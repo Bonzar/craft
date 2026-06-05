@@ -107,7 +107,7 @@ func main() {
 		updateSnap  = flag.Bool("update-snapshot", false, "Write the freshly computed snapshot back to --snapshot after diffing.")
 		sinceArg    = flag.String("since", "", "RFC3339 fallback: when a page is absent from the snapshot, treat it as changed only if newer than this. Empty => absent pages are 'new'.")
 		tree        = flag.Bool("tree", false, "Print changed pages as a nested tree instead of a flat list.")
-		incremental = flag.Bool("incremental", false, "Skip deep-fetching root docs whose /documents listing date hasn't advanced past the snapshot's Docs[id]; carry their pages over. Cuts block-budget usage. No-op without a snapshot that has a docs map.")
+		incremental = flag.Bool("incremental", false, "Skip deep-fetching root docs whose /documents listing date hasn't advanced past the snapshot's Docs[id] — or, when there is no snapshot, past --since. Only changed docs are deep-fetched; the rest cost just the cheap /documents listing. Cuts block-budget usage.")
 		timeoutSec  = flag.Int("timeout", 60, "Per-request HTTP timeout in seconds.")
 		retries     = flag.Int("retries", 3, "Retry attempts for transient failures (network / HTTP 5xx).")
 		rlRetries   = flag.Int("rl-retries", 5, "Retry attempts for HTTP 429 'Block budget exceeded', with longer exponential backoff (5,10,20,40,60s capped).")
@@ -206,7 +206,7 @@ func main() {
 			continue
 		}
 		// Incremental skip: doc-level date hasn't advanced -> carry pages over.
-		if *incremental && !docChanged(id, docDates[id], snap) {
+		if *incremental && !docChanged(id, docDates[id], snap, since) {
 			carryOver(id, snap, pages)
 			skippedDocs++
 			continue
@@ -322,22 +322,37 @@ func collectPages(b Block, rootDoc, encPageID string, encPath []string, exclude 
 	return m
 }
 
-// docChanged reports whether a root doc must be deep-fetched. It returns true
-// (fetch) when we have no recorded doc-level date, no fresh listing date, or the
-// listing date is newer than the snapshot's — i.e. we never skip a doc that may
-// have changed. The /documents listing date rolls up nested-page edits, so this
-// is safe against the cross-page bug that plain root-block dates suffer from.
-func docChanged(rootID, listingDate string, snap Snapshot) bool {
-	prev, ok := snap.Docs[rootID]
-	if !ok || listingDate == "" {
+// docChanged reports whether a root doc must be deep-fetched. The /documents
+// listing date rolls up nested-page edits at any depth (verified empirically: a
+// doc whose only recent edit lived in a deeply nested page still advances its
+// listing date, while its own root-block date does not), so it is a safe
+// doc-level gate against the cross-page bug that plain root-block dates suffer.
+//
+// Decision order:
+//   - snapshot has a prior doc date    -> fetch iff the listing date is newer;
+//   - no snapshot entry but --since set -> fetch iff the listing date is newer
+//     than since (lets a single stored cutoff drive incremental skipping with no
+//     docs map at all);
+//   - otherwise (no basis to skip)      -> fetch.
+//
+// An empty or unparseable listing date always means fetch: we never skip a doc
+// we cannot date.
+func docChanged(rootID, listingDate string, snap Snapshot, since time.Time) bool {
+	lt, lerr := parseTime(listingDate)
+	if lerr != nil {
 		return true
 	}
-	pt, e1 := parseTime(prev)
-	lt, e2 := parseTime(listingDate)
-	if e1 != nil || e2 != nil {
-		return true
+	if prev, ok := snap.Docs[rootID]; ok {
+		pt, perr := parseTime(prev)
+		if perr != nil {
+			return true
+		}
+		return lt.After(pt)
 	}
-	return lt.After(pt)
+	if !since.IsZero() {
+		return lt.After(since)
+	}
+	return true
 }
 
 // carryOver copies a skipped doc's pages from the previous snapshot into the
