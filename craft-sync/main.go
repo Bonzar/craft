@@ -10,7 +10,8 @@
 //
 // Auth: the connect-link token is embedded in the base URL, so no extra header
 // is required. Provide the base via --base or the CRAFT_API_BASE env var, e.g.
-//   https://connect.craft.do/links/XXXXXXXX/api/v1
+//
+//	https://connect.craft.do/links/XXXXXXXX/api/v1
 package main
 
 import (
@@ -29,11 +30,11 @@ import (
 
 // Block mirrors the GET /blocks response shape (only the fields we need).
 type Block struct {
-	ID       string   `json:"id"`
-	Type     string   `json:"type"`
-	Markdown string   `json:"markdown"`
-	Metadata *Meta    `json:"metadata"`
-	Content  []Block  `json:"content"`
+	ID       string  `json:"id"`
+	Type     string  `json:"type"`
+	Markdown string  `json:"markdown"`
+	Metadata *Meta   `json:"metadata"`
+	Content  []Block `json:"content"`
 }
 
 type Meta struct {
@@ -59,15 +60,24 @@ type Page struct {
 	Title    string    `json:"title"`
 	ParentID string    `json:"parentId"`
 	Path     []string  `json:"path"`
+	RootDoc  string    `json:"-"` // root document this page was scanned under
 	Eff      time.Time `json:"-"`
 }
 
 // Snapshot is the on-disk record of last-seen modification times per page.
+//
+// Docs/PageDoc enable incremental scans: the cheap GET /documents listing
+// reports a doc-level lastModifiedAt that DOES roll up nested-page edits (unlike
+// per-block metadata in GET /blocks), so a root doc whose listing date hasn't
+// advanced past Docs[id] can be skipped entirely and its pages carried over
+// from the previous snapshot — no deep fetch, no block budget spent.
 type Snapshot struct {
 	GeneratedAt string            `json:"generatedAt"`
 	Version     int               `json:"version"`
-	Pages       map[string]string `json:"pages"`  // pageID -> RFC3339 lastModifiedAt
-	Titles      map[string]string `json:"titles"` // pageID -> title (for readability)
+	Docs        map[string]string `json:"docs,omitempty"`    // rootDocID -> doc-level lastModifiedAt (from /documents)
+	Pages       map[string]string `json:"pages"`             // pageID -> RFC3339 lastModifiedAt
+	Titles      map[string]string `json:"titles"`            // pageID -> title (for readability)
+	PageDoc     map[string]string `json:"pageDoc,omitempty"` // pageID -> rootDocID (for carry-over of skipped docs)
 }
 
 type ChangedPage struct {
@@ -84,20 +94,23 @@ type Result struct {
 	UnchangedCount int           `json:"unchangedCount"`
 	TotalPages     int           `json:"totalPages"`
 	ScannedDocs    int           `json:"scannedDocs"`
+	SkippedDocs    int           `json:"skippedDocs"`
 	Errors         []string      `json:"errors,omitempty"`
 }
 
 func main() {
 	var (
-		base       = flag.String("base", os.Getenv("CRAFT_API_BASE"), "Base URL of the Craft connect-link API (or env CRAFT_API_BASE)")
-		docsArg    = flag.String("docs", "", "Comma-separated root document IDs to scan. If empty, GET /documents and scan all non-deleted.")
-		excludeArg = flag.String("exclude", "", "Comma-separated document/page IDs to skip entirely (e.g. the 'Память для агента' infra docs).")
-		snapPath   = flag.String("snapshot", "", "Path to snapshot JSON. Read for diffing; written back when --update-snapshot is set.")
-		updateSnap = flag.Bool("update-snapshot", false, "Write the freshly computed snapshot back to --snapshot after diffing.")
-		sinceArg   = flag.String("since", "", "RFC3339 fallback: when a page is absent from the snapshot, treat it as changed only if newer than this. Empty => absent pages are 'new'.")
-		tree       = flag.Bool("tree", false, "Print changed pages as a nested tree instead of a flat list.")
-		timeoutSec = flag.Int("timeout", 60, "Per-request HTTP timeout in seconds.")
-		retries    = flag.Int("retries", 3, "HTTP retry attempts per request.")
+		base        = flag.String("base", os.Getenv("CRAFT_API_BASE"), "Base URL of the Craft connect-link API (or env CRAFT_API_BASE)")
+		docsArg     = flag.String("docs", "", "Comma-separated root document IDs to scan. If empty, GET /documents and scan all non-deleted.")
+		excludeArg  = flag.String("exclude", "", "Comma-separated document/page IDs to skip entirely (e.g. the 'Память для агента' infra docs).")
+		snapPath    = flag.String("snapshot", "", "Path to snapshot JSON. Read for diffing; written back when --update-snapshot is set.")
+		updateSnap  = flag.Bool("update-snapshot", false, "Write the freshly computed snapshot back to --snapshot after diffing.")
+		sinceArg    = flag.String("since", "", "RFC3339 fallback: when a page is absent from the snapshot, treat it as changed only if newer than this. Empty => absent pages are 'new'.")
+		tree        = flag.Bool("tree", false, "Print changed pages as a nested tree instead of a flat list.")
+		incremental = flag.Bool("incremental", false, "Skip deep-fetching root docs whose /documents listing date hasn't advanced past the snapshot's Docs[id]; carry their pages over. Cuts block-budget usage. No-op without a snapshot that has a docs map.")
+		timeoutSec  = flag.Int("timeout", 60, "Per-request HTTP timeout in seconds.")
+		retries     = flag.Int("retries", 3, "Retry attempts for transient failures (network / HTTP 5xx).")
+		rlRetries   = flag.Int("rl-retries", 5, "Retry attempts for HTTP 429 'Block budget exceeded', with longer exponential backoff (5,10,20,40,60s capped).")
 	)
 	flag.Parse()
 
@@ -116,7 +129,7 @@ func main() {
 		since = t
 	}
 
-	snap := Snapshot{Pages: map[string]string{}, Titles: map[string]string{}}
+	snap := Snapshot{Pages: map[string]string{}, Titles: map[string]string{}, Docs: map[string]string{}, PageDoc: map[string]string{}}
 	if *snapPath != "" {
 		if b, err := os.ReadFile(*snapPath); err == nil {
 			if err := json.Unmarshal(b, &snap); err != nil {
@@ -128,13 +141,47 @@ func main() {
 			if snap.Titles == nil {
 				snap.Titles = map[string]string{}
 			}
+			if snap.Docs == nil {
+				snap.Docs = map[string]string{}
+			}
+			if snap.PageDoc == nil {
+				snap.PageDoc = map[string]string{}
+			}
 		}
 	}
 
 	client := &Client{
-		http:    &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second},
-		base:    *base,
-		retries: *retries,
+		http:      &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second},
+		base:      *base,
+		retries:   *retries,
+		rlRetries: *rlRetries,
+	}
+
+	var scanErrors []string
+
+	// The /documents listing is cheap (metadata only, no block budget) and its
+	// doc-level lastModifiedAt rolls up nested-page edits. We use it both to
+	// resolve the scan set (when --docs is empty) and to drive incremental skip
+	// and the fresh Docs map. Fetch it whenever we need the scan set, want
+	// incremental skipping, or are writing a snapshot worth a Docs map.
+	var listing []Document
+	docDates := map[string]string{}
+	needListing := *docsArg == "" || *incremental || (*updateSnap && *snapPath != "")
+	if needListing {
+		docs, err := client.listDocuments()
+		if err != nil {
+			if *docsArg == "" {
+				fail("GET /documents failed: %v", err) // needed to know what to scan
+			}
+			scanErrors = append(scanErrors, fmt.Sprintf("listing (for incremental/docs map): %v", err))
+			if *incremental {
+				*incremental = false // can't skip safely without dates
+			}
+		}
+		listing = docs
+		for _, d := range docs {
+			docDates[d.ID] = d.LastModifiedAt
+		}
 	}
 
 	// Resolve the set of root documents to scan.
@@ -142,11 +189,7 @@ func main() {
 	if *docsArg != "" {
 		rootIDs = splitCSV(*docsArg)
 	} else {
-		docs, err := client.listDocuments()
-		if err != nil {
-			fail("GET /documents failed: %v", err)
-		}
-		for _, d := range docs {
+		for _, d := range listing {
 			if d.IsDeleted || exclude[d.ID] {
 				continue
 			}
@@ -155,11 +198,17 @@ func main() {
 	}
 
 	pages := map[string]*Page{}
-	var scanErrors []string
 	scannedDocs := 0
+	skippedDocs := 0
 
 	for _, id := range rootIDs {
 		if exclude[id] {
+			continue
+		}
+		// Incremental skip: doc-level date hasn't advanced -> carry pages over.
+		if *incremental && !docChanged(id, docDates[id], snap) {
+			carryOver(id, snap, pages)
+			skippedDocs++
 			continue
 		}
 		root, err := client.getBlocks(id)
@@ -168,12 +217,23 @@ func main() {
 			continue // skip ghost/broken docs without dying
 		}
 		scannedDocs++
-		collectPages(root, "", nil, exclude, pages)
+		collectPages(root, id, "", nil, exclude, pages)
 	}
 
 	res, fresh := Diff(pages, snap, since)
 	res.ScannedDocs = scannedDocs
+	res.SkippedDocs = skippedDocs
 	res.Errors = append(res.Errors, scanErrors...)
+
+	// Record doc-level dates for every root we resolved, so the next run can skip
+	// unchanged docs. Prefer the fresh listing date; fall back to the prior value.
+	for _, id := range rootIDs {
+		if d := docDates[id]; d != "" {
+			fresh.Docs[id] = d
+		} else if d, ok := snap.Docs[id]; ok {
+			fresh.Docs[id] = d
+		}
+	}
 
 	if *updateSnap && *snapPath != "" {
 		out, _ := json.MarshalIndent(fresh, "", "  ")
@@ -199,12 +259,17 @@ func Diff(pages map[string]*Page, snap Snapshot, since time.Time) (Result, Snaps
 	fresh := Snapshot{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Version:     snap.Version + 1,
+		Docs:        map[string]string{},
 		Pages:       map[string]string{},
 		Titles:      map[string]string{},
+		PageDoc:     map[string]string{},
 	}
 	for id, p := range pages {
 		fresh.Pages[id] = p.Eff.Format(time.RFC3339Nano)
 		fresh.Titles[id] = p.Title
+		if p.RootDoc != "" {
+			fresh.PageDoc[id] = p.RootDoc
+		}
 	}
 	res.TotalPages = len(pages)
 
@@ -236,7 +301,7 @@ func Diff(pages map[string]*Page, snap Snapshot, since time.Time) (Result, Snaps
 // that are NOT inside a deeper page (those are their own units). This rolls
 // non-page edits up to their containing page while attributing nested-page
 // edits to the nested page — catching edits the root-only date would miss.
-func collectPages(b Block, encPageID string, encPath []string, exclude map[string]bool, pages map[string]*Page) (nonPageMax time.Time) {
+func collectPages(b Block, rootDoc, encPageID string, encPath []string, exclude map[string]bool, pages map[string]*Page) (nonPageMax time.Time) {
 	if exclude[b.ID] {
 		return time.Time{}
 	}
@@ -245,16 +310,50 @@ func collectPages(b Block, encPageID string, encPath []string, exclude map[strin
 		path := append(append([]string{}, encPath...), title)
 		eff := blockTime(b)
 		for _, c := range b.Content {
-			eff = maxT(eff, collectPages(c, b.ID, path, exclude, pages))
+			eff = maxT(eff, collectPages(c, rootDoc, b.ID, path, exclude, pages))
 		}
-		pages[b.ID] = &Page{ID: b.ID, Title: title, ParentID: encPageID, Path: encPath, Eff: eff}
+		pages[b.ID] = &Page{ID: b.ID, Title: title, ParentID: encPageID, Path: encPath, RootDoc: rootDoc, Eff: eff}
 		return time.Time{} // a page does not contribute to its enclosing page's non-page max
 	}
 	m := blockTime(b)
 	for _, c := range b.Content {
-		m = maxT(m, collectPages(c, encPageID, encPath, exclude, pages))
+		m = maxT(m, collectPages(c, rootDoc, encPageID, encPath, exclude, pages))
 	}
 	return m
+}
+
+// docChanged reports whether a root doc must be deep-fetched. It returns true
+// (fetch) when we have no recorded doc-level date, no fresh listing date, or the
+// listing date is newer than the snapshot's — i.e. we never skip a doc that may
+// have changed. The /documents listing date rolls up nested-page edits, so this
+// is safe against the cross-page bug that plain root-block dates suffer from.
+func docChanged(rootID, listingDate string, snap Snapshot) bool {
+	prev, ok := snap.Docs[rootID]
+	if !ok || listingDate == "" {
+		return true
+	}
+	pt, e1 := parseTime(prev)
+	lt, e2 := parseTime(listingDate)
+	if e1 != nil || e2 != nil {
+		return true
+	}
+	return lt.After(pt)
+}
+
+// carryOver copies a skipped doc's pages from the previous snapshot into the
+// working set unchanged, so they survive into the fresh snapshot and are not
+// re-reported. Returns the number of pages carried.
+func carryOver(rootID string, snap Snapshot, pages map[string]*Page) int {
+	n := 0
+	for pid, doc := range snap.PageDoc {
+		if doc != rootID {
+			continue
+		}
+		t, _ := parseTime(snap.Pages[pid])
+		pages[pid] = &Page{ID: pid, Title: snap.Titles[pid], RootDoc: rootID, Eff: t}
+		n++
+	}
+	return n
 }
 
 func mkChanged(p *Page, status string) ChangedPage {
@@ -291,8 +390,8 @@ func printTree(res Result, pages map[string]*Page) {
 			walk(ch, depth+1)
 		}
 	}
-	fmt.Printf("Changed pages: %d  |  unchanged: %d  |  total: %d  |  docs: %d\n",
-		len(res.Changed), res.UnchangedCount, res.TotalPages, res.ScannedDocs)
+	fmt.Printf("Changed pages: %d  |  unchanged: %d  |  total: %d  |  scanned: %d  |  skipped: %d\n",
+		len(res.Changed), res.UnchangedCount, res.TotalPages, res.ScannedDocs, res.SkippedDocs)
 	for _, id := range roots {
 		walk(id, 0)
 	}
@@ -304,9 +403,10 @@ func printTree(res Result, pages map[string]*Page) {
 // ---- HTTP client ----
 
 type Client struct {
-	http    *http.Client
-	base    string
-	retries int
+	http      *http.Client
+	base      string
+	retries   int // transient (network / 5xx) retry budget
+	rlRetries int // HTTP 429 'Block budget exceeded' retry budget (longer backoff)
 }
 
 func (c *Client) getBlocks(id string) (Block, error) {
@@ -325,9 +425,14 @@ func (c *Client) listDocuments() ([]Document, error) {
 
 func (c *Client) getJSON(u string, out any) error {
 	var lastErr error
-	for attempt := 0; attempt <= c.retries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+	transientLeft := c.retries // network / 5xx
+	rlLeft := c.rlRetries      // HTTP 429 'Block budget exceeded'
+	var backoff time.Duration
+
+	for {
+		if backoff > 0 {
+			time.Sleep(backoff)
+			backoff = 0
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -336,27 +441,61 @@ func (c *Client) getJSON(u string, out any) error {
 		if err != nil {
 			cancel()
 			lastErr = err
+			if transientLeft <= 0 {
+				return lastErr
+			}
+			backoff = transientBackoff(c.retries - transientLeft)
+			transientLeft--
 			continue
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
-		if resp.StatusCode == http.StatusNotFound {
+
+		switch {
+		case resp.StatusCode == http.StatusNotFound:
 			return fmt.Errorf("not found (HTTP 404)")
-		}
-		if resp.StatusCode >= 400 {
-			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
-			if resp.StatusCode >= 500 {
-				continue // transient: retry
+		case resp.StatusCode == http.StatusTooManyRequests:
+			// Block budget exceeded: the window needs time to refill. Wait with a
+			// longer backoff and retry rather than dropping the document.
+			lastErr = fmt.Errorf("HTTP 429: %s", truncate(string(body), 200))
+			if rlLeft <= 0 {
+				return lastErr
 			}
-			return lastErr // 4xx (other than 404): don't hammer
+			backoff = rateLimitBackoff(c.rlRetries - rlLeft)
+			rlLeft--
+			continue
+		case resp.StatusCode >= 500:
+			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+			if transientLeft <= 0 {
+				return lastErr
+			}
+			backoff = transientBackoff(c.retries - transientLeft)
+			transientLeft--
+			continue
+		case resp.StatusCode >= 400:
+			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200)) // other 4xx: don't hammer
 		}
 		if err := json.Unmarshal(body, out); err != nil {
 			return fmt.Errorf("bad JSON: %v", err)
 		}
 		return nil
 	}
-	return lastErr
+}
+
+// transientBackoff: 2s, 4s, 8s, … for network/5xx retries (n is 0-based).
+func transientBackoff(n int) time.Duration {
+	return time.Duration(1<<uint(n+1)) * time.Second
+}
+
+// rateLimitBackoff: 5s, 10s, 20s, 40s, 60s (capped) for HTTP 429, giving the
+// block-budget window time to refill (n is 0-based).
+func rateLimitBackoff(n int) time.Duration {
+	d := time.Duration(5<<uint(n)) * time.Second
+	if d > 60*time.Second {
+		d = 60 * time.Second
+	}
+	return d
 }
 
 // ---- helpers ----
