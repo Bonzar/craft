@@ -169,7 +169,31 @@ func TestDocChanged(t *testing.T) {
 		{"empty listing date -> fetch", "D", "", true},
 	}
 	for _, c := range cases {
-		if got := docChanged(c.id, c.listing, snap); got != c.want {
+		if got := docChanged(c.id, c.listing, snap, time.Time{}); got != c.want {
+			t.Errorf("%s: docChanged=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// With no snapshot docs map, --since alone must drive the doc-level skip: a doc
+// whose /documents listing date is newer than the cutoff is fetched, otherwise
+// it is skipped. This is the snapshot-less incremental mode the agent uses.
+func TestDocChangedSinceCutoff(t *testing.T) {
+	empty := Snapshot{Docs: map[string]string{}}
+	since := tm("2026-06-04T10:00:00Z")
+	cases := []struct {
+		name, listing string
+		since         time.Time
+		want          bool
+	}{
+		{"newer than cutoff -> fetch", "2026-06-04T10:00:01Z", since, true},
+		{"equal to cutoff -> skip", "2026-06-04T10:00:00Z", since, false},
+		{"older than cutoff -> skip", "2026-06-01T00:00:00Z", since, false},
+		{"no cutoff, no snapshot -> fetch", "2026-06-01T00:00:00Z", time.Time{}, true},
+		{"empty listing date -> fetch", "", since, true},
+	}
+	for _, c := range cases {
+		if got := docChanged("D", c.listing, empty, c.since); got != c.want {
 			t.Errorf("%s: docChanged=%v, want %v", c.name, got, c.want)
 		}
 	}
