@@ -34,10 +34,41 @@ if [[ -z "$md" ]]; then
   exit 0
 fi
 
+# Ссылки на документы вне шаринга connect-ссылки API отдаёт как
+# [текст](invalid:out_of_scope) (прямой GET по их ID — 403). Обычные документы
+# лечатся добавлением в шаринг connect-ссылки (см. урок в CLAUDE.md), но
+# системную папку templates Craft расшарить не даёт — ссылки на шаблоны
+# восстанавливаем статической картой «фрагмент текста ссылки → block-ID»
+# (ID стабильны, сняты через MCP Craft: `documents list --location templates`).
+restore_template_links() {
+  local key id
+  while IFS='|' read -r key id; do
+    [[ -z "$key" ]] && continue
+    md="$(sed -E "s#\[([^]]*${key}[^]]*)\]\(invalid:out_of_scope\)#[\1](block://${id})#g" <<<"$md")"
+  done <<'MAP'
+0. Заметка|7C4A64F7-F1CD-4B1C-B3FF-17D8374B245E
+1. Конспект|4C72BD43-254D-45F6-9F98-AF985AA612DD
+2. Задача|844E93D5-D127-431D-898E-0B8B3E5889E2
+3. Проект|0EE20542-CDB8-4960-BFF4-A6F4C8D64E9E
+4. Сфера|752ECC99-609E-4351-8D33-1932F6DF7972
+5. Алгоритм|47E8803D-B28D-4C50-845A-D3CD47783E28
+7. Регулярная задача|f81558ef-89af-8796-d518-4e2d9f1b4721
+MAP
+}
+restore_template_links
+
+# Голое упоминание invalid:out_of_scope в тексте роутера — легитимный контент,
+# считаем только линк-форму: остаток означает ссылку на документ вне шаринга.
+leftover="$(grep -o '\](invalid:out_of_scope)' <<<"$md" | wc -l | tr -d ' ')"
+
 {
   echo "=== Craft: роутер «Память для Claude», авто-обновлён SessionStart-хуком ($(date -u +%FT%TZ)) ==="
   echo "$md"
   echo "=== конец роутера — действуй по его директивам ==="
 } > "$OUT"
 
-echo "Craft-роутер обновлён: $(wc -c < "$OUT") байт записано в .claude/craft-router-context.md; полный текст уже в контексте через импорт в CLAUDE.md."
+msg="Craft-роутер обновлён: $(wc -c < "$OUT") байт записано в .claude/craft-router-context.md; полный текст уже в контексте через импорт в CLAUDE.md."
+if [[ "$leftover" -gt 0 ]]; then
+  msg+=" ВНИМАНИЕ: $leftover ссылок invalid:out_of_scope не восстановлено — в роутере есть ссылки на документы вне шаринга connect-ссылки. Новый шаблон — дополни карту в .claude/hooks/inject-craft-router.sh (ID через MCP Craft), обычный документ — подсвети Владу, что его надо добавить в шаринг."
+fi
+echo "$msg"
