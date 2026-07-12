@@ -4,8 +4,18 @@
 # so building on start keeps the binary available without committing a
 # platform-specific binary blob. Exit 0 on any failure so a broken build
 # can never wedge session startup.
+#
+# Opt-in: builds only when CRAFT_SYNC_BUILD=1 is set in the environment
+# settings — most sessions don't run craft-sync, no point paying the build
+# on every start. Manual build in any session:
+#   bash .claude/hooks/build-craft-sync.sh --force
 set -u
 log(){ echo "[build-craft-sync] $*" >&2; }
+
+if [[ "${1:-}" != "--force" && "${CRAFT_SYNC_BUILD:-0}" != "1" ]]; then
+  log "CRAFT_SYNC_BUILD != 1; skipping build (run with --force to build now)"
+  exit 0
+fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="${CLAUDE_PROJECT_DIR:-$(cd "$here/../.." && pwd)}"
