@@ -2,3 +2,6 @@
 # imported into context via @-reference in CLAUDE.md. Never commit — it's
 # a per-session snapshot of a live Craft document.
 .claude/craft-router-context.md
+
+# Personal per-machine Claude Code overrides
+.claude/settings.local.json
