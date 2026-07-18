@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -384,6 +385,60 @@ func TestRefreshLinksIndexNarrowedRun(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected out-of-listing warning for MISSING-DOC, got %v", errs)
+	}
+}
+
+// The Craft store round-trips the index through gzip+base64 chunks; a chunk
+// coming back from Craft may gain code fences and stray whitespace.
+func TestStoreCodecRoundTrip(t *testing.T) {
+	idx := LinksIndex{
+		GeneratedAt: "2026-07-18T00:00:00Z",
+		Docs:        map[string]string{"D1": "2026-07-18T00:00:00Z"},
+		Links: []LinkRecord{
+			{Source: "a", SourceDoc: "D1", SourcePage: "P", Path: []string{"Проект X"}, Target: idA, Text: "Задача"},
+		},
+	}
+	chunks, err := encodeIndex(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("small index must fit one chunk, got %d", len(chunks))
+	}
+	// Simulate Craft round-trip artifacts: fences and wrapping.
+	mangled := "```text\n" + chunks[0][:10] + "\n" + chunks[0][10:] + "\n```"
+	got, err := decodeIndex([]string{cleanChunk(mangled)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GeneratedAt != idx.GeneratedAt || len(got.Links) != 1 || got.Links[0].Text != "Задача" {
+		t.Errorf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestEncodeIndexChunking(t *testing.T) {
+	idx := LinksIndex{Docs: map[string]string{}}
+	for i := 0; i < 30000; i++ {
+		idx.Links = append(idx.Links, LinkRecord{Source: fmt.Sprintf("src-%d-%d", i, i*7), SourceDoc: "D", Target: idA})
+	}
+	chunks, err := encodeIndex(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("want multiple chunks for a big index, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len(c) > storeChunkSize {
+			t.Errorf("chunk %d exceeds limit: %d", i, len(c))
+		}
+	}
+	got, err := decodeIndex(chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Links) != len(idx.Links) {
+		t.Errorf("links = %d, want %d", len(got.Links), len(idx.Links))
 	}
 }
 
