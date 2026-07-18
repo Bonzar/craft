@@ -286,6 +286,30 @@ func TestCollectLinks(t *testing.T) {
 	}
 }
 
+// Collection items arrive in a separate "items" array with full nested
+// bodies; links inside them must be indexed and attributed to the item.
+func TestCollectLinksInsideCollectionItems(t *testing.T) {
+	coll := blk("COLL", "collection", "Сказки", "")
+	item := blk("ITEM", "collectionItem", "Чайничек и последнее тепло", "",
+		blk("body", "text", "герой из [Личности Оли](block://"+idA+")", ""),
+	)
+	coll.Items = []Block{item}
+	doc := blk("DOC", "page", "Архив", "", coll)
+
+	var recs []LinkRecord
+	collectLinks(doc, "DOC", "", nil, &recs)
+	if len(recs) != 1 {
+		t.Fatalf("want 1 record from item body, got %d: %+v", len(recs), recs)
+	}
+	r := recs[0]
+	if r.Source != "body" || r.SourcePage != "ITEM" || r.Target != idA {
+		t.Errorf("record = %+v", r)
+	}
+	if len(r.Path) != 2 || r.Path[1] != "Чайничек и последнее тепло" {
+		t.Errorf("path = %+v", r.Path)
+	}
+}
+
 func TestQueryBacklinksCaseInsensitive(t *testing.T) {
 	var recs []LinkRecord
 	collectLinks(linkTree(), "DOC", "", nil, &recs)
