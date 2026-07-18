@@ -166,7 +166,7 @@ func main() {
 
 		backlinksTo  = flag.String("backlinks", "", "Backlinks mode: print every block whose markdown links to this block ID, then exit. Uses/refreshes --links-file or --links-store when given.")
 		linksPath    = flag.String("links-file", "", "Path to the persistent link-index JSON for --backlinks/--links-refresh. Enables incremental refresh: docs whose /documents date hasn't advanced are carried over, not re-fetched.")
-		linksStore   = flag.String("links-store", "", "Craft page block ID holding the persistent link index (gzip+base64 dump in code blocks plus an 'Обновлён:' cutoff line). Cross-session alternative to --links-file; the store doc itself is excluded from indexing.")
+		linksStore   = flag.String("links-store", os.Getenv("CRAFT_LINKS_STORE"), "Craft page block ID holding the persistent link index (gzip+base64 dump in code blocks plus an 'Обновлён:' cutoff line); defaults to env CRAFT_LINKS_STORE. Cross-session alternative to --links-file; the store doc itself is excluded from indexing. Pass an empty value to force --links-file/local mode when the env var is set.")
 		linksRefresh = flag.Bool("links-refresh", false, "Refresh the link index (see --links-file/--links-store) without querying a target. Lets a routine keep the index warm.")
 		offline      = flag.Bool("offline", false, "With --backlinks: answer from --links-file/--links-store as-is, no refresh of the space.")
 	)
@@ -177,7 +177,16 @@ func main() {
 	}
 	*base = strings.TrimRight(*base, "/")
 	if *linksPath != "" && *linksStore != "" {
-		fail("--links-file and --links-store are mutually exclusive")
+		storeExplicit := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "links-store" {
+				storeExplicit = true
+			}
+		})
+		if storeExplicit {
+			fail("--links-file and --links-store are mutually exclusive")
+		}
+		*linksStore = "" // env-default store yields to an explicit --links-file
 	}
 
 	exclude := toSet(*excludeArg)
