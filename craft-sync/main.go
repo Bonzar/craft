@@ -30,12 +30,15 @@ import (
 )
 
 // Block mirrors the GET /blocks response shape (only the fields we need).
+// Collection blocks carry their items in a separate "items" array (type
+// collectionItem), each with a full nested content tree — not in "content".
 type Block struct {
 	ID       string  `json:"id"`
 	Type     string  `json:"type"`
 	Markdown string  `json:"markdown"`
 	Metadata *Meta   `json:"metadata"`
 	Content  []Block `json:"content"`
+	Items    []Block `json:"items"`
 }
 
 type Meta struct {
@@ -511,7 +514,9 @@ func extractLinks(md string) []LinkRef {
 // as collectPages). Duplicate (target,text) pairs within one block collapse.
 func collectLinks(b Block, rootDoc, encPage string, encPath []string, out *[]LinkRecord) {
 	page, path := encPage, encPath
-	if b.Type == "page" {
+	// A collection item is a page-like unit (its markdown is the item title),
+	// so backlinks from inside an item attribute to the item, not the doc page.
+	if b.Type == "page" || b.Type == "collectionItem" {
 		path = append(append([]string{}, encPath...), firstLine(b.Markdown))
 		page = b.ID
 	}
@@ -531,6 +536,9 @@ func collectLinks(b Block, rootDoc, encPage string, encPath []string, out *[]Lin
 	}
 	for _, c := range b.Content {
 		collectLinks(c, rootDoc, page, path, out)
+	}
+	for _, it := range b.Items {
+		collectLinks(it, rootDoc, page, path, out)
 	}
 }
 
