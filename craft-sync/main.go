@@ -15,7 +15,10 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -36,6 +39,7 @@ type Block struct {
 	ID       string  `json:"id"`
 	Type     string  `json:"type"`
 	Markdown string  `json:"markdown"`
+	RawCode  string  `json:"rawCode"`
 	Metadata *Meta   `json:"metadata"`
 	Content  []Block `json:"content"`
 	Items    []Block `json:"items"`
@@ -160,10 +164,11 @@ func main() {
 		retries     = flag.Int("retries", 3, "Retry attempts for transient failures (network / HTTP 5xx).")
 		rlRetries   = flag.Int("rl-retries", 5, "Retry attempts for HTTP 429 'Block budget exceeded', with longer exponential backoff (5,10,20,40,60s capped).")
 
-		backlinksTo  = flag.String("backlinks", "", "Backlinks mode: print every block whose markdown links to this block ID, then exit. Uses/refreshes --links-file when given.")
+		backlinksTo  = flag.String("backlinks", "", "Backlinks mode: print every block whose markdown links to this block ID, then exit. Uses/refreshes --links-file or --links-store when given.")
 		linksPath    = flag.String("links-file", "", "Path to the persistent link-index JSON for --backlinks/--links-refresh. Enables incremental refresh: docs whose /documents date hasn't advanced are carried over, not re-fetched.")
-		linksRefresh = flag.Bool("links-refresh", false, "Refresh the link index (see --links-file) without querying a target. Lets a routine keep the index warm.")
-		offline      = flag.Bool("offline", false, "With --backlinks: answer from --links-file as-is, no network refresh.")
+		linksStore   = flag.String("links-store", "", "Craft page block ID holding the persistent link index (gzip+base64 dump in code blocks plus an 'Обновлён:' cutoff line). Cross-session alternative to --links-file; the store doc itself is excluded from indexing.")
+		linksRefresh = flag.Bool("links-refresh", false, "Refresh the link index (see --links-file/--links-store) without querying a target. Lets a routine keep the index warm.")
+		offline      = flag.Bool("offline", false, "With --backlinks: answer from --links-file/--links-store as-is, no refresh of the space.")
 	)
 	flag.Parse()
 
@@ -171,6 +176,9 @@ func main() {
 		fail("missing --base (or CRAFT_API_BASE): the Craft connect-link API base URL")
 	}
 	*base = strings.TrimRight(*base, "/")
+	if *linksPath != "" && *linksStore != "" {
+		fail("--links-file and --links-store are mutually exclusive")
+	}
 
 	exclude := toSet(*excludeArg)
 	var since time.Time
@@ -211,7 +219,7 @@ func main() {
 	}
 
 	if *backlinksTo != "" || *linksRefresh {
-		runBacklinks(client, *backlinksTo, *docsArg, *excludeArg, *linksPath, *offline)
+		runBacklinks(client, *backlinksTo, *docsArg, *excludeArg, *linksPath, *linksStore, *offline)
 		return
 	}
 
@@ -649,12 +657,190 @@ func queryBacklinks(idx LinksIndex, target string) []LinkRecord {
 	return hits
 }
 
-// runBacklinks executes --backlinks/--links-refresh: load index, refresh it
-// against the live space (unless --offline), persist it back, answer the query.
-func runBacklinks(client *Client, target, docsArg, excludeArg, linksPath string, offline bool) {
+// ---- Craft-hosted index store ----
+//
+// The index can live inside Craft itself (--links-store <pageBlockId>), so any
+// session shares one warm index without a repo artifact. Layout owned by the
+// tool inside the store page:
+//   - a text block starting with "Обновлён:" — human-visible cutoff line;
+//   - one or more code blocks — base64 of gzip of the compact LinksIndex JSON,
+//     split into storeChunkSize pieces (Craft block size safety).
+// Everything else in the doc (callout, headers) is left untouched. A dump that
+// fails to decode is treated as absent: the next run rebuilds from scratch, so
+// the store is self-healing.
+
+const storeChunkSize = 60000
+
+const cutoffPrefix = "Обновлён:"
+
+// encodeIndex packs a LinksIndex into base64(gzip(compact JSON)) chunks.
+func encodeIndex(idx LinksIndex) ([]string, error) {
+	raw, err := json.Marshal(idx)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if _, err := zw.Write(raw); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+	var chunks []string
+	for len(b64) > 0 {
+		n := storeChunkSize
+		if n > len(b64) {
+			n = len(b64)
+		}
+		chunks = append(chunks, b64[:n])
+		b64 = b64[n:]
+	}
+	return chunks, nil
+}
+
+// decodeIndex reverses encodeIndex from concatenated chunk texts.
+func decodeIndex(chunks []string) (LinksIndex, error) {
+	var idx LinksIndex
+	joined := strings.Join(chunks, "")
+	bin, err := base64.StdEncoding.DecodeString(joined)
+	if err != nil {
+		return idx, fmt.Errorf("base64: %v", err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(bin))
+	if err != nil {
+		return idx, fmt.Errorf("gzip: %v", err)
+	}
+	raw, err := io.ReadAll(zr)
+	if err != nil {
+		return idx, fmt.Errorf("gunzip: %v", err)
+	}
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		return idx, fmt.Errorf("json: %v", err)
+	}
+	return idx, nil
+}
+
+// cleanChunk strips code fences and whitespace a Craft round-trip may add.
+func cleanChunk(md string) string {
+	var out []string
+	for _, line := range strings.Split(md, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "```") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "")
+}
+
+// storeState is what loadStore learned about the store page: the decoded
+// index plus the block IDs the tool owns (for the subsequent save).
+type storeState struct {
+	index    LinksIndex
+	chunkIDs []string // existing code blocks, document order
+	cutoffID string   // text block starting with cutoffPrefix ("" if absent)
+	decodeOK bool
+}
+
+// loadStore reads the store page and decodes the dump. Decode failures are
+// reported but non-fatal: the caller proceeds with an empty index.
+func loadStore(client *Client, storeID string) (storeState, error) {
+	st := storeState{index: LinksIndex{Docs: map[string]string{}}}
+	root, err := client.getBlocksNoMeta(storeID)
+	if err != nil {
+		return st, err
+	}
+	var chunks []string
+	var walk func(b Block)
+	walk = func(b Block) {
+		switch {
+		case b.Type == "code":
+			st.chunkIDs = append(st.chunkIDs, b.ID)
+			text := b.RawCode
+			if text == "" {
+				text = b.Markdown
+			}
+			chunks = append(chunks, cleanChunk(text))
+		case b.Type == "text" && st.cutoffID == "" && strings.HasPrefix(strings.TrimSpace(b.Markdown), cutoffPrefix):
+			st.cutoffID = b.ID
+		}
+		for _, c := range b.Content {
+			walk(c)
+		}
+	}
+	walk(root)
+	if len(chunks) == 0 {
+		return st, nil
+	}
+	idx, err := decodeIndex(chunks)
+	if err != nil {
+		return st, fmt.Errorf("store dump undecodable (will rebuild): %v", err)
+	}
+	if idx.Docs == nil {
+		idx.Docs = map[string]string{}
+	}
+	st.index = idx
+	st.decodeOK = true
+	return st, nil
+}
+
+// saveStore rewrites the tool-owned blocks: cutoff line updated (or created),
+// old chunk blocks deleted, fresh chunks appended one by one (order-safe).
+func saveStore(client *Client, storeID string, st storeState, idx LinksIndex) error {
+	chunks, err := encodeIndex(idx)
+	if err != nil {
+		return err
+	}
+	cutoff := fmt.Sprintf("%s %s · доков: %d · ссылок: %d",
+		cutoffPrefix, idx.GeneratedAt, len(idx.Docs), len(idx.Links))
+	if st.cutoffID != "" {
+		if err := client.updateBlocks([]map[string]any{{"id": st.cutoffID, "markdown": cutoff}}); err != nil {
+			return fmt.Errorf("cutoff update: %v", err)
+		}
+	} else {
+		if err := client.insertBlocks(storeID, []map[string]any{{"type": "text", "markdown": cutoff}}); err != nil {
+			return fmt.Errorf("cutoff insert: %v", err)
+		}
+	}
+	if len(st.chunkIDs) > 0 {
+		if err := client.deleteBlocks(st.chunkIDs); err != nil {
+			return fmt.Errorf("old chunks delete: %v", err)
+		}
+	}
+	for i, ch := range chunks {
+		block := map[string]any{"type": "code", "rawCode": ch, "language": "plaintext"}
+		if err := client.insertBlocks(storeID, []map[string]any{block}); err != nil {
+			return fmt.Errorf("chunk %d/%d insert: %v", i+1, len(chunks), err)
+		}
+	}
+	return nil
+}
+
+// runBacklinks executes --backlinks/--links-refresh: load index (file or Craft
+// store), refresh it against the live space (unless --offline), persist it
+// back, answer the query.
+func runBacklinks(client *Client, target, docsArg, excludeArg, linksPath, linksStore string, offline bool) {
 	idx := LinksIndex{Docs: map[string]string{}}
-	haveFile := false
-	if linksPath != "" {
+	havePrior := false
+	var store storeState
+
+	res := BacklinksResult{Target: strings.ToLower(target)}
+
+	switch {
+	case linksStore != "":
+		st, err := loadStore(client, linksStore)
+		if err != nil && st.chunkIDs == nil && st.cutoffID == "" {
+			fail("cannot read links store %s: %v", linksStore, err)
+		}
+		if err != nil {
+			res.Errors = append(res.Errors, err.Error())
+		}
+		store = st
+		idx = st.index
+		havePrior = st.decodeOK
+	case linksPath != "":
 		if b, err := os.ReadFile(linksPath); err == nil {
 			if err := json.Unmarshal(b, &idx); err != nil {
 				fail("cannot parse links file %s: %v", linksPath, err)
@@ -662,31 +848,38 @@ func runBacklinks(client *Client, target, docsArg, excludeArg, linksPath string,
 			if idx.Docs == nil {
 				idx.Docs = map[string]string{}
 			}
-			haveFile = true
+			havePrior = true
 		}
 	}
 
-	res := BacklinksResult{Target: strings.ToLower(target)}
-
 	if offline {
-		if !haveFile {
-			fail("--offline needs an existing --links-file")
+		if !havePrior {
+			fail("--offline needs an existing --links-file or a readable --links-store dump")
 		}
 		res.Stale = true
 	} else {
 		listing, err := client.listDocuments()
 		if err != nil {
-			if !haveFile {
-				fail("GET /documents failed and no --links-file to fall back to: %v", err)
+			if !havePrior {
+				fail("GET /documents failed and no prior index to fall back to: %v", err)
 			}
 			res.Stale = true
 			res.Errors = append(res.Errors, fmt.Sprintf("listing failed, answering from stale index: %v", err))
 		} else {
-			fresh, scanned, skipped, errs := refreshLinksIndex(client, idx, listing, splitCSV(docsArg), toSet(excludeArg))
+			exclude := toSet(excludeArg)
+			if linksStore != "" {
+				exclude[linksStore] = true // never index the store doc itself
+			}
+			fresh, scanned, skipped, errs := refreshLinksIndex(client, idx, listing, splitCSV(docsArg), exclude)
 			idx = fresh
 			res.ScannedDocs, res.SkippedDocs = scanned, skipped
 			res.Errors = append(res.Errors, errs...)
-			if linksPath != "" {
+			switch {
+			case linksStore != "":
+				if err := saveStore(client, linksStore, store, idx); err != nil {
+					res.Errors = append(res.Errors, fmt.Sprintf("store save failed: %v", err))
+				}
+			case linksPath != "":
 				out, _ := json.MarshalIndent(idx, "", " ")
 				if err := os.WriteFile(linksPath, out, 0o644); err != nil {
 					fail("cannot write links file %s: %v", linksPath, err)
@@ -719,6 +912,74 @@ func (c *Client) getBlocks(id string) (Block, error) {
 	var b Block
 	err := c.getJSON(u, &b)
 	return b, err
+}
+
+// getBlocksNoMeta fetches a tree without metadata — enough for the links store.
+func (c *Client) getBlocksNoMeta(id string) (Block, error) {
+	u := fmt.Sprintf("%s/blocks?id=%s&maxDepth=-1", c.base, url.QueryEscape(id))
+	var b Block
+	err := c.getJSON(u, &b)
+	return b, err
+}
+
+// insertBlocks POSTs new blocks to the end of parent page parentID.
+func (c *Client) insertBlocks(parentID string, blocks []map[string]any) error {
+	payload := map[string]any{
+		"blocks":   blocks,
+		"position": map[string]any{"position": "end", "pageId": parentID},
+	}
+	return c.sendJSON(http.MethodPost, c.base+"/blocks", payload)
+}
+
+// updateBlocks PUTs partial block updates ({id, markdown, ...}).
+func (c *Client) updateBlocks(blocks []map[string]any) error {
+	return c.sendJSON(http.MethodPut, c.base+"/blocks", map[string]any{"blocks": blocks})
+}
+
+// deleteBlocks removes blocks by ID.
+func (c *Client) deleteBlocks(ids []string) error {
+	return c.sendJSON(http.MethodDelete, c.base+"/blocks", map[string]any{"blockIds": ids})
+}
+
+// sendJSON issues a write request with the same transient/429 retry policy as
+// reads. Writes are NOT retried on ambiguous transport errors after the body
+// may have been consumed server-side — the store is self-healing (a broken
+// dump just forces a rebuild), so at-most-once with an error surfaced beats
+// duplicate chunks.
+func (c *Client) sendJSON(method, u string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	rlLeft := c.rlRetries
+	var backoff time.Duration
+	for {
+		if backoff > 0 {
+			time.Sleep(backoff)
+			backoff = 0
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
+		req, _ := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		resp, err := c.http.Do(req)
+		if err != nil {
+			cancel()
+			return err
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		cancel()
+		if resp.StatusCode == http.StatusTooManyRequests && rlLeft > 0 {
+			backoff = rateLimitBackoff(c.rlRetries - rlLeft)
+			rlLeft--
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("%s %s: HTTP %d: %s", method, u, resp.StatusCode, truncate(string(respBody), 300))
+		}
+		return nil
+	}
 }
 
 func (c *Client) listDocuments() ([]Document, error) {
