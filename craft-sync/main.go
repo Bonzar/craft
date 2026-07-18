@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -98,6 +99,50 @@ type Result struct {
 	Errors         []string      `json:"errors,omitempty"`
 }
 
+// ---- backlinks: link index over block:// references ----
+//
+// Craft has no native backlinks API: neither the connect-link REST API nor the
+// MCP server expose incoming links, and the search index covers visible text
+// only — a block-link's target ID lives in a text attribute and is unreachable
+// by any search (verified empirically, including RE2 regex search by ID).
+// Outgoing links, however, are fully present in each block's markdown as
+// [text](block://<id>), so an inverted index over a full crawl answers
+// "who links to X" exactly. This mode reuses the same doc-level incremental
+// machinery as change detection: only docs whose /documents listing date has
+// advanced are re-fetched; everything else is carried over from the index file.
+
+// LinkRecord is one outgoing block-link occurrence: block Source (inside
+// SourcePage of doc SourceDoc) links to block Target.
+type LinkRecord struct {
+	Source     string   `json:"source"`               // linking block ID
+	SourceDoc  string   `json:"sourceDoc"`            // root document the source lives in
+	SourcePage string   `json:"sourcePage,omitempty"` // nearest enclosing page block
+	Path       []string `json:"path,omitempty"`       // page-title chain down to the source
+	Target     string   `json:"target"`               // linked-to block ID (lowercased)
+	Text       string   `json:"text,omitempty"`       // link text, when the markdown form carries one
+}
+
+// LinksIndex is the on-disk inverted-index source: every outgoing link in the
+// space plus the doc-level dates that drive incremental refresh.
+type LinksIndex struct {
+	GeneratedAt string            `json:"generatedAt"`
+	Docs        map[string]string `json:"docs"`  // rootDocID -> /documents lastModifiedAt at index time
+	Links       []LinkRecord      `json:"links"` // every outgoing block link, flat
+}
+
+// BacklinksResult is the query answer printed in --backlinks mode.
+type BacklinksResult struct {
+	Target      string       `json:"target"`
+	Count       int          `json:"count"`
+	Backlinks   []LinkRecord `json:"backlinks"`
+	TotalLinks  int          `json:"totalLinks"`  // size of the whole index
+	ScannedDocs int          `json:"scannedDocs"` // deep-fetched this run
+	SkippedDocs int          `json:"skippedDocs"` // date unchanged -> carried from index
+	Stale       bool         `json:"stale,omitempty"` // answered from index without refresh
+	IndexedAt   string       `json:"indexedAt,omitempty"`
+	Errors      []string     `json:"errors,omitempty"`
+}
+
 func main() {
 	var (
 		base        = flag.String("base", os.Getenv("CRAFT_API_BASE"), "Base URL of the Craft connect-link API (or env CRAFT_API_BASE)")
@@ -111,10 +156,15 @@ func main() {
 		timeoutSec  = flag.Int("timeout", 60, "Per-request HTTP timeout in seconds.")
 		retries     = flag.Int("retries", 3, "Retry attempts for transient failures (network / HTTP 5xx).")
 		rlRetries   = flag.Int("rl-retries", 5, "Retry attempts for HTTP 429 'Block budget exceeded', with longer exponential backoff (5,10,20,40,60s capped).")
+
+		backlinksTo  = flag.String("backlinks", "", "Backlinks mode: print every block whose markdown links to this block ID, then exit. Uses/refreshes --links-file when given.")
+		linksPath    = flag.String("links-file", "", "Path to the persistent link-index JSON for --backlinks/--links-refresh. Enables incremental refresh: docs whose /documents date hasn't advanced are carried over, not re-fetched.")
+		linksRefresh = flag.Bool("links-refresh", false, "Refresh the link index (see --links-file) without querying a target. Lets a routine keep the index warm.")
+		offline      = flag.Bool("offline", false, "With --backlinks: answer from --links-file as-is, no network refresh.")
 	)
 	flag.Parse()
 
-	if *base == "" {
+	if *base == "" && !(*offline && *linksPath != "") {
 		fail("missing --base (or CRAFT_API_BASE): the Craft connect-link API base URL")
 	}
 	*base = strings.TrimRight(*base, "/")
@@ -155,6 +205,11 @@ func main() {
 		base:      *base,
 		retries:   *retries,
 		rlRetries: *rlRetries,
+	}
+
+	if *backlinksTo != "" || *linksRefresh {
+		runBacklinks(client, *backlinksTo, *docsArg, *excludeArg, *linksPath, *offline)
+		return
 	}
 
 	var scanErrors []string
@@ -413,6 +468,233 @@ func printTree(res Result, pages map[string]*Page) {
 	for _, e := range res.Errors {
 		fmt.Printf("! error: %s\n", e)
 	}
+}
+
+// ---- backlinks mode ----
+
+// Block IDs are UUIDs; Craft serializes block links into markdown two ways:
+// the native form [text](block://<id>) and deep links craftdocs://open?...&blockId=<id>
+// (normalized to block:// on write, but tolerated on read just in case).
+const uuidPat = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+
+var (
+	mdBlockLinkRe = regexp.MustCompile(`\[([^\]]*)\]\(block://(` + uuidPat + `)\)`)
+	rawBlockIDRe  = regexp.MustCompile(`(?:block://|[?&]blockId=)(` + uuidPat + `)`)
+)
+
+// LinkRef is one parsed outgoing reference inside a single markdown string.
+type LinkRef struct {
+	Text   string
+	Target string // lowercased
+}
+
+// extractLinks parses every block reference out of one block's markdown:
+// first the [text](block://id) form (capturing the link text), then any
+// leftover bare block:// or blockId= occurrence on the remainder.
+func extractLinks(md string) []LinkRef {
+	if !strings.Contains(md, "block://") && !strings.Contains(md, "blockId=") {
+		return nil
+	}
+	var out []LinkRef
+	for _, m := range mdBlockLinkRe.FindAllStringSubmatch(md, -1) {
+		out = append(out, LinkRef{Text: m[1], Target: strings.ToLower(m[2])})
+	}
+	rest := mdBlockLinkRe.ReplaceAllString(md, "")
+	for _, m := range rawBlockIDRe.FindAllStringSubmatch(rest, -1) {
+		out = append(out, LinkRef{Target: strings.ToLower(m[1])})
+	}
+	return out
+}
+
+// collectLinks walks a block tree and appends a LinkRecord for every outgoing
+// block reference, attributed to its nearest enclosing page (same page notion
+// as collectPages). Duplicate (target,text) pairs within one block collapse.
+func collectLinks(b Block, rootDoc, encPage string, encPath []string, out *[]LinkRecord) {
+	page, path := encPage, encPath
+	if b.Type == "page" {
+		path = append(append([]string{}, encPath...), firstLine(b.Markdown))
+		page = b.ID
+	}
+	if refs := extractLinks(b.Markdown); len(refs) > 0 {
+		seen := map[string]bool{}
+		for _, r := range refs {
+			key := r.Target + "|" + r.Text
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			*out = append(*out, LinkRecord{
+				Source: b.ID, SourceDoc: rootDoc, SourcePage: page,
+				Path: path, Target: r.Target, Text: r.Text,
+			})
+		}
+	}
+	for _, c := range b.Content {
+		collectLinks(c, rootDoc, page, path, out)
+	}
+}
+
+// refreshLinksIndex brings the link index up to date against the live space:
+// docs whose /documents listing date advanced past the index's recorded date
+// are deep-fetched and their records rebuilt; unchanged docs carry over as-is;
+// docs that disappeared from the listing (deleted) drop out. rootIDs narrows
+// which docs are ELIGIBLE for re-fetching (empty = all live docs) — records of
+// out-of-set docs are never dropped, so a narrowed run cannot shrink coverage.
+func refreshLinksIndex(client *Client, prior LinksIndex, listing []Document, rootIDs []string, exclude map[string]bool) (LinksIndex, int, int, []string) {
+	fresh := LinksIndex{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Docs:        map[string]string{},
+	}
+	byDoc := map[string][]LinkRecord{}
+	for _, r := range prior.Links {
+		byDoc[r.SourceDoc] = append(byDoc[r.SourceDoc], r)
+	}
+	// Craft IDs are case-insensitive UUIDs and arrive in mixed case depending on
+	// the source (listing vs MCP) — compare them lowercased.
+	inScan := map[string]bool{}
+	for _, id := range rootIDs {
+		inScan[strings.ToLower(id)] = true
+	}
+	scanned, skipped := 0, 0
+	var errs []string
+
+	for _, d := range listing {
+		if d.IsDeleted || exclude[d.ID] {
+			continue // records dropped: deleted or explicitly excluded
+		}
+		eligible := len(rootIDs) == 0 || inScan[strings.ToLower(d.ID)]
+		if !eligible || !linksDocChanged(d.ID, d.LastModifiedAt, prior) {
+			fresh.Links = append(fresh.Links, byDoc[d.ID]...)
+			// Carry only a date we actually indexed under: recording the current
+			// listing date for a never-fetched doc would make future runs skip it.
+			if prev, ok := prior.Docs[d.ID]; ok {
+				fresh.Docs[d.ID] = prev
+			}
+			if eligible {
+				skipped++
+			}
+			continue
+		}
+		root, err := client.getBlocks(d.ID)
+		if err != nil {
+			// Keep the stale records and the OLD date so the next run retries.
+			errs = append(errs, fmt.Sprintf("%s: %v", d.ID, err))
+			fresh.Links = append(fresh.Links, byDoc[d.ID]...)
+			if prev, ok := prior.Docs[d.ID]; ok {
+				fresh.Docs[d.ID] = prev
+			}
+			continue
+		}
+		scanned++
+		collectLinks(root, d.ID, "", nil, &fresh.Links)
+		if d.LastModifiedAt != "" {
+			fresh.Docs[d.ID] = d.LastModifiedAt
+		}
+	}
+	// A --docs ID absent from the listing is out of the connect-link scope (or
+	// mistyped) and was silently unreachable — say so instead of hiding it.
+	seenInListing := map[string]bool{}
+	for _, d := range listing {
+		seenInListing[strings.ToLower(d.ID)] = true
+	}
+	for _, id := range rootIDs {
+		if !seenInListing[strings.ToLower(id)] {
+			errs = append(errs, fmt.Sprintf("%s: not in /documents listing (out of connect-link scope?)", id))
+		}
+	}
+	return fresh, scanned, skipped, errs
+}
+
+// linksDocChanged mirrors docChanged for the links index: re-fetch unless the
+// listing date is present, parseable, and not newer than the recorded one.
+func linksDocChanged(id, listingDate string, idx LinksIndex) bool {
+	lt, err := parseTime(listingDate)
+	if err != nil {
+		return true
+	}
+	prev, ok := idx.Docs[id]
+	if !ok {
+		return true
+	}
+	pt, err := parseTime(prev)
+	if err != nil {
+		return true
+	}
+	return lt.After(pt)
+}
+
+// queryBacklinks filters the index down to records pointing at target.
+func queryBacklinks(idx LinksIndex, target string) []LinkRecord {
+	target = strings.ToLower(target)
+	var hits []LinkRecord
+	for _, r := range idx.Links {
+		if r.Target == target {
+			hits = append(hits, r)
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].SourceDoc != hits[j].SourceDoc {
+			return hits[i].SourceDoc < hits[j].SourceDoc
+		}
+		return hits[i].Source < hits[j].Source
+	})
+	return hits
+}
+
+// runBacklinks executes --backlinks/--links-refresh: load index, refresh it
+// against the live space (unless --offline), persist it back, answer the query.
+func runBacklinks(client *Client, target, docsArg, excludeArg, linksPath string, offline bool) {
+	idx := LinksIndex{Docs: map[string]string{}}
+	haveFile := false
+	if linksPath != "" {
+		if b, err := os.ReadFile(linksPath); err == nil {
+			if err := json.Unmarshal(b, &idx); err != nil {
+				fail("cannot parse links file %s: %v", linksPath, err)
+			}
+			if idx.Docs == nil {
+				idx.Docs = map[string]string{}
+			}
+			haveFile = true
+		}
+	}
+
+	res := BacklinksResult{Target: strings.ToLower(target)}
+
+	if offline {
+		if !haveFile {
+			fail("--offline needs an existing --links-file")
+		}
+		res.Stale = true
+	} else {
+		listing, err := client.listDocuments()
+		if err != nil {
+			if !haveFile {
+				fail("GET /documents failed and no --links-file to fall back to: %v", err)
+			}
+			res.Stale = true
+			res.Errors = append(res.Errors, fmt.Sprintf("listing failed, answering from stale index: %v", err))
+		} else {
+			fresh, scanned, skipped, errs := refreshLinksIndex(client, idx, listing, splitCSV(docsArg), toSet(excludeArg))
+			idx = fresh
+			res.ScannedDocs, res.SkippedDocs = scanned, skipped
+			res.Errors = append(res.Errors, errs...)
+			if linksPath != "" {
+				out, _ := json.MarshalIndent(idx, "", " ")
+				if err := os.WriteFile(linksPath, out, 0o644); err != nil {
+					fail("cannot write links file %s: %v", linksPath, err)
+				}
+			}
+		}
+	}
+
+	res.TotalLinks = len(idx.Links)
+	res.IndexedAt = idx.GeneratedAt
+	if target != "" {
+		res.Backlinks = queryBacklinks(idx, target)
+		res.Count = len(res.Backlinks)
+	}
+	out, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(out))
 }
 
 // ---- HTTP client ----
