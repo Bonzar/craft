@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -220,6 +222,223 @@ func TestCarryOver(t *testing.T) {
 	res, _ := Diff(pages, snap, time.Time{})
 	if len(res.Changed) != 0 {
 		t.Errorf("carried pages should be unchanged, got %+v", res.Changed)
+	}
+}
+
+// ---- backlinks ----
+
+const (
+	idA = "d86295ad-3736-9f6c-1575-3c5b95218e2f"
+	idB = "50E6A542-6B07-D6C2-83F6-134C176356EB" // uppercase on purpose
+)
+
+func TestExtractLinks(t *testing.T) {
+	md := "см. [Задача #задача](block://" + idA + ") и [База](block://" + idB + "), " +
+		"дип-линк craftdocs://open?spaceId=abc&blockId=" + idA + " и голый block://" + idB
+	refs := extractLinks(md)
+	if len(refs) != 4 {
+		t.Fatalf("want 4 refs, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Text != "Задача #задача" || refs[0].Target != idA {
+		t.Errorf("ref0 = %+v", refs[0])
+	}
+	if refs[1].Target != strings.ToLower(idB) {
+		t.Errorf("ref1 target not lowercased: %+v", refs[1])
+	}
+	// The two markdown-form matches must not be re-counted by the raw pass.
+	if refs[2].Text != "" || refs[2].Target != idA {
+		t.Errorf("ref2 = %+v", refs[2])
+	}
+	if refs[3].Text != "" || refs[3].Target != strings.ToLower(idB) {
+		t.Errorf("ref3 = %+v", refs[3])
+	}
+	if got := extractLinks("нет ссылок, просто текст"); got != nil {
+		t.Errorf("no-link markdown must yield nil, got %+v", got)
+	}
+}
+
+func linkTree() Block {
+	return blk("DOC", "page", "Проект X", "2026-06-01T00:00:00Z",
+		blk("t1", "text", "шапка: [Этап 1](block://"+idA+")", "2026-06-01T00:00:00Z"),
+		blk("PG", "page", "Вложенная страница", "2026-06-01T00:00:00Z",
+			blk("t2", "text", "и снова [Этап 1](block://"+idA+") дважды [Этап 1](block://"+idA+")", "2026-06-01T00:00:00Z"),
+			blk("t3", "text", "другая цель [База](block://"+idB+")", "2026-06-01T00:00:00Z"),
+		),
+	)
+}
+
+func TestCollectLinks(t *testing.T) {
+	var recs []LinkRecord
+	collectLinks(linkTree(), "DOC", "", nil, &recs)
+	if len(recs) != 3 { // t2's duplicate collapses
+		t.Fatalf("want 3 records, got %d: %+v", len(recs), recs)
+	}
+	if recs[0].Source != "t1" || recs[0].SourcePage != "DOC" || recs[0].Target != idA {
+		t.Errorf("rec0 = %+v", recs[0])
+	}
+	if recs[1].Source != "t2" || recs[1].SourcePage != "PG" {
+		t.Errorf("rec1 = %+v", recs[1])
+	}
+	if len(recs[1].Path) != 2 || recs[1].Path[1] != "Вложенная страница" {
+		t.Errorf("rec1 path = %+v", recs[1].Path)
+	}
+	if recs[2].Source != "t3" || recs[2].Target != strings.ToLower(idB) {
+		t.Errorf("rec2 = %+v", recs[2])
+	}
+}
+
+// Collection items arrive in a separate "items" array with full nested
+// bodies; links inside them must be indexed and attributed to the item.
+func TestCollectLinksInsideCollectionItems(t *testing.T) {
+	coll := blk("COLL", "collection", "Сказки", "")
+	item := blk("ITEM", "collectionItem", "Чайничек и последнее тепло", "",
+		blk("body", "text", "герой из [Личности Оли](block://"+idA+")", ""),
+	)
+	coll.Items = []Block{item}
+	doc := blk("DOC", "page", "Архив", "", coll)
+
+	var recs []LinkRecord
+	collectLinks(doc, "DOC", "", nil, &recs)
+	if len(recs) != 1 {
+		t.Fatalf("want 1 record from item body, got %d: %+v", len(recs), recs)
+	}
+	r := recs[0]
+	if r.Source != "body" || r.SourcePage != "ITEM" || r.Target != idA {
+		t.Errorf("record = %+v", r)
+	}
+	if len(r.Path) != 2 || r.Path[1] != "Чайничек и последнее тепло" {
+		t.Errorf("path = %+v", r.Path)
+	}
+}
+
+func TestQueryBacklinksCaseInsensitive(t *testing.T) {
+	var recs []LinkRecord
+	collectLinks(linkTree(), "DOC", "", nil, &recs)
+	idx := LinksIndex{Links: recs}
+	hits := queryBacklinks(idx, strings.ToUpper(idA))
+	if len(hits) != 2 {
+		t.Fatalf("want 2 backlinks for idA, got %d: %+v", len(hits), hits)
+	}
+	if hits[0].Source != "t1" || hits[1].Source != "t2" {
+		t.Errorf("hit order = %s, %s", hits[0].Source, hits[1].Source)
+	}
+}
+
+// Unchanged docs carry their records without a fetch; deleted docs drop; docs
+// outside a narrowed --docs set are carried but never marked as indexed anew.
+func TestRefreshLinksIndexCarryAndDrop(t *testing.T) {
+	prior := LinksIndex{
+		Docs: map[string]string{"D1": "2026-06-01T00:00:00Z", "D2": "2026-06-01T00:00:00Z", "D3": "2026-06-01T00:00:00Z"},
+		Links: []LinkRecord{
+			{Source: "a", SourceDoc: "D1", Target: idA},
+			{Source: "b", SourceDoc: "D2", Target: idA},
+			{Source: "c", SourceDoc: "D3", Target: idA},
+		},
+	}
+	listing := []Document{
+		{ID: "D1", LastModifiedAt: "2026-06-01T00:00:00Z"},                  // unchanged -> carry
+		{ID: "D2", LastModifiedAt: "2026-06-01T00:00:00Z", IsDeleted: true}, // deleted -> drop
+		// D3 gone from listing entirely -> drop
+	}
+	fresh, scanned, skipped, errs := refreshLinksIndex(nil, prior, listing, nil, map[string]bool{})
+	if scanned != 0 || skipped != 1 {
+		t.Errorf("scanned=%d skipped=%d, want 0/1", scanned, skipped)
+	}
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+	if len(fresh.Links) != 1 || fresh.Links[0].SourceDoc != "D1" {
+		t.Errorf("links = %+v, want only D1's record", fresh.Links)
+	}
+	if _, ok := fresh.Docs["D2"]; ok {
+		t.Error("deleted doc date must not persist")
+	}
+}
+
+// A narrowed --docs run must not shrink coverage: out-of-set docs carry over,
+// and a never-indexed out-of-set doc must NOT get a date recorded (a later full
+// run still has to fetch it). IDs are matched case-insensitively.
+func TestRefreshLinksIndexNarrowedRun(t *testing.T) {
+	prior := LinksIndex{
+		Docs:  map[string]string{"D1": "2026-06-01T00:00:00Z"},
+		Links: []LinkRecord{{Source: "a", SourceDoc: "D1", Target: idA}},
+	}
+	listing := []Document{
+		{ID: "D1", LastModifiedAt: "2026-06-01T00:00:00Z"}, // in set, unchanged -> skip
+		{ID: "D9", LastModifiedAt: "2026-06-05T00:00:00Z"}, // out of set, never indexed
+	}
+	fresh, scanned, skipped, errs := refreshLinksIndex(nil, prior, listing, []string{"d1", "MISSING-DOC"}, map[string]bool{})
+	if scanned != 0 || skipped != 1 {
+		t.Errorf("scanned=%d skipped=%d, want 0/1", scanned, skipped)
+	}
+	if len(fresh.Links) != 1 {
+		t.Errorf("links = %+v, want D1 carried", fresh.Links)
+	}
+	if _, ok := fresh.Docs["D9"]; ok {
+		t.Error("never-indexed out-of-set doc must not get a date recorded")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "MISSING-DOC") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected out-of-listing warning for MISSING-DOC, got %v", errs)
+	}
+}
+
+// The Craft store round-trips the index through gzip+base64 chunks; a chunk
+// coming back from Craft may gain code fences and stray whitespace.
+func TestStoreCodecRoundTrip(t *testing.T) {
+	idx := LinksIndex{
+		GeneratedAt: "2026-07-18T00:00:00Z",
+		Docs:        map[string]string{"D1": "2026-07-18T00:00:00Z"},
+		Links: []LinkRecord{
+			{Source: "a", SourceDoc: "D1", SourcePage: "P", Path: []string{"Проект X"}, Target: idA, Text: "Задача"},
+		},
+	}
+	chunks, err := encodeIndex(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("small index must fit one chunk, got %d", len(chunks))
+	}
+	// Simulate Craft round-trip artifacts: fences and wrapping.
+	mangled := "```text\n" + chunks[0][:10] + "\n" + chunks[0][10:] + "\n```"
+	got, err := decodeIndex([]string{cleanChunk(mangled)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GeneratedAt != idx.GeneratedAt || len(got.Links) != 1 || got.Links[0].Text != "Задача" {
+		t.Errorf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestEncodeIndexChunking(t *testing.T) {
+	idx := LinksIndex{Docs: map[string]string{}}
+	for i := 0; i < 30000; i++ {
+		idx.Links = append(idx.Links, LinkRecord{Source: fmt.Sprintf("src-%d-%d", i, i*7), SourceDoc: "D", Target: idA})
+	}
+	chunks, err := encodeIndex(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("want multiple chunks for a big index, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len(c) > storeChunkSize {
+			t.Errorf("chunk %d exceeds limit: %d", i, len(c))
+		}
+	}
+	got, err := decodeIndex(chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Links) != len(idx.Links) {
+		t.Errorf("links = %d, want %d", len(got.Links), len(idx.Links))
 	}
 }
 

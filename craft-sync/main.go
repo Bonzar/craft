@@ -15,7 +15,10 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,18 +26,23 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 // Block mirrors the GET /blocks response shape (only the fields we need).
+// Collection blocks carry their items in a separate "items" array (type
+// collectionItem), each with a full nested content tree — not in "content".
 type Block struct {
 	ID       string  `json:"id"`
 	Type     string  `json:"type"`
 	Markdown string  `json:"markdown"`
+	RawCode  string  `json:"rawCode"`
 	Metadata *Meta   `json:"metadata"`
 	Content  []Block `json:"content"`
+	Items    []Block `json:"items"`
 }
 
 type Meta struct {
@@ -98,6 +106,50 @@ type Result struct {
 	Errors         []string      `json:"errors,omitempty"`
 }
 
+// ---- backlinks: link index over block:// references ----
+//
+// Craft has no native backlinks API: neither the connect-link REST API nor the
+// MCP server expose incoming links, and the search index covers visible text
+// only — a block-link's target ID lives in a text attribute and is unreachable
+// by any search (verified empirically, including RE2 regex search by ID).
+// Outgoing links, however, are fully present in each block's markdown as
+// [text](block://<id>), so an inverted index over a full crawl answers
+// "who links to X" exactly. This mode reuses the same doc-level incremental
+// machinery as change detection: only docs whose /documents listing date has
+// advanced are re-fetched; everything else is carried over from the index file.
+
+// LinkRecord is one outgoing block-link occurrence: block Source (inside
+// SourcePage of doc SourceDoc) links to block Target.
+type LinkRecord struct {
+	Source     string   `json:"source"`               // linking block ID
+	SourceDoc  string   `json:"sourceDoc"`            // root document the source lives in
+	SourcePage string   `json:"sourcePage,omitempty"` // nearest enclosing page block
+	Path       []string `json:"path,omitempty"`       // page-title chain down to the source
+	Target     string   `json:"target"`               // linked-to block ID (lowercased)
+	Text       string   `json:"text,omitempty"`       // link text, when the markdown form carries one
+}
+
+// LinksIndex is the on-disk inverted-index source: every outgoing link in the
+// space plus the doc-level dates that drive incremental refresh.
+type LinksIndex struct {
+	GeneratedAt string            `json:"generatedAt"`
+	Docs        map[string]string `json:"docs"`  // rootDocID -> /documents lastModifiedAt at index time
+	Links       []LinkRecord      `json:"links"` // every outgoing block link, flat
+}
+
+// BacklinksResult is the query answer printed in --backlinks mode.
+type BacklinksResult struct {
+	Target      string       `json:"target"`
+	Count       int          `json:"count"`
+	Backlinks   []LinkRecord `json:"backlinks"`
+	TotalLinks  int          `json:"totalLinks"`  // size of the whole index
+	ScannedDocs int          `json:"scannedDocs"` // deep-fetched this run
+	SkippedDocs int          `json:"skippedDocs"` // date unchanged -> carried from index
+	Stale       bool         `json:"stale,omitempty"` // answered from index without refresh
+	IndexedAt   string       `json:"indexedAt,omitempty"`
+	Errors      []string     `json:"errors,omitempty"`
+}
+
 func main() {
 	var (
 		base        = flag.String("base", os.Getenv("CRAFT_API_BASE"), "Base URL of the Craft connect-link API (or env CRAFT_API_BASE)")
@@ -111,13 +163,31 @@ func main() {
 		timeoutSec  = flag.Int("timeout", 60, "Per-request HTTP timeout in seconds.")
 		retries     = flag.Int("retries", 3, "Retry attempts for transient failures (network / HTTP 5xx).")
 		rlRetries   = flag.Int("rl-retries", 5, "Retry attempts for HTTP 429 'Block budget exceeded', with longer exponential backoff (5,10,20,40,60s capped).")
+
+		backlinksTo  = flag.String("backlinks", "", "Backlinks mode: print every block whose markdown links to this block ID, then exit. Uses/refreshes --links-file or --links-store when given.")
+		linksPath    = flag.String("links-file", "", "Path to the persistent link-index JSON for --backlinks/--links-refresh. Enables incremental refresh: docs whose /documents date hasn't advanced are carried over, not re-fetched.")
+		linksStore   = flag.String("links-store", os.Getenv("CRAFT_LINKS_STORE"), "Craft page block ID holding the persistent link index (gzip+base64 dump in code blocks plus an 'Обновлён:' cutoff line); defaults to env CRAFT_LINKS_STORE. Cross-session alternative to --links-file; the store doc itself is excluded from indexing. Pass an empty value to force --links-file/local mode when the env var is set.")
+		linksRefresh = flag.Bool("links-refresh", false, "Refresh the link index (see --links-file/--links-store) without querying a target. Lets a routine keep the index warm.")
+		offline      = flag.Bool("offline", false, "With --backlinks: answer from --links-file/--links-store as-is, no refresh of the space.")
 	)
 	flag.Parse()
 
-	if *base == "" {
+	if *base == "" && !(*offline && *linksPath != "") {
 		fail("missing --base (or CRAFT_API_BASE): the Craft connect-link API base URL")
 	}
 	*base = strings.TrimRight(*base, "/")
+	if *linksPath != "" && *linksStore != "" {
+		storeExplicit := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "links-store" {
+				storeExplicit = true
+			}
+		})
+		if storeExplicit {
+			fail("--links-file and --links-store are mutually exclusive")
+		}
+		*linksStore = "" // env-default store yields to an explicit --links-file
+	}
 
 	exclude := toSet(*excludeArg)
 	var since time.Time
@@ -155,6 +225,11 @@ func main() {
 		base:      *base,
 		retries:   *retries,
 		rlRetries: *rlRetries,
+	}
+
+	if *backlinksTo != "" || *linksRefresh {
+		runBacklinks(client, *backlinksTo, *docsArg, *excludeArg, *linksPath, *linksStore, *offline)
+		return
 	}
 
 	var scanErrors []string
@@ -415,6 +490,423 @@ func printTree(res Result, pages map[string]*Page) {
 	}
 }
 
+// ---- backlinks mode ----
+
+// Block IDs are UUIDs; Craft serializes block links into markdown two ways:
+// the native form [text](block://<id>) and deep links craftdocs://open?...&blockId=<id>
+// (normalized to block:// on write, but tolerated on read just in case).
+const uuidPat = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+
+var (
+	mdBlockLinkRe = regexp.MustCompile(`\[([^\]]*)\]\(block://(` + uuidPat + `)\)`)
+	rawBlockIDRe  = regexp.MustCompile(`(?:block://|[?&]blockId=)(` + uuidPat + `)`)
+)
+
+// LinkRef is one parsed outgoing reference inside a single markdown string.
+type LinkRef struct {
+	Text   string
+	Target string // lowercased
+}
+
+// extractLinks parses every block reference out of one block's markdown:
+// first the [text](block://id) form (capturing the link text), then any
+// leftover bare block:// or blockId= occurrence on the remainder.
+func extractLinks(md string) []LinkRef {
+	if !strings.Contains(md, "block://") && !strings.Contains(md, "blockId=") {
+		return nil
+	}
+	var out []LinkRef
+	for _, m := range mdBlockLinkRe.FindAllStringSubmatch(md, -1) {
+		out = append(out, LinkRef{Text: m[1], Target: strings.ToLower(m[2])})
+	}
+	rest := mdBlockLinkRe.ReplaceAllString(md, "")
+	for _, m := range rawBlockIDRe.FindAllStringSubmatch(rest, -1) {
+		out = append(out, LinkRef{Target: strings.ToLower(m[1])})
+	}
+	return out
+}
+
+// collectLinks walks a block tree and appends a LinkRecord for every outgoing
+// block reference, attributed to its nearest enclosing page (same page notion
+// as collectPages). Duplicate (target,text) pairs within one block collapse.
+func collectLinks(b Block, rootDoc, encPage string, encPath []string, out *[]LinkRecord) {
+	page, path := encPage, encPath
+	// A collection item is a page-like unit (its markdown is the item title),
+	// so backlinks from inside an item attribute to the item, not the doc page.
+	if b.Type == "page" || b.Type == "collectionItem" {
+		path = append(append([]string{}, encPath...), firstLine(b.Markdown))
+		page = b.ID
+	}
+	if refs := extractLinks(b.Markdown); len(refs) > 0 {
+		seen := map[string]bool{}
+		for _, r := range refs {
+			key := r.Target + "|" + r.Text
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			*out = append(*out, LinkRecord{
+				Source: b.ID, SourceDoc: rootDoc, SourcePage: page,
+				Path: path, Target: r.Target, Text: r.Text,
+			})
+		}
+	}
+	for _, c := range b.Content {
+		collectLinks(c, rootDoc, page, path, out)
+	}
+	for _, it := range b.Items {
+		collectLinks(it, rootDoc, page, path, out)
+	}
+}
+
+// refreshLinksIndex brings the link index up to date against the live space:
+// docs whose /documents listing date advanced past the index's recorded date
+// are deep-fetched and their records rebuilt; unchanged docs carry over as-is;
+// docs that disappeared from the listing (deleted) drop out. rootIDs narrows
+// which docs are ELIGIBLE for re-fetching (empty = all live docs) — records of
+// out-of-set docs are never dropped, so a narrowed run cannot shrink coverage.
+func refreshLinksIndex(client *Client, prior LinksIndex, listing []Document, rootIDs []string, exclude map[string]bool) (LinksIndex, int, int, []string) {
+	fresh := LinksIndex{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Docs:        map[string]string{},
+	}
+	byDoc := map[string][]LinkRecord{}
+	for _, r := range prior.Links {
+		byDoc[r.SourceDoc] = append(byDoc[r.SourceDoc], r)
+	}
+	// Craft IDs are case-insensitive UUIDs and arrive in mixed case depending on
+	// the source (listing vs MCP) — compare them lowercased.
+	inScan := map[string]bool{}
+	for _, id := range rootIDs {
+		inScan[strings.ToLower(id)] = true
+	}
+	scanned, skipped := 0, 0
+	var errs []string
+
+	for _, d := range listing {
+		if d.IsDeleted || exclude[d.ID] {
+			continue // records dropped: deleted or explicitly excluded
+		}
+		eligible := len(rootIDs) == 0 || inScan[strings.ToLower(d.ID)]
+		if !eligible || !linksDocChanged(d.ID, d.LastModifiedAt, prior) {
+			fresh.Links = append(fresh.Links, byDoc[d.ID]...)
+			// Carry only a date we actually indexed under: recording the current
+			// listing date for a never-fetched doc would make future runs skip it.
+			if prev, ok := prior.Docs[d.ID]; ok {
+				fresh.Docs[d.ID] = prev
+			}
+			if eligible {
+				skipped++
+			}
+			continue
+		}
+		root, err := client.getBlocks(d.ID)
+		if err != nil {
+			// Keep the stale records and the OLD date so the next run retries.
+			errs = append(errs, fmt.Sprintf("%s: %v", d.ID, err))
+			fresh.Links = append(fresh.Links, byDoc[d.ID]...)
+			if prev, ok := prior.Docs[d.ID]; ok {
+				fresh.Docs[d.ID] = prev
+			}
+			continue
+		}
+		scanned++
+		collectLinks(root, d.ID, "", nil, &fresh.Links)
+		if d.LastModifiedAt != "" {
+			fresh.Docs[d.ID] = d.LastModifiedAt
+		}
+	}
+	// A --docs ID absent from the listing is out of the connect-link scope (or
+	// mistyped) and was silently unreachable — say so instead of hiding it.
+	seenInListing := map[string]bool{}
+	for _, d := range listing {
+		seenInListing[strings.ToLower(d.ID)] = true
+	}
+	for _, id := range rootIDs {
+		if !seenInListing[strings.ToLower(id)] {
+			errs = append(errs, fmt.Sprintf("%s: not in /documents listing (out of connect-link scope?)", id))
+		}
+	}
+	return fresh, scanned, skipped, errs
+}
+
+// linksDocChanged mirrors docChanged for the links index: re-fetch unless the
+// listing date is present, parseable, and not newer than the recorded one.
+func linksDocChanged(id, listingDate string, idx LinksIndex) bool {
+	lt, err := parseTime(listingDate)
+	if err != nil {
+		return true
+	}
+	prev, ok := idx.Docs[id]
+	if !ok {
+		return true
+	}
+	pt, err := parseTime(prev)
+	if err != nil {
+		return true
+	}
+	return lt.After(pt)
+}
+
+// queryBacklinks filters the index down to records pointing at target.
+func queryBacklinks(idx LinksIndex, target string) []LinkRecord {
+	target = strings.ToLower(target)
+	var hits []LinkRecord
+	for _, r := range idx.Links {
+		if r.Target == target {
+			hits = append(hits, r)
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].SourceDoc != hits[j].SourceDoc {
+			return hits[i].SourceDoc < hits[j].SourceDoc
+		}
+		return hits[i].Source < hits[j].Source
+	})
+	return hits
+}
+
+// ---- Craft-hosted index store ----
+//
+// The index can live inside Craft itself (--links-store <pageBlockId>), so any
+// session shares one warm index without a repo artifact. Layout owned by the
+// tool inside the store page:
+//   - a text block starting with "Обновлён:" — human-visible cutoff line;
+//   - one or more code blocks — base64 of gzip of the compact LinksIndex JSON,
+//     split into storeChunkSize pieces (Craft block size safety).
+// Everything else in the doc (callout, headers) is left untouched. A dump that
+// fails to decode is treated as absent: the next run rebuilds from scratch, so
+// the store is self-healing.
+
+const storeChunkSize = 60000
+
+const cutoffPrefix = "Обновлён:"
+
+// encodeIndex packs a LinksIndex into base64(gzip(compact JSON)) chunks.
+func encodeIndex(idx LinksIndex) ([]string, error) {
+	raw, err := json.Marshal(idx)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if _, err := zw.Write(raw); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+	var chunks []string
+	for len(b64) > 0 {
+		n := storeChunkSize
+		if n > len(b64) {
+			n = len(b64)
+		}
+		chunks = append(chunks, b64[:n])
+		b64 = b64[n:]
+	}
+	return chunks, nil
+}
+
+// decodeIndex reverses encodeIndex from concatenated chunk texts.
+func decodeIndex(chunks []string) (LinksIndex, error) {
+	var idx LinksIndex
+	joined := strings.Join(chunks, "")
+	bin, err := base64.StdEncoding.DecodeString(joined)
+	if err != nil {
+		return idx, fmt.Errorf("base64: %v", err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(bin))
+	if err != nil {
+		return idx, fmt.Errorf("gzip: %v", err)
+	}
+	raw, err := io.ReadAll(zr)
+	if err != nil {
+		return idx, fmt.Errorf("gunzip: %v", err)
+	}
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		return idx, fmt.Errorf("json: %v", err)
+	}
+	return idx, nil
+}
+
+// cleanChunk strips code fences and whitespace a Craft round-trip may add.
+func cleanChunk(md string) string {
+	var out []string
+	for _, line := range strings.Split(md, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "```") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "")
+}
+
+// storeState is what loadStore learned about the store page: the decoded
+// index plus the block IDs the tool owns (for the subsequent save).
+type storeState struct {
+	index    LinksIndex
+	chunkIDs []string // existing code blocks, document order
+	cutoffID string   // text block starting with cutoffPrefix ("" if absent)
+	decodeOK bool
+}
+
+// loadStore reads the store page and decodes the dump. Decode failures are
+// reported but non-fatal: the caller proceeds with an empty index.
+func loadStore(client *Client, storeID string) (storeState, error) {
+	st := storeState{index: LinksIndex{Docs: map[string]string{}}}
+	root, err := client.getBlocksNoMeta(storeID)
+	if err != nil {
+		return st, err
+	}
+	var chunks []string
+	var walk func(b Block)
+	walk = func(b Block) {
+		switch {
+		case b.Type == "code":
+			st.chunkIDs = append(st.chunkIDs, b.ID)
+			text := b.RawCode
+			if text == "" {
+				text = b.Markdown
+			}
+			chunks = append(chunks, cleanChunk(text))
+		case b.Type == "text" && st.cutoffID == "" && strings.HasPrefix(strings.TrimSpace(b.Markdown), cutoffPrefix):
+			st.cutoffID = b.ID
+		}
+		for _, c := range b.Content {
+			walk(c)
+		}
+	}
+	walk(root)
+	if len(chunks) == 0 {
+		return st, nil
+	}
+	idx, err := decodeIndex(chunks)
+	if err != nil {
+		return st, fmt.Errorf("store dump undecodable (will rebuild): %v", err)
+	}
+	if idx.Docs == nil {
+		idx.Docs = map[string]string{}
+	}
+	st.index = idx
+	st.decodeOK = true
+	return st, nil
+}
+
+// saveStore rewrites the tool-owned blocks: cutoff line updated (or created),
+// old chunk blocks deleted, fresh chunks appended one by one (order-safe).
+func saveStore(client *Client, storeID string, st storeState, idx LinksIndex) error {
+	chunks, err := encodeIndex(idx)
+	if err != nil {
+		return err
+	}
+	cutoff := fmt.Sprintf("%s %s · доков: %d · ссылок: %d",
+		cutoffPrefix, idx.GeneratedAt, len(idx.Docs), len(idx.Links))
+	if st.cutoffID != "" {
+		if err := client.updateBlocks([]map[string]any{{"id": st.cutoffID, "markdown": cutoff}}); err != nil {
+			return fmt.Errorf("cutoff update: %v", err)
+		}
+	} else {
+		if err := client.insertBlocks(storeID, []map[string]any{{"type": "text", "markdown": cutoff}}); err != nil {
+			return fmt.Errorf("cutoff insert: %v", err)
+		}
+	}
+	if len(st.chunkIDs) > 0 {
+		if err := client.deleteBlocks(st.chunkIDs); err != nil {
+			return fmt.Errorf("old chunks delete: %v", err)
+		}
+	}
+	for i, ch := range chunks {
+		block := map[string]any{"type": "code", "rawCode": ch, "language": "plaintext"}
+		if err := client.insertBlocks(storeID, []map[string]any{block}); err != nil {
+			return fmt.Errorf("chunk %d/%d insert: %v", i+1, len(chunks), err)
+		}
+	}
+	return nil
+}
+
+// runBacklinks executes --backlinks/--links-refresh: load index (file or Craft
+// store), refresh it against the live space (unless --offline), persist it
+// back, answer the query.
+func runBacklinks(client *Client, target, docsArg, excludeArg, linksPath, linksStore string, offline bool) {
+	idx := LinksIndex{Docs: map[string]string{}}
+	havePrior := false
+	var store storeState
+
+	res := BacklinksResult{Target: strings.ToLower(target)}
+
+	switch {
+	case linksStore != "":
+		st, err := loadStore(client, linksStore)
+		if err != nil && st.chunkIDs == nil && st.cutoffID == "" {
+			fail("cannot read links store %s: %v", linksStore, err)
+		}
+		if err != nil {
+			res.Errors = append(res.Errors, err.Error())
+		}
+		store = st
+		idx = st.index
+		havePrior = st.decodeOK
+	case linksPath != "":
+		if b, err := os.ReadFile(linksPath); err == nil {
+			if err := json.Unmarshal(b, &idx); err != nil {
+				fail("cannot parse links file %s: %v", linksPath, err)
+			}
+			if idx.Docs == nil {
+				idx.Docs = map[string]string{}
+			}
+			havePrior = true
+		}
+	}
+
+	if offline {
+		if !havePrior {
+			fail("--offline needs an existing --links-file or a readable --links-store dump")
+		}
+		res.Stale = true
+	} else {
+		listing, err := client.listDocuments()
+		if err != nil {
+			if !havePrior {
+				fail("GET /documents failed and no prior index to fall back to: %v", err)
+			}
+			res.Stale = true
+			res.Errors = append(res.Errors, fmt.Sprintf("listing failed, answering from stale index: %v", err))
+		} else {
+			exclude := toSet(excludeArg)
+			if linksStore != "" {
+				exclude[linksStore] = true // never index the store doc itself
+			}
+			fresh, scanned, skipped, errs := refreshLinksIndex(client, idx, listing, splitCSV(docsArg), exclude)
+			idx = fresh
+			res.ScannedDocs, res.SkippedDocs = scanned, skipped
+			res.Errors = append(res.Errors, errs...)
+			switch {
+			case linksStore != "":
+				if err := saveStore(client, linksStore, store, idx); err != nil {
+					res.Errors = append(res.Errors, fmt.Sprintf("store save failed: %v", err))
+				}
+			case linksPath != "":
+				out, _ := json.MarshalIndent(idx, "", " ")
+				if err := os.WriteFile(linksPath, out, 0o644); err != nil {
+					fail("cannot write links file %s: %v", linksPath, err)
+				}
+			}
+		}
+	}
+
+	res.TotalLinks = len(idx.Links)
+	res.IndexedAt = idx.GeneratedAt
+	if target != "" {
+		res.Backlinks = queryBacklinks(idx, target)
+		res.Count = len(res.Backlinks)
+	}
+	out, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(out))
+}
+
 // ---- HTTP client ----
 
 type Client struct {
@@ -429,6 +921,74 @@ func (c *Client) getBlocks(id string) (Block, error) {
 	var b Block
 	err := c.getJSON(u, &b)
 	return b, err
+}
+
+// getBlocksNoMeta fetches a tree without metadata — enough for the links store.
+func (c *Client) getBlocksNoMeta(id string) (Block, error) {
+	u := fmt.Sprintf("%s/blocks?id=%s&maxDepth=-1", c.base, url.QueryEscape(id))
+	var b Block
+	err := c.getJSON(u, &b)
+	return b, err
+}
+
+// insertBlocks POSTs new blocks to the end of parent page parentID.
+func (c *Client) insertBlocks(parentID string, blocks []map[string]any) error {
+	payload := map[string]any{
+		"blocks":   blocks,
+		"position": map[string]any{"position": "end", "pageId": parentID},
+	}
+	return c.sendJSON(http.MethodPost, c.base+"/blocks", payload)
+}
+
+// updateBlocks PUTs partial block updates ({id, markdown, ...}).
+func (c *Client) updateBlocks(blocks []map[string]any) error {
+	return c.sendJSON(http.MethodPut, c.base+"/blocks", map[string]any{"blocks": blocks})
+}
+
+// deleteBlocks removes blocks by ID.
+func (c *Client) deleteBlocks(ids []string) error {
+	return c.sendJSON(http.MethodDelete, c.base+"/blocks", map[string]any{"blockIds": ids})
+}
+
+// sendJSON issues a write request with the same transient/429 retry policy as
+// reads. Writes are NOT retried on ambiguous transport errors after the body
+// may have been consumed server-side — the store is self-healing (a broken
+// dump just forces a rebuild), so at-most-once with an error surfaced beats
+// duplicate chunks.
+func (c *Client) sendJSON(method, u string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	rlLeft := c.rlRetries
+	var backoff time.Duration
+	for {
+		if backoff > 0 {
+			time.Sleep(backoff)
+			backoff = 0
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
+		req, _ := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		resp, err := c.http.Do(req)
+		if err != nil {
+			cancel()
+			return err
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		cancel()
+		if resp.StatusCode == http.StatusTooManyRequests && rlLeft > 0 {
+			backoff = rateLimitBackoff(c.rlRetries - rlLeft)
+			rlLeft--
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("%s %s: HTTP %d: %s", method, u, resp.StatusCode, truncate(string(respBody), 300))
+		}
+		return nil
+	}
 }
 
 func (c *Client) listDocuments() ([]Document, error) {
