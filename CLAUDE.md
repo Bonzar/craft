@@ -11,6 +11,16 @@
 
 @.claude/craft-router-context.md
 
+## craft-sync: первый старт в сессии
+
+Бинарник в контейнере не предустановлен — перед первым использованием собрать
+хуком: `bash .claude/hooks/build-craft-sync.sh --force` (кладёт в
+`~/.local/bin/craft-sync`). Нужные env из настроек окружения:
+`CRAFT_API_BASE` — базовый URL connect-API, `CRAFT_LINKS_STORE` — block-ID
+Craft-дока с индексом обратных ссылок. Правила базы в Craft вызывают
+craft-sync как готовый инструмент — данные о сборке и env живут только здесь
+и в `craft-sync/README.md` (там же все режимы и флаги).
+
 ## Уроки для агентов в облачном окружении (Claude Code on the web)
 
 ### Headless Chromium за агент-прокси: ERR_CONNECTION_RESET — это TLS, а не сеть
