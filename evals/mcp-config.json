@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "Craft": {
+      "command": "/opt/node22/bin/node",
+      "args": ["/home/user/craft/evals/mock-craft-mcp.js"],
+      "env": {
+        "CRAFT_MOCK_WRITE_LOG": "/tmp/craft-eval-write.log"
+      }
+    }
+  }
+}

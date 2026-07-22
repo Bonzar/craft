@@ -1,0 +1,8 @@
+{"prompt": "Закончилось молоко", "item": "Молоко", "state": "todo"}
+{"prompt": "Купил говядину", "item": "Говядина", "state": "done"}
+{"prompt": "Нет яиц", "item": "Яйца", "state": "todo"}
+{"prompt": "Купили горчицу", "item": "Горчица", "state": "done"}
+{"prompt": "Больше не покупаем сайру", "item": "Сайра", "state": "canceled"}
+{"prompt": "Кончилась гречка", "item": "Гречка", "state": "todo"}
+{"prompt": "Купил масло сливочное", "item": "Масло Сливочное", "state": "done"}
+{"prompt": "Закончилась курица", "item": "Куриное филе", "state": "todo"}
