@@ -1,0 +1,14 @@
+{"name":"«сломал» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"Ты сломал разметку задачи"}}
+{"name":"«неправильно» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"это неправильно, верни как было"}}
+{"name":"«не правильно» (optional space) → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"тут не правильно проставлено поле"}}
+{"name":"«ЗАЧЕМ ТЫ» uppercase Cyrillic → inject (LC_ALL case-fold)","hook":"detect-incident","expect":"inject","input":{"prompt":"ЗАЧЕМ ТЫ подвинул дедлайн"}}
+{"name":"«почему ты» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"Почему ты выбрал это поле"}}
+{"name":"«Это инцидент» explicit declaration → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"Ты дедлайн подвинул, а надо было проставить дату. Это инцидент"}}
+{"name":"«Инцидент 2: … не вывел план» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"Инцидент 2: ты не вывел план"}}
+{"name":"«откатись» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"откатись, это лишнее"}}
+{"name":"«нарушил» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"ты нарушил правило шапки задачи"}}
+{"name":"«…каждый инцидент» substring → silent (bare «инцидент» must NOT fire)","hook":"detect-incident","expect":"silent","input":{"prompt":"давай добавим eval на каждый инцидент"}}
+{"name":"«инцидентность» → silent (^инцидент word-boundary)","hook":"detect-incident","expect":"silent","input":{"prompt":"инцидентность процесса низкая"}}
+{"name":"neutral request → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"вынести правила в инструменты для стабильности"}}
+{"name":"praise → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"спасибо, всё отлично сработало"}}
+{"name":"empty prompt → silent","hook":"detect-incident","expect":"silent","input":{"prompt":""}}
