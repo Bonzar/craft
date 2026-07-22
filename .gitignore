@@ -2,3 +2,7 @@
 # imported into context via @-reference in CLAUDE.md. Never commit — it's
 # a per-session snapshot of a live Craft document.
 .claude/craft-router-context.md
+
+# Same: per-session snapshot of the live "Разбор инцидента" SKILL doc, fetched by
+# .claude/hooks/inject-craft-incident.sh for the incident detector. Never commit.
+.claude/craft-incident-context.md
