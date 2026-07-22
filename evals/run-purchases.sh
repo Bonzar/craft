@@ -19,12 +19,14 @@ LOG="/tmp/craft-eval-write.log"; : > "$LOG"   # must match mcp-config.json env
 RUN_OUT="$(mktemp)"
 
 echo "[eval] model=$MODEL  prompt=\"$PROMPT\"  expect: $EXPECT_ID → $EXPECT_STATE"
-timeout 360 claude -p "$PROMPT" \
+env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_PID \
+    -u CLAUDE_CODE_REMOTE_SESSION_ID -u CLAUDE_CODE_WORKER_EPOCH \
+  timeout 360 claude -p "$PROMPT" \
   --mcp-config ./evals/mcp-config.json \
   --strict-mcp-config \
-  --settings ./evals/settings.eval.json \
   --model "$MODEL" \
-  --allowedTools Skill mcp__Craft__craft_read mcp__Craft__craft_write \
+  --allowedTools Skill 'mcp__Craft__*' \
+  --disallowedTools Bash Read \
   --output-format json > "$RUN_OUT" 2>&1
 echo "[eval] claude exit=$?"
 

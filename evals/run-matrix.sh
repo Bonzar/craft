@@ -42,11 +42,18 @@ while IFS= read -r line; do
   for model in "${MODELS[@]}"; do
     ml="$(label "$model")"
     : > "$LOG"
-    timeout 300 claude -p "$prompt" \
+    # env -u: don't inherit this session's CLAUDE_CODE_* ids, so each run is a
+    #   fresh isolated session (no shared warm-spare / permission state).
+    # --disallowedTools Bash Read: the продукты agent only needs Skill + Craft;
+    #   removing Bash/Read keeps a weak model (haiku) from wandering into a shell
+    #   `craft …` call and forces it through the MCP tool.
+    env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_PID \
+        -u CLAUDE_CODE_REMOTE_SESSION_ID -u CLAUDE_CODE_WORKER_EPOCH \
+      timeout 300 claude -p "$prompt" \
       --mcp-config ./evals/mcp-config.json --strict-mcp-config \
-      --settings ./evals/settings.eval.json \
       --model "$model" \
-      --allowedTools Skill mcp__Craft__craft_read mcp__Craft__craft_write \
+      --allowedTools Skill 'mcp__Craft__*' \
+      --disallowedTools Bash Read \
       --output-format json >/dev/null 2>&1
     log="$(cat "$LOG" 2>/dev/null)"
     ok=1; d=""
