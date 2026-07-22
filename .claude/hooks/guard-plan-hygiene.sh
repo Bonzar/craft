@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# PreToolUse guard on plan-file writes (Write/Edit to */plans/*.md).
+# PreToolUse guard on Craft-plan writes (Write/Edit to */plans/*.md). It polices
+# ONLY Craft «План правок» files — detected by their structure (a «где:» locator
+# line or a Craft link/ref) — and passes plans про КОД through untouched, since
+# those legitimately name files, commands and IDs.
 #
 # Enforces two of Влад's plan rules that the built-in Plan-mode actively pushes
 # against (it templates a verification/order section and doesn't produce links):
@@ -21,6 +24,13 @@ fp="$(jq -r '.tool_input.file_path // ""' <<<"$input" 2>/dev/null)"
 
 content="$(jq -r '.tool_input.content // .tool_input.new_string // ""' <<<"$input" 2>/dev/null)"
 [[ -n "$content" ]] || exit 0
+
+# Only Craft-plans («План правок») are policed. A plan про КОД legitimately names
+# files, commands and flags, so the mechanics/command/ID checks below must not
+# touch it. Detect a Craft-plan by its structural signals — the «где:» locator
+# line every entity carries, or a Craft link/ref — and pass anything else (a code
+# or other plan) straight through.
+grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:' <<<"$content" || exit 0
 
 problems=()
 
