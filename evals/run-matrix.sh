@@ -44,6 +44,7 @@ while IFS= read -r line; do
     : > "$LOG"
     timeout 300 claude -p "$prompt" \
       --mcp-config ./evals/mcp-config.json --strict-mcp-config \
+      --settings ./evals/settings.eval.json \
       --model "$model" \
       --allowedTools Skill mcp__Craft__craft_read mcp__Craft__craft_write \
       --output-format json >/dev/null 2>&1
