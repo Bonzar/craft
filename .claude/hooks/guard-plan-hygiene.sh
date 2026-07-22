@@ -8,6 +8,10 @@
 #      WHAT changes and WHERE, not HOW to do or verify it.
 #   2. Block references are clickable docs.craft.do links, not bare UUIDs.
 #
+# Fenced code blocks (```) are excluded from the checks: the verbatim text of a
+# [система] rule legitimately quotes Craft command names inside a code block —
+# that is content being written, not plan mechanics.
+#
 # Heuristic — narrow patterns to limit false positives; on a hit it denies the
 # write with a reason so the plan gets rewritten. Fail quiet on anything odd.
 set -u
@@ -22,20 +26,23 @@ fp="$(jq -r '.tool_input.file_path // ""' <<<"$input" 2>/dev/null)"
 content="$(jq -r '.tool_input.content // .tool_input.new_string // ""' <<<"$input" 2>/dev/null)"
 [[ -n "$content" ]] || exit 0
 
+# Drop fenced code blocks before checking — verbatim rule text quotes command
+# names there legitimately (content, not plan mechanics).
+nocode="$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' <<<"$content")"
+
 problems=()
 
 # 1a. verification / order / test section headings
-if grep -qiE '^#+[[:space:]]*(Порядок|Проверка|Verification|Verify|Тесты|Testing|Проверка результата|Порядок выполнения)' <<<"$content"; then
+if grep -qiE '^#+[[:space:]]*(Порядок|Проверка|Verification|Verify|Тесты|Testing|Проверка результата|Порядок выполнения)' <<<"$nocode"; then
   problems+=("секция механики/проверки/порядка — механика в план не выносится")
 fi
 # 1b. explicit execution commands / mechanics tokens
-if grep -qE '(blocks (get|update|add|move|delete|learn)|tasks (update|add|delete)|(^|[[:space:]])--(json|id|markdown|siblingId|depth)([[:space:]]|=)|git (commit|push|add)|curl )' <<<"$content"; then
+if grep -qE '(blocks (get|update|add|move|delete|learn)|tasks (update|add|delete)|(^|[[:space:]])--(json|id|markdown|siblingId|depth)([[:space:]]|=)|git (commit|push|add)|curl )' <<<"$nocode"; then
   problems+=("команды/механика выполнения в тексте плана")
 fi
 
 # 2. bare block-IDs (UUID) not inside a docs.craft.do link.
-# Strip all docs.craft.do URLs first; a UUID left in the remainder is bare.
-stripped="$(sed -E 's#https?://docs\.craft\.do[^ )]*##g' <<<"$content")"
+stripped="$(sed -E 's#https?://docs\.craft\.do[^ )]*##g' <<<"$nocode")"
 if grep -qiE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$stripped"; then
   problems+=("голый block-ID вне ссылки — отсылка к блоку должна быть кликабельной ссылкой docs.craft.do")
 fi
