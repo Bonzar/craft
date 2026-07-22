@@ -22,6 +22,7 @@ echo "[eval] model=$MODEL  prompt=\"$PROMPT\"  expect: $EXPECT_ID → $EXPECT_ST
 timeout 360 claude -p "$PROMPT" \
   --mcp-config ./evals/mcp-config.json \
   --strict-mcp-config \
+  --settings ./evals/settings.eval.json \
   --model "$MODEL" \
   --allowedTools Skill mcp__Craft__craft_read mcp__Craft__craft_write \
   --output-format json > "$RUN_OUT" 2>&1
