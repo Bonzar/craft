@@ -15,6 +15,9 @@
 # Heuristic — narrow patterns to limit false positives; on a hit it denies the
 # write with a reason so the plan gets rewritten. Fail quiet on anything odd.
 set -u
+# POSIX locale skips case-folding for Cyrillic in grep -i; force UTF-8 so the
+# Cyrillic section headings (Порядок/Проверка/…) match case-insensitively.
+export LC_ALL=C.UTF-8
 
 input="$(cat)"
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
