@@ -16,6 +16,14 @@
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/detect-incident.sh" }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__Craft__craft_write",
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-craft-markdown.sh" }
+        ]
+      }
     ]
   }
 }
