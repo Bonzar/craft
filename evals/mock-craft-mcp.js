@@ -28,6 +28,23 @@ const BASE = (process.env.CRAFT_API_BASE || '').replace(/\/+$/, '');
 const WRITE_LOG = process.env.CRAFT_MOCK_WRITE_LOG || '/tmp/craft-mock-write.log';
 
 function curlBlocks(id, accept, maxDepth) {
+  // Fixture mode (hermetic evals, e.g. run-dates.sh): when CRAFT_FIXTURE_DIR is
+  // set and a fixture file exists for this id, serve it from disk instead of the
+  // live base — the dates eval runs entirely off local fixtures and never touches
+  // Влад's real Craft. Gate on `${id}.json` existing; serve `${id}.md` for a
+  // markdown Accept, `${id}.json` for a JSON Accept. This works for both read
+  // forms with no other change: `blocks get <id>` returns the raw file, and
+  // `search … --document <id>` JSON.parse-es the served `.json` before walkSearch.
+  // No fixture dir, or no fixture file for this id → fall through to the live curl
+  // below, so the Продукты eval (which sets no CRAFT_FIXTURE_DIR) is unchanged.
+  const fixDir = process.env.CRAFT_FIXTURE_DIR;
+  if (fixDir) {
+    const jsonPath = `${fixDir}/${id}.json`;
+    if (fs.existsSync(jsonPath)) {
+      const path = /json/i.test(accept) ? jsonPath : `${fixDir}/${id}.md`;
+      return fs.readFileSync(path, 'utf8');
+    }
+  }
   const url = `${BASE}/blocks?id=${encodeURIComponent(id)}&maxDepth=${maxDepth}`;
   return execFileSync('curl', ['-sS', '--fail', '--max-time', '60', '-H', `Accept: ${accept}`, url],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
