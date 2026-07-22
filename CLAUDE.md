@@ -21,6 +21,14 @@ Craft-дока с индексом обратных ссылок. Правила
 craft-sync как готовый инструмент — данные о сборке и env живут только здесь
 и в `craft-sync/README.md` (там же все режимы и флаги).
 
+## Craft-команды идут через MCP-инструмент, не через Bash
+
+Команды Craft из роутера и скиллов (`blocks get/add/update/move/delete`,
+`tasks add/update`, `search …`, `documents …`, `collections …`) — это аргумент
+`command` инструмента Craft: чтение через `mcp__Craft__craft_read`, запись через
+`mcp__Craft__craft_write`. Это НЕ shell-команды: никогда не запускай их через
+Bash и не ищи CLI `craft` — его не существует.
+
 ## Уроки для агентов в облачном окружении (Claude Code on the web)
 
 ### Headless Chromium за агент-прокси: ERR_CONNECTION_RESET — это TLS, а не сеть
