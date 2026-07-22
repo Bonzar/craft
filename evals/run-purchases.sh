@@ -15,7 +15,7 @@ PROMPT="${2:-Закончилось молоко}"
 EXPECT_ID="${3:-2A63FEF0-34D9-485A-B9D4-0B58000D98BD}"
 EXPECT_STATE="${4:-todo}"
 
-export CRAFT_MOCK_WRITE_LOG="$(mktemp)"; : > "$CRAFT_MOCK_WRITE_LOG"
+LOG="/tmp/craft-eval-write.log"; : > "$LOG"   # must match mcp-config.json env
 RUN_OUT="$(mktemp)"
 
 echo "[eval] model=$MODEL  prompt=\"$PROMPT\"  expect: $EXPECT_ID → $EXPECT_STATE"
@@ -27,7 +27,7 @@ timeout 360 claude -p "$PROMPT" \
   --output-format json > "$RUN_OUT" 2>&1
 echo "[eval] claude exit=$?"
 
-log="$(cat "$CRAFT_MOCK_WRITE_LOG")"
+log="$(cat "$LOG" 2>/dev/null)"
 echo "=== intercepted writes ==="; echo "${log:-<none>}"
 
 pass=1; reasons=()
