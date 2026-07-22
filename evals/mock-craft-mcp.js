@@ -86,13 +86,16 @@ function handleWrite(command) {
   return 'ok (mock: write intercepted for eval, not applied to Craft)';
 }
 
+// Descriptions mirror the real Craft MCP so the agent drives them the same way
+// (passing "blocks get …" / "tasks update …" as the command arg) instead of
+// hallucinating a `craft` CLI and reaching for Bash.
 const TOOLS = [
   { name: 'craft_read',
-    description: 'Read/search Craft (mock over connect-REST). Supports: blocks get <id> [--depth N] [--format json|markdown]; search <q> --include <q> --document <id>.',
-    inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
+    description: 'Read/search Craft; batch with semicolons. Pass a CLI-style command as the "command" arg — do NOT use Bash. Cmds:\n  documents resolve-link <url> -> rootBlockId\n  blocks get <rootBlockId|blockId> [--depth <n>] [--format json|markdown]\n  blocks get --date today\n  tasks list [--scope active|upcoming|inbox|logbook|document|all]\n  search <query> [--include <text>] [--document <rootBlockId>] [--location ...]\n  collections list/schema/items-get\nFor Craft links run "documents resolve-link <url>" first; use the returned rootBlockId for blocks get.',
+    inputSchema: { type: 'object', properties: { command: { type: 'string', description: 'CLI-style Craft read command, e.g. "blocks get <id> --depth -1" or "search <q> --document <id>"' } }, required: ['command'] } },
   { name: 'craft_write',
-    description: 'Write to Craft (mock: intercepted, not applied). Same command interface as the real craft_write: blocks add/update/move/delete --json, tasks add/update, etc.',
-    inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
+    description: 'Write to Craft; batch with semicolons. Pass a CLI-style command as the "command" arg — do NOT use Bash. Cmds:\n  tasks add --markdown <text> [--state todo|done|canceled] [--schedule <date>]\n  tasks update --task <taskId> --state todo|done|canceled  (several via ";", one --task each)\n  blocks add --id <pageId> --json <blockJson> [--position start|end]\n  blocks add --siblingId <blockId> --json <blockJson> [--position before|after]\n  blocks update --id <blockId> --json <blockJson>\n  blocks move --id <blockId> --targetId <pageId>\n  blocks delete --id/--ids\nWrites go through --json; the bare --markdown flag is not used for block writes.',
+    inputSchema: { type: 'object', properties: { command: { type: 'string', description: 'CLI-style Craft write command, e.g. "tasks update --task <id> --state done"' } }, required: ['command'] } },
 ];
 
 function send(msg) { process.stdout.write(JSON.stringify(msg) + '\n'); }
