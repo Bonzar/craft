@@ -1,0 +1,29 @@
+{
+  "id": "aaaaaaaa-0000-0000-0000-000000000001",
+  "type": "page",
+  "textStyle": "title",
+  "markdown": "# 🏦 Ипотека — задачи (eval fixture)",
+  "content": [
+    {
+      "id": "aaaaaaaa-0000-0000-0000-000000000002",
+      "type": "text",
+      "listStyle": "task",
+      "taskInfo": { "state": "todo" },
+      "markdown": "- [ ] Подписать ДКП и открыть аккредитивы в Сбербанке #задача/1ч"
+    },
+    {
+      "id": "aaaaaaaa-0000-0000-0000-000000000003",
+      "type": "text",
+      "listStyle": "task",
+      "taskInfo": { "state": "todo" },
+      "markdown": "- [ ] Подать документы об исполнении цели займа в Яндекс #задача/30м"
+    },
+    {
+      "id": "aaaaaaaa-0000-0000-0000-000000000004",
+      "type": "text",
+      "listStyle": "task",
+      "taskInfo": { "state": "todo", "scheduleDate": "2026-08-01" },
+      "markdown": "- [ ] Принять квартиру по передаточному акту #задача/1ч"
+    }
+  ]
+}
