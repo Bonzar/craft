@@ -13,6 +13,9 @@ cd "$(dirname "$0")/.." || exit 1
 base="${CRAFT_API_BASE%/}"
 PAGE="395450FC-468E-4EF6-8267-BC158A4E2EBC"
 CASES="evals/cases/purchases.jsonl"
+# Fixed write-log path — must match mcp-config.json's env, so the (warm-spare
+# reused) mock server always writes here regardless of run order.
+LOG="/tmp/craft-eval-write.log"
 if [[ $# -gt 0 ]]; then MODELS=("$@"); else MODELS=("claude-haiku-4-5-20251001"); fi
 
 PAGE_JSON="$(mktemp)"
@@ -20,7 +23,9 @@ curl -sS --fail --max-time 60 -H 'Accept: application/json' "$base/blocks?id=$PA
   || { echo "fetch page failed"; exit 1; }
 
 resolve_id() {
-  jq -r --arg it "$1" '[.. | objects | select((.markdown // "") | contains($it))] | (.[0].id // "")' "$PAGE_JSON"
+  # only task blocks (products), not page-category subpages whose title may
+  # contain the item name (e.g. «Молочка - Яйца» contains «Яйца»).
+  jq -r --arg it "$1" '[.. | objects | select((.taskInfo != null) and ((.markdown // "") | contains($it)))] | (.[0].id // "")' "$PAGE_JSON"
 }
 label() { grep -oE 'haiku|sonnet|opus|fable' <<<"$1" | head -1; }
 
@@ -36,13 +41,13 @@ while IFS= read -r line; do
   eid="$(resolve_id "$item")"
   for model in "${MODELS[@]}"; do
     ml="$(label "$model")"
-    export CRAFT_MOCK_WRITE_LOG="$(mktemp)"; : > "$CRAFT_MOCK_WRITE_LOG"
+    : > "$LOG"
     timeout 300 claude -p "$prompt" \
       --mcp-config ./evals/mcp-config.json --strict-mcp-config \
       --model "$model" \
       --allowedTools Skill mcp__Craft__craft_read mcp__Craft__craft_write \
       --output-format json >/dev/null 2>&1
-    log="$(cat "$CRAFT_MOCK_WRITE_LOG")"; rm -f "$CRAFT_MOCK_WRITE_LOG"
+    log="$(cat "$LOG" 2>/dev/null)"
     ok=1; d=""
     grep -qiE 'tasks +update' <<<"$log" || { ok=0; d="no update"; }
     if [[ -n "$eid" ]]; then grep -qi -- "$eid" <<<"$log" || { ok=0; d="${d:+$d,}wrong id"; }; fi
