@@ -169,17 +169,17 @@ craft-sync --links-refresh            # только прогрев дампа
    (настройки Claude Code on the web,
    см. https://code.claude.com/docs/en/claude-code-on-the-web). В текущем
    окружении хост открыт — режим `--backlinks` проверен живыми вызовами.
-2. **Эфемерность.** Контейнер пересоздаётся. `/usr/local/bin/craft-sync` не
-   переживёт пересоздание — исходник в `/home/user/craft-sync/` нужно хранить в
-   репозитории или пересобирать в SessionStart-хуке:
-   `cd /home/user/craft-sync && go build -o /usr/local/bin/craft-sync .`
+2. **Эфемерность.** Контейнер пересоздаётся, собранный бинарник
+   (`~/.local/bin/craft-sync`) не переживёт пересоздание — исходник в
+   `/home/user/craft/craft-sync/` хранится в репозитории, а бинарник
+   пересобирается SessionStart-хуком `bash .claude/hooks/build-craft-sync.sh --force`.
 3. **Токен.** Connect-link-токен зашит в URL `--base`. Держать его в env
    `CRAFT_API_BASE` (переменные окружения настраиваются в окружении), а не в коде.
 
 ## Сборка и тесты
 
 ```bash
-cd /home/user/craft-sync
-go test ./...                                   # 6 тестов логики
+cd /home/user/craft/craft-sync
+go test ./...                                   # тесты логики
 CGO_ENABLED=0 go build -ldflags="-s -w" -o craft-sync .
 ```
