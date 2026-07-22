@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "Craft": {
+      "command": "/opt/node22/bin/node",
+      "args": ["/home/user/craft/evals/mock-craft-mcp.js"]
+    }
+  }
+}
