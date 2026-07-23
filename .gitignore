@@ -6,3 +6,9 @@
 # Same: per-session snapshot of the live "Разбор инцидента" SKILL doc, fetched by
 # .claude/hooks/inject-craft-incident.sh for the incident detector. Never commit.
 .claude/craft-incident-context.md
+
+# Local secrets (CRAFT_API_BASE token, CRAFT_LINKS_STORE, …). Never commit.
+.env
+
+# macOS Finder metadata.
+.DS_Store

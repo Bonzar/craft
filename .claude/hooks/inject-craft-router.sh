@@ -53,6 +53,7 @@ restore_template_links() {
 4. Сфера|752ECC99-609E-4351-8D33-1932F6DF7972
 5. Алгоритм|47E8803D-B28D-4C50-845A-D3CD47783E28
 7. Регулярная задача|f81558ef-89af-8796-d518-4e2d9f1b4721
+8. Дневник|ce643ded-7034-c42c-1fd4-2631e81678fe
 MAP
 }
 restore_template_links
