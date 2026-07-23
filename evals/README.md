@@ -1,8 +1,18 @@
-# Craft skill evals (level-1: mock)
+# Craft skill evals
 
-Regression tests for the Craft "memory" rules the agent must follow. Each eval runs
-a **headless `claude -p`** against a **mock Craft MCP** and asserts on the *intended
-write* — the real Craft base is never modified.
+Regression tests for the Craft rules the agent must follow. Three levels, none of which
+modify the real base except by read:
+
+- **L1 (mock)** — headless `claude -p` against a mock Craft MCP; writes are intercepted
+  and graded as the *intended* write.
+- **L2 (e2e)** — the agent's writes are applied for real, but only to a disposable,
+  hard-isolated sandbox; graded by the *actual* resulting state. See «Уровень 2» below.
+- **Структурный страж** — read-only invariant check of the real «Продукты» page. See below.
+
+## Level 1 (mock)
+
+Each L1 eval runs a **headless `claude -p`** against a **mock Craft MCP** and asserts on
+the *intended write* — the real Craft base is never modified.
 
 Why a mock: a headless run has no real Craft MCP (that server is interactively
 authenticated and absent when `claude -p` spawns). `mock-craft-mcp.js` exposes the
@@ -85,6 +95,33 @@ allows `--json` writes and denies a bare `--markdown` flag. So every write in th
 evals goes through `--json` — the dates cases set the date via
 `blocks update --json {…taskInfo:{scheduleDate|deadlineDate}}` (or `tasks update`
 without a bare `--markdown`), and the runners assert `--json` was used.
+
+## Уровень 2 — e2e с реальной записью в изолированную песочницу
+
+`run-e2e.sh` (+ `mock-craft-sandbox.js`, `mcp-config-sandbox.json`, `e2e-cases.jsonl`)
+поднимает L2: агент выполняет тот же скилл Продукты, но запись ПРИМЕНЯЕТСЯ реально — в
+одноразовую песочницу под доком «Для тестов», не в живую страницу. Оценка — не намеренная
+запись, а ФАКТИЧЕСКОЕ состояние: после прогона читается товар песочницы и сверяется
+`taskInfo.state`.
+
+Изоляция (детали — в шапках `mock-craft-sandbox.js` и `run-e2e.sh`): чтение реальной
+страницы `395450FC…` подменяется на песочницу (fail-closed); любая запись, чей id
+нормализуется в реальную страницу, роняется до сети; каждая цель записи обязана лежать
+внутри поддерева песочницы. Пред-полётный self-check (`CRAFT_SELFCHECK=1`, без сети)
+доказывает, что запись в реальную страницу бросает с нулём REST — иначе прогон падает до
+создания песочницы. У каждого кейса своя песочница, teardown в trap. Реальная страница
+только читается.
+
+Запуск: `bash evals/run-e2e.sh [model]`. Env: `CRAFT_SANDBOX_ROOT` (ставит раннер),
+`CRAFT_SELFCHECK`, `CRAFT_MOCK_WRITE_LOG`.
+
+## Структурный страж реальной страницы (только чтение)
+
+`check-structure.sh` читает реальную «Продукты» и проверяет инварианты структуры из
+`structure-invariants.json` (легенда сверху, категории — подстраницы, товары — задачи с
+валидным состоянием, вложенность). Список товаров не хардкодит — только форму, поэтому
+зелёный при обороте товаров, но падает при поломке страницы. Ни одной записи, только GET.
+Запуск: `bash evals/check-structure.sh`.
 
 ## Adding a new case-set
 
