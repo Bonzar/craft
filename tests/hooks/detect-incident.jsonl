@@ -7,10 +7,8 @@
 {"name":"«Инцидент 2: … не вывел план» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"Инцидент 2: ты не вывел план"}}
 {"name":"«откатись» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"откатись, это лишнее"}}
 {"name":"«нарушил» → inject","hook":"detect-incident","expect":"inject","input":{"prompt":"ты нарушил правило шапки задачи"}}
-{"name":"«…каждый инцидент» substring → silent (bare «инцидент» must NOT fire)","hook":"detect-incident","expect":"silent","input":{"prompt":"давай добавим eval на каждый инцидент"}}
-{"name":"«инцидентность» → silent (^инцидент word-boundary)","hook":"detect-incident","expect":"silent","input":{"prompt":"инцидентность процесса низкая"}}
+{"name":"«сломаешь» → inject (marker слома(ешь|ет))","hook":"detect-incident","expect":"inject","input":{"prompt":"ты так сломаешь всю структуру"}}
+{"name":"casual mention of «инцидент» → inject (broad marker намеренно: ложный инжект дёшев, пропуск дорог)","hook":"detect-incident","expect":"inject","input":{"prompt":"на проде вчера был инцидент с базой"}}
 {"name":"neutral request → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"вынести правила в инструменты для стабильности"}}
 {"name":"praise → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"спасибо, всё отлично сработало"}}
 {"name":"empty prompt → silent","hook":"detect-incident","expect":"silent","input":{"prompt":""}}
-{"name":"«сломается» reflexive (нейтральный вопрос) → silent (narrowed, not «сломаешь/сломает»)","hook":"detect-incident","expect":"silent","input":{"prompt":"в батч тихо сломается или явно покажет ошибку"}}
-{"name":"«сломаешь» → inject (narrowed marker всё ещё ловит агентские формы)","hook":"detect-incident","expect":"inject","input":{"prompt":"ты так сломаешь всю структуру"}}

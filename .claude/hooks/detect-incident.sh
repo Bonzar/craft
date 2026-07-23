@@ -13,9 +13,9 @@
 # Fail quiet (exit 0, no stdout) on anything unexpected: a broken detector must
 # never block Влад's message from going through.
 set -u
-# Match under UTF-8 so grep -i folds Cyrillic case (и↔И) and bracket-classes
-# (e.g. [мн]) work per-character; the container's default C locale byte-matches
-# and would silently miss capitalised phrasings and misalign multi-byte classes.
+# POSIX locale (the container default) makes grep -i skip case-folding for
+# Cyrillic, so capitalised markers («Инцидент», «Сломал») would be missed —
+# only lowercase matched. Force a UTF-8 locale so -i works on Cyrillic.
 export LC_ALL=C.UTF-8
 DIR="$(cd "$(dirname "$0")" && pwd)"
 MARKERS="$DIR/incident-markers.txt"
