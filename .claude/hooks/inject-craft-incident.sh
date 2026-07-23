@@ -10,6 +10,9 @@
 set -u
 log(){ echo "[inject-craft-incident] $*" >&2; }
 
+# Load repo .env so CRAFT_API_BASE is available (Claude Code doesn't do it).
+. "$(dirname "$0")/_load-env.sh"
+
 INCIDENT_ID="${CRAFT_INCIDENT_ID:-cbb1ba47-c05b-60b5-f86e-16c05b77bb4f}"
 OUT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-incident-context.md"
 base="${CRAFT_API_BASE:-}"
