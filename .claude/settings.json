@@ -29,7 +29,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__Craft__craft_write",
+        "matcher": "mcp__.*__craft_write",
         "hooks": [
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-craft-markdown.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-plan-gate.sh" }

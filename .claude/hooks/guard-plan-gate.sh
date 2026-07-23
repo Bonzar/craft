@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# PreToolUse plan-gate for mcp__Craft__craft_write: refuse any write to Craft
-# unless a plan was approved in the current turn. This is the lever for the
-# "запись без плана" incident — a base write must follow a plan Влад approved in
-# plan-mode, not go straight off a "запиши …".
+# PreToolUse plan-gate for the Craft MCP server's craft_write tool: refuse any
+# write to Craft unless a plan was approved in the current turn. This is the
+# lever for the "запись без плана" incident — a base write must follow a plan
+# Влад approved in plan-mode, not go straight off a "запиши …".
 #
 # State is a single marker file (kept OUT of the repo — pure ephemeral runtime
 # state, no commit footprint):
@@ -19,7 +19,10 @@ set -u
 
 input="$(cat)"
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
-[[ "$tool" == "mcp__Craft__craft_write" ]] || exit 0
+# Match by suffix, not the full qualified name: the Craft MCP server's prefix
+# changes on reconnect (mcp__Craft__... one session, mcp__<uuid>__... the
+# next) — an exact match silently stops gating the moment the ID rotates.
+[[ "$tool" =~ __craft_write$ ]] || exit 0
 
 marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
 [[ -f "$marker" ]] && exit 0
