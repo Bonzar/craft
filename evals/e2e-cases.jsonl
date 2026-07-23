@@ -1,0 +1,3 @@
+{"prompt": "Купил молоко", "item": "Молоко", "from": "todo", "state": "done"}
+{"prompt": "Больше не покупаем сайру", "item": "Сайра", "from": "todo", "state": "canceled"}
+{"prompt": "Закончилась гречка", "item": "Гречка", "from": "done", "state": "todo"}
