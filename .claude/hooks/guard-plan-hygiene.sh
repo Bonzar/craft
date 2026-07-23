@@ -32,20 +32,26 @@ content="$(jq -r '.tool_input.content // .tool_input.new_string // ""' <<<"$inpu
 # or other plan) straight through.
 grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:' <<<"$content" || exit 0
 
+# Dictated verbatim text in a «План правок» sits in ``` code-blocks and may legitimately
+# contain command tokens, IDs, even a «Проверка» heading — that is the content being
+# written, not plan mechanics. Strip fenced code-blocks first so only the plan's PROSE
+# is policed.
+body="$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' <<<"$content")"
+
 problems=()
 
 # 1a. verification / order / test section headings
-if grep -qiE '^#+[[:space:]]*(Порядок|Проверка|Verification|Verify|Тесты|Testing|Проверка результата|Порядок выполнения)' <<<"$content"; then
+if grep -qiE '^#+[[:space:]]*(Порядок|Проверка|Verification|Verify|Тесты|Testing|Проверка результата|Порядок выполнения)' <<<"$body"; then
   problems+=("секция механики/проверки/порядка — механика в план не выносится")
 fi
 # 1b. explicit execution commands / mechanics tokens
-if grep -qE '(blocks (get|update|add|move|delete|learn)|tasks (update|add|delete)|(^|[[:space:]])--(json|id|markdown|siblingId|depth)([[:space:]]|=)|git (commit|push|add)|curl )' <<<"$content"; then
+if grep -qE '(blocks (get|update|add|move|delete|learn)|tasks (update|add|delete)|(^|[[:space:]])--(json|id|markdown|siblingId|depth)([[:space:]]|=)|git (commit|push|add)|curl )' <<<"$body"; then
   problems+=("команды/механика выполнения в тексте плана")
 fi
 
 # 2. bare block-IDs (UUID) not inside a docs.craft.do link.
 # Strip all docs.craft.do URLs first; a UUID left in the remainder is bare.
-stripped="$(sed -E 's#https?://docs\.craft\.do[^ )]*##g' <<<"$content")"
+stripped="$(sed -E 's#https?://docs\.craft\.do[^ )]*##g' <<<"$body")"
 if grep -qiE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$stripped"; then
   problems+=("голый block-ID вне ссылки — отсылка к блоку должна быть кликабельной ссылкой docs.craft.do")
 fi
