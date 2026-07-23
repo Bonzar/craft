@@ -24,6 +24,9 @@ declare -A SCRIPT=(
   [guard-craft-markdown]="$HOOKS/guard-craft-markdown.sh"
   [guard-plan-hygiene]="$HOOKS/guard-plan-hygiene.sh"
   [detect-incident]="$HOOKS/detect-incident.sh"
+  [guard-plan-gate]="$HOOKS/guard-plan-gate.sh"
+  [plan-gate-approve]="$HOOKS/plan-gate-approve.sh"
+  [plan-gate-reset]="$HOOKS/plan-gate-reset.sh"
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
@@ -60,7 +63,20 @@ for f in "${files[@]}"; do
       fail=$((fail+1)); fails+=("$hook / $name — unknown hook or missing script")
       printf '%-6s %-22s %-7s %s\n' "FAIL" "$hook" "$expect" "$name"; continue
     fi
-    out="$(printf '%s' "$input" | bash "$script" 2>/dev/null)"
+    # Per-case hermetic state for the plan-gate: a fresh marker path (absent until
+    # a setup hook creates it) plus any case-declared env vars. `setup` runs the
+    # named hooks first (e.g. plan-gate-approve to set the marker, plan-gate-reset
+    # to clear it) under the same env, exercising the state machine for real.
+    marker="$(mktemp -u "${TMPDIR:-/tmp}/plan-gate-test.XXXXXX")"
+    caseenv=("CRAFT_PLAN_GATE_MARKER=$marker")
+    while IFS=$'\t' read -r k v; do [[ -n "$k" ]] && caseenv+=("$k=$v"); done \
+      < <(jq -r '(.env // {}) | to_entries[] | "\(.key)\t\(.value)"' <<<"$line")
+    while IFS= read -r sh; do
+      [[ -z "$sh" ]] && continue
+      env "${caseenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" </dev/null >/dev/null 2>&1
+    done < <(jq -r '(.setup // [])[]' <<<"$line")
+    out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
+    rm -f "$marker"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -83,6 +99,7 @@ REQUIRED=(
   "guard-craft-markdown:deny" "guard-craft-markdown:allow"
   "guard-plan-hygiene:deny"   "guard-plan-hygiene:allow"
   "detect-incident:inject"    "detect-incident:silent"
+  "guard-plan-gate:deny"      "guard-plan-gate:allow"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done

@@ -17,10 +17,14 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 
     {"name":"…","hook":"detect-incident","expect":"inject","input":{"prompt":"…"}}
 
-- `hook` — `guard-craft-markdown` | `guard-plan-hygiene` | `detect-incident`.
+- `hook` — `guard-craft-markdown` | `guard-plan-hygiene` | `detect-incident` | `guard-plan-gate`.
 - `input` — полный JSON события, как его подаёт Claude Code хуку на stdin.
 - `expect` — `deny` (stdout с `permissionDecision:"deny"`) · `allow` (хук не заблокировал)
   · `inject` (stdout с `СИГНАЛ ИНЦИДЕНТА`) · `silent` (пустой stdout).
+- `env` (опц.) — переменные окружения для вызова, напр. `{"CRAFT_AUTONOMOUS":"1"}`.
+- `setup` (опц.) — хуки, прогоняемые до целевого, чтобы выставить состояние: напр.
+  `["plan-gate-approve"]` ставит метку одобренного плана, `["plan-gate-reset"]` гасит.
+  Метка план-гейта у каждого кейса своя (временный файл) — кейсы герметичны.
 
 ## Добавить кейс
 
