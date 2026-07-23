@@ -24,9 +24,17 @@ declare -A SCRIPT=(
   [guard-craft-markdown]="$HOOKS/guard-craft-markdown.sh"
   [guard-plan-hygiene]="$HOOKS/guard-plan-hygiene.sh"
   [detect-incident]="$HOOKS/detect-incident.sh"
+  [detect-autocontinue]="$HOOKS/detect-autocontinue.sh"
   [guard-plan-gate]="$HOOKS/guard-plan-gate.sh"
   [plan-gate-approve]="$HOOKS/plan-gate-approve.sh"
   [plan-gate-reset]="$HOOKS/plan-gate-reset.sh"
+)
+
+# The `inject` outcome is per-detector: each injecting hook prints a distinctive
+# lead marker, and a case passes `inject` iff its hook's marker is present.
+declare -A INJECT_MARKER=(
+  [detect-incident]='СИГНАЛ ИНЦИДЕНТА'
+  [detect-autocontinue]='ТЕХНИЧЕСКИЙ АВТО-CONTINUE'
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
@@ -81,7 +89,7 @@ for f in "${files[@]}"; do
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
       allow)  is_deny "$out" || ok=1 ;;
-      inject) grep -q 'СИГНАЛ ИНЦИДЕНТА' <<<"$out" && ok=1 ;;
+      inject) im="${INJECT_MARKER[$hook]:-}"; [[ -n "$im" ]] && grep -qF "$im" <<<"$out" && ok=1 ;;
       silent) [[ -z "$(trim "$out")" ]] && ok=1 ;;
       *)      fails+=("$hook / $name — unknown expect '$expect'") ;;
     esac
@@ -99,6 +107,7 @@ REQUIRED=(
   "guard-craft-markdown:deny" "guard-craft-markdown:allow"
   "guard-plan-hygiene:deny"   "guard-plan-hygiene:allow"
   "detect-incident:inject"    "detect-incident:silent"
+  "detect-autocontinue:inject" "detect-autocontinue:silent"
   "guard-plan-gate:deny"      "guard-plan-gate:allow"
 )
 missing=()
