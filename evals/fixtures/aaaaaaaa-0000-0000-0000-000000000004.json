@@ -1,0 +1,7 @@
+{
+  "id": "aaaaaaaa-0000-0000-0000-000000000004",
+  "type": "text",
+  "listStyle": "task",
+  "taskInfo": { "state": "todo", "scheduleDate": "2026-08-01" },
+  "markdown": "- [ ] Принять квартиру по передаточному акту #задача/1ч"
+}
