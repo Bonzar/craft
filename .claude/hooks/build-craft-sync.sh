@@ -12,6 +12,9 @@
 set -u
 log(){ echo "[build-craft-sync] $*" >&2; }
 
+# Load repo .env so CRAFT_SYNC_BUILD is available (Claude Code doesn't do it).
+. "$(dirname "${BASH_SOURCE[0]}")/_load-env.sh"
+
 if [[ "${1:-}" != "--force" && "${CRAFT_SYNC_BUILD:-0}" != "1" ]]; then
   log "CRAFT_SYNC_BUILD != 1; skipping build (run with --force to build now)"
   exit 0
