@@ -1,0 +1,10 @@
+{
+  "_comment": "Structural invariants of the real «Продукты» page for check-structure.sh. NOT the product list (that churns) — only shape. Thresholds are floors that survive product churn but catch a real break (categories flattened, products wiped, legend removed, task state corrupted).",
+  "page": "395450FC-468E-4EF6-8267-BC158A4E2EBC",
+  "min_category_subpages": 5,
+  "min_task_blocks": 20,
+  "min_categories_with_tasks": 3,
+  "legend_in_first_top_level": 6,
+  "legend_keywords_regex": "Легенда|🔲|❎|☑️",
+  "valid_task_states": ["todo", "done", "canceled"]
+}
