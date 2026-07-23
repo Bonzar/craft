@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse guard: block any mcp__Craft__craft_write call that writes via the raw
-# --markdown flag instead of --json.
+# PreToolUse guard: block any Craft MCP craft_write call that writes via the
+# raw --markdown flag instead of --json.
 #
 # Craft rule (see "MCP-механики Craft" in the router): writing/updating goes only
 # through --json (a structural block object whose text sits in the "markdown"
@@ -15,7 +15,10 @@ set -u
 
 input="$(cat)"
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
-[[ "$tool" == "mcp__Craft__craft_write" ]] || exit 0
+# Match by suffix, not the full qualified name: the Craft MCP server's prefix
+# changes on reconnect (mcp__Craft__... one session, mcp__<uuid>__... the
+# next) — an exact match silently stops gating the moment the ID rotates.
+[[ "$tool" =~ __craft_write$ ]] || exit 0
 
 cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)" || exit 0
 
