@@ -1,0 +1,7 @@
+{"name":"exact phrase with period → inject","hook":"detect-autocontinue","expect":"inject","input":{"prompt":"Continue from where you left off."}}
+{"name":"lowercase, no period → inject","hook":"detect-autocontinue","expect":"inject","input":{"prompt":"continue from where you left off"}}
+{"name":"surrounding whitespace → inject (trim, whole-message)","hook":"detect-autocontinue","expect":"inject","input":{"prompt":"  Continue from where you left off.  "}}
+{"name":"bare «continue» → silent (не ловим: Влад может так и сказать)","hook":"detect-autocontinue","expect":"silent","input":{"prompt":"continue"}}
+{"name":"phrase inside a real sentence → silent (whole-message anchored)","hook":"detect-autocontinue","expect":"silent","input":{"prompt":"почему ты написал «Continue from where you left off»?"}}
+{"name":"normal Влад message → silent","hook":"detect-autocontinue","expect":"silent","input":{"prompt":"давай теперь займёмся хуками"}}
+{"name":"empty prompt → silent","hook":"detect-autocontinue","expect":"silent","input":{"prompt":""}}
