@@ -4,6 +4,7 @@
     "SessionStart": [
       {
         "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/sync-local-main.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/build-craft-sync.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/inject-craft-router.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/inject-craft-incident.sh" }

@@ -16,21 +16,30 @@
 set -u
 log(){ echo "[inject-craft-router] $*" >&2; }
 
+# Load repo .env so CRAFT_API_BASE is available (Claude Code doesn't do it).
+. "$(dirname "$0")/_load-env.sh"
+
 ROUTER_ID="${CRAFT_ROUTER_ID:-e8132891-81f4-2d63-36f1-d3623d0147b6}"
 OUT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-router-context.md"
+
+# Drop the previous snapshot up front: a stale router must never masquerade as
+# fresh context. If the fetch below fails we stay with no file — CLAUDE.md's
+# `@`-import then silently skips and the router is read live from Craft via MCP.
+rm -f "$OUT"
+
 base="${CRAFT_API_BASE:-}"
 if [[ -z "$base" ]]; then
-  log "CRAFT_API_BASE not set; skipping router fetch"
+  log "CRAFT_API_BASE not set; old snapshot removed, nothing fetched"
   exit 0
 fi
 base="${base%/}"
 
 md="$(curl -sS --fail --max-time 60 --retry 3 --retry-all-errors \
   -H 'Accept: text/markdown' \
-  "$base/blocks?id=$ROUTER_ID&maxDepth=-1")" || { log "router fetch failed; keeping previous snapshot if any"; exit 0; }
+  "$base/blocks?id=$ROUTER_ID&maxDepth=-1")" || { log "router fetch failed; no snapshot left (read router live from Craft)"; exit 0; }
 
 if [[ -z "$md" ]]; then
-  log "empty router response; keeping previous snapshot if any"
+  log "empty router response; no snapshot left (read router live from Craft)"
   exit 0
 fi
 
