@@ -7,6 +7,11 @@
 # .claude/hooks/inject-craft-incident.sh for the incident detector. Never commit.
 .claude/craft-incident-context.md
 
+# Per-session cache of block-IDs under the pre-authorised «direct-edit» pages
+# (gate-exempt-pages.txt), built by .claude/hooks/cache-gate-exempt-scope.sh for
+# the plan-gate scope exemption. Ephemeral snapshot of live Craft — never commit.
+.claude/craft-gate-exempt-scope.txt
+
 # Local secrets (CRAFT_API_BASE token, CRAFT_LINKS_STORE, …). Never commit.
 .env
 
