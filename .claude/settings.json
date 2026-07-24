@@ -7,7 +7,8 @@
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/sync-local-main.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/build-craft-sync.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/inject-craft-router.sh" },
-          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/inject-craft-incident.sh" }
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/inject-craft-incident.sh" },
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/cache-gate-exempt-scope.sh" }
         ]
       }
     ],
@@ -38,6 +39,7 @@
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-plan-gate.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-plan-hygiene.sh" }
         ]
       }
