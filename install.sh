@@ -146,6 +146,16 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-env-capabilities.sh")
   | ensure("SessionStart"; "";
          "\"$HOME\"/.claude/hooks/universal-inject-behavior-rules.sh")
+  | ensure("SessionStart"; "";
+         "\"$HOME\"/.claude/hooks/universal-inject-code-rules.sh")
+  | ensure("SessionStart"; "";
+         "\"$HOME\"/.claude/hooks/universal-inject-instincts.sh")
+  | ensure("SessionStart"; "";
+         "\"$HOME\"/.claude/hooks/universal-cache-gate-exempt-scope.sh")
+  | ensure("PostToolUse"; "";
+         "\"$HOME\"/.claude/hooks/universal-observe-buffer.sh")
+  | ensure("Stop"; "";
+         "\"$HOME\"/.claude/hooks/universal-instinct-flush.sh")
 ' "$SETTINGS")"
 
 if [[ "$(jq -S . <<<"$merged")" == "$(jq -S . "$SETTINGS")" ]]; then

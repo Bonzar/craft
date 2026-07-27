@@ -1,0 +1,6 @@
+{"name":"tool error is appended to observe buffer","hook":"universal-observe-buffer","expect":"silent","env":{"OBSERVE_BUFFER":"/tmp/observe-buffer-test-write.log"},"input":{"tool_name":"Bash","tool_response":{"is_error":true,"content":"npm ci exited 1"}}}
+{"name":"successful tool call is not logged → silent","hook":"universal-observe-buffer","expect":"silent","env":{"OBSERVE_BUFFER":"/tmp/observe-buffer-test-write.log"},"input":{"tool_name":"Bash","tool_response":{"is_error":false,"content":"ok"}}}
+{"name":"flush blocks the stop when buffer is non-empty","hook":"universal-instinct-flush","expect":"contains:Наблюдения","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":false}}
+{"name":"flush directive references distillation format","hook":"universal-instinct-flush","expect":"contains:при [сигнале]","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":false}}
+{"name":"flush is silent when buffer is absent","hook":"universal-instinct-flush","expect":"silent","env":{"OBSERVE_BUFFER":"/tmp/nonexistent-observe-buffer.log"},"input":{"stop_hook_active":false}}
+{"name":"flush is silent on stop_hook_active (anti-loop)","hook":"universal-instinct-flush","expect":"silent","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":true}}

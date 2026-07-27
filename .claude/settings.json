@@ -8,7 +8,7 @@
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/craft-build-sync.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/craft-inject-router.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/craft-inject-incident.sh" },
-          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/craft-cache-gate-exempt-scope.sh" },
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-cache-gate-exempt-scope.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-env-capabilities.sh" }
         ]
       }
@@ -26,6 +26,11 @@
         "matcher": "ExitPlanMode",
         "hooks": [
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-plan-gate-approve.sh" }
+        ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-observe-buffer.sh" }
         ]
       }
     ],
@@ -62,7 +67,8 @@
       {
         "hooks": [
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-check-console-log.sh" },
-          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-stop-quality-gate.sh" }
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-stop-quality-gate.sh" },
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-instinct-flush.sh" }
         ]
       }
     ],
