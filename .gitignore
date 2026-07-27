@@ -8,7 +8,7 @@
 .claude/craft-incident-context.md
 
 # Per-session cache of block-IDs under the pre-authorised «direct-edit» pages
-# (gate-exempt-pages.txt), built by .claude/hooks/craft-cache-gate-exempt-scope.sh
+# (gate-exempt-pages.txt), built by .claude/hooks/universal-cache-gate-exempt-scope.sh
 # for the plan-gate scope exemption. Ephemeral snapshot of live Craft — never commit.
 .claude/craft-gate-exempt-scope.txt
 

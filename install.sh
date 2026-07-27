@@ -150,6 +150,8 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-inject-code-rules.sh")
   | ensure("SessionStart"; "";
          "\"$HOME\"/.claude/hooks/universal-inject-instincts.sh")
+  | ensure("SessionStart"; "";
+         "\"$HOME\"/.claude/hooks/universal-cache-gate-exempt-scope.sh")
   | ensure("PostToolUse"; "";
          "\"$HOME\"/.claude/hooks/universal-observe-buffer.sh")
   | ensure("Stop"; "";

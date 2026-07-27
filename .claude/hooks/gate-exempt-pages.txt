@@ -10,8 +10,8 @@
 #
 # Формат: один page-ID (корневой block-ID страницы) на строку;
 # '#'-комментарии и пустые строки игнорируются. Кэш поддеревьев собирает
-# craft-cache-gate-exempt-scope.sh на SessionStart
-# → .claude/craft-gate-exempt-scope.txt (gitignored).
+# universal-cache-gate-exempt-scope.sh на SessionStart
+# → .claude/craft-gate-exempt-scope.txt чекаута реального файла хука (gitignored).
 
 # «Продукты» — список покупок (SKILL: Продукты): пометить купленным/нужным,
 # добавить/убрать товар. Неоднозначность разбирает сам скилл.
