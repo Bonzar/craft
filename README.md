@@ -94,11 +94,15 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 ```bash
 craft-sync --help                 # бинарник собран хуком и на PATH
-bash tests/run.sh                 # тесты хуков — exit 0
+bash tests/run.sh                 # тесты хуков — exit 0 (repo-слой)
+bash tests/install-smoke.sh       # идемпотентность install.sh (временный HOME)
+# + локальный яндекс-слой (~/.claude, вне git):
+EXTRA_HOOKS_DIR=~/.claude/hooks EXTRA_CASES_DIR=~/.claude/tests/hooks bash tests/run.sh
 source ./.env
 bash evals/check-structure.sh     # read-only структурный страж «Продукты»
 bash evals/run-matrix.sh          # L1 mock: Продукты (по умолч. haiku)
 bash evals/run-dates.sh           # L1 mock: срок vs дедлайн (герметичный)
+bash evals/run-triggers.sh        # триггер-эвалы скиллов (ручной, модельные вызовы)
 bash evals/run-e2e.sh             # L2 e2e — только когда L1 зелёные
 ```
 
