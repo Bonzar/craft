@@ -21,12 +21,12 @@ CASES_DIR="$REPO/tests/hooks"
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required" >&2; exit 2; }
 
 declare -A SCRIPT=(
-  [guard-craft-markdown]="$HOOKS/guard-craft-markdown.sh"
-  [guard-plan-hygiene]="$HOOKS/guard-plan-hygiene.sh"
-  [detect-incident]="$HOOKS/detect-incident.sh"
-  [guard-plan-gate]="$HOOKS/guard-plan-gate.sh"
-  [plan-gate-approve]="$HOOKS/plan-gate-approve.sh"
-  [plan-gate-reset]="$HOOKS/plan-gate-reset.sh"
+  [guard-craft-markdown]="$HOOKS/craft-guard-markdown.sh"
+  [guard-plan-hygiene]="$HOOKS/craft-guard-plan-hygiene.sh"
+  [detect-incident]="$HOOKS/universal-detect-incident.sh"
+  [guard-plan-gate]="$HOOKS/universal-guard-plan-gate.sh"
+  [plan-gate-approve]="$HOOKS/universal-plan-gate-approve.sh"
+  [plan-gate-reset]="$HOOKS/universal-plan-gate-reset.sh"
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
@@ -69,7 +69,11 @@ for f in "${files[@]}"; do
     # to clear it) under the same env, exercising the state machine for real.
     marker="$(mktemp -u "${TMPDIR:-/tmp}/plan-gate-test.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker")
-    while IFS=$'\t' read -r k v; do [[ -n "$k" ]] && caseenv+=("$k=$v"); done \
+    # Env values may reference fixture files via the {TESTS_DIR} placeholder —
+    # cases are static JSONL and cannot know the checkout's absolute path.
+    while IFS=$'\t' read -r k v; do
+      [[ -n "$k" ]] && caseenv+=("$k=${v//\{TESTS_DIR\}/$CASES_DIR}")
+    done \
       < <(jq -r '(.env // {}) | to_entries[] | "\(.key)\t\(.value)"' <<<"$line")
     while IFS= read -r sh; do
       [[ -z "$sh" ]] && continue
