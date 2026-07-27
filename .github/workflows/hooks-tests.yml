@@ -20,3 +20,6 @@ jobs:
 
       - name: Run hook regression tests
         run: bash tests/run.sh
+
+      - name: Install.sh idempotency smoke
+        run: bash tests/install-smoke.sh

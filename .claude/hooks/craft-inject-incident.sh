@@ -7,27 +7,35 @@
 # previously-written file (if any) is left in place as a fallback.
 #
 # Requires CRAFT_API_BASE (connect-link base URL with token, same as the router).
+#
+# Fetch policy (единая для всех craft-inject-хуков): протухший снэпшот сносится
+# ДО фетча — устаревшее тело не должно выдавать себя за живое; при недоступной
+# сети кэша просто нет, и детектор инцидентов даёт fallback-директиву читать
+# скилл живьём из Craft.
 set -u
-log(){ echo "[inject-craft-incident] $*" >&2; }
+log(){ echo "[craft-inject-incident] $*" >&2; }
 
 # Load repo .env so CRAFT_API_BASE is available (Claude Code doesn't do it).
 . "$(dirname "$0")/_load-env.sh"
 
 INCIDENT_ID="${CRAFT_INCIDENT_ID:-cbb1ba47-c05b-60b5-f86e-16c05b77bb4f}"
 OUT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-incident-context.md"
+
+rm -f "$OUT"
+
 base="${CRAFT_API_BASE:-}"
 if [[ -z "$base" ]]; then
-  log "CRAFT_API_BASE not set; skipping incident-doc fetch"
+  log "CRAFT_API_BASE not set; old snapshot removed, nothing fetched"
   exit 0
 fi
 base="${base%/}"
 
 md="$(curl -sS --fail --max-time 60 --retry 3 --retry-all-errors \
   -H 'Accept: text/markdown' \
-  "$base/blocks?id=$INCIDENT_ID&maxDepth=-1")" || { log "incident fetch failed; keeping previous snapshot if any"; exit 0; }
+  "$base/blocks?id=$INCIDENT_ID&maxDepth=-1")" || { log "incident fetch failed; no snapshot left (detector falls back to live read)"; exit 0; }
 
 if [[ -z "$md" ]]; then
-  log "empty incident response; keeping previous snapshot if any"
+  log "empty incident response; no snapshot left (detector falls back to live read)"
   exit 0
 fi
 

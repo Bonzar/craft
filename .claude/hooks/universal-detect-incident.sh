@@ -17,7 +17,19 @@ set -u
 # Cyrillic, so capitalised markers («Инцидент», «Сломал») would be missed —
 # only lowercase matched. Force a UTF-8 locale so -i works on Cyrillic.
 export LC_ALL=C.UTF-8
-DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# When this same hook is ALSO installed at user level (~/.claude, via
+# install.sh), the project-level registration yields — otherwise a craft
+# session would inject the directive twice per message.
+if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
+      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
+  exit 0
+fi
+
+# Resolve through symlinks: installed as a ~/.claude symlink this must still
+# find incident-markers.txt next to the REAL file in the repo.
+SELF="$(realpath "$0" 2>/dev/null || echo "$0")"
+DIR="$(cd "$(dirname "$SELF")" && pwd)"
 MARKERS="$DIR/incident-markers.txt"
 CACHE="${CLAUDE_PROJECT_DIR:-$(cd "$DIR/../.." && pwd)}/.claude/craft-incident-context.md"
 
@@ -40,6 +52,6 @@ if [[ -f "$CACHE" ]]; then
   echo "----- живое тело «Разбор инцидента» (кэш SessionStart) -----"
   cat "$CACHE"
 else
-  echo "(локальный кэш craft-incident-context.md отсутствует — открой док через MCP: blocks get cbb1ba47-c05b-60b5-f86e-16c05b77bb4f --depth -1)"
+  echo "(кэш тела отсутствует. Доступен Craft MCP → прочитай скилл живьём: blocks get cbb1ba47-c05b-60b5-f86e-16c05b77bb4f --depth -1. Craft недоступен → веди разбор по каркасу: 1) причина — какое действие/допущение привело к дефекту; 2) как было надо; 3) исправить результат; 4) записать переносимый урок «при [сигнале] → [действие]» с РЫЧАГОМ соблюдения (гейт, хук, чек-лист, перестановка правила в точку решения) — для кода см. скилл code-incident. Без рычага инцидент не закрыт.)"
 fi
 exit 0

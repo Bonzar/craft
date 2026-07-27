@@ -1,11 +1,21 @@
-# Generated at session start by .claude/hooks/inject-craft-router.sh;
+# Generated at session start by .claude/hooks/craft-inject-router.sh;
 # imported into context via @-reference in CLAUDE.md. Never commit — it's
 # a per-session snapshot of a live Craft document.
 .claude/craft-router-context.md
 
 # Same: per-session snapshot of the live "Разбор инцидента" SKILL doc, fetched by
-# .claude/hooks/inject-craft-incident.sh for the incident detector. Never commit.
+# .claude/hooks/craft-inject-incident.sh for the incident detector. Never commit.
 .claude/craft-incident-context.md
+
+# Per-session cache of block-IDs under the pre-authorised «direct-edit» pages
+# (gate-exempt-pages.txt), built by .claude/hooks/craft-cache-gate-exempt-scope.sh
+# for the plan-gate scope exemption. Ephemeral snapshot of live Craft — never commit.
+.claude/craft-gate-exempt-scope.txt
+
+# Session worktrees and machine-local permission overrides — per-machine state,
+# not part of the system.
+.claude/worktrees/
+.claude/settings.local.json
 
 # Local secrets (CRAFT_API_BASE token, CRAFT_LINKS_STORE, …). Never commit.
 .env

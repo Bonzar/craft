@@ -3,7 +3,7 @@
 ## Роутер «Память для Claude» (авто-инжект)
 
 Ниже импортируется полный текст роутера заметочной базы Craft. Файл
-генерируется SessionStart-хуком `.claude/hooks/inject-craft-router.sh`
+генерируется SessionStart-хуком `.claude/hooks/craft-inject-router.sh`
 (живая версия из Craft на момент старта сессии); импорт через CLAUDE.md
 нужен потому, что stdout хуков обрезается на 10 000 символах, а импорты —
 нет. Если файла нет (первый запуск без сети) — импорт молча пропускается,
@@ -18,7 +18,7 @@ CLI для чтения пространства Craft через connect-API �
 предусловия) — `craft-sync/README.md`; ниже краткий перечень для контекста сессии.
 
 **Сборка и env.** Бинарник в контейнере не предустановлен — собрать хуком
-`bash .claude/hooks/build-craft-sync.sh --force` (кладёт в `~/.local/bin/craft-sync`).
+`bash .claude/hooks/craft-build-sync.sh --force` (кладёт в `~/.local/bin/craft-sync`).
 Env из настроек окружения: `CRAFT_API_BASE` — URL connect-API; `CRAFT_LINKS_STORE`
 — block-ID Craft-дока с индексом обратных ссылок.
 

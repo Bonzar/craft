@@ -1,0 +1,7 @@
+{"name":"поиск по аркадии → arc-codesearch","prompt":"Найди в аркадии, где используется useOrganizationSlug","expect_skill":"arc-codesearch"}
+{"name":"новая задача аркадии → arc-temp-branch-pr","prompt":"Возьми задачу CRM-51120 в работу: нужно поправить редирект в dashboard","expect_skill":"arc-temp-branch-pr"}
+{"name":"скрины/hermione → frontend-visual-tests","prompt":"Прогони hermione и обнови эталоны скринов для NotificationBanner","expect_skill":"frontend-visual-tests"}
+{"name":"комменты ревью → arc-review","prompt":"Что написали в ревью по https://a.yandex-team.ru/review/9412345 — есть открытые треды?","expect_skill":"arc-review"}
+{"name":"поправка агенту в код-сессии → code-incident","prompt":"Ты сломал сборку своим последним коммитом, почему ты не прогнал тесты?","expect_skill":"code-incident"}
+{"name":"онбординг в чужой репо → codebase-onboarding","prompt":"Я склонировал незнакомый репозиторий, разберись как тут всё устроено","expect_skill":"codebase-onboarding"}
+{"name":"готово перед PR → verification-loop","prompt":"Кажется всё сделал, заводи PR","expect_skill":"verification-loop"}
