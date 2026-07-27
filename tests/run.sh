@@ -28,6 +28,8 @@ declare -A SCRIPT=(
   [plan-gate-approve]="$HOOKS/universal-plan-gate-approve.sh"
   [plan-gate-reset]="$HOOKS/universal-plan-gate-reset.sh"
   [sleep-waiter-guard]="$HOOKS/universal-sleep-waiter-guard.sh"
+  [config-protection]="$HOOKS/universal-config-protection.sh"
+  [block-no-verify]="$HOOKS/universal-block-no-verify.sh"
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
@@ -57,7 +59,8 @@ for f in "${files[@]}"; do
     fi
     hook="$(jq -r '.hook' <<<"$line")"
     expect="$(jq -r '.expect' <<<"$line")"
-    input="$(jq -c '.input' <<<"$line")"
+    # {TESTS_DIR} подставляется и в input (file_path-кейсам нужны фикстуры).
+    input="$(jq -c '.input' <<<"$line")"; input="${input//\{TESTS_DIR\}/$CASES_DIR}"
     script="${SCRIPT[$hook]:-}"
     covered["$hook:$expect"]=1
     if [[ -z "$script" || ! -f "$script" ]]; then
@@ -106,6 +109,8 @@ REQUIRED=(
   "detect-incident:inject"    "detect-incident:silent"
   "guard-plan-gate:deny"      "guard-plan-gate:allow"
   "sleep-waiter-guard:deny"   "sleep-waiter-guard:allow"
+  "config-protection:deny"    "config-protection:allow"
+  "block-no-verify:deny"      "block-no-verify:allow"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done

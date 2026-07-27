@@ -74,6 +74,30 @@ for d in "$SKILLS_SRC"/*/; do
 done
 echo "skills: $slinked new symlink(s) in $SKILLS_DST"
 
+# --- 1c. Симлинки агентов и команд --------------------------------------------
+# По образцу секции skills; при пустых/отсутствующих директориях — тихий no-op
+# (агенты и команды появляются параллельной работой).
+for kind in agents commands; do
+  KIND_SRC="$REPO/.claude/$kind"
+  KIND_DST="$CLAUDE_DIR/$kind"
+  mkdir -p "$KIND_DST"
+  klinked=0
+  for f in "$KIND_SRC"/*; do
+    [[ -e "$f" ]] || continue
+    dst="$KIND_DST/$(basename "$f")"
+    if [[ -L "$dst" && "$(readlink "$dst")" == "$f" ]]; then
+      continue
+    fi
+    if [[ -e "$dst" && ! -L "$dst" ]]; then
+      echo "SKIP: $dst существует и не симлинк — разберись вручную" >&2
+      continue
+    fi
+    ln -sfn "$f" "$dst"
+    klinked=$((klinked+1))
+  done
+  echo "$kind: $klinked new symlink(s) in $KIND_DST"
+done
+
 # --- 2. Регистрация в ~/.claude/settings.json --------------------------------
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 backup="$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
@@ -102,6 +126,16 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
   | ensure("PreToolUse"; "Bash";
          "\"$HOME\"/.claude/hooks/universal-sleep-waiter-guard.sh")
+  | ensure("PreToolUse"; "Bash";
+         "\"$HOME\"/.claude/hooks/universal-block-no-verify.sh")
+  | ensure("PreToolUse"; "Write|Edit|MultiEdit";
+         "\"$HOME\"/.claude/hooks/universal-config-protection.sh")
+  | ensure("Stop"; "";
+         "\"$HOME\"/.claude/hooks/universal-check-console-log.sh")
+  | ensure("Stop"; "";
+         "\"$HOME\"/.claude/hooks/universal-stop-quality-gate.sh")
+  | ensure("PreCompact"; "";
+         "\"$HOME\"/.claude/hooks/universal-pre-compact.sh")
   | ensure("PostToolUse"; "ExitPlanMode";
          "\"$HOME\"/.claude/hooks/universal-plan-gate-approve.sh")
   | ensure("UserPromptSubmit"; "";

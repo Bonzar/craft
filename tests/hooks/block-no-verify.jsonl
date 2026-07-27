@@ -1,0 +1,10 @@
+{"name":"git commit --no-verify → deny","hook":"block-no-verify","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m \"wip\""}}}
+{"name":"git push --no-verify → deny","hook":"block-no-verify","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"git push --no-verify origin main"}}}
+{"name":"chained: build && git commit --no-verify → deny","hook":"block-no-verify","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"npm run build && git commit -a --no-verify"}}}
+{"name":"git -c core.hooksPath=/dev/null → deny","hook":"block-no-verify","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"git -c core.hooksPath=/dev/null commit -m \"x\""}}}
+{"name":"git -c core.hooksPath в кавычках → deny","hook":"block-no-verify","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"git -c \"core.hooksPath=/tmp/empty\" push"}}}
+{"name":"обычный git commit → allow","hook":"block-no-verify","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"git commit -m \"fix: normal commit\""}}}
+{"name":"--no-verify внутри сообщения коммита → allow","hook":"block-no-verify","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"git commit -m 'docs: never use --no-verify'"}}}
+{"name":"grep про --no-verify без git → allow","hook":"block-no-verify","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"grep -rn -- --no-verify docs/"}}}
+{"name":"git push обычный → allow","hook":"block-no-verify","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"git push origin HEAD"}}}
+{"name":"не-git команда → allow","hook":"block-no-verify","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"npm test"}}}
