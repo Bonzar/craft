@@ -52,6 +52,28 @@ for f in "$HOOKS_SRC"/universal-*.sh "$HOOKS_SRC/_load-env.sh" "$HOOKS_SRC/incid
 done
 echo "hooks: $linked new symlink(s) in $HOOKS_DST"
 
+# --- 1b. Симлинки универсальных скиллов ---------------------------------------
+SKILLS_SRC="$REPO/.claude/skills"
+SKILLS_DST="$CLAUDE_DIR/skills"
+mkdir -p "$SKILLS_DST"
+slinked=0
+for d in "$SKILLS_SRC"/*/; do
+  [[ -d "$d" ]] || continue
+  name="$(basename "$d")"
+  dst="$SKILLS_DST/$name"
+  src="${d%/}"
+  if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
+    continue
+  fi
+  if [[ -e "$dst" && ! -L "$dst" ]]; then
+    echo "SKIP: $dst существует и не симлинк — разберись вручную" >&2
+    continue
+  fi
+  ln -sfn "$src" "$dst"
+  slinked=$((slinked+1))
+done
+echo "skills: $slinked new symlink(s) in $SKILLS_DST"
+
 # --- 2. Регистрация в ~/.claude/settings.json --------------------------------
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 backup="$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
@@ -78,12 +100,18 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
   | ensure("PreToolUse"; "mcp__.*__craft_write";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
+  | ensure("PreToolUse"; "Bash";
+         "\"$HOME\"/.claude/hooks/universal-sleep-waiter-guard.sh")
   | ensure("PostToolUse"; "ExitPlanMode";
          "\"$HOME\"/.claude/hooks/universal-plan-gate-approve.sh")
   | ensure("UserPromptSubmit"; "";
          "\"$HOME\"/.claude/hooks/universal-plan-gate-reset.sh")
   | ensure("UserPromptSubmit"; "";
          "\"$HOME\"/.claude/hooks/universal-detect-incident.sh")
+  | ensure("SessionStart"; "";
+         "\"$HOME\"/.claude/hooks/universal-env-capabilities.sh")
+  | ensure("SessionStart"; "";
+         "\"$HOME\"/.claude/hooks/universal-inject-behavior-rules.sh")
 ' "$SETTINGS")"
 
 if [[ "$(jq -S . <<<"$merged")" == "$(jq -S . "$SETTINGS")" ]]; then

@@ -27,6 +27,7 @@ declare -A SCRIPT=(
   [guard-plan-gate]="$HOOKS/universal-guard-plan-gate.sh"
   [plan-gate-approve]="$HOOKS/universal-plan-gate-approve.sh"
   [plan-gate-reset]="$HOOKS/universal-plan-gate-reset.sh"
+  [sleep-waiter-guard]="$HOOKS/universal-sleep-waiter-guard.sh"
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
@@ -104,6 +105,7 @@ REQUIRED=(
   "guard-plan-hygiene:deny"   "guard-plan-hygiene:allow"
   "detect-incident:inject"    "detect-incident:silent"
   "guard-plan-gate:deny"      "guard-plan-gate:allow"
+  "sleep-waiter-guard:deny"   "sleep-waiter-guard:allow"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done
