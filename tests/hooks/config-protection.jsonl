@@ -1,0 +1,5 @@
+{"name":"edit existing .eslintrc.json → deny","hook":"config-protection","expect":"deny","input":{"tool_name":"Edit","tool_input":{"file_path":"{TESTS_DIR}/fixtures/.eslintrc.json","old_string":"error","new_string":"off"}}}
+{"name":"write existing .eslintrc.json → deny","hook":"config-protection","expect":"deny","input":{"tool_name":"Write","tool_input":{"file_path":"{TESTS_DIR}/fixtures/.eslintrc.json","content":"{}"}}}
+{"name":"create new .prettierrc (нет на диске) → allow","hook":"config-protection","expect":"allow","input":{"tool_name":"Write","tool_input":{"file_path":"/tmp/craft-local-tests-nonexistent/.prettierrc","content":"{}"}}}
+{"name":"edit ordinary existing file → allow","hook":"config-protection","expect":"allow","input":{"tool_name":"Edit","tool_input":{"file_path":"{TESTS_DIR}/plan-gate.jsonl","old_string":"a","new_string":"b"}}}
+{"name":"pyproject.toml намеренно не гейтится → allow","hook":"config-protection","expect":"allow","input":{"tool_name":"Edit","tool_input":{"file_path":"{TESTS_DIR}/fixtures/pyproject.toml","old_string":"a","new_string":"b"}}}
