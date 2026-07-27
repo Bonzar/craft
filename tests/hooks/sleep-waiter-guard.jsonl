@@ -1,0 +1,6 @@
+{"name":"lone long sleep 30 → deny","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 30"}}}
+{"name":"lone sleep with minutes unit → deny","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 5m"}}}
+{"name":"short settle sleep 2 → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"sleep 2"}}}
+{"name":"sleep inside a watch loop → allow (not a lone sleep)","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"while ! curl -sf http://localhost:3000; do sleep 5; done"}}}
+{"name":"conscious timer with timed-wait marker → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"sleep 60 # timed-wait"}}}
+{"name":"non-sleep command → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"npm run build"}}}
