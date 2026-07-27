@@ -79,6 +79,6 @@ leftover="$(grep -o '\](invalid:out_of_scope)' <<<"$md" | wc -l | tr -d ' ')"
 
 msg="Craft-роутер обновлён: $(wc -c < "$OUT") байт записано в .claude/craft-router-context.md; полный текст уже в контексте через импорт в CLAUDE.md."
 if [[ "$leftover" -gt 0 ]]; then
-  msg+=" ВНИМАНИЕ: $leftover ссылок invalid:out_of_scope не восстановлено — в роутере есть ссылки на документы вне шаринга connect-ссылки. Новый шаблон — дополни карту в .claude/hooks/inject-craft-router.sh (ID через MCP Craft), обычный документ — подсвети Владу, что его надо добавить в шаринг."
+  msg+=" ВНИМАНИЕ: $leftover ссылок invalid:out_of_scope не восстановлено — в роутере есть ссылки на документы вне шаринга connect-ссылки. Новый шаблон — дополни карту в .claude/hooks/craft-inject-router.sh (ID через MCP Craft), обычный документ — подсвети Владу, что его надо добавить в шаринг."
 fi
 echo "$msg"

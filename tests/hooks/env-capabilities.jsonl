@@ -1,0 +1,2 @@
+{"name":"env card is printed with header and directive","hook":"universal-env-capabilities","expect":"contains:Карта окружения","input":{}}
+{"name":"env card carries the do-not-imitate directive","hook":"universal-env-capabilities","expect":"contains:не предлагать","input":{}}
