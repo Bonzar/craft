@@ -12,7 +12,8 @@
 #
 # Usage, right after `set -u` in a hook:  . "$(dirname "$0")/_load-env.sh"
 
-_le_root="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+_le_self="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+_le_root="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$_le_self")/../.." && pwd)}"
 _le_env="$_le_root/.env"
 if [[ ! -f "$_le_env" ]]; then
   _le_common="$(git -C "$_le_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
@@ -24,4 +25,13 @@ if [[ -f "$_le_env" ]]; then
   . "$_le_env"
   set +a
 fi
-unset _le_root _le_env _le_common
+# Outside the craft repo there is no `.env`: universal hooks installed into
+# ~/.claude run in arbitrary sessions and take the Craft connect credentials
+# from ~/.claude/craft.env instead (created by install.sh, chmod 600).
+if [[ -z "${CRAFT_API_BASE:-}" && -f "$HOME/.claude/craft.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$HOME/.claude/craft.env"
+  set +a
+fi
+unset _le_self _le_root _le_env _le_common

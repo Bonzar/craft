@@ -172,7 +172,7 @@ craft-sync --links-refresh            # только прогрев дампа
 2. **Эфемерность.** Контейнер пересоздаётся, собранный бинарник
    (`~/.local/bin/craft-sync`) не переживёт пересоздание — исходник в
    `/home/user/craft/craft-sync/` хранится в репозитории, а бинарник
-   пересобирается SessionStart-хуком `bash .claude/hooks/build-craft-sync.sh --force`.
+   пересобирается SessionStart-хуком `bash .claude/hooks/craft-build-sync.sh --force`.
 3. **Токен.** Connect-link-токен зашит в URL `--base`. Держать его в env
    `CRAFT_API_BASE` (переменные окружения настраиваются в окружении), а не в коде.
 

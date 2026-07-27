@@ -84,7 +84,7 @@ and phrasings that tempt the wrong field (an urgent event date that must stay
 | `CRAFT_API_BASE` | mock (live reads) | Connect-link REST base w/ token. From env settings. |
 | `CRAFT_FIXTURE_DIR` | mock (fixture reads) | Dir of `<id>.json` / `<id>.md` fixtures. Set only by `run-dates.sh`. |
 | `CRAFT_MOCK_WRITE_LOG` | mock (writes) | Where intercepted writes are logged. Set to `/tmp/craft-eval-write.log` in `mcp-config.json`; the runners truncate it before each case. |
-| `CRAFT_AUTONOMOUS` | (nothing today) | Exported by `run-dates.sh` for parity/forward-compat; there is **no** plan-gate hook, so it bypasses nothing (harmless). The live write guard is `guard-craft-markdown` (below), not this. |
+| `CRAFT_AUTONOMOUS` | plan-gate bypass | Exported by `run-dates.sh`: the plan-gate hook (`universal-guard-plan-gate.sh`) blocks Craft writes and file edits without an approved plan; autonomous runs (rutinas, evals) have no interactive Влад, so this flag bypasses the gate. The write-shape guard is `craft-guard-markdown.sh` (below). |
 
 Both runners isolate each case with `env -u CLAUDE_CODE_*` (fresh session, no shared
 warm-spare/permission state) and `--disallowedTools Bash Read` (force writes through
