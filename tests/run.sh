@@ -85,7 +85,10 @@ for f in "${files[@]}"; do
     # named hooks first (e.g. plan-gate-approve to set the marker, plan-gate-reset
     # to clear it) under the same env, exercising the state machine for real.
     marker="$(mktemp -u "${TMPDIR:-/tmp}/plan-gate-test.XXXXXX")"
-    caseenv=("CRAFT_PLAN_GATE_MARKER=$marker")
+    # Hermetic side-effect paths: hooks with write side effects (observe
+    # buffer) must never touch the LIVE session state during a test run.
+    obsbuf="$(mktemp -u "${TMPDIR:-/tmp}/observe-buffer-test.XXXXXX")"
+    caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf")
     # Env values may reference fixture files via the {TESTS_DIR} placeholder —
     # cases are static JSONL and cannot know the checkout's absolute path.
     while IFS=$'\t' read -r k v; do
@@ -97,7 +100,7 @@ for f in "${files[@]}"; do
       env "${caseenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" </dev/null >/dev/null 2>&1
     done < <(jq -r '(.setup // [])[]' <<<"$line")
     out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
-    rm -f "$marker"
+    rm -f "$marker" "$obsbuf"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
