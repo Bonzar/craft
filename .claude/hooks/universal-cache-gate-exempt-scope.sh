@@ -15,15 +15,22 @@
 # from env / .env). Fail-quiet toward the CHEAP side: missing env/config or a
 # failed fetch → no scope file → the gate simply keeps requiring plans. A block
 # created mid-session is absent from the snapshot — a rare, cheap miss.
+#
+# ONE canonical cache location: the checkout holding the REAL hook file
+# (resolved through the ~/.claude symlink). The gate reads the cache by the
+# same formula, so every session — cloud project, local worktree, arc-mounts,
+# scheduled task — agrees on a single place. Installed user-level via
+# install.sh so any local session refreshes it on start.
 set -u
-log(){ echo "[craft-cache-gate-exempt-scope] $*" >&2; }
+log(){ echo "[universal-cache-gate-exempt-scope] $*" >&2; }
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
+self="$(realpath "$0" 2>/dev/null || echo "$0")"
+DIR="$(cd "$(dirname "$self")" && pwd)"
 # Load repo .env so CRAFT_API_BASE is available (Claude Code doesn't do it).
 . "$DIR/_load-env.sh"
 
 CONFIG="${CRAFT_GATE_EXEMPT_PAGES:-$DIR/gate-exempt-pages.txt}"
-OUT="${CLAUDE_PROJECT_DIR:-$(cd "$DIR/../.." && pwd)}/.claude/craft-gate-exempt-scope.txt"
+OUT="${CRAFT_GATE_EXEMPT_SCOPE:-$(cd "$DIR/../.." && pwd)/.claude/craft-gate-exempt-scope.txt}"
 
 # Drop the previous snapshot first: a stale scope must never pose as fresh.
 # If the build fails below, no file remains and the gate gates everything.

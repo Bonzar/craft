@@ -106,8 +106,13 @@ fi
 # blocks inside a pre-authorised direct-edit page. Keyed on the WRITE TARGET,
 # not on wording: a real project/sphere write references block-IDs outside the
 # scope, so it still needs a plan.
+#
+# ONE canonical scope location — the checkout holding the REAL hook file
+# (resolve through the ~/.claude symlink); the cache builder
+# (universal-cache-gate-exempt-scope.sh) writes it by the same formula, so
+# cloud, local worktrees, arc-mounts and scheduled sessions all agree.
 self="$(realpath "$0" 2>/dev/null || echo "$0")"
-scope="${CRAFT_GATE_EXEMPT_SCOPE:-${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$self")/../.." && pwd)}/.claude/craft-gate-exempt-scope.txt}"
+scope="${CRAFT_GATE_EXEMPT_SCOPE:-$(cd "$(dirname "$self")/../.." && pwd)/.claude/craft-gate-exempt-scope.txt}"
 if [[ -s "$scope" ]]; then
   cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)"
   UUID_RE='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
