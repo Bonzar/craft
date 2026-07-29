@@ -63,6 +63,22 @@ and phrasings that tempt the wrong field (an urgent event date that must stay
 - Schema: `{"prompt": "...", "task": "<substring of the task markdown>", "field": "scheduleDate"|"deadlineDate", "date": "YYYY-MM-DD"}`
 - Run: `bash evals/run-dates.sh [model ...]` (matrix, default haiku).
 
+## Дисциплина прогонов
+
+Три принципа, обязательные для всех кейс-сетов:
+
+1. **Судья всегда детерминированный** — ассерты идут по фактическому состоянию
+   (write-log, состояние песочницы, структурные инварианты), никогда по
+   LLM-мнению «выглядит верно». Так уже устроено — фиксируем как принцип.
+2. **Один прогон недетерминированного агента ничего не доказывает.** Важные
+   кейсы и кейсы инцидентов гоняются от трёх раз: `EVAL_RUNS=3 bash
+   evals/run-matrix.sh …`. Разброс между прогонами — сам по себе сигнал
+   (нестабильный скилл или кейс).
+3. **Кейс из инцидента носит его имя** — имя кейса связывает тест с уроком
+   разбора (Craft-сторона правила — в SKILL-доке «Разбор инцидента»: урок
+   поведения агента закрывается евал-кейсом, включая вариант с конкурирующей
+   инструкцией).
+
 ## The mock's two read modes: live vs fixture
 
 `curlBlocks(id, accept, maxDepth)` decides per call:

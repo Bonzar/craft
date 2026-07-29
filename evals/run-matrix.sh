@@ -8,9 +8,13 @@
 # with no raw --markdown. The real base is never modified.
 #
 # Usage: run-matrix.sh [model ...]   (default: haiku)
+#        EVAL_RUNS=3 run-matrix.sh …  — прогнать каждый кейс N раз (дисциплина
+#        прогонов: один прогон недетерминированного агента ничего не доказывает;
+#        для важных кейсов и кейсов инцидентов — от трёх).
 set -u
 cd "$(dirname "$0")/.." || exit 1
 export CRAFT_AUTONOMOUS=1   # bypass the plan-gate hook — the eval is pre-authorised and headless (no interactive plan to approve)
+export CRAFT_EVAL=1            # headless-евал: Stop-энфорсер фактов рутин молчит
 base="${CRAFT_API_BASE%/}"
 PAGE="395450FC-468E-4EF6-8267-BC158A4E2EBC"
 CASES="evals/cases/purchases.jsonl"
@@ -41,6 +45,7 @@ while IFS= read -r line; do
   state="$(jq -r '.state' <<<"$line")"
   eid="$(resolve_id "$item")"
   for model in "${MODELS[@]}"; do
+   for ((run_i=0; run_i<${EVAL_RUNS:-1}; run_i++)); do
     ml="$(label "$model")"
     : > "$LOG"
     # env -u: don't inherit this session's CLAUDE_CODE_* ids, so each run is a
@@ -65,6 +70,7 @@ while IFS= read -r line; do
     total=$((total+1)); mt[$ml]=$(( ${mt[$ml]:-0}+1 ))
     if [[ $ok -eq 1 ]]; then passc=$((passc+1)); mp[$ml]=$(( ${mp[$ml]:-0}+1 )); r="PASS"; else r="FAIL"; fi
     printf '%-26s %-7s %-6s %s\n' "${prompt:0:25}" "$ml" "$r" "$d"
+   done
   done
 done < "$CASES"
 printf -- '---------------------------------------------------------------\n'
