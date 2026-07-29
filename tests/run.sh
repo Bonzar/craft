@@ -39,6 +39,8 @@ declare -A SCRIPT=(
   [block-no-verify]="$HOOKS/universal-block-no-verify.sh"
   [fact-gate]="$HOOKS/universal-fact-gate.sh"
   [stop-routine-facts]="$HOOKS/universal-stop-routine-facts.sh"
+  [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
+  [detect-incident-arm]="$HOOKS/universal-detect-incident.sh"
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
@@ -94,8 +96,13 @@ for f in "${files[@]}"; do
     obsbuf="$(mktemp -u "${TMPDIR:-/tmp}/observe-buffer-test.XXXXXX")"
     fgdir="$(mktemp -d "${TMPDIR:-/tmp}/fact-gate-test.XXXXXX")"
     rfmark="$(mktemp -u "${TMPDIR:-/tmp}/routine-facts-test.XXXXXX")"
+    icmark="$(mktemp -u "${TMPDIR:-/tmp}/incident-closure-test.XXXXXX").armed"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
-             "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark")
+             "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
+             "INCIDENT_CLOSURE_MARKER=$icmark")
+    # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
+    # из env, создаётся до прогона (взводом в жизни занимается другой хук).
+    [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"
     # Env values may reference fixture files via the {TESTS_DIR} placeholder —
     # cases are static JSONL and cannot know the checkout's absolute path.
     while IFS=$'\t' read -r k v; do
@@ -113,7 +120,7 @@ for f in "${files[@]}"; do
     for ((r_i=0; r_i<rpt; r_i++)); do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
     done
-    rm -f "$marker" "$obsbuf" "$rfmark"; rm -rf "$fgdir"
+    rm -f "$marker" "$obsbuf" "$rfmark" "$icmark" "${icmark%.armed}.reminded"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -145,6 +152,7 @@ REQUIRED=(
   "block-no-verify:deny"      "block-no-verify:allow"
   "fact-gate:deny"            "fact-gate:allow"
   "stop-routine-facts:block"  "stop-routine-facts:silent"
+  "stop-incident-closure:block" "stop-incident-closure:silent"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done
