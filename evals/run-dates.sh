@@ -37,6 +37,7 @@ export CRAFT_FIXTURE_DIR="$FIX_DIR"
 # it allows --json writes and denies a bare --markdown flag, so date changes must
 # go through `blocks update --json {…taskInfo:{scheduleDate|deadlineDate}}`.
 export CRAFT_AUTONOMOUS=1
+export CRAFT_EVAL=1            # headless-евал: Stop-энфорсер фактов рутин молчит
 
 # Resolve a task id from the fixture json by markdown substring — same shape as
 # run-matrix.sh, but read straight from the fixture file (no mock/curl needed).

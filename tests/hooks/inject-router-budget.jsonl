@@ -1,0 +1,2 @@
+{"name":"инжект роутера в бюджете — без предупреждения","hook":"craft-inject-router","expect":"silent","env":{"ROUTER_BUDGET_TEST_FILE":"{TESTS_DIR}/fixtures/observe-buffer.log","ROUTER_BUDGET_CHARS":"999999"},"input":{}}
+{"name":"инжект роутера сверх бюджета — предупреждение","hook":"craft-inject-router","expect":"contains:БЮДЖЕТ","env":{"ROUTER_BUDGET_TEST_FILE":"{TESTS_DIR}/fixtures/observe-buffer.log","ROUTER_BUDGET_CHARS":"10"},"input":{}}
