@@ -31,7 +31,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   total=$((total+1))
 
   # --max-turns 2: хватает, чтобы модель вызвала Skill; дальше ход обрывается.
-  out="$(cd "$REPO" && CRAFT_AUTONOMOUS=1 timeout 180 claude -p "$prompt" \
+  out="$(cd "$REPO" && CRAFT_AUTONOMOUS=1 CRAFT_EVAL=1 timeout 180 claude -p "$prompt" \
         --model "$MODEL" --max-turns 2 --output-format json \
         --permission-mode plan 2>/dev/null)" || out=""
 

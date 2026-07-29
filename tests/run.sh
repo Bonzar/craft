@@ -37,10 +37,13 @@ declare -A SCRIPT=(
   [sleep-waiter-guard]="$HOOKS/universal-sleep-waiter-guard.sh"
   [config-protection]="$HOOKS/universal-config-protection.sh"
   [block-no-verify]="$HOOKS/universal-block-no-verify.sh"
+  [fact-gate]="$HOOKS/universal-fact-gate.sh"
+  [stop-routine-facts]="$HOOKS/universal-stop-routine-facts.sh"
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
 is_ask()  { jq -e '.hookSpecificOutput.permissionDecision=="ask"'  >/dev/null 2>&1 <<<"$1"; }
+is_block(){ jq -e '.decision=="block"' >/dev/null 2>&1 <<<"$1"; }
 trim() { local s="$1"; printf '%s' "${s//[$' \t\n\r']/}"; }
 
 total=0; pass=0; fail=0
@@ -86,9 +89,13 @@ for f in "${files[@]}"; do
     # to clear it) under the same env, exercising the state machine for real.
     marker="$(mktemp -u "${TMPDIR:-/tmp}/plan-gate-test.XXXXXX")"
     # Hermetic side-effect paths: hooks with write side effects (observe
-    # buffer) must never touch the LIVE session state during a test run.
+    # buffer, fact-gate markers, routine-facts reminder) must never touch the
+    # LIVE session state during a test run.
     obsbuf="$(mktemp -u "${TMPDIR:-/tmp}/observe-buffer-test.XXXXXX")"
-    caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf")
+    fgdir="$(mktemp -d "${TMPDIR:-/tmp}/fact-gate-test.XXXXXX")"
+    rfmark="$(mktemp -u "${TMPDIR:-/tmp}/routine-facts-test.XXXXXX")"
+    caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
+             "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark")
     # Env values may reference fixture files via the {TESTS_DIR} placeholder —
     # cases are static JSONL and cannot know the checkout's absolute path.
     while IFS=$'\t' read -r k v; do
@@ -99,13 +106,20 @@ for f in "${files[@]}"; do
       [[ -z "$sh" ]] && continue
       env "${caseenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" </dev/null >/dev/null 2>&1
     done < <(jq -r '(.setup // [])[]' <<<"$line")
-    out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
-    rm -f "$marker" "$obsbuf"
+    # `repeat: N` — feed the SAME input N times (deny-once / remind-once hooks:
+    # the assertion is on the LAST invocation's output).
+    rpt="$(jq -r '.repeat // 1' <<<"$line")"
+    out=""
+    for ((r_i=0; r_i<rpt; r_i++)); do
+      out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
+    done
+    rm -f "$marker" "$obsbuf" "$rfmark"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
-      allow)  { is_deny "$out" || is_ask "$out"; } || ok=1 ;;
+      allow)  { is_deny "$out" || is_ask "$out" || is_block "$out"; } || ok=1 ;;
       ask)    is_ask "$out" && ok=1 ;;
+      block)  is_block "$out" && ok=1 ;;
       inject) grep -q 'СИГНАЛ ИНЦИДЕНТА' <<<"$out" && ok=1 ;;
       silent) [[ -z "$(trim "$out")" ]] && ok=1 ;;
       contains:*) grep -qF -- "${expect#contains:}" <<<"$out" && ok=1 ;;
@@ -129,6 +143,8 @@ REQUIRED=(
   "sleep-waiter-guard:deny"   "sleep-waiter-guard:allow"
   "config-protection:deny"    "config-protection:allow"
   "block-no-verify:deny"      "block-no-verify:allow"
+  "fact-gate:deny"            "fact-gate:allow"
+  "stop-routine-facts:block"  "stop-routine-facts:silent"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done
@@ -143,6 +159,31 @@ while IFS= read -r c; do
   elif [[ ! -x "$p" ]]; then smoke+=("hook not executable: $p")
   fi
 done < <(jq -r '.hooks[]?[]?.hooks[]?.command // empty' "$REPO/.claude/settings.json" 2>/dev/null)
+
+# Reverse smoke: every hook FILE under .claude/hooks must be registered in at
+# least one contour (repo settings.json or install.sh) — an unregistered hook
+# lies dead while looking installed. Whitelist: sourced helpers that are not
+# hooks themselves.
+REVERSE_WHITELIST=("_load-env.sh")
+reverse_orphans() {  # args: file paths; echoes orphan basenames
+  local reg f b w skip
+  reg="$(jq -r '.hooks[]?[]?.hooks[]?.command // empty' "$REPO/.claude/settings.json" 2>/dev/null; cat "$REPO/install.sh" 2>/dev/null)"
+  for f in "$@"; do
+    b="$(basename "$f")"
+    skip=0
+    for w in "${REVERSE_WHITELIST[@]}"; do [[ "$b" == "$w" ]] && skip=1; done
+    [[ $skip -eq 1 ]] && continue
+    grep -qF "$b" <<<"$reg" || echo "$b"
+  done
+}
+# Self-test: the red path must be provably reachable — a fictitious orphan
+# must be caught, else the check itself has silently broken.
+if [[ "$(reverse_orphans "$HOOKS/zz-selftest-orphan.sh")" != "zz-selftest-orphan.sh" ]]; then
+  smoke+=("reverse-smoke self-test failed: fictitious orphan not caught")
+fi
+while IFS= read -r b; do
+  [[ -n "$b" ]] && smoke+=("orphan hook (not registered in settings.json or install.sh): $b")
+done < <(reverse_orphans "$HOOKS"/*.sh)
 
 printf -- '---------------------------------------------------------------------------\n'
 if [[ ${#fails[@]} -gt 0 ]]; then
