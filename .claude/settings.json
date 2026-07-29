@@ -71,7 +71,8 @@
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-check-console-log.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-stop-quality-gate.sh" },
           { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-instinct-flush.sh" },
-          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-stop-routine-facts.sh" }
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-stop-routine-facts.sh" },
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-stop-incident-closure.sh" }
         ]
       }
     ],

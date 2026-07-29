@@ -12,3 +12,5 @@
 {"name":"neutral request → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"вынести правила в инструменты для стабильности"}}
 {"name":"praise → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"спасибо, всё отлично сработало"}}
 {"name":"empty prompt → silent","hook":"detect-incident","expect":"silent","input":{"prompt":""}}
+{"name":"инцидент: «почему нет тестов на эти правки» → инжект","hook":"detect-incident","expect":"inject","input":{"prompt":"почему нет тестов на эти правки правил?"}}
+{"name":"инцидент: «почему остановился» → инжект","hook":"detect-incident","expect":"inject","input":{"prompt":"Раз что то осталось, почему остановился"}}
