@@ -1,0 +1,22 @@
+{"name":"rm -rf: первый вызов — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/some-dir"}}}
+{"name":"rm -rf: повторный идентичный вызов проходит","hook":"fact-gate","expect":"allow","repeat":2,"input":{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/some-dir"}}}
+{"name":"rm -fr сцепленные флаги в другом порядке — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"rm -fr build/"}}}
+{"name":"git reset --hard — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"git reset --hard origin/main"}}}
+{"name":"git clean -fd — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"git clean -fd"}}}
+{"name":"git push --force — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"git push --force origin feature"}}}
+{"name":"arc branch -D — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"arc branch -D old-branch"}}}
+{"name":"arc unmount --forget — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"arc unmount --forget ~/arc-mounts/CRM-1"}}}
+{"name":"обычный rm без -rf — allow","hook":"fact-gate","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"rm /tmp/one-file.txt"}}}
+{"name":"git push без force — allow","hook":"fact-gate","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"git push origin feature"}}}
+{"name":"arc push --force НЕ гейтится (ask-гард Влада сильнее) — allow","hook":"fact-gate","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"arc push --force"}}}
+{"name":"безопасная команда — allow","hook":"fact-gate","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"ls -la && git status"}}}
+{"name":"выключатель FACT_GATE=off пропускает деструктив","hook":"fact-gate","expect":"allow","env":{"FACT_GATE":"off"},"input":{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}}
+{"name":"craft blocks delete — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"mcp__abc123__craft_write","tool_input":{"command":"blocks delete --id 11111111-2222-3333-4444-555555555555"}}}
+{"name":"craft documents delete — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"mcp__abc123__craft_write","tool_input":{"command":"documents delete --document 11111111-2222-3333-4444-555555555555"}}}
+{"name":"craft blocks delete: повтор проходит","hook":"fact-gate","expect":"allow","repeat":2,"input":{"tool_name":"mcp__abc123__craft_write","tool_input":{"command":"blocks delete --id 11111111-2222-3333-4444-555555555555"}}}
+{"name":"craft blocks move вне автонома — deny","hook":"fact-gate","expect":"deny","input":{"tool_name":"mcp__abc123__craft_write","tool_input":{"command":"blocks move --id 11111111-2222-3333-4444-555555555555 --targetId 66666666-7777-8888-9999-000000000000 --position end"}}}
+{"name":"craft blocks move в автономе (белый список гигиены) — allow","hook":"fact-gate","expect":"allow","env":{"CRAFT_AUTONOMOUS":"1"},"input":{"tool_name":"mcp__abc123__craft_write","tool_input":{"command":"blocks move --id 11111111-2222-3333-4444-555555555555 --targetId 66666666-7777-8888-9999-000000000000 --position end"}}}
+{"name":"craft blocks delete в автономе ВСЁ РАВНО deny","hook":"fact-gate","expect":"deny","env":{"CRAFT_AUTONOMOUS":"1"},"input":{"tool_name":"mcp__abc123__craft_write","tool_input":{"command":"blocks delete --id 11111111-2222-3333-4444-555555555555"}}}
+{"name":"craft обычный add — allow","hook":"fact-gate","expect":"allow","input":{"tool_name":"mcp__abc123__craft_write","tool_input":{"command":"blocks add --id 11111111-2222-3333-4444-555555555555 --position end --json {}"}}}
+{"name":"инцидент pr-body-force: git push без force, но текст аргумента другой команды содержит --force — allow","hook":"fact-gate","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"git push -q origin my-branch && gh pr create --body \"описание: git push --force запрещён\""}}}
+{"name":"инцидент multiline-body: rm -rf внутри многострочной кавычённой строки — allow","hook":"fact-gate","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"gh pr create --title x --body \"строка один\nвнутри упоминается rm -rf и git push --force\nстрока три\""}}}

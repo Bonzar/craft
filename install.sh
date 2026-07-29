@@ -156,6 +156,12 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-observe-buffer.sh")
   | ensure("Stop"; "";
          "\"$HOME\"/.claude/hooks/universal-instinct-flush.sh")
+  | ensure("PreToolUse"; "Bash";
+         "\"$HOME\"/.claude/hooks/universal-fact-gate.sh")
+  | ensure("PreToolUse"; "mcp__.*__craft_write";
+         "\"$HOME\"/.claude/hooks/universal-fact-gate.sh")
+  | ensure("Stop"; "";
+         "\"$HOME\"/.claude/hooks/universal-stop-routine-facts.sh")
 ' "$SETTINGS")"
 
 if [[ "$(jq -S . <<<"$merged")" == "$(jq -S . "$SETTINGS")" ]]; then

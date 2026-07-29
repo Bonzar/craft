@@ -26,6 +26,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 export CRAFT_AUTONOMOUS=1   # bypass the plan-gate hook — headless, pre-authorised
+export CRAFT_EVAL=1            # headless-евал: Stop-энфорсер фактов рутин молчит
 base="${CRAFT_API_BASE%/}"
 REAL_PAGE_NORM="395450fc468e4ef68267bc158a4e2ebc"
 PARENT="E3D227EA-D686-48A0-8A41-4E8C99597072"   # doc "Для тестов" (sandbox home)
