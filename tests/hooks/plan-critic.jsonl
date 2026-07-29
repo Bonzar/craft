@@ -1,0 +1,14 @@
+# Гейт критика: системный план не показывается, пока plan-critic не обкатал ИМЕННО эту версию плана.
+# Метка — хеш файла плана, поэтому fixtures/plan-critic-marker.txt хранит sha256 от fixtures/plan-system.md:
+# правишь фикстуру-план — пересчитай хеш в фикстуре-метке, иначе кейс «с меткой → allow» покраснеет.
+{"name":"системный план без отметки критика → deny","hook":"guard-plan-critic","expect":"deny","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"системный план с отметкой по своему хешу → allow","hook":"guard-plan-critic","expect":"allow","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md","CRAFT_PLAN_CRITIC_MARKER":"{TESTS_DIR}/fixtures/plan-critic-marker.txt"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"план переписан после обкатки (хеш не сходится) → deny","hook":"guard-plan-critic","expect":"deny","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md","CRAFT_PLAN_CRITIC_MARKER":"{TESTS_DIR}/fixtures/plan-critic-marker-stale.txt"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"план вне системной зоны без отметки → allow","hook":"guard-plan-critic","expect":"allow","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-plain.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"файла плана в сессии нет → allow (известная дыра, гейт молчит)","hook":"guard-plan-critic","expect":"allow","input":{"tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"не ExitPlanMode (запись файла) → allow","hook":"guard-plan-critic","expect":"allow","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.md"}}}
+{"name":"метку ставит plan-critic → сам хук молчит","hook":"mark-plan-critic","expect":"silent","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"Task","tool_input":{"subagent_type":"plan-critic","prompt":"обкатай план"}}}
+{"name":"другой подагент метку не ставит","hook":"mark-plan-critic","expect":"silent","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"Task","tool_input":{"subagent_type":"general-purpose","prompt":"поищи"}}}
+{"name":"событие не от plan-critic метку не ставит → гейт по-прежнему deny","hook":"guard-plan-critic","expect":"deny","setup":["mark-plan-critic"],"env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"запись файла плана запоминается молча","hook":"mark-plan-file","expect":"silent","input":{"tool_name":"Write","tool_input":{"file_path":"/root/.claude/plans/some-plan.md"}}}
+{"name":"план подагента не запоминается","hook":"mark-plan-file","expect":"silent","input":{"tool_name":"Write","tool_input":{"file_path":"/root/.claude/plans/some-plan-agent-1.md"}}}
