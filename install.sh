@@ -138,6 +138,12 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-pre-compact.sh")
   | ensure("PostToolUse"; "ExitPlanMode";
          "\"$HOME\"/.claude/hooks/universal-plan-gate-approve.sh")
+  | ensure("PreToolUse"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-critic.sh")
+  | ensure("PostToolUse"; "Task";
+         "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
+  | ensure("PostToolUse"; "Write|Edit|MultiEdit";
+         "\"$HOME\"/.claude/hooks/universal-mark-plan-file.sh")
   | ensure("UserPromptSubmit"; "";
          "\"$HOME\"/.claude/hooks/universal-plan-gate-reset.sh")
   | ensure("UserPromptSubmit"; "";
