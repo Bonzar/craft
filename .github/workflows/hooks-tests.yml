@@ -23,3 +23,8 @@ jobs:
 
       - name: Install.sh idempotency smoke
         run: bash tests/install-smoke.sh
+
+      # Ядро грейдера евалов гоняется на записанных потоках: без сети и моделей,
+      # поэтому живёт в том же CI, что и хук-тесты. См. evals/README.md.
+      - name: Eval grader selftest
+        run: bash evals/selftest.sh
