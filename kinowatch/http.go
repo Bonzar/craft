@@ -22,16 +22,85 @@ import (
 const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 	"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+// geoUA — User-Agent для геокодеров.
+// Nominatim требует идентифицирующий агент с контактом и режет анонимные
+// запросы; браузерный UA там не годится именно потому, что не идентифицирует.
+const geoUA = "kinowatch/0.1 (personal cinema schedule tracker; github.com/bonzar/craft)"
+
+// geoMinInterval — не чаще одного запроса в секунду: политика Nominatim.
+// Photon свой рейт не публикует, но ходим с той же вежливой частотой.
+const geoMinInterval = time.Second
+
+// acceptJSON — Overpass отвечает 406 на браузерный Accept с text/html
+// (проверено живьём). JSON-источникам нужен свой.
+const acceptJSON = "application/json"
+
+const acceptHTML = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
 type Client struct {
-	http    *http.Client
-	retries int
+	http      *http.Client
+	retries   int
+	userAgent string
+	accept    string
+	// acceptLang пустой означает «не слать заголовок вовсе».
+	//
+	// Это не мелочь: Photon на Accept-Language: ru-RU отдаёт названия
+	// ПО-АНГЛИЙСКИ — city приходит как «Moscow» вместо «Москва» (проверено
+	// живьём 31.07, тот же URL без заголовка отвечает кириллицей). Гейт по
+	// городу тогда отбраковывает вообще всё, и выглядит это как «геокодер
+	// ничего не находит».
+	acceptLang string
+	// minInterval — минимальный зазор между запросами этого клиента. Ноль
+	// означает «без троттлинга»: у ЕАИС четыре страницы, тормозить нечего.
+	minInterval time.Duration
+	lastCall    time.Time
 }
 
 func newClient(timeoutSec, retries int) *Client {
 	return &Client{
-		http:    &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
-		retries: retries,
+		http:       &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
+		retries:    retries,
+		userAgent:  browserUA,
+		acceptLang: "ru-RU,ru;q=0.9,en;q=0.8",
 	}
+}
+
+// newGeoClient — клиент для Photon и Nominatim: свой честный UA и троттлинг.
+// Отдельный клиент, а не флаг на общем, потому что зазор между запросами должен
+// держаться на своём счётчике: обход афиш не обязан ждать секунду.
+func newGeoClient(timeoutSec, retries int) *Client {
+	c := newClient(timeoutSec, retries)
+	c.userAgent = geoUA
+	c.accept = acceptJSON
+	c.acceptLang = "" // иначе Photon отвечает по-английски, см. поле acceptLang
+	c.minInterval = geoMinInterval
+	return c
+}
+
+// newJSONClient — для JSON-источников вроде Overpass.
+//
+// Отличий от общего клиента два, и оба выяснены живым запросом: Overpass
+// отвечает 406 на браузерный Accept с text/html, а с браузерным User-Agent
+// ответ не приходит вовсе — тот же самый URL с честным «kinowatch/0.1»
+// отдаёт 200. Маскировка под браузер тут не помогает, а мешает.
+func newJSONClient(timeoutSec, retries int) *Client {
+	c := newClient(timeoutSec, retries)
+	c.accept = acceptJSON
+	c.userAgent = geoUA
+	return c
+}
+
+// throttle выдерживает зазор перед очередным запросом.
+func (c *Client) throttle() {
+	if c.minInterval <= 0 {
+		return
+	}
+	if !c.lastCall.IsZero() {
+		if wait := c.minInterval - time.Since(c.lastCall); wait > 0 {
+			time.Sleep(wait)
+		}
+	}
+	c.lastCall = time.Now()
 }
 
 // transientBackoff — 2, 4, 8, 16 секунд.
@@ -59,6 +128,7 @@ func (c *Client) getText(url string) (string, error) {
 			time.Sleep(backoff)
 			backoff = 0
 		}
+		c.throttle()
 
 		ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -66,9 +136,19 @@ func (c *Client) getText(url string) (string, error) {
 			cancel()
 			return "", fmt.Errorf("построение запроса: %w", err)
 		}
-		req.Header.Set("User-Agent", browserUA)
-		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-		req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8")
+		ua := c.userAgent
+		if ua == "" {
+			ua = browserUA
+		}
+		accept := c.accept
+		if accept == "" {
+			accept = acceptHTML
+		}
+		req.Header.Set("User-Agent", ua)
+		req.Header.Set("Accept", accept)
+		if c.acceptLang != "" {
+			req.Header.Set("Accept-Language", c.acceptLang)
+		}
 
 		resp, err := c.http.Do(req)
 		if err != nil {
