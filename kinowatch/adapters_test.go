@@ -217,6 +217,102 @@ func TestParseKinoplanPutsVipIntoFormat(t *testing.T) {
 	}
 }
 
+// Разбор на живой фикстуре (снята 31.07.2026). Проверяются ровно те поля,
+// которых нет у большинства источников и ради которых Синема-Стар ценен:
+// хронометраж, описание и номер прокатного удостоверения.
+func TestParseCinemaStarFixture(t *testing.T) {
+	pb, err := parseCinemaStar(readFixture(t, "cinemastar-schedule.json"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if pb.Cinema == "" || len(pb.Showtimes) == 0 {
+		t.Fatalf("афиша пуста: %+v", pb)
+	}
+
+	var odyssey *Showtime
+	for i := range pb.Showtimes {
+		if strings.HasPrefix(pb.Showtimes[i].Film, "Одиссея") {
+			odyssey = &pb.Showtimes[i]
+			break
+		}
+	}
+	if odyssey == nil {
+		t.Fatal("«Одиссея» не найдена в фикстуре")
+	}
+
+	if odyssey.DurationM == 0 {
+		t.Error("хронометраж потерян — уровень каскада про аномальную длительность остался бы без входа")
+	}
+	if odyssey.LicenceID == "" {
+		t.Error("номер прокатного удостоверения потерян — уровень общего ПУ работать не сможет")
+	}
+	if odyssey.Synopsis == "" {
+		t.Error("описание потеряно")
+	}
+	// Описание приезжает вёрсткой: если теги и &nbsp; не вычищены, поиск
+	// подсказок профиля по подстроке не сработает.
+	if strings.Contains(odyssey.Synopsis, "<") || strings.Contains(odyssey.Synopsis, "&nbsp") {
+		t.Errorf("разметка не вычищена из синопсиса: %q", odyssey.Synopsis[:80])
+	}
+}
+
+// Улика, которую видно только по афише целиком: два разных фильма делят одно
+// прокатное удостоверение, то есть показываются по бумаге одной короткометражки.
+func TestCinemaStarSharedLicenceIsDetected(t *testing.T) {
+	pb, err := parseCinemaStar(readFixture(t, "cinemastar-schedule.json"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	shared := sharedLicenceTitles(pb)
+	if len(shared) == 0 {
+		t.Fatal("общее удостоверение не обнаружено, хотя в фикстуре его делят два фильма")
+	}
+
+	var minions, eagle bool
+	for title := range shared {
+		if strings.HasPrefix(title, "миньоны") {
+			minions = true
+		}
+		if strings.HasPrefix(title, "старый орел") {
+			eagle = true
+		}
+	}
+	if !minions {
+		t.Errorf("«Миньоны и монстры» не помечены общим ПУ: %v", shared)
+	}
+	if eagle {
+		t.Error("фильм с собственным удостоверением помечен как делящий его — улика обесценится")
+	}
+}
+
+// Синема-Стар называет обёртку прямо в тексте позиции. Это самый ценный вид
+// маркера: он даёт не только признак серой схемы, но и саму обёртку.
+func TestCinemaStarNamesWrapperInTitle(t *testing.T) {
+	pb, err := parseCinemaStar(readFixture(t, "cinemastar-schedule.json"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	found := map[string]string{}
+	for _, s := range pb.Showtimes {
+		if w := extractWrapper(s.Film); w != "" {
+			found[strings.Split(s.Film, " (")[0]] = w
+		}
+	}
+	if got := found["Одиссея"]; got != "Прощание" {
+		t.Errorf("обёртка «Одиссеи» разобрана как %q, в тексте позиции стоит «Прощание»", got)
+	}
+	if got := found["Миньоны и монстры"]; got != "Сказка на ночь" {
+		t.Errorf("обёртка «Миньонов» разобрана как %q", got)
+	}
+	// Фильм без маркера обёртки не получает: выдуманная обёртка попала бы в
+	// профиль и загрязнила бы его навсегда.
+	if w, ok := found["Старый орёл"]; ok {
+		t.Errorf("лицензионному фильму приписана обёртка %q", w)
+	}
+}
+
 // Синема-Стар отдаёт всё окно сразу и параметр даты игнорирует — адаптер обязан
 // вернуть сеансы всех дат, а фильтрация остаётся на нашей стороне.
 func TestParseCinemaStar(t *testing.T) {

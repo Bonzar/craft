@@ -77,10 +77,11 @@ const (
 // Пометки находки — тем же словарным принципом, что и Note у площадки:
 // фиксированный набор констант, иначе объединение множеств не дедуплицирует.
 const (
-	noteGreyRelease  = "film:grey-release"  // источник сам выдал признак серого проката
-	noteSynopsisHit  = "film:synopsis-hit"  // описание совпало с профилем
-	noteNoRuntime    = "film:no-duration"   // хронометража у источника нет вовсе
-	noteWrapperKnown = "film:known-wrapper" // название совпало с известной обёрткой
+	noteGreyRelease  = "film:grey-release"   // источник сам выдал признак серого проката
+	noteSynopsisHit  = "film:synopsis-hit"   // описание совпало с профилем
+	noteNoRuntime    = "film:no-duration"    // хронометража у источника нет вовсе
+	noteWrapperKnown = "film:known-wrapper"  // название совпало с известной обёрткой
+	noteSharedLicnc  = "film:shared-licence" // прокатное удостоверение общее с другим фильмом
 )
 
 // Match — решение каскада по одной позиции афиши.
@@ -95,6 +96,34 @@ type Match struct {
 	Unverifiable bool
 	GreyRelease  bool
 	Notes        []string
+
+	// FoundWrapper — обёртка, которую источник назвал прямо в тексте позиции.
+	// Дописывается в профиль фильма автоматически, но НЕ как идентификатор:
+	// одно «Прощание» прикрывает и «Одиссею», и «Историю игрушек 5», поэтому
+	// обёртка отвечает на вопрос «эта позиция серая», а не «за ней вот этот
+	// фильм».
+	FoundWrapper string
+}
+
+// matchContext — то, что видно только по афише целиком, а не по одному сеансу.
+type matchContext struct {
+	// sharedLicence — нормализованные названия, делящие прокатное
+	// удостоверение с другим названием этой же афиши.
+	sharedLicence map[string]bool
+}
+
+// matchPlaybill прогоняет афишу целиком.
+//
+// Отдельная функция нужна ровно из-за уровня общего ПУ: улику «два разных
+// фильма по одной бумаге» видно только тогда, когда перед глазами весь
+// репертуар площадки, а не отдельный сеанс.
+func matchPlaybill(pb Playbill, p FilmProfile) []Match {
+	ctx := matchContext{sharedLicence: sharedLicenceTitles(pb)}
+	out := make([]Match, 0, len(pb.Showtimes))
+	for _, s := range pb.Showtimes {
+		out = append(out, matchShowtimeCtx(s, p, ctx))
+	}
+	return out
 }
 
 var (
@@ -103,7 +132,9 @@ var (
 	// сравнению отношения не имеет.
 	ageRating = regexp.MustCompile(`\b\d{1,2}\s*\+`)
 	// Технология показа тоже попадает в название у части источников.
-	formatNoise = regexp.MustCompile(`(?i)\b(2d|3d|2д|3д|imax|4dx|atmos|dolby)\b`)
+	// Границы слова заданы вручную: `\b` в RE2 считается по `\w`, то есть по
+	// латинице, и на «2Д» с кириллической «Д» вела бы себя иначе, чем на «2D».
+	formatNoise = regexp.MustCompile(`(?i)(^|[\s(\[])(2d|3d|2д|3д|imax|4dx|atmos|dolby)($|[\s)\]])`)
 )
 
 // normalizeFilmTitle приводит название позиции к сравнимому виду.
@@ -156,6 +187,67 @@ func splitWrapper(title string) []string {
 		parts = append(parts, rest)
 	}
 	return parts
+}
+
+// wrapperInTitle вытаскивает название обёртки, когда источник называет её
+// прямо в тексте позиции.
+//
+// Живой формат Синема-Стар: «Одиссея (предсеансовое обслуживание к/ф
+// "Прощание")». Это самый ценный вид маркера — он даёт не только признак серой
+// схемы, но и саму обёртку, то есть пополняет профиль без нашей догадки.
+//
+// Классы символов пишутся явными диапазонами, а не через `\w`: в RE2 `\w` —
+// это [0-9A-Za-z_], кириллица в него не входит, и такая регулярка молча не
+// матчила бы ничего русского.
+var wrapperInTitle = regexp.MustCompile(`(?i)предсеансов[а-яё]*\s+обслуживани[а-яё]*\s*(?:к/ф|фильма)?\s*[«"]([^»"]+)[»"]`)
+
+// extractWrapper возвращает название обёртки из текста позиции, либо пустую
+// строку. Пустая строка — законный исход: большинство источников обёртку не
+// называют, и выдумывать её нельзя.
+func extractWrapper(title string) string {
+	m := wrapperInTitle.FindStringSubmatch(title)
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
+}
+
+// sharedLicenceTitles находит названия, делящие прокатное удостоверение с
+// другим названием в той же афише.
+//
+// Одно ПУ у двух разных фильмов означает, что показывают их по бумаге одной
+// короткометражки, — это улика, которую видно внутри одного ответа, без
+// внешних списков и без нашей интерпретации. Замерено живьём: «Миньоны и
+// монстры» и «История игрушек 5» делят код 214004624.
+//
+// Возвращаются нормализованные названия: сравнение идёт с ними же.
+func sharedLicenceTitles(pb Playbill) map[string]bool {
+	byCode := map[string]map[string]bool{}
+	for _, s := range pb.Showtimes {
+		code := strings.TrimSpace(s.LicenceID)
+		if code == "" || code == "0" {
+			continue
+		}
+		title := normalizeFilmTitle(s.Film)
+		if title == "" {
+			continue
+		}
+		if byCode[code] == nil {
+			byCode[code] = map[string]bool{}
+		}
+		byCode[code][title] = true
+	}
+
+	out := map[string]bool{}
+	for _, titles := range byCode {
+		if len(titles) < 2 {
+			continue
+		}
+		for t := range titles {
+			out[t] = true
+		}
+	}
+	return out
 }
 
 // inRuntimeRange — попадает ли хронометраж в вилку профиля.
@@ -241,6 +333,10 @@ func (p FilmProfile) synopsisHit(synopsis string) bool {
 // уступать эвристике по длительности, а находка по одной лишь длительности
 // обязана нести низкую уверенность, чтобы её было видно в отчёте.
 func matchShowtime(s Showtime, p FilmProfile) Match {
+	return matchShowtimeCtx(s, p, matchContext{})
+}
+
+func matchShowtimeCtx(s Showtime, p FilmProfile, ctx matchContext) Match {
 	m := Match{By: matchNone, Confidence: confLow}
 
 	// Факт источника, а не наш вывод: непустое фискальное название означает,
@@ -250,6 +346,19 @@ func matchShowtime(s Showtime, p FilmProfile) Match {
 	if strings.TrimSpace(s.FilmFiscal) != "" {
 		m.GreyRelease = true
 		m.Notes = append(m.Notes, noteGreyRelease)
+	}
+
+	// Та же природа улики, но видимая только по афише целиком: показывать два
+	// разных фильма по одному прокатному удостоверению легально нельзя.
+	if ctx.sharedLicence[normalizeFilmTitle(s.Film)] {
+		m.GreyRelease = true
+		m.Notes = append(m.Notes, noteSharedLicnc)
+	}
+
+	// Источник назвал обёртку прямо в тексте позиции — забираем её в профиль.
+	if w := extractWrapper(s.Film); w != "" {
+		m.FoundWrapper = w
+		m.GreyRelease = true
 	}
 
 	// Маркер склейки в тексте позиции — тоже факт источника, а не наш вывод:
