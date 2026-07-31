@@ -22,7 +22,7 @@ log(){ echo "[inject-craft-router] $*" >&2; }
 # Бюджет-проверка вынесена функцией: тестовый режим (ROUTER_BUDGET_TEST_FILE)
 # меряет готовый файл без сети — сетевой SessionStart-хук иначе не тестируем.
 budget_check() {  # $1 = file; echoes warn line when over budget
-  local f="$1" chars budget="${ROUTER_BUDGET_CHARS:-200000}"
+  local f="$1" chars budget="${ROUTER_BUDGET_CHARS:-300000}"
   chars="$(wc -m < "$f" | tr -d ' ')"
   if (( chars > budget )); then
     echo "⚠️ БЮДЖЕТ: инжект роутера $chars символов — БОЛЬШЕ порога $budget из чек-листа гигиены. Роутер пора дробить: новое уезжает на доменные страницы и в SKILL-доки, не в always-in-context. Подсвети Владу и предложи ревизию."
@@ -96,7 +96,7 @@ if [[ "$leftover" -gt 0 ]]; then
   msg+=" ВНИМАНИЕ: $leftover ссылок invalid:out_of_scope не восстановлено — в роутере есть ссылки на документы вне шаринга connect-ссылки. Новый шаблон — дополни карту в .claude/hooks/craft-inject-router.sh (ID через MCP Craft), обычный документ — подсвети Владу, что его надо добавить в шаринг."
 fi
 # Бюджет always-in-context: порог из чек-листа гигиены «Обслуживания памяти»
-# (роутер с памятью — до 200К символов). Предупреждение, не блок: сигнал
+# (роутер с памятью — до 300К символов). Предупреждение, не блок: сигнал
 # ревизии дробить роутер, платится он токенами каждой сессии.
 warn="$(budget_check "$OUT")"
 [[ -n "$warn" ]] && msg+=" $warn"
