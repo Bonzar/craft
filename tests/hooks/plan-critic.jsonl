@@ -13,3 +13,5 @@
 {"name":"запись файла плана запоминается молча","hook":"mark-plan-file","expect":"silent","input":{"tool_name":"Write","tool_input":{"file_path":"/root/.claude/plans/some-plan.md"}}}
 {"name":"план подагента не запоминается","hook":"mark-plan-file","expect":"silent","input":{"tool_name":"Write","tool_input":{"file_path":"/root/.claude/plans/some-plan-agent-1.md"}}}
 {"name":"метка критика переживает reset нового хода → allow","hook":"guard-plan-critic","expect":"allow","setup":["mark-plan-critic","plan-gate-reset"],"env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{"subagent_type":"plan-critic"}}}
+{"name":"системная зона только в прозе и в фенсе → критик не нужен","hook":"guard-plan-critic","expect":"allow","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-mentions-system.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"системный путь в адресе правки → критик обязателен","hook":"guard-plan-critic","expect":"deny","env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-path-in-where.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}

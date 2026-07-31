@@ -35,7 +35,9 @@ plan="${CRAFT_PLAN_FILE:-$(cat "${CRAFT_PLAN_FILE_MARKER:-/tmp/plan-file.${sid}.
 # CLAUDE.md. Триггер намеренно шире источника — «План правок» пускает без
 # критика точечную правку системной зоны по дословной формулировке Влада, а
 # машинного различителя «дословно от Влада» против «сочинил агент» нет.
-grep -qE '\[система|\.claude/|CLAUDE\.md' "$plan" || exit 0
+body="$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' "$plan")"
+grep -qE '^#+[[:space:]]*\[система' <<<"$body" \
+  || grep -qE '^[[:space:]]*-[[:space:]]*где:.*(\.claude/|CLAUDE\.md)' <<<"$body" || exit 0
 
 want="$(sha256sum "$plan" 2>/dev/null | cut -d' ' -f1)"
 have="$(cat "${CRAFT_PLAN_CRITIC_MARKER:-/tmp/plan-critic.${sid}.done}" 2>/dev/null)"

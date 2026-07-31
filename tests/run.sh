@@ -40,6 +40,7 @@ declare -A SCRIPT=(
   [fact-gate]="$HOOKS/universal-fact-gate.sh"
   [stop-routine-facts]="$HOOKS/universal-stop-routine-facts.sh"
   [guard-plan-critic]="$HOOKS/universal-guard-plan-critic.sh"
+  [guard-plan-delta]="$HOOKS/universal-guard-plan-delta.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
 )
@@ -99,9 +100,11 @@ for f in "${files[@]}"; do
     rfmark="$(mktemp -u "${TMPDIR:-/tmp}/routine-facts-test.XXXXXX")"
     planpath="$(mktemp -u "${TMPDIR:-/tmp}/plan-file-test.XXXXXX")"
     criticmark="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-test.XXXXXX")"
+    deltastore="$(mktemp -u "${TMPDIR:-/tmp}/plan-delta-test.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
-             "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark")
+             "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
+             "CRAFT_PLAN_DELTA_STORE=$deltastore")
     # Env values may reference fixture files via the {TESTS_DIR} placeholder —
     # cases are static JSONL and cannot know the checkout's absolute path.
     while IFS=$'\t' read -r k v; do
@@ -122,7 +125,7 @@ for f in "${files[@]}"; do
     for ((r_i=0; r_i<rpt; r_i++)); do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
     done
-    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark"; rm -rf "$fgdir"
+    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -155,6 +158,7 @@ REQUIRED=(
   "fact-gate:deny"            "fact-gate:allow"
   "stop-routine-facts:block"  "stop-routine-facts:silent"
   "guard-plan-critic:deny"    "guard-plan-critic:allow"
+  "guard-plan-delta:deny"     "guard-plan-delta:allow"     "guard-plan-delta:silent"
   "mark-plan-critic:silent"   "mark-plan-file:silent"
 )
 missing=()
