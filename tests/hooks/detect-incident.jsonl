@@ -13,5 +13,10 @@
 {"name":"neutral request → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"вынести правила в инструменты для стабильности"}}
 {"name":"praise → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"спасибо, всё отлично сработало"}}
 {"name":"empty prompt → silent","hook":"detect-incident","expect":"silent","input":{"prompt":""}}
+{"name":"маркер внутри уведомления подагента → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"<task-notification>вердикт подагента: тут всё неверно и сломал</task-notification>"}}
+{"name":"маркер внутри сообщения стоп-хука с префиксом харнесса → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"Stop hook feedback:\nпочему ты не разобрал буфер"}}
+{"name":"маркер внутри голого текста стоп-хука → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"[stop-hook] почему ты не разобрал буфер наблюдений"}}
+{"name":"маркер внутри продолжения хода → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"Continue from where you left off. Тут всё неверно"}}
+{"name":"якорь детектора читается из словаря","hook":"detect-incident","expect":"silent","env":{"CRAFT_SERVICE_ANCHORS":"{TESTS_DIR}/fixtures/service-anchors-test.txt"},"input":{"prompt":"ВЫДУМАННЫЙ-ЯКОРЬ дальше текст: почему ты не разобрал"}}
 {"name":"инцидент: «почему нет тестов на эти правки» → инжект","hook":"detect-incident","expect":"inject","input":{"prompt":"почему нет тестов на эти правки правил?"}}
 {"name":"инцидент: «почему остановился» → инжект","hook":"detect-incident","expect":"inject","input":{"prompt":"Раз что то осталось, почему остановился"}}

@@ -37,7 +37,8 @@ mkdir -p "$HOOKS_DST"
 
 # --- 1. Симлинки универсальных хуков и их данных ------------------------------
 linked=0
-for f in "$HOOKS_SRC"/universal-*.sh "$HOOKS_SRC/_load-env.sh" "$HOOKS_SRC/incident-markers.txt"; do
+for f in "$HOOKS_SRC"/universal-*.sh "$HOOKS_SRC/_load-env.sh" \
+         "$HOOKS_SRC/incident-markers.txt" "$HOOKS_SRC/service-anchors.txt"; do
   [[ -e "$f" ]] || continue
   dst="$HOOKS_DST/$(basename "$f")"
   if [[ -L "$dst" && "$(readlink "$dst")" == "$f" ]]; then
@@ -104,6 +105,18 @@ backup="$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
 cp "$SETTINGS" "$backup"
 
 merged="$(jq '
+  # Снятие устаревшей регистрации: ensure() умеет только дописывать, поэтому смена
+  # матчера без drop оставляет старую запись, и хук отрабатывает дважды. Сверка идёт по
+  # ПАРЕ «матчер и команда» — чужая регистрация с тем же матчером не страдает.
+  def drop(event; matcher; cmd):
+    if (.hooks[event]? // null) == null then .
+    else .hooks[event] = [ .hooks[event][]
+      | if (.matcher // "") == matcher
+        then .hooks = [ (.hooks // [])[] | select(.command != cmd) ]
+        else . end
+      | select(((.hooks // []) | length) > 0) ]
+    end;
+
   def ensure(event; matcher; cmd):
     .hooks = (.hooks // {})
     | .hooks[event] = (.hooks[event] // [])
@@ -120,7 +133,9 @@ merged="$(jq '
           else {"matcher":matcher,"hooks":[{"type":"command","command":cmd}]} end ]
       end;
 
-  ensure("PreToolUse"; "Write|Edit|MultiEdit|NotebookEdit";
+  drop("PostToolUse"; "Task";
+         "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
+  | ensure("PreToolUse"; "Write|Edit|MultiEdit|NotebookEdit";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
   | ensure("PreToolUse"; "mcp__.*__craft_write";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
@@ -140,7 +155,11 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-plan-gate-approve.sh")
   | ensure("PreToolUse"; "ExitPlanMode";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-critic.sh")
-  | ensure("PostToolUse"; "Task";
+  | ensure("PreToolUse"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
+  | ensure("PostToolUse"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
+  | ensure("PostToolUse"; "Task|Agent";
          "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
   | ensure("PostToolUse"; "Write|Edit|MultiEdit";
          "\"$HOME\"/.claude/hooks/universal-mark-plan-file.sh")

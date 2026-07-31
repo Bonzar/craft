@@ -35,13 +35,25 @@ content="$(jq -r '.tool_input.content // .tool_input.new_string // ""' <<<"$inpu
 # or other plan) straight through.
 grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:' <<<"$content" || exit 0
 
-# Dictated verbatim text in a «План правок» sits in ``` code-blocks and may legitimately
-# contain command tokens, IDs, even a «Проверка» heading — that is the content being
-# written, not plan mechanics. Strip fenced code-blocks first so only the plan's PROSE
-# is policed.
+# Dictated verbatim text in a «План правок» sits in a QUOTE block, and code examples in
+# ``` fences; both may legitimately contain command tokens, IDs, even a «Проверка»
+# heading — that is the content being written, not plan mechanics. Strip fences and
+# quote lines first so only the plan's own PROSE is policed.
 body="$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' <<<"$content")"
+# Строки цитаты — дословный записываемый текст, а не проза плана: в нём законны и
+# команды, и голые идентификаторы, поэтому из проверки они уходят.
+body="$(grep -v '^[[:space:]]*>' <<<"$body")"
 
 problems=()
+
+# 0. Забор длиннее трёх бэктиков — вложенный блок кода: людьми и гейтами он читается
+# хуже цитаты. Только на записи ЦЕЛОГО файла: на правке фрагмента длинный забор бывает
+# законной половиной пары, целого текста хук не видит и судить не может. Инварианта это
+# не даёт (шелл-запись гейтом не покрыта) — правило гигиены, не опора для других гейтов.
+if [[ -n "$(jq -r '.tool_input.content // ""' <<<"$input" 2>/dev/null)" ]] \
+   && grep -qE '^[[:space:]]*````' <<<"$content"; then
+  problems+=("забор длиннее трёх бэктиков — вложенный блок кода в плане запрещён, показывай вложенный пример цитатой")
+fi
 
 # 1a. verification / order / test section headings
 if grep -qiE '^#+[[:space:]]*(Порядок|Проверка|Verification|Verify|Тесты|Testing|Проверка результата|Порядок выполнения)' <<<"$body"; then

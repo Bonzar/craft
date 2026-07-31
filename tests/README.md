@@ -17,7 +17,10 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 
     {"name":"…","hook":"detect-incident","expect":"inject","input":{"prompt":"…"}}
 
-- `hook` — `guard-craft-markdown` | `guard-plan-hygiene` | `detect-incident` | `guard-plan-gate`.
+- `hook` — ключ из карты `SCRIPT` в `tests/run.sh` (`guard-craft-markdown`,
+  `guard-plan-hygiene`, `detect-incident`, `guard-plan-gate`, `guard-plan-critic`,
+  `guard-plan-delta`, `fact-gate` и остальные) либо имя файла хука без `.sh` —
+  незнакомый ключ раннер резолвит по имени файла.
 - `input` — полный JSON события, как его подаёт Claude Code хуку на stdin.
 - `expect` — `deny` (stdout с `permissionDecision:"deny"`) · `allow` (хук не заблокировал)
   · `inject` (stdout с `СИГНАЛ ИНЦИДЕНТА`) · `silent` (пустой stdout).
@@ -25,6 +28,11 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 - `setup` (опц.) — хуки, прогоняемые до целевого, чтобы выставить состояние: напр.
   `["plan-gate-approve"]` ставит метку одобренного плана, `["plan-gate-reset"]` гасит.
   Метка план-гейта у каждого кейса своя (временный файл) — кейсы герметичны.
+- `setup_input` и `setup_env` (опц.) — своё событие и свои переменные для блока
+  подготовки. Без них подготовке идёт то же, что целевому вызову; нужны связкам, где
+  подготовка и цель обязаны отличаться (запись состояния одним входом, проверка другим).
+- `repeat` (опц.) — подать тот же вход N раз; утверждение проверяется по последнему
+  вызову. Для хуков с однократным отказом (факт-гейт, напоминание рутины).
 
 ## Добавить кейс
 

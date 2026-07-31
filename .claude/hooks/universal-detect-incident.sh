@@ -36,6 +36,15 @@ CACHE="${CLAUDE_PROJECT_DIR:-$(cd "$DIR/../.." && pwd)}/.claude/craft-incident-c
 input="$(cat)"
 prompt="$(jq -r '.prompt // ""' <<<"$input" 2>/dev/null)" || exit 0
 [[ -z "$prompt" ]] && exit 0
+
+# Служебное сообщение репликой Влада не является: маркер в вердикте подагента или в
+# тексте стоп-хука — не сигнал инцидента. Якоря — в service-anchors.txt рядом.
+ANCHORS="${CRAFT_SERVICE_ANCHORS:-$DIR/service-anchors.txt}"
+while IFS= read -r anchor || [[ -n "$anchor" ]]; do
+  [[ -z "$anchor" || "$anchor" == \#* ]] && continue
+  [[ "$prompt" == "$anchor"* ]] && exit 0
+done < "$ANCHORS" 2>/dev/null
+
 [[ -f "$MARKERS" ]] || exit 0
 
 # Match the message against any marker (case-insensitive, extended regex).
