@@ -326,15 +326,43 @@ func nominatimURL(base, query string) string {
 // (проверено живым запросом 31.07). Без сверки имён каскад раздавал бы соседние
 // кинотеатры вместо честного «не знаю».
 //
-// Сравнение по нормализованному имени с допуском на вложенность: в ЕАИС
-// площадка зовётся «Кинотеатр Иллюзион», в OSM — «Иллюзион».
+// Сравнение — равенство имён, очищенных от родовых слов. Свободная вложенность
+// («одно имя содержит другое») здесь не годится, и это выяснил живой прогон:
+// по запросу «Pushka Mitino, Москва» Photon отдал объект с именем «Pushka», а
+// по «Pushka Brateevo» — его же. Три площадки сети получили одну точку, причём
+// с виду достоверную. Разница между «Кинотеатр Иллюзион» ↔ «Иллюзион» и
+// «Pushka Mitino» ↔ «Pushka» именно в том, ЧТО лишнее: в первом случае родовое
+// слово, во втором — различающий топоним.
 func nameMatches(want, got string) bool {
-	w := normalizeName(want)
-	g := normalizeName(got)
+	w := stripGenericWords(normalizeName(want))
+	g := stripGenericWords(normalizeName(got))
 	if w == "" || g == "" {
 		return false
 	}
-	return w == g || strings.Contains(w, g) || strings.Contains(g, w)
+	return w == g
+}
+
+// genericWords — слова, не различающие площадки: они одинаково стоят у десятка
+// разных кинотеатров, поэтому при сверке имён отбрасываются.
+var genericWords = map[string]bool{
+	"кинотеатр": true, "киноцентр": true, "кино": true, "кинозал": true,
+	"cinema": true, "cinemas": true, "кинокомплекс": true,
+	"центр": true, "культурный": true, "летний": true, "москва": true,
+	"городской": true, "московский": true, "детский": true, "государственный": true,
+}
+
+func stripGenericWords(s string) string {
+	fields := strings.Fields(s)
+	kept := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if genericWords[f] {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	// Имя, состоящее из одних родовых слов («Летний кинотеатр»), опознанию не
+	// поддаётся: таких объектов в городе несколько, и любой из них подставится.
+	return strings.Join(kept, " ")
 }
 
 // queryPhoton возвращает первый ответ, прошедший гейт.
