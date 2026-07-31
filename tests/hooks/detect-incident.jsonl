@@ -13,3 +13,7 @@
 {"name":"neutral request → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"вынести правила в инструменты для стабильности"}}
 {"name":"praise → silent","hook":"detect-incident","expect":"silent","input":{"prompt":"спасибо, всё отлично сработало"}}
 {"name":"empty prompt → silent","hook":"detect-incident","expect":"silent","input":{"prompt":""}}
+{"name":"маркер внутри уведомления подагента → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"<task-notification>вердикт подагента: тут всё неверно и сломал</task-notification>"}}
+{"name":"маркер внутри сообщения стоп-хука с префиксом харнесса → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"Stop hook feedback:\nпочему ты не разобрал буфер"}}
+{"name":"маркер внутри голого текста стоп-хука → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"[stop-hook] почему ты не разобрал буфер наблюдений"}}
+{"name":"маркер внутри продолжения хода → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"Continue from where you left off. Тут всё неверно"}}

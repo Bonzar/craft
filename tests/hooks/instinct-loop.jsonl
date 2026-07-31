@@ -4,3 +4,4 @@
 {"name":"flush directive references distillation format","hook":"universal-instinct-flush","expect":"contains:при [сигнале]","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":false}}
 {"name":"flush is silent when buffer is absent","hook":"universal-instinct-flush","expect":"silent","env":{"OBSERVE_BUFFER":"/tmp/nonexistent-observe-buffer.log"},"input":{"stop_hook_active":false}}
 {"name":"flush is silent on stop_hook_active (anti-loop)","hook":"universal-instinct-flush","expect":"silent","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":true}}
+{"name":"текст флеша несёт служебный префикс","hook":"universal-instinct-flush","expect":"contains:[stop-hook]","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":false}}

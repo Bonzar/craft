@@ -88,7 +88,7 @@ if [[ $has_npx -eq 1 && -f "$proj/tsconfig.json" ]] \
 fi
 
 if [[ -n "$problems" ]]; then
-  jq -cn --arg r "Stop-гейт качества: в правленных за сессию файлах есть нарушения — почини их и заверши ход снова."$'\n'"$problems" \
+  jq -cn --arg r "[stop-hook] Stop-гейт качества: в правленных за сессию файлах есть нарушения — почини их и заверши ход снова."$'\n'"$problems" \
     '{decision:"block", reason:$r}'
 fi
 exit 0

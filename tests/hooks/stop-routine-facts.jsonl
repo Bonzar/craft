@@ -4,3 +4,4 @@
 {"name":"евал-режим — молчит даже в автономе","hook":"stop-routine-facts","expect":"silent","env":{"CRAFT_AUTONOMOUS":"1","CRAFT_EVAL":"1"},"input":{"stop_hook_active":false}}
 {"name":"анти-цикл: stop_hook_active — молчит","hook":"stop-routine-facts","expect":"silent","env":{"CRAFT_AUTONOMOUS":"1"},"input":{"stop_hook_active":true}}
 {"name":"директива содержит отсылку к фактам завершения","hook":"stop-routine-facts","expect":"contains:Факты завершения","env":{"CRAFT_AUTONOMOUS":"1"},"input":{"stop_hook_active":false}}
+{"name":"директива фактов несёт служебный префикс","hook":"stop-routine-facts","expect":"contains:[stop-hook]","env":{"CRAFT_AUTONOMOUS":"1"},"input":{"stop_hook_active":false}}
