@@ -1,0 +1,188 @@
+package main
+
+// Реестр кинотеатров: скелет берётся из ЕАИС Фонда кино.
+//
+// Почему именно ЕАИС, а не афиша или карты: регистрация демонстратора там
+// обязательна по закону (ФЗ-126 + ПП РФ №837), поэтому этот перечень задаёт
+// определение полноты. Афиши и карты видят только тех, кто им интересен.
+//
+// Что источник НЕ даёт: адреса, координат, ИНН и сайта. Пять колонок и всё.
+// Поэтому адрес и сайт добываются отдельно (geo.go, site.go), а сопоставление
+// строится на названии с проверкой города — иначе «Радуга кино» уезжает в
+// Магадан, а «Дружба» на Камчатку (обе коллизии реальны, проверено).
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+// EaisRow — строка листинга ЕАИС как она есть, без интерпретации.
+type EaisRow struct {
+	Region  string `json:"region"`
+	City    string `json:"city"`
+	ID      string `json:"eaisId"`
+	Company string `json:"company"`
+	Network string `json:"network"`
+}
+
+// moscowRegionCode — код Москвы в путях листинга ЕАИС.
+const moscowRegionCode = "7700000000000"
+
+// eaisCell вытаскивает ячейки таблицы по порядку следования в разметке.
+// Разметка ЕАИС — не <table>, а <div class="d-tbl-item _region|_city|_id|_company|_cinema">,
+// причём шапка (<div class="d-tbl-head">) состоит из ТЕХ ЖЕ ячеек. Наивная
+// группировка по пять даёт лишнюю строку на каждую страницу (180 вместо 176),
+// поэтому шапка отсекается по значению первой ячейки.
+var eaisCell = regexp.MustCompile(`<div class="d-tbl-item _(region|city|id|company|cinema)"[^>]*>(.*?)</div>`)
+
+// eaisPageURL — URL страницы листинга по региону.
+// Внимание: форма ?region=<code> НЕ работает (301 на http и дальше 503),
+// рабочая форма — код в пути. Первая страница и последующие устроены по-разному.
+func eaisPageURL(base, region string, page int) string {
+	base = strings.TrimRight(base, "/")
+	if page <= 1 {
+		return fmt.Sprintf("%s/demonstrators/%s/", base, region)
+	}
+	return fmt.Sprintf("%s/demonstrators/page/%d/%s/", base, page, region)
+}
+
+// parseEaisPage разбирает одну страницу листинга.
+// IO-free: на вход сырой HTML, на выход строки. Именно поэтому тестируется
+// на зафиксированной фикстуре, без сети.
+func parseEaisPage(html string) []EaisRow {
+	matches := eaisCell.FindAllStringSubmatch(html, -1)
+
+	var rows []EaisRow
+	var cur EaisRow
+	var filled int
+
+	for _, m := range matches {
+		field, value := m[1], cleanCell(m[2])
+		switch field {
+		case "region":
+			// Начало новой строки: если предыдущая недобрана, она битая — бросаем.
+			cur = EaisRow{Region: value}
+			filled = 1
+		case "city":
+			cur.City = value
+			filled++
+		case "id":
+			cur.ID = value
+			filled++
+		case "company":
+			cur.Company = value
+			filled++
+		case "cinema":
+			cur.Network = value
+			filled++
+			if filled == 5 && !isHeaderRow(cur) {
+				rows = append(rows, cur)
+			}
+			filled = 0
+		}
+	}
+	return rows
+}
+
+// isHeaderRow опознаёт шапку таблицы. Она размечена теми же ячейками, что и
+// данные, отличается только содержимым.
+func isHeaderRow(r EaisRow) bool {
+	return r.Region == "Регион" || r.City == "Город" || r.ID == "ID"
+}
+
+// cleanCell снимает вложенные теги и схлопывает пробелы.
+var tagRe = regexp.MustCompile(`<[^>]*>`)
+
+func cleanCell(s string) string {
+	s = tagRe.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "&nbsp;", " ")
+	s = strings.ReplaceAll(s, "&amp;", "&")
+	s = strings.ReplaceAll(s, "&quot;", `"`)
+	return strings.TrimSpace(s)
+}
+
+// Города региона «Москва г», которые к городу Москве не относятся.
+// Зеленоград административно Москва, но лежит далеко за МКАД; Московский и
+// Мамыри — ТиНАО. Все три вне охвата по решению «строго внутри МКАД».
+var outOfScopeCities = map[string]string{
+	"Зеленоград г": "zelenograd",
+	"Московский г": "tinao",
+	"Мамыри д":     "tinao",
+}
+
+// ScopeDecision — почему строка попала в охват или не попала.
+type ScopeDecision struct {
+	Row     EaisRow `json:"row"`
+	InScope bool    `json:"inScope"`
+	Reason  string  `json:"reason,omitempty"`
+}
+
+// applyCityScope режет строки по городу — единственное, что можно решить
+// прямо из ЕАИС, без адреса. Всё остальное (МКАД, дубли) решается позже,
+// когда появятся адреса.
+func applyCityScope(rows []EaisRow) []ScopeDecision {
+	out := make([]ScopeDecision, 0, len(rows))
+	for _, r := range rows {
+		if reason, bad := outOfScopeCities[r.City]; bad {
+			out = append(out, ScopeDecision{Row: r, InScope: false, Reason: reason})
+			continue
+		}
+		out = append(out, ScopeDecision{Row: r, InScope: true})
+	}
+	return out
+}
+
+// DuplicateHint — кандидат в дубли по названию.
+//
+// НЕ схлопывается автоматически: «Pushka» ×3 и «PRIME CINEMA» ×2 в реестре —
+// это разные адреса (Митино, Братеево, Клён), а «Времена Года» / «Времена года»
+// с разными ID — похоже на задвоенную регистрацию. Отличить одно от другого без
+// адреса нельзя, поэтому здесь только пометка, а решение принимается на этапе,
+// где у строк уже есть адрес.
+type DuplicateHint struct {
+	Normalized string   `json:"normalized"`
+	IDs        []string `json:"eaisIds"`
+}
+
+// findDuplicateHints группирует строки по нормализованному названию.
+func findDuplicateHints(rows []EaisRow) []DuplicateHint {
+	byName := map[string][]string{}
+	order := []string{}
+	for _, r := range rows {
+		key := normalizeName(r.Company)
+		if key == "" {
+			continue
+		}
+		if _, seen := byName[key]; !seen {
+			order = append(order, key)
+		}
+		byName[key] = append(byName[key], r.ID)
+	}
+
+	var hints []DuplicateHint
+	for _, key := range order {
+		if len(byName[key]) > 1 {
+			hints = append(hints, DuplicateHint{Normalized: key, IDs: byName[key]})
+		}
+	}
+	return hints
+}
+
+var nameNoise = regexp.MustCompile(`[«»"'()\[\].,\-–—]+`)
+var multiSpace = regexp.MustCompile(`\s+`)
+
+// normalizeName приводит название к сравнимому виду.
+// Учитывает, что в колонке «Организация» лежит обычно название площадки, но
+// иногда настоящее юрлицо («ИП Харчев М.А.», «ОАО Планетарий») — префиксы
+// организационных форм снимаются, иначе они шумят при сравнении.
+func normalizeName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "ё", "е")
+	s = nameNoise.ReplaceAllString(s, " ")
+	for _, p := range []string{"ооо ", "оао ", "зао ", "ао ", "ип ", "нп ", "гаук ", "гбук ", "фгбук ", "мбук ", "гау ", "гбу "} {
+		s = strings.TrimPrefix(s, p)
+	}
+	s = multiSpace.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
