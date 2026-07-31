@@ -46,13 +46,13 @@ type karoResponse struct {
 	} `json:"data"`
 }
 
-// parseKaro разбирает справочник КАРО.
+// parseKaroDirectory разбирает справочник площадок КАРО.
 //
 // Внимание на охват: в справочнике лежат и площадки за пределами города —
 // «5 Иридиум» стоит в Зеленограде. Отсев по городу здесь не делается: строка
 // ЕАИС сопоставляется по названию, а Зеленоград отсекается раньше, на уровне
 // охвата реестра. Фильтровать дважды значило бы завести второе правило охвата.
-func parseKaro(body string) ([]EnrichedVenue, error) {
+func parseKaroDirectory(body string) ([]EnrichedVenue, error) {
 	var resp karoResponse
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		return nil, fmt.Errorf("разбор справочника КАРО: %w", err)
@@ -152,7 +152,7 @@ func fetchKaro(c *Client, endpoint string) ([]EnrichedVenue, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseKaro(body)
+	return parseKaroDirectory(body)
 }
 
 func fetchOverpass(c *Client, endpoint string) ([]EnrichedVenue, error) {
