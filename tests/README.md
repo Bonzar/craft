@@ -17,7 +17,10 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 
     {"name":"…","hook":"detect-incident","expect":"inject","input":{"prompt":"…"}}
 
-- `hook` — `guard-craft-markdown` | `guard-plan-hygiene` | `detect-incident` | `guard-plan-gate`.
+- `hook` — ключ из карты `SCRIPT` в `tests/run.sh` (`guard-craft-markdown`,
+  `guard-plan-hygiene`, `detect-incident`, `guard-plan-gate`, `guard-plan-critic`,
+  `guard-plan-delta`, `fact-gate` и остальные) либо имя файла хука без `.sh` —
+  незнакомый ключ раннер резолвит по имени файла.
 - `input` — полный JSON события, как его подаёт Claude Code хуку на stdin.
 - `expect` — `deny` (stdout с `permissionDecision:"deny"`) · `allow` (хук не заблокировал)
   · `inject` (stdout с `СИГНАЛ ИНЦИДЕНТА`) · `silent` (пустой stdout).

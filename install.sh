@@ -140,6 +140,10 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-plan-gate-approve.sh")
   | ensure("PreToolUse"; "ExitPlanMode";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-critic.sh")
+  | ensure("PreToolUse"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
+  | ensure("PostToolUse"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
   | ensure("PostToolUse"; "Task";
          "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
   | ensure("PostToolUse"; "Write|Edit|MultiEdit";
