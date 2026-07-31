@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Приоритет классов — не косметика: он решает, попадёт ли площадка в
 // знаменатель покрытия. Тест держит именно это свойство, а не порядок ради
@@ -95,6 +98,108 @@ func TestObjectiveReasonsOutrankOurOwnGaps(t *testing.T) {
 					ours[i], ours[j], got)
 			}
 		}
+	}
+}
+
+// Note накапливает, а не перезаписывается: пометки ставят разные шаги в разное
+// время, и первая же ежечасная запись затёрла бы вчерашнее предупреждение.
+func TestAddNoteAccumulatesAndDeduplicates(t *testing.T) {
+	fields := map[string]string{}
+
+	addNote(fields, noteGeoNameDup)
+	addNote(fields, noteGeoUnverified)
+	addNote(fields, noteGeoNameDup) // повтор от другого шага
+
+	got := fields[fNote]
+	if !strings.Contains(got, noteGeoNameDup) || !strings.Contains(got, noteGeoUnverified) {
+		t.Errorf("пометка потеряна: %q", got)
+	}
+	if strings.Count(got, noteGeoNameDup) != 1 {
+		t.Errorf("повторная пометка задвоилась: %q", got)
+	}
+
+	// Пустая пометка поля не создаёт — иначе в реестре появился бы пустой Note.
+	clean := map[string]string{}
+	addNote(clean, "", "  ")
+	if _, ok := clean[fNote]; ok {
+		t.Errorf("пустые пометки создали поле: %q", clean[fNote])
+	}
+}
+
+// GeoAt ставится на каждом решении, даже когда запросов не было вовсе. Иначе
+// площадка вечно подходит под условие «раньше не пробовалась» и штурмует
+// геокодер каждый час.
+func TestApplyGeoAlwaysStampsAttemptTime(t *testing.T) {
+	now := "2026-07-31T10:00:00Z"
+
+	failed := CinemaObservation{Fields: map[string]string{fStatusClass: classUncovered}}
+	applyGeo(&failed, GeoOutcome{Evidence: "https://example/api?q=x"}, now)
+
+	if failed.Fields[fGeoAt] != now {
+		t.Errorf("время попытки не проставлено: %q", failed.Fields[fGeoAt])
+	}
+	if failed.Fields[fStatusClass] != classGeoUnknown {
+		t.Errorf("класс после неудачи %q, ожидался %q", failed.Fields[fStatusClass], classGeoUnknown)
+	}
+	if failed.Fields[fEvidenceURL] == "" {
+		t.Error("URL последней попытки потерян — неудачу нечем перепроверить")
+	}
+	// InsideMkad остаётся пустым: false молча вычеркнул бы площадку из охвата.
+	if v, ok := failed.Fields[fInsideMkad]; ok && v != "" {
+		t.Errorf("InsideMkad заполнен без координат: %q", v)
+	}
+}
+
+func TestApplyGeoWritesPoint(t *testing.T) {
+	now := "2026-07-31T10:00:00Z"
+	obs := CinemaObservation{Fields: map[string]string{fStatusClass: classUncovered}}
+
+	applyGeo(&obs, GeoOutcome{
+		Point: &GeoPoint{
+			Lat: 55.748015, Lon: 37.645022,
+			Step: stepPhotonTitle, Address: "Москва, Большой Ватин переулок",
+			Evidence: "https://photon/api?q=y",
+		},
+		Notes: []string{noteGeoUnverified},
+	}, now)
+
+	if obs.Fields[fLat] != "55.748015" || obs.Fields[fLon] != "37.645022" {
+		t.Errorf("координаты записаны как %q, %q", obs.Fields[fLat], obs.Fields[fLon])
+	}
+	if obs.Fields[fGeoStep] != stepPhotonTitle {
+		t.Errorf("ступень не записана: %q", obs.Fields[fGeoStep])
+	}
+	if obs.Fields[fAddress] == "" {
+		t.Error("добытый адрес не сохранён — следующий прогон решал бы ту же задачу заново")
+	}
+	if obs.Fields[fNote] != noteGeoUnverified {
+		t.Errorf("пометка неподтверждённого геокода потеряна: %q", obs.Fields[fNote])
+	}
+	// Успех не превращает площадку в geo_unknown.
+	if obs.Fields[fStatusClass] == classGeoUnknown {
+		t.Error("площадка с координатами помечена как geo_unknown")
+	}
+}
+
+// Готовые координаты обогатителя снимают нужду в запросах вовсе — это главная
+// экономия прогона.
+func TestSetEnrichedMarksSourceAndSkipsGeocoder(t *testing.T) {
+	now := "2026-07-31T10:00:00Z"
+	obs := CinemaObservation{Fields: map[string]string{}}
+
+	setEnriched(&obs, EnrichedVenue{
+		Name: "Иллюзион", Address: "Москва, Большой Ватин переулок",
+		Lat: 55.748015, Lon: 37.645022, Source: "osm", Website: "https://illuzion.example",
+	}, now)
+
+	if !hasCoords(obs) {
+		t.Fatal("координаты обогатителя не записаны")
+	}
+	if obs.Fields[fGeoStep] != "enricher:osm" {
+		t.Errorf("источник координат не виден: %q", obs.Fields[fGeoStep])
+	}
+	if obs.Fields[fSiteURL] == "" {
+		t.Error("сайт из тегов OSM потерян")
 	}
 }
 
