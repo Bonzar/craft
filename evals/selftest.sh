@@ -129,6 +129,14 @@ grade_expect_present "четыре"
 grade_verdict; covered["evidence:ERROR"]=1
 check "улика / нет улики — ERROR, а не вердикт" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
 
+# 9f. Обрыв соединения на полуслове: весь «ответ» агента — сообщение об ошибке.
+#     Поток непустой, поэтому прежний грейдер писал FAIL, то есть «правило не
+#     соблюдено», хотя агент не сказал ничего по существу.
+grade_load "$FIX/api-cut.jsonl" 0
+grade_expect_present "ступень"
+grade_verdict; covered["api_cut:ERROR"]=1
+check "обрыв связи / не провал поведения" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
+
 # 10. Таймаут раннера → ERROR, даже если поток выглядит полным
 grade_load "$FIX/success.jsonl" 124
 grade_expect_present "четыре"
@@ -235,7 +243,7 @@ REQUIRED=(
   "no_stream:ERROR" "bad_json:ERROR" "timeout:ERROR" "noassert:ERROR"
   "noise:PASS" "case:PASS" "validate:BAD" "validate:OK" "retry:ERROR" "retry:PASS"
   "evidence:PASS" "evidence:ERROR" "trigger:BAD" "trigger:OK"
-  "behavior:PASS" "behavior:FAIL" "material:BAD"
+  "behavior:PASS" "behavior:FAIL" "material:BAD" "api_cut:ERROR"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done
