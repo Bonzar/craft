@@ -1,0 +1,184 @@
+{
+ "success": true,
+ "status": 200,
+ "data": {
+  "theatre": {
+   "id": 22,
+   "uid": "kvartal",
+   "name": "Синема Стар МФК Kvartal West",
+   "city_id": 1,
+   "address": "Москва, Аминьевское шоссе, д.6"
+  },
+  "schedule": {
+   "dates": [
+    "2026-07-31",
+    "2026-08-01",
+    "2026-08-02",
+    "2026-08-03",
+    "2026-08-04",
+    "2026-08-05",
+    "2026-08-06",
+    "2026-08-07",
+    "2026-08-08",
+    "2026-08-09",
+    "2026-08-10",
+    "2026-08-11",
+    "2026-08-12"
+   ],
+   "items": [
+    {
+     "film": {
+      "id": 1285,
+      "name": "Миньоны и монстры (предсеансовое обслуживание к/ф \"Сказка на ночь\"). Купить билеты можно только ОНЛАЙН на сайте www.cinemastar.ru, не позднее чем за 10 минут до начала киносеанса.",
+      "duration": 100,
+      "age_restriction": 6,
+      "government_code": "214004624",
+      "description": "<p><span style=\"font-size: 18px;\">​Это дерзкая, абсурдная и в&nbsp;то&nbsp;же время удивительно правдивая история о&nbsp;том, как миньоны покорили Голливуд, стали кинозвёздами, потеряли всё, выпустили монстров&nbsp;на св"
+     },
+     "formats": [
+      {
+       "format": {
+        "id": "2Д",
+        "name": "2Д"
+       },
+       "sessions": [
+        {
+         "id": 861341,
+         "business_date": "2026-07-31",
+         "showtime": "2026-07-31 15:40:00",
+         "close_date": "2026-07-31 15:40:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 60000
+        },
+        {
+         "id": 861342,
+         "business_date": "2026-07-31",
+         "showtime": "2026-07-31 17:40:00",
+         "close_date": "2026-07-31 17:40:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 70000
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "film": {
+      "id": 1300,
+      "name": "Одиссея (предсеансовое обслуживание к/ф \"Прощание\"). Купить билеты можно только ОНЛАЙН на сайте www.cinemastar.ru, не позднее чем за 10 минут до начала киносеанса.",
+      "duration": 190,
+      "age_restriction": 18,
+      "government_code": "111002624",
+      "description": "<p><span style=\"text-align: justify; font-size: 18px;\">После Троянской войны Одиссей, царь Итаки, во&nbsp;главе небольшого войска возвращается домой к&nbsp;своей жене Пенелопе. На&nbsp;своём пути Одиссей сталкивается со&"
+     },
+     "formats": [
+      {
+       "format": {
+        "id": "2Д",
+        "name": "2Д"
+       },
+       "sessions": [
+        {
+         "id": 861185,
+         "business_date": "2026-07-31",
+         "showtime": "2026-07-31 15:55:00",
+         "close_date": "2026-07-31 15:55:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 62000
+        },
+        {
+         "id": 861186,
+         "business_date": "2026-07-31",
+         "showtime": "2026-07-31 19:20:00",
+         "close_date": "2026-07-31 19:20:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 72000
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "film": {
+      "id": 1298,
+      "name": "Старый орёл",
+      "duration": 102,
+      "age_restriction": 12,
+      "government_code": "111097626",
+      "description": "<span style=\"color: rgb(26, 26, 26); font-family: calibri, sans-serif; font-size: 14.6667px; text-align: justify;\">Главный герой истории — Батраз Зелимханович, осетинский дед, уединенно живущий в горном селе. К Батразу п"
+     },
+     "formats": [
+      {
+       "format": {
+        "id": "2Д",
+        "name": "2Д"
+       },
+       "sessions": [
+        {
+         "id": 861616,
+         "business_date": "2026-07-31",
+         "showtime": "2026-07-31 16:05:00",
+         "close_date": "2026-07-31 16:05:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 60000
+        },
+        {
+         "id": 861632,
+         "business_date": "2026-07-31",
+         "showtime": "2026-07-31 17:50:00",
+         "close_date": "2026-07-31 17:50:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 70000
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "film": {
+      "id": 1276,
+      "name": "История игрушек 5 (предсеансовое обслуживание к/ф \"Сказка на ночь\"). Купить билеты можно только ОНЛАЙН на сайте www.cinemastar.ru, не позднее чем за 10 минут до начала киносеанса.",
+      "duration": 110,
+      "age_restriction": 6,
+      "government_code": "214004624",
+      "description": "<p><span style=\"font-size: 18px;\">​Вуди, Джесси и&nbsp;Базз Лайтер сталкиваются с&nbsp;новой угрозой&nbsp;&mdash;&nbsp;планшетом &laquo;ЛилиПад&raquo;, который стал любимой игрушкой 8-летней Бонни и&nbsp;занимает всё бол"
+     },
+     "formats": [
+      {
+       "format": {
+        "id": "2Д",
+        "name": "2Д"
+       },
+       "sessions": [
+        {
+         "id": 861526,
+         "business_date": "2026-08-01",
+         "showtime": "2026-08-01 10:10:00",
+         "close_date": "2026-08-01 10:10:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 40000
+        },
+        {
+         "id": 861527,
+         "business_date": "2026-08-02",
+         "showtime": "2026-08-02 10:10:00",
+         "close_date": "2026-08-02 10:10:00",
+         "format": "2Д",
+         "disabled": false,
+         "standard_price": 40000
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

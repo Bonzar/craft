@@ -238,3 +238,80 @@ func hasNote(notes []string, want string) bool {
 	}
 	return false
 }
+
+// Кириллица в регулярках — отдельная ловушка Go: `\w` и `\b` в RE2 считаются по
+// латинице, поэтому русские названия молча не матчатся. Тест держит оба места.
+func TestCyrillicFormatIsStripped(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Одиссея 2Д", "одиссея"},
+		{"Одиссея (2Д)", "одиссея"},
+		{"Одиссея МАКС 2Д", "одиссея макс"},
+		// Формат внутри слова снимать нельзя — это часть названия. Дефис при
+		// этом снимается, как и везде: «Человек-паук» и «Человек паук» обязаны
+		// сойтись в один ключ.
+		{"Кинопробы3D-мания", "кинопробы3d мания"},
+	}
+	for _, c := range cases {
+		if got := normalizeFilmTitle(c.in); got != c.want {
+			t.Errorf("normalizeFilmTitle(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestExtractWrapper(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`Одиссея (предсеансовое обслуживание к/ф "Прощание")`, "Прощание"},
+		{`Миньоны и монстры (предсеансовое обслуживание к/ф «Сказка на ночь»)`, "Сказка на ночь"},
+		{`Одиссея (предсеансовым обслуживанием фильма "Прощание")`, "Прощание"},
+		// Обёртки нет — выдумывать её нельзя: она попала бы в профиль навсегда.
+		{"Старый орёл", ""},
+		{"Одиссея*(предсеанс. обсл.)", ""},
+	}
+	for _, c := range cases {
+		if got := extractWrapper(c.in); got != c.want {
+			t.Errorf("extractWrapper(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// Уровень общего ПУ работает по афише целиком и не срабатывает на пустых или
+// нулевых кодах — иначе все источники без удостоверений слиплись бы в одну кучу.
+func TestSharedLicenceIgnoresEmptyCodes(t *testing.T) {
+	pb := Playbill{Showtimes: []Showtime{
+		{Film: "Фильм А"}, {Film: "Фильм Б"},
+		{Film: "Фильм В", LicenceID: "0"}, {Film: "Фильм Г", LicenceID: "0"},
+	}}
+	if got := sharedLicenceTitles(pb); len(got) != 0 {
+		t.Errorf("пустые удостоверения слиплись: %v", got)
+	}
+
+	// Один и тот же фильм в нескольких сеансах общим ПУ не считается: код
+	// делится с САМИМ СОБОЙ, а не с другим названием.
+	same := Playbill{Showtimes: []Showtime{
+		{Film: "Одиссея", LicenceID: "111"}, {Film: "Одиссея 6+", LicenceID: "111"},
+	}}
+	if got := sharedLicenceTitles(same); len(got) != 0 {
+		t.Errorf("сеансы одного фильма приняты за улику: %v", got)
+	}
+}
+
+// matchPlaybill — единственный вход, где уровень общего ПУ вообще работает:
+// улику видно только по репертуару целиком.
+func TestMatchPlaybillFlagsSharedLicence(t *testing.T) {
+	pb := Playbill{Showtimes: []Showtime{
+		{Film: "Миньоны и монстры", LicenceID: "214004624", DurationM: 100},
+		{Film: "История игрушек 5", LicenceID: "214004624", DurationM: 110},
+		{Film: "Старый орёл", LicenceID: "111097626", DurationM: 102},
+	}}
+
+	ms := matchPlaybill(pb, spiderman)
+	if !ms[0].GreyRelease || !ms[1].GreyRelease {
+		t.Error("фильмы с общим удостоверением не помечены серыми")
+	}
+	if ms[2].GreyRelease {
+		t.Error("фильм с собственным удостоверением помечен серым")
+	}
+	if !hasNote(ms[0].Notes, noteSharedLicnc) {
+		t.Errorf("пометка про общее ПУ потеряна: %v", ms[0].Notes)
+	}
+}

@@ -15,6 +15,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 	"time"
@@ -74,6 +75,19 @@ type Showtime struct {
 	// но и не искался. Поэтому непустое значение — сильный признак, а пустое
 	// ничего не опровергает.
 	FilmFiscal string `json:"filmFiscal,omitempty"`
+
+	// LicenceID — номер прокатного удостоверения, если источник его отдаёт
+	// (у Синема-Стар это government_code).
+	//
+	// Сам по себе он ничего не доказывает, но ОДНО удостоверение у двух разных
+	// названий — прямая улика серого проката: показывают два разных фильма по
+	// бумаге одной короткометражки. Замерено живьём 31.07: «Миньоны и монстры»
+	// и «История игрушек 5» делят код 214004624, и обе идут под обёрткой
+	// «Сказка на ночь» — той же, что Киномакс кладёт в фискальное название.
+	//
+	// В ключ сеанса и в отпечаток не входит: это свойство репертуара, а не
+	// конкретного сеанса.
+	LicenceID string `json:"licenceId,omitempty"`
 
 	// Synopsis — описание позиции, если источник его отдаёт. Для каскада
 	// матчинга это только бустер уверенности: описание бывает обрезано и
@@ -298,14 +312,23 @@ type cinemaStarResponse struct {
 			Dates []string `json:"dates"`
 			Items []struct {
 				Film struct {
-					Name string `json:"name"`
+					Name     string `json:"name"`
+					Duration int    `json:"duration"`
+					// government_code приходит числом, но это идентификатор, а
+					// не величина: json.Number бережёт его от потери точности
+					// и от экспоненциальной записи.
+					GovernmentCode json.Number `json:"government_code"`
+					Description    string      `json:"description"`
 				} `json:"film"`
 				Formats []struct {
-					Format   string `json:"format"`
+					// В группе формат приходит объектом {id, name}, а в самом
+					// сеансе — строкой. Берём из сеанса: он ближе к факту и
+					// избавляет от разбора двух форм одного поля.
 					Sessions []struct {
 						ID            int64  `json:"id"`
 						BusinessDate  string `json:"business_date"`
 						Showtime      string `json:"showtime"`
+						Format        string `json:"format"`
 						Disabled      bool   `json:"disabled"`
 						StandardPrice int    `json:"standard_price"`
 					} `json:"sessions"`
@@ -339,15 +362,39 @@ func parseCinemaStar(body string) (Playbill, error) {
 				pb.Showtimes = append(pb.Showtimes, Showtime{
 					Film:     strings.TrimSpace(it.Film.Name),
 					StartsAt: at,
-					Format:   f.Format,
+					Format:   strings.TrimSpace(s.Format),
 					PriceMin: s.StandardPrice / 100,
 					SourceID: fmt.Sprintf("%d", s.ID),
 					OnSale:   !s.Disabled,
+					// Хронометраж и описание питают уровни каскада, а
+					// удостоверение — уровень общего ПУ. Источник отдаёт всё
+					// три, и терять их значило бы обеднить матчинг там, где
+					// данных как раз хватает.
+					DurationM: it.Film.Duration,
+					LicenceID: strings.TrimSpace(it.Film.GovernmentCode.String()),
+					Synopsis:  stripHTML(it.Film.Description),
 				})
 			}
 		}
 	}
 	return pb, nil
+}
+
+// stripHTML вычищает разметку из описания.
+//
+// Синопсис приезжает готовым куском вёрстки («<p><span style=…>»), а каскаду
+// нужен текст: по нему ищутся подсказки профиля, и «&nbsp;» между словами
+// ломает поиск подстроки не хуже тега.
+func stripHTML(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = tagRe.ReplaceAllString(s, " ")
+	s = html.UnescapeString(s)
+	// Неразрывный пробел из &nbsp; остаётся отдельным символом и в обычный
+	// пробел сам не превращается.
+	s = strings.ReplaceAll(s, " ", " ")
+	return strings.TrimSpace(multiSpace.ReplaceAllString(s, " "))
 }
 
 // normalizeShowtime приводит время сеанса к RFC3339.
