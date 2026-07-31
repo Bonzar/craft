@@ -15,7 +15,7 @@ trap 'rm -rf "$TESTHOME"' EXIT
 # Чужая запись, которую install обязан сохранить.
 mkdir -p "$TESTHOME/.claude"
 cat > "$TESTHOME/.claude/settings.json" <<'JSON'
-{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/opt/foreign-guard.sh"}]}]},"permissions":{"allow":["Bash(ls:*)"]}}
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/opt/foreign-guard.sh"}]}],"PostToolUse":[{"matcher":"Task","hooks":[{"type":"command","command":"\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh"},{"type":"command","command":"/opt/foreign-on-task.sh"}]}]},"permissions":{"allow":["Bash(ls:*)"]}}
 JSON
 
 out1="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$REPO/install.sh" 2>&1)" \
@@ -34,6 +34,20 @@ jq -e '.hooks.PreToolUse[]?.hooks[]?.command
 jq -e '.permissions.allow | index("Bash(ls:*)")' \
   "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
   || FAILS+=("foreign permissions were lost")
+
+# Миграция матчера: устаревшая регистрация отметки критика на «Task» снята, новая на
+# «Task|Agent» одна, чужая команда в той же группе цела.
+n_mark="$(jq '[.hooks.PostToolUse[]?.hooks[]?.command
+       | select(endswith("universal-mark-plan-critic.sh"))] | length' \
+  "$TESTHOME/.claude/settings.json")"
+[[ "$n_mark" == "1" ]] || FAILS+=("mark-plan-critic registered $n_mark times, expected 1")
+jq -e '.hooks.PostToolUse[]? | select((.matcher // "") == "Task|Agent")
+       | .hooks[]? | select(endswith("universal-mark-plan-critic.sh") | not) | empty,
+       (.hooks | length)' "$TESTHOME/.claude/settings.json" >/dev/null 2>&1
+jq -e '.hooks.PostToolUse[]?.hooks[]?.command
+       | select(. == "/opt/foreign-on-task.sh")' \
+  "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
+  || FAILS+=("foreign hook in the Task group was lost")
 
 out2="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$REPO/install.sh" 2>&1)" \
   || FAILS+=("second run exited non-zero: $out2")
