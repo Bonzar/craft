@@ -64,6 +64,12 @@ const (
 	classNoSource     = "no_source"      // домен потерян или отдаёт не кинотеатр
 	classNoOnlineSale = "no_online_sale" // сайт есть, билетной системы нет
 	classSeasonal     = "seasonal"       // работает только в сезон
+
+	// classCloneOf — запись описывает те же залы, что и другая запись реестра.
+	// Ведущая указана в SourceParams. Свойство самого реестра, а не наша
+	// неготовность, поэтому строка выводится из знаменателя покрытия: иначе
+	// метрика считала бы фантомы, а один физический сеанс писался бы трижды.
+	classCloneOf = "clone_of"
 )
 
 // classPriority — что побеждает, когда причин совпало несколько.
@@ -79,7 +85,11 @@ const (
 // Такое правило искажало бы охват в другую сторону: держало бы в знаменателе
 // площадки, которые опросить нельзя в принципе, и покрытие никогда не сходилось
 // бы к 100% по причинам вне нашего контроля.
+//
+// clone_of стоит первым отдельно от этого деления: если строка вообще не
+// описывает отдельную площадку, остальные вопросы к ней бессмысленны.
 var classPriority = []string{
+	classCloneOf,
 	classNoSource,
 	classNoOnlineSale,
 	classSeasonal,
@@ -112,7 +122,8 @@ func pickClass(reasons ...string) string {
 // адаптер не написан) знаменатель сохраняют — иначе процент покрытия считался
 // бы от удобной выборки и всегда выглядел бы хорошо. Классы про саму площадку
 // (мёртвый домен, нет онлайн-продажи, сезонная) из знаменателя исключаются:
-// требовать от музея расписание сеансов бессмысленно.
+// требовать от музея расписание сеансов бессмысленно. Клон исключается по той
+// же логике — он не отдельная площадка, а вторая запись об одних и тех же залах.
 func keepsInDenominator(class string) bool {
 	switch class {
 	case classSiteUnknown, classGeoUnknown, classUncovered, "":
@@ -143,6 +154,14 @@ func buildCinemaObservations(decisions []ScopeDecision, now string) []CinemaObse
 			fNetwork:     strings.TrimSpace(d.Row.Network),
 			fStatusClass: classUncovered,
 			fStatusAt:    now,
+		}
+
+		// Клон своего канала не получает и в опрос не идёт: сеансы пишутся от
+		// ведущей записи. Сам он остаётся в реестре видимой строкой — он
+		// законно зарегистрирован, — но с явной причиной и ссылкой на ведущую.
+		if leader := cloneLeader(d.Row.Network); leader != "" {
+			fields[fStatusClass] = classCloneOf
+			fields[fSourceParams] = "leader=" + leader
 		}
 
 		out = append(out, CinemaObservation{

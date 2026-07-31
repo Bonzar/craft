@@ -36,6 +36,11 @@ func TestPickClassPriority(t *testing.T) {
 			[]string{classUncovered, classSeasonal},
 			classSeasonal,
 		},
+		{
+			"клон сильнее всего: строка вообще не описывает отдельную площадку",
+			[]string{classNoSource, classSeasonal, classCloneOf},
+			classCloneOf,
+		},
 		{"пустые причины игнорируются", []string{"", classSeasonal, ""}, classSeasonal},
 	}
 
@@ -51,7 +56,7 @@ func TestPickClassPriority(t *testing.T) {
 // знаменателя — покрытие 100%.
 func TestKeepsInDenominator(t *testing.T) {
 	keep := []string{classSiteUnknown, classGeoUnknown, classUncovered, ""}
-	drop := []string{classNoSource, classNoOnlineSale, classSeasonal}
+	drop := []string{classNoSource, classNoOnlineSale, classSeasonal, classCloneOf}
 
 	for _, c := range keep {
 		if !keepsInDenominator(c) {
@@ -238,5 +243,52 @@ func TestBuildCinemaObservations(t *testing.T) {
 
 	if got := obs[1].Fields[fNetwork]; got != "КАРО ФИЛЬМ" {
 		t.Errorf("сеть не перенесена: %q", got)
+	}
+}
+
+// Клоны реестра: три записи ЕАИС на один набор из семи залов. Опрашивать их
+// порознь нельзя — один физический сеанс записался бы трижды с тремя разными
+// ключами, и дедуп их не схлопнул бы, потому что ключи честно разные.
+func TestCloneNetworksGetLeaderAndLeaveDenominator(t *testing.T) {
+	rows := []EaisRow{
+		{ID: "1", City: "Москва г", Company: "Киномакс Водный", Network: `АО "Киномакс" в г. Москва`},
+		{ID: "2", City: "Москва г", Company: "Кинотеатр в ТЦ", Network: "Созвездие"},
+		{ID: "3", City: "Москва г", Company: "Кинотеатр в ТРК", Network: "Кинообслуживание"},
+	}
+
+	obs := buildCinemaObservations(applyCityScope(rows), "2026-08-01T10:00:00Z")
+	if len(obs) != 3 {
+		t.Fatalf("наблюдений %d, ожидалось 3: клон остаётся в реестре видимой строкой", len(obs))
+	}
+
+	// Ведущая опрашивается как обычно.
+	if got := obs[0].Fields[fStatusClass]; got != classUncovered {
+		t.Errorf("ведущая запись получила класс %q вместо %q", got, classUncovered)
+	}
+	if obs[0].Fields[fSourceParams] != "" {
+		t.Errorf("ведущей проставлена ссылка на ведущую: %q", obs[0].Fields[fSourceParams])
+	}
+
+	for _, i := range []int{1, 2} {
+		if got := obs[i].Fields[fStatusClass]; got != classCloneOf {
+			t.Errorf("клон %q получил класс %q, ожидался %q", obs[i].Fields[fNetwork], got, classCloneOf)
+		}
+		if !strings.Contains(obs[i].Fields[fSourceParams], "Киномакс") {
+			t.Errorf("у клона %q нет ссылки на ведущую: %q", obs[i].Fields[fNetwork], obs[i].Fields[fSourceParams])
+		}
+		if keepsInDenominator(obs[i].Fields[fStatusClass]) {
+			t.Errorf("клон %q остался в знаменателе — метрика считала бы фантомы", obs[i].Fields[fNetwork])
+		}
+	}
+}
+
+// Обратная сторона: сеть, не входящая в карту клонов, схлопыванию не подлежит.
+// Карта ручная именно потому, что похожесть названий основанием не является.
+func TestNonCloneNetworkIsUntouched(t *testing.T) {
+	if leader := cloneLeader("КАРО ФИЛЬМ"); leader != "" {
+		t.Errorf("обычная сеть объявлена клоном сети %q", leader)
+	}
+	if leader := cloneLeader("Созвездие"); leader == "" {
+		t.Error("известный клон не опознан")
 	}
 }
