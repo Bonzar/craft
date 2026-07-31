@@ -10,6 +10,11 @@
 # повторный Stop). Fail quiet.
 set -u
 
+# Headless-евалы исключены признаком CRAFT_EVAL=1, как и у stop-routine-facts:
+# в прогоне пишущих инструментов нет, требование «очисти буфер» невыполнимо, и
+# агент тратит ходы на обходные пути вместо измеряемой задачи.
+[[ -n "${CRAFT_EVAL:-}" ]] && exit 0
+
 input="$(cat)"
 active="$(jq -r '.stop_hook_active // false' <<<"$input" 2>/dev/null)" || exit 0
 [[ "$active" == "true" || "${CLAUDE_STOP_HOOK_ACTIVE:-}" == "true" ]] && exit 0

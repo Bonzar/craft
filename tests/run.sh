@@ -43,6 +43,8 @@ declare -A SCRIPT=(
   [guard-plan-delta]="$HOOKS/universal-guard-plan-delta.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
+  [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
+  [detect-incident-arm]="$HOOKS/universal-detect-incident.sh"
 )
 
 is_deny() { jq -e '.hookSpecificOutput.permissionDecision=="deny"' >/dev/null 2>&1 <<<"$1"; }
@@ -101,10 +103,14 @@ for f in "${files[@]}"; do
     planpath="$(mktemp -u "${TMPDIR:-/tmp}/plan-file-test.XXXXXX")"
     criticmark="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-test.XXXXXX")"
     deltastore="$(mktemp -u "${TMPDIR:-/tmp}/plan-delta-test.XXXXXX")"
+    icmark="$(mktemp -u "${TMPDIR:-/tmp}/incident-closure-test.XXXXXX").armed"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
-             "CRAFT_PLAN_DELTA_STORE=$deltastore")
+             "CRAFT_PLAN_DELTA_STORE=$deltastore" "INCIDENT_CLOSURE_MARKER=$icmark")
+    # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
+    # из env, создаётся до прогона (взводом в жизни занимается другой хук).
+    [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"
     # Env values may reference fixture files via the {TESTS_DIR} placeholder —
     # cases are static JSONL and cannot know the checkout's absolute path.
     while IFS=$'\t' read -r k v; do
@@ -135,7 +141,8 @@ for f in "${files[@]}"; do
     for ((r_i=0; r_i<rpt; r_i++)); do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
     done
-    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore"; rm -rf "$fgdir"
+    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
+          "$icmark" "${icmark%.armed}.reminded"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -170,6 +177,7 @@ REQUIRED=(
   "guard-plan-critic:deny"    "guard-plan-critic:allow"
   "guard-plan-delta:deny"     "guard-plan-delta:allow"     "guard-plan-delta:silent"
   "mark-plan-critic:silent"   "mark-plan-file:silent"
+  "stop-incident-closure:block" "stop-incident-closure:silent"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done

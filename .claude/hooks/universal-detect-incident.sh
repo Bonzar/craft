@@ -59,6 +59,16 @@ done < "$MARKERS"
 buf="${OBSERVE_BUFFER:-/tmp/agent-observe.${CLAUDE_CODE_SESSION_ID:-default}.log}"
 printf 'incident-signal: %s\n' "$(head -c 200 <<<"$prompt" | tr '\n' ' ')" >> "$buf" 2>/dev/null || true
 
+# Взвод гейта закрытия разбора (universal-stop-incident-closure.sh): маркер
+# «в сессии есть неразобранный сигнал». Отметка «уже напоминали» снимается —
+# КАЖДЫЙ новый сигнал гейтится заново (два инцидента подряд в одной сессии).
+sid="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -n "$sid" ]]; then
+  armed="${INCIDENT_CLOSURE_MARKER:-/tmp/incident-closure.$sid.armed}"
+  : > "$armed" 2>/dev/null || true
+  rm -f "${armed%.armed}.reminded" 2>/dev/null || true
+fi
+
 echo "⚠️ СИГНАЛ ИНЦИДЕНТА в сообщении Влада. Первым действием веди разбор строго по «⚙️ SKILL: Разбор инцидента» (тело ниже). Причину, урок или правку не формулируй, пока не свернул к нему. Вариант, нарушающий уже записанное правило, не предлагается; нарушено записанное правило → нужен ДРУГОЙ рычаг, не копия правила рядом; без рычага инцидент не закрыт."
 echo
 if [[ -f "$CACHE" ]]; then
