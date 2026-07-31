@@ -693,7 +693,7 @@ var (
 	//
 	// Окончания перечислены диапазоном, а не через `\w`: в RE2 `\w` — это
 	// [0-9A-Za-z_], и «часа» с «минут» под него не подходят вовсе.
-	moriHours   = regexp.MustCompile(`(\d+)\s*час[а-яё]*`)
+	moriHours   = regexp.MustCompile(`(\d+)\s*(?:час[а-яё]*|ч\.)`)
 	moriMinutes = regexp.MustCompile(`(\d+)\s*мин[а-яё]*`)
 )
 
@@ -982,6 +982,120 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 				}
 				pb.Showtimes = append(pb.Showtimes, st)
 			}
+		}
+	}
+
+	for d := range dates {
+		pb.Dates = append(pb.Dates, d)
+	}
+	sort.Strings(pb.Dates)
+	return pb, nil
+}
+
+// ——— СИНЕМА ПАРК / Формула Кино ———
+//
+// `kinoteatr.ru/raspisanie-kinoteatrov/<slug>/?date=&ajax=1` отдаёт JSON, внутри
+// которого лежит кусок HTML. Разбираем оба слоя: сперва конверт, потом разметку.
+//
+// ПРЕДУСЛОВИЕ: с иностранного адреса хост рвёт соединение — не 403, а обрыв,
+// который выглядит как «сайт лежит». Нужен российский выход (tunnel.go).
+//
+// Про зал: источник даёт класс обслуживания («Мувик», «Комфорт»), а не номер
+// помещения. Он едет в Format вместе с технологией показа; Hall остаётся пустым,
+// и два сеанса одного фильма в один час различаются своим openWidget-id.
+var (
+	cpMovie   = regexp.MustCompile(`(?s)movie_card_header[^>]*>\s*(.*?)\s*</span>(.*?)(?:movie_card_header|\z)`)
+	cpRuntime = regexp.MustCompile(`(?s)<span class="title">\s*([^<]*?мин[^<]*?)\s*</span>`)
+	cpSession = regexp.MustCompile(`(?s)openWidget=(\d+)"(.*?)</a>`)
+	cpTime    = regexp.MustCompile(`shedule_session_time">\s*([0-2]?\d:[0-5]\d)`)
+	cpPrice   = regexp.MustCompile(`shedule_session_price">\s*(?:от\s*)?([0-9]+)`)
+	cpFormat  = regexp.MustCompile(`shedule_session_format">\s*([^<]+?)\s*</span>`)
+	cpDate    = regexp.MustCompile(`[?&]date=(\d{4}-\d{2}-\d{2})`)
+	cpTitle   = regexp.MustCompile(`«([^»]+)»`)
+)
+
+type cinemaParkResponse struct {
+	Content string `json:"content"`
+	Title   string `json:"title"`
+}
+
+// parseCinemaPark разбирает ajax-ответ kinoteatr.ru.
+func parseCinemaPark(body, fallbackDate string) (Playbill, error) {
+	var resp cinemaParkResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return Playbill{}, fmt.Errorf("разбор конверта СИНЕМА ПАРК: %w", err)
+	}
+	if strings.TrimSpace(resp.Content) == "" {
+		return Playbill{}, fmt.Errorf("разбор СИНЕМА ПАРК: пустой content в ответе")
+	}
+
+	pb := Playbill{}
+	// Название площадки живёт в заголовке страницы, в кавычках-ёлочках:
+	// «Расписание кинотеатра на сегодня «Формула Кино ЦДМ (Москва)» …».
+	if tm := cpTitle.FindStringSubmatch(resp.Title); len(tm) > 1 {
+		pb.Cinema = strings.TrimSpace(tm[1])
+	}
+
+	movies := cpMovie.FindAllStringSubmatch(resp.Content, -1)
+	if len(movies) == 0 {
+		return pb, fmt.Errorf("разбор СИНЕМА ПАРК: блоки фильмов не найдены (content %d байт)", len(resp.Content))
+	}
+
+	dates := map[string]bool{}
+	for _, mv := range movies {
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(mv[1])))
+		block := mv[2]
+		if film == "" {
+			continue
+		}
+
+		dur := 0
+		if rm := cpRuntime.FindStringSubmatch(block); len(rm) > 1 {
+			dur = parseRussianDuration(rm[1])
+		}
+
+		for _, s := range cpSession.FindAllStringSubmatch(block, -1) {
+			id, tail := s[1], s[2]
+
+			tm := cpTime.FindStringSubmatch(tail)
+			if len(tm) < 2 {
+				continue
+			}
+
+			date := fallbackDate
+			if dm := cpDate.FindStringSubmatch(s[0]); len(dm) > 1 {
+				date = dm[1]
+			}
+			at := normalizeShowtime(tm[1], date)
+			if at == "" {
+				continue
+			}
+			if date != "" {
+				dates[date] = true
+			}
+
+			// Форматов у сеанса бывает несколько: технология и класс зала
+			// («2D» плюс «Мувик»). Оба про услугу, оба в Format.
+			var formats []string
+			for _, fm := range cpFormat.FindAllStringSubmatch(tail, -1) {
+				if v := strings.TrimSpace(stripHTML(fm[1])); v != "" {
+					formats = append(formats, v)
+				}
+			}
+
+			st := Showtime{
+				Film:     film,
+				StartsAt: at,
+				// Hall пустой: номера зала источник не даёт, только класс.
+				Format:    strings.Join(formats, " "),
+				SourceID:  id,
+				OnSale:    true,
+				DurationM: dur,
+			}
+			if pm := cpPrice.FindStringSubmatch(tail); len(pm) > 1 {
+				st.PriceMin, _ = strconv.Atoi(pm[1])
+			}
+			pb.Showtimes = append(pb.Showtimes, st)
 		}
 	}
 

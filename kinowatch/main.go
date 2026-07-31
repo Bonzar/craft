@@ -40,6 +40,13 @@ func main() {
 		probeGeo      = flag.String("probe-geo", "", "прогнать каскад по одному названию и показать решение по шагам")
 		probeAddr     = flag.String("probe-address", "", "адрес для --probe-geo, если он известен")
 		probeNet      = flag.Bool("probe-network", false, "считать площадку из --probe-geo сетевой")
+
+		// Туннель поднимает рутина, бинарник получает готовый адрес: держать
+		// внутри запуск xray значило бы смешать две разные ответственности и
+		// сделать прогон непроверяемым без сети.
+		proxyAddr    = flag.String("proxy", "", "socks5-адрес российского выхода, напр. 127.0.0.1:10808")
+		proxyCountry = flag.String("proxy-country", "RU", "какую страну обязан показать выход туннеля")
+		checkProxy   = flag.Bool("check-proxy", false, "проверить адрес и страну выхода через --proxy и выйти")
 	)
 	flag.Parse()
 
@@ -52,8 +59,36 @@ func main() {
 		runEnrich(client, newGeoClient(*timeoutSec, *retries), *eaisBase, *region, *limit)
 	case *probeGeo != "":
 		runProbeGeo(newGeoClient(*timeoutSec, *retries), *probeGeo, *probeAddr, *probeNet)
+	case *checkProxy:
+		runCheckProxy(*proxyAddr, *proxyCountry, *timeoutSec, *retries)
 	default:
 		fail("режим не выбран: укажи --build-registry или --enrich")
+	}
+}
+
+// runCheckProxy печатает, куда на самом деле выходит туннель.
+//
+// Отдельный режим нужен потому, что проверка выхода легко врёт: поднявшийся
+// процесс xray ничего не доказывает, а запрос мимо туннеля показывает адрес
+// самого контейнера. Дешевле убедиться заранее, чем объяснять потом, почему
+// целая сеть оказалась «недоступна».
+func runCheckProxy(addr, wantCountry string, timeoutSec, retries int) {
+	if addr == "" {
+		fail("--check-proxy требует --proxy")
+	}
+	c, err := newTunnelClient(addr, timeoutSec, retries)
+	if err != nil {
+		fail("%v", err)
+	}
+
+	res := checkTunnel(c, wantCountry)
+	out, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		fail("сериализация: %v", err)
+	}
+	fmt.Println(string(out))
+	if !res.OK {
+		fail("выход не подтверждён как %s: %s", wantCountry, res.Reason)
 	}
 }
 

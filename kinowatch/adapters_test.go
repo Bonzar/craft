@@ -501,6 +501,7 @@ func TestParseRussianDuration(t *testing.T) {
 		{"3 часа 0 минут", 180},
 		{"1 час 47 минут", 107},
 		{"107 минут", 107},
+		{"1 ч. 38 мин.", 98},
 		{"2 часа", 120},
 		{"", 0},
 		{"неизвестно", 0},
@@ -694,5 +695,60 @@ func TestP24GluedTitleFeedsCascade(t *testing.T) {
 	}
 	if !glued {
 		t.Skip("в фикстуре нет склеенных позиций")
+	}
+}
+
+// СИНЕМА ПАРК: JSON-конверт с HTML внутри. Фикстура снята 31.07.2026 ЧЕРЕЗ
+// ТУННЕЛЬ — с иностранного адреса хост рвёт соединение, и без российского
+// выхода этот источник не проверить вовсе.
+func TestParseCinemaPark(t *testing.T) {
+	pb, err := parseCinemaPark(readFixture(t, "cinemapark-schedule.json"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансов ноль")
+	}
+	if pb.Cinema == "" {
+		t.Error("название площадки потеряно — оно в заголовке, в кавычках-ёлочках")
+	}
+
+	var withPrice, withFormat, withDuration int
+	for _, s := range pb.Showtimes {
+		if s.Hall != "" {
+			t.Errorf("в Hall попало %q — источник даёт класс зала, а не номер", s.Hall)
+		}
+		if s.SourceID == "" {
+			t.Error("openWidget-id потерян: без него два сеанса одного фильма в один час неразличимы")
+		}
+		if s.PriceMin > 0 {
+			withPrice++
+		}
+		if s.Format != "" {
+			withFormat++
+		}
+		if s.DurationM > 0 {
+			withDuration++
+		}
+	}
+	if withPrice == 0 {
+		t.Error("цена потеряна (приходит как «от 576 р.»)")
+	}
+	if withFormat == 0 {
+		t.Error("формат и класс зала потеряны")
+	}
+	if withDuration == 0 {
+		t.Error("хронометраж потерян (приходит как «1 ч. 38 мин.»)")
+	}
+}
+
+// Пустой content при валидном JSON — поломка, а не пустая афиша: конверт
+// приходит и на сломанном эндпоинте.
+func TestParseCinemaParkFailsOnEmptyContent(t *testing.T) {
+	if _, err := parseCinemaPark(`{"content":"","title":"x"}`, "2026-07-31"); err == nil {
+		t.Error("пустой content принят за пустую афишу")
+	}
+	if _, err := parseCinemaPark(`{"content":"<div>чужая вёрстка</div>","title":"x"}`, "2026-07-31"); err == nil {
+		t.Error("сменившаяся вёрстка принята за пустую афишу")
 	}
 }
