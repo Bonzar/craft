@@ -31,6 +31,7 @@ GRADE_VERDICT=""     # PASS | FAIL | ERROR — итог grade_verdict
 GRADE_TEXT=""        # склейка ассистентских текстовых блоков и .result (lowercase)
 GRADE_TOOLS=""       # по строке на tool_use: "имя<TAB>вход-json"
 GRADE_DENIALS=""     # по строке на отказ разрешения
+GRADE_HOOKLOG=""     # служебный вывод хуков прогона (улика подготовки правила)
 GRADE_OUTCOME=""     # ok | max_turns | no_stream | bad_json | timeout
 GRADE_DETAIL=""      # причина вердикта
 GRADE_FAILS=()       # описания несошедшихся ассертов
@@ -56,7 +57,7 @@ grade_lc() { perl -CSD -Mutf8 -pe '$_=lc' 2>/dev/null || cat; }
 # grade_load <stream.jsonl> [rc]
 grade_load() {
   local file="${1:?stream file}" rc="${2:-0}" clean
-  GRADE_TEXT=""; GRADE_TOOLS=""; GRADE_DENIALS=""; GRADE_DETAIL=""
+  GRADE_TEXT=""; GRADE_TOOLS=""; GRADE_DENIALS=""; GRADE_DETAIL=""; GRADE_HOOKLOG=""
   GRADE_FAILS=(); GRADE_ERRS=(); GRADE_ASSERTS=0; GRADE_OUTCOME="ok"
 
   if [[ ! -s "$file" ]]; then
@@ -86,6 +87,13 @@ grade_load() {
          else (.content|tostring) end) as $c
       | select((.is_error == true) and ($c | test("permission|haven.t granted"; "i")))
       | $c' <<<"$clean" 2>/dev/null)"
+
+  # Служебный вывод хуков прогона. В нём лежит единственная доступная улика
+  # того, что проверяемое правило было подготовлено для этой сессии: хук инжекта
+  # сообщает, сколько байт тела правила закэшировано. По самому ответу агента
+  # этого не видно — на этом я и погорел, приняв догадку за факт.
+  GRADE_HOOKLOG="$(jq -rs '[.[] | select(.subtype=="hook_response")
+      | ((.stdout // "") + "\n" + (.stderr // ""))] | join("\n")' <<<"$clean" 2>/dev/null)"
 
   # Признак graceful-обрыва снят с живого прогона нашей CLI (см. фикстуру
   # evals/fixtures/stream/maxturns.jsonl): subtype=error_max_turns +
@@ -171,6 +179,39 @@ grade_expect_tool() {
 grade_expect_no_tool() {  # инструмента быть не должно
   GRADE_ASSERTS=$((GRADE_ASSERTS+1))
   grep -qF "$1"$'\t' <<<"$GRADE_TOOLS" && GRADE_FAILS+=("вызван запрещённый инструмент: $1")
+  return 0
+}
+
+# grade_require_rule_delivered <подстрока-улики> — правило дошло до прогона.
+# Не ассерт о поведении: не нашлось улики — измерять нечего, исход ERROR.
+# Улика доказывает подготовку правила для сессии, а не факт его прочтения
+# моделью; сильнее из потока не извлекается, и в отчёте это так и называется.
+grade_require_rule_delivered() {
+  grep -qF -- "$1" <<<"$GRADE_HOOKLOG" \
+    || GRADE_ERRS+=("нет улики доставки правила («$1») — прогон не доказывает, что правило дошло")
+  return 0
+}
+
+# Отказ вести работу — не выполненная работа, чем бы он ни был мотивирован.
+# Без этого ассерта вердикт решала лексика: отказ, в котором мимоходом прозвучало
+# нужное слово, проходил как зелёный, а почти такой же отказ падал. Список общий
+# для всех кейсов и живёт здесь, а не в кейсе: иначе каждый автор кейса угадывал
+# бы формы отказа заново.
+GRADE_REFUSALS=(
+  "не могу провести разбор" "не могу разобрать" "не могу продолжить разбор"
+  "не вижу в своём контексте" "не вижу в контексте"
+  "нужен от тебя факт" "нужен факт" "жду цитаты" "жду текст"
+  "дальше двигаться не могу" "без текста нарушения"
+  "процитируй" "уточни, что именно"
+)
+grade_expect_no_refusal() {
+  local m
+  GRADE_ASSERTS=$((GRADE_ASSERTS+1)); grade__need_text || return 0
+  for m in "${GRADE_REFUSALS[@]}"; do
+    if grep -qF -- "$(grade_lc <<<"$m")" <<<"$GRADE_TEXT"; then
+      GRADE_FAILS+=("работа не выполнена, а запрошена: $m"); return 0
+    fi
+  done
   return 0
 }
 

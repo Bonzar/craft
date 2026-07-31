@@ -114,6 +114,21 @@ grade_expect_present "четыре"
 grade_verdict; covered["retry:PASS"]=1
 check "api_retry / ответ пришёл — прогон засчитан" PASS "$GRADE_VERDICT" "$GRADE_DETAIL"
 
+# 9e. Улика доставки правила. Без неё вердикт не выпускается: прогон не
+#     доказывает, что проверяемое правило вообще дошло до сессии. Именно на
+#     отсутствии этой проверки я принял догадку за факт — дважды подряд.
+grade_load "$FIX/rule-delivered.jsonl" 0
+grade_require_rule_delivered "incident doc cached"
+grade_expect_present "четыре"
+grade_verdict; covered["evidence:PASS"]=1
+check "улика / правило доставлено — вердикт выпускается" PASS "$GRADE_VERDICT" "$GRADE_DETAIL"
+
+grade_load "$FIX/rule-missing.jsonl" 0
+grade_require_rule_delivered "incident doc cached"
+grade_expect_present "четыре"
+grade_verdict; covered["evidence:ERROR"]=1
+check "улика / нет улики — ERROR, а не вердикт" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
+
 # 10. Таймаут раннера → ERROR, даже если поток выглядит полным
 grade_load "$FIX/success.jsonl" 124
 grade_expect_present "четыре"
@@ -124,6 +139,25 @@ check "timeout / rc=124 поверх годного потока" ERROR "$GRADE_
 grade_load "$FIX/success.jsonl" 0
 grade_verdict; covered["noassert:ERROR"]=1
 check "без ассертов / вакуумный проход закрыт" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
+
+# --- регресс поведения: разбор против произнесения слов -----------------------
+# Четыре записанных ответа агента, покрывающих все сочетания. До этой правки
+# вердикт решала лексика: отказ, в котором мимоходом прозвучало «eval», проходил
+# как зелёный, а почти такой же отказ падал.
+BEH=evals/fixtures/behavior
+beh() {  # <имя> <фикстура> <ожидаемый вердикт>
+  grade_load "$BEH/$2.jsonl" 0
+  grade_expect_no_refusal
+  grade_expect_present "ступень"
+  grade_expect_any_of '["евал","eval","тест"]'
+  grade_verdict
+  check "$1" "$3" "$GRADE_VERDICT" "$GRADE_DETAIL"
+}
+beh "поведение / отказ, прошедший по лексике" refusal-passed-on-lexis FAIL
+beh "поведение / отказ без нужных слов"       refusal-failed          FAIL
+beh "поведение / разбор без названной ступени" analysis-no-rung       FAIL
+beh "поведение / полный разбор"                analysis-full          PASS
+covered["behavior:FAIL"]=1; covered["behavior:PASS"]=1
 
 # --- валидация формата кейса (evals/lib/runner.sh) ----------------------------
 # Кейс без ассертов не должен молча проходить: пустой кейс создаёт иллюзию
@@ -148,7 +182,30 @@ vcheck "формат / кейс без ассертов забракован" "�
 vcheck "формат / кейс без prompt забракован" "нет поля prompt" '{"name":"x","expect_present":["a"]}'
 vcheck "формат / кейс без name забракован" "нет поля name" '{"prompt":"y","expect_present":["a"]}'
 vcheck "формат / ассерт по инструменту засчитан" "-" '{"name":"x","prompt":"y","expect_tool":["Read"]}'
-covered["validate:BAD"]=1; covered["validate:OK"]=1
+# Промпт, не запускающий подачу правила, бракуется ДО прогона: правило до сессии
+# не дойдёт, и вердикт был бы о памяти модели, а не о соблюдении.
+vcheck "формат / промпт не запускает подачу правила" "не запускает подачу правила" \
+  '{"name":"x","prompt":"посчитай два плюс два","expect_present":["a"],"rule_evidence":"incident doc cached","rule_trigger_hook":".claude/hooks/universal-detect-incident.sh"}'
+vcheck "формат / промпт запускает подачу правила" "-" \
+  '{"name":"x","prompt":"ты нарушил записанное правило, разбери инцидент","expect_present":["a"],"rule_evidence":"incident doc cached","rule_trigger_hook":".claude/hooks/universal-detect-incident.sh"}'
+vcheck "формат / кейс про разбор без материала" "нет поля material" \
+  '{"name":"x","prompt":"y","expect_present":["a"],"expect_no_refusal":true}'
+covered["validate:BAD"]=1; covered["validate:OK"]=1; covered["trigger:BAD"]=1; covered["trigger:OK"]=1
+covered["material:BAD"]=1
+
+# Песочница прогона: пишущие инструменты и делегирование субагенту должны быть
+# закрыты. Живая проверка — в приёмке прогона; здесь сторожим состав списка,
+# чтобы правка раннера не открыла дыру молча.
+sandbox_missing=()
+for t in Bash Write Edit MultiEdit NotebookEdit Task Agent; do
+  [[ " $EVAL_DENY_TOOLS " == *" $t "* ]] || sandbox_missing+=("$t")
+done
+if [[ ${#sandbox_missing[@]} -eq 0 ]]; then
+  pass=$((pass+1)); printf '%-6s %-44s %s\n' PASS "песочница / запрет записи и субагентов" "ok"
+else
+  fail=$((fail+1)); printf '%-6s %-44s %s\n' FAIL "песочница / запрет записи и субагентов" "открыто: ${sandbox_missing[*]}"
+  fails+=("песочница: в EVAL_DENY_TOOLS не закрыты ${sandbox_missing[*]}")
+fi
 
 # Все кейсы всех наборов обязаны проходить валидацию — опечатка в jsonl иначе
 # всплывёт только на живом прогоне через 15 минут.
@@ -177,6 +234,8 @@ REQUIRED=(
   "denial:FAIL" "tool:FAIL"
   "no_stream:ERROR" "bad_json:ERROR" "timeout:ERROR" "noassert:ERROR"
   "noise:PASS" "case:PASS" "validate:BAD" "validate:OK" "retry:ERROR" "retry:PASS"
+  "evidence:PASS" "evidence:ERROR" "trigger:BAD" "trigger:OK"
+  "behavior:PASS" "behavior:FAIL" "material:BAD"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done

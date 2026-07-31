@@ -24,7 +24,10 @@ EVAL_DEF_TOOLS="${EVAL_DEF_TOOLS:-Read,Grep,Glob,Skill}"
 # Пишущие инструменты запрещены явно: --allowedTools лишь дополняет проектные
 # разрешения и остальное НЕ закрывает — в первом прогоне агент выполнил
 # `rm -f` своего буфера. Поведенческий кейс проверяет рассуждение, а не правку.
-EVAL_DENY_TOOLS="${EVAL_DENY_TOOLS:-Bash Write Edit MultiEdit NotebookEdit}"
+# Субагенты закрыты вместе с ними: у субагента свой набор инструментов, и через
+# него запрет обходится — в прогонах агент спавнил помощника с заданием удалить
+# файл. Разведка субагентом в поведенческом кейсе всё равно не нужна.
+EVAL_DENY_TOOLS="${EVAL_DENY_TOOLS:-Bash Write Edit MultiEdit NotebookEdit Task Agent}"
 EVAL_DEF_MAX_TURNS="${EVAL_DEF_MAX_TURNS:-25}"
 EVAL_DEF_LEVEL="${EVAL_DEF_LEVEL:-neutral}"
 EVAL_TIMEOUT="${EVAL_TIMEOUT:-600}"
@@ -57,7 +60,10 @@ eval__once() {
 
 # eval__assert_case <case-json> — применяет ассерты кейса к загруженному потоку.
 eval__assert_case() {
-  local c="$1" s g
+  local c="$1" s g ev
+  ev="$(jq -r '.rule_evidence // ""' <<<"$c")"
+  [[ -n "$ev" ]] && grade_require_rule_delivered "$ev"
+  [[ "$(jq -r '.expect_no_refusal // false' <<<"$c")" == "true" ]] && grade_expect_no_refusal
   while IFS= read -r s; do [[ -n "$s" ]] && grade_expect_present "$s"; done \
     < <(jq -r '(.expect_present // [])[]' <<<"$c")
   while IFS= read -r s; do [[ -n "$s" ]] && grade_expect_absent "$s"; done \
@@ -77,11 +83,37 @@ eval__validate() {
   local c="$1" n
   n="$(jq -r '.name // ""' <<<"$c")"
   [[ -z "$n" ]] && { echo "нет поля name"; return; }
-  [[ -z "$(jq -r '.prompt // ""' <<<"$c")" ]] && { echo "нет поля prompt"; return; }
+  local prompt; prompt="$(jq -r '.prompt // ""' <<<"$c")"
+  [[ -z "$prompt" ]] && { echo "нет поля prompt"; return; }
   local cnt
   cnt="$(jq '[(.expect_present // []), (.expect_absent // []), (.expect_any_of // []),
               (.expect_tool // []), (.expect_no_tool // [])] | map(length) | add' <<<"$c")"
-  [[ "${cnt:-0}" -eq 0 ]] && echo "нет ни одного ассерта"
+  [[ "${cnt:-0}" -eq 0 ]] && { echo "нет ни одного ассерта"; return; }
+
+  # Кейс про разбор обязан нести материал разбираемого случая. Без него правильное
+  # поведение — не разбирать, а требовать факты, и замер меряет готовность
+  # выдумывать. Признак такого кейса — требование не отказываться от работы.
+  if [[ "$(jq -r '.expect_no_refusal // false' <<<"$c")" == "true" ]]; then
+    [[ -z "$(jq -r '.material // ""' <<<"$c")" ]] && { echo "нет поля material — разбирать нечего"; return; }
+  fi
+
+  # Кейс, проверяющий правило из Craft, обязан назвать улику его доставки —
+  # иначе вердикт вынесен вслепую. Заодно проверяем, что промпт вообще запускает
+  # подачу правила: не запускает — правило до сессии не дойдёт, и любой вердикт
+  # будет о памяти модели, а не о соблюдении.
+  local ev; ev="$(jq -r '.rule_evidence // ""' <<<"$c")"
+  if [[ -n "$ev" ]]; then
+    local trig; trig="$(jq -r '.rule_trigger_hook // ""' <<<"$c")"
+    if [[ -n "$trig" && -x "$trig" ]]; then
+      # Буфер наблюдений подменяется: детектор пишет в него сигнал инцидента, и
+      # предполётная проверка иначе мусорит в живое состояние текущей сессии.
+      local out tmpbuf; tmpbuf="$(mktemp)"
+      out="$(jq -n --arg p "$prompt" '{prompt:$p}' \
+             | CLAUDE_PROJECT_DIR="$PWD" OBSERVE_BUFFER="$tmpbuf" bash "$trig" 2>/dev/null)"
+      rm -f "$tmpbuf"
+      [[ -z "${out//[[:space:]]/}" ]] && { echo "промпт не запускает подачу правила ($trig молчит)"; return; }
+    fi
+  fi
 }
 
 # eval_run <cases.jsonl> [model ...]
