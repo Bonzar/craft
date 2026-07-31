@@ -15,7 +15,7 @@ const karoFixture = `{"result":0,"data":{"theatre":[
 ]}}`
 
 func TestParseKaro(t *testing.T) {
-	venues, err := parseKaro(karoFixture)
+	venues, err := parseKaroDirectory(karoFixture)
 	if err != nil {
 		t.Fatalf("разбор справочника: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestParseKaro(t *testing.T) {
 // реестра (applyCityScope), а не второй раз здесь. Два правила охвата разошлись
 // бы при первой же правке одного из них.
 func TestParseKaroKeepsOutOfScopeVenues(t *testing.T) {
-	venues, err := parseKaro(karoFixture)
+	venues, err := parseKaroDirectory(karoFixture)
 	if err != nil {
 		t.Fatalf("разбор справочника: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestOsmAddress(t *testing.T) {
 // Адрес обогатителя — это вход геокодера, поэтому он обязан переживать
 // нормализацию: у КАРО название ТЦ приходит в скобках, а не в кавычках.
 func TestKaroAddressSurvivesNormalization(t *testing.T) {
-	venues, err := parseKaro(karoFixture)
+	venues, err := parseKaroDirectory(karoFixture)
 	if err != nil {
 		t.Fatalf("разбор справочника: %v", err)
 	}
