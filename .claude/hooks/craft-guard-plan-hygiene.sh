@@ -35,11 +35,14 @@ content="$(jq -r '.tool_input.content // .tool_input.new_string // ""' <<<"$inpu
 # or other plan) straight through.
 grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:' <<<"$content" || exit 0
 
-# Dictated verbatim text in a «План правок» sits in ``` code-blocks and may legitimately
-# contain command tokens, IDs, even a «Проверка» heading — that is the content being
-# written, not plan mechanics. Strip fenced code-blocks first so only the plan's PROSE
-# is policed.
+# Dictated verbatim text in a «План правок» sits in a QUOTE block, and code examples in
+# ``` fences; both may legitimately contain command tokens, IDs, even a «Проверка»
+# heading — that is the content being written, not plan mechanics. Strip fences and
+# quote lines first so only the plan's own PROSE is policed.
 body="$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' <<<"$content")"
+# Строки цитаты — дословный записываемый текст, а не проза плана: в нём законны и
+# команды, и голые идентификаторы, поэтому из проверки они уходят.
+body="$(grep -v '^[[:space:]]*>' <<<"$body")"
 
 problems=()
 
