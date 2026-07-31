@@ -5,3 +5,4 @@
 {"name":"поправка агенту в код-сессии → code-incident","prompt":"Ты сломал сборку своим последним коммитом, почему ты не прогнал тесты?","expect_skill":"code-incident"}
 {"name":"онбординг в чужой репо → codebase-onboarding","prompt":"Я склонировал незнакомый репозиторий, разберись как тут всё устроено","expect_skill":"codebase-onboarding"}
 {"name":"готово перед PR → verification-loop","prompt":"Кажется всё сделал, заводи PR","expect_skill":"verification-loop"}
+{"name":"правка правила в скилле → tdd-workflow","prompt":"Поправь правило в скилле разбора инцидента: добавь, что урок должен называть ступень рычага","expect_skill":"tdd-workflow"}

@@ -168,6 +168,10 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-fact-gate.sh")
   | ensure("Stop"; "";
          "\"$HOME\"/.claude/hooks/universal-stop-routine-facts.sh")
+  | ensure("Stop"; "";
+         "\"$HOME\"/.claude/hooks/universal-stop-incident-closure.sh")
+  | ensure("PreToolUse"; "Read|Grep|Glob";
+         "\"$HOME\"/.claude/hooks/universal-eval-materials-guard.sh")
 ' "$SETTINGS")"
 
 if [[ "$(jq -S . <<<"$merged")" == "$(jq -S . "$SETTINGS")" ]]; then
