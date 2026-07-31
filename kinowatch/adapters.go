@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -523,4 +524,143 @@ func parseZonedTime(s string) string {
 		}
 	}
 	return ""
+}
+
+// ——— Москино ———
+//
+// Городская сеть, 21 площадка. Расписание отдаётся серверным HTML на странице
+// площадки (`mos-kino.ru/cinema/<slug>/`) — все даты сразу, параметр даты
+// страница не принимает.
+//
+// Особенность, ради которой здесь отдельный разбор дат: год в разметке не
+// указан вовсе. Блок даты выглядит как «31 ИЮЛ (ПТ)», и превратить это в
+// настоящую дату можно только относительно сегодняшнего дня. Отсюда опорная
+// дата параметром: подставлять time.Now() внутри парсера значило бы сделать
+// его непроверяемым и зависящим от часа прогона.
+//
+// Чего у источника нет: номера зала, хронометража и описания. Значит на этих
+// площадках уровни каскада про длительность неприменимы — и это свойство
+// источника, а не дефект разбора.
+
+var (
+	moskinoStep    = regexp.MustCompile(`(?s)<div class="step"[^>]*>(.*?)(?:<div class="step"|\z)`)
+	moskinoDate    = regexp.MustCompile(`(?s)<div class="value">\s*(\d{1,2})\s+([А-ЯЁа-яё]+)`)
+	moskinoItem    = regexp.MustCompile(`(?s)<div class="schedule-item">(.*?)</div>\s*</div>`)
+	moskinoTitle   = regexp.MustCompile(`(?s)<div class="title">\s*(.*?)\s*</div>`)
+	moskinoSession = regexp.MustCompile(`(?s)richSession\((\d+)\)(.*?)</a>`)
+	moskinoTime    = regexp.MustCompile(`<span class="time">\s*([0-9]{1,2}:[0-9]{2})`)
+	moskinoBadge   = regexp.MustCompile(`<span class="badge">\s*([^<]+?)\s*</span>`)
+	moskinoPrice   = regexp.MustCompile(`<span class="price">\s*([0-9]+)`)
+	moskinoName    = regexp.MustCompile(`(?s)<h1[^>]*>\s*(.*?)\s*</h1>`)
+)
+
+// moskinoMonths — сокращения месяцев так, как их пишет источник.
+var moskinoMonths = map[string]time.Month{
+	"янв": time.January, "фев": time.February, "мар": time.March,
+	"апр": time.April, "май": time.May, "июн": time.June,
+	"июл": time.July, "авг": time.August, "сен": time.September,
+	"окт": time.October, "ноя": time.November, "дек": time.December,
+}
+
+// resolveMoskinoDate достраивает год к дате без года.
+//
+// Правило: год берётся такой, чтобы дата не оказалась в прошлом относительно
+// опорной. Иначе декабрьское расписание, прочитанное в январе, уехало бы на год
+// назад — и весь горизонт молча выпал бы из выдачи как «сеансы в прошлом».
+func resolveMoskinoDate(day int, monthWord string, ref time.Time) (string, bool) {
+	key := strings.ToLower(monthWord)
+	if len([]rune(key)) > 3 {
+		key = string([]rune(key)[:3])
+	}
+	month, ok := moskinoMonths[key]
+	if !ok || day < 1 || day > 31 {
+		return "", false
+	}
+
+	d := time.Date(ref.Year(), month, day, 0, 0, 0, 0, moscowTZ)
+	// Запас в сутки: сеанс сегодняшнего дня уже мог начаться.
+	if d.Before(ref.AddDate(0, 0, -1)) {
+		d = d.AddDate(1, 0, 0)
+	}
+	return d.Format("2006-01-02"), true
+}
+
+// parseMoskino разбирает страницу площадки Москино.
+//
+// ref — опорная дата, относительно которой достраивается год.
+func parseMoskino(body string, ref time.Time) (Playbill, error) {
+	pb := Playbill{}
+	if m := moskinoName.FindStringSubmatch(body); len(m) > 1 {
+		pb.Cinema = strings.TrimSpace(tagRe.ReplaceAllString(m[1], ""))
+	}
+
+	steps := moskinoStep.FindAllStringSubmatch(body, -1)
+	if len(steps) == 0 {
+		// Ноль блоков дат при непустом теле — признак сменившейся вёрстки, а
+		// не пустой афиши. Отличать это от «сеансов нет» обязан вызывающий:
+		// иначе поломка разбора выглядела бы отсутствием фильма.
+		return pb, fmt.Errorf("разбор Москино: блоки дат не найдены (тело %d байт)", len(body))
+	}
+
+	for _, step := range steps {
+		block := step[1]
+
+		dm := moskinoDate.FindStringSubmatch(block)
+		if len(dm) < 3 {
+			continue
+		}
+		day, err := strconv.Atoi(dm[1])
+		if err != nil {
+			continue
+		}
+		date, ok := resolveMoskinoDate(day, dm[2], ref)
+		if !ok {
+			continue
+		}
+		pb.Dates = append(pb.Dates, date)
+
+		for _, item := range moskinoItem.FindAllStringSubmatch(block, -1) {
+			tm := moskinoTitle.FindStringSubmatch(item[1])
+			if len(tm) < 2 {
+				continue
+			}
+			film := strings.TrimSpace(html.UnescapeString(tagRe.ReplaceAllString(tm[1], "")))
+
+			for _, s := range moskinoSession.FindAllStringSubmatch(item[1], -1) {
+				tail := s[2]
+				tmm := moskinoTime.FindStringSubmatch(tail)
+				if len(tmm) < 2 {
+					continue
+				}
+				at := normalizeShowtime(tmm[1], date)
+				if at == "" {
+					continue
+				}
+
+				// Бейджей на сеансе бывает несколько: технология показа и
+				// пометки вроде «СУБ». Все они про формат показа, а не про
+				// помещение, поэтому едут в Format — Hall остаётся пустым.
+				var badges []string
+				for _, b := range moskinoBadge.FindAllStringSubmatch(tail, -1) {
+					badges = append(badges, strings.TrimSpace(b[1]))
+				}
+
+				st := Showtime{
+					Film:     film,
+					StartsAt: at,
+					Format:   strings.Join(badges, " "),
+					SourceID: s[1],
+					// Страница показывает только то, что продаётся: отдельного
+					// признака доступности в разметке нет.
+					OnSale: true,
+				}
+				if pm := moskinoPrice.FindStringSubmatch(tail); len(pm) > 1 {
+					st.PriceMin, _ = strconv.Atoi(pm[1])
+				}
+				pb.Showtimes = append(pb.Showtimes, st)
+			}
+		}
+	}
+
+	return pb, nil
 }
