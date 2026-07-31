@@ -4,12 +4,8 @@
 # must be preceded by a fresh approved plan (guard-plan-gate.sh). Never blocks the
 # message (no stdout, exit 0).
 #
-# СЛУЖЕБНОЕ СОБЫТИЕ ходом не считается. Этим же событием приходят уведомления о
-# завершении фоновых подагентов, сообщения наших стоп-хуков и продолжения хода после
-# прерывания — сброс по ним обнулял одобрение посреди исполнения. Признак — дословное
-# начало текста; последний якорь наш собственный, его ставят сами стоп-хуки. Пометку
-# прерывания в якоря НЕ берём: она наблюдалась отдельным сообщением лишь однажды, а
-# склеенная со словами Влада проглотила бы настоящую реплику.
+# СЛУЖЕБНОЕ СОБЫТИЕ ходом не считается: сброс по нему обнулял одобрение посреди
+# исполнения. Якоря и правила их пополнения — в service-anchors.txt рядом.
 # Пустой текст (нет поля, битый вход, нет разборщика — так же подаёт вход тестовый
 # раннер) считаем настоящим ходом: лишний сброс дешевле пропущенного.
 #
@@ -19,10 +15,12 @@
 set -u
 input="$(cat)"
 prompt="$(jq -r '.prompt // ""' <<<"$input" 2>/dev/null)"
-case "$prompt" in
-  '<task-notification>'*|'Stop hook feedback:'*) exit 0 ;;
-  'Continue from where you left off'*|'[stop-hook]'*) exit 0 ;;
-esac
+SELF="$(realpath "$0" 2>/dev/null || echo "$0")"
+ANCHORS="${CRAFT_SERVICE_ANCHORS:-$(cd "$(dirname "$SELF")" && pwd)/service-anchors.txt}"
+while IFS= read -r anchor || [[ -n "$anchor" ]]; do
+  [[ -z "$anchor" || "$anchor" == \#* ]] && continue
+  [[ "$prompt" == "$anchor"* ]] && exit 0
+done < "$ANCHORS" 2>/dev/null
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
 rm -f "$marker" 2>/dev/null || true
