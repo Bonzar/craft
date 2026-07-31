@@ -18,3 +18,5 @@
 {"name":"маркер внутри голого текста стоп-хука → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"[stop-hook] почему ты не разобрал буфер наблюдений"}}
 {"name":"маркер внутри продолжения хода → молчание","hook":"detect-incident","expect":"silent","input":{"prompt":"Continue from where you left off. Тут всё неверно"}}
 {"name":"якорь детектора читается из словаря","hook":"detect-incident","expect":"silent","env":{"CRAFT_SERVICE_ANCHORS":"{TESTS_DIR}/fixtures/service-anchors-test.txt"},"input":{"prompt":"ВЫДУМАННЫЙ-ЯКОРЬ дальше текст: почему ты не разобрал"}}
+{"name":"инцидент: «почему нет тестов на эти правки» → инжект","hook":"detect-incident","expect":"inject","input":{"prompt":"почему нет тестов на эти правки правил?"}}
+{"name":"инцидент: «почему остановился» → инжект","hook":"detect-incident","expect":"inject","input":{"prompt":"Раз что то осталось, почему остановился"}}

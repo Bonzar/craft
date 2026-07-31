@@ -1,0 +1,1 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/repo/.claude/skills/foo/SKILL.md","old_string":"a","new_string":"b"}}]}}
