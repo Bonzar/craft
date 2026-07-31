@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"html"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -877,5 +878,116 @@ func parseFiveStars(body, date string) (Playbill, error) {
 			})
 		}
 	}
+	return pb, nil
+}
+
+// ——— p24.app ———
+//
+// Движок, общий для Нивады («Премьер-Зал») и Колибри: страница площадки
+// `<домен>/?date=ГГГГ/ММ/ДД&facility=<uuid>` отдаёт серверный HTML.
+//
+// Самый богатый источник первого слоя: даёт номер зала, цену, признак
+// доступности, uuid сеанса и дату прямо в ссылке.
+//
+// Разметка — Next.js с CSS-модулями, поэтому имена классов несут хеш сборки
+// («Show_show__kEocF») и меняются при каждом релизе фронта. Цепляться за них
+// нельзя: разбор сломается молча в день чужого деплоя. Все зацепки ниже — за
+// стабильные части: `data-uuid`, нехешированные дубли классов (`show-time`,
+// `hall-name`, `facility-name`, `price`) и слово `disabled`.
+var (
+	p24Event    = regexp.MustCompile(`(?s)<div class="[^"]*event-info[^"]*">(.*?)(?:<div class="[^"]*event-info[^"]*">|\z)`)
+	p24Title    = regexp.MustCompile(`(?s)<h2[^>]*>\s*<a[^>]*>\s*(.*?)\s*</a>`)
+	p24Facility = regexp.MustCompile(`(?s)<span class="facility-name">\s*(.*?)\s*</span>`)
+	p24Hall     = regexp.MustCompile(`(?s)<span class="hall-name">\s*(.*?)\s*</span>(.*?)(?:<span class="hall-name">|\z)`)
+	p24Show     = regexp.MustCompile(`(?s)<div class="([^"]*\bshow\b[^"]*)">(.*?)(?:<div class="[^"]*\bshow\b[^"]*">|\z)`)
+	p24UUID     = regexp.MustCompile(`data-uuid="([0-9a-f-]{8,})"`)
+	p24Time     = regexp.MustCompile(`show-time[^>]*>\s*([0-2]?\d:[0-5]\d)`)
+	p24Date     = regexp.MustCompile(`[?&]date=(\d{4})/(\d{2})/(\d{2})`)
+	p24Price    = regexp.MustCompile(`price[^>]*>\s*([0-9]+)`)
+	p24Formats  = regexp.MustCompile(`(?s)formats[^>]*>(.*?)</div>`)
+	p24HallNum  = regexp.MustCompile(`(?i)зал\s*([0-9A-Za-zА-Яа-я]+)`)
+)
+
+// parseP24 разбирает страницу площадки на движке p24.app.
+//
+// fallbackDate используется, только если в ссылке сеанса даты не оказалось:
+// собственная дата ссылки точнее переданной, потому что страница может отдать
+// соседний день.
+func parseP24(body, fallbackDate string) (Playbill, error) {
+	pb := Playbill{}
+	if fm := p24Facility.FindStringSubmatch(body); len(fm) > 1 {
+		pb.Cinema = strings.TrimSpace(stripHTML(fm[1]))
+	}
+
+	events := p24Event.FindAllStringSubmatch(body, -1)
+	if len(events) == 0 {
+		return pb, fmt.Errorf("разбор p24: блоки фильмов не найдены (тело %d байт)", len(body))
+	}
+
+	dates := map[string]bool{}
+	for _, ev := range events {
+		block := ev[1]
+
+		tm := p24Title.FindStringSubmatch(block)
+		if len(tm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[1])))
+
+		for _, hm := range p24Hall.FindAllStringSubmatch(block, -1) {
+			hallLabel, hallBlock := hm[1], hm[2]
+
+			// «Зал 1 (кровати)» — в Hall едет только номер: описание зала это
+			// про удобства, а не про идентификатор помещения.
+			hall := ""
+			if n := p24HallNum.FindStringSubmatch(hallLabel); len(n) > 1 {
+				hall = n[1]
+			}
+
+			for _, sm := range p24Show.FindAllStringSubmatch(hallBlock, -1) {
+				classes, show := sm[1], sm[2]
+
+				tmm := p24Time.FindStringSubmatch(show)
+				if len(tmm) < 2 {
+					continue
+				}
+
+				date := fallbackDate
+				if dm := p24Date.FindStringSubmatch(show); len(dm) > 3 {
+					date = dm[1] + "-" + dm[2] + "-" + dm[3]
+				}
+				at := normalizeShowtime(tmm[1], date)
+				if at == "" {
+					continue
+				}
+				if date != "" {
+					dates[date] = true
+				}
+
+				st := Showtime{
+					Film:     film,
+					StartsAt: at,
+					Hall:     hall,
+					// disabled — сеанс в расписании есть, купить нельзя.
+					OnSale: !strings.Contains(classes, "disabled"),
+				}
+				if um := p24UUID.FindStringSubmatch(show); len(um) > 1 {
+					st.SourceID = um[1]
+				}
+				if pm := p24Price.FindStringSubmatch(show); len(pm) > 1 {
+					st.PriceMin, _ = strconv.Atoi(pm[1])
+				}
+				if fm := p24Formats.FindStringSubmatch(show); len(fm) > 1 {
+					st.Format = strings.TrimSpace(stripHTML(fm[1]))
+				}
+				pb.Showtimes = append(pb.Showtimes, st)
+			}
+		}
+	}
+
+	for d := range dates {
+		pb.Dates = append(pb.Dates, d)
+	}
+	sort.Strings(pb.Dates)
 	return pb, nil
 }

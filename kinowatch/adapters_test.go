@@ -593,3 +593,106 @@ func TestFiveStarsMarksPastSessions(t *testing.T) {
 		t.Error("живой сеанс помечен недоступным")
 	}
 }
+
+// p24.app — самый богатый источник первого слоя: зал, цена, uuid сеанса и дата
+// в ссылке. Разбор на живой фикстуре Колибри (снята 31.07.2026).
+func TestParseP24(t *testing.T) {
+	pb, err := parseP24(readFixture(t, "p24-schedule.html"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансов ноль")
+	}
+	if pb.Cinema == "" {
+		t.Error("название площадки потеряно")
+	}
+
+	var withHall, withPrice, withID int
+	for _, s := range pb.Showtimes {
+		if s.Hall != "" {
+			withHall++
+		}
+		if s.PriceMin > 0 {
+			withPrice++
+		}
+		if s.SourceID != "" {
+			withID++
+		}
+		if !strings.HasPrefix(s.StartsAt, "2026-") {
+			t.Errorf("время собрано неверно: %q", s.StartsAt)
+		}
+	}
+	if withHall == 0 {
+		t.Error("номер зала потерян")
+	}
+	if withPrice == 0 {
+		t.Error("цена потеряна")
+	}
+	if withID != len(pb.Showtimes) {
+		t.Errorf("uuid есть только у %d сеансов из %d — остальные поедут на отпечатке зря", withID, len(pb.Showtimes))
+	}
+}
+
+// «Зал 1 (кровати)» — в Hall едет только номер. Описание удобств в ключе
+// сеанса означало бы, что переименование зала заводит все сеансы заново.
+func TestP24HallKeepsOnlyNumber(t *testing.T) {
+	pb, err := parseP24(readFixture(t, "p24-schedule.html"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	for _, s := range pb.Showtimes {
+		if strings.Contains(strings.ToLower(s.Hall), "зал") || strings.Contains(s.Hall, "(") {
+			t.Errorf("в Hall лежит %q, ожидался только номер", s.Hall)
+		}
+	}
+}
+
+// Дата берётся из ссылки самого сеанса, а не из переданной: страница может
+// отдать соседний день, и тогда переданная дата увела бы все сеансы не туда.
+func TestP24PrefersDateFromLink(t *testing.T) {
+	body := `<div class="EventList_event-info__x event-info"><h2><a href="/events/x">Кино</a></h2>
+	<span class="facility-name">Колибри</span>
+	<span class="hall-name">Зал 2</span>
+	<div class="Show_show__a show"><a href="?date=2026/08/05&amp;facility=u#2026/08/05 10:10">
+	<div data-uuid="aaaabbbb-1111-2222-3333-444455556666" class="Show_show-time__b show-time">10:10</div></a>
+	<div class="Show_price__c price">500 ₽</div></div></div>`
+
+	pb, err := parseP24(body, "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) != 1 {
+		t.Fatalf("сеансов %d, ожидался один", len(pb.Showtimes))
+	}
+	if !strings.HasPrefix(pb.Showtimes[0].StartsAt, "2026-08-05") {
+		t.Errorf("дата взята не из ссылки: %q", pb.Showtimes[0].StartsAt)
+	}
+}
+
+// Склейка «фильм-предсеанс. обсл.& прикрытие» приезжает прямо в названии, и
+// каскад обязан вытащить из неё настоящий фильм.
+func TestP24GluedTitleFeedsCascade(t *testing.T) {
+	pb, err := parseP24(readFixture(t, "p24-schedule.html"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	var glued bool
+	for _, s := range pb.Showtimes {
+		if strings.Contains(strings.ToLower(s.Film), "предсеанс") {
+			glued = true
+			m := matchShowtime(s, FilmProfile{Title: "Миньоны и монстры", DurationMin: 90, DurationMax: 120})
+			if !m.Matched {
+				t.Errorf("склеенная позиция %q не опознана каскадом: %+v", s.Film, m)
+			}
+			if !m.GreyRelease {
+				t.Errorf("маркер «предсеанс. обсл.» не поднял признак серого проката у %q", s.Film)
+			}
+			break
+		}
+	}
+	if !glued {
+		t.Skip("в фикстуре нет склеенных позиций")
+	}
+}
