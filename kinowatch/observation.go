@@ -11,7 +11,10 @@ package main
 // Формат наблюдения намеренно плоский «ключ → значения»: рутине не нужно знать
 // семантику полей, она делает upsert по Key и не думает.
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // CinemaObservation — одна строка реестра в виде, готовом к upsert.
 //
@@ -44,6 +47,12 @@ const (
 	fLastError    = "lasterror"
 	fEvidenceURL  = "evidenceurl"
 	fNote         = "note"
+	// Четыре колонки геокодера. GeoAt — время последней ПОПЫТКИ, а не успеха:
+	// по нему считается, пора ли перепроверять площадку без координат.
+	fLat     = "lat"
+	fLon     = "lon"
+	fGeoStep = "geostep"
+	fGeoAt   = "geoat"
 )
 
 // Классы площадки — почему её нельзя опрашивать. Свойство самой площадки,
@@ -144,4 +153,90 @@ func buildCinemaObservations(decisions []ScopeDecision, now string) []CinemaObse
 	}
 
 	return out
+}
+
+// addNote добавляет пометку, не затирая уже стоящие.
+//
+// Note накапливает: пометки от разных шагов живут списком через «;», а слияние
+// параллельных прогонов объединяет множества. Перезапись затёрла бы вчерашнее
+// предупреждение первой же ежечасной записью, поэтому её здесь нет.
+func addNote(fields map[string]string, notes ...string) {
+	have := map[string]bool{}
+	var order []string
+	for _, n := range strings.Split(fields[fNote], ";") {
+		n = strings.TrimSpace(n)
+		if n == "" || have[n] {
+			continue
+		}
+		have[n] = true
+		order = append(order, n)
+	}
+	for _, n := range notes {
+		n = strings.TrimSpace(n)
+		if n == "" || have[n] {
+			continue
+		}
+		have[n] = true
+		order = append(order, n)
+	}
+	if len(order) == 0 {
+		delete(fields, fNote)
+		return
+	}
+	fields[fNote] = strings.Join(order, "; ")
+}
+
+// applyGeo кладёт в наблюдение результат геокодирования.
+//
+// GeoAt ставится ВСЕГДА, даже когда запросов не было вовсе (сетевая площадка без
+// адреса): иначе она вечно подходила бы под условие «раньше не пробовалась» и
+// штурмовала бы геокодер каждый час, хотя решение принято без единого запроса.
+//
+// InsideMkad при неудаче остаётся пустым — ни true, ни false. Пустое значение
+// означает «не знаем», и это честно: false молча вычеркнул бы площадку из охвата.
+func applyGeo(obs *CinemaObservation, out GeoOutcome, now string) {
+	obs.Fields[fGeoAt] = now
+
+	if out.Point == nil {
+		obs.Fields[fStatusClass] = pickClass(obs.Fields[fStatusClass], classGeoUnknown)
+		obs.Fields[fStatusAt] = now
+		if out.Evidence != "" {
+			obs.Fields[fEvidenceURL] = out.Evidence
+		}
+		addNote(obs.Fields, out.Notes...)
+		return
+	}
+
+	obs.Fields[fLat] = strconv.FormatFloat(out.Point.Lat, 'f', 6, 64)
+	obs.Fields[fLon] = strconv.FormatFloat(out.Point.Lon, 'f', 6, 64)
+	obs.Fields[fGeoStep] = out.Point.Step
+	if out.Point.Address != "" {
+		obs.Fields[fAddress] = out.Point.Address
+	}
+	if out.Point.Evidence != "" {
+		obs.Fields[fEvidenceURL] = out.Point.Evidence
+	}
+	addNote(obs.Fields, out.Notes...)
+}
+
+// setEnriched проставляет то, что дал обогатитель, до геокодирования.
+// Готовые координаты (у КАРО они есть) снимают нужду в запросах вовсе.
+func setEnriched(obs *CinemaObservation, v EnrichedVenue, now string) {
+	if v.Address != "" {
+		obs.Fields[fAddress] = v.Address
+	}
+	if v.Website != "" {
+		obs.Fields[fSiteURL] = v.Website
+	}
+	if v.Lat != 0 || v.Lon != 0 {
+		obs.Fields[fLat] = strconv.FormatFloat(v.Lat, 'f', 6, 64)
+		obs.Fields[fLon] = strconv.FormatFloat(v.Lon, 'f', 6, 64)
+		obs.Fields[fGeoStep] = "enricher:" + v.Source
+		obs.Fields[fGeoAt] = now
+	}
+}
+
+// hasCoords — есть ли у наблюдения координаты.
+func hasCoords(obs CinemaObservation) bool {
+	return obs.Fields[fLat] != "" && obs.Fields[fLon] != ""
 }
