@@ -37,7 +37,8 @@ mkdir -p "$HOOKS_DST"
 
 # --- 1. Симлинки универсальных хуков и их данных ------------------------------
 linked=0
-for f in "$HOOKS_SRC"/universal-*.sh "$HOOKS_SRC/_load-env.sh" "$HOOKS_SRC/incident-markers.txt"; do
+for f in "$HOOKS_SRC"/universal-*.sh "$HOOKS_SRC/_load-env.sh" \
+         "$HOOKS_SRC/incident-markers.txt" "$HOOKS_SRC/service-anchors.txt"; do
   [[ -e "$f" ]] || continue
   dst="$HOOKS_DST/$(basename "$f")"
   if [[ -L "$dst" && "$(readlink "$dst")" == "$f" ]]; then
