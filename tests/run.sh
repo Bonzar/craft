@@ -40,6 +40,7 @@ declare -A SCRIPT=(
   [fact-gate]="$HOOKS/universal-fact-gate.sh"
   [stop-routine-facts]="$HOOKS/universal-stop-routine-facts.sh"
   [guard-plan-critic]="$HOOKS/universal-guard-plan-critic.sh"
+  [guard-plan-delta]="$HOOKS/universal-guard-plan-delta.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
   [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
@@ -101,11 +102,12 @@ for f in "${files[@]}"; do
     rfmark="$(mktemp -u "${TMPDIR:-/tmp}/routine-facts-test.XXXXXX")"
     planpath="$(mktemp -u "${TMPDIR:-/tmp}/plan-file-test.XXXXXX")"
     criticmark="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-test.XXXXXX")"
+    deltastore="$(mktemp -u "${TMPDIR:-/tmp}/plan-delta-test.XXXXXX")"
     icmark="$(mktemp -u "${TMPDIR:-/tmp}/incident-closure-test.XXXXXX").armed"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
-             "INCIDENT_CLOSURE_MARKER=$icmark")
+             "CRAFT_PLAN_DELTA_STORE=$deltastore" "INCIDENT_CLOSURE_MARKER=$icmark")
     # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
     # из env, создаётся до прогона (взводом в жизни занимается другой хук).
     [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"
@@ -115,12 +117,22 @@ for f in "${files[@]}"; do
       [[ -n "$k" ]] && caseenv+=("$k=${v//\{TESTS_DIR\}/$CASES_DIR}")
     done \
       < <(jq -r '(.env // {}) | to_entries[] | "\(.key)\t\(.value)"' <<<"$line")
-    # Setup-хукам подаётся ТОТ ЖЕ input, что и целевому: хуки без чтения stdin
-    # (plan-gate-approve/reset) его игнорируют, а хуки-метки на нём проверяемы —
-    # событие не их природы метку ставить не должно.
+    # Setup-хукам по умолчанию подаётся ТОТ ЖЕ input и то же окружение, что целевому:
+    # хуки без чтения stdin (plan-gate-approve/reset) его игнорируют, а хуки-метки на
+    # нём проверяемы — событие не их природы метку ставить не должно. Кейс может задать
+    # подготовке своё событие (`setup_input`) и свои переменные (`setup_env`) — это
+    # нужно связкам, где подготовка и цель обязаны отличаться (напр. запись в накопитель
+    # одним планом и проверка другим).
+    setup_input="$(jq -c '.setup_input // empty' <<<"$line")"
+    setup_input="${setup_input//\{TESTS_DIR\}/$CASES_DIR}"
+    setupenv=("${caseenv[@]}")
+    while IFS=$'\t' read -r k v; do
+      [[ -n "$k" ]] && setupenv+=("$k=${v//\{TESTS_DIR\}/$CASES_DIR}")
+    done \
+      < <(jq -r '(.setup_env // {}) | to_entries[] | "\(.key)\t\(.value)"' <<<"$line")
     while IFS= read -r sh; do
       [[ -z "$sh" ]] && continue
-      printf '%s' "$input" | env "${caseenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" >/dev/null 2>&1
+      printf '%s' "${setup_input:-$input}" | env "${setupenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" >/dev/null 2>&1
     done < <(jq -r '(.setup // [])[]' <<<"$line")
     # `repeat: N` — feed the SAME input N times (deny-once / remind-once hooks:
     # the assertion is on the LAST invocation's output).
@@ -129,8 +141,8 @@ for f in "${files[@]}"; do
     for ((r_i=0; r_i<rpt; r_i++)); do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
     done
-    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark"; rm -rf "$fgdir"
-    rm -f "$marker" "$obsbuf" "$rfmark" "$icmark" "${icmark%.armed}.reminded"; rm -rf "$fgdir"
+    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
+          "$icmark" "${icmark%.armed}.reminded"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -163,6 +175,7 @@ REQUIRED=(
   "fact-gate:deny"            "fact-gate:allow"
   "stop-routine-facts:block"  "stop-routine-facts:silent"
   "guard-plan-critic:deny"    "guard-plan-critic:allow"
+  "guard-plan-delta:deny"     "guard-plan-delta:allow"     "guard-plan-delta:silent"
   "mark-plan-critic:silent"   "mark-plan-file:silent"
   "stop-incident-closure:block" "stop-incident-closure:silent"
 )
