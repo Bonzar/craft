@@ -9,8 +9,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func readFixture(t *testing.T, name string) string {
@@ -356,5 +358,85 @@ func TestNormalizeShowtime(t *testing.T) {
 		if got := normalizeShowtime(c.showtime, c.date); got != c.want {
 			t.Errorf("normalizeShowtime(%q, %q) = %q, want %q", c.showtime, c.date, got, c.want)
 		}
+	}
+}
+
+// Разбор Москино на живой фикстуре (снята 31.07.2026). У источника нет ни
+// зала, ни хронометража, ни описания — проверяется, что разбор не выдумывает
+// их и при этом не теряет то, что есть.
+func TestParseMoskino(t *testing.T) {
+	ref := time.Date(2026, 7, 31, 12, 0, 0, 0, moscowTZ)
+	pb, err := parseMoskino(readFixture(t, "moskino-schedule.html"), ref)
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансов ноль — разбор не поймал разметку")
+	}
+	if len(pb.Dates) == 0 {
+		t.Error("список дат потерян")
+	}
+
+	s := pb.Showtimes[0]
+	if s.Film == "" {
+		t.Error("название фильма потеряно")
+	}
+	if !strings.HasPrefix(s.StartsAt, "2026-") || !strings.Contains(s.StartsAt, "+03:00") {
+		t.Errorf("время собрано неверно: %q", s.StartsAt)
+	}
+	if s.SourceID == "" {
+		t.Error("id сеанса из richSession() потерян — без него дедуп беззальных сеансов работает на отпечатке")
+	}
+	if s.PriceMin == 0 {
+		t.Error("цена потеряна")
+	}
+
+	for _, st := range pb.Showtimes {
+		if st.Hall != "" {
+			t.Errorf("в Hall попало %q, хотя источник номера зала не отдаёт", st.Hall)
+		}
+		if st.DurationM != 0 {
+			t.Errorf("у Москино появился хронометраж %d — источник его не отдаёт", st.DurationM)
+		}
+	}
+}
+
+// Год в разметке не указан вовсе («31 ИЮЛ»), поэтому достраивается относительно
+// опорной даты. Ошибка здесь тихая и дорогая: всё расписание уезжает в прошлое
+// и молча выпадает из выдачи как «сеансы, которые уже прошли».
+func TestResolveMoskinoDate(t *testing.T) {
+	ref := time.Date(2026, 7, 31, 12, 0, 0, 0, moscowTZ)
+	cases := []struct{ day, month, want string }{
+		{"31", "ИЮЛ", "2026-07-31"},
+		{"09", "АВГ", "2026-08-09"},
+		// Январь при опорном июле — это следующий год, а не прошедший.
+		{"05", "ЯНВ", "2027-01-05"},
+	}
+	for _, c := range cases {
+		day, _ := strconv.Atoi(c.day)
+		got, ok := resolveMoskinoDate(day, c.month, ref)
+		if !ok || got != c.want {
+			t.Errorf("resolveMoskinoDate(%s %s) = %q (ok=%v), want %q", c.day, c.month, got, ok, c.want)
+		}
+	}
+
+	// Декабрьское расписание, прочитанное в январе, не должно уехать назад.
+	jan := time.Date(2027, 1, 3, 12, 0, 0, 0, moscowTZ)
+	if got, _ := resolveMoskinoDate(28, "ДЕК", jan); got != "2027-12-28" {
+		t.Errorf("декабрь при январской опорной дате разобран как %q", got)
+	}
+
+	if _, ok := resolveMoskinoDate(31, "МУСОР", ref); ok {
+		t.Error("неизвестный месяц принят за настоящий")
+	}
+}
+
+// Пустой ответ при живой странице — это поломка разбора, а не отсутствие
+// сеансов. Отличать обязательно: иначе смена вёрстки выглядела бы как «фильма
+// нет» на всей сети разом.
+func TestParseMoskinoFailsLoudlyOnUnknownMarkup(t *testing.T) {
+	ref := time.Date(2026, 7, 31, 12, 0, 0, 0, moscowTZ)
+	if _, err := parseMoskino("<html><body><div>совсем другая вёрстка</div></body></html>", ref); err == nil {
+		t.Error("разбор промолчал о сменившейся вёрстке")
 	}
 }
