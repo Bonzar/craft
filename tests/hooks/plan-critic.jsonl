@@ -12,3 +12,4 @@
 {"name":"событие не от plan-critic метку не ставит → гейт по-прежнему deny","hook":"guard-plan-critic","expect":"deny","setup":["mark-plan-critic"],"env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{}}}
 {"name":"запись файла плана запоминается молча","hook":"mark-plan-file","expect":"silent","input":{"tool_name":"Write","tool_input":{"file_path":"/root/.claude/plans/some-plan.md"}}}
 {"name":"план подагента не запоминается","hook":"mark-plan-file","expect":"silent","input":{"tool_name":"Write","tool_input":{"file_path":"/root/.claude/plans/some-plan-agent-1.md"}}}
+{"name":"метка критика переживает reset нового хода → allow","hook":"guard-plan-critic","expect":"allow","setup":["mark-plan-critic","plan-gate-reset"],"env":{"CRAFT_PLAN_FILE":"{TESTS_DIR}/fixtures/plan-system.md"},"input":{"tool_name":"ExitPlanMode","tool_input":{"subagent_type":"plan-critic"}}}

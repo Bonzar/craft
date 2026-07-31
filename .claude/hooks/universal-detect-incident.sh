@@ -36,6 +36,15 @@ CACHE="${CLAUDE_PROJECT_DIR:-$(cd "$DIR/../.." && pwd)}/.claude/craft-incident-c
 input="$(cat)"
 prompt="$(jq -r '.prompt // ""' <<<"$input" 2>/dev/null)" || exit 0
 [[ -z "$prompt" ]] && exit 0
+
+# Служебное сообщение репликой Влада не является: маркер в вердикте подагента или в
+# тексте стоп-хука — не сигнал инцидента. Якоря те же, что у reset план-гейта, и
+# закреплены теми же кейсами.
+case "$prompt" in
+  '<task-notification>'*|'Stop hook feedback:'*) exit 0 ;;
+  'Continue from where you left off'*|'[stop-hook]'*) exit 0 ;;
+esac
+
 [[ -f "$MARKERS" ]] || exit 0
 
 # Match the message against any marker (case-insensitive, extended regex).
