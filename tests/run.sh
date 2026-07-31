@@ -111,12 +111,22 @@ for f in "${files[@]}"; do
       [[ -n "$k" ]] && caseenv+=("$k=${v//\{TESTS_DIR\}/$CASES_DIR}")
     done \
       < <(jq -r '(.env // {}) | to_entries[] | "\(.key)\t\(.value)"' <<<"$line")
-    # Setup-хукам подаётся ТОТ ЖЕ input, что и целевому: хуки без чтения stdin
-    # (plan-gate-approve/reset) его игнорируют, а хуки-метки на нём проверяемы —
-    # событие не их природы метку ставить не должно.
+    # Setup-хукам по умолчанию подаётся ТОТ ЖЕ input и то же окружение, что целевому:
+    # хуки без чтения stdin (plan-gate-approve/reset) его игнорируют, а хуки-метки на
+    # нём проверяемы — событие не их природы метку ставить не должно. Кейс может задать
+    # подготовке своё событие (`setup_input`) и свои переменные (`setup_env`) — это
+    # нужно связкам, где подготовка и цель обязаны отличаться (напр. запись в накопитель
+    # одним планом и проверка другим).
+    setup_input="$(jq -c '.setup_input // empty' <<<"$line")"
+    setup_input="${setup_input//\{TESTS_DIR\}/$CASES_DIR}"
+    setupenv=("${caseenv[@]}")
+    while IFS=$'\t' read -r k v; do
+      [[ -n "$k" ]] && setupenv+=("$k=${v//\{TESTS_DIR\}/$CASES_DIR}")
+    done \
+      < <(jq -r '(.setup_env // {}) | to_entries[] | "\(.key)\t\(.value)"' <<<"$line")
     while IFS= read -r sh; do
       [[ -z "$sh" ]] && continue
-      printf '%s' "$input" | env "${caseenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" >/dev/null 2>&1
+      printf '%s' "${setup_input:-$input}" | env "${setupenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" >/dev/null 2>&1
     done < <(jq -r '(.setup // [])[]' <<<"$line")
     # `repeat: N` — feed the SAME input N times (deny-once / remind-once hooks:
     # the assertion is on the LAST invocation's output).
