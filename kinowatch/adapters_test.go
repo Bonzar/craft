@@ -440,3 +440,156 @@ func TestParseMoskinoFailsLoudlyOnUnknownMarkup(t *testing.T) {
 		t.Error("разбор промолчал о сменившейся вёрстке")
 	}
 }
+
+// Разбор Mori на живой фикстуре. В блоке, который по классу называется «hall»,
+// у этого источника лежит формат показа — проверяется, что он не уехал в Hall.
+func TestParseMori(t *testing.T) {
+	pb, err := parseMori(readFixture(t, "mori-schedule.html"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансов ноль")
+	}
+
+	s := pb.Showtimes[0]
+	if s.Film == "" {
+		t.Error("название фильма потеряно")
+	}
+	if !strings.HasPrefix(s.StartsAt, "2026-07-31T") {
+		t.Errorf("время собрано неверно: %q", s.StartsAt)
+	}
+	if s.SourceID == "" {
+		t.Error("id сеанса из /session/<id>/buy потерян")
+	}
+
+	for _, st := range pb.Showtimes {
+		if st.Hall != "" {
+			t.Errorf("в Hall попало %q — у Mori в этом месте разметки формат, а не зал", st.Hall)
+		}
+	}
+
+	var withFormat, withPrice, withDuration int
+	for _, st := range pb.Showtimes {
+		if st.Format != "" {
+			withFormat++
+		}
+		if st.PriceMin > 0 {
+			withPrice++
+		}
+		if st.DurationM > 0 {
+			withDuration++
+		}
+	}
+	if withFormat == 0 {
+		t.Error("формат показа (2Д, ВИП 2Д) потерян")
+	}
+	if withPrice == 0 {
+		t.Error("цена потеряна")
+	}
+	if withDuration == 0 {
+		t.Error("хронометраж потерян — у Mori он есть прозой, и уровень каскада про длительность на нём работает")
+	}
+}
+
+// Хронометраж у Mori записан прозой, а не числом.
+func TestParseRussianDuration(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"3 часа 0 минут", 180},
+		{"1 час 47 минут", 107},
+		{"107 минут", 107},
+		{"2 часа", 120},
+		{"", 0},
+		{"неизвестно", 0},
+	}
+	for _, c := range cases {
+		if got := parseRussianDuration(c.in); got != c.want {
+			t.Errorf("parseRussianDuration(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// «Пять звёзд» — единственный источник первого слоя, отдающий и номер зала, и
+// хронометраж. Зато цены у него нет вовсе, и выдумывать её нельзя.
+func TestParseFiveStars(t *testing.T) {
+	pb, err := parseFiveStars(readFixture(t, "5zvezd-schedule.html"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансов ноль")
+	}
+	if pb.Cinema == "" {
+		t.Error("название площадки потеряно")
+	}
+
+	var withHall, withDuration int
+	for _, s := range pb.Showtimes {
+		if s.Hall != "" {
+			withHall++
+		}
+		if s.DurationM > 0 {
+			withDuration++
+		}
+		if s.PriceMin != 0 || s.PriceMax != 0 {
+			t.Errorf("у «Пяти звёзд» появилась цена %d–%d — источник её не отдаёт", s.PriceMin, s.PriceMax)
+		}
+		if s.SourceID == "" {
+			t.Error("id сеанса потерян")
+		}
+	}
+	if withHall == 0 {
+		t.Error("номер зала потерян — он лежит в title кнопки («Зал 5»)")
+	}
+	if withDuration == 0 {
+		t.Error("хронометраж потерян — он в подписи жанров («98 мин»)")
+	}
+}
+
+// В Hall обязан попасть только НОМЕР зала, а класс обслуживания (ПРЕМИУМ) —
+// в Format: иначе ключ сеанса начнёт различать сеансы по классу услуги.
+func TestFiveStarsSeparatesHallFromClass(t *testing.T) {
+	pb, err := parseFiveStars(readFixture(t, "5zvezd-schedule.html"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	var premium int
+	for _, s := range pb.Showtimes {
+		if strings.Contains(s.Hall, "Зал") || strings.Contains(strings.ToUpper(s.Hall), "ПРЕМИУМ") {
+			t.Errorf("в Hall лежит %q, ожидался только номер", s.Hall)
+		}
+		if strings.Contains(strings.ToUpper(s.Format), "ПРЕМИУМ") {
+			premium++
+		}
+	}
+	if premium == 0 {
+		t.Error("класс зала ПРЕМИУМ потерян — в фикстуре он есть")
+	}
+}
+
+// session-past означает, что сеанс уже начался: билетов на него нет.
+func TestFiveStarsMarksPastSessions(t *testing.T) {
+	body := `<div class="creation-schedule-item"><h2><a href="/details/1">Кино</a></h2>
+	<div class="creation-genre">Драма, 98 мин</div>
+	<div class="cinema-name">Пять Звёзд на Новокузнецкой</div>
+	<button type="button" class="session session-past" title="Зал 5" onclick="ticketManager.session(&#039;u&#039;, 111);">13:15</button>
+	<button type="button" class="session" title="Зал 5" onclick="ticketManager.session(&#039;u&#039;, 222);">19:45</button></div>`
+
+	pb, err := parseFiveStars(body, "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) != 2 {
+		t.Fatalf("сеансов %d, ожидалось 2", len(pb.Showtimes))
+	}
+	if pb.Showtimes[0].OnSale {
+		t.Error("прошедший сеанс помечен доступным — это ложная находка билетов")
+	}
+	if !pb.Showtimes[1].OnSale {
+		t.Error("живой сеанс помечен недоступным")
+	}
+}

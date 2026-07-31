@@ -664,3 +664,218 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 
 	return pb, nil
 }
+
+// ——— Mori Cinema ———
+//
+// HTML-страница расписания площадки (`mori.film/schedule/<id>`), серверный
+// рендер Livewire. Важное про этот источник: расписания НЕТ ни на главной, ни
+// на странице фильма — только на /schedule/<id>. Разведка этапа 2 говорила
+// просто «HTML-страницы площадки», и это стоило одного лишнего круга.
+//
+// В блоке, который по классу называется «hall», лежит НЕ зал, а технология
+// показа (2Д, ВИП 2Д, МАКС 2Д). Кладём в Format: номера зала источник не даёт
+// вовсе, и подстановка формата в Hall сломала бы ключ сеанса.
+//
+// Хронометраж есть, но прозой — «3 часа 0 минут».
+
+var (
+	moriGroup   = regexp.MustCompile(`(?s)<div class="cinema__session-schedule__group">(.*?)(?:<div class="cinema__session-schedule__group">|\z)`)
+	moriFilm    = regexp.MustCompile(`(?s)class="cinema__film__title[^"]*"[^>]*>\s*(.*?)\s*</a>`)
+	moriParams  = regexp.MustCompile(`(?s)<div class="film-info__params">(.*?)</div>`)
+	moriHall    = regexp.MustCompile(`(?s)<div class="cinema__session-schedule__item__hall">\s*(.*?)\s*</div>`)
+	moriSession = regexp.MustCompile(`(?s)/session/(\d+)/buy"(.*?)</a>`)
+	moriTime    = regexp.MustCompile(`__ticket__time">\s*([0-2]?\d:[0-5]\d)`)
+	moriPrice   = regexp.MustCompile(`__ticket__price">\s*([0-9]+)`)
+	// Части хронометража ищутся ПОРОЗНЬ. Одна регулярка с двумя опциональными
+	// группами матчит пустую строку в самом начале текста и всегда возвращает
+	// ноль — молча, без единой ошибки разбора.
+	//
+	// Окончания перечислены диапазоном, а не через `\w`: в RE2 `\w` — это
+	// [0-9A-Za-z_], и «часа» с «минут» под него не подходят вовсе.
+	moriHours   = regexp.MustCompile(`(\d+)\s*час[а-яё]*`)
+	moriMinutes = regexp.MustCompile(`(\d+)\s*мин[а-яё]*`)
+)
+
+// parseRussianDuration разбирает хронометраж прозой: «3 часа 0 минут»,
+// «1 час 47 минут», «107 минут». Ноль — законный исход «не сказано».
+func parseRussianDuration(s string) int {
+	total := 0
+	if m := moriHours.FindStringSubmatch(s); len(m) > 1 {
+		h, _ := strconv.Atoi(m[1])
+		total += h * 60
+	}
+	if m := moriMinutes.FindStringSubmatch(s); len(m) > 1 {
+		min, _ := strconv.Atoi(m[1])
+		total += min
+	}
+	return total
+}
+
+// parseMori разбирает страницу расписания Mori.
+//
+// date — дата, за которую запрошена страница: в разметке её нет, страница
+// всегда отдаёт выбранный день, а выбор задаётся параметром запроса.
+func parseMori(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	groups := moriGroup.FindAllStringSubmatch(body, -1)
+	if len(groups) == 0 {
+		return pb, fmt.Errorf("разбор Mori: группы сеансов не найдены (тело %d байт)", len(body))
+	}
+
+	// Название и хронометраж стоят ПЕРЕД группами сеансов и относятся ко всем
+	// группам до следующего фильма, поэтому идём по телу и запоминаем
+	// последний встреченный фильм.
+	for _, g := range groups {
+		block := g[0]
+		head := body[:strings.Index(body, block)+len(block)]
+
+		film, dur := "", 0
+		if fm := moriFilm.FindAllStringSubmatch(head, -1); len(fm) > 0 {
+			film = strings.TrimSpace(html.UnescapeString(tagRe.ReplaceAllString(fm[len(fm)-1][1], "")))
+		}
+		if pm := moriParams.FindAllStringSubmatch(head, -1); len(pm) > 0 {
+			dur = parseRussianDuration(stripHTML(pm[len(pm)-1][1]))
+		}
+		if film == "" {
+			continue
+		}
+
+		format := ""
+		if hm := moriHall.FindStringSubmatch(block); len(hm) > 1 {
+			format = strings.TrimSpace(stripHTML(hm[1]))
+		}
+
+		for _, s := range moriSession.FindAllStringSubmatch(block, -1) {
+			tm := moriTime.FindStringSubmatch(s[2])
+			if len(tm) < 2 {
+				continue
+			}
+			at := normalizeShowtime(tm[1], date)
+			if at == "" {
+				continue
+			}
+
+			st := Showtime{
+				Film:     film,
+				StartsAt: at,
+				// Hall остаётся пустым намеренно: у Mori номера зала нет.
+				Format:    format,
+				SourceID:  s[1],
+				OnSale:    true,
+				DurationM: dur,
+			}
+			if pm := moriPrice.FindStringSubmatch(s[2]); len(pm) > 1 {
+				st.PriceMin, _ = strconv.Atoi(pm[1])
+			}
+			pb.Showtimes = append(pb.Showtimes, st)
+		}
+	}
+	return pb, nil
+}
+
+// ——— Пять звёзд ———
+//
+// HTML `5zvezd.ru/schedule/<slug>`, три московские площадки (Новокузнецкая,
+// Павелецкая, Смоленская). Дата — параметром `?date=ДД.ММ.ГГГГ`.
+//
+// Единственный источник первого слоя, отдающий И номер зала, И хронометраж:
+// зал лежит в title кнопки сеанса («Зал 5»), длительность — в подписи жанров
+// («98 мин»). Цены нет вовсе — это свойство источника, а не пропуск разбора.
+
+var (
+	fiveItem     = regexp.MustCompile(`(?s)<div class="creation-schedule-item">(.*?)(?:<div class="creation-schedule-item">|\z)`)
+	fiveTitle    = regexp.MustCompile(`(?s)<h2><a[^>]*>\s*(.*?)\s*</a></h2>`)
+	fiveGenre    = regexp.MustCompile(`(?s)<div class="creation-genre">(.*?)</div>`)
+	fiveMinutes  = regexp.MustCompile(`(\d+)\s*мин`)
+	fiveCinema   = regexp.MustCompile(`(?s)<div class="cinema-name">\s*(.*?)\s*</div>`)
+	fiveSession  = regexp.MustCompile(`(?s)<button[^>]*class="(session[^"]*)"[^>]*title="([^"]*)"[^>]*onclick="ticketManager\.session\(&#039;[^&]*&#039;,\s*(\d+)\);?"[^>]*>\s*([0-2]?\d:[0-5]\d)`)
+	fiveHallNum  = regexp.MustCompile(`(?i)зал\s*([0-9A-Za-zА-Яа-я]+)`)
+	fivePremium  = regexp.MustCompile(`(?s)<span class="session-vip"[^>]*>\s*([^<]+?)\s*</span>`)
+	fiveSubtitle = regexp.MustCompile(`class="session-subtitle"`)
+)
+
+// parseFiveStars разбирает страницу расписания «Пяти звёзд».
+func parseFiveStars(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+	if cm := fiveCinema.FindStringSubmatch(body); len(cm) > 1 {
+		pb.Cinema = strings.TrimSpace(stripHTML(cm[1]))
+	}
+
+	items := fiveItem.FindAllStringSubmatch(body, -1)
+	if len(items) == 0 {
+		return pb, fmt.Errorf("разбор «Пяти звёзд»: блоки фильмов не найдены (тело %d байт)", len(body))
+	}
+
+	for _, it := range items {
+		block := it[1]
+
+		tm := fiveTitle.FindStringSubmatch(block)
+		if len(tm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[1])))
+
+		dur := 0
+		if gm := fiveGenre.FindStringSubmatch(block); len(gm) > 1 {
+			if mm := fiveMinutes.FindStringSubmatch(stripHTML(gm[1])); len(mm) > 1 {
+				dur, _ = strconv.Atoi(mm[1])
+			}
+		}
+
+		// Класс зала стоит ОТДЕЛЬНЫМ элементом сразу после кнопки сеанса,
+		// поэтому привязывается по позиции в разметке, а не вложенностью.
+		premium := map[int]string{}
+		for _, pm := range fivePremium.FindAllStringSubmatchIndex(block, -1) {
+			premium[pm[0]] = strings.TrimSpace(block[pm[2]:pm[3]])
+		}
+
+		for _, sm := range fiveSession.FindAllStringSubmatchIndex(block, -1) {
+			classes := block[sm[2]:sm[3]]
+			title := block[sm[4]:sm[5]]
+			id := block[sm[6]:sm[7]]
+			hhmm := block[sm[8]:sm[9]]
+
+			at := normalizeShowtime(hhmm, date)
+			if at == "" {
+				continue
+			}
+
+			hall := ""
+			if hm := fiveHallNum.FindStringSubmatch(title); len(hm) > 1 {
+				hall = hm[1]
+			}
+
+			// Формат собирается из того, что стоит рядом: класс зала
+			// (ПРЕМИУМ) и признак субтитров. Оба про услугу, не про помещение.
+			var format []string
+			for start, label := range premium {
+				// Ярлык, идущий сразу за этой кнопкой и до следующей.
+				if start >= sm[1] && start-sm[1] < 200 {
+					format = append(format, label)
+				}
+			}
+			if fiveSubtitle.MatchString(block[sm[1]:min(len(block), sm[1]+200)]) {
+				format = append(format, "СУБ")
+			}
+
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film:      film,
+				StartsAt:  at,
+				Hall:      hall,
+				Format:    strings.Join(format, " "),
+				SourceID:  id,
+				DurationM: dur,
+				// session-past — сеанс уже начался, купить нельзя.
+				OnSale: !strings.Contains(classes, "session-past"),
+			})
+		}
+	}
+	return pb, nil
+}
