@@ -1126,3 +1126,99 @@ func TestHudozhestvennySkipsNonMovies(t *testing.T) {
 		t.Errorf("не-фильм попал в афишу: %+v", pb.Showtimes)
 	}
 }
+
+// Премьерзал: прошедший сеанс источник помечает сам, и это прямой ответ на
+// вопрос о продаже — у большинства источников его приходится выводить косвенно.
+func TestParsePremierzal(t *testing.T) {
+	pb, err := parsePremierzal(readFixture(t, "premierzal-schedule.html"), "2026-08-03")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) < 5 {
+		t.Fatalf("сеансов %d, в фикстуре их больше", len(pb.Showtimes))
+	}
+
+	var passed, onSale, withPrice, withFormat int
+	films := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		if s.Film == "" {
+			t.Error("название фильма потеряно")
+		}
+		films[s.Film] = true
+		if !strings.HasPrefix(s.StartsAt, "2026-08-03T") {
+			t.Errorf("время собрано не на ту дату: %q", s.StartsAt)
+		}
+		if s.OnSale {
+			onSale++
+		} else {
+			passed++
+		}
+		if s.PriceMin > 0 {
+			withPrice++
+		}
+		if s.Format != "" {
+			withFormat++
+		}
+	}
+	// Проверяется не разнообразие репертуара, а что не потерян ни один блок:
+	// у площадки бывает и один фильм в нескольких блоках формата. Ожидание
+	// «фильмов больше одного» было моим, а не свойством источника.
+	// Считается разметочный маркер сеанса, а не подстрока `session-picker__
+	// item-time`: последняя встречается ещё и внутри скрипта страницы, и по ней
+	// счёт врёт на единицу.
+	want := strings.Count(readFixture(t, "premierzal-schedule.html"), `class="schedule__session-time `)
+	if len(pb.Showtimes) != want {
+		t.Errorf("разобрано %d сеансов из %d в фикстуре — блоки теряются", len(pb.Showtimes), want)
+	}
+	_ = films
+	if passed == 0 || onSale == 0 {
+		t.Errorf("признак прошедшего сеанса не читается: прошло %d, в продаже %d", passed, onSale)
+	}
+	if withPrice == 0 {
+		t.Error("цена потеряна")
+	}
+	if withFormat == 0 {
+		t.Error("формат показа потерян")
+	}
+}
+
+// Мираж: у площадки свой адрес расписания, и разбор обязан убедиться, что
+// отвечает именно она. Промах по идентификатору — не пустое расписание.
+func TestParseMirage(t *testing.T) {
+	body := readFixture(t, "mirage-otradnoe.html")
+
+	pb, err := parseMirage(body, "23", "2026-08-03")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансы не найдены")
+	}
+	var withHall, withLink int
+	for _, s := range pb.Showtimes {
+		if s.Film == "" {
+			t.Error("название фильма потеряно")
+		}
+		if !strings.HasPrefix(s.StartsAt, "2026-08-03T") {
+			t.Errorf("время собрано не на ту дату: %q", s.StartsAt)
+		}
+		if s.Hall != "" {
+			withHall++
+		}
+		if s.SourceID != "" && s.DeepLink != "" {
+			withLink++
+		}
+	}
+	if withHall == 0 {
+		t.Error("номер зала потерян — у Миража он есть у каждого сеанса")
+	}
+	if withLink == 0 {
+		t.Error("идентификатор сеанса потерян: он различает два сеанса в один час")
+	}
+
+	// Чужой идентификатор обязан дать ошибку, а не пустую афишу: пустая афиша
+	// означала бы «сеансов нет», то есть промах выглядел бы как факт.
+	if _, err := parseMirage(body, "18", "2026-08-03"); err == nil {
+		t.Error("разбор промолчал о том, что на странице другая площадка")
+	}
+}

@@ -214,6 +214,27 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 			func(body string) (Playbill, error) {
 				return parseHudozhestvenny(body, day.Format("2006-01-02"))
 			})
+	case kindPremierzal:
+		// Сайт у каждой площадки свой, движок общий — без домена запрос собрать
+		// не из чего, и молчать об этом нельзя.
+		host := p[pHost]
+		if host == "" {
+			return ChannelProbe{Err: fmt.Errorf("каналу Премьерзала нужен домен площадки (host)")}
+		}
+		// Клиент с банкой cookie: без неё сайт крутит редирект сам на себя и
+		// запрос умирает на десятом прыжке (проверено живьём).
+		return fetchOne(newSessionClient(60, 3), "https://"+host+"/schedule",
+			func(body string) (Playbill, error) {
+				return parsePremierzal(body, day.Format("2006-01-02"))
+			})
+	case kindMirage:
+		// У площадки свой адрес расписания. Общая страница города отдаёт только
+		// ту, что выбрана по умолчанию, поэтому брать её нельзя: три площадки
+		// получили бы одно и то же расписание MARI.
+		return fetchOne(c, "https://mirage.ru/msk/schedule/cinema/"+url.PathEscape(venue)+"/",
+			func(body string) (Playbill, error) {
+				return parseMirage(body, venue, day.Format("2006-01-02"))
+			})
 	case kindGum:
 		return fetchOne(c, "https://gum.ru/kinozal/",
 			func(body string) (Playbill, error) {

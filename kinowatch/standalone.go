@@ -63,6 +63,35 @@ var fixedChannels = []FixedChannel{
 		Source: "gum.ru/kinozal/ — расписание кинозала, не часы работы ТЦ",
 	},
 
+	{
+		EaisID: "10617", Name: "Кинотеатр «МИР»", Kind: kindPremierzal,
+		Params: ChannelParams{pHost: "mirkinomarcos.ru"},
+		Source: "mirkinomarcos.ru/schedule — виджет widget.premierzal.ru на сайте площадки",
+	},
+	{
+		EaisID: "6130", Name: "МОРИ Синема Кунцево", Kind: kindMori,
+		Params: ChannelParams{pVenue: "1"},
+		Source: "mori.film/cities-list — Москва, МФК Кунцево Плаза",
+	},
+
+	// Три московские площадки Миража. У каждой свой адрес расписания; общая
+	// страница города отдаёт только MARI, поэтому идентификатор обязателен.
+	{
+		EaisID: "6156", Name: "Москва МАРИ", Kind: kindMirage,
+		Params: ChannelParams{pVenue: "18"},
+		Source: "mirage.ru/msk/cinema/18/ — MARI, ул. Поречная, 10",
+	},
+	{
+		EaisID: "8071", Name: "Москва ОТРАДНОЕ", Kind: kindMirage,
+		Params: ChannelParams{pVenue: "23"},
+		Source: "mirage.ru/msk/cinema/23/ — FORT ОТРАДНОЕ, ул. Декабристов, 12",
+	},
+	{
+		EaisID: "8320", Name: "Москва РОСТОКИНО", Kind: kindMirage,
+		Params: ChannelParams{pVenue: "24"},
+		Source: "mirage.ru/msk/cinema/24/ — ЕВРОПОЛИС, Проспект Мира, 211к2",
+	},
+
 	// Две площадки Киноквартала. В реестре обе записаны одинаково — «Кинотеатр
 	// Киноквартал», без адреса, — поэтому какая строка какому залу
 	// соответствует, по листингу не решить. Обе получают рабочий канал, а
