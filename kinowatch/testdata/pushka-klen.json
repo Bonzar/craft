@@ -1,0 +1,170 @@
+{
+ "dates": {
+  "timezone": "Europe/Moscow",
+  "today": "2026-08-03",
+  "tomorrow": "2026-08-04"
+ },
+ "title": "Расписание кинотеатра в ТРЦ «Клен» (Москва)",
+ "schedule": {
+  "2026-08-03": [
+   {
+    "film_id": 4657,
+    "showtimes": {
+     "2D": [
+      {
+       "id": 509310,
+       "time": "10:00",
+       "date": "2026-08-03 10:00",
+       "stop_buy": 1,
+       "stop_book": 1,
+       "need_buy": 30,
+       "is_available": false,
+       "is_available_buy": false,
+       "is_available_book": false,
+       "price": 450,
+       "hall_id": 7,
+       "film_id": 4657,
+       "is_past": true,
+       "now": "2026-08-03 11:52"
+      },
+      {
+       "id": 509616,
+       "time": "12:00",
+       "date": "2026-08-03 12:00",
+       "stop_buy": 1,
+       "stop_book": 1,
+       "need_buy": 30,
+       "is_available": true,
+       "is_available_buy": true,
+       "is_available_book": true,
+       "price": 450,
+       "hall_id": 8,
+       "film_id": 4657,
+       "is_past": false,
+       "now": "2026-08-03 11:52"
+      }
+     ]
+    }
+   },
+   {
+    "film_id": 4655,
+    "showtimes": {
+     "2D": [
+      {
+       "id": 509591,
+       "time": "10:00",
+       "date": "2026-08-03 10:00",
+       "stop_buy": 1,
+       "stop_book": 1,
+       "need_buy": 30,
+       "is_available": false,
+       "is_available_buy": false,
+       "is_available_book": false,
+       "price": 350,
+       "hall_id": 8,
+       "film_id": 4655,
+       "is_past": true,
+       "now": "2026-08-03 11:52"
+      },
+      {
+       "id": 509917,
+       "time": "12:55",
+       "date": "2026-08-03 12:55",
+       "stop_buy": 1,
+       "stop_book": 1,
+       "need_buy": 30,
+       "is_available": true,
+       "is_available_buy": true,
+       "is_available_book": true,
+       "price": 350,
+       "hall_id": 4,
+       "film_id": 4655,
+       "is_past": false,
+       "now": "2026-08-03 11:52"
+      }
+     ]
+    }
+   },
+   {
+    "film_id": 4652,
+    "showtimes": {
+     "2D": [
+      {
+       "id": 509898,
+       "time": "10:00",
+       "date": "2026-08-03 10:00",
+       "stop_buy": 1,
+       "stop_book": 1,
+       "need_buy": 30,
+       "is_available": false,
+       "is_available_buy": false,
+       "is_available_book": false,
+       "price": 350,
+       "hall_id": 6,
+       "film_id": 4652,
+       "is_past": true,
+       "now": "2026-08-03 11:52"
+      },
+      {
+       "id": 509899,
+       "time": "12:05",
+       "date": "2026-08-03 12:05",
+       "stop_buy": 1,
+       "stop_book": 1,
+       "need_buy": 30,
+       "is_available": true,
+       "is_available_buy": true,
+       "is_available_book": true,
+       "price": 350,
+       "hall_id": 6,
+       "film_id": 4652,
+       "is_past": false,
+       "now": "2026-08-03 11:52"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "films": {
+  "4652": {
+   "name": "История игрушек 5 предс.обсл. & Три добрых дела",
+   "duration": 110,
+   "age": "0+",
+   "genres": "мультфильм, фэнтези, драма, комедия, приключения, семейный",
+   "default_action": "buy",
+   "url": "https://cinema.pushka.club/moscow/klen/4652.istoriya-igrushek-5-predsobsl--tri-dobryih-dela",
+   "thumb": "/!/thumbs/film/lg/2/5/4652/_.jpg",
+   "show_from": "2026-06-27",
+   "is_pushkin": false,
+   "is_exclusive": false,
+   "is_action": false
+  },
+  "4655": {
+   "name": "Миньоны и монстры предс.обсл. & Три добрых дела",
+   "duration": 95,
+   "age": "6+",
+   "genres": "мультфильм, фантастика, комедия, криминал, приключения, семейный",
+   "default_action": "buy",
+   "url": "https://cinema.pushka.club/moscow/klen/4655.minonyi-i-monstryi-predsobsl--tri-dobryih-dela",
+   "thumb": "/!/thumbs/film/lg/5/5/4655/_.jpg",
+   "show_from": "2026-07-11",
+   "is_pushkin": false,
+   "is_exclusive": false,
+   "is_action": false
+  },
+  "4657": {
+   "name": "Одиссея предс.обсл. & Три добрых дела",
+   "duration": 180,
+   "age": "16+",
+   "genres": "фэнтези, боевик, приключения",
+   "default_action": "buy",
+   "url": "https://cinema.pushka.club/moscow/klen/4657.odisseya-predsobsl--tri-dobryih-dela",
+   "thumb": "/!/thumbs/film/lg/7/5/4657/_.jpg",
+   "show_from": "2026-07-30",
+   "is_pushkin": false,
+   "is_exclusive": false,
+   "is_action": false
+  }
+ }
+}

@@ -1105,3 +1105,125 @@ func parseCinemaPark(body, fallbackDate string) (Playbill, error) {
 	sort.Strings(pb.Dates)
 	return pb, nil
 }
+
+// ——— Pushka ———
+//
+// Единственный JSON среди одиночек и самый богатый по полям: цена, номер зала,
+// признак доступности и хронометраж.
+//
+// Главная особенность — выбор площадки. `/!/ajax/schedule` отдаёт расписание
+// той площадки, чей идентификатор лежит в куке `cinema_id`; ставит эту куку
+// страница площадки. Ни путь `/moscow/<slug>/!/ajax/schedule`, ни Referer, ни
+// query-параметры на выдачу не влияют — проверено живьём всеми тремя способами,
+// и голый запрос молча возвращает дефолтный «Клён». Поэтому клиент обязан быть
+// сессионным (newSessionClient), а сбор идёт по одной площадке за раз.
+
+// pushkaVenues — московские площадки Pushka. Слаг совпадает с сегментом её
+// страницы, и он же — ключ к куке.
+var pushkaVenues = []string{"klen", "ladya", "key"}
+
+const pushkaBase = "https://cinema.pushka.club"
+
+type pushkaResponse struct {
+	Dates struct {
+		Today string `json:"today"`
+	} `json:"dates"`
+	Title string `json:"title"`
+	// schedule: дата → позиции, у каждой film_id и сеансы по форматам.
+	Schedule map[string][]struct {
+		FilmID    int `json:"film_id"`
+		Showtimes map[string][]struct {
+			ID          int64  `json:"id"`
+			Time        string `json:"time"`
+			Date        string `json:"date"`
+			IsAvailable bool   `json:"is_available"`
+			Price       int    `json:"price"`
+			HallID      int    `json:"hall_id"`
+		} `json:"showtimes"`
+	} `json:"schedule"`
+	// films: film_id строкой → карточка фильма.
+	Films map[string]struct {
+		Name     string `json:"name"`
+		Duration int    `json:"duration"`
+		URL      string `json:"url"`
+	} `json:"films"`
+}
+
+// parsePushka разбирает расписание одной площадки Pushka.
+func parsePushka(body string) (Playbill, error) {
+	var resp pushkaResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return Playbill{}, fmt.Errorf("разбор ответа Pushka: %w", err)
+	}
+	if len(resp.Schedule) == 0 {
+		return Playbill{}, fmt.Errorf("разбор Pushka: расписание пусто (тело %d байт)", len(body))
+	}
+
+	pb := Playbill{Cinema: strings.TrimSpace(resp.Title)}
+
+	dates := make([]string, 0, len(resp.Schedule))
+	for d := range resp.Schedule {
+		dates = append(dates, d)
+	}
+	// Порядок ключей map случайный, а выдача обязана быть предсказуемой:
+	// иначе два прогона дали бы один набор сеансов в разном порядке.
+	sort.Strings(dates)
+	pb.Dates = dates
+
+	for _, date := range dates {
+		for _, pos := range resp.Schedule[date] {
+			film := resp.Films[strconv.Itoa(pos.FilmID)]
+			// Названия нет в словаре — оставляем пустым. Подставить соседний
+			// фильм значило бы создать ложную находку.
+			name := strings.TrimSpace(film.Name)
+
+			formats := make([]string, 0, len(pos.Showtimes))
+			for f := range pos.Showtimes {
+				formats = append(formats, f)
+			}
+			sort.Strings(formats)
+
+			for _, format := range formats {
+				for _, s := range pos.Showtimes[format] {
+					at := normalizeShowtime(s.Date, date)
+					if at == "" {
+						at = normalizeShowtime(s.Time, date)
+					}
+					if at == "" {
+						continue
+					}
+
+					pb.Showtimes = append(pb.Showtimes, Showtime{
+						Film:     name,
+						StartsAt: at,
+						// Номер зала источник отдаёт числом.
+						Hall:      strconv.Itoa(s.HallID),
+						Format:    format,
+						PriceMin:  s.Price,
+						SourceID:  strconv.FormatInt(s.ID, 10),
+						OnSale:    s.IsAvailable,
+						DurationM: film.Duration,
+						DeepLink:  strings.TrimSpace(film.URL),
+					})
+				}
+			}
+		}
+	}
+	return pb, nil
+}
+
+// fetchPushkaVenue тянет расписание одной площадки.
+//
+// Два запроса подряд ОДНИМ сессионным клиентом: страница площадки ставит куку
+// `cinema_id`, ajax её использует. Клиент без банки вернул бы дефолтную
+// площадку, и это молчаливая подмена — ответ приходит валидный, просто не тот.
+func fetchPushkaVenue(c *Client, slug string) (Playbill, error) {
+	if _, err := c.getText(pushkaBase + "/moscow/" + slug); err != nil {
+		return Playbill{}, fmt.Errorf("страница площадки %q: %w", slug, err)
+	}
+	body, err := c.getText(pushkaBase + "/!/ajax/schedule")
+	if err != nil {
+		return Playbill{}, fmt.Errorf("расписание площадки %q: %w", slug, err)
+	}
+	return parsePushka(body)
+}
