@@ -138,6 +138,12 @@ type BindResult struct {
 const (
 	cinemaStarVenuesURL = "https://api.cinemastar.ru/data/1"
 	moskinoVenuesURL    = "https://mos-kino.ru/cinema/"
+	// Сайт Киномакса закрыт капчей Яндекса, а его API — нет: они на разных
+	// хостах, и справочник берётся напрямую с api.kinomax.ru.
+	kinomaxVenuesURL = "https://api.kinomax.ru/rest/cinemas"
+	// Страница расписаний Синема Парка отдаёт московский список сама, без
+	// параметра города.
+	cinemaParkVenuesURL = "https://kinoteatr.ru/raspisanie-kinoteatrov/"
 )
 
 // networkDirectory — один справочник сети: как его достать и как разобрать.
@@ -155,14 +161,14 @@ type networkDirectory struct {
 
 // networkDirectories — справочники, доступные прогону.
 //
-// Киномакса и Синема Парка здесь нет: их адреса с иностранного выхода не
-// открываются — Киномакс отвечает капчей, kinoteatr.ru рвёт соединение. Обе
-// сети подключаются вместе с российским туннелем, и пока их строки просто не
-// участвуют в привязке.
+// Сеть, чьего справочника здесь нет, в привязке не участвует вовсе: её строки
+// не получают ни канала, ни вердикта о его отсутствии.
 var networkDirectories = []networkDirectory{
 	{Name: "КАРО", URL: karoDirectoryURL, Parse: parseKaroVenues},
 	{Name: "Синема Стар", URL: cinemaStarVenuesURL, Parse: parseCinemaStarVenues},
 	{Name: "Москино", URL: moskinoVenuesURL, Parse: parseMoskinoVenues},
+	{Name: "Киномакс", URL: kinomaxVenuesURL, Parse: parseKinomaxVenues},
+	{Name: "Синема Парк", URL: cinemaParkVenuesURL, Parse: parseCinemaParkVenues},
 	{Name: "Пять звёзд", Fixed: fiveStarsVenues},
 	{Name: "p24", Fixed: p24Venues},
 }
@@ -379,7 +385,14 @@ var venueRank = regexp.MustCompile(`^[\s:;,.\-–—]*(?:\d+\s+)?[\s:;,.\-–—
 var venueBrands = []string{"каро под звездами", "каро", "киномакс", "москино",
 	// Четыре вывески одной сети СИНЕМА ПАРК: в реестре площадки записаны под
 	// теми же именами, что и в её справочнике.
-	"синема парк", "формула кино", "кронверк синема", "кино оkkо", "кино okko",
+	//
+	// «Кино Okko» перечислено трижды, и это не избыточность. Справочник сети
+	// пишет вывеску двумя способами сразу — «КИНО Okko Афимолл Сити» латиницей
+	// и «Кино Оkkо Щёлковский» вперемешку, — а реестр ЕАИС пишет её кириллицей
+	// целиком. Три написания неразличимы на глаз и совершенно различны для
+	// сравнения строк.
+	"синема парк", "формула кино", "кронверк синема",
+	"кино оkkо", "кино okko", "кино окко",
 	"синема стар", "mori cinema", "пять звезд"}
 
 // venueParen — скобочная приписка о состоянии площадки. Сеть пишет её прямо в
@@ -492,8 +505,9 @@ var cinemaParkLink = regexp.MustCompile(`(?s)href="https://kinoteatr\.ru/raspisa
 // Синема» и «Кино Okko», — и в реестре площадки записаны под ними же. Все
 // четыре снимаются перед сравнением списком venueBrands.
 //
-// Страница доступна только через российский выход: с иностранного адреса хост
-// рвёт соединение.
+// Страница отдаёт московский список сама, без параметра города, и вместе с ним
+// приходят областные площадки (Химки, Зеленопарк). Отсеивать их здесь нечем и
+// незачем: охват решает реестр, а лишние площадки видны в отчёте сиротами.
 func parseCinemaParkVenues(body string) ([]NetworkVenue, error) {
 	seen := map[string]bool{}
 	var out []NetworkVenue
