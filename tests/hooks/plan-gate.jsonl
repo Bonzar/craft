@@ -36,3 +36,7 @@
 {"name": "запись во временный каталог — allow", "hook": "guard-plan-gate", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "go test ./... > /tmp/t.log 2>&1"}}}
 {"name": "запись в игнорируемый гитом путь — allow", "hook": "guard-plan-gate", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "echo x > .claude/craft-router-context.md"}}}
 {"name": "сборка и чтение — allow", "hook": "guard-plan-gate", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "go build -o bin/app ./... && ls -la | grep foo"}}}
+{"name": "сравнение внутри кавычек — allow", "hook": "guard-plan-gate", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "jq 'select(.size > 10)' data.json"}}}
+{"name": "сравнение в условных скобках — allow", "hook": "guard-plan-gate", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "[[ foo > bar ]] && echo yes"}}}
+{"name": "запись по объекту пути — deny", "hook": "guard-plan-gate", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "python3 -c \"from pathlib import Path; Path('README.md').write_text('x')\""}}}
+{"name": "копирование с явной целью-каталогом — deny", "hook": "guard-plan-gate", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "cp -t kinowatch /tmp/generated.go"}}}

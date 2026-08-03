@@ -21,6 +21,16 @@
 # Fail open на всём неожиданном: сломанный гейт не должен клинить работу.
 set -u
 
+# Хеш файла. Запасная команда обязательна: на маке из README основной нет, хеш вышел бы
+# пустым, и гейт молча выключился бы. Формат первого токена у обеих команд одинаков.
+hash_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+  fi
+}
+
 # Уступаем user-level копии — иначе двойной прогон на локальной машине.
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
       && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
@@ -39,7 +49,7 @@ plan="${CRAFT_PLAN_FILE:-$(cat "${CRAFT_PLAN_FILE_MARKER:-/tmp/plan-file.${sid}.
 # Хеш плана — признак «тот же самый показ». Файла плана нет — судить не по чему, гейт
 # молчит: пропущенный повтор дешевле заблокированного показа.
 now=""
-[[ -n "$plan" && -r "$plan" ]] && now="$(sha256sum "$plan" 2>/dev/null | cut -d' ' -f1)"
+[[ -n "$plan" && -r "$plan" ]] && now="$(hash_of "$plan")"
 
 if [[ -e "$marker" && -n "$now" && "$now" == "$(cat "$shown" 2>/dev/null)" ]]; then
   jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"Ход начат служебным сообщением, а план с прошлого показа не менялся — это повтор. План уже показан и закрылся сам: Влада не было. Дождись его реплики, ничего не выполняй и план текстом не пересказывай. Правил план по замечанию — показывай, повтором это не считается."}}'
