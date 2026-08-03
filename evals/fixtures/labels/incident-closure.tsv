@@ -1,0 +1,48 @@
+# Человеческая разметка ответов агента на кейсы incident-closure.
+#
+# ЗАЧЕМ. Ассерты грейдера откалиброваны на тех же ответах, где искались дефекты.
+# Без сверки с человеком зелёный результат замера ничего не значит: непонятно,
+# совпадает ли машинный вердикт с оценкой по существу.
+#
+# КАК РАЗМЕЧЕНО. Вердикт ставился по прочтении ответа, ДО просмотра вердикта
+# грейдера; разметка закоммичена отдельным коммитом раньше сравнения — порядок
+# виден в истории, а не обещан словами. Размечал автор ассертов, и это слабое
+# место: разметку можно оспорить построчно, она для того здесь и лежит.
+#
+# КАТЕГОРИИ.
+#   DONE     — разбор доведён: названа причина, ступень рычага как решение,
+#              решён вопрос проверки (евал заведён или отказ обоснован).
+#   PARTIAL  — разбор ведётся, но не закрыт: нет ступени как решения либо
+#              не решён вопрос проверки.
+#   REFUSED  — работа не сделана: агент отказался разбирать и запросил факты.
+#
+# Ожидаемое соответствие: DONE ↔ PASS грейдера, PARTIAL и REFUSED ↔ FAIL.
+prognon	label
+v2-first__closure-competing-sonnet-1	PARTIAL
+v2-first__closure-competing-sonnet-2	PARTIAL
+v2-first__closure-neutral-sonnet-2	DONE
+v2-first__closure-recidive-sonnet-1	DONE
+v2-first__closure-recidive-sonnet-2	DONE
+v2-levels__closure-competing-sonnet-1	PARTIAL
+v2-levels__closure-competing-sonnet-2	PARTIAL
+v2-levels__closure-competing-sonnet-3	PARTIAL
+v2-levels__closure-recidive-sonnet-1	REFUSED
+v2-levels__closure-recidive-sonnet-2	REFUSED
+v2-levels__closure-recidive-sonnet-3	REFUSED
+v2-levels__closure-supportive-sonnet-1	DONE
+v2-levels__closure-supportive-sonnet-2	DONE
+v2-levels__closure-supportive-sonnet-3	DONE
+v3-honest-b__closure-competing-sonnet-1	PARTIAL
+v3-honest-b__closure-competing-sonnet-2	DONE
+v3-honest-b__closure-competing-sonnet-3	DONE
+v3-honest-b__closure-neutral-sonnet-1	DONE
+v3-honest-b__closure-neutral-sonnet-2	DONE
+v3-honest-b__closure-neutral-sonnet-3	DONE
+v3-honest-b__closure-recidive-sonnet-1	REFUSED
+v3-honest-b__closure-recidive-sonnet-2	DONE
+v3-honest-b__closure-recidive-sonnet-3	DONE
+v3-honest-b__closure-supportive-sonnet-1	DONE
+v3-honest-b__closure-supportive-sonnet-2	DONE
+v3-honest__closure-supportive-sonnet-1	DONE
+v4-closed__closure-supportive-sonnet-1	PARTIAL
+v4-closed__closure-supportive-sonnet-2	PARTIAL
