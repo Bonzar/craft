@@ -1,0 +1,321 @@
+[
+ {
+  "id": 2,
+  "ident": "xl",
+  "name": "Киномакс-XL Москва",
+  "geo": {
+   "address": "Дмитровское шоссе, д. 89, ТРЦ «XL Дмитровка», 2 этаж",
+   "latitude": 55.8638,
+   "longitude": 37.5456,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "Комфорт",
+    "color": "ca551f"
+   },
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/xl70176.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/msk-grey.png",
+    "name": "Селигерская",
+    "color": "b1d87d"
+   }
+  ]
+ },
+ {
+  "id": 42,
+  "ident": "vodny",
+  "name": "Киномакс-Водный Москва",
+  "geo": {
+   "address": "ул. Головинское шоссе, д. 5, ТЦ «Водный», 3 этаж",
+   "latitude": 55.8402,
+   "longitude": 37.492,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/vodny73573.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/msk-green.png",
+    "name": "Водный стадион",
+    "color": "05ff16"
+   }
+  ]
+ },
+ {
+  "id": 48,
+  "ident": "zhulebino",
+  "name": "Киномакс-Жулебино Москва",
+  "geo": {
+   "address": "ул. Генерала Кузнецова, д. 22, ТРЦ «Миля», 3 этаж",
+   "latitude": 55.6861,
+   "longitude": 37.8538,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "Atmos",
+    "color": "c27ba0"
+   },
+   {
+    "name": "D-BOX",
+    "color": "f48400"
+   },
+   {
+    "name": "VIP",
+    "color": "ca551f"
+   },
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/zhulebino80381.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/1",
+    "name": "Жулебино",
+    "color": "821c71"
+   }
+  ]
+ },
+ {
+  "id": 44,
+  "ident": "mozaika",
+  "name": "Киномакс-Мозаика Москва",
+  "geo": {
+   "address": "ул. 7-ая Кожуховская, д.9, ТЦ «Мозаика», 3 этаж ",
+   "latitude": 55.7106,
+   "longitude": 37.6751,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "IMAX",
+    "color": "6fa8dc"
+   },
+   {
+    "name": "D-BOX",
+    "color": "f48400"
+   },
+   {
+    "name": "VIP",
+    "color": "ca551f"
+   },
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/mozaika87233.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/msk-lgreen.png",
+    "name": "Дубровка",
+    "color": "b1d87d"
+   }
+  ]
+ },
+ {
+  "id": 43,
+  "ident": "prazhskaya",
+  "name": "Киномакс-Пражская Москва",
+  "geo": {
+   "address": "ул. Кировоградская, д.13А, ТРЦ «Columbus», 4 этаж",
+   "latitude": 55.6121,
+   "longitude": 37.6069,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "IMAX",
+    "color": "6fa8dc"
+   },
+   {
+    "name": "D-BOX",
+    "color": "f48400"
+   },
+   {
+    "name": "VIP",
+    "color": "ca551f"
+   },
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/prazhskaya47306.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/msk-grey.png",
+    "name": "Пражская",
+    "color": "bdbcbc"
+   }
+  ]
+ },
+ {
+  "id": 51,
+  "ident": "pushkino",
+  "name": "Киномакс-Релакс Пушкино",
+  "geo": {
+   "address": "г. Пушкино, Красноармейское шоссе, стр. 104, ТРЦ «Пушкино Парк»",
+   "latitude": 56.0177,
+   "longitude": 37.8857,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [],
+  "image": "/backgrounds/pushkino16873.jpg",
+  "metro": []
+ },
+ {
+  "id": 45,
+  "ident": "rigamoll",
+  "name": "Киномакс-Рига Молл Москва",
+  "geo": {
+   "address": "Новорижское шоссе, 5 км от МКАД в ТК «РИГА МОЛЛ» (23-й км автодороги Балтия, д.2)",
+   "latitude": 55.8,
+   "longitude": 37.2738,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "D-BOX",
+    "color": "f48400"
+   },
+   {
+    "name": "VIP",
+    "color": "ca551f"
+   },
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/rigamoll76006.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/msk-blue.png",
+    "name": "Строгино",
+    "color": "2075b1"
+   }
+  ]
+ },
+ {
+  "id": 5,
+  "ident": "solaris",
+  "name": "Киномакс-Солярис Москва",
+  "geo": {
+   "address": "ул. Перерва, д.43, корп. 1, ТРЦ «БУМ», 2 этаж",
+   "latitude": 55.6596,
+   "longitude": 37.7496,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/solaris35615.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/msk-lgreen.png",
+    "name": "Братиславская",
+    "color": "b1d87d"
+   }
+  ]
+ },
+ {
+  "id": 49,
+  "ident": "titan",
+  "name": "Киномакс-Титан Москва",
+  "geo": {
+   "address": "Каширское ш., д. 61Г, ТРЦ «Каширская Плаза»",
+   "latitude": 55.6214,
+   "longitude": 37.714,
+   "distance": null
+  },
+  "isFavorite": false,
+  "formats": [
+   {
+    "name": "IMAX",
+    "color": "6fa8dc"
+   },
+   {
+    "name": "Atmos",
+    "color": "c27ba0"
+   },
+   {
+    "name": "D-BOX",
+    "color": "f48400"
+   },
+   {
+    "name": "VIP",
+    "color": "ca551f"
+   },
+   {
+    "name": "3D",
+    "color": "c27ba0"
+   },
+   {
+    "name": "2D",
+    "color": "c27ba0"
+   }
+  ],
+  "image": "/backgrounds/titan29571.jpg",
+  "metro": [
+   {
+    "logo": "https://kinomax.ru/images/metro/msk-green.png",
+    "name": "Домодедовская",
+    "color": "05ff16"
+   }
+  ]
+ }
+]

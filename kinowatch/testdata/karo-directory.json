@@ -1,0 +1,372 @@
+{
+ "result": 0,
+ "data": {
+  "theatre": [
+   {
+    "id": 3,
+    "city_id": 1,
+    "name": "7 Атриум",
+    "address": "Москва, ул. Земляной вал, 33 (ТРК \"АТРИУМ\")",
+    "latitude": 55.756931,
+    "longitude": 37.658909,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "Курская",
+     "Чкаловская"
+    ],
+    "formats": [
+     "2D",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     6,
+     8,
+     12,
+     15
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 3,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/94/a1/f0/7adb59840a3e4636d3549fed9e.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/82/e3/3c/d48df43d612803a392297d11cf.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/82/e3/3c/eb909dd2f011f8b16b54ace3d3.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/82/e3/3c/7e2c9a592750ef7432f03b157d.jpg"
+     }
+    }
+   },
+   {
+    "id": 6,
+    "city_id": 1,
+    "name": "5 Иридиум",
+    "address": "г. Зеленоград, Крюковская пл., 1, ж/д, ст. Крюково ТРЦ «Иридиум», 3 этаж",
+    "latitude": 55.982533,
+    "longitude": 37.17503,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [],
+    "formats": [
+     "2D"
+    ],
+    "advantages": [
+     1
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 20,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/98/62/d3/f34b358c4c7ba48a4da2713d9e.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/39/2e/a6/efda98b94d820bf0b5cd7acd9d.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/39/2e/a6/7da1403829d335311971ea926b.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/39/2e/a6/ca9d336884f8a16749ebd8f33f.jpg"
+     }
+    }
+   },
+   {
+    "id": 10,
+    "city_id": 1,
+    "name": "11 Октябрь",
+    "address": "ул. Новый Арбат, д. 24",
+    "latitude": 55.75301,
+    "longitude": 37.588051,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "Арбатская (ар.)",
+     "Арбатская (фил.)",
+     "Смоленская (ар.)",
+     "Смоленская (фил.)"
+    ],
+    "formats": [
+     "2D",
+     "Премиум",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     6,
+     8,
+     12,
+     15
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 31,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/66/f0/da/f8d872e32ff4fc3c6b7991cd02.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/19/13/72/dcbda74fd41ab774fd20075b2b.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/19/13/72/49504d55d75abde00b6c20fbbb.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/19/13/72/c10caf808e809975c9b2d839c6.jpg"
+     }
+    }
+   },
+   {
+    "id": 12,
+    "city_id": 1,
+    "name": "6 Щука",
+    "address": "Москва, ул. Щукинская, д. 42, ТРК \"Щука\"",
+    "latitude": 55.809422,
+    "longitude": 37.465221,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "Щукинская"
+    ],
+    "formats": [
+     "2D",
+     "КАРОАкция"
+    ],
+    "advantages": [],
+    "concession_sales": 1,
+    "loyalty_id": 30,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/b5/bb/a3/d885fd1fa69f21b1c6099a2c56.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/b7/c3/54/ff67ce552266a8be701f6d73ab.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/b7/c3/54/69aea3afd7fafaf79b07a89956.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/b7/c3/54/c7cd75f152e57bed385595ee79.jpg"
+     }
+    }
+   },
+   {
+    "id": 33,
+    "city_id": 1,
+    "name": "10 Реутов",
+    "address": "Носовихинское шоссе, д. 45, ТРЦ \"Реутов Парк\"",
+    "latitude": 55.752098,
+    "longitude": 37.887932,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "Новокосино"
+    ],
+    "formats": [
+     "2D",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     1,
+     8
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 24,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/03/8e/74/3e6108c0db1a002ba04c865c6c.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/1d/10/bc/ecef6de973e2542d80ae5ce3bc.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/1d/10/bc/b6bda56b8741939993c434d172.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/1d/10/bc/fc6491783eca9e28582653220a.jpg"
+     }
+    }
+   },
+   {
+    "id": 35,
+    "city_id": 1,
+    "name": "Sky 17 Авиапарк",
+    "address": "ул. Ходынский бульвар д. 4, ТЦ \"АВИАПАРК\"",
+    "latitude": 55.790043,
+    "longitude": 37.531246,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "ЦСКА"
+    ],
+    "formats": [
+     "2D",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     1,
+     6,
+     8,
+     12,
+     15
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 1,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/36/b4/16/2f76c579470c13b98a610f5b9d.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/78/10/50/5e42b414900dbb631d8736f925.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/78/10/50/668515a2bb0e662f0a7d4ef13b.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/78/10/50/d20da5d137688953fdffe3178d.jpg"
+     }
+    }
+   },
+   {
+    "id": 50,
+    "city_id": 1,
+    "name": "8 Саларис",
+    "address": "г.Москва, 23-й километр Киевского ш. (п. Московский), д.1 ТРЦ Саларис",
+    "latitude": 55.623539,
+    "longitude": 37.41993,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [],
+    "formats": [
+     "2D",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     1
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 0,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/9a/0f/28/6fcff66ffbeb636d1a75725070.jfif",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/d6/8d/3c/ddd676608d3490ebd8ac4c307b.jfif",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/d6/8d/3c/1ac4311c23351ca5972e9db13c.jfif",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/d6/8d/3c/eb17fad71e4be1c063c892ef26.jfif"
+     }
+    }
+   },
+   {
+    "id": 53,
+    "city_id": 1,
+    "name": "4 Высота",
+    "address": "ул. Юных Ленинцев, 52",
+    "latitude": 55.699829,
+    "longitude": 37.763336,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "Кузьминки"
+    ],
+    "formats": [
+     "2D",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     1,
+     8,
+     12,
+     15
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 50,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/eb/61/73/d1d145fb012bb4d36fa5048928.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/27/a9/f7/c99731e8017aa6f7b76e651870.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/27/a9/f7/e1a105b6d6b5408c20359b923d.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/27/a9/f7/fed470afcbcf25b7042d56c532.jpg"
+     }
+    }
+   },
+   {
+    "id": 58,
+    "city_id": 1,
+    "name": "6 Будапешт",
+    "address": "Ул. Лескова, 14",
+    "latitude": 55.897194,
+    "longitude": 37.60445,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "Алтуфьево"
+    ],
+    "formats": [
+     "2D",
+     "КИНОКРЫША",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     1,
+     8,
+     12,
+     15,
+     16
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 52,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/1f/85/cc/f24bf4b06d2b55783a2c4ce67a.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/63/9c/59/0ce2a71a86cfa719ec241f3820.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/63/9c/59/08d717a224f8d3cc1ae366c2a5.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/63/9c/59/43c4adf14391982c0c94f8042f.jpg"
+     }
+    }
+   },
+   {
+    "id": 59,
+    "city_id": 1,
+    "name": "10 София",
+    "address": "Сиреневый бульвар, 31",
+    "latitude": 55.803818,
+    "longitude": 37.800541,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "",
+    "metro": [
+     "Щелковская"
+    ],
+    "formats": [
+     "2D",
+     "КИНОКРЫША",
+     "КАРОАкция"
+    ],
+    "advantages": [
+     1,
+     8,
+     12,
+     15,
+     16
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 53,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/f6/e8/35/f8b24b363ea2df1546790e6501.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/e2/65/55/80cccf210f30b3923262d142c2.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/e2/65/55/08854d26367c322939da2ac8ca.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/e2/65/55/4d64aeca3d11566f28c621ca15.jpg"
+     }
+    }
+   },
+   {
+    "id": 67,
+    "city_id": 1,
+    "name": "6 Киргизия",
+    "address": "Москва, Зеленый пр., 81",
+    "latitude": 55.751751,
+    "longitude": 37.82024,
+    "phone_support": "+7 903 754 55 00",
+    "working_hours": "10:00 - 01:00",
+    "metro": [
+     "Новогиреево"
+    ],
+    "formats": [
+     "2D"
+    ],
+    "advantages": [
+     1,
+     8,
+     12,
+     15
+    ],
+    "concession_sales": 1,
+    "loyalty_id": 55,
+    "loyalty_source": 1,
+    "media": {
+     "cover": "https://static.karofilm.ru/uploads/theatre/resize/9e/68/44/e37570471dddf001ec7b896d35.jpg",
+     "bg": {
+      "desktop": "https://static.karofilm.ru/uploads/theatre/desktop/09/51/37/a4552311724c685062c57e07f8.jpg",
+      "tablet": "https://static.karofilm.ru/uploads/theatre/tablet/09/51/37/c831e3c562abbf57046aca82bd.jpg",
+      "mobile": "https://static.karofilm.ru/uploads/theatre/mobile/09/51/37/29c4a24f713e255e3276c04124.jpg"
+     }
+    }
+   }
+  ]
+ }
+}
