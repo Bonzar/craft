@@ -169,10 +169,12 @@ type EnrichReport struct {
 	NameDuplicates int                 `json:"nameDuplicates"`
 	// Binding — покрытие каналами по сетям. Отдельно от Paths: там речь про
 	// координаты площадки, здесь — про то, есть ли к ней вообще запрос.
-	Binding      []NetworkBinding    `json:"binding"`
-	BoundVenues  int                 `json:"boundVenues"`
-	Observations []CinemaObservation `json:"observations"`
-	Errors       []string            `json:"errors,omitempty"`
+	Binding     []NetworkBinding `json:"binding"`
+	BoundVenues int              `json:"boundVenues"`
+	// FixedChannels — сколько каналов проставлено поштучно, вне справочников.
+	FixedChannels int                 `json:"fixedChannels"`
+	Observations  []CinemaObservation `json:"observations"`
+	Errors        []string            `json:"errors,omitempty"`
 	// GeoErrors отдельно от Errors: отказ геокодера по одной площадке прогон не
 	// рушит, но и тонуть в общем списке не должен — по нему видно, чего стоит
 	// доверять числам в Paths.
@@ -258,6 +260,14 @@ func runEnrich(c, geo *Client, base, region string, limit int) {
 	// Привязка идёт до геокодирования: она решает, ЕСТЬ ли у площадки запрос за
 	// расписанием, и от координат никак не зависит.
 	report.Binding = bindAllNetworks(jsonClient.getText, obs)
+
+	// Каналы, найденные поштучно: у одиночек справочника нет по определению.
+	fixed, orphans := applyFixedChannels(obs)
+	report.FixedChannels = fixed
+	for _, o := range orphans {
+		report.Errors = append(report.Errors, "запись канала без строки реестра: "+o)
+	}
+
 	for i := range obs {
 		if obs[i].Fields[fSourceKind] != "" {
 			report.BoundVenues++

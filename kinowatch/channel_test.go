@@ -17,7 +17,7 @@ import (
 // Пустая афиша вместо ошибки означала бы «у площадки нет сеансов» — то есть
 // ненаписанный код выглядел бы как факт о прокате.
 func TestFetchChannelUnknownKindFails(t *testing.T) {
-	got := fetchChannelDay(newClient(1, 0), "мираж", "vodny", time.Now())
+	got := fetchChannelDay(newClient(1, 0), "мираж", ChannelParams{pVenue: "vodny"}, time.Now())
 
 	if got.Err == nil {
 		t.Fatal("неизвестный вид канала не дал ошибки")
@@ -33,7 +33,7 @@ func TestFetchChannelUnknownKindFails(t *testing.T) {
 // Классификатор обязан увидеть отказ неизвестного вида как поломку источника, а
 // не как отсутствие фильма.
 func TestUnknownKindNeverLooksLikeAbsent(t *testing.T) {
-	probe := fetchChannelDay(newClient(1, 0), "люксор", "x", time.Now())
+	probe := fetchChannelDay(newClient(1, 0), "люксор", ChannelParams{pVenue: "x"}, time.Now())
 
 	res := classifyProbe(ProbeInput{
 		Err:      probe.Err,

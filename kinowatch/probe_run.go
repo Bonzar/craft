@@ -212,7 +212,7 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 		Key:   o.Key,
 		Name:  o.Name,
 		Kind:  o.Fields[fSourceKind],
-		Venue: strings.TrimPrefix(o.Fields[fSourceParams], "venue="),
+		Venue: o.Fields[fSourceParams],
 	}
 
 	if vp.Kind == "" {
@@ -221,7 +221,7 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 		return vp
 	}
 
-	probe := fetchChannel(c, vp.Kind, vp.Venue, now, days)
+	probe := fetchChannel(c, vp.Kind, parseChannelParams(o.Fields[fSourceParams]), now, days)
 	vp.FailedDays = probe.FailedDays
 
 	matches := matchPlaybill(probe.Playbill, film)
