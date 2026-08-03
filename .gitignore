@@ -22,3 +22,6 @@
 
 # macOS Finder metadata.
 .DS_Store
+
+# Состояние последнего прогона kinowatch: артефакт, не исходник.
+kinowatch/.last-run.json
