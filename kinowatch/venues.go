@@ -262,10 +262,19 @@ func venueKey(name string) string {
 	// учреждение культуры города Москвы "Московское кино", кинотеатр "Москино
 	// Юность"». Значимая часть — хвост после имени сети.
 	for _, brand := range venueBrands {
-		if i := strings.LastIndex(s, brand); i >= 0 {
-			s = strings.TrimSpace(s[i+len(brand):])
+		i := strings.LastIndex(s, brand)
+		if i < 0 {
+			continue
+		}
+		tail := strings.TrimSpace(s[i+len(brand):])
+		// Название площадки может СОВПАДАТЬ с именем сети целиком — «КАРО под
+		// звёздами». Снять бренд значило бы получить пустой ключ, то есть
+		// потерять площадку вовсе; в таком случае имя остаётся как есть.
+		if tail == "" {
 			break
 		}
+		s = tail
+		break
 	}
 	s = venueRank.ReplaceAllString(s, "")
 	// Хвост с городом. Справочник Киномакса зовёт площадку «Киномакс-Водный

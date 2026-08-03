@@ -160,7 +160,19 @@ func fetchOverpass(c *Client, endpoint string) ([]EnrichedVenue, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseOverpass(body)
+
+	out, err := parseOverpass(body)
+	if err != nil {
+		return nil, err
+	}
+	// Ноль объектов при успешном ответе — это отказ сервиса, а не «в Москве нет
+	// кинотеатров». Замерено живьём: два запроса подряд дали 0 и 123 объекта,
+	// и по первому вывод о полноте был бы неверным. Молчаливый пустой список
+	// здесь означал бы, что геокодер тихо остался без половины входа.
+	if len(out) == 0 {
+		return nil, fmt.Errorf("Overpass вернул ноль объектов при успешном ответе (тело %d байт)", len(body))
+	}
+	return out, nil
 }
 
 // osmWebsite — сайт площадки из тегов. Когда шаг поиска сайта появится, это его

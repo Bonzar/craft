@@ -548,10 +548,22 @@ func geocode(c *Client, t GeoTarget, photonAPI, nominatimAPI string) GeoOutcome 
 // названию. Запрос-то у них одинаковый. Значит неразличимость имени закрывает
 // площадке не только сопоставление, но и весь поиск по имени; иначе два разных
 // зала сливаются в одну точку с видом полной достоверности.
+// Ключ — venueKey, тот же, которым привязываются каналы сетей (venues.go).
+// Раньше здесь стоял normalizeName, и это был один дефект в двух местах:
+// «каро 7 атриум» из реестра не совпадало с «7 атриум» из справочника, поэтому
+// 14 готовых адресов КАРО не доезжали до геокодера вовсе. Замер до правки — 37
+// сопоставленных строк, после — 49, из них 25 с адресом.
+//
+// Обратная сторона смены ключа: venueKey снимает имя сети, и «Москино Музеон» с
+// «КАРО Музеон» сходятся в один ключ «музеон», хотя это разные площадки разных
+// сетей. Такое схождение — артефакт ключа, а не свойство листинга, поэтому
+// неразличимостью оно не считается: неразличимы только строки, у которых
+// совпадает и полное имя. Строки, разведённые полным именем, из сопоставления
+// просто выбывают — молча подставить им общего кандидата нельзя.
 func matchEnrichers(rows []EaisRow, venues []EnrichedVenue) (map[string]EnrichedVenue, []string) {
 	rowsByName := map[string][]EaisRow{}
 	for _, r := range rows {
-		key := normalizeName(r.Company)
+		key := venueKey(r.Company)
 		if key == "" {
 			continue
 		}
@@ -560,7 +572,7 @@ func matchEnrichers(rows []EaisRow, venues []EnrichedVenue) (map[string]Enriched
 
 	venuesByName := map[string][]EnrichedVenue{}
 	for _, v := range venues {
-		key := normalizeName(v.Name)
+		key := venueKey(v.Name)
 		if key == "" {
 			continue
 		}
@@ -571,14 +583,26 @@ func matchEnrichers(rows []EaisRow, venues []EnrichedVenue) (map[string]Enriched
 	var ambiguous []string
 
 	for _, r := range rows {
-		key := normalizeName(r.Company)
+		key := venueKey(r.Company)
 		if key == "" {
 			continue
 		}
 		if len(rowsByName[key]) > 1 {
-			// Две строки реестра с одним именем: какая из них чья, по названию
-			// не решить — ни у обогатителя, ни в геокодере.
-			ambiguous = append(ambiguous, r.ID)
+			// Две строки реестра с одним ключом. Разобраться, что именно
+			// совпало: полные имена или только хвост после снятия бренда.
+			same := 0
+			for _, other := range rowsByName[key] {
+				if normalizeName(other.Company) == normalizeName(r.Company) {
+					same++
+				}
+			}
+			if same > 1 {
+				// Полные имена совпадают: какая строка чья, по названию не
+				// решить — ни у обогатителя, ни в геокодере.
+				ambiguous = append(ambiguous, r.ID)
+			}
+			// Иначе имя строку различает, но ключ — нет: кандидата по нему
+			// брать нельзя, он общий на несколько площадок.
 			continue
 		}
 		cands := venuesByName[key]
