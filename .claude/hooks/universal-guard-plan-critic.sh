@@ -18,6 +18,16 @@
 # Fail open на всём неожиданном: сломанный гейт не должен клинить работу.
 set -u
 
+# Хеш файла. Запасная команда обязательна: на маке из README основной нет, хеш вышел бы
+# пустым, и гейт молча выключился бы. Формат первого токена у обеих команд одинаков.
+hash_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+  fi
+}
+
 # Уступаем user-level копии — иначе двойной прогон на локальной машине.
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
       && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
@@ -59,7 +69,7 @@ fields="$(grep -v '^[[:space:]]*>' "$plan")"
 grep -qiE '^[[:space:]]*#+[[:space:]]*\[система' <<<"$fields" \
   || grep -qiE '^[[:space:]]*-[[:space:]]*где:.*(\.claude/|CLAUDE\.md)' <<<"$fields" || exit 0
 
-want="$(sha256sum "$plan" 2>/dev/null | cut -d' ' -f1)"
+want="$(hash_of "$plan")"
 have="$(cat "${CRAFT_PLAN_CRITIC_MARKER:-/tmp/plan-critic.${sid}.done}" 2>/dev/null)"
 [[ -n "$want" && "$want" == "$have" ]] && exit 0
 
