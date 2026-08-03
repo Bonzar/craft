@@ -45,6 +45,11 @@ const (
 	// канала совпадает с самой площадкой, а параметр ей не нужен вовсе.
 	kindHudozhestvenny = "hudozhestvenny" // HTML cinema1909.ru
 	kindGum            = "gum"            // HTML gum.ru/kinozal
+
+	// Движки, найденные позже: у каждого свой сайт на площадку или общая
+	// страница города с отбором внутри.
+	kindPremierzal = "premierzal" // HTML сети «Премьер-Зал», домен на площадку
+	kindMirage     = "mirage"     // HTML mirage.ru, одна страница на все площадки города
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.
@@ -1433,4 +1438,177 @@ func gumDays(body string) map[string]string {
 		}
 	}
 	return out
+}
+
+// ——— Премьерзал ———
+//
+// Движок сети «Премьер-Зал». Найден по виджету `widget.premierzal.ru` на сайте
+// площадки — прежняя разведка ошибочно записала эти кинотеатры в p24, хотя
+// facility-uuid в их разметке нет вовсе.
+//
+// Площадка задаётся своим доменом: движок общий, сайт у каждой свой. Страница
+// расписания отдаёт один день — сегодняшний; переключателя даты в разметке нет,
+// параметр `date` страница не принимает.
+//
+// Разметка смысловая и без хешей сборки, поэтому зацепки за неё устойчивы.
+// Отдельного упоминания стоит прошедший сеанс: источник помечает его
+// модификатором `_passed`, и это прямой признак «билетов уже не купить» — тот
+// самый OnSale, который у большинства источников приходится выводить косвенно.
+var (
+	pzFilmName = regexp.MustCompile(`^\s*([^<]+?)\s*</div>`)
+	pzFormat   = regexp.MustCompile(`schedule__session-format">\s*([^<]*?)\s*<`)
+	pzTime     = regexp.MustCompile(`>\s*([0-2]?\d:[0-5]\d)\s*<`)
+	pzPrice    = regexp.MustCompile(`session-picker__item-price">[^<0-9]*(\d[\d\s]*)`)
+)
+
+// parsePremierzal разбирает страницу расписания площадки Премьерзала.
+//
+// Блоки режутся разбиением, а не регулярным выражением с «до следующего»:
+// нежадный поиск съедает разделитель и теряет каждый второй блок. Здесь это
+// стоило бы всех фильмов кроме первого — тест поймал ровно это.
+func parsePremierzal(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	films := strings.Split(body, `schedule__film-name">`)
+	if len(films) < 2 {
+		return pb, fmt.Errorf("разбор Премьерзала: фильмы не найдены (тело %d байт)", len(body))
+	}
+
+	for _, chunk := range films[1:] {
+		nm := pzFilmName.FindStringSubmatch(chunk)
+		if len(nm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(nm[1]))
+		if film == "" {
+			continue
+		}
+
+		format := ""
+		if fm := pzFormat.FindStringSubmatch(chunk); len(fm) > 1 {
+			format = strings.TrimSpace(fm[1])
+		}
+
+		// Каждый кусок начинается со списка классов самого сеанса — именно там
+		// стоит пометка о том, что сеанс уже прошёл.
+		for _, item := range strings.Split(chunk, `class="schedule__session-time `)[1:] {
+			tm := pzTime.FindStringSubmatch(item)
+			if len(tm) < 2 {
+				continue
+			}
+			at := normalizeShowtime(tm[1], date)
+			if at == "" {
+				continue
+			}
+
+			st := Showtime{
+				Film:     film,
+				StartsAt: at,
+				Format:   format,
+				// Прошедший сеанс источник помечает сам — это его собственное
+				// слово о продаже, а не наш вывод по времени.
+				OnSale: !strings.Contains(item[:min(len(item), 200)], "session-picker__item_passed"),
+			}
+			if pm := pzPrice.FindStringSubmatch(item); len(pm) > 1 {
+				st.PriceMin, _ = strconv.Atoi(strings.Join(strings.Fields(pm[1]), ""))
+			}
+			pb.Showtimes = append(pb.Showtimes, st)
+		}
+	}
+
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Премьерзала: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— Мираж ———
+//
+// Сеть считалась SPA без собственного канала — это оказалось неверно: сайт
+// найден по тегу website в OSM, и расписание отдаётся сервером обычным HTML.
+//
+// Адрес расписания — свой у каждой площадки: `/msk/schedule/cinema/<id>/`.
+// Общая страница города `/msk/schedule/` выглядит как список всех, но отдаёт
+// только выбранную по умолчанию — замерено живьём: один блок площадки, всегда
+// MARI, при любом параметре кинотеатра и любой куке. Взять её значило бы выдать
+// трём площадкам одно расписание.
+//
+// Отбор по блоку площадки сохранён и на этом адресе: он дешёвый, а промах по
+// идентификатору отличает от пустого расписания.
+var (
+	mirageBox   = regexp.MustCompile(`(?s)<div class="session-box">(.*?)(?:<div class="session-box">|\z)`)
+	mirageVenue = regexp.MustCompile(`md-title">\s*<a href="/msk/cinema/(\d+)/?"`)
+	mirageItem  = regexp.MustCompile(`(?s)<div class="title">\s*(.*?)\s*</div>(.*?)(?:<div class="title">|\z)`)
+	mirageHall  = regexp.MustCompile(`<span class="blue">\s*([^<]+?)\s*</span>`)
+	mirageTime  = regexp.MustCompile(`<div class="time">\s*([0-2]?\d:[0-5]\d)\s*</div>`)
+	mirageFmt   = regexp.MustCompile(`<div class="format">\s*([^<]*?)\s*</div>`)
+	mirageLink  = regexp.MustCompile(`href="(/ticket_new/[0-9a-f-]+/?)"`)
+)
+
+// parseMirage разбирает расписание Москвы, оставляя сеансы одной площадки.
+//
+// venue — числовой идентификатор кинотеатра в адресе его страницы. Пустой
+// означает «взять всё»: у сети из одной площадки отбирать нечего.
+func parseMirage(body, venue, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	boxes := mirageBox.FindAllStringSubmatch(body, -1)
+	if len(boxes) == 0 {
+		return pb, fmt.Errorf("разбор Миража: блоки площадок не найдены (тело %d байт)", len(body))
+	}
+
+	seen := false
+	for _, box := range boxes {
+		vm := mirageVenue.FindStringSubmatch(box[1])
+		if len(vm) < 2 {
+			continue
+		}
+		if venue != "" && vm[1] != venue {
+			continue
+		}
+		seen = true
+
+		for _, it := range mirageItem.FindAllStringSubmatch(box[1], -1) {
+			film := strings.TrimSpace(html.UnescapeString(stripHTML(it[1])))
+			tm := mirageTime.FindStringSubmatch(it[2])
+			if film == "" || len(tm) < 2 {
+				continue
+			}
+			at := normalizeShowtime(tm[1], date)
+			if at == "" {
+				continue
+			}
+
+			st := Showtime{Film: film, StartsAt: at, OnSale: true}
+			if hm := mirageHall.FindStringSubmatch(it[2]); len(hm) > 1 {
+				st.Hall = strings.TrimSpace(hm[1])
+			}
+			if fm := mirageFmt.FindStringSubmatch(it[2]); len(fm) > 1 {
+				st.Format = strings.TrimSpace(fm[1])
+			}
+			if lm := mirageLink.FindStringSubmatch(it[2]); len(lm) > 1 {
+				st.DeepLink = "https://mirage.ru" + lm[1]
+				// Идентификатор сеанса у источника есть — это uuid в ссылке на
+				// билет. Он различает два сеанса одного фильма в один час.
+				st.SourceID = strings.Trim(strings.TrimPrefix(lm[1], "/ticket_new/"), "/")
+			}
+			pb.Showtimes = append(pb.Showtimes, st)
+		}
+	}
+
+	// Площадки нет на странице — это не «сеансов нет», а промах по
+	// идентификатору, и путать эти вещи нельзя.
+	if venue != "" && !seen {
+		return pb, fmt.Errorf("разбор Миража: площадки %q нет на странице расписания", venue)
+	}
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Миража: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
 }
