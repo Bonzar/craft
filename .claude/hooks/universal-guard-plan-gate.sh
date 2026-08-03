@@ -27,9 +27,16 @@
 # cached by craft-cache-gate-exempt-scope.sh (e.g. «Продукты»). File edits have
 # no such scope exemption.
 #
-# Known accepted limitation (mirrors arc-mount-guard): Bash file writes
-# (sed -i, echo >, tee…) are NOT gated — Bash must stay free for builds/copies.
-# The gate targets the file tools the agent actually edits with.
+# THIRD surface — Bash writes. Разбирается строка команды: перенаправление, tee,
+# правка на месте (sed/perl -i), запись из интерпретатора, а также cp и mv — подмена
+# файла копированием равносильна правке. Цель отклоняется, только если она НЕ
+# эфемерная и НЕ игнорируется гитом: игнор и есть различитель сборки — вывод сборки,
+# покрытие и зависимости лежат в игнорируемых путях, исходник нет.
+#
+# Непокрыто и названо честно: неопознанная конструкция записи; пакетные менеджеры и
+# операции гита над рабочим деревом (они пишут своей логикой, не перенаправлением);
+# перенаправление в закавыченную цель — кавычки вычёркиваются, чтобы «больше» в
+# сравнении не считалось записью.
 #
 # Fail open on anything unexpected: a broken gate must never wedge legit work.
 set -u
@@ -50,6 +57,7 @@ tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
 
 is_craft_write=0
 is_file_edit=0
+is_bash=0
 # Match craft_write by suffix, not the full qualified name: the Craft MCP
 # server's prefix changes on reconnect (mcp__Craft__… one session,
 # mcp__<uuid>__… the next) — an exact match silently stops gating the moment
@@ -59,6 +67,7 @@ if [[ "$tool" =~ __craft_write$ ]]; then
 else
   case "$tool" in
     Write|Edit|MultiEdit|NotebookEdit) is_file_edit=1 ;;
+    Bash) is_bash=1 ;;
     *) exit 0 ;;
   esac
 fi
@@ -72,33 +81,83 @@ deny() {
   exit 0
 }
 
-# --- File edits (Write/Edit/MultiEdit/NotebookEdit) --------------------------
-if [[ "$is_file_edit" -eq 1 ]]; then
-  fp="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' <<<"$input" 2>/dev/null)"
-  [[ -z "$fp" ]] && exit 0
-
+# is_ephemeral <path> — путь, правка которого системным изменением не является.
+# Общий для правки файлов и для Bash-записи: разъехавшиеся списки дали бы поверхность,
+# где одно и то же место то гейтится, то нет.
+is_ephemeral() {
+  local fp="$1" rel
   # Plan files are written by plan-mode BEFORE the marker exists — gating them
   # would deadlock planning itself.
-  [[ "$fp" == */plans/*.md ]] && exit 0
-
-  # Ephemeral scratch locations — not system changes.
+  [[ "$fp" == */plans/*.md ]] && return 0
   case "$fp" in
-    /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*|*/scratchpad/*) exit 0 ;;
+    /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*|*/scratchpad/*) return 0 ;;
   esac
-  [[ -n "${TMPDIR:-}" && "$fp" == "${TMPDIR%/}"/* ]] && exit 0
-
+  [[ -n "${TMPDIR:-}" && "$fp" == "${TMPDIR%/}"/* ]] && return 0
   # ~/.claude: the harness writes service state there continuously (memory,
   # sessions, tasks, todos…) — that must stay free. Only the SYSTEM zones are
   # gated: skills, hooks, agents, rules, commands, workflows, settings, env.
   if [[ "$fp" == "$HOME/.claude/"* ]]; then
     rel="${fp#"$HOME/.claude/"}"
     case "$rel" in
-      skills/*|hooks/*|agents/*|rules/*|commands/*|workflows/*|settings.json|settings.local.json|craft.env) ;;
-      *) exit 0 ;;
+      skills/*|hooks/*|agents/*|rules/*|commands/*|workflows/*|settings.json|settings.local.json|craft.env) return 1 ;;
+      *) return 0 ;;
     esac
   fi
+  return 1
+}
+
+# --- File edits (Write/Edit/MultiEdit/NotebookEdit) --------------------------
+if [[ "$is_file_edit" -eq 1 ]]; then
+  fp="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' <<<"$input" 2>/dev/null)"
+  [[ -z "$fp" ]] && exit 0
+  is_ephemeral "$fp" && exit 0
 
   deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана в этом ходе. Правки кода и системы в любой рабочей директории идут через тот же план-гейт, что и запись в Craft: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки. Автономному прогону — CRAFT_AUTONOMOUS=1."
+fi
+
+# --- Bash writes -------------------------------------------------------------
+# Разбор строки на ЦЕЛИ записи. Гейтится цель, а не команда: сборка, копирование в
+# игнорируемый путь и любое чтение проходят.
+if [[ "$is_bash" -eq 1 ]]; then
+  cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)"
+  [[ -z "$cmd" ]] && exit 0
+
+  # Знак «больше» бывает и сравнением: в кавычках (jq 'select(.size > 10)') и в условных
+  # скобках ([[ a > b ]]). Оба места вычёркиваются — но в ОТДЕЛЬНУЮ строку: разбору
+  # записи из интерпретатора нужны буквальные кавычки вокруг пути, на вычеркнутой он бы
+  # ослеп. Цена — перенаправление в закавыченную цель (> "мой файл") не увидится.
+  scan="$(sed -E "s/'[^']*'/ /g; s/\"[^\"]*\"/ /g; s/\[\[[^]]*\]\]/ /g; s/\(\([^)]*\)\)/ /g" <<<"$cmd")"
+
+  # Цели: перенаправление (> >>), tee, правка на месте (-i), cp/mv (последний аргумент
+  # либо явная цель после -t), запись из интерпретатора (open(…,'w'), write_text/bytes).
+  targets="$(
+    grep -oE '>>?[[:space:]]*[^|&;()<>[:space:]]+' <<<"$scan" 2>/dev/null | sed -E 's/^>>?[[:space:]]*//'
+    grep -oE '\btee\b([[:space:]]+-[a-zA-Z]+)*[[:space:]]+[^|&;()<>[:space:]]+' <<<"$scan" 2>/dev/null | awk '{print $NF}'
+    grep -oE '\b(sed|perl)\b[^|&;]*-i[^|&;]*' <<<"$scan" 2>/dev/null | tr ' ' '\n' | grep -E '/|\.'
+    grep -oE '\b(cp|mv)\b[^|&;]*[[:space:]]-t[[:space:]]+[^[:space:]|&;]+' <<<"$scan" 2>/dev/null \
+      | sed -E 's/.*[[:space:]]-t[[:space:]]+//'
+    grep -vE '[[:space:]]-t[[:space:]]' <<<"$scan" 2>/dev/null \
+      | grep -oE '\b(cp|mv)\b[[:space:]]+[^|&;()<>]+' 2>/dev/null | awk '{print $NF}'
+    grep -oE "open\([[:space:]]*['\"][^'\"]+['\"][[:space:]]*,[[:space:]]*['\"][wa]" <<<"$cmd" 2>/dev/null \
+      | sed -E "s/^open\([[:space:]]*['\"]//; s/['\"].*$//"
+    grep -oE "Path\([[:space:]]*['\"][^'\"]+['\"][[:space:]]*\)[[:space:]]*\.[[:space:]]*write_(text|bytes)" <<<"$cmd" 2>/dev/null \
+      | sed -E "s/^Path\([[:space:]]*['\"]//; s/['\"].*$//"
+  )"
+  [[ -z "${targets//[[:space:]]/}" ]] && exit 0
+
+  while IFS= read -r t; do
+    [[ -z "${t//[[:space:]]/}" ]] && continue
+    # Дескрипторы и устройства целями записи в дерево не являются.
+    case "$t" in
+      /dev/*|1|2|"&1"|"&2"|-*) continue ;;
+    esac
+    t="${t%\"}"; t="${t#\"}"; t="${t%\'}"; t="${t#\'}"
+    is_ephemeral "$t" && continue
+    # Игнорируемое гитом — вывод сборки, покрытие, зависимости: не системная правка.
+    git check-ignore -q -- "$t" 2>/dev/null && continue
+    deny "Заблокировано план-гейтом: запись в файл ($t) через Bash без одобренного плана в этом ходе. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
+  done <<<"$targets"
+  exit 0
 fi
 
 # --- Craft writes ------------------------------------------------------------
