@@ -17,6 +17,20 @@
 #   REFUSED  — работа не сделана: агент отказался разбирать и запросил факты.
 #
 # Ожидаемое соответствие: DONE ↔ PASS грейдера, PARTIAL и REFUSED ↔ FAIL.
+#
+# ИСПРАВЛЕНО ПОСЛЕ СВЕРКИ (видно в истории коммитов отдельной правкой):
+# v4-closed__closure-supportive-sonnet-1 — стояло PARTIAL, стало DONE. Ошибка
+# разметчика: ступень там названа прямо («**6. ступень рычага.** машинный чек:
+# проверка финального сообщения перед отправкой…»), я её не увидел, потому что
+# размечал по структуре и обрывкам, а не по полному тексту.
+#
+# ИЗВЕСТНОЕ РАСХОЖДЕНИЕ, НЕ ИСПРАВЛЕНО:
+# v3-honest-b__closure-competing-sonnet-1 — человек PARTIAL, грейдер PASS.
+# Агент ступень как решение не назвал: слово попало в цитату поправленной
+# формулировки для PR и в оборот «"ступень" всё равно называю». Из названий
+# лестницы встречается только «машинный чек» — и то как констатация уже
+# стоящего, не как выбранный рычаг. Текстовый ассерт этого различить не может,
+# и подкручивать его под один случай — подгонка. Предел метода записан здесь.
 prognon	label
 v2-first__closure-competing-sonnet-1	PARTIAL
 v2-first__closure-competing-sonnet-2	PARTIAL
@@ -44,5 +58,5 @@ v3-honest-b__closure-recidive-sonnet-3	DONE
 v3-honest-b__closure-supportive-sonnet-1	DONE
 v3-honest-b__closure-supportive-sonnet-2	DONE
 v3-honest__closure-supportive-sonnet-1	DONE
-v4-closed__closure-supportive-sonnet-1	PARTIAL
+v4-closed__closure-supportive-sonnet-1	DONE
 v4-closed__closure-supportive-sonnet-2	PARTIAL

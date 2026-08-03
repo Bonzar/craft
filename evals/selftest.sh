@@ -185,6 +185,43 @@ beh "поведение / разбор без названной ступени"
 beh "поведение / полный разбор"                analysis-full          PASS
 covered["behavior:FAIL"]=1; covered["behavior:PASS"]=1
 
+# --- сверка с человеческой разметкой ------------------------------------------
+# Ассерты калибровались на тех же ответах, где искались дефекты. Эта сверка —
+# единственное, что говорит, согласен ли грейдер с оценкой по существу. Гоняется
+# только если сохранённые потоки под рукой: в CI их нет (runs/ вне git), там шаг
+# пропускается с явной отметкой, а не молча.
+LABELS=evals/fixtures/labels/incident-closure.tsv
+# Одно известное расхождение: слово «ступень» попало в цитату, а решение не
+# названо. Текстовый ассерт этого не различает; подкручивать его под один
+# случай — подгонка. Причина записана в шапке файла разметки.
+KNOWN_MISMATCH="v3-honest-b__closure-competing-sonnet-1"
+if [[ -r "$LABELS" ]] && compgen -G "evals/runs/*/*.jsonl" > /dev/null; then
+  ag=0; dis=0; unexpected=()
+  while IFS=$'\t' read -r id label; do
+    [[ "$id" == \#* || "$id" == "prognon" || -z "$id" ]] && continue
+    run="${id%%__*}"; base="${id#*__}"
+    stream=$(ls "evals/runs/$run/${base%%-sonnet*}"*"-sonnet-${base##*-}.jsonl" 2>/dev/null | head -1)
+    [[ -z "$stream" ]] && continue
+    grade_load "$stream" 0 2>/dev/null
+    grade_expect_no_refusal
+    grade_expect_present "ступень"
+    grade_expect_any_of '["евал","eval","тест"]'
+    grade_verdict
+    want=PASS; [[ "$label" != "DONE" ]] && want=FAIL
+    if [[ "$GRADE_VERDICT" == "$want" ]]; then ag=$((ag+1)); else
+      dis=$((dis+1)); [[ "$id" != "$KNOWN_MISMATCH" ]] && unexpected+=("$id: человек $label, грейдер $GRADE_VERDICT")
+    fi
+  done < "$LABELS"
+  if [[ ${#unexpected[@]} -eq 0 ]]; then
+    pass=$((pass+1)); printf '%-6s %-44s %s\n' PASS "сверка с человеком" "совпало $ag из $((ag+dis)), известных расхождений $dis"
+  else
+    fail=$((fail+1)); printf '%-6s %-44s %s\n' FAIL "сверка с человеком" "новых расхождений: ${#unexpected[@]}"
+    for m in "${unexpected[@]}"; do fails+=("сверка: $m"); done
+  fi
+else
+  printf '%-6s %-44s %s\n' SKIP "сверка с человеком" "сохранённых прогонов нет (runs/ вне git)"
+fi
+
 # --- валидация формата кейса (evals/lib/runner.sh) ----------------------------
 # Кейс без ассертов не должен молча проходить: пустой кейс создаёт иллюзию
 # покрытия — набор зелёный, а не проверяет ничего.
