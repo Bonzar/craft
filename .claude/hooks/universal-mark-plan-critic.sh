@@ -41,7 +41,19 @@ input="$(cat)"
 sid="${CLAUDE_CODE_SESSION_ID:-default}"
 marker="${CRAFT_PLAN_CRITIC_MARKER:-/tmp/plan-critic.${sid}.done}"
 pending="${CRAFT_PLAN_CRITIC_PENDING:-/tmp/plan-critic.${sid}.pending}"
+runs="${CRAFT_PLAN_CRITIC_RUNS:-/tmp/plan-critic.${sid}.runs}"
 event="$(jq -r '.hook_event_name // "PostToolUse"' <<<"$input" 2>/dev/null)" || exit 0
+
+# Счётчик завершённых прогонов критика — машинное «Плато»: гейт по нему пропускает показ,
+# когда обкатка перестала двигать план. Считается ПРОГОН, а не версия файла: правка по
+# замечаниям меняет хеш, и счёт по хешу всегда был бы единица. Инкремент идёт всюду, где
+# ставится отметка, — иначе синхронный вердикт плато не набирает.
+bump_runs() {
+  local n
+  n="$(cat "$runs" 2>/dev/null)"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  printf '%s\n' "$((n + 1))" > "$runs" 2>/dev/null || true
+}
 
 if [[ "$event" == "UserPromptSubmit" ]]; then
   prompt="$(jq -r '.prompt // ""' <<<"$input" 2>/dev/null)"
@@ -55,6 +67,7 @@ if [[ "$event" == "UserPromptSubmit" ]]; then
   grep -v -- "^${id}	" "$pending" > "${pending}.tmp" 2>/dev/null && mv "${pending}.tmp" "$pending"
   [[ "$prompt" == *"<status>completed</status>"* ]] || exit 0
   printf '%s\n' "$hash" > "$marker" 2>/dev/null || true
+  bump_runs
   exit 0
 fi
 
@@ -71,5 +84,6 @@ if [[ -n "$id" ]]; then
   printf '%s\t%s\n' "$id" "$hash" >> "$pending" 2>/dev/null || true
 else
   printf '%s\n' "$hash" > "$marker" 2>/dev/null || true
+  bump_runs
 fi
 exit 0
