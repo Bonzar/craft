@@ -21,6 +21,13 @@
 # not be executable. Run from anywhere: `bash tests/run.sh`.
 set -u
 
+# UTF-8-локаль обязательна: часть дефектов видна ТОЛЬКО в ней. В bash подстановка
+# `$var` вплотную к не-ASCII символу в UTF-8 читается как имя вместе с этим
+# символом и валит скрипт по set -u, а в локали C та же строка работает. Из-за
+# этого сломанный guard-plan-delta прошёл ревью: CI был зелёный, а на рабочей
+# машине гвард молча падал. Локаль та же, что у хуков (см. universal-detect-incident.sh).
+export LC_ALL=C.UTF-8
+
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HOOKS="$REPO/.claude/hooks"
 CASES_DIR="$REPO/tests/hooks"
@@ -254,6 +261,54 @@ fi
 while IFS= read -r b; do
   [[ -n "$b" ]] && smoke+=("orphan hook (not registered in settings.json or install.sh): $b")
 done < <(reverse_orphans "$HOOKS"/*.sh)
+
+# Static check: a `$var` substitution glued to a non-ASCII character is a bug.
+# In a UTF-8 locale bash reads the name together with that character, so the
+# script dies on set -u — and only there: in the C locale the same
+# line works, which is why a broken guard sat in main with a green CI. Braces
+# (`${var}`) end the name explicitly and are the fix.
+# The prior run in the UTF-8 locale only catches lines the tests actually
+# execute; this catches the rest of the tree.
+# Only flags places where bash actually expands: a whole-line comment, an escaped
+# `\$` and anything inside single quotes are inert, and flagging them would fail
+# the suite on harmless text — the fastest way to get a check disabled.
+# Single quotes are judged per line by counting them before the match: enough for
+# real code, blind to multi-line quoting. That gap is covered by the UTF-8 run.
+utf8_glue() {  # args: files; echoes "path:line" for each offending line
+  local hit file lineno text before
+  while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    file="${hit%%:*}"; hit="${hit#*:}"
+    lineno="${hit%%:*}"; text="${hit#*:}"
+    [[ "$text" =~ ^[[:space:]]*# ]] && continue          # comment line
+    before="${text%%\$*}"
+    [[ "${before: -1}" == "\\" ]] && continue            # escaped \$
+    before="${before//[^\']/}"
+    (( ${#before} % 2 == 1 )) && continue                # inside single quotes
+    printf '%s:%s\n' "$file" "$lineno"
+  done < <(grep -nHE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$@" 2>/dev/null)
+}
+# Self-test: the red path must be provably reachable. The samples are assembled
+# from parts so this file itself carries no literal defect for the check to find.
+D='$'; Q='«'; QQ='»'
+selftest_file="$(mktemp)"
+printf 'x="%s%st%s "\n' "$Q" "$D" "$QQ" > "$selftest_file"
+[[ -n "$(utf8_glue "$selftest_file")" ]] \
+  || smoke+=("utf8-glue self-test failed: planted defect not caught")
+# The negative side: braces, an ASCII quote after the name, a comment, single
+# quotes and an escaped `\$` are all legal — none of them expands into a defect.
+{ printf 'a="%s%s{t}%s "\n' "$Q" "$D" "$QQ"
+  printf 'b="%sname"\n' "$D"
+  printf '# note: %st%s label\n' "$D" "$QQ"
+  printf "echo '%st%s literal'\n" "$D" "$QQ"
+  printf 'echo "\\%st%s escaped"\n' "$D" "$QQ"; } > "$selftest_file"
+[[ -z "$(utf8_glue "$selftest_file")" ]] \
+  || smoke+=("utf8-glue self-test failed: legal forms flagged: $(utf8_glue "$selftest_file")")
+rm -f "$selftest_file"
+while IFS= read -r hit; do
+  [[ -n "$hit" ]] && smoke+=("\$var glued to a non-ASCII char (use \${var}): $hit")
+done < <(utf8_glue "$HOOKS"/*.sh "$REPO"/tests/*.sh "$REPO"/evals/*.sh "$REPO"/evals/lib/*.sh \
+                  "$REPO"/install.sh)
 
 printf -- '---------------------------------------------------------------------------\n'
 if [[ ${#fails[@]} -gt 0 ]]; then

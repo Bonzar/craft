@@ -152,7 +152,7 @@ while IFS= read -r line; do
   bodies="$(jq -r '.body|tostring' "$LOG" 2>/dev/null | tr -d '-' | tr 'A-Z' 'a-z')"
 
   ok=1; d=""
-  [[ "$got" == "$want" ]] || { ok=0; d="state=$got≠$want(from $from)"; }
+  [[ "$got" == "$want" ]] || { ok=0; d="state=${got}≠${want}(from ${from})"; }
   grep -qiE 'tasks +update' <<<"$cmds"        || { ok=0; d="${d:+$d,}no tasks update"; }
   grep -qi -- "$id" <<<"$cmds"                 || { ok=0; d="${d:+$d,}target id absent"; }
   grep -q -- "$REAL_PAGE_NORM" <<<"$bodies"    && { ok=0; d="${d:+$d,}REAL PAGE!"; }
