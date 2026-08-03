@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"time"
 )
@@ -63,6 +64,28 @@ func newClient(timeoutSec, retries int) *Client {
 		userAgent:  browserUA,
 		acceptLang: "ru-RU,ru;q=0.9,en;q=0.8",
 	}
+}
+
+// newSessionClient — клиент с банкой cookie: для источников, где выбор площадки
+// хранится в сессии, а не в адресе запроса.
+//
+// Живой случай — Pushka: `/!/ajax/schedule` отдаёт расписание той площадки, чей
+// идентификатор лежит в куке `cinema_id`, и ставит эту куку страница площадки.
+// Голый запрос к ajax возвращает дефолт, поэтому без банки видна была бы одна
+// площадка из трёх. Путь, Referer и query-параметры на выбор не влияют —
+// проверено живьём всеми тремя способами.
+//
+// Банка НЕ добавляется в общий клиент намеренно: обход афиш ходит по разным
+// площадкам подряд, и общее состояние означало бы, что кука одной площадки
+// уезжает в запрос следующей — то есть тихую подмену данных.
+func newSessionClient(timeoutSec, retries int) *Client {
+	c := newClient(timeoutSec, retries)
+	// cookiejar.New с нулевыми опциями ошибку не возвращает никогда, но
+	// игнорировать её молча всё равно нельзя: сигнатура может измениться.
+	if jar, err := cookiejar.New(nil); err == nil {
+		c.http.Jar = jar
+	}
+	return c
 }
 
 // newGeoClient — клиент для Photon и Nominatim: свой честный UA и троттлинг.
