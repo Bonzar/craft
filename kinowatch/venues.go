@@ -21,6 +21,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
@@ -89,26 +90,28 @@ func parseKinomaxVenues(body string) ([]NetworkVenue, error) {
 	return out, nil
 }
 
-// moskinoLink — ссылка на страницу площадки в списке кинотеатров сети.
-var moskinoLink = regexp.MustCompile(`href="/cinema/([^"/]+)/"`)
+// moskinoLink — ссылка на страницу площадки вместе с её названием.
+//
+// Название обязательно, и брать его из слага нельзя: слаг латиницей
+// («moskino_kosmos»), а реестр зовёт площадку кириллицей («Москино Космос»).
+// Сопоставлять их пришлось бы транслитерацией, то есть гадать. Текст ссылки
+// решает задачу точно.
+var moskinoLink = regexp.MustCompile(`(?s)href="/cinema/([^"/]+)/"[^>]*>(.{0,150}?)</a>`)
 
 // parseMoskinoVenues разбирает список площадок Москино.
-//
-// Названий на странице списка нет — только слаги, а слаг и есть идентификатор
-// в канале. Имя берётся из него же: «moskino_kosmos» → «moskino kosmos», чего
-// достаточно для сопоставления по нормализованному названию.
 func parseMoskinoVenues(body string) ([]NetworkVenue, error) {
 	seen := map[string]bool{}
 	var out []NetworkVenue
 	for _, m := range moskinoLink.FindAllStringSubmatch(body, -1) {
 		slug := m[1]
-		if slug == "" || seen[slug] {
+		name := strings.TrimSpace(html.UnescapeString(stripHTML(m[2])))
+		if slug == "" || name == "" || seen[slug] {
 			continue
 		}
 		seen[slug] = true
 		out = append(out, NetworkVenue{
 			ID:   slug,
-			Name: strings.NewReplacer("_", " ", "-", " ").Replace(slug),
+			Name: name,
 			Kind: kindMoskino,
 		})
 	}
@@ -172,9 +175,21 @@ func bindNetworkVenues(obs []CinemaObservation, venues []NetworkVenue) BindResul
 
 		cands := byKey[key]
 		if len(cands) != 1 {
+			// Площадка ОСТАЁТСЯ непокрытой, а не объявляется непокрываемой.
+			//
+			// Соблазн поставить сюда no_source велик — и он неверен дважды. По
+			// определению этот класс означает «домен потерян или отдаёт не
+			// кинотеатр», а домен сети жив и отдаёт кинотеатр: просто данной
+			// площадки нет в её справочнике. И, что важнее, no_source выводит
+			// строку из знаменателя — семь работающих площадок КАРО (Фили,
+			// ВДНХ, Музеон, Эрмитаж, Музей Москвы, под звёздами Черемушки, парк
+			// Садовники) перестали бы считаться недоработкой, хотя канал у них
+			// скорее всего есть, просто на своей странице.
+			//
+			// Причина словами отличает эту непокрытость от «адаптер не написан».
 			res.Unmatched = append(res.Unmatched, obs[i].Name)
-			obs[i].Fields[fStatusClass] = pickClass(obs[i].Fields[fStatusClass], classNoSource)
-			obs[i].Fields[fLastError] = "площадки нет в справочнике собственной сети"
+			obs[i].Fields[fStatusClass] = classUncovered
+			obs[i].Fields[fLastError] = "нет в справочнике собственной сети — канал искать отдельно"
 			continue
 		}
 
@@ -219,14 +234,41 @@ var venueRank = regexp.MustCompile(`^[\s:;,.\-–—]*(?:\d+\s+)?[\s:;,.\-–—
 // Сверх обычной нормализации снимаются имя сети и ведущий номер зала: в реестре
 // площадка называется «КАРО 7 Атриум», а в справочнике сети — «7 Атриум».
 // Сравнение по полному имени не сошлось бы ни на одной площадке.
+// venueBrands — имена сетей, снимаемые перед сравнением. Порядок значим:
+// более длинное имя идёт раньше, иначе «каро» съест начало «каро под звездами».
+var venueBrands = []string{"каро под звездами", "каро", "киномакс", "москино",
+	"синема парк", "формула кино", "синема стар", "mori cinema", "пять звезд"}
+
+// venueParen — скобочная приписка о состоянии площадки. Сеть пишет её прямо в
+// названии («Берёзка (временно закрыт на ремонт)»), и без снятия площадка не
+// сопоставится с реестром, где приписки нет.
+//
+// Снимается ДО нормализации: normalizeName сама убирает скобки как знаки
+// препинания, оставляя текст приписки внутри ключа.
+var venueParen = regexp.MustCompile(`\s*\([^)]*\)`)
+
+// venueCityTail — хвост с городом в двух видах, какие встречаются живьём:
+// «… москва» у справочника Киномакса и «… г москва» у реестра (после
+// нормализации «г.» превращается в отдельную букву).
+var venueCityTail = regexp.MustCompile(`\s*(?:г\s+)?москва\s*$`)
+
 func venueKey(name string) string {
-	s := normalizeName(name)
-	for _, brand := range []string{"каро под звездами", "каро", "киномакс", "москино", "синема парк", "формула кино", "синема стар", "mori cinema", "пять звезд"} {
-		s = strings.TrimSpace(strings.TrimPrefix(s, brand))
+	s := normalizeName(venueParen.ReplaceAllString(name, ""))
+	// Имя сети снимается вместе со ВСЕМ, что стоит перед ним. В реестре
+	// площадка бывает записана юридически целиком: «Государственное бюджетное
+	// учреждение культуры города Москвы "Московское кино", кинотеатр "Москино
+	// Юность"». Значимая часть — хвост после имени сети.
+	for _, brand := range venueBrands {
+		if i := strings.LastIndex(s, brand); i >= 0 {
+			s = strings.TrimSpace(s[i+len(brand):])
+			break
+		}
 	}
 	s = venueRank.ReplaceAllString(s, "")
-	// Хвост с городом: Киномакс зовёт площадку «Киномакс-Водный Москва», а
-	// реестр — «Киномакс Водный». Без снятия хвоста не совпала бы ни одна.
-	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "москва"))
+	// Хвост с городом. Справочник Киномакса зовёт площадку «Киномакс-Водный
+	// Москва», а реестр — ««Киномакс-Водный» г. Москва»: после нормализации от
+	// «г.» остаётся отдельная буква, и снимать надо оба вида хвоста, иначе не
+	// совпадёт ни одна площадка сети.
+	s = venueCityTail.ReplaceAllString(s, "")
 	return strings.TrimSpace(s)
 }
