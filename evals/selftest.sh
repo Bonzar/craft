@@ -196,12 +196,16 @@ LABELS=evals/fixtures/labels/incident-closure.tsv
 # случай — подгонка. Причина записана в шапке файла разметки.
 KNOWN_MISMATCH="v3-honest-b__closure-competing-sonnet-1"
 if [[ -r "$LABELS" ]] && compgen -G "evals/runs/*/*.jsonl" > /dev/null; then
-  ag=0; dis=0; unexpected=()
+  ag=0; dis=0; missing=0; labelled=0; unexpected=()
   while IFS=$'\t' read -r id label; do
     [[ "$id" == \#* || "$id" == "prognon" || -z "$id" ]] && continue
+    labelled=$((labelled+1))
     run="${id%%__*}"; base="${id#*__}"
     stream=$(ls "evals/runs/$run/${base%%-sonnet*}"*"-sonnet-${base##*-}.jsonl" 2>/dev/null | head -1)
-    [[ -z "$stream" ]] && continue
+    # Пропущенный поток — не повод молча зачесть сверку: без этого счётчика
+    # достаточно одного постороннего файла в runs/, чтобы напечатать
+    # «совпало 0 из 0» и зелёный, а обещанной защиты не было бы вовсе.
+    [[ -z "$stream" ]] && { missing=$((missing+1)); continue; }
     grade_load "$stream" 0 2>/dev/null
     grade_expect_no_refusal
     grade_expect_present "ступень"
@@ -212,7 +216,14 @@ if [[ -r "$LABELS" ]] && compgen -G "evals/runs/*/*.jsonl" > /dev/null; then
       dis=$((dis+1)); [[ "$id" != "$KNOWN_MISMATCH" ]] && unexpected+=("$id: человек $label, грейдер $GRADE_VERDICT")
     fi
   done < "$LABELS"
-  if [[ ${#unexpected[@]} -eq 0 ]]; then
+  if [[ $((ag+dis)) -eq 0 ]]; then
+    # Ни одного размеченного потока не нашлось — сверять нечего. Это пропуск, а
+    # не успех: зелёная строка тут означала бы защиту, которой нет.
+    printf '%-6s %-44s %s\n' SKIP "сверка с человеком" "размеченных потоков нет ($labelled в разметке, все отсутствуют)"
+  elif [[ $missing -gt 0 ]]; then
+    fail=$((fail+1)); printf '%-6s %-44s %s\n' FAIL "сверка с человеком" "набор неполон: нет $missing потоков из $labelled"
+    fails+=("сверка: отсутствует $missing размеченных потоков из $labelled — сверка проведена не на всём наборе")
+  elif [[ ${#unexpected[@]} -eq 0 ]]; then
     pass=$((pass+1)); printf '%-6s %-44s %s\n' PASS "сверка с человеком" "совпало $ag из $((ag+dis)), известных расхождений $dis"
   else
     fail=$((fail+1)); printf '%-6s %-44s %s\n' FAIL "сверка с человеком" "новых расхождений: ${#unexpected[@]}"

@@ -160,10 +160,11 @@ for f in "${files[@]}"; do
     # `repeat: N` — feed the SAME input N times (deny-once / remind-once hooks:
     # the assertion is on the LAST invocation's output).
     rpt="$(jq -r '.repeat // 1' <<<"$line")"
-    out=""
+    out=""; errf="$(mktemp)"
     for ((r_i=0; r_i<rpt; r_i++)); do
-      out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
+      out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>"$errf")"
     done
+    err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
     rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
           "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend"; rm -rf "$fgdir"
     ok=0
@@ -175,6 +176,14 @@ for f in "${files[@]}"; do
       inject) grep -q 'СИГНАЛ ИНЦИДЕНТА' <<<"$out" && ok=1 ;;
       silent) [[ -z "$(trim "$out")" ]] && ok=1 ;;
       contains:*) grep -qF -- "${expect#contains:}" <<<"$out" && ok=1 ;;
+      # Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет
+      # улику доставки правила. Без отдельной проверки эта половина вывода
+      # тестами не покрывается вовсе.
+      err-contains:*) grep -qF -- "${expect#err-contains:}" <<<"$err" && ok=1 ;;
+      # Отрицание: иногда доказательство — именно ОТСУТСТВИЕ строки (хук не
+      # пошёл по короткому пути, гвард не сработал вхолостую).
+      not-contains:*)     grep -qF -- "${expect#not-contains:}" <<<"$out" || ok=1 ;;
+      err-not-contains:*) grep -qF -- "${expect#err-not-contains:}" <<<"$err" || ok=1 ;;
       *)      fails+=("$hook / $name — unknown expect '$expect'") ;;
     esac
     if [[ $ok -eq 1 ]]; then

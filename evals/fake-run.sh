@@ -32,7 +32,7 @@ done
 
 run_id="fake-$(date +%s)"
 started=$(date +%s)
-PATH="$bin:$PATH" EVAL_JOBS="$JOBS" EVAL_RUNS=3 EVAL_RUN_ID="$run_id" \
+PATH="$bin:$PATH" EVAL_JOBS="$JOBS" EVAL_RUNS=3 EVAL_RUN_ID="$run_id" EVAL_SKIP_WARMUP=1 \
   bash -c 'source evals/lib/runner.sh; eval_run "$1" claude-sonnet-5' _ "$cases" \
   > /tmp/fake-run.out 2>&1
 elapsed=$(( $(date +%s) - started ))
@@ -69,12 +69,30 @@ verdicts=$(grep -oE 'class="(PASS|FAIL|ERROR)"' "$html" 2>/dev/null | wc -l | tr
 grep -q 'fetch(' "$html" 2>/dev/null \
   && say FAIL "страница всё ещё тянет данные запросом" \
   || say PASS "страница не зависит от запросов к файлам"
-# Последовательно двенадцать прогонов заняли бы 12×FAKE_DELAY; пачками — заметно
-# меньше. Порог с запасом, чтобы не флапать на медленной машине.
-seq_time=$(( 12 * FAKE_DELAY ))
-[[ "$elapsed" -lt $(( seq_time / 2 )) ]] \
-  && say PASS "пачками быстрее: ${elapsed}s против ${seq_time}s последовательно" \
-  || say FAIL "ускорения нет: ${elapsed}s при последовательных ${seq_time}s"
+
+# Недостача результатов обязана валить прогон. Имитация настоящая: подставной
+# прогон для одного кейса убивает свой воркер, тот не успевает записать исход —
+# без проверки сводка посчитала бы по остальным, и неполный эксперимент выглядел
+# бы удачным.
+# Недостача результатов обязана валить прогон. Проверяется напрямую: берём
+# каталог удачного прогона, убираем один файл результата и зовём сводку — так
+# видно поведение, а не имитация умирающего воркера (там убивается не тот
+# процесс, и дефект остаётся непокрытым).
+lost_dir="$dir-lost"
+cp -R "$dir" "$lost_dir"
+rm -f "$(ls "$lost_dir"/result-*.tsv | head -1)"
+if ( source evals/lib/runner.sh; eval__summarize "$lost_dir" 12 0 "" ) > /tmp/fake-lost.out 2>&1; then
+  say FAIL "неполный замер прошёл как успешный"
+else
+  grep -q "НЕПОЛНЫЙ ЗАМЕР" /tmp/fake-lost.out \
+    && say PASS "неполный замер валит прогон: $(grep -o 'результатов [0-9]* из [0-9]*' /tmp/fake-lost.out | head -1)" \
+    || say FAIL "прогон упал, но без внятной причины (см. /tmp/fake-lost.out)"
+fi
+# И обратное: полный набор сводка принимает — иначе проверка ловила бы всегда.
+( source evals/lib/runner.sh; eval__summarize "$dir" 12 0 "" ) > /dev/null 2>&1 \
+  && say PASS "полный набор сводка принимает" \
+  || say FAIL "полный набор сводка забраковала"
+rm -rf "$lost_dir"
 
 rm -rf "$dir"
 echo "---"

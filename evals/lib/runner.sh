@@ -139,7 +139,7 @@ eval__progress_init() {  # <dir> <total>
 # полузаписанное.
 eval__progress_set() {  # <dir> <slug> <state> <name> [detail]
   local dir="$1" slug="$2" state="$3" name="$4" detail="${5:-}"
-  local tmp="$dir/progress/.$slug.$$"
+  local tmp="$dir/progress/.$slug.${BASHPID:-$$}"
   printf '%s\t%s\t%s\t%s\n' "$state" "$name" "$(date +%s)" "$detail" > "$tmp"
   mv -f "$tmp" "$dir/progress/$slug.tsv"
 }
@@ -160,7 +160,7 @@ eval__progress_page() {  # <dir>
       printf "<tr><td>%s<td class=\"%s\">%s<td data-t0=\"%s\">–<td>%s\n", nm, st, st, (st=="RUN"?t0:""), det }')"
   done_n="$(grep -hcv $'^RUN\t' "$dir"/progress/*.tsv 2>/dev/null | paste -sd+ - | bc 2>/dev/null || echo 0)"
   running="$(grep -hc $'^RUN\t' "$dir"/progress/*.tsv 2>/dev/null | paste -sd+ - | bc 2>/dev/null || echo 0)"
-  tmp="$dir/.progress.html.$$"
+  tmp="$dir/.progress.html.${BASHPID:-$$}"
   { cat <<HTML
 <!doctype html><meta charset="utf-8"><title>Ход прогона евалов</title>
 <meta http-equiv="refresh" content="3">
@@ -201,7 +201,7 @@ eval__progress_snapshot() {  # <dir>
   local dir="$1" total tmp
   total="$(cat "$dir/progress/total" 2>/dev/null || echo 0)"
   eval__progress_page "$dir"   # страница держит данные в себе — рисуем тем же снимком
-  tmp="$dir/progress/.index.$$"
+  tmp="$dir/progress/.index.${BASHPID:-$$}"
   cat "$dir"/progress/*.tsv 2>/dev/null \
   | jq -R -s --argjson total "$total" --argjson now "$(date +%s)" '
       [ split("\n")[] | select(length > 0) | split("\t")
@@ -246,11 +246,72 @@ eval__worker() {  # <item> <dir>
 
   # Результат — свой файл, записанный целиком: сводка собирается из них после
   # ожидания, потому что счётчики из фоновой ветки до родителя не долетают.
-  local tmp="$dir/.result-$slug.$$"
+  local tmp="$dir/.result-$slug.${BASHPID:-$$}"
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$level" "$ml" "$i" "$GRADE_VERDICT" "$GRADE_DETAIL" > "$tmp"
   mv -f "$tmp" "$dir/result-$slug.tsv"
   eval__progress_set "$dir" "$slug" "$GRADE_VERDICT" "$name" "${GRADE_DETAIL:0:60}"
   eval__progress_snapshot "$dir"
+}
+
+# Прогрев кэша правил одной короткой сессией. Признак евала здесь СНЯТ намеренно:
+# под ним хуки инжекта кэш не обновляют, и прогрев стал бы бесполезным — замер
+# пошёл бы на старом правиле.
+eval__warm_cache() {
+  # Подставным прогонам прогрев не нужен: они не читают правил и не должны
+  # дёргать настоящую модель ради разогрева кэша.
+  [[ -n "${EVAL_SKIP_WARMUP:-}" ]] && return 0
+  local root="${CLAUDE_PROJECT_DIR:-$PWD}" f before after ok=1
+  local files=("$root/.claude/craft-incident-context.md" "$root/.claude/craft-router-context.md")
+  before=""; for f in "${files[@]}"; do before+="$(stat -f %m "$f" 2>/dev/null || echo 0),"; done
+
+  env -u CRAFT_EVAL -u CLAUDE_CODE_SESSION_ID \
+    timeout 180 claude -p "Ответь одним словом: готов." --model claude-haiku-4-5-20251001 \
+      --allowedTools Read --max-turns 1 --output-format json < /dev/null > /dev/null 2>&1
+
+  after=""; for f in "${files[@]}"; do
+    after+="$(stat -f %m "$f" 2>/dev/null || echo 0),"
+    [[ -s "$f" ]] || { echo "прогрев не поднял кэш: $f" >&2; ok=0; }
+  done
+  [[ "$before" == "$after" && "$before" != "0,0," ]] \
+    && echo "предупреждение: прогрев не обновил кэш (файлы те же)" >&2
+  [[ $ok -eq 1 ]]
+}
+
+# Сводка по файлам результата. Вынесена отдельно, чтобы её проверяли напрямую:
+# недостачу результатов иначе пришлось бы имитировать убийством воркера, а это
+# ненадёжно — убивается не тот процесс, и дефект остаётся непокрытым.
+eval__summarize() {  # <dir> <expected> <bad> <report>
+  local dir="$1" expected="$2" bad="$3" report="$4"
+  local total=0 passc=0 failc=0 errc=0 res name lv ml i v detail l
+  declare -A lvl_t lvl_p
+  for res in "$dir"/result-*.tsv; do
+    [[ -e "$res" ]] || continue
+    IFS=$'\t' read -r name lv ml i v detail < "$res"
+    total=$((total+1)); lvl_t[$lv]=$(( ${lvl_t[$lv]:-0}+1 ))
+    case "$v" in
+      PASS) passc=$((passc+1)); lvl_p[$lv]=$(( ${lvl_p[$lv]:-0}+1 ));;
+      FAIL) failc=$((failc+1));;
+      *)    errc=$((errc+1));   lvl_t[$lv]=$(( ${lvl_t[$lv]:-0}-1 ));;
+    esac
+    [[ -n "$report" ]] && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$lv" "$ml" "$i" "$v" "$detail" >> "$report"
+    printf '%-38s %-10s %-7s %-6s %s\n' "${name:0:37}" "$lv" "$ml" "$v" "${detail:0:60}"
+  done
+
+  printf -- '-------------------------------------------------------------------------------\n'
+  # ERROR в знаменатель pass rate не входит: измерения не было.
+  for l in "${!lvl_t[@]}"; do
+    printf '%-10s %s/%s\n' "$l" "${lvl_p[$l]:-0}" "${lvl_t[$l]:-0}"
+  done
+  echo "TOTAL: PASS $passc / FAIL $failc / ERROR $errc (прогонов $total), брак кейсов: $bad"
+
+  # Недостача результатов = неполный эксперимент. Без этой проверки умерший
+  # воркер просто не оставлял бы файла, сводка считала бы по остальным, и набор
+  # выходил бы зелёным на меньшем числе прогонов.
+  if [[ "$total" -ne "$expected" ]]; then
+    echo "НЕПОЛНЫЙ ЗАМЕР: результатов $total из $expected — $(( expected - total )) прогонов не записали исход" >&2
+    return 1
+  fi
+  [[ $failc -eq 0 && $bad -eq 0 && $passc -gt 0 ]]
 }
 
 # eval_run <cases.jsonl> [model ...]
@@ -263,6 +324,14 @@ eval_run() {
   mkdir -p "$dir"
 
   export CRAFT_AUTONOMOUS=1   # байпас план-гейта: headless, одобрять план некому
+
+  # Прогрев кэша правил ДО признака евала. Внутри пачки хуки инжекта кэш только
+  # читают (иначе параллельные сессии сносят правило друг у друга на старте), а
+  # свежим его делает эта одна короткая сессия: без CRAFT_EVAL она проходит
+  # обычным путём и перезаписывает оба файла — тело скилла и роутер, потому что
+  # оба хука срабатывают на старте любой сессии.
+  eval__warm_cache || return 1
+
   export CRAFT_EVAL=1         # Stop-энфорсеры молчат: меряем промптовый слой
 
   local total=0 passc=0 failc=0 errc=0 bad=0
@@ -309,28 +378,8 @@ eval_run() {
   wait
   eval__progress_finish "$dir"
 
-  # Сводка из файлов результата — по одному на прогон, каждый записан целиком.
-  local res v lv
-  for res in "$dir"/result-*.tsv; do
-    [[ -e "$res" ]] || continue
-    IFS=$'\t' read -r name lv ml i v detail < "$res"
-    total=$((total+1)); lvl_t[$lv]=$(( ${lvl_t[$lv]:-0}+1 ))
-    case "$v" in
-      PASS) passc=$((passc+1)); lvl_p[$lv]=$(( ${lvl_p[$lv]:-0}+1 ));;
-      FAIL) failc=$((failc+1));;
-      *)    errc=$((errc+1));   lvl_t[$lv]=$(( ${lvl_t[$lv]:-0}-1 ));;
-    esac
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$lv" "$ml" "$i" "$v" "$detail" >> "$report"
-    printf '%-38s %-10s %-7s %-6s %s\n' "${name:0:37}" "$lv" "$ml" "$v" "${detail:0:60}"
-  done
-
-  printf -- '-------------------------------------------------------------------------------\n'
-  # ERROR в знаменатель pass rate не входит: измерения не было.
-  local l
-  for l in "${!lvl_t[@]}"; do
-    printf '%-10s %s/%s\n' "$l" "${lvl_p[$l]:-0}" "${lvl_t[$l]:-0}"
-  done
-  echo "TOTAL: PASS $passc / FAIL $failc / ERROR $errc (прогонов $total), брак кейсов: $bad"
+  local rc=0
+  eval__summarize "$dir" "${#queue[@]}" "$bad" "$report" || rc=1
   echo "Отчёт и сырые потоки: $dir"
-  [[ $failc -eq 0 && $bad -eq 0 && $passc -gt 0 ]]
+  return $rc
 }
