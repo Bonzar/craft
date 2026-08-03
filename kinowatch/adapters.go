@@ -38,6 +38,8 @@ const (
 	kindMoskino    = "moskino"    // HTML mos-kino.ru
 	kindMori       = "mori"       // HTML mori.film
 	kind5Zvezd     = "5zvezd"     // HTML 5zvezd.ru
+	kindP24        = "p24"        // движок p24.app — Нивада и Колибри
+	kindPushka     = "pushka"     // JSON cinema.pushka.club, площадка в куке
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.

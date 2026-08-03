@@ -237,7 +237,10 @@ var venueRank = regexp.MustCompile(`^[\s:;,.\-–—]*(?:\d+\s+)?[\s:;,.\-–—
 // venueBrands — имена сетей, снимаемые перед сравнением. Порядок значим:
 // более длинное имя идёт раньше, иначе «каро» съест начало «каро под звездами».
 var venueBrands = []string{"каро под звездами", "каро", "киномакс", "москино",
-	"синема парк", "формула кино", "синема стар", "mori cinema", "пять звезд"}
+	// Четыре вывески одной сети СИНЕМА ПАРК: в реестре площадки записаны под
+	// теми же именами, что и в её справочнике.
+	"синема парк", "формула кино", "кронверк синема", "кино оkkо", "кино okko",
+	"синема стар", "mori cinema", "пять звезд"}
 
 // venueParen — скобочная приписка о состоянии площадки. Сеть пишет её прямо в
 // названии («Берёзка (временно закрыт на ремонт)»), и без снятия площадка не
@@ -271,4 +274,91 @@ func venueKey(name string) string {
 	// совпадёт ни одна площадка сети.
 	s = venueCityTail.ReplaceAllString(s, "")
 	return strings.TrimSpace(s)
+}
+
+// parseCinemaStarVenues разбирает список площадок Синема-Стар.
+//
+// Эндпоинт `api.cinemastar.ru/data/1` виден только по запросам фронта: сайт
+// сети — SPA, ссылок на площадки в разметке нет вовсе, а угадывание uid по
+// одному известному («kvartal») даёт пустые ответы.
+//
+// Город справочник отдаёт, но отсев по нему здесь не делается: охват решает
+// реестр, и второе правило охвата разошлось бы с первым при первой же правке.
+func parseCinemaStarVenues(body string) ([]NetworkVenue, error) {
+	var resp struct {
+		Data struct {
+			Theatre []struct {
+				UID    string `json:"uid"`
+				Name   string `json:"name"`
+				CityID int    `json:"city_id"`
+			} `json:"theatre"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return nil, fmt.Errorf("разбор списка площадок Синема-Стар: %w", err)
+	}
+
+	out := make([]NetworkVenue, 0, len(resp.Data.Theatre))
+	for _, t := range resp.Data.Theatre {
+		uid := strings.TrimSpace(t.UID)
+		name := strings.TrimSpace(t.Name)
+		if uid == "" || name == "" {
+			continue
+		}
+		out = append(out, NetworkVenue{ID: uid, Name: name, Kind: kindCinemaStar})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("разбор списка площадок Синема-Стар: площадок нет (тело %d байт)", len(body))
+	}
+	return out, nil
+}
+
+// cinemaParkLink — слаг площадки рядом с её названием на странице расписаний.
+var cinemaParkLink = regexp.MustCompile(`(?s)href="https://kinoteatr\.ru/raspisanie-kinoteatrov/([^"/]+)/"[^>]*>\s*<h3[^>]*>\s*([^<]+?)\s*</h3>`)
+
+// parseCinemaParkVenues разбирает список площадок СИНЕМА ПАРК.
+//
+// Одна сеть держит четыре вывески — «Синема Парк», «Формула Кино», «Кронверк
+// Синема» и «Кино Okko», — и в реестре площадки записаны под ними же. Все
+// четыре снимаются перед сравнением списком venueBrands.
+//
+// Страница доступна только через российский выход: с иностранного адреса хост
+// рвёт соединение.
+func parseCinemaParkVenues(body string) ([]NetworkVenue, error) {
+	seen := map[string]bool{}
+	var out []NetworkVenue
+	for _, m := range cinemaParkLink.FindAllStringSubmatch(body, -1) {
+		slug := m[1]
+		name := strings.TrimSpace(html.UnescapeString(stripHTML(m[2])))
+		if slug == "" || name == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		out = append(out, NetworkVenue{ID: slug, Name: name, Kind: kindCinemaPark})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("разбор списка площадок СИНЕМА ПАРК: ссылки не найдены (тело %d байт)", len(body))
+	}
+	return out, nil
+}
+
+// fiveStarsVenues — три московские площадки «Пяти звёзд».
+//
+// Список в коде, а не в справочнике: у сети его нет, слаги живут только в
+// разметке главной страницы. Их три, и ровно столько же строк в реестре.
+var fiveStarsVenues = []NetworkVenue{
+	{ID: "novokuznetskaya", Name: "Пять звёзд на Новокузнецкой", Kind: kind5Zvezd},
+	{ID: "paveletskaya", Name: "Пять звёзд на Павелецкой", Kind: kind5Zvezd},
+	{ID: "smolenskaya", Name: "Пять звёзд на Смоленской", Kind: kind5Zvezd},
+}
+
+// p24Venues — площадки на движке p24.app.
+//
+// Идентификатор — uuid из адреса собственного сайта площадки. Найдены два:
+// у Нивады («Премьер-Зал») и Колибри. У второго домена Премьер-Зала,
+// mirkinomarcos.ru, uuid в разметке нет — его площадки остаются непокрытыми, а
+// не подгоняются под чужой идентификатор.
+var p24Venues = []NetworkVenue{
+	{ID: "041df025-e930-4941-b095-e2639ef8f45f", Name: "Нивада", Kind: kindP24},
+	{ID: "b57ea270-eda1-4ae4-b1a4-df9eb088f8df", Name: "Колибри", Kind: kindP24},
 }
