@@ -21,6 +21,17 @@ log(){ echo "[craft-inject-incident] $*" >&2; }
 INCIDENT_ID="${CRAFT_INCIDENT_ID:-cbb1ba47-c05b-60b5-f86e-16c05b77bb4f}"
 OUT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-incident-context.md"
 
+# Внутри евал-пачки кэш переиспользуется: параллельные сессии делят один путь, и
+# перезапись сносит правило у соседа ровно на старте — агент стартует без тела
+# правила, а улика всё равно попадает в его лог, и грейдер выпускает вердикт для
+# прогона, который правила не читал. Свежесть обеспечивает прогрев до пачки: он
+# идёт без CRAFT_EVAL и сюда не попадает. Улика печатается та же — по ней
+# грейдер и судит, дошло ли правило.
+if [[ -n "${CRAFT_EVAL:-}" && -s "$OUT" ]]; then
+  log "incident doc cached: $(wc -c < "$OUT") bytes -> .claude/craft-incident-context.md (reused)"
+  exit 0
+fi
+
 rm -f "$OUT"
 
 base="${CRAFT_API_BASE:-}"
