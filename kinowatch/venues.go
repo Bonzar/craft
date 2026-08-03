@@ -37,6 +37,32 @@ type NetworkVenue struct {
 	// не «Москва»: отсев по городу идёт по реестру, а не по догадке.
 	City string `json:"city,omitempty"`
 	Kind string `json:"kind"`
+
+	// Closed — сказанное самой сетью о том, что площадка не работает.
+	//
+	// Единственная законная причина не иметь рабочего инструмента, которую
+	// нельзя назначить своей пометкой: это слова источника, а не наш вывод.
+	// Москино пишет их прямо в названии — «Берёзка (временно закрыт на
+	// ремонт)», — и до этого поля приписка молча терялась при нормализации.
+	Closed string `json:"closed,omitempty"`
+}
+
+// venueClosureWords — по каким словам приписка в названии читается как
+// «площадка не работает», а не как уточнение вроде «(Москва)».
+var venueClosureWords = []string{"закрыт", "ремонт", "не работает", "временно"}
+
+// venueClosure возвращает приписку о закрытии, если она есть в названии.
+func venueClosure(name string) string {
+	for _, m := range venueParen.FindAllString(name, -1) {
+		note := strings.TrimSpace(strings.Trim(strings.TrimSpace(m), "()"))
+		low := strings.ToLower(note)
+		for _, w := range venueClosureWords {
+			if strings.Contains(low, w) {
+				return note
+			}
+		}
+	}
+	return ""
 }
 
 // parseKaroVenues разбирает справочник КАРО.
@@ -110,9 +136,10 @@ func parseMoskinoVenues(body string) ([]NetworkVenue, error) {
 		}
 		seen[slug] = true
 		out = append(out, NetworkVenue{
-			ID:   slug,
-			Name: name,
-			Kind: kindMoskino,
+			ID:     slug,
+			Name:   name,
+			Kind:   kindMoskino,
+			Closed: venueClosure(name),
 		})
 	}
 	if len(out) == 0 {
@@ -340,6 +367,18 @@ func bindNetworkVenues(obs []CinemaObservation, venues []NetworkVenue) BindResul
 		}
 
 		v := cands[0]
+
+		// Сеть сама сказала, что площадка не работает. Канал ей не назначаем:
+		// опрашивать закрытый кинотеатр нечего, а слова источника — законная
+		// причина не иметь инструмента, в отличие от нашей пометки.
+		if v.Closed != "" {
+			obs[i].Fields[fStatusClass] = classClosed
+			obs[i].Fields[fLastError] = "сеть сообщает: " + v.Closed
+			obs[i].Fields[fEvidenceURL] = "справочник сети, площадка «" + v.Name + "»"
+			used[v.ID] = true
+			continue
+		}
+
 		obs[i].Fields[fSourceKind] = v.Kind
 		obs[i].Fields[fSourceParams] = "venue=" + v.ID
 		// Привязка снимает «адаптер не написан»: канал у площадки теперь есть.
