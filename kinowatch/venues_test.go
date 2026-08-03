@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -233,10 +234,34 @@ func TestVenueKey(t *testing.T) {
 		{"КАРО Sky 17 Авиапарк", "Sky 17 Авиапарк"},
 		{"КАРО под звёздами: Черемушки", "Черемушки"},
 		{"Киномакс-Водный", "Киномакс-Водный Москва"},
+		// Синема-Стар ставит город не в хвост, а сразу после имени сети.
+		{"Синема Стар Москва Европарк", "Синема Стар Европарк"},
+		{"Синема Стар Москва Марьина Роща", "Синема Стар Марьина роща"},
+		{"Синема Стар Москва Принц Плаза", "Синема Стар Принц Плаза"},
 	}
 	for _, c := range cases {
 		if got, want := venueKey(c.registry), venueKey(c.directory); got != want {
 			t.Errorf("ключи разошлись: %q → %q, %q → %q", c.registry, got, c.directory, want)
+		}
+	}
+}
+
+// Город снимается только вместе с именем сети.
+//
+// У Миража «Москва» — само название кинотеатра, а не приписка о городе:
+// безусловное снятие превратило бы три разные площадки в «мари», «отрадное» и
+// «ростокино», то есть тихо переименовало бы их.
+func TestVenueKeyKeepsCityWhenItIsTheName(t *testing.T) {
+	cases := map[string]string{
+		"Москва МАРИ":      "москва мари",
+		"Москва ОТРАДНОЕ":  "москва отрадное",
+		"Москва РОСТОКИНО": "москва ростокино",
+		// Имя площадки — сам город: снимать нечего, иначе ключ обнулится.
+		"Москва": "москва",
+	}
+	for name, want := range cases {
+		if got := venueKey(name); got != want {
+			t.Errorf("venueKey(%q) = %q, ожидалось %q", name, got, want)
 		}
 	}
 }
@@ -295,6 +320,36 @@ func TestBindMoskino(t *testing.T) {
 		if o.Fields[fSourceParams] == "" && o.Fields[fLastError] == "" {
 			t.Errorf("%q осталась без исхода", o.Name)
 		}
+	}
+}
+
+// Строка ищет себя только в справочнике своей сети.
+//
+// «Москино Музеон» и «КАРО Музеон» — реальная пара листинга: разные площадки
+// разных сетей с одинаковым ключом «музеон». Без разделения по сетям обе
+// привязывались бы к единственному кандидату из справочника Москино, и КАРО
+// получил бы чужое расписание с видом полной достоверности.
+func TestBindScopesRowsToTheirOwnNetwork(t *testing.T) {
+	rows := []EaisRow{
+		{ID: "1", City: "Москва г", Company: "«Москино Музеон»", Network: "Москино"},
+		{ID: "2", City: "Москва г", Company: "КАРО Музеон", Network: "КАРО ФИЛЬМ"},
+	}
+	obs := buildCinemaObservations(applyCityScope(rows), "2026-08-03T10:00:00Z")
+	res := bindNetworkVenues(obs, []NetworkVenue{{ID: "moskino_muzeon", Name: "Музеон", Kind: kindMoskino}})
+
+	if res.Bound != 1 {
+		t.Fatalf("привязано %d, ожидалась одна строка Москино: %+v", res.Bound, res)
+	}
+	if got := obs[0].Fields[fSourceParams]; got != "venue=moskino_muzeon" {
+		t.Errorf("«Москино Музеон» не получила свой канал: %q", got)
+	}
+	if got := obs[1].Fields[fSourceParams]; got != "" {
+		t.Errorf("«КАРО Музеон» привязана к чужой сети: %q", got)
+	}
+	// Строка чужой сети не получает и вердикта «нет в справочнике своей сети»:
+	// справочника КАРО в этом вызове не было вовсе.
+	if got := obs[1].Fields[fLastError]; got != "" {
+		t.Errorf("«КАРО Музеон» получила вердикт по чужому справочнику: %q", got)
 	}
 }
 
@@ -448,3 +503,56 @@ func TestHardcodedVenueLists(t *testing.T) {
 		}
 	}
 }
+
+// Отказ одного справочника не рушит прогон и не калечит остальные сети.
+//
+// Свойство несущее: справочники живут на чужих серверах, любой из них может
+// ответить 500 или сменить вёрстку. Если такой отказ уронит весь шаг, прогон
+// потеряет каналы всех сетей разом — из-за одной.
+func TestBindAllNetworksSurvivesBrokenDirectory(t *testing.T) {
+	obs := buildCinemaObservations(applyCityScope([]EaisRow{
+		{ID: "1", City: "Москва г", Company: "КАРО 7 Атриум", Network: "КАРО ФИЛЬМ"},
+		{ID: "2", City: "Москва г", Company: "Пять звёзд на Смоленской", Network: "Пять звезд"},
+	}), "2026-08-03T10:00:00Z")
+
+	// КАРО отвечает мусором, остальные сетевые справочники — пустотой.
+	fetch := func(url string) (string, error) {
+		if url == karoDirectoryURL {
+			return "не JSON вовсе", nil
+		}
+		return "", errNoDirectory
+	}
+
+	res := bindAllNetworks(fetch, obs)
+	if len(res) != len(networkDirectories) {
+		t.Fatalf("сетей в отчёте %d, справочников %d", len(res), len(networkDirectories))
+	}
+
+	byName := map[string]NetworkBinding{}
+	for _, b := range res {
+		byName[b.Network] = b
+	}
+	if byName["КАРО"].Error == "" {
+		t.Error("сломанный справочник КАРО не отмечен ошибкой")
+	}
+	if byName["КАРО"].Bound != 0 {
+		t.Errorf("сломанный справочник всё же что-то привязал: %d", byName["КАРО"].Bound)
+	}
+	// Список в коде от сети не зависит вовсе — он обязан отработать.
+	if byName["Пять звёзд"].Bound != 1 {
+		t.Errorf("«Пять звёзд» привязали %d строк, ожидалась одна", byName["Пять звёзд"].Bound)
+	}
+	if obs[1].Fields[fSourceKind] != kind5Zvezd {
+		t.Errorf("площадка «Пяти звёзд» осталась без канала: %q", obs[1].Fields[fSourceKind])
+	}
+	// Строка КАРО осталась непокрытой, но не получила вердикта по справочнику,
+	// которого прогон так и не увидел.
+	if obs[0].Fields[fSourceKind] != "" {
+		t.Errorf("строка КАРО получила канал из сломанного справочника: %q", obs[0].Fields[fSourceKind])
+	}
+	if obs[0].Fields[fLastError] != "" {
+		t.Errorf("строка КАРО получила вердикт по неполученному справочнику: %q", obs[0].Fields[fLastError])
+	}
+}
+
+var errNoDirectory = fmt.Errorf("справочник недоступен")
