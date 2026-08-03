@@ -422,6 +422,40 @@ func TestNameDuplicatesReportedEvenWithoutEnricherCandidate(t *testing.T) {
 	}
 }
 
+// Схождение ключа после снятия бренда — не неразличимость.
+//
+// «Москино Музеон» и «КАРО Музеон» — реальная пара московского листинга: разные
+// площадки разных сетей, у которых venueKey одинаков («музеон»). Кандидата по
+// такому ключу брать нельзя, он общий на двоих, — но и в неразличимые их писать
+// нельзя: имя их прекрасно различает, и поиск по имени найдёт каждую свою.
+// Пометив их неразличимыми, мы закрыли бы им ещё и весь поиск по названию.
+func TestMatchEnrichersBrandCollisionIsNotAmbiguity(t *testing.T) {
+	rows := []EaisRow{
+		{ID: "5001", Company: "«Москино Музеон»", Network: "Москино"},
+		{ID: "5002", Company: "КАРО Музеон", Network: "КАРО"},
+		{ID: "7001", Company: "Родина"},
+		{ID: "7002", Company: "Родина"},
+	}
+	venues := []EnrichedVenue{{Name: "Музеон", Address: "Крымский Вал, 10", Source: "karo"}}
+
+	matched, ambiguous := matchEnrichers(rows, venues)
+
+	for _, id := range []string{"5001", "5002"} {
+		if v, ok := matched[id]; ok {
+			t.Errorf("строка %s взяла кандидата по общему ключу: %+v", id, v)
+		}
+		for _, a := range ambiguous {
+			if a == id {
+				t.Errorf("строка %s помечена неразличимой, хотя имя её различает", id)
+			}
+		}
+	}
+	// Совпадение полных имён неразличимостью остаётся.
+	if len(ambiguous) != 2 {
+		t.Errorf("неразличимых %d, ожидалось 2 («Родина»): %v", len(ambiguous), ambiguous)
+	}
+}
+
 // Обратная сторона: если у обогатителя два объекта с одним именем, не
 // сопоставляется никто — расстоянием отсеять нечем, координат ещё нет.
 func TestMatchEnrichersRejectsAmbiguousVenue(t *testing.T) {
