@@ -122,6 +122,119 @@ eval__validate() {
   fi
 }
 
+# --- ход прогона --------------------------------------------------------------
+# Показывается страницей, а не строкой в терминале: строка не переживает ни
+# параллельность (несколько прогонов пишут разом), ни фоновый запуск (в файле
+# она превращается в кашу из недописанных строк). Страница сама обновляется,
+# состояние каждого прогона лежит в своём файле и пишется целиком.
+eval__progress_init() {  # <dir> <total>
+  local dir="$1" total="$2"
+  mkdir -p "$dir/progress"
+  printf '%s\n' "$total" > "$dir/progress/total"
+  eval__progress_page "$dir"
+  echo "Ход прогона: file://$(cd "$dir" && pwd)/progress.html  (обновляется само)"
+}
+
+# Состояние одного прогона: файл переписывается целиком, читатель не поймает
+# полузаписанное.
+eval__progress_set() {  # <dir> <slug> <state> <name> [detail]
+  local dir="$1" slug="$2" state="$3" name="$4" detail="${5:-}"
+  local tmp="$dir/progress/.$slug.$$"
+  printf '%s\t%s\t%s\t%s\n' "$state" "$name" "$(date +%s)" "$detail" > "$tmp"
+  mv -f "$tmp" "$dir/progress/$slug.tsv"
+}
+
+eval__progress_page() {  # <dir>
+  local dir="$1"
+  cat > "$dir/progress.html" <<'HTML'
+<!doctype html><meta charset="utf-8"><title>Ход прогона евалов</title>
+<meta http-equiv="refresh" content="3">
+<style>
+ body{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem;max-width:60rem}
+ h1{font-size:1.1rem;font-weight:600;margin:0 0 1rem}
+ table{border-collapse:collapse;width:100%}
+ td,th{padding:.35rem .6rem;border-bottom:1px solid #e5e5e5;text-align:left}
+ th{font-weight:600;color:#666;font-size:.85rem}
+ .run{color:#b8860b}.PASS{color:#2e7d32}.FAIL{color:#c62828}.ERROR{color:#8e24aa}
+ .done{color:#666}
+</style>
+<h1>Ход прогона евалов</h1>
+<p id=sum class=done>загрузка…</p>
+<table><thead><tr><th>прогон<th>состояние<th>время<th>детали</tr></thead><tbody id=b></tbody></table>
+<script>
+async function tick(){
+  const r = await fetch('progress/index.json?'+Date.now()).catch(()=>null);
+  if(!r||!r.ok) return;
+  const d = await r.json();
+  document.getElementById('sum').textContent =
+    `${d.done} из ${d.total} готово, идёт ${d.running}`;
+  document.getElementById('b').innerHTML = d.rows.map(x =>
+    `<tr><td>${x.name}<td class="${x.state}">${x.state}<td>${x.secs}s<td>${x.detail||''}`).join('');
+}
+tick(); setInterval(tick, 2000);
+</script>
+HTML
+}
+
+# Сборка состояния для страницы: читает файлы прогонов и пишет один json целиком.
+# Собирается ОДНИМ вызовом jq по всем файлам состояния. Вызов на каждый прогон
+# отдельно съедал весь выигрыш от параллельности: снимков вдвое больше числа
+# прогонов, и на дюжине это секунды чистых накладных.
+eval__progress_snapshot() {  # <dir>
+  local dir="$1" total tmp
+  total="$(cat "$dir/progress/total" 2>/dev/null || echo 0)"
+  tmp="$dir/progress/.index.$$"
+  cat "$dir"/progress/*.tsv 2>/dev/null \
+  | jq -R -s --argjson total "$total" --argjson now "$(date +%s)" '
+      [ split("\n")[] | select(length > 0) | split("\t")
+        | {name: .[1], state: .[0], detail: (.[3] // ""),
+           secs: ($now - ((.[2] // "0") | tonumber))} ]
+      | {total: $total,
+         done:    ([.[] | select(.state != "RUN")] | length),
+         running: ([.[] | select(.state == "RUN")] | length),
+         rows: .}' > "$tmp" 2>/dev/null \
+  && mv -f "$tmp" "$dir/progress/index.json" || rm -f "$tmp"
+}
+
+eval__progress_finish() { eval__progress_snapshot "$1"; }
+
+# Один прогон целиком: запуск, грейд, ретрай при ERROR, запись своего результата.
+# Ретрай остаётся внутри воркера и последовательным — параллелится только то, что
+# относится к разным прогонам.
+eval__worker() {  # <item> <dir>
+  local item="$1" dir="$2"
+  local line model ml i out
+  IFS=$'\x1f' read -r line model ml i out <<<"$item"
+  local name level slug rc attempt
+  name="$(jq -r '.name' <<<"$line")"
+  level="$(jq -r ".level // \"$EVAL_DEF_LEVEL\"" <<<"$line")"
+  slug="$(eval__slug "$name")-$ml-$i"
+  eval__progress_set "$dir" "$slug" RUN "$name"
+  eval__progress_snapshot "$dir"
+
+  local prompt tools turns
+  prompt="$(jq -r '.prompt' <<<"$line")"
+  tools="$(jq -r ".allowed_tools // \"$EVAL_DEF_TOOLS\"" <<<"$line")"
+  turns="$(jq -r ".max_turns // $EVAL_DEF_MAX_TURNS" <<<"$line")"
+
+  for attempt in 1 2; do
+    eval__once "$prompt" "$model" "$tools" "$turns" "$out"; rc=$?
+    grade_load "$out" "$rc"
+    eval__assert_case "$line"
+    grade_verdict
+    [[ "$GRADE_VERDICT" != "ERROR" ]] && break
+    [[ $attempt -eq 1 ]] && cp "$out" "$out.error-attempt1"
+  done
+
+  # Результат — свой файл, записанный целиком: сводка собирается из них после
+  # ожидания, потому что счётчики из фоновой ветки до родителя не долетают.
+  local tmp="$dir/.result-$slug.$$"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$level" "$ml" "$i" "$GRADE_VERDICT" "$GRADE_DETAIL" > "$tmp"
+  mv -f "$tmp" "$dir/result-$slug.tsv"
+  eval__progress_set "$dir" "$slug" "$GRADE_VERDICT" "$name" "${GRADE_DETAIL:0:60}"
+  eval__progress_snapshot "$dir"
+}
+
 # eval_run <cases.jsonl> [model ...]
 eval_run() {
   local cases="${1:?cases file}"; shift || true
@@ -142,7 +255,13 @@ eval_run() {
   printf '%-38s %-10s %-7s %-6s %s\n' CASE LEVEL MODEL RES DETAIL
   printf -- '-------------------------------------------------------------------------------\n'
 
-  local line name prompt level tools turns problem model ml i out rc attempt
+  # Прогоны идут пачками: последний замер из двенадцати занял 55 минут чистого
+  # времени только потому, что они ждали друг друга. Каждый воркер пишет ТОЛЬКО
+  # свои файлы — счётчики в фоновой ветке до родителя не доходят, поэтому сводка
+  # собирается после ожидания, из файлов результата.
+  local jobs="${EVAL_JOBS:-4}" active=0
+  local line name prompt level tools turns problem model ml i out
+  local -a queue=()
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "${line//[[:space:]]/}" || "$line" == \#* ]] && continue
     problem="$(eval__validate "$line")"
@@ -153,37 +272,39 @@ eval_run() {
       continue
     fi
     name="$(jq -r '.name' <<<"$line")"
-    prompt="$(jq -r '.prompt' <<<"$line")"
-    level="$(jq -r ".level // \"$EVAL_DEF_LEVEL\"" <<<"$line")"
-    tools="$(jq -r ".allowed_tools // \"$EVAL_DEF_TOOLS\"" <<<"$line")"
-    turns="$(jq -r ".max_turns // $EVAL_DEF_MAX_TURNS" <<<"$line")"
-
     for model in "${models[@]}"; do
       ml="$(eval__label "$model")"
       for ((i=1; i<=runs; i++)); do
         out="$dir/$(eval__slug "$name")-$ml-$i.jsonl"
-        # ERROR ретраится один раз: прогон не состоялся — это про механику
-        # (таймаут, обрыв сессии), а не про поведение агента.
-        for attempt in 1 2; do
-          eval__once "$prompt" "$model" "$tools" "$turns" "$out"; rc=$?
-          grade_load "$out" "$rc"
-          eval__assert_case "$line"
-          grade_verdict
-          [[ "$GRADE_VERDICT" != "ERROR" ]] && break
-          [[ $attempt -eq 1 ]] && cp "$out" "$out.error-attempt1"
-        done
-
-        total=$((total+1)); lvl_t[$level]=$(( ${lvl_t[$level]:-0}+1 ))
-        case "$GRADE_VERDICT" in
-          PASS) passc=$((passc+1)); lvl_p[$level]=$(( ${lvl_p[$level]:-0}+1 ));;
-          FAIL) failc=$((failc+1));;
-          *)    errc=$((errc+1));   lvl_t[$level]=$(( ${lvl_t[$level]:-0}-1 ));;
-        esac
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$level" "$ml" "$i" "$GRADE_VERDICT" "$GRADE_DETAIL" >> "$report"
-        printf '%-38s %-10s %-7s %-6s %s\n' "${name:0:37}" "$level" "$ml" "$GRADE_VERDICT" "${GRADE_DETAIL:0:60}"
+        queue+=("$line"$'\x1f'"$model"$'\x1f'"$ml"$'\x1f'"$i"$'\x1f'"$out")
       done
     done
   done < "$cases"
+
+  eval__progress_init "$dir" "${#queue[@]}"
+  local item
+  for item in "${queue[@]}"; do
+    while (( active >= jobs )); do wait -n 2>/dev/null || wait; active=$((active-1)); done
+    eval__worker "$item" "$dir" &
+    active=$((active+1))
+  done
+  wait
+  eval__progress_finish "$dir"
+
+  # Сводка из файлов результата — по одному на прогон, каждый записан целиком.
+  local res v lv
+  for res in "$dir"/result-*.tsv; do
+    [[ -e "$res" ]] || continue
+    IFS=$'\t' read -r name lv ml i v detail < "$res"
+    total=$((total+1)); lvl_t[$lv]=$(( ${lvl_t[$lv]:-0}+1 ))
+    case "$v" in
+      PASS) passc=$((passc+1)); lvl_p[$lv]=$(( ${lvl_p[$lv]:-0}+1 ));;
+      FAIL) failc=$((failc+1));;
+      *)    errc=$((errc+1));   lvl_t[$lv]=$(( ${lvl_t[$lv]:-0}-1 ));;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$lv" "$ml" "$i" "$v" "$detail" >> "$report"
+    printf '%-38s %-10s %-7s %-6s %s\n' "${name:0:37}" "$lv" "$ml" "$v" "${detail:0:60}"
+  done
 
   printf -- '-------------------------------------------------------------------------------\n'
   # ERROR в знаменатель pass rate не входит: измерения не было.
