@@ -55,6 +55,26 @@ bump_runs() {
   printf '%s\n' "$((n + 1))" > "$runs" 2>/dev/null || true
 }
 
+# Вердикт критика — машиночитаемая последняя строка его ответа. Он и разрывает
+# самоинвалидацию: «блокеров нет» пускает показ, даже если план после обкатки правился,
+# то есть шероховатость больше не стоит целого круга. Текст вердикта доступен в обоих
+# путях — синхронный ответ подагента и поле результата в уведомлении о завершении.
+# Не распознан — пусто: гейт тогда судит по хешу, как раньше.
+verdict_of() {
+  if grep -qF 'Вердикт: блокеров нет' <<<"$1"; then printf 'noblockers'
+  elif grep -qF 'Вердикт: есть блокеры' <<<"$1"; then printf 'blockers'
+  fi
+}
+
+# Отметка — «хеш<таб>вердикт». Вердикта нет — остаётся голый хеш, как было: старые
+# отметки и фикстуры читаются тем же первым полем.
+put_mark() {
+  local h="$1" v="$2"
+  if [[ -n "$v" ]]; then printf '%s\t%s\n' "$h" "$v" > "$marker" 2>/dev/null || true
+  else printf '%s\n' "$h" > "$marker" 2>/dev/null || true
+  fi
+}
+
 if [[ "$event" == "UserPromptSubmit" ]]; then
   prompt="$(jq -r '.prompt // ""' <<<"$input" 2>/dev/null)"
   [[ "$prompt" == *"<task-notification>"* ]] || exit 0
@@ -66,7 +86,7 @@ if [[ "$event" == "UserPromptSubmit" ]]; then
   # переставит, а незавершённый критик её не получит вовсе.
   grep -v -- "^${id}	" "$pending" > "${pending}.tmp" 2>/dev/null && mv "${pending}.tmp" "$pending"
   [[ "$prompt" == *"<status>completed</status>"* ]] || exit 0
-  printf '%s\n' "$hash" > "$marker" 2>/dev/null || true
+  put_mark "$hash" "$(verdict_of "$prompt")"
   bump_runs
   exit 0
 fi
@@ -83,7 +103,7 @@ id="$(sed -n 's/.*agentId: \([A-Za-z0-9_-]*\).*/\1/p' <<<"$resp" | head -1)"
 if [[ -n "$id" ]]; then
   printf '%s\t%s\n' "$id" "$hash" >> "$pending" 2>/dev/null || true
 else
-  printf '%s\n' "$hash" > "$marker" 2>/dev/null || true
+  put_mark "$hash" "$(verdict_of "$resp")"
   bump_runs
 fi
 exit 0

@@ -8,4 +8,9 @@ set -u
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
 : > "$marker" 2>/dev/null || true
+# Показ состоялся — обкатка кончилась: счётчик прогонов критика начинает следующую с нуля.
+# Обкатка привязана к плану, а не к ходу, поэтому обнуляет её именно одобрение, а не
+# реплика Влада — по реплике плато было недостижимо в живом диалоге.
+runs="${CRAFT_PLAN_CRITIC_RUNS:-/tmp/plan-critic.${CLAUDE_CODE_SESSION_ID:-default}.runs}"
+rm -f "$runs" 2>/dev/null || true
 exit 0
