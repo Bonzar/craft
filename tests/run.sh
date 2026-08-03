@@ -41,6 +41,7 @@ declare -A SCRIPT=(
   [stop-routine-facts]="$HOOKS/universal-stop-routine-facts.sh"
   [guard-plan-critic]="$HOOKS/universal-guard-plan-critic.sh"
   [guard-plan-delta]="$HOOKS/universal-guard-plan-delta.sh"
+  [guard-plan-service-turn]="$HOOKS/universal-guard-plan-service-turn.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
   [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
@@ -104,10 +105,14 @@ for f in "${files[@]}"; do
     criticmark="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-test.XXXXXX")"
     deltastore="$(mktemp -u "${TMPDIR:-/tmp}/plan-delta-test.XXXXXX")"
     icmark="$(mktemp -u "${TMPDIR:-/tmp}/incident-closure-test.XXXXXX").armed"
+    serviceturn="$(mktemp -u "${TMPDIR:-/tmp}/plan-service-turn-test.XXXXXX")"
+    criticpend="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-pending-test.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
-             "CRAFT_PLAN_DELTA_STORE=$deltastore" "INCIDENT_CLOSURE_MARKER=$icmark")
+             "CRAFT_PLAN_DELTA_STORE=$deltastore" "INCIDENT_CLOSURE_MARKER=$icmark"
+             "CRAFT_SERVICE_TURN_MARKER=$serviceturn"
+             "CRAFT_PLAN_CRITIC_PENDING=$criticpend")
     # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
     # из env, создаётся до прогона (взводом в жизни занимается другой хук).
     [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"
@@ -123,16 +128,27 @@ for f in "${files[@]}"; do
     # подготовке своё событие (`setup_input`) и свои переменные (`setup_env`) — это
     # нужно связкам, где подготовка и цель обязаны отличаться (напр. запись в накопитель
     # одним планом и проверка другим).
-    setup_input="$(jq -c '.setup_input // empty' <<<"$line")"
+    # setup_input — одиночное событие всем шагам подготовки либо СПИСОК: свой элемент
+    # каждому шагу. Список нужен связкам, где один и тот же хук зовётся дважды разными
+    # событиями (расписка о запуске, затем уведомление о завершении).
+    setup_is_list="$(jq -r '(.setup_input // null) | type == "array"' <<<"$line")"
+    setup_input="$(jq -c 'if ((.setup_input // null) | type) == "array" then empty else (.setup_input // empty) end' <<<"$line")"
     setup_input="${setup_input//\{TESTS_DIR\}/$CASES_DIR}"
     setupenv=("${caseenv[@]}")
     while IFS=$'\t' read -r k v; do
       [[ -n "$k" ]] && setupenv+=("$k=${v//\{TESTS_DIR\}/$CASES_DIR}")
     done \
       < <(jq -r '(.setup_env // {}) | to_entries[] | "\(.key)\t\(.value)"' <<<"$line")
+    setup_i=0
     while IFS= read -r sh; do
       [[ -z "$sh" ]] && continue
-      printf '%s' "${setup_input:-$input}" | env "${setupenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" >/dev/null 2>&1
+      step="$setup_input"
+      if [[ "$setup_is_list" == "true" ]]; then
+        step="$(jq -c --argjson i "$setup_i" '.setup_input[$i] // empty' <<<"$line")"
+        step="${step//\{TESTS_DIR\}/$CASES_DIR}"
+      fi
+      printf '%s' "${step:-$input}" | env "${setupenv[@]}" bash "${SCRIPT[$sh]:-/nonexistent}" >/dev/null 2>&1
+      setup_i=$((setup_i+1))
     done < <(jq -r '(.setup // [])[]' <<<"$line")
     # `repeat: N` — feed the SAME input N times (deny-once / remind-once hooks:
     # the assertion is on the LAST invocation's output).
@@ -142,7 +158,7 @@ for f in "${files[@]}"; do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
     done
     rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
-          "$icmark" "${icmark%.armed}.reminded"; rm -rf "$fgdir"
+          "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -176,6 +192,7 @@ REQUIRED=(
   "stop-routine-facts:block"  "stop-routine-facts:silent"
   "guard-plan-critic:deny"    "guard-plan-critic:allow"
   "guard-plan-delta:deny"     "guard-plan-delta:allow"     "guard-plan-delta:silent"
+  "guard-plan-service-turn:deny" "guard-plan-service-turn:allow"
   "mark-plan-critic:silent"   "mark-plan-file:silent"
   "stop-incident-closure:block" "stop-incident-closure:silent"
 )
