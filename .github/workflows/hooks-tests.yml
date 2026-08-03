@@ -34,3 +34,8 @@ jobs:
       # поэтому живёт в том же CI, что и хук-тесты. См. evals/README.md.
       - name: Eval grader selftest
         run: bash evals/selftest.sh
+
+      # Раннер евалов на подставном прогоне: параллельность, целостность отчёта
+      # и страница хода — без моделей и сети, за десяток секунд.
+      - name: Eval runner smoke (no models)
+        run: bash evals/fake-run.sh
