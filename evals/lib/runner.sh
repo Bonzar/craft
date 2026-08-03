@@ -144,9 +144,24 @@ eval__progress_set() {  # <dir> <slug> <state> <name> [detail]
   mv -f "$tmp" "$dir/progress/$slug.tsv"
 }
 
+# Данные вписываются В САМУ страницу. Тянуть их запросом к соседнему файлу
+# нельзя: браузер запрещает такие запросы для локальных файлов, и страница
+# показывала пустые ячейки. Секунды пересчитываются на месте от времени старта —
+# иначе секундомер стоял бы между снимками, а снимки делаются только на старте и
+# финише прогона.
 eval__progress_page() {  # <dir>
-  local dir="$1"
-  cat > "$dir/progress.html" <<'HTML'
+  local dir="$1" total done_n running rows now tmp
+  now="$(date +%s)"
+  total="$(cat "$dir/progress/total" 2>/dev/null || echo 0)"
+  rows="$(cat "$dir"/progress/*.tsv 2>/dev/null | awk -F'\t' -v now="$now" '
+    { st=$1; nm=$2; t0=($3==""?now:$3); det=$4
+      gsub(/&/,"\\&amp;",nm); gsub(/</,"\\&lt;",nm)
+      gsub(/&/,"\\&amp;",det); gsub(/</,"\\&lt;",det)
+      printf "<tr><td>%s<td class=\"%s\">%s<td data-t0=\"%s\">–<td>%s\n", nm, st, st, (st=="RUN"?t0:""), det }')"
+  done_n="$(grep -hcv $'^RUN\t' "$dir"/progress/*.tsv 2>/dev/null | paste -sd+ - | bc 2>/dev/null || echo 0)"
+  running="$(grep -hc $'^RUN\t' "$dir"/progress/*.tsv 2>/dev/null | paste -sd+ - | bc 2>/dev/null || echo 0)"
+  tmp="$dir/.progress.html.$$"
+  { cat <<HTML
 <!doctype html><meta charset="utf-8"><title>Ход прогона евалов</title>
 <meta http-equiv="refresh" content="3">
 <style>
@@ -155,25 +170,27 @@ eval__progress_page() {  # <dir>
  table{border-collapse:collapse;width:100%}
  td,th{padding:.35rem .6rem;border-bottom:1px solid #e5e5e5;text-align:left}
  th{font-weight:600;color:#666;font-size:.85rem}
- .run{color:#b8860b}.PASS{color:#2e7d32}.FAIL{color:#c62828}.ERROR{color:#8e24aa}
- .done{color:#666}
+ .RUN{color:#b8860b}.PASS{color:#2e7d32}.FAIL{color:#c62828}.ERROR{color:#8e24aa}
+ .sum{color:#666}
 </style>
 <h1>Ход прогона евалов</h1>
-<p id=sum class=done>загрузка…</p>
-<table><thead><tr><th>прогон<th>состояние<th>время<th>детали</tr></thead><tbody id=b></tbody></table>
+<p class=sum>${done_n:-0} из ${total} готово, идёт ${running:-0}</p>
+<table><thead><tr><th>прогон<th>состояние<th>время<th>детали</tr></thead><tbody>
+$rows
+</tbody></table>
 <script>
-async function tick(){
-  const r = await fetch('progress/index.json?'+Date.now()).catch(()=>null);
-  if(!r||!r.ok) return;
-  const d = await r.json();
-  document.getElementById('sum').textContent =
-    `${d.done} из ${d.total} готово, идёт ${d.running}`;
-  document.getElementById('b').innerHTML = d.rows.map(x =>
-    `<tr><td>${x.name}<td class="${x.state}">${x.state}<td>${x.secs}s<td>${x.detail||''}`).join('');
+// Секунды тикают на месте: страница знает время старта каждого идущего прогона.
+function tick(){
+  const now = Math.floor(Date.now()/1000);
+  document.querySelectorAll('td[data-t0]').forEach(td => {
+    const t0 = parseInt(td.dataset.t0, 10);
+    td.textContent = t0 ? (now - t0) + 's' : '';
+  });
 }
-tick(); setInterval(tick, 2000);
+tick(); setInterval(tick, 1000);
 </script>
 HTML
+  } > "$tmp" && mv -f "$tmp" "$dir/progress.html"
 }
 
 # Сборка состояния для страницы: читает файлы прогонов и пишет один json целиком.
@@ -183,6 +200,7 @@ HTML
 eval__progress_snapshot() {  # <dir>
   local dir="$1" total tmp
   total="$(cat "$dir/progress/total" 2>/dev/null || echo 0)"
+  eval__progress_page "$dir"   # страница держит данные в себе — рисуем тем же снимком
   tmp="$dir/progress/.index.$$"
   cat "$dir"/progress/*.tsv 2>/dev/null \
   | jq -R -s --argjson total "$total" --argjson now "$(date +%s)" '
