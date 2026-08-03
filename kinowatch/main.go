@@ -41,6 +41,8 @@ func main() {
 		probeFilm     = flag.String("film", "", "название искомого фильма")
 		probeProfile  = flag.String("film-profile", "", "файл с профилем фильма: обёртки, хронометраж, синопсис")
 		probeDays     = flag.Int("days", 7, "горизонт опроса в днях от сегодня")
+		coverageMode  = flag.Bool("coverage", false, "посчитать покрытие по реестру (stdin) и упасть, пока оно неполно")
+		coverageShort = flag.Bool("short", false, "для --coverage: одна строка вместо списка")
 
 		probeGeo  = flag.String("probe-geo", "", "прогнать каскад по одному названию и показать решение по шагам")
 		probeAddr = flag.String("probe-address", "", "адрес для --probe-geo, если он известен")
@@ -64,6 +66,8 @@ func main() {
 		runEnrich(client, newGeoClient(*timeoutSec, *retries), *eaisBase, *region, *limit)
 	case *probe:
 		runProbe(client, *probeFilm, *probeProfile, *probeDays)
+	case *coverageMode:
+		runCoverage(*coverageShort)
 	case *probeGeo != "":
 		runProbeGeo(newGeoClient(*timeoutSec, *retries), *probeGeo, *probeAddr, *probeNet)
 	case *checkProxy:

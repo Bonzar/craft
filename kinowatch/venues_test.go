@@ -304,8 +304,28 @@ func TestBindMoskino(t *testing.T) {
 	obs := buildCinemaObservations(applyCityScope(rows), "2026-08-03T10:00:00Z")
 	res := bindNetworkVenues(obs, vs)
 
-	if res.Bound != 21 {
-		t.Errorf("привязано %d из %d, ожидался 21", res.Bound, len(rows))
+	// 20, а не 21: Берёзка помечена самой сетью как закрытая на ремонт, и канал
+	// ей не назначается — опрашивать закрытый кинотеатр нечего.
+	if res.Bound != 20 {
+		t.Errorf("привязано %d из %d, ожидалось 20", res.Bound, len(rows))
+	}
+	var closed int
+	for _, o := range obs {
+		if o.Fields[fStatusClass] != classClosed {
+			continue
+		}
+		closed++
+		// Закрытие — законная причина не иметь инструмента ровно потому, что
+		// это слова источника. Без улики пометка ничем не лучше догадки.
+		if o.Fields[fEvidenceURL] == "" {
+			t.Errorf("%q помечена закрытой без улики источника", o.Name)
+		}
+		if o.Fields[fSourceKind] != "" {
+			t.Errorf("закрытой площадке %q назначен канал опроса", o.Name)
+		}
+	}
+	if closed != 1 {
+		t.Errorf("закрытых площадок %d, ожидалась одна (Берёзка)", closed)
 	}
 	// «Москино Звезда» есть в реестре, но не на сайте сети — честная
 	// непокрытость, а не повод объявить площадку несуществующей.

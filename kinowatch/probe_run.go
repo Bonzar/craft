@@ -33,6 +33,14 @@ type ProbeReport struct {
 	Statuses map[string]int `json:"statuses"`
 
 	Venues []VenueProbe `json:"venues"`
+
+	// Observations — тот же реестр, что пришёл на вход, с записанным итогом
+	// прогона по каждой площадке.
+	//
+	// Без него цепочка «канал ответил живьём → это видно в реестре» рвётся, и
+	// покрытие снова становится тем, что агент себе проставил. Отдаётся целиком,
+	// чтобы следующий прогон и счётчик покрытия читали ФАКТ ответа, а не пометку.
+	Observations []CinemaObservation `json:"observations"`
 }
 
 // VenueProbe — итог по одной площадке.
@@ -149,16 +157,18 @@ func runProbe(c *Client, title, profilePath string, days int) {
 		Statuses:  map[string]int{},
 	}
 
-	for _, o := range obs {
-		vp := probeVenue(c, o, film, now, days)
+	for i := range obs {
+		vp := probeVenue(c, obs[i], film, now, days)
 		if vp.SkipReason != "" {
 			report.Skipped++
 		} else {
 			report.Probed++
 			report.Statuses[vp.Status]++
+			recordProbe(&obs[i], vp, report.FetchedAt)
 		}
 		report.Venues = append(report.Venues, vp)
 	}
+	report.Observations = obs
 
 	out, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -170,6 +180,29 @@ func runProbe(c *Client, title, profilePath string, days int) {
 	// напечатанный отчёт без единого опроса читается как «фильма нигде нет».
 	if report.Probed == 0 {
 		fail("не опрошено ни одной площадки из %d — проверь, что в реестре есть каналы", len(obs))
+	}
+}
+
+// recordProbe кладёт итог опроса в саму строку реестра.
+//
+// LastOk — время последнего ДОКАЗАННО живого ответа, и обновляется только по
+// доказанной живости. Именно оно, а не пометка класса, отвечает на вопрос «у
+// этой площадки есть работающий инструмент»: живость доказывается ответом
+// источника, назначить её себе нельзя.
+//
+// Прошлое значение LastOk при неудачном прогоне не стирается — иначе одна
+// сетевая ошибка обнуляла бы всю историю площадки.
+func recordProbe(o *CinemaObservation, vp VenueProbe, now string) {
+	o.Fields[fLastStatus] = vp.Status
+	o.Fields[fStatusAt] = now
+
+	if vp.Alive {
+		o.Fields[fLastOk] = now
+		delete(o.Fields, fLastError)
+		return
+	}
+	if vp.Evidence != "" {
+		o.Fields[fLastError] = vp.Evidence
 	}
 }
 
