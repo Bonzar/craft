@@ -129,6 +129,24 @@ grade_expect_present "четыре"
 grade_verdict; covered["evidence:ERROR"]=1
 check "улика / нет улики — ERROR, а не вердикт" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
 
+# 9e-2. Улик может быть несколько: правила кейса приходят разными каналами.
+#       «Отчёт об изменениях» и «Факт против догадки» живут в роутере, а тело
+#       скилла разбора — в своём инжекте. Пропади роутер из контекста, замер
+#       остался бы зелёным на пустом месте, поэтому требуются обе улики.
+source evals/lib/runner.sh
+CASE_TWO='{"name":"x","prompt":"y","expect_present":["четыре"],"rule_evidence":["incident doc cached","роутер обновлён"]}'
+grade_load "$FIX/rule-both.jsonl" 0
+eval__assert_case "$CASE_TWO"
+grade_verdict; covered["evidence2:PASS"]=1
+check "улики / обе на месте — вердикт выпускается" PASS "$GRADE_VERDICT" "$GRADE_DETAIL"
+
+grade_load "$FIX/rule-delivered.jsonl" 0
+eval__assert_case "$CASE_TWO"
+grade_verdict; covered["evidence2:ERROR"]=1
+check "улики / нет улики роутера — ERROR" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
+[[ "$GRADE_DETAIL" == *"роутер обновлён"* ]] \
+  || { fail=$((fail+1)); fails+=("улики: в причине не назван недостающий источник: $GRADE_DETAIL"); }
+
 # 9f. Обрыв соединения на полуслове: весь «ответ» агента — сообщение об ошибке.
 #     Поток непустой, поэтому прежний грейдер писал FAIL, то есть «правило не
 #     соблюдено», хотя агент не сказал ничего по существу.
@@ -242,7 +260,7 @@ REQUIRED=(
   "denial:FAIL" "tool:FAIL"
   "no_stream:ERROR" "bad_json:ERROR" "timeout:ERROR" "noassert:ERROR"
   "noise:PASS" "case:PASS" "validate:BAD" "validate:OK" "retry:ERROR" "retry:PASS"
-  "evidence:PASS" "evidence:ERROR" "trigger:BAD" "trigger:OK"
+  "evidence:PASS" "evidence:ERROR" "evidence2:PASS" "evidence2:ERROR" "trigger:BAD" "trigger:OK"
   "behavior:PASS" "behavior:FAIL" "material:BAD" "api_cut:ERROR"
 )
 missing=()

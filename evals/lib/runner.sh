@@ -59,10 +59,16 @@ eval__once() {
 }
 
 # eval__assert_case <case-json> — применяет ассерты кейса к загруженному потоку.
+# Улик может быть несколько: правила кейса приходят разными каналами — тело
+# скилла своим инжектом, а «Отчёт об изменениях» и «Факт против догадки» только
+# роутером. Требуется каждая: пропади один источник, замер остался бы зелёным на
+# пустом месте. Поле принимает и строку, и перечень.
 eval__assert_case() {
   local c="$1" s g ev
-  ev="$(jq -r '.rule_evidence // ""' <<<"$c")"
-  [[ -n "$ev" ]] && grade_require_rule_delivered "$ev"
+  while IFS= read -r ev; do
+    [[ -n "$ev" ]] && grade_require_rule_delivered "$ev"
+  done < <(jq -r 'if (.rule_evidence // "") | type == "array"
+                  then .rule_evidence[] else (.rule_evidence // "") end' <<<"$c")
   [[ "$(jq -r '.expect_no_refusal // false' <<<"$c")" == "true" ]] && grade_expect_no_refusal
   while IFS= read -r s; do [[ -n "$s" ]] && grade_expect_present "$s"; done \
     < <(jq -r '(.expect_present // [])[]' <<<"$c")
