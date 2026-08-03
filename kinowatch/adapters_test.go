@@ -752,3 +752,161 @@ func TestParseCinemaParkFailsOnEmptyContent(t *testing.T) {
 		t.Error("сменившаяся вёрстка принята за пустую афишу")
 	}
 }
+
+// Pushka — единственный JSON среди одиночек и самый богатый: цена, номер зала,
+// доступность и хронометраж. Фикстуры сняты 03.08 по двум разным площадкам.
+func TestParsePushka(t *testing.T) {
+	pb, err := parsePushka(readFixture(t, "pushka-klen.json"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансов ноль")
+	}
+	if pb.Cinema == "" {
+		t.Error("название площадки потеряно")
+	}
+
+	for _, s := range pb.Showtimes {
+		if s.Film == "" {
+			t.Error("название потеряно — оно в отдельном словаре films")
+		}
+		if s.Hall == "" {
+			t.Errorf("номер зала потерян у %q", s.Film)
+		}
+		if s.PriceMin == 0 {
+			t.Errorf("цена потеряна у %q", s.Film)
+		}
+		if s.DurationM == 0 {
+			t.Errorf("хронометраж потерян у %q — он в films[film_id].duration", s.Film)
+		}
+		if s.SourceID == "" {
+			t.Error("id сеанса потерян")
+		}
+		if !strings.Contains(s.StartsAt, "+03:00") {
+			t.Errorf("время собрано неверно: %q", s.StartsAt)
+		}
+	}
+}
+
+// Главная проверка полноты: площадку задаёт кука, и разные площадки обязаны
+// давать разные наборы сеансов. Один и тот же набор означал бы, что кука не
+// сработала и мы молча собираем дефолтную площадку вместо трёх.
+func TestPushkaVenuesDifferFromEachOther(t *testing.T) {
+	klen, err := parsePushka(readFixture(t, "pushka-klen.json"))
+	if err != nil {
+		t.Fatalf("разбор «Клёна»: %v", err)
+	}
+	ladya, err := parsePushka(readFixture(t, "pushka-ladya.json"))
+	if err != nil {
+		t.Fatalf("разбор «Ладьи»: %v", err)
+	}
+
+	if klen.Cinema == ladya.Cinema {
+		t.Errorf("обе площадки назвались одинаково (%q) — кука не переключила выдачу", klen.Cinema)
+	}
+
+	ids := map[string]bool{}
+	for _, s := range klen.Showtimes {
+		ids[s.SourceID] = true
+	}
+	var shared int
+	for _, s := range ladya.Showtimes {
+		if ids[s.SourceID] {
+			shared++
+		}
+	}
+	if shared == len(ladya.Showtimes) {
+		t.Error("наборы сеансов совпали целиком — вернулась одна и та же площадка")
+	}
+}
+
+// is_available:false — сеанс в расписании есть, купить нельзя. Потеря признака
+// означала бы рапорт о билетах, которых нет.
+func TestPushkaMarksUnavailableSessions(t *testing.T) {
+	pb, err := parsePushka(readFixture(t, "pushka-klen.json"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	var onSale, off int
+	for _, s := range pb.Showtimes {
+		if s.OnSale {
+			onSale++
+		} else {
+			off++
+		}
+	}
+	if off == 0 {
+		t.Error("в фикстуре есть недоступные сеансы, но все помечены продающимися")
+	}
+	if onSale == 0 {
+		t.Error("все сеансы помечены недоступными — признак разобран наоборот")
+	}
+}
+
+// Позиция, чьего film_id нет в словаре films, остаётся без названия: подставить
+// туда соседний фильм значило бы создать ложную находку.
+func TestPushkaLeavesUnknownFilmEmpty(t *testing.T) {
+	body := `{"dates":{"today":"2026-08-03"},"title":"Клён",
+	"schedule":{"2026-08-03":[{"film_id":999999,"showtimes":{"2D":[
+	{"id":1,"time":"10:00","date":"2026-08-03 10:00","is_available":true,"price":450,"hall_id":7}]}}]},
+	"films":{"4657":{"name":"Другой фильм","duration":180}}}`
+
+	pb, err := parsePushka(body)
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) != 1 {
+		t.Fatalf("сеансов %d, ожидался один", len(pb.Showtimes))
+	}
+	if got := pb.Showtimes[0].Film; got != "" {
+		t.Errorf("неизвестному film_id подставлено название %q", got)
+	}
+	// Остальные поля при этом на месте: сеанс существует, просто без названия.
+	if pb.Showtimes[0].Hall == "" || pb.Showtimes[0].PriceMin == 0 {
+		t.Errorf("сеанс без названия потерял и остальные поля: %+v", pb.Showtimes[0])
+	}
+}
+
+// Пустое расписание при валидном JSON — поломка, а не пустая афиша.
+func TestParsePushkaFailsOnEmptySchedule(t *testing.T) {
+	if _, err := parsePushka(`{"dates":{},"schedule":{},"films":{}}`); err == nil {
+		t.Error("пустое расписание принято за пустую афишу")
+	}
+}
+
+// Склейка «фильм предс.обсл. & прикрытие» приезжает прямо в названии — каскад
+// обязан поднять признак серого проката.
+func TestPushkaGluedTitleFeedsCascade(t *testing.T) {
+	pb, err := parsePushka(readFixture(t, "pushka-klen.json"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	for _, s := range pb.Showtimes {
+		if !strings.Contains(strings.ToLower(s.Film), "предс") {
+			continue
+		}
+		m := matchShowtime(s, FilmProfile{Title: "Одиссея", DurationMin: 150, DurationMax: 200})
+		if !m.GreyRelease {
+			t.Errorf("маркер «предс.обсл.» не поднял признак серого проката у %q", s.Film)
+		}
+		return
+	}
+	t.Skip("в фикстуре нет склеенных позиций")
+}
+
+// Три московские площадки перечислены явно: пропуск любой означает неполные
+// данные по МКАД.
+func TestPushkaCoversAllMoscowVenues(t *testing.T) {
+	want := map[string]bool{"klen": true, "ladya": true, "key": true}
+	if len(pushkaVenues) != len(want) {
+		t.Fatalf("площадок %d, ожидалось %d: %v", len(pushkaVenues), len(want), pushkaVenues)
+	}
+	for _, v := range pushkaVenues {
+		if !want[v] {
+			t.Errorf("неизвестная площадка %q", v)
+		}
+	}
+}
