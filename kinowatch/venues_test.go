@@ -355,3 +355,96 @@ func TestVenueKeyHandlesLiveNames(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCinemaStarVenues(t *testing.T) {
+	vs, err := parseCinemaStarVenues(readFixture(t, "cinemastar-venues.json"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(vs) < 3 {
+		t.Fatalf("площадок %d, в фикстуре их больше", len(vs))
+	}
+	for _, v := range vs {
+		if v.ID == "" || v.Name == "" {
+			t.Errorf("площадка без uid или названия: %+v", v)
+		}
+	}
+
+	// Областная площадка остаётся в справочнике: охват решает реестр, а не
+	// второе правило отсева внутри разбора.
+	var hasRegional bool
+	for _, v := range vs {
+		if strings.Contains(strings.ToLower(v.Name), "реутов") {
+			hasRegional = true
+		}
+	}
+	if !hasRegional {
+		t.Error("областная площадка отфильтрована внутри разбора — охват решается не здесь")
+	}
+}
+
+func TestParseCinemaParkVenues(t *testing.T) {
+	vs, err := parseCinemaParkVenues(readFixture(t, "cinemapark-venues.html"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(vs) < 3 {
+		t.Fatalf("площадок %d, в фикстуре их больше", len(vs))
+	}
+
+	// Одна сеть держит четыре вывески, и в фикстуре их минимум две.
+	brands := map[string]bool{}
+	for _, v := range vs {
+		low := strings.ToLower(v.Name)
+		switch {
+		case strings.Contains(low, "синема парк"):
+			brands["cinemapark"] = true
+		case strings.Contains(low, "формула кино"):
+			brands["formula"] = true
+		case strings.Contains(low, "кронверк"):
+			brands["kronverk"] = true
+		case strings.Contains(low, "okko"), strings.Contains(low, "оkkо"):
+			brands["okko"] = true
+		}
+	}
+	if len(brands) < 2 {
+		t.Errorf("вывесок в фикстуре %d, нужно не меньше двух: %v", len(brands), brands)
+	}
+
+	if _, err := parseCinemaParkVenues("<html><body>нет ссылок</body></html>"); err == nil {
+		t.Error("разбор промолчал об отсутствии ссылок")
+	}
+}
+
+// Четыре вывески одной сети снимаются перед сравнением — иначе не совпала бы
+// ни одна площадка СИНЕМА ПАРК.
+func TestVenueKeyStripsCinemaParkBrands(t *testing.T) {
+	cases := []struct{ registry, directory string }{
+		{"Синема Парк Мосфильм", "Синема Парк Мосфильм"},
+		{"Кронверк Синема Вэйпарк", "Кронверк Синема Вэйпарк"},
+		{"Кино Оkkо Щёлковский", "Кино Оkkо Щёлковский"},
+		{"Формула Кино ЦДМ", "Формула Кино ЦДМ"},
+	}
+	for _, c := range cases {
+		got := venueKey(c.registry)
+		if got == "" || strings.Contains(got, "синема") || strings.Contains(got, "кино") {
+			t.Errorf("вывеска не снята: %q → %q", c.registry, got)
+		}
+	}
+}
+
+// Списки, заданные в коде, обязаны совпадать по размеру с тем, что есть в
+// реестре: три площадки «Пяти звёзд» и два найденных uuid у p24.
+func TestHardcodedVenueLists(t *testing.T) {
+	if len(fiveStarsVenues) != 3 {
+		t.Errorf("площадок «Пяти звёзд» %d, в реестре их три", len(fiveStarsVenues))
+	}
+	if len(p24Venues) != 2 {
+		t.Errorf("uuid p24 %d, найдено было два", len(p24Venues))
+	}
+	for _, v := range append(append([]NetworkVenue{}, fiveStarsVenues...), p24Venues...) {
+		if v.ID == "" || v.Name == "" || v.Kind == "" {
+			t.Errorf("неполная запись: %+v", v)
+		}
+	}
+}
