@@ -154,6 +154,14 @@ func (c *Client) getText(url string) (string, error) {
 // ошибке этой разницы не видно — там строка, и разбирать её обратно значило бы
 // гадать по тексту.
 func (c *Client) get(url string) (string, int, error) {
+	return c.getHeaders(url, nil)
+}
+
+// getHeaders — тот же запрос с дополнительными заголовками.
+//
+// Нужны кассам, где площадка задаётся не адресом: Kinoplan различает
+// приложения по x-application-token и без x-platform отвечает 400.
+func (c *Client) getHeaders(url string, extra map[string]string) (string, int, error) {
 	var backoff time.Duration
 	netAttempt, rlAttempt := 0, 0
 
@@ -182,6 +190,9 @@ func (c *Client) get(url string) (string, int, error) {
 		req.Header.Set("Accept", accept)
 		if c.acceptLang != "" {
 			req.Header.Set("Accept-Language", c.acceptLang)
+		}
+		for k, v := range extra {
+			req.Header.Set(k, v)
 		}
 
 		resp, err := c.http.Do(req)
