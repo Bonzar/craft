@@ -84,7 +84,9 @@ total=0; rep=0; names=""
 while IFS=$'\t' read -r h t; do
   [[ -n "$h" ]] || continue
   total=$((total + 1))
-  grep -qxF -- "$h" <<<"$approved" && { rep=$((rep + 1)); names+="«$t» "; }
+  # Скобки обязательны: без них в UTF-8-локали bash читает имя как «t»» вместе
+  # с кавычкой и валит хук по set -u — гвард молча пропускал повторы.
+  grep -qxF -- "$h" <<<"$approved" && { rep=$((rep + 1)); names+="«${t}» "; }
 done <<<"$now"
 
 [[ "$rep" -eq 0 ]] && exit 0          # чистая дельта

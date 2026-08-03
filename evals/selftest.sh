@@ -181,7 +181,7 @@ vcheck() {  # <имя> <ожидаемая-подстрока-ошибки|-> <c
   if [[ "$got" == *"$want"* ]]; then
     pass=$((pass+1)); printf '%-6s %-44s %s\n' PASS "$name" "$got"
   else
-    fail=$((fail+1)); fails+=("$name — ждали ошибку «$want», получили «$got»")
+    fail=$((fail+1)); fails+=("$name — ждали ошибку «${want}», получили «${got}»")
     printf '%-6s %-44s %s\n' FAIL "$name" "${got:-<нет ошибки>}"
   fi
 }
