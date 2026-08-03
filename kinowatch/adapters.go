@@ -456,8 +456,12 @@ type kinoplanResponse struct {
 		Title    string `json:"title"`
 		Duration int    `json:"duration"`
 		Seances  []struct {
-			ID   string `json:"id"`
-			Hall struct {
+			ID string `json:"id"`
+			// CinemaID — чья это площадка. Ответ кассы содержит сеансы ВСЕХ
+			// площадок приложения: у Киноквартала одно приложение на Ясенево и
+			// Варшавский, и без этого поля каждая получала бы расписание обеих.
+			CinemaID int `json:"cinema_id"`
+			Hall     struct {
 				Title string `json:"title"`
 				IsVIP bool   `json:"is_vip"`
 			} `json:"hall"`
@@ -483,6 +487,20 @@ type kinoplanResponse struct {
 //
 // Цена в копейках, как у КАРО: 45000 — это 450 рублей.
 func parseKinoplan(body string) (Playbill, error) {
+	return parseKinoplanFor(body, 0)
+}
+
+// parseKinoplanFor оставляет сеансы одной площадки.
+//
+// Касса отвечает афишей всего приложения, а приложение бывает общим на
+// несколько кинотеатров — замерено живьём: ответ приложения Киноквартала несёт
+// 22 сеанса Варшавского и 17 Ясенева вперемешку. Без отбора обе площадки
+// получили бы 39 чужих сеансов вдобавок к своим, и выглядело бы это как их
+// собственное расписание.
+//
+// cinemaID = 0 означает «не отбирать»: у приложения на одну площадку отбирать
+// нечего, и требовать идентификатор там незачем.
+func parseKinoplanFor(body string, cinemaID int) (Playbill, error) {
 	var resp kinoplanResponse
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		return Playbill{}, fmt.Errorf("разбор ответа Kinoplan: %w", err)
@@ -492,6 +510,9 @@ func parseKinoplan(body string) (Playbill, error) {
 	seenDates := map[string]bool{}
 	for _, r := range resp.Releases {
 		for _, s := range r.Seances {
+			if cinemaID != 0 && s.CinemaID != 0 && s.CinemaID != cinemaID {
+				continue
+			}
 			at := parseZonedTime(s.StartDateTime)
 			if at == "" {
 				continue
@@ -1251,23 +1272,39 @@ func fetchPushkaVenue(c *Client, slug string) (Playbill, error) {
 // Самый полный источник среди одиночек: номер зала, цена, хронометраж прозой
 // («2 часа 7 минут») и язык показа.
 //
-// Разметка — Next.js с CSS-модулями, имена классов несут хеш сборки
-// («styles_title__2FF9g») и меняются при каждом релизе фронта. Зацепки взяты за
-// имя модуля до хеша: оно переживает пересборку, а полное имя — нет.
+// Разбор идёт по данным страницы, а не по её вёрстке. Сайт — Next.js, и всё
+// расписание уже лежит в теле готовым JSON-ом (`__NEXT_DATA__`): название,
+// хронометраж, время сеанса, зал, цена и признак продажи. Прежняя версия
+// цеплялась за имена CSS-модулей и перестала находить карточки на первом же
+// релизе фронта — замерено живьём: страница отдаёт 200 и 67 КБ, а сеансов ноль.
 //
-// Карточка фильма и его сеансы лежат РЯДОМ, а не вложенно: `<main>` закрывается
-// до блока сеансов. Поэтому страница режется по открывающему `<main`, а не
-// разбирается вложенными группами — и режется разбиением, а не регулярным
-// выражением: нежадный поиск «до следующего <main» съедает разделитель и
-// теряет каждый второй фильм.
-var (
-	hudTitle = regexp.MustCompile(`(?s)href="/movies/([a-z0-9-]+)"[^>]*>\s*(.*?)\s*</a>`)
-	hudDur   = regexp.MustCompile(`(?s)>([^<]{0,40}?(?:час|мин)[^<]{0,20})</div>`)
-	hudTime  = regexp.MustCompile(`>\s*([0-2]?\d:[0-5]\d)\s*<`)
-	hudHall  = regexp.MustCompile(`styles_title__[^"]*"[^>]*>\s*([^<]+?)\s*<`)
-	hudPrice = regexp.MustCompile(`styles_price__[^"]*"[^>]*>\s*([0-9\s]+)`)
-	hudNote  = regexp.MustCompile(`(?s)</div>\s*<div class="mt-2[^"]*"[^>]*>\s*([^<]+?)\s*</div>`)
-)
+// Данные страницы устойчивее её оформления: классы несут хеш сборки и меняются
+// каждым деплоем, а имена полей — часть модели, которую фронт сам и читает.
+var hudNextData = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</script>`)
+
+type hudPage struct {
+	Props struct {
+		PageProps struct {
+			Data struct {
+				Events []struct {
+					Type      string `json:"type"`
+					Title     string `json:"title"`
+					Slug      string `json:"slug"`
+					Duration  int    `json:"duration"`
+					Showtimes []struct {
+						Datetime string `json:"datetime"`
+						Note     string `json:"note"`
+						Price    int    `json:"price"`
+						Location struct {
+							Title string `json:"title"`
+						} `json:"location"`
+						IsSaleAvailable bool `json:"isSaleAvailable"`
+					} `json:"showtimes"`
+				} `json:"events"`
+			} `json:"data"`
+		} `json:"pageProps"`
+	} `json:"props"`
+}
 
 // parseHudozhestvenny разбирает страницу расписания на одну дату.
 func parseHudozhestvenny(body, date string) (Playbill, error) {
@@ -1276,69 +1313,52 @@ func parseHudozhestvenny(body, date string) (Playbill, error) {
 		pb.Dates = []string{date}
 	}
 
-	blocks := strings.Split(body, "<main")
-	if len(blocks) < 2 {
-		return pb, fmt.Errorf("разбор Художественного: карточки фильмов не найдены (тело %d байт)", len(body))
+	m := hudNextData.FindStringSubmatch(body)
+	if len(m) < 2 {
+		return pb, fmt.Errorf("разбор Художественного: данные страницы не найдены (тело %d байт)", len(body))
 	}
 
-	var parsed int
-	for _, block := range blocks[1:] {
-		tm := hudTitle.FindStringSubmatch(block)
-		if len(tm) < 3 {
+	var page hudPage
+	if err := json.Unmarshal([]byte(m[1]), &page); err != nil {
+		return pb, fmt.Errorf("разбор Художественного: %w", err)
+	}
+
+	for _, e := range page.Props.PageProps.Data.Events {
+		// В афише кинотеатра бывают не только фильмы (лекции, встречи). Тип
+		// события отдаёт сам источник, и гадать по названию незачем.
+		if e.Type != "MOVIE" {
 			continue
 		}
-		slug := tm[1]
-		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[2])))
+		film := strings.TrimSpace(e.Title)
 		if film == "" {
 			continue
 		}
 
-		dur := 0
-		if dm := hudDur.FindStringSubmatch(block); len(dm) > 1 {
-			dur = parseRussianDuration(dm[1])
-		}
-
-		// Блоки сеансов режутся разбиением по той же причине, что и карточки
-		// фильмов: нежадный поиск «до следующего styles_root__» съедает
-		// разделитель и оставляет по одному сеансу на фильм.
-		for _, show := range strings.Split(block, "styles_root__")[1:] {
-			tmm := hudTime.FindStringSubmatch(show)
-			if len(tmm) < 2 {
-				continue
-			}
-			at := normalizeShowtime(tmm[1], date)
+		for _, sh := range e.Showtimes {
+			at := parseZonedTime(sh.Datetime)
 			if at == "" {
 				continue
 			}
-
-			st := Showtime{
-				Film:      film,
-				StartsAt:  at,
-				DurationM: dur,
-				OnSale:    true,
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film:     film,
+				StartsAt: at,
+				Hall:     strings.TrimSpace(sh.Location.Title),
+				// Пометка про язык показа — про услугу, а не про зал.
+				Format:    strings.TrimSpace(sh.Note),
+				PriceMin:  sh.Price,
+				DurationM: e.Duration,
+				OnSale:    sh.IsSaleAvailable,
 				// Своего идентификатора сеанса источник не даёт — в реестре
 				// такие сеансы различаются отпечатком. Слаг фильма сюда не
 				// годится: он один на все сеансы дня.
-				DeepLink: "https://cinema1909.ru/movies/" + slug,
-			}
-			if hm := hudHall.FindStringSubmatch(show); len(hm) > 1 {
-				st.Hall = strings.TrimSpace(hm[1])
-			}
-			if pm := hudPrice.FindStringSubmatch(show); len(pm) > 1 {
-				st.PriceMin, _ = strconv.Atoi(strings.Join(strings.Fields(pm[1]), ""))
-			}
-			// Язык показа и прочие пометки — про услугу, поэтому Format.
-			if nm := hudNote.FindStringSubmatch(show); len(nm) > 1 {
-				st.Format = strings.TrimSpace(stripHTML(nm[1]))
-			}
-			pb.Showtimes = append(pb.Showtimes, st)
-			parsed++
+				DeepLink: "https://cinema1909.ru/movies/" + e.Slug,
+			})
 		}
 	}
 
-	// Ни одного сеанса при найденных карточках — тоже поломка разбора: у
-	// страницы даты сеансы есть всегда, иначе её бы не отдали.
-	if parsed == 0 {
+	// Ни одного сеанса при полученных данных — тоже поломка разбора: у страницы
+	// даты сеансы есть всегда, иначе её бы не отдали.
+	if len(pb.Showtimes) == 0 {
 		return pb, fmt.Errorf("разбор Художественного: сеансы не найдены (тело %d байт)", len(body))
 	}
 	return pb, nil
