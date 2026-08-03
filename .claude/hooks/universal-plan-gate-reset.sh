@@ -22,7 +22,9 @@ ANCHORS="${CRAFT_SERVICE_ANCHORS:-$(cd "$(dirname "$SELF")" && pwd)/service-anch
 # словарь якорей уже разобран, а гейт видит только событие показа.
 serviceturn="${CRAFT_SERVICE_TURN_MARKER:-/tmp/plan-service-turn.${CLAUDE_CODE_SESSION_ID:-default}}"
 planshown="${CRAFT_PLAN_SHOWN_MARKER:-/tmp/plan-shown.${CLAUDE_CODE_SESSION_ID:-default}}"
-criticruns="${CRAFT_PLAN_CRITIC_RUNS:-/tmp/plan-critic.${CLAUDE_CODE_SESSION_ID:-default}.runs}"
+# Счётчик прогонов критика реплика НЕ снимает: обкатка привязана к плану, а не к ходу —
+# «покажи» или замечание к плану её не завершают. Обнуление по реплике делало плато
+# недостижимым в живом диалоге. Снимает его одобрение плана (plan-gate-approve.sh).
 criticpend="${CRAFT_PLAN_CRITIC_PENDING:-/tmp/plan-critic.${CLAUDE_CODE_SESSION_ID:-default}.pending}"
 while IFS= read -r anchor || [[ -n "$anchor" ]]; do
   [[ -z "$anchor" || "$anchor" == \#* ]] && continue
@@ -33,7 +35,7 @@ done < "$ANCHORS" 2>/dev/null
 # Ожидания снимаются вместе со счётчиком: критик, запущенный до реплики, дозавершился бы
 # уже в новом разговоре и накрутил чужой счётчик — плато набралось бы прогонами, которых
 # в этом разговоре не было. Цена — такой критик отметки не поставит, нужен новый прогон.
-rm -f "$serviceturn" "$planshown" "$criticruns" "$criticpend" 2>/dev/null || true
+rm -f "$serviceturn" "$planshown" "$criticpend" 2>/dev/null || true
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
 rm -f "$marker" 2>/dev/null || true
