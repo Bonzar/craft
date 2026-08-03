@@ -143,6 +143,17 @@ func rateLimitBackoff(attempt int) time.Duration {
 // getText тянет страницу как текст. Возвращает тело и ошибку; на 4xx (кроме 429)
 // не ретраит — если доступ закрыт, повтор ничего не изменит, только нагрузит.
 func (c *Client) getText(url string) (string, error) {
+	body, _, err := c.get(url)
+	return body, err
+}
+
+// get — то же самое, но отдаёт ещё и код ответа.
+//
+// Код нужен опросу площадок: классификатор различает 401/403/404 (протухший
+// доступ, лечится заменой токена) и остальные отказы (лечатся повтором). В
+// ошибке этой разницы не видно — там строка, и разбирать её обратно значило бы
+// гадать по тексту.
+func (c *Client) get(url string) (string, int, error) {
 	var backoff time.Duration
 	netAttempt, rlAttempt := 0, 0
 
@@ -157,7 +168,7 @@ func (c *Client) getText(url string) (string, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			cancel()
-			return "", fmt.Errorf("построение запроса: %w", err)
+			return "", 0, fmt.Errorf("построение запроса: %w", err)
 		}
 		ua := c.userAgent
 		if ua == "" {
@@ -181,7 +192,7 @@ func (c *Client) getText(url string) (string, error) {
 				netAttempt++
 				continue
 			}
-			return "", fmt.Errorf("сеть: %w", err)
+			return "", 0, fmt.Errorf("сеть: %w", err)
 		}
 
 		body, readErr := io.ReadAll(resp.Body)
@@ -195,7 +206,7 @@ func (c *Client) getText(url string) (string, error) {
 				rlAttempt++
 				continue
 			}
-			return "", fmt.Errorf("HTTP 429 после ретраев")
+			return "", resp.StatusCode, fmt.Errorf("HTTP 429 после ретраев")
 
 		case resp.StatusCode >= 500:
 			if netAttempt < c.retries {
@@ -203,16 +214,16 @@ func (c *Client) getText(url string) (string, error) {
 				netAttempt++
 				continue
 			}
-			return "", fmt.Errorf("HTTP %d после ретраев", resp.StatusCode)
+			return "", resp.StatusCode, fmt.Errorf("HTTP %d после ретраев", resp.StatusCode)
 
 		case resp.StatusCode >= 400:
-			return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+			return "", resp.StatusCode, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 
 		if readErr != nil {
-			return "", fmt.Errorf("чтение тела: %w", readErr)
+			return "", resp.StatusCode, fmt.Errorf("чтение тела: %w", readErr)
 		}
-		return string(body), nil
+		return string(body), resp.StatusCode, nil
 	}
 }
 
