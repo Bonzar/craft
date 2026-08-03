@@ -1,0 +1,270 @@
+package main
+
+// Опрос площадок по фильму: реестр на вход, статус каждой площадки на выход.
+//
+// Здесь соединяются три уже написанные части — сборка запроса к каналу
+// (channel.go), каскад матчинга (film.go) и классификатор исхода (probe.go).
+// Своей логики тут минимум, и это намеренно: решения о том, найден ли фильм и
+// жив ли источник, принимаются чистыми функциями, которые целиком накрыты
+// табличными тестами.
+//
+// Обход последовательный. Чужие кассы не наш сервер, и десяток параллельных
+// запросов к одной сети ради минуты выигрыша — плохая сделка.
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+)
+
+// ProbeReport — то, что отдаёт --probe.
+type ProbeReport struct {
+	FetchedAt string      `json:"fetchedAt"`
+	Film      FilmProfile `json:"film"`
+	Days      int         `json:"days"`
+
+	// Probed и Skipped в сумме дают весь реестр: площадка не может тихо
+	// выпасть из отчёта, иначе непокрытость выглядела бы как её отсутствие.
+	Probed   int            `json:"probed"`
+	Skipped  int            `json:"skipped"`
+	Statuses map[string]int `json:"statuses"`
+
+	Venues []VenueProbe `json:"venues"`
+}
+
+// VenueProbe — итог по одной площадке.
+type VenueProbe struct {
+	Key    string `json:"key"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind,omitempty"`
+	Venue  string `json:"venue,omitempty"`
+	Status string `json:"status"`
+	// Evidence отвечает на вопрос «почему такой статус». Без него чужой прогон
+	// разбирается гаданием.
+	Evidence string `json:"evidence,omitempty"`
+	Alive    bool   `json:"alive"`
+
+	// Found — сеансы искомого фильма. Пустой список при статусе absent — это
+	// результат, а при статусе поломки — просто отсутствие данных.
+	Found []FoundShowtime `json:"found,omitempty"`
+
+	// FailedDays — даты, которых канал не отдал. Пустой горизонт делает вывод
+	// «фильма нет» недоказуемым, см. ниже.
+	FailedDays []string `json:"failedDays,omitempty"`
+
+	// SkipReason непустая означает, что площадку не опрашивали вовсе.
+	SkipReason string `json:"skipReason,omitempty"`
+}
+
+// FoundShowtime — найденный сеанс вместе с объяснением, чем он опознан.
+type FoundShowtime struct {
+	StartsAt   string `json:"startsAt"`
+	Title      string `json:"title"`
+	By         string `json:"by"`
+	Confidence string `json:"confidence"`
+	OnSale     bool   `json:"onSale"`
+	Grey       bool   `json:"grey,omitempty"`
+	Hall       string `json:"hall,omitempty"`
+	PriceMin   int    `json:"priceMin,omitempty"`
+}
+
+// readRegistry читает наблюдения со stdin.
+//
+// Принимается и отчёт --enrich целиком, и голый список наблюдений: рутина
+// хранит у себя первое, а руками удобнее скормить второе.
+func readRegistry(r io.Reader) ([]CinemaObservation, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("чтение реестра: %w", err)
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil, fmt.Errorf("реестр пуст: ожидается отчёт --enrich или список наблюдений")
+	}
+
+	var report struct {
+		Observations []CinemaObservation `json:"observations"`
+	}
+	if err := json.Unmarshal(raw, &report); err == nil && len(report.Observations) > 0 {
+		return report.Observations, nil
+	}
+
+	var list []CinemaObservation
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("разбор реестра: %w", err)
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("в реестре ноль площадок")
+	}
+	return list, nil
+}
+
+// loadFilmProfile собирает профиль искомого фильма.
+//
+// Одного названия хватает для проката без маскировки. Профиль файлом нужен
+// там, где фильм идёт «предсеансовым обслуживанием»: тогда решают обёртки,
+// хронометраж и синопсис, а названия в афише нет вовсе.
+func loadFilmProfile(title, path string) (FilmProfile, error) {
+	if path == "" {
+		if strings.TrimSpace(title) == "" {
+			return FilmProfile{}, fmt.Errorf("нужен --film или --film-profile")
+		}
+		return FilmProfile{Title: strings.TrimSpace(title)}, nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return FilmProfile{}, fmt.Errorf("чтение профиля фильма: %w", err)
+	}
+	var p FilmProfile
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return FilmProfile{}, fmt.Errorf("разбор профиля фильма: %w", err)
+	}
+	if strings.TrimSpace(title) != "" {
+		p.Title = strings.TrimSpace(title)
+	}
+	if strings.TrimSpace(p.Title) == "" {
+		return FilmProfile{}, fmt.Errorf("в профиле фильма нет названия")
+	}
+	return p, nil
+}
+
+func runProbe(c *Client, title, profilePath string, days int) {
+	film, err := loadFilmProfile(title, profilePath)
+	if err != nil {
+		fail("%v", err)
+	}
+	obs, err := readRegistry(os.Stdin)
+	if err != nil {
+		fail("%v", err)
+	}
+
+	now := time.Now()
+	report := ProbeReport{
+		FetchedAt: nowRFC3339(),
+		Film:      film,
+		Days:      days,
+		Statuses:  map[string]int{},
+	}
+
+	for _, o := range obs {
+		vp := probeVenue(c, o, film, now, days)
+		if vp.SkipReason != "" {
+			report.Skipped++
+		} else {
+			report.Probed++
+			report.Statuses[vp.Status]++
+		}
+		report.Venues = append(report.Venues, vp)
+	}
+
+	out, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		fail("сериализация: %v", err)
+	}
+	fmt.Println(string(out))
+
+	// Ноль опрошенных площадок — отказ прогона, а не пустой результат: молча
+	// напечатанный отчёт без единого опроса читается как «фильма нигде нет».
+	if report.Probed == 0 {
+		fail("не опрошено ни одной площадки из %d — проверь, что в реестре есть каналы", len(obs))
+	}
+}
+
+// probeVenue опрашивает одну площадку.
+func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time, days int) VenueProbe {
+	vp := VenueProbe{
+		Key:   o.Key,
+		Name:  o.Name,
+		Kind:  o.Fields[fSourceKind],
+		Venue: strings.TrimPrefix(o.Fields[fSourceParams], "venue="),
+	}
+
+	if vp.Kind == "" {
+		vp.Venue = ""
+		vp.SkipReason = skipReason(o)
+		return vp
+	}
+
+	probe := fetchChannel(c, vp.Kind, vp.Venue, now, days)
+	vp.FailedDays = probe.FailedDays
+
+	matches := matchPlaybill(probe.Playbill, film)
+	found, onSale := false, false
+	for i, m := range matches {
+		if !m.Matched {
+			continue
+		}
+		found = true
+		s := probe.Playbill.Showtimes[i]
+		if s.OnSale {
+			onSale = true
+		}
+		vp.Found = append(vp.Found, FoundShowtime{
+			StartsAt:   s.StartsAt,
+			Title:      s.Film,
+			By:         m.By,
+			Confidence: m.Confidence,
+			OnSale:     s.OnSale,
+			Grey:       m.GreyRelease,
+			Hall:       s.Hall,
+			PriceMin:   s.PriceMin,
+		})
+	}
+
+	res := classifyProbe(ProbeInput{
+		Err:        probe.Err,
+		HTTPStatus: probe.Status,
+		BodySize:   probe.BodySize,
+		ParseErr:   probe.ParseErr,
+		Playbill:   probe.Playbill,
+		FilmFound:  found,
+		FilmOnSale: onSale,
+		Now:        now,
+	})
+
+	res = applyHorizonGap(res, probe.FailedDays)
+	vp.Status, vp.Evidence, vp.Alive = res.Status, res.Evidence, res.Alive
+	return vp
+}
+
+// applyHorizonGap запрещает вывод «фильма нет» по неполному горизонту.
+//
+// Классификатор судит по одному ответу и про пропущенные дни не знает. А «нет»
+// — утверждение обо ВСЁМ горизонте: если канал не отдал три дня из семи, фильм
+// мог идти именно в них. Находка от этого не страдает — она положительна и уже
+// сделана, — поэтому понижается только absent.
+//
+// Живость источника при этом остаётся доказанной: он ответил за остальные дни.
+func applyHorizonGap(res ProbeResult, failedDays []string) ProbeResult {
+	if res.Status != statusAbsent || len(failedDays) == 0 {
+		return res
+	}
+	res.Status = statusSuspect
+	res.Evidence = fmt.Sprintf("горизонт неполон, канал не ответил за %d дн. (%s): %s",
+		len(failedDays), strings.Join(failedDays, ", "), res.Evidence)
+	return res
+}
+
+// skipReason объясняет, почему площадку не опрашивали.
+//
+// Причина обязана быть словами, а не пустотой: непокрытая площадка и площадка
+// без сеансов по своей природе — разные вещи, и в отчёте они не должны
+// выглядеть одинаково.
+func skipReason(o CinemaObservation) string {
+	if e := strings.TrimSpace(o.Fields[fLastError]); e != "" {
+		return e
+	}
+	switch o.Fields[fStatusClass] {
+	case classCloneOf:
+		return "клон другой записи реестра, сеансы пишет ведущая"
+	case classNoOnlineSale:
+		return "площадка без сущности «сеанс»"
+	case "":
+		return "канал не назначен"
+	default:
+		return "канала нет: " + o.Fields[fStatusClass]
+	}
+}
