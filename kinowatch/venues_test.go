@@ -7,6 +7,7 @@ package main
 // заметить это по отчёту будет нельзя.
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -119,15 +120,34 @@ func TestBindKaroVenues(t *testing.T) {
 		t.Errorf("площадок справочника без пары %d, ожидалось 2: %v", len(res.Orphans), res.Orphans)
 	}
 
-	// У каждой строки исход: либо канал, либо явная причина его отсутствия.
+	// У каждой строки исход: либо канал, либо непокрытость с причиной.
 	for _, o := range obs {
 		params := o.Fields[fSourceParams]
 		class := o.Fields[fStatusClass]
-		if params == "" && class != classNoSource {
+		if params == "" && o.Fields[fLastError] == "" {
 			t.Errorf("%q осталась без исхода: params=%q class=%q", o.Name, params, class)
 		}
 		if params != "" && !strings.HasPrefix(params, "venue=") {
 			t.Errorf("%q: параметры канала записаны как %q", o.Name, params)
+		}
+	}
+
+	// Площадка без канала остаётся В ЗНАМЕНАТЕЛЕ: иначе семь работающих
+	// кинотеатров молча перестали бы считаться недоработкой.
+	for _, name := range res.Unmatched {
+		for _, o := range obs {
+			if o.Name != name {
+				continue
+			}
+			if o.Fields[fStatusClass] == classNoSource {
+				t.Errorf("%q объявлена непокрываемой, хотя домен сети жив", name)
+			}
+			if !keepsInDenominator(o.Fields[fStatusClass]) {
+				t.Errorf("%q выпала из знаменателя покрытия", name)
+			}
+			if o.Fields[fLastError] == "" {
+				t.Errorf("%q без причины — не отличить от «адаптер не написан»", name)
+			}
 		}
 	}
 }
@@ -217,6 +237,121 @@ func TestVenueKey(t *testing.T) {
 	for _, c := range cases {
 		if got, want := venueKey(c.registry), venueKey(c.directory); got != want {
 			t.Errorf("ключи разошлись: %q → %q, %q → %q", c.registry, got, c.directory, want)
+		}
+	}
+}
+
+// registryRows читает строки реестра из фикстуры: привязка обязана проверяться
+// на настоящих названиях, а не на придуманных. Именно живые названия ломают
+// наивное сравнение — юридическая обёртка у Москино, кавычки и «г. Москва» у
+// Киномакса.
+func registryRows(t *testing.T, network func(string) bool) []EaisRow {
+	t.Helper()
+	var reg []struct {
+		City    string `json:"city"`
+		EaisID  string `json:"eaisId"`
+		Company string `json:"company"`
+		Network string `json:"network"`
+	}
+	if err := json.Unmarshal([]byte(readFixture(t, "registry-networks.json")), &reg); err != nil {
+		t.Fatalf("разбор фикстуры реестра: %v", err)
+	}
+	var rows []EaisRow
+	for _, r := range reg {
+		if network(r.Network) {
+			rows = append(rows, EaisRow{ID: r.EaisID, City: r.City, Company: r.Company, Network: r.Network})
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatal("в фикстуре нет строк выбранной сети")
+	}
+	return rows
+}
+
+// Москино: 22 строки реестра против 21 площадки на сайте сети.
+func TestBindMoskino(t *testing.T) {
+	vs, err := parseMoskinoVenues(readFixture(t, "moskino-venues.html"))
+	if err != nil {
+		t.Fatalf("разбор справочника: %v", err)
+	}
+	rows := registryRows(t, func(n string) bool { return n == "Москино" })
+
+	obs := buildCinemaObservations(applyCityScope(rows), "2026-08-03T10:00:00Z")
+	res := bindNetworkVenues(obs, vs)
+
+	if res.Bound != 21 {
+		t.Errorf("привязано %d из %d, ожидался 21", res.Bound, len(rows))
+	}
+	// «Москино Звезда» есть в реестре, но не на сайте сети — честная
+	// непокрытость, а не повод объявить площадку несуществующей.
+	if len(res.Unmatched) != 1 {
+		t.Errorf("без канала %d строк, ожидалась 1: %v", len(res.Unmatched), res.Unmatched)
+	}
+	if len(res.Orphans) != 0 {
+		t.Errorf("площадки сайта без пары: %v", res.Orphans)
+	}
+
+	for _, o := range obs {
+		if o.Fields[fSourceParams] == "" && o.Fields[fLastError] == "" {
+			t.Errorf("%q осталась без исхода", o.Name)
+		}
+	}
+}
+
+// Киномакс: у каждой площадки в канал идёт ident, а клоны сети привязку не
+// получают вовсе.
+func TestBindKinomax(t *testing.T) {
+	vs, err := parseKinomaxVenues(readFixture(t, "kinomax-cinemas.json"))
+	if err != nil {
+		t.Fatalf("разбор справочника: %v", err)
+	}
+	rows := registryRows(t, func(n string) bool { return n != "Москино" })
+
+	obs := buildCinemaObservations(applyCityScope(rows), "2026-08-03T10:00:00Z")
+	res := bindNetworkVenues(obs, vs)
+
+	if res.Bound != 6 {
+		t.Errorf("привязано %d, ожидалось 6", res.Bound)
+	}
+
+	var clones, bound int
+	for _, o := range obs {
+		if o.Fields[fStatusClass] == classCloneOf {
+			clones++
+			if strings.HasPrefix(o.Fields[fSourceParams], "venue=") {
+				t.Errorf("клон %q получил канал опроса", o.Name)
+			}
+			continue
+		}
+		if strings.HasPrefix(o.Fields[fSourceParams], "venue=") {
+			bound++
+			// В запрос идёт ident, а не число: на числовом id сеть отвечает 404.
+			id := strings.TrimPrefix(o.Fields[fSourceParams], "venue=")
+			if _, err := strconv.Atoi(id); err == nil {
+				t.Errorf("%q получила числовой идентификатор %q вместо ident", o.Name, id)
+			}
+		}
+	}
+	if clones != 14 {
+		t.Errorf("клонов %d, ожидалось 14", clones)
+	}
+	if bound != 6 {
+		t.Errorf("привязанных строк %d, ожидалось 6", bound)
+	}
+}
+
+// Живые названия ломают наивное сравнение тремя способами разом — тест держит
+// все три, потому что каждый встретился в реестре.
+func TestVenueKeyHandlesLiveNames(t *testing.T) {
+	cases := []struct{ registry, directory, note string }{
+		{`«Киномакс-Водный» г. Москва`, "Киномакс-Водный Москва", "кавычки и хвост с городом"},
+		{`Государственное бюджетное учреждение культуры города Москвы "Московское кино", кинотеатр "Москино Юность"`,
+			"Юность", "юридическая обёртка вокруг названия"},
+		{"Москино Березка", "Берёзка (временно закрыт на ремонт)", "приписка о состоянии и ёфикация"},
+	}
+	for _, c := range cases {
+		if got, want := venueKey(c.registry), venueKey(c.directory); got != want {
+			t.Errorf("%s: ключи разошлись — %q → %q, %q → %q", c.note, c.registry, got, c.directory, want)
 		}
 	}
 }
