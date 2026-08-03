@@ -33,13 +33,18 @@ const (
 	kindKinomax    = "kinomax"    // JSON api.kinomax.ru — он же Созвездие и Кинообслуживание
 	kindKaro       = "karo"       // JSON api.karofilm.ru, два вызова
 	kindCinemaStar = "cinemastar" // JSON api.cinemastar.ru, всё окно сразу
-	kindCinemaPark = "cinemapark" // kinoteatr.ru, JSON-обёртка над HTML, только через туннель
-	kindKinoplan   = "kinoplan"   // kinokassa.kinoplan24.ru, токен на площадку
+	kindCinemaPark = "cinemapark" // kinoteatr.ru, JSON-обёртка над HTML
+	kindKinoplan   = "kinoplan"   // kinokassa.kinoplan24.ru, токен выводится из виджета
 	kindMoskino    = "moskino"    // HTML mos-kino.ru
 	kindMori       = "mori"       // HTML mori.film
 	kind5Zvezd     = "5zvezd"     // HTML 5zvezd.ru
-	kindP24        = "p24"        // движок p24.app — Нивада и Колибри
+	kindP24        = "p24"        // движок p24.app, у каждой площадки свой домен
 	kindPushka     = "pushka"     // JSON cinema.pushka.club, площадка в куке
+
+	// Одиночки со своим сайтом: движок общим ни с кем не является, поэтому вид
+	// канала совпадает с самой площадкой, а параметр ей не нужен вовсе.
+	kindHudozhestvenny = "hudozhestvenny" // HTML cinema1909.ru
+	kindGum            = "gum"            // HTML gum.ru/kinozal
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.
