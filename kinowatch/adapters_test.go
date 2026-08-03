@@ -910,3 +910,136 @@ func TestPushkaCoversAllMoscowVenues(t *testing.T) {
 		}
 	}
 }
+
+// Художественный — самый полный из одиночек: зал, цена, хронометраж и язык
+// показа. Фикстуры сняты 03.08 по двум разным датам.
+func TestParseHudozhestvenny(t *testing.T) {
+	pb, err := parseHudozhestvenny(readFixture(t, "hudozhestvenny-0804.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) < 3 {
+		t.Fatalf("сеансов %d, в фикстуре их больше", len(pb.Showtimes))
+	}
+
+	var withHall, withPrice, withDur int
+	for _, s := range pb.Showtimes {
+		if s.Film == "" {
+			t.Error("название фильма потеряно")
+		}
+		if !strings.HasPrefix(s.StartsAt, "2026-08-04T") {
+			t.Errorf("время собрано не на ту дату: %q", s.StartsAt)
+		}
+		if s.Hall != "" {
+			withHall++
+		}
+		if s.PriceMin > 0 {
+			withPrice++
+		}
+		if s.DurationM > 0 {
+			withDur++
+		}
+	}
+	if withHall == 0 {
+		t.Error("зал потерян — у Художественного он есть у каждого сеанса")
+	}
+	if withPrice == 0 {
+		t.Error("цена потеряна")
+	}
+	if withDur == 0 {
+		t.Error("хронометраж потерян — он записан прозой («2 часа 7 минут»)")
+	}
+}
+
+// Даты запрашиваются по одной, и сеансы разных дат не должны слипаться: путь с
+// датой отдаёт свой день, а параметр ?date= сайт игнорирует.
+func TestHudozhestvennyKeepsDatesApart(t *testing.T) {
+	first, err := parseHudozhestvenny(readFixture(t, "hudozhestvenny-0804.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор 04.08: %v", err)
+	}
+	second, err := parseHudozhestvenny(readFixture(t, "hudozhestvenny-0808.html"), "2026-08-08")
+	if err != nil {
+		t.Fatalf("разбор 08.08: %v", err)
+	}
+
+	for _, s := range first.Showtimes {
+		if !strings.HasPrefix(s.StartsAt, "2026-08-04") {
+			t.Errorf("сеанс чужой даты в выдаче 04.08: %q", s.StartsAt)
+		}
+	}
+	for _, s := range second.Showtimes {
+		if !strings.HasPrefix(s.StartsAt, "2026-08-08") {
+			t.Errorf("сеанс чужой даты в выдаче 08.08: %q", s.StartsAt)
+		}
+	}
+	if len(first.Showtimes) == 0 || len(second.Showtimes) == 0 {
+		t.Fatal("одна из дат разобрана пустой")
+	}
+}
+
+// Язык показа — про услугу, поэтому уезжает в Format, а не в Hall: иначе ключ
+// сеанса начнёт различать сеансы по надписи о субтитрах.
+func TestHudozhestvennySeparatesHallFromNote(t *testing.T) {
+	pb, err := parseHudozhestvenny(readFixture(t, "hudozhestvenny-0804.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	for _, s := range pb.Showtimes {
+		if strings.Contains(strings.ToLower(s.Hall), "язык") || strings.Contains(strings.ToLower(s.Hall), "субтитр") {
+			t.Errorf("пометка о языке попала в Hall: %q", s.Hall)
+		}
+	}
+}
+
+// ГУМ: сеансы живут в разделе кинозала. На главной странице времена тоже есть,
+// но это часы работы торгового центра — принять их за сеансы значило бы
+// отрапортовать о показах, которых нет.
+func TestParseGum(t *testing.T) {
+	pb, err := parseGum(readFixture(t, "gum-kinozal.html"), "2026-08-03")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) < 3 {
+		t.Fatalf("сеансов %d, в фикстуре их больше", len(pb.Showtimes))
+	}
+
+	for _, s := range pb.Showtimes {
+		if s.Film == "" {
+			t.Error("название фильма потеряно")
+		}
+		if s.SourceID == "" {
+			t.Error("id сеанса из ticketManager.session() потерян")
+		}
+		hhmm := s.StartsAt[11:16]
+		if hhmm == "10:00" || hhmm == "22:00" {
+			t.Errorf("в сеансы попали часы работы ТЦ: %q у %q", hhmm, s.Film)
+		}
+	}
+}
+
+// Выпадающий список дат — то, чем добирается горизонт: без него виден только
+// сегодняшний день.
+func TestGumDays(t *testing.T) {
+	days := gumDays(readFixture(t, "gum-kinozal.html"))
+	if len(days) == 0 {
+		t.Fatal("список дат не разобран — горизонт свёлся бы к одному дню")
+	}
+	for id, label := range days {
+		if id == "" || label == "" {
+			t.Errorf("пустая запись даты: %q → %q", id, label)
+		}
+	}
+}
+
+// Смена вёрстки обязана быть ошибкой, а не пустой афишей: иначе она выглядела
+// бы как «фильмов нет».
+func TestStandaloneParsersFailLoudly(t *testing.T) {
+	junk := "<html><body><div>совсем другая вёрстка</div></body></html>"
+	if _, err := parseHudozhestvenny(junk, "2026-08-04"); err == nil {
+		t.Error("Художественный промолчал о сменившейся вёрстке")
+	}
+	if _, err := parseGum(junk, "2026-08-03"); err == nil {
+		t.Error("ГУМ промолчал о сменившейся вёрстке")
+	}
+}

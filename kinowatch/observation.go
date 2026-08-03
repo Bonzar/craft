@@ -164,6 +164,15 @@ func buildCinemaObservations(decisions []ScopeDecision, now string) []CinemaObse
 			fields[fSourceParams] = "leader=" + leader
 		}
 
+		// Площадка без сущности «сеанс» — объективное препятствие, а не наша
+		// недоработка: требовать расписание от ресторана с приватным залом
+		// бессмысленно. Причина пишется словами, чтобы в реестре было видно
+		// основание, не заглядывая в код.
+		if reason := screeningsAbsentReason(d.Row.Company); reason != "" {
+			fields[fStatusClass] = pickClass(fields[fStatusClass], classNoOnlineSale)
+			fields[fLastError] = reason
+		}
+
 		out = append(out, CinemaObservation{
 			Key:    d.Row.ID,
 			Name:   d.Row.Company,

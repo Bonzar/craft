@@ -1227,3 +1227,176 @@ func fetchPushkaVenue(c *Client, slug string) (Playbill, error) {
 	}
 	return parsePushka(body)
 }
+
+// ——— Художественный ———
+//
+// `cinema1909.ru/schedule/<ГГГГ-ММ-ДД>` — страница одной даты. Горизонт больше
+// трёх недель, но каждая дата запрашивается отдельно: параметр `?date=` сайт
+// игнорирует и молча отдаёт сегодняшний день, а путь с датой работает.
+//
+// Самый полный источник среди одиночек: номер зала, цена, хронометраж прозой
+// («2 часа 7 минут») и язык показа.
+//
+// Разметка — Next.js с CSS-модулями, имена классов несут хеш сборки
+// («styles_title__2FF9g») и меняются при каждом релизе фронта. Зацепки взяты за
+// имя модуля до хеша: оно переживает пересборку, а полное имя — нет.
+//
+// Карточка фильма и его сеансы лежат РЯДОМ, а не вложенно: `<main>` закрывается
+// до блока сеансов. Поэтому страница режется по открывающему `<main`, а не
+// разбирается вложенными группами — и режется разбиением, а не регулярным
+// выражением: нежадный поиск «до следующего <main» съедает разделитель и
+// теряет каждый второй фильм.
+var (
+	hudTitle = regexp.MustCompile(`(?s)href="/movies/([a-z0-9-]+)"[^>]*>\s*(.*?)\s*</a>`)
+	hudDur   = regexp.MustCompile(`(?s)>([^<]{0,40}?(?:час|мин)[^<]{0,20})</div>`)
+	hudTime  = regexp.MustCompile(`>\s*([0-2]?\d:[0-5]\d)\s*<`)
+	hudHall  = regexp.MustCompile(`styles_title__[^"]*"[^>]*>\s*([^<]+?)\s*<`)
+	hudPrice = regexp.MustCompile(`styles_price__[^"]*"[^>]*>\s*([0-9\s]+)`)
+	hudNote  = regexp.MustCompile(`(?s)</div>\s*<div class="mt-2[^"]*"[^>]*>\s*([^<]+?)\s*</div>`)
+)
+
+// parseHudozhestvenny разбирает страницу расписания на одну дату.
+func parseHudozhestvenny(body, date string) (Playbill, error) {
+	pb := Playbill{Cinema: "Художественный"}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	blocks := strings.Split(body, "<main")
+	if len(blocks) < 2 {
+		return pb, fmt.Errorf("разбор Художественного: карточки фильмов не найдены (тело %d байт)", len(body))
+	}
+
+	var parsed int
+	for _, block := range blocks[1:] {
+		tm := hudTitle.FindStringSubmatch(block)
+		if len(tm) < 3 {
+			continue
+		}
+		slug := tm[1]
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[2])))
+		if film == "" {
+			continue
+		}
+
+		dur := 0
+		if dm := hudDur.FindStringSubmatch(block); len(dm) > 1 {
+			dur = parseRussianDuration(dm[1])
+		}
+
+		// Блоки сеансов режутся разбиением по той же причине, что и карточки
+		// фильмов: нежадный поиск «до следующего styles_root__» съедает
+		// разделитель и оставляет по одному сеансу на фильм.
+		for _, show := range strings.Split(block, "styles_root__")[1:] {
+			tmm := hudTime.FindStringSubmatch(show)
+			if len(tmm) < 2 {
+				continue
+			}
+			at := normalizeShowtime(tmm[1], date)
+			if at == "" {
+				continue
+			}
+
+			st := Showtime{
+				Film:      film,
+				StartsAt:  at,
+				DurationM: dur,
+				OnSale:    true,
+				// Своего идентификатора сеанса источник не даёт — в реестре
+				// такие сеансы различаются отпечатком. Слаг фильма сюда не
+				// годится: он один на все сеансы дня.
+				DeepLink: "https://cinema1909.ru/movies/" + slug,
+			}
+			if hm := hudHall.FindStringSubmatch(show); len(hm) > 1 {
+				st.Hall = strings.TrimSpace(hm[1])
+			}
+			if pm := hudPrice.FindStringSubmatch(show); len(pm) > 1 {
+				st.PriceMin, _ = strconv.Atoi(strings.Join(strings.Fields(pm[1]), ""))
+			}
+			// Язык показа и прочие пометки — про услугу, поэтому Format.
+			if nm := hudNote.FindStringSubmatch(show); len(nm) > 1 {
+				st.Format = strings.TrimSpace(stripHTML(nm[1]))
+			}
+			pb.Showtimes = append(pb.Showtimes, st)
+			parsed++
+		}
+	}
+
+	// Ни одного сеанса при найденных карточках — тоже поломка разбора: у
+	// страницы даты сеансы есть всегда, иначе её бы не отдали.
+	if parsed == 0 {
+		return pb, fmt.Errorf("разбор Художественного: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— ГУМ ———
+//
+// `gum.ru/kinozal/` — расписание кинозала. Важно не перепутать с главной
+// страницей `gum.ru`: там времена есть, но это часы работы торгового центра
+// («ежедневно с 10:00 до 22:00»), а не сеансы.
+//
+// Даты переключаются выпадающим списком, где значение опции — идентификатор
+// дня; человекочитаемая подпись стоит рядом («Понедельник 31 Августа»).
+var (
+	gumItem   = regexp.MustCompile(`(?s)<div class="kino__item">(.*?)(?:<div class="kino__item">|\z)`)
+	gumTitle  = regexp.MustCompile(`(?s)kino__title"[^>]*>\s*<a[^>]*href="/kinozal/movie/id/(\d+)/"[^>]*>\s*(.*?)\s*</a>`)
+	gumTime   = regexp.MustCompile(`ticketManager\.session\("([^"]+)",\s*(\d+)\);'>\s*([0-2]?\d:[0-5]\d)`)
+	gumDayOpt = regexp.MustCompile(`<option value="(\d+)"[^>]*>\s*([^<]+?)\s*</option>`)
+)
+
+// parseGum разбирает расписание кинозала ГУМа.
+func parseGum(body, date string) (Playbill, error) {
+	pb := Playbill{Cinema: "ГУМ Кинозал"}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	items := gumItem.FindAllStringSubmatch(body, -1)
+	if len(items) == 0 {
+		return pb, fmt.Errorf("разбор ГУМа: карточки фильмов не найдены (тело %d байт)", len(body))
+	}
+
+	for _, it := range items {
+		block := it[1]
+
+		tm := gumTitle.FindStringSubmatch(block)
+		if len(tm) < 3 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[2])))
+		if film == "" {
+			continue
+		}
+
+		for _, s := range gumTime.FindAllStringSubmatch(block, -1) {
+			at := normalizeShowtime(s[3], date)
+			if at == "" {
+				continue
+			}
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film:     film,
+				StartsAt: at,
+				// Второй аргумент ticketManager.session — идентификатор сеанса,
+				// первый описывает площадку и у всех сеансов один.
+				SourceID: s[2],
+				OnSale:   true,
+				DeepLink: "https://gum.ru/kinozal/movie/id/" + tm[1] + "/",
+			})
+		}
+	}
+	return pb, nil
+}
+
+// gumDays — идентификаторы дат из выпадающего списка страницы.
+// Нужны, чтобы обойти весь горизонт, а не только сегодняшний день.
+func gumDays(body string) map[string]string {
+	out := map[string]string{}
+	for _, m := range gumDayOpt.FindAllStringSubmatch(body, -1) {
+		label := strings.TrimSpace(stripHTML(m[2]))
+		if label != "" {
+			out[m[1]] = label
+		}
+	}
+	return out
+}

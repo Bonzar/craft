@@ -292,3 +292,55 @@ func TestNonCloneNetworkIsUntouched(t *testing.T) {
 		t.Error("известный клон не опознан")
 	}
 }
+
+// Площадка без кинопоказов получает объективный класс, а не «адаптер не
+// написан»: разница в том, попадёт ли она в знаменатель покрытия навсегда.
+func TestVenuesWithoutScreeningsLeaveDenominator(t *testing.T) {
+	rows := []EaisRow{
+		{ID: "10", City: "Москва г", Company: "Коперто"},
+		{ID: "11", City: "Москва г", Company: `Киноклуб-музей "Эльдар"`},
+		{ID: "12", City: "Москва г", Company: "Художественный"},
+	}
+
+	obs := buildCinemaObservations(applyCityScope(rows), "2026-08-03T10:00:00Z")
+	if len(obs) != 3 {
+		t.Fatalf("наблюдений %d, ожидалось 3", len(obs))
+	}
+
+	for _, i := range []int{0, 1} {
+		got := obs[i].Fields[fStatusClass]
+		if got != classNoOnlineSale {
+			t.Errorf("%q получил класс %q, ожидался %q", obs[i].Name, got, classNoOnlineSale)
+		}
+		if keepsInDenominator(got) {
+			t.Errorf("%q остался в знаменателе — площадка без сеансов вечно висела бы недоработкой", obs[i].Name)
+		}
+		if obs[i].Fields[fLastError] == "" {
+			t.Errorf("%q не несёт причину словами — основание не видно без чтения кода", obs[i].Name)
+		}
+		if obs[i].Fields[fStatusAt] == "" {
+			t.Errorf("%q без даты решения — месячная перепроверка не сработает", obs[i].Name)
+		}
+	}
+
+	// Обычная площадка остаётся непокрытой, то есть в знаменателе.
+	if got := obs[2].Fields[fStatusClass]; got != classUncovered {
+		t.Errorf("обычная площадка получила класс %q вместо %q", got, classUncovered)
+	}
+	if !keepsInDenominator(obs[2].Fields[fStatusClass]) {
+		t.Error("обычная площадка выпала из знаменателя")
+	}
+}
+
+// Совпадение только по подстроке названия, а не по любому созвучию: чужая
+// площадка не должна нечаянно получить чужой класс.
+func TestScreeningsAbsentReasonIsNarrow(t *testing.T) {
+	if r := screeningsAbsentReason("Коперто"); r == "" {
+		t.Error("известная площадка без сеансов не опознана")
+	}
+	for _, name := range []string{"Художественный", "ГУМ Кинозал", "Пять звёзд", "КАРО ФИЛЬМ"} {
+		if r := screeningsAbsentReason(name); r != "" {
+			t.Errorf("обычной площадке %q приписано отсутствие сеансов: %q", name, r)
+		}
+	}
+}
