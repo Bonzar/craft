@@ -157,6 +157,8 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-guard-plan-critic.sh")
   | ensure("PreToolUse"; "ExitPlanMode";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
+  | ensure("PreToolUse"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-service-turn.sh")
   | ensure("PostToolUse"; "ExitPlanMode";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
   | ensure("PostToolUse"; "Task|Agent";
@@ -165,6 +167,8 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-mark-plan-file.sh")
   | ensure("UserPromptSubmit"; "";
          "\"$HOME\"/.claude/hooks/universal-plan-gate-reset.sh")
+  | ensure("UserPromptSubmit"; "";
+         "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
   | ensure("UserPromptSubmit"; "";
          "\"$HOME\"/.claude/hooks/universal-detect-incident.sh")
   | ensure("SessionStart"; "";
