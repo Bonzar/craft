@@ -37,9 +37,14 @@ func main() {
 		timeoutSec    = flag.Int("timeout", 60, "таймаут одного HTTP-запроса, сек")
 		retries       = flag.Int("retries", 3, "ретраи на сетевых ошибках и 5xx")
 		limit         = flag.Int("limit", 0, "геокодировать только первые N площадок (0 — все)")
-		probeGeo      = flag.String("probe-geo", "", "прогнать каскад по одному названию и показать решение по шагам")
-		probeAddr     = flag.String("probe-address", "", "адрес для --probe-geo, если он известен")
-		probeNet      = flag.Bool("probe-network", false, "считать площадку из --probe-geo сетевой")
+		probe         = flag.Bool("probe", false, "опросить площадки реестра (stdin) по фильму и напечатать статусы")
+		probeFilm     = flag.String("film", "", "название искомого фильма")
+		probeProfile  = flag.String("film-profile", "", "файл с профилем фильма: обёртки, хронометраж, синопсис")
+		probeDays     = flag.Int("days", 7, "горизонт опроса в днях от сегодня")
+
+		probeGeo  = flag.String("probe-geo", "", "прогнать каскад по одному названию и показать решение по шагам")
+		probeAddr = flag.String("probe-address", "", "адрес для --probe-geo, если он известен")
+		probeNet  = flag.Bool("probe-network", false, "считать площадку из --probe-geo сетевой")
 
 		// Туннель поднимает рутина, бинарник получает готовый адрес: держать
 		// внутри запуск xray значило бы смешать две разные ответственности и
@@ -57,12 +62,14 @@ func main() {
 		runBuildRegistry(client, *eaisBase, *region)
 	case *enrich:
 		runEnrich(client, newGeoClient(*timeoutSec, *retries), *eaisBase, *region, *limit)
+	case *probe:
+		runProbe(client, *probeFilm, *probeProfile, *probeDays)
 	case *probeGeo != "":
 		runProbeGeo(newGeoClient(*timeoutSec, *retries), *probeGeo, *probeAddr, *probeNet)
 	case *checkProxy:
 		runCheckProxy(*proxyAddr, *proxyCountry, *timeoutSec, *retries)
 	default:
-		fail("режим не выбран: укажи --build-registry или --enrich")
+		fail("режим не выбран: укажи --build-registry, --enrich или --probe")
 	}
 }
 
