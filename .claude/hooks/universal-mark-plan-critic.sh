@@ -21,6 +21,16 @@
 # Fail quiet: не смог посчитать хеш — отметки нет, гейт просто не пропустит.
 set -u
 
+# Хеш файла. Запасная команда обязательна: на маке из README основной нет, хеш вышел бы
+# пустым, и гейт молча выключился бы. Формат первого токена у обеих команд одинаков.
+hash_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+  fi
+}
+
 # Уступаем user-level копии — иначе двойной прогон на локальной машине.
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
       && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
@@ -52,7 +62,7 @@ jq -e '(.tool_input.subagent_type // "") == "plan-critic"' >/dev/null 2>&1 <<<"$
 
 plan="${CRAFT_PLAN_FILE:-$(cat "${CRAFT_PLAN_FILE_MARKER:-/tmp/plan-file.${sid}.path}" 2>/dev/null)}"
 [[ -n "$plan" && -r "$plan" ]] || exit 0
-hash="$(sha256sum "$plan" 2>/dev/null | cut -d' ' -f1)"
+hash="$(hash_of "$plan")"
 [[ -n "$hash" ]] || exit 0
 
 resp="$(jq -r '.tool_response | tostring' <<<"$input" 2>/dev/null)"

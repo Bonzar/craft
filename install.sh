@@ -140,6 +140,10 @@ merged="$(jq '
   | ensure("PreToolUse"; "mcp__.*__craft_write";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
   | ensure("PreToolUse"; "Bash";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
+  | ensure("PostToolUseFailure"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-exit-failure.sh")
+  | ensure("PreToolUse"; "Bash";
          "\"$HOME\"/.claude/hooks/universal-sleep-waiter-guard.sh")
   | ensure("PreToolUse"; "Bash";
          "\"$HOME\"/.claude/hooks/universal-block-no-verify.sh")

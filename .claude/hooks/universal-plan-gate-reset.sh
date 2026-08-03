@@ -21,12 +21,14 @@ ANCHORS="${CRAFT_SERVICE_ANCHORS:-$(cd "$(dirname "$SELF")" && pwd)/service-anch
 # не показывать план повторно, пока Влад не ответил. Ставится здесь, а не в самом гейте:
 # словарь якорей уже разобран, а гейт видит только событие показа.
 serviceturn="${CRAFT_SERVICE_TURN_MARKER:-/tmp/plan-service-turn.${CLAUDE_CODE_SESSION_ID:-default}}"
+planshown="${CRAFT_PLAN_SHOWN_MARKER:-/tmp/plan-shown.${CLAUDE_CODE_SESSION_ID:-default}}"
 while IFS= read -r anchor || [[ -n "$anchor" ]]; do
   [[ -z "$anchor" || "$anchor" == \#* ]] && continue
   [[ "$prompt" == "$anchor"* ]] && { : > "$serviceturn" 2>/dev/null || true; exit 0; }
 done < "$ANCHORS" 2>/dev/null
-# Реплика Влада: ход снова его, показ плана разрешён.
-rm -f "$serviceturn" 2>/dev/null || true
+# Реплика Влада: ход снова его, показ плана разрешён — снимаем и метку служебного хода,
+# и хеш показанного, разговор начинается заново.
+rm -f "$serviceturn" "$planshown" 2>/dev/null || true
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
 rm -f "$marker" 2>/dev/null || true

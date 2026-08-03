@@ -42,6 +42,7 @@ declare -A SCRIPT=(
   [guard-plan-critic]="$HOOKS/universal-guard-plan-critic.sh"
   [guard-plan-delta]="$HOOKS/universal-guard-plan-delta.sh"
   [guard-plan-service-turn]="$HOOKS/universal-guard-plan-service-turn.sh"
+  [guard-plan-exit-failure]="$HOOKS/universal-guard-plan-exit-failure.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
   [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
@@ -107,12 +108,14 @@ for f in "${files[@]}"; do
     icmark="$(mktemp -u "${TMPDIR:-/tmp}/incident-closure-test.XXXXXX").armed"
     serviceturn="$(mktemp -u "${TMPDIR:-/tmp}/plan-service-turn-test.XXXXXX")"
     criticpend="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-pending-test.XXXXXX")"
+    planshown="$(mktemp -u "${TMPDIR:-/tmp}/plan-shown-test.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
              "CRAFT_PLAN_DELTA_STORE=$deltastore" "INCIDENT_CLOSURE_MARKER=$icmark"
              "CRAFT_SERVICE_TURN_MARKER=$serviceturn"
-             "CRAFT_PLAN_CRITIC_PENDING=$criticpend")
+             "CRAFT_PLAN_CRITIC_PENDING=$criticpend"
+             "CRAFT_PLAN_SHOWN_MARKER=$planshown")
     # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
     # из env, создаётся до прогона (взводом в жизни занимается другой хук).
     [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"
@@ -158,7 +161,7 @@ for f in "${files[@]}"; do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
     done
     rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
-          "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend"; rm -rf "$fgdir"
+          "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend" "$planshown"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -209,6 +212,23 @@ while IFS= read -r c; do
   elif [[ ! -x "$p" ]]; then smoke+=("hook not executable: $p")
   fi
 done < <(jq -r '.hooks[]?[]?.hooks[]?.command // empty' "$REPO/.claude/settings.json" 2>/dev/null)
+
+# Поверхность, которую хук объявляет, обязана быть за ним зарегистрирована: раннер
+# зовёт хуки по своей карте и регистрации не видит, поэтому пропавший матчер тесты
+# иначе не ловят. Ключ — «файл хука ↔ событие и матчер».
+declare -A NEEDS_MATCHER=(
+  ["universal-guard-plan-gate.sh|PreToolUse"]="Bash"
+  ["universal-guard-plan-exit-failure.sh|PostToolUseFailure"]="ExitPlanMode"
+  ["universal-guard-plan-service-turn.sh|PreToolUse"]="ExitPlanMode"
+)
+for key in "${!NEEDS_MATCHER[@]}"; do
+  hookfile="${key%%|*}"; event="${key##*|}"; want="${NEEDS_MATCHER[$key]}"
+  jq -e --arg e "$event" --arg m "$want" --arg f "$hookfile" \
+     '(.hooks[$e] // []) | any(((.matcher // "") == $m)
+        and any((.hooks // [])[]; (.command // "") | endswith($f)))' \
+     "$REPO/.claude/settings.json" >/dev/null 2>&1 \
+    || smoke+=("hook $hookfile not registered on $event matcher $want")
+done
 
 # Reverse smoke: every hook FILE under .claude/hooks must be registered in at
 # least one contour (repo settings.json or install.sh) — an unregistered hook
