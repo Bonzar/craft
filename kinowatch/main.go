@@ -156,8 +156,12 @@ type EnrichReport struct {
 	Paths          map[string]PathStat `json:"paths"`
 	Unverified     int                 `json:"unverified"`
 	NameDuplicates int                 `json:"nameDuplicates"`
-	Observations   []CinemaObservation `json:"observations"`
-	Errors         []string            `json:"errors,omitempty"`
+	// Binding — покрытие каналами по сетям. Отдельно от Paths: там речь про
+	// координаты площадки, здесь — про то, есть ли к ней вообще запрос.
+	Binding      []NetworkBinding    `json:"binding"`
+	BoundVenues  int                 `json:"boundVenues"`
+	Observations []CinemaObservation `json:"observations"`
+	Errors       []string            `json:"errors,omitempty"`
 	// GeoErrors отдельно от Errors: отказ геокодера по одной площадке прогон не
 	// рушит, но и тонуть в общем списке не должен — по нему видно, чего стоит
 	// доверять числам в Paths.
@@ -239,6 +243,15 @@ func runEnrich(c, geo *Client, base, region string, limit int) {
 
 	obs := buildCinemaObservations(decisions, now)
 	report.InScope = len(obs)
+
+	// Привязка идёт до геокодирования: она решает, ЕСТЬ ли у площадки запрос за
+	// расписанием, и от координат никак не зависит.
+	report.Binding = bindAllNetworks(jsonClient.getText, obs)
+	for i := range obs {
+		if obs[i].Fields[fSourceKind] != "" {
+			report.BoundVenues++
+		}
+	}
 
 	geocoded := 0
 	for i := range obs {

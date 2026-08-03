@@ -133,6 +133,122 @@ type BindResult struct {
 	Ambiguous []string `json:"ambiguous,omitempty"`
 }
 
+// Адреса справочников площадок. У КАРО справочник один на две задачи: отсюда
+// берутся и координаты для геокодера (enrich.go), и идентификаторы каналов.
+const (
+	cinemaStarVenuesURL = "https://api.cinemastar.ru/data/1"
+	moskinoVenuesURL    = "https://mos-kino.ru/cinema/"
+)
+
+// networkDirectory — один справочник сети: как его достать и как разобрать.
+//
+// Часть сетей справочника не имеет вовсе — у «Пяти звёзд» и p24 площадки
+// перечислены в коде. У них fetch пустой, и это не заглушка: список из трёх
+// слагов, живущих только в разметке главной страницы, честнее держать списком,
+// чем изображать вокруг него справочник.
+type networkDirectory struct {
+	Name  string
+	URL   string
+	Parse func(string) ([]NetworkVenue, error)
+	Fixed []NetworkVenue
+}
+
+// networkDirectories — справочники, доступные прогону.
+//
+// Киномакса и Синема Парка здесь нет: их адреса с иностранного выхода не
+// открываются — Киномакс отвечает капчей, kinoteatr.ru рвёт соединение. Обе
+// сети подключаются вместе с российским туннелем, и пока их строки просто не
+// участвуют в привязке.
+var networkDirectories = []networkDirectory{
+	{Name: "КАРО", URL: karoDirectoryURL, Parse: parseKaroVenues},
+	{Name: "Синема Стар", URL: cinemaStarVenuesURL, Parse: parseCinemaStarVenues},
+	{Name: "Москино", URL: moskinoVenuesURL, Parse: parseMoskinoVenues},
+	{Name: "Пять звёзд", Fixed: fiveStarsVenues},
+	{Name: "p24", Fixed: p24Venues},
+}
+
+// NetworkBinding — покрытие одной сети каналами её собственного справочника.
+type NetworkBinding struct {
+	Network string `json:"network"`
+	Venues  int    `json:"venues"`
+	BindResult
+	Error string `json:"error,omitempty"`
+}
+
+// bindAllNetworks проходит справочники сетей и привязывает к ним строки реестра.
+//
+// Каждая сеть обрабатывается своим вызовом, а не общим котлом из всех
+// справочников сразу: строка обязана искать себя только у своей сети, и вердикт
+// «нет в справочнике» имеет смысл лишь применительно к конкретному справочнику.
+//
+// Отказ одного справочника прогон не рушит — сеть остаётся непривязанной с
+// причиной в отчёте, ровно как ведут себя обогатители геокодера.
+func bindAllNetworks(fetch func(url string) (string, error), obs []CinemaObservation) []NetworkBinding {
+	out := make([]NetworkBinding, 0, len(networkDirectories))
+
+	for _, d := range networkDirectories {
+		nb := NetworkBinding{Network: d.Name}
+
+		venues := d.Fixed
+		if d.URL != "" {
+			body, err := fetch(d.URL)
+			if err != nil {
+				nb.Error = err.Error()
+				out = append(out, nb)
+				continue
+			}
+			venues, err = d.Parse(body)
+			if err != nil {
+				nb.Error = err.Error()
+				out = append(out, nb)
+				continue
+			}
+		}
+
+		nb.Venues = len(venues)
+		nb.BindResult = bindNetworkVenues(obs, venues)
+		out = append(out, nb)
+	}
+
+	return out
+}
+
+// networkKinds — имя сети в листинге ЕАИС → вид её канала.
+//
+// Ключ здесь ФРАГМЕНТ нормализованного имени, а не имя целиком: листинг пишет
+// сеть как придётся — «КАРО ФИЛЬМ», «СИНЕМА-СТАР», «АО "Киномакс" в г. Москва».
+// Сравнение идёт вхождением фрагмента, поэтому все три формы сходятся к одному
+// виду канала.
+//
+// Строки сетей, чьего справочника ещё нет (Mori, Люксор, Мираж, Космик), в
+// таблице отсутствуют: вид канала им назначать нечем, и в привязке они не
+// участвуют вовсе.
+var networkKinds = map[string]string{
+	"каро":        kindKaro,
+	"москино":     kindMoskino,
+	"синема стар": kindCinemaStar,
+	"синема парк": kindCinemaPark,
+	"киномакс":    kindKinomax,
+	"пять звезд":  kind5Zvezd,
+	"колибри":     kindP24,
+	"премьер зал": kindP24,
+}
+
+// kindOfNetwork — вид канала сети, к которой относится строка реестра.
+// Пустая строка означает «сеть неизвестна», а не «одиночка».
+func kindOfNetwork(network string) string {
+	n := normalizeName(network)
+	if n == "" {
+		return ""
+	}
+	for frag, kind := range networkKinds {
+		if strings.Contains(n, frag) {
+			return kind
+		}
+	}
+	return ""
+}
+
 // bindNetworkVenues проставляет наблюдениям идентификатор площадки в её канале.
 //
 // Сопоставление — по нормализованному названию и ТОЛЬКО при единственном
@@ -143,37 +259,61 @@ type BindResult struct {
 // Названия площадок сетей несут номер зала спереди («КАРО 7 Атриум» против
 // «7 Атриум» в справочнике) и имя сети — сравнение идёт по хвосту, см.
 // venueKey.
+//
+// Строка ищет себя только в справочнике СВОЕЙ сети, и это не оптимизация.
+// Во-первых, ключи разных сетей сталкиваются: «Москино Музеон» и «КАРО Музеон»
+// оба дают «музеон», и без разделения по сетям обе строки привязывались бы к
+// единственному кандидату «Музеон» из справочника Москино — замерено живьём.
+// Во-вторых, вердикт «нет в справочнике собственной сети» иначе доставался бы
+// каждой строке чужой сети, просто потому что её справочник сейчас не на руках.
 func bindNetworkVenues(obs []CinemaObservation, venues []NetworkVenue) BindResult {
 	res := BindResult{}
 
+	haveKind := map[string]bool{}
 	byKey := map[string][]NetworkVenue{}
 	for _, v := range venues {
+		haveKind[v.Kind] = true
 		byKey[venueKey(v.Name)] = append(byKey[venueKey(v.Name)], v)
 	}
 
-	// Строки реестра, неразличимые между собой, не привязываются ни одна.
-	rowCount := map[string]int{}
+	// Участвуют только строки тех сетей, чьи справочники сейчас на руках.
+	var rows []int
+	kindOf := map[int]string{}
 	for i := range obs {
 		if skipBinding(obs[i]) {
 			continue
 		}
-		rowCount[venueKey(obs[i].Name)]++
+		kind := kindOfNetwork(obs[i].Fields[fNetwork])
+		if kind == "" || !haveKind[kind] {
+			continue
+		}
+		rows = append(rows, i)
+		kindOf[i] = kind
+	}
+
+	// Неразличимость считается ВНУТРИ сети: одинаковый ключ у строк разных
+	// сетей — не столкновение, каждая ищет себя в своём справочнике.
+	rowCount := map[string]int{}
+	for _, i := range rows {
+		rowCount[kindOf[i]+"\x00"+venueKey(obs[i].Name)]++
 	}
 
 	used := map[string]bool{}
-	for i := range obs {
-		if skipBinding(obs[i]) {
-			continue
-		}
+	for _, i := range rows {
 		key := venueKey(obs[i].Name)
 
-		if rowCount[key] > 1 {
+		if rowCount[kindOf[i]+"\x00"+key] > 1 {
 			res.Ambiguous = append(res.Ambiguous, obs[i].Name)
 			addNote(obs[i].Fields, noteGeoNameDup)
 			continue
 		}
 
-		cands := byKey[key]
+		var cands []NetworkVenue
+		for _, v := range byKey[key] {
+			if v.Kind == kindOf[i] {
+				cands = append(cands, v)
+			}
+		}
 		if len(cands) != 1 {
 			// Площадка ОСТАЁТСЯ непокрытой, а не объявляется непокрываемой.
 			//
@@ -255,8 +395,18 @@ var venueParen = regexp.MustCompile(`\s*\([^)]*\)`)
 // нормализации «г.» превращается в отдельную букву).
 var venueCityTail = regexp.MustCompile(`\s*(?:г\s+)?москва\s*$`)
 
+// venueCityHead — тот же город, но НЕ в хвосте: Синема-Стар ставит его сразу
+// после имени сети — «Синема Стар Москва Европарк» против «Синема Стар
+// Европарк» в собственном справочнике сети.
+//
+// Снимается только когда имя сети действительно снято, и это условие несущее:
+// у Миража «Москва» — само название кинотеатра («Москва МАРИ», «Москва
+// ОТРАДНОЕ»), и безусловное снятие превратило бы их в «мари» и «отрадное».
+var venueCityHead = regexp.MustCompile(`^(?:г\s+)?москва\s+`)
+
 func venueKey(name string) string {
 	s := normalizeName(venueParen.ReplaceAllString(name, ""))
+	brandCut := false
 	// Имя сети снимается вместе со ВСЕМ, что стоит перед ним. В реестре
 	// площадка бывает записана юридически целиком: «Государственное бюджетное
 	// учреждение культуры города Москвы "Московское кино", кинотеатр "Москино
@@ -274,6 +424,7 @@ func venueKey(name string) string {
 			break
 		}
 		s = tail
+		brandCut = true
 		break
 	}
 	s = venueRank.ReplaceAllString(s, "")
@@ -281,7 +432,17 @@ func venueKey(name string) string {
 	// Москва», а реестр — ««Киномакс-Водный» г. Москва»: после нормализации от
 	// «г.» остаётся отдельная буква, и снимать надо оба вида хвоста, иначе не
 	// совпадёт ни одна площадка сети.
-	s = venueCityTail.ReplaceAllString(s, "")
+	// Снятие города не имеет права обнулить ключ — ни хвостом, ни серединой.
+	// Площадка так и зовётся, «Москва», и пустой ключ вычёркивал бы её из
+	// сопоставления молча: и обогатители, и привязка пустой ключ пропускают.
+	if cut := strings.TrimSpace(venueCityTail.ReplaceAllString(s, "")); cut != "" {
+		s = cut
+	}
+	if brandCut {
+		if cut := strings.TrimSpace(venueCityHead.ReplaceAllString(s, "")); cut != "" {
+			s = cut
+		}
+	}
 	return strings.TrimSpace(s)
 }
 
