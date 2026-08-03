@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -291,7 +292,10 @@ func fetchKinoplanDay(c *Client, widget string, day time.Time) ChannelProbe {
 		return out
 	}
 
-	pb, perr := parseKinoplan(body)
+	// Отбор по площадке обязателен: приложение бывает общим на несколько
+	// кинотеатров, и без него каждый получил бы расписание всех сразу.
+	id, _ := strconv.Atoi(widget)
+	pb, perr := parseKinoplanFor(body, id)
 	out.Playbill, out.ParseErr = pb, perr
 	return out
 }
