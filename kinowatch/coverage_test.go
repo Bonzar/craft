@@ -56,11 +56,32 @@ func TestCoverageAcceptsExcuseWithEvidence(t *testing.T) {
 	rep := coverage([]CinemaObservation{
 		obsWith("Берёзка", map[string]string{
 			fStatusClass: classClosed,
-			fEvidenceURL: "справочник сети, площадка «Берёзка (временно закрыт на ремонт)»",
+			fExcuse:      "справочник сети, площадка «Берёзка»: временно закрыт на ремонт",
 		}),
 	})
 	if rep.Excused != 1 || rep.Uncoverd != 0 {
 		t.Errorf("улика источника не засчитана: %+v", rep)
+	}
+}
+
+// Поля общего назначения уликой не считаются, даже когда заполнены.
+//
+// Это и есть та дыра, ради которой заведено отдельное поле: строку «нет в
+// справочнике собственной сети» привязка проставляет в LastError двум десяткам
+// площадок, а SourceParams и EvidenceURL пишет геокодер и назначение канала.
+// Пока улику брали из них, смены класса хватало, чтобы площадка «освободилась»,
+// не тронув ни одного источника.
+func TestCoverageIgnoresGeneralPurposeFieldsAsEvidence(t *testing.T) {
+	for _, field := range []string{fLastError, fEvidenceURL, fSourceParams, fNote} {
+		rep := coverage([]CinemaObservation{
+			obsWith("площадка", map[string]string{
+				fStatusClass: classClosed,
+				field:        "нет в справочнике собственной сети — канал искать отдельно",
+			}),
+		})
+		if rep.Excused != 0 || rep.Uncoverd != 1 {
+			t.Errorf("поле %q засчитано уликой освобождения: %+v", field, rep)
+		}
 	}
 }
 

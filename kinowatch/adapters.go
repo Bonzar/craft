@@ -50,6 +50,8 @@ const (
 	// страница города с отбором внутри.
 	kindPremierzal = "premierzal" // HTML сети «Премьер-Зал», домен на площадку
 	kindMirage     = "mirage"     // HTML mirage.ru, одна страница на все площадки города
+	kindCinema5    = "cinema5"    // JSON cinema5.ru, горизонт у источника два дня
+	kindEtobilet   = "etobilet"   // движок etobilet, расписание JSON-ом внутри страницы
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.
@@ -1611,4 +1613,266 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 		return pb, fmt.Errorf("разбор Миража: сеансы не найдены (тело %d байт)", len(body))
 	}
 	return pb, nil
+}
+
+// ——— СИНЕМА 5 ———
+//
+// `cinema5.ru/api/v1/movies/page/<страница>?cinemaIds=<id>` отдаёт афишу
+// площадки готовым JSON. Отбор по площадке делает сам сервис: 21 → 6 сеансов,
+// 20 → 4, суммы не совпадают со страницей города. Ключ `key` в запросе не
+// обязателен — ответ с ним и без него побайтово одинаков.
+//
+// Горизонт у источника ровно два дня: страницы `today` и `tomorrow` отвечают,
+// произвольная дата в пути — пустым списком, а `soon` и `all` не существуют.
+// Это свойство источника, а не адаптера, и врать о нём нельзя: за глубиной
+// обращаться некуда.
+type cinema5Response struct {
+	Items []struct {
+		ID    int64  `json:"id"`
+		Name  string `json:"name"`
+		Shows []struct {
+			ID       int64  `json:"id"`
+			CinemaID int    `json:"cinemaId"`
+			Date     string `json:"date"`
+			Time     string `json:"time"`
+			Format   string `json:"formatName"`
+			Hall     string `json:"hallName"`
+			HallCat  string `json:"hallCategory"`
+			MinPrice int    `json:"minPrice"`
+			MaxPrice int    `json:"maxPrice"`
+		} `json:"shows"`
+	} `json:"items"`
+}
+
+// parseCinema5 разбирает ответ афиши Синема 5.
+//
+// cinemaID здесь не фильтр, а ПРОВЕРКА: отбор уже сделал сервис, и чужой сеанс
+// в ответе означал бы, что запрос ушёл не туда. Молча выбросить его нельзя —
+// тогда промах по идентификатору выглядел бы как «сеансов мало».
+func parseCinema5(body string, cinemaID int) (Playbill, error) {
+	var resp cinema5Response
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return Playbill{}, fmt.Errorf("разбор ответа Синема 5: %w", err)
+	}
+
+	pb := Playbill{}
+	dates := map[string]bool{}
+
+	for _, m := range resp.Items {
+		film := strings.TrimSpace(m.Name)
+		if film == "" {
+			continue
+		}
+		for _, s := range m.Shows {
+			if cinemaID != 0 && s.CinemaID != cinemaID {
+				return Playbill{}, fmt.Errorf(
+					"разбор Синема 5: в ответе площадки %d пришёл сеанс площадки %d",
+					cinemaID, s.CinemaID)
+			}
+			at := normalizeShowtime(s.Time, s.Date)
+			if at == "" {
+				continue
+			}
+			dates[s.Date] = true
+
+			// Класс зала («Комфорт») едет в Format вместе с технологией: Hall
+			// держит только номер, иначе два сеанса одного фильма в разных
+			// залах одного формата схлопнулись бы в один ключ.
+			format := strings.TrimSpace(s.Format)
+			if cat := strings.TrimSpace(s.HallCat); cat != "" {
+				format = strings.TrimSpace(format + " " + cat)
+			}
+
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film:     film,
+				StartsAt: at,
+				Hall:     strings.TrimSpace(s.Hall),
+				Format:   format,
+				PriceMin: s.MinPrice,
+				PriceMax: s.MaxPrice,
+				SourceID: fmt.Sprintf("%d", s.ID),
+				OnSale:   true,
+			})
+		}
+	}
+
+	for d := range dates {
+		pb.Dates = append(pb.Dates, d)
+	}
+	sort.Strings(pb.Dates)
+
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Синема 5: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— PRIME CINEMA (движок etobilet) ———
+//
+// `primecinema.ru/?date=ДД.ММ.ГГГГ` отдаёт страницу, внутри которой лежит
+// готовый JSON расписания дня — массив `daySchedule` в потоковых данных Next.js.
+// Кавычки в нём экранированы (`\"`), потому что массив сам является строкой
+// внутри разметки.
+//
+// Разбираем именно JSON, а не разметку: вёрстка у Next.js собрана из хешированных
+// классов и меняется с каждой пересборкой, а форма данных живёт дольше.
+//
+// Дата, у которой расписание ещё не составлено, отдаёт пустой массив (в списке
+// дат такой день помечен `isFormed: false`). Это не поломка канала: сеансов на
+// эту дату у площадки пока нет.
+
+type etobiletFilm struct {
+	Name     string `json:"name"`
+	Duration int    `json:"duration"`
+	Formats  []struct {
+		FormatName string `json:"format_name"`
+		Halls      []struct {
+			HallID   int `json:"hall_id"`
+			Sessions []struct {
+				SessionID int64  `json:"session_id"`
+				Time      string `json:"time"`
+				Price     string `json:"price"`
+				Allow     int    `json:"allow"`
+			} `json:"sessions"`
+		} `json:"halls"`
+	} `json:"formats"`
+}
+
+// etobiletPrice вытаскивает число из «650 руб.».
+var etobiletPrice = regexp.MustCompile(`(\d+)`)
+
+// parseEtobilet разбирает страницу площадки на движке etobilet.
+func parseEtobilet(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	raw, err := extractEmbeddedJSON(body, `daySchedule`)
+	if err != nil {
+		return pb, fmt.Errorf("разбор PRIME CINEMA: %w", err)
+	}
+
+	var films []etobiletFilm
+	if err := json.Unmarshal([]byte(raw), &films); err != nil {
+		return pb, fmt.Errorf("разбор PRIME CINEMA: расписание дня не читается как JSON: %w", err)
+	}
+
+	for _, f := range films {
+		film := strings.TrimSpace(html.UnescapeString(f.Name))
+		if film == "" {
+			continue
+		}
+		for _, fm := range f.Formats {
+			for _, hl := range fm.Halls {
+				for _, s := range hl.Sessions {
+					at := normalizeShowtime(s.Time, date)
+					if at == "" {
+						continue
+					}
+					st := Showtime{
+						Film:      film,
+						StartsAt:  at,
+						Hall:      strconv.Itoa(hl.HallID),
+						Format:    strings.TrimSpace(fm.FormatName),
+						SourceID:  fmt.Sprintf("%d", s.SessionID),
+						OnSale:    s.Allow == 1,
+						DurationM: f.Duration,
+					}
+					if p := etobiletPrice.FindString(s.Price); p != "" {
+						st.PriceMin, _ = strconv.Atoi(p)
+					}
+					pb.Showtimes = append(pb.Showtimes, st)
+				}
+			}
+		}
+	}
+	return pb, nil
+}
+
+// unescapeJSString снимает ОДИН слой экранирования, проходом слева направо.
+//
+// Двумя независимыми заменами это не делается, и на живых данных разница
+// фатальна. Название «Одиссея \\"Авиарежим\\"» несёт кавычку ВНУТРИ строки, то
+// есть экранированную дважды. Замена `\"`→`"` по всему телу превращает её в
+// `\\"` — экранированный слеш плюс настоящая кавычка, и JSON обрывается прямо
+// посреди названия. Проход же видит пару `\\` первой и отдаёт один слеш,
+// оставляя внутреннюю кавычку экранированной, как ей и положено.
+func unescapeJSString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		switch s[i+1] {
+		case '"':
+			b.WriteByte('"')
+			i++
+		case '\\':
+			b.WriteByte('\\')
+			i++
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+// extractEmbeddedJSON достаёт массив, лежащий строкой внутри разметки.
+//
+// Скобки считаются с учётом строк и экранирования — иначе закрывающая скобка из
+// названия фильма («Одиссея (2D)») оборвала бы массив на середине, и потеря
+// выглядела бы как «сеансов мало». Регулярным выражением такое не берётся в
+// принципе: вложенность у него не считается.
+//
+// Ключ ищется в экранированном виде тоже: в потоковых данных Next.js кавычки
+// внутри строки записаны как \", и обычный поиск по `"ключ":` их не находит.
+func extractEmbeddedJSON(body, key string) (string, error) {
+	unescaped := unescapeJSString(body)
+
+	i := strings.Index(unescaped, `"`+key+`":`)
+	if i < 0 {
+		return "", fmt.Errorf("ключ %q не найден (тело %d байт)", key, len(body))
+	}
+	i += len(key) + 3
+
+	for i < len(unescaped) && (unescaped[i] == ' ' || unescaped[i] == '\n') {
+		i++
+	}
+	if i >= len(unescaped) || (unescaped[i] != '[' && unescaped[i] != '{') {
+		return "", fmt.Errorf("значение ключа %q не массив и не объект", key)
+	}
+
+	open := unescaped[i]
+	close := byte(']')
+	if open == '{' {
+		close = '}'
+	}
+
+	depth, inStr, esc := 0, false, false
+	for j := i; j < len(unescaped); j++ {
+		c := unescaped[j]
+		switch {
+		case esc:
+			esc = false
+		case c == '\\':
+			esc = true
+		case inStr:
+			if c == '"' {
+				inStr = false
+			}
+		case c == '"':
+			inStr = true
+		case c == open:
+			depth++
+		case c == close:
+			depth--
+			if depth == 0 {
+				return unescaped[i : j+1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("значение ключа %q не закрыто", key)
 }
