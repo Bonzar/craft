@@ -88,6 +88,26 @@ func newSessionClient(timeoutSec, retries int) *Client {
 	return c
 }
 
+// withCookies — тот же клиент, но с банкой cookie.
+//
+// Отличается от newSessionClient тем, что СОХРАНЯЕТ транспорт исходного
+// клиента: у туннельного там прокси, и создание банки с нуля увело бы запросы
+// мимо российского выхода — ровно та ошибка, которая выглядит как «туннель не
+// работает».
+//
+// Живой случай: luxorfilm.ru отдаёт площадке «Весна» бесконечную цепочку
+// редиректов, пока в куке не сохранён выбор кинотеатра; «Гудзон» при этом
+// отвечает и без банки. Без cookie Весна выглядела бы сломанным источником.
+func (c *Client) withCookies() *Client {
+	clone := *c
+	inner := *c.http
+	if jar, err := cookiejar.New(nil); err == nil {
+		inner.Jar = jar
+	}
+	clone.http = &inner
+	return &clone
+}
+
 // newNoRedirectClient — клиент, который переход по 30x не выполняет, а отдаёт
 // сам код ответа.
 //

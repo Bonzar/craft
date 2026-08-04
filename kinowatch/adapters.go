@@ -54,12 +54,15 @@ const (
 	kindEtobilet   = "etobilet"   // движок etobilet, расписание JSON-ом внутри страницы
 
 	// Одиночки со своим сайтом и своей разметкой — движок ни с кем не общий.
-	kindPioner   = "pioner"   // HTML pioner-cinema.ru
-	kindPoklonka = "poklonka" // HTML poklonka-cinema.ru, весь горизонт разом
-	kindMoskva   = "moskva"   // HTML cinema.moscow
-	kindRomanov  = "romanov"  // POST-API, серверный HTML — пустой шаблон
-	kindAlmaz    = "almaz"    // HTML almazcinema.com, сеанс JSON-ом в атрибуте
-	kindIllusion = "illuzion" // HTML illusion-cinema.ru, весь горизонт разом
+	kindPioner    = "pioner"    // HTML pioner-cinema.ru
+	kindPoklonka  = "poklonka"  // HTML poklonka-cinema.ru, весь горизонт разом
+	kindMoskva    = "moskva"    // HTML cinema.moscow
+	kindRomanov   = "romanov"   // POST-API, серверный HTML — пустой шаблон
+	kindAlmaz     = "almaz"     // HTML almazcinema.com, сеанс JSON-ом в атрибуте
+	kindIllusion  = "illuzion"  // HTML illusion-cinema.ru, весь горизонт разом
+	kindLuxor     = "luxor"     // HTML luxorfilm.ru, сеансы массивом filmsAll
+	kindMosfilm   = "mosfilm"   // HTML centerkino.mosfilm.ru
+	kindTretyakov = "tretyakov" // HTML tretyakovgallery.ru, отбор по корпусу
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.
@@ -2387,6 +2390,241 @@ func parseIllusion(body string, now time.Time) (Playbill, error) {
 	sort.Strings(pb.Dates)
 	if len(pb.Showtimes) == 0 {
 		return pb, fmt.Errorf("разбор Иллюзиона: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— Люксор ———
+//
+// `luxorfilm.ru/cinema/<slug>/seances` отдаёт страницу, внутри которой лежит
+// готовый массив `filmsAll` — фильмы вместе со своими сеансами. Разбираем его,
+// а не разметку: в массиве есть зал, технология и вилка цены.
+//
+// Доступен только через российский выход: напрямую сайт отвечает 403 от
+// DDoS-Guard. Прежняя разведка объявила его недоступным вовсе — вердикт был
+// снят повторной проверкой через туннель, там он берётся обычным запросом.
+type luxorFilm struct {
+	Title   string `json:"title"`
+	Seances []struct {
+		ID        int64  `json:"session_id"`
+		Time      string `json:"time"`
+		Tech      string `json:"tech"`
+		Hall      string `json:"hall"`
+		MinPrice  int    `json:"minprice"`
+		MaxPrice  int    `json:"maxprice"`
+		SeanceKey int64  `json:"id"`
+	} `json:"seances"`
+}
+
+var luxorHallNum = regexp.MustCompile(`(\d+)`)
+
+func parseLuxor(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	raw, err := extractEmbeddedJSON(body, "filmsAll")
+	if err != nil {
+		// Ключ ищется и как `"filmsAll":`, и как присваивание в скрипте —
+		// у этого источника он второй формы.
+		i := strings.Index(body, "filmsAll = ")
+		if i < 0 {
+			return pb, fmt.Errorf("разбор Люксора: массив фильмов не найден (тело %d байт)", len(body))
+		}
+		raw, err = extractJSONAt(body[i+len("filmsAll = "):])
+		if err != nil {
+			return pb, fmt.Errorf("разбор Люксора: %w", err)
+		}
+	}
+
+	var films []luxorFilm
+	if err := json.Unmarshal([]byte(raw), &films); err != nil {
+		return pb, fmt.Errorf("разбор Люксора: массив фильмов не читается как JSON: %w", err)
+	}
+
+	for _, f := range films {
+		film := strings.TrimSpace(f.Title)
+		if film == "" {
+			continue
+		}
+		for _, s := range f.Seances {
+			at := normalizeShowtime(s.Time, businessDayShift(date, s.Time))
+			if at == "" {
+				continue
+			}
+			st := Showtime{
+				Film:     film,
+				StartsAt: at,
+				Format:   strings.TrimSpace(s.Tech),
+				PriceMin: s.MinPrice,
+				PriceMax: s.MaxPrice,
+				SourceID: fmt.Sprintf("%d", s.ID),
+				OnSale:   true,
+			}
+			// «Зал 4» — в Hall едет только номер.
+			if hm := luxorHallNum.FindStringSubmatch(s.Hall); len(hm) > 1 {
+				st.Hall = hm[1]
+			}
+			pb.Showtimes = append(pb.Showtimes, st)
+		}
+	}
+
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Люксора: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// extractJSONAt отрезает один JSON-массив или объект от начала строки.
+//
+// Нужен там, где значение не подписано ключом, а присвоено переменной в
+// скрипте: искать его конец приходится счётом скобок — по тем же причинам, что
+// и в extractEmbeddedJSON, только без поиска ключа.
+func extractJSONAt(s string) (string, error) {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\n' || s[i] == '\t') {
+		i++
+	}
+	if i >= len(s) || (s[i] != '[' && s[i] != '{') {
+		return "", fmt.Errorf("значение не массив и не объект")
+	}
+	open := s[i]
+	closing := byte(']')
+	if open == '{' {
+		closing = '}'
+	}
+
+	depth, inStr, esc := 0, false, false
+	for j := i; j < len(s); j++ {
+		c := s[j]
+		switch {
+		case esc:
+			esc = false
+		case c == '\\':
+			esc = true
+		case inStr:
+			if c == '"' {
+				inStr = false
+			}
+		case c == '"':
+			inStr = true
+		case c == open:
+			depth++
+		case c == closing:
+			depth--
+			if depth == 0 {
+				return s[i : j+1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("значение не закрыто")
+}
+
+// ——— Третьяковская галерея ———
+//
+// `tretyakovgallery.ru/tickets/cinema/` отдаёт страницу, где сеансы лежат в
+// потоковых данных Next.js: у каждого показа свой url `/cinema/o/<слаг>/` и
+// массив `session_dates` вида «06.08.2026 19:00:00». Времён в самой разметке
+// нет — по срезу тегов страница выглядит расписанием без сеансов.
+//
+// Зал при этом живёт как раз в РАЗМЕТКЕ: рядом со ссылкой показа стоит
+// `<span>Инженерный корпус</span>`. Он обязателен: строк реестра у Третьяковки
+// две (Инженерный корпус и Новая Третьяковка), и без отбора обе получили бы
+// одну афишу — ровно та ловушка «афиша всех площадок разом», на которой уже
+// попадались Kinoplan и Мираж.
+//
+// Доступна только через российский выход.
+var (
+	tretyakovHallLink = regexp.MustCompile(`<span[^>]*>([^<]{4,40})</span></a>\s*<a href="/cinema/o/([a-z0-9-]+)/"`)
+	// Ключи в потоковых данных Next.js идут БЕЗ кавычек (минифицированный
+	// объект). Классы символов вместо `.*?` намеренно: нежадный поиск через
+	// весь документ перескакивал границы объекта и утаскивал в название
+	// фильма половину страницы.
+	tretyakovName  = regexp.MustCompile(`name:"([^"]{3,200})",picture:"[^"]*"$`)
+	tretyakovDates = regexp.MustCompile(`session_dates:\[([^\]]*)\]`)
+	tretyakovDate  = regexp.MustCompile(`"(\d{2})\.(\d{2})\.(\d{4}) (\d{2}:\d{2}):\d{2}"`)
+)
+
+// parseTretyakov разбирает афишу кинозалов галереи.
+//
+// hall — название корпуса; пустое означает «взять все», но в реестре так не
+// используется: там у каждой строки свой корпус.
+func parseTretyakov(body, hall string) (Playbill, error) {
+	pb := Playbill{}
+
+	// Зал → слаг показа берём из разметки, сеансы — из данных. Связывает их
+	// слаг: он есть и там, и там.
+	hallOf := map[string]string{}
+	for _, m := range tretyakovHallLink.FindAllStringSubmatch(body, -1) {
+		hallOf[m[2]] = strings.TrimSpace(html.UnescapeString(m[1]))
+	}
+	if len(hallOf) == 0 {
+		return pb, fmt.Errorf("разбор Третьяковки: показы с залами не найдены (тело %d байт)", len(body))
+	}
+
+	// Слеши в потоковых данных экранированы как \u002F — без обратной замены
+	// путь показа в них не найти.
+	unescaped := strings.ReplaceAll(body, `\u002F`, "/")
+	dates := map[string]bool{}
+	seen := false
+
+	// Режем по адресу показа: слаг открывает кусок, даты лежат внутри него, а
+	// название — в хвосте ПРЕДЫДУЩЕГО куска, прямо перед адресом.
+	const urlMark = `,url:"/cinema/o/`
+	chunks := strings.Split(unescaped, urlMark)
+
+	for i := 1; i < len(chunks); i++ {
+		slug, rest, ok := strings.Cut(chunks[i], `/"`)
+		if !ok {
+			continue
+		}
+		venue := hallOf[slug]
+		if venue == "" {
+			continue
+		}
+		nm := tretyakovName.FindStringSubmatch(chunks[i-1])
+		if len(nm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(nm[1]))
+		if film == "" {
+			continue
+		}
+		if hall != "" && venue != hall {
+			continue
+		}
+		seen = true
+
+		dm := tretyakovDates.FindStringSubmatch(rest)
+		if len(dm) < 2 {
+			continue
+		}
+		for _, d := range tretyakovDate.FindAllStringSubmatch(dm[1], -1) {
+			date := d[3] + "-" + d[2] + "-" + d[1]
+			at := normalizeShowtime(d[4], businessDayShift(date, d[4]))
+			if at == "" {
+				continue
+			}
+			dates[date] = true
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film: film, StartsAt: at, Hall: venue, OnSale: true,
+			})
+		}
+	}
+
+	for d := range dates {
+		pb.Dates = append(pb.Dates, d)
+	}
+	sort.Strings(pb.Dates)
+
+	// Корпуса нет на странице — это НЕ пустая афиша, а промах по названию зала:
+	// молча отдать пустоту значило бы выдать «сеансов нет» за факт.
+	if hall != "" && !seen {
+		return pb, fmt.Errorf("разбор Третьяковки: показов в зале %q на странице нет", hall)
+	}
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Третьяковки: сеансы не найдены (тело %d байт)", len(body))
 	}
 	return pb, nil
 }

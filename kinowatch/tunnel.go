@@ -152,9 +152,10 @@ type TunnelStats struct {
 // соответствует действительности и снята. Люксор через туннель берётся обычным
 // запросом: JS-челленджа за российским выходом не оказалось.
 var needsTunnel = map[string]bool{
-	kindIllusion: true, // illusion-cinema.ru не резолвится с иностранного адреса
-	kindAlmaz:    true, // то же поведение
-	"luxor":      true, // 403 DDoS-Guard, снимается российским выходом
+	kindIllusion:  true, // illusion-cinema.ru не резолвится с иностранного адреса
+	kindAlmaz:     true, // то же поведение
+	kindLuxor:     true, // 403 DDoS-Guard, снимается российским выходом
+	kindTretyakov: true, // сайт галереи не резолвится с иностранного адреса
 }
 
 func requiresTunnel(sourceKind string) bool {
