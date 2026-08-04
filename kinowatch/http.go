@@ -88,6 +88,24 @@ func newSessionClient(timeoutSec, retries int) *Client {
 	return c
 }
 
+// newNoRedirectClient — клиент, который переход по 30x не выполняет, а отдаёт
+// сам код ответа.
+//
+// Нужен там, где редирект — это ОТВЕТ источника, а не техническая пересылка.
+// Живой случай: kinoteatr.ru на дату, которой у площадки нет в расписании,
+// отвечает 301 на страницу-обёртку с ближайшим доступным днём. Клиент по
+// умолчанию переход выполняет, и разбор получает HTML вместо JSON — то есть
+// пустой день выглядит сломанным каналом. Проверено на двух площадках:
+// mosfilm на сегодня и kaluzhskij на 31.12 отвечают одинаково, а на даты со
+// своими сеансами обе отдают JSON.
+func newNoRedirectClient(timeoutSec, retries int) *Client {
+	c := newClient(timeoutSec, retries)
+	c.http.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return c
+}
+
 // newGeoClient — клиент для Photon и Nominatim: свой честный UA и троттлинг.
 // Отдельный клиент, а не флаг на общем, потому что зазор между запросами должен
 // держаться на своём счётчике: обход афиш не обязан ждать секунду.

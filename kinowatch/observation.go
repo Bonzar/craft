@@ -47,6 +47,17 @@ const (
 	fLastError    = "lasterror"
 	fEvidenceURL  = "evidenceurl"
 	fNote         = "note"
+
+	// fExcuse — улика, освобождающая площадку от рабочего инструмента.
+	//
+	// Отдельное поле, а не переиспользование EvidenceURL или LastError, и это
+	// несущее решение. Прежняя проверка засчитывала любое непустое поле улики, а
+	// LastError уже заполнен у 21 площадки строкой «нет в справочнике
+	// собственной сети» — то есть смены класса хватило бы, чтобы они
+	// «освободились», не тронув ни одного источника. Поле, которое заполняется
+	// ТОЛЬКО записью о факте источника, такой обход закрывает.
+	fExcuse = "excuse"
+
 	// Четыре колонки геокодера. GeoAt — время последней ПОПЫТКИ, а не успеха:
 	// по нему считается, пора ли перепроверять площадку без координат.
 	fLat     = "lat"
@@ -171,6 +182,7 @@ func buildCinemaObservations(decisions []ScopeDecision, now string) []CinemaObse
 		if leader := cloneLeader(d.Row.Network); leader != "" {
 			fields[fStatusClass] = classCloneOf
 			fields[fSourceParams] = "leader=" + leader
+			fields[fExcuse] = "те же залы описывает запись сети «" + leader + "»"
 		}
 
 		// Площадка без сущности «сеанс» — объективное препятствие, а не наша
@@ -180,6 +192,7 @@ func buildCinemaObservations(decisions []ScopeDecision, now string) []CinemaObse
 		if reason := screeningsAbsentReason(d.Row.Company); reason != "" {
 			fields[fStatusClass] = pickClass(fields[fStatusClass], classNoOnlineSale)
 			fields[fLastError] = reason
+			fields[fExcuse] = reason
 		}
 
 		out = append(out, CinemaObservation{

@@ -1222,3 +1222,96 @@ func TestParseMirage(t *testing.T) {
 		t.Error("разбор промолчал о том, что на странице другая площадка")
 	}
 }
+
+// Разбор на живой фикстуре Синема 5 (снята 04.08.2026, площадка Балтика).
+func TestParseCinema5Fixture(t *testing.T) {
+	pb, err := parseCinema5(readFixture(t, "cinema5-today.json"), 21)
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 || len(pb.Dates) == 0 {
+		t.Fatalf("афиша пуста: %+v", pb)
+	}
+
+	st := pb.Showtimes[0]
+	if st.Film == "" || st.StartsAt == "" {
+		t.Errorf("сеанс без названия или времени: %+v", st)
+	}
+	if st.Hall == "" || st.Format == "" || st.PriceMin == 0 {
+		t.Errorf("потеряны поля, которые источник отдаёт: %+v", st)
+	}
+	// Класс зала едет в Format, а не в Hall: иначе два сеанса одного фильма в
+	// разных залах одного формата схлопнулись бы в один ключ.
+	if strings.ContainsAny(st.Hall, " ") {
+		t.Errorf("в Hall попал не только номер зала: %q", st.Hall)
+	}
+}
+
+// Чужой сеанс в ответе — промах по идентификатору площадки, а не «сеансов мало».
+//
+// Отбор делает сам сервис, поэтому появление чужой площадки означает, что
+// запрос ушёл не туда. Молча выбросить такой сеанс значило бы спрятать промах:
+// афиша осталась бы непустой и канал выглядел бы рабочим.
+func TestParseCinema5RejectsForeignVenue(t *testing.T) {
+	_, err := parseCinema5(readFixture(t, "cinema5-today.json"), 20)
+	if err == nil {
+		t.Fatal("сеансы чужой площадки приняты за свои")
+	}
+	if !strings.Contains(err.Error(), "21") {
+		t.Errorf("в ошибке не видно, чья площадка пришла: %v", err)
+	}
+}
+
+// Разбор PRIME CINEMA на живой фикстуре (снята 04.08.2026).
+func TestParseEtobiletFixture(t *testing.T) {
+	pb, err := parseEtobilet(readFixture(t, "primecinema-today.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("афиша пуста")
+	}
+
+	// Шесть залов и десятки сеансов: потеря вложенности (формат → зал → сеанс)
+	// схлопнула бы их в горстку и выглядела бы как скудная афиша.
+	halls := map[string]bool{}
+	films := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		halls[s.Hall] = true
+		films[s.Film] = true
+		if s.StartsAt == "" {
+			t.Fatalf("сеанс без времени: %+v", s)
+		}
+	}
+	if len(halls) < 2 || len(films) < 2 {
+		t.Errorf("вложенность потеряна: залов %d, фильмов %d", len(halls), len(films))
+	}
+}
+
+// Закрывающая скобка внутри названия не имеет права оборвать массив.
+//
+// Названия у этой площадки идут с форматом в скобках — «Одиссея (2D, 18+)», —
+// и наивный поиск конца массива обрезал бы расписание на первом же фильме.
+func TestExtractEmbeddedJSONCountsBrackets(t *testing.T) {
+	body := `что-то до \"daySchedule\":[{\"name\":\"Фильм (2D] шутка\",\"n\":1},{\"name\":\"Второй\"}] хвост`
+	got, err := extractEmbeddedJSON(body, "daySchedule")
+	if err != nil {
+		t.Fatalf("извлечение: %v", err)
+	}
+	if !strings.Contains(got, "Второй") {
+		t.Errorf("массив оборван на скобке внутри строки: %s", got)
+	}
+}
+
+// Кавычка внутри строки экранирована дважды, и снимать надо ровно один слой.
+//
+// Живой случай: название «Одиссея \\"Авиарежим\\"». Двумя независимыми заменами
+// внутренняя кавычка теряет своё экранирование, JSON обрывается посреди
+// названия — и выглядит это как сломавшийся источник.
+func TestUnescapeJSStringKeepsInnerQuotesEscaped(t *testing.T) {
+	got := unescapeJSString(`\"name\":\"Одиссея \\\"Авиарежим\\\"\"`)
+	want := `"name":"Одиссея \"Авиарежим\""`
+	if got != want {
+		t.Errorf("получено %s, ожидалось %s", got, want)
+	}
+}

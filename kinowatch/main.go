@@ -172,9 +172,13 @@ type EnrichReport struct {
 	Binding     []NetworkBinding `json:"binding"`
 	BoundVenues int              `json:"boundVenues"`
 	// FixedChannels — сколько каналов проставлено поштучно, вне справочников.
-	FixedChannels int                 `json:"fixedChannels"`
-	Observations  []CinemaObservation `json:"observations"`
-	Errors        []string            `json:"errors,omitempty"`
+	FixedChannels int `json:"fixedChannels"`
+	// DuplicateRecords — сколько строк опознано второй регистрацией той же
+	// площадки. Отдельно от клонов сети: там дублируется целая сеть, здесь —
+	// одна регистрация, и каждая пара решается своим источником.
+	DuplicateRecords int                 `json:"duplicateRecords"`
+	Observations     []CinemaObservation `json:"observations"`
+	Errors           []string            `json:"errors,omitempty"`
 	// GeoErrors отдельно от Errors: отказ геокодера по одной площадке прогон не
 	// рушит, но и тонуть в общем списке не должен — по нему видно, чего стоит
 	// доверять числам в Paths.
@@ -266,6 +270,16 @@ func runEnrich(c, geo *Client, base, region string, limit int) {
 	report.FixedChannels = fixed
 	for _, o := range orphans {
 		report.Errors = append(report.Errors, "запись канала без строки реестра: "+o)
+	}
+
+	// Дубли — последними: строка, оказавшаяся второй регистрацией той же
+	// площадки, канал теряет, даже если привязка или поштучная запись его уже
+	// проставили. Иначе один физический сеанс писался бы дважды с разными
+	// ключами, и дедуп их не схлопнул бы — ключи честно разные.
+	dups, dupOrphans := applyDuplicateRecords(obs)
+	report.DuplicateRecords = dups
+	for _, o := range dupOrphans {
+		report.Errors = append(report.Errors, "запись дубля не применилась: "+o)
 	}
 
 	for i := range obs {

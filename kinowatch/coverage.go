@@ -102,13 +102,18 @@ func coverage(obs []CinemaObservation) CoverageReport {
 }
 
 // excuseEvidence — чем подтверждено освобождение площадки.
+//
+// Читается ОДНО выделенное поле, а не любое непустое из полей общего
+// назначения. Прежняя версия брала EvidenceURL, LastError и SourceParams — и
+// это была дыра: строку «нет в справочнике собственной сети» привязка уже
+// проставила в LastError 21 площадке, поэтому смены класса хватило бы, чтобы
+// они «освободились», не тронув ни одного источника.
+//
+// Поле заполняется только записью о факте источника: словами сети о закрытии,
+// ссылкой на ведущую запись у дубля, причиной отсутствия сеансов. Побочно, как
+// след другой операции, оно не появляется.
 func excuseEvidence(o CinemaObservation) string {
-	for _, f := range []string{fEvidenceURL, fLastError, fSourceParams} {
-		if v := strings.TrimSpace(o.Fields[f]); v != "" {
-			return v
-		}
-	}
-	return ""
+	return strings.TrimSpace(o.Fields[fExcuse])
 }
 
 // gapReason объясняет, чего площадке не хватает.
