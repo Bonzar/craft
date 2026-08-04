@@ -52,6 +52,11 @@ const (
 	kindMirage     = "mirage"     // HTML mirage.ru, одна страница на все площадки города
 	kindCinema5    = "cinema5"    // JSON cinema5.ru, горизонт у источника два дня
 	kindEtobilet   = "etobilet"   // движок etobilet, расписание JSON-ом внутри страницы
+
+	// Одиночки со своим сайтом и своей разметкой — движок ни с кем не общий.
+	kindPioner   = "pioner"   // HTML pioner-cinema.ru
+	kindPoklonka = "poklonka" // HTML poklonka-cinema.ru, весь горизонт разом
+	kindMoskva   = "moskva"   // HTML cinema.moscow
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.
@@ -735,7 +740,16 @@ var (
 	//
 	// Окончания перечислены диапазоном, а не через `\w`: в RE2 `\w` — это
 	// [0-9A-Za-z_], и «часа» с «минут» под него не подходят вовсе.
-	moriHours   = regexp.MustCompile(`(\d+)\s*(?:час[а-яё]*|ч\.)`)
+	// Часы: «2 часа», «1 ч. 38 мин.» (Mori), «1 ч 44 мин» (кинотеатр «Москва»).
+	//
+	// Точка после «ч» необязательна, а вот отделить её от кириллического слова
+	// приходится классом символов, а НЕ границей `\b`: в Go граница слова
+	// считается по ASCII, и рядом с кириллической «ч» она не срабатывает
+	// вовсе. С `\b` часы молча терялись у всех источников сразу — фильм на
+	// 1 ч 38 мин приезжал как 38-минутный, то есть уровень каскада про
+	// аномальную длительность получал ложный вход и мог принять полнометражку
+	// за короткометражку-обёртку.
+	moriHours   = regexp.MustCompile(`(\d+)\s*(?:час[а-яё]*|ч(?:[.,)\s]|$))`)
 	moriMinutes = regexp.MustCompile(`(\d+)\s*мин[а-яё]*`)
 )
 
@@ -1832,6 +1846,27 @@ func unescapeJSString(s string) string {
 	return b.String()
 }
 
+// splitBlocks режет разметку по повторяющемуся маркеру и отдаёт куски ПОСЛЕ
+// каждого его вхождения.
+//
+// Заведено вместо нежадного регулярного выражения вида
+// `маркер(.*?)(?:маркер|\z)`, и это не стилистика. Такой поиск теряет каждый
+// второй блок: конец найденного куска включает следующий маркер, и обход
+// продолжается уже за ним. На живой странице Пионера из семи фильмов так
+// находились четыре, у Поклонки из пяти дней — четыре. Потеря молчаливая:
+// афиша остаётся непустой, канал выглядит рабочим, а часть сеансов просто не
+// доезжает.
+//
+// Та же ошибка уже ловилась на Премьерзале и была починена там локально —
+// поэтому теперь приём общий, чтобы следующий адаптер не повторил её снова.
+func splitBlocks(body, marker string) []string {
+	parts := strings.Split(body, marker)
+	if len(parts) < 2 {
+		return nil
+	}
+	return parts[1:]
+}
+
 // extractEmbeddedJSON достаёт массив, лежащий строкой внутри разметки.
 //
 // Скобки считаются с учётом строк и экранирования — иначе закрывающая скобка из
@@ -1887,4 +1922,203 @@ func extractEmbeddedJSON(body, key string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("значение ключа %q не закрыто", key)
+}
+
+// ——— Пионер ———
+//
+// `pioner-cinema.ru/?date=ГГГГ-ММ-ДД` отдаёт расписание дня серверным HTML.
+// Горизонт — 8 дат, видных в переключателе (`data-date`); своего API у сайта
+// нет, но разметка смысловая и переживает пересборку темы лучше, чем классы.
+//
+// Номера зала источник не даёт вовсе — у площадки один зал. Hall остаётся
+// пустым: подставленное туда значение участвовало бы в ключе сеанса.
+var (
+	pionerTitle = regexp.MustCompile(`(?s)class="movie__title">\s*(.*?)\s*</a>`)
+	pionerShow  = regexp.MustCompile(`data-seance-id="(\d+)"\s*>\s*([0-2]?\d:[0-5]\d)`)
+	pionerDates = regexp.MustCompile(`data-date="(\d{4}-\d{2}-\d{2})"`)
+)
+
+func parsePioner(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	for _, d := range pionerDates.FindAllStringSubmatch(body, -1) {
+		pb.Dates = append(pb.Dates, d[1])
+	}
+	sort.Strings(pb.Dates)
+
+	movies := splitBlocks(body, `sessions-items__movie movie">`)
+	if len(movies) == 0 {
+		return pb, fmt.Errorf("разбор Пионера: блоки фильмов не найдены (тело %d байт)", len(body))
+	}
+
+	for _, block := range movies {
+		tm := pionerTitle.FindStringSubmatch(block)
+		if len(tm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[1])))
+		if film == "" {
+			continue
+		}
+		for _, s := range pionerShow.FindAllStringSubmatch(block, -1) {
+			at := normalizeShowtime(s[2], date)
+			if at == "" {
+				continue
+			}
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film: film, StartsAt: at, SourceID: s[1], OnSale: true,
+			})
+		}
+	}
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Пионера: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— Поклонка (кинотеатр Музея Победы) ———
+//
+// `poklonka-cinema.ru/films/` отдаёт ВЕСЬ горизонт одним ответом: дни —
+// блоки `seance-elem id="sN"`, а какой день какому N соответствует, говорит
+// переключатель дат (`data-id="sN"` рядом с числом и месяцем).
+//
+// Внутри дня сеансы сгруппированы по залам, названным фамилиями маршалов
+// («Зал Василевский»). Заголовок зала — не отдельный контейнер, а такой же
+// `item`, поэтому сеансы разбираются потоком: заголовок переключает текущий
+// зал, ссылки после него принадлежат ему.
+var (
+	poklonkaDayID   = regexp.MustCompile(`^(s\d+)">`)
+	poklonkaDayTab  = regexp.MustCompile(`data-id="(s\d+)">(\d{1,2})<br>\s*([а-яё]+)`)
+	poklonkaHallOrS = regexp.MustCompile(`(?s)<div class="item title">\s*(.*?)\s*</div>|<a class="item"[^>]*>\s*<div class="name">\s*(.*?)\s*</div>\s*<div class="value">\s*([0-2]?\d:[0-5]\d)\s*</div>`)
+)
+
+func parsePoklonka(body string, now time.Time) (Playbill, error) {
+	pb := Playbill{}
+
+	// Даты у источника без года: «6 августа». Год берём от текущего момента и
+	// перекидываем вперёд при переходе через декабрь — иначе январские сеансы
+	// уехали бы в прошлое и выглядели протухшим расписанием.
+	dayDate := map[string]string{}
+	for _, t := range poklonkaDayTab.FindAllStringSubmatch(body, -1) {
+		d, err := strconv.Atoi(t[2])
+		mon := russianMonth(t[3])
+		if err != nil || mon == 0 {
+			continue
+		}
+		year := now.Year()
+		if mon < int(now.Month()) {
+			year++
+		}
+		dayDate[t[1]] = fmt.Sprintf("%04d-%02d-%02d", year, mon, d)
+	}
+
+	days := splitBlocks(body, `<div class="seance-elem" id="`)
+	if len(days) == 0 {
+		return pb, fmt.Errorf("разбор Поклонки: блоки дней не найдены (тело %d байт)", len(body))
+	}
+
+	for _, day := range days {
+		im := poklonkaDayID.FindStringSubmatch(day)
+		if len(im) < 2 {
+			continue
+		}
+		date := dayDate[im[1]]
+		if date == "" {
+			// День без даты в переключателе разбирать нельзя: время без даты
+			// сеанса не образует.
+			continue
+		}
+		pb.Dates = append(pb.Dates, date)
+
+		hall := ""
+		for _, m := range poklonkaHallOrS.FindAllStringSubmatch(day, -1) {
+			if m[1] != "" {
+				hall = strings.TrimSpace(html.UnescapeString(stripHTML(m[1])))
+				continue
+			}
+			film := strings.TrimSpace(html.UnescapeString(stripHTML(m[2])))
+			at := normalizeShowtime(m[3], date)
+			if film == "" || at == "" {
+				continue
+			}
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film: film, StartsAt: at, Hall: hall, OnSale: true,
+			})
+		}
+	}
+
+	sort.Strings(pb.Dates)
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Поклонки: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// russianMonth — номер месяца по русскому названию в родительном падеже.
+// Ноль означает, что месяц не опознан: гадать нельзя, дата сеанса от него.
+func russianMonth(s string) int {
+	months := map[string]int{
+		"января": 1, "февраля": 2, "марта": 3, "апреля": 4,
+		"мая": 5, "июня": 6, "июля": 7, "августа": 8,
+		"сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+	}
+	return months[strings.ToLower(strings.TrimSpace(s))]
+}
+
+// ——— Кинотеатр «Москва» ———
+//
+// `cinema.moscow/repertoire` отдаёт репертуар серверным HTML. Формат площадка
+// называет словами про удобство («зал с креслами»), а номера зала не даёт —
+// поэтому оно едет в Format, а Hall остаётся пустым.
+var (
+	moskvaName   = regexp.MustCompile(`^\s*(.*?)\s*</div>`)
+	moskvaFormat = regexp.MustCompile(`repertoire-times__format">\s*(.*?)\s*</div>`)
+	moskvaDur    = regexp.MustCompile(`repertoire-times__dur">\s*(.*?)\s*</div>`)
+	moskvaShow   = regexp.MustCompile(`data-href="/sessions/(\d+)"[^>]*>\s*([0-2]?\d:[0-5]\d)`)
+)
+
+func parseCinemaMoskva(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	blocks := splitBlocks(body, `repertoire-times__title">`)
+	if len(blocks) == 0 {
+		return pb, fmt.Errorf("разбор кинотеатра «Москва»: блоки фильмов не найдены (тело %d байт)", len(body))
+	}
+
+	for _, block := range blocks {
+		nm := moskvaName.FindStringSubmatch(block)
+		if len(nm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(nm[1])))
+		if film == "" {
+			continue
+		}
+
+		format := ""
+		if fm := moskvaFormat.FindStringSubmatch(block); len(fm) > 1 {
+			format = strings.TrimSpace(stripHTML(fm[1]))
+		}
+		dur := 0
+		if dm := moskvaDur.FindStringSubmatch(block); len(dm) > 1 {
+			dur = parseRussianDuration(dm[1])
+		}
+
+		for _, s := range moskvaShow.FindAllStringSubmatch(block, -1) {
+			at := normalizeShowtime(s[2], date)
+			if at == "" {
+				continue
+			}
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film: film, StartsAt: at, Format: format,
+				SourceID: s[1], OnSale: true, DurationM: dur,
+			})
+		}
+	}
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор кинотеатра «Москва»: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
 }

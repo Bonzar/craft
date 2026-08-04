@@ -114,6 +114,9 @@ var channelWindowWhole = map[string]bool{
 	// пустых дней и объявил живой канал дырявым, хотя дыра — свойство самого
 	// источника.
 	kindCinema5: true,
+	// Поклонка отдаёт все свои дни одной страницей: дни — блоки внутри неё,
+	// параметра даты у источника нет вовсе.
+	kindPoklonka: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -183,6 +186,19 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		return fetchCinemaParkDay(venue, day)
 	case kindCinema5:
 		return fetchCinema5(c, venue)
+	case kindPioner:
+		return fetchOne(c, "https://pioner-cinema.ru/?date="+day.Format("2006-01-02"),
+			func(body string) (Playbill, error) {
+				return parsePioner(body, day.Format("2006-01-02"))
+			})
+	case kindPoklonka:
+		return fetchOne(c, "https://poklonka-cinema.ru/films/",
+			func(body string) (Playbill, error) { return parsePoklonka(body, day) })
+	case kindMoskva:
+		return fetchOne(c, "https://cinema.moscow/repertoire",
+			func(body string) (Playbill, error) {
+				return parseCinemaMoskva(body, day.Format("2006-01-02"))
+			})
 	case kindEtobilet:
 		// Площадка живёт на своём домене, движок общий — как у p24.
 		host := p[pHost]
