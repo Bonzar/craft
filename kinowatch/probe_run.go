@@ -32,6 +32,11 @@ type ProbeReport struct {
 	Skipped  int            `json:"skipped"`
 	Statuses map[string]int `json:"statuses"`
 
+	// Tunnel — сколько площадок требуют российского выхода и сколько из них
+	// осталось неопрошенными. Отдельно от прочих причин намеренно: несобранное
+	// из-за отсутствия туннеля — это «не дотянулись», а не «источник сломался».
+	Tunnel TunnelStats `json:"tunnel"`
+
 	Venues []VenueProbe `json:"venues"`
 
 	// Observations — тот же реестр, что пришёл на вход, с записанным итогом
@@ -139,7 +144,9 @@ func loadFilmProfile(title, path string) (FilmProfile, error) {
 	return p, nil
 }
 
-func runProbe(c *Client, title, profilePath string, days int) {
+// runProbe опрашивает реестр. tunnel — клиент через российский выход; nil
+// означает, что туннеля нет и площадки, которым он нужен, опрошены не будут.
+func runProbe(c, tunnel *Client, title, profilePath string, days int) {
 	film, err := loadFilmProfile(title, profilePath)
 	if err != nil {
 		fail("%v", err)
@@ -158,7 +165,28 @@ func runProbe(c *Client, title, profilePath string, days int) {
 	}
 
 	for i := range obs {
-		vp := probeVenue(c, obs[i], film, now, days)
+		// Площадке, недоступной с иностранного адреса, общий клиент не годится:
+		// без туннеля она молча выглядела бы сломанной. Туннеля нет — площадка
+		// пропускается с явной причиной, и это ЧЕСТНЕЕ, чем записать ей отказ
+		// источника, которого не было.
+		client := c
+		if requiresTunnel(obs[i].Fields[fSourceKind]) {
+			report.Tunnel.Required++
+			if tunnel == nil {
+				report.Tunnel.Skipped++
+				vp := VenueProbe{
+					Key: obs[i].Key, Name: obs[i].Name,
+					Kind:       obs[i].Fields[fSourceKind],
+					SkipReason: "каналу нужен российский выход, туннель не задан (--proxy)",
+				}
+				report.Skipped++
+				report.Venues = append(report.Venues, vp)
+				continue
+			}
+			client = tunnel
+		}
+
+		vp := probeVenue(client, obs[i], film, now, days)
 		if vp.SkipReason != "" {
 			report.Skipped++
 		} else {

@@ -1455,3 +1455,129 @@ func TestParseCinemaMoskvaFixture(t *testing.T) {
 		t.Errorf("хронометраж %d, ожидалось 104 — часы потеряны", s.DurationM)
 	}
 }
+
+// Разбор Романова на живой фикстуре (снята 04.08.2026 на дату 05.08).
+//
+// Серверный HTML у этой площадки — пустой шаблон с фильмом «test» и временами
+// «00:00»; разбор ведётся по POST-ручке, и фикстура снята с неё.
+func TestParseRomanovFixture(t *testing.T) {
+	pb, err := parseRomanov(readFixture(t, "romanov-seans.json"), "2026-08-05")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("афиша пуста")
+	}
+
+	halls := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		halls[s.Hall] = true
+		if s.Film == "test" {
+			t.Fatalf("в афишу попал плейсхолдер шаблона: %+v", s)
+		}
+		if s.PriceMin == 0 {
+			t.Errorf("цена потеряна: %+v", s)
+			break
+		}
+		// Цена приходит в копейках: 6000 — это 60 рублей.
+		if s.PriceMin > 5000 {
+			t.Errorf("цена %d — копейки не переведены в рубли", s.PriceMin)
+			break
+		}
+	}
+	if len(halls) != 3 {
+		t.Errorf("залов %d, у площадки их три", len(halls))
+	}
+	// В Hall едет только номер: слово HALL из ключа карты туда попасть не должно.
+	for h := range halls {
+		if strings.Contains(h, "HALL") {
+			t.Errorf("в Hall попал ключ карты целиком: %q", h)
+		}
+	}
+
+	// Ночной сеанс уезжает на следующие сутки: касса относит его к предыдущему
+	// операционному дню, а человеку идти в кино уже завтра.
+	var night *Showtime
+	for i := range pb.Showtimes {
+		if strings.Contains(pb.Showtimes[i].StartsAt, "T00:00:00") {
+			night = &pb.Showtimes[i]
+			break
+		}
+	}
+	if night == nil {
+		t.Fatal("в фикстуре есть сеанс в 00:00, но в афише его нет")
+	}
+	if !strings.HasPrefix(night.StartsAt, "2026-08-06") {
+		t.Errorf("ночной сеанс остался на дате запроса: %s", night.StartsAt)
+	}
+}
+
+// Перенос ночных сеансов не имеет права трогать дневные.
+func TestBusinessDayShift(t *testing.T) {
+	cases := map[string]string{
+		"00:00": "2026-08-06",
+		"01:30": "2026-08-06",
+		"05:59": "2026-08-06",
+		"06:00": "2026-08-05",
+		"11:10": "2026-08-05",
+		"23:40": "2026-08-05",
+	}
+	for hhmm, want := range cases {
+		if got := businessDayShift("2026-08-05", hhmm); got != want {
+			t.Errorf("%s → %s, ожидалось %s", hhmm, got, want)
+		}
+	}
+}
+
+// Разбор Алмаза на живой фикстуре (снята 04.08.2026 через российский выход).
+func TestParseAlmazFixture(t *testing.T) {
+	pb, err := parseAlmaz(readFixture(t, "almaz.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		ids[s.SourceID] = true
+		if s.Hall == "" || s.Format == "" || s.PriceMin == 0 {
+			t.Errorf("потеряны поля, которые источник отдаёт: %+v", s)
+			break
+		}
+		// «Зал №1» — в Hall едет только номер.
+		if strings.ContainsAny(s.Hall, "Зал№ ") {
+			t.Errorf("в Hall попало не только число: %q", s.Hall)
+			break
+		}
+	}
+	// Идентификатор сеанса, а не фильма: перепутанные поля схлопнули бы все
+	// сеансы одного фильма в один ключ.
+	if len(ids) != len(pb.Showtimes) {
+		t.Errorf("уникальных id %d при %d сеансах — в SourceID попал id фильма",
+			len(ids), len(pb.Showtimes))
+	}
+}
+
+// Разбор Иллюзиона: весь горизонт одной страницей, зал вынесен в начало
+// названия («МАЛЫЙ ЗАЛ. Питер ФМ») и должен быть отделён — иначе один фильм в
+// двух залах выглядит двумя разными фильмами и не совпадёт с искомым.
+func TestParseIllusionFixture(t *testing.T) {
+	pb, err := parseIllusion(readFixture(t, "illusion.html"),
+		time.Date(2026, 8, 4, 12, 0, 0, 0, moscowTZ))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Dates) < 10 {
+		t.Errorf("дней %d — источник отдаёт горизонт до сентября", len(pb.Dates))
+	}
+
+	halls := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		halls[s.Hall] = true
+		if strings.Contains(s.Film, "ЗАЛ.") {
+			t.Errorf("зал остался в названии фильма: %q", s.Film)
+			break
+		}
+	}
+	if !halls["БОЛЬШОЙ ЗАЛ"] || !halls["МАЛЫЙ ЗАЛ"] {
+		t.Errorf("залы не отделены: %v", halls)
+	}
+}
