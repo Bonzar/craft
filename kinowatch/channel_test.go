@@ -48,6 +48,43 @@ func TestUnknownKindNeverLooksLikeAbsent(t *testing.T) {
 	}
 }
 
+// Пустой день не имеет права перебить код рабочих дней горизонта.
+//
+// Живой случай: kinoteatr.ru отвечает редиректом на дату, которой у площадки
+// нет в расписании. Пока «последний день выигрывал», канал с афишей на неделю и
+// одним выходным в конце горизонта уезжал в suspect — то есть выпадал из
+// покрытия, будучи полностью рабочим.
+func TestMergeStatusKeepsAnsweringDay(t *testing.T) {
+	cases := []struct {
+		name       string
+		have, next int
+		want       int
+	}{
+		{"первый день задаёт код", 0, 200, 200},
+		{"пустой день после рабочего код не меняет", 200, 301, 200},
+		{"рабочий день после пустого код перебивает", 301, 200, 200},
+		{"пустой день после пустого остаётся пустым", 301, 302, 301},
+	}
+	for _, c := range cases {
+		if got := mergeStatus(c.have, c.next); got != c.want {
+			t.Errorf("%s: mergeStatus(%d, %d) = %d, ожидалось %d", c.name, c.have, c.next, got, c.want)
+		}
+	}
+}
+
+// А одинокий пустой день живостью не становится: горизонт без единого сеанса —
+// это по-прежнему повод присмотреться, а не факт «фильма нет».
+func TestRedirectOnlyHorizonIsNotAlive(t *testing.T) {
+	res := classifyProbe(ProbeInput{
+		HTTPStatus: 301,
+		Playbill:   Playbill{Dates: []string{"2026-08-04"}},
+		Now:        time.Now(),
+	})
+	if res.Alive || res.Status == statusAbsent {
+		t.Errorf("пустой горизонт засчитан живым каналом: %+v", res)
+	}
+}
+
 // Горизонт канала, отдающего окно целиком, берётся одним запросом.
 func TestChannelWindowWholeCoversKnownKinds(t *testing.T) {
 	// Замерено живьём: эти три отдают несколько дат за один ответ.

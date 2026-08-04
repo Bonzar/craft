@@ -375,6 +375,7 @@ func bindNetworkVenues(obs []CinemaObservation, venues []NetworkVenue) BindResul
 			obs[i].Fields[fStatusClass] = classClosed
 			obs[i].Fields[fLastError] = "сеть сообщает: " + v.Closed
 			obs[i].Fields[fEvidenceURL] = "справочник сети, площадка «" + v.Name + "»"
+			obs[i].Fields[fExcuse] = "справочник сети, площадка «" + v.Name + "»: " + v.Closed
 			used[v.ID] = true
 			continue
 		}

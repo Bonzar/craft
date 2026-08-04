@@ -107,6 +107,13 @@ var channelWindowWhole = map[string]bool{
 	kindKaro:       true,
 	kindCinemaStar: true,
 	kindMoskino:    true,
+	// Синема 5 сюда попадает по другой причине, чем остальные три: не потому,
+	// что отдаёт много дат одним ответом, а потому, что БОЛЬШЕ ДВУХ у него нет
+	// вовсе. Страницы today и tomorrow отвечают, произвольная дата в пути —
+	// пустым списком, soon и all не существуют. Обход по дню накопил бы пять
+	// пустых дней и объявил живой канал дырявым, хотя дыра — свойство самого
+	// источника.
+	kindCinema5: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -136,7 +143,7 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		}
 
 		got++
-		out.Status = one.Status
+		out.Status = mergeStatus(out.Status, one.Status)
 		out.BodySize += one.BodySize
 		if out.Playbill.Cinema == "" {
 			out.Playbill.Cinema = one.Playbill.Cinema
@@ -173,11 +180,18 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 			"https://mos-kino.ru/cinema/"+url.PathEscape(venue)+"/",
 			func(body string) (Playbill, error) { return parseMoskino(body, day) })
 	case kindCinemaPark:
-		return fetchOne(c,
-			"https://kinoteatr.ru/raspisanie-kinoteatrov/"+url.PathEscape(venue)+
-				"/?date="+day.Format("2006-01-02")+"&ajax=1",
+		return fetchCinemaParkDay(venue, day)
+	case kindCinema5:
+		return fetchCinema5(c, venue)
+	case kindEtobilet:
+		// Площадка живёт на своём домене, движок общий — как у p24.
+		host := p[pHost]
+		if host == "" {
+			return ChannelProbe{Err: fmt.Errorf("каналу etobilet нужен домен площадки (host)")}
+		}
+		return fetchOne(c, "https://"+host+"/?date="+day.Format("02.01.2006"),
 			func(body string) (Playbill, error) {
-				return parseCinemaPark(body, day.Format("2006-01-02"))
+				return parseEtobilet(body, day.Format("2006-01-02"))
 			})
 	case kind5Zvezd:
 		return fetchOne(c,
@@ -318,6 +332,99 @@ func fetchKinoplanDay(c *Client, widget string, day time.Time) ChannelProbe {
 	id, _ := strconv.Atoi(widget)
 	pb, perr := parseKinoplanFor(body, id)
 	out.Playbill, out.ParseErr = pb, perr
+	return out
+}
+
+// mergeStatus — какой код ответа канал показывает наружу за весь горизонт.
+//
+// Побеждает день, ПРИНЁСШИЙ ответ, а не последний по счёту. Разница видна на
+// kinoteatr.ru: пустой день он отдаёт редиректом (см. fetchCinemaParkDay), и
+// простое «последний выигрывает» позволило бы пустому дню в конце горизонта
+// перебить код рабочих дней. Классификатор на всё, кроме 200, ставит suspect —
+// то есть живой канал с полной афишей на неделю выглядел бы подозрительным
+// из-за одного дня без сеансов.
+func mergeStatus(have, next int) int {
+	if have == 0 || (have/100 == 3 && next/100 != 3) {
+		return next
+	}
+	return have
+}
+
+// fetchCinemaParkDay — афиша площадки kinoteatr.ru за одну дату.
+//
+// Своя функция ради одной вещи: у этого источника редирект — содержательный
+// ответ. На дату, которой у площадки в расписании нет, он отвечает 301 на
+// страницу-обёртку с ближайшим доступным днём. Клиент по умолчанию переход
+// выполняет, разбор получает HTML вместо JSON и объявляет канал сломанным —
+// именно так «СИНЕМА ПАРК МОСФИЛЬМ» выпал из покрытия, хотя канал жив и на
+// завтрашнюю дату отдаёт афишу.
+//
+// Поэтому запрос идёт клиентом без переходов, а 30x читается как пустой день.
+// Отличить пустой день от поломки иначе нечем: обёртка отдаёт нормальные 200 и
+// разметку расписания — только чужого дня.
+func fetchCinemaParkDay(venue string, day time.Time) ChannelProbe {
+	date := day.Format("2006-01-02")
+	addr := "https://kinoteatr.ru/raspisanie-kinoteatrov/" + url.PathEscape(venue) +
+		"/?date=" + date + "&ajax=1"
+
+	c := newNoRedirectClient(60, 3)
+	body, status, err := c.get(addr)
+	out := ChannelProbe{Status: status, BodySize: len(body), Err: err}
+	if err != nil {
+		return out
+	}
+	if status >= 300 && status < 400 {
+		// Пустой день, а не отказ: канал ответил, сеансов на эту дату нет.
+		out.Playbill = Playbill{Dates: []string{date}}
+		return out
+	}
+
+	out.Playbill, out.ParseErr = parseCinemaPark(body, date)
+	return out
+}
+
+// fetchCinema5 — весь горизонт площадки Синема 5, то есть два дня.
+//
+// Два запроса вместо одного: у источника афиша разложена по страницам `today` и
+// `tomorrow`, произвольная дата в пути отдаёт пустой список. Сегодня и завтра
+// собираются вместе, потому что для канала это и есть всё, что у него есть.
+//
+// Отказ ВТОРОГО дня афишу первого не отменяет: сеансы сегодняшнего дня — факт,
+// добытый живым ответом, и выбрасывать их из-за завтрашнего дня значило бы
+// потерять данные там, где источник ответил.
+func fetchCinema5(c *Client, venue string) ChannelProbe {
+	id, err := strconv.Atoi(strings.TrimSpace(venue))
+	if err != nil {
+		return ChannelProbe{Err: fmt.Errorf("каналу Синема 5 нужен числовой id площадки, получено %q", venue)}
+	}
+
+	var out ChannelProbe
+	var lastFail ChannelProbe
+	got := 0
+
+	for _, page := range []string{"today", "tomorrow"} {
+		one := fetchOne(c,
+			"https://cinema5.ru/api/v1/movies/page/"+page+"?cinemaIds="+strconv.Itoa(id),
+			func(body string) (Playbill, error) { return parseCinema5(body, id) })
+
+		if one.Err != nil || one.ParseErr != nil {
+			lastFail = one
+			out.FailedDays = append(out.FailedDays, page)
+			continue
+		}
+		got++
+		out.Status = mergeStatus(out.Status, one.Status)
+		out.BodySize += one.BodySize
+		if out.Playbill.Cinema == "" {
+			out.Playbill.Cinema = one.Playbill.Cinema
+		}
+		out.Playbill.Showtimes = append(out.Playbill.Showtimes, one.Playbill.Showtimes...)
+		out.Playbill.Dates = append(out.Playbill.Dates, one.Playbill.Dates...)
+	}
+
+	if got == 0 {
+		return lastFail
+	}
 	return out
 }
 
