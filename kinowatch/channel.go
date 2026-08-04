@@ -119,6 +119,8 @@ var channelWindowWhole = map[string]bool{
 	kindPoklonka: true,
 	// Иллюзион отдаёт все дни одной страницей, параметра даты у него нет.
 	kindIllusion: true,
+	// Третьяковка отдаёт все свои показы одной страницей, дат в адресе нет.
+	kindTretyakov: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -210,6 +212,19 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 	case kindIllusion:
 		return fetchOne(c, "https://illusion-cinema.ru/schedule/",
 			func(body string) (Playbill, error) { return parseIllusion(body, day) })
+	case kindLuxor:
+		// Банка cookie обязательна: без неё сайт крутит редирект сам на себя,
+		// пока в куке не сохранён выбор площадки (проверено на «Весне»).
+		// Банка навешивается на ПЕРЕДАННЫЙ клиент, чтобы не потерять туннель.
+		return fetchOne(c.withCookies(),
+			"https://www.luxorfilm.ru/cinema/"+url.PathEscape(venue)+"/seances",
+			func(body string) (Playbill, error) {
+				return parseLuxor(body, day.Format("2006-01-02"))
+			})
+	case kindTretyakov:
+		// venue здесь — название корпуса: строк реестра две, а страница одна.
+		return fetchOne(c, "https://www.tretyakovgallery.ru/tickets/cinema/",
+			func(body string) (Playbill, error) { return parseTretyakov(body, venue) })
 	case kindRomanov:
 		return fetchRomanovDay(c, day)
 	case kindEtobilet:

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func readFixture(t *testing.T, name string) string {
@@ -1579,5 +1580,62 @@ func TestParseIllusionFixture(t *testing.T) {
 	}
 	if !halls["БОЛЬШОЙ ЗАЛ"] || !halls["МАЛЫЙ ЗАЛ"] {
 		t.Errorf("залы не отделены: %v", halls)
+	}
+}
+
+// Разбор Люксора: сеансы лежат массивом filmsAll внутри страницы.
+func TestParseLuxorFixture(t *testing.T) {
+	pb, err := parseLuxor(readFixture(t, "luxor.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	halls, ids := map[string]bool{}, map[string]bool{}
+	for _, s := range pb.Showtimes {
+		halls[s.Hall] = true
+		ids[s.SourceID] = true
+		// «Зал 4» — в Hall едет только номер.
+		if strings.ContainsAny(s.Hall, "Зал ") {
+			t.Errorf("в Hall попало не только число: %q", s.Hall)
+			break
+		}
+	}
+	if len(halls) < 3 {
+		t.Errorf("залов %d — у площадки их восемь", len(halls))
+	}
+	if len(ids) != len(pb.Showtimes) {
+		t.Errorf("уникальных id %d при %d сеансах", len(ids), len(pb.Showtimes))
+	}
+}
+
+// Разбор Третьяковки: сеансы в потоковых данных, корпус — в разметке.
+//
+// Отбор по корпусу обязателен: строк реестра две, страница одна. Без него обе
+// строки получили бы одну афишу — та же ловушка, что у Kinoplan и Миража.
+func TestParseTretyakovFiltersByHall(t *testing.T) {
+	body := readFixture(t, "tretyakov.html")
+
+	eng, err := parseTretyakov(body, "Инженерный корпус")
+	if err != nil {
+		t.Fatalf("разбор Инженерного корпуса: %v", err)
+	}
+	if len(eng.Showtimes) == 0 {
+		t.Fatal("в Инженерном корпусе сеансов нет, хотя на странице они есть")
+	}
+	for _, s := range eng.Showtimes {
+		if s.Hall != "Инженерный корпус" {
+			t.Fatalf("в афишу корпуса попал чужой зал: %+v", s)
+		}
+		// Название фильма не должно утаскивать соседние данные страницы.
+		// Длина считается в РУНАХ: len() в Go меряет байты, а кириллица
+		// двухбайтовая — на байтах порог срабатывал бы на обычных названиях.
+		if utf8.RuneCountInString(s.Film) > 120 || strings.Contains(s.Film, `","`) {
+			t.Fatalf("в название фильма затекла разметка: %.80q", s.Film)
+		}
+	}
+
+	// Корпуса без показов на странице нет — это промах по названию зала, а не
+	// пустая афиша, и молчать о нём нельзя.
+	if _, err := parseTretyakov(body, "Новая Третьяковка"); err == nil {
+		t.Error("отсутствие корпуса на странице выдано за пустую афишу")
 	}
 }
