@@ -121,6 +121,8 @@ var channelWindowWhole = map[string]bool{
 	kindIllusion: true,
 	// Третьяковка отдаёт все свои показы одной страницей, дат в адресе нет.
 	kindTretyakov: true,
+	// Еврейский музей публикует всю афишу одной страницей, дат в адресе нет.
+	kindJewish: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -225,6 +227,9 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		// venue здесь — название корпуса: строк реестра две, а страница одна.
 		return fetchOne(c, "https://www.tretyakovgallery.ru/tickets/cinema/",
 			func(body string) (Playbill, error) { return parseTretyakov(body, venue) })
+	case kindJewish:
+		return fetchOne(c, "https://www.jewish-museum.ru/events/",
+			func(body string) (Playbill, error) { return parseJewishMuseum(body) })
 	case kindRomanov:
 		return fetchRomanovDay(c, day)
 	case kindEtobilet:
