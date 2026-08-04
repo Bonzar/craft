@@ -197,7 +197,6 @@ var networkDirectories = []networkDirectory{
 	{Name: "Киномакс", URL: kinomaxVenuesURL, Parse: parseKinomaxVenues},
 	{Name: "Синема Парк", URL: cinemaParkVenuesURL, Parse: parseCinemaParkVenues},
 	{Name: "Пять звёзд", Fixed: fiveStarsVenues},
-	{Name: "p24", Fixed: p24Venues},
 }
 
 // NetworkBinding — покрытие одной сети каналами её собственного справочника.
@@ -576,13 +575,10 @@ var fiveStarsVenues = []NetworkVenue{
 	{ID: "smolenskaya", Name: "Пять звёзд на Смоленской", Kind: kind5Zvezd},
 }
 
-// p24Venues — площадки на движке p24.app.
+// Справочника у движка p24 здесь нет намеренно.
 //
-// Идентификатор — uuid из адреса собственного сайта площадки. Найдены два:
-// у Нивады («Премьер-Зал») и Колибри. У второго домена Премьер-Зала,
-// mirkinomarcos.ru, uuid в разметке нет — его площадки остаются непокрытыми, а
-// не подгоняются под чужой идентификатор.
-var p24Venues = []NetworkVenue{
-	{ID: "041df025-e930-4941-b095-e2639ef8f45f", Name: "Нивада", Kind: kindP24},
-	{ID: "b57ea270-eda1-4ae4-b1a4-df9eb088f8df", Name: "Колибри", Kind: kindP24},
-}
+// Запрос к p24 собирается из домена площадки и её facility-uuid вместе, а
+// справочник умеет хранить только идентификатор. Любая привязка через него
+// выдавала канал без домена — заведомо нерабочий: строка выглядела покрытой и
+// падала на опросе с «каналу p24 нужен домен площадки». Поэтому площадки p24
+// покрываются только поштучными записями fixedChannels, где домен задан.
