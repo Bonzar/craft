@@ -1344,3 +1344,114 @@ func TestParseP24WithoutHalls(t *testing.T) {
 		}
 	}
 }
+
+// Хронометраж собирается из часов И минут, как бы источник их ни записал.
+//
+// Здесь был тихий дефект: часы отделялись от слова границей `\b`, а в Go она
+// считается по ASCII и рядом с кириллической «ч» не срабатывает. Часы молча
+// терялись у ВСЕХ источников — фильм на 1 ч 38 мин приезжал как 38-минутный,
+// то есть уровень каскада про аномальную длительность получал ложный вход и
+// мог принять полнометражку за короткометражку-обёртку.
+func TestParseRussianDurationCollectsHours(t *testing.T) {
+	cases := map[string]int{
+		"1 ч 44 мин":      104, // кинотеатр «Москва», без точки
+		"1 ч. 38 мин.":    98,  // Mori и СИНЕМА ПАРК, с точкой
+		"2 часа 10 минут": 130, // полная форма
+		"44 мин":          44,  // часов нет вовсе
+		"":                0,
+	}
+	for in, want := range cases {
+		if got := parseRussianDuration(in); got != want {
+			t.Errorf("%q → %d, ожидалось %d", in, got, want)
+		}
+	}
+}
+
+// Нарезка блоков не имеет права терять каждый второй.
+//
+// Нежадный поиск вида `маркер(.*?)(?:маркер|\z)` включает следующий маркер в
+// конец найденного куска, и обход продолжается уже за ним. Потеря молчаливая:
+// афиша остаётся непустой, канал выглядит рабочим, а половина сеансов не
+// доезжает. На живых страницах так терялись 3 фильма Пионера из 7 и 4 дня
+// Поклонки из 8.
+func TestSplitBlocksKeepsEveryBlock(t *testing.T) {
+	got := splitBlocks("шапка<b>раз<b>два<b>три", "<b>")
+	if len(got) != 3 {
+		t.Fatalf("кусков %d, ожидалось 3: %q", len(got), got)
+	}
+	if got[0] != "раз" || got[2] != "три" {
+		t.Errorf("границы кусков разъехались: %q", got)
+	}
+	if splitBlocks("маркера тут нет", "<b>") != nil {
+		t.Error("на теле без маркера должен возвращаться пустой список")
+	}
+}
+
+// Разбор Пионера на живой фикстуре (снята 04.08.2026).
+func TestParsePionerFixture(t *testing.T) {
+	pb, err := parsePioner(readFixture(t, "pioner.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	// На странице девять ссылок сеансов — столько же должно доехать.
+	if len(pb.Showtimes) != 9 {
+		t.Errorf("сеансов %d, на странице их 9 — часть блоков потеряна", len(pb.Showtimes))
+	}
+	if len(pb.Dates) < 7 {
+		t.Errorf("горизонт из переключателя не собран: %v", pb.Dates)
+	}
+	for _, s := range pb.Showtimes {
+		if s.Film == "" || s.StartsAt == "" || s.SourceID == "" {
+			t.Fatalf("неполный сеанс: %+v", s)
+		}
+		// Зала у площадки нет — выдуманный номер сломал бы ключ сеанса.
+		if s.Hall != "" {
+			t.Errorf("зал выдуман: %q", s.Hall)
+		}
+	}
+}
+
+// Разбор Поклонки: весь горизонт одним ответом, сеансы разложены по залам,
+// названным фамилиями маршалов.
+func TestParsePoklonkaFixture(t *testing.T) {
+	pb, err := parsePoklonka(readFixture(t, "poklonka.html"),
+		time.Date(2026, 8, 4, 12, 0, 0, 0, moscowTZ))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Dates) < 5 {
+		t.Errorf("дней %d — переключатель дат отдаёт больше", len(pb.Dates))
+	}
+
+	halls := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		halls[s.Hall] = true
+		if s.Hall == "" {
+			t.Errorf("сеанс без зала, хотя источник его даёт: %+v", s)
+			break
+		}
+	}
+	if len(halls) < 2 {
+		t.Errorf("залов %d — сеансы всех залов схлопнулись в один", len(halls))
+	}
+}
+
+// Разбор кинотеатра «Москва»: формат словами, хронометраж и id сеанса.
+func TestParseCinemaMoskvaFixture(t *testing.T) {
+	pb, err := parseCinemaMoskva(readFixture(t, "cinema-moscow.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) < 20 {
+		t.Errorf("сеансов %d — похоже, часть блоков потеряна", len(pb.Showtimes))
+	}
+
+	s := pb.Showtimes[0]
+	if s.Format == "" || s.SourceID == "" {
+		t.Errorf("потеряны поля, которые источник отдаёт: %+v", s)
+	}
+	// «1 ч 44 мин» — 104 минуты, а не 44: часы должны собираться.
+	if s.DurationM != 104 {
+		t.Errorf("хронометраж %d, ожидалось 104 — часы потеряны", s.DurationM)
+	}
+}

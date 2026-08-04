@@ -232,6 +232,26 @@ var fixedChannels = []FixedChannel{
 			"адрес: ул. Снежная, д. 27, ТК Свиблово",
 	},
 
+	// ——— Одиночки со своим движком ———
+	{
+		EaisID: "2465", Name: "Пионер", Kind: kindPioner,
+		Params: ChannelParams{},
+		Source: "pioner-cinema.ru/?date=ГГГГ-ММ-ДД — расписание дня в разметке, " +
+			"горизонт восемь дат в переключателе. Кутузовский пр., 21",
+	},
+	{
+		EaisID: "7726", Name: "КИНОТЕАТР ПОКЛОНКА", Kind: kindPoklonka,
+		Params: ChannelParams{},
+		Source: "poklonka-cinema.ru/films/ — кинотеатр Музея Победы, весь горизонт " +
+			"одной страницей, залы названы фамилиями маршалов. Площадь Победы, 3",
+	},
+	{
+		EaisID: "5861", Name: "Москва", Kind: kindMoskva,
+		Params: ChannelParams{},
+		Source: "cinema.moscow/repertoire — репертуар в разметке, у каждого сеанса " +
+			"свой id в data-href",
+	},
+
 	// Две московские площадки Синема 5. Какая из них какая, сказал сам источник
 	// адресом: `api/v1/cinemas?cinemaIds=<id>` отдаёт название и улицу.
 	{
