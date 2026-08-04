@@ -976,7 +976,19 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 		}
 		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[1])))
 
-		for _, hm := range p24Hall.FindAllStringSubmatch(block, -1) {
+		// Разбивка по залам у движка НЕОБЯЗАТЕЛЬНА. У Колибри блоки залов есть,
+		// у «Часа кино» их нет вовсе — сеансы лежат прямо в блоке фильма. Пока
+		// зал считался обязательным, площадка без него отдавала пустую афишу
+		// при HTTP 200: канал выглядел живым и молчащим, а на деле разбор
+		// искал разметку, которой у этого сайта не бывает.
+		halls := p24Hall.FindAllStringSubmatch(block, -1)
+		if len(halls) == 0 {
+			// Зала нет — вся группа сеансов идёт без номера помещения. Пустой
+			// Hall честнее выдуманного: он участвует в ключе сеанса.
+			halls = [][]string{{"", "", block}}
+		}
+
+		for _, hm := range halls {
 			hallLabel, hallBlock := hm[1], hm[2]
 
 			// «Зал 1 (кровати)» — в Hall едет только номер: описание зала это

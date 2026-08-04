@@ -100,3 +100,36 @@ func TestChannelWindowWholeCoversKnownKinds(t *testing.T) {
 		}
 	}
 }
+
+// Город берётся у запрошенной площадки, а не у первой в списке приложения.
+//
+// Живой случай: виджет ЗигЗага знает три площадки — Липецк, Люберцы и Москву,
+// и Липецк стоит первым. Пока брался первый, канал уходил за афишей чужого
+// города и возвращал ПУСТУЮ афишу при HTTP 200 — то есть площадка выпадала из
+// покрытия, выглядя при этом исправной.
+func TestKinoplanCityOfPicksRequestedVenue(t *testing.T) {
+	app := kinoplanApp{Token: "t"}
+	app.Cinemas = append(app.Cinemas,
+		struct {
+			ID     int `json:"id"`
+			CityID int `json:"city_id"`
+		}{ID: 120, CityID: 28},
+		struct {
+			ID     int `json:"id"`
+			CityID int `json:"city_id"`
+		}{ID: 2465, CityID: 29},
+		struct {
+			ID     int `json:"id"`
+			CityID int `json:"city_id"`
+		}{ID: 6552, CityID: 1},
+	)
+
+	if got := kinoplanCityOf(app, 6552); got != 1 {
+		t.Errorf("город запрошенной площадки = %d, ожидалась Москва (1)", got)
+	}
+	// Площадки нет в приложении — это промах по идентификатору. Ноль заставляет
+	// вызывающего сказать об этом ошибкой, а не подставить чужой город.
+	if got := kinoplanCityOf(app, 9999); got != 0 {
+		t.Errorf("для отсутствующей площадки вернулся город %d, ожидался 0", got)
+	}
+}
