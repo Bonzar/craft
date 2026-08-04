@@ -191,9 +191,11 @@ type EnrichReport struct {
 	// DuplicateRecords — сколько строк опознано второй регистрацией той же
 	// площадки. Отдельно от клонов сети: там дублируется целая сеть, здесь —
 	// одна регистрация, и каждая пара решается своим источником.
-	DuplicateRecords int                 `json:"duplicateRecords"`
-	Observations     []CinemaObservation `json:"observations"`
-	Errors           []string            `json:"errors,omitempty"`
+	DuplicateRecords int `json:"duplicateRecords"`
+	// ClosedRecords — сколько строк помечено закрытыми поштучно.
+	ClosedRecords int                 `json:"closedRecords"`
+	Observations  []CinemaObservation `json:"observations"`
+	Errors        []string            `json:"errors,omitempty"`
 	// GeoErrors отдельно от Errors: отказ геокодера по одной площадке прогон не
 	// рушит, но и тонуть в общем списке не должен — по нему видно, чего стоит
 	// доверять числам в Paths.
@@ -285,6 +287,15 @@ func runEnrich(c, geo *Client, base, region string, limit int) {
 	report.FixedChannels = fixed
 	for _, o := range orphans {
 		report.Errors = append(report.Errors, "запись канала без строки реестра: "+o)
+	}
+
+	// Закрытые площадки: справочника сети у них нет, пометку даёт поштучная
+	// запись с уликой. Идёт после привязки — чтобы снять канал, если он всё же
+	// проставился по имени сети.
+	closed, closedOrphans := applyClosedRecords(obs)
+	report.ClosedRecords = closed
+	for _, o := range closedOrphans {
+		report.Errors = append(report.Errors, "запись о закрытии без строки реестра: "+o)
 	}
 
 	// Дубли — последними: строка, оказавшаяся второй регистрацией той же
