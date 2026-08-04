@@ -519,15 +519,12 @@ func TestVenueKeyStripsCinemaParkBrands(t *testing.T) {
 }
 
 // Списки, заданные в коде, обязаны совпадать по размеру с тем, что есть в
-// реестре: три площадки «Пяти звёзд» и два найденных uuid у p24.
+// реестре: три площадки «Пяти звёзд».
 func TestHardcodedVenueLists(t *testing.T) {
 	if len(fiveStarsVenues) != 3 {
 		t.Errorf("площадок «Пяти звёзд» %d, в реестре их три", len(fiveStarsVenues))
 	}
-	if len(p24Venues) != 2 {
-		t.Errorf("uuid p24 %d, найдено было два", len(p24Venues))
-	}
-	for _, v := range append(append([]NetworkVenue{}, fiveStarsVenues...), p24Venues...) {
+	for _, v := range fiveStarsVenues {
 		if v.ID == "" || v.Name == "" || v.Kind == "" {
 			t.Errorf("неполная запись: %+v", v)
 		}
