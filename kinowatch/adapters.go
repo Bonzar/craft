@@ -63,6 +63,7 @@ const (
 	kindLuxor     = "luxor"     // HTML luxorfilm.ru, сеансы массивом filmsAll
 	kindMosfilm   = "mosfilm"   // HTML centerkino.mosfilm.ru
 	kindTretyakov = "tretyakov" // HTML tretyakovgallery.ru, отбор по корпусу
+	kindJewish    = "jewish"    // HTML jewish-museum.ru, кино среди прочих событий
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.
@@ -2625,6 +2626,92 @@ func parseTretyakov(body, hall string) (Playbill, error) {
 	}
 	if len(pb.Showtimes) == 0 {
 		return pb, fmt.Errorf("разбор Третьяковки: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— Еврейский музей и центр толерантности ———
+//
+// `jewish-museum.ru/events/` отдаёт афишу карточками: название со ссылкой на
+// событие, дата и время одной строкой («09.08.2026, 20:15»), цена.
+//
+// В афише вперемешку лекции, экскурсии и кинопоказы, поэтому нужен ОТБОР. Он
+// сделан по признаку показа в названии и адресе события: площадка называет
+// кинопоказы прямо. Без отбора в афишу поехали бы лекции, и поиск фильма стал
+// бы находить их по совпадению слов.
+//
+// Проверено 04.08.2026: в афише стоит «Непокой» — текущий прокат, тот же, что
+// в мультиплексах. Поэтому площадка и не попала в класс «не показывает прокат».
+var (
+	jewishName  = regexp.MustCompile(`(?s)small-card__name[^"]*"\s*href="(/events/[a-z0-9-]+/)">\s*(.*?)\s*</a>`)
+	jewishWhen  = regexp.MustCompile(`(\d{2})\.(\d{2})\.(\d{4}),\s*(\d{2}:\d{2})`)
+	jewishPrice = regexp.MustCompile(`event-card__price">[^\d]*(\d+)`)
+)
+
+// screeningWords — по чему опознаётся кинопоказ среди прочих событий.
+//
+// Список короткий и явный намеренно: отбор по нему решает, что попадёт в афишу,
+// и молчаливая эвристика здесь была бы опаснее пропуска. Слово ищется и в
+// названии, и в адресе события — площадки пишут его то там, то там.
+var screeningWords = []string{"кинопоказ", "киносеанс", "kinopokaz", "kinoseans", "показ фильма"}
+
+func looksLikeScreening(title, url string) bool {
+	low := strings.ToLower(title + " " + url)
+	for _, w := range screeningWords {
+		if strings.Contains(low, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseJewishMuseum(body string) (Playbill, error) {
+	pb := Playbill{}
+
+	// Карточка события — самостоятельный блок; название и дата лежат внутри
+	// него, а первая ссылка карточки ведёт на картинку, не на название.
+	cards := splitBlocks(body, `class="event-card small-card`)
+	if len(cards) == 0 {
+		return pb, fmt.Errorf("разбор Еврейского музея: карточки событий не найдены (тело %d байт)", len(body))
+	}
+
+	dates := map[string]bool{}
+	for _, card := range cards {
+		nm := jewishName.FindStringSubmatch(card)
+		if len(nm) < 3 {
+			continue
+		}
+		url := nm[1]
+		title := strings.TrimSpace(html.UnescapeString(stripHTML(nm[2])))
+		if title == "" || !looksLikeScreening(title, url) {
+			continue
+		}
+		when := card
+		wm := jewishWhen.FindStringSubmatch(when)
+		if len(wm) < 5 {
+			continue
+		}
+		date := wm[3] + "-" + wm[2] + "-" + wm[1]
+		at := normalizeShowtime(wm[4], businessDayShift(date, wm[4]))
+		if at == "" {
+			continue
+		}
+		dates[date] = true
+
+		st := Showtime{Film: title, StartsAt: at, OnSale: true, DeepLink: "https://www.jewish-museum.ru" + url}
+		if pm := jewishPrice.FindStringSubmatch(when); len(pm) > 1 {
+			st.PriceMin, _ = strconv.Atoi(pm[1])
+		}
+		pb.Showtimes = append(pb.Showtimes, st)
+	}
+
+	for d := range dates {
+		pb.Dates = append(pb.Dates, d)
+	}
+	sort.Strings(pb.Dates)
+
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Еврейского музея: кинопоказов в афише нет (событий %d)", len(cards))
 	}
 	return pb, nil
 }

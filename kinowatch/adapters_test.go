@@ -1639,3 +1639,29 @@ func TestParseTretyakovFiltersByHall(t *testing.T) {
 		t.Error("отсутствие корпуса на странице выдано за пустую афишу")
 	}
 }
+
+// Еврейский музей: в афише кино вперемешку с лекциями, экскурсиями и
+// концертами, и отбор обязателен — иначе поиск фильма начнёт находить лекции
+// по совпадению слов.
+func TestParseJewishMuseumFiltersScreenings(t *testing.T) {
+	pb, err := parseJewishMuseum(readFixture(t, "jewish-events.html"))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("кинопоказов нет, хотя в афише они есть")
+	}
+	for _, s := range pb.Showtimes {
+		if !looksLikeScreening(s.Film, s.DeepLink) {
+			t.Errorf("в афишу попало не кино: %q", s.Film)
+		}
+		if s.StartsAt == "" || s.PriceMin == 0 {
+			t.Errorf("потеряны поля, которые источник отдаёт: %+v", s)
+		}
+	}
+	// В фикстуре 11 событий и лишь часть из них — показы: если отбор перестанет
+	// работать, сюда поедут концерты и экскурсии.
+	if len(pb.Showtimes) > 6 {
+		t.Errorf("показов %d из 11 событий — похоже, отбор перестал отсекать лекции", len(pb.Showtimes))
+	}
+}
