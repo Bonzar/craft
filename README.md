@@ -149,3 +149,9 @@ bash evals/run-e2e.sh             # L2 e2e — только когда L1 зел
 Документация компонентов: [CLAUDE.md](CLAUDE.md),
 [craft-sync/README.md](craft-sync/README.md), [evals/README.md](evals/README.md),
 [tests/README.md](tests/README.md).
+
+`kinowatch` — собственный обходчик кинотеатров Москвы: собирает реестр
+демонстраторов из ЕАИС, опрашивает расписания площадок их же каналами и держит
+счётчик покрытия. Разведка каналов — какой движок у какой сети, где касса
+отдаёт афишу чужой площадки, какие тупики уже разобраны — в
+[kinowatch/RECON.md](kinowatch/RECON.md).
