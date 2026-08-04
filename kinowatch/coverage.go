@@ -55,6 +55,9 @@ var excusedClasses = map[string]bool{
 	classCloneOf:      true,
 	classClosed:       true,
 	classNoOnlineSale: true,
+	// Площадка показывает не прокат: сеансы у неё бывают, но это выставочные и
+	// лекционные программы. Причина в самой площадке, а не в нашей неготовности.
+	classNoRelease: true,
 }
 
 // coverage считает покрытие по реестру.

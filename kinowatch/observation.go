@@ -84,6 +84,19 @@ const (
 	// считается законной причиной не иметь рабочего инструмента.
 	classClosed = "closed"
 
+	// classNoRelease — площадка показывает не кинопрокат.
+	//
+	// Отдельно от no_online_sale: там сеансов нет вовсе, здесь показы бывают, но
+	// это выставочные и лекционные программы, а не прокат — искать в них
+	// премьеру бессмысленно. Разделять обязательно, потому что причина разная и
+	// перепроверять их надо по-разному.
+	//
+	// Ставится ТОЛЬКО после проверки афиши самой площадки. Проверка на этой
+	// группе уже дала обратный результат у трёх из одиннадцати: Еврейский музей,
+	// Центр Зотов и ГЭС-2 показывают текущий прокат наравне с мультиплексами, и
+	// списать их «как музеи» было бы ошибкой.
+	classNoRelease = "no_release"
+
 	// classCloneOf — запись описывает те же залы, что и другая запись реестра.
 	// Ведущая указана в SourceParams. Свойство самого реестра, а не наша
 	// неготовность, поэтому строка выводится из знаменателя покрытия: иначе
@@ -112,6 +125,7 @@ var classPriority = []string{
 	classClosed,
 	classNoSource,
 	classNoOnlineSale,
+	classNoRelease,
 	classSeasonal,
 	classSiteUnknown,
 	classGeoUnknown,
@@ -144,6 +158,9 @@ func pickClass(reasons ...string) string {
 // (мёртвый домен, нет онлайн-продажи, сезонная) из знаменателя исключаются:
 // требовать от музея расписание сеансов бессмысленно. Клон исключается по той
 // же логике — он не отдельная площадка, а вторая запись об одних и тех же залах.
+//
+// classNoRelease сюда же: площадка показывает не прокат, и требовать от неё
+// премьеру бессмысленно — как от музея расписание сеансов.
 func keepsInDenominator(class string) bool {
 	switch class {
 	case classSiteUnknown, classGeoUnknown, classUncovered, "":
@@ -191,6 +208,14 @@ func buildCinemaObservations(decisions []ScopeDecision, now string) []CinemaObse
 		// основание, не заглядывая в код.
 		if reason := screeningsAbsentReason(d.Row.Company); reason != "" {
 			fields[fStatusClass] = pickClass(fields[fStatusClass], classNoOnlineSale)
+			fields[fLastError] = reason
+			fields[fExcuse] = reason
+		}
+
+		// Площадка показывает не прокат: сеансы бывают, но это выставочные и
+		// лекционные программы. Искать в них премьеру бессмысленно.
+		if reason := noReleaseReason(d.Row.Company); reason != "" {
+			fields[fStatusClass] = pickClass(fields[fStatusClass], classNoRelease)
 			fields[fLastError] = reason
 			fields[fExcuse] = reason
 		}
