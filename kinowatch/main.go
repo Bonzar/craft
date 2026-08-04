@@ -65,7 +65,22 @@ func main() {
 	case *enrich:
 		runEnrich(client, newGeoClient(*timeoutSec, *retries), *eaisBase, *region, *limit)
 	case *probe:
-		runProbe(client, *probeFilm, *probeProfile, *probeDays)
+		// Туннель поднимает рутина снаружи; бинарник получает готовый адрес и
+		// проверяет страну выхода ДО опроса. Непроверенный туннель хуже
+		// отсутствующего: он молча гонит трафик мимо, и площадки выглядят
+		// сломанными.
+		var tunnel *Client
+		if *proxyAddr != "" {
+			t, err := newTunnelClient(*proxyAddr, *timeoutSec, *retries)
+			if err != nil {
+				fail("%v", err)
+			}
+			if res := checkTunnel(t, *proxyCountry); !res.OK {
+				fail("выход туннеля не подтверждён как %s: %s", *proxyCountry, res.Reason)
+			}
+			tunnel = t
+		}
+		runProbe(client, tunnel, *probeFilm, *probeProfile, *probeDays)
 	case *coverageMode:
 		runCoverage(*coverageShort)
 	case *probeGeo != "":

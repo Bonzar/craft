@@ -175,11 +175,31 @@ func (c *Client) get(url string) (string, int, error) {
 	return c.getHeaders(url, nil)
 }
 
+// postJSON — POST с телом JSON и дополнительными заголовками.
+//
+// Нужен ровно одному источнику, но обойтись без него нельзя: у Романова Синема
+// серверный HTML — пустой шаблон (фильм «test», времена «00:00»), а настоящее
+// расписание отдаёт POST-ручка. Разбор шаблона дал бы непустую афишу из мусора,
+// то есть площадка выглядела бы рабочей и отдавала выдуманные сеансы.
+func (c *Client) postJSON(url, body string, extra map[string]string) (string, int, error) {
+	head := map[string]string{"content-type": "application/json"}
+	for k, v := range extra {
+		head[k] = v
+	}
+	return c.do(http.MethodPost, url, body, head)
+}
+
 // getHeaders — тот же запрос с дополнительными заголовками.
 //
 // Нужны кассам, где площадка задаётся не адресом: Kinoplan различает
 // приложения по x-application-token и без x-platform отвечает 400.
 func (c *Client) getHeaders(url string, extra map[string]string) (string, int, error) {
+	return c.do(http.MethodGet, url, "", extra)
+}
+
+// do — общий транспорт с ретраями. Метод и тело параметрами, чтобы POST-ручка
+// получала ту же политику повторов, что и все остальные запросы.
+func (c *Client) do(method, url, body string, extra map[string]string) (string, int, error) {
 	var backoff time.Duration
 	netAttempt, rlAttempt := 0, 0
 
@@ -191,7 +211,11 @@ func (c *Client) getHeaders(url string, extra map[string]string) (string, int, e
 		c.throttle()
 
 		ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		var reader io.Reader
+		if body != "" {
+			reader = strings.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, url, reader)
 		if err != nil {
 			cancel()
 			return "", 0, fmt.Errorf("построение запроса: %w", err)
@@ -224,7 +248,7 @@ func (c *Client) getHeaders(url string, extra map[string]string) (string, int, e
 			return "", 0, fmt.Errorf("сеть: %w", err)
 		}
 
-		body, readErr := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
 
@@ -252,7 +276,7 @@ func (c *Client) getHeaders(url string, extra map[string]string) (string, int, e
 		if readErr != nil {
 			return "", resp.StatusCode, fmt.Errorf("чтение тела: %w", readErr)
 		}
-		return string(body), resp.StatusCode, nil
+		return string(respBody), resp.StatusCode, nil
 	}
 }
 

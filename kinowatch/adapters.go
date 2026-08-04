@@ -57,6 +57,9 @@ const (
 	kindPioner   = "pioner"   // HTML pioner-cinema.ru
 	kindPoklonka = "poklonka" // HTML poklonka-cinema.ru, весь горизонт разом
 	kindMoskva   = "moskva"   // HTML cinema.moscow
+	kindRomanov  = "romanov"  // POST-API, серверный HTML — пустой шаблон
+	kindAlmaz    = "almaz"    // HTML almazcinema.com, сеанс JSON-ом в атрибуте
+	kindIllusion = "illuzion" // HTML illusion-cinema.ru, весь горизонт разом
 )
 
 // Showtime — один сеанс в том виде, в каком его отдал источник.
@@ -2119,6 +2122,271 @@ func parseCinemaMoskva(body, date string) (Playbill, error) {
 	}
 	if len(pb.Showtimes) == 0 {
 		return pb, fmt.Errorf("разбор кинотеатра «Москва»: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— Романов Синема ———
+//
+// Серверный HTML у площадки — ПУСТОЙ ШАБЛОН: название фильма «test», времена
+// сеансов «00:00», залы «Зал 1»–«Зал 3». Разбор такой разметки дал бы непустую
+// афишу из мусора, то есть площадка выглядела бы рабочей и отдавала выдуманные
+// сеансы. Настоящее расписание отдаёт POST-ручка, найденная в трафике страницы.
+//
+// Ключ доступа публичный — лежит в скрипте сайта. Как и токены Kinoplan, он
+// может смениться; тогда ручка начнёт отвечать 403, и это будет видно как
+// поломка канала, а не как отсутствие сеансов.
+const (
+	romanovAPI    = "https://g84siu34vb.execute-api.eu-central-1.amazonaws.com/PHONE_API/seans"
+	romanovAPIKey = "iMtuQpib7jaHUIoKdTtbv7H0nZIn6UAI3byWs9RP"
+)
+
+type romanovResponse struct {
+	Halls map[string][]struct {
+		ID     int64  `json:"SEANSES_ID"`
+		Time   string `json:"SEANSES_TIME_FORMAT"`
+		Film   string `json:"FILM_NAME"`
+		Prices []struct {
+			Price int `json:"PRICE"`
+		} `json:"Prices"`
+	} `json:"HALLS"`
+}
+
+// businessDayShift переносит ночной сеанс на следующий календарный день.
+//
+// Касса относит сеансы после полуночи к ПРЕДЫДУЩЕМУ операционному дню: у
+// Романова в расписании на 5 августа стоят и 23:40, и 00:00, и второй идёт в
+// ночь на 6-е. Без переноса такой сеанс приезжал бы на сутки раньше — человек
+// пришёл бы не в тот день, а проверка «последний сеанс уже в прошлом» считала
+// бы живое расписание протухшим.
+//
+// Граница в шесть утра — то же соглашение, что у операционного дня кинотеатра:
+// раньше шести сеансов не бывает, а всё, что позже, принадлежит своему дню.
+func businessDayShift(date, hhmm string) string {
+	if date == "" || len(hhmm) < 2 {
+		return date
+	}
+	h, err := strconv.Atoi(strings.TrimSpace(hhmm)[:2])
+	if err != nil || h >= 6 {
+		return date
+	}
+	d, err := time.ParseInLocation("2006-01-02", date, moscowTZ)
+	if err != nil {
+		return date
+	}
+	return d.AddDate(0, 0, 1).Format("2006-01-02")
+}
+
+// parseRomanov разбирает ответ ручки расписания.
+//
+// Зал приходит ключом карты («HALL1»), а не полем сеанса, поэтому номер
+// вынимается из ключа: в Hall едет только он, без слова «HALL».
+func parseRomanov(body, date string) (Playbill, error) {
+	var resp romanovResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return Playbill{}, fmt.Errorf("разбор Романов Синема: %w", err)
+	}
+
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	// Порядок ключей карты в Go случаен, а сеансы должны ложиться устойчиво:
+	// иначе два одинаковых прогона дадут разный порядок афиши.
+	halls := make([]string, 0, len(resp.Halls))
+	for h := range resp.Halls {
+		halls = append(halls, h)
+	}
+	sort.Strings(halls)
+
+	for _, h := range halls {
+		hall := strings.TrimPrefix(h, "HALL")
+		for _, s := range resp.Halls[h] {
+			film := strings.TrimSpace(s.Film)
+			at := normalizeShowtime(s.Time, businessDayShift(date, s.Time))
+			if film == "" || at == "" {
+				continue
+			}
+			st := Showtime{
+				Film:     film,
+				StartsAt: at,
+				Hall:     hall,
+				SourceID: fmt.Sprintf("%d", s.ID),
+				OnSale:   true,
+			}
+			// Цен у сеанса несколько (по типам билета) — берём вилку, а не
+			// первую попавшуюся. Цена приходит в копейках.
+			for i, p := range s.Prices {
+				rub := p.Price / 100
+				if i == 0 || rub < st.PriceMin {
+					st.PriceMin = rub
+				}
+				if rub > st.PriceMax {
+					st.PriceMax = rub
+				}
+			}
+			pb.Showtimes = append(pb.Showtimes, st)
+		}
+	}
+
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Романов Синема: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— Алмаз Синема ———
+//
+// `almazcinema.com/msk/cinema/<id>/schedule/` отдаёт страницу, где каждый
+// сеанс лежит готовым JSON в атрибуте кнопки покупки. Разбираем его, а не
+// текст рядом: в атрибуте есть и зона времени, и вилка цены, и зал, а в
+// подписи — только час.
+//
+// Доступен только через российский выход.
+type almazSession struct {
+	DateTimeOffset string `json:"DateTimeOffset"`
+	Format         string `json:"Format"`
+	MinPrice       string `json:"MinPrice"`
+	MaxPrice       string `json:"MaxPrice"`
+	HallName       string `json:"HallName"`
+	SaleAvailable  bool   `json:"IsSaleAvailable"`
+	// SessionID — идентификатор СЕАНСА. CreationObjectID рядом в том же
+	// объекте — идентификатор фильма, и он одинаков у всех его сеансов:
+	// взятый в SourceID, он схлопнул бы их в один.
+	ID int64 `json:"SessionID"`
+}
+
+var (
+	almazBtn      = regexp.MustCompile(`data-data='([^']+)'`)
+	almazFilmName = regexp.MustCompile(`(?s)^\s*(.*?)\s*</h3>`)
+	almazHallOnly = regexp.MustCompile(`(\d+)`)
+)
+
+func parseAlmaz(body, date string) (Playbill, error) {
+	pb := Playbill{}
+	if date != "" {
+		pb.Dates = []string{date}
+	}
+
+	// Фильм и его сеансы идут одним блоком: название лежит в <h3>, сеансы —
+	// кнопками после него. Режем по заголовку, внутри куска собираем кнопки.
+	blocks := splitBlocks(body, `<h3>`)
+	if len(blocks) == 0 {
+		return pb, fmt.Errorf("разбор Алмаза: блоки фильмов не найдены (тело %d байт)", len(body))
+	}
+
+	for _, block := range blocks {
+		fm := almazFilmName.FindStringSubmatch(block)
+		if len(fm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(fm[1])))
+		if film == "" {
+			continue
+		}
+
+		for _, bm := range almazBtn.FindAllStringSubmatch(block, -1) {
+			var s almazSession
+			if err := json.Unmarshal([]byte(html.UnescapeString(bm[1])), &s); err != nil {
+				continue
+			}
+			at := parseZonedTime(s.DateTimeOffset)
+			if at == "" {
+				continue
+			}
+
+			st := Showtime{
+				Film:     film,
+				StartsAt: at,
+				Format:   strings.TrimSpace(s.Format),
+				SourceID: fmt.Sprintf("%d", s.ID),
+				OnSale:   s.SaleAvailable,
+			}
+			// «Зал №1» — в Hall едет только номер: слово «Зал» одинаково у всех
+			// и в ключе сеанса ничего не различает.
+			if hm := almazHallOnly.FindStringSubmatch(s.HallName); len(hm) > 1 {
+				st.Hall = hm[1]
+			}
+			st.PriceMin, _ = strconv.Atoi(strings.TrimSpace(s.MinPrice))
+			st.PriceMax, _ = strconv.Atoi(strings.TrimSpace(s.MaxPrice))
+			pb.Showtimes = append(pb.Showtimes, st)
+		}
+	}
+
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Алмаза: сеансы не найдены (тело %d байт)", len(body))
+	}
+	return pb, nil
+}
+
+// ——— Иллюзион ———
+//
+// `illusion-cinema.ru/schedule/` отдаёт ВЕСЬ горизонт одним ответом: дни идут
+// заголовками «4 августа, вторник», внутри дня — сеансы. Параметра даты у
+// источника нет вовсе, и это не ограничение адаптера, а устройство страницы.
+//
+// Название несёт зал: «МАЛЫЙ ЗАЛ. Питер ФМ». Зал отделяется, потому что иначе
+// один и тот же фильм в разных залах выглядел бы разными фильмами и не совпал
+// бы с искомым названием.
+//
+// Доступен только через российский выход.
+var (
+	illusionDayHdr = regexp.MustCompile(`^\s*(\d{1,2})\s+([а-яё]+)`)
+	illusionTime   = regexp.MustCompile(`schedule-film__time">\s*([0-2]?\d:[0-5]\d)`)
+	illusionName   = regexp.MustCompile(`(?s)schedule-film__name">\s*(.*?)\s*</span>`)
+	illusionHall   = regexp.MustCompile(`^\s*([А-ЯЁ][А-ЯЁ\s]{2,20}ЗАЛ)\.\s*(.+)$`)
+)
+
+func parseIllusion(body string, now time.Time) (Playbill, error) {
+	pb := Playbill{}
+
+	days := splitBlocks(body, `<h2>`)
+	if len(days) == 0 {
+		return pb, fmt.Errorf("разбор Иллюзиона: дни не найдены (тело %d байт)", len(body))
+	}
+
+	for _, day := range days {
+		hm := illusionDayHdr.FindStringSubmatch(day)
+		if len(hm) < 3 {
+			continue
+		}
+		d, err := strconv.Atoi(hm[1])
+		mon := russianMonth(hm[2])
+		if err != nil || mon == 0 {
+			continue
+		}
+		year := now.Year()
+		if mon < int(now.Month()) {
+			year++
+		}
+		date := fmt.Sprintf("%04d-%02d-%02d", year, mon, d)
+		pb.Dates = append(pb.Dates, date)
+
+		for _, item := range splitBlocks(day, `schedule-film__time">`) {
+			tm := illusionTime.FindStringSubmatch(`schedule-film__time">` + item)
+			nm := illusionName.FindStringSubmatch(item)
+			if len(tm) < 2 || len(nm) < 2 {
+				continue
+			}
+			film := strings.TrimSpace(html.UnescapeString(stripHTML(nm[1])))
+			hall := ""
+			if p := illusionHall.FindStringSubmatch(film); len(p) > 2 {
+				hall, film = strings.TrimSpace(p[1]), strings.TrimSpace(p[2])
+			}
+			at := normalizeShowtime(tm[1], businessDayShift(date, tm[1]))
+			if film == "" || at == "" {
+				continue
+			}
+			pb.Showtimes = append(pb.Showtimes, Showtime{
+				Film: film, StartsAt: at, Hall: hall, OnSale: true,
+			})
+		}
+	}
+
+	sort.Strings(pb.Dates)
+	if len(pb.Showtimes) == 0 {
+		return pb, fmt.Errorf("разбор Иллюзиона: сеансы не найдены (тело %d байт)", len(body))
 	}
 	return pb, nil
 }
