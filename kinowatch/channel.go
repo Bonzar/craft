@@ -117,6 +117,8 @@ var channelWindowWhole = map[string]bool{
 	// Поклонка отдаёт все свои дни одной страницей: дни — блоки внутри неё,
 	// параметра даты у источника нет вовсе.
 	kindPoklonka: true,
+	// Иллюзион отдаёт все дни одной страницей, параметра даты у него нет.
+	kindIllusion: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -199,6 +201,17 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 			func(body string) (Playbill, error) {
 				return parseCinemaMoskva(body, day.Format("2006-01-02"))
 			})
+	case kindAlmaz:
+		return fetchOne(c,
+			"https://almazcinema.com/msk/cinema/"+url.PathEscape(venue)+"/schedule/",
+			func(body string) (Playbill, error) {
+				return parseAlmaz(body, day.Format("2006-01-02"))
+			})
+	case kindIllusion:
+		return fetchOne(c, "https://illusion-cinema.ru/schedule/",
+			func(body string) (Playbill, error) { return parseIllusion(body, day) })
+	case kindRomanov:
+		return fetchRomanovDay(c, day)
 	case kindEtobilet:
 		// Площадка живёт на своём домене, движок общий — как у p24.
 		host := p[pHost]
@@ -467,6 +480,22 @@ func fetchCinema5(c *Client, venue string) ChannelProbe {
 	if got == 0 {
 		return lastFail
 	}
+	return out
+}
+
+// fetchRomanovDay — расписание Романова за одну дату.
+//
+// Ручка принимает дату в теле POST, а не в адресе, и требует ключ заголовком.
+func fetchRomanovDay(c *Client, day time.Time) ChannelProbe {
+	body, status, err := c.postJSON(romanovAPI+"/seanslist",
+		fmt.Sprintf(`{"TIMETABLE_DATE":%q}`, day.Format("02.01.2006")),
+		map[string]string{"x-api-key": romanovAPIKey, "accept": "application/json"})
+
+	out := ChannelProbe{Status: status, BodySize: len(body), Err: err}
+	if err != nil {
+		return out
+	}
+	out.Playbill, out.ParseErr = parseRomanov(body, day.Format("2006-01-02"))
 	return out
 }
 

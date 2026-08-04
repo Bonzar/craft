@@ -1,0 +1,1936 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Расписание кинотеатра Алмаз Синема Алтуфьевский</title>
+<meta name="description" content="" />
+<meta name="keywords" content="" />
+<meta name="generator" content="Cinema Management System - CMS for cinema MSG Rocket Master (DataLife Engine)" />
+
+<script src="/engine/classes/js/jquery.js"></script>
+<script src="/engine/classes/js/jqueryui.js"></script>
+<script src="/engine/classes/js/dle_js.js"></script>
+<script src="/templates/cinema/js/schedule.js?b3bbf1f7534a8a3dafab82e165b6ba51"></script>
+<link media="screen" href="/templates/cinema/style/schedule.css" type="text/css" rel="stylesheet" />
+<script>
+        (function(d,t,u,e,s){
+        e=d.createElement(t);s=d.getElementsByTagName(t)[0];
+        e.addEventListener('load', ()=> { widgetScriptLoad('rambler'); });
+        e.async=true;e.defer=true;e.src=u+'?v=b3bbf1f7534a8a3dafab82e165b6ba51';s.parentNode.insertBefore(e,s);
+        })(document,'script','//www.afisha.ru/w/ticketmanager.js');
+    </script>
+<link href="/templates/cinema/images/favicon.ico" rel="shortcut icon" type="image/vnd.microsoft.icon" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-itunes-app" content="app-id=1138380021">
+<meta name="google-play-app" content="app-id=ru.rambler.kassa_almaz">
+<meta name="vk-agent" content="Привет, агент #11">
+<link rel="apple-touch-icon" sizes="180x180" href="/templates/cinema/img/touch-icon-iphone.png">
+
+<link rel="stylesheet" href="/templates/cinema/style/engine.css?2" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/cover.css?2" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/tooltip.css?2" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/inputUI.css?2" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/inputUI.dialog.css?2" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/growl.css?2" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/scrollbar.css?2" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/jquery.fancybox.min.css?2" type="text/css" />
+    
+<link rel="stylesheet" href="/templates/cinema/style/styles_vendors.css?6" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/styles_main.css?9" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/styles_pages.css?v=13" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/styles_blocks.css?12" type="text/css" />
+<link rel="stylesheet" href="/templates/cinema/style/schedule_markers.css?date=2026-08-0412:55:04" type="text/css" />
+
+<script src="/templates/cinema/js/js.cookie.js?3"></script>
+<script src="/templates/cinema/js/script.js?10"></script>
+<script src="/templates/cinema/js/scrollbar.js?2"></script>
+<script src="/templates/cinema/js/cover.js?2"></script>
+<script src="/templates/cinema/js/tooltip.js?2"></script>
+<script src="/templates/cinema/js/inputUI.js?2"></script>
+<script src="/templates/cinema/js/inputUI.dialog.js?3"></script>
+<script src="/templates/cinema/js/carousel.min.js?2"></script>
+<script src="/templates/cinema/js/ofi.browser.js?2"></script>
+<script src="/templates/cinema/js/jquery.fancybox.min.js?2"></script>
+<script src="/templates/cinema/js/jquery.smartbanner.js?2"></script>
+<script src="//vk.com/js/api/openapi.js?144"></script>
+<script>
+<!--
+var dle_root       = '/';
+var dle_admin      = '';
+var dle_login_hash = '';
+var dle_group      = 5;
+var dle_skin       = 'cinema';
+var dle_wysiwyg    = '0';
+var quick_wysiwyg  = '0';
+var dle_act_lang   = ["Да", "Нет", "Ввод", "Отмена", "Сохранить", "Удалить", "Загрузка. Пожалуйста, подождите..."];
+var menu_short     = 'Быстрое редактирование';
+var menu_full      = 'Полное редактирование';
+var menu_profile   = 'Просмотр профиля';
+var menu_send      = 'Отправить сообщение';
+var menu_uedit     = 'Админцентр';
+var dle_info       = 'Информация';
+var dle_confirm    = 'Подтверждение';
+var dle_prompt     = 'Ввод информации';
+var dle_req_field  = 'Заполните все необходимые поля';
+var dle_del_agree  = 'Вы действительно хотите удалить? Данное действие невозможно будет отменить';
+var dle_spam_agree = 'Вы действительно хотите отметить пользователя как спамера? Это приведёт к удалению всех его комментариев';
+var dle_complaint  = 'Укажите текст Вашей жалобы для администрации:';
+var dle_big_text   = 'Выделен слишком большой участок текста.';
+var dle_orfo_title = 'Укажите комментарий для администрации к найденной ошибке на странице';
+var dle_p_send     = 'Отправить';
+var dle_p_send_ok  = 'Уведомление успешно отправлено';
+var dle_save_ok    = 'Изменения успешно сохранены. Обновить страницу?';
+var dle_reply_title= 'Ответ на комментарий';
+var dle_tree_comm  = '0';
+var dle_lang 	   = 'ru';
+var dle_lang_id    = '1';
+var smartphone     = false;
+var dle_city_id    = '34';
+var dle_needselect = '';
+var dle_del_news   = 'Удалить статью';
+var dle_page       = 'schedule';
+var allow_dle_delete_news   = false;
+
+//-->
+</script>
+<!-- Yandex.Metrika counter -->
+<script type="text/javascript" >
+  (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+  m[i].l=1*new Date();
+  for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+  k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+  (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+ 
+  ym(99031446, "init", {
+       clickmap:true,
+       trackLinks:true,
+       accurateTrackBounce:true
+  });
+</script>
+<noscript><div><img src="https://mc.yandex.ru/watch/99031446" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+<!-- /Yandex.Metrika counter -->
+</head>
+<body>
+<header class="header">
+    <div class="wrapper flex header__wrapper">
+        <a class="logo header__logo" href="/msk/">
+            <img src="/templates/cinema/img/logo-new.svg" alt="Алмаз Синема">
+        </a>
+        <div class="menu header__menu">
+            <div class="wrapper">
+                <div class="hamburger">
+                    <div class="line"></div>
+                    <div class="line"></div>
+                    <div class="line"></div>
+                </div>
+                <a class="logo header__logo" href="/msk/">
+                    <img src="/templates/cinema/img/logo-new.svg" alt="Алмаз Синема">
+                </a>
+                <div class="menu__container">
+    <div class="menu__element">
+    <a href="https://almazcinema.com/msk/cinema/41/schedule/" class="menu__link">Расписание</a>
+</div>
+    <div class="menu__element">
+    <a href="https://almazcinema.com/msk/cinema/41/" class="menu__link">О кинотеатре</a>
+</div>
+    
+    <div class="menu__element">
+        <div class="menu__link">Фильмы</div>
+        <div class="menu__dropdown">
+            <div class="menu__element"><a href="/msk/cinema/movies/" class="menu__link">Сегодня в кино</a></div>
+            <div class="menu__element"><a href="/msk/cinema/anonces/" class="menu__link">Скоро в кино</a></div>
+        </div>
+    </div>
+    <div class="menu__element">
+        <div class="menu__link">Алмаз<span class="almaz">Промо</span></div>
+        <div class="menu__dropdown">
+            <div class="menu__element"><a href="/msk/stock/" class="menu__link">Акции</a></div>
+            <div class="menu__element"><a href="/msk/sale/" class="menu__link">Скидки</a></div>
+            <div class="menu__element"><a href="/msk/news/" class="menu__link">Новости</a></div>
+            <div class="menu__element"><a href="/msk/p/memorandum/" class="menu__link">Меморандум</a></div>
+            <div class="menu__element"><a href="/msk/p/cinodiscont/" class="menu__link">КИНОДИСКОНТ</a></div>
+            <div class="menu__element"><a href="/msk/p/live-ticket/" class="menu__link">Мобильное приложение</a></div>
+        </div>
+    </div>
+    <div class="menu__element menu__element--sert"><a href="/msk/p/gift/" class="menu__link">Киноподарок</a></div>
+    
+    <div class="menu__element">
+        <div class="menu__link">Услуги кинотеатра</div>
+        <div class="menu__dropdown">
+            <div class="menu__element"><a href="/msk/p/advertising/" class="menu__link">Реклама в кинотеатре</a></div>
+            <div class="menu__element"><a href="/msk/p/hall-rent/" class="menu__link">Аренда кинозала</a></div>
+            <div class="menu__element"><a href="/msk/p/area-rent/" class="menu__link">Аренда площадей</a></div>
+        </div>
+    </div>
+</div>
+            </div>
+        </div>
+        <div class="icons flex">
+            <a class="icon icon_user" href="https://cabinet.almazcinema.ru/" title="Войти в личный кабинет">
+                <img src="/templates/cinema/img/icon_user.svg" alt="Войти в личный кабинет">
+            </a>
+            <div class="icon icon_map help_tooltip_container">
+	<img src="/templates/cinema/img/icon_map.svg" class="openPopup select" alt="Выбран город Москва" title="Выбран город Москва">
+	<div class="help_tooltip">
+		<div class="selected_city">Хотите выбрать другой город?</div>
+		<div class="help__buttons">
+			<div class="help__button openPopup select">Да</div>
+			<div class="help__button yeees">Нет</div>
+		</div>
+	</div>
+</div>
+<div class="location openPopup select">г. <b>Москва</b><br>Выбрать город</div>
+        </div>
+        
+    </div>
+</header>
+
+  
+
+  
+  
+  
+<div class="page wrapper schedule">
+      <div class="page__head">
+        <h1 class="page__title">Расписание кинотеатра Алмаз Синема Алтуфьевский</h1>
+        
+    </div>
+        
+    <div class="page__content clear">
+        
+        <div class="cinema__card">
+	<div class="cinema__address">
+		г. Москва, Алтуфьевское ш., 8, ТРЦ «Алтуфьевский», м. Владыкино
+	</div>
+	<a href="https://almazcinema.com/msk/cinema/41/" class="button">О кинотеатре</a>
+</div>
+
+<div class="module schedule">
+	<div class="header">
+		<div class="calendar">
+	<div class="controls">
+		<div class="btn prev"><span><i class="fa fa-fw fa-angle-left"></i></span></div>
+		<div class="btn next"><span><i class="fa fa-fw fa-angle-right"></i></span></div>
+	</div>
+	<div class="content-list clear">
+		<div class="item enable" data-date="2026-08-04">
+	<span class="label-h1">Сегодня</span>
+	<span class="label-h2"><data value="2026-08-04">4</data> авг</span>
+</div><div class="item enable" data-date="2026-08-05">
+	<span class="label-h1">Завтра</span>
+	<span class="label-h2"><data value="2026-08-05">5</data> авг</span>
+</div><div class="item disable" data-date="2026-08-06">
+	<span class="label-h1">Четверг</span>
+	<span class="label-h2"><data value="2026-08-06">6</data> авг</span>
+</div><div class="item disable" data-date="2026-08-07">
+	<span class="label-h1">Пятница</span>
+	<span class="label-h2"><data value="2026-08-07">7</data> авг</span>
+</div><div class="item disable weekend" data-date="2026-08-08">
+	<span class="label-h1">Суббота</span>
+	<span class="label-h2"><data value="2026-08-08">8</data> авг</span>
+</div><div class="item disable weekend" data-date="2026-08-09">
+	<span class="label-h1">Воскресенье</span>
+	<span class="label-h2"><data value="2026-08-09">9</data> авг</span>
+</div><div class="item disable" data-date="2026-08-10">
+	<span class="label-h1">Понедельник</span>
+	<span class="label-h2"><data value="2026-08-10">10</data> авг</span>
+</div>
+	</div>
+</div>
+		
+	</div>
+	<div class="content-list clear">
+		<div class="item day" data-date="2026-08-04">
+	<div class="scheduleList">
+		<div class="scheduleMovie__item" data-filmid="4825">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4825/">
+			<img class="movie__item-img" src="/engine/cache/images/03e97a5b9a7f710d534b19c0ee35a84f.jpg" alt="Одиссея*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4825/">
+			<img class="movie__item-img" src="/engine/cache/images/42300af0738d15cfe2d34912ae1cf640.jpg" alt="Одиссея*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4825/"><h3>Одиссея*(предсеанс. обсл.) + м/ф "Историю не изменить"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>18+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №1" data-price="370" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458302" data-data='{"SessionID":133458302,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 13:25","DateTimeOffset":"2026-08-04T13:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"370","MaxPrice":"370","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>13:25</span><div class="sale__price">от 370<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №4" data-price="420" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133278110" data-data='{"SessionID":133278110,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 15:15","DateTimeOffset":"2026-08-04T15:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"420","MaxPrice":"420","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":154,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>15:15</span><div class="sale__price">от 420<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №1" data-price="420" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458303" data-data='{"SessionID":133458303,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 16:45","DateTimeOffset":"2026-08-04T16:45:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"420","MaxPrice":"420","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>16:45</span><div class="sale__price">от 420<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №4" data-price="450" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133278111" data-data='{"SessionID":133278111,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 18:35","DateTimeOffset":"2026-08-04T18:35:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"450","MaxPrice":"450","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":153,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>18:35</span><div class="sale__price">от 450<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №1" data-price="450" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458304" data-data='{"SessionID":133458304,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 20:05","DateTimeOffset":"2026-08-04T20:05:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"450","MaxPrice":"450","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>20:05</span><div class="sale__price">от 450<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №4" data-price="450" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133278112" data-data='{"SessionID":133278112,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 21:55","DateTimeOffset":"2026-08-04T21:55:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"450","MaxPrice":"450","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":156,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>21:55</span><div class="sale__price">от 450<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4805">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4805/">
+			<img class="movie__item-img" src="/engine/cache/images/70c6fc13ef0404d7d4f201ac2f34f4e5.jpg" alt="Миньоны и монстры*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4805/">
+			<img class="movie__item-img" src="/engine/cache/images/f11e0291aaa7b84fe9c4c89329f2fd22.jpg" alt="Миньоны и монстры*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4805/"><h3>Миньоны и монстры*(предсеанс. обсл.) + м/ф "Сколько весит облако?"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>6+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="350" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355927" data-data='{"SessionID":133355927,"CityID":2,"CreationClassType":"Movie","CreationObjectID":116552,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 15:45","DateTimeOffset":"2026-08-04T15:45:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"350","MaxPrice":"350","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4805"><span>15:45</span><div class="sale__price">от 350<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №5" data-price="350" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355928" data-data='{"SessionID":133355928,"CityID":2,"CreationClassType":"Movie","CreationObjectID":116552,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 17:35","DateTimeOffset":"2026-08-04T17:35:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"350","MaxPrice":"350","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4805"><span>17:35</span><div class="sale__price">от 350<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №5" data-price="380" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355929" data-data='{"SessionID":133355929,"CityID":2,"CreationClassType":"Movie","CreationObjectID":116552,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 19:30","DateTimeOffset":"2026-08-04T19:30:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"380","MaxPrice":"380","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4805"><span>19:30</span><div class="sale__price">от 380<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4875">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4875/">
+			<img class="movie__item-img" src="/engine/cache/images/be9c3a11f47c9330d4a960a983d9a297.jpg" alt="Все, что мы потеряли">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4875/">
+			<img class="movie__item-img" src="/engine/cache/images/4db252608d03d44c8d8936e47cd2df69.jpg" alt="Все, что мы потеряли">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4875/"><h3>Все, что мы потеряли</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>мелодрама</span></span>
+				</div>
+				<div class="item"><span>Испания</span><span>, 1 ч. 47 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458265" data-data='{"SessionID":133458265,"CityID":2,"CreationClassType":"Movie","CreationObjectID":49670076,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 13:35","DateTimeOffset":"2026-08-04T13:35:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4875"><span>13:35</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458256" data-data='{"SessionID":133458256,"CityID":2,"CreationClassType":"Movie","CreationObjectID":49670076,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 20:45","DateTimeOffset":"2026-08-04T20:45:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4875"><span>20:45</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4874">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4874/">
+			<img class="movie__item-img" src="/engine/cache/images/0123adcdd41d186560c4de694ca1bde5.jpg" alt="Старый орёл">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4874/">
+			<img class="movie__item-img" src="/engine/cache/images/8db44e731f7be8ecd4733c11dfa0683d.jpg" alt="Старый орёл">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4874/"><h3>Старый орёл</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>12+, </span>
+					<span><span>комедия</span>, <span>семейный</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="380" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458262" data-data='{"SessionID":133458262,"CityID":2,"CreationClassType":"Movie","CreationObjectID":47265971,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 18:25","DateTimeOffset":"2026-08-04T18:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"380","MaxPrice":"380","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7287033,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4874"><span>18:25</span><div class="sale__price">от 380<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4801">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4801/">
+			<img class="movie__item-img" src="/engine/cache/images/ccecd0ce67524d9e12bb6d21e3ab264f.jpg" alt="Мой дикий друг. Возвращение домой">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4801/">
+			<img class="movie__item-img" src="/engine/cache/images/d2fb48686c441cda3ad92a9d4e0649a9.jpg" alt="Мой дикий друг. Возвращение домой">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4801/"><h3>Мой дикий друг. Возвращение домой</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>6+, </span>
+					<span><span>приключения</span>, <span>семейный</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458260" data-data='{"SessionID":133458260,"CityID":2,"CreationClassType":"Movie","CreationObjectID":42471877,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 14:25","DateTimeOffset":"2026-08-04T14:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7268601,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4801"><span>14:25</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4856">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4856/">
+			<img class="movie__item-img" src="/engine/cache/images/eeaf9dde82e81285da19630ff3e4573c.jpg" alt="Кодекс Данте">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4856/">
+			<img class="movie__item-img" src="/engine/cache/images/c4d07f6d2621a18274bd200fae37b105.jpg" alt="Кодекс Данте">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4856/"><h3>Кодекс Данте</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>детектив</span>, <span>драма</span>, <span>криминал</span></span>
+				</div>
+				<div class="item"><span>Великобритания, Италия, Чили, США</span><span>, 1 ч. 44 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №1" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458251" data-data='{"SessionID":133458251,"CityID":2,"CreationClassType":"Movie","CreationObjectID":119316,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 23:25","DateTimeOffset":"2026-08-04T23:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4856"><span>23:25</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4863">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4863/">
+			<img class="movie__item-img" src="/engine/cache/images/57e581d09b6a76b7eac370238cc0579d.jpg" alt="День разоблачения*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4863/">
+			<img class="movie__item-img" src="/engine/cache/images/f7f5fa31a7e459ed99958b1dd856f90b.jpg" alt="День разоблачения*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4863/"><h3>День разоблачения*(предсеанс. обсл.) + м/ф "Историю не изменить"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>16+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355923" data-data='{"SessionID":133355923,"CityID":2,"CreationClassType":"Movie","CreationObjectID":52047104,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 20:25","DateTimeOffset":"2026-08-04T20:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4863"><span>20:25</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4678">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4678/">
+			<img class="movie__item-img" src="/engine/cache/images/c35bbc3facc90cbdf43a3e7c15abf25c.jpg" alt="История игрушек 5*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4678/">
+			<img class="movie__item-img" src="/engine/cache/images/ed9b6e6c6a51b4b93d5655033e87bb49.jpg" alt="История игрушек 5*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4678/"><h3>История игрушек 5*(предсеанс. обсл.) + м/ф "Сколько весит облако?"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>6+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458305" data-data='{"SessionID":133458305,"CityID":2,"CreationClassType":"Movie","CreationObjectID":117214,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 14:15","DateTimeOffset":"2026-08-04T14:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4678"><span>14:15</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4802">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4802/">
+			<img class="movie__item-img" src="/engine/cache/images/e3dc82d3c7020f514823357747da4776.jpg" alt="Зловещие мертвецы: Пекло">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4802/">
+			<img class="movie__item-img" src="/engine/cache/images/5a748e24c2cfceea5e91f9a8b202fd1e.png" alt="Зловещие мертвецы: Пекло">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4802/"><h3>Зловещие мертвецы: Пекло</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>ужасы</span></span>
+				</div>
+				<div class="item"><span>США, Новая Зеландия, Канада</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458267" data-data='{"SessionID":133458267,"CityID":2,"CreationClassType":"Movie","CreationObjectID":43659575,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 23:10","DateTimeOffset":"2026-08-04T23:10:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4802"><span>23:10</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4796">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4796/">
+			<img class="movie__item-img" src="/engine/cache/images/f6137a7ddf4c9afa25fb36993afafaac.jpg" alt="Холоп 3">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4796/">
+			<img class="movie__item-img" src="/engine/cache/images/b87f5f85dfa9fe71ae811eb14afe9683.jpg" alt="Холоп 3">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4796/"><h3>Холоп 3</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>16+, </span>
+					<span><span>комедия</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 2 ч.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458254" data-data='{"SessionID":133458254,"CityID":2,"CreationClassType":"Movie","CreationObjectID":38539778,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 16:20","DateTimeOffset":"2026-08-04T16:20:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7259223,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4796"><span>16:20</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4794">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4794/">
+			<img class="movie__item-img" src="/engine/cache/images/867778a349fab3b855c34e475187bc52.jpg" alt="Майкл">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4794/">
+			<img class="movie__item-img" src="/engine/cache/images/201dbc6e0885493cdcb2b8ef1ef5e876.jpg" alt="Майкл">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4794/"><h3>Майкл</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>драма</span></span>
+				</div>
+				<div class="item"><span>США</span><span>, 2 ч. 7 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458257" data-data='{"SessionID":133458257,"CityID":2,"CreationClassType":"Movie","CreationObjectID":43659554,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 22:55","DateTimeOffset":"2026-08-04T22:55:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4794"><span>22:55</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4873">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4873/">
+			<img class="movie__item-img" src="/engine/cache/images/10e890a35301487dac44e45b47eaab5d.jpg" alt="Пиноккио: Раскрепощенный">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4873/">
+			<img class="movie__item-img" src="/engine/cache/images/0bce3fda1dcfccd9568b931e5ebfd14e.jpg" alt="Пиноккио: Раскрепощенный">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4873/"><h3>Пиноккио: Раскрепощенный</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>триллер</span>, <span>ужасы</span>, <span>фэнтези</span></span>
+				</div>
+				<div class="item"><span>Великобритания, США</span><span>, 1 ч. 21 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458266" data-data='{"SessionID":133458266,"CityID":2,"CreationClassType":"Movie","CreationObjectID":48486649,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 21:20","DateTimeOffset":"2026-08-04T21:20:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4873"><span>21:20</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4877">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4877/">
+			<img class="movie__item-img" src="/engine/cache/images/cce36f062e085b4f04010f597d627f03.jpg" alt="Непокой">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4877/">
+			<img class="movie__item-img" src="/engine/cache/images/ce738b3784fd922a97920a18a9a43e1a.jpg" alt="Непокой">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4877/"><h3>Непокой</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>мистика</span>, <span>триллер</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 26 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458255" data-data='{"SessionID":133458255,"CityID":2,"CreationClassType":"Movie","CreationObjectID":35820470,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 18:55","DateTimeOffset":"2026-08-04T18:55:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4877"><span>18:55</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4781">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4781/">
+			<img class="movie__item-img" src="/engine/cache/images/5975f4b5c5dc0926f32a6c1be6f33e47.jpg" alt="Обсессия">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4781/">
+			<img class="movie__item-img" src="/engine/cache/images/d88a5b86fa7d60866f82b5742121d626.jpg" alt="Обсессия">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4781/"><h3>Обсессия</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					
+				</div>
+				<div class="item"><span>США</span><span>, 1 ч. 40 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458263" data-data='{"SessionID":133458263,"CityID":2,"CreationClassType":"Movie","CreationObjectID":43099726,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 23:15","DateTimeOffset":"2026-08-04T23:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4781"><span>23:15</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4876">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4876/">
+			<img class="movie__item-img" src="/engine/cache/images/82be6dd0eca2e125d9b06cb6ae167ae0.jpg" alt="Храбрый Давид">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4876/">
+			<img class="movie__item-img" src="/engine/cache/images/249119d183fedd8e55bba5178c189d87.jpg" alt="Храбрый Давид">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4876/"><h3>Храбрый Давид</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>6+, </span>
+					<span><span>мультфильм</span></span>
+				</div>
+				<div class="item"><span>США</span><span>, 1 ч. 49 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458259" data-data='{"SessionID":133458259,"CityID":2,"CreationClassType":"Movie","CreationObjectID":45700747,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 12:15","DateTimeOffset":"2026-08-04T12:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4876"><span>12:15</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4811">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4811/">
+			<img class="movie__item-img" src="/engine/cache/images/92f15e941de7ee1a81d408eb06a08030.jpg" alt="На деревню дедушке 2">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4811/">
+			<img class="movie__item-img" src="/engine/cache/images/a88a1847b94811899d1faac260493427.jpg" alt="На деревню дедушке 2">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4811/"><h3>На деревню дедушке 2</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>6+, </span>
+					<span><span>комедия</span>, <span>семейный</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458261" data-data='{"SessionID":133458261,"CityID":2,"CreationClassType":"Movie","CreationObjectID":47669702,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-04 16:25","DateTimeOffset":"2026-08-04T16:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7255624,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4811"><span>16:25</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div>
+	</div>
+</div><div class="item day" data-date="2026-08-05">
+	<div class="scheduleList">
+		<div class="scheduleMovie__item" data-filmid="4825">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4825/">
+			<img class="movie__item-img" src="/engine/cache/images/03e97a5b9a7f710d534b19c0ee35a84f.jpg" alt="Одиссея*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4825/">
+			<img class="movie__item-img" src="/engine/cache/images/42300af0738d15cfe2d34912ae1cf640.jpg" alt="Одиссея*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4825/"><h3>Одиссея*(предсеанс. обсл.) + м/ф "Историю не изменить"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>18+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №1" data-price="320" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458306" data-data='{"SessionID":133458306,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 10:05","DateTimeOffset":"2026-08-05T10:05:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"320","MaxPrice":"320","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>10:05</span><div class="sale__price">от 320<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №4" data-price="370" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133278113" data-data='{"SessionID":133278113,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 12:00","DateTimeOffset":"2026-08-05T12:00:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"370","MaxPrice":"370","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":156,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>12:00</span><div class="sale__price">от 370<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №1" data-price="370" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458307" data-data='{"SessionID":133458307,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 13:25","DateTimeOffset":"2026-08-05T13:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"370","MaxPrice":"370","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>13:25</span><div class="sale__price">от 370<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №4" data-price="450" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133278114" data-data='{"SessionID":133278114,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 15:15","DateTimeOffset":"2026-08-05T15:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"450","MaxPrice":"450","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":156,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>15:15</span><div class="sale__price">от 450<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №1" data-price="420" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458308" data-data='{"SessionID":133458308,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 16:45","DateTimeOffset":"2026-08-05T16:45:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"420","MaxPrice":"420","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>16:45</span><div class="sale__price">от 420<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №4" data-price="450" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133278115" data-data='{"SessionID":133278115,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 18:35","DateTimeOffset":"2026-08-05T18:35:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"450","MaxPrice":"450","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":150,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>18:35</span><div class="sale__price">от 450<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №1" data-price="450" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458309" data-data='{"SessionID":133458309,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 20:05","DateTimeOffset":"2026-08-05T20:05:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"450","MaxPrice":"450","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>20:05</span><div class="sale__price">от 450<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №4" data-price="450" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133278116" data-data='{"SessionID":133278116,"CityID":2,"CreationClassType":"Movie","CreationObjectID":39612334,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 21:55","DateTimeOffset":"2026-08-05T21:55:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"450","MaxPrice":"450","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":152,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4825"><span>21:55</span><div class="sale__price">от 450<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4805">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4805/">
+			<img class="movie__item-img" src="/engine/cache/images/70c6fc13ef0404d7d4f201ac2f34f4e5.jpg" alt="Миньоны и монстры*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4805/">
+			<img class="movie__item-img" src="/engine/cache/images/f11e0291aaa7b84fe9c4c89329f2fd22.jpg" alt="Миньоны и монстры*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4805/"><h3>Миньоны и монстры*(предсеанс. обсл.) + м/ф "Сколько весит облако?"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>6+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="300" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355936" data-data='{"SessionID":133355936,"CityID":2,"CreationClassType":"Movie","CreationObjectID":116552,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 11:55","DateTimeOffset":"2026-08-05T11:55:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"300","MaxPrice":"300","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4805"><span>11:55</span><div class="sale__price">от 300<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №5" data-price="350" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355938" data-data='{"SessionID":133355938,"CityID":2,"CreationClassType":"Movie","CreationObjectID":116552,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 15:45","DateTimeOffset":"2026-08-05T15:45:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"350","MaxPrice":"350","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4805"><span>15:45</span><div class="sale__price">от 350<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №5" data-price="350" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355939" data-data='{"SessionID":133355939,"CityID":2,"CreationClassType":"Movie","CreationObjectID":116552,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 17:35","DateTimeOffset":"2026-08-05T17:35:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"350","MaxPrice":"350","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4805"><span>17:35</span><div class="sale__price">от 350<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №5" data-price="380" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355940" data-data='{"SessionID":133355940,"CityID":2,"CreationClassType":"Movie","CreationObjectID":116552,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 19:30","DateTimeOffset":"2026-08-05T19:30:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"380","MaxPrice":"380","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4805"><span>19:30</span><div class="sale__price">от 380<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4875">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4875/">
+			<img class="movie__item-img" src="/engine/cache/images/be9c3a11f47c9330d4a960a983d9a297.jpg" alt="Все, что мы потеряли">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4875/">
+			<img class="movie__item-img" src="/engine/cache/images/4db252608d03d44c8d8936e47cd2df69.jpg" alt="Все, что мы потеряли">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4875/"><h3>Все, что мы потеряли</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>мелодрама</span></span>
+				</div>
+				<div class="item"><span>Испания</span><span>, 1 ч. 47 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458270" data-data='{"SessionID":133458270,"CityID":2,"CreationClassType":"Movie","CreationObjectID":49670076,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 10:00","DateTimeOffset":"2026-08-05T10:00:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4875"><span>10:00</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №5" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458283" data-data='{"SessionID":133458283,"CityID":2,"CreationClassType":"Movie","CreationObjectID":49670076,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 13:35","DateTimeOffset":"2026-08-05T13:35:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4875"><span>13:35</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458274" data-data='{"SessionID":133458274,"CityID":2,"CreationClassType":"Movie","CreationObjectID":49670076,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 20:45","DateTimeOffset":"2026-08-05T20:45:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4875"><span>20:45</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4874">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4874/">
+			<img class="movie__item-img" src="/engine/cache/images/0123adcdd41d186560c4de694ca1bde5.jpg" alt="Старый орёл">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4874/">
+			<img class="movie__item-img" src="/engine/cache/images/8db44e731f7be8ecd4733c11dfa0683d.jpg" alt="Старый орёл">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4874/"><h3>Старый орёл</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>12+, </span>
+					<span><span>комедия</span>, <span>семейный</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №4" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133356162" data-data='{"SessionID":133356162,"CityID":2,"CreationClassType":"Movie","CreationObjectID":47265971,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 10:00","DateTimeOffset":"2026-08-05T10:00:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"5:4","HallName":"Зал №4","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":0,"PushkinsCardEventId":7287033,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4874"><span>10:00</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458271" data-data='{"SessionID":133458271,"CityID":2,"CreationClassType":"Movie","CreationObjectID":47265971,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 12:10","DateTimeOffset":"2026-08-05T12:10:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7287033,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4874"><span>12:10</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №3" data-price="380" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458280" data-data='{"SessionID":133458280,"CityID":2,"CreationClassType":"Movie","CreationObjectID":47265971,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 18:25","DateTimeOffset":"2026-08-05T18:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"380","MaxPrice":"380","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7287033,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4874"><span>18:25</span><div class="sale__price">от 380<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4801">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4801/">
+			<img class="movie__item-img" src="/engine/cache/images/ccecd0ce67524d9e12bb6d21e3ab264f.jpg" alt="Мой дикий друг. Возвращение домой">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4801/">
+			<img class="movie__item-img" src="/engine/cache/images/d2fb48686c441cda3ad92a9d4e0649a9.jpg" alt="Мой дикий друг. Возвращение домой">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4801/"><h3>Мой дикий друг. Возвращение домой</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>6+, </span>
+					<span><span>приключения</span>, <span>семейный</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458276" data-data='{"SessionID":133458276,"CityID":2,"CreationClassType":"Movie","CreationObjectID":42471877,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 10:15","DateTimeOffset":"2026-08-05T10:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7268601,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4801"><span>10:15</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+<a class="btn btn__time sale" data-title="Зал №3" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458278" data-data='{"SessionID":133458278,"CityID":2,"CreationClassType":"Movie","CreationObjectID":42471877,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 14:25","DateTimeOffset":"2026-08-05T14:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7268601,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4801"><span>14:25</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4856">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4856/">
+			<img class="movie__item-img" src="/engine/cache/images/eeaf9dde82e81285da19630ff3e4573c.jpg" alt="Кодекс Данте">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4856/">
+			<img class="movie__item-img" src="/engine/cache/images/c4d07f6d2621a18274bd200fae37b105.jpg" alt="Кодекс Данте">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4856/"><h3>Кодекс Данте</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>детектив</span>, <span>драма</span>, <span>криминал</span></span>
+				</div>
+				<div class="item"><span>Великобритания, Италия, Чили, США</span><span>, 1 ч. 44 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №1" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458269" data-data='{"SessionID":133458269,"CityID":2,"CreationClassType":"Movie","CreationObjectID":119316,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 23:25","DateTimeOffset":"2026-08-05T23:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"1:1","HallName":"Зал №1","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4856"><span>23:25</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4863">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4863/">
+			<img class="movie__item-img" src="/engine/cache/images/57e581d09b6a76b7eac370238cc0579d.jpg" alt="День разоблачения*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4863/">
+			<img class="movie__item-img" src="/engine/cache/images/f7f5fa31a7e459ed99958b1dd856f90b.jpg" alt="День разоблачения*(предсеанс. обсл.) + м/ф "Историю не изменить"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4863/"><h3>День разоблачения*(предсеанс. обсл.) + м/ф "Историю не изменить"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>16+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133355934" data-data='{"SessionID":133355934,"CityID":2,"CreationClassType":"Movie","CreationObjectID":52047104,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 20:25","DateTimeOffset":"2026-08-05T20:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4863"><span>20:25</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4678">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4678/">
+			<img class="movie__item-img" src="/engine/cache/images/c35bbc3facc90cbdf43a3e7c15abf25c.jpg" alt="История игрушек 5*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4678/">
+			<img class="movie__item-img" src="/engine/cache/images/ed9b6e6c6a51b4b93d5655033e87bb49.jpg" alt="История игрушек 5*(предсеанс. обсл.) + м/ф "Сколько весит облако?"">
+			
+			
+            <div class="film_marker">Только онлайн покупка</div>
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4678/"><h3>История игрушек 5*(предсеанс. обсл.) + м/ф "Сколько весит облако?"</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		<div class="film_marker small">Фильм демонстрируется в рамках аренды залов ИП Харчев М.А.</div>
+				<div class="item">
+					<span>6+, </span>
+					<span><span>короткометражный</span></span>
+				</div>
+				<div class="item"><span>-</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458310" data-data='{"SessionID":133458310,"CityID":2,"CreationClassType":"Movie","CreationObjectID":117214,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 14:15","DateTimeOffset":"2026-08-05T14:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4678"><span>14:15</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4802">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4802/">
+			<img class="movie__item-img" src="/engine/cache/images/e3dc82d3c7020f514823357747da4776.jpg" alt="Зловещие мертвецы: Пекло">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4802/">
+			<img class="movie__item-img" src="/engine/cache/images/5a748e24c2cfceea5e91f9a8b202fd1e.png" alt="Зловещие мертвецы: Пекло">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4802/"><h3>Зловещие мертвецы: Пекло</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>ужасы</span></span>
+				</div>
+				<div class="item"><span>США, Новая Зеландия, Канада</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458285" data-data='{"SessionID":133458285,"CityID":2,"CreationClassType":"Movie","CreationObjectID":43659575,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 23:10","DateTimeOffset":"2026-08-05T23:10:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4802"><span>23:10</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4796">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4796/">
+			<img class="movie__item-img" src="/engine/cache/images/f6137a7ddf4c9afa25fb36993afafaac.jpg" alt="Холоп 3">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4796/">
+			<img class="movie__item-img" src="/engine/cache/images/b87f5f85dfa9fe71ae811eb14afe9683.jpg" alt="Холоп 3">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4796/"><h3>Холоп 3</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>16+, </span>
+					<span><span>комедия</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 2 ч.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458272" data-data='{"SessionID":133458272,"CityID":2,"CreationClassType":"Movie","CreationObjectID":38539778,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 16:20","DateTimeOffset":"2026-08-05T16:20:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7259223,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4796"><span>16:20</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4794">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4794/">
+			<img class="movie__item-img" src="/engine/cache/images/867778a349fab3b855c34e475187bc52.jpg" alt="Майкл">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4794/">
+			<img class="movie__item-img" src="/engine/cache/images/201dbc6e0885493cdcb2b8ef1ef5e876.jpg" alt="Майкл">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4794/"><h3>Майкл</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>драма</span></span>
+				</div>
+				<div class="item"><span>США</span><span>, 2 ч. 7 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458275" data-data='{"SessionID":133458275,"CityID":2,"CreationClassType":"Movie","CreationObjectID":43659554,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 22:55","DateTimeOffset":"2026-08-05T22:55:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4794"><span>22:55</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4873">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4873/">
+			<img class="movie__item-img" src="/engine/cache/images/10e890a35301487dac44e45b47eaab5d.jpg" alt="Пиноккио: Раскрепощенный">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4873/">
+			<img class="movie__item-img" src="/engine/cache/images/0bce3fda1dcfccd9568b931e5ebfd14e.jpg" alt="Пиноккио: Раскрепощенный">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4873/"><h3>Пиноккио: Раскрепощенный</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>триллер</span>, <span>ужасы</span>, <span>фэнтези</span></span>
+				</div>
+				<div class="item"><span>Великобритания, США</span><span>, 1 ч. 21 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458284" data-data='{"SessionID":133458284,"CityID":2,"CreationClassType":"Movie","CreationObjectID":48486649,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 21:20","DateTimeOffset":"2026-08-05T21:20:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4873"><span>21:20</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4877">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4877/">
+			<img class="movie__item-img" src="/engine/cache/images/cce36f062e085b4f04010f597d627f03.jpg" alt="Непокой">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4877/">
+			<img class="movie__item-img" src="/engine/cache/images/ce738b3784fd922a97920a18a9a43e1a.jpg" alt="Непокой">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4877/"><h3>Непокой</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					<span><span>мистика</span>, <span>триллер</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 26 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №2" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458273" data-data='{"SessionID":133458273,"CityID":2,"CreationClassType":"Movie","CreationObjectID":35820470,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 18:55","DateTimeOffset":"2026-08-05T18:55:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"3:2","HallName":"Зал №2","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4877"><span>18:55</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4781">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4781/">
+			<img class="movie__item-img" src="/engine/cache/images/5975f4b5c5dc0926f32a6c1be6f33e47.jpg" alt="Обсессия">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4781/">
+			<img class="movie__item-img" src="/engine/cache/images/d88a5b86fa7d60866f82b5742121d626.jpg" alt="Обсессия">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4781/"><h3>Обсессия</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>18+, </span>
+					
+				</div>
+				<div class="item"><span>США</span><span>, 1 ч. 40 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458281" data-data='{"SessionID":133458281,"CityID":2,"CreationClassType":"Movie","CreationObjectID":43099726,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 23:15","DateTimeOffset":"2026-08-05T23:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4781"><span>23:15</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4876">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4876/">
+			<img class="movie__item-img" src="/engine/cache/images/82be6dd0eca2e125d9b06cb6ae167ae0.jpg" alt="Храбрый Давид">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4876/">
+			<img class="movie__item-img" src="/engine/cache/images/249119d183fedd8e55bba5178c189d87.jpg" alt="Храбрый Давид">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4876/"><h3>Храбрый Давид</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>6+, </span>
+					<span><span>мультфильм</span></span>
+				</div>
+				<div class="item"><span>США</span><span>, 1 ч. 49 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458277" data-data='{"SessionID":133458277,"CityID":2,"CreationClassType":"Movie","CreationObjectID":45700747,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 12:15","DateTimeOffset":"2026-08-05T12:15:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4876"><span>12:15</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4811">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4811/">
+			<img class="movie__item-img" src="/engine/cache/images/92f15e941de7ee1a81d408eb06a08030.jpg" alt="На деревню дедушке 2">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4811/">
+			<img class="movie__item-img" src="/engine/cache/images/a88a1847b94811899d1faac260493427.jpg" alt="На деревню дедушке 2">
+			<div class="film_pushkin">Пушкинская карта</div>
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4811/"><h3>На деревню дедушке 2</h3></a></div>
+			<div class="info">
+				<div class="item">
+					<div class="film_pushkin">Пушкинская карта</div>
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>6+, </span>
+					<span><span>комедия</span>, <span>семейный</span></span>
+				</div>
+				<div class="item"><span>Россия</span><span>, 1 ч. 30 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №3" data-price="250" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458279" data-data='{"SessionID":133458279,"CityID":2,"CreationClassType":"Movie","CreationObjectID":47669702,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 16:25","DateTimeOffset":"2026-08-05T16:25:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"250","MaxPrice":"250","HallID":"4:3","HallName":"Зал №3","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":7255624,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4811"><span>16:25</span><div class="sale__price">от 250<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div><div class="scheduleMovie__item" data-filmid="4854">
+	<div class="scheduleMovie__item-poster">
+		<a class="movie__item-cover" href="https://almazcinema.com/msk/cinema/movie/4854/">
+			<img class="movie__item-img" src="/engine/cache/images/024864996e5b15c6cbbab0bffaaf3e54.jpg" alt="Колючая и Ушастый">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-hposter">
+		<a class="movie__item-cover movie__item-cover-horizontal" href="https://almazcinema.com/msk/cinema/movie/4854/">
+			<img class="movie__item-img" src="/engine/cache/images/22ff07256d3cf418080bb1bddefcc5b0.jpg" alt="Колючая и Ушастый">
+			
+			
+            
+		</a>
+	</div>
+	<div class="scheduleMovie__item-content">
+		<div class="scheduleMovie__item-information">
+			<div class="title"><a href="https://almazcinema.com/msk/cinema/movie/4854/"><h3>Колючая и Ушастый</h3></a></div>
+			<div class="info">
+				<div class="item">
+					
+        			
+					
+				</div>
+        		
+				<div class="item">
+					<span>6+, </span>
+					<span><span>комедия</span>, <span>приключения</span>, <span>семейный</span></span>
+				</div>
+				<div class="item"><span>-</span><span>, 1 ч. 23 мин.</span></div>
+				
+			</div>
+		</div>
+		<div class="seances">
+			<div class="format" data-format="2D">
+	
+	<div class="content-list clear">
+		<a class="btn btn__time sale" data-title="Зал №5" data-price="200" data-city="msk" data-widget="7066f73b-28d6-4564-9905-56934904843b" data-platform="rambler" data-cinema-id="593" data-session="133458282" data-data='{"SessionID":133458282,"CityID":2,"CreationClassType":"Movie","CreationObjectID":35788872,"PlaceClassType":"Place","PlaceObjectID":593,"DateTime":"2026-08-05 10:00","DateTimeOffset":"2026-08-05T10:00:00+03:00","Format":"2D","IsSaleAvailable":true,"IsReservationAvailable":false,"IsWithoutSeats":false,"MinPrice":"200","MaxPrice":"200","HallID":"7:5","HallName":"Зал №5","FeeType":"Percent","FeeValue":"0,00","AvailableTicketsCount":null,"PushkinsCardEventId":null,"IsAvailableByPresale":false,"PresaleIds":[]}' data-placeid="41" data-day="2" data-filmid="4854"><span>10:00</span><div class="sale__price">от 200<i class="fa fa-ruble"></i></div></a>
+	</div>
+</div>
+		</div>
+	</div>
+</div>
+	</div>
+</div>
+	</div>
+</div>
+
+<div class="module block banner"><div class="notify_schedule">
+    
+    <p>Все сеансы начинаются с показа рекламно-информационного блока.</p>
+	<p>Информацию о точной продолжительности рекламно-информационного блока уточняйте у сотрудников кинотеатра.</p>
+
+</div>
+<style>
+    .notify_schedule{
+        background-color: #fff;
+        margin-top: 20px;
+    }
+    .notify_schedule p{
+        color: #5118e1;
+        font-size:1.1em;
+        max-width 500px;
+        margin: 0 auto;
+    }
+</style></div>
+
+<style>
+    .button_kinoas {
+        color: #121212;
+        font-size: 1.2rem;
+       background: #26fe01;}
+</style>
+    </div>
+    
+<div class="module block banner">
+
+
+<p><b>*На фильмы , демонстрируемые в рамках аренды зала, билеты приобретаются только ОНЛАЙН. На сеансы с соответствующим возрастным ограничением можно купить "Детский билет". Иные скидки и льготы не предоставляются..</b></p></div>
+
+    </div>
+
+
+    
+
+<div class="module block banner"><!-- Первый баннер -->
+<div id="prokat221" class="promo-banner" style="display:none;">
+    <a href="https://almazcinema.com/cinema/movie/4825/">
+        <img
+            src="/uploads/88aa4e43-9095-4b5a-b039-9f911f724d25.jpg"
+            alt="Одиссея"
+        >
+    </a>
+</div>
+
+<!-- Второй баннер -->
+<div id="prokat223" class="promo-banner" style="display:none;">
+    <a href="https://almazcinema.com/news/1029-almaz-sinema-vozobnovlyaet-rabotu-s-pushkinskoy-kartoy/">
+        <img
+            src="https://almazcinema.com/uploads/photo_2026-07-20_09-22-59.jpg"
+            alt="Алмаз Синема возобновляет работу с «Пушкинской картой»"
+        >
+    </a>
+</div>
+
+<script>
+(function ($) {
+    const FIRST_BANNER_COOKIE = 'prokat221';
+    const SECOND_BANNER_COOKIE = 'prokat223';
+
+    /**
+     * Cookie хранится 3 часа.
+     */
+    function setBannerCookie(cookieName) {
+        const expiresAt = new Date(
+            Date.now() + 3 * 60 * 60 * 1000
+        );
+
+        Cookies.set(cookieName, 'true', {
+            expires: expiresAt,
+            path: '/'
+        });
+    }
+
+    function isBannerClosed(cookieName) {
+        return Cookies.get(cookieName) === 'true';
+    }
+
+    function openSecondBanner() {
+        if (isBannerClosed(SECOND_BANNER_COOKIE)) {
+            return;
+        }
+
+        setTimeout(function () {
+            $.fancybox.open({
+                src: '#prokat223',
+                type: 'inline',
+                opts: {
+                    afterClose: function () {
+                        setBannerCookie(SECOND_BANNER_COOKIE);
+                    }
+                }
+            });
+        }, 200);
+    }
+
+    function openFirstBanner() {
+        $.fancybox.open({
+            src: '#prokat221',
+            type: 'inline',
+            opts: {
+                afterClose: function () {
+                    setBannerCookie(FIRST_BANNER_COOKIE);
+                    openSecondBanner();
+                }
+            }
+        });
+    }
+
+    window.modalClose = function (element) {
+        const link = $(element).data('href') || '';
+
+        $.fancybox.close();
+
+        if (link !== '') {
+            window.open(link, '_blank', 'noopener,noreferrer');
+        }
+    };
+
+    $(document).ready(function () {
+        /*
+         * Клик по первому баннеру также считается его закрытием.
+         * Cookie записывается синхронно перед переходом по ссылке.
+         */
+        $('#prokat221 a').on('click', function () {
+            setBannerCookie(FIRST_BANNER_COOKIE);
+        });
+
+        /*
+         * Клик по второму баннеру также считается его закрытием.
+         */
+        $('#prokat223 a').on('click', function () {
+            setBannerCookie(SECOND_BANNER_COOKIE);
+        });
+
+        if (!isBannerClosed(FIRST_BANNER_COOKIE)) {
+            openFirstBanner();
+        } else if (!isBannerClosed(SECOND_BANNER_COOKIE)) {
+            openSecondBanner();
+        }
+    });
+})(jQuery);
+</script>
+
+<style>
+    .promo-banner {
+        padding: 0 !important;
+    }
+
+    .promo-banner img {
+        display: block;
+        max-width: 100vw;
+        max-height: 90vh;
+        width: auto;
+        height: auto;
+    }
+</style></div>
+  <footer class="footer">
+    <div class="wrapper flex footer__wrapper">
+      <div class="footer__column">
+        <div class="footer__block-content">
+          <a class="footer__link" href="/msk/p/about/">О сети</a>
+<a class="footer__link" href="/msk/p/feedback/">Обратная связь</a>
+<a class="footer__link" href="/msk/p/rules-and-docs/">Правила и регламенты</a>
+<a class="footer__link" href="/msk/p/careers/">Вакансии</a>
+<a class="footer__link" href="/msk/p/faq/">Часто задаваемые вопросы</a>
+<a class="footer__link" href="/msk/p/contacts/">Контакты</a>
+
+        </div>
+      </div>
+    <div class="footer__column">
+        <div class="footer__block-title">Следи за новостями любимого кинотеатра</div>
+        <div class="footer__block-content">
+            <a class="footer__socials" target="_blank" href="https://vk.com/almazcinema" style="margin-right: 10px;">
+                <img src="/templates/cinema/img/vk.png" width="63" height="63" alt="VK">
+            </a>
+            <a class="footer__socials" target="_blank" href="https://t.me/almazcinemakino" style="margin-right: 10px;">
+                <img src="/templates/cinema/img/telegramm.png" width="65" height="65" alt="telegramm">
+            </a>
+            <a class="footer__socials" target="_blank" href="https://max.ru/id9706046652_biz">
+                <img src="/uploads/max-messenger-sign-logo.png" width="65" height="65" alt="MAX">
+            </a>
+        </div>
+    </div>
+    <div class="footer__column">
+        <div class="footer__block-title">Покупай билеты<br>в приложении «Алмаз Синема»</div>
+        <div class="footer__block-content">
+            <a class="footer__apps" href="https://play.google.com/store/apps/details?id=ru.kinoplan.cinema.almazcinema&pcampaignid=web_share" target="_blank">
+                <img src="/templates/cinema/img/android.png" width="194" height="58" alt="Скачай наше приложение в Google Play">
+            </a>
+            <a class="footer__apps" href="https://apps.apple.com/ru/app/%D1%81%D0%B5%D1%82%D1%8C-%D0%BA%D0%B8%D0%BD%D0%BE%D1%82%D0%B5%D0%B0%D1%82%D1%80%D0%BE%D0%B2-almaz-cinema/id6756412773"
+                target="_blank">
+                <img src="/templates/cinema/img/apple.png" width="177" height="60" alt="Скачай наше приложение в App Store">
+            </a>
+        </div>
+    </div>
+    </div>
+    <div class="wrapper footer__wrapper">
+      <a class="footer__agency" href="https://sirene.ru" target="_blank">Создание и разработка сайта — СИРЕНА AGENCY</a>
+    </div>
+  </footer>
+
+<script src="/templates/cinema/js/scripts_main.js?2"></script>
+</body>
+</html>

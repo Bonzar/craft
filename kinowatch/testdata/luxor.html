@@ -1,0 +1,3190 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+<meta http-equiv="X-UA-Compatible" content="ie=edge">
+<link rel="stylesheet" href="/assets/css/style.min.css?v=1.5">
+<!--<link rel="stylesheet" href="/assets/css/style.css">-->
+<link rel="stylesheet" href="/assets/css/new2.css">
+<meta name="format-detection" content="telephone=no">
+
+<script src="/assets/js/vue.min.js"></script>
+<link rel="stylesheet" href="/assets/css/swiper-bundle.min.css">
+<script type="text/javascript" src="/assets/js/swiper-bundle.min.js"></script>
+<meta name="apple-itunes-app" content="app-id=6449501849">
+<link rel="stylesheet" href="/jquery.smartbanner.css" type="text/css" media="screen">
+<link rel="stylesheet" href="/assets/js/jquery.fancybox.css" type="text/css" media="screen">
+<link rel="stylesheet" href="/assets/datepicker/css/datepicker.css" type="text/css" media="screen">
+<meta name="msapplication-TileImage" content="/assets/img/icons/site-tile-image.webp" />
+<meta name="yandex-verification" content="1450020073f050c0" />
+<!-- CSRF Token -->
+<meta name="csrf-token" content="0Zs4Nzq8DhT8v4F1Ct8RNBKCXXfx0ZYkCYr8PJPN">
+<title>Luxor Film</title>
+
+
+
+
+<style>
+    @media (max-width: 768px) {
+        .hide_desctop{
+            display:  none!important;
+        }
+    }
+    @media (min-width: 769px) {
+        .hide_mobile {
+            display: none !important;
+        }
+    }
+
+</style>
+
+<style>
+    .vacancy_wrap h2{
+        color: #222222;
+    }
+    /*на всех статичных страницах    */
+    .content_header:before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(152,49,65,1);
+    }
+</style>
+    
+    </head>
+<body>
+<section id="f_bg" class="index_header" style="padding: 0;">
+    <script src="/assets/js/axios.min.js"></script>
+
+<div class="fixed_menu">
+    <div class="collapse" id="CollapseCity">
+        <button class="close" id="city_close"></button>
+        <div class="container">
+            <div class="wrap" id="CollapseCityWrap">
+                <div class="swiper-wrapper">
+                                            <div class="swiper-slide city__item">
+                            <h2>Москва</h2>
+                            <div>
+                                                                    <a class="clickflag" data-cinemaid="39835" href="https://www.luxorfilm.ru/cinema/vesna/seances" data-reload=false>Люксор Весна</a><br>
+                                                                    <a class="clickflag" data-cinemaid="39038" href="https://www.luxorfilm.ru/cinema/goodzone/seances" data-reload=false>Люксор Гудзон</a><br>
+                                                            </div>
+                        </div>
+                                            <div class="swiper-slide city__item">
+                            <h2>Санкт-Петербург</h2>
+                            <div>
+                                                                    <a class="clickflag" data-cinemaid="17028" href="https://www.luxorfilm.ru/cinema/spb-kontinent/seances" data-reload=false>Люксор Континент</a><br>
+                                                                    <a class="clickflag" data-cinemaid="17984" href="https://www.luxorfilm.ru/cinema/spb-leto/seances" data-reload=false>Люксор Лето</a><br>
+                                                            </div>
+                        </div>
+                                            <div class="swiper-slide city__item">
+                            <h2>Тула</h2>
+                            <div>
+                                                                    <a class="clickflag" data-cinemaid="143455" href="https://www.luxorfilm.ru/cinema/lyuksor-tula/seances" data-reload=false>Люксор Тула</a><br>
+                                                            </div>
+                        </div>
+                                            <div class="swiper-slide city__item">
+                            <h2>Рязань</h2>
+                            <div>
+                                                                    <a class="clickflag" data-cinemaid="13811" href="https://www.luxorfilm.ru/cinema/ryazan/seances" data-reload=false>Люксор Круиз</a><br>
+                                                            </div>
+                        </div>
+                                            <div class="swiper-slide city__item">
+                            <h2>Курск</h2>
+                            <div>
+                                                                    <a class="clickflag" data-cinemaid="17344" href="https://www.luxorfilm.ru/cinema/kursk/seances" data-reload=false>Люксор Европа</a><br>
+                                                            </div>
+                        </div>
+                                    </div>
+                <div class="swiper-scrollbar"></div>
+            </div>
+            <script>
+                document.addEventListener("DOMContentLoaded", (event) => {
+                    let citySwiper = new Swiper('#CollapseCityWrap', {
+                        slidesPerView: 'auto',
+                        spaceBetween: 20,
+                        mousewheel: {
+                            forceToAxis: true,
+                        },
+                        scrollbar: {
+                            el: ".swiper-scrollbar",
+                            hide: false,
+                        },
+                    });
+                });
+            </script>
+        </div>
+    </div>
+    <div class="main_menu inner">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="mobile_logo">
+                    <a href="/"></a>
+                </div>
+                <div class="desktop_logo">
+                    <a href="/"></a>
+                </div>
+                <div class="city_select" id="toggle_city">
+                    <ul>
+                        <li>
+                            <div class="dropdown">
+                                <button type="button" class="select_city_mobile" data-toggle="modal" data-target="#cityModal">Москва</button>
+                                <button type="button" class="select_city_desktop">Москва</button>
+                            </div>
+                        </li>
+                        <li>
+                            <button id="select2Cinema" class="select_city_mobile" data-toggle="modal" data-target="#cityModal">Люксор Гудзон</button>
+                            <button id="select2Cinema" class="select_city_desktop">Люксор Гудзон</button>
+                        </li>
+                    </ul>
+                </div>
+                <div class="search_form_wrap">
+                    <form action="" id="search" class="search_form">
+                        <input type="text" placeholder="Найти фильм или описание" v-model="input" @keyup="getFilm">
+                        <button></button>
+                          <ul>
+                            <li v-for="film in films">
+                                <a :href="'/films/'+film.slug">
+                                    <h2>${film.title}</h2>
+                                <span v-for="genre in film.genres">${genre.title}</span>
+                                    <h3>${film.short}</h3>
+                                </a>
+                            </li>
+                          </ul>
+                    </form>
+                </div>
+                <div class="top_cabinet">
+                                            <a href="/login" class="link_gradient"><span>Войти в кабинет</span></a>
+                                    </div>
+                <div class="full_menu">
+                    <button type="button" class="btn btn-primary menu_mobile" data-toggle="modal" data-target="#menuModal">Меню</button>
+                    
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="collapse show" id="CollapseMenu">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-12">
+                    <ul class="desktop_list_links">
+                        <li><a href="/cinema/goodzone/seances">Расписание</a></li>
+                        <li><a href="/cinema">Кинотеатры</a></li>
+                        <li><a href="/about">О нас</a></li>
+                        <li><a href="/cinema/goodzone/events">Мероприятия</a></li>
+                        <li><a href="/cinema/goodzone/stocks">Акции и скидки</a></li>
+                        <li><a href="/news">Новости</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade modal_city" id="cityModal" tabindex="-1" role="dialog" aria-labelledby="menuModalLabel" aria-hidden="true">
+
+    <div class="modal-dialog modal-xl" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="cinemas_list">
+                                            <div class="cinemas_list_item">
+                            <div class="cinemas_list_item_title">
+                                Москва
+                            </div>
+                            <div class="cinemas_list_item_links">
+                                                                    <a class="clickflag" data-cinemaid="39835" href="/cinema/vesna/seances">84-й км МКАД, ТРЦ «Весна»</a>
+                                                                    <a class="clickflag" data-cinemaid="39038" href="/cinema/goodzone/seances">Каширское ш., 14, ТЦ «Гудзон»</a>
+                                                            </div>
+                        </div>
+                                            <div class="cinemas_list_item">
+                            <div class="cinemas_list_item_title">
+                                Санкт-Петербург
+                            </div>
+                            <div class="cinemas_list_item_links">
+                                                                    <a class="clickflag" data-cinemaid="17028" href="/cinema/spb-kontinent/seances">Бухарестская, 30/32, ТРК «Континент»</a>
+                                                                    <a class="clickflag" data-cinemaid="17984" href="/cinema/spb-leto/seances">Пулковское ш., 25, корп. 1, ТРК «Лето»</a>
+                                                            </div>
+                        </div>
+                                            <div class="cinemas_list_item">
+                            <div class="cinemas_list_item_title">
+                                Тула
+                            </div>
+                            <div class="cinemas_list_item_links">
+                                                                    <a class="clickflag" data-cinemaid="143455" href="/cinema/lyuksor-tula/seances">Советская, 47, ТЦ «Гостиный двор»</a>
+                                                            </div>
+                        </div>
+                                            <div class="cinemas_list_item">
+                            <div class="cinemas_list_item_title">
+                                Рязань
+                            </div>
+                            <div class="cinemas_list_item_links">
+                                                                    <a class="clickflag" data-cinemaid="13811" href="/cinema/ryazan/seances">Солотчинское ш., 11, ТЦ «Круиз»</a>
+                                                            </div>
+                        </div>
+                                            <div class="cinemas_list_item">
+                            <div class="cinemas_list_item_title">
+                                Курск
+                            </div>
+                            <div class="cinemas_list_item_links">
+                                                                    <a class="clickflag" data-cinemaid="17344" href="/cinema/kursk/seances">Студенческая, 1, ТРЦ «Европа-40»</a>
+                                                            </div>
+                        </div>
+                    
+                    
+                        
+                            
+                        
+                        
+                            
+                            
+                        
+                    
+                    
+                        
+                            
+                        
+                        
+                            
+                        
+                    
+                    
+                        
+                            
+                        
+                        
+                            
+                        
+                    
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+
+
+    
+        
+            
+                
+                    
+                
+                
+                    
+                
+                
+                    
+                        
+                            
+                                
+                                        
+                                
+                            
+                        
+                        
+                            
+                                    
+                            
+                        
+                    
+                
+                
+                    
+                        
+                        
+                            
+                                
+                                    
+                                    
+                                    
+                                
+                            
+                        
+                        
+                    
+                
+                
+                    
+                        
+                    
+                        
+                            
+                            
+                                
+                                
+                                
+                                    
+                                
+                                
+                                    
+                                
+                            
+                        
+                    
+                
+                
+                    
+                
+            
+        
+    
+    
+        
+            
+                
+                    
+                        
+                            
+                                
+                                    
+                                
+                                    
+                                
+                                
+                                
+                            
+                        
+                    
+                
+                    
+                
+                
+                    
+                        
+                        
+                            
+                        
+                    
+                
+            
+            
+        
+    
+
+
+<script>
+    var app2 = new Vue({
+        delimiters: ['${', '}'],
+        el: '#search',
+        data: {
+            films: [],
+            input: '',
+        },
+        methods: {
+            getFilm: function(e) {
+                self = this;
+                if (self.input.length>3){
+                    axios.post(
+                        '/searchfilms',
+                        {body:self.input}
+                    ).then(response => ( self.films = response.data
+//                        function () {
+//
+//                        self.films = response.body
+//                    }
+                        )
+                    );
+                }
+                if (self.input.length<4){
+                    self.films = [];
+                }
+            }
+        },
+        watch: {}
+    })
+</script>
+</section>
+
+<div class="margin_header"></div>
+        <section class="top_banner">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-12">
+                    <h1>Расписание сеансов</h1>
+                    <p class="rasp_lh_map"><span class="rasp_seans_map">г. Москва, Люксор Гудзон</span><a href="/cinema/goodzone">Показать на карте</a></p>
+
+                </div>
+            </div>
+        </div>
+    </section>
+    <section id="apps" class="schedule">
+        <div class="container">
+            <div class="row" id="main-content">
+                <div class="col-md-12 col-lg-8 order-2 order-lg-1" id="content">
+                    <h2>Сейчас в кино</h2>
+                    <div class="sl-1 schedule_date_filter" >
+                                                                                                                        <a href="?day=2026-08-04">
+                                        <div class="day slick__slide" style="background-color: #722d8b;"><span>4</span></div>
+                                    </a>
+                                                                                                                                                                                    <a href="?day=2026-08-05">
+                                        <div class="day slick__slide"><span>5</span></div>
+                                    </a>
+                                                                                                                                                                                    <a href="?day=2026-08-06">
+                                        <div class="day slick__slide"><span>6</span></div>
+                                    </a>
+                                                                                                        </div>
+                    <div class="schedule_list_items">
+                        <div class="schedule_item" v-for="film in filteredFilms" v-if="render_show_info()">
+                            <div class="schedule_item_img">
+                                <a :href="'/films/'+film.slug">
+                                    <img v-if="film.poster" :src="film.poster" :alt="film.title">
+                                    <img v-else src="/assets/img/no_poster.png" alt="" style="background-image: radial-gradient(circle at 100% 100%,#c81632,#941bc0);">
+                                </a>
+                            </div>
+                            <div class="schedule_item_content">
+                                <a class="header" :href="'/films/'+film.slug">${film.title} <span class="age">${film.age_rating}+</span></a>
+                                <h4 class="genres"><span v-for="genre in film.genres">${genre} </span></h4>
+                                <div class="types" v-html="kartinki(film.seances, film.pushkin)">
+                                    <!-- <img v-for="format in film.formats" class="format" :src="format.title=='dolby atmos'?'/assets/img/box/atmos.png':'/assets/img/box/'+format.title+'p.svg'"> -->
+                                </div>
+                                <div class="desc">
+                                    <p>${film.description}</p>
+                                </div>
+                                <ul class="sessions">
+                                    <a v-for="(seance, key) in film.seances" @click="onSeans(seance.session_id)">
+                                        <li v-if="hasSeance(seance)">
+                                            <span>${seance.time}</span>
+                                            <div class="modal_info sessions__modal_info" style="display: none;" >
+                                                <div class="modalrelative">
+                                                    <img src="/assets/img/icons/ico-film.svg" alt="">
+                                                    <p class="hall_info">${seance.hall_front}</p>
+                                                    <p class="sessions__modal_info__tech" v-if="price_modal_tech(seance) !== ''">${price_modal_tech(seance)}</p>
+                                                    <p class="sessions__modal_info__tech__empty" v-else></p>
+                                                    <p class="minprice_info">
+                          <span class="modal_mini_info little" v-for="price in seance.places">
+                              <span>${price.PlaceTypeName}:</span> ${price.Price}₽
+                          </span>
+                                                        <span class="modal_mini_info little" v-if="!seance.places">
+                              <span>Стандарт:</span> ${seance.minprice}₽
+                          </span>
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </li>
+                                    </a>
+                                </ul>
+                            </div>
+
+                        </div>
+                        <h2 v-if="filteredFilms.length == 0">Нет фильмов с такими фильтрами.</h2>
+                    </div>
+                </div>
+                <div class="col-md-12 col-lg-3 offset-lg-1 order-1 order-lg-2"  id="sidebar" >
+                    <div class="" id="sidebarclroll" :class="absolute('wrap_nofixed')">
+                        <div class="schedule_filters" :class="absolute('nofixed')" >
+                            <h3>Фильтр</h3>
+                            <div class="checkbox_filter col-6 col-md-12" v-if="markersfilter(filters.markers)" >
+                                <div class="row">
+                                    <h4>Особенности</h4>
+                                    <ul>
+                                        <li v-for="(filter, index) in filters.markers">
+                                            <label class="checkbox_container"  :for="filter.attr">
+                                                ${filter.title}
+                                                <input :id="filter.attr" type="checkbox" v-model="filter.status" >
+                                                <span class="checkmark"></span>
+                                            </label>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="checkbox_filter col-6 col-md-12" v-if="formatsfilter(filters.formats)" >
+                                <div class="row">
+                                    <h4>Формат</h4>
+                                    <ul>
+                                        <li v-for="(filter, index) in filters.formats">
+                                            <label class="checkbox_container"  :for="filter.title">
+                                                ${filter.front}
+                                                <input :id="filter.title" type="checkbox" v-model="filter.status" >
+                                                <span class="checkmark"></span>
+                                            </label>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="checkbox_filter col-6 col-md-12" v-if="hallsfilter(filters.halls)" >
+                                <div class="row">
+                                    <h4>Зал</h4>
+                                    <ul>
+                                        <li v-for="(hall, index) in filters.halls">
+                                            <label :for="hall.title" class="checkbox_container">
+                                                ${hall.title}
+                                                <input :id="hall.title" type="checkbox" v-model="hall.status" >
+                                                <span class="checkmark"></span>
+                                            </label>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="inline_filter">
+                                <h4 class="genriesFilterButton">Жанры</h4>
+                                <!--                                <ul id="">-->
+
+                                <ul class="" id="genriesFilterList">
+                                    <li :class="genre.status?'active':''" v-for="(genre, index) in filters.genres">
+                                        <input :id="genre.title" type="checkbox" v-model="genre.status" style="display: none">
+                                        <a class="cursor_ptr"><label :for="genre.title">${genre.title}</label></a>
+                                    </li>
+                                </ul>
+                            </div>
+
+                        </div>
+                    </div>
+                    <div id="sticky">
+                        <div class="sticky-anchor"></div>
+                        <div class="sticky-content ">
+                            <div class="info_city">
+                                <h2>Москва</h2>
+                                <h3>Люксор Гудзон</h3>
+                                <p>Каширское ш., 14, ТЦ «Гудзон»</p>
+                                <p><p><a href="mailto:info@icekino.com">info@icekino.com</a> для общих вопросов<br /><br /></p></p>
+                                <p></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+
+
+
+            </div>
+
+            <div id="nosticky">
+                <div class="info_city">
+                    <h2>Москва</h2>
+                    <h3>Люксор Гудзон</h3>
+                    <p>Каширское ш., 14, ТЦ «Гудзон»</p>
+                    <p><p><a href="mailto:info@icekino.com">info@icekino.com</a> для общих вопросов<br /><br /></p></p>
+                    <p></p>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-12 order-3">
+                    <div class="soon_in_cinema">
+                        <h2>Скоро в кино</h2>
+                        <div class="sl-2">
+                                                            <div class="sl__slide">
+                                    <div class="soon_cinema_item">
+                                        <a href="/films/posledniy-bogatyr-kolobok">
+                                                                                            <img src="/storage/f8d5121bbc0cf6bc7d727f91cca50424.jpeg" alt="" >
+                                                                                        <h5>Последний богатырь. Колобок</h5>
+                                            <span class="soon_cinema_item_genre">2026, Приключение, Фэнтези, Комедия</span>
+                                        </a>
+                                    </div>
+                                </div>
+                                                            <div class="sl__slide">
+                                    <div class="soon_cinema_item">
+                                        <a href="/films/smeshariki-skvoz-vselennye">
+                                                                                            <img src="/storage/161d66dc37ab374cdae286c9e4290100.jpeg" alt="" >
+                                                                                        <h5>Смешарики сквозь вселенные</h5>
+                                            <span class="soon_cinema_item_genre">2026, Приключение, Фантастика, Комедия</span>
+                                        </a>
+                                    </div>
+                                </div>
+                                                            <div class="sl__slide">
+                                    <div class="soon_cinema_item">
+                                        <a href="/films/above-and-below">
+                                                                                            <img src="/storage/9de6a4ab8081198117f54ab56d096af2.jpeg" alt="" >
+                                                                                        <h5>Во власти страха</h5>
+                                            <span class="soon_cinema_item_genre">2026, Боевик, Триллер, Фильмы</span>
+                                        </a>
+                                    </div>
+                                </div>
+                                                    </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <style>
+        .schedule_item_content .sessions a:after {
+            display: none;
+        }
+        @media  screen and (min-width: 992px) {
+            .inline_filter {
+                margin-bottom: 0!important;
+            }
+        }
+        @media (min-width: 992px) {
+            .offset-lg-1 {
+                padding-left: 0!important;
+            }
+            #nosticky{
+                display: none;
+            }
+            #sticky{
+                display: block;
+            }
+        }
+        #sidebar{
+            /*height: 10000px;*/
+        }
+        .soon_in_cinema .slick-next,.soon_in_cinema .slick-prev{
+            top: 36%;
+        }
+        .soon_in_cinema .slick-prev{
+
+            left: -32px;
+
+        }
+        @media (max-width: 768px) {
+            .soon_in_cinema .slick-next,.soon_in_cinema .slick-prev{
+                display:none;
+            }
+        }
+    </style>
+
+    <!--    <script src="/assets/js/main.js"></script>-->
+    <footer>
+    <div class="container">
+        <div class="row">
+            <div class="col-md-12">
+                <div class="footer_top">
+                    <div class="footer_desc">
+                        <a href="/"></a>
+                       <p>
+                        ООО "АСкино"
+                        <br>ИНН: 5024183426<br>КПП: 771501001
+
+                       </p>
+                        <div class="hide_desctop footer_alternative_desc" style="display:none!important"><p>Группа компаний, объединяющая кинодистрибьютера "Люксор дистрибьюшен" и оператора сети кинотеатров "Люксор"</p></div>
+                    </div>
+                    <div class="links_block">
+                        <div class="links_block_item">
+                            <h4>Разделы</h4>
+                            <ul>
+                                <li><a href="https://www.luxorfilm.ru/cinema/goodzone/seances">Расписание</a></li>
+                                <li><a href="https://www.luxorfilm.ru/about">О нас</a></li>
+                                <li><a href="https://www.luxorfilm.ru/cinema/goodzone/events">Мероприятия</a></li>
+                                <li><a href="https://www.luxorfilm.ru/cinema/goodzone/stocks">Акции и скидки</a></li>
+                                <li><a href="https://www.luxorfilm.ru/news">Новости</a></li>
+                                
+
+                            </ul>
+                        </div>
+                        <div class="links_block_item">
+                            <h4>Полезная информация</h4>
+                            <ul>
+                                <li><a href="https://www.luxorfilm.ru/privacy-policy">Политика конфиденциальности</a></li>
+                                <li><a href="https://www.luxorfilm.ru/rules">Правила посещения кинотеатра</a></li>
+                                <li><a href="https://www.luxorfilm.ru/partners">Партнерам</a></li>
+                                <li><a href="https://www.luxorfilm.ru/advertising">Сотрудничество с нами</a></li>
+                                <li><a href="https://www.luxorfilm.ru/cinema/goodzone/vacancies">Вакансии</a></li>
+                                <li><a href="/memorandum">Меморандум</a></li>
+                                <li><a href="https://www.luxorfilm.ru/refund" target="_blank">Возврат билетов</a></li>
+                            </ul>
+                        </div>
+                        <div class="links_block_item">
+                            <h4>Контакты</h4>
+                            <ul class="contact_list">
+                                <li class="social_in_contacts social_links">
+                                    <ul>
+                                                                                    <li>
+                                                <a href="https://vk.com/luxorfilm" target="_blank">
+                                        <span
+                                                                                                    class="ico_fb"
+                                                >
+                                            <img src="/storage/qLwxDjX0JFl66fAIxZQLv62kQ7EsyGBAt5F0kDq2.svg" width="17" alt="vk">
+                                        </span>
+                                                </a>
+                                            </li>
+                                                                                    <li>
+                                                <a href="https://t.me/luxor_kino" target="_blank">
+                                        <span
+                                                                                                    class="ico_vk"
+                                                >
+                                            <img src="/storage/l4vpZs1O7k5utJgWbk5Tmi5KC6nvuIPym4j88tvM.svg" width="17" alt="telegram">
+                                        </span>
+                                                </a>
+                                            </li>
+                                                                            </ul>
+                                </li>
+                            </ul>
+                            <ul class="contact_list">
+                                <li><a href="mailto:info@icekino.com">info@icekino.com</a></li>
+
+                                <li><a class="footer_phone" href="tel:"></a></li>
+                            </ul>
+                                                        <a href="https://yandex.ru/business/widget/request/company/73459187966" target="_blank" rel="nofollow"><span>Обратная связь</span></a>
+                        </div>
+
+
+                    </div>
+                    <div class="social_links">
+                        <h4>Мы в соцсетях:</h4>
+                        <ul>
+                                                        <li>
+                                <a href="https://vk.com/luxorfilm" target="_blank">
+                                        <span
+                                                                                                class="ico_fb"
+                                            >
+                                            <img src="/storage/qLwxDjX0JFl66fAIxZQLv62kQ7EsyGBAt5F0kDq2.svg" width="17" alt="vk">
+                                        </span>
+                                </a>
+                            </li>
+                                                        <li>
+                                <a href="https://t.me/luxor_kino" target="_blank">
+                                        <span
+                                                                                                class="ico_vk"
+                                            >
+                                            <img src="/storage/l4vpZs1O7k5utJgWbk5Tmi5KC6nvuIPym4j88tvM.svg" width="17" alt="telegram">
+                                        </span>
+                                </a>
+                            </li>
+                                                    </ul>
+                    </div>
+                </div>
+                <div class="footer_bottom">
+                                        <style>
+                        .app_links a.other_link{
+                            margin-right: 16px;
+                            background-size: cover;
+                            background-image: url(/assets/img/icons/simple.svg);
+                        }
+
+                    </style>
+                    <div class="footer_copyright">© 2026 Luxorfilm. Все права защищены.</div>
+                    <div class="app_links">
+                        <a href="https://apps.rustore.ru/app/ru.rambler.kassa_askino" class=" other_link" target="_blank"></a>
+                        <a href="https://apps.apple.com/ru/app/%D0%BB%D1%8E%D0%BA%D1%81%D0%BE%D1%80-%D1%81%D0%B5%D1%82%D1%8C-%D0%BA%D0%B8%D0%BD%D0%BE%D1%82%D0%B5%D0%B0%D1%82%D1%80%D0%BE%D0%B2/id6449501849" class="ios_link" target="_blank"></a>
+                    </div>
+
+                    <!--
+                    <div class="developer">
+                        <a href="https://webinnovations.ru/" rel="nofollow" class="developer_logo" target="_blank">Сделано с инновациями</a>
+                    </div>
+                    -->
+                </div>
+            </div>
+
+        </div>
+    </div>
+</footer>
+<!-- Cookie Notice Start -->
+<div id="cookie-notice">
+    Мы используем cookies для улучшения работы сайта Luxor Films. Оставаясь на сайте, вы подтверждаете, что проинформированы об использовании cookies. Их можно отключить в настройках браузера.
+    <button id="cookie-accept-btn">Согласиться</button>
+</div>
+<style>
+    #cookie-notice {
+        display:none; position:fixed; right:20px; bottom:20px; max-width:360px; background:#fff; color:#222; box-shadow:0 2px 16px rgba(0,0,0,0.12); border-radius:5px; z-index:9999; font-size:16px; font-weight:600; padding:22px 24px 18px 24px; box-sizing:border-box;
+    }
+    #cookie-accept-btn {
+        margin-top:18px; display:block; margin-left:auto; padding:9px 22px; background:#222; color:#fff; border:none; border-radius:5px; cursor:pointer; font-size:16px; font-weight:600;
+    }
+</style>
+<script>
+    // Куки сеттер
+    function setCookie(name, value, days) {
+        var expires = "";
+        if (days) {
+            var date = new Date();
+            date.setTime(date.getTime() + (days*24*60*60*1000));
+            expires = "; expires=" + date.toUTCString();
+        }
+        document.cookie = name + "=" + encodeURIComponent(value) + expires + "; path=/";
+    }
+    // Куки геттер
+    function getCookie(name) {
+        var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return match ? decodeURIComponent(match[2]) : null;
+    }
+
+    // Показать уведомление если не согласился
+    if (!getCookie('cookie_notice_accepted')) {
+        document.getElementById('cookie-notice').style.display = 'block';
+    }
+
+    // Кнопка "Согласиться"
+    document.getElementById('cookie-accept-btn').onclick = function() {
+        setCookie('cookie_notice_accepted', 'yes', 365);
+        document.getElementById('cookie-notice').style.display = 'none';
+    };
+</script>
+<!-- Cookie Notice End -->
+    <div class="modal fade modal_goroda" id="gorodaModal" tabindex="-1" role="dialog" aria-labelledby="gorodaModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document" style="max-width: 100%!important;margin: 0;height: 100%">
+        <style>
+            .modal_goroda .cinema-img img { position: relative;}
+        </style>
+        <div class="modal-content" style="height: 100%;">
+            <img src="/assets/img/pic-location.png" alt="">
+            <div class="modal-header">
+                <h5 class="modal-title" id="gorodaModalLabel">Выберите город и кинотеатр</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="cinemas"></div>
+                <script type="text/javascript" src="/vue_builds/cinemas.min.js"></script>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="modal fade modal_menu" id="menuModal" tabindex="-1" role="dialog" aria-labelledby="menuModalLabel" aria-hidden="true">
+
+    <div class="modal-dialog modal-xl" role="document">
+        <div class="modal-content">
+            <img src="/assets/img/icons/ico-film.svg" alt="">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <ul>
+                    <li><a href="https://www.luxorfilm.ru/cinema/goodzone/seances">Расписание</a></li>
+                    <li><a href="https://www.luxorfilm.ru/cinema">Кинотеатры</a></li>
+                    <li><a href="https://www.luxorfilm.ru/about">О нас</a></li>
+                    <li><a href="https://www.luxorfilm.ru/cinema/goodzone/events">Мероприятия</a></li>
+                    <li><a href="https://www.luxorfilm.ru/cinema/goodzone/stocks">Акции и скидки</a></li>
+                    <li><a href="https://www.luxorfilm.ru/news">Новости</a></li>
+                    
+                </ul>
+                <div class="mobile_search" id="search_mob">
+                    <form action="" class="search_form">
+                        <input type="text" placeholder="Найти фильм или описание" v-model="input" @keyup="getFilm">
+                        <button></button>
+                    </form>
+                    <ul>
+                        <li v-for="film in films" class="mob_search_item">
+                            <a :href="'/films/'+film.slug">
+                                <h2>${film.title}</h2>
+                                <span v-for="genre in film.genres">${genre.title}</span>
+                                <h3>${film.short}</h3>
+                            </a>
+                        </li>
+                        <br v-if="films.length">
+                    </ul>
+                                    <a href="https://www.luxorfilm.ru/login" class="link_gradient"><span>Войти в кабинет</span></a>
+
+                  
+                </div>
+                <script>
+                    var app2mob = new Vue({
+                        delimiters: ['${', '}'],
+                        el: '#search_mob',
+                        data: {
+                            films: [],
+                            input: '',
+                        },
+                        methods: {
+                            getFilm: function(e) {
+                                self = this;
+                                if (self.input.length>3){
+                                    axios.post(
+                                        '/searchfilms',
+                                        {body:self.input}
+                                    ).then(response => ( self.films = response.data
+//                        function () {
+//
+//                        self.films = response.body
+//                    }
+                                    )
+                                );
+                                }
+                                if (self.input.length<4){
+                                    self.films = [];
+                                }
+                            }
+                        },
+                        watch: {}
+                    })
+                </script>
+
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+<div class="modal fade" id="trailerModal" tabindex="-1" role="dialog" aria-labelledby="trailerModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document" style="position: relative; width:800px;max-width: 800px;">
+        <div class="modal-content">
+            <div id="trailer_modal_close"><button type="button" class="close" data-dismiss="modal" aria-label="Close"></button></div>
+            <iframe width="800" height="600" id="f_ytu" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+    
+        
+        
+            
+        
+
+        
+
+
+        
+            
+                
+            
+
+            
+                
+            
+
+            
+                
+            
+        
+
+        
+
+        
+        
+        
+        
+            
+            
+        
+
+    
+
+
+
+
+
+
+
+
+    <script type="text/javascript" src="https://www.afisha.ru/w/ticketmanager.js"></script>
+<script>
+    window.addEventListener("message", receiveMessage, false);
+
+    function receiveMessage(event) {
+        if (event.data.orderId && event.data.id == 'kassa-widget-successful-payment') {
+            let user = "1"
+            $.post({
+                url: '/addOrder',
+                data: {
+                    '_token': "0Zs4Nzq8DhT8v4F1Ct8RNBKCXXfx0ZYkCYr8PJPN",
+                    'key': event.data.orderId,
+                    'user': user
+                }
+            })
+        }
+    }
+</script>
+
+<script src="/assets/js/main.js"></script>
+<script src="/assets/js/Inputmask-5.x/dist/jquery.inputmask.js"></script>
+<script type="text/javascript" src="/vue_builds/cinemas.min.js"></script>
+<script type="text/javascript" src="/assets/datepicker/js/datepicker.js"></script>
+
+<script>
+    $("#trailerModal").on('shown.bs.modal', function () {
+        var iframe = document.querySelector('#trailerModal iframe');
+        iframe.src = window.gTrailerIframeSrc;
+    })
+    $("#trailerModal").on('hidden.bs.modal', function (e) {
+        var iframe = document.querySelector('#trailerModal iframe');
+        iframe.src = "";
+    });
+</script>
+    
+
+
+
+    <script>
+        $(document).ready(function(){
+            $('.sl-1').slick({
+                variableWidth: true,
+                arrows: false,
+                infinite: false,
+            });
+            $('.sl-2').slick({
+                // arrows: false,
+                slidesToShow: 5,
+                // variableWidth: true,
+                focusOnSelect: true,
+                centerMode: false,
+                responsive: [
+                    {
+                        breakpoint: 500,
+                        settings: {
+                            slidesToShow: 1,
+                        }
+                    },
+                    {
+                        breakpoint: 900,
+                        settings: {
+                            slidesToShow: 2,
+                        },
+                    }
+                ]
+            });
+            if (window.innerWidth > 992) {
+                var sidebar = new StickySidebar('#sidebarclroll', {
+                    containerSelector: '#sidebarclroll',
+                    innerWrapperSelector: '.schedule_filters',
+                    topSpacing: 110,
+                    bottomSpacing: 20
+                });
+            }
+
+        });
+
+
+
+    </script>
+
+    <script type="text/javascript" src="/assets/js/jquery.ba-throttle-debounce.min.js"></script>
+
+    <script>
+        $('#genriesFilterList').hide();
+        function init_modal_info() {
+
+            var fun = $.debounce(100, function(isShow,sself) {
+                if (isShow) {
+                    $(".modal_info").stop().fadeOut( "fast");
+                    var child_modal = $(sself).find( ".modal_info" );
+                    child_modal.stop().fadeIn("fast");
+                } else {
+
+                    $(".modal_info").stop().fadeOut("fast");
+                }
+            });
+
+            $('.sessions>a').unbind().mouseenter(function(){fun(true,this)});
+            $('.sessions>a').mouseleave(function(){fun(false,this)});
+            $('.modalrelative').click(function(e){
+                e.stopPropagation();
+            });
+        }
+        init_modal_info();
+
+        function delDub(arr) {
+            return arr.filter((v,i) => arr.indexOf(v) === i);
+        }
+
+        function sortAZ(arr) {
+            arr.sort((a, b) => {
+                if (a > b) return 1;
+                else if (a < b) return -1;
+                else return 0;
+            });
+            return arr;
+        }
+
+
+
+        var markerAll = [];
+        var techAll = [];
+        var hallAll = [];
+        var genreAll = [];
+
+        var pushkinMarker = {title: 'Пушкинская карта', attr: 'pushkin'};
+
+        var filmsAll = [{"id":44633281,"title":"\u041e\u0434\u0438\u0441\u0441\u0435\u044f\/ \u041c\u0438\u0442\u0438\u043d\u0433 ON\/OFF  (\u043f\u0440\u0435\u0434-\u043e\u0435 \u043e\u0431\u0441\u043b-\u043d\u0438\u0435)","title_original":"The Odyssey","slug":"The_Odyssey_1","country":"\u0421\u0428\u0410","year":"2026","director":"\u041a\u0440\u0438\u0441\u0442\u043e\u0444\u0435\u0440 \u041d\u043e\u043b\u0430\u043d","scenario":"","starring":null,"duration":"180","age_rating":"18","rating":"0.00","genres":["\u0424\u044d\u043d\u0442\u0435\u0437\u0438 \u041f\u0440\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u0414\u0440\u0430\u043c\u0430 \u041c\u0435\u043b\u043e\u0434\u0440\u0430\u043c\u0430"],"release_date":"2026-07-29T21:00:00.000000Z","description":"\u041f\u043e\u0441\u043b\u0435 \u0422\u0440\u043e\u044f\u043d\u0441\u043a\u043e\u0439 \u0432\u043e\u0439\u043d\u044b \u041e\u0434\u0438\u0441\u0441\u0435\u0439, \u0446\u0430\u0440\u044c \u0418\u0442\u0430\u043a\u0438, \u0432\u043e \u0433\u043b\u0430\u0432\u0435 \u043d\u0435\u0431\u043e\u043b\u044c\u0448\u043e\u0433\u043e \u0432\u043e\u0439\u0441\u043a\u0430 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u0442\u0441\u044f \u0434\u043e\u043c\u043e\u0439 \u043a \u0441\u0432\u043e\u0435\u0439 \u0436\u0435\u043d\u0435 \u041f\u0435\u043d\u0435\u043b\u043e\u043f\u0435. \u041d\u0430 \u0441\u0432\u043e\u0451\u043c \u043f\u0443\u0442\u0438 \u041e\u0434\u0438\u0441\u0441\u0435\u0439 \u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0441\u043e \u043c\u043d\u043e\u0436\u0435\u0441\u0442\u0432\u043e\u043c \u0438\u0441\u043f\u044b\u0442\u0430\u043d\u0438\u0439, \u0432\u0441\u0442\u0440\u0435\u0447\u0430\u0435\u0442 \u0446\u0438\u043a\u043b\u043e\u043f\u043e\u0432, \u0441\u0438\u0440\u0435\u043d \u0438 \u0432\u0435\u043b\u0438\u043a\u0430\u043d\u043e\u0432-\u043b\u044e\u0434\u043e\u0435\u0434\u043e\u0432.\r\n\r\n\u0412\u0440\u0435\u043c\u044f \u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u0435\u0434\u0441\u0435\u0430\u043d\u0441\u043e\u0432\u043e\u0433\u043e \u043e\u0431\u0441\u043b\u0443\u0436\u0438\u0432\u0430\u043d\u0438\u044f \u0441\u043e\u043e\u0442\u0432\u0435...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/rwABBqUkZo4z3N5W7AKU4qgxHnwLN4l4Nsw02QPd.jpeg","videos":[{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9850423,"time":"13:00","tech":"2D","hall":"\u0417\u0430\u043b 4","minprice":0,"maxprice":0,"session_id":133466381,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"350"}]},{"id":9632386,"time":"14:40","tech":"2D","hall":"\u0417\u0430\u043b 8","minprice":350,"maxprice":350,"session_id":133259954,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"350"}]},{"id":9850424,"time":"16:20","tech":"2D","hall":"\u0417\u0430\u043b 4","minprice":0,"maxprice":0,"session_id":133466383,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"350"}]},{"id":9632387,"time":"18:00","tech":"2D","hall":"\u0417\u0430\u043b 8","minprice":350,"maxprice":350,"session_id":133259958,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"350"}]},{"id":9850425,"time":"19:40","tech":"2D","hall":"\u0417\u0430\u043b 4","minprice":0,"maxprice":0,"session_id":133466386,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"350"}]},{"id":9632388,"time":"21:20","tech":"2D","hall":"\u0417\u0430\u043b 8","minprice":350,"maxprice":350,"session_id":133259962,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"350"}]}],"count_seances":6},{"id":121760,"title":"\u041c\u0438\u043d\u044c\u043e\u043d\u044b \u0438 \u043c\u043e\u043d\u0441\u0442\u0440\u044b\/ \u0421\u043a\u0430\u0437\u043a\u0430 \u043d\u0430 \u043d\u043e\u0447\u044c (\u043f\u0440\u0435\u0434-\u043e\u0435 \u043e\u0431\u0441\u043b-\u043d\u0438\u0435)","title_original":"Minions & Monsters","slug":"Minions & Monsters","country":"\u0421\u0428\u0410","year":"2026","director":null,"scenario":"","starring":null,"duration":"92","age_rating":"6","rating":"0.00","genres":["\u041c\u0443\u043b\u044c\u0442\u0444\u0438\u043b\u044c\u043c","\u041f\u0440\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435","\u041a\u043e\u043c\u0435\u0434\u0438\u044f"],"release_date":"2026-07-10T21:00:00.000000Z","description":"\u042d\u0442\u043e \u0434\u0435\u0440\u0437\u043a\u0430\u044f, \u0430\u0431\u0441\u0443\u0440\u0434\u043d\u0430\u044f \u0438 \u0432 \u0442\u043e \u0436\u0435 \u0432\u0440\u0435\u043c\u044f \u0443\u0434\u0438\u0432\u0438\u0442\u0435\u043b\u044c\u043d\u043e \u043f\u0440\u0430\u0432\u0434\u0438\u0432\u0430\u044f \u0438\u0441\u0442\u043e\u0440\u0438\u044f \u043e \u0442\u043e\u043c, \u043a\u0430\u043a \u043c\u0438\u043d\u044c\u043e\u043d\u044b \u043f\u043e\u043a\u043e\u0440\u0438\u043b\u0438 \u0413\u043e\u043b\u043b\u0438\u0432\u0443\u0434, \u0441\u0442\u0430\u043b\u0438 \u043a\u0438\u043d\u043e\u0437\u0432\u0451\u0437\u0434\u0430\u043c\u0438, \u043f\u043e\u0442\u0435\u0440\u044f\u043b\u0438 \u0432\u0441\u0451, \u0432\u044b\u043f\u0443\u0441\u0442\u0438\u043b\u0438 \u043c\u043e\u043d\u0441\u0442\u0440\u043e\u0432 \u043d\u0430 \u0441\u0432\u043e\u0431\u043e\u0434\u0443 \u2014 \u0438 \u0432 \u043a\u043e\u043d\u0446\u0435 \u043a\u043e\u043d\u0446\u043e\u0432 \u0431\u044b\u043b\u0438 \u0432\u044b\u043d\u0443\u0436\u0434\u0435\u043d\u044b \u043e\u0431\u044a\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0441\u044f, \u0447\u0442\u043e\u0431\u044b \u0441\u043f\u0430\u0441\u0442\u0438 \u043f\u043b\u0430\u043d\u0435\u0442\u0443 \u043e\u0442 \u0445\u0430\u043e\u0441\u0430, \u043a\u043e\u0442\u043e\u0440\u044b\u0439 \u0441\u0430\u043c\u0438 \u0436\u0435 \u0438 \u0432\u044b...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/xlelZwhdPPeUl6uPyPpIlJJxWlZePEgmidLlXSCQ.jpeg","videos":[{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632283,"time":"13:50","tech":"2D","hall":"\u0417\u0430\u043b 3","minprice":300,"maxprice":300,"session_id":133259843,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"250"}]},{"id":9632284,"time":"15:50","tech":"2D","hall":"\u0417\u0430\u043b 3","minprice":300,"maxprice":300,"session_id":133259850,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"250"}]},{"id":9632285,"time":"17:50","tech":"2D","hall":"\u0417\u0430\u043b 3","minprice":300,"maxprice":300,"session_id":133259854,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"250"}]},{"id":9632286,"time":"19:50","tech":"2D","hall":"\u0417\u0430\u043b 3","minprice":300,"maxprice":300,"session_id":133259858,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"250"}]}],"count_seances":4},{"id":47265971,"title":"\u0421\u0442\u0430\u0440\u044b\u0439 \u043e\u0440\u0435\u043b","title_original":"","slug":"staryy-orel","country":"\u0420\u043e\u0441\u0441\u0438\u044f","year":"2025","director":"\u041c\u0443\u0440\u0430\u0434 \u041d\u043e\u0433\u043c\u043e\u0432","scenario":"","starring":"\u0410\u043b\u0438\u043a \u041a\u0430\u0440\u0430\u0435\u0432, \u041f\u0430\u0432\u0435\u043b \u041b\u0435\u0432\u043a\u0438\u043d, \u041c\u0438\u0448\u0430 \u0428\u0443\u043b\u044c\u0446, \u0418\u0441\u0430 \u041d\u043e\u0432\u0438\u043a\u043e\u0432, \u041d\u0430\u0434\u0435\u0436\u0434\u0430 \u041c\u0438\u0445\u0430\u043b\u043a\u043e\u0432\u0430, \u0421\u0432\u0435\u0442\u043b\u0430\u043d\u0430 \u0413\u0443\u0441\u0441\u0430\u043e\u0432\u0430, \u041f\u0430\u0432\u0435\u043b \u0414\u0435\u0440\u0435\u0432\u044f\u043d\u043a\u043e, \u0414\u043c\u0438\u0442\u0440\u0438\u0439 \u0422\u043a\u0430\u0447\u0435\u043d\u043a\u043e, \u0421\u0435\u0440\u0433\u0435\u0439 \u0421\u0442\u0435\u043f\u0438\u043d, \u0413\u043e\u0448\u0430 \u0422\u043e\u0440\u0432\u0438\u0447, \u0412\u0430\u0441\u0438\u043b\u0438\u0439 \u041d\u0430\u0433\u0438\u0435\u0432","duration":"94 \u043c\u0438\u043d.","age_rating":"12","rating":"0.00","genres":["\u041a\u043e\u043c\u0435\u0434\u0438\u044f","\u0424\u0438\u043b\u044c\u043c\u044b","\u0421\u0435\u043c\u0435\u0439\u043d\u044b\u0439"],"release_date":"2026-07-29T21:00:00.000000Z","description":"\u0413\u043b\u0430\u0432\u043d\u044b\u0439 \u0433\u0435\u0440\u043e\u0439 \u0438\u0441\u0442\u043e\u0440\u0438\u0438 \u2014 \u0411\u0430\u0442\u0440\u0430\u0437 \u0417\u0435\u043b\u0438\u043c\u0445\u0430\u043d\u043e\u0432\u0438\u0447, \u043e\u0441\u0435\u0442\u0438\u043d\u0441\u043a\u0438\u0439 \u0434\u0435\u0434, \u0443\u0435\u0434\u0438\u043d\u0435\u043d\u043d\u043e \u0436\u0438\u0432\u0443\u0449\u0438\u0439 \u0432 \u0433\u043e\u0440\u043d\u043e\u043c \u0441\u0435\u043b\u0435. \u041a \u0411\u0430\u0442\u0440\u0430\u0437\u0443 \u043f\u0440\u0438\u0435\u0437\u0436\u0430\u0435\u0442 \u043d\u043e\u0432\u044b\u0439 \u0433\u043b\u0430\u0432\u0430 \u043c\u0435\u0441\u0442\u043d\u043e\u0439 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u0438 \u0421\u0435\u043c\u0435\u043d, \u0447\u0442\u043e\u0431\u044b \u0441\u043e\u043e\u0431\u0449\u0438\u0442\u044c \u043e \u0440\u0435\u0448\u0435\u043d\u0438\u0438 \u043b\u0438\u043a\u0432\u0438\u0434\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0441\u0435\u043b\u043e, \u043f\u043e\u0442\u043e\u043c\u0443 \u0447\u0442\u043e \u00ab\u043e\u0434\u0438\u043d \u0447\u0435\u043b\u043e\u0432\u0435\u043a \u2014 \u043d\u0435 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u0438\u0432\u043d\u0430\u044f \u0435\u0434\u0438\u043d\u0438\u0446\u0430\u00bb. \u0421\u0435\u043c\u0435\u043d\u0443 \u043d\u0443\u0436\u043d\u043e ...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/f3d081ef657978910c5b8e073fd8f24d.jpeg","videos":[{"name":"video","title":"video","fields":[]}],"pushkin":true,"seances":[{"id":9632346,"time":"15:10","tech":"2D","hall":"\u0417\u0430\u043b 6","minprice":200,"maxprice":200,"session_id":133259914,"pushkin_id":7284005,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]},{"id":9632347,"time":"18:30","tech":"2D","hall":"\u0417\u0430\u043b 1 \u0412\u0438\u043f","minprice":620,"maxprice":620,"session_id":133259807,"pushkin_id":7284005,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"620"}]},{"id":9632348,"time":"21:30","tech":"2D","hall":"\u0417\u0430\u043b 6","minprice":200,"maxprice":200,"session_id":133259926,"pushkin_id":7284005,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":3},{"id":115879,"title":"\u0414\u0435\u043d\u044c \u0440\u0430\u0437\u043e\u0431\u043b\u0430\u0447\u0435\u043d\u0438\u044f\/ \u0423\u0448\u043b\u0430 \u043f\u043e-\u0447\u0435\u0445\u043e\u0432\u0441\u043a\u0438 (\u043f\u0440\u0435\u0434-\u043e\u0435 \u043e\u0431\u0441\u043b-\u043d\u0438\u0435)","title_original":"Disclosure Day","slug":"Disclosure-Day","country":"\u0421\u0428\u0410","year":"2026","director":null,"scenario":"","starring":null,"duration":"149","age_rating":"18","rating":"0.00","genres":["\u0424\u0430\u043d\u0442\u0430\u0441\u0442\u0438\u043a\u0430","\u0411\u043e\u0435\u0432\u0438\u043a","\u0414\u0440\u0430\u043c\u0430","\u0414\u0435\u0442\u0435\u043a\u0442\u0438\u0432","\u0422\u0440\u0438\u043b\u043b\u0435\u0440"],"release_date":"2026-06-24T21:00:00.000000Z","description":"\u0427\u0435\u043b\u043e\u0432\u0435\u0447\u0435\u0441\u0442\u0432\u043e \u0443\u0437\u043d\u0430\u0451\u0442 \u043e \u043f\u0440\u0438\u0431\u044b\u0442\u0438\u0438 \u043d\u0430 \u0417\u0435\u043c\u043b\u044e \u0438\u043d\u043e\u043f\u043b\u0430\u043d\u0435\u0442\u044f\u043d, \u0447\u044c\u0451 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u043e\u0432\u0430\u043d\u0438\u0435 \u0434\u043e\u043b\u0433\u043e\u0435 \u0432\u0440\u0435\u043c\u044f \u0442\u0449\u0430\u0442\u0435\u043b\u044c\u043d\u043e \u0441\u043a\u0440\u044b\u0432\u0430\u043b\u043e\u0441\u044c.\r\n\u00ab\u0414\u0435\u043d\u044c \u0440\u0430\u0437\u043e\u0431\u043b\u0430\u0447\u0435\u043d\u0438\u044f\u00bb \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c 145\r\n\r\n\"\u0423\u0448\u043b\u0430 \u043f\u043e-\u0447\u0435\u0445\u043e\u0432\u0441\u043a\u0438\" - \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c - 4 \u043c\u0438\u043d.\r\n\u041f\u0435\u0440\u0435\u0440\u044b\u0432 \u043c\u0435\u0436\u0434\u0443 \u0441\u0435\u0430\u043d\u0441\u0430\u043c\u0438 \u043d\u0435 \u043f\u0440\u0435\u0434\u0443\u0441\u043c\u043e\u0442\u0440\u0435\u043d...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/JNAhFW1ruJMO6GniZwzxThDwDQZfqAiR4ZKa4hBW.jpeg","videos":[{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632252,"time":"15:30","tech":"2D","hall":"\u0417\u0430\u043b 7","minprice":200,"maxprice":200,"session_id":133259938,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]},{"id":9632253,"time":"20:10","tech":"2D","hall":"\u0417\u0430\u043b 7","minprice":200,"maxprice":200,"session_id":133259946,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":2},{"id":38927651,"title":"\u0417\u0430 \u043b\u044e\u0431\u043e\u0432\u044c","title_original":"","slug":"za-lyubov","country":"\u0420\u043e\u0441\u0441\u0438\u044f","year":"2026","director":"\u0410\u043d\u0434\u0440\u0435\u0439 \u041c\u0430\u043b\u0430\u0439","scenario":"","starring":"\u041a\u0441\u0435\u043d\u0438\u044f \u0411\u043e\u0440\u043e\u0434\u0438\u043d\u0430, \u0410\u043b\u0435\u043a\u0441\u0435\u0439 \u0427\u0430\u0434\u043e\u0432, \u041e\u043b\u0435\u0441\u044f \u0421\u0443\u0434\u0437\u0438\u043b\u043e\u0432\u0441\u043a\u0430\u044f, \u0420\u043e\u0437\u0430 \u0421\u044f\u0431\u0438\u0442\u043e\u0432\u0430, \u0410\u043b\u0435\u043a\u0441\u0430\u043d\u0434\u0440 \u0420\u043e\u0433\u043e\u0432, \u041a\u0430\u0440\u0435\u043d \u0410\u043a\u043e\u043f\u044f\u043d, \u041b\u044e\u0431\u043e\u0432\u044c \u0420\u0443\u0431\u0446\u043e\u0432\u0430, \u0415\u0432\u0433\u0435\u043d\u0438\u0439 \u0428\u0438\u0440\u0438\u043a\u043e\u0432, \u0412\u0438\u043a\u0442\u043e\u0440\u0438\u044f \u041a\u043b\u0438\u043d\u043a\u043e\u0432\u0430, \u041f\u0430\u0432\u0435\u043b \u0412\u043e\u0440\u043e\u0436\u0446\u043e\u0432, \u0410\u043d\u043d\u0430-\u041c\u0430\u0440\u0438\u044f \u0422\u0438\u0445\u043e\u043d\u043e\u0432\u0430, \u0422\u0435\u043e\u043d\u0430 \u041e\u043c\u0430\u0440\u043e\u0432\u0430, \u041b\u0435\u044f \u0421\u0430\u043c\u043e\u0439\u043b\u043e\u0432\u0430, \u041c\u0430\u0440\u043a \u0411\u0430\u0440\u0442\u043e\u043d","duration":"92 \u043c\u0438\u043d.","age_rating":"16","rating":"0.00","genres":["\u0424\u0438\u043b\u044c\u043c\u044b","\u0422\u0440\u0430\u0433\u0438\u043a\u043e\u043c\u0435\u0434\u0438\u044f","\u0424\u0430\u043d\u0442\u0430\u0441\u0442\u0438\u043a\u0430"],"release_date":"2026-07-29T21:00:00.000000Z","description":"\u041e\u043d\u0438, \u043a\u0430\u0437\u0430\u043b\u043e\u0441\u044c \u0431\u044b, \u0438\u043c\u0435\u044e\u0442 \u0432\u0441\u0435 \u0434\u043b\u044f \u0441\u0447\u0430\u0441\u0442\u044c\u044f: \u043a\u043e\u043c\u0444\u043e\u0440\u0442\u043d\u0430\u044f \u043a\u0432\u0430\u0440\u0442\u0438\u0440\u0430, \u043f\u0435\u0440\u0441\u043f\u0435\u043a\u0442\u0438\u0432\u043d\u0430\u044f \u0440\u0430\u0431\u043e\u0442\u0430, \u0437\u0430\u043c\u0435\u0447\u0430\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0434\u0435\u0442\u0438. \u041d\u043e \u0437\u0430 \u0438\u0434\u0435\u0430\u043b\u044c\u043d\u043e\u0439 \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u043e\u0439 \u0441\u043a\u0440\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0433\u043b\u0443\u0431\u043e\u043a\u0438\u0439 \u043a\u0440\u0438\u0437\u0438\u0441. \u041a\u0430\u0436\u0434\u044b\u0439 \u0438\u0437 \u0441\u0443\u043f\u0440\u0443\u0433\u043e\u0432 \u0443\u0436\u0435 \u0434\u0430\u0432\u043d\u043e \u043d\u0435\u0433\u043b\u0430\u0441\u043d\u043e \u0436\u0438\u0432\u0435\u0442 \u0441\u0432\u043e\u0435\u0439 \u0436\u0438\u0437\u043d\u044c\u044e, \u0443\u0431\u0435\u0433\u0430\u044f \u043e\u0442 \u0440\u0443\u0442\u0438\u043d\u044b \u0438 \u043f\u043e\u0441\u043b\u0435\u0434\u0441\u0442\u0432\u0438\u0439 \u0431\u044b\u0442\u0430. \u0412 \u0434\u0435\u043d\u044c \u044e\u0431\u0438\u043b\u0435\u044f \u043f\u0430\u0440...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/dad607ebd48bca2eed6af42f711238fc.jpeg","videos":[{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632324,"time":"14:00","tech":"2D","hall":"\u0417\u0430\u043b 1 \u0412\u0438\u043f","minprice":520,"maxprice":520,"session_id":133259800,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"520"}]},{"id":9632325,"time":"19:30","tech":"2D","hall":"\u0417\u0430\u043b 6","minprice":200,"maxprice":200,"session_id":133259922,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":2},{"id":42920274,"title":"\u041a\u043e\u043b\u043e\u043d\u0438\u044f","title_original":"Gunche","slug":"gunche","country":"\u042e\u0436\u043d\u0430\u044f \u041a\u043e\u0440\u0435\u044f","year":"2026","director":"\u0415\u043d \u0421\u0430\u043d \u0425\u043e","scenario":"","starring":"\u0427\u043e\u043d \u0427\u0438 \u0425\u0435\u043d, \u0413\u0443 \u0413\u0435 \u0425\u0432\u0430\u043d, \u0427\u0438 \u0427\u0445\u0430\u043d \u0423\u043a, \u041a\u0438\u043c \u0421\u0438\u043d \u0420\u043e\u043a, \u0421\u0438\u043d \u0425\u0435\u043d \u0411\u0438\u043d, \u041a\u043e \u0421\u0443, \u041a\u0438\u043c \u0425\u0435\u043d \u041c\u0443\u043a","duration":"122 \u043c\u0438\u043d.","age_rating":"18","rating":"0.00","genres":["\u0411\u043e\u0435\u0432\u0438\u043a","\u0422\u0440\u0438\u043b\u043b\u0435\u0440","\u0424\u0438\u043b\u044c\u043c\u044b"],"release_date":"2026-06-17T21:00:00.000000Z","description":"\u0412 \u043c\u0438\u0440\u0435 \u0440\u0430\u0437\u0433\u043e\u0440\u0430\u0435\u0442\u0441\u044f \u044d\u043f\u0438\u0434\u0435\u043c\u0438\u044f \u043d\u043e\u0432\u043e\u0433\u043e \u0432\u0438\u0440\u0443\u0441\u0430, \u0438 \u043b\u044e\u0434\u0438 \u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e\u0442\u0441\u044f \u0437\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u043d\u044b \u0432 \u043e\u0433\u0440\u043e\u043c\u043d\u043e\u043c \u0432\u044b\u0441\u0442\u0430\u0432\u043e\u0447\u043d\u043e\u043c \u0446\u0435\u043d\u0442\u0440\u0435, \u0433\u0434\u0435 \u043d\u0430\u0447\u0438\u043d\u0430\u0435\u0442\u0441\u044f \u0441\u0430\u043c\u044b\u0439 \u043d\u0430\u0441\u0442\u043e\u044f\u0449\u0438\u0439 \u044d\u043f\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0437\u043e\u043c\u0431\u0438-\u043a\u043e\u0448\u043c\u0430\u0440....","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/f920f8abd2ebad4c916843bb48a21bd1.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632180,"time":"16:00","tech":"2D","hall":"\u0417\u0430\u043b 1 \u0412\u0438\u043f","minprice":520,"maxprice":520,"session_id":133259804,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"520"}]},{"id":9850387,"time":"21:30","tech":"2D","hall":"\u0417\u0430\u043b 2","minprice":0,"maxprice":0,"session_id":133466379,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"},{"PlaceTypeID":"5","PlaceTypeName":"Love seat","Price":"400"}]}],"count_seances":2},{"id":35820470,"title":"\u041d\u0435\u043f\u043e\u043a\u043e\u0439","title_original":null,"slug":"nepokoy","country":null,"year":"2025","director":"\u041b\u0435\u043e\u043d\u0438\u0434 \u0428\u043c\u0435\u043b\u044c\u043a\u043e\u0432","scenario":"","starring":null,"duration":"86 \u043c\u0438\u043d.","age_rating":"18","rating":"0.00","genres":["\u041c\u0443\u043b\u044c\u0442\u0444\u0438\u043b\u044c\u043c","\u0414\u0435\u0442\u0435\u043a\u0442\u0438\u0432","\u0424\u0438\u043b\u044c\u043c\u044b"],"release_date":null,"description":"\u0417\u0430\u0433\u0430\u0434\u043e\u0447\u043d\u0430\u044f \u0438\u0441\u0442\u043e\u0440\u0438\u044f \u043e \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u0435, \u043a\u043e\u0442\u043e\u0440\u044b\u0439 \u0437\u0430\u0441\u0442\u0440\u0435\u0432\u0430\u0435\u0442 \u0432 \u043c\u0430\u043b\u0435\u043d\u044c\u043a\u043e\u043c \u043f\u0440\u043e\u0432\u0438\u043d\u0446\u0438\u0430\u043b\u044c\u043d\u043e\u043c \u043e\u0442\u0435\u043b\u0435, \u0433\u0434\u0435 \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u044f\u0442 \u0441\u0442\u0440\u0430\u043d\u043d\u044b\u0435 \u0432\u0435\u0449\u0438 \u0438 \u043f\u043e\u0441\u0442\u043e\u044f\u043b\u044c\u0446\u044b \u043f\u043e\u0433\u0438\u0431\u0430\u044e\u0442 \u043e\u0434\u0438\u043d \u0437\u0430 \u0434\u0440\u0443\u0433\u0438\u043c....","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/u1UeOqIQfMVBecdLqIAICSMdm57xUxdmiOKd66hU.jpeg","videos":[],"pushkin":false,"seances":[{"id":9632414,"time":"18:20","tech":"2D","hall":"\u0417\u0430\u043b 7","minprice":200,"maxprice":200,"session_id":133259942,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":1},{"id":42471877,"title":"\u041c\u043e\u0439 \u0434\u0438\u043a\u0438\u0439 \u0434\u0440\u0443\u0433. \u0412\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u0438\u0435 \u0434\u043e\u043c\u043e\u0439","title_original":"","slug":"moy-dikiy-drug-vozvrashchenie-domoy","country":"\u0420\u043e\u0441\u0441\u0438\u044f","year":"2026","director":"\u0410\u043d\u043d\u0430 \u041a\u0443\u0440\u0431\u0430\u0442\u043e\u0432\u0430","scenario":"","starring":"\u0415\u043b\u0438\u0441\u0435\u0439 \u0427\u0443\u0447\u0438\u043b\u0438\u043d, \u042e\u043b\u0438\u044f \u0410\u043b\u0435\u043a\u0441\u0430\u043d\u0434\u0440\u043e\u0432\u0430, \u041e\u043b\u044c\u0433\u0430 \u0421\u043c\u0438\u0440\u043d\u043e\u0432\u0430, \u041c\u0438\u0445\u0430\u0438\u043b \u0411\u0430\u0448\u043a\u0430\u0442\u043e\u0432, \u042f\u043d \u0426\u0430\u043f\u043d\u0438\u043a, \u0412\u0430\u043b\u0435\u043d\u0442\u0438\u043d\u0430 \u041c\u0430\u0437\u0443\u043d\u0438\u043d\u0430, \u0410\u043d\u0442\u043e\u043d \u0411\u043e\u0433\u0434\u0430\u043d\u043e\u0432, \u0421\u043e\u0444\u0438\u044f \u041a\u043e\u0432\u0430\u043b\u0435\u043d\u043a\u043e","duration":"96 \u043c\u0438\u043d.","age_rating":"6","rating":"0.00","genres":["\u041f\u0440\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435","\u0424\u0438\u043b\u044c\u043c\u044b","\u0421\u0435\u043c\u0435\u0439\u043d\u044b\u0439"],"release_date":"2026-07-22T21:00:00.000000Z","description":"\u041a\u043e\u0433\u0434\u0430 \u0421\u0430\u0448\u0430 \u0441\u043d\u043e\u0432\u0430 \u0432\u0441\u0442\u0440\u0435\u0447\u0430\u0435\u0442 \u0441\u0432\u043e\u0435\u0433\u043e \u0434\u0438\u043a\u043e\u0433\u043e \u0434\u0440\u0443\u0433\u0430, \u043b\u0438\u0441\u0430 \u0420\u044b\u0436\u0435\u0433\u043e, \u043e\u043d \u0443\u0437\u043d\u0430\u0435\u0442, \u0447\u0442\u043e \u0441\u0435\u043c\u044c\u044e \u043b\u0438\u0441\u0430 \u043f\u043e\u0445\u0438\u0442\u0438\u043b \u043f\u0435\u0440\u0435\u0434\u0432\u0438\u0436\u043d\u043e\u0439 \u0437\u043e\u043e\u043f\u0430\u0440\u043a. \u041c\u0430\u043b\u044c\u0447\u0438\u043a \u0440\u0435\u0448\u0430\u0435\u0442 \u0432\u043e \u0447\u0442\u043e \u0431\u044b \u0442\u043e \u043d\u0438 \u0441\u0442\u0430\u043b\u043e \u0432\u0435\u0440\u043d\u0443\u0442\u044c \u0438\u0445 \u0434\u043e\u043c\u043e\u0439. \u0412\u043f\u0435\u0440\u0435\u0434\u0438 \u0435\u0433\u043e \u0436\u0434\u0435\u0442 \u043e\u043f\u0430\u0441\u043d\u043e\u0435 \u043f\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u0435 \u0438 \u0432\u0441\u0442\u0440\u0435\u0447\u0430 \u0441 \u043d\u043e\u0432\u044b\u043c \u043d\u0430\u0441\u0442\u043e\u044f\u0449\u0438\u043c \u0434\u0440\u0443\u0433\u043e\u043c....","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/3966523dedf6467e3af200321e802b23.jpeg","videos":[{"name":"video","title":"video","fields":[]}],"pushkin":true,"seances":[{"id":9850411,"time":"17:20","tech":"2D","hall":"\u0417\u0430\u043b 2","minprice":0,"maxprice":0,"session_id":133466374,"pushkin_id":7268639,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"},{"PlaceTypeID":"5","PlaceTypeName":"Love seat","Price":"300"}]}],"count_seances":1},{"id":43659554,"title":"\u041c\u0430\u0439\u043a\u043b","title_original":"Michael","slug":"michael","country":"\u0421\u0428\u0410, \u0412\u0435\u043b\u0438\u043a\u043e\u0431\u0440\u0438\u0442\u0430\u043d\u0438\u044f","year":"2026","director":"\u0410\u043d\u0442\u0443\u0430\u043d \u0424\u0443\u043a\u0443\u0430","scenario":"","starring":"\u0414\u0436\u0430\u0430\u0444\u0430\u0440 \u0414\u0436\u0435\u043a\u0441\u043e\u043d, \u0414\u0436\u0443\u043b\u0438\u0430\u043d\u043e \u041a\u0440\u044e \u0412\u0430\u043b\u044c\u0434\u0438, \u0422\u043e\u043d\u0438 \u0444\u043e\u043d \u0425\u0430\u043b\u043b\u0435, \u041c\u0430\u0439\u043b\u0441 \u0422\u0435\u043b\u043b\u0435\u0440, \u041a\u043e\u043b\u043c\u0430\u043d \u0414\u043e\u043c\u0438\u043d\u0433\u043e, \u041a\u044d\u0442 \u0413\u0440\u044d\u043c, \u041b\u043e\u0440\u0430 \u0425\u044d\u0440\u0440\u0438\u0435\u0440, \u041d\u0438\u0430 \u041b\u043e\u043d\u0433, \u041b\u0430\u0440\u0435\u043d\u0446 \u0422\u0435\u0439\u0442, \u0414\u0435\u0440\u0435\u043a \u041b\u044e\u043a, \u0414\u0436\u0435\u0441\u0441\u0438\u043a\u0430 \u0421\u0443\u043b\u0430","duration":"127 \u043c\u0438\u043d.","age_rating":"18","rating":"6.90","genres":["\u0424\u0438\u043b\u044c\u043c\u044b","\u0411\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u044f","\u0418\u0441\u0442\u043e\u0440\u0438\u0447\u0435\u0441\u043a\u0438\u0439"],"release_date":"2026-05-27T21:00:00.000000Z","description":"\u041e\u043d \u2014 \u043e\u0434\u0438\u043d \u0438\u0437 \u0441\u0430\u043c\u044b\u0445 \u0443\u0441\u043f\u0435\u0448\u043d\u044b\u0445 \u0430\u0440\u0442\u0438\u0441\u0442\u043e\u0432 \u0432\u0441\u0435\u0445 \u0432\u0440\u0435\u043c\u0435\u043d, \u0430 \u0435\u0433\u043e \u043f\u0435\u0441\u043d\u0438 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0438 \u043c\u0438\u0440 \u043d\u0430\u0432\u0441\u0435\u0433\u0434\u0430. \u041d\u043e \u0434\u043e \u0442\u043e\u0433\u043e \u043a\u0430\u043a \u0441\u0442\u0430\u0442\u044c \u043a\u043e\u0440\u043e\u043b\u0435\u043c \u043f\u043e\u043f-\u043c\u0443\u0437\u044b\u043a\u0438, \u0441\u043e\u0431\u0438\u0440\u0430\u044e\u0449\u0438\u043c \u0441\u0442\u0430\u0434\u0438\u043e\u043d\u044b \u043f\u043e\u043a\u043b\u043e\u043d\u043d\u0438\u043a\u043e\u0432, \u043e\u043d \u0431\u044b\u043b \u043f\u0440\u043e\u0441\u0442\u043e\u2026 \u041c\u0430\u0439\u043a\u043b\u043e\u043c. \u0418 \u043b\u0435\u0433\u0435\u043d\u0434\u0430\u0440\u043d\u0435\u0435 \u0435\u0433\u043e \u043c\u0443\u0437\u044b\u043a\u0438 \u043b\u0438\u0448\u044c \u0435\u0433\u043e \u0436\u0438\u0437\u043d\u044c \u2014 \u043f\u043e\u043b\u043d\u0430\u044f \u0432\u0437\u043b\u0435\u0442\u043e\u0432 \u0438 \u043f\u0430\u0434\u0435\u043d\u0438\u0439 \u043d\u0430 \u043f\u0443\u0442\u0438 \u043a \u0433\u043e\u043b\u043e\u0432\u043e\u043a\u0440\u0443\u0436...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/7d6e33f598b32b766444339a9c78ad52.jpeg","videos":[{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632307,"time":"20:40","tech":"2D","hall":"\u0417\u0430\u043b 1 \u0412\u0438\u043f","minprice":770,"maxprice":770,"session_id":133259811,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"620"}]}],"count_seances":1},{"id":43659575,"title":"\u0417\u043b\u043e\u0432\u0435\u0449\u0438\u0435 \u043c\u0435\u0440\u0442\u0432\u0435\u0446\u044b: \u041f\u0435\u043a\u043b\u043e","title_original":"Evil Dead Burn","slug":"evil-dead-burn","country":"\u0421\u0428\u0410","year":"2026","director":"\u0421\u0435\u0431\u0430\u0441\u0442\u044c\u0435\u043d \u0412\u0430\u043d\u0438\u0447\u0435\u043a","scenario":"","starring":"\u041b\u0443\u0441\u0438\u0430\u043d\u0430 \u0411\u044c\u044e\u043a\u0435\u043d\u0435\u043d, \u0425\u0430\u043d\u0442\u0435\u0440 \u0414\u0443\u044d\u043d, \u0421\u0443\u0445\u0435\u0439\u043b\u0430 \u042f\u043a\u0443\u0431, \u042d\u0440\u0440\u043e\u043b\u043b \u0428\u0430\u043d\u0434, \u0422\u044d\u043d\u0434\u0438 \u0420\u0430\u0439\u0442, \u0422\u0430\u043f\u0438\u0432\u0430 \u0421\u043e\u0440\u043e\u043f\u0430, \u041c\u043e\u0434 \u0414\u0435\u0439\u0432\u0438, \u041a\u0435\u0430\u043d\u0443 \u041a\u0430\u0440\u0438\u043c, \u0412\u0438\u043a\u0442\u043e\u0440\u0438 \u041d\u0434\u0443\u043a\u0432\u0435","duration":"109 \u043c\u0438\u043d.","age_rating":"18","rating":"0.00","genres":["\u0424\u0438\u043b\u044c\u043c\u044b","\u0424\u044d\u043d\u0442\u0435\u0437\u0438","\u0423\u0436\u0430\u0441\u044b"],"release_date":"2026-07-15T21:00:00.000000Z","description":"\u041f\u043e\u0441\u043b\u0435 \u0441\u043c\u0435\u0440\u0442\u0438 \u043c\u0443\u0436\u0430 \u042d\u043b\u0438\u0441 \u043f\u0440\u0438\u0435\u0437\u0436\u0430\u0435\u0442 \u043a \u0435\u0433\u043e \u0441\u0435\u043c\u044c\u0435 \u0432 \u0443\u0435\u0434\u0438\u043d\u0435\u043d\u043d\u044b\u0439 \u0437\u0430\u0433\u043e\u0440\u043e\u0434\u043d\u044b\u0439 \u0434\u043e\u043c. \u041d\u043e \u043f\u043e\u043c\u0438\u043d\u043a\u0438 \u043e\u043c\u0440\u0430\u0447\u0430\u0435\u0442 \u0434\u0440\u0435\u0432\u043d\u0435\u0435 \u0437\u043b\u043e, \u0432\u044b\u0431\u0440\u0430\u0432\u0448\u0435\u0435 \u0440\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0438\u043a\u043e\u0432 \u0441\u0432\u043e\u0435\u0439 \u043d\u043e\u0432\u043e\u0439 \u0446\u0435\u043b\u044c\u044e. \u0418 \u043a\u043e\u0433\u0434\u0430 \u0441\u0435\u043c\u0435\u0439\u043d\u044b\u0435 \u0434\u0435\u043c\u043e\u043d\u044b \u043d\u0430\u0447\u0438\u043d\u0430\u044e\u0442 \u043b\u0435\u0437\u0442\u044c \u043d\u0430\u0440\u0443\u0436\u0443, \u042d\u043b\u0438\u0441 \u043f\u043e\u043d\u0438\u043c\u0430\u0435\u0442: \u043d\u0435\u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u043a\u043b\u044f\u0442\u0432\u044b, \u0434\u0430\u043d\u043d\u044b\u0435 \u043f\u0440\u0438 \u0436\u0438\u0437\u043d\u0438, \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u044e\u0442 \u0441\u0438\u043b\u0443 \u0438 \u043d\u0430 \u0442\u043e...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/d9bb5e0125cbe455f5dac50a4b01c640.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632213,"time":"13:30","tech":"2D","hall":"\u0417\u0430\u043b 5","minprice":250,"maxprice":250,"session_id":133259891,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":1},{"id":45088021,"title":"\u0417\u0430\u043a\u0443\u043b\u0438\u0441\u044c\u0435 \u0440\u0435\u0430\u043b\u044c\u043d\u043e\u0441\u0442\u0438","title_original":"Backrooms","slug":"backrooms","country":"\u0421\u0428\u0410","year":"2026","director":"\u041a\u0435\u0439\u043d \u041f\u0430\u0440\u0441\u043e\u043d\u0441","scenario":"","starring":"\u0424\u0438\u043d\u043d \u0411\u0435\u043d\u043d\u0435\u0442\u0442, \u042d\u0432\u0430\u043d \u0414\u0436\u043e\u0433\u0438\u0430, \u041b\u0443\u043a\u0438\u0442\u0430 \u041c\u0430\u043a\u0441\u0432\u0435\u043b\u043b, \u0420\u0435\u043d\u0430\u0442\u0430 \u0420\u0435\u0439\u043d\u0441\u0432\u0435, \u0427\u0438\u0432\u0435\u0442\u0435\u043b\u044c \u042d\u0434\u0436\u043e\u0444\u043e\u0440, \u041c\u0430\u0440\u043a \u0414\u044e\u043f\u043b\u0430\u0441\u0441, \u0427\u0435\u043b\u0430 \u0425\u043e\u0440\u0441\u0434\u0430\u043b, \u0422\u043e\u0431\u0438 \u0425\u0430\u0440\u0433\u0440\u0435\u0439\u0432, \u0424\u0438\u043b\u0438\u043f \u0413\u0440\u0435\u0439\u043d\u0434\u0436\u0435\u0440, \u041f\u0430\u0442\u0440\u0438\u043a \u0411\u0435\u0439\u043d\u0435\u043c","duration":"110 \u043c\u0438\u043d.","age_rating":"18","rating":"6.80","genres":["\u0424\u0430\u043d\u0442\u0430\u0441\u0442\u0438\u043a\u0430","\u0424\u0438\u043b\u044c\u043c\u044b","\u0423\u0436\u0430\u0441\u044b"],"release_date":"2026-06-03T21:00:00.000000Z","description":"\u0415\u0441\u0442\u044c \u043c\u0435\u0441\u0442\u043e \u0437\u0430 \u043f\u0440\u0435\u0434\u0435\u043b\u0430\u043c\u0438 \u043d\u0430\u0448\u0435\u0439 \u0440\u0435\u0430\u043b\u044c\u043d\u043e\u0441\u0442\u0438\u2026 \u041a\u043e\u0433\u0434\u0430 \u043d\u0435\u0443\u0434\u0430\u0447\u043b\u0438\u0432\u044b\u0439 \u043f\u0440\u043e\u0434\u0430\u0432\u0435\u0446 \u043c\u0435\u0431\u0435\u043b\u0438 \u041a\u043b\u0430\u0440\u043a \u043e\u0431\u043d\u0430\u0440\u0443\u0436\u0438\u0432\u0430\u0435\u0442 \u0441\u043a\u0440\u044b\u0442\u044b\u0439 \u043f\u043e\u0440\u0442\u0430\u043b \u0432 \u0434\u0440\u0443\u0433\u043e\u0435 \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u0435 \u0432 \u043f\u043e\u0434\u0432\u0430\u043b\u0435 \u0441\u0432\u043e\u0435\u0433\u043e \u043c\u0430\u0433\u0430\u0437\u0438\u043d\u0430, \u043e\u043d \u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0432 \u0431\u0435\u0441\u043a\u043e\u043d\u0435\u0447\u043d\u043e\u043c \u043b\u0430\u0431\u0438\u0440\u0438\u043d\u0442\u0435 \u0438\u0437\u0432\u0438\u043b\u0438\u0441\u0442\u044b\u0445 \u0436\u0435\u043b\u0442\u044b\u0445 \u043a\u043e\u0440\u0438\u0434\u043e\u0440\u043e\u0432. \u0412 \u044d\u0442\u043e\u043c \u043c\u0438\u0440\u0435 \u0432\u0440\u0435\u043c\u044f \u0438 \u043f\u0440\u043e\u0441\u0442\u0440\u0430\u043d\u0441\u0442\u0432\u043e \u043d\u0435 \u043f\u043e\u0434\u0447\u0438\u043d\u044f\u044e\u0442\u0441...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/0fb59a05a8d1686429af7c7e977668b8.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632165,"time":"15:50","tech":"2D","hall":"\u0417\u0430\u043b 5","minprice":200,"maxprice":200,"session_id":133259895,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":1},{"id":45700747,"title":"\u0425\u0440\u0430\u0431\u0440\u044b\u0439 \u0414\u0430\u0432\u0438\u0434","title_original":"David","slug":"david","country":"\u042e\u0410\u0420, \u0421\u0428\u0410","year":"2025","director":"\u0424\u0438\u043b \u041a\u0430\u043d\u043d\u0438\u043d\u0433\u0435\u043c, \u0411\u0440\u0435\u043d\u0442 \u0414\u043e\u0443\u0437","scenario":"","starring":"","duration":"109 \u043c\u0438\u043d.","age_rating":"6","rating":"0.00","genres":["\u041c\u0443\u043b\u044c\u0442\u0444\u0438\u043b\u044c\u043c","\u041f\u0440\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435","\u0424\u0438\u043b\u044c\u043c\u044b"],"release_date":"2026-07-29T21:00:00.000000Z","description":"\u042e\u043d\u044b\u0439 \u0414\u0430\u0432\u0438\u0434 \u2014 \u0434\u043e\u0431\u0440\u044b\u0439 \u0438 \u0441\u043c\u0435\u043b\u044b\u0439 \u043f\u0430\u0441\u0442\u0443\u0445, \u043a\u043e\u0442\u043e\u0440\u044b\u0439 \u0436\u0438\u0432\u0435\u0442 \u043c\u0443\u0437\u044b\u043a\u043e\u0439 \u0438 \u0437\u0430\u0431\u043e\u0442\u0438\u0442\u0441\u044f \u043e\u0431 \u043e\u0442\u0446\u043e\u0432\u0441\u043a\u0438\u043c \u0441\u0442\u0430\u0434\u0435, \u0431\u0435\u0441\u0441\u0442\u0440\u0430\u0448\u043d\u043e \u0437\u0430\u0449\u0438\u0449\u0430\u044f \u043e\u0432\u0435\u0446 \u043e\u0442 \u0445\u0438\u0449\u043d\u0438\u043a\u043e\u0432. \u041f\u043e\u0441\u043b\u0435 \u0432\u0441\u0442\u0440\u0435\u0447\u0438 \u0441 \u043f\u0440\u043e\u0440\u043e\u043a\u043e\u043c, \u043f\u0440\u0435\u0434\u0440\u0435\u043a\u0448\u0438\u043c \u0435\u043c\u0443 \u0432\u0435\u043b\u0438\u043a\u043e\u0435 \u0431\u0443\u0434\u0443\u0449\u0435\u0435, \u044e\u043d\u043e\u0448\u0430 \u043f\u043e\u043f\u0430\u0434\u0430\u0435\u0442 \u043a\u043e \u0434\u0432\u043e\u0440\u0443 \u0446\u0430\u0440\u044f \u0421\u0430\u0443\u043b\u0430, \u0433\u0434\u0435 \u0435\u0433\u043e \u0442\u0430\u043b\u0430\u043d\u0442 \u0438 \u0434\u043e\u0431\u0440\u043e\u0435 \u0441\u0435\u0440\u0434\u0446\u0435 \u0443\u0442\u0435\u0448\u0430\u044e\u0442 \u043c\u043e\u0433\u0443\u0449\u0435\u0441\u0442\u0432...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/d1d9d9a85460b248d13194d7cdfee526.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632402,"time":"17:10","tech":"2D","hall":"\u0417\u0430\u043b 6","minprice":200,"maxprice":200,"session_id":133259918,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":1},{"id":45803031,"title":"\u041f\u0440\u0438\u0437\u0440\u0430\u043a \u0432 \u043a\u043b\u0435\u0442\u043a\u0435","title_original":"Hantu Dalam Sel","slug":"hantu-dalam-sel","country":"\u0418\u043d\u0434\u043e\u043d\u0435\u0437\u0438\u044f, \u042e\u0436\u043d\u0430\u044f \u041a\u043e\u0440\u0435\u044f","year":"2026","director":"\u0425\u043e\u043a\u043e \u0410\u043d\u0432\u0430\u0440","scenario":"","starring":"\u0410\u0431\u0438\u043c\u0430\u043d\u0430 \u0410\u0440\u044c\u044f\u0441\u0430\u0442\u044c\u044f, \u0410\u043b\u044c\u043c\u0430\u043d\u0437\u043e \u041a\u043e\u043d\u043e\u0440\u0430\u043b\u044c\u043c\u0430, \u0410\u043c\u0438\u043d\u0433 \u0421\u0443\u0433\u0430\u043d\u0434\u0438, \u0410\u0440\u0441\u0432\u0435\u043d\u0434\u0438 \u0411\u0435\u043d\u0438\u043d \u0421\u0432\u0430\u0440\u0430, \u0411\u0440\u043e\u043d\u0442 \u041f\u0430\u043b\u0430\u0440\u0430\u044d, \u0414\u0438\u043c\u0430\u0441 \u0414\u0430\u043d\u0430\u043d\u0433 \u0421\u0443\u0440\u044c\u043e\u043d\u0435\u0433\u043e\u0440\u043e, \u0414\u0435\u0432\u0430 \u0414\u0430\u044f\u043d\u0430, \u042d\u043d\u0434\u0438 \u0410\u0440\u0444\u0438\u0430\u043d, \u0424\u0430\u0438\u0437 \u0412\u0438\u0448\u0430\u043b, \u0425\u043e \u042e\u0439\u0445\u0430\u043d, \u041c\u043e\u0440\u0433\u0430\u043d \u041e\u044d\u0439","duration":"101 \u043c\u0438\u043d.","age_rating":"18","rating":"0.00","genres":["\u0422\u0440\u0438\u043b\u043b\u0435\u0440","\u041a\u043e\u043c\u0435\u0434\u0438\u044f","\u0424\u0438\u043b\u044c\u043c\u044b"],"release_date":"2026-07-29T21:00:00.000000Z","description":"\u0412 \u043f\u0435\u0447\u0430\u043b\u044c\u043d\u043e \u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0439 \u0442\u044e\u0440\u044c\u043c\u0435 \u043d\u0435\u0432\u0438\u0434\u0438\u043c\u0430\u044f \u0441\u0438\u043b\u0430 \u043d\u0430\u0447\u0438\u043d\u0430\u0435\u0442 \u0436\u0435\u0441\u0442\u043e\u043a\u043e \u0443\u0431\u0438\u0432\u0430\u0442\u044c \u0437\u0430\u043a\u043b\u044e\u0447\u0435\u043d\u043d\u044b\u0445, \u0432\u044b\u043d\u0443\u0436\u0434\u0430\u044f \u0432\u0440\u0430\u0436\u0435\u0441\u043a\u0438\u0435 \u0431\u0430\u043d\u0434\u044b \u0438 \u043a\u043e\u0440\u0440\u0443\u043c\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0445 \u043e\u0445\u0440\u0430\u043d\u043d\u0438\u043a\u043e\u0432 \u0434\u0435\u0439\u0441\u0442\u0432\u043e\u0432\u0430\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0430, \u043f\u044b\u0442\u0430\u044f\u0441\u044c \u0432\u044b\u0436\u0438\u0442\u044c \u0432 \u0443\u0441\u043b\u043e\u0432\u0438\u044f\u0445 \u043d\u0430\u0440\u0430\u0441\u0442\u0430\u044e\u0449\u0435\u0433\u043e \u043a\u0440\u043e\u0432\u043e\u043f\u0440\u043e\u043b\u0438\u0442\u0438\u044f....","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/472226083b21d6312c109ed1778a8ab6.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632363,"time":"21:50","tech":"2D","hall":"\u0417\u0430\u043b 3","minprice":200,"maxprice":200,"session_id":133259861,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":1},{"id":47361514,"title":"\u0428\u043a\u043e\u043b\u0430 \u043f\u0440\u0438\u0437\u0440\u0430\u043a\u043e\u0432","title_original":"The Invisible Half","slug":"the-invisible-half","country":"\u042f\u043f\u043e\u043d\u0438\u044f","year":"2025","director":"\u041c\u0430\u0441\u0430\u043a\u0438 \u041d\u0438\u0441\u0438\u044f\u043c\u0430","scenario":"","starring":"\u041b\u0438\u0437\u0430 \u0421\u0438\u0435\u0440\u0430, \u041c\u0438\u044e \u041e\u043a\u0443\u043d\u043e, \u0420\u0443\u043d\u0430 \u0425\u0438\u0440\u0430\u0441\u0430\u0432\u0430","duration":"107 \u043c\u0438\u043d.","age_rating":"18","rating":"0.00","genres":["\u0424\u0438\u043b\u044c\u043c\u044b","\u0423\u0436\u0430\u0441\u044b"],"release_date":"2026-07-29T21:00:00.000000Z","description":"\u0415\u043b\u0435\u043d\u0435 \u043e\u0447\u0435\u043d\u044c \u043d\u0435\u043f\u0440\u043e\u0441\u0442\u043e \u0432 \u043d\u043e\u0432\u043e\u0439 \u0448\u043a\u043e\u043b\u0435. \u0415\u0435 \u0435\u0434\u0438\u043d\u0441\u0442\u0432\u0435\u043d\u043d\u043e\u0439 \u043f\u043e\u0434\u0440\u0443\u0433\u043e\u0439 \u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u0441\u044f \u0441\u0442\u0440\u0430\u043d\u043d\u0430\u044f \u043e\u0434\u043d\u043e\u043a\u043b\u0430\u0441\u0441\u043d\u0438\u0446\u0430 \u041d\u044f\u043d, \u043a\u043e\u0442\u043e\u0440\u0430\u044f \u0443\u0432\u0435\u0440\u0435\u043d\u0430, \u0447\u0442\u043e \u0432 \u0448\u043a\u043e\u043b\u0435 \u043e\u0431\u0438\u0442\u0430\u044e\u0442 \u043f\u0440\u0438\u0437\u0440\u0430\u043a\u0438. \u0415\u043b\u0435\u043d\u0430 \u043d\u0435 \u0432\u0435\u0440\u0438\u0442 \u0432 \u044d\u0442\u0443 \u0441\u0442\u0440\u0430\u0448\u0438\u043b\u043a\u0443, \u043d\u043e \u043f\u043e\u0441\u0442\u0435\u043f\u0435\u043d\u043d\u043e \u043d\u0430\u0447\u0438\u043d\u0430\u0435\u0442 \u0437\u0430\u043c\u0435\u0447\u0430\u0442\u044c, \u0447\u0442\u043e \u0438 \u0437\u0430 \u043d\u0435\u0439 \u043f\u043e\u0441\u0442\u043e\u044f\u043d\u043d\u043e \u043a\u0442\u043e-\u0442\u043e \u043d\u0430\u0431\u043b\u044e\u0434\u0430\u0435\u0442 \u2014 \u043f\u0440\u0438\u0437\u0440\u0430\u043a\u043e\u0432 \u043c\u043e\u0436\u043d\u043e ...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/0c0aae11c4652acaca98bd847cd244f6.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632421,"time":"20:30","tech":"2D","hall":"\u0417\u0430\u043b 5","minprice":200,"maxprice":200,"session_id":133259902,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":1},{"id":47669702,"title":"\u041d\u0430 \u0434\u0435\u0440\u0435\u0432\u043d\u044e \u0434\u0435\u0434\u0443\u0448\u043a\u0435 2","title_original":"","slug":"na-derevnyu-dedushke-2","country":"\u0420\u043e\u0441\u0441\u0438\u044f","year":"2026","director":"\u0412\u043b\u0430\u0434\u0438\u043c\u0438\u0440 \u041a\u043e\u0442\u0442","scenario":"","starring":"\u042e\u0440\u0438\u0439 \u0421\u0442\u043e\u044f\u043d\u043e\u0432, \u0424\u0435\u0434\u043e\u0440 \u0414\u043e\u0431\u0440\u043e\u043d\u0440\u0430\u0432\u043e\u0432, \u042f\u0440\u043e\u0441\u043b\u0430\u0432 \u0413\u043e\u043b\u043e\u0432\u043d\u0435\u0432, \u0418\u043d\u0433\u0440\u0438\u0434 \u041e\u043b\u0435\u0440\u0438\u043d\u0441\u043a\u0430\u044f, \u0422\u0430\u0442\u044c\u044f\u043d\u0430 \u041e\u0440\u043b\u043e\u0432\u0430, \u0410\u043d\u0442\u043e\u043d \u0424\u0438\u043b\u0438\u043f\u0435\u043d\u043a\u043e, \u0410\u043b\u0435\u043a\u0441\u0430\u043d\u0434\u0440 \u0418\u043b\u044c\u0438\u043d, \u041c\u0438\u0440\u043e\u043d \u041b\u0435\u0431\u0435\u0434\u0435\u0432, \u0410\u043b\u0438\u0441\u0430 \u0420\u0443\u0434\u0435\u043d\u043a\u043e","duration":"93 \u043c\u0438\u043d.","age_rating":"6","rating":"6.30","genres":["\u041a\u043e\u043c\u0435\u0434\u0438\u044f","\u0424\u0438\u043b\u044c\u043c\u044b","\u0421\u0435\u043c\u0435\u0439\u043d\u044b\u0439"],"release_date":"2026-07-15T21:00:00.000000Z","description":"\u0412\u043b\u0430\u0434\u0438\u043a \u0441\u043d\u043e\u0432\u0430 \u043f\u0440\u043e\u0432\u043e\u0434\u0438\u0442 \u043a\u0430\u043d\u0438\u043a\u0443\u043b\u044b \u0443 \u0434\u0435\u0434\u0430 \u042e\u0440\u044b, \u043a\u043e\u0433\u0434\u0430 \u0432 \u0434\u0435\u0440\u0435\u0432\u043d\u0435 \u043d\u0435\u043e\u0436\u0438\u0434\u0430\u043d\u043d\u043e \u043f\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f\u2026 \u0412\u0438\u043a\u0442\u043e\u0440 \u2014 \u0434\u0435\u0434 \u0412\u043b\u0430\u0434\u0438\u043a\u0430 \u043f\u043e \u043f\u0430\u043f\u0435, \u0431\u044b\u0432\u0448\u0438\u0439 \u0434\u0438\u043f\u043b\u043e\u043c\u0430\u0442. \u041e\u043d \u0431\u044b\u0441\u0442\u0440\u043e \u043d\u0430\u0445\u043e\u0434\u0438\u0442 \u043e\u0431\u0449\u0438\u0439 \u044f\u0437\u044b\u043a \u0441 \u043c\u0435\u0441\u0442\u043d\u044b\u043c\u0438, \u0434\u0430\u0440\u0438\u0442 \u0432\u043d\u0443\u043a\u0443 \u0434\u043e\u0440\u043e\u0433\u0438\u0435 \u043f\u043e\u0434\u0430\u0440\u043a\u0438 \u0438 \u0443\u0432\u043b\u0435\u043a\u0430\u0435\u0442 \u0435\u0433\u043e \u0437\u0430\u0445\u0432\u0430\u0442\u044b\u0432\u0430\u044e\u0449\u0438\u043c\u0438 \u0438\u0441\u0442\u043e\u0440\u0438\u044f\u043c\u0438 \u043e \u043f\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u044f\u0445 \u043f\u043e \u043c\u0438\u0440\u0443. \u041c\u0435\u0436\u0434\u0443 \u0434\u0435...","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/59970f7ad331ee239ccf2e1bf5789ceb.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":true,"seances":[{"id":9850382,"time":"19:30","tech":"2D","hall":"\u0417\u0430\u043b 2","minprice":0,"maxprice":0,"session_id":133466377,"pushkin_id":7252256,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"},{"PlaceTypeID":"5","PlaceTypeName":"Love seat","Price":"400"}]}],"count_seances":1},{"id":49670076,"title":"\u0412\u0441\u0435, \u0447\u0442\u043e \u043c\u044b \u043f\u043e\u0442\u0435\u0440\u044f\u043b\u0438","title_original":"Todo lo que nunca fuimos","slug":"todo-lo-que-nunca-fuimos","country":"\u0418\u0441\u043f\u0430\u043d\u0438\u044f","year":"2026","director":"\u0425\u043e\u0440\u0445\u0435 \u0410\u043b\u043e\u043d\u0441\u043e","scenario":"","starring":"\u041c\u0430\u043a\u0441\u0438 \u0418\u0433\u043b\u0435\u0441\u0438\u0430\u0441, \u041c\u0430\u0440\u0433\u0430\u0440\u0438\u0434\u0430 \u041a\u043e\u0440\u0441\u0435\u0439\u0440\u0443, \u0421\u0435\u0431\u0430\u0441\u0442\u044c\u044f\u043d \u0417\u0443\u0440\u0438\u0442\u0430, \u0425\u0430\u0432\u044c\u0435\u0440 \u0422\u043e\u043b\u043e\u0441\u0430, \u041d\u0430\u0442\u0430\u043b\u0438\u044f \u0420\u043e\u0434\u0440\u0438\u0433\u0435\u0441, \u0420\u0438\u0447\u0430\u0440\u0434 \u0425\u043e\u043b\u043c\u0441, \u0410\u0434\u0440\u0438\u0430\u043d\u0430 \u041e\u0440\u043c\u0438\u0433\u043e\u0441, \u041c\u0430\u0440\u0442\u0430 \u0421\u043e\u043b\u0430\u0441, \u041a\u043b\u0430\u0440\u0438\u0441\u0430 \u0410\u043b\u0432\u0438\u0441, \u0410\u0440\u043c\u0430\u043d\u0434\u043e \u0434\u0435\u043b\u044c \u0420\u0438\u043e, \u0423\u0441\u0443\u044d \u0410\u043b\u044c\u0432\u0430\u0440\u0435\u0441, \u0410\u043b\u0430\u043d \u041c\u0438\u0440\u0430\u043d\u0434\u0430","duration":"107 \u043c\u0438\u043d.","age_rating":"18","rating":"0.00","genres":["\u0424\u0438\u043b\u044c\u043c\u044b","\u041c\u0435\u043b\u043e\u0434\u0440\u0430\u043c\u0430"],"release_date":"2026-07-29T21:00:00.000000Z","description":"\u041f\u043e\u0441\u043b\u0435 \u0441\u043c\u0435\u0440\u0442\u0438 \u0440\u043e\u0434\u0438\u0442\u0435\u043b\u0435\u0439 \u041b\u0435\u044f \u043f\u0435\u0440\u0435\u0441\u0442\u0430\u043b\u0430 \u043c\u0435\u0447\u0442\u0430\u0442\u044c, \u0440\u0438\u0441\u043e\u0432\u0430\u0442\u044c \u0438 \u0440\u0430\u0434\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u0436\u0438\u0437\u043d\u0438. \u0415\u0434\u0438\u043d\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u043c \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u043e\u043c, \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u044b\u043c \u0432\u0435\u0440\u043d\u0443\u0442\u044c \u0435\u0439 \u0432\u0435\u0440\u0443 \u0432 \u0441\u0435\u0431\u044f, \u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u0441\u044f \u0410\u043a\u0441\u0435\u043b\u044c \u2014 \u043b\u0443\u0447\u0448\u0438\u0439 \u0434\u0440\u0443\u0433 \u0435\u0435 \u0431\u0440\u0430\u0442\u0430. \u041f\u043e\u0441\u0442\u0435\u043f\u0435\u043d\u043d\u043e \u043c\u0435\u0436\u0434\u0443 \u043d\u0438\u043c\u0438 \u0432\u043e\u0437\u043d\u0438\u043a\u0430\u0435\u0442 \u043e\u0441\u043e\u0431\u0430\u044f \u0441\u0432\u044f\u0437\u044c, \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u0430\u044f \u0438\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0438\u0445 \u0436\u0438\u0437\u043d\u0438 \u0440\u0430\u0437 \u0438 \u043d\u0430\u0432\u0441\u0435\u0433\u0434\u0430....","status":1,"order":5,"images":[{"name":"image","title":"image","fields":[]},{"name":"image","title":"image","fields":[]}],"poster":"\/storage\/e0c278a198ab3b66219a471b4523b334.jpeg","videos":[{"name":"video","title":"video","fields":[]},{"name":"video","title":"video","fields":[]}],"pushkin":false,"seances":[{"id":9632357,"time":"18:10","tech":"2D","hall":"\u0417\u0430\u043b 5","minprice":200,"maxprice":200,"session_id":133259898,"pushkin_id":null,"places":[{"PlaceTypeID":"3","PlaceTypeName":"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442","Price":"200"}]}],"count_seances":1}];
+        filmsAll = filmsAll.map(function(film){
+            var uniqTechs = [];
+            var uniqHalls = [];
+            var uniqMarkers = [];
+
+            if (!film.age_rating) {
+                film.age_rating = 0;
+            }
+
+            if (film.pushkin === true) {
+                uniqMarkers.push('pushkin');
+                if(!markerAll.includes(pushkinMarker)) {
+                    markerAll.push(pushkinMarker);
+                }
+            }
+            film.seances = film.seances.map(function(seance) {
+                // console.log(seance);
+
+                var techList = seance.tech.split(",");
+//                console.log(techList);
+                techList.forEach(function (elem) {
+                    techAll.push(elem.trim());
+                    uniqTechs.push(elem.trim());
+                })
+
+
+
+
+//                 фиксим залы
+                if (seance.hall) {
+                    seance.old_hall = seance.hall
+                    seance.hall_front = seance.hall
+                    seance.status = true;
+                    if (seance.hall.toUpperCase().indexOf("VIP") != -1 || seance.hall.toUpperCase().indexOf("PREMIUM") != -1 || seance.hall.toUpperCase().indexOf("ВИП") != -1) {
+                        seance.hall = "Вип";
+                        seance.old_hall = "Вип";
+                    } else {
+//                        seance.hall = "Все";
+                        seance.old_hall = "Все";
+                    }
+                }
+
+                hallAll.push(seance.old_hall);
+                uniqHalls.push(seance.old_hall);
+
+                return seance;
+            });
+
+            film.genres.map(function(genre) {
+                genreAll.push(genre);
+                return genre;
+            });
+
+            film.uniqTechs = sortAZ(delDub(uniqTechs));
+            film.uniqHalls = sortAZ(delDub(uniqHalls));
+            film.uniqMarkers = sortAZ(delDub(uniqMarkers));
+            return film;
+        });
+
+        techAll = sortAZ(delDub(techAll));
+        markerAll = sortAZ(delDub(markerAll));
+        hallAll = sortAZ(delDub(hallAll));
+        genreAll = sortAZ(delDub(genreAll));
+
+        var app = new Vue({
+            delimiters: ['${', '}'],
+            el: '#apps',
+            data: {
+                stopSeances: true,
+                films: filmsAll,
+                filters: {
+                    markers: markerAll.map(function(val) {
+                        return {title: val.title, attr: val.attr, status: false};
+                    }),
+                    formats: techAll.map(function(val) {
+                        return {title: val, front: val.toUpperCase(), status: false};
+                    }),
+                    halls: hallAll.map(function(val) {
+                        return {title: val, front: val.toUpperCase(), status: false};
+                    }),
+                    genres: genreAll.map(function(val) {
+                        return {title: val, status: false};
+                    }),
+                },
+                activeFilters: {},
+                count_films: 0
+            } ,
+            computed: {
+                filteredFilms() {
+                    var filters = this.activeFilters;
+                    var self = this
+                    return this.films.filter(function(film) {
+                        var result = true;
+
+                        Object.keys(filters).map(function (key, index) {
+
+                            var filter = filters[key];
+                            var isActive = false;
+                            var isFound = false;
+                            filter.map(function (value1, key1) {
+                                isActive = true;
+
+                                //console.log(value1.title, key);
+
+                                if (key == "markers") {
+                                    if(film.uniqMarkers.includes(value1.attr)) {
+                                        isFound = true;
+                                    }
+                                }
+
+                                if (key == "formats") {
+                                    if((","+film.uniqTechs.join(",")+",").indexOf(","+value1.title+",") != -1) {
+                                        isFound = true;
+                                    }
+                                }
+
+                                if (key == "halls") {
+                                    if((","+film.uniqHalls.join(",")+",").indexOf(","+value1.title+",") != -1) {
+                                        isFound = true;
+                                    }
+                                }
+
+                                if (key == "genres") {
+                                    if((","+film.genres.join(",")+",").indexOf(","+value1.title+",") != -1) {
+                                        isFound = true;
+                                    }
+                                }
+
+                            });
+
+                            if (isActive && isFound == false) {
+                                result = false;
+                            }
+
+                        });
+                        if(result){
+                            self.count_films++
+                        }
+//                        console.log(self.count_films);
+                        return result;
+
+                    });
+                }
+            },
+
+            methods: {
+                hallsfilter(halls) {
+                    count = halls.length
+                    if(count == 1 ){
+                        if(halls[0].title == 'VIP' || halls[0].title == 'ВИП'){
+//                            halls[0].status = true;
+//                            halls[0].only_one = true;
+                            return true;
+                        }else{
+                            return false
+                        }
+                    }else{
+                        return true;
+                    }
+                },
+
+                formatsfilter(formats) {
+                    count = formats.length
+                    if(count == 1 ){
+//                        formats[0].only_one = true;
+//                        formats[0].status = true;
+                    }
+                    return true;
+
+                },
+
+                markersfilter(markers) {
+                    count = markers.length
+                    return count > 0;
+
+                },
+                render_show_info() {
+                    Vue.nextTick(function () {
+                        init_modal_info()
+                    });
+                    return true;
+                },
+                fixHalls(seance) {
+                    if (seance.hall) {
+                        seance.old_hall = seance.hall
+                        if (seance.hall.toUpperCase().indexOf("VIP") != -1 || seance.hall.toUpperCase().indexOf("PREMIUM") != -1 || seance.hall.toUpperCase().indexOf("ВИП") != -1) {
+                            seance.hall = "Вип";
+                            seance.old_hall = "Вип";
+                        } else {
+//                        seance.hall = "Все";
+                            seance.old_hall = "Все";
+                        }
+                    }
+                    return seance;
+                },
+                stopSeans() {
+                    this.stopSeances = false
+                },
+                absolute(string) {
+                    if(this.count_films < 5){
+                        return string;
+                    }
+                },
+                onSeans(session_id) {
+                    if(this.stopSeances){
+                        window.ticketManager.session('ef4cf60d-4351-4c64-bfd4-99c4dfd826a8', session_id);
+                    }
+                    this.stopSeances = true
+                },
+
+                kartinki(film_seances, film_pushkin) {
+
+                    //console.log("krt", film_seances);
+                    var tech_html = "";
+
+                    if (film_seances.find(function (el) {
+                        return el.tech.indexOf("2D") != -1;
+                    }) !== undefined) tech_html += '<img src="/assets/img/box/2dp.svg" alt="2D"> ';
+
+                    if (film_seances.find(function (el) {
+                        return el.tech.indexOf("3D") != -1;
+                    }) !== undefined) tech_html += '<img src="/assets/img/box/3dp.svg" alt="3D"> ';
+
+                    if (film_seances.find(function (el) {
+                        return el.tech.indexOf("D-BOX") != -1;
+                    }) !== undefined) tech_html += '<img src="/assets/img/icons/dbox-purple.png" alt="D-Box"> ';
+
+                    if (film_seances.find(function (el) {
+                        return (', '+el.tech+', ').indexOf(", Dolby,") != -1;
+                    }) !== undefined) tech_html += '<img src="/assets/img/box/dolby_p.svg" alt="Dolby"> ';
+
+                    if (film_seances.find(function (el) {
+                        return el.tech.indexOf("Dolby Atmos") != -1;
+                    }) !== undefined) tech_html += '<img src="/assets/img/box/atmos_p.svg" alt="Dolby Atmos"> ';
+
+                    if (film_pushkin) tech_html += '<img src="/assets/img/pushkin_color.svg" alt="Доступно по Пушкинской карте"> ';
+
+                    return tech_html;
+                },
+
+                price_modal_tech(seance) {
+                    if (seance.tech.indexOf("Dolby Atmos") != -1) {
+                        return "Dolby Atmos";
+                    }
+
+                    if (seance.tech.indexOf("D-BOX") != -1) {
+                        return "D-BOX";
+                    }
+
+                    return "";
+                },
+
+                hasSeance(seance) {
+                    if (
+                        Array.isArray(this.activeFilters.formats) &&
+                        this.activeFilters.formats.length > 0
+                    ) {
+                        var res = false;
+
+                        try {
+                            this.activeFilters.formats.forEach(filter => {
+                                if (seance.tech.toLowerCase().indexOf(filter.front.toLowerCase()) != -1) {
+                                    res = true;
+                                }
+                            });
+                        } catch (e) {
+                            return true;
+                        }
+
+                        return res;
+                    }
+
+                    if (
+                        Array.isArray(this.activeFilters.halls) &&
+                        this.activeFilters.halls.length > 0
+                    ) {
+                        var res = false;
+
+                        try {
+                            this.activeFilters.halls.forEach(hall => {
+                                if (seance.old_hall.toLowerCase().indexOf(hall.title.toLowerCase()) != -1) {
+                                    res = true;
+                                }
+                            });
+                        } catch (e) {
+                            return true;
+                        }
+
+                        return res;
+                    }
+
+                    return true;
+                }
+            },
+            watch: {
+
+                filters: {
+                    handler: function (val) {
+
+                        var filters = val;
+                        var activeFilters = {};
+
+                        Object.keys(filters).map(function (key, index) {
+                            var filter = filters[key];
+
+                            filter.map(function (value1, key1) {
+                                if (value1.status == true) {
+                                    if (activeFilters[key] == undefined) {
+                                        activeFilters[key] = [];
+                                    }
+                                    activeFilters[key].push(value1);
+                                }
+                            });
+                        });
+                        this.activeFilters = activeFilters;
+                    },
+                    deep: true
+                },
+                'filters.formats': {
+                    handler: function (val) {
+                        this.count_films = 0;
+                    },deep: true
+                },
+                'filters.markers': {
+                    handler: function (val) {
+                        this.count_films = 0;
+                    },deep: true
+                },
+                'filters.genres': {
+                    handler: function (val) {
+                        this.count_films = 0;
+                    },deep: true
+                },
+                'filters.halls': {
+                    handler: function (val) {
+                        this.count_films = 0;
+                        var arr = [];
+                        val.map(function (format) {
+                            if(format.status){
+                                arr.push(format.title)
+                            }
+                        });
+                        this.films.map(function (film) {
+                            film.seances.map(function (seance) {
+                                seance.status = false;
+                                if(arr.length > 0){
+                                    arr.map(function (format) {
+                                        if (seance.old_hall == format){
+                                            seance.status = true
+                                        }
+                                    });
+                                }else{
+                                    seance.status = true
+                                }
+                            })
+                        })
+                    },
+                    deep: true
+                }
+            }
+        })
+    </script>
+    <script>
+        $('.days').slick({
+            infinite: true,
+            variableWidth: true,
+        });
+
+        $('.soon_films').slick({
+            infinite: true,
+            variableWidth: true,
+        });
+    </script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- Стили для городов -->
+<style>
+    .goroda .cinema {
+        font-size: 20px;
+        font-weight: 600;
+        cursor: pointer;
+        color: hsla(0, 0%, 100%, .5);
+    }
+
+    .goroda .search input {
+        color: rgba(255, 255, 255, 0.5);
+    }
+
+    .goroda .search input::placeholder {
+        color: rgba(255, 255, 255, 0.5);
+    }
+
+
+    .odnokino-red .seans a {
+        cursor: pointer;
+    }
+
+    #gorodaModal .modal-content {
+        border-radius: 24px;
+        overflow: hidden;
+    }
+
+    .sp-btn {
+        padding: 6px 0px;
+        color: #fff;
+        transition: all .2s ease-in-out;
+        border-radius: 12px;
+        background-color: transparent;
+        border: none;
+        font-size: 12px;
+    }
+
+
+    .goroda {
+        min-height: auto !important;
+    }
+
+    #f_rasp a {
+        position: relative;
+    }
+
+    .modal_info {
+        position: absolute;
+        top: -143px;
+        left: -49px;
+        z-index: 2;
+    }
+
+    .modal_info .minprice_info {
+        margin-bottom: 0;
+    }
+
+    .schedule_item_content a:after {
+        content: "";
+    }
+
+    .main_menu {
+        position: fixed;
+        width: 100%;
+        background: white;
+        z-index: 10;
+    }
+
+    .index_header .main_menu {
+        /*position: fixed;*/
+        /*width: 100%;*/
+        background: transparent;
+        /*z-index: 10;*/
+    }
+
+    .margin_header {
+        margin-top: 157px;
+    }
+</style>
+<style>
+    .modal_info .hall_info {
+        font-family: Inter, sans-serif;
+        font-size: 18px;
+        font-weight: bold;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 1.01;
+        letter-spacing: 0.1px;
+        color: #ffffff;
+    }
+
+    .modal_info .modal_mini_info {
+        font-family: Inter, sans-serif;
+        font-size: 17px !important;
+        font-weight: bold !important;
+        font-stretch: normal !important;
+        font-style: normal !important;
+        line-height: normal !important;
+        letter-spacing: normal !important;
+        color: #ffffff !important;
+        background-color: transparent !important;
+        text-align: left !important;
+        padding: 0 !important;
+        cursor: default !important;
+        width: auto !important;
+
+    }
+
+    .modal_info img {
+        display: block;
+        position: absolute;
+        height: 100%;
+        /*top: 53px;*/
+        left: 0;
+    }
+
+    .modalrelative {
+        position: relative;
+        overflow: hidden;
+        border: none;
+        padding: 28px 24px 24px 24px;
+        background: #983141;
+        object-fit: contain;
+        border-radius: 12px;
+        box-shadow: 0 2px 35px 0 rgba(0, 0, 0, 0.08);
+        width: 154px;
+    }
+
+    .index_header .vslides {
+        z-index: 1;
+    }
+
+    .modal_info button {
+        border-radius: 8px;
+        border: solid 2px #ffffff;
+        background: transparent;
+        padding: 19px 43px;
+        font-family: Inter, sans-serif;
+        font-size: 13px;
+        font-weight: 500;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 0.54;
+        letter-spacing: 0.2px;
+        /*text-align: center;*/
+        color: #722d8b;
+        color: white;
+        /*margin-right: 14px ;*/
+        z-index: 3;
+    }
+
+    .modal_info button:hover {
+        color: #722d8b;
+        background-color: #ffffff;
+    }
+
+    .flex_buttons {
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .modal_info::after {
+        content: '';
+        position: absolute;
+        right: 38%;
+        bottom: -28px;
+        border: 13px solid transparent;
+        border-top: 15px solid #973241
+    }
+
+    .index_header .film-seanses a span {
+        cursor: pointer;
+    }
+
+    .sessions .modal_info {
+        top: -146px;
+        left: -55px;
+    }
+
+    .sessions .sessions__modal_info {
+        top: inherit;
+        left: -55px;
+        bottom: 48px;
+    }
+
+    .sessions .sessions__modal_info .modalrelative .hall_info {
+        margin-bottom: 0px;
+    }
+
+    .sessions .sessions__modal_info .modalrelative p {
+        color: #FFFFFF;
+        margin-bottom: 0px;
+    }
+
+    .sessions .sessions__modal_info .modalrelative .sessions__modal_info__tech__empty {
+        height: 20px;
+    }
+
+    .index_header .main_menu.inner {
+        background-color: #fff;
+    }
+
+    .main_menu {
+        transition: background-color 0.1s linear 0s;
+    }
+
+    /*.index_header .main_menu.inner .desktop_logo a {*/
+    /*background-image: url(/assets/img/icons/desktop_logo_inner.svg);*/
+    /*}*/
+    .index_header .main_menu.inner .full_menu button {
+        color: #222;
+    }
+
+    .index_header .main_menu.inner .full_menu button:after {
+        background-image: url(/assets/img/icons/menu_inner.svg);
+    }
+
+    .index_header .main_menu.inner .search_form input {
+        background-color: #f6f2f8;
+        color: #333;
+    }
+
+    .index_header .main_menu.inner .city_select .dropdown > button, .index_header .main_menu.inner .city_select li > button, .index_header .main_menu.inner .top_cabinet .dropdown > button {
+        color: #333;
+        border-color: rgba(51, 51, 51, .5);
+    }
+
+    .index_header .main_menu.inner .search_form button {
+        background-image: url(/assets/img/icons/search_inner.svg);
+    }
+
+    #modal_cinemas .slick-slider {
+        /*width: 100%!important;*/
+        min-width: 100%;
+    }
+
+    #modal_cinemas .slick-slider .slick-track {
+        /*width: 100%!important;*/
+        min-width: 100%;
+    }
+
+    #modal_cinemas {
+        /*display: none;*/
+        background-color: #983141;
+        /*transition: height 0.5s linear 0.1s;*/
+        -moz-transition: height .5s;
+        -ms-transition: height .5s;
+        -o-transition: height .5s;
+        -webkit-transition: height .5s;
+        transition: height .5s;
+        overflow: hidden;
+        padding: 32px 0;
+        width: 100%;
+    }
+
+    #modal_cinemas h2 {
+        font-family: Inter, sans-serif;
+        font-size: 20px;
+        font-weight: bold;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 1.52;
+        letter-spacing: 0.12px;
+        color: #ffffff;
+        margin-bottom: 4px;
+    }
+
+    #modal_cinemas a {
+        font-family: HelveticaNeue;
+        font-size: 13px;
+        font-weight: normal;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: normal;
+        letter-spacing: 0.06px;
+        color: rgba(255, 255, 255, 0.5);
+        display: inline-block;
+        margin-bottom: 4px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+        padding-bottom: 2px;
+    }
+
+    #modal_cinemas a:hover {
+        text-decoration: none;
+        border-bottom: 1px solid #ffffff;
+
+        color: #ffffff;
+    }
+
+    .menu_fixed {
+        position: fixed;
+        width: 100%;
+        background: transparent;
+        z-index: 10;
+        top: 0;
+        left: 0px;
+    }
+
+    .index_header .main_menu {
+        position: relative;
+    }
+
+    .zeroheight {
+
+        height: 0 !important;
+        -moz-transition: height .5s;
+        -ms-transition: height .5s;
+        -o-transition: height .5s;
+        -webkit-transition: height .5s;
+        transition: height .5s;
+        overflow: hidden;
+        transform: scaleY(0);
+        transform-origin: top;
+        transition: transform 0.3s ease-in-out;
+
+    }
+
+    #modal_cinemas .close {
+        position: absolute;
+        right: 1px;
+        top: -27px;
+    }
+
+    #modal_cinemas .container {
+        position: relative;
+    }
+
+    .modal_info .modal_mini_info.little {
+        font-family: Inter, sans-serif;
+        font-weight: 500;
+        font-size: 13px !important;
+        font-stretch: normal !important;
+        font-style: normal !important;
+        line-height: 1.08 !important;
+        letter-spacing: 0.8px !important;
+        color: rgba(255, 255, 255, 0.75) !important;
+        margin: 3px 0;
+    }
+
+    .modal_info .modal_mini_info.little > span {
+        font-size: 14px;
+        font-weight: 500;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 1.43;
+        letter-spacing: normal;
+        color: #ffffff;
+        background: transparent;
+        padding: 0;
+        text-align: left;
+    }
+
+    .modal_info .modal_mini_info.little {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .soon_cinema_item img, .schedule_item_img img {
+        width: 196px;
+    }
+</style>
+<style>
+    #sidebarclroll {
+        height: 100%;
+        width: 100%;
+    }
+
+    .nofixed {
+        position: relative !important;
+        transform: translate3d(0px, 0px, 0px) !important;
+        top: auto !important;
+        left: auto !important;
+        width: auto !important;
+    }
+
+    .wrap_nofixed {
+        justify-content: space-between !important;
+    }
+
+
+    .info_city {
+        padding: 28px 22px 22px 22px;
+        border-radius: 12px;
+        background-color: rgba(114, 45, 139, 0.05);
+    }
+
+    .info_city h2 {
+        font-size: 27px;
+        font-weight: 600;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 0.52;
+        letter-spacing: 0.12px;
+        color: #222222;
+        margin-bottom: 27px;
+    }
+
+    .info_city h3 {
+        font-family: HelveticaNeue;
+        font-size: 18px;
+        font-weight: bold;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 0.56;
+        letter-spacing: 0.15px;
+        color: #333333;
+        margin-bottom: 12px;
+    }
+
+    .info_city p {
+        font-family: HelveticaNeue;
+        font-size: 14px;
+        font-weight: normal;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 1.29;
+        letter-spacing: 0.1px;
+        color: #333333;
+        margin-bottom: 4px;
+    }
+
+    .info_city span {
+        font-family: HelveticaNeue;
+        font-size: 14px;
+        font-weight: normal;
+        font-stretch: normal;
+        font-style: normal;
+        line-height: 0.64;
+        letter-spacing: 0.1px;
+        color: #333333;
+        margin-bottom: 10px;
+        display: inline-block;
+    }
+
+    .info_city span a {
+        color: #722d8b;
+
+    }
+
+    #sidebar {
+        justify-content: space-between;
+        flex-direction: column;
+        display: flex;
+        position: relative;
+    }
+
+    #sidebar.is-affixed {
+        justify-content: flex-end;
+        flex-direction: column;
+        display: flex;
+        position: relative;
+    }
+
+    .sticky-content.fixed {
+        position: fixed;
+        top: 821px;
+        left: 1240px;
+        width: 270px;
+    }
+
+    html {
+        overflow: auto;
+    }
+
+    body {
+        overflow: hidden;
+    }
+
+    @media  screen and (max-width: 991px) {
+        #sticky {
+            display: none;
+        }
+
+        #nosticky {
+            margin-top: 88px;
+            display: block;
+        }
+    }
+
+    .sticky-content.hidden {
+        opacity: 0;
+    }
+
+    /*@media (min-width: 1200px){*/
+    /*.index_header {*/
+    /*padding-left: calc((100% - 1024px + 30px)/2);*/
+    /*}*/
+
+    /*}*/
+    @media (min-width: 576px) {
+        .index_header {
+            padding-left: calc((100% - 540px + 30px) / 2);
+        }
+    }
+
+    @media (min-width: 768px) {
+        .index_header {
+            padding-left: calc((100% - 720px + 30px) / 2);
+        }
+    }
+
+    @media (min-width: 992px) {
+        .index_header {
+            padding-left: calc((100% - 960px + 30px) / 2);
+        }
+    }
+
+    @media (min-width: 1200px) {
+        .index_header {
+            padding-left: calc((100% - 1140px + 30px) / 2);
+        }
+    }
+
+    @media (min-width: 1600px) {
+        .container {
+            max-width: 1530px;
+        }
+
+        .index_header {
+            padding-left: calc((100% - 1530px + 30px) / 2);
+        }
+
+        .desktop_list_links {
+            justify-content: space-around;
+        }
+
+        .desktop_list_links li:not(:last-child) {
+            margin-right: 0;
+        }
+
+        .desktop_logo {
+            margin-right: 63px;
+        }
+
+        .top_cabinet a {
+            width: 236px;
+            min-width: 236px;
+        }
+
+        .top_cabinet {
+            margin-left: 32px;
+        }
+    }
+
+    @media (min-width: 1920px) {
+        .container {
+            max-width: 1600px;
+        }
+
+        .index_header {
+            padding-left: calc((100% - 1600px + 30px) / 2);
+        }
+    }
+
+
+    .schedule_filters {
+        z-index: 2;
+        background-color: white;
+    }
+
+    .soon_in_cinema .slick-track {
+        z-index: 1;
+    }
+
+    .schedule_item_content p {
+        font-size: 14px;
+    }
+
+    #f_technology img.collapsed {
+        opacity: 0.5;
+    }
+
+    .flexim {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+
+    .odnokino-red .techs {
+        margin-top: 24px;
+    }
+
+    @media (min-width: 1600px) {
+        .odnokino-red .descr {
+            font-size: 16px;
+        }
+    }
+
+    @media (max-width: 1599px) {
+        .odnokino-red .info .name {
+            font-size: 14px;
+        }
+
+        .odnokino-red .info .value {
+            font-size: 14px;
+        }
+
+        .odnokino-red .descr {
+            font-size: 14px;
+        }
+    }
+
+    @media (max-width: 1200px) {
+        .odnokino-red .info .name {
+            font-size: 13px;
+        }
+
+        .odnokino-red .info .value {
+            font-size: 13px;
+        }
+
+        .odnokino-red .descr {
+            font-size: 13px;
+        }
+
+        .odnokino-red .title {
+            font-size: 48px;
+        }
+
+        .odnokino-red .title2 {
+            font-size: 26px;
+        }
+
+        .odnokino-red .techs {
+            margin-top: 16px;
+        }
+    }
+
+    .odnokino-red .descr {
+        max-width: 654px;
+    }
+
+    .kresla {
+        height: 42px;
+    }
+
+
+    @media (max-width: 768px) {
+        .hide_mobile {
+            display: none;
+        }
+
+        .hide_desctop {
+            display: block;
+        }
+    }
+
+    .top_cabinet a {
+        margin-top: 0;
+    }
+
+    @media (min-width: 769px) {
+        .hide_mobile {
+            display: block;
+        }
+
+        .hide_desctop {
+            display: none;
+        }
+
+        .collapse.show {
+            height: auto;
+            display: block;
+            visibility: visible;
+            opacity: 1;
+        }
+
+        /*.hide_desctop{*/
+        /*    display: none!important;*/
+        /*}*/
+        .micromodal {
+            display: none !important;
+        }
+    }
+
+    .stock_items .stock_item {
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+    }
+
+    .news_slider .sl__slide a {
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+    }
+
+    .index_header .select_day {
+        font-size: 30px;
+    }
+
+    .time_list .sessions .modal_info {
+        top: -143px;
+        left: calc(50% - 77px);
+    }
+
+
+    .select_day h1 {
+        font-weight: normal;
+        font-size: 40px;
+        font-weight: normal;
+        text-transform: uppercase;
+    }
+
+    .select_day h1 span {
+        font-size: 13px;
+        display: block;
+        padding-left: 4px;
+    }
+
+    .select_day p {
+        margin-top: 200px;
+    }
+
+    .select_day p a {
+        text-transform: uppercase;
+        text-decoration: none;
+        display: inline-block;
+        color: #fff;
+        padding: 5px 10px;
+        margin: 0 5px;
+        background-color: #b83729;
+    }
+
+    .select_day p a:hover {
+        background-color: #ab3326;
+    }
+
+    .select_day .select-hidden {
+        display: none;
+        visibility: hidden;
+        padding-right: 10px;
+    }
+
+    .select_day .select {
+        cursor: pointer;
+        display: inline-block;
+        position: relative;
+        /*font-size: 16px;*/
+        /*color: #fff;*/
+        width: 220px;
+        height: 40px;
+    }
+
+    /*.select_day .select-styled {*/
+    /*position: absolute;*/
+    /*top: 0;*/
+    /*right: 0;*/
+    /*bottom: 0;*/
+    /*left: 0;*/
+    /*background-color: #c0392b;*/
+    /*padding: 8px 15px;*/
+    /*}*/
+    .select_day .select-styled:after {
+        content: "";
+        width: 16px;
+        height: 9px;
+        position: absolute;
+        top: 16px;
+        margin-left: 5px;
+        background: url(/img/strelka.png) no-repeat;
+        background-position: 0px 0px;
+        background-size: 100%;
+    }
+
+    .select_day .select-styled.active:after {
+        content: "";
+        width: 16px;
+        height: 9px;
+        position: absolute;
+        top: 16px;
+        margin-left: 5px;
+        background: url(/img/strelka.png) no-repeat;
+        background-position: 0px 0px;
+        background-size: 100%;
+        transform: rotate(180deg);
+        transition: transform 0.1s;
+        z-index: 6;
+    }
+
+    /*.select_day .select-styled:hover {*/
+    /*background-color: #b83729;*/
+    /*}*/
+    /*.select_day .select-styled:active, .select_day .select-styled.active {*/
+    /*background-color: #ab3326;*/
+    /*}*/
+    /*.select_day .select-styled:active:after, .select_day .select-styled.active:after {*/
+    /*top: 9px;*/
+    /*border-color: transparent transparent #fff transparent;*/
+    /*}*/
+    .select_day .select-options {
+        display: none;
+        position: absolute;
+        top: -9px;
+        right: 20px;
+        z-index: 7;
+        margin: 0;
+        padding: 5px 22px 10px 9px;
+        list-style: none;
+        background-color: #0d1e30;
+        text-align: right;
+        border-radius: 8px;
+
+    }
+
+    .select_day .select-options li {
+        margin: 0;
+        padding: 7px 0;
+        line-height: 30px;
+        text-indent: 15px;
+        /*border-top: 1px solid #962d22;*/
+        background: transparent;
+        font-weight: 700;
+        background: radial-gradient(circle at 100% 100%, #c81632, #941bc0);
+        background-clip: border-box;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .select_day .select-options li:hover {
+        -webkit-text-fill-color: white;
+    }
+
+    .select_day .select-options li[rel=hide] {
+        display: none;
+    }
+
+    .select_day .select-styled {
+        background: transparent;
+        font-weight: 700;
+        background: radial-gradient(circle at 100% 100%, #c81632, #941bc0);
+        background-clip: border-box;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .developer_logo {
+        background-image: none;
+        color: hsla(0, 0%, 100%, .5);
+        width: auto;
+        height: auto;
+    }
+
+    .developer_logo:hover {
+        color: hsla(0, 0%, 100%, .5);
+        text-decoration: underline;
+    }
+
+    .footer_desc a {
+        background-image: url(/assets/img/icons/footer-logo.svg);
+
+        width: 126px;
+
+
+    }
+
+    .soon_cinema_item_genre {
+        padding: 0 15px 0 0;
+    }
+
+    .ico_fb, .ico_vk, .ico_inst {
+        display: flex;
+        align-items: center;
+        align-content: center;
+        justify-content: center;
+        height: 45px;
+    }
+
+    .sl-1 .slick-track > a {
+        height: 42px;
+
+    }
+
+    .fix_height_sl_2 .slick-track .slick-slide {
+        height: 345px;
+
+    }
+
+    .search_form_wrap .search_form {
+        margin-bottom: 0;
+    }
+
+    @media (max-width: 768px) {
+        .ico_fb, .ico_vk, .ico_inst {
+            height: 32px;
+        }
+
+        #f_title {
+            text-decoration: underline;
+        }
+
+        .odnokino-red .title {
+            font-size: 42px;
+        }
+
+        #trailerModalFilm .modal-dialog {
+            margin: 0;
+            width: 100% !important;
+        }
+
+        #trailerModalFilm .modal-dialog iframe {
+            width: 100%;
+        }
+
+        .news_slider .sl__slide a {
+            min-height: 196px;
+            width: 343px;
+        }
+
+        .news_slider .sl-1:after {
+            background-image: linear-gradient(93deg, hsla(0, 0%, 100%, 0) 70%, #fff 100%);
+        }
+
+        .news_slider {
+            padding: 8px 0 16px 0;
+        }
+
+        .micromodal .close {
+            top: 6px;
+        }
+
+        #f_slug2 h1 {
+            height: 68px;
+        }
+
+        .pika {
+            width: 100%;
+        }
+
+        #micromodal .modal-dialog {
+            padding: 6px 16px;
+        }
+
+        .event_item a {
+            padding: 19px 25% 19px 25%;
+            width: 100%;
+            max-width: 100%;
+        }
+
+        .top_banner a {
+            font-size: 14px;
+        }
+
+        .event_item .second_info {
+            top: 24px;
+        }
+
+        .events .event_item .event_info {
+            margin: 0;
+        }
+
+        .event_item {
+            padding: 45px 24px 24px 24px
+        }
+
+        .content_slider .sl-1 img {
+            width: calc(100%);
+        }
+
+        .margin_header {
+            margin-top: 46px;
+        }
+
+        .news {
+            padding-top: 16px;
+            padding-bottom: 0px;
+        }
+
+        .schedule_date_filter {
+            margin-bottom: 16px;
+        }
+
+        .schedule {
+            padding: 0;
+        }
+
+        .schedule_filters .inline_filter {
+            position: relative;
+            margin-bottom: 16px;
+        }
+
+        .schedule_filters .inline_filter h4:after {
+            content: '';
+            position: absolute;
+            right: -15px;
+            top: 12px;
+            background: url(/img/strelka.png) no-repeat;
+            background-position: 0px 0px;
+            background-size: 100%;
+            width: 10px;
+            height: 10px;
+        }
+
+        .schedule_filters .inline_filter ul {
+            position: absolute;
+            width: auto;
+            background: white;
+            top: 33px;
+            border: 1px solid #0000007d;
+            padding: 8px 12px 0px 12px;
+            border-radius: 9px;
+        }
+
+        .schedule_filters .inline_filter li a:hover {
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .fg-row24 {
+            display: none;
+        }
+
+        #f_genres {
+            display: none;
+        }
+
+        .film-col {
+            width: calc(100% - 15px);
+        }
+
+        #f_slug2 h1 {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            align-items: flex-start;
+            margin-bottom: 24px;
+        }
+
+        .index_header .vslides {
+            margin-left: -15px;
+        }
+
+        .modal_info {
+            display: none !important;
+        }
+
+        .mlabel small {
+            padding-top: 0px;
+        }
+
+        .index_header .film-slide {
+            margin-right: 16px;
+        }
+
+        .index_header_content .micromodal {
+            z-index: 1;
+            width: calc(100vW - 30px);
+            background-color: transparent;
+            height: 116px;
+            overflow: hidden;
+            margin-bottom: 17px;
+            opacity: 1 !important;
+        }
+
+        .index_header_content .micromodal h2 {
+            font-size: 25px;
+            font-weight: 600;
+            font-stretch: normal;
+            font-style: normal;
+            line-height: 0.56;
+            letter-spacing: 0.11px;
+            color: #ffffff;
+            margin-top: 8px;
+            margin-bottom: 16px;
+        }
+
+        .micromodal .film-seanses {
+            display: block;
+            margin-bottom: 0px;
+        }
+
+        .micromodal .film-seanses a {
+            background-color: rgba(255, 255, 255, 0.5);
+            border-radius: 4px;
+            padding: 1px;
+            margin-bottom: 12px;
+        }
+
+        .micromodal .film-seanses a span {
+            border-radius: 4px;
+            padding: 8px 0 8px 0;
+            font-size: 14px;
+            font-weight: 500;
+            font-stretch: normal;
+            font-style: normal;
+            line-height: 0.71;
+            letter-spacing: 0.32px;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.9);
+            min-width: 54px;
+        }
+
+        .mobile_more_info {
+            z-index: 1;
+            position: absolute;
+            left: 15px;
+            bottom: 15px;
+        }
+
+        .mobile_more_info a {
+            font-family: HelveticaNeue;
+            font-size: 14px;
+            font-weight: bold;
+            font-stretch: normal;
+            font-style: normal;
+            line-height: 1.14;
+            letter-spacing: 0.12px;
+            color: #ffffff;
+            text-decoration: underline;
+        }
+
+        .city_select {
+            margin-left: 8px;
+        }
+
+        .all_content {
+            padding-top: 32px;
+        }
+
+        .all_content .content_inner img {
+            margin-bottom: 32px;
+        }
+
+        .custom_row .row {
+            margin-left: -5px;
+            margin-right: -5px;
+        }
+
+        .schedule_item_content .sessions li {
+            margin-bottom: 4px;
+        }
+
+        .schedule_item_content .sessions li span {
+            padding: 8px 8px;
+            width: 54px;
+        }
+
+        .time_list h4 {
+            padding: 0;
+            text-align: center;
+            font-size: 25px;
+        }
+
+        .time_list {
+            margin-top: 16px;
+        }
+
+        .time_list.morning h4:before {
+            left: 20px !important;
+            top: -6px !important;
+        }
+
+        .time_list.daytime h4:before {
+            left: 25px !important;
+            top: -6px !important;
+        }
+
+        .time_list.evening h4:before {
+            left: 25px !important;
+            top: -2px !important;
+        }
+
+        .stock_item {
+            border-radius: 5px;
+        }
+
+        .links_block a.footer_phone span {
+            font-size: 13px;
+        }
+
+        .links_block a.footer_phone {
+            font-family: HelveticaNeue;
+            font-size: 18px;
+            font-weight: normal;
+            font-stretch: normal;
+            font-style: normal;
+            line-height: 0.78;
+            letter-spacing: 0.26px;
+            color: #ffffff;
+        }
+
+        .footer_alternative_desc {
+            font-family: HelveticaNeue;
+            font-size: 9px;
+            font-weight: normal;
+            font-stretch: normal;
+            font-style: normal;
+            line-height: 1.56;
+            letter-spacing: normal;
+            color: #ffffff;
+        }
+
+        .footer_desc a {
+            min-width: 33%;
+            margin-right: 32px;
+            background-image: url(/assets/img/icons/footer-logo.svg);
+            background-size: 100%;
+            background-repeat: no-repeat;
+            background-position: center;
+
+        }
+
+        .footer_desc {
+            align-items: center;
+        }
+
+        .contact_list > li:first-child {
+            margin-right: 21px;
+        }
+
+        .modal_menu .mobile_search form button {
+            right: 8px;
+            background-size: auto;
+            background-repeat: no-repeat;
+        }
+
+        .soon_in_cinema .sl-2 .slick-slide {
+            width: 253px !important;
+        }
+
+        .stock_item {
+
+            border: 1px solid rgba(0, 0, 0, .05) !important;
+        }
+
+        .film-slides .active .gb3:before {
+            background-image: radial-gradient(circle at 100% 100%, #c81632, #941bc0);
+        }
+
+        /*.schedule_filters {*/
+        /*    position: relative;*/
+        /*}*/
+        /*.schedule_filters .inline_filter {*/
+        /*    position: initial;*/
+        /*}*/
+        /*.schedule_filters .inline_filter ul {*/
+        /*    top: 100px;*/
+        /*}*/
+    }
+
+    .all_content .soon_cinema_item img, .schedule_item_img img {
+        width: auto;
+    }
+
+    .index_header .film-seanses a.disabled_seance {
+        background-color: #777777 !important;
+        cursor: auto !important;
+
+    }
+
+    .index_header .film-seanses a.disabled_seance span {
+        color: #777777;
+        cursor: auto !important;
+
+    }
+
+    .index_header .film-seanses a.disabled_seance.active, .index_header .film-seanses a.disabled_seance:hover {
+        background-image: none !important;
+        cursor: auto !important;
+    }
+
+    .cinemas_list_item_links a:hover {
+        text-decoration: none;
+    }
+
+    .film-slide.slick-center .gb3 {
+        opacity: 1;
+    }
+
+    #smartbanner .sb-close {
+        top: 30px;
+    }
+
+    .cursor_ptr label {
+        cursor: pointer;
+    }
+
+    .content_inner img {
+        width: auto;
+        height: auto;
+    }
+
+    .schedule_item {
+        width: 100%;
+    }
+
+    .fancybox_images {
+    }
+
+    .fancybox_images img {
+        width: 23%;
+        display: inline-block;
+        margin-bottom: 8px;
+    }
+
+    fancybox_images_cont {
+        display: flex;
+    }
+
+    .button32ss {
+        display: inline-block;
+        height: 38px;
+        width: 38px;
+        /* line-height: normal; */
+        /* vertical-align: middle; */
+        /* text-align: center; */
+        /* letter-spacing: -.2em; */
+        text-decoration: none;
+        /* color: #999; */
+        /* border-radius: 100%; */
+        background: url(../img/play.png);
+        background-size: 100%;
+        background-repeat: no-repeat;
+    }
+
+    .trai_film_oprn {
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+    }
+
+    .mobile_logo {
+        width: 100px;
+    }
+
+    .mobile_logo a {
+        width: 97px;
+        background-image: url(/assets/img/icons/desktop_logo_inner.svg);
+    }
+
+    @media (min-width: 769px) {
+        .hide_mobile {
+            display: block !important;;
+        }
+
+        .hide_desctop {
+            display: none !important;;
+        }
+
+        #genriesFilterList {
+            display: block !important;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .hide_mobile {
+            display: none !important;;
+        }
+
+        .hide_desctop {
+            display: block !important;
+        }
+    }
+
+    .city_select ul li:last-child {
+        padding-top: 3px;
+        display: block;
+    }
+
+    .da_col {
+        /*height: 48px;*/
+        /*overflow: hidden;*/
+    }
+
+    .film-icons {
+        justify-content: flex-start;
+    }
+
+    .index_header .film-icons {
+        width: 100%;
+    }
+
+    @media (max-width: 991px) {
+
+        .mobile_padding {
+            padding: 0;
+        }
+    }
+
+    .errorsform {
+        margin-top: 8px !important;
+        margin-bottom: 0px !important;;
+    }
+</style>
+
+<script type="text/javascript"
+        src="/assets/js/jquery.ba-throttle-debounce.min.js"></script>
+<script type="text/javascript"
+        src="/assets/js/js.cookie.min.js"></script>
+<script>
+    // /HelveticaNeueCyrMedium/HelveticaNeueCyrMedium.woff2
+    $(document).ready(function () {
+
+        init_modal_info();
+
+        function init_modal_info() {
+
+            var fun = $.debounce(100, function (isShow, sself) {
+                if (isShow) {
+                    $(".modal_info").stop().fadeOut("fast");
+                    var child_modal = $(sself).find(".modal_info");
+                    child_modal.stop().fadeIn("fast");
+                } else {
+
+                    $(".modal_info").stop().fadeOut("fast");
+                }
+            });
+
+            $('.sessions>a').mouseenter(function () {
+                fun(true, this)
+            });
+            $('.sessions>a').mouseleave(function () {
+                fun(false, this)
+            });
+            $('.modalrelative').click(function (e) {
+                e.stopPropagation();
+            });
+        }
+
+
+    });
+    $(function () {
+        menu_top = $('#f_bg').offset().top;        // запоминаем положение меню
+//        menu_top = $('.main_menu').offset().top;        // запоминаем положение меню
+        $(window).scroll(function () {
+            if ($(window).scrollTop() > menu_top + 60) {  // если прокрутка дошла до меню ....
+                $('.main_menu').addClass("inner")
+            } else {                                 // прокрутка страницы обратно вверх достигла место "перехода" меню
+                if ($('.main_menu').css('position') == 'fixed') {  // если меню зафиксировано
+                    $('.main_menu').removeClass("inner")
+                }
+            }
+        });
+    });
+
+    $('.sl-menu').slick({
+        arrows: false,
+        slidesToShow: 4,
+//         variableWidth: true,
+        focusOnSelect: true,
+        centerMode: false,
+        responsive: [
+            {
+                breakpoint: 500,
+                settings: {
+                    slidesToShow: 1,
+                }
+            },
+            {
+                breakpoint: 900,
+                settings: {
+                    slidesToShow: 2,
+                },
+            }
+        ]
+    });
+    $(function () {
+        function changeCinema() {
+            if (!open) {
+                $('.main_menu').addClass("inner")
+                modal_cinemas.fadeIn("slow");
+                $('.sl-menu').slick('setPosition');
+                open = true
+            } else {
+                modal_cinemas.fadeOut("slow");
+                open = false
+
+            }
+        }
+
+        var button_cinema = $('#select2Cinema');        // запоминаем положение меню
+        var button_cinema = $('#select3Cinema');        // запоминаем положение меню
+        var button_cinema2 = $('#selectCinema');        // запоминаем положение меню
+        var modal_cinemas = $('#modal_cinemas');        // запоминаем положение меню
+        var open = false
+//        menu_top = $('.main_menu').offset().top;        // запоминаем положение меню
+        button_cinema.click(function () {
+            changeCinema();
+        });
+        button_cinema2.click(function () {
+            changeCinema();
+        });
+//        button_cinema3.click(function() {
+//            changeCinema();
+//        });
+//        $('.clickflag').click(function(e) {
+//            e.preventDefault()
+//            Cookies.set'cinema_id', e.target.dataset.cinemaid);
+//            location.reload();
+//        });
+
+    });
+
+    $(".vmformclass").submit(function (e) {
+        e.preventDefault();
+        form = $(e.target)
+        $.ajax({
+                headers: {
+                    'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+                },
+                type: "POST",
+                url: "/cinemas/goodzone/vacancies",
+                processData: false,  // tell jQuery not to process the data
+                contentType: false,  // tell jQuery not to set contentType
+                enctype: 'multipart/form-data',
+                data: new FormData(form[0]),
+                success: function () {
+                    $('#notifyModal').modal('show')
+//                    $('#resumes').trigger("reset");
+                    setTimeout(function () {
+                        $('#notifyModal').modal('hide')
+                    }, 3500);
+
+                }
+            }
+        );
+    });
+    $("#notifyModalClose").on('click', function (e) {
+        $('#notifyModal').modal('hide')
+    });
+
+    var StickyElement = function (node) {
+        var doc = $(document),
+            fixed = false,
+            fixed2 = false,
+            anchor = node.find('.sticky-anchor'),
+            content = node.find('.sticky-content');
+        var onScroll = function (e) {
+            var docTop = doc.scrollTop(),
+                anchorTop = anchor.offset().top;
+
+//            console.log('scroll', docTop, anchorTop);
+            if (docTop > (anchorTop - 821)) {
+                if (!fixed) {
+                    anchor.height(content.outerHeight());
+                    content.addClass('fixed');
+                    fixed = true;
+                }
+            } else {
+                if (fixed) {
+                    anchor.height(0);
+                    content.removeClass('fixed');
+                    fixed = false;
+                }
+            }
+//            console.log('scroll', content.offset().top, anchorTop-661);
+
+            if ((content.offset().top) > (anchorTop - 661 + 811)) {
+                if (!fixed2) {
+                    content.addClass('hidden');
+                    fixed2 = true;
+                }
+            } else {
+                if (fixed2) {
+                    content.removeClass('hidden');
+                    fixed2 = false;
+                }
+            }
+        };
+
+        $(window).on('scroll', onScroll);
+    };
+
+    /*
+Reference: http://jsfiddle.net/BB3JK/47/
+*/
+
+
+
+
+    //    var demo = new StickyElement($('#sticky'));
+    $('.clickflag').click(function (e) {
+        // e.preventDefault();
+        // console.log(Cookies.set"cinema_id"));
+        // return false
+        if ($(this).data('reload')) {
+            e.preventDefault();
+            id = $(this).data('cinemaid');
+            Cookies.set("cinema_id", id, {path: '/', expires: 7});
+            // Cookies.set"cinema_id",id,{path:'/'});
+            window.location.reload();
+        }
+
+    });
+    if (typeof noclickcollapse == 'function') {
+        noclickcollapse()
+    }
+    //    $(document).click(function () {
+    //        $('#genriesFilterList').hide();
+    //    });
+    $('.genriesFilterButton').click(function (e) {
+        // console.log(123);
+        $('#genriesFilterList').toggle();
+    });
+    jQuery(function ($) {
+        $(document).mouseup(function (e) { // событие клика по веб-документу
+            var div = $("#genriesFilterList"); // тут указываем ID элемента
+            if (!div.is(e.target) // если клик был не по нашему блоку
+                && div.has(e.target).length === 0) { // и не по его дочерним элементам
+                div.hide(); // скрываем его
+            }
+        });
+    });
+    var inputs = $('input');
+    inputs.each(function (key, index) {
+        var inputValue = $(index).val();
+        if (inputValue == "") {
+            $(index).removeClass('filled');
+            $(index).parents('.input_group').add('focused');
+        } else {
+            $(index).parents('.input_group').addClass('focused');
+            $(index).addClass('filled');
+        }
+    });
+</script>
+<script src="/jquery.smartbanner.js?v=1"></script>
+<script>
+    $(function () {
+        $.smartbanner({
+            daysHidden: 15, daysReminder: 90,
+            title: 'Люксор',
+            author: 'Афиша',
+            price: 'Бесплатно',
+            icon: 'https://luxorfilm.ru/assets/img/ico-arrow.png',
+            button: 'Установить',
+            url: 'https://apps.rustore.ru/app/ru.rambler.kassa_askino',
+            force: 'android'
+        });
+    });
+    $('.my-datepicker').datepicker({
+        autoClose: true,
+        maxDate: new Date(),
+        timeFormat: "dd.mm.yyyy"
+    })
+</script>
+<script src="/assets/js/jquery.fancybox.js"></script>
+
+<!-- Yandex.Metrika counter -->
+
+<script type="text/javascript" >
+
+    (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+
+        m[i].l=1*new Date();k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+
+    (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+
+
+
+    ym(68660986, "init", {
+
+        clickmap:true,
+
+        trackLinks:true,
+
+        accurateTrackBounce:true,
+
+        webvisor:true,
+
+        ecommerce:"dataLayer"
+
+    });
+
+</script>
+
+<noscript><div><img src="https://mc.yandex.ru/watch/68660986" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+
+<!-- /Yandex.Metrika counter -->
+
+</body>
+</html>
