@@ -285,6 +285,33 @@ const (
 // протухает при его перевыпуске: сохранённый однажды, он однажды же начнёт
 // отвечать 404 «App not found», и выглядеть это будет как исчезнувшая площадка.
 // В реестре живёт номер виджета — он у площадки постоянный и виден на её сайте.
+// kinoplanApp — то, что касса отдаёт про приложение виджета.
+type kinoplanApp struct {
+	Token   string `json:"token"`
+	Cinemas []struct {
+		ID     int `json:"id"`
+		CityID int `json:"city_id"`
+	} `json:"cinemas"`
+}
+
+// kinoplanCityOf — город ЗАПРОШЕННОЙ площадки. Ноль означает, что её в
+// приложении нет вовсе.
+//
+// Отдельная функция, потому что здесь был тихий дефект: город брался у ПЕРВОЙ
+// площадки списка. Приложение кассы бывает общим на несколько городов — у
+// виджета ЗигЗага их три, Липецк (120), Люберцы (2465) и Москва (6552), и
+// Липецк стоит первым. Запрос уходил за афишей Липецка, московских сеансов в
+// ней не было, и канал отдавал пустую афишу при HTTP 200: выглядел живым, но
+// молчащим, а площадка тихо выпадала из покрытия.
+func kinoplanCityOf(app kinoplanApp, id int) int {
+	for _, c := range app.Cinemas {
+		if c.ID == id {
+			return c.CityID
+		}
+	}
+	return 0
+}
+
 func fetchKinoplanDay(c *Client, widget string, day time.Time) ChannelProbe {
 	head := map[string]string{
 		"x-platform":           kinoplanPlatform,
@@ -298,13 +325,7 @@ func fetchKinoplanDay(c *Client, widget string, day time.Time) ChannelProbe {
 		return out
 	}
 
-	var app struct {
-		Token   string `json:"token"`
-		Cinemas []struct {
-			ID     int `json:"id"`
-			CityID int `json:"city_id"`
-		} `json:"cinemas"`
-	}
+	var app kinoplanApp
 	if err := json.Unmarshal([]byte(appBody), &app); err != nil {
 		out.ParseErr = fmt.Errorf("разбор приложения Kinoplan: %w", err)
 		return out
@@ -313,9 +334,15 @@ func fetchKinoplanDay(c *Client, widget string, day time.Time) ChannelProbe {
 		out.ParseErr = fmt.Errorf("приложение Kinoplan %q не отдало токен", widget)
 		return out
 	}
-	city := 0
-	if len(app.Cinemas) > 0 {
-		city = app.Cinemas[0].CityID
+	id, _ := strconv.Atoi(widget)
+	city := kinoplanCityOf(app, id)
+	if city == 0 {
+		// Площадки нет в собственном приложении — это промах по идентификатору,
+		// а не пустой день. Молча взять чужой город значило бы выдать чужую
+		// афишу за свою.
+		out.ParseErr = fmt.Errorf(
+			"приложение Kinoplan не содержит площадку %s (в нём %d других)", widget, len(app.Cinemas))
+		return out
 	}
 
 	head["x-application-token"] = app.Token
@@ -329,7 +356,6 @@ func fetchKinoplanDay(c *Client, widget string, day time.Time) ChannelProbe {
 
 	// Отбор по площадке обязателен: приложение бывает общим на несколько
 	// кинотеатров, и без него каждый получил бы расписание всех сразу.
-	id, _ := strconv.Atoi(widget)
 	pb, perr := parseKinoplanFor(body, id)
 	out.Playbill, out.ParseErr = pb, perr
 	return out
