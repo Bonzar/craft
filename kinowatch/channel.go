@@ -784,7 +784,7 @@ func findYandexEvents(c *Client, title string) ([]YandexEvent, int, error) {
 // На входе идентификатор события, а не адрес страницы: адрес ведёт на фильм
 // любого года, и опознание фильма — отдельная работа, которая к моменту
 // запроса расписания уже сделана.
-func fetchYandexScheduleByID(c *Client, id string, from time.Time, days int) ([]YandexSession, int, error) {
+func fetchYandexScheduleByID(c *Client, id string, from time.Time, days int) ([]AggregatorSession, int, error) {
 	if days < 1 {
 		days = 1
 	}
