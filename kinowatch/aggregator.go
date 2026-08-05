@@ -271,7 +271,7 @@ func rowPoint(o CinemaObservation) (float64, float64, bool) {
 }
 
 // collectAggregatorVenues сворачивает сеансы в список площадок.
-func collectAggregatorVenues(sessions []YandexSession) []AggregatorVenue {
+func collectAggregatorVenues(sessions []AggregatorSession) []AggregatorVenue {
 	idx := map[string]int{}
 	var out []AggregatorVenue
 	for _, s := range sessions {
@@ -388,7 +388,7 @@ func resolveYandexFilm(c *Client, p FilmProfile) (YandexEvent, string, error) {
 //
 // Вторым значением отдаёт сами сеансы: они нужны прогону, чтобы разложить их
 // по строкам реестра уже после обхода собственных касс.
-func runYandexLayer(c *Client, film FilmProfile, obs []CinemaObservation, from time.Time, days int) (*AggregatorLayer, []YandexSession, error) {
+func runYandexLayer(c *Client, film FilmProfile, obs []CinemaObservation, from time.Time, days int) (*AggregatorLayer, []AggregatorSession, error) {
 	layer := &AggregatorLayer{Source: "yandex-afisha", Buckets: map[string]int{}}
 
 	ev, by, err := resolveYandexFilm(c, film)
@@ -428,7 +428,7 @@ func runYandexLayer(c *Client, film FilmProfile, obs []CinemaObservation, from t
 }
 
 // aggregatorShowtimesByRow раскладывает сеансы агрегатора по ключам реестра.
-func aggregatorShowtimesByRow(layer *AggregatorLayer, sessions []YandexSession) map[string][]AggregatorShowtime {
+func aggregatorShowtimesByRow(layer *AggregatorLayer, sessions []AggregatorSession) map[string][]AggregatorShowtime {
 	rowOf := map[string]string{}
 	for _, a := range layer.Attached {
 		rowOf[a.Venue.ID] = a.RegistryKey
