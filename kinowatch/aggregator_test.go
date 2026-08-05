@@ -7,6 +7,7 @@ package main
 // промахи, и проверять их надо на них же.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -388,5 +389,85 @@ func TestOutOfScopeByAddressKeepsMoscow(t *testing.T) {
 		if !outOfScopeByAddress(a) {
 			t.Errorf("чужой адрес принят за московский: %q", a)
 		}
+	}
+}
+
+// Одна площадка приходит в расписании десятками сеансов, а страница у неё одна.
+// Кэш обязан спрашивать источник по разу — иначе слой сам загонит себя под
+// частотную защиту, которая у kinoafisha и отвечает теми самыми 403.
+func TestKinoafishaGeoAsksSourceOnce(t *testing.T) {
+	var calls int
+	g := &kinoafishaGeo{fetch: func(id string) (float64, float64, error) {
+		calls++
+		return 55.75, 37.61, nil
+	}}
+
+	for i := 0; i < 3; i++ {
+		lat, lon, err := g.point("8327263")
+		if err != nil || lat != 55.75 || lon != 37.61 {
+			t.Fatalf("заход %d вернул %v, %v, %v", i, lat, lon, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("запросов к источнику %d, ожидался 1", calls)
+	}
+}
+
+// Промах запоминается наравне с удачей: повторный заход за тем же отказом стоит
+// столько же, сколько первый, а платим мы им частотным лимитом.
+func TestKinoafishaGeoRemembersFailure(t *testing.T) {
+	var calls int
+	g := &kinoafishaGeo{fetch: func(id string) (float64, float64, error) {
+		calls++
+		return 0, 0, fmt.Errorf("403")
+	}}
+
+	for i := 0; i < 3; i++ {
+		if _, _, err := g.point("8327263"); err == nil {
+			t.Fatalf("заход %d принял отказ за координаты", i)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("запросов к источнику %d, ожидался 1", calls)
+	}
+}
+
+// Площадка без идентификатора страницы — не повод идти в сеть за пустым
+// адресом: у источника он ведёт на список кинотеатров, а не на карточку.
+func TestKinoafishaGeoRefusesEmptyID(t *testing.T) {
+	g := &kinoafishaGeo{fetch: func(id string) (float64, float64, error) {
+		t.Fatal("пустой идентификатор ушёл в сеть")
+		return 0, 0, nil
+	}}
+	if _, _, err := g.point(""); err == nil {
+		t.Fatal("пустой идентификатор принят")
+	}
+}
+
+// Живой случай слоя kinoafisha: две московские площадки «Паука».
+//
+// Замер 05.08.2026 с реальными координатами со страниц кинотеатров и строками
+// реестра как они есть. Обе площадки приходят с приклеенной к вывеске сетью —
+// «Вики Синема ЗигЗаг», «Мягкий кинотеатр Отрада», — а координат в расписании
+// нет вовсе, они дозагружаются отдельно. Без них Отрада уходила в «реестр не
+// опознал» вместо «за городом», то есть выглядела дырой покрытия.
+func TestAttachKinoafishaVenuesOfSpiderMan(t *testing.T) {
+	obs := []CinemaObservation{
+		row("7458", "ЗигЗаг", "", ""), // строка реестра без координат
+		row("7912", "Каро Октябрь", "55.7449", "37.5866"),
+	}
+	venues := []AggregatorVenue{
+		{ID: "kinoafisha:8327263", Slug: "8327263", Title: "Вики Синема ЗигЗаг",
+			Address: "ул. Лобненская, 4А", Lat: 55.889471, Lon: 37.5379549, Sessions: 70},
+		{ID: "kinoafisha:8327074", Slug: "8327074", Title: "Мягкий кинотеатр Отрада",
+			Address: "г. Москва, Пятницкое шоссе, 7-й километр", Lat: 55.8758005, Lon: 37.331821, Sessions: 47},
+	}
+
+	res := attachVenues(venues, obs)
+	if len(res.Attached) != 1 || res.Attached[0].RegistryKey != "7458" {
+		t.Fatalf("ЗигЗаг не сел на свою строку: %+v", res.Attached)
+	}
+	if len(res.Unattached) != 1 || res.Unattached[0].Bucket != bucketOutsideByGeo {
+		t.Fatalf("Отрада попала не в ту корзину: %+v", res.Unattached)
 	}
 }

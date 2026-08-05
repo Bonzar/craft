@@ -1983,3 +1983,44 @@ func TestParseKinoafishaRejectsForeignMarkup(t *testing.T) {
 		t.Fatal("чужая разметка принята за пустое расписание")
 	}
 }
+
+// Координаты площадки лежат не в расписании, а на странице кинотеатра.
+//
+// Фикстура — живой кусок страницы ЗигЗага (замер 05.08.2026): та же карточка
+// JSON-LD и следом сеансы, в которых адрес площадки повторяется без точки.
+func TestParseKinoafishaVenueGeoReadsPoint(t *testing.T) {
+	lat, lon, err := parseKinoafishaVenueGeo(readFixture(t, "kinoafisha-cinema.html"), "8327263")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lat != 55.889471 || lon != 37.5379549 {
+		t.Errorf("точка прочитана как %v, %v — ожидалась 55.889471, 37.5379549", lat, lon)
+	}
+}
+
+// Адрес площадки повторяется на странице по разу на каждый сеанс, и почти все
+// эти вхождения точки не несут. Взять первое попавшееся нельзя — либо потеряем
+// координаты, либо припишем чужие.
+func TestParseKinoafishaVenueGeoSkipsCardsWithoutPoint(t *testing.T) {
+	// Разметка собрана руками: в живой странице карточка самой площадки идёт
+	// первой, а нам нужен обратный порядок.
+	body := `{"url":"https:\/\/www.kinoafisha.info\/russia\/msk\/cinema\/111\/","name":"сеанс без точки"},` +
+		`{"url":"https:\/\/www.kinoafisha.info\/russia\/msk\/cinema\/222\/","geo":{"latitude":"55.0","longitude":"37.0"}},` +
+		`{"url":"https:\/\/www.kinoafisha.info\/russia\/msk\/cinema\/111\/","geo":{"latitude":"55.75","longitude":"37.61"}}`
+
+	lat, lon, err := parseKinoafishaVenueGeo(body, "111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lat != 55.75 || lon != 37.61 {
+		t.Errorf("взята точка %v, %v — похоже, чужой карточки", lat, lon)
+	}
+}
+
+// Страница без точки — ошибка, а не нулевые координаты: ноль увёл бы площадку
+// в Гвинейский залив и там же похоронил бы её привязку.
+func TestParseKinoafishaVenueGeoMissingIsError(t *testing.T) {
+	if _, _, err := parseKinoafishaVenueGeo("<html>редизайн</html>", "8327263"); err == nil {
+		t.Fatal("страница без координат принята за площадку в нулевой точке")
+	}
+}
