@@ -361,6 +361,7 @@ type aggregatorRun struct {
 // тому же фильму отдаёт ноль, и общим счётчиком этого не увидеть.
 var aggregatorSources = []func(*Client, FilmProfile, []CinemaObservation, time.Time, int) (*AggregatorLayer, []AggregatorSession, error){
 	runYandexLayer,
+	runKinoafishaLayer,
 }
 
 // runAggregatorLayers опрашивает все слои второго уровня.

@@ -327,10 +327,26 @@ type AggregatorLayer struct {
 
 	Agreement AgreementStats `json:"agreement"`
 
-	// Err непустая означает, что слой не отработал. Пустой слой без ошибки и
-	// сломанный слой — разные вещи: первое значит «фильма нет у агрегатора»,
-	// второе — «мы до агрегатора не дошли».
+	// Err непустая означает, что слой не отработал ВОВСЕ. Пустой слой без
+	// ошибки и сломанный слой — разные вещи: первое значит «фильма нет у
+	// агрегатора», второе — «мы до агрегатора не дошли».
 	Err string `json:"error,omitempty"`
+
+	// Flaws — изъяны прогона, при которых слой всё же принёс сеансы: не
+	// доехавшая дата, не полученные координаты площадки.
+	//
+	// Отдельно от Err, потому что на Err стоит решение «сеансы слоя не
+	// раскладывать». Свалив сюда же одну непришедшую дату, мы выбросили бы из
+	// отчёта все остальные — то есть скрыли бы найденное ради ненайденного.
+	Flaws []string `json:"flaws,omitempty"`
+}
+
+// flaw записывает изъян, не роняя слой.
+//
+// Копится списком, а не одной строкой: затирание превращало отчёт об изъянах в
+// одну случайную беду из нескольких.
+func (l *AggregatorLayer) flaw(format string, a ...any) {
+	l.Flaws = append(l.Flaws, fmt.Sprintf(format, a...))
 }
 
 // AgreementStats — расхождение слоёв по строкам реестра.
@@ -492,4 +508,192 @@ func countAgreement(ownFound map[string]bool, byRow map[string][]AggregatorShowt
 		}
 	}
 	return st
+}
+
+// ——— Слой kinoafisha ———
+
+// runKinoafishaLayer опрашивает kinoafisha по фильму на окне прогона.
+//
+// Отличие от Яндекса в цене и в форме: там одно окно приходит одним ответом,
+// тут первичная страница плюс запрос на каждую недостающую дату.
+func runKinoafishaLayer(c *Client, film FilmProfile, obs []CinemaObservation, from time.Time, days int) (*AggregatorLayer, []AggregatorSession, error) {
+	layer := &AggregatorLayer{Source: "kinoafisha", Buckets: map[string]int{}}
+
+	id, err := resolveKinoafishaFilm(c, film)
+	layer.FndBy = "search"
+	if err != nil {
+		layer.Err = err.Error()
+		if fatal, ok := err.(aggregatorFatal); ok {
+			return layer, nil, fatal
+		}
+		return layer, nil, nil
+	}
+	layer.Film = YandexEvent{ID: id, Slug: id, Title: film.Title}
+
+	page, err := fetchKinoafishaMovie(c, id)
+	if err != nil {
+		layer.Err = err.Error()
+		return layer, nil, nil
+	}
+
+	sessions, perr := parseKinoafisha(page, "")
+	if perr != nil {
+		layer.Err = perr.Error()
+		return layer, nil, nil
+	}
+
+	// Первичная страница наливает целиком только первую дату — остальные
+	// догружаются. Даты вне окна прогона не трогаем: слой обязан идти по тому
+	// же окну, что первый, иначе счётчик расхождений считает разницу окон.
+	seen := map[string]bool{}
+	for _, s := range sessions {
+		if len(s.StartsAt) >= 10 {
+			seen[s.StartsAt[:10]] = true
+		}
+	}
+	for date, skip := range kinoafishaPending(page) {
+		if !withinWindow(date, from, days) {
+			continue
+		}
+		more, err := fetchKinoafishaDate(c, id, date, skip)
+		if err != nil {
+			// Отказ ОДНОЙ даты слой не рушит, но и молчать о нём нельзя:
+			// иначе неполнота выглядит как «на эту дату сеансов нет».
+			layer.flaw("дата %s не догружена: %v", date, err)
+			continue
+		}
+		rest, err := parseKinoafisha(more, date)
+		if err != nil {
+			layer.flaw("дата %s не разобрана: %v", date, err)
+			continue
+		}
+		sessions = append(sessions, rest...)
+	}
+
+	// Сеансы вне окна прогона отбрасываются уже после сбора: страница отдаёт
+	// свой горизонт целиком, а сравнивать слои можно только на общем окне.
+	sessions = sessionsWithinWindow(sessions, from, days)
+	layer.Sessions = len(sessions)
+
+	venues := collectAggregatorVenues(sessions)
+	layer.Venues = len(venues)
+
+	geo := newKinoafishaGeo(c)
+	for i := range venues {
+		lat, lon, err := geo.point(venues[i].Slug)
+		if err != nil {
+			// Площадка без точки не выбрасывается — её ещё может опознать имя.
+			// Но промолчать нельзя: непривязанная площадка выглядела бы как
+			// «реестр её не знает», хотя причина в несостоявшемся запросе.
+			layer.flaw("координаты %q не получены: %v", venues[i].Title, err)
+			continue
+		}
+		venues[i].Lat, venues[i].Lon = lat, lon
+	}
+
+	res := attachVenues(venues, obs)
+	layer.Attached, layer.Unattached = res.Attached, res.Unattached
+	for _, u := range res.Unattached {
+		layer.Buckets[u.Bucket]++
+	}
+	return layer, sessions, nil
+}
+
+// kinoafishaGeo — координаты площадок, взятые один раз на прогон.
+//
+// Точка лежит на странице кинотеатра, а не в расписании, поэтому за каждой
+// нужен свой запрос. Кэш держит и промах тоже: повторный заход за тем же
+// отказом стоит ровно столько же, сколько первый, а источник считает частоту.
+type kinoafishaGeo struct {
+	// fetch отделён от клиента, чтобы кэш проверялся без сети.
+	fetch func(id string) (float64, float64, error)
+	seen  map[string]kinoafishaPoint
+}
+
+type kinoafishaPoint struct {
+	lat, lon float64
+	err      error
+}
+
+func newKinoafishaGeo(c *Client) *kinoafishaGeo {
+	return &kinoafishaGeo{fetch: func(id string) (float64, float64, error) {
+		return fetchKinoafishaVenueGeo(c, id)
+	}}
+}
+
+func (g *kinoafishaGeo) point(id string) (float64, float64, error) {
+	if id == "" {
+		return 0, 0, fmt.Errorf("kinoafisha: у площадки нет идентификатора страницы")
+	}
+	if p, ok := g.seen[id]; ok {
+		return p.lat, p.lon, p.err
+	}
+
+	lat, lon, err := g.fetch(id)
+	if g.seen == nil {
+		g.seen = map[string]kinoafishaPoint{}
+	}
+	g.seen[id] = kinoafishaPoint{lat, lon, err}
+	return lat, lon, err
+}
+
+// resolveKinoafishaFilm выбирает фильм из выдачи поиска.
+//
+// Правило то же, что у Яндекса, но кандидатов сужает уже сам поиск: он
+// каталожный, и точное совпадение названия отсекается в клиенте. Остаток —
+// одноимённые фильмы разных лет, и выбирать между ними за Влада нельзя.
+func resolveKinoafishaFilm(c *Client, p FilmProfile) (string, error) {
+	found, err := findKinoafishaMovies(c, p.Title)
+	if err != nil {
+		return "", err
+	}
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("kinoafisha: по названию %q нет ни одного фильма", p.Title)
+	case 1:
+		return found[0].ID, nil
+	}
+
+	// Год есть прямо в карточке выдачи, поэтому развилка решается им, а не
+	// вторым запросом. Живой случай: «Майкл» — три фильма, 2026, 2023 и 1996.
+	if p.Year > 0 {
+		var byYear []KinoafishaMovie
+		for _, m := range found {
+			if m.Year == p.Year {
+				byYear = append(byYear, m)
+			}
+		}
+		if len(byYear) == 1 {
+			return byYear[0].ID, nil
+		}
+	}
+
+	names := make([]string, 0, len(found))
+	for _, m := range found {
+		names = append(names, fmt.Sprintf("%s (%d, id %s)", m.Title, m.Year, m.ID))
+	}
+	return "", aggregatorFatal{fmt.Errorf(
+		"kinoafisha: по названию %q идёт несколько фильмов, укажи год в профиле: %s",
+		p.Title, strings.Join(names, "; "))}
+}
+
+// withinWindow — попадает ли дата в окно прогона.
+func withinWindow(date string, from time.Time, days int) bool {
+	if days < 1 {
+		days = 1
+	}
+	lo := from.Format("2006-01-02")
+	hi := from.AddDate(0, 0, days-1).Format("2006-01-02")
+	return date >= lo && date <= hi
+}
+
+// sessionsWithinWindow оставляет сеансы внутри окна прогона.
+func sessionsWithinWindow(in []AggregatorSession, from time.Time, days int) []AggregatorSession {
+	out := in[:0]
+	for _, s := range in {
+		if len(s.StartsAt) >= 10 && withinWindow(s.StartsAt[:10], from, days) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
