@@ -1,0 +1,4 @@
+{"type":"user","message":{"content":"заведи тикет по декомпозиции"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__tracker_mcp__CreateIssue","input":{"queue":"CRM","summary":"[components] Общее подтверждение действия","description":"Файлы:\n- [FlowConfirmation.tsx](packages/components/src/Flow/FlowConfirmation/FlowConfirmation.tsx) — тип опций в юнион","type":"task"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"CRM-99999"}]},"toolUseResult":{"key":"CRM-99999"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Тикет CRM-99999 создан."}]}}
