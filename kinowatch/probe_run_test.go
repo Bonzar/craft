@@ -165,3 +165,84 @@ func TestBuildSalesSummaryEmpty(t *testing.T) {
 		t.Errorf("пустая сводка выглядит как %+v", got)
 	}
 }
+
+// Записи из кода достраивают реестр, поданный прогону на вход.
+//
+// Живой случай, стоивший трёх неверных объяснений подряд: строка ЗигЗага (7458)
+// в отчёте прогона стояла как «канала нет: uncovered», хотя канал в коде есть и
+// живьём отдаёт 70 сеансов. Применение записей жило только в --enrich, а прогон
+// брал реестр со stdin как есть.
+func TestApplyStandaloneRecordsFillsChannel(t *testing.T) {
+	obs := []CinemaObservation{
+		{Key: "7458", Name: "ЗигЗаг", Fields: map[string]string{fStatusClass: classUncovered}},
+	}
+
+	got := applyStandaloneRecords(obs)
+
+	if got.Channels == 0 {
+		t.Fatalf("ни одна запись канала не применилась: %+v", got)
+	}
+	if obs[0].Fields[fSourceKind] != kindKinoplan {
+		t.Errorf("канал строки = %q, ожидался %q", obs[0].Fields[fSourceKind], kindKinoplan)
+	}
+	// Класс «непокрыта» снимается: строка перестала быть непокрытой ровно
+	// потому, что канал у неё теперь есть.
+	if obs[0].Fields[fStatusClass] == classUncovered {
+		t.Error("строка осталась непокрытой при проставленном канале")
+	}
+}
+
+// Строку-клон применение каналов пропускает молча — она не считается ни
+// применённой, ни сиротой. Иначе один физический сеанс писался бы дважды.
+func TestApplyStandaloneRecordsSkipsClone(t *testing.T) {
+	obs := []CinemaObservation{
+		{Key: "7458", Name: "ЗигЗаг", Fields: map[string]string{fStatusClass: classCloneOf}},
+	}
+
+	got := applyStandaloneRecords(obs)
+
+	if obs[0].Fields[fSourceKind] != "" {
+		t.Errorf("клон получил канал: %q", obs[0].Fields[fSourceKind])
+	}
+	// Сироты тут неизбежны — в реестре одна строка, а записей десятки. Важно
+	// другое: САМ клон сиротой не считается, он именно пропущен.
+	for _, o := range got.Orphans {
+		if strings.Contains(o, "7458") {
+			t.Errorf("пропущенный клон записан в сироты: %s", o)
+		}
+	}
+}
+
+// Запись без строки реестра обязана быть видна: это либо опечатка в
+// идентификаторе, либо площадка, выпавшая из листинга ЕАИС.
+func TestApplyStandaloneRecordsReportsOrphans(t *testing.T) {
+	got := applyStandaloneRecords([]CinemaObservation{
+		{Key: "нет-такой-строки", Name: "Пустышка", Fields: map[string]string{}},
+	})
+
+	if len(got.Orphans) == 0 {
+		t.Fatal("записи без строк реестра пропали молча")
+	}
+	if !strings.Contains(got.Orphans[0], "без строки реестра") {
+		t.Errorf("причина непонятна: %q", got.Orphans[0])
+	}
+}
+
+// Повторное применение к уже обогащённому реестру ничего не меняет — числа
+// показывают работу, а не переработку.
+func TestApplyStandaloneRecordsIsIdempotent(t *testing.T) {
+	obs := []CinemaObservation{
+		{Key: "7458", Name: "ЗигЗаг", Fields: map[string]string{fStatusClass: classUncovered}},
+	}
+
+	first := applyStandaloneRecords(obs)
+	kind, params := obs[0].Fields[fSourceKind], obs[0].Fields[fSourceParams]
+	second := applyStandaloneRecords(obs)
+
+	if obs[0].Fields[fSourceKind] != kind || obs[0].Fields[fSourceParams] != params {
+		t.Error("повторное применение переписало канал")
+	}
+	if first.Channels != second.Channels {
+		t.Errorf("числа применённого разошлись: %d против %d", first.Channels, second.Channels)
+	}
+}

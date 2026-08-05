@@ -60,6 +60,15 @@ type ProbeReport struct {
 	// Diff — что изменилось против прошлого прогона. Заполняется, только когда
 	// снимок прошлого прогона дан на вход.
 	Diff *RunDiff `json:"diff,omitempty"`
+
+	// Records — что достроено к поданному реестру записями из кода.
+	//
+	// Прогон берёт реестр со stdin, и до этого поштучные записи применялись
+	// только при его пересборке. Канал, найденный руками и дописанный в код,
+	// доезжал до опроса лишь после дорогого --enrich с геокодером: на снимке
+	// сегодняшнего прогона так молчали 34 записи каналов из 48 и все 16
+	// записей о закрытии.
+	Records RecordsApplied `json:"records"`
 }
 
 // SalesSummary — сводка по продажам искомого фильма за прогон.
@@ -215,6 +224,9 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 	if err != nil {
 		fail("%v", err)
 	}
+	// Реестр достраивается записями из кода ДО опроса: иначе площадка с
+	// найденным вручную каналом выглядит непокрытой и в опрос не идёт.
+	records := applyStandaloneRecords(obs)
 
 	now := time.Now()
 	report := ProbeReport{
@@ -222,6 +234,7 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 		Film:      film,
 		Days:      days,
 		Statuses:  map[string]int{},
+		Records:   records,
 	}
 
 	// Второй слой опрашивается ПЕРВЫМ и одним запросом: он отвечает за фильм

@@ -732,3 +732,51 @@ func fixedChannelNames() string {
 	}
 	return strings.Join(names, ", ")
 }
+
+// RecordsApplied — что достроено к реестру поштучными записями из кода.
+//
+// Числа нужны обоим режимам. На уже обогащённом реестре применение ничего не
+// меняет, и это должно быть видно нулями, а не выглядеть как повторная работа.
+type RecordsApplied struct {
+	Channels   int `json:"channels"`
+	Closed     int `json:"closed"`
+	Duplicates int `json:"duplicates"`
+
+	// Orphans — записи, которым не нашлось строки реестра. Пустой список —
+	// норма; непустой означает опечатку в идентификаторе или площадку,
+	// выпавшую из листинга ЕАИС, и молчать о нём нельзя.
+	Orphans []string `json:"orphans,omitempty"`
+}
+
+// applyStandaloneRecords достраивает реестр всеми тремя списками записей.
+//
+// Порядок значим и повторяется в обоих режимах. Каналы, затем закрытия:
+// закрытие снимает канал, если тот проставился по имени сети. Дубли
+// последними — вторая регистрация той же площадки канал теряет, иначе один
+// физический сеанс писался бы дважды под разными ключами, и дедуп его не
+// схлопнул бы: ключи честно разные.
+//
+// Строку с классом «клон» или «без онлайн-продажи» применение каналов
+// пропускает молча (skipBinding): она не считается ни применённой, ни сиротой.
+func applyStandaloneRecords(obs []CinemaObservation) RecordsApplied {
+	var out RecordsApplied
+
+	fixed, orphans := applyFixedChannels(obs)
+	out.Channels = fixed
+	for _, o := range orphans {
+		out.Orphans = append(out.Orphans, "запись канала без строки реестра: "+o)
+	}
+
+	closed, closedOrphans := applyClosedRecords(obs)
+	out.Closed = closed
+	for _, o := range closedOrphans {
+		out.Orphans = append(out.Orphans, "запись о закрытии без строки реестра: "+o)
+	}
+
+	dups, dupOrphans := applyDuplicateRecords(obs)
+	out.Duplicates = dups
+	for _, o := range dupOrphans {
+		out.Orphans = append(out.Orphans, "запись дубля не применилась: "+o)
+	}
+	return out
+}
