@@ -51,6 +51,41 @@ type ProbeReport struct {
 	// доп-покрытия (площадки без своего канала), и как контроль качества —
 	// расхождение слоёв видно числами в Agreement.
 	Aggregator *AggregatorLayer `json:"aggregator,omitempty"`
+
+	// Sales отвечает на вопрос, ради которого затеян дальний горизонт: где уже
+	// открыта продажа. Без него открытие предпродажи тонет в общем списке
+	// площадок.
+	Sales SalesSummary `json:"sales"`
+
+	// Diff — что изменилось против прошлого прогона. Заполняется, только когда
+	// снимок прошлого прогона дан на вход.
+	Diff *RunDiff `json:"diff,omitempty"`
+}
+
+// SalesSummary — сводка по продажам искомого фильма за прогон.
+type SalesSummary struct {
+	// EarliestDate — самый ранний сеанс по городу. Пустая строка означает, что
+	// фильм не найден нигде.
+	EarliestDate string `json:"earliestDate,omitempty"`
+	// Venues — сколько площадок уже продают, Showtimes — сколько всего сеансов.
+	Venues    int `json:"venues"`
+	Showtimes int `json:"showtimes"`
+}
+
+// buildSalesSummary собирает сводку продаж по опрошенным площадкам.
+func buildSalesSummary(venues []VenueProbe) SalesSummary {
+	var out SalesSummary
+	for _, vp := range venues {
+		if len(vp.Found) == 0 {
+			continue
+		}
+		out.Venues++
+		out.Showtimes += len(vp.Found)
+		if out.EarliestDate == "" || (vp.SaleFrom != "" && vp.SaleFrom < out.EarliestDate) {
+			out.EarliestDate = vp.SaleFrom
+		}
+	}
+	return out
 }
 
 // VenueProbe — итог по одной площадке.
@@ -80,6 +115,18 @@ type VenueProbe struct {
 	// Found, а не сливаются с ними: как только поля перемешаются, сравнивать
 	// слои станет не с чем и второй слой перестанет быть контролем качества.
 	FromAggregator []AggregatorShowtime `json:"fromAggregator,omitempty"`
+
+	// Две пары дат разного происхождения, и путать их нельзя.
+	//
+	// SourceFrom/SourceTo — фактическое окно ИСТОЧНИКА по всей его афише: до
+	// какой даты он вообще публикует. Им же ограничен вывод «фильма нет».
+	SourceFrom string `json:"sourceFrom,omitempty"`
+	SourceTo   string `json:"sourceTo,omitempty"`
+
+	// SaleFrom/SaleTo — окно продаж ИСКОМОГО фильма на этой площадке. Отвечает
+	// на вопрос «с какого числа продают», ради которого затеян дальний горизонт.
+	SaleFrom string `json:"saleFrom,omitempty"`
+	SaleTo   string `json:"saleTo,omitempty"`
 }
 
 // FoundShowtime — найденный сеанс вместе с объяснением, чем он опознан.
@@ -91,7 +138,10 @@ type FoundShowtime struct {
 	OnSale     bool   `json:"onSale"`
 	Grey       bool   `json:"grey,omitempty"`
 	Hall       string `json:"hall,omitempty"`
-	PriceMin   int    `json:"priceMin,omitempty"`
+	// Format нужен сравнению прогонов: отпечаток сеанса его учитывает, и без
+	// этого поля 2D и IMAX одного времени были бы одним сеансом.
+	Format   string `json:"format,omitempty"`
+	PriceMin int    `json:"priceMin,omitempty"`
 }
 
 // readRegistry читает наблюдения со stdin.
@@ -156,7 +206,7 @@ func loadFilmProfile(title, path string) (FilmProfile, error) {
 
 // runProbe опрашивает реестр. tunnel — клиент через российский выход; nil
 // означает, что туннеля нет и площадки, которым он нужен, опрошены не будут.
-func runProbe(c, tunnel *Client, title, profilePath string, days int) {
+func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days int) {
 	film, err := loadFilmProfile(title, profilePath)
 	if err != nil {
 		fail("%v", err)
@@ -213,6 +263,17 @@ func runProbe(c, tunnel *Client, title, profilePath string, days int) {
 		report.Venues = append(report.Venues, vp)
 	}
 	report.Observations = obs
+	report.Sales = buildSalesSummary(report.Venues)
+
+	// Сравнение с прошлым прогоном — последним, когда отчёт уже собран целиком.
+	if strings.TrimSpace(previousPath) != "" {
+		prev, err := readPreviousRun(previousPath)
+		if err != nil {
+			fail("%v", err)
+		}
+		d := diffRuns(report, prev)
+		report.Diff = &d
+	}
 
 	// Сеансы агрегатора раскладываются по строкам реестра уже после обхода:
 	// привязка знает про строки, а не про то, что ответил их собственный канал.
@@ -322,9 +383,15 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 			OnSale:     s.OnSale,
 			Grey:       m.GreyRelease,
 			Hall:       s.Hall,
+			Format:     s.Format,
 			PriceMin:   s.PriceMin,
 		})
 	}
+
+	// Фактическое окно источника — по ВСЕЙ его афише, а не по найденному фильму.
+	vp.SourceFrom, vp.SourceTo = probe.WindowFrom, probe.WindowTo
+	// Окно продаж искомого фильма — по его сеансам.
+	vp.SaleFrom, vp.SaleTo = foundWindow(vp.Found)
 
 	res := classifyProbe(ProbeInput{
 		Err:        probe.Err,
@@ -338,8 +405,27 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 	})
 
 	res = applyHorizonGap(res, probe.FailedDays)
+	res = applySourceWindow(res, uncoveredDates(now, days, probe.WindowFrom, probe.WindowTo))
 	vp.Status, vp.Evidence, vp.Alive = res.Status, res.Evidence, res.Alive
 	return vp
+}
+
+// foundWindow — окно продаж искомого фильма: первая и последняя даты сеансов.
+func foundWindow(found []FoundShowtime) (string, string) {
+	var lo, hi string
+	for _, f := range found {
+		if len(f.StartsAt) < 10 {
+			continue
+		}
+		day := f.StartsAt[:10]
+		if lo == "" || day < lo {
+			lo = day
+		}
+		if hi == "" || day > hi {
+			hi = day
+		}
+	}
+	return lo, hi
 }
 
 // applyHorizonGap запрещает вывод «фильма нет» по неполному горизонту.
@@ -357,6 +443,26 @@ func applyHorizonGap(res ProbeResult, failedDays []string) ProbeResult {
 	res.Status = statusSuspect
 	res.Evidence = fmt.Sprintf("горизонт неполон, канал не ответил за %d дн. (%s): %s",
 		len(failedDays), strings.Join(failedDays, ", "), res.Evidence)
+	return res
+}
+
+// applySourceWindow запрещает вывод «фильма нет» за пределами того, что источник
+// вообще покрыл.
+//
+// Отдельно от applyHorizonGap, и смешивать их нельзя: там канал ОШИБСЯ, здесь
+// ответил успешно, просто дальше своего края не публикует. Написать про такие
+// дни «канал не ответил» значило бы соврать, а весь классификатор построен на
+// том, что «источник сломался» и «фильма нет» — разные вещи.
+//
+// Живость не трогается: источник ответил, и счёт покрытия считается по этому
+// факту, а не по выводу о фильме.
+func applySourceWindow(res ProbeResult, uncovered []string) ProbeResult {
+	if res.Status != statusAbsent || len(uncovered) == 0 {
+		return res
+	}
+	res.Status = statusSuspect
+	res.Evidence = fmt.Sprintf("источник публикует у́же запрошенного окна, %d дн. вне его охвата (%s): %s",
+		len(uncovered), strings.Join(uncovered, ", "), res.Evidence)
 	return res
 }
 
@@ -379,4 +485,21 @@ func skipReason(o CinemaObservation) string {
 	default:
 		return "канала нет: " + o.Fields[fStatusClass]
 	}
+}
+
+// readPreviousRun читает отчёт прошлого прогона.
+//
+// Нечитаемый снимок — отказ прогона, а не пустое сравнение: молча пропустить
+// его значило бы напечатать отчёт без раздела «что изменилось» ровно там, где
+// его и ждали.
+func readPreviousRun(path string) (ProbeReport, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ProbeReport{}, fmt.Errorf("чтение прошлого прогона: %w", err)
+	}
+	var prev ProbeReport
+	if err := json.Unmarshal(raw, &prev); err != nil {
+		return ProbeReport{}, fmt.Errorf("разбор прошлого прогона: %w", err)
+	}
+	return prev, nil
 }
