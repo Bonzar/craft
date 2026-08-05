@@ -53,6 +53,7 @@ declare -A SCRIPT=(
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
   [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
+  [stop-relative-link]="$HOOKS/universal-stop-relative-link.sh"
   [detect-incident-arm]="$HOOKS/universal-detect-incident.sh"
 )
 
@@ -216,6 +217,7 @@ REQUIRED=(
   "guard-plan-service-turn:deny" "guard-plan-service-turn:allow"
   "mark-plan-critic:silent"   "mark-plan-file:silent"
   "stop-incident-closure:block" "stop-incident-closure:silent"
+  "stop-relative-link:block"    "stop-relative-link:silent"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done

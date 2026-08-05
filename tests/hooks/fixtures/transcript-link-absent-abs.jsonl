@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"покажи, что поправил"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Правка тут: [конфиг](/nope/definitely/missing/config.ts)."}]}}

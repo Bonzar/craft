@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"покажи, что поправил"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Готово: [фикстура](fixtures/transcript-link-broken.jsonl), [абсолютный](/bin/sh), [внешний](https://example.com/a/b), [craft](block://abc-def), [якорь](#section)."}]}}
