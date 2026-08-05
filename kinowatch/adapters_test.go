@@ -1714,3 +1714,85 @@ func TestParseMoriNoMarkerStillBroken(t *testing.T) {
 		t.Fatal("страница без групп и без маркера принята за пустой день")
 	}
 }
+
+// ——— Яндекс Афиша (второй слой) ———
+
+// Разбор расписания даёт плоский список сеансов, у каждого — своя площадка.
+//
+// Второй слой ценен ровно этим: площадка приезжает внутри сеанса, с адресом и
+// слагом. Поэтому справочник кинотеатров в коде не нужен, а привязка к реестру
+// идёт по адресу из ответа.
+func TestParseYandexScheduleFlattensDays(t *testing.T) {
+	body := readFixture(t, "yandex-schedule.json")
+
+	got, err := parseYandexSchedule(body)
+	if err != nil {
+		t.Fatalf("разбор живого ответа Афиши упал: %v", err)
+	}
+	// В фикстуре два дня по четыре сеанса: горизонт складывается в один список.
+	if len(got) != 8 {
+		t.Fatalf("сеансов %d, ожидалось 8 — день горизонта потерян или задвоен", len(got))
+	}
+
+	first := got[0]
+	want := YandexSession{
+		PlaceID:      "554b45b31f6fd6280a3eeee4",
+		PlaceSlug:    "kronverk-sinema-veipark",
+		PlaceTitle:   "Кронверк Синема Вэйпарк",
+		PlaceAddress: "71-й км МКАД, ТРЦ «Вэйпарк»",
+		StartsAt:     "2026-08-05T12:35:00+03:00",
+		Hall:         "Зал 3",
+	}
+	if first != want {
+		t.Errorf("первый сеанс разобран как %+v, ожидался %+v", first, want)
+	}
+}
+
+// Адрес обязан быть у каждого сеанса: без него сеанс не привязать к строке
+// реестра, и весь второй слой превращается в список названий.
+func TestParseYandexScheduleKeepsPlaceAddress(t *testing.T) {
+	got, err := parseYandexSchedule(readFixture(t, "yandex-schedule.json"))
+	if err != nil {
+		t.Fatalf("разбор упал: %v", err)
+	}
+	for i, s := range got {
+		if s.PlaceAddress == "" || s.PlaceSlug == "" {
+			t.Errorf("сеанс %d без опознавательных знаков площадки: %+v", i, s)
+		}
+	}
+}
+
+// Отвергнутый запрос приходит с HTTP 200 и полем errors рядом с пустыми данными.
+//
+// Это главная ловушка источника: доступ держится на недокументированном
+// заголовке, и его пропажа выглядит как «сеансов нет». Пустой список тут —
+// молчаливая потеря целого слоя, поэтому ошибка обязана дойти до вызывающего.
+func TestParseYandexScheduleRejectsGraphQLErrors(t *testing.T) {
+	body := `{"data":{"eventScheduleOther":null},"errors":[{"message":"Unknown operation named \"unknown\""}]}`
+
+	got, err := parseYandexSchedule(body)
+	if err == nil {
+		t.Fatalf("отвергнутый запрос прочитан как пустая афиша: %d сеансов", len(got))
+	}
+	if !strings.Contains(err.Error(), "Unknown operation") {
+		t.Errorf("в ошибке не видно причины отказа: %v", err)
+	}
+}
+
+// Честно пустое расписание — это не ошибка: фильм мог сойти с проката.
+func TestParseYandexScheduleEmptyIsNotError(t *testing.T) {
+	got, err := parseYandexSchedule(`{"data":{"eventScheduleOther":{"items":[]}}}`)
+	if err != nil {
+		t.Fatalf("пустое расписание признано поломкой: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("из пустого расписания извлеклись сеансы: %d", len(got))
+	}
+}
+
+// Мусор вместо JSON остаётся поломкой источника.
+func TestParseYandexScheduleRejectsNonJSON(t *testing.T) {
+	if _, err := parseYandexSchedule("<html>405 Not Allowed</html>"); err == nil {
+		t.Fatal("страница ошибки nginx принята за расписание")
+	}
+}

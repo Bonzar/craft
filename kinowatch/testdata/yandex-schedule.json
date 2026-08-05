@@ -1,0 +1,115 @@
+{
+ "status": 200,
+ "data": {
+  "eventScheduleOther": {
+   "items": [
+    {
+     "date": "2026-08-05",
+     "sessions": [
+      {
+       "place": {
+        "id": "554b45b31f6fd6280a3eeee4",
+        "url": "/moscow/cinema/places/kronverk-sinema-veipark",
+        "title": "Кронверк Синема Вэйпарк",
+        "address": "71-й км МКАД, ТРЦ «Вэйпарк»"
+       },
+       "session": {
+        "datetime": "2026-08-05T12:35:00",
+        "hall": "Зал 3"
+       }
+      },
+      {
+       "place": {
+        "id": "573662028dabaf9753ec0a7c",
+        "url": "/moscow/cinema/places/sinema-star-iugo-zapadnaia",
+        "title": "Синема Стар Авеню Юго-Западная",
+        "address": "просп. Вернадского, д. 86а, ТЦ Avenue, 4 этаж"
+       },
+       "session": {
+        "datetime": "2026-08-05T12:45:00",
+        "hall": "VIP"
+       }
+      },
+      {
+       "place": {
+        "id": "58663d286ee3daa2413fcce6",
+        "url": "/moscow/cinema/places/sinema-star-evropark",
+        "title": "Синема Стар ЕвроПарк",
+        "address": "Рублёвское ш., 62, МТК «ЕвроПарк»"
+       },
+       "session": {
+        "datetime": "2026-08-05T12:45:00",
+        "hall": "4"
+       }
+      },
+      {
+       "place": {
+        "id": "693739692ca0ea4c7b1c9c0b",
+        "url": "/moscow/cinema/places/moskino-neva",
+        "title": "Москино Нева",
+        "address": "Беломорская ул., 16а, центр «Место встречи Нева»"
+       },
+       "session": {
+        "datetime": "2026-08-05T12:50:00",
+        "hall": "Зал 2"
+       }
+      }
+     ]
+    },
+    {
+     "date": "2026-08-06",
+     "sessions": [
+      {
+       "place": {
+        "id": "551798111f7d154a12ddf126",
+        "url": "/moscow/cinema/places/cinema-park-evropeyskiy",
+        "title": "Синема Парк Европейский",
+        "address": "пл. Киевского Вокзала, 2, ТРЦ «Европейский»"
+       },
+       "session": {
+        "datetime": "2026-08-06T10:00:00",
+        "hall": "Зал 2"
+       }
+      },
+      {
+       "place": {
+        "id": "5812883510048dfe7e310979",
+        "url": "/moscow/cinema/places/formula-kino-na-lubianke",
+        "title": "Формула Кино ЦДМ",
+        "address": "Театральный пр., 5/1, Центральный детский магазин"
+       },
+       "session": {
+        "datetime": "2026-08-06T10:10:00",
+        "hall": "6"
+       }
+      },
+      {
+       "place": {
+        "id": "584fbb47832301dbf49f4f4b",
+        "url": "/moscow/cinema/places/sinema-park-filion",
+        "title": "Синема Парк Филион на Багратионовской",
+        "address": "Багратионовский пр-д, 5, ТРЦ «Филион», 4-й этаж"
+       },
+       "session": {
+        "datetime": "2026-08-06T10:15:00",
+        "hall": "Зал: 09"
+       }
+      },
+      {
+       "place": {
+        "id": "57dbe3f6f7b4b564ae379ec9",
+        "url": "/moscow/cinema/places/formula-kino-na-polezhaevskoi",
+        "title": "Формула Кино на Полежаевской",
+        "address": "Хорошёвское ш., 27, ТРЦ «Хорошо!»"
+       },
+       "session": {
+        "datetime": "2026-08-06T10:15:00",
+        "hall": "Зал 1"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
