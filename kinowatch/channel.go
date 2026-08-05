@@ -667,8 +667,13 @@ func yandexEventID(c *Client, slug string) (string, int, error) {
 		slug, out.Data.URLInfo.Status)
 }
 
-// yandexEventCardFields — набор полей карточки, общий для поиска и события.
-const yandexEventCardFields = "id title url originalTitle year dateReleased duration"
+// Наборы полей события. Их ДВА, и это не дублирование: поиск отдаёт EventPreview,
+// у которого нет ни года, ни хронометража — именно тех полей, которыми сверяется
+// профиль. Полная карточка есть только у event(id).
+const (
+	yandexEventCardFields    = "id title url originalTitle year dateReleased duration"
+	yandexEventPreviewFields = "id title url originalTitle dateReleased"
+)
 
 // fetchYandexEventCard берёт карточку фильма по его идентификатору.
 //
@@ -699,7 +704,7 @@ func findYandexEvents(c *Client, title string) ([]YandexEvent, int, error) {
 	body := fmt.Sprintf(`{"operationName":"ActualEventsQuery","variables":{"q":%q},`+
 		`"query":"query ActualEventsQuery($q: String) { actualEvents(search: $q, tags: [\"cinema\"], `+
 		`paging: {limit: 20, offset: 0}) { items { event { %s } } } }"}`,
-		strings.TrimSpace(title), yandexEventCardFields)
+		strings.TrimSpace(title), yandexEventPreviewFields)
 
 	resp, status, err := c.postJSON(yandexGQL, body, yandexHeaders())
 	if err != nil {
@@ -712,18 +717,17 @@ func findYandexEvents(c *Client, title string) ([]YandexEvent, int, error) {
 	return events, status, nil
 }
 
-// fetchYandexSchedule берёт сеансы фильма по всем площадкам города.
+// fetchYandexScheduleByID берёт сеансы фильма по всем площадкам города.
 //
 // Горизонт задаётся периодом в днях и приходит ОДНИМ ответом — обходить
 // площадки не нужно, и это главное отличие от собственных каналов.
-func fetchYandexSchedule(c *Client, slug string, from time.Time, days int) ([]YandexSession, int, error) {
+//
+// На входе идентификатор события, а не адрес страницы: адрес ведёт на фильм
+// любого года, и опознание фильма — отдельная работа, которая к моменту
+// запроса расписания уже сделана.
+func fetchYandexScheduleByID(c *Client, id string, from time.Time, days int) ([]YandexSession, int, error) {
 	if days < 1 {
 		days = 1
-	}
-
-	id, status, err := yandexEventID(c, slug)
-	if err != nil {
-		return nil, status, err
 	}
 
 	body := fmt.Sprintf(`{"operationName":"EventScheduleOtherQuery","variables":{"id":%q,`+

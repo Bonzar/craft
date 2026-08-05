@@ -232,3 +232,67 @@ func TestCollectAggregatorVenuesCountsSessions(t *testing.T) {
 		}
 	}
 }
+
+// Счётчик расхождений считает по СТРОКАМ реестра, а не по площадкам.
+//
+// Ради этих трёх чисел второй слой и заводился: сколько площадок нашёл только
+// свой канал, сколько только агрегатор и сколько оба. Смешать их с
+// непривязанными площадками значило бы выдать «это вообще не наша площадка» за
+// «наш канал промолчал».
+func TestCountAgreementSplitsThreeWays(t *testing.T) {
+	own := map[string]bool{
+		"both": true,  // нашли обе стороны
+		"own":  true,  // нашёл только свой канал
+		"agg":  false, // свой канал промолчал
+		"none": false, // не нашёл никто
+	}
+	byRow := map[string][]AggregatorShowtime{
+		"both": {{StartsAt: "2026-08-05T10:00:00+03:00"}},
+		"agg":  {{StartsAt: "2026-08-05T12:00:00+03:00"}},
+	}
+
+	got := countAgreement(own, byRow)
+
+	want := AgreementStats{OwnOnly: 1, AggregatorOnly: 1, Both: 1}
+	if got != want {
+		t.Errorf("расхождение посчитано как %+v, ожидалось %+v", got, want)
+	}
+}
+
+// Строка, которую свой обход вообще не опрашивал, но у агрегатора она есть, —
+// это доп-покрытие, и оно обязано быть видно.
+func TestCountAgreementSeesRowsOwnRunNeverProbed(t *testing.T) {
+	got := countAgreement(map[string]bool{}, map[string][]AggregatorShowtime{
+		"uncovered": {{StartsAt: "2026-08-05T10:00:00+03:00"}},
+	})
+
+	if got.AggregatorOnly != 1 {
+		t.Errorf("доп-покрытие потеряно: %+v", got)
+	}
+}
+
+// Сеансы агрегатора раскладываются по строкам реестра только через привязку:
+// площадка вне корзины «привязано» ничего никуда не приносит.
+func TestAggregatorShowtimesByRowFollowsAttachment(t *testing.T) {
+	layer := &AggregatorLayer{Attached: []VenueAttachment{
+		{Venue: AggregatorVenue{ID: "a"}, RegistryKey: "7912"},
+	}}
+	sessions := []YandexSession{
+		{PlaceID: "a", StartsAt: "2026-08-05T20:00:00+03:00", Hall: "1", SaleStatus: "available", PriceMin: 420},
+		{PlaceID: "a", StartsAt: "2026-08-05T10:00:00+03:00", Hall: "2"},
+		{PlaceID: "b", StartsAt: "2026-08-05T11:00:00+03:00"}, // площадка не привязана
+	}
+
+	got := aggregatorShowtimesByRow(layer, sessions)
+
+	if len(got) != 1 || len(got["7912"]) != 2 {
+		t.Fatalf("разложено неверно: %+v", got)
+	}
+	// Порядок по времени, иначе отчёт читается наугад.
+	if got["7912"][0].StartsAt > got["7912"][1].StartsAt {
+		t.Errorf("сеансы не отсортированы: %+v", got["7912"])
+	}
+	if got["7912"][1].PriceMin != 420 || got["7912"][1].SaleStatus != "available" {
+		t.Errorf("цена и статус продажи потеряны: %+v", got["7912"][1])
+	}
+}

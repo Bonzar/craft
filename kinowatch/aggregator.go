@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -289,4 +290,192 @@ func collectAggregatorVenues(sessions []YandexSession) []AggregatorVenue {
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].ID < out[b].ID })
 	return out
+}
+
+// ——— Второй слой в прогоне ———
+
+// AggregatorLayer — итог опроса агрегатора за один прогон.
+type AggregatorLayer struct {
+	Source string `json:"source"`
+
+	// Film — карточка фильма, который РЕАЛЬНО опрошен. Печатается всегда:
+	// по одному расписанию нельзя отличить «фильм нигде не идёт» от «спросили
+	// не про тот фильм», и карточка — единственный ответ на второй вопрос.
+	Film  YandexEvent `json:"film"`
+	FndBy string      `json:"foundBy"` // search | pin
+
+	Sessions int `json:"sessions"`
+	Venues   int `json:"venues"`
+
+	Attached   []VenueAttachment `json:"attached"`
+	Unattached []UnattachedVenue `json:"unattached"`
+	Buckets    map[string]int    `json:"buckets"`
+
+	Agreement AgreementStats `json:"agreement"`
+
+	// Err непустая означает, что слой не отработал. Пустой слой без ошибки и
+	// сломанный слой — разные вещи: первое значит «фильма нет у агрегатора»,
+	// второе — «мы до агрегатора не дошли».
+	Err string `json:"error,omitempty"`
+}
+
+// AgreementStats — расхождение слоёв по строкам реестра.
+//
+// Ради этих трёх чисел второй слой и заводился как контроль качества: сколько
+// площадок нашёл только свой канал, сколько только агрегатор и сколько оба.
+type AgreementStats struct {
+	OwnOnly        int `json:"ownOnly"`
+	AggregatorOnly int `json:"aggregatorOnly"`
+	Both           int `json:"both"`
+}
+
+// AggregatorShowtime — сеанс глазами агрегатора.
+//
+// Лежит РЯДОМ с находками своего канала, а не вместо них: как только поля
+// сольются, сравнивать станет не с чем и слой перестанет быть контролем.
+type AggregatorShowtime struct {
+	StartsAt string `json:"startsAt"`
+	Hall     string `json:"hall,omitempty"`
+	// SaleStatus — строкой, как её называет источник. Шесть значений в булев
+	// признак не сворачиваются.
+	SaleStatus string `json:"saleStatus,omitempty"`
+	PriceMin   int    `json:"priceMin,omitempty"`
+	PriceMax   int    `json:"priceMax,omitempty"`
+}
+
+// aggregatorFatal — ошибка, при которой прогон продолжать нельзя.
+//
+// Таких две: по названию идёт несколько фильмов (гадать нельзя) и карточка
+// противоречит профилю (спросили не про тот фильм). Всё остальное — отсутствие
+// слоя, и первый слой из-за него страдать не должен.
+type aggregatorFatal struct{ err error }
+
+func (e aggregatorFatal) Error() string { return e.err.Error() }
+
+// resolveYandexFilm опознаёт фильм у Афиши: сначала выбирает событие, потом
+// открывает его карточку.
+func resolveYandexFilm(c *Client, p FilmProfile) (YandexEvent, string, error) {
+	if slug := strings.TrimSpace(p.YandexSlug); slug != "" {
+		id, _, err := yandexEventID(c, slug)
+		if err != nil {
+			return YandexEvent{}, "pin", err
+		}
+		ev, _, err := fetchYandexEventCard(c, id)
+		if err != nil {
+			return YandexEvent{}, "pin", err
+		}
+		return ev, "pin", nil
+	}
+
+	found, _, err := findYandexEvents(c, p.Title)
+	if err != nil {
+		return YandexEvent{}, "search", err
+	}
+	ev, err := pickYandexEvent(found, p)
+	if err != nil {
+		// Ноль кандидатов — законный ответ: фильм ещё не вышел или уже сошёл.
+		// Слоя в этом прогоне просто нет. А вот несколько кандидатов — вопрос
+		// к Владу, и молча выбирать за него нельзя.
+		if len(found) > 1 {
+			return YandexEvent{}, "search", aggregatorFatal{err}
+		}
+		return YandexEvent{}, "search", err
+	}
+	return ev, "search", nil
+}
+
+// runYandexLayer опрашивает Афишу и раскладывает её площадки по реестру.
+//
+// Вторым значением отдаёт сами сеансы: они нужны прогону, чтобы разложить их
+// по строкам реестра уже после обхода собственных касс.
+func runYandexLayer(c *Client, film FilmProfile, obs []CinemaObservation, from time.Time, days int) (*AggregatorLayer, []YandexSession, error) {
+	layer := &AggregatorLayer{Source: "yandex-afisha", Buckets: map[string]int{}}
+
+	ev, by, err := resolveYandexFilm(c, film)
+	layer.FndBy = by
+	if err != nil {
+		layer.Err = err.Error()
+		if fatal, ok := err.(aggregatorFatal); ok {
+			return layer, nil, fatal
+		}
+		return layer, nil, nil
+	}
+	layer.Film = ev
+
+	sessions, _, err := fetchYandexScheduleByID(c, ev.ID, from, days)
+	if err != nil {
+		layer.Err = err.Error()
+		return layer, nil, nil
+	}
+	layer.Sessions = len(sessions)
+
+	// Сверка карточки идёт ПОСЛЕ расписания: сама по себе пустота законна, а
+	// вот пустота при несверенной карточке — это ловушка однофамильца.
+	if err := verifyYandexEvent(ev, film, len(sessions)); err != nil {
+		layer.Err = err.Error()
+		return layer, nil, aggregatorFatal{err}
+	}
+
+	venues := collectAggregatorVenues(sessions)
+	layer.Venues = len(venues)
+
+	res := attachVenues(venues, obs)
+	layer.Attached, layer.Unattached = res.Attached, res.Unattached
+	for _, u := range res.Unattached {
+		layer.Buckets[u.Bucket]++
+	}
+	return layer, sessions, nil
+}
+
+// aggregatorShowtimesByRow раскладывает сеансы агрегатора по ключам реестра.
+func aggregatorShowtimesByRow(layer *AggregatorLayer, sessions []YandexSession) map[string][]AggregatorShowtime {
+	rowOf := map[string]string{}
+	for _, a := range layer.Attached {
+		rowOf[a.Venue.ID] = a.RegistryKey
+	}
+
+	out := map[string][]AggregatorShowtime{}
+	for _, s := range sessions {
+		key, ok := rowOf[s.PlaceID]
+		if !ok {
+			continue
+		}
+		out[key] = append(out[key], AggregatorShowtime{
+			StartsAt: s.StartsAt, Hall: s.Hall,
+			SaleStatus: s.SaleStatus, PriceMin: s.PriceMin, PriceMax: s.PriceMax,
+		})
+	}
+	for k := range out {
+		sort.Slice(out[k], func(a, b int) bool { return out[k][a].StartsAt < out[k][b].StartsAt })
+	}
+	return out
+}
+
+// countAgreement считает расхождение слоёв по строкам реестра.
+//
+// Считается по СТРОКАМ, а не по площадкам агрегатора: непривязанная площадка
+// живёт в своей корзине и в «только агрегатор» не попадает — иначе одно число
+// смешало бы «наш канал промолчал» с «это вообще не наша площадка».
+func countAgreement(ownFound map[string]bool, byRow map[string][]AggregatorShowtime) AgreementStats {
+	var st AgreementStats
+	seen := map[string]bool{}
+
+	for key, own := range ownFound {
+		seen[key] = true
+		agg := len(byRow[key]) > 0
+		switch {
+		case own && agg:
+			st.Both++
+		case own:
+			st.OwnOnly++
+		case agg:
+			st.AggregatorOnly++
+		}
+	}
+	for key := range byRow {
+		if !seen[key] && len(byRow[key]) > 0 {
+			st.AggregatorOnly++
+		}
+	}
+	return st
 }
