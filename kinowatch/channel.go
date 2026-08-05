@@ -123,6 +123,11 @@ var channelWindowWhole = map[string]bool{
 	kindTretyakov: true,
 	// Еврейский музей публикует всю афишу одной страницей, дат в адресе нет.
 	kindJewish: true,
+	// Pushka отдаёт полное расписание площадки: параметра даты у запроса нет
+	// вовсе. Пока её здесь не было, обход по дню звал один и тот же ответ по
+	// разу на день и складывал его сам с собой — на двухдневном горизонте это
+	// давало ровно двойной комплект сеансов.
+	kindPushka: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -140,6 +145,7 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 	var out ChannelProbe
 	var lastFail ChannelProbe
 	got := 0
+	seen := map[string]bool{}
 
 	for i := 0; i < days; i++ {
 		day := from.AddDate(0, 0, i)
@@ -157,7 +163,7 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		if out.Playbill.Cinema == "" {
 			out.Playbill.Cinema = one.Playbill.Cinema
 		}
-		out.Playbill.Showtimes = append(out.Playbill.Showtimes, one.Playbill.Showtimes...)
+		out.Playbill.Showtimes = appendNewShowtimes(out.Playbill.Showtimes, one.Playbill.Showtimes, seen)
 		out.Playbill.Dates = append(out.Playbill.Dates, one.Playbill.Dates...)
 	}
 
@@ -167,6 +173,32 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		return lastFail
 	}
 	return out
+}
+
+// appendNewShowtimes добавляет к окну только те сеансы, которых в нём ещё нет.
+//
+// Канал, игнорирующий запрошенную дату, отдаёт на каждый день окна ОДИН И ТОТ ЖЕ
+// ответ, и склейка без проверки складывает его сам с собой: на горизонте в N
+// дней каждый сеанс повторяется N раз. Так и случилось с Pushka — 140 записей
+// при 70 реальных временах.
+//
+// Список channelWindowWhole от этого защищает, но только пока в него не забыли
+// внести очередной такой канал — а забыть легко, свойство видно лишь по коду
+// запроса. Дедуп ловит любой канал с этим свойством, даже неизвестный.
+//
+// Признак совпадения — тот же отпечаток, которым сеансы различаются в отчёте:
+// название, время, зал и формат. Площадка здесь одна на всё окно, поэтому в
+// ключ не входит.
+func appendNewShowtimes(dst, src []Showtime, seen map[string]bool) []Showtime {
+	for _, s := range src {
+		fp := showtimeFingerprint("", s)
+		if seen[fp] {
+			continue
+		}
+		seen[fp] = true
+		dst = append(dst, s)
+	}
+	return dst
 }
 
 // fetchChannelDay — один запрос к каналу за одну дату.

@@ -1665,3 +1665,52 @@ func TestParseJewishMuseumFiltersScreenings(t *testing.T) {
 		t.Errorf("показов %d из 11 событий — похоже, отбор перестал отсекать лекции", len(pb.Showtimes))
 	}
 }
+
+// Пустой день у Люксора — ответ источника, а не сменившаяся вёрстка.
+//
+// Живой случай: прогон в 23:26 по Москве. Сеансы дня уже прошли, источник отдал
+// `filmsAll = []`, и площадка получила source_broken:parse — то есть живой
+// кинотеатр объявлялся мёртвым просто из-за позднего часа.
+func TestParseLuxorEmptyDayIsNotBroken(t *testing.T) {
+	body := readFixture(t, "luxor-empty-day.html")
+
+	pb, err := parseLuxor(body, "2026-08-04")
+	if err != nil {
+		t.Fatalf("пустой день Люксора признан поломкой: %v", err)
+	}
+	if len(pb.Showtimes) != 0 {
+		t.Errorf("из пустого дня извлеклись сеансы: %d", len(pb.Showtimes))
+	}
+	// Дата запроса остаётся в афише: классификатору важно, что день опрошен.
+	if len(pb.Dates) != 1 || pb.Dates[0] != "2026-08-04" {
+		t.Errorf("дата запроса потеряна: %v", pb.Dates)
+	}
+}
+
+// А вот подсунутая страница без массива фильмов обязана остаться поломкой:
+// ослабление проверки не должно превращать сменившуюся вёрстку в «пустой день».
+func TestParseLuxorMissingArrayStillBroken(t *testing.T) {
+	if _, err := parseLuxor("<html><body>редизайн</body></html>", "2026-08-04"); err == nil {
+		t.Fatal("страница без массива фильмов принята за пустой день")
+	}
+}
+
+// Пустой день у Mori размечен явным блоком внутри живого контейнера расписания.
+func TestParseMoriEmptyDayIsNotBroken(t *testing.T) {
+	body := readFixture(t, "mori-empty-day.html")
+
+	pb, err := parseMori(body, "2026-08-04")
+	if err != nil {
+		t.Fatalf("пустой день Mori признан поломкой: %v", err)
+	}
+	if len(pb.Showtimes) != 0 {
+		t.Errorf("из пустого дня извлеклись сеансы: %d", len(pb.Showtimes))
+	}
+}
+
+// Без маркера пустого дня отсутствие групп сеансов остаётся поломкой разбора.
+func TestParseMoriNoMarkerStillBroken(t *testing.T) {
+	if _, err := parseMori("<html><body>редизайн</body></html>", "2026-08-04"); err == nil {
+		t.Fatal("страница без групп и без маркера принята за пустой день")
+	}
+}
