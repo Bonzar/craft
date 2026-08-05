@@ -90,3 +90,78 @@ func TestSkipReasonAlwaysExplains(t *testing.T) {
 		}
 	}
 }
+
+// Вывод «фильма нет» не действует за краем того, что источник вообще покрыл.
+//
+// Живой случай: КАРО отдаёт 23 даты при запрошенных 28. Про оставшиеся пять он
+// не сказал ничего, и уверенное «нет» по ним — утверждение без основания.
+func TestApplySourceWindowDowngradesAbsent(t *testing.T) {
+	res := applySourceWindow(
+		ProbeResult{Status: statusAbsent, Alive: true, Evidence: "афиша разобрана"},
+		[]string{"2026-09-01", "2026-09-02"})
+
+	if res.Status != statusSuspect {
+		t.Errorf("статус %q, ожидался %q", res.Status, statusSuspect)
+	}
+	if !strings.Contains(res.Evidence, "2026-09-01") {
+		t.Errorf("непокрытые даты не названы: %s", res.Evidence)
+	}
+	// Живость доказана ответом источника и от вывода о фильме не зависит: по
+	// ней считается покрытие.
+	if !res.Alive {
+		t.Error("живость источника снята вместе с выводом о фильме")
+	}
+}
+
+// Полностью покрытое окно вывод не трогает.
+func TestApplySourceWindowKeepsAbsentWhenCovered(t *testing.T) {
+	res := applySourceWindow(ProbeResult{Status: statusAbsent, Alive: true}, nil)
+	if res.Status != statusAbsent {
+		t.Errorf("статус %q, ожидался %q", res.Status, statusAbsent)
+	}
+}
+
+// Находка не понижается: она положительна и уже сделана, а неполнота окна
+// ставит под сомнение только отрицание.
+func TestApplySourceWindowKeepsFinding(t *testing.T) {
+	res := applySourceWindow(ProbeResult{Status: statusOnSale, Alive: true}, []string{"2026-09-01"})
+	if res.Status != statusOnSale {
+		t.Errorf("находка понижена до %q", res.Status)
+	}
+}
+
+// Окно продаж искомого фильма считается по его сеансам.
+func TestFoundWindowSpansFoundShowtimes(t *testing.T) {
+	from, to := foundWindow([]FoundShowtime{
+		{StartsAt: "2026-08-26T22:00:00+03:00"},
+		{StartsAt: "2026-08-20T10:10:00+03:00"},
+		{StartsAt: "2026-08-23T15:20:00+03:00"},
+	})
+	if from != "2026-08-20" || to != "2026-08-26" {
+		t.Errorf("окно продаж %q…%q, ожидалось 2026-08-20…2026-08-26", from, to)
+	}
+}
+
+// Сводка отвечает на вопрос «где уже продают», а не «сколько сеансов всего».
+func TestBuildSalesSummaryTakesEarliestDate(t *testing.T) {
+	got := buildSalesSummary([]VenueProbe{
+		{Key: "1", SaleFrom: "2026-08-22", Found: []FoundShowtime{{}, {}}},
+		{Key: "2", SaleFrom: "2026-08-20", Found: []FoundShowtime{{}}},
+		{Key: "3"}, // фильма нет — в сводку не идёт
+	})
+
+	if got.EarliestDate != "2026-08-20" {
+		t.Errorf("самая ранняя дата %q, ожидалось 2026-08-20", got.EarliestDate)
+	}
+	if got.Venues != 2 || got.Showtimes != 3 {
+		t.Errorf("площадок %d, сеансов %d — ожидалось 2 и 3", got.Venues, got.Showtimes)
+	}
+}
+
+// Фильм не найден нигде — сводка пустая, а не с нулевой датой.
+func TestBuildSalesSummaryEmpty(t *testing.T) {
+	got := buildSalesSummary([]VenueProbe{{Key: "1"}})
+	if got.EarliestDate != "" || got.Venues != 0 {
+		t.Errorf("пустая сводка выглядит как %+v", got)
+	}
+}

@@ -191,3 +191,65 @@ func TestAppendNewShowtimesKeepsParallelHalls(t *testing.T) {
 		t.Errorf("параллельных сеансов осталось %d, ожидалось 2", len(out))
 	}
 }
+
+// Фактическое окно источника — от первой даты сеанса до последней.
+func TestSourceWindowSpansShowtimes(t *testing.T) {
+	pb := Playbill{Showtimes: []Showtime{
+		{StartsAt: "2026-08-07T10:00:00+03:00"},
+		{StartsAt: "2026-08-05T22:00:00+03:00"},
+		{StartsAt: "2026-08-06T13:00:00+03:00"},
+	}}
+
+	from, to := sourceWindow(pb)
+	if from != "2026-08-05" || to != "2026-08-07" {
+		t.Errorf("окно источника %q…%q, ожидалось 2026-08-05…2026-08-07", from, to)
+	}
+}
+
+// Афиша без сеансов окна не даёт — это отдельный исход, и решает его
+// классификатор, а не пустые строки в окне.
+func TestSourceWindowEmptyPlaybill(t *testing.T) {
+	from, to := sourceWindow(Playbill{})
+	if from != "" || to != "" {
+		t.Errorf("у пустой афиши появилось окно %q…%q", from, to)
+	}
+}
+
+// Непокрытыми считаются только КРАЯ запрошенного окна.
+//
+// Живой случай: КАРО отдаёт 23 даты, сколько ни проси. На горизонте в 28 дней
+// пять последних дат остаются без единого ответа источника, и «фильма там нет»
+// — утверждение без основания.
+func TestUncoveredDatesTakesEdgesOnly(t *testing.T) {
+	from := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+
+	got := uncoveredDates(from, 5, "2026-08-06", "2026-08-08")
+
+	want := []string{"2026-08-05", "2026-08-09"}
+	if len(got) != len(want) {
+		t.Fatalf("непокрытых дат %v, ожидалось %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("непокрытые даты %v, ожидалось %v", got, want)
+			break
+		}
+	}
+}
+
+// Дырка ВНУТРИ окна источника непокрытой не считается: площадка имеет право не
+// работать в этот день, и «фильма нет» там честное.
+func TestUncoveredDatesIgnoresHoleInside(t *testing.T) {
+	from := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+
+	if got := uncoveredDates(from, 3, "2026-08-05", "2026-08-07"); len(got) != 0 {
+		t.Errorf("дни внутри окна источника объявлены непокрытыми: %v", got)
+	}
+}
+
+// Окна нет вовсе — считать нечего: это ветка пустой афиши, у неё свой исход.
+func TestUncoveredDatesWithoutWindow(t *testing.T) {
+	if got := uncoveredDates(time.Now(), 7, "", ""); got != nil {
+		t.Errorf("без окна источника посчитались непокрытые даты: %v", got)
+	}
+}
