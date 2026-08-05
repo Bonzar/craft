@@ -108,21 +108,6 @@ func (c *Client) withCookies() *Client {
 	return &clone
 }
 
-// withoutAcceptLang — тот же клиент, но без заголовка Accept-Language.
-//
-// Нужен там, где заголовок сам по себе служит признаком бота. Живой случай —
-// kinoafisha: с браузерным UA и «Accept-Language: ru-RU,ru;q=0.9,en;q=0.8»
-// страница кинотеатра и поиск отвечают 403 в 10 запросах из 10, без заголовка —
-// 0 из 10, и так на обеих ручках (замер 05.08.2026). Отдельные значения ведут
-// себя по-разному: «ru-RU» и «en-US,en;q=0.9» проходят, голое «ru» — нет.
-//
-// Транспорт СОХРАНЯЕТСЯ, как и в withCookies: у туннельного клиента там прокси.
-func (c *Client) withoutAcceptLang() *Client {
-	clone := *c
-	clone.acceptLang = ""
-	return &clone
-}
-
 // newNoRedirectClient — клиент, который переход по 30x не выполняет, а отдаёт
 // сам код ответа.
 //

@@ -3013,10 +3013,17 @@ var kinoafishaSessionRe = regexp.MustCompile(
 // kinoafishaPriceRe — «от 450 ₽» внутри сеанса.
 var kinoafishaPriceRe = regexp.MustCompile(`session_price[^>]*>[^\d]*(\d[\d\s]*)`)
 
-// kinoafishaVenueRe — площадка: идентификатор в адресе, название, адрес.
+// kinoafishaVenueRe — площадка: идентификатор в адресе страницы и название.
+//
+// Адрес сюда НЕ входит, и это не упрощение. Источник печатает под названием либо
+// адрес, либо станции метро: на широком фильме из 83 площадок дня адрес был лишь
+// у 24. Пока адрес требовался тем же выражением, остальные 59 не находились
+// вовсе — молча, без единой ошибки, потому что расписание оставалось непустым.
 var kinoafishaVenueRe = regexp.MustCompile(
-	`(?s)<a class="showtimesCinema_name" href="[^"]*?/cinema/(\d+)/">([^<]+)</a>\s*` +
-		`<span class="showtimesCinema_addr">([^<]*)</span>`)
+	`<a class="showtimesCinema_name" href="[^"]*?/cinema/(\d+)/">([^<]+)</a>`)
+
+// kinoafishaAddrRe — адрес площадки, если он есть.
+var kinoafishaAddrRe = regexp.MustCompile(`<span class="showtimesCinema_addr">([^<]*)</span>`)
 
 // kinoafishaFormatRe — формат группы сеансов («2D», «IMAX»).
 var kinoafishaFormatRe = regexp.MustCompile(`data-format="([^"]*)"`)
@@ -3052,13 +3059,23 @@ func parseKinoafisha(body, fallbackDate string) ([]AggregatorSession, error) {
 	}
 
 	var out []AggregatorSession
+	var blocks, lost int
 	for _, part := range splitKinoafishaDates(body, fallbackDate) {
 		for _, block := range strings.Split(part.html, kinoafishaItemOpen)[1:] {
+			blocks++
 			venue := kinoafishaVenueRe.FindStringSubmatch(block)
 			if venue == nil {
+				// Блок отрезан по литералу, которым открывается ровно контейнер
+				// площадки. Раз название в нём не нашлось — сменилась вёрстка, и
+				// пропустить его молча значит потерять площадку целиком.
+				lost++
 				continue
 			}
-			addr := strings.TrimSpace(kinoafishaCityAddr.ReplaceAllString(html.UnescapeString(venue[3]), ""))
+
+			addr := ""
+			if a := kinoafishaAddrRe.FindStringSubmatch(block); a != nil {
+				addr = strings.TrimSpace(kinoafishaCityAddr.ReplaceAllString(html.UnescapeString(a[1]), ""))
+			}
 
 			format := ""
 			if f := kinoafishaFormatRe.FindStringSubmatch(block); f != nil {
@@ -3071,9 +3088,10 @@ func parseKinoafisha(body, fallbackDate string) ([]AggregatorSession, error) {
 					continue
 				}
 				out = append(out, AggregatorSession{
-					PlaceID:      "kinoafisha:" + venue[1],
-					PlaceSlug:    venue[1],
-					PlaceTitle:   strings.TrimSpace(html.UnescapeString(venue[2])),
+					PlaceID:    "kinoafisha:" + venue[1],
+					PlaceSlug:  venue[1],
+					PlaceTitle: strings.TrimSpace(html.UnescapeString(venue[2])),
+
 					PlaceAddress: addr,
 					StartsAt:     at,
 					Hall:         format,
@@ -3082,6 +3100,10 @@ func parseKinoafisha(body, fallbackDate string) ([]AggregatorSession, error) {
 				})
 			}
 		}
+	}
+	if lost > 0 {
+		return nil, fmt.Errorf(
+			"разбор kinoafisha: в %d блоках площадки из %d не нашлось названия — сменилась вёрстка", lost, blocks)
 	}
 	return out, nil
 }

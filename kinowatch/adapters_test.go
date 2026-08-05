@@ -2024,3 +2024,49 @@ func TestParseKinoafishaVenueGeoMissingIsError(t *testing.T) {
 		t.Fatal("страница без координат принята за площадку в нулевой точке")
 	}
 }
+
+// Площадка без адреса не теряется: источник печатает под названием либо адрес,
+// либо станции метро.
+//
+// Фикстура — живой кусок дня широкого фильма (замер 05.08.2026): шесть площадок,
+// у двух адрес, у четырёх метро. Пока разбор требовал адрес тем же выражением,
+// что и название, из 83 площадок дня находились 24 — и молча, потому что
+// расписание оставалось непустым и на ошибку это не походило.
+func TestParseKinoafishaKeepsVenuesWithoutAddress(t *testing.T) {
+	got, err := parseKinoafisha(readFixture(t, "kinoafisha-wide.html"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	places := map[string]string{}
+	for _, s := range got {
+		places[s.PlaceID] = s.PlaceAddress
+	}
+	if len(places) != 6 {
+		t.Fatalf("площадок %d, ожидалось 6: %v", len(places), places)
+	}
+
+	var withAddr int
+	for _, a := range places {
+		if a != "" {
+			withAddr++
+		}
+	}
+	if withAddr != 2 {
+		t.Errorf("адрес прочитан у %d площадок, ожидалось 2: %v", withAddr, places)
+	}
+}
+
+// Блок площадки, в котором не нашлось названия, — это смена вёрстки, и она
+// обязана быть ошибкой: пропуск такого блока тихо вычёркивает площадку.
+func TestParseKinoafishaRejectsVenueBlockWithoutName(t *testing.T) {
+	body := `<article data-schedule-date="2026-08-21">
+		<div class="showtimes_item">
+		<a class="showtimesCinema_title" href="/russia/msk/cinema/1/">Новая вёрстка</a>
+		<a class="showtimes_session session session-ticket"><span class="session_time">10:10</span></a>
+		</div>`
+
+	if _, err := parseKinoafisha(body, "2026-08-21"); err == nil {
+		t.Fatal("блок без названия площадки пропущен молча")
+	}
+}

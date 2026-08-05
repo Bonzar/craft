@@ -854,36 +854,30 @@ var (
 	kinoafishaCardRef  = regexp.MustCompile(`class="shortList_ref" href="[^"]*?/movies/(\d+)/"`)
 )
 
-// kinoafishaClient — клиент, каким этот источник вообще отвечает.
+// kinoafishaGet — GET к источнику с повтором на 403.
 //
-// Отличие ровно одно: без Accept-Language. Заголовок здесь сам служит признаком
-// бота — с ним обе ручки дают 403 в 10 запросах из 10, без него ни одного
-// (замер 05.08.2026, подробности у withoutAcceptLang).
+// За источником стоит ddos-guard, и доступ он закрывает полосами: 05.08.2026
+// днём обычный Go-клиент получал 403 на любой запрос около получаса, а через час
+// тот же код без единой правки отвечал 200 двадцать раз из двадцати. Ни один
+// подбор запроса полосу не пробил — ни снятие Accept-Language, ни HTTP/1.1, ни
+// банка cookie, ни настройки TLS, — а сама она прошла.
 //
-// Первое объяснение было другим — «защита считает частоту» — и оно неверно:
-// строилось на одиночных запросах, где 403 и 200 чередовались по другой
-// причине. Парный замер с заголовком и без развёл их начисто.
-func kinoafishaClient(c *Client) *Client { return c.withoutAcceptLang() }
-
-// kinoafishaGet — GET к источнику с одним повтором на 403.
-//
-// Повтор оставлен не как лечение (лечит клиент выше), а как запас на случайный
-// отказ под нагрузкой прогона: за один фильм сюда уходят десятки запросов.
-// Постоянный 403 повтором не лечится — он означает, что в запрос вернулся
-// Accept-Language, и текст ошибки говорит об этом прямо.
+// Отсюда трактовка: 403 у ЭТОГО источника означает «сейчас закрыто», а не «нам
+// сюда нельзя». Повтор берёт короткую рябь; длинную полосу он не лечит, и тогда
+// это честный отказ слоя, а не пустая афиша.
 func kinoafishaGet(c *Client, addr string) (string, error) {
 	var last error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			time.Sleep(3 * time.Second)
+			time.Sleep(time.Duration(attempt) * 3 * time.Second)
 		}
-		body, status, err := kinoafishaClient(c).get(addr)
+		body, status, err := c.get(addr)
 		switch {
 		case err != nil && status != 403:
 			return "", err
 		case status == 403:
 			last = fmt.Errorf(
-				"kinoafisha: %s ответил 403 (%d попытки) — проверь, что запрос идёт без Accept-Language",
+				"kinoafisha: %s ответил 403 после %d попыток — источник закрыл доступ полосой",
 				addr, attempt+1)
 			continue
 		case status != 200:
@@ -918,7 +912,7 @@ func fetchKinoafishaVenueGeo(c *Client, id string) (float64, float64, error) {
 func fetchKinoafishaDate(c *Client, id, date string, skip int) (string, error) {
 	addr := fmt.Sprintf("%s%s/?date=%s&skip=%d", kinoafishaMovieBase, url.PathEscape(id), date, skip)
 
-	body, status, err := kinoafishaClient(c).do("POST", addr, "", kinoafishaHeaders())
+	body, status, err := c.do("POST", addr, "", kinoafishaHeaders())
 	if err != nil {
 		return "", err
 	}
