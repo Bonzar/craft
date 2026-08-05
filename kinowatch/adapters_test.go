@@ -1735,7 +1735,7 @@ func TestParseYandexScheduleFlattensDays(t *testing.T) {
 	}
 
 	first := got[0]
-	want := YandexSession{
+	want := AggregatorSession{
 		PlaceID:      "5517983f1f7d154a12ddf205",
 		PlaceSlug:    "cinema-park-mega-teplyi-stan",
 		PlaceTitle:   "Синема Парк Тёплый Стан",

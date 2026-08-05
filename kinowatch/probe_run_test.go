@@ -4,6 +4,7 @@ package main
 // выводить «фильма нет» по неполному горизонту.
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -244,5 +245,54 @@ func TestApplyStandaloneRecordsIsIdempotent(t *testing.T) {
 	}
 	if first.Channels != second.Channels {
 		t.Errorf("числа применённого разошлись: %d против %d", first.Channels, second.Channels)
+	}
+}
+
+// Снимок прошлого прогона старой формы читается наравне с новым.
+//
+// Иначе переход на список слоёв обнулил бы всю накопленную базу сравнения:
+// разбор снимка падает через fail и роняет прогон целиком.
+func TestReadPreviousRunAcceptsLegacyAggregator(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/legacy.json"
+	body := `{"fetchedAt":"2026-08-05T09:00:00Z","days":28,
+		"film":{"title":"Майкл"},
+		"aggregator":{"source":"yandex-afisha","sessions":653}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readPreviousRun(path)
+	if err != nil {
+		t.Fatalf("снимок старой формы не прочитался: %v", err)
+	}
+	if len(got.Aggregators) != 1 {
+		t.Fatalf("слой старой формы потерян: %+v", got.Aggregators)
+	}
+	if got.Aggregators[0].Source != "yandex-afisha" || got.Aggregators[0].Sessions != 653 {
+		t.Errorf("слой прочитан неверно: %+v", got.Aggregators[0])
+	}
+	// Поле старой формы после переноса пустое: наружу оно не пишется.
+	if got.LegacyAggregator != nil {
+		t.Error("старое поле осталось заполненным и уедет в новый отчёт")
+	}
+}
+
+// Снимок новой формы читается как есть.
+func TestReadPreviousRunReadsLayerList(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/new.json"
+	body := `{"fetchedAt":"2026-08-05T09:00:00Z","days":28,"film":{"title":"Майкл"},
+		"aggregators":[{"source":"yandex-afisha"},{"source":"kinoafisha"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readPreviousRun(path)
+	if err != nil {
+		t.Fatalf("снимок новой формы не прочитался: %v", err)
+	}
+	if len(got.Aggregators) != 2 {
+		t.Errorf("слоёв прочитано %d, ожидалось 2", len(got.Aggregators))
 	}
 }

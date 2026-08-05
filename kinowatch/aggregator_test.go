@@ -216,7 +216,7 @@ func TestAttachEveryVenueLandsExactlyOnce(t *testing.T) {
 
 // Сеансы одной площадки сворачиваются в одну запись со счётчиком.
 func TestCollectAggregatorVenuesCountsSessions(t *testing.T) {
-	got := collectAggregatorVenues([]YandexSession{
+	got := collectAggregatorVenues([]AggregatorSession{
 		{PlaceID: "a", PlaceTitle: "Москино Нева", StartsAt: "2026-08-05T12:50:00+03:00"},
 		{PlaceID: "a", PlaceTitle: "Москино Нева", StartsAt: "2026-08-05T15:10:00+03:00"},
 		{PlaceID: "b", PlaceTitle: "Кронверк Синема Вэйпарк", StartsAt: "2026-08-05T12:35:00+03:00"},
@@ -277,7 +277,7 @@ func TestAggregatorShowtimesByRowFollowsAttachment(t *testing.T) {
 	layer := &AggregatorLayer{Attached: []VenueAttachment{
 		{Venue: AggregatorVenue{ID: "a"}, RegistryKey: "7912"},
 	}}
-	sessions := []YandexSession{
+	sessions := []AggregatorSession{
 		{PlaceID: "a", StartsAt: "2026-08-05T20:00:00+03:00", Hall: "1", SaleStatus: "available", PriceMin: 420},
 		{PlaceID: "a", StartsAt: "2026-08-05T10:00:00+03:00", Hall: "2"},
 		{PlaceID: "b", StartsAt: "2026-08-05T11:00:00+03:00"}, // площадка не привязана
@@ -294,5 +294,68 @@ func TestAggregatorShowtimesByRowFollowsAttachment(t *testing.T) {
 	}
 	if got["7912"][1].PriceMin != 420 || got["7912"][1].SaleStatus != "available" {
 		t.Errorf("цена и статус продажи потеряны: %+v", got["7912"][1])
+	}
+}
+
+// ——— Несколько слоёв ———
+
+// Сеансы разных агрегаторов у одной площадки не сливаются в общий список.
+//
+// Это требование Влада «сетки не объединять», перенесённое на второй уровень:
+// как только сеансы двух источников окажутся в одном списке без признака, чей
+// он, сравнивать слои станет не с чем.
+func TestVenueKeepsAggregatorSessionsPerSource(t *testing.T) {
+	vp := VenueProbe{Key: "7458", FromAggregator: map[string][]AggregatorShowtime{}}
+
+	vp.FromAggregator["yandex-afisha"] = []AggregatorShowtime{{StartsAt: "2026-08-20T10:10:00+03:00"}}
+	vp.FromAggregator["kinoafisha"] = []AggregatorShowtime{
+		{StartsAt: "2026-08-20T10:10:00+03:00"},
+		{StartsAt: "2026-08-20T11:20:00+03:00"},
+	}
+
+	if len(vp.FromAggregator) != 2 {
+		t.Fatalf("источников в отчёте площадки %d, ожидалось 2", len(vp.FromAggregator))
+	}
+	if len(vp.FromAggregator["yandex-afisha"]) != 1 || len(vp.FromAggregator["kinoafisha"]) != 2 {
+		t.Errorf("слои перезаписали друг друга: %+v", vp.FromAggregator)
+	}
+}
+
+// Счётчик расхождений у каждого слоя свой: один агрегатор видит предпродажу,
+// другой по тому же фильму отдаёт ноль, и общим числом это не выразить.
+func TestAgreementIsCountedPerLayer(t *testing.T) {
+	own := map[string]bool{"7458": false}
+
+	// Первый слой площадку не знает вовсе.
+	blind := countAgreement(own, map[string][]AggregatorShowtime{})
+	// Второй видит у неё сеансы.
+	seeing := countAgreement(own, map[string][]AggregatorShowtime{
+		"7458": {{StartsAt: "2026-08-20T10:10:00+03:00"}},
+	})
+
+	if blind.AggregatorOnly != 0 {
+		t.Errorf("слепой слой насчитал доп-покрытие: %+v", blind)
+	}
+	if seeing.AggregatorOnly != 1 {
+		t.Errorf("зрячий слой доп-покрытие потерял: %+v", seeing)
+	}
+}
+
+// Форма сеанса общая для всех источников: привязка, сведение и счётчик у слоёв
+// одни и те же, разный только способ добыть поля.
+func TestAggregatorSessionIsSourceAgnostic(t *testing.T) {
+	// Собран вручную, как это сделает разбор любого источника.
+	s := AggregatorSession{
+		PlaceID: "kinoafisha:8327263", PlaceTitle: "Вики Синема ЗигЗаг",
+		PlaceAddress: "ул. Лобненская, 4А", PlaceLat: 55.889471, PlaceLon: 37.537954,
+		StartsAt: "2026-08-20T10:10:00+03:00", SaleStatus: "ticket", PriceMin: 450,
+	}
+
+	got := collectAggregatorVenues([]AggregatorSession{s})
+	if len(got) != 1 || got[0].Title != "Вики Синема ЗигЗаг" {
+		t.Fatalf("сеанс чужого источника не свернулся в площадку: %+v", got)
+	}
+	if got[0].Lat == 0 {
+		t.Error("координаты потеряны — привязка по точке работать не будет")
 	}
 }

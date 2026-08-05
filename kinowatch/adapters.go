@@ -2754,12 +2754,17 @@ func parseJewishMuseum(body string) (Playbill, error) {
 // слаг, название и АДРЕС. Адрес и делает привязку к строке реестра возможной
 // без справочника соответствий — новый кинотеатр появляется в ответе сам.
 
-// YandexSession — один сеанс из ответа Афиши вместе с его площадкой.
+// AggregatorSession — сеанс агрегатора вместе с его площадкой, в форме, общей
+// для ВСЕХ источников второго слоя.
 //
-// Координаты площадки приходят у каждого сеанса и нужны привязке: адрес у
-// строки реестра есть далеко не всегда, а расстояние между точками — самое
-// доказательное, что вообще можно предъявить.
-type YandexSession struct {
+// Форма одна намеренно: агрегаторов несколько, а привязка к реестру, счётчик
+// расхождений и сведение сеансов у них общие. Разное у источников — только
+// способ добыть эти поля, и он живёт в их клиентах и разборе.
+//
+// Координаты площадки нужны привязке: адрес у строки реестра есть далеко не
+// всегда, а расстояние между точками — самое доказательное, что можно
+// предъявить.
+type AggregatorSession struct {
 	PlaceID      string
 	PlaceSlug    string
 	PlaceTitle   string
@@ -2832,7 +2837,7 @@ type yandexScheduleResponse struct {
 }
 
 // parseYandexSchedule разбирает ответ Афиши в плоский список сеансов.
-func parseYandexSchedule(body string) ([]YandexSession, error) {
+func parseYandexSchedule(body string) ([]AggregatorSession, error) {
 	var resp yandexScheduleResponse
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		return nil, fmt.Errorf("разбор Яндекс Афиши: ответ не читается как JSON: %w", err)
@@ -2841,7 +2846,7 @@ func parseYandexSchedule(body string) ([]YandexSession, error) {
 		return nil, fmt.Errorf("разбор Яндекс Афиши: запрос отвергнут: %s", resp.Errors[0].Message)
 	}
 
-	var out []YandexSession
+	var out []AggregatorSession
 	for _, day := range resp.Data.EventScheduleOther.Items {
 		for _, s := range day.Sessions {
 			// Время приходит без зоны, но по московскому времени — как и у
@@ -2850,7 +2855,7 @@ func parseYandexSchedule(body string) ([]YandexSession, error) {
 			if at == "" {
 				continue
 			}
-			ys := YandexSession{
+			ys := AggregatorSession{
 				PlaceID:      strings.TrimSpace(s.Place.ID),
 				PlaceSlug:    strings.TrimSpace(path.Base(s.Place.URL)),
 				PlaceTitle:   strings.TrimSpace(s.Place.Title),
