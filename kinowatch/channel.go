@@ -667,6 +667,51 @@ func yandexEventID(c *Client, slug string) (string, int, error) {
 		slug, out.Data.URLInfo.Status)
 }
 
+// yandexEventCardFields — набор полей карточки, общий для поиска и события.
+const yandexEventCardFields = "id title url originalTitle year dateReleased duration"
+
+// fetchYandexEventCard берёт карточку фильма по его идентификатору.
+//
+// Единственный способ узнать, ПРО ТОТ ЛИ фильм спросили. Расписание на этот
+// вопрос не отвечает: у чужого фильма-однофамильца оно просто пустое, и от
+// честного «нигде не идёт» неотличимо.
+func fetchYandexEventCard(c *Client, id string) (YandexEvent, int, error) {
+	body := fmt.Sprintf(`{"operationName":"EventQuery","variables":{"id":%q},`+
+		`"query":"query EventQuery($id: ID!) { event(id: $id) { %s } }"}`, id, yandexEventCardFields)
+
+	resp, status, err := c.postJSON(yandexGQL, body, yandexHeaders())
+	if err != nil {
+		return YandexEvent{}, status, err
+	}
+	ev, perr := parseYandexEventCard(resp)
+	if perr != nil {
+		return YandexEvent{}, status, perr
+	}
+	return ev, status, nil
+}
+
+// findYandexEvents ищет идущие в городе фильмы по названию.
+//
+// Тег cinema обязателен: без него в выдачу лезут концерты и спектакли с тем же
+// словом в названии. Ищутся ТОЛЬКО идущие сейчас — этим и снимается ловушка
+// одноимённого фильма прошлых лет, которую даёт поиск по адресу страницы.
+func findYandexEvents(c *Client, title string) ([]YandexEvent, int, error) {
+	body := fmt.Sprintf(`{"operationName":"ActualEventsQuery","variables":{"q":%q},`+
+		`"query":"query ActualEventsQuery($q: String) { actualEvents(search: $q, tags: [\"cinema\"], `+
+		`paging: {limit: 20, offset: 0}) { items { event { %s } } } }"}`,
+		strings.TrimSpace(title), yandexEventCardFields)
+
+	resp, status, err := c.postJSON(yandexGQL, body, yandexHeaders())
+	if err != nil {
+		return nil, status, err
+	}
+	events, perr := parseYandexSearch(resp)
+	if perr != nil {
+		return nil, status, perr
+	}
+	return events, status, nil
+}
+
 // fetchYandexSchedule берёт сеансы фильма по всем площадкам города.
 //
 // Горизонт задаётся периодом в днях и приходит ОДНИМ ответом — обходить
@@ -685,7 +730,8 @@ func fetchYandexSchedule(c *Client, slug string, from time.Time, days int) ([]Ya
 		`"dates":{"date":%q,"period":%d}},`+
 		`"query":"query EventScheduleOtherQuery($id: ID!, $dates: DaysIntervalInput!) `+
 		`{ eventScheduleOther(id: $id, dates: $dates) { items: byDate { date sessions `+
-		`{ place { id url title address } session { datetime hall: hallName } } } } }"}`,
+		`{ place { id url title address coordinates { latitude longitude } } `+
+		`session { datetime hall: hallName ticket { saleStatus price { min max currency } } } } } } }"}`,
 		id, from.Format("2006-01-02"), days)
 
 	resp, status, err := c.postJSON(yandexGQL, body, yandexHeaders())

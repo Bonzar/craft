@@ -2755,14 +2755,35 @@ func parseJewishMuseum(body string) (Playbill, error) {
 // без справочника соответствий — новый кинотеатр появляется в ответе сам.
 
 // YandexSession — один сеанс из ответа Афиши вместе с его площадкой.
+//
+// Координаты площадки приходят у каждого сеанса и нужны привязке: адрес у
+// строки реестра есть далеко не всегда, а расстояние между точками — самое
+// доказательное, что вообще можно предъявить.
 type YandexSession struct {
 	PlaceID      string
 	PlaceSlug    string
 	PlaceTitle   string
 	PlaceAddress string
+	PlaceLat     float64
+	PlaceLon     float64
 
 	StartsAt string
 	Hall     string
+
+	// SaleStatus — состояние продажи как его называет Афиша, СТРОКОЙ. Значений
+	// шесть (available, closed, in_progress, no_seats, not_available,
+	// not_opened), и в булев признак они не сворачиваются: «продажа ещё не
+	// открыта» и «мест нет» — разные вещи, и обе не равны «не продаётся».
+	//
+	// Пустая строка означает, что блока билета у сеанса не было вовсе. Это не
+	// «нет продажи», а «Афиша этот сеанс не продаёт» — сеансом он быть не
+	// перестаёт.
+	SaleStatus string
+
+	// Цена в РУБЛЯХ. Источник отдаёт копейки, перевод делает разбор — см.
+	// yandexPriceRubles.
+	PriceMin int
+	PriceMax int
 }
 
 // yandexScheduleResponse — форма ответа EventScheduleOtherQuery.
@@ -2778,14 +2799,28 @@ type yandexScheduleResponse struct {
 				Date     string `json:"date"`
 				Sessions []struct {
 					Place struct {
-						ID      string `json:"id"`
-						URL     string `json:"url"`
-						Title   string `json:"title"`
-						Address string `json:"address"`
+						ID          string `json:"id"`
+						URL         string `json:"url"`
+						Title       string `json:"title"`
+						Address     string `json:"address"`
+						Coordinates *struct {
+							Lat float64 `json:"latitude"`
+							Lon float64 `json:"longitude"`
+						} `json:"coordinates"`
 					} `json:"place"`
 					Session struct {
 						Datetime string `json:"datetime"`
 						Hall     string `json:"hall"`
+						// Ticket приходит указателем намеренно: его отсутствие —
+						// значимый факт, а не нулевая цена.
+						Ticket *struct {
+							SaleStatus string `json:"saleStatus"`
+							Price      *struct {
+								Min      int    `json:"min"`
+								Max      int    `json:"max"`
+								Currency string `json:"currency"`
+							} `json:"price"`
+						} `json:"ticket"`
 					} `json:"session"`
 				} `json:"sessions"`
 			} `json:"items"`
@@ -2815,14 +2850,135 @@ func parseYandexSchedule(body string) ([]YandexSession, error) {
 			if at == "" {
 				continue
 			}
-			out = append(out, YandexSession{
+			ys := YandexSession{
 				PlaceID:      strings.TrimSpace(s.Place.ID),
 				PlaceSlug:    strings.TrimSpace(path.Base(s.Place.URL)),
 				PlaceTitle:   strings.TrimSpace(s.Place.Title),
 				PlaceAddress: strings.TrimSpace(s.Place.Address),
 				StartsAt:     at,
 				Hall:         strings.TrimSpace(s.Session.Hall),
-			})
+			}
+			if c := s.Place.Coordinates; c != nil {
+				ys.PlaceLat, ys.PlaceLon = c.Lat, c.Lon
+			}
+			if t := s.Session.Ticket; t != nil {
+				ys.SaleStatus = strings.TrimSpace(t.SaleStatus)
+				if p := t.Price; p != nil {
+					ys.PriceMin = yandexPriceRubles(p.Min, p.Currency)
+					ys.PriceMax = yandexPriceRubles(p.Max, p.Currency)
+				}
+			}
+			out = append(out, ys)
+		}
+	}
+	return out, nil
+}
+
+// yandexPriceRubles переводит цену Афиши в рубли.
+//
+// Замер: у Москино Невы min = 42000 при валюте rub и реальной цене билета
+// около 420 ₽; по всему прогону значения от 20000 до 800000 и все кратны сотне.
+// То есть это копейки.
+//
+// Чужая валюта возвращает ноль, а не пересчитанное число: делить на сто
+// вслепую значило бы выдать правдоподобную цифру из воздуха. Ноль в цене
+// означает «цены нет» — так же, как у сеанса без блока билета.
+func yandexPriceRubles(value int, currency string) int {
+	if value <= 0 || !strings.EqualFold(strings.TrimSpace(currency), "rub") {
+		return 0
+	}
+	return value / 100
+}
+
+// YandexEvent — карточка фильма у Афиши.
+//
+// Нужна не ради данных, а ради опознания: по одному расписанию нельзя отличить
+// «фильм нигде не идёт» от «спросили не про тот фильм». Карточка отвечает на
+// второй вопрос — и потому печатается в отчёт целиком.
+type YandexEvent struct {
+	ID            string
+	Title         string
+	Slug          string
+	OriginalTitle string
+	Year          int
+	DateReleased  string
+	DurationMin   int
+}
+
+// yandexEventFields — общая часть ответов о событии.
+type yandexEventFields struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	URL           string `json:"url"`
+	OriginalTitle string `json:"originalTitle"`
+	Year          int    `json:"year"`
+	DateReleased  string `json:"dateReleased"`
+	Duration      int    `json:"duration"`
+}
+
+func (f yandexEventFields) event() YandexEvent {
+	return YandexEvent{
+		ID:            strings.TrimSpace(f.ID),
+		Title:         strings.TrimSpace(f.Title),
+		Slug:          strings.TrimSpace(path.Base(f.URL)),
+		OriginalTitle: strings.TrimSpace(f.OriginalTitle),
+		Year:          f.Year,
+		DateReleased:  strings.TrimSpace(f.DateReleased),
+		DurationMin:   f.Duration,
+	}
+}
+
+// parseYandexEventCard разбирает ответ о конкретном событии.
+func parseYandexEventCard(body string) (YandexEvent, error) {
+	var resp struct {
+		Data struct {
+			Event *yandexEventFields `json:"event"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return YandexEvent{}, fmt.Errorf("разбор карточки Яндекс Афиши: ответ не читается как JSON: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return YandexEvent{}, fmt.Errorf("разбор карточки Яндекс Афиши: запрос отвергнут: %s", resp.Errors[0].Message)
+	}
+	if resp.Data.Event == nil {
+		return YandexEvent{}, fmt.Errorf("разбор карточки Яндекс Афиши: события нет в ответе")
+	}
+	return resp.Data.Event.event(), nil
+}
+
+// parseYandexSearch разбирает ответ поиска фильма по названию.
+//
+// Пустой список — законный ответ («такого фильма в прокате нет»), поэтому
+// ошибкой он не считается: решение принимает вызывающий, у которого есть
+// название и профиль.
+func parseYandexSearch(body string) ([]YandexEvent, error) {
+	var resp struct {
+		Data struct {
+			ActualEvents struct {
+				Items []struct {
+					Event yandexEventFields `json:"event"`
+				} `json:"items"`
+			} `json:"actualEvents"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return nil, fmt.Errorf("разбор поиска Яндекс Афиши: ответ не читается как JSON: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("разбор поиска Яндекс Афиши: запрос отвергнут: %s", resp.Errors[0].Message)
+	}
+
+	var out []YandexEvent
+	for _, it := range resp.Data.ActualEvents.Items {
+		if e := it.Event.event(); e.ID != "" {
+			out = append(out, e)
 		}
 	}
 	return out, nil

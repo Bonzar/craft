@@ -1719,9 +1719,9 @@ func TestParseMoriNoMarkerStillBroken(t *testing.T) {
 
 // Разбор расписания даёт плоский список сеансов, у каждого — своя площадка.
 //
-// Второй слой ценен ровно этим: площадка приезжает внутри сеанса, с адресом и
-// слагом. Поэтому справочник кинотеатров в коде не нужен, а привязка к реестру
-// идёт по адресу из ответа.
+// Второй слой ценен ровно этим: площадка приезжает внутри сеанса, с адресом,
+// координатами и слагом. Поэтому справочник кинотеатров в коде не нужен, а
+// привязка к реестру идёт по точке и адресу из ответа.
 func TestParseYandexScheduleFlattensDays(t *testing.T) {
 	body := readFixture(t, "yandex-schedule.json")
 
@@ -1729,19 +1729,24 @@ func TestParseYandexScheduleFlattensDays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("разбор живого ответа Афиши упал: %v", err)
 	}
-	// В фикстуре два дня по четыре сеанса: горизонт складывается в один список.
-	if len(got) != 8 {
-		t.Fatalf("сеансов %d, ожидалось 8 — день горизонта потерян или задвоен", len(got))
+	// В фикстуре два дня по три сеанса: горизонт складывается в один список.
+	if len(got) != 6 {
+		t.Fatalf("сеансов %d, ожидалось 6 — день горизонта потерян или задвоен", len(got))
 	}
 
 	first := got[0]
 	want := YandexSession{
-		PlaceID:      "554b45b31f6fd6280a3eeee4",
-		PlaceSlug:    "kronverk-sinema-veipark",
-		PlaceTitle:   "Кронверк Синема Вэйпарк",
-		PlaceAddress: "71-й км МКАД, ТРЦ «Вэйпарк»",
-		StartsAt:     "2026-08-05T12:35:00+03:00",
-		Hall:         "Зал 3",
+		PlaceID:      "5517983f1f7d154a12ddf205",
+		PlaceSlug:    "cinema-park-mega-teplyi-stan",
+		PlaceTitle:   "Синема Парк Тёплый Стан",
+		PlaceAddress: "Калужское ш., 21-й км, ТЦ «Мега Тёплый Стан», 1-й этаж",
+		PlaceLat:     55.602984,
+		PlaceLon:     37.490164,
+		StartsAt:     "2026-08-05T13:45:00+03:00",
+		Hall:         "Зал: 02",
+		SaleStatus:   "available",
+		PriceMin:     670,
+		PriceMax:     670,
 	}
 	if first != want {
 		t.Errorf("первый сеанс разобран как %+v, ожидался %+v", first, want)
@@ -1794,5 +1799,74 @@ func TestParseYandexScheduleEmptyIsNotError(t *testing.T) {
 func TestParseYandexScheduleRejectsNonJSON(t *testing.T) {
 	if _, err := parseYandexSchedule("<html>405 Not Allowed</html>"); err == nil {
 		t.Fatal("страница ошибки nginx принята за расписание")
+	}
+}
+
+// Цена приходит в копейках и обязана доехать рублями.
+//
+// Замер: у Москино Невы min = 42000 при валюте rub и реальной цене билета
+// около 420 ₽. Ошибка в сто раз тут тихая — и 420, и 42000 выглядят
+// правдоподобно, а сравнение с ценами своих каналов ломается в обе стороны.
+func TestYandexPriceRublesConvertsKopecks(t *testing.T) {
+	if got := yandexPriceRubles(42000, "rub"); got != 420 {
+		t.Errorf("42000 копеек превратились в %d ₽, ожидалось 420", got)
+	}
+	// Верхняя граница вилки — премиальный зал, а не аренда: «Времена года»,
+	// залы «Зима» и «Лето».
+	if got := yandexPriceRubles(800000, "RUB"); got != 8000 {
+		t.Errorf("верх вилки превратился в %d ₽, ожидалось 8000", got)
+	}
+}
+
+// Чужая валюта не пересчитывается: делить на сто вслепую значило бы выдать
+// правдоподобное число из воздуха. Сеанс при этом не теряется — теряется цена.
+func TestYandexPriceRublesSkipsForeignCurrency(t *testing.T) {
+	if got := yandexPriceRubles(42000, "usd"); got != 0 {
+		t.Errorf("цена в чужой валюте пересчиталась в %d, ожидался ноль", got)
+	}
+	if got := yandexPriceRubles(0, "rub"); got != 0 {
+		t.Errorf("пустая цена превратилась в %d", got)
+	}
+}
+
+// Сеанс без блока билета — это не «нет продажи», а «Афиша его не продаёт».
+// Пропасть он не имеет права: сеанс состоится независимо от того, кто продаёт.
+func TestParseYandexScheduleKeepsSessionWithoutTicket(t *testing.T) {
+	got, err := parseYandexSchedule(readFixture(t, "yandex-schedule.json"))
+	if err != nil {
+		t.Fatalf("разбор упал: %v", err)
+	}
+
+	var noTicket int
+	for _, s := range got {
+		if s.SaleStatus == "" {
+			noTicket++
+			if s.PriceMin != 0 || s.PriceMax != 0 {
+				t.Errorf("у сеанса без билета появилась цена: %+v", s)
+			}
+			if s.StartsAt == "" {
+				t.Errorf("сеанс без билета потерял время: %+v", s)
+			}
+		}
+	}
+	if noTicket != 2 {
+		t.Errorf("сеансов без блока билета %d, в фикстуре их 2", noTicket)
+	}
+}
+
+// Статус продажи доезжает строкой. Свёртка в булев признак склеила бы «продажа
+// ещё не открыта» и «мест нет» — а это разные вещи, и обе не равны «не идёт».
+func TestParseYandexScheduleKeepsSaleStatusAsText(t *testing.T) {
+	body := `{"data":{"eventScheduleOther":{"items":[{"date":"2026-08-05","sessions":[` +
+		`{"place":{"id":"p","url":"/moscow/cinema/places/x","title":"Т","address":"А"},` +
+		`"session":{"datetime":"2026-08-05T20:00:00","hall":"1",` +
+		`"ticket":{"saleStatus":"not_opened","price":null}}}]}]}}}`
+
+	got, err := parseYandexSchedule(body)
+	if err != nil {
+		t.Fatalf("разбор упал: %v", err)
+	}
+	if len(got) != 1 || got[0].SaleStatus != "not_opened" {
+		t.Fatalf("статус продажи потерян: %+v", got)
 	}
 }
