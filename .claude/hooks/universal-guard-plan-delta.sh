@@ -23,6 +23,16 @@
 # Fail open на всём неожиданном: сломанный гейт не должен клинить работу.
 set -u
 
+# Хеш из потока. Запасная команда обязательна: на маке основной нет — хеши разъехались
+# бы в пустоту и гейт молча выключился бы.
+hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -d' ' -f1
+  fi
+}
+
 # Уступаем user-level копии — иначе двойной прогон на локальной машине.
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
       && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
@@ -45,7 +55,7 @@ units() {  # печатает «хеш<таб>заголовок» на кажд
   local title="" buf="" line
   emit() {
     [[ -n "$title" ]] || return 0
-    printf '%s\t%s\n' "$(printf '%s' "$buf" | sha256sum | cut -d' ' -f1)" "$title"
+    printf '%s\t%s\n' "$(printf '%s' "$buf" | hash_stdin)" "$title"
   }
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "${line//[[:space:]]/}" ]] && continue
@@ -84,7 +94,9 @@ total=0; rep=0; names=""
 while IFS=$'\t' read -r h t; do
   [[ -n "$h" ]] || continue
   total=$((total + 1))
-  grep -qxF -- "$h" <<<"$approved" && { rep=$((rep + 1)); names+="«$t» "; }
+  # Скобки обязательны: без них в UTF-8-локали bash читает имя как «t»» вместе
+  # с кавычкой и валит хук по set -u — гвард молча пропускал повторы.
+  grep -qxF -- "$h" <<<"$approved" && { rep=$((rep + 1)); names+="«${t}» "; }
 done <<<"$now"
 
 [[ "$rep" -eq 0 ]] && exit 0          # чистая дельта

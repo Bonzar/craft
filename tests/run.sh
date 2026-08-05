@@ -21,6 +21,13 @@
 # not be executable. Run from anywhere: `bash tests/run.sh`.
 set -u
 
+# UTF-8-локаль обязательна: часть дефектов видна ТОЛЬКО в ней. В bash подстановка
+# `$var` вплотную к не-ASCII символу в UTF-8 читается как имя вместе с этим
+# символом и валит скрипт по set -u, а в локали C та же строка работает. Из-за
+# этого сломанный guard-plan-delta прошёл ревью: CI был зелёный, а на рабочей
+# машине гвард молча падал. Локаль та же, что у хуков (см. universal-detect-incident.sh).
+export LC_ALL=C.UTF-8
+
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HOOKS="$REPO/.claude/hooks"
 CASES_DIR="$REPO/tests/hooks"
@@ -42,9 +49,11 @@ declare -A SCRIPT=(
   [guard-plan-critic]="$HOOKS/universal-guard-plan-critic.sh"
   [guard-plan-delta]="$HOOKS/universal-guard-plan-delta.sh"
   [guard-plan-service-turn]="$HOOKS/universal-guard-plan-service-turn.sh"
+  [guard-plan-exit-failure]="$HOOKS/universal-guard-plan-exit-failure.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
   [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
+  [stop-relative-link]="$HOOKS/universal-stop-relative-link.sh"
   [detect-incident-arm]="$HOOKS/universal-detect-incident.sh"
 )
 
@@ -107,12 +116,16 @@ for f in "${files[@]}"; do
     icmark="$(mktemp -u "${TMPDIR:-/tmp}/incident-closure-test.XXXXXX").armed"
     serviceturn="$(mktemp -u "${TMPDIR:-/tmp}/plan-service-turn-test.XXXXXX")"
     criticpend="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-pending-test.XXXXXX")"
+    planshown="$(mktemp -u "${TMPDIR:-/tmp}/plan-shown-test.XXXXXX")"
+    criticruns="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-runs-test.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
              "CRAFT_PLAN_DELTA_STORE=$deltastore" "INCIDENT_CLOSURE_MARKER=$icmark"
              "CRAFT_SERVICE_TURN_MARKER=$serviceturn"
-             "CRAFT_PLAN_CRITIC_PENDING=$criticpend")
+             "CRAFT_PLAN_CRITIC_PENDING=$criticpend"
+             "CRAFT_PLAN_SHOWN_MARKER=$planshown"
+             "CRAFT_PLAN_CRITIC_RUNS=$criticruns")
     # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
     # из env, создаётся до прогона (взводом в жизни занимается другой хук).
     [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"
@@ -153,12 +166,13 @@ for f in "${files[@]}"; do
     # `repeat: N` — feed the SAME input N times (deny-once / remind-once hooks:
     # the assertion is on the LAST invocation's output).
     rpt="$(jq -r '.repeat // 1' <<<"$line")"
-    out=""
+    out=""; errf="$(mktemp)"
     for ((r_i=0; r_i<rpt; r_i++)); do
-      out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>/dev/null)"
+      out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>"$errf")"
     done
+    err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
     rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
-          "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend"; rm -rf "$fgdir"
+          "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend" "$planshown" "$criticruns"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
@@ -168,6 +182,14 @@ for f in "${files[@]}"; do
       inject) grep -q 'СИГНАЛ ИНЦИДЕНТА' <<<"$out" && ok=1 ;;
       silent) [[ -z "$(trim "$out")" ]] && ok=1 ;;
       contains:*) grep -qF -- "${expect#contains:}" <<<"$out" && ok=1 ;;
+      # Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет
+      # улику доставки правила. Без отдельной проверки эта половина вывода
+      # тестами не покрывается вовсе.
+      err-contains:*) grep -qF -- "${expect#err-contains:}" <<<"$err" && ok=1 ;;
+      # Отрицание: иногда доказательство — именно ОТСУТСТВИЕ строки (хук не
+      # пошёл по короткому пути, гвард не сработал вхолостую).
+      not-contains:*)     grep -qF -- "${expect#not-contains:}" <<<"$out" || ok=1 ;;
+      err-not-contains:*) grep -qF -- "${expect#err-not-contains:}" <<<"$err" || ok=1 ;;
       *)      fails+=("$hook / $name — unknown expect '$expect'") ;;
     esac
     if [[ $ok -eq 1 ]]; then
@@ -195,6 +217,7 @@ REQUIRED=(
   "guard-plan-service-turn:deny" "guard-plan-service-turn:allow"
   "mark-plan-critic:silent"   "mark-plan-file:silent"
   "stop-incident-closure:block" "stop-incident-closure:silent"
+  "stop-relative-link:block"    "stop-relative-link:silent"
 )
 missing=()
 for k in "${REQUIRED[@]}"; do [[ -n "${covered[$k]:-}" ]] || missing+=("$k"); done
@@ -209,6 +232,23 @@ while IFS= read -r c; do
   elif [[ ! -x "$p" ]]; then smoke+=("hook not executable: $p")
   fi
 done < <(jq -r '.hooks[]?[]?.hooks[]?.command // empty' "$REPO/.claude/settings.json" 2>/dev/null)
+
+# Поверхность, которую хук объявляет, обязана быть за ним зарегистрирована: раннер
+# зовёт хуки по своей карте и регистрации не видит, поэтому пропавший матчер тесты
+# иначе не ловят. Ключ — «файл хука ↔ событие и матчер».
+declare -A NEEDS_MATCHER=(
+  ["universal-guard-plan-gate.sh|PreToolUse"]="Bash"
+  ["universal-guard-plan-exit-failure.sh|PostToolUseFailure"]="ExitPlanMode"
+  ["universal-guard-plan-service-turn.sh|PreToolUse"]="ExitPlanMode"
+)
+for key in "${!NEEDS_MATCHER[@]}"; do
+  hookfile="${key%%|*}"; event="${key##*|}"; want="${NEEDS_MATCHER[$key]}"
+  jq -e --arg e "$event" --arg m "$want" --arg f "$hookfile" \
+     '(.hooks[$e] // []) | any(((.matcher // "") == $m)
+        and any((.hooks // [])[]; (.command // "") | endswith($f)))' \
+     "$REPO/.claude/settings.json" >/dev/null 2>&1 \
+    || smoke+=("hook $hookfile not registered on $event matcher $want")
+done
 
 # Reverse smoke: every hook FILE under .claude/hooks must be registered in at
 # least one contour (repo settings.json or install.sh) — an unregistered hook
@@ -234,6 +274,54 @@ fi
 while IFS= read -r b; do
   [[ -n "$b" ]] && smoke+=("orphan hook (not registered in settings.json or install.sh): $b")
 done < <(reverse_orphans "$HOOKS"/*.sh)
+
+# Static check: a `$var` substitution glued to a non-ASCII character is a bug.
+# In a UTF-8 locale bash reads the name together with that character, so the
+# script dies on set -u — and only there: in the C locale the same
+# line works, which is why a broken guard sat in main with a green CI. Braces
+# (`${var}`) end the name explicitly and are the fix.
+# The prior run in the UTF-8 locale only catches lines the tests actually
+# execute; this catches the rest of the tree.
+# Only flags places where bash actually expands: a whole-line comment, an escaped
+# `\$` and anything inside single quotes are inert, and flagging them would fail
+# the suite on harmless text — the fastest way to get a check disabled.
+# Single quotes are judged per line by counting them before the match: enough for
+# real code, blind to multi-line quoting. That gap is covered by the UTF-8 run.
+utf8_glue() {  # args: files; echoes "path:line" for each offending line
+  local hit file lineno text before
+  while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    file="${hit%%:*}"; hit="${hit#*:}"
+    lineno="${hit%%:*}"; text="${hit#*:}"
+    [[ "$text" =~ ^[[:space:]]*# ]] && continue          # comment line
+    before="${text%%\$*}"
+    [[ "${before: -1}" == "\\" ]] && continue            # escaped \$
+    before="${before//[^\']/}"
+    (( ${#before} % 2 == 1 )) && continue                # inside single quotes
+    printf '%s:%s\n' "$file" "$lineno"
+  done < <(grep -nHE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$@" 2>/dev/null)
+}
+# Self-test: the red path must be provably reachable. The samples are assembled
+# from parts so this file itself carries no literal defect for the check to find.
+D='$'; Q='«'; QQ='»'
+selftest_file="$(mktemp)"
+printf 'x="%s%st%s "\n' "$Q" "$D" "$QQ" > "$selftest_file"
+[[ -n "$(utf8_glue "$selftest_file")" ]] \
+  || smoke+=("utf8-glue self-test failed: planted defect not caught")
+# The negative side: braces, an ASCII quote after the name, a comment, single
+# quotes and an escaped `\$` are all legal — none of them expands into a defect.
+{ printf 'a="%s%s{t}%s "\n' "$Q" "$D" "$QQ"
+  printf 'b="%sname"\n' "$D"
+  printf '# note: %st%s label\n' "$D" "$QQ"
+  printf "echo '%st%s literal'\n" "$D" "$QQ"
+  printf 'echo "\\%st%s escaped"\n' "$D" "$QQ"; } > "$selftest_file"
+[[ -z "$(utf8_glue "$selftest_file")" ]] \
+  || smoke+=("utf8-glue self-test failed: legal forms flagged: $(utf8_glue "$selftest_file")")
+rm -f "$selftest_file"
+while IFS= read -r hit; do
+  [[ -n "$hit" ]] && smoke+=("\$var glued to a non-ASCII char (use \${var}): $hit")
+done < <(utf8_glue "$HOOKS"/*.sh "$REPO"/tests/*.sh "$REPO"/evals/*.sh "$REPO"/evals/lib/*.sh \
+                  "$REPO"/install.sh)
 
 printf -- '---------------------------------------------------------------------------\n'
 if [[ ${#fails[@]} -gt 0 ]]; then

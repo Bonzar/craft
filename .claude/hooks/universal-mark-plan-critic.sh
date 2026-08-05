@@ -21,6 +21,16 @@
 # Fail quiet: не смог посчитать хеш — отметки нет, гейт просто не пропустит.
 set -u
 
+# Хеш файла. Запасная команда обязательна: на маке из README основной нет, хеш вышел бы
+# пустым, и гейт молча выключился бы. Формат первого токена у обеих команд одинаков.
+hash_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+  fi
+}
+
 # Уступаем user-level копии — иначе двойной прогон на локальной машине.
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
       && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
@@ -31,7 +41,39 @@ input="$(cat)"
 sid="${CLAUDE_CODE_SESSION_ID:-default}"
 marker="${CRAFT_PLAN_CRITIC_MARKER:-/tmp/plan-critic.${sid}.done}"
 pending="${CRAFT_PLAN_CRITIC_PENDING:-/tmp/plan-critic.${sid}.pending}"
+runs="${CRAFT_PLAN_CRITIC_RUNS:-/tmp/plan-critic.${sid}.runs}"
 event="$(jq -r '.hook_event_name // "PostToolUse"' <<<"$input" 2>/dev/null)" || exit 0
+
+# Счётчик завершённых прогонов критика — машинное «Плато»: гейт по нему пропускает показ,
+# когда обкатка перестала двигать план. Считается ПРОГОН, а не версия файла: правка по
+# замечаниям меняет хеш, и счёт по хешу всегда был бы единица. Инкремент идёт всюду, где
+# ставится отметка, — иначе синхронный вердикт плато не набирает.
+bump_runs() {
+  local n
+  n="$(cat "$runs" 2>/dev/null)"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  printf '%s\n' "$((n + 1))" > "$runs" 2>/dev/null || true
+}
+
+# Вердикт критика — машиночитаемая последняя строка его ответа. Он и разрывает
+# самоинвалидацию: «блокеров нет» пускает показ, даже если план после обкатки правился,
+# то есть шероховатость больше не стоит целого круга. Текст вердикта доступен в обоих
+# путях — синхронный ответ подагента и поле результата в уведомлении о завершении.
+# Не распознан — пусто: гейт тогда судит по хешу, как раньше.
+verdict_of() {
+  if grep -qF 'Вердикт: блокеров нет' <<<"$1"; then printf 'noblockers'
+  elif grep -qF 'Вердикт: есть блокеры' <<<"$1"; then printf 'blockers'
+  fi
+}
+
+# Отметка — «хеш<таб>вердикт». Вердикта нет — остаётся голый хеш, как было: старые
+# отметки и фикстуры читаются тем же первым полем.
+put_mark() {
+  local h="$1" v="$2"
+  if [[ -n "$v" ]]; then printf '%s\t%s\n' "$h" "$v" > "$marker" 2>/dev/null || true
+  else printf '%s\n' "$h" > "$marker" 2>/dev/null || true
+  fi
+}
 
 if [[ "$event" == "UserPromptSubmit" ]]; then
   prompt="$(jq -r '.prompt // ""' <<<"$input" 2>/dev/null)"
@@ -44,7 +86,8 @@ if [[ "$event" == "UserPromptSubmit" ]]; then
   # переставит, а незавершённый критик её не получит вовсе.
   grep -v -- "^${id}	" "$pending" > "${pending}.tmp" 2>/dev/null && mv "${pending}.tmp" "$pending"
   [[ "$prompt" == *"<status>completed</status>"* ]] || exit 0
-  printf '%s\n' "$hash" > "$marker" 2>/dev/null || true
+  put_mark "$hash" "$(verdict_of "$prompt")"
+  bump_runs
   exit 0
 fi
 
@@ -52,7 +95,7 @@ jq -e '(.tool_input.subagent_type // "") == "plan-critic"' >/dev/null 2>&1 <<<"$
 
 plan="${CRAFT_PLAN_FILE:-$(cat "${CRAFT_PLAN_FILE_MARKER:-/tmp/plan-file.${sid}.path}" 2>/dev/null)}"
 [[ -n "$plan" && -r "$plan" ]] || exit 0
-hash="$(sha256sum "$plan" 2>/dev/null | cut -d' ' -f1)"
+hash="$(hash_of "$plan")"
 [[ -n "$hash" ]] || exit 0
 
 resp="$(jq -r '.tool_response | tostring' <<<"$input" 2>/dev/null)"
@@ -60,6 +103,7 @@ id="$(sed -n 's/.*agentId: \([A-Za-z0-9_-]*\).*/\1/p' <<<"$resp" | head -1)"
 if [[ -n "$id" ]]; then
   printf '%s\t%s\n' "$id" "$hash" >> "$pending" 2>/dev/null || true
 else
-  printf '%s\n' "$hash" > "$marker" 2>/dev/null || true
+  put_mark "$hash" "$(verdict_of "$resp")"
+  bump_runs
 fi
 exit 0

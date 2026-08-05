@@ -129,6 +129,24 @@ grade_expect_present "четыре"
 grade_verdict; covered["evidence:ERROR"]=1
 check "улика / нет улики — ERROR, а не вердикт" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
 
+# 9e-2. Улик может быть несколько: правила кейса приходят разными каналами.
+#       «Отчёт об изменениях» и «Факт против догадки» живут в роутере, а тело
+#       скилла разбора — в своём инжекте. Пропади роутер из контекста, замер
+#       остался бы зелёным на пустом месте, поэтому требуются обе улики.
+source evals/lib/runner.sh
+CASE_TWO='{"name":"x","prompt":"y","expect_present":["четыре"],"rule_evidence":["incident doc cached","роутер обновлён"]}'
+grade_load "$FIX/rule-both.jsonl" 0
+eval__assert_case "$CASE_TWO"
+grade_verdict; covered["evidence2:PASS"]=1
+check "улики / обе на месте — вердикт выпускается" PASS "$GRADE_VERDICT" "$GRADE_DETAIL"
+
+grade_load "$FIX/rule-delivered.jsonl" 0
+eval__assert_case "$CASE_TWO"
+grade_verdict; covered["evidence2:ERROR"]=1
+check "улики / нет улики роутера — ERROR" ERROR "$GRADE_VERDICT" "$GRADE_DETAIL"
+[[ "$GRADE_DETAIL" == *"роутер обновлён"* ]] \
+  || { fail=$((fail+1)); fails+=("улики: в причине не назван недостающий источник: $GRADE_DETAIL"); }
+
 # 9f. Обрыв соединения на полуслове: весь «ответ» агента — сообщение об ошибке.
 #     Поток непустой, поэтому прежний грейдер писал FAIL, то есть «правило не
 #     соблюдено», хотя агент не сказал ничего по существу.
@@ -167,6 +185,54 @@ beh "поведение / разбор без названной ступени"
 beh "поведение / полный разбор"                analysis-full          PASS
 covered["behavior:FAIL"]=1; covered["behavior:PASS"]=1
 
+# --- сверка с человеческой разметкой ------------------------------------------
+# Ассерты калибровались на тех же ответах, где искались дефекты. Эта сверка —
+# единственное, что говорит, согласен ли грейдер с оценкой по существу. Гоняется
+# только если сохранённые потоки под рукой: в CI их нет (runs/ вне git), там шаг
+# пропускается с явной отметкой, а не молча.
+LABELS=evals/fixtures/labels/incident-closure.tsv
+# Одно известное расхождение: слово «ступень» попало в цитату, а решение не
+# названо. Текстовый ассерт этого не различает; подкручивать его под один
+# случай — подгонка. Причина записана в шапке файла разметки.
+KNOWN_MISMATCH="v3-honest-b__closure-competing-sonnet-1"
+if [[ -r "$LABELS" ]] && compgen -G "evals/runs/*/*.jsonl" > /dev/null; then
+  ag=0; dis=0; missing=0; labelled=0; unexpected=()
+  while IFS=$'\t' read -r id label; do
+    [[ "$id" == \#* || "$id" == "prognon" || -z "$id" ]] && continue
+    labelled=$((labelled+1))
+    run="${id%%__*}"; base="${id#*__}"
+    stream=$(ls "evals/runs/$run/${base%%-sonnet*}"*"-sonnet-${base##*-}.jsonl" 2>/dev/null | head -1)
+    # Пропущенный поток — не повод молча зачесть сверку: без этого счётчика
+    # достаточно одного постороннего файла в runs/, чтобы напечатать
+    # «совпало 0 из 0» и зелёный, а обещанной защиты не было бы вовсе.
+    [[ -z "$stream" ]] && { missing=$((missing+1)); continue; }
+    grade_load "$stream" 0 2>/dev/null
+    grade_expect_no_refusal
+    grade_expect_present "ступень"
+    grade_expect_any_of '["евал","eval","тест"]'
+    grade_verdict
+    want=PASS; [[ "$label" != "DONE" ]] && want=FAIL
+    if [[ "$GRADE_VERDICT" == "$want" ]]; then ag=$((ag+1)); else
+      dis=$((dis+1)); [[ "$id" != "$KNOWN_MISMATCH" ]] && unexpected+=("$id: человек $label, грейдер $GRADE_VERDICT")
+    fi
+  done < "$LABELS"
+  if [[ $((ag+dis)) -eq 0 ]]; then
+    # Ни одного размеченного потока не нашлось — сверять нечего. Это пропуск, а
+    # не успех: зелёная строка тут означала бы защиту, которой нет.
+    printf '%-6s %-44s %s\n' SKIP "сверка с человеком" "размеченных потоков нет ($labelled в разметке, все отсутствуют)"
+  elif [[ $missing -gt 0 ]]; then
+    fail=$((fail+1)); printf '%-6s %-44s %s\n' FAIL "сверка с человеком" "набор неполон: нет $missing потоков из $labelled"
+    fails+=("сверка: отсутствует $missing размеченных потоков из $labelled — сверка проведена не на всём наборе")
+  elif [[ ${#unexpected[@]} -eq 0 ]]; then
+    pass=$((pass+1)); printf '%-6s %-44s %s\n' PASS "сверка с человеком" "совпало $ag из $((ag+dis)), известных расхождений $dis"
+  else
+    fail=$((fail+1)); printf '%-6s %-44s %s\n' FAIL "сверка с человеком" "новых расхождений: ${#unexpected[@]}"
+    for m in "${unexpected[@]}"; do fails+=("сверка: $m"); done
+  fi
+else
+  printf '%-6s %-44s %s\n' SKIP "сверка с человеком" "сохранённых прогонов нет (runs/ вне git)"
+fi
+
 # --- валидация формата кейса (evals/lib/runner.sh) ----------------------------
 # Кейс без ассертов не должен молча проходить: пустой кейс создаёт иллюзию
 # покрытия — набор зелёный, а не проверяет ничего.
@@ -181,7 +247,7 @@ vcheck() {  # <имя> <ожидаемая-подстрока-ошибки|-> <c
   if [[ "$got" == *"$want"* ]]; then
     pass=$((pass+1)); printf '%-6s %-44s %s\n' PASS "$name" "$got"
   else
-    fail=$((fail+1)); fails+=("$name — ждали ошибку «$want», получили «$got»")
+    fail=$((fail+1)); fails+=("$name — ждали ошибку «${want}», получили «${got}»")
     printf '%-6s %-44s %s\n' FAIL "$name" "${got:-<нет ошибки>}"
   fi
 }
@@ -242,7 +308,7 @@ REQUIRED=(
   "denial:FAIL" "tool:FAIL"
   "no_stream:ERROR" "bad_json:ERROR" "timeout:ERROR" "noassert:ERROR"
   "noise:PASS" "case:PASS" "validate:BAD" "validate:OK" "retry:ERROR" "retry:PASS"
-  "evidence:PASS" "evidence:ERROR" "trigger:BAD" "trigger:OK"
+  "evidence:PASS" "evidence:ERROR" "evidence2:PASS" "evidence2:ERROR" "trigger:BAD" "trigger:OK"
   "behavior:PASS" "behavior:FAIL" "material:BAD" "api_cut:ERROR"
 )
 missing=()

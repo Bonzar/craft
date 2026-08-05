@@ -36,6 +36,18 @@ fi
 ROUTER_ID="${CRAFT_ROUTER_ID:-e8132891-81f4-2d63-36f1-d3623d0147b6}"
 OUT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-router-context.md"
 
+# То же, что в craft-inject-incident.sh: внутри евал-пачки кэш переиспользуется,
+# потому что параллельные сессии делят один путь и перезапись сносит контекст у
+# соседа на старте. Свежесть даёт прогрев до пачки — он идёт без CRAFT_EVAL.
+# Формулировка улики сохранена дословно: по подстроке «роутер обновлён» кейсы
+# проверяют, что роутер доехал. Вторичные предупреждения (недостижимые ссылки,
+# бюджет контекста) при переиспользовании не печатаются — на вердикт они не
+# влияют, а в обычных сессиях остаются как были.
+if [[ -n "${CRAFT_EVAL:-}" && -s "$OUT" ]]; then
+  echo "Craft-роутер обновлён: $(wc -c < "$OUT") байт записано в .claude/craft-router-context.md; полный текст уже в контексте через импорт в CLAUDE.md. (переиспользован кэш евал-прогона)"
+  exit 0
+fi
+
 # Drop the previous snapshot up front: a stale router must never masquerade as
 # fresh context. If the fetch below fails we stay with no file — CLAUDE.md's
 # `@`-import then silently skips and the router is read live from Craft via MCP.
