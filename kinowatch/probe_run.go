@@ -46,6 +46,11 @@ type ProbeReport struct {
 	// покрытие снова становится тем, что агент себе проставил. Отдаётся целиком,
 	// чтобы следующий прогон и счётчик покрытия читали ФАКТ ответа, а не пометку.
 	Observations []CinemaObservation `json:"observations"`
+
+	// Aggregator — второй слой: тот же фильм глазами Яндекс Афиши. Нужен и для
+	// доп-покрытия (площадки без своего канала), и как контроль качества —
+	// расхождение слоёв видно числами в Agreement.
+	Aggregator *AggregatorLayer `json:"aggregator,omitempty"`
 }
 
 // VenueProbe — итог по одной площадке.
@@ -70,6 +75,11 @@ type VenueProbe struct {
 
 	// SkipReason непустая означает, что площадку не опрашивали вовсе.
 	SkipReason string `json:"skipReason,omitempty"`
+
+	// FromAggregator — сеансы этого же фильма у агрегатора. Лежат ОТДЕЛЬНО от
+	// Found, а не сливаются с ними: как только поля перемешаются, сравнивать
+	// слои станет не с чем и второй слой перестанет быть контролем качества.
+	FromAggregator []AggregatorShowtime `json:"fromAggregator,omitempty"`
 }
 
 // FoundShowtime — найденный сеанс вместе с объяснением, чем он опознан.
@@ -164,6 +174,12 @@ func runProbe(c, tunnel *Client, title, profilePath string, days int) {
 		Statuses:  map[string]int{},
 	}
 
+	// Второй слой опрашивается ПЕРВЫМ и одним запросом: он отвечает за фильм
+	// целиком, а не за площадку, и его отказ должен быть виден до того, как
+	// прогон потратит час на обход своих касс.
+	layer, sessions := runAggregatorLayer(c, film, obs, now, days)
+	report.Aggregator = layer
+
 	for i := range obs {
 		// Площадке, недоступной с иностранного адреса, общий клиент не годится:
 		// без туннеля она молча выглядела бы сломанной. Туннеля нет — площадка
@@ -198,6 +214,21 @@ func runProbe(c, tunnel *Client, title, profilePath string, days int) {
 	}
 	report.Observations = obs
 
+	// Сеансы агрегатора раскладываются по строкам реестра уже после обхода:
+	// привязка знает про строки, а не про то, что ответил их собственный канал.
+	if layer != nil && layer.Err == "" {
+		byRow := aggregatorShowtimesByRow(layer, sessions)
+		ownFound := map[string]bool{}
+		for i := range report.Venues {
+			vp := &report.Venues[i]
+			if vp.SkipReason == "" {
+				ownFound[vp.Key] = len(vp.Found) > 0
+			}
+			vp.FromAggregator = byRow[vp.Key]
+		}
+		layer.Agreement = countAgreement(ownFound, byRow)
+	}
+
 	out, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		fail("сериализация: %v", err)
@@ -209,6 +240,26 @@ func runProbe(c, tunnel *Client, title, profilePath string, days int) {
 	if report.Probed == 0 {
 		fail("не опрошено ни одной площадки из %d — проверь, что в реестре есть каналы", len(obs))
 	}
+}
+
+// runAggregatorLayer опрашивает второй слой и решает, можно ли идти дальше.
+//
+// Отказы у него разной природы, и смешивать их нельзя.
+//
+// Прогон ОСТАНАВЛИВАЕТСЯ, когда опознание фильма провалилось по существу: по
+// названию идёт несколько фильмов и выбирать за Влада нельзя, либо карточка
+// противоречит профилю — значит спросили не про тот фильм, и весь результат
+// прогона был бы не про него.
+//
+// Прогон ПРОДОЛЖАЕТСЯ, когда слоя просто нет: фильм ещё не вышел или уже сошёл
+// с проката, агрегатор его не знает, сеть не дошла. Уронить из-за этого первый
+// слой значило бы потерять собственные кассы там, где они как раз работают.
+func runAggregatorLayer(c *Client, film FilmProfile, obs []CinemaObservation, now time.Time, days int) (*AggregatorLayer, []YandexSession) {
+	layer, sessions, err := runYandexLayer(c, film, obs, now, days)
+	if _, fatal := err.(aggregatorFatal); fatal {
+		fail("%v", err)
+	}
+	return layer, sessions
 }
 
 // recordProbe кладёт итог опроса в саму строку реестра.
