@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"покажи, что поправил"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Готово. Правки: [FlowManager.tsx](CRM-52256/crm/frontend/FlowManager.tsx) и [стори](CRM-52256/crm/frontend/Flow.stories.tsx)."}]}}

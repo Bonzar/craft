@@ -140,6 +140,10 @@ merged="$(jq '
   | ensure("PreToolUse"; "mcp__.*__craft_write";
          "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
   | ensure("PreToolUse"; "Bash";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
+  | ensure("PostToolUseFailure"; "ExitPlanMode";
+         "\"$HOME\"/.claude/hooks/universal-guard-plan-exit-failure.sh")
+  | ensure("PreToolUse"; "Bash";
          "\"$HOME\"/.claude/hooks/universal-sleep-waiter-guard.sh")
   | ensure("PreToolUse"; "Bash";
          "\"$HOME\"/.claude/hooks/universal-block-no-verify.sh")
@@ -193,6 +197,8 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-stop-routine-facts.sh")
   | ensure("Stop"; "";
          "\"$HOME\"/.claude/hooks/universal-stop-incident-closure.sh")
+  | ensure("Stop"; "";
+         "\"$HOME\"/.claude/hooks/universal-stop-relative-link.sh")
   | ensure("PreToolUse"; "Read|Grep|Glob";
          "\"$HOME\"/.claude/hooks/universal-eval-materials-guard.sh")
 ' "$SETTINGS")"

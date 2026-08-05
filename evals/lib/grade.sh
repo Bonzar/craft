@@ -179,7 +179,7 @@ grade_expect_tool() {
   GRADE_ASSERTS=$((GRADE_ASSERTS+1))
   if [[ -n "$needle" ]]; then
     grep -F "$name"$'\t' <<<"$GRADE_TOOLS" | grade_lc | grep -qF -- "$(grade_lc <<<"$needle")" \
-      || GRADE_FAILS+=("не вызван $name с «$needle»")
+      || GRADE_FAILS+=("не вызван $name с «${needle}»")
   else
     grep -qF "$name"$'\t' <<<"$GRADE_TOOLS" || GRADE_FAILS+=("не вызван инструмент: $name")
   fi

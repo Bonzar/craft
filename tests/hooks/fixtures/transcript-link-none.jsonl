@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"как дела"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Всё поправил, ссылок в ответе нет — только текст."}]}}
