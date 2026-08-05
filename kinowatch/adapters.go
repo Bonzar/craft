@@ -3149,3 +3149,69 @@ func joinKinoafishaTime(date, hhmm string) string {
 	}
 	return at
 }
+
+// kinoafishaGeoRe — координаты в разметке JSON-LD страницы кинотеатра.
+var kinoafishaGeoRe = regexp.MustCompile(
+	`"latitude":"(-?\d+(?:\.\d+)?)","longitude":"(-?\d+(?:\.\d+)?)"`)
+
+// kinoafishaGeoWindow — сколько байт после якоря считается карточкой площадки.
+//
+// Замер: у ЗигЗага точка стоит в 98 байтах после адреса страницы, дальше идут
+// картинки. Окно нужно не для скорости, а чтобы поиск не убежал в соседнюю
+// карточку и не приписал площадке чужую точку.
+const kinoafishaGeoWindow = 600
+
+// kinoafishaCinemaRef — начало карточки любого кинотеатра в JSON-LD.
+//
+// По нему окно обрывается: длина окна одна для всех, а карточки разной длины, и
+// у короткой хвост окна дотягивается до следующей. Точка соседа при этом
+// выглядит как своя — ошибка молчаливая и неотличимая от верного ответа.
+const kinoafishaCinemaRef = `\/cinema\/`
+
+// parseKinoafishaVenueGeo достаёт координаты площадки со страницы кинотеатра.
+//
+// Точка ищется не по всей странице, а сразу за адресом САМОЙ площадки. Адрес
+// повторяется на странице четырнадцать раз — по разу на каждый сеанс, — но
+// координаты стоят только в её собственной карточке, поэтому перебираются все
+// вхождения и берётся первое, у которого точка нашлась в окне.
+func parseKinoafishaVenueGeo(body, id string) (float64, float64, error) {
+	// Адреса в JSON-LD экранированы: «https:\/\/…\/cinema\/8327263\/».
+	anchor := kinoafishaCinemaRef + id + `\/"`
+
+	for off := 0; ; {
+		i := strings.Index(body[off:], anchor)
+		if i < 0 {
+			break
+		}
+		off += i + len(anchor)
+
+		end := off + kinoafishaGeoWindow
+		if end > len(body) {
+			end = len(body)
+		}
+		if next := strings.Index(body[off:end], kinoafishaCinemaRef); next >= 0 {
+			end = off + next
+		}
+		m := kinoafishaGeoRe.FindStringSubmatch(body[off:end])
+		if m == nil {
+			continue
+		}
+
+		lat, err1 := strconv.ParseFloat(m[1], 64)
+		lon, err2 := strconv.ParseFloat(m[2], 64)
+		if err1 != nil || err2 != nil || (lat == 0 && lon == 0) {
+			return 0, 0, fmt.Errorf(
+				"разбор kinoafisha: у кинотеатра %s координаты нечитаемы (%q, %q)", id, m[1], m[2])
+		}
+		return lat, lon, nil
+	}
+	return 0, 0, fmt.Errorf(
+		"разбор kinoafisha: на странице кинотеатра %s нет его точки в JSON-LD — сменилась вёрстка", id)
+}
+
+// KinoafishaMovie — карточка фильма в выдаче поиска kinoafisha.
+type KinoafishaMovie struct {
+	ID    string
+	Title string
+	Year  int
+}

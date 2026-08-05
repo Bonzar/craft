@@ -18,7 +18,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -807,4 +809,187 @@ func fetchYandexScheduleByID(c *Client, id string, from time.Time, days int) ([]
 		return nil, status, perr
 	}
 	return sessions, status, nil
+}
+
+// ——— kinoafisha: третий слой ———
+//
+// Устроен иначе всех: расписание отдаётся серверным HTML, но постранично ПО
+// ДАТАМ. Первичная страница фильма наливает целиком только первую дату своего
+// горизонта, остальные приходят отдельным запросом.
+//
+// Условие догрузки выяснено перехватом в браузере и стоило нескольких попыток:
+//
+//   - метод POST, а не GET. GET на тот же адрес отдаёт 301, и это выглядит как
+//     «такой даты нет», хотя дата есть;
+//   - обязателен заголовок x-request-ajax: 1. Ни X-Requested-With, ни Accept:
+//     application/json, ни Referer, ни куки сессии не заменяют его — без него
+//     тот же POST отвечает пустым телом.
+//
+// Ответ — JSON {status, html, css}, само расписание лежит в html и разбирается
+// тем же разбором, что и первичная страница.
+const (
+	kinoafishaBase       = "https://www.kinoafisha.info"
+	kinoafishaMovieBase  = kinoafishaBase + "/russia/msk/movies/"
+	kinoafishaCinemaBase = kinoafishaBase + "/russia/msk/cinema/"
+)
+
+// kinoafishaHeaders — набор для догрузки даты.
+func kinoafishaHeaders() map[string]string {
+	return map[string]string{"x-request-ajax": "1"}
+}
+
+// kinoafishaNextRe — сколько строк даты уже отрисовано в первичной странице.
+//
+// Значение skip приходит вместе с датой в атрибуте data-schedule-next; своим
+// числом его подменять нельзя — сервер отдаёт ровно остаток после skip.
+var kinoafishaNextRe = regexp.MustCompile(`data-schedule-next=.\{"next":"\?date=(\d{4}-\d{2}-\d{2})&skip=(\d+)"\}`)
+
+// Разбор выдачи поиска. Блок карточки несёт название, год и ссылку в РАЗНЫХ
+// узлах, поэтому берётся по кускам, а не одной регуляркой на всё.
+const kinoafishaCardOpen = `<div class="shortList_item">`
+
+var (
+	kinoafishaCardName = regexp.MustCompile(`<span class="shortList_name">([^<]+)</span>`)
+	kinoafishaCardInfo = regexp.MustCompile(`<span class="shortList_info">\s*(\d{4})`)
+	kinoafishaCardRef  = regexp.MustCompile(`class="shortList_ref" href="[^"]*?/movies/(\d+)/"`)
+)
+
+// kinoafishaClient — клиент, каким этот источник вообще отвечает.
+//
+// Отличие ровно одно: без Accept-Language. Заголовок здесь сам служит признаком
+// бота — с ним обе ручки дают 403 в 10 запросах из 10, без него ни одного
+// (замер 05.08.2026, подробности у withoutAcceptLang).
+//
+// Первое объяснение было другим — «защита считает частоту» — и оно неверно:
+// строилось на одиночных запросах, где 403 и 200 чередовались по другой
+// причине. Парный замер с заголовком и без развёл их начисто.
+func kinoafishaClient(c *Client) *Client { return c.withoutAcceptLang() }
+
+// kinoafishaGet — GET к источнику с одним повтором на 403.
+//
+// Повтор оставлен не как лечение (лечит клиент выше), а как запас на случайный
+// отказ под нагрузкой прогона: за один фильм сюда уходят десятки запросов.
+// Постоянный 403 повтором не лечится — он означает, что в запрос вернулся
+// Accept-Language, и текст ошибки говорит об этом прямо.
+func kinoafishaGet(c *Client, addr string) (string, error) {
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(3 * time.Second)
+		}
+		body, status, err := kinoafishaClient(c).get(addr)
+		switch {
+		case err != nil && status != 403:
+			return "", err
+		case status == 403:
+			last = fmt.Errorf(
+				"kinoafisha: %s ответил 403 (%d попытки) — проверь, что запрос идёт без Accept-Language",
+				addr, attempt+1)
+			continue
+		case status != 200:
+			return "", fmt.Errorf("kinoafisha: %s ответил %d", addr, status)
+		default:
+			return body, nil
+		}
+	}
+	return "", last
+}
+
+// fetchKinoafishaMovie берёт первичную страницу фильма.
+func fetchKinoafishaMovie(c *Client, id string) (string, error) {
+	return kinoafishaGet(c, kinoafishaMovieBase+url.PathEscape(id)+"/")
+}
+
+// fetchKinoafishaVenueGeo берёт координаты площадки с её собственной страницы.
+//
+// В расписании фильма координат нет вовсе — только название и адрес. Без точки
+// привязка сваливается на именную ступень, а она разрешена лишь для строк
+// реестра БЕЗ координат: обе московские площадки «Паука» уходили в «не
+// опознано» ровно по этой причине, хотя одна из них есть в реестре.
+func fetchKinoafishaVenueGeo(c *Client, id string) (float64, float64, error) {
+	body, err := kinoafishaGet(c, kinoafishaCinemaBase+url.PathEscape(id)+"/")
+	if err != nil {
+		return 0, 0, err
+	}
+	return parseKinoafishaVenueGeo(body, id)
+}
+
+// fetchKinoafishaDate догружает остаток одной даты.
+func fetchKinoafishaDate(c *Client, id, date string, skip int) (string, error) {
+	addr := fmt.Sprintf("%s%s/?date=%s&skip=%d", kinoafishaMovieBase, url.PathEscape(id), date, skip)
+
+	body, status, err := kinoafishaClient(c).do("POST", addr, "", kinoafishaHeaders())
+	if err != nil {
+		return "", err
+	}
+	// 301 здесь означает ровно одно: заголовок не доехал. Прочитать это как
+	// «на дату сеансов нет» нельзя — слой замолчал бы там, где у него всё
+	// расписание.
+	if status != 200 {
+		return "", fmt.Errorf("kinoafisha: догрузка %s ответила %d — проверь заголовок x-request-ajax", date, status)
+	}
+
+	var out struct {
+		Status bool   `json:"status"`
+		HTML   string `json:"html"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		return "", fmt.Errorf("kinoafisha: ответ догрузки %s не читается как JSON: %w", date, err)
+	}
+	if !out.Status {
+		return "", fmt.Errorf("kinoafisha: догрузка %s отвергнута источником", date)
+	}
+	return out.HTML, nil
+}
+
+// kinoafishaPending — какие даты и с каким skip нужно догрузить.
+func kinoafishaPending(page string) map[string]int {
+	out := map[string]int{}
+	for _, m := range kinoafishaNextRe.FindAllStringSubmatch(page, -1) {
+		n, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		out[m[1]] = n
+	}
+	return out
+}
+
+// findKinoafishaMovies ищет фильм по названию.
+//
+// Поиск КАТАЛОЖНЫЙ, а не по идущим в городе, и этим принципиально отличается от
+// яндексовского: запрос «Майкл» отдал 20 карточек, из них с точным названием
+// три — 2026, 2023 и 1996 года. Поэтому кандидаты сужаются точным совпадением
+// названия ещё до того, как в дело вступит правило про год.
+func findKinoafishaMovies(c *Client, title string) ([]KinoafishaMovie, error) {
+	addr := kinoafishaBase + "/search/?q=" + url.QueryEscape(strings.TrimSpace(title)) + "&type=movies"
+	body, err := kinoafishaGet(c, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	want := normalizeFilmTitle(title)
+	var out []KinoafishaMovie
+	seen := map[string]bool{}
+	for _, card := range strings.Split(body, kinoafishaCardOpen)[1:] {
+		name := kinoafishaCardName.FindStringSubmatch(card)
+		ref := kinoafishaCardRef.FindStringSubmatch(card)
+		if name == nil || ref == nil || seen[ref[1]] {
+			continue
+		}
+		title := strings.TrimSpace(html.UnescapeString(name[1]))
+		if normalizeFilmTitle(title) != want {
+			continue
+		}
+		seen[ref[1]] = true
+
+		m := KinoafishaMovie{ID: ref[1], Title: title}
+		// Год лежит в той же карточке («2026, США») — отдельный запрос за ним
+		// не нужен, а без него одноимённые фильмы неразличимы.
+		if y := kinoafishaCardInfo.FindStringSubmatch(card); y != nil {
+			m.Year, _ = strconv.Atoi(y[1])
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
