@@ -87,8 +87,10 @@ func TestRedirectOnlyHorizonIsNotAlive(t *testing.T) {
 
 // Горизонт канала, отдающего окно целиком, берётся одним запросом.
 func TestChannelWindowWholeCoversKnownKinds(t *testing.T) {
-	// Замерено живьём: эти три отдают несколько дат за один ответ.
-	for _, kind := range []string{kindKaro, kindCinemaStar, kindMoskino} {
+	// Замерено живьём: эти отдают весь свой горизонт за один ответ. У Pushka
+	// причина крайняя — параметра даты в запросе нет вовсе, и обход по дню
+	// складывал один и тот же ответ сам с собой.
+	for _, kind := range []string{kindKaro, kindCinemaStar, kindMoskino, kindPushka} {
 		if !channelWindowWhole[kind] {
 			t.Errorf("канал %q помечен как однодневный, хотя отдаёт окно целиком", kind)
 		}
@@ -131,5 +133,61 @@ func TestKinoplanCityOfPicksRequestedVenue(t *testing.T) {
 	// вызывающего сказать об этом ошибкой, а не подставить чужой город.
 	if got := kinoplanCityOf(app, 9999); got != 0 {
 		t.Errorf("для отсутствующей площадки вернулся город %d, ожидался 0", got)
+	}
+}
+
+// Канал, отдающий на каждый день окна один и тот же ответ, не задваивает сеансы.
+//
+// Живой случай: у Pushka в запросе нет параметра даты, и обход горизонта по дню
+// складывал полное расписание площадки само с собой — 140 записей при 70
+// реальных временах. Список channelWindowWhole это лечит, но только для
+// известных каналов; дедуп обязан удержать инвариант и для неизвестного.
+func TestAppendNewShowtimesDropsRepeats(t *testing.T) {
+	day := []Showtime{
+		{Film: "Одиссея", StartsAt: "2026-08-05T10:00:00+03:00", Hall: "Зал 1"},
+		{Film: "Одиссея", StartsAt: "2026-08-05T13:10:00+03:00", Hall: "Зал 1"},
+	}
+
+	seen := map[string]bool{}
+	var out []Showtime
+	// Тот же ответ пришёл дважды — ровно как при обходе двухдневного окна.
+	out = appendNewShowtimes(out, day, seen)
+	out = appendNewShowtimes(out, day, seen)
+
+	if len(out) != len(day) {
+		t.Errorf("сеансов после склейки %d, ожидалось %d — повтор не схлопнулся", len(out), len(day))
+	}
+}
+
+// Честно разные дни складываются целиком: дедуп не должен съедать данные.
+func TestAppendNewShowtimesKeepsDistinctDays(t *testing.T) {
+	first := []Showtime{{Film: "Одиссея", StartsAt: "2026-08-05T10:00:00+03:00", Hall: "Зал 1"}}
+	second := []Showtime{{Film: "Одиссея", StartsAt: "2026-08-06T10:00:00+03:00", Hall: "Зал 1"}}
+
+	seen := map[string]bool{}
+	var out []Showtime
+	out = appendNewShowtimes(out, first, seen)
+	out = appendNewShowtimes(out, second, seen)
+
+	if len(out) != 2 {
+		t.Errorf("сеансов после склейки %d, ожидалось 2 — дедуп съел разные дни", len(out))
+	}
+}
+
+// Один и тот же фильм в одно время, но в РАЗНЫХ залах — это два сеанса.
+//
+// Мультиплексы так и работают: параллельные показы в соседних залах. Схлопнуть
+// их значило бы потерять половину расписания.
+func TestAppendNewShowtimesKeepsParallelHalls(t *testing.T) {
+	same := []Showtime{
+		{Film: "Одиссея", StartsAt: "2026-08-05T10:00:00+03:00", Hall: "Зал 1"},
+		{Film: "Одиссея", StartsAt: "2026-08-05T10:00:00+03:00", Hall: "Зал 2"},
+	}
+
+	seen := map[string]bool{}
+	out := appendNewShowtimes(nil, same, seen)
+
+	if len(out) != 2 {
+		t.Errorf("параллельных сеансов осталось %d, ожидалось 2", len(out))
 	}
 }

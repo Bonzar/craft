@@ -733,6 +733,13 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 //
 // Хронометраж есть, но прозой — «3 часа 0 минут».
 
+// moriEmptyDayMarker — чем Mori сам говорит, что на выбранную дату сеансов нет.
+//
+// Маркер стоит внутри живого контейнера расписания, поэтому и служит границей
+// между «сеансов нет» и «вёрстка сменилась»: без него пустой разбор остаётся
+// поломкой источника.
+const moriEmptyDayMarker = "Нет сеансов на выбранную дату"
+
 var (
 	moriGroup   = regexp.MustCompile(`(?s)<div class="cinema__session-schedule__group">(.*?)(?:<div class="cinema__session-schedule__group">|\z)`)
 	moriFilm    = regexp.MustCompile(`(?s)class="cinema__film__title[^"]*"[^>]*>\s*(.*?)\s*</a>`)
@@ -787,6 +794,13 @@ func parseMori(body, date string) (Playbill, error) {
 
 	groups := moriGroup.FindAllStringSubmatch(body, -1)
 	if len(groups) == 0 {
+		// Пустой день источник помечает сам: контейнер расписания на месте, а
+		// внутри стоит блок «Нет сеансов на выбранную дату». Это ответ кассы, а
+		// не поломка, и путать их нельзя — иначе площадка, у которой сеансы
+		// сегодня уже кончились, объявляется мёртвой.
+		if strings.Contains(body, moriEmptyDayMarker) {
+			return pb, nil
+		}
 		return pb, fmt.Errorf("разбор Mori: группы сеансов не найдены (тело %d байт)", len(body))
 	}
 
@@ -2442,6 +2456,18 @@ func parseLuxor(body, date string) (Playbill, error) {
 	var films []luxorFilm
 	if err := json.Unmarshal([]byte(raw), &films); err != nil {
 		return pb, fmt.Errorf("разбор Люксора: массив фильмов не читается как JSON: %w", err)
+	}
+
+	// Пустой день у Люксора выглядит как `filmsAll = []`: массив на месте и
+	// читается, просто фильмов в нём нет. Это ответ источника — сеансы дня
+	// кончились или день ещё не открыт, — а не сменившаяся вёрстка, и путать
+	// их нельзя: иначе живая площадка вечером объявляется мёртвой.
+	//
+	// Граница ровно здесь. Массив, который не нашёлся или не разобрался,
+	// по-прежнему ошибка; непустой массив без единого сеанса — тоже (значит
+	// сменились поля внутри, и молчать об этом опаснее всего).
+	if len(films) == 0 {
+		return pb, nil
 	}
 
 	for _, f := range films {
