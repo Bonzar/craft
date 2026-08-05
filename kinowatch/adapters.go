@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -2740,4 +2741,89 @@ func parseJewishMuseum(body string) (Playbill, error) {
 		return pb, fmt.Errorf("разбор Еврейского музея: кинопоказов в афише нет (событий %d)", len(cards))
 	}
 	return pb, nil
+}
+
+// ——— Яндекс Афиша: второй источник, машинный ———
+//
+// Этот источник устроен иначе всех остальных. Обычный канал отвечает за ОДНУ
+// площадку и отдаёт её репертуар; Яндекс отвечает за ОДИН ФИЛЬМ и отдаёт все
+// площадки города, где тот идёт. Поэтому он и не описан видом канала — его
+// место в прогоне отдельное, рядом с собственными каналами, а не среди них.
+//
+// Ценность в том, что площадка приезжает вместе с сеансом: идентификатор,
+// слаг, название и АДРЕС. Адрес и делает привязку к строке реестра возможной
+// без справочника соответствий — новый кинотеатр появляется в ответе сам.
+
+// YandexSession — один сеанс из ответа Афиши вместе с его площадкой.
+type YandexSession struct {
+	PlaceID      string
+	PlaceSlug    string
+	PlaceTitle   string
+	PlaceAddress string
+
+	StartsAt string
+	Hall     string
+}
+
+// yandexScheduleResponse — форма ответа EventScheduleOtherQuery.
+//
+// Поля берутся ровно те, что нужны: запрос собирается нами, и раздувать его
+// незачем. Ошибки GraphQL лежат рядом с данными и приходят при HTTP 200 —
+// поэтому проверяются отдельно, иначе пустой список читался бы как «сеансов
+// нет», хотя запрос отвергнут.
+type yandexScheduleResponse struct {
+	Data struct {
+		EventScheduleOther struct {
+			Items []struct {
+				Date     string `json:"date"`
+				Sessions []struct {
+					Place struct {
+						ID      string `json:"id"`
+						URL     string `json:"url"`
+						Title   string `json:"title"`
+						Address string `json:"address"`
+					} `json:"place"`
+					Session struct {
+						Datetime string `json:"datetime"`
+						Hall     string `json:"hall"`
+					} `json:"session"`
+				} `json:"sessions"`
+			} `json:"items"`
+		} `json:"eventScheduleOther"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// parseYandexSchedule разбирает ответ Афиши в плоский список сеансов.
+func parseYandexSchedule(body string) ([]YandexSession, error) {
+	var resp yandexScheduleResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return nil, fmt.Errorf("разбор Яндекс Афиши: ответ не читается как JSON: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("разбор Яндекс Афиши: запрос отвергнут: %s", resp.Errors[0].Message)
+	}
+
+	var out []YandexSession
+	for _, day := range resp.Data.EventScheduleOther.Items {
+		for _, s := range day.Sessions {
+			// Время приходит без зоны, но по московскому времени — как и у
+			// всех остальных источников этого реестра.
+			at := normalizeShowtime(s.Session.Datetime, "")
+			if at == "" {
+				continue
+			}
+			out = append(out, YandexSession{
+				PlaceID:      strings.TrimSpace(s.Place.ID),
+				PlaceSlug:    strings.TrimSpace(path.Base(s.Place.URL)),
+				PlaceTitle:   strings.TrimSpace(s.Place.Title),
+				PlaceAddress: strings.TrimSpace(s.Place.Address),
+				StartsAt:     at,
+				Hall:         strings.TrimSpace(s.Session.Hall),
+			})
+		}
+	}
+	return out, nil
 }
