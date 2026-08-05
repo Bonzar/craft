@@ -1870,3 +1870,116 @@ func TestParseYandexScheduleKeepsSaleStatusAsText(t *testing.T) {
 		t.Fatalf("статус продажи потерян: %+v", got)
 	}
 }
+
+// ——— kinoafisha ———
+
+// Разбор расписания фильма: площадка, время, формат, цена и признак продажи.
+//
+// Фикстура — живой блок расписания «Человека-паука» (замер 05.08.2026), тот
+// самый случай, ради которого слой и заводится: Яндекс по этому фильму отдаёт
+// ноль, а тут 117 сеансов на семь дат.
+func TestParseKinoafishaReadsSchedule(t *testing.T) {
+	got, err := parseKinoafisha(readFixture(t, "kinoafisha-spider.html"), "")
+	if err != nil {
+		t.Fatalf("разбор живого расписания упал: %v", err)
+	}
+
+	if len(got) != 117 {
+		t.Fatalf("сеансов %d, ожидалось 117", len(got))
+	}
+
+	days, places := map[string]bool{}, map[string]bool{}
+	for _, s := range got {
+		days[s.StartsAt[:10]] = true
+		places[s.PlaceID] = true
+	}
+	if len(days) != 7 {
+		t.Errorf("дат %d, ожидалось 7: %v", len(days), days)
+	}
+	if len(places) != 2 {
+		t.Errorf("площадок %d, ожидалось 2: %v", len(places), places)
+	}
+}
+
+// Город приклеен к адресу вплотную («Москваул. Лобненская, 4А») — без снятия
+// отсев чужих городов и привязка работали бы по мусорной строке.
+func TestParseKinoafishaCleansAddress(t *testing.T) {
+	got, err := parseKinoafisha(readFixture(t, "kinoafisha-spider.html"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range got {
+		if strings.HasPrefix(s.PlaceAddress, "Москва") {
+			t.Fatalf("город остался приклеен к адресу: %q", s.PlaceAddress)
+		}
+		if s.PlaceAddress == "" {
+			t.Fatalf("адрес потерян у площадки %q", s.PlaceTitle)
+		}
+	}
+}
+
+// Сеанс без билетного бэкенда не теряется — и цену при этом иметь может.
+//
+// У «Отрады» покупка идёт не через виджет: класса session-ticket у её сеансов
+// нет вовсе, а цена в разметке есть. Это разные вещи, и склеивать их нельзя:
+// «нет билета у агрегатора» не равно «сеанса нет» и не равно «цена неизвестна».
+func TestParseKinoafishaKeepsSessionsWithoutTicket(t *testing.T) {
+	got, err := parseKinoafisha(readFixture(t, "kinoafisha-spider.html"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byStatus := map[string]int{}
+	for _, s := range got {
+		byStatus[s.SaleStatus]++
+	}
+	if byStatus["no-ticket"] == 0 {
+		t.Error("сеансы без билетного бэкенда потеряны — а они есть у одной из двух площадок")
+	}
+	if byStatus["ticket"]+byStatus["cheap"] == 0 {
+		t.Error("покупаемые сеансы потеряны")
+	}
+
+	var priced int
+	for _, s := range got {
+		if s.PriceMin > 0 {
+			priced++
+		}
+	}
+	if priced == 0 {
+		t.Error("цена не прочиталась ни у одного сеанса")
+	}
+}
+
+// Ответ догрузки одной даты приходит без секции даты — она известна из запроса.
+func TestParseKinoafishaUsesFallbackDate(t *testing.T) {
+	body := `<div class="showtimes_item">
+		<a class="showtimesCinema_name" href="https://www.kinoafisha.info/russia/msk/cinema/8327263/">Вики Синема ЗигЗаг</a>
+		<span class="showtimesCinema_addr">Москваул. Лобненская, 4А</span>
+		<div class="showtimes_formatGroup" data-format="2D">
+		<a class="showtimes_session session  session-ticket " data-param='{"type":"platformamts"}'>
+		<span class="session_time">10:10</span><span class="session_price">от 450 ₽</span></a>
+		</div></div>`
+
+	got, err := parseKinoafisha(body, "2026-08-21")
+	if err != nil {
+		t.Fatalf("разбор догрузки упал: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("сеансов %d, ожидался 1", len(got))
+	}
+	if got[0].StartsAt[:10] != "2026-08-21" {
+		t.Errorf("дата догрузки не подставилась: %q", got[0].StartsAt)
+	}
+	if got[0].PriceMin != 450 || got[0].SaleStatus != "ticket" {
+		t.Errorf("цена или статус прочитаны неверно: %+v", got[0])
+	}
+}
+
+// Сменившаяся вёрстка — ошибка разбора, а не пустая афиша. Иначе слой замолчал
+// бы, и это было бы неотличимо от «фильма нигде нет».
+func TestParseKinoafishaRejectsForeignMarkup(t *testing.T) {
+	if _, err := parseKinoafisha("<html><body>редизайн</body></html>", "2026-08-21"); err == nil {
+		t.Fatal("чужая разметка принята за пустое расписание")
+	}
+}
