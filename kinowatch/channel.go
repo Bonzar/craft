@@ -606,3 +606,96 @@ func fetchKaroDay(c *Client, venue string) ChannelProbe {
 	out.Playbill, out.ParseErr = pb, perr
 	return out
 }
+
+// ——— Яндекс Афиша: второй источник ———
+//
+// Доступ держится на двух неочевидных условиях, и оба выяснены живой пробой.
+//
+// Первое: заголовок x-force-cors-preflight. Без него nginx Афиши отвечает 405
+// Not Allowed — причём на ЛЮБУЮ операцию, включая те, что шлёт сам сайт. То
+// есть 405 здесь значит «нас не пустили», а не «такой операции нет».
+//
+// Второе: имя операции сервер берёт из поля operationName, а не из текста
+// запроса. Запрос с именем внутри query, но без этого поля, отвергается с
+// «Unknown operation named 'unknown'».
+const (
+	yandexGQL = "https://afisha.yandex.ru/api/graphql?city=moscow&version=581.0.0"
+
+	// yandexSlugBase — префикс адреса фильма, из которого берётся его id.
+	yandexSlugBase = "/moscow/cinema/"
+)
+
+// yandexHeaders — обязательный набор. Пустой x-csrf-token шлёт и сам сайт.
+func yandexHeaders() map[string]string {
+	return map[string]string{
+		"content-type":           "application/json",
+		"x-force-cors-preflight": "1",
+		"x-csrf-token":           "",
+		"accept-language":        "ru-RU",
+		"accept":                 "*/*",
+	}
+}
+
+// yandexEventID переводит слаг фильма в идентификатор Афиши.
+func yandexEventID(c *Client, slug string) (string, int, error) {
+	body := fmt.Sprintf(`{"operationName":"UrlInfoQuery","variables":{"url":%q},`+
+		`"query":"query UrlInfoQuery($url: String!) { urlInfo(url: $url) { status type params { ... on UrlInfoEvent { eventId: id } } } }"}`,
+		yandexSlugBase+slug)
+
+	resp, status, err := c.postJSON(yandexGQL, body, yandexHeaders())
+	if err != nil {
+		return "", status, err
+	}
+
+	var out struct {
+		Data struct {
+			URLInfo struct {
+				Status string `json:"status"`
+				Params struct {
+					EventID string `json:"eventId"`
+				} `json:"params"`
+			} `json:"urlInfo"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+		return "", status, fmt.Errorf("Яндекс Афиша: ответ об адресе не читается: %w", err)
+	}
+	if id := strings.TrimSpace(out.Data.URLInfo.Params.EventID); id != "" {
+		return id, status, nil
+	}
+	return "", status, fmt.Errorf("Яндекс Афиша: у слага %q нет идентификатора фильма (status %q)",
+		slug, out.Data.URLInfo.Status)
+}
+
+// fetchYandexSchedule берёт сеансы фильма по всем площадкам города.
+//
+// Горизонт задаётся периодом в днях и приходит ОДНИМ ответом — обходить
+// площадки не нужно, и это главное отличие от собственных каналов.
+func fetchYandexSchedule(c *Client, slug string, from time.Time, days int) ([]YandexSession, int, error) {
+	if days < 1 {
+		days = 1
+	}
+
+	id, status, err := yandexEventID(c, slug)
+	if err != nil {
+		return nil, status, err
+	}
+
+	body := fmt.Sprintf(`{"operationName":"EventScheduleOtherQuery","variables":{"id":%q,`+
+		`"dates":{"date":%q,"period":%d}},`+
+		`"query":"query EventScheduleOtherQuery($id: ID!, $dates: DaysIntervalInput!) `+
+		`{ eventScheduleOther(id: $id, dates: $dates) { items: byDate { date sessions `+
+		`{ place { id url title address } session { datetime hall: hallName } } } } }"}`,
+		id, from.Format("2006-01-02"), days)
+
+	resp, status, err := c.postJSON(yandexGQL, body, yandexHeaders())
+	if err != nil {
+		return nil, status, err
+	}
+
+	sessions, perr := parseYandexSchedule(resp)
+	if perr != nil {
+		return nil, status, perr
+	}
+	return sessions, status, nil
+}
