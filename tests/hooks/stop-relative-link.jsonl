@@ -6,3 +6,5 @@
 {"name": "ответ без ссылок → молчит", "hook": "stop-relative-link", "expect": "silent", "input": {"stop_hook_active": false, "cwd": "{TESTS_DIR}", "transcript_path": "{TESTS_DIR}/fixtures/transcript-link-none.jsonl"}}
 {"name": "анти-цикл stop_hook_active → молчит", "hook": "stop-relative-link", "expect": "silent", "input": {"stop_hook_active": true, "cwd": "{TESTS_DIR}", "transcript_path": "{TESTS_DIR}/fixtures/transcript-link-broken.jsonl"}}
 {"name": "нет транскрипта → молчит", "hook": "stop-relative-link", "expect": "silent", "input": {"stop_hook_active": false, "cwd": "{TESTS_DIR}"}}
+{"name": "битый путь:строка без косой черты не притворяется схемой → block", "hook": "stop-relative-link", "expect": "block", "input": {"stop_hook_active": false, "cwd": "{TESTS_DIR}", "transcript_path": "{TESTS_DIR}/fixtures/transcript-link-lineno-noslash.jsonl"}}
+{"name": "схемы без двойной косой (почта, телефон, смс) → молчит", "hook": "stop-relative-link", "expect": "silent", "input": {"stop_hook_active": false, "cwd": "{TESTS_DIR}", "transcript_path": "{TESTS_DIR}/fixtures/transcript-link-schemeless.jsonl"}}
