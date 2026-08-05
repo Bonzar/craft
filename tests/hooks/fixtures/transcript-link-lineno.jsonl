@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"покажи, что поправил"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Смотри [фикстуру](fixtures/transcript-link-broken.jsonl:42) — там весь кейс."}]}}
