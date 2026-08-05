@@ -71,6 +71,20 @@ var otherTownRe = regexp.MustCompile(`(?i)(^\s*(г\.|г |пос\.|дер\.|пг�
 	`Краснознаменск|Лобня|Лесной Городок|Люберцы|Мытищи|Одинцово|Подольск|Пушкино|` +
 	`Раменское|Реутов|Фрязино|Химки|Щёлково)`)
 
+// moscowPrefixRe — «г. Москва» в начале адреса.
+//
+// Снимается ДО отсева чужих городов: часть источников пишет город явно, и
+// правило «адрес начинается с г.» выбросило бы московскую площадку как чужую.
+// Живой промах: «Мягкий кинотеатр Отрада», адрес «г. Москва, Пятницкое шоссе,
+// 7-й километр» — Москва, просто за МКАД, и её место в корзине «за городом по
+// точке», а не «вне охвата по адресу».
+var moscowPrefixRe = regexp.MustCompile(`(?i)^\s*(г\.\s*)?Москва,?\s*`)
+
+// outOfScopeByAddress — называет ли адрес чужой населённый пункт.
+func outOfScopeByAddress(addr string) bool {
+	return otherTownRe.MatchString(moscowPrefixRe.ReplaceAllString(addr, ""))
+}
+
 // AggregatorVenue — площадка агрегатора в том виде, в каком её видит привязка.
 type AggregatorVenue struct {
 	ID       string  `json:"id"`
@@ -145,7 +159,7 @@ func attachVenues(venues []AggregatorVenue, obs []CinemaObservation) AttachResul
 	// 1-2. Отсев.
 	for _, v := range venues {
 		switch {
-		case otherTownRe.MatchString(v.Address):
+		case outOfScopeByAddress(v.Address):
 			drop(v, bucketOutOfScope, "адрес вне охвата «строго внутри МКАД»: "+v.Address)
 		case hasPoint(v) && haversineKm(moscowCenterLat, moscowCenterLon, v.Lat, v.Lon) > attachFarKm:
 			drop(v, bucketOutsideByGeo, fmt.Sprintf(

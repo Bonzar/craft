@@ -2988,3 +2988,164 @@ func parseYandexSearch(body string) ([]YandexEvent, error) {
 	}
 	return out, nil
 }
+
+// ——— kinoafisha: третий слой ———
+//
+// Зачем он при уже готовом Яндексе. Агрегаторы делятся не по брендам, а по
+// билетным бэкендам: Афиша.ру, Т-Банк и Касса Рамблера — один источник, и
+// слепая зона у них общая. kinoafisha держит четыре бэкенда сразу, и потому
+// видит то, чего не видит никто: предпродажу «Человека-паука» на 20 августа,
+// которая идёт через platformamts мимо Рамблера.
+//
+// Устройство. Единица — фильм, но выдача постраничная ПО ДАТАМ: первичная
+// страница наливает целиком только первую дату, остальные приходят отдельным
+// запросом. Разбор поэтому один и тот же для страницы и для догрузки — форма
+// разметки у них общая.
+
+// kinoafishaSessionRe — один сеанс: класс несёт признак продажи, дальше время.
+//
+// Признак читается КЛАССОМ, а не отдельным полем: session-ticket — покупаемый,
+// session-cheap — он же со скидкой, голый session — сеанс без билета. Последнее
+// не равно «не продаётся»: у Отрады билетного бэкенда нет вовсе, а сеансы идут.
+var kinoafishaSessionRe = regexp.MustCompile(
+	`(?s)<a class="showtimes_session session([^"]*)"[^>]*?>.*?<span class="session_time">([^<]+)</span>(.*?)</a>`)
+
+// kinoafishaPriceRe — «от 450 ₽» внутри сеанса.
+var kinoafishaPriceRe = regexp.MustCompile(`session_price[^>]*>[^\d]*(\d[\d\s]*)`)
+
+// kinoafishaVenueRe — площадка: идентификатор в адресе, название, адрес.
+var kinoafishaVenueRe = regexp.MustCompile(
+	`(?s)<a class="showtimesCinema_name" href="[^"]*?/cinema/(\d+)/">([^<]+)</a>\s*` +
+		`<span class="showtimesCinema_addr">([^<]*)</span>`)
+
+// kinoafishaFormatRe — формат группы сеансов («2D», «IMAX»).
+var kinoafishaFormatRe = regexp.MustCompile(`data-format="([^"]*)"`)
+
+// kinoafishaDateRe — дата секции расписания.
+var kinoafishaDateRe = regexp.MustCompile(`data-schedule-date="(\d{4}-\d{2}-\d{2})"`)
+
+// kinoafishaItemOpen — начало блока одной площадки.
+//
+// Резать блоки регуляркой «от начала до следующего начала» нельзя: RE2 не умеет
+// lookahead, и разделитель ПОГЛОЩАЕТСЯ вместе с открывающим тегом следующей
+// площадки — та потом не находится вовсе. Живой промах: так терялась вторая
+// площадка «Паука» со всеми 47 сеансами.
+//
+// Рекламная вставка носит класс «showtimes_item showtimes_item-row» и по этому
+// литералу не режется — кавычка после имени класса её отсекает.
+const kinoafishaItemOpen = `<div class="showtimes_item"`
+
+// kinoafishaCityAddr снимает приклеенный к адресу город.
+//
+// Источник печатает их слитно: «Москваул. Лобненская, 4А». Без снятия отсев
+// чужих городов и привязка по адресу работали бы по мусорной строке.
+var kinoafishaCityAddr = regexp.MustCompile(`^\s*(г\.\s*)?Москва,?\s*`)
+
+// parseKinoafisha разбирает расписание фильма: и первичную страницу, и догрузку
+// одной даты — разметка у них общая.
+//
+// fallbackDate подставляется, когда секция даты в куске отсутствует: у ответа
+// догрузки её нет, дата известна из самого запроса.
+func parseKinoafisha(body, fallbackDate string) ([]AggregatorSession, error) {
+	if !strings.Contains(body, "showtimes_item") {
+		return nil, fmt.Errorf("разбор kinoafisha: в ответе нет ни одного блока площадки — сменилась вёрстка")
+	}
+
+	var out []AggregatorSession
+	for _, part := range splitKinoafishaDates(body, fallbackDate) {
+		for _, block := range strings.Split(part.html, kinoafishaItemOpen)[1:] {
+			venue := kinoafishaVenueRe.FindStringSubmatch(block)
+			if venue == nil {
+				continue
+			}
+			addr := strings.TrimSpace(kinoafishaCityAddr.ReplaceAllString(html.UnescapeString(venue[3]), ""))
+
+			format := ""
+			if f := kinoafishaFormatRe.FindStringSubmatch(block); f != nil {
+				format = strings.TrimSpace(f[1])
+			}
+
+			for _, s := range kinoafishaSessionRe.FindAllStringSubmatch(block, -1) {
+				at := joinKinoafishaTime(part.date, strings.TrimSpace(s[2]))
+				if at == "" {
+					continue
+				}
+				out = append(out, AggregatorSession{
+					PlaceID:      "kinoafisha:" + venue[1],
+					PlaceSlug:    venue[1],
+					PlaceTitle:   strings.TrimSpace(html.UnescapeString(venue[2])),
+					PlaceAddress: addr,
+					StartsAt:     at,
+					Hall:         format,
+					SaleStatus:   kinoafishaSaleStatus(s[1]),
+					PriceMin:     kinoafishaPrice(s[3]),
+				})
+			}
+		}
+	}
+	return out, nil
+}
+
+// kinoafishaDatePart — кусок разметки, относящийся к одной дате.
+type kinoafishaDatePart struct {
+	date string
+	html string
+}
+
+// splitKinoafishaDates режет разметку по секциям дат.
+func splitKinoafishaDates(body, fallbackDate string) []kinoafishaDatePart {
+	idx := kinoafishaDateRe.FindAllStringSubmatchIndex(body, -1)
+	if len(idx) == 0 {
+		return []kinoafishaDatePart{{date: fallbackDate, html: body}}
+	}
+
+	out := make([]kinoafishaDatePart, 0, len(idx))
+	for i, m := range idx {
+		end := len(body)
+		if i+1 < len(idx) {
+			end = idx[i+1][0]
+		}
+		out = append(out, kinoafishaDatePart{date: body[m[2]:m[3]], html: body[m[1]:end]})
+	}
+	return out
+}
+
+// kinoafishaSaleStatus — что источник говорит о продаже этого сеанса.
+//
+// Строкой, а не булевым признаком: «без билета» и «не продаётся» — разные вещи,
+// и склеить их значит потерять сеанс, который идёт, но продаётся не здесь.
+func kinoafishaSaleStatus(classes string) string {
+	switch {
+	case strings.Contains(classes, "session-ticket"):
+		return "ticket"
+	case strings.Contains(classes, "session-cheap"):
+		return "cheap"
+	default:
+		return "no-ticket"
+	}
+}
+
+// kinoafishaPrice — «от 450 ₽» в рублях. Ноль означает, что цены нет.
+func kinoafishaPrice(block string) int {
+	m := kinoafishaPriceRe.FindStringSubmatch(block)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.Join(strings.Fields(m[1]), ""))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// joinKinoafishaTime склеивает дату секции и время сеанса.
+func joinKinoafishaTime(date, hhmm string) string {
+	if date == "" || len(hhmm) < 4 {
+		return ""
+	}
+	at, err := joinDateTime(date, hhmm)
+	if err != nil {
+		return ""
+	}
+	return at
+}
