@@ -288,31 +288,13 @@ func runEnrich(c, geo *Client, base, region string, limit int) {
 	// расписанием, и от координат никак не зависит.
 	report.Binding = bindAllNetworks(jsonClient.getText, obs)
 
-	// Каналы, найденные поштучно: у одиночек справочника нет по определению.
-	fixed, orphans := applyFixedChannels(obs)
-	report.FixedChannels = fixed
-	for _, o := range orphans {
-		report.Errors = append(report.Errors, "запись канала без строки реестра: "+o)
-	}
-
-	// Закрытые площадки: справочника сети у них нет, пометку даёт поштучная
-	// запись с уликой. Идёт после привязки — чтобы снять канал, если он всё же
-	// проставился по имени сети.
-	closed, closedOrphans := applyClosedRecords(obs)
-	report.ClosedRecords = closed
-	for _, o := range closedOrphans {
-		report.Errors = append(report.Errors, "запись о закрытии без строки реестра: "+o)
-	}
-
-	// Дубли — последними: строка, оказавшаяся второй регистрацией той же
-	// площадки, канал теряет, даже если привязка или поштучная запись его уже
-	// проставили. Иначе один физический сеанс писался бы дважды с разными
-	// ключами, и дедуп их не схлопнул бы — ключи честно разные.
-	dups, dupOrphans := applyDuplicateRecords(obs)
-	report.DuplicateRecords = dups
-	for _, o := range dupOrphans {
-		report.Errors = append(report.Errors, "запись дубля не применилась: "+o)
-	}
+	// Поштучные записи применяются тем же вызовом, что и в прогоне: порядок
+	// применения — часть правил, и разъехаться между режимами он не должен.
+	records := applyStandaloneRecords(obs)
+	report.FixedChannels = records.Channels
+	report.ClosedRecords = records.Closed
+	report.DuplicateRecords = records.Duplicates
+	report.Errors = append(report.Errors, records.Orphans...)
 
 	for i := range obs {
 		if obs[i].Fields[fSourceKind] != "" {
