@@ -40,7 +40,13 @@ func main() {
 		probe         = flag.Bool("probe", false, "опросить площадки реестра (stdin) по фильму и напечатать статусы")
 		probeFilm     = flag.String("film", "", "название искомого фильма")
 		probeProfile  = flag.String("film-profile", "", "файл с профилем фильма: обёртки, хронометраж, синопсис")
-		probeDays     = flag.Int("days", 7, "горизонт опроса в днях от сегодня")
+		// Горизонт по умолчанию — месяц, и это не запас на всякий случай.
+		// Предпродажа открывается задолго до проката: у ЗигЗага «Человек-паук»
+		// продавался с 20 августа, когда до него было 15 дней, а прежние семь
+		// дней окна до этой даты просто не доезжали. Самое дальнее, что вообще
+		// отдают источники, — 23 даты у КАРО одним ответом.
+		probeDays     = flag.Int("days", 28, "горизонт опроса в днях от сегодня")
+		probePrevious = flag.String("previous", "", "отчёт прошлого прогона: с ним сравнивается текущий")
 		coverageMode  = flag.Bool("coverage", false, "посчитать покрытие по реестру (stdin) и упасть, пока оно неполно")
 		coverageShort = flag.Bool("short", false, "для --coverage: одна строка вместо списка")
 
@@ -80,7 +86,7 @@ func main() {
 			}
 			tunnel = t
 		}
-		runProbe(client, tunnel, *probeFilm, *probeProfile, *probeDays)
+		runProbe(client, tunnel, *probeFilm, *probeProfile, *probePrevious, *probeDays)
 	case *coverageMode:
 		runCoverage(*coverageShort)
 	case *probeGeo != "":

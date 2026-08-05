@@ -44,6 +44,62 @@ type ChannelProbe struct {
 	// вывод «фильма нет» по неполному горизонту делать нельзя, и решает это
 	// вызывающий, глядя на этот список.
 	FailedDays []string
+
+	// WindowFrom и WindowTo — ФАКТИЧЕСКОЕ окно источника: первая и последняя
+	// даты, на которые он дал хоть один сеанс любого фильма.
+	//
+	// Нужно потому, что запрошенное окно и покрытое источником — разные вещи, и
+	// расходятся они у обоих типов каналов. Канал, отдающий окно целиком,
+	// упирается в свой край сразу: КАРО присылает 23 даты, сколько ни проси.
+	// Канал, обходимый по дню, упирается в него дальними датами: они приходят
+	// успешным ответом с пустым репертуаром.
+	//
+	// Про даты вне этого окна источник не сказал НИЧЕГО, и «фильма там нет» —
+	// утверждение без основания. Дырка внутри окна — другое дело: там площадка
+	// честно не работает в этот день.
+	//
+	// Пустые обе строки означают, что сеансов не пришло вовсе. Это уже отдельный
+	// исход («пустая афиша»), и решает его классификатор, а не это поле.
+	WindowFrom string
+	WindowTo   string
+}
+
+// sourceWindow — фактическое окно афиши: от первой даты сеанса до последней.
+func sourceWindow(pb Playbill) (string, string) {
+	var lo, hi string
+	for _, s := range pb.Showtimes {
+		if len(s.StartsAt) < 10 {
+			continue
+		}
+		day := s.StartsAt[:10]
+		if lo == "" || day < lo {
+			lo = day
+		}
+		if hi == "" || day > hi {
+			hi = day
+		}
+	}
+	return lo, hi
+}
+
+// uncoveredDates — запрошенные даты, которых фактическое окно источника не
+// накрывает.
+//
+// Считаются только КРАЯ: всё до начала окна и всё после его конца. Дни внутри
+// окна не считаются непокрытыми, даже если сеансов в них нет, — площадка имеет
+// право не работать, и это честное «фильма нет в этот день».
+func uncoveredDates(from time.Time, days int, winFrom, winTo string) []string {
+	if winFrom == "" || winTo == "" || days < 1 {
+		return nil
+	}
+	var out []string
+	for i := 0; i < days; i++ {
+		day := from.AddDate(0, 0, i).Format("2006-01-02")
+		if day < winFrom || day > winTo {
+			out = append(out, day)
+		}
+	}
+	return out
 }
 
 // ChannelParams — то, что нужно каналу сверх его вида, чтобы попасть в нужную
@@ -139,7 +195,9 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		days = 1
 	}
 	if channelWindowWhole[kind] {
-		return fetchChannelDay(c, kind, p, from)
+		one := fetchChannelDay(c, kind, p, from)
+		one.WindowFrom, one.WindowTo = sourceWindow(one.Playbill)
+		return one
 	}
 
 	var out ChannelProbe
@@ -172,6 +230,7 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 	if got == 0 {
 		return lastFail
 	}
+	out.WindowFrom, out.WindowTo = sourceWindow(out.Playbill)
 	return out
 }
 
