@@ -18,6 +18,7 @@ package main
 // фильма.
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -49,14 +50,20 @@ type FilmProfile struct {
 	// бустер уверенности: сами по себе находкой не являются.
 	SynopsisHints []string `json:"synopsisHints"`
 
+	// Year — год фильма. Нужен там, где название неуникально: у Афиши по
+	// «Майклу» есть и фильм 2026 года, и фильм 2020-го. Ноль означает «не
+	// знаем» и, как и с хронометражом, выключает сверку по году.
+	Year int `json:"year"`
+
 	// YandexSlug — адрес фильма у Афиши: часть пути после /moscow/cinema/.
-	// С него начинается цепочка второго слоя: слаг → идентификатор события →
-	// расписание по городу.
 	//
-	// Поле ручное. Автоподбор по названию не закрыт: саджест Афиши отвечает
-	// пустым списком без фильтров, которые пока не подобраны (журнал разведки,
-	// раздел про GraphQL). Слаг пустой — второй слой просто не опрашивается,
-	// первый работает как работал.
+	// Поле необязательное, роль — ПИН: им фильм задаётся вручную, когда по
+	// названию нашлось несколько идущих. Обычный путь другой — поиск по
+	// названию среди идущих в городе, и он ловушку однофамильца снимает сам.
+	//
+	// Пин её, наоборот, создаёт: слаг ведёт на страницу фильма любого года, и
+	// у чужого фильма расписание просто пустое. Поэтому при пине карточка
+	// события сверяется обязательно.
 	YandexSlug string `json:"yandexSlug"`
 }
 
@@ -458,4 +465,101 @@ func (p FilmProfile) finish(s Showtime, m Match) Match {
 		}
 	}
 	return m
+}
+
+// ——— Опознание фильма у Яндекс Афиши ———
+//
+// Афиша отвечает на вопрос «где идёт фильм с таким идентификатором», а не «где
+// идёт вот этот фильм». Разница видна ровно в одном случае, и он не редкий:
+// спросили про однофамильца — получили HTTP 200, валидный идентификатор и
+// ПУСТОЕ расписание. От честного «фильм нигде не идёт» это неотличимо.
+//
+// Поэтому опознание разведено на два шага: выбрать событие и сверить карточку.
+
+// pickYandexEvent выбирает событие из найденных по названию.
+//
+// Молча брать первое нельзя: порядок выдачи нам не принадлежит, и «первый»
+// завтра станет другим. Несколько кандидатов без года в профиле — это вопрос к
+// Владу, а не развилка для догадки.
+func pickYandexEvent(found []YandexEvent, p FilmProfile) (YandexEvent, error) {
+	switch len(found) {
+	case 0:
+		return YandexEvent{}, fmt.Errorf("Яндекс Афиша: по названию %q нет ни одного идущего фильма", p.Title)
+	case 1:
+		return found[0], nil
+	}
+
+	if p.Year > 0 {
+		var byYear []YandexEvent
+		for _, e := range found {
+			if e.Year == p.Year {
+				byYear = append(byYear, e)
+			}
+		}
+		if len(byYear) == 1 {
+			return byYear[0], nil
+		}
+	}
+
+	names := make([]string, 0, len(found))
+	for _, e := range found {
+		names = append(names, describeYandexEvent(e))
+	}
+	return YandexEvent{}, fmt.Errorf(
+		"Яндекс Афиша: по названию %q идёт несколько фильмов, выбери нужный слагом в профиле: %s",
+		p.Title, strings.Join(names, "; "))
+}
+
+// verifyYandexEvent сверяет карточку выбранного события с профилем.
+//
+// sessions — сколько сеансов принесло расписание. Он тут не ради статистики:
+// именно связка «сверять нечем» плюс «сеансов ноль» и есть ловушка. Порознь
+// каждое из двух законно — у профиля может не быть года, а фильм может честно
+// сойти с проката.
+func verifyYandexEvent(ev YandexEvent, p FilmProfile, sessions int) error {
+	checked := false
+
+	if p.Year > 0 && ev.Year > 0 {
+		checked = true
+		if p.Year != ev.Year {
+			return fmt.Errorf("Яндекс Афиша: у фильма в профиле год %d, а открылся %s — это другой фильм",
+				p.Year, describeYandexEvent(ev))
+		}
+	}
+
+	if p.hasRuntimeRange() && ev.DurationMin > 0 {
+		checked = true
+		if !p.inRuntimeRange(ev.DurationMin) {
+			return fmt.Errorf("Яндекс Афиша: хронометраж %d мин не попадает в вилку профиля %d-%d — открылся %s",
+				ev.DurationMin, p.DurationMin, p.DurationMax, describeYandexEvent(ev))
+		}
+	}
+
+	if !checked && sessions == 0 {
+		return fmt.Errorf(
+			"Яндекс Афиша: сеансов ноль, а сверить нечем — в профиле нет ни года, ни хронометража. "+
+				"Открылся %s: проставь год в профиле, если фильм тот", describeYandexEvent(ev))
+	}
+	return nil
+}
+
+// describeYandexEvent — как фильм называется в отчёте и в ошибках.
+func describeYandexEvent(e YandexEvent) string {
+	out := e.Title
+	if e.OriginalTitle != "" && !strings.EqualFold(e.OriginalTitle, e.Title) {
+		out += " (" + e.OriginalTitle + ")"
+	}
+	if e.Year > 0 {
+		out += fmt.Sprintf(", %d", e.Year)
+	}
+	if e.DateReleased != "" {
+		out += ", релиз " + e.DateReleased
+	}
+	if e.DurationMin > 0 {
+		out += fmt.Sprintf(", %d мин", e.DurationMin)
+	}
+	if e.Slug != "" {
+		out += ", " + yandexSlugBase + e.Slug
+	}
+	return out
 }

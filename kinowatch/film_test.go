@@ -315,3 +315,107 @@ func TestMatchPlaybillFlagsSharedLicence(t *testing.T) {
 		t.Errorf("пометка про общее ПУ потеряна: %v", ms[0].Notes)
 	}
 }
+
+// ——— Опознание фильма у Яндекс Афиши ———
+
+// Единственное совпадение по названию берётся без вопросов.
+func TestPickYandexEventTakesTheOnlyOne(t *testing.T) {
+	found := []YandexEvent{{ID: "id", Title: "Майкл", Slug: "maikl-2026", Year: 2026}}
+
+	got, err := pickYandexEvent(found, FilmProfile{Title: "Майкл"})
+	if err != nil {
+		t.Fatalf("единственный кандидат отвергнут: %v", err)
+	}
+	if got.Slug != "maikl-2026" {
+		t.Errorf("выбран %q", got.Slug)
+	}
+}
+
+// Несколько кандидатов без года в профиле — это вопрос к Владу, а не развилка
+// для догадки: порядок выдачи Афиши нам не принадлежит и завтра будет другим.
+func TestPickYandexEventRefusesToGuess(t *testing.T) {
+	found := []YandexEvent{
+		{ID: "a", Title: "Майкл", Slug: "maikl", Year: 2020},
+		{ID: "b", Title: "Майкл", Slug: "maikl-2026", Year: 2026},
+	}
+
+	_, err := pickYandexEvent(found, FilmProfile{Title: "Майкл"})
+	if err == nil {
+		t.Fatal("из двух кандидатов один выбран молча")
+	}
+	for _, want := range []string{"maikl-2026", "maikl", "слагом"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("в ошибке нет %q: %v", want, err)
+		}
+	}
+}
+
+// Год в профиле развилку решает.
+func TestPickYandexEventUsesProfileYear(t *testing.T) {
+	found := []YandexEvent{
+		{ID: "a", Title: "Майкл", Slug: "maikl", Year: 2020},
+		{ID: "b", Title: "Майкл", Slug: "maikl-2026", Year: 2026},
+	}
+
+	got, err := pickYandexEvent(found, FilmProfile{Title: "Майкл", Year: 2026})
+	if err != nil {
+		t.Fatalf("год не помог выбрать: %v", err)
+	}
+	if got.Slug != "maikl-2026" {
+		t.Errorf("выбран %q, ожидался maikl-2026", got.Slug)
+	}
+}
+
+// Ни одного идущего фильма — это ошибка опознания, а не пустая афиша: спросить
+// расписание не про что.
+func TestPickYandexEventEmptyIsError(t *testing.T) {
+	if _, err := pickYandexEvent(nil, FilmProfile{Title: "Ничего"}); err == nil {
+		t.Fatal("пустая выдача принята за найденный фильм")
+	}
+}
+
+// Год карточки против года профиля — стоп, а не тихий ноль сеансов.
+func TestVerifyYandexEventCatchesWrongYear(t *testing.T) {
+	ev := YandexEvent{Title: "Майкл", Slug: "maikl", Year: 2020}
+
+	err := verifyYandexEvent(ev, FilmProfile{Title: "Майкл", Year: 2026}, 0)
+	if err == nil {
+		t.Fatal("фильм другого года принят за искомый")
+	}
+	if !strings.Contains(err.Error(), "2020") || !strings.Contains(err.Error(), "2026") {
+		t.Errorf("в ошибке не видно обоих годов: %v", err)
+	}
+}
+
+// Хронометраж вне вилки профиля ловится так же.
+func TestVerifyYandexEventCatchesWrongRuntime(t *testing.T) {
+	ev := YandexEvent{Title: "Майкл", DurationMin: 88}
+	p := FilmProfile{Title: "Майкл", DurationMin: 150, DurationMax: 200}
+
+	if err := verifyYandexEvent(ev, p, 5); err == nil {
+		t.Fatal("фильм с чужим хронометражом принят за искомый")
+	}
+}
+
+// Главная развилка: сверять нечем И сеансов ноль — это ловушка однофамильца, и
+// молчать нельзя. Сеансы есть — идём дальше: фильм нашёлся, спорить не о чем.
+func TestVerifyYandexEventStopsOnBlindEmptySchedule(t *testing.T) {
+	ev := YandexEvent{Title: "Майкл", Slug: "maikl", Year: 2020}
+	blind := FilmProfile{Title: "Майкл"} // ни года, ни вилки хронометража
+
+	if err := verifyYandexEvent(ev, blind, 0); err == nil {
+		t.Fatal("пустое расписание при несверенной карточке прошло молча")
+	}
+	if err := verifyYandexEvent(ev, blind, 653); err != nil {
+		t.Errorf("непустое расписание при том же профиле остановило прогон: %v", err)
+	}
+}
+
+// Совпавший год пропускает пустое расписание: фильм честно сошёл с проката.
+func TestVerifyYandexEventAllowsHonestEmptySchedule(t *testing.T) {
+	ev := YandexEvent{Title: "Майкл", Year: 2026}
+
+	if err := verifyYandexEvent(ev, FilmProfile{Title: "Майкл", Year: 2026}, 0); err != nil {
+		t.Errorf("сверенный фильм без сеансов объявлен ошибкой: %v", err)
+	}
+}
