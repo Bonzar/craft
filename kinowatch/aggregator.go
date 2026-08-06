@@ -130,16 +130,99 @@ type attachCandidate struct {
 	distKm   float64
 }
 
+// ——— Адресная ступень ———
+//
+// Адрес — самая сильная улика из трёх: он называет место, а не окрестность, как
+// точка, и не вывеску, как имя. Поэтому ступень идёт первой.
+//
+// Сегодня она не даёт ни одной новой пары, и это свойство данных, а не кода: в
+// ЕАИС адреса нет вовсе, в реестр он приходит от справочника сети или от
+// геокодера — и оба раза вместе с координатами. Строк с адресом 24, и у всех 24
+// точка уже есть. Ступень стоит первой на будущее: адрес у строки без точки
+// сразу начнёт работать.
+//
+// Строгость несущая. Замер: «Каширское ш., 14, ТЦ «Гудзон»» совпадает со
+// строкой «Киномакс-Титан», если требовать только улицу.
+
+// addrTrash — знаки препинания в адресе.
+var addrTrash = regexp.MustCompile(`[«»"'(),.;:]+`)
+
+// addrMallTail — торговый центр и всё после него. Название ТЦ адресом не
+// является и совпадает у разных площадок чаще, чем улица.
+var addrMallTail = regexp.MustCompile(`(?i)\s\b(тц|трц|трк|тк|мфк|мега|галерея|галереи)\b.*$`)
+
+// addrStopWords — слова, которые есть в любом адресе и потому ничего не
+// различают.
+var addrStopWords = map[string]bool{
+	"москва": true, "город": true, "улица": true, "проспект": true, "переулок": true,
+	"шоссе": true, "бульвар": true, "набережная": true, "площадь": true, "проезд": true,
+	"дом": true, "строение": true, "корпус": true, "километр": true, "км": true,
+	"мкад": true, "этаж": true, "владение": true, "пересечение": true,
+}
+
+// addrHouseRe — номер дома: последнее самостоятельное число в адресе, возможно с
+// буквой («13а»).
+var addrHouseRe = regexp.MustCompile(`(?i)(?:^|\s)(\d+[а-я]?)(?:\s|$)`)
+
+// venueAddress — адрес, приведённый к сравнимому виду.
+type venueAddress struct {
+	words map[string]bool
+	house string
+}
+
+// parseVenueAddress разбирает адрес на улицу и дом. Пустой дом означает, что
+// сравнивать нечем: ступень такую пару не рассматривает.
+func parseVenueAddress(s string) venueAddress {
+	s = strings.ToLower(strings.ReplaceAll(s, "ё", "е"))
+	s = addrMallTail.ReplaceAllString(s, "")
+	s = strings.TrimSpace(addrTrash.ReplaceAllString(s, " "))
+
+	out := venueAddress{words: map[string]bool{}}
+	if m := addrHouseRe.FindAllStringSubmatch(s, -1); len(m) > 0 {
+		out.house = m[len(m)-1][1]
+	}
+	for _, w := range strings.Fields(s) {
+		// Сокращения («ул», «просп», «ш») отбрасываются вместе с любым коротким
+		// хвостом порядкового числительного («23-й» → «23 й»).
+		if len([]rune(w)) < 4 || addrStopWords[w] || strings.ContainsAny(w, "0123456789") {
+			continue
+		}
+		out.words[w] = true
+	}
+	return out
+}
+
+// sameAddress — один ли это адрес. Дом обязан совпасть у обеих сторон: без него
+// улица привязывает соседей друг к другу.
+func sameAddress(a, b venueAddress) bool {
+	if a.house == "" || b.house == "" || a.house != b.house {
+		return false
+	}
+	for w := range a.words {
+		if b.words[w] {
+			return true
+		}
+	}
+	return false
+}
+
 // attachVenues раскладывает площадки агрегатора по строкам реестра.
 //
 // Порядок шагов значим целиком, менять его нельзя:
 //
 //  1. отсев чужих городов по адресу;
-//  2. отсев загородных по точке — ДО именной ступени, иначе площадка с
+//  2. отсев загородных по точке — ДО любой привязки, иначе площадка с
 //     московским адресом и точкой в области привяжется по имени и в корзину
 //     не попадёт вовсе;
-//  3. координаты, от ближней пары к дальней;
-//  4. имя — только для строк без координат.
+//  3. псевдоним вывески — решение Влада по конкретной паре;
+//  4. адрес — улица и дом;
+//  5. координаты, от ближней пары к дальней;
+//  6. имя — только там, где решать больше нечем: у строки нет ни адреса, ни
+//     координат.
+//
+// Лесенка идёт от самой сильной улики к самой слабой. Адрес называет место,
+// точка — окрестность, имя — вывеску, и каждая следующая ступень ошибается
+// чаще предыдущей.
 func attachVenues(venues []AggregatorVenue, obs []CinemaObservation) AttachResult {
 	var res AttachResult
 
@@ -168,7 +251,77 @@ func attachVenues(venues []AggregatorVenue, obs []CinemaObservation) AttachResul
 		}
 	}
 
-	// 3. Координатная ступень: сперва собираем все пары, потом разбираем от
+	// 3. Псевдонимы вывесок — решение Влада по конкретной паре, и потому оно
+	// главнее всех вычисляемых улик.
+	rowByEais := map[string]int{}
+	for i := range obs {
+		rowByEais[obs[i].Key] = i
+	}
+	for _, v := range venues {
+		if takenVenue[v.ID] {
+			continue
+		}
+		id, ok := aliasEaisID(v.Title)
+		if !ok {
+			continue
+		}
+		ri, exists := rowByEais[id]
+		if !exists {
+			// Запись протухла: строку из реестра убрали. Молчать нельзя —
+			// иначе площадка уйдёт в общую корзину, и причина потеряется.
+			drop(v, bucketDisputed, fmt.Sprintf(
+				"запись псевдонима ведёт на строку %s, которой в реестре нет", id))
+			continue
+		}
+		if other, busy := takenRow[ri]; busy {
+			drop(v, bucketDisputed, fmt.Sprintf(
+				"строку %s, назначенную псевдонимом, уже заняла площадка %s", id, other))
+			continue
+		}
+
+		takenRow[ri] = v.Title
+		takenVenue[v.ID] = true
+		res.Attached = append(res.Attached, VenueAttachment{
+			Venue: v, RegistryKey: obs[ri].Key, RegistryName: obs[ri].Name, By: "alias",
+		})
+	}
+
+	// 4. Адресная ступень. Совпасть должны улица И дом, иначе ступень отступает
+	// к координатам: полагаться на одну улицу нельзя.
+	rowAddr := make([]venueAddress, len(obs))
+	for i := range obs {
+		rowAddr[i] = parseVenueAddress(obs[i].Fields[fAddress])
+	}
+	for _, v := range venues {
+		if takenVenue[v.ID] || v.Address == "" {
+			continue
+		}
+		va := parseVenueAddress(v.Address)
+		if va.house == "" {
+			continue
+		}
+
+		var hit []int
+		for ri := range obs {
+			if takenRow[ri] == "" && sameAddress(va, rowAddr[ri]) {
+				hit = append(hit, ri)
+			}
+		}
+		// Несколько строк на один адрес — это не привязка, а вопрос к реестру:
+		// решать его молча в пользу первой строки нельзя.
+		if len(hit) != 1 {
+			continue
+		}
+
+		row := obs[hit[0]]
+		takenRow[hit[0]] = v.Title
+		takenVenue[v.ID] = true
+		res.Attached = append(res.Attached, VenueAttachment{
+			Venue: v, RegistryKey: row.Key, RegistryName: row.Name, By: "address",
+		})
+	}
+
+	// 5. Координатная ступень: сперва собираем все пары, потом разбираем от
 	// ближней к дальней. Жадность тут и есть правило «одна строка — одна
 	// площадка»: ближайший претендент занимает строку, остальные спорят.
 	var cands []attachCandidate
@@ -215,24 +368,60 @@ func attachVenues(venues []AggregatorVenue, obs []CinemaObservation) AttachResul
 		})
 	}
 
-	// 4. Именная ступень — только для строк БЕЗ координат. Там, где координаты
-	// есть, решение уже принято ими: имя не имеет права его пересматривать.
+	// 6. Именная ступень — последняя и самая слабая. Работает только там, где
+	// решать больше нечем: у строки нет ни адреса, ни координат. Где они есть,
+	// решение уже принято ими, и имя не имеет права его пересматривать.
+	//
+	// Непривязка тут — не одно событие, а три разных, и смешивать их в одну
+	// корзину значит врать: «реестр не знает» читается совсем иначе, чем «строк
+	// с таким именем несколько».
 	byRow := map[int][]int{}
 	for vi, v := range venues {
 		if takenVenue[v.ID] {
 			continue
 		}
+
+		all := rowsByKey[venueKey(v.Title)]
+		if len(all) == 0 {
+			drop(v, bucketUnknown, "реестр не опознал: ключ имени "+venueKey(v.Title)+" ни к чему не ведёт")
+			continue
+		}
+
+		// Клон описывает те же залы, что и ведущая строка, и своей площадкой не
+		// является. Оставленный в кандидатах, он превращает решённый дубль в
+		// вечный спор: у «Колибри Москва» строка 10735 помечена клоном 9962.
+		var live []int
+		for _, ri := range all {
+			if obs[ri].Fields[fStatusClass] != classCloneOf {
+				live = append(live, ri)
+			}
+		}
+
 		var free []int
-		for _, ri := range rowsByKey[venueKey(v.Title)] {
-			if _, _, ok := rowPoint(obs[ri]); ok {
+		for _, ri := range live {
+			_, _, hasCoords := rowPoint(obs[ri])
+			if hasCoords || obs[ri].Fields[fAddress] != "" {
 				continue
 			}
 			free = append(free, ri)
 		}
-		if len(free) != 1 {
-			continue
+
+		switch {
+		case len(free) == 1:
+			byRow[free[0]] = append(byRow[free[0]], vi)
+		case len(free) > 1:
+			drop(v, bucketDisputed, fmt.Sprintf(
+				"ключ имени %q ведёт к нескольким живым строкам: %s — какая из них та самая, не решено",
+				venueKey(v.Title), rowKeys(obs, free)))
+		case len(live) == 0:
+			drop(v, bucketDisputed, fmt.Sprintf(
+				"ключ имени %q ведёт только к клонам (%s) — ведущая строка записана под другим именем",
+				venueKey(v.Title), rowKeys(obs, all)))
+		default:
+			drop(v, bucketDisputed, fmt.Sprintf(
+				"ключ имени %q ведёт только к строкам %s, а у них решение уже принято адресом или точкой",
+				venueKey(v.Title), rowKeys(obs, live)))
 		}
-		byRow[free[0]] = append(byRow[free[0]], vi)
 	}
 
 	for _, ri := range sortedKeys(byRow) {
@@ -260,6 +449,16 @@ func attachVenues(venues []AggregatorVenue, obs []CinemaObservation) AttachResul
 		}
 	}
 	return res
+}
+
+// rowKeys перечисляет строки реестра их eaisid — по нему строка и адресуется.
+// Имя тут не годится: одинаковых имён в реестре восемь групп.
+func rowKeys(obs []CinemaObservation, idx []int) string {
+	out := make([]string, 0, len(idx))
+	for _, i := range idx {
+		out = append(out, obs[i].Key)
+	}
+	return strings.Join(out, ", ")
 }
 
 // sortedKeys — порядок обхода карты, чтобы прогон был воспроизводим.
