@@ -583,3 +583,30 @@ func TestBindAllNetworksSurvivesBrokenDirectory(t *testing.T) {
 }
 
 var errNoDirectory = fmt.Errorf("справочник недоступен")
+
+// Вывеска агрегатора и строка реестра сходятся, когда сеть и родовое слово сняты
+// с обеих сторон.
+//
+// Случаи из живого прогона 05.08.2026: все три площадки стояли в корзине «не
+// опознано», хотя строки у них есть.
+func TestVenueKeyMatchesAggregatorSignboards(t *testing.T) {
+	cases := []struct{ registry, aggregator, note string }{
+		{"Гудзон", "Люксор Гудзон", "сеть ЛЮКСОР приклеена к вывеске"},
+		{"Весна", "Люксор Весна", "та же сеть, другая площадка"},
+		{"МОРИ Синема Кунцево", "Mori Cinema Кунцево", "сеть кириллицей против латиницы"},
+		{"Кинотеатр Киноквартал", "Киноквартал", "родовое слово в имени реестра"},
+	}
+	for _, c := range cases {
+		if got, want := venueKey(c.registry), venueKey(c.aggregator); got != want {
+			t.Errorf("%s: ключи разошлись — %q → %q, %q → %q", c.note, c.registry, got, c.aggregator, want)
+		}
+	}
+}
+
+// Снятие родового слова не имеет права обнулить ключ: площадка может так и
+// называться, и пустой ключ вычеркнул бы её из сопоставления молча.
+func TestVenueKeyKeepsBareKindName(t *testing.T) {
+	if got := venueKey("Кинотеатр"); got == "" {
+		t.Error("имя «Кинотеатр» дало пустой ключ")
+	}
+}

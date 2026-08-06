@@ -139,14 +139,14 @@ func TestAttachOutsideByGeoBeatsNameStep(t *testing.T) {
 // Строка без координат берётся именем — это единственный путь для 96 сетевых
 // строк реестра, у которых адреса нет вовсе.
 func TestAttachByNameForRowWithoutCoords(t *testing.T) {
-	obs := []CinemaObservation{row("5", "«Киномакс-Пражская» г. Москва", "", "")}
+	obs := []CinemaObservation{row("5", "«Киномакс-Жулебино» г. Москва", "", "")}
 	venues := []AggregatorVenue{
-		{ID: "prag", Title: "Киномакс-Пражская", Address: "ул. Кировоградская, д.13А"},
+		{ID: "zhul", Title: "Киномакс Жулебино"},
 	}
 
 	res := attachVenues(venues, obs)
 
-	got := attachedOf(t, res, "prag")
+	got := attachedOf(t, res, "zhul")
 	if got.By != "name" {
 		t.Errorf("привязка доказана как %q, ожидалось «name»", got.By)
 	}
@@ -170,8 +170,14 @@ func TestAttachCoordsBeatName(t *testing.T) {
 	if len(res.Attached) != 0 {
 		t.Fatalf("имя перебило координаты строки: %+v", res.Attached)
 	}
-	if got := bucketOf(t, res, "pioner").Bucket; got != bucketUnknown {
-		t.Errorf("корзина %q, ожидалась %q", got, bucketUnknown)
+	// Корзина именно спорная, а не «реестр не знает»: имя-то реестр знает, и
+	// смешивать это с площадкой, которой в реестре нет, значит врать в отчёте.
+	got := bucketOf(t, res, "pioner")
+	if got.Bucket != bucketDisputed {
+		t.Errorf("корзина %q, ожидалась %q", got.Bucket, bucketDisputed)
+	}
+	if !strings.Contains(got.Reason, "6") {
+		t.Errorf("в причине не назван eaisid строки: %s", got.Reason)
 	}
 }
 
@@ -180,12 +186,12 @@ func TestAttachCoordsBeatName(t *testing.T) {
 func TestAttachEveryVenueLandsExactlyOnce(t *testing.T) {
 	obs := []CinemaObservation{
 		row("1", "Художественный", "55.752286", "37.601494"),
-		row("5", "«Киномакс-Пражская» г. Москва", "", ""),
+		row("5", "«Киномакс-Жулебино» г. Москва", "", ""),
 	}
 	venues := []AggregatorVenue{
 		{ID: "hud", Title: "Художественный", Address: "Арбатская пл., 14", Lat: 55.752300, Lon: 37.601500},
 		{ID: "domjur", Title: "Киноцентр «Домжур»", Address: "Никитский бульв., 8а", Lat: 55.753500, Lon: 37.599900},
-		{ID: "prag", Title: "Киномакс-Пражская", Address: "ул. Кировоградская, д.13А"},
+		{ID: "zhul", Title: "Киномакс Жулебино"},
 		{ID: "pod", Title: "Silver Cinema (Подольск)", Address: "г. Подольск, ул. Комсомольская, 24"},
 	}
 
@@ -469,5 +475,100 @@ func TestAttachKinoafishaVenuesOfSpiderMan(t *testing.T) {
 	}
 	if len(res.Unattached) != 1 || res.Unattached[0].Bucket != bucketOutsideByGeo {
 		t.Fatalf("Отрада попала не в ту корзину: %+v", res.Unattached)
+	}
+}
+
+// Клон в кандидаты именной ступени не попадает: он описывает те же залы, что и
+// ведущая строка, и своей площадкой не является.
+//
+// Живой случай: «Колибри Москва» — две строки ЕАИС, 10735 помечена клоном 9962,
+// канал у ведущей. Пока клон считался кандидатом, площадка вечно стояла спорной.
+func TestAttachNameStepIgnoresClones(t *testing.T) {
+	lead := row("9962", "Колибри Москва", "", "")
+	clone := row("10735", "Колибри Москва", "", "")
+	clone.Fields[fStatusClass] = classCloneOf
+
+	res := attachVenues([]AggregatorVenue{{ID: "kolibri", Title: "Колибри Москва"}},
+		[]CinemaObservation{lead, clone})
+
+	got := attachedOf(t, res, "kolibri")
+	if got.RegistryKey != "9962" {
+		t.Errorf("площадка села на строку %q, ожидалась ведущая 9962", got.RegistryKey)
+	}
+}
+
+// Несколько живых строк с одним ключом — спор с называнием eaisid, а не «реестр
+// не знает»: реестр знает, и даже дважды.
+func TestAttachNameStepNamesRivalRows(t *testing.T) {
+	res := attachVenues([]AggregatorVenue{{ID: "prime", Title: "Prime Cinema"}},
+		[]CinemaObservation{row("8894", "PRIME CINEMA", "", ""), row("10315", "PRIME CINEMA", "", "")})
+
+	got := bucketOf(t, res, "prime")
+	if got.Bucket != bucketDisputed {
+		t.Fatalf("корзина %q, ожидалась %q", got.Bucket, bucketDisputed)
+	}
+	for _, id := range []string{"8894", "10315"} {
+		if !strings.Contains(got.Reason, id) {
+			t.Errorf("в причине не назван eaisid %s: %s", id, got.Reason)
+		}
+	}
+}
+
+// Адресная ступень: улица И дом. Совпадения по одной улице мало — на живых
+// данных «Каширское ш., 14, ТЦ «Гудзон»» иначе садится на «Киномакс-Титан».
+func TestAttachByAddressNeedsHouse(t *testing.T) {
+	obs := []CinemaObservation{row("100", "Киномакс-Титан", "", "")}
+	obs[0].Fields[fAddress] = "Москва, Каширское шоссе, 61"
+
+	res := attachVenues([]AggregatorVenue{
+		{ID: "gudzon", Title: "Люксор Гудзон", Address: "Каширское ш., 14, ТЦ «Гудзон»"},
+	}, obs)
+
+	if len(res.Attached) != 0 {
+		t.Fatalf("привязка по одной улице состоялась: %+v", res.Attached)
+	}
+}
+
+// Совпали улица и дом — привязка доказана, и доказана именно адресом.
+func TestAttachByAddressBindsSameHouse(t *testing.T) {
+	obs := []CinemaObservation{row("101", "Пионер", "", "")}
+	obs[0].Fields[fAddress] = "Москва, Кутузовский проспект, 21"
+
+	res := attachVenues([]AggregatorVenue{
+		{ID: "pioner", Title: "Совсем другое имя", Address: "Кутузовский просп., 21"},
+	}, obs)
+
+	got := attachedOf(t, res, "pioner")
+	if got.By != "address" || got.RegistryKey != "101" {
+		t.Errorf("привязка вышла как %+v, ожидалась адресом на строку 101", got)
+	}
+}
+
+// Псевдоним вывески — решение Влада по конкретной паре, и оно главнее всех
+// вычисляемых улик: «Киномакс Пражская» у агрегаторов это строка 6101, которую
+// реестр зовёт «Киномакс - Колумбус».
+func TestAttachAliasBeatsEverything(t *testing.T) {
+	obs := []CinemaObservation{
+		row("6101", "Киномакс - Колумбус", "", ""),
+		row("200", "Пражская", "", ""), // ложный тёзка вывески
+	}
+
+	res := attachVenues([]AggregatorVenue{{ID: "prag", Title: "Киномакс Пражская"}}, obs)
+
+	got := attachedOf(t, res, "prag")
+	if got.By != "alias" || got.RegistryKey != "6101" {
+		t.Errorf("привязка вышла как %+v, ожидалась псевдонимом на 6101", got)
+	}
+}
+
+// Протухшая запись псевдонима не молчит: строку убрали из реестра — это видно в
+// причине, а не растворяется в общей корзине.
+func TestAttachAliasWithoutRowIsVisible(t *testing.T) {
+	res := attachVenues([]AggregatorVenue{{ID: "prag", Title: "Киномакс Пражская"}},
+		[]CinemaObservation{row("999", "Совсем другая площадка", "", "")})
+
+	got := bucketOf(t, res, "prag")
+	if !strings.Contains(got.Reason, "6101") {
+		t.Errorf("в причине не назван eaisid из записи: %s", got.Reason)
 	}
 }
