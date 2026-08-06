@@ -77,6 +77,12 @@ type ProbeReport struct {
 	Records RecordsApplied `json:"records"`
 }
 
+// layerCheck — счёт одного слоя, снятый при сведении и сверенный после печати.
+type layerCheck struct {
+	source string
+	acc    layerAccounting
+}
+
 // SalesSummary — сводка по продажам искомого фильма за прогон.
 type SalesSummary struct {
 	// EarliestDate — самый ранний сеанс по городу. Пустая строка означает, что
@@ -85,10 +91,22 @@ type SalesSummary struct {
 	// Venues — сколько площадок уже продают, Showtimes — сколько всего сеансов.
 	Venues    int `json:"venues"`
 	Showtimes int `json:"showtimes"`
+
+	// UnattachedShowtimes — сеансы, найденные вторым слоем на площадках, которые
+	// не сели ни на одну строку реестра.
+	//
+	// Считаются отдельным числом, а не вместе со своими: они найдены, но чья это
+	// площадка — не решено, и складывать их со своими значило бы выдать
+	// неопознанное за покрытие. Молчать о них тоже нельзя: именно так 25 сеансов
+	// «Киносферы IMAX» выглядели как отсутствующие.
+	UnattachedShowtimes int `json:"unattachedShowtimes,omitempty"`
 }
 
 // buildSalesSummary собирает сводку продаж по опрошенным площадкам.
-func buildSalesSummary(venues []VenueProbe) SalesSummary {
+//
+// Вызывается ПОСЛЕ сведения слоёв: до него непривязанные сеансы ещё не
+// разложены по корзинам, и сводка увидела бы ноль.
+func buildSalesSummary(venues []VenueProbe, layers []*AggregatorLayer) SalesSummary {
 	var out SalesSummary
 	for _, vp := range venues {
 		if len(vp.Found) == 0 {
@@ -98,6 +116,11 @@ func buildSalesSummary(venues []VenueProbe) SalesSummary {
 		out.Showtimes += len(vp.Found)
 		if out.EarliestDate == "" || (vp.SaleFrom != "" && vp.SaleFrom < out.EarliestDate) {
 			out.EarliestDate = vp.SaleFrom
+		}
+	}
+	for _, l := range layers {
+		for _, u := range l.Unattached {
+			out.UnattachedShowtimes += len(u.Showtimes)
 		}
 	}
 	return out
@@ -287,17 +310,6 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 		report.Venues = append(report.Venues, vp)
 	}
 	report.Observations = obs
-	report.Sales = buildSalesSummary(report.Venues)
-
-	// Сравнение с прошлым прогоном — последним, когда отчёт уже собран целиком.
-	if strings.TrimSpace(previousPath) != "" {
-		prev, err := readPreviousRun(previousPath)
-		if err != nil {
-			fail("%v", err)
-		}
-		d := diffRuns(report, prev)
-		report.Diff = &d
-	}
 
 	// Сеансы агрегаторов раскладываются по строкам реестра уже после обхода:
 	// привязка знает про строки, а не про то, что ответил их собственный канал.
@@ -310,6 +322,7 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 			ownFound[vp.Key] = len(vp.Found) > 0
 		}
 	}
+	var accounting []layerCheck
 	for _, r := range runs {
 		if r.Layer == nil || r.Layer.Err != "" {
 			continue
@@ -329,6 +342,21 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 		// Счётчик у каждого слоя свой: «наш канал против Яндекса» и «наш канал
 		// против kinoafisha» — разные числа, и одним их не заменить.
 		r.Layer.Agreement = countAgreement(ownFound, byRow)
+		accounting = append(accounting, layerCheck{source: r.Layer.Source, acc: countLayerAccounting(r.Layer, byRow)})
+	}
+
+	// Сводка и сравнение с прошлым прогоном идут ПОСЛЕ сведения слоёв: до него
+	// непривязанные сеансы ещё не разложены по корзинам, и сводка увидела бы
+	// ноль там, где их сотни.
+	report.Sales = buildSalesSummary(report.Venues, report.Aggregators)
+
+	if strings.TrimSpace(previousPath) != "" {
+		prev, err := readPreviousRun(previousPath)
+		if err != nil {
+			fail("%v", err)
+		}
+		d := diffRuns(report, prev)
+		report.Diff = &d
 	}
 
 	out, err := json.MarshalIndent(report, "", "  ")
@@ -336,6 +364,15 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 		fail("сериализация: %v", err)
 	}
 	fmt.Println(string(out))
+
+	// Счёт сводится ПОСЛЕ печати: падение обязано оставлять материал для
+	// разбора, а не пустой вывод.
+	for _, c := range accounting {
+		if d := c.acc.Diff(); d != 0 {
+			fail("слой %s: вернул %d сеансов, в отчёте %d, законно отброшено %d — потеряно %d",
+				c.source, c.acc.Returned, c.acc.Shown, c.acc.Dropped, d)
+		}
+	}
 
 	// Ноль опрошенных площадок — отказ прогона, а не пустой результат: молча
 	// напечатанный отчёт без единого опроса читается как «фильма нигде нет».

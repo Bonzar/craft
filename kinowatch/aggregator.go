@@ -115,6 +115,13 @@ type UnattachedVenue struct {
 	// Reason — человекочитаемое объяснение. Без него список корзин
 	// превращается в свалку, по которой ничего нельзя решить.
 	Reason string `json:"reason"`
+	// Showtimes — сеансы, найденные на этой площадке.
+	//
+	// Лежат здесь, а не выбрасываются: неудача привязки отвечает на вопрос «чья
+	// это строка реестра», а не «есть ли сеанс». Живой промах, из-за которого
+	// поле и заведено: слой нашёл 25 сеансов «Паука» в «Киносфере IMAX», имя не
+	// сошлось со строкой — и сеансы исчезли из отчёта вместе с площадкой.
+	Showtimes []AggregatorShowtime `json:"showtimes,omitempty"`
 }
 
 // AttachResult — итог привязки целиком.
@@ -520,6 +527,11 @@ type AggregatorLayer struct {
 	Sessions int `json:"sessions"`
 	Venues   int `json:"venues"`
 
+	// Dropped — сеансы, пришедшие без идентификатора площадки. Единственная
+	// законная потеря на участке «сеансы слоя → отчёт»; печатается, чтобы её не
+	// приходилось выводить вычитанием.
+	Dropped int `json:"dropped,omitempty"`
+
 	Attached   []VenueAttachment `json:"attached"`
 	Unattached []UnattachedVenue `json:"unattached"`
 	Buckets    map[string]int    `json:"buckets"`
@@ -662,22 +674,71 @@ func aggregatorShowtimesByRow(layer *AggregatorLayer, sessions []AggregatorSessi
 	for _, a := range layer.Attached {
 		rowOf[a.Venue.ID] = a.RegistryKey
 	}
+	bucketOf := map[string]int{}
+	for i := range layer.Unattached {
+		bucketOf[layer.Unattached[i].Venue.ID] = i
+	}
 
 	out := map[string][]AggregatorShowtime{}
+	layer.Dropped = 0
 	for _, s := range sessions {
-		key, ok := rowOf[s.PlaceID]
-		if !ok {
-			continue
-		}
-		out[key] = append(out[key], AggregatorShowtime{
+		st := AggregatorShowtime{
 			StartsAt: s.StartsAt, Hall: s.Hall,
 			SaleStatus: s.SaleStatus, PriceMin: s.PriceMin, PriceMax: s.PriceMax,
-		})
+		}
+		switch {
+		case rowOf[s.PlaceID] != "":
+			out[rowOf[s.PlaceID]] = append(out[rowOf[s.PlaceID]], st)
+		default:
+			i, ok := bucketOf[s.PlaceID]
+			if !ok {
+				// Площадки нет ни среди привязанных, ни в корзинах — такой
+				// сеанс пришёл без идентификатора площадки и в сборку площадок
+				// не попал. Единственная законная потеря на этом участке.
+				layer.Dropped++
+				continue
+			}
+			layer.Unattached[i].Showtimes = append(layer.Unattached[i].Showtimes, st)
+		}
 	}
+
 	for k := range out {
 		sort.Slice(out[k], func(a, b int) bool { return out[k][a].StartsAt < out[k][b].StartsAt })
 	}
+	for i := range layer.Unattached {
+		u := layer.Unattached[i].Showtimes
+		sort.Slice(u, func(a, b int) bool { return u[a].StartsAt < u[b].StartsAt })
+	}
 	return out
+}
+
+// layerAccounting — сходится ли слой по счёту сеансов.
+//
+// Сверяются три числа: сколько слой вернул, сколько показано в отчёте (у строк
+// реестра плюс в корзинах) и сколько отброшено законно. Всё, что не сошлось, —
+// потеря: сеанс, который нашли и не показали.
+//
+// Проверка узкая по построению и шире не притворяется: она видит только участок
+// от списка сеансов слоя до отчёта. Потери раньше — в разборе страницы, в
+// догрузке дат, в сборке площадок — сюда не доходят.
+type layerAccounting struct {
+	Returned int
+	Shown    int
+	Dropped  int
+}
+
+// Diff — сеансы, потерянные между слоем и отчётом. Ноль означает, что сошлось.
+func (a layerAccounting) Diff() int { return a.Returned - a.Shown - a.Dropped }
+
+func countLayerAccounting(layer *AggregatorLayer, byRow map[string][]AggregatorShowtime) layerAccounting {
+	acc := layerAccounting{Returned: layer.Sessions, Dropped: layer.Dropped}
+	for _, list := range byRow {
+		acc.Shown += len(list)
+	}
+	for _, u := range layer.Unattached {
+		acc.Shown += len(u.Showtimes)
+	}
+	return acc
 }
 
 // countAgreement считает расхождение слоёв по строкам реестра.
