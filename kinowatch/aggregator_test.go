@@ -572,3 +572,117 @@ func TestAttachAliasWithoutRowIsVisible(t *testing.T) {
 		t.Errorf("в причине не назван eaisid из записи: %s", got.Reason)
 	}
 }
+
+// Сеансы непривязанной площадки не выбрасываются, а лежат в её записи в корзине.
+//
+// Живой промах, ради которого это заведено: слой нашёл 25 сеансов «Паука» в
+// «Киносфере IMAX», имя не сошлось со строкой реестра — и сеансы исчезли из
+// отчёта вместе с площадкой, хотя площадка в корзине была видна.
+func TestShowtimesOfUnattachedVenueSurvive(t *testing.T) {
+	layer := &AggregatorLayer{
+		Source:   "kinoafisha",
+		Sessions: 3,
+		Attached: []VenueAttachment{{
+			Venue: AggregatorVenue{ID: "zz", Title: "ЗигЗаг"}, RegistryKey: "7458",
+		}},
+		Unattached: []UnattachedVenue{{
+			Venue: AggregatorVenue{ID: "ks", Title: "Киносфера IMAX"}, Bucket: bucketUnknown,
+		}},
+	}
+	sessions := []AggregatorSession{
+		{PlaceID: "zz", StartsAt: "2026-08-20T10:00:00+03:00", PriceMin: 450},
+		{PlaceID: "ks", StartsAt: "2026-08-20T12:00:00+03:00", PriceMin: 1250},
+		{PlaceID: "ks", StartsAt: "2026-08-20T09:00:00+03:00", PriceMin: 1250},
+	}
+
+	byRow := aggregatorShowtimesByRow(layer, sessions)
+
+	if got := len(byRow["7458"]); got != 1 {
+		t.Errorf("у строки реестра %d сеансов, ожидался 1", got)
+	}
+	got := layer.Unattached[0].Showtimes
+	if len(got) != 2 {
+		t.Fatalf("у непривязанной площадки %d сеансов, ожидалось 2", len(got))
+	}
+	if got[0].StartsAt > got[1].StartsAt {
+		t.Errorf("сеансы не отсортированы: %+v", got)
+	}
+	if got[0].PriceMin != 1250 {
+		t.Errorf("цена потеряна: %+v", got[0])
+	}
+}
+
+// Счёт слоя сходится, когда все найденные сеансы показаны.
+func TestLayerAccountingBalances(t *testing.T) {
+	layer := &AggregatorLayer{Sessions: 3,
+		Attached:   []VenueAttachment{{Venue: AggregatorVenue{ID: "zz"}, RegistryKey: "7458"}},
+		Unattached: []UnattachedVenue{{Venue: AggregatorVenue{ID: "ks"}, Bucket: bucketUnknown}},
+	}
+	byRow := aggregatorShowtimesByRow(layer, []AggregatorSession{
+		{PlaceID: "zz", StartsAt: "2026-08-20T10:00:00+03:00"},
+		{PlaceID: "ks", StartsAt: "2026-08-20T12:00:00+03:00"},
+		{PlaceID: "ks", StartsAt: "2026-08-20T13:00:00+03:00"},
+	})
+
+	if got := countLayerAccounting(layer, byRow); got.Diff() != 0 {
+		t.Errorf("счёт не сошёлся на целых данных: %+v", got)
+	}
+}
+
+// Потерянный сеанс виден числом, а не догадкой: именно так дефект и обнаружился.
+func TestLayerAccountingCatchesLostShowtimes(t *testing.T) {
+	layer := &AggregatorLayer{Sessions: 3,
+		Attached: []VenueAttachment{{Venue: AggregatorVenue{ID: "zz"}, RegistryKey: "7458"}},
+	}
+	// Площадки «ks» нет ни среди привязанных, ни в корзинах — её сеансы
+	// раскладка не находит, но в счёте слоя они остаются.
+	byRow := map[string][]AggregatorShowtime{"7458": {{StartsAt: "2026-08-20T10:00:00+03:00"}}}
+
+	got := countLayerAccounting(layer, byRow)
+	if got.Diff() != 2 {
+		t.Errorf("потеря посчитана как %d, ожидалось 2: %+v", got.Diff(), got)
+	}
+}
+
+// Сеанс без идентификатора площадки — законная потеря: он не может попасть ни в
+// одну корзину. Считается отдельным числом и в разницу не идёт.
+func TestLayerAccountingCountsSessionsWithoutVenue(t *testing.T) {
+	layer := &AggregatorLayer{Sessions: 2,
+		Attached: []VenueAttachment{{Venue: AggregatorVenue{ID: "zz"}, RegistryKey: "7458"}},
+	}
+	byRow := aggregatorShowtimesByRow(layer, []AggregatorSession{
+		{PlaceID: "zz", StartsAt: "2026-08-20T10:00:00+03:00"},
+		{PlaceID: "", StartsAt: "2026-08-20T11:00:00+03:00"},
+	})
+
+	got := countLayerAccounting(layer, byRow)
+	if got.Dropped != 1 {
+		t.Errorf("законных потерь %d, ожидалась 1: %+v", got.Dropped, got)
+	}
+	if got.Diff() != 0 {
+		t.Errorf("законная потеря уехала в разницу: %+v", got)
+	}
+}
+
+// «Киносфера IMAX» у агрегаторов — это строка 2947, которую реестр зовёт
+// «Киносфера Москва».
+//
+// Ни адреса, ни координат у строки нет, поэтому обе сильные ступени лесенки её
+// не берут, а имена расходятся. Улику дал сам источник сети: cinema5 отдаёт по
+// этой площадке «Киносфера IMAX ТЦ «Капитолий» Ленинградский», Правобережная 1Б.
+func TestAttachKinosferaByAlias(t *testing.T) {
+	obs := []CinemaObservation{
+		row("2947", "Киносфера Москва", "", ""),
+		row("5382", "Балтика Москва", "55.850635", "37.445437"),
+	}
+	venues := []AggregatorVenue{
+		{ID: "kinoafisha:772611", Title: "Киносфера IMAX", Lat: 55.8808872, Lon: 37.4487987, Sessions: 25},
+	}
+
+	res := attachVenues(venues, obs)
+
+	got := attachedOf(t, res, "kinoafisha:772611")
+	if got.RegistryKey != "2947" || got.By != "alias" {
+		t.Errorf("привязка вышла как %+v, ожидалась псевдонимом на 2947", got)
+	}
+}

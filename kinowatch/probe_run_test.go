@@ -149,7 +149,7 @@ func TestBuildSalesSummaryTakesEarliestDate(t *testing.T) {
 		{Key: "1", SaleFrom: "2026-08-22", Found: []FoundShowtime{{}, {}}},
 		{Key: "2", SaleFrom: "2026-08-20", Found: []FoundShowtime{{}}},
 		{Key: "3"}, // фильма нет — в сводку не идёт
-	})
+	}, nil)
 
 	if got.EarliestDate != "2026-08-20" {
 		t.Errorf("самая ранняя дата %q, ожидалось 2026-08-20", got.EarliestDate)
@@ -161,7 +161,7 @@ func TestBuildSalesSummaryTakesEarliestDate(t *testing.T) {
 
 // Фильм не найден нигде — сводка пустая, а не с нулевой датой.
 func TestBuildSalesSummaryEmpty(t *testing.T) {
-	got := buildSalesSummary([]VenueProbe{{Key: "1"}})
+	got := buildSalesSummary([]VenueProbe{{Key: "1"}}, nil)
 	if got.EarliestDate != "" || got.Venues != 0 {
 		t.Errorf("пустая сводка выглядит как %+v", got)
 	}
