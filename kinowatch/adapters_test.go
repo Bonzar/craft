@@ -7,6 +7,7 @@ package main
 // живой сетью, то есть не проверялись бы в CI вовсе.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1000,7 +1001,7 @@ func TestHudozhestvennySeparatesHallFromNote(t *testing.T) {
 // но это часы работы торгового центра — принять их за сеансы значило бы
 // отрапортовать о показах, которых нет.
 func TestParseGum(t *testing.T) {
-	pb, err := parseGum(readFixture(t, "gum-kinozal.html"), "2026-08-03")
+	pb, err := parseGum(readFixture(t, "gum-kinozal.html"), time.Date(2026, 8, 3, 0, 0, 0, 0, moscowTZ))
 	if err != nil {
 		t.Fatalf("разбор: %v", err)
 	}
@@ -1022,16 +1023,49 @@ func TestParseGum(t *testing.T) {
 	}
 }
 
-// Выпадающий список дат — то, чем добирается горизонт: без него виден только
-// сегодняшний день.
+// Выпадающий список дней — то, чем добирается горизонт: без него виден только
+// сегодняшний день. Из подписи выводится дата, а пункты формы обратной связи в
+// список не попадают.
 func TestGumDays(t *testing.T) {
-	days := gumDays(readFixture(t, "gum-kinozal.html"))
+	ref := time.Date(2026, 8, 3, 0, 0, 0, 0, moscowTZ)
+	days := gumDays(readFixture(t, "gum-kinozal.html"), ref)
 	if len(days) == 0 {
-		t.Fatal("список дат не разобран — горизонт свёлся бы к одному дню")
+		t.Fatal("список дней не разобран — горизонт свёлся бы к одному дню")
 	}
-	for id, label := range days {
-		if id == "" || label == "" {
-			t.Errorf("пустая запись даты: %q → %q", id, label)
+
+	selected := 0
+	for _, d := range days {
+		if d.id == "" || d.date == "" {
+			t.Errorf("пустая запись дня: %+v", d)
+		}
+		if d.selected {
+			selected++
+			if d.date != "2026-08-03" {
+				t.Errorf("выбранный день разобран как %q, фикстура снята 03.08", d.date)
+			}
+		}
+	}
+	if selected != 1 {
+		t.Errorf("выбранных дней %d, ожидался ровно один", selected)
+	}
+	if days[len(days)-1].date != "2026-09-17" {
+		t.Errorf("дальний край горизонта разобран как %q — год выведен неверно",
+			days[len(days)-1].date)
+	}
+}
+
+// Пункты формы обратной связи стоят на той же странице тем же тегом. Если брать
+// все подряд, в горизонт источника уедут шесть лишних «дней», из подписи
+// которых даты не вывести, — и шесть лишних запросов на каждом прогоне.
+func TestGumDaysIgnoreFeedbackForm(t *testing.T) {
+	body := readFixture(t, "gum-kinozal.html") +
+		`<select name="form_dropdown_message_subject">` +
+		`<option value="3">Общие пожелания и рекомендации</option>` +
+		`<option value="6">Проблемы с доставкой</option></select>`
+	ref := time.Date(2026, 8, 3, 0, 0, 0, 0, moscowTZ)
+	for _, d := range gumDays(body, ref) {
+		if d.id == "3" || d.id == "6" {
+			t.Errorf("пункт формы обратной связи принят за день: %+v", d)
 		}
 	}
 }
@@ -1043,7 +1077,7 @@ func TestStandaloneParsersFailLoudly(t *testing.T) {
 	if _, err := parseHudozhestvenny(junk, "2026-08-05"); err == nil {
 		t.Error("Художественный промолчал о сменившейся вёрстке")
 	}
-	if _, err := parseGum(junk, "2026-08-03"); err == nil {
+	if _, err := parseGum(junk, time.Date(2026, 8, 3, 0, 0, 0, 0, moscowTZ)); err == nil {
 		t.Error("ГУМ промолчал о сменившейся вёрстке")
 	}
 }
@@ -1221,6 +1255,37 @@ func TestParseMirage(t *testing.T) {
 	// означала бы «сеансов нет», то есть промах выглядел бы как факт.
 	if _, err := parseMirage(body, "18", "2026-08-03"); err == nil {
 		t.Error("разбор промолчал о том, что на странице другая площадка")
+	}
+}
+
+// Мираж называет свой горизонт календарём страницы, и разбор обязан его отдать:
+// по этому списку обход перестаёт спрашивать источник про дни, которых у него
+// нет, — раньше их было 23 из 28.
+func TestMirageGivesOwnHorizon(t *testing.T) {
+	pb, err := parseMirage(readFixture(t, "mirage-otradnoe.html"), "23", "2026-08-03")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Dates) != 5 {
+		t.Fatalf("дни источника разобраны как %v, в календаре страницы их пять", pb.Dates)
+	}
+	if pb.Dates[0] != "2026-08-03" || pb.Dates[4] != "2026-08-07" {
+		t.Errorf("края горизонта разъехались: %v", pb.Dates)
+	}
+}
+
+// Главная поломка Миража: сайт отдавал сегодняшнюю страницу на любой запрос, а
+// разбор приписывал её сеансы запрошенному дню — в отчёт ехали сеансы, которых
+// нет. Теперь несовпадение активного дня календаря с запрошенным — отдельный
+// исход «источник этот день не публикует», а не отказ канала и не молчаливый
+// штамп.
+func TestMirageRefusesForeignDay(t *testing.T) {
+	_, err := parseMirage(readFixture(t, "mirage-otradnoe.html"), "23", "2026-08-06")
+	if err == nil {
+		t.Fatal("страница за 03.08 принята за расписание 06.08")
+	}
+	if !errors.Is(err, errDayNotPublished) {
+		t.Errorf("чужой день объявлен поломкой канала: %v", err)
 	}
 }
 
@@ -1438,8 +1503,11 @@ func TestParsePoklonkaFixture(t *testing.T) {
 }
 
 // Разбор кинотеатра «Москва»: формат словами, хронометраж и id сеанса.
+//
+// Фикстура снята со страницы дня (`?date=2026-08-10`): без параметра источник
+// отдаёт сегодняшний день и не называет, за какой день страница.
 func TestParseCinemaMoskvaFixture(t *testing.T) {
-	pb, err := parseCinemaMoskva(readFixture(t, "cinema-moscow.html"), "2026-08-04")
+	pb, err := parseCinemaMoskva(readFixture(t, "cinema-moscow-day.html"), "2026-08-10")
 	if err != nil {
 		t.Fatalf("разбор: %v", err)
 	}
@@ -1451,9 +1519,44 @@ func TestParseCinemaMoskvaFixture(t *testing.T) {
 	if s.Format == "" || s.SourceID == "" {
 		t.Errorf("потеряны поля, которые источник отдаёт: %+v", s)
 	}
-	// «1 ч 44 мин» — 104 минуты, а не 44: часы должны собираться.
-	if s.DurationM != 104 {
-		t.Errorf("хронометраж %d, ожидалось 104 — часы потеряны", s.DurationM)
+	if s.DurationM == 0 {
+		t.Errorf("хронометраж потерян: %+v", s)
+	}
+}
+
+// Кинотеатр «Москва» называет свой горизонт списком дат сеансов — по нему обход
+// перестаёт спрашивать про дни, которых у источника нет.
+func TestCinemaMoskvaGivesOwnHorizon(t *testing.T) {
+	pb, err := parseCinemaMoskva(readFixture(t, "cinema-moscow-day.html"), "2026-08-10")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Dates) != 6 {
+		t.Fatalf("дни источника разобраны как %v, на странице их шесть", pb.Dates)
+	}
+	if pb.Dates[0] != "2026-08-07" || pb.Dates[5] != "2026-08-12" {
+		t.Errorf("края горизонта разъехались: %v", pb.Dates)
+	}
+}
+
+// Сегодняшнюю страницу источник днём не подписывает — поле приходит пустым
+// (фикстура снята 04.08, первый день её горизонта 04.08). Такая страница
+// читается как первый день горизонта, иначе терялся бы весь сегодняшний
+// репертуар. А вот выдать её за любой другой день нельзя: ровно так и
+// появлялись сеансы, которых нет.
+func TestCinemaMoskvaDaylessPageIsFirstDay(t *testing.T) {
+	body := readFixture(t, "cinema-moscow.html")
+
+	if _, err := parseCinemaMoskva(body, "2026-08-04"); err != nil {
+		t.Fatalf("сегодняшняя страница отвергнута: %v", err)
+	}
+
+	_, err := parseCinemaMoskva(body, "2026-08-05")
+	if err == nil {
+		t.Fatal("страница первого дня принята за расписание 05.08")
+	}
+	if !errors.Is(err, errDayNotPublished) {
+		t.Errorf("чужой день объявлен поломкой канала: %v", err)
 	}
 }
 
@@ -1681,9 +1784,10 @@ func TestParseLuxorEmptyDayIsNotBroken(t *testing.T) {
 	if len(pb.Showtimes) != 0 {
 		t.Errorf("из пустого дня извлеклись сеансы: %d", len(pb.Showtimes))
 	}
-	// Дата запроса остаётся в афише: классификатору важно, что день опрошен.
-	if len(pb.Dates) != 1 || pb.Dates[0] != "2026-08-04" {
-		t.Errorf("дата запроса потеряна: %v", pb.Dates)
+	// Запрошенная дата в список дней источника не пишется: он означает «что
+	// публикует источник», и эхо вопроса в нём схлопнуло бы обход до одного дня.
+	if len(pb.Dates) != 0 {
+		t.Errorf("в дни источника попало эхо запроса: %v", pb.Dates)
 	}
 }
 

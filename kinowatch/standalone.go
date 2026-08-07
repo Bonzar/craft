@@ -77,7 +77,7 @@ var fixedChannels = []FixedChannel{
 	{
 		EaisID: "2697", Name: "ГУМ-Кинотеатр", Kind: kindGum,
 		Params: ChannelParams{},
-		Source: "gum.ru/kinozal/ — расписание кинозала, не часы работы ТЦ",
+		Source: "gum.ru/kinozal/ — расписание кинозала, не часы работы ТЦ; день выбирается\n\t\t\tотправкой формы, список дней лежит на самой странице",
 	},
 
 	{
@@ -91,22 +91,23 @@ var fixedChannels = []FixedChannel{
 		Source: "mori.film/cities-list — Москва, МФК Кунцево Плаза",
 	},
 
-	// Три московские площадки Миража. У каждой свой адрес расписания; общая
-	// страница города отдаёт только MARI, поэтому идентификатор обязателен.
+	// Три московские площадки Миража. У каждой свой адрес расписания, и дата
+	// стоит в самом пути; общая страница города отдаёт только MARI, поэтому
+	// идентификатор обязателен.
 	{
 		EaisID: "6156", Name: "Москва МАРИ", Kind: kindMirage,
 		Params: ChannelParams{pVenue: "18"},
-		Source: "mirage.ru/msk/cinema/18/ — MARI, ул. Поречная, 10",
+		Source: "www.mirage.ru/msk/schedule/<дата>/cinema/18/ — MARI, ул. Поречная, 10",
 	},
 	{
 		EaisID: "8071", Name: "Москва ОТРАДНОЕ", Kind: kindMirage,
 		Params: ChannelParams{pVenue: "23"},
-		Source: "mirage.ru/msk/cinema/23/ — FORT ОТРАДНОЕ, ул. Декабристов, 12",
+		Source: "www.mirage.ru/msk/schedule/<дата>/cinema/23/ — FORT ОТРАДНОЕ, ул. Декабристов, 12",
 	},
 	{
 		EaisID: "8320", Name: "Москва РОСТОКИНО", Kind: kindMirage,
 		Params: ChannelParams{pVenue: "24"},
-		Source: "mirage.ru/msk/cinema/24/ — ЕВРОПОЛИС, Проспект Мира, 211к2",
+		Source: "www.mirage.ru/msk/schedule/<дата>/cinema/24/ — ЕВРОПОЛИС, Проспект Мира, 211к2",
 	},
 
 	// PRIME CINEMA. Движок etobilet, домен у площадки свой.

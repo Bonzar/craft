@@ -90,7 +90,11 @@ func TestChannelWindowWholeCoversKnownKinds(t *testing.T) {
 	// Замерено живьём: эти отдают весь свой горизонт за один ответ. У Pushka
 	// причина крайняя — параметра даты в запросе нет вовсе, и обход по дню
 	// складывал один и тот же ответ сам с собой.
-	for _, kind := range []string{kindKaro, kindCinemaStar, kindMoskino, kindPushka} {
+	// Премьер-зал и Алмаз попали сюда позже и по разным причинам: первый
+	// публикует только сегодня и взять другой день у него нечем, второй отдаёт
+	// одну страницу на любой запрос, но датирует сеансы сам.
+	for _, kind := range []string{kindKaro, kindCinemaStar, kindMoskino, kindPushka,
+		kindPremierzal, kindAlmaz} {
 		if !channelWindowWhole[kind] {
 			t.Errorf("канал %q помечен как однодневный, хотя отдаёт окно целиком", kind)
 		}
