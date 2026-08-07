@@ -14,6 +14,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"path"
@@ -130,14 +131,36 @@ type Playbill struct {
 	Cinema    string     `json:"cinema"`
 	Showtimes []Showtime `json:"showtimes"`
 
-	// Dates — даты, которые источник считает доступными. Берём оттуда, где
-	// источник их отдаёт (Киномакс, КАРО), вместо того чтобы гадать глубину
-	// горизонта: она у всех разная.
+	// Dates — даты, которые ИСТОЧНИК считает доступными: его собственный
+	// горизонт, а не эхо нашего вопроса. Берём оттуда, где источник его отдаёт
+	// (Киномакс, КАРО, ГУМ, кинотеатр «Москва»), вместо того чтобы гадать
+	// глубину: она у всех разная.
+	//
+	// По этому списку обход сужает остаток горизонта, поэтому запрошенной дате
+	// здесь не место: разбор, кладущий сюда её, схлопнул бы обход до одного дня.
+	// Источник своего списка не знает — поле остаётся пустым.
 	Dates []string `json:"dates,omitempty"`
 }
 
 // moscowTZ — источники говорят о московском времени, но зону не указывают.
 var moscowTZ = time.FixedZone("MSK", 3*60*60)
+
+// errDayNotPublished — источник ответил, но страница не про запрошенный день.
+//
+// Отдельно от обычной ошибки разбора: та значит «канал сломался», а это —
+// «канал жив и этот день не публикует». Первое роняет площадку в поломку,
+// второе оставляет день непокрытым, и путать их нельзя.
+var errDayNotPublished = errors.New("источник не публикует запрошенный день")
+
+// ruDateToISO переводит «09.08.2026» в «2026-08-09». Пустая строка означает,
+// что на входе была не дата.
+func ruDateToISO(s string) string {
+	t, err := time.ParseInLocation("02.01.2006", strings.TrimSpace(s), moscowTZ)
+	if err != nil {
+		return ""
+	}
+	return t.Format("2006-01-02")
+}
 
 // joinDateTime собирает момент сеанса из даты и времени источника.
 func joinDateTime(date, hhmm string) (string, error) {
@@ -787,11 +810,12 @@ func parseRussianDuration(s string) int {
 //
 // date — дата, за которую запрошена страница: в разметке её нет, страница
 // всегда отдаёт выбранный день, а выбор задаётся параметром запроса.
+//
+// Отсюда же и слабое место: сверить, та ли пришла страница, у этого источника
+// нечем — датой он себя не подписывает. Единственная защита от «отдали
+// сегодняшний день на любой запрос» — чек сходимости дат в обходе.
 func parseMori(body, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 
 	groups := moriGroup.FindAllStringSubmatch(body, -1)
 	if len(groups) == 0 {
@@ -880,9 +904,6 @@ var (
 // parseFiveStars разбирает страницу расписания «Пяти звёзд».
 func parseFiveStars(body, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 	if cm := fiveCinema.FindStringSubmatch(body); len(cm) > 1 {
 		pb.Cinema = strings.TrimSpace(stripHTML(cm[1]))
 	}
@@ -1364,9 +1385,6 @@ type hudPage struct {
 // parseHudozhestvenny разбирает страницу расписания на одну дату.
 func parseHudozhestvenny(body, date string) (Playbill, error) {
 	pb := Playbill{Cinema: "Художественный"}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 
 	m := hudNextData.FindStringSubmatch(body)
 	if len(m) < 2 {
@@ -1428,22 +1446,51 @@ func parseHudozhestvenny(body, date string) (Playbill, error) {
 // Даты переключаются выпадающим списком, где значение опции — идентификатор
 // дня; человекочитаемая подпись стоит рядом («Понедельник 31 Августа»).
 var (
-	gumItem   = regexp.MustCompile(`(?s)<div class="kino__item">(.*?)(?:<div class="kino__item">|\z)`)
-	gumTitle  = regexp.MustCompile(`(?s)kino__title"[^>]*>\s*<a[^>]*href="/kinozal/movie/id/(\d+)/"[^>]*>\s*(.*?)\s*</a>`)
-	gumTime   = regexp.MustCompile(`ticketManager\.session\("([^"]+)",\s*(\d+)\);'>\s*([0-2]?\d:[0-5]\d)`)
-	gumDayOpt = regexp.MustCompile(`<option value="(\d+)"[^>]*>\s*([^<]+?)\s*</option>`)
+	gumItem    = regexp.MustCompile(`(?s)<div class="kino__item">(.*?)(?:<div class="kino__item">|\z)`)
+	gumTitle   = regexp.MustCompile(`(?s)kino__title"[^>]*>\s*<a[^>]*href="/kinozal/movie/id/(\d+)/"[^>]*>\s*(.*?)\s*</a>`)
+	gumTime    = regexp.MustCompile(`ticketManager\.session\("([^"]+)",\s*(\d+)\);'>\s*([0-2]?\d:[0-5]\d)`)
+	gumDayOpt  = regexp.MustCompile(`<option value="(\d+)"([^>]*)>\s*([^<]+?)\s*</option>`)
+	gumLabelRe = regexp.MustCompile(
+		`^([А-Яа-яЁё]+)\s+(\d{1,2})\s+([А-Яа-яЁё]+)$`)
 )
 
-// parseGum разбирает расписание кинозала ГУМа.
-func parseGum(body, date string) (Playbill, error) {
+// gumDaySelect — начало ИМЕННО списка выбора дня. На странице есть и второй
+// выпадающий список (форма обратной связи), и без этой зацепки его пункты
+// попадали бы в горизонт источника.
+const gumDaySelect = `<select class="showtimes-select" name="SECTION_ID">`
+
+// parseGum разбирает расписание кинозала ГУМа за один день.
+//
+// ref — день прогона: подписи дней идут без года («Пятница 7 Августа»), а список
+// тянется в следующие месяцы, поэтому год выводится от него. Дата сеансов берётся
+// из подписи выбранного дня, а не от вызывающего: раньше источник на любой
+// запрос отдавал сегодняшнюю страницу, и её сеансы уезжали в отчёт под чужими
+// датами.
+func parseGum(body string, ref time.Time) (Playbill, error) {
 	pb := Playbill{Cinema: "ГУМ Кинозал"}
-	if date != "" {
-		pb.Dates = []string{date}
+
+	days := gumDays(body, ref)
+	date := ""
+	for _, d := range days {
+		pb.Dates = append(pb.Dates, d.date)
+		if d.selected {
+			date = d.date
+		}
+	}
+	sort.Strings(pb.Dates)
+
+	if date == "" {
+		return pb, fmt.Errorf("разбор ГУМа: выбранный день не найден в списке (тело %d байт)", len(body))
 	}
 
+	// Пустой день — не поломка: у ГУМа в списке есть дни, где кинозал не
+	// показывает (замер: 14 и 17 августа отдают расписание без карточек). Отличие
+	// от сменившейся вёрстки в том, что переключатель дней на месте — значит это
+	// та самая страница расписания, просто пустая. Границу держит проверка выше:
+	// нет переключателя — ошибка.
 	items := gumItem.FindAllStringSubmatch(body, -1)
 	if len(items) == 0 {
-		return pb, fmt.Errorf("разбор ГУМа: карточки фильмов не найдены (тело %d байт)", len(body))
+		return pb, nil
 	}
 
 	for _, it := range items {
@@ -1477,17 +1524,98 @@ func parseGum(body, date string) (Playbill, error) {
 	return pb, nil
 }
 
-// gumDays — идентификаторы дат из выпадающего списка страницы.
-// Нужны, чтобы обойти весь горизонт, а не только сегодняшний день.
-func gumDays(body string) map[string]string {
-	out := map[string]string{}
-	for _, m := range gumDayOpt.FindAllStringSubmatch(body, -1) {
-		label := strings.TrimSpace(stripHTML(m[2]))
-		if label != "" {
-			out[m[1]] = label
+// gumDay — один день из переключателя расписания.
+type gumDayOption struct {
+	id       string // значение SECTION_ID, которым день запрашивается
+	date     string // ГГГГ-ММ-ДД, выведенная из подписи
+	selected bool   // этот день страница и показывает
+}
+
+// gumDays — дни из переключателя расписания.
+//
+// Читается ТОЛЬКО список выбора дня: на странице есть и второй выпадающий
+// список — форма обратной связи с пунктами вроде «Проблемы с доставкой». Их
+// шесть, и без отбора они уезжали бы в горизонт источника шестью лишними
+// запросами и датами, которых из подписи не вывести.
+//
+// Подпись дня идёт без года («Пятница 7 Августа»), поэтому год берётся от ref:
+// список тянется на полтора месяца вперёд и через Новый год ушёл бы в прошлое.
+// Название дня недели служит проверкой, что год выведен верно.
+func gumDays(body string, ref time.Time) []gumDayOption {
+	i := strings.Index(body, gumDaySelect)
+	if i < 0 {
+		return nil
+	}
+	chunk := body[i:]
+	if j := strings.Index(chunk, "</select>"); j > 0 {
+		chunk = chunk[:j]
+	}
+
+	var out []gumDayOption
+	for _, m := range gumDayOpt.FindAllStringSubmatch(chunk, -1) {
+		label := strings.TrimSpace(stripHTML(m[3]))
+		date := gumLabelDate(label, ref)
+		if date == "" {
+			continue
 		}
+		out = append(out, gumDayOption{
+			id:       m[1],
+			date:     date,
+			selected: strings.Contains(m[2], "selected"),
+		})
 	}
 	return out
+}
+
+// gumLabelDate переводит «Пятница 7 Августа» в дату.
+//
+// Год подбирается от ref: сперва его собственный, и если получившийся день
+// заметно позади прогона — следующий. Совпадение дня недели с подписью и есть
+// проверка выбора; не совпало — дату не выдаём, гадать нельзя.
+func gumLabelDate(label string, ref time.Time) string {
+	m := gumLabelRe.FindStringSubmatch(label)
+	if len(m) < 4 {
+		return ""
+	}
+	day, _ := strconv.Atoi(m[2])
+	month := russianMonthNominative(m[3])
+	if day == 0 || month == 0 {
+		return ""
+	}
+
+	for _, year := range []int{ref.Year(), ref.Year() + 1} {
+		t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, moscowTZ)
+		if t.Before(ref.AddDate(0, 0, -1)) {
+			continue
+		}
+		if !strings.EqualFold(ruWeekday(t), m[1]) {
+			continue
+		}
+		return t.Format("2006-01-02")
+	}
+	return ""
+}
+
+// russianMonthNominative — номер месяца по названию в именительном падеже:
+// подписи дней у ГУМа идут «7 Августа», но встречается и «Август».
+func russianMonthNominative(s string) int {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if n := russianMonth(s); n != 0 {
+		return n
+	}
+	months := map[string]int{
+		"январь": 1, "февраль": 2, "март": 3, "апрель": 4,
+		"май": 5, "июнь": 6, "июль": 7, "август": 8,
+		"сентябрь": 9, "октябрь": 10, "ноябрь": 11, "декабрь": 12,
+	}
+	return months[s]
+}
+
+// ruWeekday — русское название дня недели, как его пишет источник.
+func ruWeekday(t time.Time) string {
+	names := [...]string{"Воскресенье", "Понедельник", "Вторник", "Среда",
+		"Четверг", "Пятница", "Суббота"}
+	return names[int(t.Weekday())]
 }
 
 // ——— Премьерзал ———
@@ -1518,9 +1646,6 @@ var (
 // стоило бы всех фильмов кроме первого — тест поймал ровно это.
 func parsePremierzal(body, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 
 	films := strings.Split(body, `schedule__film-name">`)
 	if len(films) < 2 {
@@ -1580,7 +1705,12 @@ func parsePremierzal(body, date string) (Playbill, error) {
 // Сеть считалась SPA без собственного канала — это оказалось неверно: сайт
 // найден по тегу website в OSM, и расписание отдаётся сервером обычным HTML.
 //
-// Адрес расписания — свой у каждой площадки: `/msk/schedule/cinema/<id>/`.
+// Адрес расписания — свой у каждой площадки и НЕСЁТ ДАТУ:
+// `/msk/schedule/<ДД.ММ.ГГГГ>/cinema/<id>/`. Без даты сайт на любой запрос
+// отдаёт сегодняшнюю страницу (159045 байт на всё окно), а разбор приписывал её
+// сеансы запрошенному дню — в отчёте появлялись сеансы, которых нет. Форма
+// `/cinema/<id>/<дата>/` дату игнорирует, проверено.
+//
 // Общая страница города `/msk/schedule/` выглядит как список всех, но отдаёт
 // только выбранную по умолчанию — замерено живьём: один блок площадки, всегда
 // MARI, при любом параметре кинотеатра и любой куке. Взять её значило бы выдать
@@ -1588,9 +1718,16 @@ func parsePremierzal(body, date string) (Playbill, error) {
 //
 // Отбор по блоку площадки сохранён и на этом адресе: он дешёвый, а промах по
 // идентификатору отличает от пустого расписания.
+//
+// Свой горизонт источник называет сам: календарь наверху страницы перечисляет
+// дни, которые он публикует (на замере пять), и активный день помечен классом.
+// mirageHost — домен сети с www: без него сайт отвечает редиректом.
+const mirageHost = "https://www.mirage.ru"
+
 var (
 	mirageBox   = regexp.MustCompile(`(?s)<div class="session-box">(.*?)(?:<div class="session-box">|\z)`)
 	mirageVenue = regexp.MustCompile(`md-title">\s*<a href="/msk/cinema/(\d+)/?"`)
+	mirageDay   = regexp.MustCompile(`<a href="/msk/schedule/(\d{2}\.\d{2}\.\d{4})/"([^>]*)>`)
 	mirageItem  = regexp.MustCompile(`(?s)<div class="title">\s*(.*?)\s*</div>(.*?)(?:<div class="title">|\z)`)
 	mirageHall  = regexp.MustCompile(`<span class="blue">\s*([^<]+?)\s*</span>`)
 	mirageTime  = regexp.MustCompile(`<div class="time">\s*([0-2]?\d:[0-5]\d)\s*</div>`)
@@ -1604,8 +1741,25 @@ var (
 // означает «взять всё»: у сети из одной площадки отбирать нечего.
 func parseMirage(body, venue, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
+
+	// Дни источника и день самой страницы — из календаря. Читаются до сеансов:
+	// страница не про запрошенный день означает, что разбирать её незачем.
+	active := ""
+	for _, m := range mirageDay.FindAllStringSubmatch(body, -1) {
+		day := ruDateToISO(m[1])
+		if day == "" {
+			continue
+		}
+		pb.Dates = append(pb.Dates, day)
+		if strings.Contains(m[2], "active") {
+			active = day
+		}
+	}
+	sort.Strings(pb.Dates)
+
+	if date != "" && active != date {
+		return pb, fmt.Errorf("%w: Мираж отдал страницу за %q вместо %q",
+			errDayNotPublished, active, date)
 	}
 
 	boxes := mirageBox.FindAllStringSubmatch(body, -1)
@@ -1643,7 +1797,7 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 				st.Format = strings.TrimSpace(fm[1])
 			}
 			if lm := mirageLink.FindStringSubmatch(it[2]); len(lm) > 1 {
-				st.DeepLink = "https://mirage.ru" + lm[1]
+				st.DeepLink = mirageHost + lm[1]
 				// Идентификатор сеанса у источника есть — это uuid в ссылке на
 				// билет. Он различает два сеанса одного фильма в один час.
 				st.SourceID = strings.Trim(strings.TrimPrefix(lm[1], "/ticket_new/"), "/")
@@ -1792,9 +1946,6 @@ var etobiletPrice = regexp.MustCompile(`(\d+)`)
 // parseEtobilet разбирает страницу площадки на движке etobilet.
 func parseEtobilet(body, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 
 	raw, err := extractEmbeddedJSON(body, `daySchedule`)
 	if err != nil {
@@ -2088,20 +2239,53 @@ func russianMonth(s string) int {
 
 // ——— Кинотеатр «Москва» ———
 //
-// `cinema.moscow/repertoire` отдаёт репертуар серверным HTML. Формат площадка
-// называет словами про удобство («зал с креслами»), а номера зала не даёт —
-// поэтому оно едет в Format, а Hall остаётся пустым.
+// `cinema.moscow/repertoire?date=<ГГГГ-ММ-ДД>` отдаёт репертуар дня серверным
+// HTML. Без параметра приходит сегодняшний день, и раньше запрашивался именно
+// он — на все 28 дней окна, а разбор приписывал сеансы запрошенной дате.
+// Замер: дефолтная страница даёт 20 сеансов, `?date=2026-08-10` — 35.
+//
+// Свой горизонт источник называет сам списком дат сеансов, а день страницы —
+// отдельным полем. Поле это ЭХО параметра, а не суждение: на дате вне своего
+// окна источник повторяет её и отдаёт пустой репертуар. Поэтому сверка ловит
+// только случай «параметр проигнорирован целиком», а дни вне окна отсекает
+// список дат.
+//
+// Формат площадка называет словами про удобство («зал с креслами»), а номера
+// зала не даёт — поэтому оно едет в Format, а Hall остаётся пустым.
 var (
 	moskvaName   = regexp.MustCompile(`^\s*(.*?)\s*</div>`)
 	moskvaFormat = regexp.MustCompile(`repertoire-times__format">\s*(.*?)\s*</div>`)
 	moskvaDur    = regexp.MustCompile(`repertoire-times__dur">\s*(.*?)\s*</div>`)
 	moskvaShow   = regexp.MustCompile(`data-href="/sessions/(\d+)"[^>]*>\s*([0-2]?\d:[0-5]\d)`)
+	moskvaDays   = regexp.MustCompile(`data-session-dates="([^"]*)"`)
+	moskvaPage   = regexp.MustCompile(`data-calendar-default-date="([^"]*)"`)
 )
 
 func parseCinemaMoskva(body, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
+
+	if dm := moskvaDays.FindStringSubmatch(body); len(dm) > 1 {
+		for _, d := range regexp.MustCompile(`\d{4}-\d{2}-\d{2}`).FindAllString(html.UnescapeString(dm[1]), -1) {
+			pb.Dates = append(pb.Dates, d)
+		}
+		sort.Strings(pb.Dates)
+	}
+
+	// День страницы источник называет отдельным полем, но НЕ для сегодняшнего
+	// дня: на `?date=<сегодня>` поле приходит пустым (проверено живьём). Пустое
+	// поле поэтому читается как «первый день горизонта» — сегодняшний, — и
+	// только он его и оправдывает. Считать пустое поле промахом нельзя: так
+	// терялся бы весь сегодняшний репертуар.
+	page := ""
+	if pm := moskvaPage.FindStringSubmatch(body); len(pm) > 1 {
+		page = strings.TrimSpace(pm[1])
+	}
+	if page == "" && len(pb.Dates) > 0 {
+		page = pb.Dates[0]
+	}
+	if date != "" && page != date {
+		return pb, fmt.Errorf("%w: кинотеатр «Москва» отдал страницу за %q вместо %q",
+			errDayNotPublished, page, date)
 	}
 
 	blocks := splitBlocks(body, `repertoire-times__title">`)
@@ -2207,9 +2391,6 @@ func parseRomanov(body, date string) (Playbill, error) {
 	}
 
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 
 	// Порядок ключей карты в Go случаен, а сеансы должны ложиться устойчиво:
 	// иначе два одинаковых прогона дадут разный порядок афиши.
@@ -2284,9 +2465,6 @@ var (
 
 func parseAlmaz(body, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 
 	// Фильм и его сеансы идут одним блоком: название лежит в <h3>, сеансы —
 	// кнопками после него. Режем по заголовку, внутри куска собираем кнопки.
@@ -2436,9 +2614,6 @@ var luxorHallNum = regexp.MustCompile(`(\d+)`)
 
 func parseLuxor(body, date string) (Playbill, error) {
 	pb := Playbill{}
-	if date != "" {
-		pb.Dates = []string{date}
-	}
 
 	raw, err := extractEmbeddedJSON(body, "filmsAll")
 	if err != nil {

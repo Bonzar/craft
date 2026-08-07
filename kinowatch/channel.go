@@ -16,7 +16,10 @@ package main
 // не пустая афиша, и день, который канал не отдал, помечается отдельно.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/url"
@@ -64,6 +67,21 @@ type ChannelProbe struct {
 	// исход («пустая афиша»), и решает его классификатор, а не это поле.
 	WindowFrom string
 	WindowTo   string
+
+	// BodyHash — отпечаток тела ответа, по которому видно, что источник
+	// запрошенную дату не различил: два дня подряд с одинаковым телом означают,
+	// что он отдал одну и ту же страницу.
+	//
+	// Пустой означает «сравнивать нечем», а не «тела совпали»: часть каналов
+	// собирает ответ мимо общего скелета запроса и отпечатка не ставит. Все
+	// такие каналы несут дату в самом запросе, поэтому потеря чека для них
+	// безопасна.
+	BodyHash string
+
+	// DateBlind непустая означает, что источник отдал на разные даты один и тот
+	// же ответ. Не ошибка канала: он жив и отвечает, просто про запрошенные дни
+	// ничего не сказал — и приписывать им сеансы первого дня не на чем.
+	DateBlind string
 }
 
 // sourceWindow — фактическое окно афиши: от первой даты сеанса до последней.
@@ -186,6 +204,19 @@ var channelWindowWhole = map[string]bool{
 	// разу на день и складывал его сам с собой — на двухдневном горизонте это
 	// давало ровно двойной комплект сеансов.
 	kindPushka: true,
+	// Премьер-зал публикует ТОЛЬКО сегодня, и взять у него другой день нечем:
+	// форма даты расписание не меняет (три разные даты дали байт в байт одну
+	// страницу), а pjax-фрагмент отвечает «сеансов нет» на любую дату, включая
+	// сегодняшнюю. Пока канал обходился по дню, сегодняшние сеансы уезжали в
+	// отчёт под всеми 28 датами окна.
+	//
+	// Правильность держится на том, что прогон стартует с сегодня — другой
+	// начальной даты у инструмента нет. Появится ключ начальной даты — этот
+	// канал придётся пересматривать первым: он проставит сеансам чужой день.
+	kindPremierzal: true,
+	// Алмаз отдаёт одну и ту же страницу на любой запрос, но датирует сеансы
+	// сам — данные верные, лишними были только 27 запросов из 28.
+	kindAlmaz: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -202,19 +233,50 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		return one
 	}
 
+	plan, inHorizon := horizonPlan(from, days)
+
 	var out ChannelProbe
 	var lastFail ChannelProbe
 	got := 0
 	seen := map[string]bool{}
+	seenDates := map[string]bool{}
+	narrowed := false
+	bodies := map[string]bodySeen{}
 
-	for i := 0; i < days; i++ {
-		day := from.AddDate(0, 0, i)
+	for i := 0; i < len(plan); i++ {
+		day := plan[i]
+		date := day.Format("2006-01-02")
 		one := fetchChannelDay(c, kind, p, day)
+
+		// Источник ответил, но страница не про этот день. Не отказ: канал жив,
+		// просто этот день он не публикует — и в список неответивших он не
+		// попадает, иначе живой источник объявлялся бы дырявым.
+		if errors.Is(one.ParseErr, errDayNotPublished) {
+			if !narrowed && len(one.Playbill.Dates) > 0 {
+				narrowed = true
+				plan = narrowPlan(plan, i, one.Playbill.Dates, inHorizon)
+			}
+			continue
+		}
 
 		if one.Err != nil || one.ParseErr != nil {
 			lastFail = one
-			out.FailedDays = append(out.FailedDays, day.Format("2006-01-02"))
+			out.FailedDays = append(out.FailedDays, date)
 			continue
+		}
+
+		// Чек сходимости дат. Тело этого дня уже приходило раньше — значит
+		// источник запрошенную дату не различил, и спрашивать его дальше не о
+		// чем. День без сеансов в сравнении не участвует: у многих каналов
+		// пустой день — байт в байт одна и та же заглушка, и два таких дня
+		// подряд обрубили бы обход, потеряв все дальнейшие дни с сеансами.
+		if one.BodyHash != "" && len(one.Playbill.Showtimes) > 0 {
+			days := showtimeDays(one.Playbill)
+			if prev, ok := bodies[one.BodyHash]; ok {
+				out.DateBlind = dateBlindReason(prev, date, days)
+				break
+			}
+			bodies[one.BodyHash] = bodySeen{date: date, days: days}
 		}
 
 		got++
@@ -224,7 +286,17 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 			out.Playbill.Cinema = one.Playbill.Cinema
 		}
 		out.Playbill.Showtimes = appendNewShowtimes(out.Playbill.Showtimes, one.Playbill.Showtimes, seen)
-		out.Playbill.Dates = append(out.Playbill.Dates, one.Playbill.Dates...)
+		// Список дней источник повторяет на каждой странице — складывать его
+		// сам с собой значит получить один и тот же горизонт по разу на день.
+		out.Playbill.Dates = appendNewDates(out.Playbill.Dates, one.Playbill.Dates, seenDates)
+
+		// Источник назвал свои дни — дальше идём только по ним. Список
+		// пересекается с запрошенным горизонтом, а не заменяет его: ключ --days
+		// остаётся верхней границей.
+		if !narrowed && len(one.Playbill.Dates) > 0 {
+			narrowed = true
+			plan = narrowPlan(plan, i, one.Playbill.Dates, inHorizon)
+		}
 	}
 
 	// Не ответил ни один день — наружу уходит настоящий отказ последнего
@@ -234,6 +306,129 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 	}
 	out.WindowFrom, out.WindowTo = sourceWindow(out.Playbill)
 	return out
+}
+
+// bodySeen — тело ответа, уже полученное на какую-то дату.
+//
+// days хранится рядом с датой, потому что одного совпадения тел мало: по нему
+// видно, что источник не различил даты, но не видно, кто датировал сеансы.
+// Совпали и дни — значит датировал источник; разошлись — датировали мы.
+type bodySeen struct {
+	date string
+	days []string
+}
+
+// dateBlindReason решает, кто датировал сеансы источника, отдавшего одно и то же
+// тело на две разные даты.
+//
+// Даты сеансов сдвинулись вслед за запросом — датируем их МЫ, и приписывать
+// этому дню нечего: наружу уходит причина, по которой окно площадки узкое. Не
+// сдвинулись — источник датирует сеансы сам, его окно уже собрано первым
+// ответом, и жаловаться не на что: лишними были только запросы.
+func dateBlindReason(prev bodySeen, date string, days []string) string {
+	if sameStrings(prev.days, days) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"на %s пришло то же тело, что на %s: источник запрошенную дату не различает",
+		date, prev.date)
+}
+
+// horizonPlan раскладывает запрошенное окно в список дней и множество их дат.
+//
+// Множество нужно, чтобы дни, названные самим источником, не вывели обход за
+// границу запрошенного окна: у ГУМа собственный список тянется на полтора
+// месяца вперёд, а спрашивали его про 28 дней.
+func horizonPlan(from time.Time, days int) ([]time.Time, map[string]bool) {
+	plan := make([]time.Time, 0, days)
+	inHorizon := make(map[string]bool, days)
+	for i := 0; i < days; i++ {
+		d := from.AddDate(0, 0, i)
+		plan = append(plan, d)
+		inHorizon[d.Format("2006-01-02")] = true
+	}
+	return plan, inHorizon
+}
+
+// narrowPlan сужает остаток обхода до дней, которые назвал сам источник.
+//
+// Пройденное не трогается: done — индекс дня, ответ которого принёс список.
+// Дни вне запрошенного горизонта отбрасываются.
+func narrowPlan(plan []time.Time, done int, srcDates []string, inHorizon map[string]bool) []time.Time {
+	seen := map[string]bool{}
+	for _, d := range plan[:done+1] {
+		seen[d.Format("2006-01-02")] = true
+	}
+
+	var rest []string
+	for _, s := range srcDates {
+		s = strings.TrimSpace(s)
+		if len(s) < 10 {
+			continue
+		}
+		s = s[:10]
+		if !inHorizon[s] || seen[s] {
+			continue
+		}
+		seen[s] = true
+		rest = append(rest, s)
+	}
+	sort.Strings(rest)
+
+	out := append([]time.Time{}, plan[:done+1]...)
+	for _, s := range rest {
+		t, err := time.ParseInLocation("2006-01-02", s, moscowTZ)
+		if err != nil {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// showtimeDays — отсортированные уникальные даты сеансов афиши.
+func showtimeDays(pb Playbill) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range pb.Showtimes {
+		if len(s.StartsAt) < 10 {
+			continue
+		}
+		day := s.StartsAt[:10]
+		if seen[day] {
+			continue
+		}
+		seen[day] = true
+		out = append(out, day)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// appendNewDates складывает дни источника без повторов: список приходит на
+// каждой его странице целиком.
+func appendNewDates(dst, src []string, seen map[string]bool) []string {
+	for _, d := range src {
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		dst = append(dst, d)
+	}
+	sort.Strings(dst)
+	return dst
 }
 
 // appendNewShowtimes добавляет к окну только те сеансы, которых в нём ещё нет.
@@ -294,7 +489,7 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		return fetchOne(c, "https://poklonka-cinema.ru/films/",
 			func(body string) (Playbill, error) { return parsePoklonka(body, day) })
 	case kindMoskva:
-		return fetchOne(c, "https://cinema.moscow/repertoire",
+		return fetchOne(c, "https://cinema.moscow/repertoire?date="+day.Format("2006-01-02"),
 			func(body string) (Playbill, error) {
 				return parseCinemaMoskva(body, day.Format("2006-01-02"))
 			})
@@ -359,8 +554,12 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 	case kindPushka:
 		return fetchPushkaDay(c, venue)
 	case kindMori:
+		// Дата — параметром. Без неё источник отдаёт сегодняшний день на любой
+		// запрос (133453 байта против 162246 у `?date=2026-08-10`), а разбор
+		// приписывал его сеансы запрошенной дате.
 		return fetchOne(c,
-			"https://mori.film/schedule/"+url.PathEscape(venue),
+			"https://mori.film/schedule/"+url.PathEscape(venue)+
+				"?date="+day.Format("2006-01-02"),
 			func(body string) (Playbill, error) {
 				return parseMori(body, day.Format("2006-01-02"))
 			})
@@ -384,23 +583,79 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 				return parsePremierzal(body, day.Format("2006-01-02"))
 			})
 	case kindMirage:
-		// У площадки свой адрес расписания. Общая страница города отдаёт только
-		// ту, что выбрана по умолчанию, поэтому брать её нельзя: три площадки
-		// получили бы одно и то же расписание MARI.
-		return fetchOne(c, "https://mirage.ru/msk/schedule/cinema/"+url.PathEscape(venue)+"/",
+		// У площадки свой адрес расписания, и дата стоит в самом пути. Общая
+		// страница города отдаёт только ту площадку, что выбрана по умолчанию,
+		// поэтому брать её нельзя: три площадки получили бы одно расписание
+		// MARI. Домен сразу с www — на него ведёт редирект, и без него каждый
+		// запрос идёт дважды.
+		return fetchOne(c, mirageHost+"/msk/schedule/"+day.Format("02.01.2006")+
+			"/cinema/"+url.PathEscape(venue)+"/",
 			func(body string) (Playbill, error) {
 				return parseMirage(body, venue, day.Format("2006-01-02"))
 			})
 	case kindGum:
-		return fetchOne(c, "https://gum.ru/kinozal/",
-			func(body string) (Playbill, error) {
-				return parseGum(body, day.Format("2006-01-02"))
-			})
+		return fetchGumDay(c, day)
 	}
 
 	// Молчаливый пропуск здесь означал бы пустую афишу, а пустая афиша — «у
 	// площадки нет сеансов». Поэтому вид без запроса это отказ, и видно, какой.
 	return ChannelProbe{Err: fmt.Errorf("вид канала %q опрашивать нечем", kind)}
+}
+
+// gumSchedule — страница расписания кинозала ГУМа.
+const gumSchedule = "https://gum.ru/kinozal/"
+
+// fetchGumDay — расписание ГУМа за один день.
+//
+// Два шага, потому что день выбирается не адресом: сперва берётся страница со
+// списком дней, потом нужный день запрашивается отправкой формы с его
+// идентификатором. Пока этого не было, источник на все 28 дней окна отдавал
+// сегодняшнюю страницу, а её сеансы разъезжались по датам, которых нет.
+//
+// Запрошенного дня нет в списке — источник про него сказал «не показываю»: это
+// не отказ канала, и день остаётся непокрытым.
+func fetchGumDay(c *Client, day time.Time) ChannelProbe {
+	body, status, err := c.get(gumSchedule)
+	out := ChannelProbe{Status: status, BodySize: len(body), Err: err}
+	if err != nil {
+		return out
+	}
+
+	date := day.Format("2006-01-02")
+	var want gumDayOption
+	days := gumDays(body, day)
+	for _, d := range days {
+		if d.date == date {
+			want = d
+			break
+		}
+	}
+	if want.id == "" {
+		// Дни источника наружу отдаём и здесь: по ним обход сузит остаток
+		// горизонта и больше не станет спрашивать про дни, которых нет.
+		for _, d := range days {
+			out.Playbill.Dates = append(out.Playbill.Dates, d.date)
+		}
+		sort.Strings(out.Playbill.Dates)
+		out.ParseErr = fmt.Errorf("%w: ГУМ не показывает %s", errDayNotPublished, date)
+		return out
+	}
+
+	// Выбранный день страница уже показывает — второй запрос не нужен.
+	if !want.selected {
+		body, status, err = c.postForm(gumSchedule, url.Values{"SECTION_ID": {want.id}}, nil)
+		out.Status = mergeStatus(out.Status, status)
+		out.BodySize += len(body)
+		if err != nil {
+			out.Err = err
+			return out
+		}
+	}
+
+	sum := sha256.Sum256([]byte(body))
+	out.BodyHash = hex.EncodeToString(sum[:8])
+	out.Playbill, out.ParseErr = parseGum(body, day)
+	return out
 }
 
 // fetchOne — общий скелет: один GET и один разбор.
@@ -410,6 +665,8 @@ func fetchOne(c *Client, addr string, parse func(string) (Playbill, error)) Chan
 	if err != nil {
 		return out
 	}
+	sum := sha256.Sum256([]byte(body))
+	out.BodyHash = hex.EncodeToString(sum[:8])
 	pb, perr := parse(body)
 	out.Playbill, out.ParseErr = pb, perr
 	return out
@@ -543,7 +800,10 @@ func fetchCinemaParkDay(venue string, day time.Time) ChannelProbe {
 	}
 	if status >= 300 && status < 400 {
 		// Пустой день, а не отказ: канал ответил, сеансов на эту дату нет.
-		out.Playbill = Playbill{Dates: []string{date}}
+		// Дни источника здесь не проставляются: запрошенная дата — не список
+		// того, что источник публикует, а эхо вопроса, и обход по ней сузился
+		// бы до одного дня.
+		out.Playbill = Playbill{}
 		return out
 	}
 

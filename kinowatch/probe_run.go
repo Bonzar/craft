@@ -153,6 +153,14 @@ type VenueProbe struct {
 	// SkipReason непустая означает, что площадку не опрашивали вовсе.
 	SkipReason string `json:"skipReason,omitempty"`
 
+	// DateBlind непустая означает, что источник отдал на разные даты один и тот
+	// же ответ: про запрошенные дни он ничего не сказал, и окно у площадки узкое
+	// не потому, что сеансов нет.
+	//
+	// Отдельно от FailedDays: там канал не ответил, а здесь ответил — и врал бы,
+	// если бы мы приписали его ответ каждому дню окна.
+	DateBlind string `json:"dateBlind,omitempty"`
+
 	// FromAggregator — сеансы этого же фильма у агрегаторов, ПО ИСТОЧНИКАМ.
 	//
 	// Отдельно от Found, а не вперемешку: как только поля сольются, сравнивать
@@ -495,6 +503,7 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 
 	probe := fetchChannel(c, vp.Kind, parseChannelParams(o.Fields[fSourceParams]), now, days)
 	vp.FailedDays = probe.FailedDays
+	vp.DateBlind = probe.DateBlind
 
 	matches := matchPlaybill(probe.Playbill, film)
 	found, onSale := false, false
@@ -538,6 +547,7 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 
 	res = applyHorizonGap(res, probe.FailedDays)
 	res = applySourceWindow(res, uncoveredDates(now, days, probe.WindowFrom, probe.WindowTo))
+	res = applyDateBlind(res, probe.DateBlind)
 	vp.Status, vp.Evidence, vp.Alive = res.Status, res.Evidence, res.Alive
 	return vp
 }
@@ -595,6 +605,21 @@ func applySourceWindow(res ProbeResult, uncovered []string) ProbeResult {
 	res.Status = statusSuspect
 	res.Evidence = fmt.Sprintf("источник публикует у́же запрошенного окна, %d дн. вне его охвата (%s): %s",
 		len(uncovered), strings.Join(uncovered, ", "), res.Evidence)
+	return res
+}
+
+// applyDateBlind помечает площадку, чей источник не различает запрошенные даты.
+//
+// Третий случай рядом с двумя предыдущими, и путать его с ними нельзя: канал не
+// ошибся (applyHorizonGap) и не упёрся в свой край (applySourceWindow) — он
+// ответил, но одним и тем же ответом на разные дни. Окно у такой площадки узкое
+// не потому, что сеансов дальше нет, а потому, что источник про них не сказал.
+func applyDateBlind(res ProbeResult, blind string) ProbeResult {
+	if res.Status != statusAbsent || blind == "" {
+		return res
+	}
+	res.Status = statusSuspect
+	res.Evidence = blind + ": " + res.Evidence
 	return res
 }
 

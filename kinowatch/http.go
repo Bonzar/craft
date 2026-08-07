@@ -254,6 +254,19 @@ func (c *Client) postJSON(url, body string, extra map[string]string) (string, in
 	return c.do(http.MethodPost, url, body, head)
 }
 
+// postForm — POST с телом обычной HTML-формы.
+//
+// Нужен там, где день выбирается не адресом, а отправкой формы: у ГУМа
+// расписание переключается полем SECTION_ID, и без этого запроса источник на
+// любой день отдаёт сегодняшний.
+func (c *Client) postForm(addr string, form url.Values, extra map[string]string) (string, int, error) {
+	head := map[string]string{"content-type": "application/x-www-form-urlencoded"}
+	for k, v := range extra {
+		head[k] = v
+	}
+	return c.do(http.MethodPost, addr, form.Encode(), head)
+}
+
 // getHeaders — тот же запрос с дополнительными заголовками.
 //
 // Нужны кассам, где площадка задаётся не адресом: Kinoplan различает
