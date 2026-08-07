@@ -47,6 +47,11 @@ func main() {
 		// отдают источники, — 23 даты у КАРО одним ответом.
 		probeDays     = flag.Int("days", 28, "горизонт опроса в днях от сегодня")
 		probePrevious = flag.String("previous", "", "отчёт прошлого прогона: с ним сравнивается текущий")
+		// Площадки опрашиваются параллельно, но к одной кассе клиент всё равно
+		// пускает по запросу за раз: ускорение идёт за счёт РАЗНЫХ касс.
+		// Восемь — компромисс между временем прогона и вежливостью к источникам;
+		// растут отказы под нагрузкой — число снижается флагом.
+		probeWorkers  = flag.Int("workers", 8, "сколько площадок опрашивать одновременно")
 		coverageMode  = flag.Bool("coverage", false, "посчитать покрытие по реестру (stdin) и упасть, пока оно неполно")
 		coverageShort = flag.Bool("short", false, "для --coverage: одна строка вместо списка")
 
@@ -86,7 +91,7 @@ func main() {
 			}
 			tunnel = t
 		}
-		runProbe(client, tunnel, *probeFilm, *probeProfile, *probePrevious, *probeDays)
+		runProbe(client, tunnel, *probeFilm, *probeProfile, *probePrevious, *probeDays, *probeWorkers)
 	case *coverageMode:
 		runCoverage(*coverageShort)
 	case *probeGeo != "":

@@ -8,8 +8,11 @@ package main
 // жив ли источник, принимаются чистыми функциями, которые целиком накрыты
 // табличными тестами.
 //
-// Обход последовательный. Чужие кассы не наш сервер, и десяток параллельных
-// запросов к одной сети ради минуты выигрыша — плохая сделка.
+// Обход параллельный, но параллелятся РАЗНЫЕ кассы: к одному хосту клиент
+// пускает по запросу за раз, поэтому нагрузка на отдельную кассу не растёт.
+// Замер, ради которого это заведено: 53 площадки из 101 сидят на источниках без
+// диапазона дат, им нужен запрос на каждый из 28 дней — 1484 запроса, и
+// последовательно это полчаса.
 
 import (
 	"encoding/json"
@@ -17,6 +20,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -247,7 +251,7 @@ func loadFilmProfile(title, path string) (FilmProfile, error) {
 
 // runProbe опрашивает реестр. tunnel — клиент через российский выход; nil
 // означает, что туннеля нет и площадки, которым он нужен, опрошены не будут.
-func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days int) {
+func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days, workers int) {
 	film, err := loadFilmProfile(title, profilePath)
 	if err != nil {
 		fail("%v", err)
@@ -277,6 +281,17 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 		report.Aggregators = append(report.Aggregators, r.Layer)
 	}
 
+	// Площадки опрашиваются пулом воркеров. Ускоряет это за счёт РАЗНЫХ касс:
+	// к одной кассе клиент всё равно пускает по запросу за раз, и параллельность
+	// нагрузку на неё не увеличивает.
+	//
+	// Результат кладётся на СВОЁ место, а не дописывается в конец: порядок в
+	// отчёте не должен зависеть от того, кто ответил первым, иначе сравнение
+	// прогонов начнёт видеть перестановки как изменения.
+	probes := make([]VenueProbe, len(obs))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, workers)
+
 	for i := range obs {
 		// Площадке, недоступной с иностранного адреса, общий клиент не годится:
 		// без туннеля она молча выглядела бы сломанной. Туннеля нет — площадка
@@ -287,22 +302,35 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days i
 			report.Tunnel.Required++
 			if tunnel == nil {
 				report.Tunnel.Skipped++
-				vp := VenueProbe{
+				probes[i] = VenueProbe{
 					Key: obs[i].Key, Name: obs[i].Name,
 					Kind:       obs[i].Fields[fSourceKind],
 					SkipReason: "каналу нужен российский выход, туннель не задан (--proxy)",
 				}
-				report.Skipped++
-				report.Venues = append(report.Venues, vp)
 				continue
 			}
 			client = tunnel
 		}
 
-		vp := probeVenue(client, obs[i], film, now, days)
-		if vp.SkipReason != "" {
+		wg.Add(1)
+		go func(i int, client *Client) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			probes[i] = probeVenue(client, obs[i], film, now, days)
+		}(i, client)
+	}
+	wg.Wait()
+
+	// Счётчики и запись в наблюдения — уже последовательно: считать их из
+	// воркеров значило бы городить замки вокруг того, что и так делается
+	// мгновенно.
+	for i := range probes {
+		vp := probes[i]
+		switch {
+		case vp.SkipReason != "":
 			report.Skipped++
-		} else {
+		default:
 			report.Probed++
 			report.Statuses[vp.Status]++
 			recordProbe(&obs[i], vp, report.FetchedAt)

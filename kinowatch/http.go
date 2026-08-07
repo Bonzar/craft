@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -54,7 +56,15 @@ type Client struct {
 	// minInterval — минимальный зазор между запросами этого клиента. Ноль
 	// означает «без троттлинга»: у ЕАИС четыре страницы, тормозить нечего.
 	minInterval time.Duration
-	lastCall    time.Time
+
+	// pace — темп запросов, общий для клиента и всех его клонов.
+	//
+	// Указатель, а не поле: клоны (withCookies, withoutAcceptLang) копируют
+	// структуру целиком, и своим полем каждый получил бы отдельную квоту к тому
+	// же хосту — то есть троттлинг перестал бы работать ровно там, где площадка
+	// требует cookie. Указатель делят все копии, и замок внутри копируется как
+	// адрес, а не как значение.
+	pace *pacer
 }
 
 func newClient(timeoutSec, retries int) *Client {
@@ -63,6 +73,7 @@ func newClient(timeoutSec, retries int) *Client {
 		retries:    retries,
 		userAgent:  browserUA,
 		acceptLang: "ru-RU,ru;q=0.9,en;q=0.8",
+		pace:       newPacer(),
 	}
 }
 
@@ -151,17 +162,51 @@ func newJSONClient(timeoutSec, retries int) *Client {
 	return c
 }
 
-// throttle выдерживает зазор перед очередным запросом.
-func (c *Client) throttle() {
-	if c.minInterval <= 0 {
-		return
+// throttle ждёт очереди к хосту и возвращает функцию освобождения.
+//
+// Темп живёт в pacer, общем для клиента и его клонов: обход площадок идёт
+// параллельно, и состояние темпа полем структуры было бы гонкой.
+func (c *Client) throttle(host string) func() {
+	if c.pace == nil {
+		c.pace = newPacer()
 	}
-	if !c.lastCall.IsZero() {
-		if wait := c.minInterval - time.Since(c.lastCall); wait > 0 {
-			time.Sleep(wait)
+	return c.pace.acquire(host, c.minInterval)
+}
+
+// requestHost — хост из адреса запроса. Он же ключ очереди к кассе.
+//
+// Адрес битый — возвращается сам адрес: тогда очередь у него своя, и это лучше
+// общей на все нечитаемые адреса.
+func requestHost(addr string) string {
+	u, err := url.Parse(addr)
+	if err != nil || u.Host == "" {
+		return addr
+	}
+	return u.Host
+}
+
+// retryAfter — сколько ждать по просьбе кассы.
+//
+// Заголовок бывает в двух видах, и оба законны: число секунд и дата. Пустой,
+// битый или отрицательный — берётся своя лесенка повторов, потому что «касса не
+// сказала» не означает «можно сразу».
+func retryAfter(header string, fallback time.Duration) time.Duration {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return fallback
+	}
+	if secs, err := strconv.Atoi(header); err == nil {
+		if d := time.Duration(secs) * time.Second; d > 0 {
+			return d
+		}
+		return fallback
+	}
+	if until, err := http.ParseTime(header); err == nil {
+		if d := time.Until(until); d > 0 {
+			return d
 		}
 	}
-	c.lastCall = time.Now()
+	return fallback
 }
 
 // transientBackoff — 2, 4, 8, 16 секунд.
@@ -219,25 +264,30 @@ func (c *Client) getHeaders(url string, extra map[string]string) (string, int, e
 
 // do — общий транспорт с ретраями. Метод и тело параметрами, чтобы POST-ручка
 // получала ту же политику повторов, что и все остальные запросы.
-func (c *Client) do(method, url, body string, extra map[string]string) (string, int, error) {
+func (c *Client) do(method, addr, body string, extra map[string]string) (string, int, error) {
 	var backoff time.Duration
 	netAttempt, rlAttempt := 0, 0
+	host := requestHost(addr)
 
 	for {
 		if backoff > 0 {
 			time.Sleep(backoff)
 			backoff = 0
 		}
-		c.throttle()
+		// Очередь к кассе берётся на один запрос и отпускается сразу после
+		// ответа: паузы повторов ждём БЕЗ слота, иначе соседние площадки той же
+		// сети простаивают вместе с нами.
+		release := c.throttle(host)
 
 		ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
 		var reader io.Reader
 		if body != "" {
 			reader = strings.NewReader(body)
 		}
-		req, err := http.NewRequestWithContext(ctx, method, url, reader)
+		req, err := http.NewRequestWithContext(ctx, method, addr, reader)
 		if err != nil {
 			cancel()
+			release()
 			return "", 0, fmt.Errorf("построение запроса: %w", err)
 		}
 		ua := c.userAgent
@@ -260,6 +310,7 @@ func (c *Client) do(method, url, body string, extra map[string]string) (string, 
 		resp, err := c.http.Do(req)
 		if err != nil {
 			cancel()
+			release()
 			if netAttempt < c.retries {
 				backoff = transientBackoff(netAttempt)
 				netAttempt++
@@ -271,11 +322,16 @@ func (c *Client) do(method, url, body string, extra map[string]string) (string, 
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
+		release()
 
 		switch {
 		case resp.StatusCode == http.StatusTooManyRequests:
+			// Отказ по частоте — свойство кассы, а не одного запроса: пауза
+			// ставится на весь хост, и её увидят соседние площадки той же сети.
+			wait := retryAfter(resp.Header.Get("Retry-After"), rateLimitBackoff(rlAttempt))
+			c.pace.penalize(host, wait)
 			if rlAttempt < c.retries+2 {
-				backoff = rateLimitBackoff(rlAttempt)
+				backoff = wait
 				rlAttempt++
 				continue
 			}
