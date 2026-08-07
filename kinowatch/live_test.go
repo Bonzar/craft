@@ -29,8 +29,8 @@ func TestLiveDayChannels(t *testing.T) {
 
 	for _, tc := range cases {
 		probe := fetchChannel(c, tc.kind, tc.params, now, 10)
-		t.Logf("%s: сеансов=%d дни_источника=%v окно=%s..%s отказов=%d слепота=%q err=%v parse=%v",
-			tc.name, len(probe.Playbill.Showtimes), probe.Playbill.Dates,
+		t.Logf("%s: сеансов=%d горизонт_источника=%v окно=%s..%s отказов=%d слепота=%q err=%v parse=%v",
+			tc.name, len(probe.Playbill.Showtimes), probe.Playbill.SourceDays,
 			probe.WindowFrom, probe.WindowTo, len(probe.FailedDays),
 			probe.DateBlind, probe.Err, probe.ParseErr)
 

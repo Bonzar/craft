@@ -131,15 +131,27 @@ type Playbill struct {
 	Cinema    string     `json:"cinema"`
 	Showtimes []Showtime `json:"showtimes"`
 
-	// Dates — даты, которые ИСТОЧНИК считает доступными: его собственный
-	// горизонт, а не эхо нашего вопроса. Берём оттуда, где источник его отдаёт
-	// (Киномакс, КАРО, ГУМ, кинотеатр «Москва»), вместо того чтобы гадать
-	// глубину: она у всех разная.
+	// Dates — даты, названные источником В ЭТОМ ответе. У канала, отдающего окно
+	// целиком (Киномакс, КАРО), это и есть его горизонт; у канала, обходимого по
+	// дню, — просто даты сеансов этой страницы.
 	//
-	// По этому списку обход сужает остаток горизонта, поэтому запрошенной дате
-	// здесь не место: разбор, кладущий сюда её, схлопнул бы обход до одного дня.
-	// Источник своего списка не знает — поле остаётся пустым.
+	// Запрошенной дате здесь не место: эхо вопроса ничего не сообщает, а
+	// одиннадцать разборов клали сюда именно её.
 	Dates []string `json:"dates,omitempty"`
+
+	// SourceDays — дни, которые источник ПУБЛИКУЕТ, его собственный горизонт.
+	//
+	// Отдельно от Dates, и путать их нельзя: по SourceDays обход сужает остаток
+	// окна и больше не спрашивает источник про дни, которых у него нет. Список
+	// дат одного ответа сюда не годится — у канала, обходимого по дню, он равен
+	// запрошенному дню, и обход схлопнулся бы до одного дня (живой случай:
+	// kinoplan и Пионер потеряли весь горизонт).
+	//
+	// Заполняют его только разборы, которым источник список показывает: у Миража
+	// это календарь страницы, у кинотеатра «Москва» — список дат сеансов, у ГУМа
+	// — переключатель дней. Остальные оставляют поле пустым, и обход у них
+	// прежний.
+	SourceDays []string `json:"sourceDays,omitempty"`
 }
 
 // moscowTZ — источники говорят о московском времени, но зону не указывают.
@@ -1472,12 +1484,12 @@ func parseGum(body string, ref time.Time) (Playbill, error) {
 	days := gumDays(body, ref)
 	date := ""
 	for _, d := range days {
-		pb.Dates = append(pb.Dates, d.date)
+		pb.SourceDays = append(pb.SourceDays, d.date)
 		if d.selected {
 			date = d.date
 		}
 	}
-	sort.Strings(pb.Dates)
+	sort.Strings(pb.SourceDays)
 
 	if date == "" {
 		return pb, fmt.Errorf("разбор ГУМа: выбранный день не найден в списке (тело %d байт)", len(body))
@@ -1750,12 +1762,12 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 		if day == "" {
 			continue
 		}
-		pb.Dates = append(pb.Dates, day)
+		pb.SourceDays = append(pb.SourceDays, day)
 		if strings.Contains(m[2], "active") {
 			active = day
 		}
 	}
-	sort.Strings(pb.Dates)
+	sort.Strings(pb.SourceDays)
 
 	if date != "" && active != date {
 		return pb, fmt.Errorf("%w: Мираж отдал страницу за %q вместо %q",
@@ -2266,9 +2278,9 @@ func parseCinemaMoskva(body, date string) (Playbill, error) {
 
 	if dm := moskvaDays.FindStringSubmatch(body); len(dm) > 1 {
 		for _, d := range regexp.MustCompile(`\d{4}-\d{2}-\d{2}`).FindAllString(html.UnescapeString(dm[1]), -1) {
-			pb.Dates = append(pb.Dates, d)
+			pb.SourceDays = append(pb.SourceDays, d)
 		}
-		sort.Strings(pb.Dates)
+		sort.Strings(pb.SourceDays)
 	}
 
 	// День страницы источник называет отдельным полем, но НЕ для сегодняшнего
@@ -2280,8 +2292,8 @@ func parseCinemaMoskva(body, date string) (Playbill, error) {
 	if pm := moskvaPage.FindStringSubmatch(body); len(pm) > 1 {
 		page = strings.TrimSpace(pm[1])
 	}
-	if page == "" && len(pb.Dates) > 0 {
-		page = pb.Dates[0]
+	if page == "" && len(pb.SourceDays) > 0 {
+		page = pb.SourceDays[0]
 	}
 	if date != "" && page != date {
 		return pb, fmt.Errorf("%w: кинотеатр «Москва» отдал страницу за %q вместо %q",
