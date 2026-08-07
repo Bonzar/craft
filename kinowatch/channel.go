@@ -217,6 +217,16 @@ var channelWindowWhole = map[string]bool{
 	// Алмаз отдаёт одну и ту же страницу на любой запрос, но датирует сеансы
 	// сам — данные верные, лишними были только 27 запросов из 28.
 	kindAlmaz: true,
+	// Пионер — восьмой канал класса, и нашёл его чек сходимости дат, а не
+	// разведка: параметр даты в адресе ЕСТЬ, но источник его игнорирует —
+	// `?date=` на 07.08, 08.08 и 11.08 отдал байт в байт одну страницу (105201
+	// байт). Публикуется только сегодня; полоса дат на странице — календарь, а
+	// не опубликованные дни.
+	//
+	// Ручка `/ajax/main_page_other_days/` найдена, но датой не управляется: на
+	// любое имя и формат параметра отвечает одним и тем же фрагментом без дат.
+	// Пока не расшифрована — горизонт Пионера остаётся однодневным.
+	kindPioner: true,
 }
 
 // fetchChannel опрашивает площадку на горизонт в days дней от from.
@@ -239,7 +249,7 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 	var lastFail ChannelProbe
 	got := 0
 	seen := map[string]bool{}
-	seenDates := map[string]bool{}
+	seenDays := map[string]bool{}
 	narrowed := false
 	bodies := map[string]bodySeen{}
 
@@ -252,9 +262,9 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		// просто этот день он не публикует — и в список неответивших он не
 		// попадает, иначе живой источник объявлялся бы дырявым.
 		if errors.Is(one.ParseErr, errDayNotPublished) {
-			if !narrowed && len(one.Playbill.Dates) > 0 {
+			if !narrowed && len(one.Playbill.SourceDays) > 0 {
 				narrowed = true
-				plan = narrowPlan(plan, i, one.Playbill.Dates, inHorizon)
+				plan = narrowPlan(plan, i, one.Playbill.SourceDays, inHorizon)
 			}
 			continue
 		}
@@ -286,16 +296,17 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 			out.Playbill.Cinema = one.Playbill.Cinema
 		}
 		out.Playbill.Showtimes = appendNewShowtimes(out.Playbill.Showtimes, one.Playbill.Showtimes, seen)
-		// Список дней источник повторяет на каждой странице — складывать его
-		// сам с собой значит получить один и тот же горизонт по разу на день.
-		out.Playbill.Dates = appendNewDates(out.Playbill.Dates, one.Playbill.Dates, seenDates)
+		out.Playbill.Dates = append(out.Playbill.Dates, one.Playbill.Dates...)
+		// Горизонт источник повторяет на каждой странице — складывать его сам
+		// с собой значит получить один и тот же список по разу на день.
+		out.Playbill.SourceDays = appendNewDates(out.Playbill.SourceDays, one.Playbill.SourceDays, seenDays)
 
 		// Источник назвал свои дни — дальше идём только по ним. Список
 		// пересекается с запрошенным горизонтом, а не заменяет его: ключ --days
 		// остаётся верхней границей.
-		if !narrowed && len(one.Playbill.Dates) > 0 {
+		if !narrowed && len(one.Playbill.SourceDays) > 0 {
 			narrowed = true
-			plan = narrowPlan(plan, i, one.Playbill.Dates, inHorizon)
+			plan = narrowPlan(plan, i, one.Playbill.SourceDays, inHorizon)
 		}
 	}
 
@@ -634,9 +645,9 @@ func fetchGumDay(c *Client, day time.Time) ChannelProbe {
 		// Дни источника наружу отдаём и здесь: по ним обход сузит остаток
 		// горизонта и больше не станет спрашивать про дни, которых нет.
 		for _, d := range days {
-			out.Playbill.Dates = append(out.Playbill.Dates, d.date)
+			out.Playbill.SourceDays = append(out.Playbill.SourceDays, d.date)
 		}
-		sort.Strings(out.Playbill.Dates)
+		sort.Strings(out.Playbill.SourceDays)
 		out.ParseErr = fmt.Errorf("%w: ГУМ не показывает %s", errDayNotPublished, date)
 		return out
 	}

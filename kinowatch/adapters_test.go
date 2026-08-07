@@ -1266,11 +1266,11 @@ func TestMirageGivesOwnHorizon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("разбор: %v", err)
 	}
-	if len(pb.Dates) != 5 {
-		t.Fatalf("дни источника разобраны как %v, в календаре страницы их пять", pb.Dates)
+	if len(pb.SourceDays) != 5 {
+		t.Fatalf("дни источника разобраны как %v, в календаре страницы их пять", pb.SourceDays)
 	}
-	if pb.Dates[0] != "2026-08-03" || pb.Dates[4] != "2026-08-07" {
-		t.Errorf("края горизонта разъехались: %v", pb.Dates)
+	if pb.SourceDays[0] != "2026-08-03" || pb.SourceDays[4] != "2026-08-07" {
+		t.Errorf("края горизонта разъехались: %v", pb.SourceDays)
 	}
 }
 
@@ -1531,11 +1531,11 @@ func TestCinemaMoskvaGivesOwnHorizon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("разбор: %v", err)
 	}
-	if len(pb.Dates) != 6 {
-		t.Fatalf("дни источника разобраны как %v, на странице их шесть", pb.Dates)
+	if len(pb.SourceDays) != 6 {
+		t.Fatalf("дни источника разобраны как %v, на странице их шесть", pb.SourceDays)
 	}
-	if pb.Dates[0] != "2026-08-07" || pb.Dates[5] != "2026-08-12" {
-		t.Errorf("края горизонта разъехались: %v", pb.Dates)
+	if pb.SourceDays[0] != "2026-08-07" || pb.SourceDays[5] != "2026-08-12" {
+		t.Errorf("края горизонта разъехались: %v", pb.SourceDays)
 	}
 }
 
