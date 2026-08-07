@@ -1,0 +1,23 @@
+}
+
+
+
+        var markerAll = [];
+        var techAll = [];
+        var hallAll = [];
+        var genreAll = [];
+
+        var pushkinMarker = {title: 'Пушкинская карта', attr: 'pushkin'};
+
+        var filmsAll = [];
+        filmsAll = filmsAll.map(function(film){
+            var uniqTechs = [];
+            var uniqHalls = [];
+            var uniqMarkers = [];
+
+            if (!film.age_rating) {
+                film.age_rating = 0;
+            }
+
+            if (film.pushkin === true) {
+         
