@@ -1,7 +1,8 @@
 name: hooks-tests
 
-# Регресс-тесты bash-хуков Claude Code (.claude/hooks/). Детерминированно,
-# только bash + jq — реальный Craft не трогается. См. tests/README.md.
+# Регресс-тесты bash-хуков Claude Code (.claude/hooks/) и чистых кусков JS-инструментов.
+# Детерминированно, без сети и моделей — реальный Craft не трогается. Инструментам нужен
+# node, всему остальному хватает bash + jq. См. tests/README.md.
 on:
   push:
   pull_request:
@@ -29,6 +30,21 @@ jobs:
 
       - name: Install.sh idempotency smoke
         run: bash tests/install-smoke.sh
+
+      # Решение по ключу пульта капчи. Сам пульт живёт на маке и тянет playwright
+      # маковским путём — здесь гоняется только вынесенная из него чистая функция.
+      - name: Capgate outcome test
+        run: node tools/mac/capgate-outcome.test.js
+
+      # Bash не создаёт переменную с не-ASCII именем: присваивание падает «command not
+      # found», и защита молча перестаёт работать. «bash -n» этого не видит.
+      - name: Shell identifiers are ASCII
+        run: bash tests/shell-identifiers.sh
+
+      # У ожидания человека не бывает срока: таймер делает «ещё не пришёл» неотличимым
+      # от «отказал».
+      - name: Human wait is unbounded
+        run: bash tests/human-wait-unbounded.sh
 
       # Ядро грейдера евалов гоняется на записанных потоках: без сети и моделей,
       # поэтому живёт в том же CI, что и хук-тесты. См. evals/README.md.

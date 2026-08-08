@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>do.craft.tidy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/agent/bin/agtidy.sh</string>
+  </array>
+  <!-- Раз в час: вкладки копятся за сессию, лишние профили остаются после опытов.
+       Занятый профиль уборка пропускает по свежей метке — работа посреди хода не рвётся. -->
+  <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/tmp/agtidy.log</string>
+  <key>StandardErrorPath</key><string>/tmp/agtidy.log</string>
+</dict>
+</plist>
