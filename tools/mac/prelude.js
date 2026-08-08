@@ -110,19 +110,32 @@ async function odone(page) {
 //   «решено» — страница ушла с адреса проверки (человек прошёл капчу);
 //   «отдано» — человек нажал «Вернуть агенту», и пульт положил метку в саму страницу.
 // Ожидание живёт внутри вкладки и до мака не ходит: круги через реле тут не нужны.
+// Метка считается своей, только если она новее начала этого ожидания, и стирается при
+// чтении: без первого сессия подхватывает чужой возврат, без второго — свой прошлый.
 async function owait(page, ms) {
   var предел = ms === undefined ? 15 * 60 * 1000 : ms;
   // Условие «адрес больше не проверка» годится ТОЛЬКО если он ею был. Для обычного зова
   // о помощи оно истинно с самого начала, и ожидание закрывается мгновенно — на этом я
   // и обжёгся. Поэтому исходное состояние снимаем до ожидания и передаём внутрь.
   var былаКапча = /xpvnsulc|showcaptcha/i.test(page.url());
+  // Момент старта снимаем ЧАСАМИ САМОЙ СТРАНИЦЫ — теми же, которыми пульт штампует метку.
+  // Часы контейнера тут не годятся: они чужие странице и расходятся с ней на что угодно.
+  var старт = await page.evaluate(function () { return Date.now(); }).catch(function () { return 0; });
   try {
-    var исход = await page.waitForFunction(function (капча) {
-      if (window.__отдано) return "отдано";
-      try { if (localStorage.getItem("__отдано")) return "отдано"; } catch (e) { }
-      if (капча && !/xpvnsulc|showcaptcha/i.test(location.href)) return "решено";
+    var исход = await page.waitForFunction(function (арг) {
+      function свежая(v) { return v !== undefined && v !== null && Number(v) >= арг.старт; }
+      if (свежая(window.__отдано) || (function () {
+        try { return свежая(sessionStorage.getItem("__отдано")); } catch (e) { return false; }
+      })()) {
+        // Метка одноразовая: прочитали — стёрли. Возврат управления штатно случается,
+        // когда сессия уже вышла; непрочитанная метка иначе досталась бы следующей.
+        try { delete window.__отдано; } catch (e) { }
+        try { sessionStorage.removeItem("__отдано"); } catch (e) { }
+        return "отдано";
+      }
+      if (арг.капча && !/xpvnsulc|showcaptcha/i.test(location.href)) return "решено";
       return null;
-    }, былаКапча, { timeout: предел, polling: 400 });
+    }, { старт: старт, капча: былаКапча }, { timeout: предел, polling: 400 });
     var что = await исход.jsonValue();
     console.log("человек: " + что);
     return что;

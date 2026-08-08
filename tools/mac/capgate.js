@@ -597,10 +597,13 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
         await stopCast(page);
         // Метку кладём В САМУ СТРАНИЦУ: у сессии нет сетевого вызова (в песочнице
         // fetch отсутствует — замерено), и единственный канал до неё — браузер.
-        // Пишем и в окно, и в хранилище: первое переживает работу, второе перезагрузку.
+        // Пишем и в окно, и в хранилище вкладки: первое переживает работу, второе
+        // перезагрузку. Хранилище именно вкладки, а не домена: localStorage у профиля
+        // общий на все вкладки, и метка одной заявки доставалась бы чужим вкладкам того
+        // же сайта — на этом контур уже обжёгся, ссылка отдавалась мгновенно.
         await page.evaluate(() => {
           window.__отдано = Date.now();
-          try { localStorage.setItem("__отдано", String(Date.now())); } catch (e) { }
+          try { sessionStorage.setItem("__отдано", String(Date.now())); } catch (e) { }
         }).catch(() => { });
         (rec.ждущие || []).forEach((fn) => fn("отдано")); rec.ждущие = [];
         console.log("управление возвращено агенту: " + m[1]);
@@ -610,7 +613,7 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
         rec.paused = false;
         await page.evaluate(() => {
           delete window.__отдано;
-          try { localStorage.removeItem("__отдано"); } catch (e) { }
+          try { sessionStorage.removeItem("__отдано"); } catch (e) { }
         }).catch(() => { });
         await startCast(page);
         res.writeHead(204); return res.end();
