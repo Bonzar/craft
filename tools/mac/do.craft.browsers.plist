@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>do.craft.browsers</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/agent/bin/agenv.sh</string>
+  </array>
+  <!-- Поднимаем при входе в систему: после перезагрузки мака браузеры должны встать
+       сами, иначе облачная сессия приходит в пустоту. -->
+  <key>RunAtLoad</key><true/>
+  <!-- Раз в 10 минут перепроверяем: скрипт идемпотентен, поднимет только упавшее. -->
+  <key>StartInterval</key><integer>600</integer>
+  <key>StandardOutPath</key><string>/tmp/agenv.log</string>
+  <key>StandardErrorPath</key><string>/tmp/agenv.log</string>
+</dict>
+</plist>
