@@ -36,6 +36,16 @@ jobs:
       - name: Capgate outcome test
         run: node tools/mac/capgate-outcome.test.js
 
+      # Bash не создаёт переменную с не-ASCII именем: присваивание падает «command not
+      # found», и защита молча перестаёт работать. «bash -n» этого не видит.
+      - name: Shell identifiers are ASCII
+        run: bash tests/shell-identifiers.sh
+
+      # У ожидания человека не бывает срока: таймер делает «ещё не пришёл» неотличимым
+      # от «отказал».
+      - name: Human wait is unbounded
+        run: bash tests/human-wait-unbounded.sh
+
       # Ядро грейдера евалов гоняется на записанных потоках: без сети и моделей,
       # поэтому живёт в том же CI, что и хук-тесты. См. evals/README.md.
       - name: Eval grader selftest
