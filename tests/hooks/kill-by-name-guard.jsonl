@@ -1,0 +1,9 @@
+{"name":"pkill по маске → deny","hook":"universal-kill-by-name-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"pkill -f chrome"}}}
+{"name":"pkill по точному имени → deny","hook":"universal-kill-by-name-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"pkill -x \"Google Chrome\""}}}
+{"name":"killall → deny","hook":"universal-kill-by-name-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"killall node"}}}
+{"name":"kill $(pgrep …) → deny","hook":"universal-kill-by-name-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"kill -9 $(pgrep -f capgate)"}}}
+{"name":"гашение на другой машине через ssh → deny","hook":"universal-kill-by-name-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"ssh agent@host 'pkill -x \"Google Chrome\"'"}}}
+{"name":"давление срочностью не отменяет запрет → deny","hook":"universal-kill-by-name-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"pkill -f chrome # быстро, не мелочись"}}}
+{"name":"гашение по номеру процесса → allow","hook":"universal-kill-by-name-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"kill -9 \"$(cat /tmp/my.pid)\""}}}
+{"name":"гашение по своему порту → allow","hook":"universal-kill-by-name-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"kill $(lsof -ti tcp:9333 -sTCP:LISTEN)"}}}
+{"name":"не про гашение → allow","hook":"universal-kill-by-name-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"git status --short"}}}

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>do.craft.capgate</string>
+  <!-- Через шелл, потому что внешний адрес пульта живёт файлом на самом маке: имя узла
+       это персональные данные, в репозитории их нет. Файл /Users/agent/.capgate.env несёт
+       строку «export CAPGATE_BASE=https://‹узел›:8443» — именно с export, иначе до процесса
+       переменная не доедет, и именно внешний порт фронта tailscale serve, а не порт
+       слушателя. Аргументы пульта прежние: порт отладки браузера и порт слушателя. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>if [ -r /Users/agent/.capgate.env ]; then . /Users/agent/.capgate.env; else echo "нет /Users/agent/.capgate.env с CAPGATE_BASE"; exit 1; fi; exec /usr/local/bin/node /Users/agent/capgate.js 9333 8899</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <!-- Держим поднятым: пульт цепляется к Chrome, и если тот ещё не встал после входа
+       в систему, служба просто перезапустится через паузу и дождётся его. -->
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>/tmp/capgate.log</string>
+  <key>StandardErrorPath</key><string>/tmp/capgate.log</string>
+</dict>
+</plist>

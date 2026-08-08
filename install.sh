@@ -146,6 +146,8 @@ merged="$(jq '
   | ensure("PreToolUse"; "Bash";
          "\"$HOME\"/.claude/hooks/universal-sleep-waiter-guard.sh")
   | ensure("PreToolUse"; "Bash";
+         "\"$HOME\"/.claude/hooks/universal-kill-by-name-guard.sh")
+  | ensure("PreToolUse"; "Bash";
          "\"$HOME\"/.claude/hooks/universal-block-no-verify.sh")
   | ensure("PreToolUse"; "Write|Edit|MultiEdit";
          "\"$HOME\"/.claude/hooks/universal-config-protection.sh")
