@@ -18,8 +18,18 @@
 //  3. заявка от сессии — ловит ЛЮБУЮ проверку, включая самодельную без единой приметы.
 //     Признаки это удобство, заявка это опора.
 //
-// Ключ гаснет ровно тогда, когда проверка пройдена. До этого ссылку можно открывать
-// сколько угодно. После — «пройдено», и через минуту ключ забывается совсем.
+// Ключ гаснет по одной из ДВУХ причин: проверка пройдена или вкладка закрылась. До этого
+// ссылку можно открывать сколько угодно. Причины не сливаются: человеку они показываются
+// разными экранами, и третий экран — у ключа, которого пульт не знает вовсе. Раньше все
+// три случая давали один зелёный «Проверка пройдена», и ссылка, не пережившая перезапуск
+// службы, читалась как успех. После гашения ключ помнится ещё час: открывший ссылку чуть
+// позже должен увидеть причину, а не «пульт такого ключа не знает».
+//
+// Реестр ключей лежит файлом рядом с пультом и переживает перезапуск службы. Раньше он жил
+// только в памяти, а служба стоит под KeepAlive и перезапускается при каждом отвале
+// браузера — выданная ссылка после этого становилась неизвестной. В файле хранится и
+// заявка сессии, и погашенность: без первой восстановленный ключ на вкладке с обычным
+// адресом погас бы как «проверка пройдена», без второй потраченная ссылка ожила бы.
 //
 // ОТКЛИК. Канал до мака идёт через реле, поэтому решает не частота опроса, а размер
 // кадра и число кругов на действие: кадры берём трансляцией Chrome (снимок с
@@ -28,6 +38,7 @@
 const http = require("http");
 const fs = require("fs");
 const crypto = require("crypto");
+const { исход } = require("./capgate-outcome");
 const path = "/Users/agent/.npm-global/lib/node_modules/dev-browser/node_modules/playwright-core";
 const { chromium } = require(path);
 
@@ -44,7 +55,16 @@ if (!BASE) {
 }
 const CAPTCHA = /xpvnsulc|showcaptcha|\/captcha/i;
 const CAPTCHA_FRAME = /recaptcha|hcaptcha|turnstile|smartcaptcha|captcha|challenges\.cloudflare|geetest|funcaptcha|arkoselabs|xpvnsulc/i;
-const FORGET_MS = 60000;
+// Сколько погасший ключ ещё помнится. Час, а не минута: человек, открывший ссылку через
+// несколько минут после гашения, должен увидеть правдивую причину, а не «Ссылка не
+// действует» — то есть новую неправду вместо старой.
+const FORGET_MS = 60 * 60 * 1000;
+
+// Реестр ключей на диске. Служба стоит под KeepAlive и перезапускается сама при любом
+// отвале браузера — а реестр жил только в памяти, и выданная ссылка после перезапуска
+// становилась пульту неизвестной. В домашнем каталоге, а не во временном: переживает и
+// перезагрузку мака. Права только владельцу: по ключу открывается чужая вкладка.
+const РЕЕСТР = process.env.CAPGATE_KEYS || "/Users/agent/.capgate-keys.json";
 
 const CF_TEAM = process.env.CAPGATE_CF_TEAM || "";
 const CF_AUD = process.env.CAPGATE_CF_AUD || "";
@@ -83,6 +103,34 @@ async function checkCF(req) {
   return body.iss === "https://" + CF_TEAM + ".cloudflareaccess.com";
 }
 
+// Финальные экраны — ЕДИНСТВЕННЫЙ их источник, и серверный, и клиентский.
+//
+// Раньше «Проверка пройдена» лежала в файле четырьмя вхождениями: заголовок вкладки
+// серверного экрана, его тело, статическая разметка внутри страницы и умолчания
+// обработчика завершения. Правка одного места оставляла ложь в трёх других — человек мог
+// получить тело «Ссылка не действует» с заголовком вкладки «Проверка пройдена».
+//
+// Исходы РАЗНЫЕ намеренно: пройденная проверка, закрывшаяся вкладка и неизвестный пульту
+// ключ — три разных события, и показывать их одним зелёным экраном значит врать.
+const ИСХОДЫ = {
+  "пройдена": {
+    заголовок: "Проверка пройдена",
+    под: "Ссылка погасла — она была одноразовой.",
+  },
+  "закрылась": {
+    заголовок: "Вкладка закрылась",
+    под: "Сессия завершилась, показывать больше нечего.",
+  },
+  "не-действует": {
+    заголовок: "Ссылка не действует",
+    под: "Пульт не знает этого ключа. Попроси сессию выдать новую ссылку.",
+  },
+  "у-агента": {
+    заголовок: "Управление у агента",
+    под: "Трансляция остановлена, ресурсы не тратятся.",
+  },
+};
+
 const PAGE_HTML = `<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Проверка</title>
@@ -113,9 +161,10 @@ const PAGE_HTML = `<!doctype html><meta charset="utf-8">
 </div>
 <div id="wrap"><div id="stage"><img id="v" alt=""><div id="pad"></div></div></div>
 <input id="typer" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
-<div id="done"><b id="dt">Проверка пройдена</b><span id="ds">Ссылка погасла — она была одноразовой.</span>
+<div id="done"><b id="dt"></b><span id="ds"></span>
   <button id="back" style="display:none">Взять управление обратно</button></div>
 <script>
+const ИСХОДЫ = ${JSON.stringify(ИСХОДЫ)};
 const K = location.pathname.split("/")[2];
 const v = document.getElementById("v"), pad = document.getElementById("pad");
 const stage = document.getElementById("stage");
@@ -132,13 +181,27 @@ function applyZoom() {
   document.getElementById("zr").textContent = (zoom < 1.05 ? "1" : zoom.toFixed(1)) + "×";
 }
 
-function finish(заголовок, под, можноВернуть) {
+// Экран выбирается ТОЛЬКО по названному исходу: умолчания у finish больше нет намеренно —
+// раньше им был зелёный «Проверка пройдена», и любой отказ ручки рисовал успех.
+function finish(вид, можноВернуть) {
   finished = true;
-  dt.textContent = заголовок || "Проверка пройдена";
-  ds.textContent = под || "Ссылка погасла — она была одноразовой.";
+  const и = ИСХОДЫ[вид] || ИСХОДЫ["не-действует"];
+  dt.textContent = и.заголовок;
+  ds.textContent = и.под;
+  document.title = и.заголовок;
   back.style.display = можноВернуть ? "inline-block" : "none";
   done.style.display = "flex";
   st.textContent = можноВернуть ? "на паузе" : "готово";
+}
+
+// Ключ умер — но отчего? Показ кадра отвечает пустым отказом, поэтому причину спрашиваем
+// у состояния и только потом рисуем.
+async function почему() {
+  try {
+    const r = await fetch("/c/" + K + "/state");
+    const s = await r.json();
+    return s.исход || "не-действует";
+  } catch (e) { return "не-действует"; }
 }
 
 async function loop() {
@@ -146,8 +209,8 @@ async function loop() {
     const t0 = Date.now();
     try {
       const r = await fetch("/c/" + K + "/frame?since=" + seq);
-      if (r.status === 410) return finish();
-      if (r.status === 409) { return finish("Управление у агента", "Трансляция остановлена, ресурсы не тратятся.", true); }
+      if (r.status === 410) return finish(await почему());
+      if (r.status === 409) { return finish("у-агента", true); }
       if (r.status === 204) continue;
       if (!r.ok) throw new Error(r.status);
       seq = Number(r.headers.get("x-seq") || seq);
@@ -168,10 +231,10 @@ async function state() {
   if (finished) return;
   try {
     const r = await fetch("/c/" + K + "/state");
-    if (r.status === 410) return finish();
+    if (r.status === 410) return finish("не-действует");
     const s = await r.json();
-    if (s.пройдена) return finish();
-    if (s.пауза) return finish("Управление у агента", "Трансляция остановлена, ресурсы не тратятся.", true);
+    if (s.исход) return finish(s.исход);
+    if (s.пауза) return finish("у-агента", true);
     info.textContent = (s.повод ? s.повод + " · " : "") + "ждёт " + s.ждёт + " с";
   } catch (e) {}
 }
@@ -188,7 +251,7 @@ async function flush() {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ шаги: batch }),
     });
-    if (r.status === 410) finish();
+    if (r.status === 410) finish(await почему());
   } catch (e) {}
   flying = false;
   if (buf.length) flush();
@@ -306,7 +369,7 @@ typer.addEventListener("keydown", function (e) {
 // Возврат управления агенту: гасим трансляцию, чтобы не тратить канал и мак впустую.
 document.getElementById("hand").onclick = async function () {
   await fetch("/c/" + K + "/stop", { method: "POST" });
-  finish("Управление у агента", "Трансляция остановлена, ресурсы не тратятся.", true);
+  finish("у-агента", true);
 };
 back.onclick = async function () {
   await fetch("/c/" + K + "/resume", { method: "POST" });
@@ -316,13 +379,16 @@ back.onclick = async function () {
 applyZoom();
 </script>`;
 
-const DONE_HTML = `<!doctype html><meta charset="utf-8">
+// Серверный финальный экран: та же пара «заголовок и подпись», что и у клиентского, из
+// того же источника. Зелёным остаётся только успех — остальные исходы нейтральны, иначе
+// отказ снова читался бы как удача.
+const ЭКРАН = (вид) => `<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Проверка пройдена</title>
+<title>${ИСХОДЫ[вид].заголовок}</title>
 <style>html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;
  background:#111;color:#ddd;font:16px -apple-system,system-ui,sans-serif;text-align:center;padding:20px}
- b{color:#7ddf9a;font-size:20px;display:block;margin-bottom:8px}</style>
-<div><b>Проверка пройдена</b>Ссылка погасла — она была одноразовой.</div>`;
+ b{color:${вид === "пройдена" ? "#7ddf9a" : "#ddd"};font-size:20px;display:block;margin-bottom:8px}</style>
+<div><b>${ИСХОДЫ[вид].заголовок}</b>${ИСХОДЫ[вид].под}</div>`;
 
 (async () => {
   const browser = await chromium.connectOverCDP("http://127.0.0.1:" + CDP_PORT);
@@ -330,10 +396,15 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
 
   const pages = () => browser.contexts().flatMap((c) => c.pages()).filter((p) => !p.isClosed());
 
-  const keys = new Map();      // ключ → {page, born, solved, paused, повод}
+  const keys = new Map();      // ключ → {page, цель, born, solved, погашен, paused, повод}
   const byPage = new Map();
 
-  const mint = (page, повод) => {
+  // Вкладка записи, которую после перезапуска не нашли. Настоящего объекта у неё нет, но
+  // обход ключей спрашивает ровно два метода — этого хватает, чтобы такой ключ честно
+  // говорил «Вкладка закрылась» вместо исчезновения.
+  const ЗАКРЫТАЯ = { isClosed: () => true, url: () => "" };
+
+  const mint = async (page, повод) => {
     if (byPage.has(page)) {
       const k = byPage.get(page);
       const rec = keys.get(k);
@@ -348,8 +419,12 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
       byPage.delete(page);
     }
     const k = crypto.randomBytes(16).toString("base64url");
-    keys.set(k, { page, born: Date.now(), solved: 0, paused: false, повод: повод || "" });
+    keys.set(k, {
+      page, цель: await цельВкладки(page), born: Date.now(),
+      solved: 0, погашен: "", paused: false, повод: повод || "",
+    });
     byPage.set(page, k);
+    сохранить();
     console.log("новая проверка, ключ выпущен: " + BASE + "/c/" + k + (повод ? "  повод: " + повод : ""));
     return k;
   };
@@ -362,6 +437,63 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
   };
 
   const заявленные = new Set();
+
+  const цельВкладки = async (page) => {
+    try {
+      const info = await (await cdp(page)).send("Target.getTargetInfo");
+      return (info && info.targetInfo && info.targetInfo.targetId) || "";
+    } catch (e) { return ""; }
+  };
+
+  // Реестр пишется целиком на каждое изменение: ключей единицы, а надёжность важнее.
+  const сохранить = () => {
+    try {
+      const данные = [...keys.entries()].map(([k, r]) => ({
+        ключ: k, цель: r.цель || "", повод: r.повод || "", born: r.born,
+        solved: r.solved || 0, погашен: r.погашен || "",
+        // Заявка сессии — единственное, что держит живым ключ на вкладке с обычным
+        // адресом. Без неё восстановленный ключ на первом же обходе погас бы как
+        // «проверка пройдена»: примет капчи в таком адресе нет.
+        заявлен: заявленные.has(r.page),
+      }));
+      fs.writeFileSync(РЕЕСТР, JSON.stringify(данные));
+      fs.chmodSync(РЕЕСТР, 0o600);
+    } catch (e) { console.error("реестр ключей не сохранён: " + e.message); }
+  };
+
+  // Восстановление идёт ДО первого обхода: обход судит ключи по заявке и погашенности, и
+  // без них он либо погасит живой ключ как пройденную проверку, либо оживит потраченный.
+  const восстановить = async () => {
+    let данные;
+    try { данные = JSON.parse(fs.readFileSync(РЕЕСТР, "utf8")); } catch (e) { return; }
+    if (!Array.isArray(данные)) return;
+
+    const поЦели = new Map();
+    for (const p of pages()) {
+      const t = await цельВкладки(p);
+      if (t) поЦели.set(t, p);
+    }
+
+    const now = Date.now();
+    let живых = 0, погасших = 0;
+    for (const з of данные) {
+      if (з.погашен && now - (з.solved || 0) > FORGET_MS) continue;   // старьё не тащим
+      const page = поЦели.get(з.цель) || ЗАКРЫТАЯ;
+      const rec = {
+        page, цель: з.цель || "", born: з.born || now, solved: з.solved || 0,
+        погашен: з.погашен || "", paused: false, повод: з.повод || "",
+      };
+      // Вкладки больше нет — это честно «закрылась», а не «проверка пройдена».
+      if (!rec.погашен && page === ЗАКРЫТАЯ) { rec.погашен = "закрылась"; rec.solved = now; }
+      keys.set(з.ключ, rec);
+      if (page !== ЗАКРЫТАЯ) {
+        byPage.set(page, з.ключ);
+        if (з.заявлен && !rec.погашен) заявленные.add(page);
+      }
+      rec.погашен ? погасших++ : живых++;
+    }
+    console.log("реестр восстановлен: живых ключей " + живых + ", погасших " + погасших);
+  };
 
   // Адреса вложенных кадров. Список Playwright показывает только те переходы, которые он
   // наблюдал сам: кадр, появившийся ДО подключения пульта, приходит с пустым адресом —
@@ -397,8 +529,11 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
   };
 
   const scan = async () => {
-    for (const p of pages()) if (await хватает(p)) mint(p);
+    // Выдача ждётся: она спрашивает у браузера идентификатор вкладки, и без ожидания два
+    // обхода подряд успели бы выпустить на одну вкладку два ключа.
+    for (const p of pages()) if (await хватает(p)) await mint(p);
     const now = Date.now();
+    let менялось = false;
     for (const [k, rec] of keys) {
       const закрыта = rec.page.isClosed();
       if (!закрыта && await хватает(rec.page)) continue;
@@ -406,13 +541,19 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
         rec.solved = now;
         // Две РАЗНЫЕ причины гашения, и путать их нельзя: пройденная проверка — успех,
         // закрытая вкладка — обычно умершая сессия, то есть чей-то сбой. Одна фраза на
-        // оба случая уже стоила мне часа поисков вслепую.
+        // оба случая уже стоила мне часа поисков вслепую — а человеку показывалась и вовсе
+        // одна, зелёная. Причина живёт в самой записи, оттуда её берут и экран, и ручка
+        // состояния, а не только строка журнала.
+        rec.погашен = закрыта ? "закрылась" : "пройдена";
         (rec.ждущие || []).forEach((fn) => fn(закрыта ? "вкладка закрыта" : "решено")); rec.ждущие = [];
         console.log((закрыта ? "вкладка закрыта, ключ гаснет: " : "проверка пройдена, ключ гаснет: ") + k);
+        менялось = true;
       }
-      if (now - rec.solved > FORGET_MS) { keys.delete(k); byPage.delete(rec.page); }
+      if (now - rec.solved > FORGET_MS) { keys.delete(k); byPage.delete(rec.page); менялось = true; }
     }
+    if (менялось) сохранить();
   };
+  await восстановить();
   setInterval(() => { scan().catch(() => { }); }, 1500);
   await scan();
 
@@ -501,6 +642,9 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
         await scan();
         const list = [...keys.entries()].filter(([, r]) => !r.solved).map(([k, r]) => ({
           ссылка: BASE + "/c/" + k,
+          // Идентификатор вкладки нужен уборке: живая заявка означает, что работа не
+          // закончена, и такую вкладку закрывать нельзя, сколько бы часов ни прошло.
+          цель: r.цель || "",
           повод: r.повод || "",
           пауза: !!r.paused,
           ждёт: Math.round((Date.now() - r.born) / 1000),
@@ -544,7 +688,7 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
           return res.end(JSON.stringify({ снято: true }));
         }
         заявленные.add(цель);
-        const k = mint(цель, j.повод || "нужна помощь");
+        const k = await mint(цель, j.повод || "нужна помощь");
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
         return res.end(JSON.stringify({ ссылка: BASE + "/c/" + k }));
       }
@@ -553,41 +697,46 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
       if (!m) { res.writeHead(404); return res.end("нет такой ручки"); }
       const rec = keys.get(m[1]);
       const what = m[2] || "";
-      if (!rec) {
-        res.writeHead(what ? 410 : 200, { "content-type": "text/html; charset=utf-8" });
-        return res.end(what ? "" : DONE_HTML);
-      }
-      if (rec.solved && what) { res.writeHead(410); return res.end(""); }
-      if (!what) {
+      // Что отдать по ключу — решает вынесенная функция: она без сети и браузера, и потому
+      // покрыта тестом (capgate-outcome.test.js). Здесь остаётся только исполнение решения.
+      const реш = исход(rec ? { погашен: rec.погашен, пауза: rec.paused } : null, what);
+      if (реш.вид === "экран") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        return res.end(rec.solved ? DONE_HTML : PAGE_HTML);
+        return res.end(реш.экран === "пульт" ? PAGE_HTML : ЭКРАН(реш.экран));
       }
+      if (реш.вид === "причина") {
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        return res.end(JSON.stringify({ исход: реш.причина, адрес: "" }));
+      }
+      if (реш.вид === "отказ") { res.writeHead(реш.код); return res.end(""); }
       const page = rec.page;
 
       // Долгое ожидание для агента: запрос висит, пока человек не нажмёт «Вернуть
       // агенту» или не пройдёт проверку. Сессия к этому моменту уже завершилась —
       // следить за нажатием было некому, и оно терялось. Теперь ждёт пульт, а агента
       // будит сам ответ.
+      // Сюда доходят только живые ключи: погашенные и неизвестные разобраны решением выше,
+      // и оно же назвало им причину.
       if (what === "/watch") {
-        if (rec.paused || rec.solved) {
+        if (rec.paused) {
           res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-          return res.end(JSON.stringify({ исход: rec.solved ? "решено" : "отдано", адрес: rec.page.url() }));
+          return res.end(JSON.stringify({ исход: "отдано", адрес: rec.page.url() }));
         }
-        const исход = await new Promise((готово) => {
+        const что = await new Promise((готово) => {
           const t = setTimeout(() => готово(null), 10 * 60 * 1000);
           rec.ждущие = rec.ждущие || [];
-          rec.ждущие.push((что) => { clearTimeout(t); готово(что); });
+          rec.ждущие.push((чем) => { clearTimeout(t); готово(чем); });
         });
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
         return res.end(JSON.stringify({
-          исход: исход || "ожидание истекло",
+          исход: что || "ожидание истекло",
           адрес: rec.page.isClosed() ? "" : rec.page.url(),
         }));
       }
       if (what === "/state") {
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
         return res.end(JSON.stringify({
-          пройдена: !!rec.solved, пауза: !!rec.paused, повод: rec.повод || "",
+          пауза: !!rec.paused, повод: rec.повод || "",
           ждёт: Math.round((Date.now() - rec.born) / 1000),
         }));
       }
@@ -618,7 +767,7 @@ const DONE_HTML = `<!doctype html><meta charset="utf-8">
         await startCast(page);
         res.writeHead(204); return res.end();
       }
-      if (rec.paused && what !== "/reload") { res.writeHead(409); return res.end(""); }
+      // Пауза здесь уже разобрана решением по ключу — своей проверки тут больше нет.
 
       if (what === "/frame") {
         await raise(page);

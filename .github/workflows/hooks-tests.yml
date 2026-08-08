@@ -1,7 +1,8 @@
 name: hooks-tests
 
-# Регресс-тесты bash-хуков Claude Code (.claude/hooks/). Детерминированно,
-# только bash + jq — реальный Craft не трогается. См. tests/README.md.
+# Регресс-тесты bash-хуков Claude Code (.claude/hooks/) и чистых кусков JS-инструментов.
+# Детерминированно, без сети и моделей — реальный Craft не трогается. Инструментам нужен
+# node, всему остальному хватает bash + jq. См. tests/README.md.
 on:
   push:
   pull_request:
@@ -29,6 +30,11 @@ jobs:
 
       - name: Install.sh idempotency smoke
         run: bash tests/install-smoke.sh
+
+      # Решение по ключу пульта капчи. Сам пульт живёт на маке и тянет playwright
+      # маковским путём — здесь гоняется только вынесенная из него чистая функция.
+      - name: Capgate outcome test
+        run: node tools/mac/capgate-outcome.test.js
 
       # Ядро грейдера евалов гоняется на записанных потоках: без сети и моделей,
       # поэтому живёт в том же CI, что и хук-тесты. См. evals/README.md.

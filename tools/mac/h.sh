@@ -32,7 +32,10 @@ HOST="agent@$MAC_NODE_ADDR"
 
 [[ -f "$GC" ]] || { echo "нет слоя траекторий: $GC"; exit 1; }
 
-# Метка занятости профиля: уборка не трогает то, с чем сейчас работают.
+# Метка занятости профиля: уборка не трогает то, с чем сейчас работают. Ставится не
+# однажды, а бьётся сердцем всё время прогона — иначе работа дольше окна уборки переставала
+# защищать вкладки, и они закрывались прямо под сессией. Сердце живёт на маке рядом с
+# прогоном и умирает вместе с ним.
 ssh "${OPTS[@]}" "$HOST" "touch /tmp/agchrome-keep.$PORT" >/dev/null 2>&1 || true
 
 # Ключ -n обязателен: без него вложенный ssh читает тот же stdin, что и цикл разбора вывода,
@@ -42,9 +45,14 @@ gate() {  # $1 — json тела заявки
     "curl -sS --max-time 12 -X POST -H 'content-type: application/json' -d '$1' $GATE/register" 2>/dev/null
 }
 
+# Сердце метки: фоновый цикл на маке трогает её раз в полминуты и сам умирает, когда
+# кончается прогон (kill -0 по родительской оболочке). Продлевать метку из контейнера
+# нельзя — каждый удар стоил бы отдельного захода через реле.
+СЕРДЦЕ="( while kill -0 \$\$ 2>/dev/null; do touch /tmp/agchrome-keep.$PORT; sleep 30; done ) >/dev/null 2>&1 &"
+
 cat "$GC" "$DIR/prelude.js" "$1" \
   | ssh "${OPTS[@]}" "$HOST" \
-      "export PATH=\$HOME/.npm-global/bin:\$PATH; dev-browser --connect http://127.0.0.1:$PORT --timeout $T" \
+      "export PATH=\$HOME/.npm-global/bin:\$PATH; $СЕРДЦЕ dev-browser --connect http://127.0.0.1:$PORT --timeout $T" \
   | while IFS= read -r line; do
       printf '%s\n' "$line"
       case "$line" in
