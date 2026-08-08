@@ -722,14 +722,17 @@ const ЭКРАН = (вид) => `<!doctype html><meta charset="utf-8">
           res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
           return res.end(JSON.stringify({ исход: "отдано", адрес: rec.page.url() }));
         }
+        // Срока у ожидания нет. Раньше запрос отвисал через десять минут с исходом
+        // «ожидание истекло» — исходом, который не отличал «человек ещё не пришёл» от
+        // «что-то сломалось». Ждём, пока есть чего ждать: обход всё равно погасит ключ,
+        // когда вкладка закроется, и разбудит ждущего настоящей причиной.
         const что = await new Promise((готово) => {
-          const t = setTimeout(() => готово(null), 10 * 60 * 1000);
           rec.ждущие = rec.ждущие || [];
-          rec.ждущие.push((чем) => { clearTimeout(t); готово(чем); });
+          rec.ждущие.push(готово);
         });
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
         return res.end(JSON.stringify({
-          исход: что || "ожидание истекло",
+          исход: что,
           адрес: rec.page.isClosed() ? "" : rec.page.url(),
         }));
       }
