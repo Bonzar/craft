@@ -147,6 +147,10 @@
           },
           {
             "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-kill-by-name-guard.sh"
+          },
+          {
+            "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/universal-block-no-verify.sh"
           },
           {
