@@ -55,6 +55,11 @@ jobs:
       - name: Page URL cannot execute commands over ssh
         run: bash tools/mac/h-shell-injection.test.sh
 
+      # Узел сети ждут, а не смотрят однажды: карта сети приходит с задержкой, и мгновенный
+      # снимок не отличает спящий ноут от ещё не доехавшей карты.
+      - name: Tunnel waits for the node before giving a verdict
+        run: bash tools/mac/node-ready.test.sh
+
       # Ядро грейдера евалов гоняется на записанных потоках: без сети и моделей,
       # поэтому живёт в том же CI, что и хук-тесты. См. evals/README.md.
       - name: Eval grader selftest
