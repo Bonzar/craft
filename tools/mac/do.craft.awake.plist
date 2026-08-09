@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>do.craft.awake</string>
+  <!-- СИСТЕМНОЕ задание, не пользовательское: запрет сна и плановое пробуждение — это
+       настройки машины, пользователю они не подчиняются. Живёт в /Library/LaunchDaemons,
+       поэтому работает и когда в систему никто не вошёл. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Library/craft/awake.sh</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <!-- Раз в минуту: столько же занимает возврат канала после смены сети. Чаще незачем —
+       решение принимается по медленным величинам (сеть, заряд, питание). -->
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>/var/log/craft-awake.log</string>
+  <key>StandardErrorPath</key><string>/var/log/craft-awake.log</string>
+</dict>
+</plist>
