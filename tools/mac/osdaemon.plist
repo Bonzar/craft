@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>do.craft.osinput</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/Shared/aginput/bin/python3</string>
+    <string>/Users/agent/osdaemon.py</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!-- Без этого macOS склеивает таймеры фонового процесса и короткий сон в 16 мс
+       растягивается до 68 — ритм ввода уезжает вчетверо. Замерено. -->
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LowPriorityIO</key><false/>
+  <key>StandardOutPath</key><string>/Users/agent/osdaemon.out</string>
+  <key>StandardErrorPath</key><string>/Users/agent/osdaemon.err</string>
+</dict></plist>
