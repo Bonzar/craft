@@ -50,6 +50,14 @@ type ChannelProbe struct {
 	// вызывающий, глядя на этот список.
 	FailedDays []string
 
+	// Skipped — записи, которые разбор не смог прочитать, со всех дней окна.
+	//
+	// Отдельно от FailedDays и от ParseErr: там канал не ответил или ответ не
+	// прочитался целиком, а здесь ответ прочитан и часть его потеряна внутри.
+	// Вывод «фильма нет» по такому ответу недоказуем — искомый фильм мог стоять
+	// ровно в пропущенной записи.
+	Skipped []string
+
 	// WindowFrom и WindowTo — ФАКТИЧЕСКОЕ окно источника: первая и последняя
 	// даты, на которые он дал хоть один сеанс любого фильма.
 	//
@@ -297,6 +305,7 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		}
 		out.Playbill.Showtimes = appendNewShowtimes(out.Playbill.Showtimes, one.Playbill.Showtimes, seen)
 		out.Playbill.Dates = append(out.Playbill.Dates, one.Playbill.Dates...)
+		out.Skipped = append(out.Skipped, one.Playbill.Skipped...)
 		// Горизонт источник повторяет на каждой странице — складывать его сам
 		// с собой значит получить один и тот же список по разу на день.
 		out.Playbill.SourceDays = appendNewDates(out.Playbill.SourceDays, one.Playbill.SourceDays, seenDays)
@@ -859,6 +868,7 @@ func fetchCinema5(c *Client, venue string) ChannelProbe {
 		}
 		out.Playbill.Showtimes = append(out.Playbill.Showtimes, one.Playbill.Showtimes...)
 		out.Playbill.Dates = append(out.Playbill.Dates, one.Playbill.Dates...)
+		out.Skipped = append(out.Skipped, one.Playbill.Skipped...)
 	}
 
 	if got == 0 {

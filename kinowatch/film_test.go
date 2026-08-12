@@ -419,3 +419,39 @@ func TestVerifyYandexEventAllowsHonestEmptySchedule(t *testing.T) {
 		t.Errorf("сверенный фильм без сеансов объявлен ошибкой: %v", err)
 	}
 }
+
+// Живая афиша Алмаза 12.08.2026: три «Человека-паука» подряд, и все под одной
+// обёрткой — «‹название›*(предсеанс. обсл.) + м/ф "…"». Профиль намеренно голый,
+// без паттернов и псевдонимов: ровно такой шёл в прогоне, и именно на нём фильм
+// терялся. Паттерн эту дыру закрывает, но ценой ложных попаданий — с ним в ту же
+// корзину падают «Вдали от дома» и «Нет пути домой», поэтому проверка идёт с
+// двух сторон: искомый находится, однофамильцы нет.
+func TestMatchAlmazWrappedTitles(t *testing.T) {
+	pb, err := parseAlmaz(readFixture(t, "almaz-wrapped.html"), "2026-08-20")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	bare := FilmProfile{Title: "Человек-паук: Новый день"}
+	// Решения идут в порядке сеансов афиши — название берём из самого сеанса.
+	hits, strangers := 0, 0
+	for i, m := range matchPlaybill(pb, bare) {
+		if !m.Matched {
+			continue
+		}
+		title := pb.Showtimes[i].Film
+		switch {
+		case strings.Contains(title, "Новый день"):
+			hits++
+		case strings.Contains(title, "Вдали от дома"), strings.Contains(title, "Нет пути домой"):
+			strangers++
+		}
+	}
+
+	if hits == 0 {
+		t.Error("фильм под обёрткой не найден: расщепление оставляет хвост, которого нет в искомом названии")
+	}
+	if strangers != 0 {
+		t.Errorf("однофамильцы приняты за искомый фильм: %d сеансов", strangers)
+	}
+}

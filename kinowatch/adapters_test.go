@@ -7,6 +7,7 @@ package main
 // живой сетью, то есть не проверялись бы в CI вовсе.
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -2172,5 +2173,94 @@ func TestParseKinoafishaRejectsVenueBlockWithoutName(t *testing.T) {
 
 	if _, err := parseKinoafisha(body, "2026-08-21"); err == nil {
 		t.Fatal("блок без названия площадки пропущен молча")
+	}
+}
+
+// Мираж публикует дальний день ПУСТЫМ: календарь на месте и активная вкладка
+// правильная, а расписания ещё нет. Замер 11.08.2026 — дни 13 и 15 августа
+// приходят так (76787 байт против 197982 у заполненного дня): блок расписания
+// есть, якорей площадок в нём ноль. До правки такой ответ падал раньше, на
+// проверке «площадки нет на странице», и живой источник выглядел дырявым.
+func TestParseMirageEmptyDay(t *testing.T) {
+	pb, err := parseMirage(readFixture(t, "mirage-empty-day.html"), "18", "2026-08-13")
+	if err != nil {
+		t.Fatalf("день без расписания объявлен поломкой: %v", err)
+	}
+	if len(pb.Showtimes) != 0 {
+		t.Errorf("на пустом дне разобрано %d сеансов", len(pb.Showtimes))
+	}
+	// Горизонт источник называет и в пустой день — по нему обход не спрашивает
+	// про дни, которых у источника нет вовсе.
+	if len(pb.SourceDays) != 5 {
+		t.Errorf("дни источника разобраны как %v, в календаре их пять", pb.SourceDays)
+	}
+}
+
+// Обратная сторона послабления: промах по идентификатору площадки обязан
+// остаться ошибкой. Якоря на странице есть, нашего среди них нет — это другая
+// страница, и молчать о ней нельзя.
+func TestParseMirageVenueMissStaysError(t *testing.T) {
+	_, err := parseMirage(readFixture(t, "mirage-mari-day.html"), "999", "2026-08-12")
+	if err == nil {
+		t.Fatal("промах по площадке прошёл как пустой день")
+	}
+	if errors.Is(err, errDayNotPublished) {
+		t.Errorf("промах по площадке выдан за непубликуемый день: %v", err)
+	}
+}
+
+// Вторая сторона: пустой день и сменившаяся вёрстка различаются только
+// календарём, поэтому исчезнувший календарь — поломка, а не «день не
+// опубликован». Тело собрано из настоящего ответа руками: живьём такой вёрстки
+// не наблюдалось, и выдавать её за замер нельзя.
+func TestParseMirageBrokenCalendarStaysError(t *testing.T) {
+	body := strings.ReplaceAll(readFixture(t, "mirage-mari-day.html"),
+		`href="/msk/schedule/`, `href="/msk/RASPISANIE/`)
+
+	_, err := parseMirage(body, "18", "2026-08-12")
+	if err == nil {
+		t.Fatal("страница без календаря принята за расписание")
+	}
+	if errors.Is(err, errDayNotPublished) {
+		t.Errorf("сменившаяся вёрстка выдана за непубликуемый день: %v", err)
+	}
+}
+
+// Синема-Стар 10.08.2026 уронил три площадки сети разом: у части позиций вместо
+// карточки фильма пришло логическое «нет», и разбор падал целиком — вместе с
+// позициями, которые прочитались бы прекрасно. Тело того дня не сохранилось, а
+// живьём касса отвечает нормально, поэтому кривая форма внесена в настоящий
+// ответ руками. Это не замер, а воспроизведение замеренной формы.
+func TestParseCinemaStarSkipsFilmlessItem(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(readFixture(t, "cinemastar-schedule.json")), &doc); err != nil {
+		t.Fatalf("фикстура не читается: %v", err)
+	}
+	items := doc["data"].(map[string]any)["schedule"].(map[string]any)["items"].([]any)
+	items[0].(map[string]any)["film"] = false
+	broken, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("сборка тела: %v", err)
+	}
+
+	pb, err := parseCinemaStar(string(broken))
+	if err != nil {
+		t.Fatalf("одна кривая запись уронила весь день: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансы остальных позиций потеряны")
+	}
+	// Молчать о пропуске нельзя: «часть ответа не прочиталась» не должна
+	// выглядеть как «фильма на площадке нет».
+	if len(pb.Skipped) == 0 {
+		t.Error("пропуск не назван — по отчёту его будет не отличить от пустой афиши")
+	}
+}
+
+// Обратная сторона: ответ, не читаемый целиком, остаётся ошибкой. Иначе
+// послабление превратит сменившуюся схему в тихое «фильма нет».
+func TestParseCinemaStarKeepsHardError(t *testing.T) {
+	if _, err := parseCinemaStar(`{"data": "не объект"}`); err == nil {
+		t.Fatal("нечитаемый ответ принят за расписание")
 	}
 }
