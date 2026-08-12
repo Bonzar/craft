@@ -6,3 +6,4 @@
 {"name":"онбординг в чужой репо → codebase-onboarding","prompt":"Я склонировал незнакомый репозиторий, разберись как тут всё устроено","expect_skill":"codebase-onboarding"}
 {"name":"готово перед PR → verification-loop","prompt":"Кажется всё сделал, заводи PR","expect_skill":"verification-loop"}
 {"name":"правка правила в скилле → tdd-workflow","prompt":"Поправь правило в скилле разбора инцидента: добавь, что урок должен называть ступень рычага","expect_skill":"tdd-workflow"}
+{"name":"взвесить варианты решения → council","prompt":"Взвесь варианты: переезжать на новый домен сразу или поэтапно, дай второе мнение","expect_skill":"council"}
