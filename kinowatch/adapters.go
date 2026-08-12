@@ -152,6 +152,16 @@ type Playbill struct {
 	// — переключатель дней. Остальные оставляют поле пустым, и обход у них
 	// прежний.
 	SourceDays []string `json:"sourceDays,omitempty"`
+
+	// Skipped — записи ответа, которые разбор не смог прочитать и пропустил.
+	//
+	// Пропуск рождается здесь, поэтому здесь и живёт: место общее на все
+	// разборы, а не заводится каждому своё. Пустой список — обычное состояние.
+	//
+	// Молчать о пропуске нельзя. «Часть ответа не прочиталась» и «фильма на
+	// площадке нет» — разные вещи, а в отчёте выглядели бы одинаково: искомый
+	// фильм мог стоять ровно в пропущенной записи.
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // moscowTZ — источники говорят о московском времени, но зону не указывают.
@@ -367,6 +377,48 @@ func parseKaroSchedule(flatBody, filmsBody string) (Playbill, error) {
 
 // ——— СИНЕМА-СТАР ———
 
+// cinemaStarFilm — карточка фильма позиции расписания.
+//
+// Приходит она в двух формах. Обычная — объект с названием, хронометражом,
+// прокатным удостоверением и описанием. Вторая замерена 10.08.2026, когда три
+// площадки сети разом ответили логическим «нет» вместо карточки у части
+// позиций; строгий разбор падал на этом целиком, вместе с позициями, которые
+// читались прекрасно. Поэтому обе формы законны, а решение «карточки нет»
+// принимает разбор, а не парсер JSON.
+type cinemaStarFilm struct {
+	Name     string `json:"name"`
+	Duration int    `json:"duration"`
+	// government_code приходит числом, но это идентификатор, а не величина:
+	// json.Number бережёт его от потери точности и от экспоненциальной записи.
+	GovernmentCode json.Number `json:"government_code"`
+	Description    string      `json:"description"`
+
+	// Present отвечает на вопрос «карточка вообще была?». Без него пустое имя
+	// от отсутствующей карточки не отличить, а это разные вещи: первое —
+	// данные источника, второе — пропуск, о котором надо доложить.
+	Present bool `json:"-"`
+}
+
+func (f *cinemaStarFilm) UnmarshalJSON(data []byte) error {
+	// Ложь и null — законные формы «карточки нет». Любая другая непонятная
+	// форма остаётся ошибкой: молчаливое проглатывание превратило бы смену
+	// схемы в тихое «фильма нет».
+	switch strings.TrimSpace(string(data)) {
+	case "false", "null":
+		*f = cinemaStarFilm{}
+		return nil
+	}
+
+	type plain cinemaStarFilm // без своего метода, иначе рекурсия
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*f = cinemaStarFilm(v)
+	f.Present = true
+	return nil
+}
+
 type cinemaStarResponse struct {
 	Data struct {
 		Theatre struct {
@@ -375,15 +427,7 @@ type cinemaStarResponse struct {
 		Schedule struct {
 			Dates []string `json:"dates"`
 			Items []struct {
-				Film struct {
-					Name     string `json:"name"`
-					Duration int    `json:"duration"`
-					// government_code приходит числом, но это идентификатор, а
-					// не величина: json.Number бережёт его от потери точности
-					// и от экспоненциальной записи.
-					GovernmentCode json.Number `json:"government_code"`
-					Description    string      `json:"description"`
-				} `json:"film"`
+				Film    cinemaStarFilm `json:"film"`
 				Formats []struct {
 					// В группе формат приходит объектом {id, name}, а в самом
 					// сеансе — строкой. Берём из сеанса: он ближе к факту и
@@ -417,6 +461,17 @@ func parseCinemaStar(body string) (Playbill, error) {
 		Dates:  resp.Data.Schedule.Dates,
 	}
 	for _, it := range resp.Data.Schedule.Items {
+		// Позиция без карточки фильма пропускается, но не молча: сеансы у неё
+		// есть, и искомый фильм мог стоять ровно здесь.
+		if !it.Film.Present {
+			lost := 0
+			for _, f := range it.Formats {
+				lost += len(f.Sessions)
+			}
+			pb.Skipped = append(pb.Skipped,
+				fmt.Sprintf("Синема-Стар: у позиции нет карточки фильма, пропущено сеансов: %d", lost))
+			continue
+		}
 		for _, f := range it.Formats {
 			for _, s := range f.Sessions {
 				at := normalizeShowtime(s.Showtime, s.BusinessDate)
@@ -1769,6 +1824,13 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 	}
 	sort.Strings(pb.SourceDays)
 
+	// Календарь — единственное, чем пустой день отличается от сменившейся
+	// вёрстки, поэтому его исчезновение это поломка, а не «день не публикуется».
+	// Без этой развилки любая смена разметки уезжала бы в непокрытые дни молча.
+	if len(pb.SourceDays) == 0 {
+		return pb, fmt.Errorf("разбор Миража: календарь дней не найден (тело %d байт)", len(body))
+	}
+
 	if date != "" && active != date {
 		return pb, fmt.Errorf("%w: Мираж отдал страницу за %q вместо %q",
 			errDayNotPublished, active, date)
@@ -1780,11 +1842,13 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 	}
 
 	seen := false
+	anchors := 0
 	for _, box := range boxes {
 		vm := mirageVenue.FindStringSubmatch(box[1])
 		if len(vm) < 2 {
 			continue
 		}
+		anchors++
 		if venue != "" && vm[1] != venue {
 			continue
 		}
@@ -1816,6 +1880,14 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 			}
 			pb.Showtimes = append(pb.Showtimes, st)
 		}
+	}
+
+	// Ни одного якоря площадки на всей странице при исправном календаре — это
+	// день, который источник опубликовал без расписания. Замер 11.08.2026: дни
+	// 13 и 15 августа приходят ровно так, вчетверо короче заполненного дня.
+	// Отличие от промаха ниже — там якоря есть, просто нашего среди них нет.
+	if anchors == 0 {
+		return pb, nil
 	}
 
 	// Площадки нет на странице — это не «сеансов нет», а промах по

@@ -150,6 +150,13 @@ type VenueProbe struct {
 	// «фильма нет» недоказуемым, см. ниже.
 	FailedDays []string `json:"failedDays,omitempty"`
 
+	// Skipped — записи ответа, которые разбор прочитать не смог.
+	//
+	// Отдельно от FailedDays: там канал не ответил за день целиком, а здесь
+	// ответил, и потеряна часть внутри ответа. Пока список непуст, вывод
+	// «фильма нет» по площадке не выносится.
+	Skipped []string `json:"skipped,omitempty"`
+
 	// SkipReason непустая означает, что площадку не опрашивали вовсе.
 	SkipReason string `json:"skipReason,omitempty"`
 
@@ -504,6 +511,7 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 	probe := fetchChannel(c, vp.Kind, parseChannelParams(o.Fields[fSourceParams]), now, days)
 	vp.FailedDays = probe.FailedDays
 	vp.DateBlind = probe.DateBlind
+	vp.Skipped = probe.Skipped
 
 	matches := matchPlaybill(probe.Playbill, film)
 	found, onSale := false, false
@@ -546,6 +554,7 @@ func probeVenue(c *Client, o CinemaObservation, film FilmProfile, now time.Time,
 	})
 
 	res = applyHorizonGap(res, probe.FailedDays)
+	res = applyParseSkips(res, probe.Skipped)
 	res = applySourceWindow(res, uncoveredDates(now, days, probe.WindowFrom, probe.WindowTo))
 	res = applyDateBlind(res, probe.DateBlind)
 	vp.Status, vp.Evidence, vp.Alive = res.Status, res.Evidence, res.Alive
@@ -585,6 +594,25 @@ func applyHorizonGap(res ProbeResult, failedDays []string) ProbeResult {
 	res.Status = statusSuspect
 	res.Evidence = fmt.Sprintf("горизонт неполон, канал не ответил за %d дн. (%s): %s",
 		len(failedDays), strings.Join(failedDays, ", "), res.Evidence)
+	return res
+}
+
+// applyParseSkips запрещает вывод «фильма нет» по ответу, прочитанному не
+// целиком.
+//
+// Отдельно от applyHorizonGap и applySourceWindow: там канал не ответил или
+// ответил у́же окна, а здесь ответил полностью — не прочитались отдельные записи
+// внутри ответа. Искомый фильм мог стоять ровно в них, поэтому отсутствие по
+// такому ответу недоказуемо.
+//
+// Живость не трогается: источник ответил, и часть данных прочиталась.
+func applyParseSkips(res ProbeResult, skipped []string) ProbeResult {
+	if res.Status != statusAbsent || len(skipped) == 0 {
+		return res
+	}
+	res.Status = statusSuspect
+	res.Evidence = fmt.Sprintf("ответ прочитан не целиком, пропущено записей %d (%s): %s",
+		len(skipped), strings.Join(skipped, "; "), res.Evidence)
 	return res
 }
 

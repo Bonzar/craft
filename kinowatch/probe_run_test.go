@@ -296,3 +296,43 @@ func TestReadPreviousRunReadsLayerList(t *testing.T) {
 		t.Errorf("слоёв прочитано %d, ожидалось 2", len(got.Aggregators))
 	}
 }
+
+// Пропуск разбора и «фильма нет» — разные вещи. Часть ответа не прочиталась, и
+// искомый фильм мог стоять ровно в пропущенной записи: объявлять по такому
+// ответу отсутствие нельзя.
+func TestParseSkipsForbidAbsent(t *testing.T) {
+	got := applyParseSkips(
+		ProbeResult{Status: statusAbsent, Alive: true, Evidence: "сеансов 40, фильмов 6"},
+		[]string{"Синема-Стар: у позиции нет карточки фильма, пропущено сеансов: 12"})
+
+	if got.Status != statusSuspect {
+		t.Errorf("статус %q, ожидался %q", got.Status, statusSuspect)
+	}
+	if !strings.Contains(got.Evidence, "карточки фильма") {
+		t.Errorf("в обосновании не видно самого пропуска: %q", got.Evidence)
+	}
+	if !strings.Contains(got.Evidence, "сеансов 40") {
+		t.Errorf("прежнее обоснование потеряно: %q", got.Evidence)
+	}
+	// Источник ответил, часть данных прочиталась — живость остаётся.
+	if !got.Alive {
+		t.Error("пропуск одной записи отменил доказанную живость источника")
+	}
+}
+
+// Находку пропуск не отменяет: фильм уже найден, спорить не о чем.
+func TestParseSkipsKeepFindings(t *testing.T) {
+	for _, status := range []string{statusOnSale, statusFound} {
+		got := applyParseSkips(ProbeResult{Status: status, Alive: true}, []string{"пропуск"})
+		if got.Status != status {
+			t.Errorf("находка %q понижена до %q из-за пропуска записи", status, got.Status)
+		}
+	}
+}
+
+func TestParseSkipsNoopWhenNothingSkipped(t *testing.T) {
+	got := applyParseSkips(ProbeResult{Status: statusAbsent, Alive: true, Evidence: "e"}, nil)
+	if got.Status != statusAbsent || got.Evidence != "e" {
+		t.Errorf("чистый разбор изменил вердикт: %+v", got)
+	}
+}
