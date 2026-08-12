@@ -1135,6 +1135,98 @@ var (
 	kinoafishaCardRef  = regexp.MustCompile(`class="shortList_ref" href="[^"]*?/movies/(\d+)/"`)
 )
 
+// kinoafishaSource — как слой достаёт тела: сетью или пропуском через мак.
+//
+// Переключение запоминается на весь слой. Иначе каждый из трёх десятков
+// запросов сперва трижды бился бы в закрытый источник: девять секунд сна на
+// запрос и лишняя нагрузка на чужой сайт ради заведомо известного отказа.
+type kinoafishaSource struct {
+	net  bodyFetcher // обычный путь
+	pass bodyFetcher // ступень мака; nil означает, что её нет
+	mode string      // passAuto | passNever | passAlways
+
+	on   bool   // переключились на пропуск
+	why  string // чем объясняется переключение
+	fell bool   // ступень звали и она не поднялась
+}
+
+// Режимы ступени.
+const (
+	passAuto   = "auto"   // звать пропуск, когда источник закрыл доступ
+	passNever  = "never"  // не звать вовсе: поведение без ступени
+	passAlways = "always" // брать источник пропуском сразу
+)
+
+// path — каким путём взяты данные. Едет в отчёт слоя: «слой отдал ноль» и «слой
+// взят пропуском» различать нечем, а решения по ним разные.
+func (s *kinoafishaSource) path() string {
+	if s.on {
+		return "пропуск через мак"
+	}
+	return "сеть"
+}
+
+// fetch выполняет пачку запросов тем путём, который сейчас выбран.
+//
+// Пачкой ходят только шаги, где адреса известны сразу все — догрузки дат и
+// страницы площадок. Поиск и страница фильма зависят друг от друга и идут
+// поодиночке.
+func (s *kinoafishaSource) fetch(reqs []rawRequest) ([]rawResponse, error) {
+	if s.pass != nil && s.mode == passAlways && !s.on {
+		s.on, s.why = true, "ступень включена ключом"
+	}
+	if s.on {
+		return s.pass.fetch(reqs)
+	}
+
+	res, err := s.net.fetch(reqs)
+	if err != nil {
+		return nil, err
+	}
+	if !s.shouldSwitch(res) {
+		return res, nil
+	}
+
+	s.on, s.why = true, "источник закрыл доступ"
+	viaPass, err := s.pass.fetch(reqs)
+	if err != nil {
+		// Ступень не поднялась — остаёмся с сетевым ответом и его отказом.
+		// Честный отказ слоя лучше выдуманной пустоты.
+		s.on, s.fell = false, true
+		s.why = err.Error()
+		return res, nil
+	}
+	return viaPass, nil
+}
+
+// shouldSwitch — есть ли повод звать пропуск.
+//
+// Только закрытый доступ. Прочие исходы браузер не изменит: «агрегатор не знает
+// такого фильма» — ответ по существу, а сеть недоступна одинаково обоим путям.
+func (s *kinoafishaSource) shouldSwitch(res []rawResponse) bool {
+	if s.pass == nil || s.mode == passNever || s.fell {
+		return false
+	}
+	for _, r := range res {
+		if r.Status == 403 || r.Status == 429 {
+			return true
+		}
+	}
+	return false
+}
+
+// one — один запрос тем же путём.
+func (s *kinoafishaSource) one(req rawRequest) (rawResponse, error) {
+	res, err := s.fetch([]rawRequest{req})
+	if err != nil {
+		return rawResponse{}, err
+	}
+	if len(res) == 0 {
+		return rawResponse{}, fmt.Errorf("kinoafisha: на запрос %s ответа не пришло вовсе", req.URL)
+	}
+	return res[0], nil
+}
+
 // kinoafishaGet — GET к источнику с повтором на 403.
 //
 // За источником стоит ddos-guard, и доступ он закрывает полосами: 05.08.2026
@@ -1146,33 +1238,36 @@ var (
 // Отсюда трактовка: 403 у ЭТОГО источника означает «сейчас закрыто», а не «нам
 // сюда нельзя». Повтор берёт короткую рябь; длинную полосу он не лечит, и тогда
 // это честный отказ слоя, а не пустая афиша.
-func kinoafishaGet(c *Client, addr string) (string, error) {
+func kinoafishaGet(s *kinoafishaSource, addr string) (string, error) {
 	var last error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * 3 * time.Second)
 		}
-		body, status, err := c.get(addr)
-		switch {
-		case err != nil && status != 403:
+		r, err := s.one(rawRequest{URL: addr})
+		if err != nil {
 			return "", err
-		case status == 403:
+		}
+		switch {
+		case r.Err != "" && r.Status != 403:
+			return "", errors.New(r.Err)
+		case r.Status == 403 || r.Status == 429:
 			last = fmt.Errorf(
-				"kinoafisha: %s ответил 403 после %d попыток — источник закрыл доступ полосой",
-				addr, attempt+1)
+				"kinoafisha: %s ответил %d после %d попыток — источник закрыл доступ полосой",
+				addr, r.Status, attempt+1)
 			continue
-		case status != 200:
-			return "", fmt.Errorf("kinoafisha: %s ответил %d", addr, status)
+		case r.Status != 200:
+			return "", fmt.Errorf("kinoafisha: %s ответил %d", addr, r.Status)
 		default:
-			return body, nil
+			return r.Body, nil
 		}
 	}
 	return "", last
 }
 
 // fetchKinoafishaMovie берёт первичную страницу фильма.
-func fetchKinoafishaMovie(c *Client, id string) (string, error) {
-	return kinoafishaGet(c, kinoafishaMovieBase+url.PathEscape(id)+"/")
+func fetchKinoafishaMovie(s *kinoafishaSource, id string) (string, error) {
+	return kinoafishaGet(s, kinoafishaMovieBase+url.PathEscape(id)+"/")
 }
 
 // fetchKinoafishaVenueGeo берёт координаты площадки с её собственной страницы.
@@ -1181,34 +1276,45 @@ func fetchKinoafishaMovie(c *Client, id string) (string, error) {
 // привязка сваливается на именную ступень, а она разрешена лишь для строк
 // реестра БЕЗ координат: обе московские площадки «Паука» уходили в «не
 // опознано» ровно по этой причине, хотя одна из них есть в реестре.
-func fetchKinoafishaVenueGeo(c *Client, id string) (float64, float64, error) {
-	body, err := kinoafishaGet(c, kinoafishaCinemaBase+url.PathEscape(id)+"/")
+func fetchKinoafishaVenueGeo(s *kinoafishaSource, id string) (float64, float64, error) {
+	body, err := kinoafishaGet(s, kinoafishaCinemaBase+url.PathEscape(id)+"/")
 	if err != nil {
 		return 0, 0, err
 	}
 	return parseKinoafishaVenueGeo(body, id)
 }
 
-// fetchKinoafishaDate догружает остаток одной даты.
-func fetchKinoafishaDate(c *Client, id, date string, skip int) (string, error) {
-	addr := fmt.Sprintf("%s%s/?date=%s&skip=%d", kinoafishaMovieBase, url.PathEscape(id), date, skip)
-
-	body, status, err := c.do("POST", addr, "", kinoafishaHeaders())
-	if err != nil {
-		return "", err
+// kinoafishaDateReq — запрос догрузки одной даты.
+func kinoafishaDateReq(id, date string, skip int) rawRequest {
+	return rawRequest{
+		URL:     fmt.Sprintf("%s%s/?date=%s&skip=%d", kinoafishaMovieBase, url.PathEscape(id), date, skip),
+		Method:  "POST",
+		Headers: kinoafishaHeaders(),
 	}
-	// 301 здесь означает ровно одно: заголовок не доехал. Прочитать это как
-	// «на дату сеансов нет» нельзя — слой замолчал бы там, где у него всё
-	// расписание.
-	if status != 200 {
-		return "", fmt.Errorf("kinoafisha: догрузка %s ответила %d — проверь заголовок x-request-ajax", date, status)
+}
+
+// readKinoafishaDate достаёт разметку дня из ответа догрузки.
+func readKinoafishaDate(date string, r rawResponse) (string, error) {
+	if r.Err != "" {
+		return "", errors.New(r.Err)
+	}
+	switch {
+	case r.Status == 403 || r.Status == 429:
+		// Закрытый доступ и недоехавший заголовок — разные вещи, и путать их
+		// нельзя: первое лечится пропуском, второе правкой запроса.
+		return "", fmt.Errorf("kinoafisha: догрузка %s ответила %d — источник закрыл доступ", date, r.Status)
+	case r.Status != 200:
+		// 301 здесь означает ровно одно: заголовок не доехал. Прочитать это как
+		// «на дату сеансов нет» нельзя — слой замолчал бы там, где у него всё
+		// расписание.
+		return "", fmt.Errorf("kinoafisha: догрузка %s ответила %d — проверь заголовок x-request-ajax", date, r.Status)
 	}
 
 	var out struct {
 		Status bool   `json:"status"`
 		HTML   string `json:"html"`
 	}
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
+	if err := json.Unmarshal([]byte(r.Body), &out); err != nil {
 		return "", fmt.Errorf("kinoafisha: ответ догрузки %s не читается как JSON: %w", date, err)
 	}
 	if !out.Status {
@@ -1236,9 +1342,9 @@ func kinoafishaPending(page string) map[string]int {
 // яндексовского: запрос «Майкл» отдал 20 карточек, из них с точным названием
 // три — 2026, 2023 и 1996 года. Поэтому кандидаты сужаются точным совпадением
 // названия ещё до того, как в дело вступит правило про год.
-func findKinoafishaMovies(c *Client, title string) ([]KinoafishaMovie, error) {
+func findKinoafishaMovies(s *kinoafishaSource, title string) ([]KinoafishaMovie, error) {
 	addr := kinoafishaBase + "/search/?q=" + url.QueryEscape(strings.TrimSpace(title)) + "&type=movies"
-	body, err := kinoafishaGet(c, addr)
+	body, err := kinoafishaGet(s, addr)
 	if err != nil {
 		return nil, err
 	}
