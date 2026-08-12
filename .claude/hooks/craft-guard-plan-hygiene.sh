@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# PreToolUse guard on Craft-plan writes (Write/Edit to */plans/*.md). It polices
-# ONLY Craft «План правок» files — detected by their structure (a «где:» locator
-# line or a Craft link/ref) — and passes plans про КОД through untouched, since
-# those legitimately name files, commands and IDs.
+# PreToolUse guard on plan writes (Write/Edit to */plans/*.md). Rule 3 runs
+# first and applies to EVERY plan; rules 0–2 police ONLY Craft «План правок» files —
+# detected by their structure (a «где:» locator line or a Craft link/ref) —
+# and pass plans про КОД through untouched, since those legitimately name
+# files, commands and IDs.
 #
-# Enforces two of Влад's plan rules that the built-in Plan-mode actively pushes
+# Enforces four of Влад's plan rules that the built-in Plan-mode actively pushes
 # against (it templates a verification/order section and doesn't produce links):
+#   0. NO fence longer than three backticks — a nested code block reads worse
+#      than a quote, for humans and for gates alike.
 #   1. NO execution mechanics in a plan — no verification/order sections, no
 #      commands (blocks get/update, tasks, git, curl, --json/--id). A plan says
 #      WHAT changes and WHERE, not HOW to do or verify it.
 #   2. Block references are clickable docs.craft.do links, not bare UUIDs.
+#   3. NO hard-wrapped paragraphs — Влад reads plans on a phone, where every
+#      wrapped line renders as its own paragraph and the sentence breaks apart.
 #
 # Heuristic — narrow patterns to limit false positives; on a hit it denies the
 # write with a reason so the plan gets rewritten. Fail quiet on anything odd.
@@ -28,8 +33,65 @@ fp="$(jq -r '.tool_input.file_path // ""' <<<"$input" 2>/dev/null)"
 content="$(jq -r '.tool_input.content // .tool_input.new_string // ""' <<<"$input" 2>/dev/null)"
 [[ -n "$content" ]] || exit 0
 
-# Only Craft-plans («План правок») are policed. A plan про КОД legitimately names
-# files, commands and flags, so the mechanics/command/ID checks below must not
+# 3. Жёсткий перенос абзаца. Правило действует на ЛЮБОЙ план, поэтому проверка стоит
+# ДО детекта Craft-плана: Влад читает планы с телефона, где каждая перенесённая строка
+# рисуется отдельным абзацем и фраза рвётся посреди себя.
+#
+# Счёт длины требует UTF-8: в POSIX-локали кириллица весит вдвое, порог упал бы до ~31
+# символа и отбивал бы законные планы. Локаль проверяется пробой, а не именем — на маке
+# набор локалей другой. Нет ни одной подходящей → проверка молча выключается, остальные
+# продолжают работать (файл держится «fail quiet on anything odd»).
+wrap_probe="абвгд"
+if (( ${#wrap_probe} != 5 )); then
+  for wrap_loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8 ru_RU.UTF-8 ru_RU.utf8; do
+    LC_ALL="$wrap_loc"
+    (( ${#wrap_probe} == 5 )) && break
+  done
+fi
+if (( ${#wrap_probe} == 5 )); then
+  # Строки, где перенос — часть содержимого (цитата, код, таблица, заголовок), гасятся
+  # ПУСТЫМИ, а не удаляются: удаление придвинуло бы друг к другу несоседние строки и
+  # родило ложное срабатывание.
+  wrapbody="$(awk '
+    BEGIN{f=0}
+    /^[[:space:]]*```/ {f=!f; print ""; next}
+    f                  {print ""; next}
+    /^[[:space:]]*>/   {print ""; next}
+    /^[[:space:]]*\|/  {print ""; next}
+    /^[[:space:]]*#/   {print ""; next}
+                       {print}
+  ' <<<"$content")"
+
+  wrap_hit=0
+  wrap_prev=""
+  while IFS= read -r wrap_line || [[ -n "$wrap_line" ]]; do
+    if [[ -n "${wrap_prev//[[:space:]]/}" ]]; then
+      # Длина — по тексту строки: без ведущих пробелов и без маркера списка. Отступ на
+      # продолжении — самый частый стиль переноса, и он не должен прятать дефект.
+      p="${wrap_prev#"${wrap_prev%%[![:space:]]*}"}"
+      p="${p#[-*+] }"; p="${p#[0-9]. }"
+      c="${wrap_line#"${wrap_line%%[![:space:]]*}"}"
+      # Локатор «где:» и строка со ссылкой исключены: их длину задаёт адрес, а не вёрстка.
+      if (( ${#p} >= 60 )) && [[ "$p" != где:* && "$wrap_prev" != *http* && -n "$c" ]] \
+         && [[ "$c" != [-*+]\ * && "$c" != [0-9].\ * && "$c" != '---'* && "$c" != '!['* ]]; then
+        wrap_hit=1
+        break
+      fi
+    fi
+    wrap_prev="$wrap_line"
+  done <<<"$wrapbody"
+
+  if (( wrap_hit )); then
+    # Свой отказ, не общий: общая причина требует Craft-ссылок и на код-плане соврала бы,
+    # за что отбили.
+    wrap_reason="План свёрстан жёсткими переносами: абзац разбит на строки под ширину терминала. Влад читает с телефона, где каждая такая строка рисуется отдельным абзацем и фраза рвётся посреди себя. Набери абзац одной строкой; перенос оставь только внутри цитат, кода и таблиц — в цитате знак «>» ставится на КАЖДОЙ строке, иначе продолжение читается как проза."
+    jq -cn --arg r "$wrap_reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+    exit 0
+  fi
+fi
+
+# Only Craft-plans («План правок») are policed by rules 0–2. A plan про КОД legitimately
+# names files, commands and flags, so the mechanics/command/ID checks below must not
 # touch it. Detect a Craft-plan by its structural signals — the «где:» locator
 # line every entity carries, or a Craft link/ref — and pass anything else (a code
 # or other plan) straight through.
