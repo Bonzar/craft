@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // Режим выбирается непустым флагом, как в craft-sync: подкоманд нет,
@@ -65,8 +66,19 @@ func main() {
 		proxyAddr    = flag.String("proxy", "", "socks5-адрес российского выхода, напр. 127.0.0.1:10808")
 		proxyCountry = flag.String("proxy-country", "RU", "какую страну обязан показать выход туннеля")
 		checkProxy   = flag.Bool("check-proxy", false, "проверить адрес и страну выхода через --proxy и выйти")
+
+		// Ступень пропуска через настоящий браузер на маке. Нужна одной
+		// кинoафише: она закрывает доступ полосами, и никакой подбор запроса их
+		// не пробивает — а браузер проходит.
+		passMode    = flag.String("kinoafisha-pass", passAuto, "ступень мака: auto (по закрытому доступу) | never | always")
+		passHelm    = flag.String("mac-helm", "", "путь к пульту мака (по умолчанию tools/mac/h.sh репозитория)")
+		passTunnel  = flag.String("mac-tunnel", "", "путь к скрипту канала (по умолчанию tools/mac-tunnel.sh репозитория)")
+		passTimeout = flag.Int("mac-timeout", 900, "предел ожидания одного захода на мак, сек")
 	)
 	flag.Parse()
+
+	macPassMode, macHelmPath, macTunnelPath = *passMode, *passHelm, *passTunnel
+	macPassTimeout = time.Duration(*passTimeout) * time.Second
 
 	client := newClient(*timeoutSec, *retries)
 

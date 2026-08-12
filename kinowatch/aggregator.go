@@ -24,6 +24,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -527,6 +528,17 @@ type AggregatorLayer struct {
 	Sessions int `json:"sessions"`
 	Venues   int `json:"venues"`
 
+	// Days — сколько дат слой собрал. Отдельно от Sessions: слой, взявший одну
+	// дату вместо одиннадцати, отдаёт непустой отчёт и по числу сеансов выглядит
+	// рабочим — а горизонт у него схлопнут.
+	Days int `json:"days,omitempty"`
+
+	// Path — каким путём взяты данные: сетью или пропуском через мак. Без него
+	// «слой отдал ноль» и «слой взят пропуском на 11 датах» неразличимы, а
+	// решения по ним разные. PathWhy объясняет переключение.
+	Path    string `json:"path,omitempty"`
+	PathWhy string `json:"pathWhy,omitempty"`
+
 	// Dropped — сеансы, пришедшие без идентификатора площадки. Единственная
 	// законная потеря на участке «сеансы слоя → отчёт»; печатается, чтобы её не
 	// приходилось выводить вычитанием.
@@ -777,9 +789,40 @@ func countAgreement(ownFound map[string]bool, byRow map[string][]AggregatorShowt
 // Отличие от Яндекса в цене и в форме: там одно окно приходит одним ответом,
 // тут первичная страница плюс запрос на каждую недостающую дату.
 func runKinoafishaLayer(c *Client, film FilmProfile, obs []CinemaObservation, from time.Time, days int) (*AggregatorLayer, []AggregatorSession, error) {
-	layer := &AggregatorLayer{Source: "kinoafisha", Buckets: map[string]int{}}
+	return runKinoafishaLayerVia(newKinoafishaSource(c), film, obs, from, days)
+}
 
-	id, err := resolveKinoafishaFilm(c, film)
+// newKinoafishaSource собирает источник слоя по настройкам прогона.
+//
+// Ступень мака заводится один раз на прогон и молчит, пока источник не закроет
+// доступ. Её нет вовсе, если режим «никогда» или площадка не та (мы на самом
+// узле с браузером, идти некуда).
+func newKinoafishaSource(c *Client) *kinoafishaSource {
+	s := &kinoafishaSource{net: netFetcher{c: c}, mode: macPassMode}
+	if macPassMode == passNever {
+		return s
+	}
+	pass := newMacPass(repoRoot(), macHelmPath, macTunnelPath, macPassTimeout)
+	if err := pass.available(); err != nil {
+		s.why = err.Error()
+		return s
+	}
+	s.pass = pass
+	return s
+}
+
+func runKinoafishaLayerVia(src *kinoafishaSource, film FilmProfile, obs []CinemaObservation, from time.Time, days int) (*AggregatorLayer, []AggregatorSession, error) {
+	layer := &AggregatorLayer{Source: "kinoafisha", Buckets: map[string]int{}}
+	defer func() {
+		// Путь и охват дописываются в отчёт всегда, включая отказ: «слой отдал
+		// ноль» и «слой взят пропуском на 11 датах» иначе выглядят одинаково.
+		layer.Path = src.path()
+		if src.why != "" {
+			layer.PathWhy = src.why
+		}
+	}()
+
+	id, err := resolveKinoafishaFilm(src, film)
 	layer.FndBy = "search"
 	if err != nil {
 		layer.Err = err.Error()
@@ -790,7 +833,7 @@ func runKinoafishaLayer(c *Client, film FilmProfile, obs []CinemaObservation, fr
 	}
 	layer.Film = YandexEvent{ID: id, Slug: id, Title: film.Title}
 
-	page, err := fetchKinoafishaMovie(c, id)
+	page, err := fetchKinoafishaMovie(src, id)
 	if err != nil {
 		layer.Err = err.Error()
 		return layer, nil, nil
@@ -811,23 +854,44 @@ func runKinoafishaLayer(c *Client, film FilmProfile, obs []CinemaObservation, fr
 			seen[s.StartsAt[:10]] = true
 		}
 	}
+	// Даты догружаются ПАЧКОЙ: адреса известны сразу все, а каждый отдельный
+	// заход на ступени мака стоит связи с ноутом через реле.
+	var dates []string
+	var reqs []rawRequest
 	for date, skip := range kinoafishaPending(page) {
 		if !withinWindow(date, from, days) {
 			continue
 		}
-		more, err := fetchKinoafishaDate(c, id, date, skip)
+		dates = append(dates, date)
+		reqs = append(reqs, kinoafishaDateReq(id, date, skip))
+	}
+	layer.Days = len(seen) + len(dates)
+
+	if len(reqs) > 0 {
+		res, err := src.fetch(reqs)
 		if err != nil {
-			// Отказ ОДНОЙ даты слой не рушит, но и молчать о нём нельзя:
-			// иначе неполнота выглядит как «на эту дату сеансов нет».
-			layer.flaw("дата %s не догружена: %v", date, err)
-			continue
+			layer.flaw("догрузка дат не состоялась: %v", err)
+			res = nil
 		}
-		rest, err := parseKinoafisha(more, date)
-		if err != nil {
-			layer.flaw("дата %s не разобрана: %v", date, err)
-			continue
+		for i, r := range res {
+			if i >= len(dates) {
+				break
+			}
+			date := dates[i]
+			more, err := readKinoafishaDate(date, r)
+			if err != nil {
+				// Отказ ОДНОЙ даты слой не рушит, но и молчать о нём нельзя:
+				// иначе неполнота выглядит как «на эту дату сеансов нет».
+				layer.flaw("дата %s не догружена: %v", date, err)
+				continue
+			}
+			rest, err := parseKinoafisha(more, date)
+			if err != nil {
+				layer.flaw("дата %s не разобрана: %v", date, err)
+				continue
+			}
+			sessions = append(sessions, rest...)
 		}
-		sessions = append(sessions, rest...)
 	}
 
 	// Сеансы вне окна прогона отбрасываются уже после сбора: страница отдаёт
@@ -838,7 +902,10 @@ func runKinoafishaLayer(c *Client, film FilmProfile, obs []CinemaObservation, fr
 	venues := collectAggregatorVenues(sessions)
 	layer.Venues = len(venues)
 
-	geo := newKinoafishaGeo(c)
+	// Страницы площадок тоже уезжают пачкой — по той же причине, что и даты.
+	// На сетевом пути пачка проходится циклом и ведёт себя как прежде.
+	geo := newKinoafishaGeo(src)
+	geo.warm(venues)
 	for i := range venues {
 		lat, lon, err := geo.point(venues[i].Slug)
 		if err != nil {
@@ -868,6 +935,10 @@ type kinoafishaGeo struct {
 	// fetch отделён от клиента, чтобы кэш проверялся без сети.
 	fetch func(id string) (float64, float64, error)
 	seen  map[string]kinoafishaPoint
+
+	// src нужен только предварительному прогреву пачкой; пустой означает, что
+	// точки берутся по одной, как и раньше.
+	src *kinoafishaSource
 }
 
 type kinoafishaPoint struct {
@@ -875,10 +946,54 @@ type kinoafishaPoint struct {
 	err      error
 }
 
-func newKinoafishaGeo(c *Client) *kinoafishaGeo {
-	return &kinoafishaGeo{fetch: func(id string) (float64, float64, error) {
-		return fetchKinoafishaVenueGeo(c, id)
-	}}
+func newKinoafishaGeo(src *kinoafishaSource) *kinoafishaGeo {
+	return &kinoafishaGeo{
+		src: src,
+		fetch: func(id string) (float64, float64, error) {
+			return fetchKinoafishaVenueGeo(src, id)
+		},
+	}
+}
+
+// warm забирает страницы всех площадок одной пачкой.
+//
+// Ленивый заход по одной остаётся рабочим и после этого — им же добираются
+// площадки, чью страницу пачка не принесла. Пачка нужна ступени мака: тридцать
+// отдельных заходов к ноуту через реле стоили бы получаса прогона.
+func (g *kinoafishaGeo) warm(venues []AggregatorVenue) {
+	if g.src == nil || len(venues) == 0 {
+		return
+	}
+	var ids []string
+	var reqs []rawRequest
+	for _, v := range venues {
+		if v.Slug == "" {
+			continue
+		}
+		ids = append(ids, v.Slug)
+		reqs = append(reqs, rawRequest{URL: kinoafishaCinemaBase + url.PathEscape(v.Slug) + "/"})
+	}
+	if len(reqs) == 0 {
+		return
+	}
+
+	res, err := g.src.fetch(reqs)
+	if err != nil {
+		return // не беда: точки доберёт ленивый заход, и он же назовёт причину
+	}
+	if g.seen == nil {
+		g.seen = map[string]kinoafishaPoint{}
+	}
+	for i, r := range res {
+		if i >= len(ids) || r.Status != 200 || r.Err != "" {
+			continue
+		}
+		lat, lon, err := parseKinoafishaVenueGeo(r.Body, ids[i])
+		if err != nil {
+			continue // разбор промахнулся — пусть промах назовёт ленивый заход
+		}
+		g.seen[ids[i]] = kinoafishaPoint{lat, lon, nil}
+	}
 }
 
 func (g *kinoafishaGeo) point(id string) (float64, float64, error) {
@@ -902,8 +1017,8 @@ func (g *kinoafishaGeo) point(id string) (float64, float64, error) {
 // Правило то же, что у Яндекса, но кандидатов сужает уже сам поиск: он
 // каталожный, и точное совпадение названия отсекается в клиенте. Остаток —
 // одноимённые фильмы разных лет, и выбирать между ними за Влада нельзя.
-func resolveKinoafishaFilm(c *Client, p FilmProfile) (string, error) {
-	found, err := findKinoafishaMovies(c, p.Title)
+func resolveKinoafishaFilm(s *kinoafishaSource, p FilmProfile) (string, error) {
+	found, err := findKinoafishaMovies(s, p.Title)
 	if err != nil {
 		return "", err
 	}

@@ -7,9 +7,17 @@ package main
 // промахи, и проверять их надо на них же.
 
 import (
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // row — строка реестра с координатами или без.
@@ -684,5 +692,162 @@ func TestAttachKinosferaByAlias(t *testing.T) {
 	got := attachedOf(t, res, "kinoafisha:772611")
 	if got.RegistryKey != "2947" || got.By != "alias" {
 		t.Errorf("привязка вышла как %+v, ожидалась псевдонимом на 2947", got)
+	}
+}
+
+// ——— ступень пропуска через мак ———
+
+// passFixtures — подставной транспорт: отдаёт тела, снятые живым пропуском
+// 12.08.2026. Мак и канал тесту не нужны.
+type passFixtures struct {
+	t     *testing.T
+	calls int
+}
+
+func (p *passFixtures) fetch(reqs []rawRequest) ([]rawResponse, error) {
+	p.calls++
+	out := make([]rawResponse, 0, len(reqs))
+	for _, r := range reqs {
+		switch {
+		case strings.Contains(r.URL, "/search/"):
+			out = append(out, rawResponse{URL: r.URL, Status: 200, Body: readGzFixture(p.t, "kinoafisha-pass/search.html.gz")})
+		case strings.Contains(r.URL, "date="):
+			out = append(out, rawResponse{URL: r.URL, Status: 200, Body: passDateBody(p.t, r.URL)})
+		case strings.Contains(r.URL, "/movies/"):
+			out = append(out, rawResponse{URL: r.URL, Status: 200, Body: readGzFixture(p.t, "kinoafisha-pass/movie.html.gz")})
+		default:
+			// Страницы площадок в фикстуру не входят: охват проверяется по
+			// расписанию, координаты — отдельная механика со своими тестами.
+			out = append(out, rawResponse{URL: r.URL, Status: 404})
+		}
+	}
+	return out, nil
+}
+
+// deniedNet — сеть, закрытая полосой: ровно тот исход, ради которого ступень и
+// заводилась.
+type deniedNet struct{ calls int }
+
+func (d *deniedNet) fetch(reqs []rawRequest) ([]rawResponse, error) {
+	d.calls++
+	out := make([]rawResponse, 0, len(reqs))
+	for _, r := range reqs {
+		out = append(out, rawResponse{URL: r.URL, Status: 403})
+	}
+	return out, nil
+}
+
+func readGzFixture(t *testing.T, name string) string {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("фикстура %s: %v", name, err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("фикстура %s не распаковывается: %v", name, err)
+	}
+	defer zr.Close()
+	data, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("фикстура %s не читается: %v", name, err)
+	}
+	return string(data)
+}
+
+// passDateBody отдаёт догрузку той даты и того смещения, которые спросили.
+func passDateBody(t *testing.T, addr string) string {
+	t.Helper()
+	var parts struct {
+		Parts []struct {
+			Date string      `json:"date"`
+			Skip json.Number `json:"skip"`
+			HTML string      `json:"html"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal([]byte(readGzFixture(t, "kinoafisha-pass/dates.json.gz")), &parts); err != nil {
+		t.Fatalf("фикстура догрузок не читается: %v", err)
+	}
+	u, err := url.Parse(addr)
+	if err != nil {
+		t.Fatalf("адрес догрузки: %v", err)
+	}
+	q := u.Query()
+	for _, p := range parts.Parts {
+		if p.Date == q.Get("date") && p.Skip.String() == q.Get("skip") {
+			return `{"status":true,"html":` + strconv.Quote(p.HTML) + `}`
+		}
+	}
+	// Даты нет в фикстуре — источник в тот день её и не публиковал.
+	return `{"status":true,"html":""}`
+}
+
+// Главная приёмка ступени: под закрытым доступом слой доходит до конца и не
+// теряет горизонт. Замер 12.08.2026 — 18 площадок против 16, которые давал
+// сетевой путь в лучшем прогоне.
+func TestKinoafishaLayerViaPass(t *testing.T) {
+	net := &deniedNet{}
+	src := &kinoafishaSource{net: net, pass: &passFixtures{t: t}, mode: passAuto}
+
+	from := time.Date(2026, 8, 12, 0, 0, 0, 0, moscowTZ)
+	layer, sessions, err := runKinoafishaLayerVia(src, FilmProfile{Title: "Человек-паук: Новый день"}, nil, from, 28)
+	if err != nil {
+		t.Fatalf("слой упал: %v", err)
+	}
+	if layer.Err != "" {
+		t.Fatalf("слой не отработал: %s", layer.Err)
+	}
+
+	if layer.Venues < 18 {
+		t.Errorf("площадок %d, сетевой путь давал 16 — ступень должна давать 18", layer.Venues)
+	}
+	// Горизонт — то, что схлопывалось первым при любой ошибке пути.
+	days := map[string]bool{}
+	for _, s := range sessions {
+		if len(s.StartsAt) >= 10 {
+			days[s.StartsAt[:10]] = true
+		}
+	}
+	if len(days) < 11 {
+		t.Errorf("дат %d, страница объявляла одиннадцать с лишним — горизонт схлопнулся", len(days))
+	}
+	if layer.Path != "пропуск через мак" {
+		t.Errorf("путь в отчёте %q — по нему не видно, чем взяты данные", layer.Path)
+	}
+}
+
+// Переключение запоминается: иначе каждый из трёх десятков запросов сперва
+// трижды бился бы в закрытый источник.
+func TestKinoafishaSourceSwitchesOnce(t *testing.T) {
+	net := &deniedNet{}
+	pass := &passFixtures{t: t}
+	src := &kinoafishaSource{net: net, pass: pass, mode: passAuto}
+
+	for i := 0; i < 4; i++ {
+		if _, err := src.one(rawRequest{URL: "https://www.kinoafisha.info/russia/msk/movies/8374515/"}); err != nil {
+			t.Fatalf("заход %d: %v", i, err)
+		}
+	}
+	if net.calls != 1 {
+		t.Errorf("в закрытый источник постучались %d раз, ожидался один", net.calls)
+	}
+}
+
+// Режим «никогда» оставляет сегодняшнее поведение: ступень не зовётся, отказ
+// остаётся честным отказом слоя.
+func TestKinoafishaSourceNeverMode(t *testing.T) {
+	net := &deniedNet{}
+	pass := &passFixtures{t: t}
+	src := &kinoafishaSource{net: net, pass: pass, mode: passNever}
+
+	if _, err := src.one(rawRequest{URL: "https://www.kinoafisha.info/x/"}); err != nil {
+		t.Fatalf("заход: %v", err)
+	}
+	if pass.calls != 0 {
+		t.Errorf("ступень позвали в режиме «никогда»: %d заходов", pass.calls)
+	}
+	if src.path() != "сеть" {
+		t.Errorf("путь %q, ожидался сетевой", src.path())
 	}
 }
