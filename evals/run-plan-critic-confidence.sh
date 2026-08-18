@@ -8,9 +8,14 @@
 # закрыт песочницей раннера (Task и Agent в EVAL_DENY_TOOLS), поэтому кейс
 # меряет агента, исполняющего рубрику, а не вызов plan-critic.
 #
-# Фикстуры планов — evals/fixtures/plans/: blocker с правкой без адреса
+# Фикстуры планов — evals/fixtures/critic-plans/: blocker с правкой без адреса
 # (выполнить нельзя), guess с местом, к которому легко придраться рассуждением
 # без улики, clean с одной стилевой шероховатостью.
+#
+# Каталог называется critic-plans, а не plans, намеренно: хук
+# universal-mark-plan-file.sh запоминает файл плана сессии по глобу */plans/*.md,
+# и правка фикстуры через Write подменяла бы им рабочий план — гейт критика начал
+# бы сверять хеш с фикстурой.
 #
 # Usage: run-plan-critic-confidence.sh [model ...]   (default: claude-sonnet-5)
 #        EVAL_RUNS=3 run-plan-critic-confidence.sh … — N прогонов каждого кейса
