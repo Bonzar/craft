@@ -52,6 +52,7 @@ declare -A SCRIPT=(
   [guard-plan-exit-failure]="$HOOKS/universal-guard-plan-exit-failure.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
+  [plan-gate-button]="$HOOKS/universal-plan-gate-button.sh"
   [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
   [stop-relative-link]="$HOOKS/universal-stop-relative-link.sh"
   [detect-incident-arm]="$HOOKS/universal-detect-incident.sh"
