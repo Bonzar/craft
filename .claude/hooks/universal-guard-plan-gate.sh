@@ -1,42 +1,35 @@
 #!/usr/bin/env bash
-# PreToolUse plan-gate: refuse a base/system change unless a plan was approved
-# in the current turn. The lever for the "запись без плана" incident — a change
-# must follow a plan Влад approved in plan-mode, not go straight off a "запиши".
+# PreToolUse plan-gate: рабочие правки — код, система, Craft — по умолчанию
+# закрыты; открывает их ПЕРИМЕТР одобренного плана, а не факт одобрения.
 #
-# Covers TWO surfaces:
-#   - Craft MCP craft_write               — writes to the Craft base;
-#   - Write|Edit|MultiEdit|NotebookEdit   — file edits ANYWHERE. Coverage is
-#     INVERTED: the hook cannot know the session's additional working dirs
-#     (arc-mounts and the like are not in the PreToolUse JSON), so instead of
-#     listing what to gate it gates every path EXCEPT known-ephemeral places
-#     (plan files, tmp/scratchpad, harness service state under ~/.claude).
+# Маркер (universal-plan-gate-approve.sh) — список целей из строк «- где:»
+# одобренного плана: файловые пути и block-ID Craft. Гейт открывает только
+# совпадение с целью; одобрения складываются, реплики Влада периметр не гасят
+# (гасят реплика «закрой гейт» — plan-gate-reset — и смена сессии).
 #
-# State is a single marker file (kept OUT of the repo — ephemeral runtime
-# state):
-#   - set   by universal-plan-gate-approve.sh (PostToolUse on ExitPlanMode =
-#     plan APPROVED; a rejected ExitPlanMode never fires PostToolUse, so a
-#     text "ок" cannot set it)
-#   - clear by universal-plan-gate-reset.sh   (UserPromptSubmit = new turn
-#     needs a fresh plan)
-# CRAFT_AUTONOMOUS=1 bypasses the gate entirely — cron rutinas (гигиена,
-# актуализация, ночная) and headless evals are pre-authorised, no interactive
-# Влад to approve a plan.
+# Поверхности:
+#   - Write|Edit|MultiEdit|NotebookEdit — правки файлов где угодно, кроме
+#     эфемерного (планы, tmp/scratchpad, служебное ~/.claude) и игнорируемого
+#     гитом ВНЕ .claude/ — внутри .claude/ живут игнорируемые, но системные
+#     файлы (settings.local.json, кэш предодобренной зоны), их игнор-лазейка
+#     открывала бы без плана;
+#   - Bash — разбор команды на цели записи: перенаправление, tee, sed/perl -i,
+#     cp/mv, запись из интерпретатора. Команда со смешанными целями проходит
+#     только когда ВСЕ цели в периметре;
+#   - craft_write — каждый UUID команды обязан быть в периметре; отдельно и
+#     раньше периметра — предодобренная зона (exempt-scope, напр. «Продукты»).
 #
-# One more way past the gate WITHOUT a plan: a craft_write whose every target
-# block-ID lies inside a pre-authorised «direct-edit» page — the exempt scope
-# cached by craft-cache-gate-exempt-scope.sh (e.g. «Продукты»). File edits have
-# no such scope exemption.
+# CRAFT_AUTONOMOUS=1 обходит гейт целиком — рутины и headless-евалы
+# предавторизованы, интерактивного Влада там нет.
 #
-# THIRD surface — Bash writes. Разбирается строка команды: перенаправление, tee,
-# правка на месте (sed/perl -i), запись из интерпретатора, а также cp и mv — подмена
-# файла копированием равносильна правке. Цель отклоняется, только если она НЕ
-# эфемерная и НЕ игнорируется гитом: игнор и есть различитель сборки — вывод сборки,
-# покрытие и зависимости лежат в игнорируемых путях, исходник нет.
+# Защита от протечки привязана к источнику пути маркера: путь, выведенный из
+# ПУСТОГО session-id (общий default), не читается и не пишется; путь из
+# env-переопределения используется всегда — тесты герметичны через него.
 #
-# Непокрыто и названо честно: неопознанная конструкция записи; пакетные менеджеры и
-# операции гита над рабочим деревом (они пишут своей логикой, не перенаправлением);
-# перенаправление в закавыченную цель — кавычки вычёркиваются, чтобы «больше» в
-# сравнении не считалось записью.
+# Непокрыто и названо честно: неопознанная конструкция записи; пакетные
+# менеджеры и операции гита над рабочим деревом (пишут своей логикой, не
+# перенаправлением); перенаправление в закавыченную цель — кавычки
+# вычёркиваются, чтобы «больше» в сравнении не считалось записью.
 #
 # Fail open on anything unexpected: a broken gate must never wedge legit work.
 set -u
@@ -72,13 +65,38 @@ else
   esac
 fi
 
-marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
-[[ -f "$marker" ]] && exit 0
+sid="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
+  marker="$CRAFT_PLAN_GATE_MARKER"
+elif [[ -n "$sid" ]]; then
+  marker="/tmp/craft-plan-gate.${sid}.approved"
+else
+  marker=""
+fi
+scopelist=""
+[[ -n "$marker" && -s "$marker" ]] && scopelist="$(cat "$marker" 2>/dev/null)"
+
+# in_scope <цель> — цель входит в периметр: точное имя, вложенность в названный
+# каталог, либо сам идентификатор строкой (Craft-UUID).
+in_scope() {
+  local t="$1" e
+  [[ -n "$scopelist" ]] || return 1
+  while IFS= read -r e; do
+    [[ -z "$e" ]] && continue
+    [[ "$t" == "$e" ]] && return 0
+    [[ "$t" == "${e%/}"/* ]] && return 0
+  done <<<"$scopelist"
+  return 1
+}
 
 deny() {
   jq -cn --arg r "$1" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
+}
+
+deny_scope() {
+  deny "Заблокировано план-гейтом: цель ($1) не входит в одобренный план. Пути дальше: дельта плана с этой целью, кнопка разрешения, режим acceptEdits. Автономному прогону — CRAFT_AUTONOMOUS=1."
 }
 
 # is_ephemeral <path> — путь, правка которого системным изменением не является.
@@ -106,13 +124,31 @@ is_ephemeral() {
   return 1
 }
 
+# git_ephemeral <path> — игнорируемое гитом эфемерно (сборка, логи) для ЛЮБОГО
+# инструмента записи, кроме путей внутри .claude/: там игнор не оправдание.
+git_ephemeral() {
+  local fp="$1"
+  case "$fp" in
+    .claude/*|*/.claude/*) return 1 ;;
+  esac
+  git check-ignore -q -- "$fp" 2>/dev/null
+}
+
 # --- File edits (Write/Edit/MultiEdit/NotebookEdit) --------------------------
 if [[ "$is_file_edit" -eq 1 ]]; then
   fp="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' <<<"$input" 2>/dev/null)"
   [[ -z "$fp" ]] && exit 0
   is_ephemeral "$fp" && exit 0
+  git_ephemeral "$fp" && exit 0
 
-  deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана в этом ходе. Правки кода и системы в любой рабочей директории идут через тот же план-гейт, что и запись в Craft: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки. Автономному прогону — CRAFT_AUTONOMOUS=1."
+  in_scope "$fp" && exit 0
+  # Абсолютный путь к цели внутри текущего репо матчится и по репо-относительной
+  # записи плана: строки «- где:» пишутся от корня репозитория.
+  rel="${fp#"$PWD"/}"
+  [[ "$rel" != "$fp" ]] && in_scope "$rel" && exit 0
+
+  [[ -n "$scopelist" ]] && deny_scope "$fp"
+  deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана. Правки кода и системы идут через план-гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
 # --- Bash writes -------------------------------------------------------------
@@ -165,6 +201,9 @@ if [[ "$is_bash" -eq 1 ]]; then
   )"
   [[ -z "${targets//[[:space:]]/}" ]] && exit 0
 
+  # Команда проходит, только когда КАЖДАЯ неэфемерная цель в периметре: смешанная
+  # команда (одна цель из плана, другая нет) не проезжает по половине разрешения.
+  offender=""
   while IFS= read -r t; do
     [[ -z "${t//[[:space:]]/}" ]] && continue
     # Дескрипторы и устройства целями записи в дерево не являются.
@@ -173,11 +212,16 @@ if [[ "$is_bash" -eq 1 ]]; then
     esac
     t="${t%\"}"; t="${t#\"}"; t="${t%\'}"; t="${t#\'}"
     is_ephemeral "$t" && continue
-    # Игнорируемое гитом — вывод сборки, покрытие, зависимости: не системная правка.
-    git check-ignore -q -- "$t" 2>/dev/null && continue
-    deny "Заблокировано план-гейтом: запись в файл ($t) через Bash без одобренного плана в этом ходе. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
+    git_ephemeral "$t" && continue
+    in_scope "$t" && continue
+    rel="${t#"$PWD"/}"
+    [[ "$rel" != "$t" ]] && in_scope "$rel" && continue
+    offender="$t"; break
   done <<<"$targets"
-  exit 0
+  [[ -z "$offender" ]] && exit 0
+
+  [[ -n "$scopelist" ]] && deny_scope "$offender"
+  deny "Заблокировано план-гейтом: запись в файл ($offender) через Bash без одобренного плана. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
 # --- Craft writes ------------------------------------------------------------
@@ -192,17 +236,27 @@ fi
 # cloud, local worktrees, arc-mounts and scheduled sessions all agree.
 self="$(realpath "$0" 2>/dev/null || echo "$0")"
 scope="${CRAFT_GATE_EXEMPT_SCOPE:-$(cd "$(dirname "$self")/../.." && pwd)/.claude/craft-gate-exempt-scope.txt}"
-if [[ -s "$scope" ]]; then
-  cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)"
-  UUID_RE='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
-  ids="$(grep -oE "$UUID_RE" <<<"$cmd" | tr 'a-f' 'A-F' | sort -u)"
-  if [[ -n "$ids" ]]; then
-    all_in=1
-    while IFS= read -r id; do
-      grep -qxF "$id" "$scope" || { all_in=0; break; }
-    done <<<"$ids"
-    [[ "$all_in" -eq 1 ]] && exit 0
-  fi
+cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)"
+UUID_RE='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
+ids="$(grep -oE "$UUID_RE" <<<"$cmd" | sort -u)"
+if [[ -s "$scope" && -n "$ids" ]]; then
+  all_in=1
+  while IFS= read -r id; do
+    grep -qxF "$(tr 'a-f' 'A-F' <<<"$id")" "$scope" || { all_in=0; break; }
+  done <<<"$ids"
+  [[ "$all_in" -eq 1 ]] && exit 0
 fi
 
-deny "Заблокировано план-гейтом: запись в Craft без одобренного плана в этом ходе. Сначала покажи план и получи ок Влада (план-мод → ExitPlanMode), потом пиши. Запись целиком внутри предодобренной зоны (напр. «Продукты») проходит без плана. Автономному прогону (рутина, евал) — CRAFT_AUTONOMOUS=1."
+# Периметр плана: каждый UUID команды обязан быть в списке целей. Команда без
+# единого UUID адресуемой цели не несёт — остаётся deny, как раньше.
+if [[ -n "$scopelist" && -n "$ids" ]]; then
+  all_in=1
+  while IFS= read -r id; do
+    lid="$(tr 'A-F' 'a-f' <<<"$id")"
+    in_scope "$lid" || in_scope "$id" || { all_in=0; break; }
+  done <<<"$ids"
+  [[ "$all_in" -eq 1 ]] && exit 0
+  deny_scope "craft: $(head -c 120 <<<"$ids" | tr '\n' ' ')"
+fi
+
+deny "Заблокировано план-гейтом: запись в Craft без одобренного плана. Сначала покажи план и получи ок Влада (план-мод → ExitPlanMode), потом пиши цели плана. Запись целиком внутри предодобренной зоны (напр. «Продукты») проходит без плана. Автономному прогону (рутина, евал) — CRAFT_AUTONOMOUS=1."
