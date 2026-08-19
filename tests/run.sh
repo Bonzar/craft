@@ -118,6 +118,9 @@ for f in "${files[@]}"; do
     criticpend="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-pending-test.XXXXXX")"
     planshown="$(mktemp -u "${TMPDIR:-/tmp}/plan-shown-test.XXXXXX")"
     criticruns="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-runs-test.XXXXXX")"
+    # Классификатор гейта в тестах ВСЕГДА мок (дефолтный ответ «СООТВЕТСТВУЕТ»),
+    # иначе кейс с периметром сделал бы сетевой вызов настоящей модели.
+    buttonmark="$(mktemp -u "${TMPDIR:-/tmp}/plan-gate-button-test.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
@@ -125,7 +128,9 @@ for f in "${files[@]}"; do
              "CRAFT_SERVICE_TURN_MARKER=$serviceturn"
              "CRAFT_PLAN_CRITIC_PENDING=$criticpend"
              "CRAFT_PLAN_SHOWN_MARKER=$planshown"
-             "CRAFT_PLAN_CRITIC_RUNS=$criticruns")
+             "CRAFT_PLAN_CRITIC_RUNS=$criticruns"
+             "PLAN_CLASSIFIER_CMD=$CASES_DIR/fixtures/mock-classifier.sh"
+             "PLAN_GATE_BUTTON_MARKER=$buttonmark")
     # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
     # из env, создаётся до прогона (взводом в жизни занимается другой хук).
     [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"

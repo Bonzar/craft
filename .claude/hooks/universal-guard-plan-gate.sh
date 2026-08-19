@@ -96,7 +96,48 @@ deny() {
 }
 
 deny_scope() {
-  deny "Заблокировано план-гейтом: цель ($1) не входит в одобренный план. Пути дальше: дельта плана с этой целью, кнопка разрешения, режим acceptEdits. Автономному прогону — CRAFT_AUTONOMOUS=1."
+  deny "Заблокировано план-гейтом: цель ($1) не входит в одобренный план и не времянка. Пути дальше: дельта плана с этой целью, кнопка разрешения, режим acceptEdits. Автономному прогону — CRAFT_AUTONOMOUS=1."
+}
+
+# --- Классификатор содержания (tools/plan-scope-classifier.sh) ---------------
+# Путь-матч по периметру — грубый фильтр; точность даёт LLM-сверка содержания
+# правки с планом. Вне периметра классификатор отвечает на вопрос «очевидная
+# времянка?» — там он единственная защита, и его недоступность закрывает.
+# В периметре недоступность деградирует к путь-матчу — мягко, но ВИДИМО:
+# первый отказ за сессию оставляет файл-след рядом с маркером и строку в stderr,
+# исправный и мёртвый классификатор обязаны различаться по признаку.
+self0="$(realpath "$0" 2>/dev/null || echo "$0")"
+classifier="${PLAN_CLASSIFIER_BIN:-$(cd "$(dirname "$self0")/../.." && pwd)/tools/plan-scope-classifier.sh}"
+
+classifier_degraded() {
+  if [[ -n "$marker" && ! -e "${marker}.classifier-degraded" ]]; then
+    : > "${marker}.classifier-degraded" 2>/dev/null || true
+    echo "[plan-gate] классификатор недоступен — периметр живёт путь-матчем" >&2
+  fi
+}
+
+# classify_change <описание-на-stdin> → решение по правке в периметре
+scope_content_check() {
+  local desc="$1" plan verdict
+  [[ -x "$classifier" || -r "$classifier" ]] || { classifier_degraded; return 0; }
+  plan="${CRAFT_PLAN_FILE:-$(cat "${CRAFT_PLAN_FILE_MARKER:-/tmp/plan-file.${sid:-default}.path}" 2>/dev/null)}"
+  [[ -n "$plan" && -r "$plan" ]] || { classifier_degraded; return 0; }
+  verdict="$(printf '%s' "$desc" | bash "$classifier" match "$plan" 2>/dev/null)"
+  case "$verdict" in
+    NOMATCH:*) deny "Заблокировано план-гейтом: правка цели из периметра расходится с одобренным планом — ${verdict#NOMATCH:}. Пути дальше: дельта плана, кнопка разрешения, режим acceptEdits." ;;
+    MATCH) return 0 ;;
+    *) classifier_degraded; return 0 ;;
+  esac
+}
+
+# throwaway_check <описание> <цель> → пропуск времянки или deny
+throwaway_check() {
+  local desc="$1" target="$2" verdict
+  if [[ -x "$classifier" || -r "$classifier" ]]; then
+    verdict="$(printf '%s' "$desc" | bash "$classifier" throwaway 2>/dev/null)"
+    [[ "$verdict" == "THROWAWAY" ]] && return 0
+  fi
+  deny_scope "$target"
 }
 
 # is_ephemeral <path> — путь, правка которого системным изменением не является.
@@ -141,13 +182,20 @@ if [[ "$is_file_edit" -eq 1 ]]; then
   is_ephemeral "$fp" && exit 0
   git_ephemeral "$fp" && exit 0
 
-  in_scope "$fp" && exit 0
+  desc="инструмент: $tool
+файл: $fp
+новый текст:
+$(jq -r '.tool_input.new_string // .tool_input.content // "" ' <<<"$input" 2>/dev/null | head -c 4000)"
+
   # Абсолютный путь к цели внутри текущего репо матчится и по репо-относительной
   # записи плана: строки «- где:» пишутся от корня репозитория.
   rel="${fp#"$PWD"/}"
-  [[ "$rel" != "$fp" ]] && in_scope "$rel" && exit 0
+  if in_scope "$fp" || { [[ "$rel" != "$fp" ]] && in_scope "$rel"; }; then
+    scope_content_check "$desc"
+    exit 0
+  fi
 
-  [[ -n "$scopelist" ]] && deny_scope "$fp"
+  [[ -n "$scopelist" ]] && { throwaway_check "$desc" "$fp"; exit 0; }
   deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана. Правки кода и системы идут через план-гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
@@ -203,7 +251,7 @@ if [[ "$is_bash" -eq 1 ]]; then
 
   # Команда проходит, только когда КАЖДАЯ неэфемерная цель в периметре: смешанная
   # команда (одна цель из плана, другая нет) не проезжает по половине разрешения.
-  offender=""
+  offender=""; scoped=0
   while IFS= read -r t; do
     [[ -z "${t//[[:space:]]/}" ]] && continue
     # Дескрипторы и устройства целями записи в дерево не являются.
@@ -213,14 +261,22 @@ if [[ "$is_bash" -eq 1 ]]; then
     t="${t%\"}"; t="${t#\"}"; t="${t%\'}"; t="${t#\'}"
     is_ephemeral "$t" && continue
     git_ephemeral "$t" && continue
-    in_scope "$t" && continue
+    in_scope "$t" && { scoped=1; continue; }
     rel="${t#"$PWD"/}"
-    [[ "$rel" != "$t" ]] && in_scope "$rel" && continue
+    [[ "$rel" != "$t" ]] && in_scope "$rel" && { scoped=1; continue; }
     offender="$t"; break
   done <<<"$targets"
-  [[ -z "$offender" ]] && exit 0
+  bdesc="инструмент: Bash
+команда:
+$(head -c 4000 <<<"$cmd")"
+  if [[ -z "$offender" ]]; then
+    # Сверка содержания одним вызовом на команду — только когда хоть одна цель
+    # прошла именно по периметру: чисто эфемерная запись классификатора не стоит.
+    [[ "$scoped" -eq 1 && -n "$scopelist" ]] && scope_content_check "$bdesc"
+    exit 0
+  fi
 
-  [[ -n "$scopelist" ]] && deny_scope "$offender"
+  [[ -n "$scopelist" ]] && { throwaway_check "$bdesc" "$offender"; exit 0; }
   deny "Заблокировано план-гейтом: запись в файл ($offender) через Bash без одобренного плана. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
@@ -255,7 +311,12 @@ if [[ -n "$scopelist" && -n "$ids" ]]; then
     lid="$(tr 'A-F' 'a-f' <<<"$id")"
     in_scope "$lid" || in_scope "$id" || { all_in=0; break; }
   done <<<"$ids"
-  [[ "$all_in" -eq 1 ]] && exit 0
+  if [[ "$all_in" -eq 1 ]]; then
+    scope_content_check "инструмент: craft_write
+команда:
+$(head -c 4000 <<<"$cmd")"
+    exit 0
+  fi
   deny_scope "craft: $(head -c 120 <<<"$ids" | tr '\n' ' ')"
 fi
 
