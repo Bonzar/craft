@@ -46,6 +46,15 @@ fi
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 
 input="$(cat)"
+# Явный клик Влада старше гейта: режимы acceptEdits и bypassPermissions он
+# включает сам штатным переключателем — белый список, ровно два значения.
+# auto в списке НЕТ намеренно (решение Влада): авто-режим — доверие харнесса,
+# а не человека; все прочие значения и отсутствие поля оставляют гейт работать.
+pm="$(jq -r '.permission_mode // ""' <<<"$input" 2>/dev/null)"
+case "$pm" in acceptEdits|bypassPermissions) exit 0 ;; esac
+# Отладочный след последнего входа (эфемерный): по нему проверяются факты о
+# составе hook-входа (напр. поле permission_mode) без правки харнесса.
+printf '%s' "$input" > "/tmp/plan-gate-last-input.${CLAUDE_CODE_SESSION_ID:-default}.json" 2>/dev/null || true
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
 
 is_craft_write=0
@@ -130,6 +139,23 @@ scope_content_check() {
   esac
 }
 
+# button_spend — одноразовая кнопка Влада «Разрешаю без плана (одну правку)»
+# (universal-plan-gate-button.sh). Тратится ровно там, где иначе был бы deny:
+# эфемерная правка и правка, прошедшая по периметру, маркер не трогают — иначе
+# тап сгорал бы на действии, которое и так было свободно. Снятие атомарно
+# переименованием: из параллельных вызовов одного хода по одному тапу проходит
+# ровно один. Классификатор для кнопочной правки не зовётся — тап старше
+# вердикта модели.
+button_spend() {
+  local bm=""
+  if [[ -n "${PLAN_GATE_BUTTON_MARKER:-}" ]]; then bm="$PLAN_GATE_BUTTON_MARKER"
+  elif [[ -n "$sid" ]]; then bm="/tmp/plan-gate-button.${sid}.one"; fi
+  [[ -n "$bm" && -e "$bm" ]] || return 1
+  mv "$bm" "${bm}.spent.$$" 2>/dev/null || return 1
+  rm -f "${bm}.spent.$$" 2>/dev/null
+  return 0
+}
+
 # throwaway_check <описание> <цель> → пропуск времянки или deny
 throwaway_check() {
   local desc="$1" target="$2" verdict
@@ -195,6 +221,7 @@ $(jq -r '.tool_input.new_string // .tool_input.content // "" ' <<<"$input" 2>/de
     exit 0
   fi
 
+  button_spend && exit 0
   [[ -n "$scopelist" ]] && { throwaway_check "$desc" "$fp"; exit 0; }
   deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана. Правки кода и системы идут через план-гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
@@ -276,6 +303,7 @@ $(head -c 4000 <<<"$cmd")"
     exit 0
   fi
 
+  button_spend && exit 0
   [[ -n "$scopelist" ]] && { throwaway_check "$bdesc" "$offender"; exit 0; }
   deny "Заблокировано план-гейтом: запись в файл ($offender) через Bash без одобренного плана. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
@@ -317,7 +345,9 @@ if [[ -n "$scopelist" && -n "$ids" ]]; then
 $(head -c 4000 <<<"$cmd")"
     exit 0
   fi
+  button_spend && exit 0
   deny_scope "craft: $(head -c 120 <<<"$ids" | tr '\n' ' ')"
 fi
 
+button_spend && exit 0
 deny "Заблокировано план-гейтом: запись в Craft без одобренного плана. Сначала покажи план и получи ок Влада (план-мод → ExitPlanMode), потом пиши цели плана. Запись целиком внутри предодобренной зоны (напр. «Продукты») проходит без плана. Автономному прогону (рутина, евал) — CRAFT_AUTONOMOUS=1."
