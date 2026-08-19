@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# UserPromptSubmit: a new message from Влад starts a new turn — the previous plan
-# approval no longer covers it, so clear the plan-gate marker. The next craft_write
-# must be preceded by a fresh approved plan (guard-plan-gate.sh). Never blocks the
-# message (no stdout, exit 0).
+# UserPromptSubmit: обычная реплика Влада ПЕРИМЕТР ГЕЙТА НЕ ГАСИТ — маркер
+# одобрения хранит список целей плана и живёт до реплики, начинающейся фразой
+# «закрой гейт», либо до смены сессии (файл в /tmp с id). Хук чистит только
+# пометки хода (служебный ход, показ плана, ожидания критика) и никогда не
+# блокирует сообщение (no stdout, exit 0).
 #
 # СЛУЖЕБНОЕ СОБЫТИЕ ходом не считается: сброс по нему обнулял одобрение посреди
 # исполнения. Якоря и правила их пополнения — в service-anchors.txt рядом.
@@ -37,6 +38,16 @@ done < "$ANCHORS" 2>/dev/null
 # в этом разговоре не было. Цена — такой критик отметки не поставит, нужен новый прогон.
 rm -f "$serviceturn" "$planshown" "$criticpend" 2>/dev/null || true
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
-marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
-rm -f "$marker" 2>/dev/null || true
+# Периметр гасит только явная фраза: сверка префиксом сообщения, как у якорей.
+if [[ "$prompt" == "закрой гейт"* ]]; then
+  sid="${CLAUDE_CODE_SESSION_ID:-}"
+  if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
+    marker="$CRAFT_PLAN_GATE_MARKER"
+  elif [[ -n "$sid" ]]; then
+    marker="/tmp/craft-plan-gate.${sid}.approved"
+  else
+    marker=""
+  fi
+  [[ -n "$marker" ]] && rm -f "$marker" 2>/dev/null || true
+fi
 exit 0
