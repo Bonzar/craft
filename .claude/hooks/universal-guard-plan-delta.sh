@@ -84,6 +84,8 @@ if [[ "$event" == "PostToolUse" ]]; then
   # работы иначе блокировал бы новый план навсегда. Цена — повтор через план обратно
   # не ловится; ложный отказ дороже пропущенного повтора.
   cut -f1 <<<"$now" > "$store" 2>/dev/null || true
+  # Рядом с хешами — ТЕКСТ одобренного плана: вход сравнения по смыслу.
+  cp "$plan" "${store}.snapshot" 2>/dev/null || true
   exit 0
 fi
 
@@ -99,8 +101,26 @@ while IFS=$'\t' read -r h t; do
   grep -qxF -- "$h" <<<"$approved" && { rep=$((rep + 1)); names+="«${t}» "; }
 done <<<"$now"
 
-[[ "$rep" -eq 0 ]] && exit 0          # чистая дельта
 [[ "$rep" -eq "$total" ]] && exit 0   # перепоказ того же плана целиком
+
+# Хеш ловит только ДОСЛОВНЫЙ повтор: переформулированный одобренный юнит даёт
+# rep=0 и раньше проезжал полным перепоказом. Сравнение по смыслу закрывает
+# это классификатором (tools/plan-scope-classifier.sh, режим delta); его
+# недоступность возвращает к хеш-поведению — ложный отказ дороже пропуска.
+if [[ "$rep" -eq 0 ]]; then
+  snap="${store}.snapshot"
+  self1="$(realpath "$0" 2>/dev/null || echo "$0")"
+  classifier="${PLAN_CLASSIFIER_BIN:-$(cd "$(dirname "$self1")/../.." && pwd)/tools/plan-scope-classifier.sh}"
+  if [[ -r "$snap" && -r "$classifier" ]]; then
+    verdict="$(: | bash "$classifier" delta "$snap" "$plan" 2>/dev/null)"
+    if [[ "$verdict" == REPEATS:* ]]; then
+      jq -cn --arg r "План повторяет уже одобренные юниты по смыслу:${verdict#REPEATS:}. Одобренное повторно не показывается — оставь только изменившееся с прошлого одобрения, а изменённый юнит пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off." \
+        '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+      exit 0
+    fi
+  fi
+  exit 0                              # чистая дельта (по смыслу или по фолбеку)
+fi
 
 jq -cn --arg r "План повторяет уже одобренные юниты: ${names}. Одобренное повторно не показывается — оставь только изменившееся с прошлого одобрения, а изменённый юнит пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off." \
   '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
