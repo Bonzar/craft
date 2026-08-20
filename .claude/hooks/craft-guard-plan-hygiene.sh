@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# PreToolUse guard on plan writes (Write/Edit to */plans/*.md). Rule 3 runs
-# first and applies to EVERY plan; rules 0–2 police ONLY Craft «План правок» files —
+# PreToolUse guard on plan writes (Write/Edit to */plans/*.md). Rules 3 and 4 run
+# first and apply to EVERY plan; rules 0–2 police ONLY Craft «План правок» files —
 # detected by their structure (a «где:» locator line or a Craft link/ref) —
 # and pass plans про КОД through untouched, since those legitimately name
 # files, commands and IDs.
 #
-# Enforces four of Влад's plan rules that the built-in Plan-mode actively pushes
+# Enforces five of Влад's plan rules that the built-in Plan-mode actively pushes
 # against (it templates a verification/order section and doesn't produce links):
 #   0. NO fence longer than three backticks — a nested code block reads worse
 #      than a quote, for humans and for gates alike.
@@ -15,6 +15,10 @@
 #   2. Block references are clickable docs.craft.do links, not bare UUIDs.
 #   3. NO hard-wrapped paragraphs — Влад reads plans on a phone, where every
 #      wrapped line renders as its own paragraph and the sentence breaks apart.
+#   4. NO relative file paths — inside a plan file the app resolves a path
+#      against the PLANS folder, not the session root, so a relative path opens
+#      nothing. Applies to markdown links and to bare mentions alike: the app
+#      makes a path in plain text clickable too.
 #
 # Heuristic — narrow patterns to limit false positives; on a hit it denies the
 # write with a reason so the plan gets rewritten. Fail quiet on anything odd.
@@ -116,6 +120,51 @@ if (( ${#wrap_probe} == 5 )); then
     jq -cn --arg r "$wrap_reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
     exit 0
   fi
+fi
+
+# 4. Относительный путь к файлу. Правило действует на ЛЮБОЙ план — улика пришла как раз
+# из плана про код, — поэтому проверка тоже стоит ДО детекта Craft-плана. Внутри файла
+# плана база относительного пути — папка планов, а не корень сессии, так что ссылка ведёт
+# в никуда; кликается и голое упоминание пути текстом, поэтому проверяются оба вида.
+#
+# Дефектом считается только путь, который РЕЗОЛВИТСЯ в живой ФАЙЛ от корня сессии: значит
+# автор имел в виду реальный файл и записал его относительно. Неразрешимый путь и имя
+# файла без косой черты не трогаются — это прозаическое упоминание, а не адрес. Каталог —
+# тоже не адрес: хлебная крошка «где: репозиторий › каталог › …» называет место, а не файл,
+# и по -e вместо -f она ловилась как дефект.
+# Цитаты и заборы кода снимаются: там путь — содержимое, а не адрес.
+plan_root="$(jq -r '.cwd // ""' <<<"$input" 2>/dev/null)" || plan_root=""
+[[ -n "$plan_root" ]] || plan_root="${CLAUDE_PROJECT_DIR:-$PWD}"
+pathbody="$(strip_fenced drop <<<"$content" | grep -v '^[[:space:]]*>')"
+# Адрес ссылки и голый текст разбираются порознь. Текст ссылки в квадратных скобках —
+# подпись, а не адрес: у `[tests/run.sh](/абсолютный/путь)` ссылка исправна, и ловить в
+# ней подпись нельзя. Поэтому сперва снимаются адреса, потом ссылки удаляются целиком, и
+# только остаток читается как проза.
+plan_cands="$(grep -oE '\]\([^)]*\)' <<<"$pathbody" | sed -E 's/^\]\(//; s/\)$//; s/^<//; s/>$//')"
+plan_rest="$(sed -E 's/\[[^]]*\]\([^)]*\)//g' <<<"$pathbody")"
+# Из остатка убираются адреса, у которых относительной части быть не может: URL со схемой
+# и абсолютные пути. Иначе хвост URL и середина абсолютного пути читаются как относительный.
+plan_rest="$(sed -E 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^ )]*##g; s#(^|[[:space:]([])[~/][^ )]*#\1#g' <<<"$plan_rest")"
+plan_cands+=$'\n'"$(grep -oE '(^|[^A-Za-z0-9_./-])[A-Za-z0-9_@.-]+(/[A-Za-z0-9_@.+-]+)+' <<<"$plan_rest" \
+                    | sed -E 's/^[^A-Za-z0-9_.-]+//')"
+
+rel_hits=()
+while IFS= read -r cand; do
+  [[ -z "${cand//[[:space:]]/}" ]] && continue
+  cand="${cand%%#*}"
+  cand="$(sed -E 's/:[0-9]+(-[0-9]+)?$//' <<<"$cand")"
+  [[ -z "$cand" || "$cand" == /* || "$cand" == \~* ]] && continue
+  [[ "$cand" =~ ^[a-zA-Z][a-zA-Z0-9+.-]*:// ]] && continue
+  [[ -f "$plan_root/$cand" ]] || continue
+  rel_hits+=("$cand")
+done < <(sort -u <<<"$plan_cands")
+
+if [[ ${#rel_hits[@]} -gt 0 ]]; then
+  # Свой отказ, не общий: общая причина требует Craft-ссылок и на код-плане соврала бы.
+  rel_list="$(printf '%s, ' "${rel_hits[@]}")"
+  path_reason="В плане относительные пути к файлам: ${rel_list%, } — у Влада они не откроются. Внутри файла плана путь резолвится от папки планов, а не от корня сессии, и кликается даже голое упоминание в тексте. Дай абсолютный путь от корня диска."
+  jq -cn --arg r "$path_reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
 fi
 
 # Only Craft-plans («План правок») are policed by rules 0–2. A plan про КОД legitimately

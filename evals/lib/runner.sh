@@ -45,14 +45,21 @@ eval__slug() {
 # Прогон идёт ИЗ РЕПО: проектные SessionStart-хуки инжектят роутер и правила —
 # в песочнице агент не получил бы проверяемого правила, и кейс падал бы по
 # причине, не связанной с поведением.
+# EVAL_ADD_DIR — второй рабочий корень сессии прогона. Нужен наборам, чьё правило
+# доставляется только код-сессиям: инжект правил кода в craft-репо включается
+# ровно этим признаком, и без него кейс мерил бы память модели, а не соблюдение.
+# Пустая переменная — обычный одиночный корень, как у остальных наборов.
 eval__once() {
   local prompt="$1" model="$2" tools="$3" turns="$4" out="$5"
+  local adddir=()
+  [[ -n "${EVAL_ADD_DIR:-}" ]] && adddir=(--add-dir "$EVAL_ADD_DIR")
   # env -u: свежая изолированная сессия на каждый прогон, без общего warm-spare
   # и накопленного состояния хуков.
   # < /dev/null: иначе CLI пишет в stdout предупреждение про stdin.
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_PID \
       -u CLAUDE_CODE_REMOTE_SESSION_ID -u CLAUDE_CODE_WORKER_EPOCH \
     timeout "$EVAL_TIMEOUT" claude -p "$prompt" --model "$model" \
+      "${adddir[@]+"${adddir[@]}"}" \
       --allowedTools "$tools" --disallowedTools $EVAL_DENY_TOOLS --max-turns "$turns" \
       --output-format stream-json --verbose < /dev/null > "$out" 2>/dev/null
   return $?
