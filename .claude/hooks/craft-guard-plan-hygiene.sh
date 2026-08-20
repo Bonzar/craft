@@ -120,12 +120,17 @@ if (( ${#wrap_probe} == 5 )); then
   fi
 fi
 
-# Only Craft-plans («План правок») are policed by rules 0–2. A plan про КОД legitimately
+# Only Craft-plans («План правок») are policed by rules 0–2 and 4. A plan про КОД legitimately
 # names files, commands and flags, so the mechanics/command/ID checks below must not
 # touch it. Detect a Craft-plan by its structural signals — the «где:» locator
-# line every entity carries, or a Craft link/ref — and pass anything else (a code
-# or other plan) straight through.
-grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:' <<<"$content" || exit 0
+# line every entity carries, a Craft link/ref, or a сущностный заголовок вида
+# «## [тип · операция]» — and pass anything else (a code or other plan) straight through.
+#
+# Заголовок сущности в списке сигналов обязателен: без него план, где адрес забыт у ВСЕХ
+# сущностей разом, не опознавался Craft-планом и проезжал мимо правила 4 — то есть мимо
+# ровно того случая, ради которого правило заведено. Код-планы такой заголовок не носят:
+# у них секции «Контекст», «Шаги», «Проверка».
+grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:|^[[:space:]]*#+[[:space:]]*\[' <<<"$content" || exit 0
 
 # Dictated verbatim text in a «План правок» sits in a QUOTE block, and code examples in
 # ``` or ~~~ fences; both may legitimately contain command tokens, IDs, even a «Проверка»
