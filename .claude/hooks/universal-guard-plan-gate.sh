@@ -1,42 +1,37 @@
 #!/usr/bin/env bash
-# PreToolUse plan-gate: refuse a base/system change unless a plan was approved
-# in the current turn. The lever for the "запись без плана" incident — a change
-# must follow a plan Влад approved in plan-mode, not go straight off a "запиши".
+# PreToolUse plan-gate: рабочие правки — код, система, Craft — по умолчанию
+# закрыты; открывает их ПЕРИМЕТР одобренного плана, а не факт одобрения.
 #
-# Covers TWO surfaces:
-#   - Craft MCP craft_write               — writes to the Craft base;
-#   - Write|Edit|MultiEdit|NotebookEdit   — file edits ANYWHERE. Coverage is
-#     INVERTED: the hook cannot know the session's additional working dirs
-#     (arc-mounts and the like are not in the PreToolUse JSON), so instead of
-#     listing what to gate it gates every path EXCEPT known-ephemeral places
-#     (plan files, tmp/scratchpad, harness service state under ~/.claude).
+# Маркер (universal-plan-gate-approve.sh) — список целей одобренного: строки
+# «- где:» одобренных планов И семантические разрешения (строки «button:цель»,
+# дописывает permission_grant по вердикту классификатора над окном разрешений —
+# парами «вопрос + ответ» и репликами-указаниями Влада). Гейт открывает только
+# совпадение с целью; одобрения складываются, гасит их смена сессии — отзыв по
+# просьбе Влада выполняется как обычная работа, магической фразы нет.
 #
-# State is a single marker file (kept OUT of the repo — ephemeral runtime
-# state):
-#   - set   by universal-plan-gate-approve.sh (PostToolUse on ExitPlanMode =
-#     plan APPROVED; a rejected ExitPlanMode never fires PostToolUse, so a
-#     text "ок" cannot set it)
-#   - clear by universal-plan-gate-reset.sh   (UserPromptSubmit = new turn
-#     needs a fresh plan)
-# CRAFT_AUTONOMOUS=1 bypasses the gate entirely — cron rutinas (гигиена,
-# актуализация, ночная) and headless evals are pre-authorised, no interactive
-# Влад to approve a plan.
+# Поверхности:
+#   - Write|Edit|MultiEdit|NotebookEdit — правки файлов где угодно, кроме
+#     эфемерного (планы, tmp/scratchpad, служебное ~/.claude) и игнорируемого
+#     гитом ВНЕ .claude/ — внутри .claude/ живут игнорируемые, но системные
+#     файлы (settings.local.json, кэш предодобренной зоны), их игнор-лазейка
+#     открывала бы без плана;
+#   - Bash — разбор команды на цели записи: перенаправление, tee, sed/perl -i,
+#     cp/mv, запись из интерпретатора. Команда со смешанными целями проходит
+#     только когда ВСЕ цели в периметре;
+#   - craft_write — каждый UUID команды обязан быть в периметре; отдельно и
+#     раньше периметра — предодобренная зона (exempt-scope, напр. «Продукты»).
 #
-# One more way past the gate WITHOUT a plan: a craft_write whose every target
-# block-ID lies inside a pre-authorised «direct-edit» page — the exempt scope
-# cached by craft-cache-gate-exempt-scope.sh (e.g. «Продукты»). File edits have
-# no such scope exemption.
+# CRAFT_AUTONOMOUS=1 обходит гейт целиком — рутины и headless-евалы
+# предавторизованы, интерактивного Влада там нет.
 #
-# THIRD surface — Bash writes. Разбирается строка команды: перенаправление, tee,
-# правка на месте (sed/perl -i), запись из интерпретатора, а также cp и mv — подмена
-# файла копированием равносильна правке. Цель отклоняется, только если она НЕ
-# эфемерная и НЕ игнорируется гитом: игнор и есть различитель сборки — вывод сборки,
-# покрытие и зависимости лежат в игнорируемых путях, исходник нет.
+# Защита от протечки привязана к источнику пути маркера: путь, выведенный из
+# ПУСТОГО session-id (общий default), не читается и не пишется; путь из
+# env-переопределения используется всегда — тесты герметичны через него.
 #
-# Непокрыто и названо честно: неопознанная конструкция записи; пакетные менеджеры и
-# операции гита над рабочим деревом (они пишут своей логикой, не перенаправлением);
-# перенаправление в закавыченную цель — кавычки вычёркиваются, чтобы «больше» в
-# сравнении не считалось записью.
+# Непокрыто и названо честно: неопознанная конструкция записи; пакетные
+# менеджеры и операции гита над рабочим деревом (пишут своей логикой, не
+# перенаправлением); перенаправление в закавыченную цель — кавычки
+# вычёркиваются, чтобы «больше» в сравнении не считалось записью.
 #
 # Fail open on anything unexpected: a broken gate must never wedge legit work.
 set -u
@@ -53,6 +48,15 @@ fi
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 
 input="$(cat)"
+# Явный клик Влада старше гейта: режимы acceptEdits и bypassPermissions он
+# включает сам штатным переключателем — белый список, ровно два значения.
+# auto в списке НЕТ намеренно (решение Влада): авто-режим — доверие харнесса,
+# а не человека; все прочие значения и отсутствие поля оставляют гейт работать.
+pm="$(jq -r '.permission_mode // ""' <<<"$input" 2>/dev/null)"
+case "$pm" in acceptEdits|bypassPermissions) exit 0 ;; esac
+# Отладочный след последнего входа (эфемерный): по нему проверяются факты о
+# составе hook-входа (напр. поле permission_mode) без правки харнесса.
+printf '%s' "$input" > "/tmp/plan-gate-last-input.${CLAUDE_CODE_SESSION_ID:-default}.json" 2>/dev/null || true
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
 
 is_craft_write=0
@@ -72,13 +76,167 @@ else
   esac
 fi
 
-marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
-[[ -f "$marker" ]] && exit 0
+sid="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
+  marker="$CRAFT_PLAN_GATE_MARKER"
+elif [[ -n "$sid" ]]; then
+  marker="/tmp/craft-plan-gate.${sid}.approved"
+else
+  marker=""
+fi
+scopelist=""
+[[ -n "$marker" && -s "$marker" ]] && scopelist="$(cat "$marker" 2>/dev/null)"
+
+# in_scope <цель> — цель входит в периметр: точное имя, вложенность в названный
+# каталог, либо сам идентификатор строкой (Craft-UUID). Кнопочные строки
+# «button:цель» матчатся наравне с плановыми; источник совпадения остаётся в
+# MATCH_SRC (plan|button) — цель, входящая в оба, считается плановой.
+MATCH_SRC=""
+in_scope() {
+  local t="$1" e raw src hit_btn=0
+  [[ -n "$scopelist" ]] || return 1
+  while IFS= read -r raw; do
+    [[ -z "$raw" ]] && continue
+    e="$raw"; src="plan"
+    [[ "$raw" == button:* ]] && { e="${raw#button:}"; src="button"; }
+    if [[ "$t" == "$e" || "$t" == "${e%/}"/* ]]; then
+      [[ "$src" == "plan" ]] && { MATCH_SRC="plan"; return 0; }
+      hit_btn=1
+    fi
+  done <<<"$scopelist"
+  [[ "$hit_btn" -eq 1 ]] && { MATCH_SRC="button"; return 0; }
+  return 1
+}
+
+# Плановая часть периметра — lock ветки времянок: кнопочные цели её не открывают.
+plan_scope_nonempty() { grep -v '^button:' <<<"$scopelist" | grep -q '[^[:space:]]'; }
 
 deny() {
   jq -cn --arg r "$1" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
+}
+
+deny_scope() {
+  deny "Заблокировано план-гейтом: цель ($1) не входит в одобренный план и не времянка. Пути дальше: дельта плана с этой целью, предметный вопрос-разрешение или прямое указание Влада, режим acceptEdits. Автономному прогону — CRAFT_AUTONOMOUS=1."
+}
+
+# --- Классификатор содержания (tools/plan-scope-classifier.sh) ---------------
+# Путь-матч по периметру — грубый фильтр; точность даёт LLM-сверка содержания
+# правки с планом. Вне периметра классификатор отвечает на вопрос «очевидная
+# времянка?» — там он единственная защита, и его недоступность закрывает.
+# В периметре недоступность деградирует к путь-матчу — мягко, но ВИДИМО:
+# первый отказ за сессию оставляет файл-след рядом с маркером и строку в stderr,
+# исправный и мёртвый классификатор обязаны различаться по признаку.
+self0="$(realpath "$0" 2>/dev/null || echo "$0")"
+classifier="${PLAN_CLASSIFIER_BIN:-$(cd "$(dirname "$self0")/../.." && pwd)/tools/plan-scope-classifier.sh}"
+
+classifier_degraded() {
+  if [[ -n "$marker" && ! -e "${marker}.classifier-degraded" ]]; then
+    : > "${marker}.classifier-degraded" 2>/dev/null || true
+    echo "[plan-gate] классификатор недоступен — периметр живёт путь-матчем" >&2
+  fi
+}
+
+# classify_change <описание-на-stdin> → решение по правке в периметре.
+# Сверка идёт против НАКОПИТЕЛЯ одобренных планов «‹маркер›.plans» (его пишет
+# universal-plan-gate-approve.sh при каждом одобрении, окно последних 5), а не
+# против живого файла плана: маркер держит цели всех одобрений сессии, и
+# правка старой цели не должна сверяться с новейшей дельтой, а правка файла
+# плана после одобрения не должна менять одобренное. Сверка со всеми планами
+# сразу — принятое огрубление вместо адресной привязки «цель → её план».
+# Накопителя нет (одобрение до этой правки) — видимая деградация к путь-матчу.
+scope_content_check() {
+  local desc="$1" plans verdict
+  [[ -x "$classifier" || -r "$classifier" ]] || { classifier_degraded; return 0; }
+  plans="${marker}.plans"
+  [[ -s "$plans" ]] || { classifier_degraded; return 0; }
+  verdict="$(printf '%s' "$desc" | bash "$classifier" match "$plans" 2>/dev/null)"
+  case "$verdict" in
+    NOMATCH:*) deny "Заблокировано план-гейтом: правка цели из периметра расходится с одобренным планом — ${verdict#NOMATCH:}. Пути дальше: дельта плана, предметный вопрос-разрешение или прямое указание Влада, режим acceptEdits." ;;
+    MATCH) return 0 ;;
+    *) classifier_degraded; return 0 ;;
+  esac
+}
+
+# permission_grant <описание> <цели…> — семантическое разрешение: правка вне
+# периметра сверяется классификатором с окном разрешений «‹маркер›.qa-window»
+# (пары «вопрос + ответ» кнопочного хука и реплики-указания Влада из
+# reset-хука). Вердикт «разрешает» дописывает цели в периметр строками
+# «button:цель» и окно-на-момент-разрешения в файл микро-планов
+# «‹маркер›.button-plans» секциями «Цель: …» — предмет сверки содержания для
+# повторных правок цели. Пустое окно модель не зовёт — мгновенный отказ ветки.
+# Бюджет вызова уменьшен до 15 с (не env-дефолт 20): на отказе следом идёт
+# ещё вызов времянки, и пара 15+20 укладывается в лимит PreToolUse-хука
+# (дефолт 60 с) — его превышение убивает хук БЕЗ deny, то есть открыло бы
+# гейт молча. Меньше нельзя: холодный вызов haiku живьём не влез в 10 с.
+# «Не разрешает» и недоступность классификатора ветку не открывают (return 1).
+permission_grant() {
+  local desc="$1" qa verdict t
+  shift
+  [[ -n "$marker" ]] || return 1
+  qa="${marker}.qa-window"
+  [[ -s "$qa" ]] || return 1
+  [[ -x "$classifier" || -r "$classifier" ]] || return 1
+  verdict="$(printf '%s' "$desc" \
+    | PLAN_CLASSIFIER_TIMEOUT="${PLAN_CLASSIFIER_TIMEOUT:-15}" \
+      bash "$classifier" permission "$qa" 2>/dev/null)"
+  [[ "$verdict" == PERMIT* ]] || return 1
+  for t in "$@"; do
+    [[ -z "$t" ]] && continue
+    printf 'button:%s\n' "$t" >> "$marker" 2>/dev/null || true
+    { printf '## Цель: %s\n' "$t"; cat "$qa" 2>/dev/null; printf '\n'; } \
+      >> "${marker}.button-plans" 2>/dev/null || true
+  done
+  return 0
+}
+
+# button_content_check <описание> <цель> <отн.цель> — сверка правки
+# разрешённой цели против секции её окна из файла микро-планов; секции нет —
+# сверка невозможна: пропуск по путь-матчу с видимым следом деградации.
+button_content_check() {
+  local desc="$1" t="$2" rel="$3" bp sec verdict
+  bp="${marker}.button-plans"
+  if ! [[ -r "$bp" ]] || ! [[ -x "$classifier" || -r "$classifier" ]]; then
+    classifier_degraded; return 0
+  fi
+  sec="$(mktemp "${TMPDIR:-/tmp}/btn-plan.XXXXXX")"
+  awk -v a="## Цель: $t" -v b="## Цель: $rel" \
+    '$0==a || (b!="## Цель: " && $0==b) {f=1; print; next} /^## Цель: /{f=0} f' \
+    "$bp" > "$sec" 2>/dev/null
+  if [[ ! -s "$sec" ]]; then rm -f "$sec"; classifier_degraded; return 0; fi
+  verdict="$(printf '%s' "$desc" | bash "$classifier" match "$sec" 2>/dev/null)"
+  rm -f "$sec"
+  case "$verdict" in
+    NOMATCH:*) deny "Заблокировано план-гейтом: правка разрешённой цели расходится с одобренным вопросом или указанием — ${verdict#NOMATCH:}. Пути дальше: задай предметный вопрос-разрешение заново или покажи план." ;;
+    *) return 0 ;;
+  esac
+}
+
+# mixed_content_check <описание> — смешанная команда: цели плана и разрешений
+# сверяются против накопителя одобренных планов и файла микро-планов вместе;
+# deny-текст плановый.
+mixed_content_check() {
+  local desc="$1" comb verdict
+  comb="$(mktemp "${TMPDIR:-/tmp}/mixed-plan.XXXXXX")"
+  { cat "${marker}.plans" 2>/dev/null; cat "${marker}.button-plans" 2>/dev/null; } > "$comb"
+  if [[ ! -s "$comb" ]]; then rm -f "$comb"; classifier_degraded; return 0; fi
+  verdict="$(printf '%s' "$desc" | bash "$classifier" match "$comb" 2>/dev/null)"
+  rm -f "$comb"
+  case "$verdict" in
+    NOMATCH:*) deny "Заблокировано план-гейтом: правка цели из периметра расходится с одобренным планом — ${verdict#NOMATCH:}. Пути дальше: дельта плана, предметный вопрос-разрешение или прямое указание Влада, режим acceptEdits." ;;
+    *) return 0 ;;
+  esac
+}
+
+# throwaway_check <описание> <цель> → пропуск времянки или deny
+throwaway_check() {
+  local desc="$1" target="$2" verdict
+  if [[ -x "$classifier" || -r "$classifier" ]]; then
+    verdict="$(printf '%s' "$desc" | bash "$classifier" throwaway 2>/dev/null)"
+    [[ "$verdict" == "THROWAWAY" ]] && return 0
+  fi
+  deny_scope "$target"
 }
 
 # is_ephemeral <path> — путь, правка которого системным изменением не является.
@@ -106,13 +264,48 @@ is_ephemeral() {
   return 1
 }
 
+# git_ephemeral <path> — игнорируемое гитом эфемерно (сборка, логи) для ЛЮБОГО
+# инструмента записи, кроме путей внутри .claude/: там игнор не оправдание.
+git_ephemeral() {
+  local fp="$1"
+  case "$fp" in
+    .claude/*|*/.claude/*) return 1 ;;
+  esac
+  git check-ignore -q -- "$fp" 2>/dev/null
+}
+
 # --- File edits (Write/Edit/MultiEdit/NotebookEdit) --------------------------
 if [[ "$is_file_edit" -eq 1 ]]; then
   fp="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' <<<"$input" 2>/dev/null)"
   [[ -z "$fp" ]] && exit 0
   is_ephemeral "$fp" && exit 0
+  git_ephemeral "$fp" && exit 0
 
-  deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана в этом ходе. Правки кода и системы в любой рабочей директории идут через тот же план-гейт, что и запись в Craft: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки. Автономному прогону — CRAFT_AUTONOMOUS=1."
+  # Текст правки по инструменту: Edit/Write — new_string/content, MultiEdit —
+  # все edits[].new_string, NotebookEdit — new_source; без них классификатор
+  # видел бы пустую правку и не мог ловить выход за одобренное.
+  desc="инструмент: $tool
+файл: $fp
+новый текст:
+$(jq -r '.tool_input.new_string // .tool_input.content // .tool_input.new_source
+         // (((.tool_input.edits // []) | map(.new_string // "") | join("\n---\n")) | select(. != ""))
+         // ""' <<<"$input" 2>/dev/null | head -c 4000)"
+
+  # Абсолютный путь к цели внутри текущего репо матчится и по репо-относительной
+  # записи плана: строки «- где:» пишутся от корня репозитория.
+  rel="${fp#"$PWD"/}"
+  if in_scope "$fp" || { [[ "$rel" != "$fp" ]] && in_scope "$rel"; }; then
+    if [[ "$MATCH_SRC" == "button" ]]; then
+      button_content_check "$desc" "$fp" "$rel"
+    else
+      scope_content_check "$desc"
+    fi
+    exit 0
+  fi
+
+  permission_grant "$desc" "$rel" && exit 0
+  plan_scope_nonempty && { throwaway_check "$desc" "$fp"; exit 0; }
+  deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана. Правки кода и системы идут через план-гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
 # --- Bash writes -------------------------------------------------------------
@@ -122,18 +315,38 @@ if [[ "$is_bash" -eq 1 ]]; then
   cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)"
   [[ -z "$cmd" ]] && exit 0
 
+  # Тела heredoc с ЗАКАВЫЧЕННЫМ маркером вычёркиваются ПЕРВЫМИ, до снятия кавычек:
+  # после снятия маркер <<'PY' неотличим от << и опознать его нечем. Внутри такого
+  # тела shell-подстановок не бывает по определению, а «больше» там — сравнение кода
+  # (i>0:), не перенаправление; сама строка-открыватель остаётся в скане целиком,
+  # потому что перенаправление формы `cat <<'EOF' > файл` стоит именно на ней.
+  # Незакавыченный маркер не вычёркивается: в его теле живут подстановки.
+  strip_quoted_heredocs() {
+    awk -v q="'" '
+      inhd { if ($0 == mark) inhd = 0; next }
+      {
+        re = "<<[ \t]*[\"" q "][A-Za-z_][A-Za-z0-9_]*[\"" q "]"
+        if (match($0, re)) {
+          m = substr($0, RSTART, RLENGTH)
+          sub("<<[ \t]*[\"" q "]", "", m); sub("[\"" q "]$", "", m)
+          mark = m; inhd = 1
+        }
+        print
+      }'
+  }
   # Знак «больше» бывает и сравнением: в кавычках (jq 'select(.size > 10)') и в условных
   # скобках ([[ a > b ]]). Оба места вычёркиваются — но в ОТДЕЛЬНУЮ строку: разбору
   # записи из интерпретатора нужны буквальные кавычки вокруг пути, на вычеркнутой он бы
   # ослеп. Цена — перенаправление в закавыченную цель (> "мой файл") не увидится.
-  scan="$(sed -E "s/'[^']*'/ /g; s/\"[^\"]*\"/ /g; s/\[\[[^]]*\]\]/ /g; s/\(\([^)]*\)\)/ /g" <<<"$cmd")"
+  scan="$(strip_quoted_heredocs <<<"$cmd" \
+    | sed -E "s/'[^']*'/ /g; s/\"[^\"]*\"/ /g; s/\[\[[^]]*\]\]/ /g; s/\(\([^)]*\)\)/ /g")"
 
   # Цели: перенаправление (> >>), tee, правка на месте (-i), cp/mv (последний аргумент
   # либо явная цель после -t), запись из интерпретатора (open(…,'w'), write_text/bytes).
   targets="$(
     grep -oE '>>?[[:space:]]*[^|&;()<>[:space:]]+' <<<"$scan" 2>/dev/null | sed -E 's/^>>?[[:space:]]*//'
     grep -oE '\btee\b([[:space:]]+-[a-zA-Z]+)*[[:space:]]+[^|&;()<>[:space:]]+' <<<"$scan" 2>/dev/null | awk '{print $NF}'
-    grep -oE '\b(sed|perl)\b[^|&;]*-i[^|&;]*' <<<"$scan" 2>/dev/null | tr ' ' '\n' | grep -E '/|\.'
+    grep -oE '\b(sed|perl)\b[^|&;]*[[:space:]]-i[^|&;]*' <<<"$scan" 2>/dev/null | tr ' ' '\n' | grep -E '/|\.'
     grep -oE '\b(cp|mv)\b[^|&;]*[[:space:]]-t[[:space:]]+[^[:space:]|&;]+' <<<"$scan" 2>/dev/null \
       | sed -E 's/.*[[:space:]]-t[[:space:]]+//'
     grep -vE '[[:space:]]-t[[:space:]]' <<<"$scan" 2>/dev/null \
@@ -145,19 +358,45 @@ if [[ "$is_bash" -eq 1 ]]; then
   )"
   [[ -z "${targets//[[:space:]]/}" ]] && exit 0
 
+  # Команда проходит, только когда КАЖДАЯ неэфемерная цель в периметре: смешанная
+  # команда (одна цель из плана, другая нет) не проезжает по половине разрешения.
+  offender=""; scoped=0; saw_button=0; bash_goals=()
   while IFS= read -r t; do
     [[ -z "${t//[[:space:]]/}" ]] && continue
     # Дескрипторы и устройства целями записи в дерево не являются.
     case "$t" in
-      /dev/*|1|2|"&1"|"&2"|-*) continue ;;
+      /dev/*|0|1|2|"&1"|"&2"|-*) continue ;;
     esac
     t="${t%\"}"; t="${t#\"}"; t="${t%\'}"; t="${t#\'}"
     is_ephemeral "$t" && continue
-    # Игнорируемое гитом — вывод сборки, покрытие, зависимости: не системная правка.
-    git check-ignore -q -- "$t" 2>/dev/null && continue
-    deny "Заблокировано план-гейтом: запись в файл ($t) через Bash без одобренного плана в этом ходе. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
+    git_ephemeral "$t" && continue
+    rel="${t#"$PWD"/}"
+    bash_goals+=("$rel")
+    in_scope "$t" && { scoped=1; [[ "$MATCH_SRC" == button ]] && saw_button=1; continue; }
+    [[ "$rel" != "$t" ]] && in_scope "$rel" && { scoped=1; [[ "$MATCH_SRC" == button ]] && saw_button=1; continue; }
+    [[ -z "$offender" ]] && offender="$t"
   done <<<"$targets"
-  exit 0
+  bdesc="инструмент: Bash
+команда:
+$(head -c 4000 <<<"$cmd")"
+  if [[ -z "$offender" ]]; then
+    # Сверка содержания одним вызовом на команду — только когда хоть одна цель
+    # прошла именно по периметру: чисто эфемерная запись классификатора не стоит.
+    # Кнопочные цели в команде сверяются против файла микро-планов вместе с
+    # планом сессии (смешанная команда), deny-текст — плановый.
+    if [[ "$scoped" -eq 1 && -n "$scopelist" ]]; then
+      if [[ "$saw_button" -eq 1 ]]; then
+        mixed_content_check "$bdesc"
+      else
+        scope_content_check "$bdesc"
+      fi
+    fi
+    exit 0
+  fi
+
+  permission_grant "$bdesc" "${bash_goals[@]}" && exit 0
+  plan_scope_nonempty && { throwaway_check "$bdesc" "$offender"; exit 0; }
+  deny "Заблокировано план-гейтом: запись в файл ($offender) через Bash без одобренного плана. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
 # --- Craft writes ------------------------------------------------------------
@@ -172,17 +411,55 @@ fi
 # cloud, local worktrees, arc-mounts and scheduled sessions all agree.
 self="$(realpath "$0" 2>/dev/null || echo "$0")"
 scope="${CRAFT_GATE_EXEMPT_SCOPE:-$(cd "$(dirname "$self")/../.." && pwd)/.claude/craft-gate-exempt-scope.txt}"
-if [[ -s "$scope" ]]; then
-  cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)"
-  UUID_RE='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
-  ids="$(grep -oE "$UUID_RE" <<<"$cmd" | tr 'a-f' 'A-F' | sort -u)"
-  if [[ -n "$ids" ]]; then
-    all_in=1
-    while IFS= read -r id; do
-      grep -qxF "$id" "$scope" || { all_in=0; break; }
-    done <<<"$ids"
-    [[ "$all_in" -eq 1 ]] && exit 0
-  fi
+cmd="$(jq -r '.tool_input.command // ""' <<<"$input" 2>/dev/null)"
+UUID_RE='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
+ids="$(grep -oE "$UUID_RE" <<<"$cmd" | sort -u)"
+if [[ -s "$scope" && -n "$ids" ]]; then
+  all_in=1
+  while IFS= read -r id; do
+    grep -qxF "$(tr 'a-f' 'A-F' <<<"$id")" "$scope" || { all_in=0; break; }
+  done <<<"$ids"
+  [[ "$all_in" -eq 1 ]] && exit 0
 fi
 
-deny "Заблокировано план-гейтом: запись в Craft без одобренного плана в этом ходе. Сначала покажи план и получи ок Влада (план-мод → ExitPlanMode), потом пиши. Запись целиком внутри предодобренной зоны (напр. «Продукты») проходит без плана. Автономному прогону (рутина, евал) — CRAFT_AUTONOMOUS=1."
+cdesc="инструмент: craft_write
+команда:
+$(head -c 4000 <<<"$cmd")"
+
+# Периметр плана: каждый UUID команды обязан быть в списке целей. Команда без
+# единого UUID адресуемой цели не несёт — остаётся deny, как раньше. Смешанные
+# источники совпадений (часть UUID из плана, часть из разрешений) сверяются
+# против одобренных планов и микро-планов вместе, как в Bash-ветке.
+if [[ -n "$scopelist" && -n "$ids" ]]; then
+  all_in=1; craft_saw_button=0; craft_saw_plan=0
+  while IFS= read -r id; do
+    lid="$(tr 'A-F' 'a-f' <<<"$id")"
+    if in_scope "$lid" || in_scope "$id"; then
+      [[ "$MATCH_SRC" == "button" ]] && craft_saw_button=1 || craft_saw_plan=1
+    else
+      all_in=0; break
+    fi
+  done <<<"$ids"
+  if [[ "$all_in" -eq 1 ]]; then
+    if [[ "$craft_saw_button" -eq 1 && "$craft_saw_plan" -eq 1 ]]; then
+      mixed_content_check "$cdesc"
+    elif [[ "$craft_saw_button" -eq 1 ]]; then
+      button_content_check "$cdesc" "$(head -1 <<<"$ids" | tr 'A-F' 'a-f')" ""
+    else
+      scope_content_check "$cdesc"
+    fi
+    exit 0
+  fi
+  permission_grant "$cdesc" $(tr 'A-F' 'a-f' <<<"$ids") && exit 0
+  deny_scope "craft: $(head -c 120 <<<"$ids" | tr '\n' ' ')"
+fi
+
+# Команда с UUID при недоступном периметре: цели известны — разрешение оставляет
+# след; без единого UUID целей нет — пропуск по вердикту без следа (правило по
+# признаку).
+if [[ -n "$ids" ]]; then
+  permission_grant "$cdesc" $(tr 'A-F' 'a-f' <<<"$ids") && exit 0
+else
+  permission_grant "$cdesc" && exit 0
+fi
+deny "Заблокировано план-гейтом: запись в Craft без одобренного плана. Сначала покажи план и получи ок Влада (план-мод → ExitPlanMode), потом пиши цели плана. Запись целиком внутри предодобренной зоны (напр. «Продукты») проходит без плана. Автономному прогону (рутина, евал) — CRAFT_AUTONOMOUS=1."

@@ -169,6 +169,10 @@ merged="$(jq '
          "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
   | ensure("PostToolUse"; "Task|Agent";
          "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
+  | ensure("PreToolUse"; "Task|Agent";
+         "\"$HOME\"/.claude/hooks/universal-guard-critic-plateau.sh")
+  | ensure("PostToolUse"; "AskUserQuestion";
+         "\"$HOME\"/.claude/hooks/universal-plan-gate-button.sh")
   | ensure("PostToolUse"; "Write|Edit|MultiEdit";
          "\"$HOME\"/.claude/hooks/universal-mark-plan-file.sh")
   | ensure("UserPromptSubmit"; "";
