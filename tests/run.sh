@@ -127,6 +127,10 @@ for f in "${files[@]}"; do
     # вызова мока (classtrace) — признак для кейсов «модель не зовётся»:
     # ответ хука одинаков с вызовом и без, различает исходы только след.
     classtrace="$(mktemp -u "${TMPDIR:-/tmp}/mock-classifier-trace.XXXXXX")"
+    # Состояние синка системы и меток дедупликации: без своих путей хук читал бы
+    # отчёт ЖИВОЙ сессии и мог бы подтянуть main прямо посреди прогона тестов.
+    syncstate="$(mktemp -u "${TMPDIR:-/tmp}/sync-system-test.XXXXXX")"
+    oncedir="$(mktemp -d "${TMPDIR:-/tmp}/hook-once-test.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
@@ -135,6 +139,8 @@ for f in "${files[@]}"; do
              "CRAFT_PLAN_CRITIC_PENDING=$criticpend"
              "CRAFT_PLAN_SHOWN_MARKER=$planshown"
              "CRAFT_PLAN_CRITIC_RUNS=$criticruns"
+             "SYNC_SYSTEM_STATE=$syncstate"
+             "HOOK_ONCE=off" "HOOK_ONCE_DIR=$oncedir"
              "CRAFT_PLAN_CRITIC_ROUND=$criticround"
              "PLAN_CLASSIFIER_CMD=$CASES_DIR/fixtures/mock-classifier.sh"
              "MOCK_CLASSIFIER_TRACE=$classtrace")
@@ -293,7 +299,7 @@ done
 # least one contour (repo settings.json or install.sh) — an unregistered hook
 # lies dead while looking installed. Whitelist: sourced helpers that are not
 # hooks themselves.
-REVERSE_WHITELIST=("_load-env.sh")
+REVERSE_WHITELIST=("_load-env.sh" "_hook-once.sh")
 reverse_orphans() {  # args: file paths; echoes orphan basenames
   local reg f b w skip
   reg="$(jq -r '.hooks[]?[]?.hooks[]?.command // empty' "$REPO/.claude/settings.json" 2>/dev/null; cat "$REPO/install.sh" 2>/dev/null)"

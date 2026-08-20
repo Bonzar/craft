@@ -19,7 +19,10 @@ log(){ echo "[craft-inject-incident] $*" >&2; }
 . "$(dirname "$0")/_load-env.sh"
 
 INCIDENT_ID="${CRAFT_INCIDENT_ID:-cbb1ba47-c05b-60b5-f86e-16c05b77bb4f}"
-OUT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-incident-context.md"
+# Адрес снимка — своей переменной, тем же приёмом, что у инжектора роутера:
+# синк системы пересобирает снимок в служебное место, не трогая ни рабочий
+# чекаут, ни резолвинг `.env` с токеном.
+OUT="${CRAFT_INCIDENT_SNAPSHOT:-${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-incident-context.md}"
 
 # Внутри евал-пачки кэш переиспользуется: параллельные сессии делят один путь, и
 # перезапись сносит правило у соседа ровно на старте — агент стартует без тела

@@ -2,9 +2,10 @@
 # Установка универсального слоя системы агента в ~/.claude (локальная машина).
 #
 # Что делает (идемпотентно, повторный запуск = no-op):
-#   1. Симлинкает universal-* хуки (+ их данные) из этого репо в ~/.claude/hooks/.
-#   2. Дописывает их регистрацию в ~/.claude/settings.json (jq-мерж с бэкапом;
-#      существующие чужие хуки и permissions не трогаются).
+#   1. Регистрирует universal-* хуки в ~/.claude/settings.json командами в этот чекаут.
+#   2. Снимает прежний симлинк-слой в ~/.claude (хуки, скиллы, агенты, команды)
+#      и регистрации, которые на него указывали: скиллы, команды и агенты
+#      сессия берёт из самой репы, подключённой рабочей директорией.
 #   3. Создаёт ~/.claude/craft.env (chmod 600), перенося CRAFT_* из репо-.env,
 #      если тот есть, — универсальные хуки берут оттуда connect-доступ к Craft
 #      в сессиях вне этого репо.
@@ -13,8 +14,9 @@
 # project-level из .claude/settings.json. Для НОВЫХ облачных реп — одна строка
 # в bootstrap окружения:  git clone <this-repo> ~/agent-system && bash ~/agent-system/install.sh
 #
-# После установки действующие сессии Claude Code надо перезапустить: конфиг
-# хуков снимается на старте сессии.
+# Перезапускать активные сессии после установки не нужно: регистрацию хуков в
+# settings.json подхватывает файл-вотчер Claude Code, а тела хуков читаются с
+# диска в момент срабатывания.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -35,76 +37,32 @@ command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required" >&2; exit 1; }
 
 mkdir -p "$HOOKS_DST"
 
-# --- 1. Симлинки универсальных хуков и их данных ------------------------------
-linked=0
-for f in "$HOOKS_SRC"/universal-*.sh "$HOOKS_SRC/_load-env.sh" \
-         "$HOOKS_SRC/incident-markers.txt" "$HOOKS_SRC/service-anchors.txt"; do
-  [[ -e "$f" ]] || continue
-  dst="$HOOKS_DST/$(basename "$f")"
-  if [[ -L "$dst" && "$(readlink "$dst")" == "$f" ]]; then
-    continue
-  fi
-  if [[ -e "$dst" && ! -L "$dst" ]]; then
-    echo "SKIP: $dst существует и не симлинк — разберись вручную" >&2
-    continue
-  fi
-  ln -sf "$f" "$dst"
-  linked=$((linked+1))
-done
-echo "hooks: $linked new symlink(s) in $HOOKS_DST"
-
-# --- 1b. Симлинки универсальных скиллов ---------------------------------------
-SKILLS_SRC="$REPO/.claude/skills"
-SKILLS_DST="$CLAUDE_DIR/skills"
-mkdir -p "$SKILLS_DST"
-slinked=0
-for d in "$SKILLS_SRC"/*/; do
+# --- 1. Снос прежнего симлинк-слоя -------------------------------------------
+# Симлинков больше нет: хуки исполняются прямо из чекаута по зарегистрированному
+# пути, а скиллы, команды и агенты Claude Code берёт из репы, подключённой к
+# сессии рабочей директорией (--add-dir грузит .claude/skills, .claude/commands
+# и .claude/agents). Оставленные линки задвоили бы скиллы (личная копия
+# перекрывает проектную) и указывали бы в чекаут мимо регистраций.
+unlinked=0
+for dir_name in hooks skills agents commands; do
+  d="$CLAUDE_DIR/$dir_name"
   [[ -d "$d" ]] || continue
-  name="$(basename "$d")"
-  dst="$SKILLS_DST/$name"
-  src="${d%/}"
-  if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
-    continue
-  fi
-  if [[ -e "$dst" && ! -L "$dst" ]]; then
-    echo "SKIP: $dst существует и не симлинк — разберись вручную" >&2
-    continue
-  fi
-  ln -sfn "$src" "$dst"
-  slinked=$((slinked+1))
-done
-echo "skills: $slinked new symlink(s) in $SKILLS_DST"
-
-# --- 1c. Симлинки агентов и команд --------------------------------------------
-# По образцу секции skills; при пустых/отсутствующих директориях — тихий no-op
-# (агенты и команды появляются параллельной работой).
-for kind in agents commands; do
-  KIND_SRC="$REPO/.claude/$kind"
-  KIND_DST="$CLAUDE_DIR/$kind"
-  mkdir -p "$KIND_DST"
-  klinked=0
-  for f in "$KIND_SRC"/*; do
-    [[ -e "$f" ]] || continue
-    dst="$KIND_DST/$(basename "$f")"
-    if [[ -L "$dst" && "$(readlink "$dst")" == "$f" ]]; then
-      continue
-    fi
-    if [[ -e "$dst" && ! -L "$dst" ]]; then
-      echo "SKIP: $dst существует и не симлинк — разберись вручную" >&2
-      continue
-    fi
-    ln -sfn "$f" "$dst"
-    klinked=$((klinked+1))
+  for dst in "$d"/*; do
+    [[ -L "$dst" ]] || continue
+    target="$(readlink "$dst")"
+    [[ "$target" == "$REPO"/* ]] || continue
+    rm -f "$dst"
+    unlinked=$((unlinked+1))
   done
-  echo "$kind: $klinked new symlink(s) in $KIND_DST"
 done
+echo "symlinks: $unlinked stale link(s) removed from $CLAUDE_DIR"
 
 # --- 2. Регистрация в ~/.claude/settings.json --------------------------------
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 backup="$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
 cp "$SETTINGS" "$backup"
 
-merged="$(jq '
+merged="$(jq --arg hooks "$HOOKS_SRC" '
   # Снятие устаревшей регистрации: ensure() умеет только дописывать, поэтому смена
   # матчера без drop оставляет старую запись, и хук отрабатывает дважды. Сверка идёт по
   # ПАРЕ «матчер и команда» — чужая регистрация с тем же матчером не страдает.
@@ -133,80 +91,94 @@ merged="$(jq '
           else {"matcher":matcher,"hooks":[{"type":"command","command":cmd}]} end ]
       end;
 
-  drop("PostToolUse"; "Task";
-         "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
+  # Чистка прежнего слоя: записи, указывающие на снесённые симлинки в
+  # ~/.claude/hooks, иначе остались бы мёртвыми рядом с новыми.
+  def purge_symlink_layer:
+    .hooks = ((.hooks // {}) | with_entries(
+      .value = [ .value[]
+        | .hooks = [ (.hooks // [])[]
+            | select(((.command // "") | startswith("\"$HOME\"/.claude/hooks/universal-")) | not) ]
+        | select(((.hooks // []) | length) > 0) ]));
+
+  purge_symlink_layer
+  | drop("PostToolUse"; "Task";
+         "\($hooks)/universal-mark-plan-critic.sh")
   | ensure("PreToolUse"; "Write|Edit|MultiEdit|NotebookEdit";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
+         "\($hooks)/universal-guard-plan-gate.sh")
   | ensure("PreToolUse"; "mcp__.*__craft_write";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
+         "\($hooks)/universal-guard-plan-gate.sh")
   | ensure("PreToolUse"; "Bash";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh")
+         "\($hooks)/universal-guard-plan-gate.sh")
   | ensure("PostToolUseFailure"; "ExitPlanMode";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-exit-failure.sh")
+         "\($hooks)/universal-guard-plan-exit-failure.sh")
   | ensure("PreToolUse"; "Bash";
-         "\"$HOME\"/.claude/hooks/universal-sleep-waiter-guard.sh")
+         "\($hooks)/universal-sleep-waiter-guard.sh")
   | ensure("PreToolUse"; "Bash";
-         "\"$HOME\"/.claude/hooks/universal-kill-by-name-guard.sh")
+         "\($hooks)/universal-kill-by-name-guard.sh")
   | ensure("PreToolUse"; "Bash";
-         "\"$HOME\"/.claude/hooks/universal-block-no-verify.sh")
+         "\($hooks)/universal-block-no-verify.sh")
   | ensure("PreToolUse"; "Write|Edit|MultiEdit";
-         "\"$HOME\"/.claude/hooks/universal-config-protection.sh")
+         "\($hooks)/universal-config-protection.sh")
   | ensure("Stop"; "";
-         "\"$HOME\"/.claude/hooks/universal-check-console-log.sh")
+         "\($hooks)/universal-check-console-log.sh")
   | ensure("Stop"; "";
-         "\"$HOME\"/.claude/hooks/universal-stop-quality-gate.sh")
+         "\($hooks)/universal-stop-quality-gate.sh")
   | ensure("PreCompact"; "";
-         "\"$HOME\"/.claude/hooks/universal-pre-compact.sh")
+         "\($hooks)/universal-pre-compact.sh")
   | ensure("PostToolUse"; "ExitPlanMode";
-         "\"$HOME\"/.claude/hooks/universal-plan-gate-approve.sh")
+         "\($hooks)/universal-plan-gate-approve.sh")
   | ensure("PreToolUse"; "ExitPlanMode";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-critic.sh")
+         "\($hooks)/universal-guard-plan-critic.sh")
   | ensure("PreToolUse"; "ExitPlanMode";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
+         "\($hooks)/universal-guard-plan-delta.sh")
   | ensure("PreToolUse"; "ExitPlanMode";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-service-turn.sh")
+         "\($hooks)/universal-guard-plan-service-turn.sh")
   | ensure("PostToolUse"; "ExitPlanMode";
-         "\"$HOME\"/.claude/hooks/universal-guard-plan-delta.sh")
+         "\($hooks)/universal-guard-plan-delta.sh")
   | ensure("PostToolUse"; "Task|Agent";
-         "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
+         "\($hooks)/universal-mark-plan-critic.sh")
   | ensure("PreToolUse"; "Task|Agent";
-         "\"$HOME\"/.claude/hooks/universal-guard-critic-plateau.sh")
+         "\($hooks)/universal-guard-critic-plateau.sh")
   | ensure("PostToolUse"; "AskUserQuestion";
-         "\"$HOME\"/.claude/hooks/universal-plan-gate-button.sh")
+         "\($hooks)/universal-plan-gate-button.sh")
   | ensure("PostToolUse"; "Write|Edit|MultiEdit";
-         "\"$HOME\"/.claude/hooks/universal-mark-plan-file.sh")
+         "\($hooks)/universal-mark-plan-file.sh")
   | ensure("UserPromptSubmit"; "";
-         "\"$HOME\"/.claude/hooks/universal-plan-gate-reset.sh")
+         "\($hooks)/universal-plan-gate-reset.sh")
   | ensure("UserPromptSubmit"; "";
-         "\"$HOME\"/.claude/hooks/universal-mark-plan-critic.sh")
+         "\($hooks)/universal-mark-plan-critic.sh")
   | ensure("UserPromptSubmit"; "";
-         "\"$HOME\"/.claude/hooks/universal-detect-incident.sh")
+         "\($hooks)/universal-detect-incident.sh")
   | ensure("SessionStart"; "";
-         "\"$HOME\"/.claude/hooks/universal-env-capabilities.sh")
+         "\($hooks)/universal-env-capabilities.sh")
   | ensure("SessionStart"; "";
-         "\"$HOME\"/.claude/hooks/universal-inject-behavior-rules.sh")
+         "\($hooks)/universal-inject-behavior-rules.sh")
   | ensure("SessionStart"; "";
-         "\"$HOME\"/.claude/hooks/universal-inject-code-rules.sh")
+         "\($hooks)/universal-inject-code-rules.sh")
   | ensure("SessionStart"; "";
-         "\"$HOME\"/.claude/hooks/universal-inject-instincts.sh")
+         "\($hooks)/universal-inject-instincts.sh")
   | ensure("SessionStart"; "";
-         "\"$HOME\"/.claude/hooks/universal-cache-gate-exempt-scope.sh")
+         "\($hooks)/universal-cache-gate-exempt-scope.sh")
   | ensure("PostToolUse"; "";
-         "\"$HOME\"/.claude/hooks/universal-observe-buffer.sh")
+         "\($hooks)/universal-observe-buffer.sh")
   | ensure("Stop"; "";
-         "\"$HOME\"/.claude/hooks/universal-instinct-flush.sh")
+         "\($hooks)/universal-instinct-flush.sh")
   | ensure("PreToolUse"; "Bash";
-         "\"$HOME\"/.claude/hooks/universal-fact-gate.sh")
+         "\($hooks)/universal-fact-gate.sh")
   | ensure("PreToolUse"; "mcp__.*__craft_write";
-         "\"$HOME\"/.claude/hooks/universal-fact-gate.sh")
+         "\($hooks)/universal-fact-gate.sh")
   | ensure("Stop"; "";
-         "\"$HOME\"/.claude/hooks/universal-stop-routine-facts.sh")
+         "\($hooks)/universal-stop-routine-facts.sh")
   | ensure("Stop"; "";
-         "\"$HOME\"/.claude/hooks/universal-stop-incident-closure.sh")
+         "\($hooks)/universal-stop-incident-closure.sh")
   | ensure("Stop"; "";
-         "\"$HOME\"/.claude/hooks/universal-stop-relative-link.sh")
+         "\($hooks)/universal-stop-relative-link.sh")
   | ensure("PreToolUse"; "Read|Grep|Glob";
-         "\"$HOME\"/.claude/hooks/universal-eval-materials-guard.sh")
+         "\($hooks)/universal-eval-materials-guard.sh")
+  | ensure("UserPromptSubmit"; "";
+         "\($hooks)/universal-sync-system.sh")
+  | ensure("Stop"; "";
+         "\($hooks)/universal-sync-system.sh")
 ' "$SETTINGS")"
 
 if [[ "$(jq -S . <<<"$merged")" == "$(jq -S . "$SETTINGS")" ]]; then
@@ -237,4 +209,4 @@ else
   echo "craft.env: already present"
 fi
 
-echo "Done. Перезапусти активные сессии Claude Code — хуки читаются на старте."
+echo "Done. Новые регистрации действуют в активных сессиях без перезапуска."

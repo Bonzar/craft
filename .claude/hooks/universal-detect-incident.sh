@@ -18,13 +18,11 @@ set -u
 # only lowercase matched. Force a UTF-8 locale so -i works on Cyrillic.
 export LC_ALL=C.UTF-8
 
-# When this same hook is ALSO installed at user level (~/.claude, via
-# install.sh), the project-level registration yields — otherwise a craft
-# session would inject the directive twice per message.
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
-      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
-  exit 0
-fi
+# Уступка второму вызову того же события: хук зарегистрирован и project-level, и
+# пользовательски (install.sh), а после сноса симлинков обе регистрации ведут в
+# ОДИН файл — различить их путями нельзя. Признак — метка занятия события.
+# shellcheck disable=SC1091
+. "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 # Resolve through symlinks: installed as a ~/.claude symlink this must still
 # find incident-markers.txt next to the REAL file in the repo.
@@ -34,6 +32,7 @@ MARKERS="$DIR/incident-markers.txt"
 CACHE="${CLAUDE_PROJECT_DIR:-$(cd "$DIR/../.." && pwd)}/.claude/craft-incident-context.md"
 
 input="$(cat)"
+declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }
 prompt="$(jq -r '.prompt // ""' <<<"$input" 2>/dev/null)" || exit 0
 [[ -z "$prompt" ]] && exit 0
 
