@@ -377,3 +377,29 @@ func TestCheckNumericFlags(t *testing.T) {
 		}
 	}
 }
+
+// Неполное чтение обязано менять вывод и тогда, когда фильм найден: в
+// потерянной записи мог стоять ещё один его сеанс.
+func TestParseSkipsMarkFoundVenueToo(t *testing.T) {
+	found := ProbeResult{Status: statusOnSale, Evidence: "сеансов 12"}
+	got := applyParseSkips(found, []string{"тело обещало 14 сеансов, разбор объяснил 12 — потеряно 2"})
+	if got.Status != statusOnSale {
+		t.Errorf("статус площадки с найденным фильмом сменился на %q — фильм-то найден", got.Status)
+	}
+	if !strings.Contains(got.Evidence, "прочитан не целиком") {
+		t.Errorf("улика не говорит о неполноте: %q", got.Evidence)
+	}
+
+	// Площадка без фильма по-прежнему уходит из «фильма нет» в подозрение:
+	// вывод об отсутствии по неполному ответу выносить нельзя.
+	absent := ProbeResult{Status: statusAbsent, Evidence: "сеансов 40"}
+	if got := applyParseSkips(absent, []string{"потеряно 2"}); got.Status != statusSuspect {
+		t.Errorf("площадка с потерями и без фильма осталась в %q", got.Status)
+	}
+
+	// Без потерь ничего не меняется.
+	clean := ProbeResult{Status: statusAbsent, Evidence: "сеансов 40"}
+	if got := applyParseSkips(clean, nil); got.Status != statusAbsent || got.Evidence != "сеансов 40" {
+		t.Errorf("чистый ответ помечен неполным: %+v", got)
+	}
+}

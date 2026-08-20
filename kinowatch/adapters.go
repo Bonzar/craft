@@ -1958,6 +1958,10 @@ type cinema5Response struct {
 			CinemaID int    `json:"cinemaId"`
 			Date     string `json:"date"`
 			Time     string `json:"time"`
+			// Готовый момент сеанса: «2026-08-05 00:05». Он и есть истина —
+			// поле date рядом с ним держит день расписания, и ночной сеанс на
+			// нём уезжает на сутки назад.
+			Datetime string `json:"datetime"`
 			Format   string `json:"formatName"`
 			Hall     string `json:"hallName"`
 			HallCat  string `json:"hallCategory"`
@@ -1992,7 +1996,14 @@ func parseCinema5(body string, cinemaID int) (Playbill, error) {
 					"разбор Синема 5: в ответе площадки %d пришёл сеанс площадки %d",
 					cinemaID, s.CinemaID)
 			}
-			at := normalizeShowtime(s.Time, s.Date)
+			// Дата берётся из готового момента, а не из дня расписания: у
+			// ночного сеанса они расходятся. Замер 20.08.2026: сеанс «2026-08-05
+			// 00:05» лежит в дне 4 августа, и по дню он уехал бы на сутки назад.
+			day := s.Date
+			if d, _, ok := strings.Cut(strings.TrimSpace(s.Datetime), " "); ok && d != "" {
+				day = d
+			}
+			at := normalizeShowtime(s.Time, day)
 			if at == "" {
 				continue
 			}
@@ -3053,21 +3064,32 @@ func parseJewishMuseum(body string) (Playbill, error) {
 	for _, card := range cards {
 		nm := jewishName.FindStringSubmatch(card)
 		if len(nm) < 3 {
+			pb.Skipped = append(pb.Skipped, "карточка события без названия и ссылки")
 			continue
 		}
 		url := nm[1]
 		title := strings.TrimSpace(html.UnescapeString(stripHTML(nm[2])))
-		if title == "" || !looksLikeScreening(title, url) {
+		if title == "" {
+			pb.Skipped = append(pb.Skipped, "карточка события с пустым названием")
+			continue
+		}
+		// У музея кино — меньшинство среди событий: остальное лекции,
+		// экскурсии, концерты. Это законный фильтр, а не потеря, и в сверке
+		// позиций он участвует наравне с сеансами.
+		if !looksLikeScreening(title, url) {
+			pb.Filtered++
 			continue
 		}
 		when := card
 		wm := jewishWhen.FindStringSubmatch(when)
 		if len(wm) < 5 {
+			pb.Skipped = append(pb.Skipped, "кинопоказ «"+title+"» без даты и времени")
 			continue
 		}
 		date := wm[3] + "-" + wm[2] + "-" + wm[1]
 		at := normalizeShowtime(wm[4], date)
 		if at == "" {
+			pb.Skipped = append(pb.Skipped, "кинопоказ «"+title+"»: время "+wm[4]+" не разобралось")
 			continue
 		}
 		dates[date] = true
