@@ -2522,3 +2522,26 @@ func TestAuditPositions(t *testing.T) {
 		t.Errorf("ослабленная сверка ругается: %v", got)
 	}
 }
+
+// У «Синема 5» день расписания и момент сеанса расходятся на ночных сеансах:
+// источник кладёт «2026-08-05 00:05» в день 4 августа. Верный ответ у него уже
+// есть, и выбрасывать его нельзя.
+func TestParseCinema5TakesReadyMoment(t *testing.T) {
+	pb, err := parseCinema5(readFixture(t, "cinema5-today.json"), 21)
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	var night int
+	for _, s := range pb.Showtimes {
+		if strings.Contains(s.StartsAt, "T00:05") {
+			night++
+			if !strings.HasPrefix(s.StartsAt, "2026-08-05") {
+				t.Errorf("ночной сеанс встал на день расписания: %s", s.StartsAt)
+			}
+		}
+	}
+	if night == 0 {
+		t.Fatal("в фикстуре есть сеанс 00:05, но в афише его нет")
+	}
+}

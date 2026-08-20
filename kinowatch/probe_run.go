@@ -36,6 +36,11 @@ type ProbeReport struct {
 	Skipped  int            `json:"skipped"`
 	Statuses map[string]int `json:"statuses"`
 
+	// Partial — сколько площадок ответили, но были прочитаны не целиком.
+	// Отдельно от статусов: такая площадка может быть в любом из них, и без
+	// своего счётчика неполнота теряется в общей массе.
+	Partial int `json:"partial"`
+
 	// Tunnel — сколько площадок требуют российского выхода и сколько из них
 	// осталось неопрошенными. Отдельно от прочих причин намеренно: несобранное
 	// из-за отсутствия туннеля — это «не дотянулись», а не «источник сломался».
@@ -370,6 +375,9 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days, 
 		default:
 			report.Probed++
 			report.Statuses[vp.Status]++
+			if len(vp.Skipped) > 0 {
+				report.Partial++
+			}
 			recordProbe(&obs[i], vp, report.FetchedAt)
 		}
 		report.Venues = append(report.Venues, vp)
@@ -629,10 +637,17 @@ func applyHorizonGap(res ProbeResult, failedDays []string) ProbeResult {
 //
 // Живость не трогается: источник ответил, и часть данных прочиталась.
 func applyParseSkips(res ProbeResult, skipped []string) ProbeResult {
-	if res.Status != statusAbsent || len(skipped) == 0 {
+	if len(skipped) == 0 {
 		return res
 	}
-	res.Status = statusSuspect
+
+	// Неполное чтение бьёт по выводу независимо от того, нашёлся фильм или
+	// нет. Раньше пометка ставилась только площадке с «фильма нет», и площадка
+	// с найденным фильмом выглядела прочитанной целиком — хотя в потерянной
+	// записи мог стоять ещё один его сеанс.
+	if res.Status == statusAbsent {
+		res.Status = statusSuspect
+	}
 	res.Evidence = fmt.Sprintf("ответ прочитан не целиком, пропущено записей %d (%s): %s",
 		len(skipped), strings.Join(skipped, "; "), res.Evidence)
 	return res
