@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -1603,11 +1604,17 @@ func TestParseRomanovFixture(t *testing.T) {
 	}
 
 	// Ночной сеанс уезжает на следующие сутки: касса относит его к предыдущему
-	// операционному дню, а человеку идти в кино уже завтра.
+	// операционному дню, а человеку идти в кино уже завтра. Переносит его общий
+	// вход по объявлению источника, поэтому и проверяем через вход.
+	viaSource, err := parseSource(kindRomanov, readFixture(t, "romanov-seans.json"),
+		func(b string) (Playbill, error) { return parseRomanov(b, "2026-08-05") })
+	if err != nil {
+		t.Fatalf("разбор через общий вход: %v", err)
+	}
 	var night *Showtime
-	for i := range pb.Showtimes {
-		if strings.Contains(pb.Showtimes[i].StartsAt, "T00:00:00") {
-			night = &pb.Showtimes[i]
+	for i := range viaSource.Showtimes {
+		if strings.Contains(viaSource.Showtimes[i].StartsAt, "T00:00:00") {
+			night = &viaSource.Showtimes[i]
 			break
 		}
 	}
@@ -1620,23 +1627,32 @@ func TestParseRomanovFixture(t *testing.T) {
 }
 
 // Перенос ночных сеансов не имеет права трогать дневные.
-func TestBusinessDayShift(t *testing.T) {
-	cases := map[string]string{
-		"00:00": "2026-08-06",
-		"01:30": "2026-08-06",
-		"05:59": "2026-08-06",
-		"06:00": "2026-08-05",
-		"11:10": "2026-08-05",
-		"23:40": "2026-08-05",
+// Ночной сеанс переносится на следующие сутки — теперь общим входом, по
+// объявлению источника, а не руками внутри разбора.
+func TestShiftNightSessions(t *testing.T) {
+	list := []Showtime{
+		{StartsAt: "2026-08-06T00:20:00+03:00"},
+		{StartsAt: "2026-08-06T05:59:00+03:00"},
+		{StartsAt: "2026-08-06T06:00:00+03:00"},
+		{StartsAt: "2026-08-06T23:10:00+03:00"},
+		{StartsAt: ""},
 	}
-	for hhmm, want := range cases {
-		if got := businessDayShift("2026-08-05", hhmm); got != want {
-			t.Errorf("%s → %s, ожидалось %s", hhmm, got, want)
+	got := shiftNightSessions(list)
+
+	want := []string{
+		"2026-08-07T00:20:00+03:00",
+		"2026-08-07T05:59:00+03:00",
+		"2026-08-06T06:00:00+03:00",
+		"2026-08-06T23:10:00+03:00",
+		"",
+	}
+	for i, w := range want {
+		if got[i].StartsAt != w {
+			t.Errorf("сеанс %d: вышло %q, ожидалось %q", i, got[i].StartsAt, w)
 		}
 	}
 }
 
-// Разбор Алмаза на живой фикстуре (снята 04.08.2026 через российский выход).
 func TestParseAlmazFixture(t *testing.T) {
 	pb, err := parseAlmaz(readFixture(t, "almaz.html"), "2026-08-04")
 	if err != nil {
@@ -2459,5 +2475,50 @@ func TestParseMoriReadsThousandPrices(t *testing.T) {
 	}
 	if maxPrice < 1000 {
 		t.Errorf("самая дорогая цена %d ₽, а в теле фикстуры есть четырёхзначные", maxPrice)
+	}
+}
+
+// Сверка позиций: тело обещает столько-то сеансов, разбор обязан объяснить
+// каждый — сеансом, названным пропуском или объявленным фильтром.
+//
+// Это и есть запрет вместо правила: он ловит и выброшенную позицию, и не
+// найденный целиком блок, и смену вёрстки, независимо от того, что написано
+// внутри самого разбора.
+func TestAuditPositions(t *testing.T) {
+	spec := sourceSpec{anchor: regexp.MustCompile(`SEANS`), dateMeaning: dateOperational}
+	body := "SEANS SEANS SEANS SEANS"
+
+	cases := []struct {
+		name string
+		pb   Playbill
+		want bool // ожидается ли изъян
+	}{
+		{"всё объяснено сеансами", Playbill{Showtimes: make([]Showtime, 4)}, false},
+		{"часть ушла в пропуски", Playbill{Showtimes: make([]Showtime, 2), Skipped: []string{"a", "b"}}, false},
+		{"часть отфильтрована", Playbill{Showtimes: make([]Showtime, 1), Filtered: 3}, false},
+		{"половина потеряна молча", Playbill{Showtimes: make([]Showtime, 2)}, true},
+		{"потеряно всё", Playbill{}, true},
+	}
+	for _, c := range cases {
+		got := auditPositions(spec, body, c.pb)
+		if (len(got) > 0) != c.want {
+			t.Errorf("%s: изъянов %d, ожидалось %v", c.name, len(got), c.want)
+		}
+	}
+
+	// Признак исчез из непустого тела — сменилась вёрстка, и молчать нельзя.
+	if got := auditPositions(spec, "тело без единого признака", Playbill{}); len(got) == 0 {
+		t.Error("признак сеанса исчез из тела, а сверка промолчала")
+	}
+
+	// Источник сам объявил пустой день — это ответ кассы, а не поломка.
+	if got := auditPositions(spec, "тело без единого признака", Playbill{EmptyDay: true}); len(got) != 0 {
+		t.Errorf("штатный пустой день помечен изъяном: %v", got)
+	}
+
+	// У источника без признака уровня сеанса сверка объявлена ослабленной.
+	weak := sourceSpec{weakAnchor: true, dateMeaning: dateOperational}
+	if got := auditPositions(weak, body, Playbill{}); len(got) != 0 {
+		t.Errorf("ослабленная сверка ругается: %v", got)
 	}
 }
