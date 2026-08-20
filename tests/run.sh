@@ -52,6 +52,9 @@ declare -A SCRIPT=(
   [guard-plan-exit-failure]="$HOOKS/universal-guard-plan-exit-failure.sh"
   [mark-plan-critic]="$HOOKS/universal-mark-plan-critic.sh"
   [mark-plan-file]="$HOOKS/universal-mark-plan-file.sh"
+  [plan-gate-button]="$HOOKS/universal-plan-gate-button.sh"
+  [guard-critic-plateau]="$HOOKS/universal-guard-critic-plateau.sh"
+  [plan-delta]="$HOOKS/universal-guard-plan-delta.sh"
   [stop-incident-closure]="$HOOKS/universal-stop-incident-closure.sh"
   [stop-relative-link]="$HOOKS/universal-stop-relative-link.sh"
   [detect-incident-arm]="$HOOKS/universal-detect-incident.sh"
@@ -118,6 +121,11 @@ for f in "${files[@]}"; do
     criticpend="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-pending-test.XXXXXX")"
     planshown="$(mktemp -u "${TMPDIR:-/tmp}/plan-shown-test.XXXXXX")"
     criticruns="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-runs-test.XXXXXX")"
+    # Классификатор гейта в тестах ВСЕГДА мок (дефолтный ответ «СООТВЕТСТВУЕТ»),
+    # иначе кейс с периметром сделал бы сетевой вызов настоящей модели. След
+    # вызова мока (classtrace) — признак для кейсов «модель не зовётся»:
+    # ответ хука одинаков с вызовом и без, различает исходы только след.
+    classtrace="$(mktemp -u "${TMPDIR:-/tmp}/mock-classifier-trace.XXXXXX")"
     caseenv=("CRAFT_PLAN_GATE_MARKER=$marker" "OBSERVE_BUFFER=$obsbuf"
              "FACT_GATE_STATE_DIR=$fgdir" "ROUTINE_FACTS_MARKER=$rfmark"
              "CRAFT_PLAN_FILE_MARKER=$planpath" "CRAFT_PLAN_CRITIC_MARKER=$criticmark"
@@ -125,7 +133,9 @@ for f in "${files[@]}"; do
              "CRAFT_SERVICE_TURN_MARKER=$serviceturn"
              "CRAFT_PLAN_CRITIC_PENDING=$criticpend"
              "CRAFT_PLAN_SHOWN_MARKER=$planshown"
-             "CRAFT_PLAN_CRITIC_RUNS=$criticruns")
+             "CRAFT_PLAN_CRITIC_RUNS=$criticruns"
+             "PLAN_CLASSIFIER_CMD=$CASES_DIR/fixtures/mock-classifier.sh"
+             "MOCK_CLASSIFIER_TRACE=$classtrace")
     # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
     # из env, создаётся до прогона (взводом в жизни занимается другой хук).
     [[ "$(jq -r '.arm // false' <<<"$line")" == "true" ]] && : > "$icmark"
@@ -171,7 +181,13 @@ for f in "${files[@]}"; do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>"$errf")"
     done
     err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
-    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
+    # Число записей окна разрешений снимается ДО уборки — его сверяет
+    # assert_qa_records (кейсы вытеснения и фильтра служебных сообщений).
+    qa_count="$(grep -c '^## Запись' "${marker}.qa-window" 2>/dev/null || echo 0)"
+    rm -f "$marker" "${marker}.button-plans" "${marker}.classifier-degraded" \
+          "${marker}.qa-window" "${marker}.plans" \
+          "$obsbuf" "$rfmark" "$planpath" "$criticmark" \
+          "$deltastore" "${deltastore}.snapshot" \
           "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend" "$planshown" "$criticruns"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
@@ -192,6 +208,25 @@ for f in "${files[@]}"; do
       err-not-contains:*) grep -qF -- "${expect#err-not-contains:}" <<<"$err" || ok=1 ;;
       *)      fails+=("$hook / $name — unknown expect '$expect'") ;;
     esac
+    # Ассерты следа классификатора: assert_no_model_call — мок не вызывался
+    # (следа нет), assert_model_call — вызывался, assert_trace_contains —
+    # строка дошла до промпта (сериализация правки). Ответ хука в этих
+    # исходах одинаков, различает их только след мока.
+    if [[ $ok -eq 1 && "$(jq -r '.assert_no_model_call // false' <<<"$line")" == "true" && -e "$classtrace" ]]; then
+      ok=0; out="классификатор был вызван, а не должен"
+    fi
+    if [[ $ok -eq 1 && "$(jq -r '.assert_model_call // false' <<<"$line")" == "true" && ! -e "$classtrace" ]]; then
+      ok=0; out="классификатор не был вызван, а должен"
+    fi
+    tneedle="$(jq -r '.assert_trace_contains // ""' <<<"$line")"
+    if [[ $ok -eq 1 && -n "$tneedle" ]] && ! grep -qF -- "$tneedle" "$classtrace" 2>/dev/null; then
+      ok=0; out="в промпте классификатора нет «${tneedle}»"
+    fi
+    rm -f "$classtrace"
+    qa_expect="$(jq -r '.assert_qa_records // ""' <<<"$line")"
+    if [[ $ok -eq 1 && -n "$qa_expect" && "$qa_count" != "$qa_expect" ]]; then
+      ok=0; out="записей в окне разрешений: $qa_count, ожидалось $qa_expect"
+    fi
     if [[ $ok -eq 1 ]]; then
       pass=$((pass+1)); printf '%-6s %-22s %-7s %s\n' "PASS" "$hook" "$expect" "$name"
     else
@@ -213,6 +248,7 @@ REQUIRED=(
   "fact-gate:deny"            "fact-gate:allow"
   "stop-routine-facts:block"  "stop-routine-facts:silent"
   "guard-plan-critic:deny"    "guard-plan-critic:allow"
+  "guard-critic-plateau:deny" "guard-critic-plateau:allow"
   "guard-plan-delta:deny"     "guard-plan-delta:allow"     "guard-plan-delta:silent"
   "guard-plan-service-turn:deny" "guard-plan-service-turn:allow"
   "mark-plan-critic:silent"   "mark-plan-file:silent"
