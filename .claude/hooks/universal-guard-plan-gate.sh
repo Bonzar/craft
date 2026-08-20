@@ -281,9 +281,15 @@ if [[ "$is_file_edit" -eq 1 ]]; then
 
   # Текст правки по инструменту: Edit/Write — new_string/content, MultiEdit —
   # все edits[].new_string, NotebookEdit — new_source; без них классификатор
-  # видел бы пустую правку и не мог ловить выход за одобренное.
+  # видел бы пустую правку и не мог ловить выход за одобренное. Заменяемый
+  # текст (old_string) сериализуется тоже: без него у Edit новый текст читается
+  # как ДОБАВЛЕНИЕ целиком, и якорные строки замены дают ложное «сверх плана».
   desc="инструмент: $tool
 файл: $fp
+заменяемый текст:
+$(jq -r '.tool_input.old_string
+         // (((.tool_input.edits // []) | map(.old_string // "") | join("\n---\n")) | select(. != ""))
+         // ""' <<<"$input" 2>/dev/null | head -c 2000)
 новый текст:
 $(jq -r '.tool_input.new_string // .tool_input.content // .tool_input.new_source
          // (((.tool_input.edits // []) | map(.new_string // "") | join("\n---\n")) | select(. != ""))
