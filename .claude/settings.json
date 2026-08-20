@@ -73,7 +73,7 @@
         ]
       },
       {
-        "matcher": "Task|Agent",
+        "matcher": "Task|Agent|Workflow",
         "hooks": [
           {
             "type": "command",

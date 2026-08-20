@@ -13,6 +13,11 @@
 #   UserPromptSubmit — уведомление о завершении задачи. Тот же идентификатор и успешный
 #                    статус превращают ожидание в отметку; иной статус ожидание снимает.
 #
+# Веер, запущенный одним Workflow (tools/plan-critic-fan.sh), идёт тем же путём:
+# запуск оставляет ожидание, уведомление о завершении — отметку. Идентификатор из
+# расписки Workflow не опознан — ожидания нет, отметку по завершению пишет сам
+# скрипт веера (подкоманда mark, идемпотентна).
+#
 # Хеш берётся в момент ЗАПУСКА: критик читал именно ту версию плана. Правка плана после
 # запуска отметку обесценит сама — гейт сверяет её с текущим файлом.
 #
@@ -117,8 +122,18 @@ if [[ "$event" == "UserPromptSubmit" ]]; then
 fi
 
 role="$(jq -r '.tool_input.subagent_type // ""' <<<"$input" 2>/dev/null)"
+# Веер, запущенный одним Workflow (tools/plan-critic-fan.sh): событий Task|Agent
+# на его внутренних критиков не приходит, поэтому запуск распознаётся по самому
+# Workflow-вызову — подстрока plan-critic-fan в пути или meta скрипта. Круг
+# веера — одна отметка, как у сводящего.
+if [[ -z "$role" ]] \
+   && [[ "$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" == "Workflow" ]]; then
+  wfsrc="$(jq -r '(.tool_input.scriptPath // "") + "\n" + ((.tool_input.script // "") | .[0:600])' \
+           <<<"$input" 2>/dev/null)"
+  [[ "$wfsrc" == *plan-critic-fan* ]] && role="workflow-fan"
+fi
 case "$role" in
-  plan-critic|plan-critic-verdict|plan-critic-unit|plan-critic-seams) ;;
+  plan-critic|plan-critic-verdict|plan-critic-unit|plan-critic-seams|workflow-fan) ;;
   *) exit 0 ;;
 esac
 
@@ -146,8 +161,18 @@ rm -f "$round" 2>/dev/null || true
 
 resp="$(jq -r '.tool_response | tostring' <<<"$input" 2>/dev/null)"
 id="$(sed -n 's/.*agentId: \([A-Za-z0-9_-]*\).*/\1/p' <<<"$resp" | head -1)"
+# У Workflow идентификатор в расписке зовётся иначе: сперва явный task-id,
+# потом runId (wf_…) — уведомление о завершении принесёт один из них.
+if [[ -z "$id" && "$role" == "workflow-fan" ]]; then
+  id="$(sed -n 's/.*[Tt]ask[-_ ]\{0,1\}[Ii][Dd][^A-Za-z0-9_-]\{1,3\}\([A-Za-z0-9_-]\{4,\}\).*/\1/p' <<<"$resp" | head -1)"
+  [[ -z "$id" ]] && id="$(grep -oE 'wf_[a-z0-9-]{6,}' <<<"$resp" | head -1)"
+fi
 if [[ -n "$id" ]]; then
   printf '%s\t%s\n' "$id" "$hash" >> "$pending" 2>/dev/null || true
+elif [[ "$role" == "workflow-fan" ]]; then
+  # Расписка Workflow вердикта не несёт никогда: без опознанного идентификатора
+  # отметки нет — её по завершению пишет сам скрипт веера (подкоманда mark).
+  exit 0
 else
   put_mark "$hash" "$(verdict_of "$resp")"
   bump_runs
