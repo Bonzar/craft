@@ -3598,3 +3598,129 @@ type KinoafishaMovie struct {
 	Title string
 	Year  int
 }
+
+// ——— Что инструмент знает про ответ источника помимо разбора ———
+//
+// Два свойства, без которых разбор нельзя проверить и нельзя правильно
+// датировать. Оба объявляются НА ИСТОЧНИК и оба обязательны: вид канала без
+// объявления валит перебор в тестах, потому что забытое объявление — это
+// молчаливое согласие с любым поведением.
+
+// dateMeaning — что означает дата, с которой разбор склеивает время сеанса.
+type dateMeaning int
+
+const (
+	// dateCalendar — дата это календарный день самого сеанса. Так отвечают
+	// источники, у которых дата висит на каждом сеансе: «06.08.2026 19:00:00».
+	// Ночной сеанс уже датирован верно, трогать его нельзя.
+	dateCalendar dateMeaning = iota + 1
+
+	// dateOperational — дата это операционный день страницы или запроса.
+	// Сеанс в 00:20 на странице 31 июля принадлежит первому августа, и без
+	// переноса он уезжает на сутки назад.
+	dateOperational
+
+	// dateReady — источник отдаёт готовый момент целиком, и разбор берёт его
+	// как есть. Ни переносить, ни склеивать нечего.
+	dateReady
+)
+
+// sourceSpec — объявление источника.
+type sourceSpec struct {
+	// anchor — чем в теле ответа считается ОДИН сеанс.
+	//
+	// Именно сеанс, а не карточка фильма: потерянная карточка на пять сеансов
+	// дала бы баланс «одна позиция против одного пропуска» и сошлась бы.
+	anchor *regexp.Regexp
+
+	// anchorFrom — маркер, с которого начинается расписание. Пустой означает
+	// «считать всё тело». Нужен там, где выше расписания в том же теле лежит
+	// чужой блок: у p24 это промо-виджет «ближайшие сеансы», чьи сеансы
+	// дублируют расписание.
+	anchorFrom string
+
+	// weakAnchor — у источника нет признака уровня сеанса, и сверка ослаблена:
+	// она видит потери только после нарезки тела на блоки. Ставится осознанно и
+	// поимённо, список печатается в отчёте прогона.
+	weakAnchor bool
+
+	// dateMeaning — см. выше. Ноль недопустим.
+	dateMeaning dateMeaning
+}
+
+// countAnchors — сколько сеансов обещает тело источника.
+func (s sourceSpec) countAnchors(body string) int {
+	if s.anchor == nil {
+		return 0
+	}
+	if s.anchorFrom != "" {
+		if i := strings.Index(body, s.anchorFrom); i >= 0 {
+			body = body[i:]
+		}
+	}
+	return len(s.anchor.FindAllStringIndex(body, -1))
+}
+
+// channelKinds — все виды каналов, из которых вызывается разбор.
+//
+// Список ведётся здесь, а не выводится из диспетчера: по нему идёт перебор в
+// тестах, и вид без объявления обязан валить проверку. Забытый ключ в карте
+// молча даёт ноль — этот урок в файле уже есть, поэтому список и перебор.
+var channelKinds = []string{
+	kindKinomax, kindKaro, kindCinemaStar, kindCinemaPark, kindKinoplan,
+	kindMoskino, kindMori, kindP24, kindPushka, kindHudozhestvenny,
+	kindGum, kindPremierzal, kindMirage, kindCinema5, kindEtobilet,
+	kindPioner, kindPoklonka, kindMoskva, kindRomanov, kindAlmaz,
+	kindIllusion, kindLuxor, kindTretyakov, kindJewish,
+}
+
+// sourceSpecs — объявления источников.
+//
+// Признак позиции подобран замером 20.08.2026: на здоровой фикстуре число его
+// вхождений равно числу разобранных сеансов. Смысл даты прочитан из того, с чем
+// разбор склеивает время.
+var sourceSpecs = map[string]sourceSpec{
+	// Дата ответа плюс время сеанса — операционный день.
+	kindKinomax: {anchor: regexp.MustCompile(`"time":`), dateMeaning: dateOperational},
+	// Момент приходит целиком: «2026-08-02 13:00:00».
+	kindKaro:       {anchor: regexp.MustCompile(`"showtime"`), dateMeaning: dateReady},
+	kindCinemaStar: {anchor: regexp.MustCompile(`"showtime"`), dateMeaning: dateReady},
+	kindKinoplan:   {anchor: regexp.MustCompile(`"hall"`), dateMeaning: dateReady},
+	// Дата страницы дня плюс время — операционный день.
+	kindCinemaPark: {anchor: regexp.MustCompile(`openWidget=`), dateMeaning: dateOperational},
+	kindMoskino:    {anchor: regexp.MustCompile(`richSession\(`), dateMeaning: dateOperational},
+	kindMori:       {anchor: regexp.MustCompile(`/session/\d+/buy`), dateMeaning: dateOperational},
+	// Выше расписания у p24 висит промо-виджет «ближайшие сеансы», и его
+	// сеансы дублируют расписание: считаем от первого блока фильма.
+	kindP24: {
+		anchor:      regexp.MustCompile(`data-uuid`),
+		anchorFrom:  `event-info`,
+		dateMeaning: dateOperational,
+	},
+	kindPushka:         {anchor: regexp.MustCompile(`"time"`), dateMeaning: dateOperational},
+	kindHudozhestvenny: {anchor: regexp.MustCompile(`isSaleAvailable`), dateMeaning: dateReady},
+	kindGum:            {anchor: regexp.MustCompile(`ticketManager\.session\(`), dateMeaning: dateOperational},
+	kindPremierzal:     {anchor: regexp.MustCompile(`class="schedule__session-time `), dateMeaning: dateOperational},
+	kindMirage:         {anchor: regexp.MustCompile(`<div class="time">`), dateMeaning: dateOperational},
+	// Источник отдаёт готовый момент рядом с датой дня.
+	kindCinema5:  {anchor: regexp.MustCompile(`"datetime"`), dateMeaning: dateReady},
+	kindEtobilet: {anchor: regexp.MustCompile(`\\"time\\"`), dateMeaning: dateOperational},
+	kindPioner:   {anchor: regexp.MustCompile(`data-seance`), dateMeaning: dateOperational},
+	// У Поклонки признака уровня сеанса нет: времена лежат по несколько в одной
+	// ячейке, и отдельного идентификатора у сеанса не существует. Сверка здесь
+	// ослаблена и это объявлено, а не забыто.
+	kindPoklonka: {weakAnchor: true, dateMeaning: dateOperational},
+	kindMoskva:   {anchor: regexp.MustCompile(`repertoire-times__time`), dateMeaning: dateOperational},
+	kindRomanov:  {anchor: regexp.MustCompile(`"SEANSES_TIME_FORMAT"`), dateMeaning: dateOperational},
+	kindAlmaz:    {anchor: regexp.MustCompile(`DateTimeOffset`), dateMeaning: dateReady},
+	kindIllusion: {anchor: regexp.MustCompile(`schedule-film__time"`), dateMeaning: dateOperational},
+	kindLuxor:    {anchor: regexp.MustCompile(`"time"`), dateMeaning: dateOperational},
+	// Полная дата висит на каждом сеансе: «06.08.2026 19:00:00».
+	kindTretyakov: {
+		anchor:      regexp.MustCompile(`\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}`),
+		dateMeaning: dateCalendar,
+	},
+	// У музея среди карточек событий кино — меньшинство, остальные уходят
+	// объявленным фильтром.
+	kindJewish: {anchor: regexp.MustCompile(`event-card__date`), dateMeaning: dateCalendar},
+}
