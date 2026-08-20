@@ -2545,3 +2545,74 @@ func TestParseCinema5TakesReadyMoment(t *testing.T) {
 		t.Fatal("в фикстуре есть сеанс 00:05, но в афише его нет")
 	}
 }
+
+// Ночной сеанс приходит в свои сутки — поимённо по каждому источнику, где он
+// в наших телах есть.
+//
+// Сверять список дат источника с датами его сеансов бесполезно: у большинства
+// он собран из тех же дат и сойдётся при любом переносе, нужном и лишнем.
+func TestNightSessionsLandOnTheirDay(t *testing.T) {
+	// Операционный день: сеанс после полуночи принадлежит следующим суткам.
+	cases := []struct {
+		name    string
+		kind    string
+		fixture string
+		hhmm    string
+		want    string
+		parse   func(string) (Playbill, error)
+	}{
+		{
+			name: "СИНЕМА ПАРК", kind: kindCinemaPark, fixture: "cinemapark-schedule.json",
+			hhmm: "T00:20", want: "2026-08-01",
+			parse: func(b string) (Playbill, error) { return parseCinemaPark(b, "2026-07-31") },
+		},
+		{
+			name: "Mori", kind: kindMori, fixture: "mori-thousand-price.html",
+			hhmm: "T00:00", want: "2026-08-24",
+			parse: func(b string) (Playbill, error) { return parseMori(b, "2026-08-23") },
+		},
+	}
+	for _, c := range cases {
+		pb, err := parseSource(c.kind, readFixture(t, c.fixture), c.parse)
+		if err != nil {
+			t.Errorf("%s: разбор: %v", c.name, err)
+			continue
+		}
+		var seen bool
+		for _, s := range pb.Showtimes {
+			if !strings.Contains(s.StartsAt, c.hhmm) {
+				continue
+			}
+			seen = true
+			if !strings.HasPrefix(s.StartsAt, c.want) {
+				t.Errorf("%s: ночной сеанс %s остался на дне расписания, ожидался %s",
+					c.name, s.StartsAt, c.want)
+			}
+		}
+		if !seen {
+			t.Errorf("%s: в фикстуре есть сеанс %s, но в афише его нет", c.name, c.hhmm)
+		}
+	}
+
+	// Календарная дата: источник датировал сеанс сам, и трогать его нельзя.
+	// У Третьяковки полная дата стоит у каждого сеанса — «06.08.2026 19:00:00».
+	before, err := parseTretyakov(readFixture(t, "tretyakov.html"), "")
+	if err != nil {
+		t.Fatalf("Третьяковка: разбор: %v", err)
+	}
+	after, err := parseSource(kindTretyakov, readFixture(t, "tretyakov.html"),
+		func(b string) (Playbill, error) { return parseTretyakov(b, "") })
+	if err != nil {
+		t.Fatalf("Третьяковка через общий вход: %v", err)
+	}
+	if len(before.Showtimes) != len(after.Showtimes) {
+		t.Fatalf("Третьяковка: сеансов было %d, стало %d", len(before.Showtimes), len(after.Showtimes))
+	}
+	for i := range before.Showtimes {
+		if before.Showtimes[i].StartsAt != after.Showtimes[i].StartsAt {
+			t.Errorf("Третьяковка: сеанс %s уехал на %s — календарную дату переносить нельзя",
+				before.Showtimes[i].StartsAt, after.Showtimes[i].StartsAt)
+			break
+		}
+	}
+}
