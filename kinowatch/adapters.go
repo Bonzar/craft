@@ -153,6 +153,17 @@ type Playbill struct {
 	// прежний.
 	SourceDays []string `json:"sourceDays,omitempty"`
 
+	// Filtered — позиции, законно отброшенные разбором: заголовок зала, событие
+	// без сеанса, день вне запроса. Не потеря, но в сверке позиций участвует
+	// наравне с сеансами и пропусками — иначе она ругалась бы на здоровый
+	// разбор. Наружу не печатается.
+	Filtered int `json:"-"`
+
+	// EmptyDay — источник сам сказал, что на этот день сеансов нет: маркер у
+	// Mori, календарь у Миража, пустой список у Люксора. Отличает штатную
+	// пустоту от исчезнувшего признака сеанса.
+	EmptyDay bool `json:"-"`
+
 	// Skipped — записи ответа, которые разбор не смог прочитать и пропустил.
 	//
 	// Пропуск рождается здесь, поэтому здесь и живёт: место общее на все
@@ -2535,31 +2546,6 @@ type romanovResponse struct {
 	} `json:"HALLS"`
 }
 
-// businessDayShift переносит ночной сеанс на следующий календарный день.
-//
-// Касса относит сеансы после полуночи к ПРЕДЫДУЩЕМУ операционному дню: у
-// Романова в расписании на 5 августа стоят и 23:40, и 00:00, и второй идёт в
-// ночь на 6-е. Без переноса такой сеанс приезжал бы на сутки раньше — человек
-// пришёл бы не в тот день, а проверка «последний сеанс уже в прошлом» считала
-// бы живое расписание протухшим.
-//
-// Граница в шесть утра — то же соглашение, что у операционного дня кинотеатра:
-// раньше шести сеансов не бывает, а всё, что позже, принадлежит своему дню.
-func businessDayShift(date, hhmm string) string {
-	if date == "" || len(hhmm) < 2 {
-		return date
-	}
-	h, err := strconv.Atoi(strings.TrimSpace(hhmm)[:2])
-	if err != nil || h >= 6 {
-		return date
-	}
-	d, err := time.ParseInLocation("2006-01-02", date, moscowTZ)
-	if err != nil {
-		return date
-	}
-	return d.AddDate(0, 0, 1).Format("2006-01-02")
-}
-
 // parseRomanov разбирает ответ ручки расписания.
 //
 // Зал приходит ключом карты («HALL1»), а не полем сеанса, поэтому номер
@@ -2584,7 +2570,7 @@ func parseRomanov(body, date string) (Playbill, error) {
 		hall := strings.TrimPrefix(h, "HALL")
 		for _, s := range resp.Halls[h] {
 			film := strings.TrimSpace(s.Film)
-			at := normalizeShowtime(s.Time, businessDayShift(date, s.Time))
+			at := normalizeShowtime(s.Time, date)
 			if film == "" || at == "" {
 				continue
 			}
@@ -2757,7 +2743,7 @@ func parseIllusion(body string, now time.Time) (Playbill, error) {
 			if p := illusionHall.FindStringSubmatch(film); len(p) > 2 {
 				hall, film = strings.TrimSpace(p[1]), strings.TrimSpace(p[2])
 			}
-			at := normalizeShowtime(tm[1], businessDayShift(date, tm[1]))
+			at := normalizeShowtime(tm[1], date)
 			if film == "" || at == "" {
 				continue
 			}
@@ -2838,7 +2824,7 @@ func parseLuxor(body, date string) (Playbill, error) {
 			continue
 		}
 		for _, s := range f.Seances {
-			at := normalizeShowtime(s.Time, businessDayShift(date, s.Time))
+			at := normalizeShowtime(s.Time, date)
 			if at == "" {
 				continue
 			}
@@ -2991,7 +2977,7 @@ func parseTretyakov(body, hall string) (Playbill, error) {
 		}
 		for _, d := range tretyakovDate.FindAllStringSubmatch(dm[1], -1) {
 			date := d[3] + "-" + d[2] + "-" + d[1]
-			at := normalizeShowtime(d[4], businessDayShift(date, d[4]))
+			at := normalizeShowtime(d[4], date)
 			if at == "" {
 				continue
 			}
@@ -3080,7 +3066,7 @@ func parseJewishMuseum(body string) (Playbill, error) {
 			continue
 		}
 		date := wm[3] + "-" + wm[2] + "-" + wm[1]
-		at := normalizeShowtime(wm[4], businessDayShift(date, wm[4]))
+		at := normalizeShowtime(wm[4], date)
 		if at == "" {
 			continue
 		}
@@ -3693,8 +3679,12 @@ var sourceSpecs = map[string]sourceSpec{
 	// Выше расписания у p24 висит промо-виджет «ближайшие сеансы», и его
 	// сеансы дублируют расписание: считаем от первого блока фильма.
 	kindP24: {
-		anchor:      regexp.MustCompile(`data-uuid`),
-		anchorFrom:  `event-info`,
+		anchor: regexp.MustCompile(`data-uuid`),
+		// Отсечка по контейнеру списка событий, а не по блоку фильма: подстрока
+		// «event-info» встречается в теле и выше промо-виджета, и по ней он не
+		// отрезался. Замер 20.08.2026: контейнер стоит после промо, и после
+		// него в теле ровно 24 сеанса расписания против 31 во всём теле.
+		anchorFrom:  `EventList_`,
 		dateMeaning: dateOperational,
 	},
 	kindPushka:         {anchor: regexp.MustCompile(`"time"`), dateMeaning: dateOperational},
@@ -3723,4 +3713,81 @@ var sourceSpecs = map[string]sourceSpec{
 	// У музея среди карточек событий кино — меньшинство, остальные уходят
 	// объявленным фильтром.
 	kindJewish: {anchor: regexp.MustCompile(`event-card__date`), dateMeaning: dateCalendar},
+}
+
+// parseSource — единственный вход к разбору ответа кассы.
+//
+// Через него проходит любой разбор, и в нём живут две вещи, которые нельзя
+// оставлять на дисциплину автора адаптера.
+//
+// ПЕРВОЕ — время. Ночной сеанс на странице операционного дня принадлежит
+// следующим суткам: «00:20» со страницы 31 июля это первое августа. Раньше
+// перенос вписывался руками в пять разборов из двадцати пяти, и ошибались обе
+// стороны — у СИНЕМА ПАРКа, кинотеатра «Москва» и Mori его не было при живых
+// ночных сеансах, у Третьяковки и Еврейского музея он стоял лишним.
+//
+// ВТОРОЕ — сверка. Тело обещает столько-то сеансов, разбор обязан их все
+// куда-то деть: в афишу, в названный пропуск или в объявленный фильтр. Меньше
+// исходов, чем позиций, значит потерю, и она уходит в пропуски числом. Так
+// молчаливая потеря становится невозможной независимо от того, что написано
+// внутри самого разбора.
+func parseSource(kind, body string, parse func(string) (Playbill, error)) (Playbill, error) {
+	spec, ok := sourceSpecs[kind]
+	if !ok {
+		return Playbill{}, fmt.Errorf("разбор %s: вид канала не объявлен — нечем считать позиции и нечем датировать", kind)
+	}
+
+	pb, err := parse(body)
+	if err != nil {
+		return pb, err
+	}
+
+	if spec.dateMeaning == dateOperational {
+		pb.Showtimes = shiftNightSessions(pb.Showtimes)
+	}
+
+	pb.Skipped = append(pb.Skipped, auditPositions(spec, body, pb)...)
+	return pb, nil
+}
+
+// shiftNightSessions переносит сеансы до шести утра на следующие сутки.
+//
+// Шесть утра, а не полночь: кинотеатр закрывается ночью, и всё, что стоит в
+// расписании дня раньше утреннего сеанса, относится к его ночи. Обратная
+// сторона — утренний сеанс в 06:00 остаётся на своём дне.
+func shiftNightSessions(list []Showtime) []Showtime {
+	for i, s := range list {
+		at, err := time.Parse(time.RFC3339, s.StartsAt)
+		if err != nil || at.Hour() >= 6 {
+			continue
+		}
+		list[i].StartsAt = at.AddDate(0, 0, 1).Format(time.RFC3339)
+	}
+	return list
+}
+
+// auditPositions сверяет обещанное телом с тем, что разбор из него достал.
+func auditPositions(spec sourceSpec, body string, pb Playbill) []string {
+	if spec.weakAnchor {
+		return nil
+	}
+
+	want := spec.countAnchors(body)
+	got := len(pb.Showtimes) + len(pb.Skipped) + pb.Filtered
+
+	// Ноль позиций при непустом теле — это смена вёрстки: исчез сам признак.
+	// Кроме случая, когда источник САМ объявил пустой день: у него календарь
+	// или переключатель на месте, просто сеансов нет, и объявлять живую
+	// площадку мёртвой нельзя.
+	if want == 0 {
+		if len(body) == 0 || pb.EmptyDay || got > 0 {
+			return nil
+		}
+		return []string{"признак сеанса не найден в теле — похоже, сменилась вёрстка"}
+	}
+
+	if want <= got {
+		return nil
+	}
+	return []string{fmt.Sprintf("тело обещало %d сеансов, разбор объяснил %d — потеряно %d", want, got, want-got)}
 }

@@ -499,16 +499,16 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 	case kindKaro:
 		return fetchKaroDay(c, venue)
 	case kindKinomax:
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://api.kinomax.ru/rest/cinemas/"+url.PathEscape(venue)+
 				"/sessions?date="+day.Format("2006-01-02"),
 			parseKinomax)
 	case kindCinemaStar:
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://api.cinemastar.ru/theatre/"+url.PathEscape(venue),
 			parseCinemaStar)
 	case kindMoskino:
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://mos-kino.ru/cinema/"+url.PathEscape(venue)+"/",
 			func(body string) (Playbill, error) { return parseMoskino(body, day) })
 	case kindCinemaPark:
@@ -516,42 +516,42 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 	case kindCinema5:
 		return fetchCinema5(c, venue)
 	case kindPioner:
-		return fetchOne(c, "https://pioner-cinema.ru/?date="+day.Format("2006-01-02"),
+		return fetchOne(c, kind, "https://pioner-cinema.ru/?date="+day.Format("2006-01-02"),
 			func(body string) (Playbill, error) {
 				return parsePioner(body, day.Format("2006-01-02"))
 			})
 	case kindPoklonka:
-		return fetchOne(c, "https://poklonka-cinema.ru/films/",
+		return fetchOne(c, kind, "https://poklonka-cinema.ru/films/",
 			func(body string) (Playbill, error) { return parsePoklonka(body, day) })
 	case kindMoskva:
-		return fetchOne(c, "https://cinema.moscow/repertoire?date="+day.Format("2006-01-02"),
+		return fetchOne(c, kind, "https://cinema.moscow/repertoire?date="+day.Format("2006-01-02"),
 			func(body string) (Playbill, error) {
 				return parseCinemaMoskva(body, day.Format("2006-01-02"))
 			})
 	case kindAlmaz:
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://almazcinema.com/msk/cinema/"+url.PathEscape(venue)+"/schedule/",
 			func(body string) (Playbill, error) {
 				return parseAlmaz(body, day.Format("2006-01-02"))
 			})
 	case kindIllusion:
-		return fetchOne(c, "https://illusion-cinema.ru/schedule/",
+		return fetchOne(c, kind, "https://illusion-cinema.ru/schedule/",
 			func(body string) (Playbill, error) { return parseIllusion(body, day) })
 	case kindLuxor:
 		// Банка cookie обязательна: без неё сайт крутит редирект сам на себя,
 		// пока в куке не сохранён выбор площадки (проверено на «Весне»).
 		// Банка навешивается на ПЕРЕДАННЫЙ клиент, чтобы не потерять туннель.
-		return fetchOne(c.withCookies(),
+		return fetchOne(c.withCookies(), kind,
 			"https://www.luxorfilm.ru/cinema/"+url.PathEscape(venue)+"/seances",
 			func(body string) (Playbill, error) {
 				return parseLuxor(body, day.Format("2006-01-02"))
 			})
 	case kindTretyakov:
 		// venue здесь — название корпуса: строк реестра две, а страница одна.
-		return fetchOne(c, "https://www.tretyakovgallery.ru/tickets/cinema/",
+		return fetchOne(c, kind, "https://www.tretyakovgallery.ru/tickets/cinema/",
 			func(body string) (Playbill, error) { return parseTretyakov(body, venue) })
 	case kindJewish:
-		return fetchOne(c, "https://www.jewish-museum.ru/events/",
+		return fetchOne(c, kind, "https://www.jewish-museum.ru/events/",
 			func(body string) (Playbill, error) { return parseJewishMuseum(body) })
 	case kindRomanov:
 		return fetchRomanovDay(c, day)
@@ -561,12 +561,12 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		if host == "" {
 			return ChannelProbe{Err: fmt.Errorf("каналу etobilet нужен домен площадки (host)")}
 		}
-		return fetchOne(c, "https://"+host+"/?date="+day.Format("02.01.2006"),
+		return fetchOne(c, kind, "https://"+host+"/?date="+day.Format("02.01.2006"),
 			func(body string) (Playbill, error) {
 				return parseEtobilet(body, day.Format("2006-01-02"))
 			})
 	case kind5Zvezd:
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://5zvezd.ru/schedule/"+url.PathEscape(venue)+
 				"?date="+day.Format("02.01.2006"),
 			func(body string) (Playbill, error) {
@@ -581,7 +581,7 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		if host == "" {
 			return ChannelProbe{Err: fmt.Errorf("каналу p24 нужен домен площадки (host)")}
 		}
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://"+host+"/?date="+day.Format("2006/01/02")+"&facility="+url.QueryEscape(venue),
 			func(body string) (Playbill, error) {
 				return parseP24(body, day.Format("2006-01-02"))
@@ -592,14 +592,14 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		// Дата — параметром. Без неё источник отдаёт сегодняшний день на любой
 		// запрос (133453 байта против 162246 у `?date=2026-08-10`), а разбор
 		// приписывал его сеансы запрошенной дате.
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://mori.film/schedule/"+url.PathEscape(venue)+
 				"?date="+day.Format("2006-01-02"),
 			func(body string) (Playbill, error) {
 				return parseMori(body, day.Format("2006-01-02"))
 			})
 	case kindHudozhestvenny:
-		return fetchOne(c,
+		return fetchOne(c, kind,
 			"https://cinema1909.ru/schedule/"+day.Format("2006-01-02"),
 			func(body string) (Playbill, error) {
 				return parseHudozhestvenny(body, day.Format("2006-01-02"))
@@ -613,7 +613,7 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		}
 		// Клиент с банкой cookie: без неё сайт крутит редирект сам на себя и
 		// запрос умирает на десятом прыжке (проверено живьём).
-		return fetchOne(newSessionClient(60, 3), "https://"+host+"/schedule",
+		return fetchOne(newSessionClient(60, 3), kind, "https://"+host+"/schedule",
 			func(body string) (Playbill, error) {
 				return parsePremierzal(body, day.Format("2006-01-02"))
 			})
@@ -623,7 +623,7 @@ func fetchChannelDay(c *Client, kind string, p ChannelParams, day time.Time) Cha
 		// поэтому брать её нельзя: три площадки получили бы одно расписание
 		// MARI. Домен сразу с www — на него ведёт редирект, и без него каждый
 		// запрос идёт дважды.
-		return fetchOne(c, mirageHost+"/msk/schedule/"+day.Format("02.01.2006")+
+		return fetchOne(c, kind, mirageHost+"/msk/schedule/"+day.Format("02.01.2006")+
 			"/cinema/"+url.PathEscape(venue)+"/",
 			func(body string) (Playbill, error) {
 				return parseMirage(body, venue, day.Format("2006-01-02"))
@@ -689,12 +689,14 @@ func fetchGumDay(c *Client, day time.Time) ChannelProbe {
 
 	sum := sha256.Sum256([]byte(body))
 	out.BodyHash = hex.EncodeToString(sum[:8])
-	out.Playbill, out.ParseErr = parseGum(body, day)
+	out.Playbill, out.ParseErr = parseSource(kindGum, body,
+		func(b string) (Playbill, error) { return parseGum(b, day) })
+	out.Skipped = append(out.Skipped, out.Playbill.Skipped...)
 	return out
 }
 
 // fetchOne — общий скелет: один GET и один разбор.
-func fetchOne(c *Client, addr string, parse func(string) (Playbill, error)) ChannelProbe {
+func fetchOne(c *Client, kind, addr string, parse func(string) (Playbill, error)) ChannelProbe {
 	body, status, err := c.get(addr)
 	out := ChannelProbe{Status: status, BodySize: len(body), Err: err}
 	if err != nil {
@@ -702,8 +704,11 @@ func fetchOne(c *Client, addr string, parse func(string) (Playbill, error)) Chan
 	}
 	sum := sha256.Sum256([]byte(body))
 	out.BodyHash = hex.EncodeToString(sum[:8])
-	pb, perr := parse(body)
+	// Разбор идёт ТОЛЬКО через общий вход: там живут перенос ночного сеанса и
+	// сверка позиций, и обойти их мимо этого места нельзя.
+	pb, perr := parseSource(kind, body, parse)
 	out.Playbill, out.ParseErr = pb, perr
+	out.Skipped = append(out.Skipped, pb.Skipped...)
 	return out
 }
 
@@ -790,7 +795,8 @@ func fetchKinoplanDay(c *Client, widget string, day time.Time) ChannelProbe {
 
 	// Отбор по площадке обязателен: приложение бывает общим на несколько
 	// кинотеатров, и без него каждый получил бы расписание всех сразу.
-	pb, perr := parseKinoplanFor(body, id)
+	pb, perr := parseSource(kindKinoplan, body,
+		func(b string) (Playbill, error) { return parseKinoplanFor(b, id) })
 	out.Playbill, out.ParseErr = pb, perr
 	return out
 }
@@ -842,7 +848,9 @@ func fetchCinemaParkDay(venue string, day time.Time) ChannelProbe {
 		return out
 	}
 
-	out.Playbill, out.ParseErr = parseCinemaPark(body, date)
+	out.Playbill, out.ParseErr = parseSource(kindCinemaPark, body,
+		func(b string) (Playbill, error) { return parseCinemaPark(b, date) })
+	out.Skipped = append(out.Skipped, out.Playbill.Skipped...)
 	return out
 }
 
@@ -866,7 +874,7 @@ func fetchCinema5(c *Client, venue string) ChannelProbe {
 	got := 0
 
 	for _, page := range []string{"today", "tomorrow"} {
-		one := fetchOne(c,
+		one := fetchOne(c, kindCinema5,
 			"https://cinema5.ru/api/v1/movies/page/"+page+"?cinemaIds="+strconv.Itoa(id),
 			func(body string) (Playbill, error) { return parseCinema5(body, id) })
 
@@ -904,7 +912,9 @@ func fetchRomanovDay(c *Client, day time.Time) ChannelProbe {
 	if err != nil {
 		return out
 	}
-	out.Playbill, out.ParseErr = parseRomanov(body, day.Format("2006-01-02"))
+	out.Playbill, out.ParseErr = parseSource(kindRomanov, body,
+		func(b string) (Playbill, error) { return parseRomanov(b, day.Format("2006-01-02")) })
+	out.Skipped = append(out.Skipped, out.Playbill.Skipped...)
 	return out
 }
 
@@ -930,7 +940,7 @@ func fetchPushkaDay(c *Client, slug string) ChannelProbe {
 		return out
 	}
 
-	pb, perr := parsePushka(body)
+	pb, perr := parseSource(kindPushka, body, parsePushka)
 	out.Playbill, out.ParseErr = pb, perr
 	return out
 }
@@ -959,7 +969,8 @@ func fetchKaroDay(c *Client, venue string) ChannelProbe {
 		return out
 	}
 
-	pb, perr := parseKaroSchedule(flat, films)
+	pb, perr := parseSource(kindKaro, flat,
+		func(b string) (Playbill, error) { return parseKaroSchedule(b, films) })
 	out.Playbill, out.ParseErr = pb, perr
 	return out
 }
