@@ -259,6 +259,8 @@ func parseKinomax(body string) (Playbill, error) {
 		for _, s := range m.Sessions {
 			at, err := joinDateTime(resp.SelectedDate, s.Time)
 			if err != nil {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("Киномакс: сеанс «%s» со временем %q не датируется: %v", strings.TrimSpace(m.Name), s.Time, err))
 				continue
 			}
 			min, max := parsePriceLabel(s.Price)
@@ -368,6 +370,8 @@ func parseKaroSchedule(flatBody, filmsBody string) (Playbill, error) {
 	for _, s := range flat.Data.Items {
 		at, err := joinDateTime(s.Date, s.Time)
 		if err != nil {
+			pb.Skipped = append(pb.Skipped,
+				fmt.Sprintf("КАРО: сеанс %q %q не датируется: %v", s.Date, s.Time, err))
 			continue
 		}
 		pb.Showtimes = append(pb.Showtimes, Showtime{
@@ -632,10 +636,15 @@ func parseKinoplanFor(body string, cinemaID int) (Playbill, error) {
 	for _, r := range resp.Releases {
 		for _, s := range r.Seances {
 			if cinemaID != 0 && s.CinemaID != 0 && s.CinemaID != cinemaID {
+				// Шаблонная касса отдаёт сеансы всех своих площадок: чужие —
+				// законный фильтр, а не потеря.
+				pb.Filtered++
 				continue
 			}
 			at := parseZonedTime(s.StartDateTime)
 			if at == "" {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("Kinoplan: момент %q не разобрался", s.StartDateTime))
 				continue
 			}
 			if s.StartDate != "" && !seenDates[s.StartDate] {
