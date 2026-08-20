@@ -27,5 +27,8 @@ check "мусорный ответ → UNAVAILABLE"                  "throwaway"
 check "упавшая команда → UNAVAILABLE"                 "match $PLAN" "fail" "UNAVAILABLE"
 check "ПОВТОРЫ → REPEATS"        "delta $PLAN $PLAN"  "ПОВТОРЫ: Юнит 1" "REPEATS:*"
 check "ДЕЛЬТА ЧИСТАЯ → CLEAN"    "delta $PLAN $PLAN"  "ДЕЛЬТА ЧИСТАЯ" "CLEAN"
+check "ловушка подстроки: НЕ РАЗРЕШАЕТ ≠ PERMIT"      "permission $PLAN" "НЕ РАЗРЕШАЕТ: про другое" "NOPERMIT:*"
+check "РАЗРЕШАЕТ → PERMIT"                            "permission $PLAN" "РАЗРЕШАЕТ" "PERMIT"
+check "permission: мусорный ответ → UNAVAILABLE"      "permission $PLAN" "возможно" "UNAVAILABLE"
 echo "TOTAL: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # UserPromptSubmit: обычная реплика Влада ПЕРИМЕТР ГЕЙТА НЕ ГАСИТ — маркер
-# одобрения хранит список целей плана и живёт до реплики, начинающейся фразой
-# «закрой гейт», либо до смены сессии (файл в /tmp с id). Хук чистит только
-# пометки хода (служебный ход, показ плана, ожидания критика) и никогда не
-# блокирует сообщение (no stdout, exit 0).
+# одобрения хранит список целей и живёт до смены сессии (файл в /tmp с id);
+# отзыв разрешений — обычная просьба Влада, не магическая фраза. Хук чистит
+# пометки хода (служебный ход, показ плана, ожидания критика), никогда не
+# блокирует сообщение (no stdout, exit 0) — и дописывает реплику Влада в окно
+# разрешений: прямое указание («сделай короче») видно классификатору гейта и
+# открывает цель без нового плана.
 #
 # СЛУЖЕБНОЕ СОБЫТИЕ ходом не считается: сброс по нему обнулял одобрение посреди
 # исполнения. Якоря и правила их пополнения — в service-anchors.txt рядом.
@@ -38,27 +40,27 @@ done < "$ANCHORS" 2>/dev/null
 # в этом разговоре не было. Цена — такой критик отметки не поставит, нужен новый прогон.
 rm -f "$serviceturn" "$planshown" "$criticpend" 2>/dev/null || true
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
-# Периметр гасит только явная фраза: сверка префиксом сообщения, как у якорей.
-# Вместе с маркером уходят его производные (микро-планы кнопки, след деградации
-# классификатора) и непотраченный тап с сайдкаром вопроса: после фразы дельта
-# не помнит кнопочных одобрений и сверять правки не с чем.
-if [[ "$prompt" == "закрой гейт"* ]]; then
-  sid="${CLAUDE_CODE_SESSION_ID:-}"
-  if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
-    marker="$CRAFT_PLAN_GATE_MARKER"
-  elif [[ -n "$sid" ]]; then
-    marker="/tmp/craft-plan-gate.${sid}.approved"
-  else
-    marker=""
-  fi
-  [[ -n "$marker" ]] && rm -f "$marker" "${marker}.button-plans" "${marker}.classifier-degraded" 2>/dev/null || true
-  if [[ -n "${PLAN_GATE_BUTTON_MARKER:-}" ]]; then
-    bmarker="$PLAN_GATE_BUTTON_MARKER"
-  elif [[ -n "$sid" ]]; then
-    bmarker="/tmp/plan-gate-button.${sid}.one"
-  else
-    bmarker=""
-  fi
-  [[ -n "$bmarker" ]] && rm -f "$bmarker" "${bmarker}.question" 2>/dev/null || true
+# Реплика-указание — в окно разрешений (тот же файл, что пары кнопочного хука):
+# прямое доуточнение к сделанной правке открывает цель через классификатор.
+# Служебные сообщения выше уже вышли по якорям и сюда не доходят; пустая
+# реплика не пишется. Длинные вставки режутся — классификатору хватает начала.
+[[ -z "${prompt//[[:space:]]/}" ]] && exit 0
+sid="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
+  marker="$CRAFT_PLAN_GATE_MARKER"
+elif [[ -n "$sid" ]]; then
+  marker="/tmp/craft-plan-gate.${sid}.approved"
+else
+  exit 0
 fi
+qa="${marker}.qa-window"
+{ cat "$qa" 2>/dev/null
+  printf '## Запись: указание\n%s\n\n' "$(head -c 2000 <<<"$prompt")"
+} > "${qa}.tmp" 2>/dev/null || exit 0
+awk '
+  /^## Запись/ { n++ }
+  { line[NR] = $0; rec[NR] = n }
+  END { for (i = 1; i <= NR; i++) if (rec[i] > n - 5) print line[i] }
+' "${qa}.tmp" > "$qa" 2>/dev/null || true
+rm -f "${qa}.tmp" 2>/dev/null
 exit 0

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# PostToolUse на AskUserQuestion: кнопка разрешения план-гейта — МИКРО-ПЛАН.
-# Влад тапнул опцию с дословным лейблом «Разрешаю без плана (эту цель)» —
-# хук ставит маркер тапа и сохраняет в сайдкар текст вопроса: гейт
-# (universal-guard-plan-gate.sh) на трате дописывает цель правки в периметр
-# и привязывает к ней этот вопрос как предмет сверки содержания. Любой
-# другой ответ кнопки маркер не ставит. Новый тап до траты заменяет прежний
-# целиком — и маркер, и сайдкар. Событие рождается только настоящим тапом:
-# PostToolUse не срабатывает на отклонённый или упавший вопрос.
+# PostToolUse на AskUserQuestion: регистратор пар «вопрос + выбранный ответ»
+# для семантического разрешения план-гейта. Каждый завершённый вопрос с
+# ответом ложится записью в файл окна разрешений у маркера периметра; гейт
+# (universal-guard-plan-gate.sh) на правке вне периметра сверяет её с этим
+# окном классификатором — явное разрешение открывает цель. Дословного лейбла
+# и маркера тапа больше нет: решение «это было разрешение» принимает модель,
+# а не совпадение строки.
 #
-# Отладочный след входа — тем же приёмом, что у гейта: по нему проверяется
-# факт, что tool_response несёт выбранный пользователем ответ.
+# Схема входа снята с живого следа этой сессии (см. отладочный след ниже):
+# выбранный ответ лежит в .tool_response.answers — карта «текст вопроса →
+# лейбл выбранной опции». Ответ по вопросу не разобрался — пара не пишется:
+# окна из одних вопросов без ответов не бывает. Событие рождается только
+# настоящим тапом: PostToolUse не срабатывает на отклонённый вопрос.
+#
+# Окно — последние 5 записей (вместе с репликами-указаниями, которые пишет
+# universal-plan-gate-reset.sh), старые вытесняются. Гасит окно только смена
+# сессии — файл в /tmp с session-id.
 set -u
 
 if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
@@ -20,32 +26,39 @@ fi
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 
 input="$(cat)"
+# Отладочный след входа: по нему проверяются факты о схеме tool_response.
 printf '%s' "$input" > "/tmp/plan-gate-button-last-input.${CLAUDE_CODE_SESSION_ID:-default}.json" 2>/dev/null || true
 
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
 [[ "$tool" == "AskUserQuestion" ]] || exit 0
 
-LABEL="Разрешаю без плана (эту цель)"
-# Ответ пользователя ищется по всему tool_response: точная строка лейбла.
-resp="$(jq -r '.tool_response | tostring' <<<"$input" 2>/dev/null)"
-grep -qF "$LABEL" <<<"$resp" || exit 0
-
 sid="${CLAUDE_CODE_SESSION_ID:-}"
-if [[ -n "${PLAN_GATE_BUTTON_MARKER:-}" ]]; then
-  bmarker="$PLAN_GATE_BUTTON_MARKER"
+if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
+  marker="$CRAFT_PLAN_GATE_MARKER"
 elif [[ -n "$sid" ]]; then
-  bmarker="/tmp/plan-gate-button.${sid}.one"
+  marker="/tmp/craft-plan-gate.${sid}.approved"
 else
   exit 0
 fi
-# Сайдкар вопроса: поле question вопроса, среди опций которого тапнутый лейбл;
-# входы без options (историческая форма) — первый вопрос вызова. Вопросов нет
-# вовсе — тап не распознан, маркер не ставится.
-q="$(jq -r --arg L "$LABEL" '
-  (.tool_input.questions // []) as $qs
-  | ([$qs[] | select((.options // []) | any(.label == $L)) | .question] | first)
-    // ($qs | first | .question) // empty' <<<"$input" 2>/dev/null)"
-[[ -z "$q" ]] && exit 0
-printf '%s\n' "$q" > "${bmarker}.question" 2>/dev/null || true
-: > "$bmarker" 2>/dev/null || true
+qa="${marker}.qa-window"
+
+# Пары «вопрос + ответ»: все вопросы вызова, у которых есть выбранный ответ.
+pairs="$(jq -r '
+  (.tool_response.answers // .tool_input.answers // {}) as $a
+  | [(.tool_input.questions // [])[]
+     | .question as $q
+     | ($a[$q] // "") as $ans
+     | select(($q // "") != "" and $ans != "")
+     | "## Запись: вопрос\nВопрос: \($q)\nОтвет: \($ans)\n"]
+  | join("\n")' <<<"$input" 2>/dev/null)"
+[[ -z "${pairs//[[:space:]]/}" ]] && exit 0
+
+{ cat "$qa" 2>/dev/null; printf '%s\n' "$pairs"; } > "${qa}.tmp" 2>/dev/null || exit 0
+# Окно: оставить последние 5 записей (по заголовкам «## Запись»).
+awk '
+  /^## Запись/ { n++ }
+  { line[NR] = $0; rec[NR] = n }
+  END { for (i = 1; i <= NR; i++) if (rec[i] > n - 5) print line[i] }
+' "${qa}.tmp" > "$qa" 2>/dev/null || true
+rm -f "${qa}.tmp" 2>/dev/null
 exit 0

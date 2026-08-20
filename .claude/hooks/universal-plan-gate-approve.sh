@@ -57,6 +57,20 @@ if [[ -n "$marker" ]]; then
     if [[ -n "${targets//[[:space:]]/}" ]]; then
       { cat "$marker" 2>/dev/null; printf '%s\n' "$targets"; } | awk 'NF && !seen[$0]++' \
         > "${marker}.tmp" 2>/dev/null && mv "${marker}.tmp" "$marker" 2>/dev/null || true
+      # Накопитель одобренных ТЕКСТОВ — вход сверки содержания у гейта: правка
+      # старой цели сверяется со своим планом, а правка файла плана после
+      # одобрения одобренного не меняет. Пишется тем же вызовом, что цели
+      # (нет целей — нет и записи), окно — последние 5 одобрений.
+      plans="${marker}.plans"
+      { cat "$plans" 2>/dev/null
+        printf '=== ОДОБРЕНИЕ ===\n'; cat "$plan"; printf '\n'
+      } > "${plans}.tmp" 2>/dev/null \
+        && awk '
+             /^=== ОДОБРЕНИЕ ===$/ { n++ }
+             { line[NR] = $0; rec[NR] = n }
+             END { for (i = 1; i <= NR; i++) if (rec[i] > n - 5) print line[i] }
+           ' "${plans}.tmp" > "$plans" 2>/dev/null || true
+      rm -f "${plans}.tmp" 2>/dev/null
     fi
   fi
 fi
