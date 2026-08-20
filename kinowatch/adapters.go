@@ -770,14 +770,18 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 	for _, block := range steps {
 		dm := moskinoDate.FindStringSubmatch(block)
 		if len(dm) < 3 {
+			pb.Skipped = append(pb.Skipped, "Москино: блок дня без самой даты")
 			continue
 		}
 		day, err := strconv.Atoi(dm[1])
 		if err != nil {
+			pb.Skipped = append(pb.Skipped, "Москино: день «"+dm[1]+"» не число")
 			continue
 		}
 		date, ok := resolveMoskinoDate(day, dm[2], ref)
 		if !ok {
+			pb.Skipped = append(pb.Skipped,
+				fmt.Sprintf("Москино: дата «%s %s» не разобралась", dm[1], dm[2]))
 			continue
 		}
 		pb.Dates = append(pb.Dates, date)
@@ -785,6 +789,7 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 		for _, item := range moskinoItem.FindAllStringSubmatch(block, -1) {
 			tm := moskinoTitle.FindStringSubmatch(item[1])
 			if len(tm) < 2 {
+				pb.Skipped = append(pb.Skipped, "Москино: позиция расписания без названия фильма")
 				continue
 			}
 			film := strings.TrimSpace(html.UnescapeString(tagRe.ReplaceAllString(tm[1], "")))
@@ -793,10 +798,13 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 				tail := s[2]
 				tmm := moskinoTime.FindStringSubmatch(tail)
 				if len(tmm) < 2 {
+					pb.Skipped = append(pb.Skipped, "Москино: сеанс «"+film+"» без времени")
 					continue
 				}
 				at := normalizeShowtime(tmm[1], date)
 				if at == "" {
+					pb.Skipped = append(pb.Skipped,
+						fmt.Sprintf("Москино: сеанс «%s» со временем %q не датируется", film, tmm[1]))
 					continue
 				}
 
@@ -938,6 +946,7 @@ func parseMori(body, date string) (Playbill, error) {
 			dur = parseRussianDuration(stripHTML(pm[len(pm)-1][1]))
 		}
 		if film == "" {
+			pb.Skipped = append(pb.Skipped, "Mori: группа сеансов без названия фильма выше неё")
 			continue
 		}
 
@@ -949,10 +958,13 @@ func parseMori(body, date string) (Playbill, error) {
 		for _, s := range moriSession.FindAllStringSubmatch(block, -1) {
 			tm := moriTime.FindStringSubmatch(s[2])
 			if len(tm) < 2 {
+				pb.Skipped = append(pb.Skipped, "Mori: сеанс «"+film+"» без времени")
 				continue
 			}
 			at := normalizeShowtime(tm[1], date)
 			if at == "" {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("Mori: сеанс «%s» со временем %q не датируется", film, tm[1]))
 				continue
 			}
 
@@ -1009,6 +1021,7 @@ func parseFiveStars(body, date string) (Playbill, error) {
 	for _, block := range items {
 		tm := fiveTitle.FindStringSubmatch(block)
 		if len(tm) < 2 {
+			pb.Skipped = append(pb.Skipped, "«Пять звёзд»: блок фильма без названия")
 			continue
 		}
 		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[1])))
@@ -1035,6 +1048,8 @@ func parseFiveStars(body, date string) (Playbill, error) {
 
 			at := normalizeShowtime(hhmm, date)
 			if at == "" {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("«Пять звёзд»: сеанс «%s» со временем %q не датируется", film, hhmm))
 				continue
 			}
 
@@ -1129,6 +1144,7 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 	for _, block := range events {
 		tm := p24Title.FindStringSubmatch(block)
 		if len(tm) < 2 {
+			pb.Skipped = append(pb.Skipped, "p24: блок фильма без названия")
 			continue
 		}
 		film := strings.TrimSpace(html.UnescapeString(stripHTML(tm[1])))
@@ -1170,6 +1186,7 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 
 				tmm := p24Time.FindStringSubmatch(show)
 				if len(tmm) < 2 {
+					pb.Skipped = append(pb.Skipped, "p24: сеанс «"+film+"» без времени")
 					continue
 				}
 
@@ -1179,6 +1196,8 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 				}
 				at := normalizeShowtime(tmm[1], date)
 				if at == "" {
+					pb.Skipped = append(pb.Skipped,
+						fmt.Sprintf("p24: сеанс «%s» со временем %q не датируется", film, tmm[1]))
 					continue
 				}
 				if date != "" {
@@ -1266,10 +1285,12 @@ func parseCinemaPark(body, fallbackDate string) (Playbill, error) {
 	for _, block := range movies {
 		nm := cpMovieName.FindStringSubmatch(block)
 		if len(nm) < 2 {
+			pb.Skipped = append(pb.Skipped, "СИНЕМА ПАРК: карточка фильма без названия")
 			continue
 		}
 		film := strings.TrimSpace(html.UnescapeString(stripHTML(nm[1])))
 		if film == "" {
+			pb.Skipped = append(pb.Skipped, "СИНЕМА ПАРК: карточка фильма с пустым названием")
 			continue
 		}
 
@@ -1283,6 +1304,7 @@ func parseCinemaPark(body, fallbackDate string) (Playbill, error) {
 
 			tm := cpTime.FindStringSubmatch(tail)
 			if len(tm) < 2 {
+				pb.Skipped = append(pb.Skipped, "СИНЕМА ПАРК: сеанс «"+film+"» без времени")
 				continue
 			}
 
@@ -1292,6 +1314,8 @@ func parseCinemaPark(body, fallbackDate string) (Playbill, error) {
 			}
 			at := normalizeShowtime(tm[1], date)
 			if at == "" {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("СИНЕМА ПАРК: сеанс «%s» со временем %q не датируется", film, tm[1]))
 				continue
 			}
 			if date != "" {
@@ -1765,10 +1789,12 @@ func parsePremierzal(body, date string) (Playbill, error) {
 	for _, chunk := range films[1:] {
 		nm := pzFilmName.FindStringSubmatch(chunk)
 		if len(nm) < 2 {
+			pb.Skipped = append(pb.Skipped, "Премьерзал: блок фильма без названия")
 			continue
 		}
 		film := strings.TrimSpace(html.UnescapeString(nm[1]))
 		if film == "" {
+			pb.Skipped = append(pb.Skipped, "Премьерзал: блок фильма с пустым названием")
 			continue
 		}
 
@@ -1782,10 +1808,13 @@ func parsePremierzal(body, date string) (Playbill, error) {
 		for _, item := range strings.Split(chunk, `class="schedule__session-time `)[1:] {
 			tm := pzTime.FindStringSubmatch(item)
 			if len(tm) < 2 {
+				pb.Skipped = append(pb.Skipped, "Премьерзал: сеанс «"+film+"» без времени")
 				continue
 			}
 			at := normalizeShowtime(tm[1], date)
 			if at == "" {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("Премьерзал: сеанс «%s» со временем %q не датируется", film, tm[1]))
 				continue
 			}
 
@@ -1857,6 +1886,7 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 	for _, m := range mirageDay.FindAllStringSubmatch(body, -1) {
 		day := ruDateToISO(m[1])
 		if day == "" {
+			pb.Skipped = append(pb.Skipped, "Мираж: дата календаря «"+m[1]+"» не разобралась")
 			continue
 		}
 		pb.SourceDays = append(pb.SourceDays, day)
@@ -1888,10 +1918,14 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 	for _, box := range boxes {
 		vm := mirageVenue.FindStringSubmatch(box)
 		if len(vm) < 2 {
+			pb.Skipped = append(pb.Skipped, "Мираж: блок площадки без её идентификатора")
 			continue
 		}
 		anchors++
 		if venue != "" && vm[1] != venue {
+			// Страница городская: на ней все площадки сети. Чужие — законный
+			// фильтр, а не потеря.
+			pb.Filtered++
 			continue
 		}
 		seen = true
@@ -1899,15 +1933,19 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 		for _, it := range splitBlocks(box, `<div class="title">`) {
 			nm := mirageItemName.FindStringSubmatch(it)
 			if len(nm) < 2 {
+				pb.Skipped = append(pb.Skipped, "Мираж: позиция расписания без названия фильма")
 				continue
 			}
 			film := strings.TrimSpace(html.UnescapeString(stripHTML(nm[1])))
 			tm := mirageTime.FindStringSubmatch(it)
 			if film == "" || len(tm) < 2 {
+				pb.Skipped = append(pb.Skipped, "Мираж: позиция без названия фильма или без времени")
 				continue
 			}
 			at := normalizeShowtime(tm[1], date)
 			if at == "" {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("Мираж: сеанс «%s» со временем %q не датируется", film, tm[1]))
 				continue
 			}
 
@@ -1997,6 +2035,7 @@ func parseCinema5(body string, cinemaID int) (Playbill, error) {
 	for _, m := range resp.Items {
 		film := strings.TrimSpace(m.Name)
 		if film == "" {
+			pb.Skipped = append(pb.Skipped, "«Синема 5»: карточка фильма с пустым названием")
 			continue
 		}
 		for _, s := range m.Shows {
@@ -2014,6 +2053,8 @@ func parseCinema5(body string, cinemaID int) (Playbill, error) {
 			}
 			at := normalizeShowtime(s.Time, day)
 			if at == "" {
+				pb.Skipped = append(pb.Skipped,
+					fmt.Sprintf("«Синема 5»: сеанс «%s» со временем %q не датируется", film, s.Time))
 				continue
 			}
 			dates[s.Date] = true
