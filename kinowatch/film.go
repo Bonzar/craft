@@ -154,10 +154,6 @@ var (
 	// Возрастной рейтинг приклеивается к названию («Волшебник 6+») и к
 	// сравнению отношения не имеет.
 	ageRating = regexp.MustCompile(`\b\d{1,2}\s*\+`)
-	// Технология показа тоже попадает в название у части источников.
-	// Границы слова заданы вручную: `\b` в RE2 считается по `\w`, то есть по
-	// латинице, и на «2Д» с кириллической «Д» вела бы себя иначе, чем на «2D».
-	formatNoise = regexp.MustCompile(`(?i)(^|[\s(\[])(2d|3d|2д|3д|imax|4dx|atmos|dolby)($|[\s)\]])`)
 )
 
 // normalizeFilmTitle приводит название позиции к сравнимому виду.
@@ -169,10 +165,35 @@ func normalizeFilmTitle(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.ReplaceAll(s, "ё", "е")
 	s = ageRating.ReplaceAllString(s, " ")
-	s = formatNoise.ReplaceAllString(s, " ")
 	s = filmNoise.ReplaceAllString(s, " ")
-	s = multiSpace.ReplaceAllString(s, " ")
-	return strings.TrimSpace(s)
+
+	// Технология показа снимается ПОСЛЕ шума и по словам, а не выражением с
+	// границами. Выражение съедало разделитель с обеих сторон тега, поэтому
+	// второму тегу подряд не хватало ведущего пробела: замер 20.08.2026 —
+	// «Человек-паук: Новый день 3D IMAX» давал «человек паук новый день imax»,
+	// а «Одиссея (IMAX, 2D)» — «одиссея imax». Совпадение с профилем точное,
+	// так что лишний хвост означал «фильма на площадке нет».
+	//
+	// К этому месту скобки, запятые и дефисы уже стали пробелами, поэтому тег
+	// стоит отдельным словом — и формат ВНУТРИ слова не трогается:
+	// «Кинопробы3D-мания» остаётся «кинопробы3d мания».
+	fields := strings.Fields(s)
+	kept := make([]string, 0, len(fields))
+	for _, w := range fields {
+		if formatWords[w] {
+			continue
+		}
+		kept = append(kept, w)
+	}
+	return strings.Join(kept, " ")
+}
+
+// formatWords — теги технологии показа, которые источники приклеивают к
+// названию. Кириллические варианты нужны наравне с латинскими: «2Д» пишут
+// столько же источников, сколько «2D».
+var formatWords = map[string]bool{
+	"2d": true, "3d": true, "2д": true, "3д": true,
+	"imax": true, "4dx": true, "atmos": true, "dolby": true,
 }
 
 // splitMarkers — по чему рвётся склеенная позиция афиши.

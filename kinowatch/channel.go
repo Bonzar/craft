@@ -255,6 +255,10 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 
 	var out ChannelProbe
 	var lastFail ChannelProbe
+	// Последний ответ «этих дней не публикую». Это НЕ отказ, и подменять его
+	// пустой заготовкой нельзя: заготовка выглядит как «HTTP 200, тело 0 байт»
+	// — выдуманная улика про живую страницу с честным ответом источника.
+	var lastSkip ChannelProbe
 	got := 0
 	seen := map[string]bool{}
 	seenDays := map[string]bool{}
@@ -270,6 +274,7 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 		// просто этот день он не публикует — и в список неответивших он не
 		// попадает, иначе живой источник объявлялся бы дырявым.
 		if errors.Is(one.ParseErr, errDayNotPublished) {
+			lastSkip = one
 			if !narrowed && len(one.Playbill.SourceDays) > 0 {
 				narrowed = true
 				plan = narrowPlan(plan, i, one.Playbill.SourceDays, inHorizon)
@@ -321,7 +326,17 @@ func fetchChannel(c *Client, kind string, p ChannelParams, from time.Time, days 
 
 	// Не ответил ни один день — наружу уходит настоящий отказ последнего
 	// запроса, а не сводка о нём: классификатору нужны код и текст ошибки.
+	//
+	// Отказа не было вовсе (все дни ответили «не публикую») — уходит последний
+	// такой ответ со своим кодом, размером тела и окном источника. Иначе
+	// площадка, честно сказавшая, какие дни она публикует, получала бы улику
+	// «HTTP 200, но афиша пуста: тело 0 байт» от пустой заготовки.
 	if got == 0 {
+		if lastFail.Err == nil && lastFail.ParseErr == nil && lastSkip.Status != 0 {
+			lastSkip.FailedDays = out.FailedDays
+			lastSkip.WindowFrom, lastSkip.WindowTo = sourceWindow(lastSkip.Playbill)
+			return lastSkip
+		}
 		return lastFail
 	}
 	out.WindowFrom, out.WindowTo = sourceWindow(out.Playbill)

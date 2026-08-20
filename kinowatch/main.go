@@ -103,6 +103,9 @@ func main() {
 			}
 			tunnel = t
 		}
+		if err := checkNumericFlags(*probeWorkers, *timeoutSec); err != nil {
+			fail("%v", err)
+		}
 		runProbe(client, tunnel, *probeFilm, *probeProfile, *probePrevious, *probeDays, *probeWorkers)
 	case *coverageMode:
 		runCoverage(*coverageShort)
@@ -468,4 +471,26 @@ func bump(stats map[string]PathStat, path string, solved bool) {
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "kinowatch: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// checkNumericFlags отбраковывает числа, при которых прогон не работает, но и
+// не жалуется.
+//
+// Ноль работников — очередь без единого места: раздача работы встаёт навсегда,
+// прогон молчит, пока его не убьют (замер 20.08.2026 — убит по таймауту).
+// Отрицательное значение роняет прогон изнутри.
+//
+// Ноль таймаута выглядит как «без предела», но запрос уходит с уже истёкшим
+// сроком и мгновенно падает: здоровый прогон отчитывается поломкой всех
+// источников разом. Оба случая отвергаются, а не трактуются как «без предела»
+// — на трёх десятках площадок «без предела» означает зависание на одной
+// молчащей кассе, и отличить его от работы нечем.
+func checkNumericFlags(workers, timeoutSec int) error {
+	if workers < 1 {
+		return fmt.Errorf("--workers %d: нужно хотя бы одного работника, иначе раздача работы встанет навсегда", workers)
+	}
+	if timeoutSec < 1 {
+		return fmt.Errorf("--timeout %d: нужен предел ожидания в секундах, иначе каждый запрос падает мгновенно", timeoutSec)
+	}
+	return nil
 }

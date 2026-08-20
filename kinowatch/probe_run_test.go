@@ -336,3 +336,44 @@ func TestParseSkipsNoopWhenNothingSkipped(t *testing.T) {
 		t.Errorf("чистый разбор изменил вердикт: %+v", got)
 	}
 }
+
+// Голый список наблюдений — заявленная форма входа, и карты полей в нём нет.
+// Пока она не достраивалась при чтении, первая же запись в неё роняла прогон
+// паникой.
+func TestReadRegistryFillsFields(t *testing.T) {
+	obs, err := readRegistry(strings.NewReader(`[{"key":"7458","name":"ЗигЗаг"}]`))
+	if err != nil {
+		t.Fatalf("чтение реестра: %v", err)
+	}
+	if len(obs) != 1 {
+		t.Fatalf("наблюдений %d, ожидалось 1", len(obs))
+	}
+	if obs[0].Fields == nil {
+		t.Fatal("карта полей пуста — запись в неё уронит прогон")
+	}
+	obs[0].Fields["проверка"] = "запись не роняет прогон"
+}
+
+// Числа, при которых прогон не работает, но и не жалуется.
+func TestCheckNumericFlags(t *testing.T) {
+	cases := []struct {
+		name     string
+		workers  int
+		timeout  int
+		wantFail bool
+	}{
+		{"рабочие значения", 8, 60, false},
+		{"ноль работников вешает раздачу", 0, 60, true},
+		{"отрицательные работники роняют прогон", -1, 60, true},
+		{"нулевой таймаут валит каждый запрос", 8, 0, true},
+	}
+	for _, c := range cases {
+		err := checkNumericFlags(c.workers, c.timeout)
+		if c.wantFail && err == nil {
+			t.Errorf("%s: ожидался отказ, а прогон бы стартовал", c.name)
+		}
+		if !c.wantFail && err != nil {
+			t.Errorf("%s: неожиданный отказ: %v", c.name, err)
+		}
+	}
+}
