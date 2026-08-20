@@ -178,7 +178,10 @@ for f in "${files[@]}"; do
       out="$(printf '%s' "$input" | env "${caseenv[@]}" bash "$script" 2>"$errf")"
     done
     err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
-    rm -f "$marker" "$obsbuf" "$rfmark" "$planpath" "$criticmark" "$deltastore" \
+    rm -f "$marker" "${marker}.button-plans" "${marker}.classifier-degraded" \
+          "$obsbuf" "$rfmark" "$planpath" "$criticmark" \
+          "$deltastore" "${deltastore}.snapshot" \
+          "$buttonmark" "${buttonmark}.question" \
           "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend" "$planshown" "$criticruns"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
