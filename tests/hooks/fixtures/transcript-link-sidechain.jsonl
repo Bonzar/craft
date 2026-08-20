@@ -1,0 +1,3 @@
+{"type":"user","message":{"content":"поищи по коду"}}
+{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Нашёл: [FlowManager.tsx](CRM-52256/crm/frontend/FlowManager.tsx)."}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Готово, ничего не нашлось."}]}}
