@@ -695,7 +695,7 @@ var (
 	moskinoSession = regexp.MustCompile(`(?s)richSession\((\d+)\)(.*?)</a>`)
 	moskinoTime    = regexp.MustCompile(`<span class="time">\s*([0-9]{1,2}:[0-9]{2})`)
 	moskinoBadge   = regexp.MustCompile(`<span class="badge">\s*([^<]+?)\s*</span>`)
-	moskinoPrice   = regexp.MustCompile(`<span class="price">\s*([0-9]+)`)
+	moskinoPrice   = regexp.MustCompile(`<span class="price">\s*(\d[\d\s\x{00a0}\x{202f}]*)`)
 	moskinoName    = regexp.MustCompile(`(?s)<h1[^>]*>\s*(.*?)\s*</h1>`)
 )
 
@@ -798,7 +798,7 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 					OnSale: true,
 				}
 				if pm := moskinoPrice.FindStringSubmatch(tail); len(pm) > 1 {
-					st.PriceMin, _ = strconv.Atoi(pm[1])
+					st.PriceMin = priceRubles(pm[1])
 				}
 				pb.Showtimes = append(pb.Showtimes, st)
 			}
@@ -835,7 +835,7 @@ var (
 	moriHall      = regexp.MustCompile(`(?s)<div class="cinema__session-schedule__item__hall">\s*(.*?)\s*</div>`)
 	moriSession   = regexp.MustCompile(`(?s)/session/(\d+)/buy"(.*?)</a>`)
 	moriTime      = regexp.MustCompile(`__ticket__time">\s*([0-2]?\d:[0-5]\d)`)
-	moriPrice     = regexp.MustCompile(`__ticket__price">\s*([0-9]+)`)
+	moriPrice     = regexp.MustCompile(`__ticket__price">\s*(\d[\d\s\x{00a0}\x{202f}]*)`)
 	// Части хронометража ищутся ПОРОЗНЬ. Одна регулярка с двумя опциональными
 	// группами матчит пустую строку в самом начале текста и всегда возвращает
 	// ноль — молча, без единой ошибки разбора.
@@ -946,7 +946,7 @@ func parseMori(body, date string) (Playbill, error) {
 				DurationM: dur,
 			}
 			if pm := moriPrice.FindStringSubmatch(s[2]); len(pm) > 1 {
-				st.PriceMin, _ = strconv.Atoi(pm[1])
+				st.PriceMin = priceRubles(pm[1])
 			}
 			pb.Showtimes = append(pb.Showtimes, st)
 		}
@@ -1075,7 +1075,7 @@ var (
 	p24UUID      = regexp.MustCompile(`data-uuid="([0-9a-f-]{8,})"`)
 	p24Time      = regexp.MustCompile(`show-time[^>]*>\s*([0-2]?\d:[0-5]\d)`)
 	p24Date      = regexp.MustCompile(`[?&]date=(\d{4})/(\d{2})/(\d{2})`)
-	p24Price     = regexp.MustCompile(`price[^>]*>\s*([0-9]+)`)
+	p24Price     = regexp.MustCompile(`price[^>]*>\s*(\d[\d\s\x{00a0}\x{202f}]*)`)
 	p24Formats   = regexp.MustCompile(`(?s)formats[^>]*>(.*?)</div>`)
 	p24HallNum   = regexp.MustCompile(`(?i)зал\s*([0-9A-Za-zА-Яа-я]+)`)
 )
@@ -1176,7 +1176,7 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 					st.SourceID = um[1]
 				}
 				if pm := p24Price.FindStringSubmatch(show); len(pm) > 1 {
-					st.PriceMin, _ = strconv.Atoi(pm[1])
+					st.PriceMin = priceRubles(pm[1])
 				}
 				if fm := p24Formats.FindStringSubmatch(show); len(fm) > 1 {
 					st.Format = strings.TrimSpace(stripHTML(fm[1]))
@@ -1209,7 +1209,7 @@ var (
 	cpRuntime   = regexp.MustCompile(`(?s)<span class="title">\s*([^<]*?мин[^<]*?)\s*</span>`)
 	cpSession   = regexp.MustCompile(`(?s)openWidget=(\d+)"(.*?)</a>`)
 	cpTime      = regexp.MustCompile(`shedule_session_time">\s*([0-2]?\d:[0-5]\d)`)
-	cpPrice     = regexp.MustCompile(`shedule_session_price">\s*(?:от\s*)?([0-9]+)`)
+	cpPrice     = regexp.MustCompile(`shedule_session_price">\s*(?:от\s*)?(\d[\d\s\x{00a0}\x{202f}]*)`)
 	cpFormat    = regexp.MustCompile(`shedule_session_format">\s*([^<]+?)\s*</span>`)
 	cpDate      = regexp.MustCompile(`[?&]date=(\d{4}-\d{2}-\d{2})`)
 	cpTitle     = regexp.MustCompile(`«([^»]+)»`)
@@ -1297,7 +1297,7 @@ func parseCinemaPark(body, fallbackDate string) (Playbill, error) {
 				DurationM: dur,
 			}
 			if pm := cpPrice.FindStringSubmatch(tail); len(pm) > 1 {
-				st.PriceMin, _ = strconv.Atoi(pm[1])
+				st.PriceMin = priceRubles(pm[1])
 			}
 			pb.Showtimes = append(pb.Showtimes, st)
 		}
@@ -2136,6 +2136,27 @@ func unescapeJSString(s string) string {
 	return b.String()
 }
 
+// priceRubles читает цену, записанную с разделителем разрядов.
+//
+// Источники пишут четырёхзначные цены пробелом («1 290 ₽»), и жадная группа
+// цифр обрывалась на первой: замер 20.08.2026 — у Мори билет за 1290 ₽
+// публиковался как 1 ₽, а за 4400 ₽ — как 4. Трёхзначные цены той же площадки
+// при этом читались верно, поэтому дефект не был виден ни на фикстуре, ни в
+// будни: он вылезает только там, где цена перевалила за тысячу.
+func priceRubles(s string) int {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	n, err := strconv.Atoi(b.String())
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 // splitBlocks режет разметку по повторяющемуся маркеру и отдаёт куски ПОСЛЕ
 // каждого его вхождения.
 //
@@ -2303,8 +2324,13 @@ func parsePioner(body, date string) (Playbill, error) {
 // `item`, поэтому сеансы разбираются потоком: заголовок переключает текущий
 // зал, ссылки после него принадлежат ему.
 var (
-	poklonkaDayID   = regexp.MustCompile(`^(s\d+)">`)
-	poklonkaDayTab  = regexp.MustCompile(`data-id="(s\d+)">(\d{1,2})<br>\s*([а-яё]+)`)
+	poklonkaDayID = regexp.MustCompile(`^(s\d+)">`)
+	// Пробелы между тегом и числом обязаны быть необязательными: живая
+	// страница пишет день с переносом и отступом («data-id="s1">\n  20<br>»),
+	// и без этого послабления дат не находилось вовсе — а без дат разбор
+	// объявлял «сеансы не найдены» при живом расписании на 96 сеансов.
+	// Замер 20.08.2026 живым телом.
+	poklonkaDayTab  = regexp.MustCompile(`data-id="(s\d+)">\s*(\d{1,2})\s*<br>\s*([а-яё]+)`)
 	poklonkaHallOrS = regexp.MustCompile(`(?s)<div class="item title">\s*(.*?)\s*</div>|<a class="item"[^>]*>\s*<div class="name">\s*(.*?)\s*</div>\s*<div class="value">\s*(.*?)\s*</div>`)
 	// Ячейка времени держит ВСЕ сеансы фильма за день, через запятую:
 	// «12:30, 16:20, 18:10». Пока выражение выше требовало ровно одно время,
@@ -3007,7 +3033,7 @@ func parseTretyakov(body, hall string) (Playbill, error) {
 var (
 	jewishName  = regexp.MustCompile(`(?s)small-card__name[^"]*"\s*href="(/events/[a-z0-9-]+/)">\s*(.*?)\s*</a>`)
 	jewishWhen  = regexp.MustCompile(`(\d{2})\.(\d{2})\.(\d{4}),\s*(\d{2}:\d{2})`)
-	jewishPrice = regexp.MustCompile(`event-card__price">[^\d]*(\d+)`)
+	jewishPrice = regexp.MustCompile(`event-card__price">[^\d]*(\d[\d\s\x{00a0}\x{202f}]*)`)
 )
 
 // screeningWords — по чему опознаётся кинопоказ среди прочих событий.
@@ -3062,7 +3088,7 @@ func parseJewishMuseum(body string) (Playbill, error) {
 
 		st := Showtime{Film: title, StartsAt: at, OnSale: true, DeepLink: "https://www.jewish-museum.ru" + url}
 		if pm := jewishPrice.FindStringSubmatch(when); len(pm) > 1 {
-			st.PriceMin, _ = strconv.Atoi(pm[1])
+			st.PriceMin = priceRubles(pm[1])
 		}
 		pb.Showtimes = append(pb.Showtimes, st)
 	}

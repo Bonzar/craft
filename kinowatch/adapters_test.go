@@ -2410,3 +2410,54 @@ func TestParseEtobiletTakesCleanTitle(t *testing.T) {
 		}
 	}
 }
+
+// Живая страница Поклонки пишет день с переносом строки между тегом и числом.
+// Пока разбор дат этого не терпел, дней не находилось вовсе — и разбор
+// объявлял «сеансы не найдены» при полном расписании. Замер 20.08.2026:
+// источник отвечал 128 КБ с 96 сеансами, а канал числился сломанным.
+func TestParsePoklonkaReadsSpacedDayTabs(t *testing.T) {
+	pb, err := parsePoklonka(readFixture(t, "poklonka-days.html"),
+		time.Date(2026, 8, 20, 0, 0, 0, 0, moscowTZ))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Dates) != 14 {
+		t.Errorf("дней %d, в переключателе фикстуры 14", len(pb.Dates))
+	}
+	if len(pb.Showtimes) != 96 {
+		t.Errorf("сеансов %d, в теле фикстуры 96", len(pb.Showtimes))
+	}
+}
+
+// Цена с разделителем разрядов обязана читаться целиком.
+//
+// Замер 20.08.2026: у Мори выходные стоят «1 290 ₽» и «4 400 ₽», и жадная
+// группа цифр обрывалась на первой — билет за 1290 ₽ публиковался как 1 ₽.
+// Трёхзначные цены буднего дня при этом читались верно, поэтому ни фикстура,
+// ни живой прогон по будням дефекта не показывали.
+func TestParseMoriReadsThousandPrices(t *testing.T) {
+	pb, err := parseMori(readFixture(t, "mori-thousand-price.html"), "2026-08-23")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	var small int
+	for _, s := range pb.Showtimes {
+		if s.PriceMin != 0 && s.PriceMin < 100 {
+			small++
+		}
+	}
+	if small != 0 {
+		t.Errorf("сеансов с ценой меньше 100 ₽: %d — похоже, цена оборвана на разделителе", small)
+	}
+
+	var maxPrice int
+	for _, s := range pb.Showtimes {
+		if s.PriceMin > maxPrice {
+			maxPrice = s.PriceMin
+		}
+	}
+	if maxPrice < 1000 {
+		t.Errorf("самая дорогая цена %d ₽, а в теле фикстуры есть четырёхзначные", maxPrice)
+	}
+}
