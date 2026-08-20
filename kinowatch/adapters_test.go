@@ -1584,9 +1584,11 @@ func TestParseRomanovFixture(t *testing.T) {
 			t.Errorf("цена потеряна: %+v", s)
 			break
 		}
-		// Цена приходит в копейках: 6000 — это 60 рублей.
-		if s.PriceMin > 5000 {
-			t.Errorf("цена %d — копейки не переведены в рубли", s.PriceMin)
+		// Цена приходит в рублях, и источник подтверждает это сам: рядом с
+		// ценой 6000 у него стоит подпись «С 11:00 до 16:00 - 6000 р». Пока
+		// разбор делил на сто, билет за 6000 ₽ публиковался как 60 ₽.
+		if s.PriceMin != 0 && s.PriceMin < 1000 {
+			t.Errorf("цена %d — похоже, рубли поделены как копейки", s.PriceMin)
 			break
 		}
 	}
@@ -2262,5 +2264,149 @@ func TestParseCinemaStarSkipsFilmlessItem(t *testing.T) {
 func TestParseCinemaStarKeepsHardError(t *testing.T) {
 	if _, err := parseCinemaStar(`{"data": "не объект"}`); err == nil {
 		t.Fatal("нечитаемый ответ принят за расписание")
+	}
+}
+
+// Счётные проверки разборов: источник обязан отдать столько сеансов, сколько
+// их в расписании фикстуры.
+//
+// Проверка «сеансов не ноль» такую потерю пропускает: 20 августа 2026 замер
+// показал, что семь разборов теряли часть расписания молча, оставаясь
+// зелёными. Числа взяты из тел фикстур подсчётом их собственных маркеров
+// сеансов, а не из текущего поведения разбора.
+func TestParseCountsWholeSchedule(t *testing.T) {
+	ref := time.Date(2026, 8, 3, 0, 0, 0, 0, moscowTZ)
+
+	cases := []struct {
+		name string
+		want int
+		run  func() (Playbill, error)
+	}{
+		{"Москино", 22, func() (Playbill, error) {
+			return parseMoskino(readFixture(t, "moskino-schedule.html"), ref)
+		}},
+		{"Mori", 20, func() (Playbill, error) {
+			return parseMori(readFixture(t, "mori-schedule.html"), "2026-08-04")
+		}},
+		{"Пять звёзд", 3, func() (Playbill, error) {
+			return parseFiveStars(readFixture(t, "5zvezd-schedule.html"), "2026-08-04")
+		}},
+		{"СИНЕМА ПАРК", 13, func() (Playbill, error) {
+			return parseCinemaPark(readFixture(t, "cinemapark-schedule.json"), "2026-07-31")
+		}},
+		{"ГУМ", 13, func() (Playbill, error) {
+			return parseGum(readFixture(t, "gum-kinozal.html"), ref)
+		}},
+		{"Мираж Марьина Роща", 44, func() (Playbill, error) {
+			return parseMirage(readFixture(t, "mirage-mari-day.html"), "18", "2026-08-12")
+		}},
+		{"Мираж Отрадное", 12, func() (Playbill, error) {
+			return parseMirage(readFixture(t, "mirage-otradnoe.html"), "23", "2026-08-03")
+		}},
+		{"Поклонка", 100, func() (Playbill, error) {
+			return parsePoklonka(readFixture(t, "poklonka.html"), ref)
+		}},
+	}
+
+	for _, c := range cases {
+		pb, err := c.run()
+		if err != nil {
+			t.Errorf("%s: разбор упал: %v", c.name, err)
+			continue
+		}
+		if len(pb.Showtimes) != c.want {
+			t.Errorf("%s: сеансов %d, в расписании фикстуры %d", c.name, len(pb.Showtimes), c.want)
+		}
+	}
+}
+
+// p24 считается отдельно: в теле страницы без залов есть ещё промо-блок
+// «ближайшие сеансы» над расписанием — семь сеансов, пять из которых
+// дублируют расписание. Разбор обязан взять расписание и не втащить промо.
+func TestParseP24CountsScheduleOnly(t *testing.T) {
+	pb, err := parseP24(readFixture(t, "p24-no-halls.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) != 24 {
+		t.Errorf("сеансов %d, в расписании фикстуры 24", len(pb.Showtimes))
+	}
+
+	seen := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		if seen[s.SourceID] {
+			t.Errorf("сеанс %s пришёл дважды — похоже, промо-блок попал в афишу", s.SourceID)
+		}
+		seen[s.SourceID] = true
+	}
+}
+
+// Признак продажи у p24 живёт в классе самого блока показа, поэтому резка,
+// потерявшая начало блока, молча превратила бы закрытые сеансы в продающиеся.
+func TestParseP24KeepsSaleFlag(t *testing.T) {
+	pb, err := parseP24(readFixture(t, "p24-schedule.html"), "2026-07-31")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) != 11 {
+		t.Errorf("сеансов %d, в расписании фикстуры 11", len(pb.Showtimes))
+	}
+
+	var closed int
+	for _, s := range pb.Showtimes {
+		if !s.OnSale {
+			closed++
+		}
+	}
+	if closed != 5 {
+		t.Errorf("закрытых к покупке %d, в фикстуре 5", closed)
+	}
+}
+
+// Сеанс обязан достаться тому фильму, под чьей карточкой он стоит.
+//
+// Замер 20.08.2026: карточка следующего фильма лежит ВНУТРИ группы
+// предыдущего, и поиск названия «до конца блока» отдавал сеансы 411075 и
+// 411076 «Одиссеи» под названием «Миньоны и монстры». Проверка «название не
+// пустое» такую подмену не видит.
+func TestParseMoriKeepsFilmOfItsGroup(t *testing.T) {
+	pb, err := parseMori(readFixture(t, "mori-schedule.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+
+	want := map[string]string{"411075": "Одиссея", "411076": "Одиссея"}
+	seen := map[string]bool{}
+	for _, s := range pb.Showtimes {
+		if w, ok := want[s.SourceID]; ok {
+			seen[s.SourceID] = true
+			if s.Film != w {
+				t.Errorf("сеанс %s: фильм %q, а на странице он стоит под %q", s.SourceID, s.Film, w)
+			}
+		}
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("сеанс %s не доехал до афиши", id)
+		}
+	}
+}
+
+// PRIME CINEMA отдаёт название дважды: витринное с приклеенным форматом и
+// возрастом и чистое. Пока брали витринное, «Храбрый Давид  (2D, 6+)» не
+// совпадал с профилем и читался как отсутствующий фильм.
+func TestParseEtobiletTakesCleanTitle(t *testing.T) {
+	pb, err := parseEtobilet(readFixture(t, "primecinema-today.html"), "2026-08-04")
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if len(pb.Showtimes) == 0 {
+		t.Fatal("сеансов ноль")
+	}
+	for _, s := range pb.Showtimes {
+		if strings.Contains(s.Film, "(") || strings.Contains(s.Film, "+") {
+			t.Errorf("в названии остался витринный хвост: %q", s.Film)
+			break
+		}
 	}
 }

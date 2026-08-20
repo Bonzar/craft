@@ -87,6 +87,11 @@ func parseKaroVenues(body string) ([]NetworkVenue, error) {
 			Kind: kindKaro,
 		})
 	}
+	// Пустой справочник — поломка, а не сеть без площадок: строки реестра этой
+	// сети остались бы непривязанными молча, и отчёт не отличить от здорового.
+	if len(out) == 0 {
+		return nil, fmt.Errorf("разбор справочника КАРО: площадок ноль (тело %d байт)", len(body))
+	}
 	return out, nil
 }
 
@@ -112,6 +117,9 @@ func parseKinomaxVenues(body string) ([]NetworkVenue, error) {
 			continue
 		}
 		out = append(out, NetworkVenue{ID: ident, Name: name, Kind: kindKinomax})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("разбор списка площадок Киномакса: площадок ноль (тело %d байт)", len(body))
 	}
 	return out, nil
 }

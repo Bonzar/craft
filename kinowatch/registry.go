@@ -221,12 +221,19 @@ var venuesWithoutRelease = map[string]string{
 // noReleaseReason возвращает причину «не прокат», либо пустую строку.
 func noReleaseReason(company string) string {
 	norm := normalizeName(company)
+
+	// Ключи вложены друг в друга («музей кино» и «центральный музей кино»), а
+	// обход карты в Go случаен: одна и та же строка реестра получала в разных
+	// прогонах разную причину и давала ложное расхождение при сравнении с
+	// прошлым прогоном. Побеждает самый длинный подошедший ключ — он и есть
+	// самый точный.
+	best, bestLen := "", 0
 	for key, reason := range venuesWithoutRelease {
-		if strings.Contains(norm, key) {
-			return reason
+		if strings.Contains(norm, key) && len(key) > bestLen {
+			best, bestLen = reason, len(key)
 		}
 	}
-	return ""
+	return best
 }
 
 // cloneLeader возвращает ведущую сеть для клона, либо пустую строку.

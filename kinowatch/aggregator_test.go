@@ -851,3 +851,35 @@ func TestKinoafishaSourceNeverMode(t *testing.T) {
 		t.Errorf("путь %q, ожидался сетевой", src.path())
 	}
 }
+
+// Ступень адреса стоит выше координатной, поэтому ложная пара забирает строку
+// реестра, и правильное совпадение по координатам уже не рассматривается.
+func TestSameAddressDoesNotMatchOnStreetTypeAlone(t *testing.T) {
+	kutuz := parseVenueAddress("Кутузовский просп., 21")
+	lenin := parseVenueAddress("Ленинский просп., 21")
+	if sameAddress(kutuz, lenin) {
+		t.Error("разные проспекты с одинаковым домом объявлены одним адресом")
+	}
+
+	// Тот же проспект — по-прежнему один адрес.
+	same := parseVenueAddress("Кутузовский проспект, 21")
+	if !sameAddress(kutuz, same) {
+		t.Error("один и тот же адрес в двух написаниях не сошёлся")
+	}
+}
+
+// Номер дома — это номер дома, а не последнее число строки: у строений и
+// помещений свои номера, и подмена рвёт пару с реестром.
+func TestParseVenueAddressTakesHouseNotBuilding(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Арбатская пл., 14, стр. 1", "14"},
+		{"Покровский бульв., 5, пом. 49", "5"},
+		{"Ходынский бульвар, 4, корп. 2", "4"},
+		{"Пресненская наб., 2", "2"},
+	}
+	for _, c := range cases {
+		if got := parseVenueAddress(c.in).house; got != c.want {
+			t.Errorf("%q: дом %q, ожидался %q", c.in, got, c.want)
+		}
+	}
+}

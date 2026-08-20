@@ -81,12 +81,18 @@ func classifyProbe(in ProbeInput) ProbeResult {
 	// 1. Транспорт. Отдельно 401/403/404 у источников с токеном: у Kinoplan
 	// протухшее приложение отвечает 404 «App not found», и лечится это заменой
 	// токена, а не ретраем.
+	// Коды доступа разбираются ДО общей ветки ошибки: на 4xx транспорт
+	// заполняет и код, и текст ошибки разом, поэтому проверка «ошибка есть»
+	// раньше забирала их себе, и ветка ниже была недостижима. Оператор видел
+	// «повтори позже» там, где нужен туннель или новый ключ.
+	switch {
+	case in.HTTPStatus == 401 || in.HTTPStatus == 403 || in.HTTPStatus == 404:
+		return ProbeResult{Status: statusBrokenAuth, Evidence: httpEvidence(in.HTTPStatus)}
+	}
 	if in.Err != nil {
 		return ProbeResult{Status: statusBrokenUnreachable, Evidence: in.Err.Error()}
 	}
 	switch {
-	case in.HTTPStatus == 401 || in.HTTPStatus == 403 || in.HTTPStatus == 404:
-		return ProbeResult{Status: statusBrokenAuth, Evidence: httpEvidence(in.HTTPStatus)}
 	case in.HTTPStatus >= 400:
 		return ProbeResult{Status: statusBrokenUnreachable, Evidence: httpEvidence(in.HTTPStatus)}
 	case in.HTTPStatus != 200 && in.HTTPStatus != 0:

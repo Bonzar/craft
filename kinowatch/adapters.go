@@ -689,7 +689,6 @@ func parseZonedTime(s string) string {
 // источника, а не дефект разбора.
 
 var (
-	moskinoStep    = regexp.MustCompile(`(?s)<div class="step"[^>]*>(.*?)(?:<div class="step"|\z)`)
 	moskinoDate    = regexp.MustCompile(`(?s)<div class="value">\s*(\d{1,2})\s+([А-ЯЁа-яё]+)`)
 	moskinoItem    = regexp.MustCompile(`(?s)<div class="schedule-item">(.*?)</div>\s*</div>`)
 	moskinoTitle   = regexp.MustCompile(`(?s)<div class="title">\s*(.*?)\s*</div>`)
@@ -740,7 +739,7 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 		pb.Cinema = strings.TrimSpace(tagRe.ReplaceAllString(m[1], ""))
 	}
 
-	steps := moskinoStep.FindAllStringSubmatch(body, -1)
+	steps := splitBlocks(body, `<div class="step"`)
 	if len(steps) == 0 {
 		// Ноль блоков дат при непустом теле — признак сменившейся вёрстки, а
 		// не пустой афиши. Отличать это от «сеансов нет» обязан вызывающий:
@@ -748,9 +747,7 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 		return pb, fmt.Errorf("разбор Москино: блоки дат не найдены (тело %d байт)", len(body))
 	}
 
-	for _, step := range steps {
-		block := step[1]
-
+	for _, block := range steps {
 		dm := moskinoDate.FindStringSubmatch(block)
 		if len(dm) < 3 {
 			continue
@@ -832,13 +829,13 @@ func parseMoskino(body string, ref time.Time) (Playbill, error) {
 const moriEmptyDayMarker = "Нет сеансов на выбранную дату"
 
 var (
-	moriGroup   = regexp.MustCompile(`(?s)<div class="cinema__session-schedule__group">(.*?)(?:<div class="cinema__session-schedule__group">|\z)`)
-	moriFilm    = regexp.MustCompile(`(?s)class="cinema__film__title[^"]*"[^>]*>\s*(.*?)\s*</a>`)
-	moriParams  = regexp.MustCompile(`(?s)<div class="film-info__params">(.*?)</div>`)
-	moriHall    = regexp.MustCompile(`(?s)<div class="cinema__session-schedule__item__hall">\s*(.*?)\s*</div>`)
-	moriSession = regexp.MustCompile(`(?s)/session/(\d+)/buy"(.*?)</a>`)
-	moriTime    = regexp.MustCompile(`__ticket__time">\s*([0-2]?\d:[0-5]\d)`)
-	moriPrice   = regexp.MustCompile(`__ticket__price">\s*([0-9]+)`)
+	moriGroupOpen = regexp.MustCompile(`<div class="cinema__session-schedule__group">`)
+	moriFilm      = regexp.MustCompile(`(?s)class="cinema__film__title[^"]*"[^>]*>\s*(.*?)\s*</a>`)
+	moriParams    = regexp.MustCompile(`(?s)<div class="film-info__params">(.*?)</div>`)
+	moriHall      = regexp.MustCompile(`(?s)<div class="cinema__session-schedule__item__hall">\s*(.*?)\s*</div>`)
+	moriSession   = regexp.MustCompile(`(?s)/session/(\d+)/buy"(.*?)</a>`)
+	moriTime      = regexp.MustCompile(`__ticket__time">\s*([0-2]?\d:[0-5]\d)`)
+	moriPrice     = regexp.MustCompile(`__ticket__price">\s*([0-9]+)`)
 	// Части хронометража ищутся ПОРОЗНЬ. Одна регулярка с двумя опциональными
 	// группами матчит пустую строку в самом начале текста и всегда возвращает
 	// ноль — молча, без единой ошибки разбора.
@@ -884,7 +881,7 @@ func parseRussianDuration(s string) int {
 func parseMori(body, date string) (Playbill, error) {
 	pb := Playbill{}
 
-	groups := moriGroup.FindAllStringSubmatch(body, -1)
+	groups := moriGroupOpen.FindAllStringIndex(body, -1)
 	if len(groups) == 0 {
 		// Пустой день источник помечает сам: контейнер расписания на месте, а
 		// внутри стоит блок «Нет сеансов на выбранную дату». Это ответ кассы, а
@@ -899,9 +896,19 @@ func parseMori(body, date string) (Playbill, error) {
 	// Название и хронометраж стоят ПЕРЕД группами сеансов и относятся ко всем
 	// группам до следующего фильма, поэтому идём по телу и запоминаем
 	// последний встреченный фильм.
-	for _, g := range groups {
-		block := g[0]
-		head := body[:strings.Index(body, block)+len(block)]
+	//
+	// Область поиска названия обрывается на НАЧАЛЕ своей группы, а не на её
+	// конце: карточка следующего фильма стоит внутри группы предыдущего, и
+	// поиск «до конца блока» подхватывал её. Замер 20.08.2026 на фикстуре:
+	// сеансы 411075 и 411076 «Одиссеи» уезжали в афишу как «Миньоны и монстры».
+	for i, loc := range groups {
+		start := loc[0]
+		end := len(body)
+		if i+1 < len(groups) {
+			end = groups[i+1][0]
+		}
+		block := body[start:end]
+		head := body[:start]
 
 		film, dur := "", 0
 		if fm := moriFilm.FindAllStringSubmatch(head, -1); len(fm) > 0 {
@@ -957,7 +964,6 @@ func parseMori(body, date string) (Playbill, error) {
 // («98 мин»). Цены нет вовсе — это свойство источника, а не пропуск разбора.
 
 var (
-	fiveItem     = regexp.MustCompile(`(?s)<div class="creation-schedule-item">(.*?)(?:<div class="creation-schedule-item">|\z)`)
 	fiveTitle    = regexp.MustCompile(`(?s)<h2><a[^>]*>\s*(.*?)\s*</a></h2>`)
 	fiveGenre    = regexp.MustCompile(`(?s)<div class="creation-genre">(.*?)</div>`)
 	fiveMinutes  = regexp.MustCompile(`(\d+)\s*мин`)
@@ -975,14 +981,12 @@ func parseFiveStars(body, date string) (Playbill, error) {
 		pb.Cinema = strings.TrimSpace(stripHTML(cm[1]))
 	}
 
-	items := fiveItem.FindAllStringSubmatch(body, -1)
+	items := splitBlocks(body, `<div class="creation-schedule-item">`)
 	if len(items) == 0 {
 		return pb, fmt.Errorf("разбор «Пяти звёзд»: блоки фильмов не найдены (тело %d байт)", len(body))
 	}
 
-	for _, it := range items {
-		block := it[1]
-
+	for _, block := range items {
 		tm := fiveTitle.FindStringSubmatch(block)
 		if len(tm) < 2 {
 			continue
@@ -1061,18 +1065,26 @@ func parseFiveStars(body, date string) (Playbill, error) {
 // стабильные части: `data-uuid`, нехешированные дубли классов (`show-time`,
 // `hall-name`, `facility-name`, `price`) и слово `disabled`.
 var (
-	p24Event    = regexp.MustCompile(`(?s)<div class="[^"]*event-info[^"]*">(.*?)(?:<div class="[^"]*event-info[^"]*">|\z)`)
-	p24Title    = regexp.MustCompile(`(?s)<h2[^>]*>\s*<a[^>]*>\s*(.*?)\s*</a>`)
-	p24Facility = regexp.MustCompile(`(?s)<span class="facility-name">\s*(.*?)\s*</span>`)
-	p24Hall     = regexp.MustCompile(`(?s)<span class="hall-name">\s*(.*?)\s*</span>(.*?)(?:<span class="hall-name">|\z)`)
-	p24Show     = regexp.MustCompile(`(?s)<div class="([^"]*\bshow\b[^"]*)">(.*?)(?:<div class="[^"]*\bshow\b[^"]*">|\z)`)
-	p24UUID     = regexp.MustCompile(`data-uuid="([0-9a-f-]{8,})"`)
-	p24Time     = regexp.MustCompile(`show-time[^>]*>\s*([0-2]?\d:[0-5]\d)`)
-	p24Date     = regexp.MustCompile(`[?&]date=(\d{4})/(\d{2})/(\d{2})`)
-	p24Price    = regexp.MustCompile(`price[^>]*>\s*([0-9]+)`)
-	p24Formats  = regexp.MustCompile(`(?s)formats[^>]*>(.*?)</div>`)
-	p24HallNum  = regexp.MustCompile(`(?i)зал\s*([0-9A-Za-zА-Яа-я]+)`)
+	p24EventOpen = regexp.MustCompile(`<div class="[^"]*event-info[^"]*">`)
+	p24Title     = regexp.MustCompile(`(?s)<h2[^>]*>\s*<a[^>]*>\s*(.*?)\s*</a>`)
+	p24Facility  = regexp.MustCompile(`(?s)<span class="facility-name">\s*(.*?)\s*</span>`)
+	p24ShowOpen  = regexp.MustCompile(`<div class="[^"]*\bshow\b[^"]*">`)
+	// Класс блока показа читается из его же начала: в нём стоит признак
+	// «купить нельзя», и он обязан ехать вместе с сеансом.
+	p24ShowClass = regexp.MustCompile(`^<div class="([^"]*)"`)
+	p24UUID      = regexp.MustCompile(`data-uuid="([0-9a-f-]{8,})"`)
+	p24Time      = regexp.MustCompile(`show-time[^>]*>\s*([0-2]?\d:[0-5]\d)`)
+	p24Date      = regexp.MustCompile(`[?&]date=(\d{4})/(\d{2})/(\d{2})`)
+	p24Price     = regexp.MustCompile(`price[^>]*>\s*([0-9]+)`)
+	p24Formats   = regexp.MustCompile(`(?s)formats[^>]*>(.*?)</div>`)
+	p24HallNum   = regexp.MustCompile(`(?i)зал\s*([0-9A-Za-zА-Яа-я]+)`)
 )
+
+// p24HallBlock — группа сеансов одного зала: подпись и её кусок разметки.
+type p24HallBlock struct {
+	label string
+	body  string
+}
 
 // parseP24 разбирает страницу площадки на движке p24.app.
 //
@@ -1085,15 +1097,16 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 		pb.Cinema = strings.TrimSpace(stripHTML(fm[1]))
 	}
 
-	events := p24Event.FindAllStringSubmatch(body, -1)
+	// Резка по позициям блоков фильма заодно отсекает промо-виджет «ближайшие
+	// сеансы»: он стоит ВЫШЕ первого блока фильма, и его сеансы дублируют
+	// расписание. Замер 20.08.2026: в теле 31 сеанс, расписание — 24.
+	events := splitBlocksRe(body, p24EventOpen)
 	if len(events) == 0 {
 		return pb, fmt.Errorf("разбор p24: блоки фильмов не найдены (тело %d байт)", len(body))
 	}
 
 	dates := map[string]bool{}
-	for _, ev := range events {
-		block := ev[1]
-
+	for _, block := range events {
 		tm := p24Title.FindStringSubmatch(block)
 		if len(tm) < 2 {
 			continue
@@ -1105,15 +1118,22 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 		// зал считался обязательным, площадка без него отдавала пустую афишу
 		// при HTTP 200: канал выглядел живым и молчащим, а на деле разбор
 		// искал разметку, которой у этого сайта не бывает.
-		halls := p24Hall.FindAllStringSubmatch(block, -1)
+		var halls []p24HallBlock
+		for _, hb := range splitBlocks(block, `<span class="hall-name">`) {
+			label := ""
+			if i := strings.Index(hb, "</span>"); i != -1 {
+				label = strings.TrimSpace(stripHTML(hb[:i]))
+			}
+			halls = append(halls, p24HallBlock{label: label, body: hb})
+		}
 		if len(halls) == 0 {
 			// Зала нет — вся группа сеансов идёт без номера помещения. Пустой
 			// Hall честнее выдуманного: он участвует в ключе сеанса.
-			halls = [][]string{{"", "", block}}
+			halls = []p24HallBlock{{body: block}}
 		}
 
-		for _, hm := range halls {
-			hallLabel, hallBlock := hm[1], hm[2]
+		for _, h := range halls {
+			hallLabel, hallBlock := h.label, h.body
 
 			// «Зал 1 (кровати)» — в Hall едет только номер: описание зала это
 			// про удобства, а не про идентификатор помещения.
@@ -1122,8 +1142,11 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 				hall = n[1]
 			}
 
-			for _, sm := range p24Show.FindAllStringSubmatch(hallBlock, -1) {
-				classes, show := sm[1], sm[2]
+			for _, show := range splitBlocksRe(hallBlock, p24ShowOpen) {
+				classes := ""
+				if cm := p24ShowClass.FindStringSubmatch(show); len(cm) > 1 {
+					classes = cm[1]
+				}
 
 				tmm := p24Time.FindStringSubmatch(show)
 				if len(tmm) < 2 {
@@ -1182,14 +1205,14 @@ func parseP24(body, fallbackDate string) (Playbill, error) {
 // помещения. Он едет в Format вместе с технологией показа; Hall остаётся пустым,
 // и два сеанса одного фильма в один час различаются своим openWidget-id.
 var (
-	cpMovie   = regexp.MustCompile(`(?s)movie_card_header[^>]*>\s*(.*?)\s*</span>(.*?)(?:movie_card_header|\z)`)
-	cpRuntime = regexp.MustCompile(`(?s)<span class="title">\s*([^<]*?мин[^<]*?)\s*</span>`)
-	cpSession = regexp.MustCompile(`(?s)openWidget=(\d+)"(.*?)</a>`)
-	cpTime    = regexp.MustCompile(`shedule_session_time">\s*([0-2]?\d:[0-5]\d)`)
-	cpPrice   = regexp.MustCompile(`shedule_session_price">\s*(?:от\s*)?([0-9]+)`)
-	cpFormat  = regexp.MustCompile(`shedule_session_format">\s*([^<]+?)\s*</span>`)
-	cpDate    = regexp.MustCompile(`[?&]date=(\d{4}-\d{2}-\d{2})`)
-	cpTitle   = regexp.MustCompile(`«([^»]+)»`)
+	cpMovieName = regexp.MustCompile(`(?s)^[^>]*>\s*(.*?)\s*</span>`)
+	cpRuntime   = regexp.MustCompile(`(?s)<span class="title">\s*([^<]*?мин[^<]*?)\s*</span>`)
+	cpSession   = regexp.MustCompile(`(?s)openWidget=(\d+)"(.*?)</a>`)
+	cpTime      = regexp.MustCompile(`shedule_session_time">\s*([0-2]?\d:[0-5]\d)`)
+	cpPrice     = regexp.MustCompile(`shedule_session_price">\s*(?:от\s*)?([0-9]+)`)
+	cpFormat    = regexp.MustCompile(`shedule_session_format">\s*([^<]+?)\s*</span>`)
+	cpDate      = regexp.MustCompile(`[?&]date=(\d{4}-\d{2}-\d{2})`)
+	cpTitle     = regexp.MustCompile(`«([^»]+)»`)
 )
 
 type cinemaParkResponse struct {
@@ -1214,15 +1237,18 @@ func parseCinemaPark(body, fallbackDate string) (Playbill, error) {
 		pb.Cinema = strings.TrimSpace(tm[1])
 	}
 
-	movies := cpMovie.FindAllStringSubmatch(resp.Content, -1)
+	movies := splitBlocks(resp.Content, "movie_card_header")
 	if len(movies) == 0 {
 		return pb, fmt.Errorf("разбор СИНЕМА ПАРК: блоки фильмов не найдены (content %d байт)", len(resp.Content))
 	}
 
 	dates := map[string]bool{}
-	for _, mv := range movies {
-		film := strings.TrimSpace(html.UnescapeString(stripHTML(mv[1])))
-		block := mv[2]
+	for _, block := range movies {
+		nm := cpMovieName.FindStringSubmatch(block)
+		if len(nm) < 2 {
+			continue
+		}
+		film := strings.TrimSpace(html.UnescapeString(stripHTML(nm[1])))
 		if film == "" {
 			continue
 		}
@@ -1513,7 +1539,6 @@ func parseHudozhestvenny(body, date string) (Playbill, error) {
 // Даты переключаются выпадающим списком, где значение опции — идентификатор
 // дня; человекочитаемая подпись стоит рядом («Понедельник 31 Августа»).
 var (
-	gumItem    = regexp.MustCompile(`(?s)<div class="kino__item">(.*?)(?:<div class="kino__item">|\z)`)
 	gumTitle   = regexp.MustCompile(`(?s)kino__title"[^>]*>\s*<a[^>]*href="/kinozal/movie/id/(\d+)/"[^>]*>\s*(.*?)\s*</a>`)
 	gumTime    = regexp.MustCompile(`ticketManager\.session\("([^"]+)",\s*(\d+)\);'>\s*([0-2]?\d:[0-5]\d)`)
 	gumDayOpt  = regexp.MustCompile(`<option value="(\d+)"([^>]*)>\s*([^<]+?)\s*</option>`)
@@ -1555,14 +1580,12 @@ func parseGum(body string, ref time.Time) (Playbill, error) {
 	// от сменившейся вёрстки в том, что переключатель дней на месте — значит это
 	// та самая страница расписания, просто пустая. Границу держит проверка выше:
 	// нет переключателя — ошибка.
-	items := gumItem.FindAllStringSubmatch(body, -1)
+	items := splitBlocks(body, `<div class="kino__item">`)
 	if len(items) == 0 {
 		return pb, nil
 	}
 
-	for _, it := range items {
-		block := it[1]
-
+	for _, block := range items {
 		tm := gumTitle.FindStringSubmatch(block)
 		if len(tm) < 3 {
 			continue
@@ -1792,14 +1815,13 @@ func parsePremierzal(body, date string) (Playbill, error) {
 const mirageHost = "https://www.mirage.ru"
 
 var (
-	mirageBox   = regexp.MustCompile(`(?s)<div class="session-box">(.*?)(?:<div class="session-box">|\z)`)
-	mirageVenue = regexp.MustCompile(`md-title">\s*<a href="/msk/cinema/(\d+)/?"`)
-	mirageDay   = regexp.MustCompile(`<a href="/msk/schedule/(\d{2}\.\d{2}\.\d{4})/"([^>]*)>`)
-	mirageItem  = regexp.MustCompile(`(?s)<div class="title">\s*(.*?)\s*</div>(.*?)(?:<div class="title">|\z)`)
-	mirageHall  = regexp.MustCompile(`<span class="blue">\s*([^<]+?)\s*</span>`)
-	mirageTime  = regexp.MustCompile(`<div class="time">\s*([0-2]?\d:[0-5]\d)\s*</div>`)
-	mirageFmt   = regexp.MustCompile(`<div class="format">\s*([^<]*?)\s*</div>`)
-	mirageLink  = regexp.MustCompile(`href="(/ticket_new/[0-9a-f-]+/?)"`)
+	mirageVenue    = regexp.MustCompile(`md-title">\s*<a href="/msk/cinema/(\d+)/?"`)
+	mirageDay      = regexp.MustCompile(`<a href="/msk/schedule/(\d{2}\.\d{2}\.\d{4})/"([^>]*)>`)
+	mirageItemName = regexp.MustCompile(`(?s)^\s*(.*?)\s*</div>`)
+	mirageHall     = regexp.MustCompile(`<span class="blue">\s*([^<]+?)\s*</span>`)
+	mirageTime     = regexp.MustCompile(`<div class="time">\s*([0-2]?\d:[0-5]\d)\s*</div>`)
+	mirageFmt      = regexp.MustCompile(`<div class="format">\s*([^<]*?)\s*</div>`)
+	mirageLink     = regexp.MustCompile(`href="(/ticket_new/[0-9a-f-]+/?)"`)
 )
 
 // parseMirage разбирает расписание Москвы, оставляя сеансы одной площадки.
@@ -1836,7 +1858,7 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 			errDayNotPublished, active, date)
 	}
 
-	boxes := mirageBox.FindAllStringSubmatch(body, -1)
+	boxes := splitBlocks(body, `<div class="session-box">`)
 	if len(boxes) == 0 {
 		return pb, fmt.Errorf("разбор Миража: блоки площадок не найдены (тело %d байт)", len(body))
 	}
@@ -1844,7 +1866,7 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 	seen := false
 	anchors := 0
 	for _, box := range boxes {
-		vm := mirageVenue.FindStringSubmatch(box[1])
+		vm := mirageVenue.FindStringSubmatch(box)
 		if len(vm) < 2 {
 			continue
 		}
@@ -1854,9 +1876,13 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 		}
 		seen = true
 
-		for _, it := range mirageItem.FindAllStringSubmatch(box[1], -1) {
-			film := strings.TrimSpace(html.UnescapeString(stripHTML(it[1])))
-			tm := mirageTime.FindStringSubmatch(it[2])
+		for _, it := range splitBlocks(box, `<div class="title">`) {
+			nm := mirageItemName.FindStringSubmatch(it)
+			if len(nm) < 2 {
+				continue
+			}
+			film := strings.TrimSpace(html.UnescapeString(stripHTML(nm[1])))
+			tm := mirageTime.FindStringSubmatch(it)
 			if film == "" || len(tm) < 2 {
 				continue
 			}
@@ -1866,13 +1892,13 @@ func parseMirage(body, venue, date string) (Playbill, error) {
 			}
 
 			st := Showtime{Film: film, StartsAt: at, OnSale: true}
-			if hm := mirageHall.FindStringSubmatch(it[2]); len(hm) > 1 {
+			if hm := mirageHall.FindStringSubmatch(it); len(hm) > 1 {
 				st.Hall = strings.TrimSpace(hm[1])
 			}
-			if fm := mirageFmt.FindStringSubmatch(it[2]); len(fm) > 1 {
+			if fm := mirageFmt.FindStringSubmatch(it); len(fm) > 1 {
 				st.Format = strings.TrimSpace(fm[1])
 			}
-			if lm := mirageLink.FindStringSubmatch(it[2]); len(lm) > 1 {
+			if lm := mirageLink.FindStringSubmatch(it); len(lm) > 1 {
 				st.DeepLink = mirageHost + lm[1]
 				// Идентификатор сеанса у источника есть — это uuid в ссылке на
 				// билет. Он различает два сеанса одного фильма в один час.
@@ -2008,6 +2034,10 @@ func parseCinema5(body string, cinemaID int) (Playbill, error) {
 // эту дату у площадки пока нет.
 
 type etobiletFilm struct {
+	// Название источник отдаёт дважды: витринное с приклеенным форматом и
+	// возрастом («Храбрый Давид  (2D, 6+)») и чистое. Берём чистое: сравнение
+	// с профилем точное, и склеенный хвост означал бы «фильма нет».
+	NameRaw  string `json:"name_raw"`
 	Name     string `json:"name"`
 	Duration int    `json:"duration"`
 	Formats  []struct {
@@ -2042,7 +2072,10 @@ func parseEtobilet(body, date string) (Playbill, error) {
 	}
 
 	for _, f := range films {
-		film := strings.TrimSpace(html.UnescapeString(f.Name))
+		film := strings.TrimSpace(html.UnescapeString(f.NameRaw))
+		if film == "" {
+			film = strings.TrimSpace(html.UnescapeString(f.Name))
+		}
 		if film == "" {
 			continue
 		}
@@ -2122,6 +2155,33 @@ func splitBlocks(body, marker string) []string {
 		return nil
 	}
 	return parts[1:]
+}
+
+// splitBlocksRe режет разметку по совпадениям выражения и отдаёт куски,
+// НАЧИНАЮЩИЕСЯ с самого совпадения.
+//
+// Нужна там, где маркер не постоянная строка: у движков с CSS-модулями имя
+// класса несёт хеш сборки («Show_show__kEocF show»), и разделить тело по
+// литералу нельзя.
+//
+// Кусок начинается с совпадения, а не после него, и это не деталь: у p24 в
+// классе блока показа лежит признак продажи. Резка «после маркера» уводила бы
+// класс в предыдущий кусок, и закрытые к покупке сеансы молча становились бы
+// продающимися.
+func splitBlocksRe(body string, re *regexp.Regexp) []string {
+	idx := re.FindAllStringIndex(body, -1)
+	if len(idx) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(idx))
+	for i, loc := range idx {
+		end := len(body)
+		if i+1 < len(idx) {
+			end = idx[i+1][0]
+		}
+		out = append(out, body[loc[0]:end])
+	}
+	return out
 }
 
 // extractEmbeddedJSON достаёт массив, лежащий строкой внутри разметки.
@@ -2245,7 +2305,12 @@ func parsePioner(body, date string) (Playbill, error) {
 var (
 	poklonkaDayID   = regexp.MustCompile(`^(s\d+)">`)
 	poklonkaDayTab  = regexp.MustCompile(`data-id="(s\d+)">(\d{1,2})<br>\s*([а-яё]+)`)
-	poklonkaHallOrS = regexp.MustCompile(`(?s)<div class="item title">\s*(.*?)\s*</div>|<a class="item"[^>]*>\s*<div class="name">\s*(.*?)\s*</div>\s*<div class="value">\s*([0-2]?\d:[0-5]\d)\s*</div>`)
+	poklonkaHallOrS = regexp.MustCompile(`(?s)<div class="item title">\s*(.*?)\s*</div>|<a class="item"[^>]*>\s*<div class="name">\s*(.*?)\s*</div>\s*<div class="value">\s*(.*?)\s*</div>`)
+	// Ячейка времени держит ВСЕ сеансы фильма за день, через запятую:
+	// «12:30, 16:20, 18:10». Пока выражение выше требовало ровно одно время,
+	// фильм с двумя и более сеансами не совпадал вовсе и выпадал целиком —
+	// замер 20.08.2026 на фикстуре: 100 сеансов в теле, 30 в разборе.
+	poklonkaTimes = regexp.MustCompile(`[0-2]?\d:[0-5]\d`)
 )
 
 func parsePoklonka(body string, now time.Time) (Playbill, error) {
@@ -2293,13 +2358,18 @@ func parsePoklonka(body string, now time.Time) (Playbill, error) {
 				continue
 			}
 			film := strings.TrimSpace(html.UnescapeString(stripHTML(m[2])))
-			at := normalizeShowtime(m[3], date)
-			if film == "" || at == "" {
+			if film == "" {
 				continue
 			}
-			pb.Showtimes = append(pb.Showtimes, Showtime{
-				Film: film, StartsAt: at, Hall: hall, OnSale: true,
-			})
+			for _, hhmm := range poklonkaTimes.FindAllString(stripHTML(m[3]), -1) {
+				at := normalizeShowtime(hhmm, date)
+				if at == "" {
+					continue
+				}
+				pb.Showtimes = append(pb.Showtimes, Showtime{
+					Film: film, StartsAt: at, Hall: hall, OnSale: true,
+				})
+			}
 		}
 	}
 
@@ -2500,9 +2570,15 @@ func parseRomanov(body, date string) (Playbill, error) {
 				OnSale:   true,
 			}
 			// Цен у сеанса несколько (по типам билета) — берём вилку, а не
-			// первую попавшуюся. Цена приходит в копейках.
+			// первую попавшуюся.
+			//
+			// Цена приходит В РУБЛЯХ, хотя движок похож на соседние с
+			// копейками. Источник говорит это сам: рядом с ценой 6000 у него
+			// стоит подпись «С 11:00 до 16:00 - 6000 р». Пока цена делилась на
+			// сто, билет за 6000 ₽ публиковался у нас как 60 ₽ — цена премиум-
+			// площадки выглядела самой дешёвой в городе.
 			for i, p := range s.Prices {
-				rub := p.Price / 100
+				rub := p.Price
 				if i == 0 || rub < st.PriceMin {
 					st.PriceMin = rub
 				}

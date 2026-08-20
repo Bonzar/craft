@@ -221,7 +221,7 @@ func readRegistry(r io.Reader) ([]CinemaObservation, error) {
 		Observations []CinemaObservation `json:"observations"`
 	}
 	if err := json.Unmarshal(raw, &report); err == nil && len(report.Observations) > 0 {
-		return report.Observations, nil
+		return withFields(report.Observations), nil
 	}
 
 	var list []CinemaObservation
@@ -231,7 +231,23 @@ func readRegistry(r io.Reader) ([]CinemaObservation, error) {
 	if len(list) == 0 {
 		return nil, fmt.Errorf("в реестре ноль площадок")
 	}
-	return list, nil
+	return withFields(list), nil
+}
+
+// withFields достраивает карту полей у наблюдений, где её нет.
+//
+// Голый список наблюдений — заявленная форма входа, и в нём поле полей
+// обычно не пишут руками. Читающие пути пустую карту переносят спокойно, а
+// первая же запись в неё роняла прогон паникой (замер 20.08.2026 — падение на
+// применении записей из кода). Карта заводится один раз здесь, а не проверками
+// на каждой записи.
+func withFields(obs []CinemaObservation) []CinemaObservation {
+	for i := range obs {
+		if obs[i].Fields == nil {
+			obs[i].Fields = map[string]string{}
+		}
+	}
+	return obs
 }
 
 // loadFilmProfile собирает профиль искомого фильма.
@@ -279,7 +295,13 @@ func runProbe(c, tunnel *Client, title, profilePath, previousPath string, days, 
 	// найденным вручную каналом выглядит непокрытой и в опрос не идёт.
 	records := applyStandaloneRecords(obs)
 
-	now := time.Now()
+	// Момент берётся в МОСКОВСКОЙ зоне, а не в зоне машины: даты у всех
+	// источников московские, а прогон живёт в контейнере с UTC. Между 21:00 и
+	// полуночью UTC машинное «сегодня» это вчерашний московский день —
+	// горизонт уезжал на сутки назад, последний день окна не спрашивался
+	// вовсе, а здоровые площадки получали отметку «последний сеанс уже в
+	// прошлом».
+	now := time.Now().In(moscowTZ)
 	report := ProbeReport{
 		FetchedAt: nowRFC3339(),
 		Film:      film,

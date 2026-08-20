@@ -166,7 +166,19 @@ var addrStopWords = map[string]bool{
 	"шоссе": true, "бульвар": true, "набережная": true, "площадь": true, "проезд": true,
 	"дом": true, "строение": true, "корпус": true, "километр": true, "км": true,
 	"мкад": true, "этаж": true, "владение": true, "пересечение": true,
+	// Сокращения источники пишут чаще полных форм, а фильтр коротких слов их
+	// не ловит: «просп» и «бульв» это пять букв. Пока они считались значимыми
+	// словами, совпадения одного «просп» вместе с одинаковым номером дома
+	// хватало, чтобы объявить Кутузовский и Ленинский одним адресом.
+	"просп": true, "пр-кт": true, "бульв": true, "набер": true, "площ": true,
+	"проез": true, "шосс": true, "переул": true, "помещение": true, "офис": true,
 }
+
+// addrHouseTail — служебный хвост адреса: строение, корпус, помещение и прочее
+// со своими номерами. Отрезается ДО поиска дома, иначе номером дома становится
+// последнее число строки — у «Арбатская пл., 14, стр. 1» это 1, а у
+// «Покровский бульв., 5, пом. 49» — номер помещения.
+var addrHouseTail = regexp.MustCompile(`(?i)\s(стр|строение|корп|корпус|к|пом|помещение|вл|влад|владение|оф|офис|этаж|эт)\.?\s*\d+.*$`)
 
 // addrHouseRe — номер дома: последнее самостоятельное число в адресе, возможно с
 // буквой («13а»).
@@ -186,7 +198,7 @@ func parseVenueAddress(s string) venueAddress {
 	s = strings.TrimSpace(addrTrash.ReplaceAllString(s, " "))
 
 	out := venueAddress{words: map[string]bool{}}
-	if m := addrHouseRe.FindAllStringSubmatch(s, -1); len(m) > 0 {
+	if m := addrHouseRe.FindAllStringSubmatch(addrHouseTail.ReplaceAllString(s, ""), -1); len(m) > 0 {
 		out.house = m[len(m)-1][1]
 	}
 	for _, w := range strings.Fields(s) {
@@ -865,13 +877,34 @@ func runKinoafishaLayerVia(src *kinoafishaSource, film FilmProfile, obs []Cinema
 		dates = append(dates, date)
 		reqs = append(reqs, kinoafishaDateReq(id, date, skip))
 	}
-	layer.Days = len(seen) + len(dates)
+
+	// Даты складываются ОБЪЕДИНЕНИЕМ, а не суммой: дата попадает в очередь на
+	// догрузку именно потому, что часть её строк уже отрисована на странице —
+	// то есть она есть в обоих наборах, и сумма считала бы её дважды. По этому
+	// числу распознаётся схлопнувшийся горизонт, так что завышение прячет
+	// потерю дат.
+	all := make(map[string]bool, len(seen)+len(dates))
+	for d := range seen {
+		all[d] = true
+	}
+	for _, d := range dates {
+		all[d] = true
+	}
+	layer.Days = len(all)
 
 	if len(reqs) > 0 {
 		res, err := src.fetch(reqs)
 		if err != nil {
 			layer.flaw("догрузка дат не состоялась: %v", err)
 			res = nil
+		}
+		// Ответы сопоставляются датам по порядку. Пришло меньше, чем
+		// запрошено — остаток НЕ пропадает молча: недоехавшая дата это та же
+		// неполнота, что и неразобранная.
+		if len(res) < len(dates) {
+			for _, date := range dates[len(res):] {
+				layer.flaw("дата %s не догружена: ответа не пришло", date)
+			}
 		}
 		for i, r := range res {
 			if i >= len(dates) {

@@ -9,6 +9,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -145,5 +146,27 @@ func TestMarkStale(t *testing.T) {
 	// Успешный прогон в stale не превращается ни при каком счётчике.
 	if got := markStale(9, statusOnSale); got != statusOnSale {
 		t.Errorf("успешный статус затёрт на %q", got)
+	}
+}
+
+// Транспорт на 4xx отдаёт код и ошибку разом, поэтому классификатор обязан
+// разобрать код доступа раньше общей ветки «ответа не было». Иначе
+// геозаблокированная площадка отчитывается как недоступная, и оператор читает
+// «повтори позже» вместо «нужен туннель или новый ключ».
+func TestClassifyProbeSeesAuthBehindTransportError(t *testing.T) {
+	for _, code := range []int{401, 403, 404} {
+		got := classifyProbe(ProbeInput{
+			HTTPStatus: code,
+			Err:        fmt.Errorf("HTTP %d", code),
+		})
+		if got.Status != statusBrokenAuth {
+			t.Errorf("код %d: статус %q, ожидался %q", code, got.Status, statusBrokenAuth)
+		}
+	}
+
+	// Сеть не ответила вовсе — это по-прежнему недоступность.
+	got := classifyProbe(ProbeInput{Err: fmt.Errorf("dial tcp: i/o timeout")})
+	if got.Status != statusBrokenUnreachable {
+		t.Errorf("сетевая ошибка: статус %q, ожидался %q", got.Status, statusBrokenUnreachable)
 	}
 }
