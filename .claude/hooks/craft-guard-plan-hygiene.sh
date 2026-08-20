@@ -5,7 +5,7 @@
 # and pass plans про КОД through untouched, since those legitimately name
 # files, commands and IDs.
 #
-# Enforces four of Влад's plan rules that the built-in Plan-mode actively pushes
+# Enforces five of Влад's plan rules that the built-in Plan-mode actively pushes
 # against (it templates a verification/order section and doesn't produce links):
 #   0. NO fence longer than three backticks — a nested code block reads worse
 #      than a quote, for humans and for gates alike.
@@ -15,6 +15,8 @@
 #   2. Block references are clickable docs.craft.do links, not bare UUIDs.
 #   3. NO hard-wrapped paragraphs — Влад reads plans on a phone, where every
 #      wrapped line renders as its own paragraph and the sentence breaks apart.
+#   4. EVERY entity block carries its «где:» locator — a plan without an address
+#      cannot be executed, and the critic used to spend a whole round on it.
 #
 # Heuristic — narrow patterns to limit false positives; on a hit it denies the
 # write with a reason so the plan gets rewritten. Fail quiet on anything odd.
@@ -118,12 +120,17 @@ if (( ${#wrap_probe} == 5 )); then
   fi
 fi
 
-# Only Craft-plans («План правок») are policed by rules 0–2. A plan про КОД legitimately
+# Only Craft-plans («План правок») are policed by rules 0–2 and 4. A plan про КОД legitimately
 # names files, commands and flags, so the mechanics/command/ID checks below must not
 # touch it. Detect a Craft-plan by its structural signals — the «где:» locator
-# line every entity carries, or a Craft link/ref — and pass anything else (a code
-# or other plan) straight through.
-grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:' <<<"$content" || exit 0
+# line every entity carries, a Craft link/ref, or a сущностный заголовок вида
+# «## [тип · операция]» — and pass anything else (a code or other plan) straight through.
+#
+# Заголовок сущности в списке сигналов обязателен: без него план, где адрес забыт у ВСЕХ
+# сущностей разом, не опознавался Craft-планом и проезжал мимо правила 4 — то есть мимо
+# ровно того случая, ради которого правило заведено. Код-планы такой заголовок не носят:
+# у них секции «Контекст», «Шаги», «Проверка».
+grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:|^[[:space:]]*#+[[:space:]]*\[' <<<"$content" || exit 0
 
 # Dictated verbatim text in a «План правок» sits in a QUOTE block, and code examples in
 # ``` or ~~~ fences; both may legitimately contain command tokens, IDs, even a «Проверка»
@@ -152,6 +159,22 @@ fi
 # 1b. explicit execution commands / mechanics tokens
 if grep -qE '(blocks (get|update|add|move|delete|learn)|tasks (update|add|delete)|(^|[[:space:]])--(json|id|markdown|siblingId|depth)([[:space:]]|=)|git (commit|push|add)|curl )' <<<"$body"; then
   problems+=("команды/механика выполнения в тексте плана")
+fi
+
+# 4. Сущность без адреса правки. Сущностный блок — заголовок ЛЮБОГО уровня, открытый
+# скобкой типа и операции («## [заметка · новая] …»), и строки до следующего заголовка;
+# такой блок обязан нести строку «где:». Строки юнита вне сущностного блока не смотрим:
+# у мета юнита свои лейблы («приёмка:», «риск:»), словаря операций они не нарушают.
+# Только на записи ЦЕЛОГО файла: на правке фрагмента хук целого текста не видит, и
+# сущность без адреса там законна — адрес остался в неправленой части.
+if [[ -n "$(jq -r '.tool_input.content // ""' <<<"$input" 2>/dev/null)" ]] \
+   && awk '
+     /^[[:space:]]*#+[[:space:]]*\[/ { if (ent && !found) { bad=1; exit } ent=1; found=0; next }
+     /^[[:space:]]*#/               { if (ent && !found) { bad=1; exit } ent=0; next }
+     { if (ent && $0 ~ /^[[:space:]]*[-*+]?[[:space:]]*где:/) found=1 }
+     END { if (!bad && ent && !found) bad=1; exit !bad }
+   ' <<<"$body"; then
+  problems+=("сущность без строки «где:» — у каждой сущности плана есть адрес правки, путь крошками от контейнера до позиции")
 fi
 
 # 2. bare block-IDs (UUID) not inside a docs.craft.do link.

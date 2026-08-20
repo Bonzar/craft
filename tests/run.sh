@@ -121,6 +121,7 @@ for f in "${files[@]}"; do
     criticpend="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-pending-test.XXXXXX")"
     planshown="$(mktemp -u "${TMPDIR:-/tmp}/plan-shown-test.XXXXXX")"
     criticruns="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-runs-test.XXXXXX")"
+    criticround="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-round-test.XXXXXX")"
     # Классификатор гейта в тестах ВСЕГДА мок (дефолтный ответ «СООТВЕТСТВУЕТ»),
     # иначе кейс с периметром сделал бы сетевой вызов настоящей модели. След
     # вызова мока (classtrace) — признак для кейсов «модель не зовётся»:
@@ -134,6 +135,7 @@ for f in "${files[@]}"; do
              "CRAFT_PLAN_CRITIC_PENDING=$criticpend"
              "CRAFT_PLAN_SHOWN_MARKER=$planshown"
              "CRAFT_PLAN_CRITIC_RUNS=$criticruns"
+             "CRAFT_PLAN_CRITIC_ROUND=$criticround"
              "PLAN_CLASSIFIER_CMD=$CASES_DIR/fixtures/mock-classifier.sh"
              "MOCK_CLASSIFIER_TRACE=$classtrace")
     # `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт
@@ -188,7 +190,8 @@ for f in "${files[@]}"; do
           "${marker}.qa-window" "${marker}.plans" \
           "$obsbuf" "$rfmark" "$planpath" "$criticmark" \
           "$deltastore" "${deltastore}.snapshot" \
-          "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend" "$planshown" "$criticruns"; rm -rf "$fgdir"
+          "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend" "$planshown" "$criticruns" \
+          "$criticround"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;

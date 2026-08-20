@@ -80,4 +80,6 @@ fi
 # реплика Влада — по реплике плато было недостижимо в живом диалоге.
 runs="${CRAFT_PLAN_CRITIC_RUNS:-/tmp/plan-critic.${CLAUDE_CODE_SESSION_ID:-default}.runs}"
 rm -f "$runs" 2>/dev/null || true
+# Память версии круга живёт внутри одной обкатки: показ её закрывает вместе со счётчиком.
+rm -f "${CRAFT_PLAN_CRITIC_ROUND:-/tmp/plan-critic.${CLAUDE_CODE_SESSION_ID:-default}.round}" 2>/dev/null || true
 exit 0

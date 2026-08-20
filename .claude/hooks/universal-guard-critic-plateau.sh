@@ -20,8 +20,11 @@ fi
 input="$(cat)"
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
 case "$tool" in Task|Agent) ;; *) exit 0 ;; esac
+# Гейтятся роли, которые КРУТЯТ счётчик, — те же, что ставят отметку: сводящий веера и
+# одиночный критик. Юнитные критики и критик швов прогон не засчитывают, и блокировать их
+# нечем: круг веера считается один раз, по своему сводящему.
 agent="$(jq -r '.tool_input.subagent_type // ""' <<<"$input" 2>/dev/null)"
-[[ "$agent" == "plan-critic" ]] || exit 0
+case "$agent" in plan-critic|plan-critic-verdict) ;; *) exit 0 ;; esac
 
 runs="${CRAFT_PLAN_CRITIC_RUNS:-/tmp/plan-critic.${CLAUDE_CODE_SESSION_ID:-default}.runs}"
 n="$(cat "$runs" 2>/dev/null)"
