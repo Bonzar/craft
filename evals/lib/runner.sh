@@ -261,7 +261,8 @@ eval__warm_cache() {
   # дёргать настоящую модель ради разогрева кэша.
   [[ -n "${EVAL_SKIP_WARMUP:-}" ]] && return 0
   local root="${CLAUDE_PROJECT_DIR:-$PWD}" f before after ok=1
-  local files=("$root/.claude/craft-incident-context.md" "$root/.claude/craft-router-context.md")
+  local files=("$root/.claude/craft-incident-context.md" "$root/.claude/craft-router-context.md" \
+               "$root/.claude/craft-code-rules-context.md")
   before=""; for f in "${files[@]}"; do before+="$(stat -f %m "$f" 2>/dev/null || echo 0),"; done
 
   env -u CRAFT_EVAL -u CLAUDE_CODE_SESSION_ID \

@@ -7,6 +7,11 @@
 # .claude/hooks/craft-inject-incident.sh for the incident detector. Never commit.
 .claude/craft-incident-context.md
 
+# Same: per-session snapshot of the live «⚙️ Правила кода» core, fetched by
+# .claude/hooks/universal-inject-code-rules.sh and imported from CLAUDE.md.
+# Never commit.
+.claude/craft-code-rules-context.md
+
 # Per-session cache of block-IDs under the pre-authorised «direct-edit» pages
 # (gate-exempt-pages.txt), built by .claude/hooks/universal-cache-gate-exempt-scope.sh
 # for the plan-gate scope exemption. Ephemeral snapshot of live Craft — never commit.
