@@ -222,6 +222,44 @@ else
 fi
 rm -rf "$sb"
 
+# --- J. ветка цели сменилась между сетевым шагом и применением ----------------
+t="ветка цели сменилась после отчёта — судим по свежей"
+sb="$(sandbox)"; st="$sb/state"
+mkdir -p "$sb/other-project"
+run_hook Stop "$st" "$sb/work" "$sb/other-project" >/dev/null
+# Отчёт снят, когда цель стояла на main; теперь Влад переключил её на свою ветку.
+G -C "$sb/work" checkout --quiet -b vlad-branch
+before="$(G -C "$sb/work" rev-parse HEAD)"
+out="$(run_hook UserPromptSubmit "$st" "$sb/work" "$sb/other-project")"
+after="$(G -C "$sb/work" rev-parse HEAD)"
+if [[ "$before" != "$after" ]]; then
+  bad "$t" "перемотана ветка, на которую переключились после отчёта"
+elif [[ "$(G -C "$sb/work" rev-parse main)" != "$(G -C "$sb/work" rev-parse origin/main)" ]]; then
+  bad "$t" "указатель main не продвинут"
+elif ! grep -q "не на main" <<<"$out"; then
+  bad "$t" "решение принято по ветке из отчёта: ${out:0:150}"
+else
+  ok "$t"
+fi
+rm -rf "$sb"
+
+# --- K. цель уехала вперёд сама между отчётом и применением -------------------
+t="цель подтянулась сама — вливания нет, сигнал есть"
+sb="$(sandbox)"; st="$sb/state"
+G -C "$sb/work" checkout --quiet -b feature
+run_hook Stop "$st" "$sb/work" "$sb/work" >/dev/null
+G -C "$sb/work" merge --quiet --no-edit origin/main
+head_after_manual="$(G -C "$sb/work" rev-parse HEAD)"
+out="$(run_hook UserPromptSubmit "$st" "$sb/work" "$sb/work")"
+if [[ "$(G -C "$sb/work" rev-parse HEAD)" != "$head_after_manual" ]]; then
+  bad "$t" "хук влил поверх уже подтянутой цели"
+elif [[ -n "${out//[$' \t\n\r']/}" ]]; then
+  bad "$t" "отставания уже нет, а хук напечатал: ${out:0:150}"
+else
+  ok "$t"
+fi
+rm -rf "$sb"
+
 # --- Ветка правил Craft: сравнение снимков ------------------------------------
 # Отчёт подкладывается готовым — сеть в этих кейсах не нужна, проверяется ровно
 # сравнение базы со свежим снимком и то, что попадает в контекст.
@@ -298,6 +336,49 @@ else
   ok "$t"
 fi
 rm -rf "$sb"
+
+# Базой обязан быть снимок ЭТОЙ сессии — тот, что импортировал её CLAUDE.md.
+# Снимок из чекаута цели за базу не годится: в сессии другого проекта это чужой
+# файл произвольного возраста.
+rules_case_snapshot() {  # $1 снимок в чекауте сессии, $2 снимок в чекауте цели, $3 свежий
+  local sb st
+  sb="$(mktemp -d "${TMPDIR:-/tmp}/sync-seed-test.XXXXXX")"
+  st="$sb/state"
+  mkdir -p "$sb/session/.claude" "$sb/target/.claude"
+  [[ -n "$1" ]] && printf '%s' "$1" > "$sb/session/.claude/craft-router-context.md"
+  [[ -n "$2" ]] && printf '%s' "$2" > "$sb/target/.claude/craft-router-context.md"
+  printf '%s' "$3" > "$st.rules-fresh"
+  printf 'ahead=0\nscope=shared\nbranch=main\nhead_before=x\nrules=%s\n' "$st.rules-fresh" > "$st.report"
+  printf '{"hook_event_name":"UserPromptSubmit","session_id":"seed-%s","prompt":"x","cwd":"%s"}' "$RANDOM" "$sb/session" \
+    | env SYNC_SYSTEM_STATE="$st" SYNC_SYSTEM_TARGET="$sb/target" HOOK_ONCE=off \
+          CLAUDE_PROJECT_DIR="$sb/session" bash "$HOOK" 2>/dev/null
+  rm -rf "$sb"
+}
+
+t="база — снимок старта СВОЕЙ сессии, дельта против него"
+out="$(rules_case_snapshot "$HEAD_LINE
+Правило: версия из контекста сессии." "$HEAD_LINE
+Правило: чужой снимок в чекауте цели." "$HEAD_LINE
+Правило: версия свежая, правило изменили.")"
+if ! grep -q "Правила Craft изменились" <<<"$out"; then
+  bad "$t" "дельта не напечатана: ${out:0:150}"
+elif ! grep -q "правило изменили" <<<"$out"; then
+  bad "$t" "в дельте нет изменившегося правила: ${out:0:200}"
+elif grep -q "чужой снимок" <<<"$out"; then
+  bad "$t" "базой взят снимок чекаута цели, а не своей сессии: ${out:0:200}"
+else
+  ok "$t"
+fi
+
+t="снимок есть только в чекауте цели — дельты нет"
+out="$(rules_case_snapshot "" "$HEAD_LINE
+Правило: чужой снимок произвольного возраста." "$HEAD_LINE
+Правило: версия свежая.")"
+if [[ -n "${out//[$' \t\n\r']/}" ]]; then
+  bad "$t" "дельта посчитана против чужого снимка: ${out:0:150}"
+else
+  ok "$t"
+fi
 
 t="дельта режется по бюджету"
 big_old="$HEAD_LINE"; big_new="$HEAD_LINE"

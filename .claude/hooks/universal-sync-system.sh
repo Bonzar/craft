@@ -178,8 +178,31 @@ maybe_reinstall() {
   bash "$TARGET/install.sh" >/dev/null 2>&1 || true
 }
 
-apply_code() {  # печатает директиву; $1 ahead, $2 scope, $3 branch, $4 head_before
+apply_code() {  # печатает директиву; $1 ahead (из отчёта), $2 scope, $3 branch (из отчёта), $4 head_before
   local ahead="$1" scope="$2" branch="$3" head_before="$4" reason="" ok=0
+
+  # Между сетевым шагом и этим применением цель могла переключить ветку или
+  # уехать вперёд сама. Поэтому ветка, позиция и само отставание читаются
+  # ЗАНОВО — счёт локальный, по уже скачанному origin/main, сети не требует.
+  # Из отчёта берётся только то, чего заново не узнать.
+  local branch_now head_now ahead_now
+  branch_now="$(g rev-parse --abbrev-ref HEAD)"
+  head_now="$(g rev-parse HEAD)"
+  if [[ -z "$branch_now" || "$branch_now" == "HEAD" || -z "$head_now" ]]; then
+    printf '🔄 Свежесть системы проверить не удалось: позиция чекаута %s неопределённая. Считай, что сессия может работать на устаревших правилах.\n' "$TARGET"
+    return 0
+  fi
+  ahead_now="$(g rev-list --count HEAD..origin/main)"
+  [[ "$ahead_now" =~ ^[0-9]+$ ]] || ahead_now="$ahead"
+  # Отставания уже нет (цель подтянули руками, соседняя сессия) — это законное
+  # единственное молчание.
+  (( ahead_now == 0 )) && return 0
+
+  branch="$branch_now"
+  ahead="$ahead_now"
+  # Перечень изменившихся файлов считается от позиции ПЕРЕД вливанием, а не от
+  # записанной в отчёте: после смены ветки та дала бы всю разницу между ветками.
+  head_before="$head_now"
 
   if [[ "$scope" == own ]]; then
     if dirty; then
@@ -217,6 +240,22 @@ apply_code() {  # печатает директиву; $1 ahead, $2 scope, $3 br
 
 # Зона правил снимка: без служебного заголовка со временем сборки (иначе отличие
 # всегда) и без регенерируемой памяти (её переписывают рутины актуализации).
+# Снимок правил, который импортировала САМА сессия: ищется от каталога, который
+# событие принесло с собой, вверх до первого `.claude` со снимком. Переменной с
+# корнем проекта тут нет — в окружении хука на неё полагаться нельзя.
+session_snapshot() {
+  local cwd probe candidate
+  cwd="$(jq -r '.cwd // ""' <<<"$input" 2>/dev/null)"
+  [[ -n "$cwd" && -d "$cwd" ]] || return 0
+  probe="$(cd "$cwd" 2>/dev/null && pwd)" || return 0
+  while [[ -n "$probe" && "$probe" != "/" ]]; do
+    candidate="$probe/.claude/craft-router-context.md"
+    [[ -s "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+    probe="$(dirname "$probe")"
+  done
+  return 0
+}
+
 rules_zone() {  # $1 — файл снимка
   awk '
     /^=== Craft: роутер/ { next }
@@ -230,10 +269,21 @@ apply_rules() {  # $1 — путь свежего снимка
   local fresh="$1" a b delta
   [[ -s "$fresh" ]] || return 0
 
-  # Базы нет — засеиваем и молчим: обрезок всего роутера вместо дельты бесполезен.
+  # Базы нет — засеиваем снимком СТАРТА ЭТОЙ сессии: именно он попал в контекст
+  # через импорт её CLAUDE.md. Снимок из чекаута цели за базу не берётся — в
+  # сессии другого проекта это чужой файл произвольного возраста, и первая же
+  # дельта показала бы правила, которых в контексте не было. Своего снимка нет
+  # (сессия без роутера, сбой сети на старте) — засеиваем свежим и молчим:
+  # сравнивать не с чем, а обрезок всего роутера вместо дельты бесполезен.
   if [[ ! -s "$BASE" ]]; then
-    cp -f "$fresh" "$BASE" 2>/dev/null
-    return 0
+    local at_start
+    at_start="$(session_snapshot)"
+    if [[ -n "$at_start" && -s "$at_start" ]]; then
+      cp -f "$at_start" "$BASE" 2>/dev/null
+    else
+      cp -f "$fresh" "$BASE" 2>/dev/null
+      return 0
+    fi
   fi
 
   a="$(mktemp)"; b="$(mktemp)"
@@ -291,6 +341,18 @@ apply() {
   [[ -n "$rules" ]] && apply_rules "$rules"
   return 0
 }
+
+# База снимается при ПЕРВОМ же событии сессии, не дожидаясь первого применения:
+# так окно, в которое старт соседней сессии успевает переписать общий снимок,
+# самое узкое. Совсем закрыть его нельзя — снимок один на чекаут.
+seed_base_early() {
+  [[ -s "$BASE" ]] && return 0
+  local at_start
+  at_start="$(session_snapshot)"
+  [[ -n "$at_start" && -s "$at_start" ]] && cp -f "$at_start" "$BASE" 2>/dev/null
+  return 0
+}
+seed_base_early
 
 case "$event" in
   Stop|SubagentStop)
