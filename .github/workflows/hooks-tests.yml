@@ -31,6 +31,12 @@ jobs:
       - name: Install.sh idempotency smoke
         run: bash tests/install-smoke.sh
 
+      # Раннер кейсов видит только stdout хука. Что синк системы делает С ГИТОМ —
+      # сдвинулся ли HEAD, цела ли несохранённая работа, откачен ли конфликт —
+      # проверяется отдельным тестом на временных репозиториях, без сети.
+      - name: System sync git logic
+        run: bash tests/sync-system-git.sh
+
       # Решение по ключу пульта капчи. Сам пульт живёт на маке и тянет playwright
       # маковским путём — здесь гоняется только вынесенная из него чистая функция.
       - name: Capgate outcome test

@@ -7,13 +7,14 @@
 # Тихий и fail open: любая ошибка — молчаливый exit 0, компакцию не задерживаем.
 set -u
 
-# Project-уровень уступает user-уровню (install.sh) — не пишем дважды.
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
-      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
-  exit 0
-fi
+# Уступка второму вызову того же события: хук зарегистрирован и project-level, и
+# пользовательски (install.sh), а после сноса симлинков обе регистрации ведут в
+# ОДИН файл — различить их путями нельзя. Признак — метка занятия события.
+# shellcheck disable=SC1091
+. "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 input="$(cat)"
+declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }
 sid="$(jq -r '.session_id // ""' <<<"$input" 2>/dev/null)" || sid=""
 [[ -z "$sid" ]] && sid="unknown"
 sid="$(printf '%s' "$sid" | tr -c 'a-zA-Z0-9_-' '_')"

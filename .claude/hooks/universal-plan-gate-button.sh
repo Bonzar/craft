@@ -18,14 +18,16 @@
 # сессии — файл в /tmp с session-id.
 set -u
 
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
-      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
-  exit 0
-fi
+# Уступка второму вызову того же события: хук зарегистрирован и project-level, и
+# пользовательски (install.sh), а после сноса симлинков обе регистрации ведут в
+# ОДИН файл — различить их путями нельзя. Признак — метка занятия события.
+# shellcheck disable=SC1091
+. "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 
 input="$(cat)"
+declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }
 # Отладочный след входа: по нему проверяются факты о схеме tool_response.
 printf '%s' "$input" > "/tmp/plan-gate-button-last-input.${CLAUDE_CODE_SESSION_ID:-default}.json" 2>/dev/null || true
 

@@ -10,14 +10,16 @@
 # Fail open на всём неожиданном: сломанный гейт не должен клинить работу.
 set -u
 
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
-      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
-  exit 0
-fi
+# Уступка второму вызову того же события: хук зарегистрирован и project-level, и
+# пользовательски (install.sh), а после сноса симлинков обе регистрации ведут в
+# ОДИН файл — различить их путями нельзя. Признак — метка занятия события.
+# shellcheck disable=SC1091
+. "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 
 input="$(cat)"
+declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
 case "$tool" in Task|Agent) ;; *) exit 0 ;; esac
 # Гейтятся роли, которые КРУТЯТ счётчик, — те же, что ставят отметку: сводящий веера и

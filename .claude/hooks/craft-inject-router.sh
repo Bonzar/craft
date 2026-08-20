@@ -34,7 +34,12 @@ if [[ -n "${ROUTER_BUDGET_TEST_FILE:-}" ]]; then
 fi
 
 ROUTER_ID="${CRAFT_ROUTER_ID:-e8132891-81f4-2d63-36f1-d3623d0147b6}"
-OUT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-router-context.md"
+# Адрес снимка — своей переменной, как у кэша предодобренных зон: синк системы
+# пересобирает ВТОРОЙ снимок в служебное место, чтобы сравнить его с базой
+# сессии. Через подмену CLAUDE_PROJECT_DIR так нельзя — от той же переменной
+# _load-env.sh резолвит `.env` с токеном, а запись уехала бы в чужой рабочий
+# чекаут. Импортируемый CLAUDE.md адрес по умолчанию не меняется.
+OUT="${CRAFT_ROUTER_SNAPSHOT:-${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/.claude/craft-router-context.md}"
 
 # То же, что в craft-inject-incident.sh: внутри евал-пачки кэш переиспользуется,
 # потому что параллельные сессии делят один путь и перезапись сносит контекст у
