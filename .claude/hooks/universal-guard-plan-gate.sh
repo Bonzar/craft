@@ -2,10 +2,11 @@
 # PreToolUse plan-gate: рабочие правки — код, система, Craft — по умолчанию
 # закрыты; открывает их ПЕРИМЕТР одобренного плана, а не факт одобрения.
 #
-# Маркер (universal-plan-gate-approve.sh) — список целей из строк «- где:»
-# одобренного плана: файловые пути и block-ID Craft. Гейт открывает только
-# совпадение с целью; одобрения складываются, реплики Влада периметр не гасят
-# (гасят реплика «закрой гейт» — plan-gate-reset — и смена сессии).
+# Маркер (universal-plan-gate-approve.sh) — список целей одобренного: строки
+# «- где:» одобренных планов И кнопочные одобрения (строки «button:цель»,
+# дописывает трата кнопки). Гейт открывает только совпадение с целью;
+# одобрения складываются, реплики Влада периметр не гасят (гасят реплика
+# «закрой гейт» — plan-gate-reset — и смена сессии).
 #
 # Поверхности:
 #   - Write|Edit|MultiEdit|NotebookEdit — правки файлов где угодно, кроме
@@ -86,17 +87,28 @@ scopelist=""
 [[ -n "$marker" && -s "$marker" ]] && scopelist="$(cat "$marker" 2>/dev/null)"
 
 # in_scope <цель> — цель входит в периметр: точное имя, вложенность в названный
-# каталог, либо сам идентификатор строкой (Craft-UUID).
+# каталог, либо сам идентификатор строкой (Craft-UUID). Кнопочные строки
+# «button:цель» матчатся наравне с плановыми; источник совпадения остаётся в
+# MATCH_SRC (plan|button) — цель, входящая в оба, считается плановой.
+MATCH_SRC=""
 in_scope() {
-  local t="$1" e
+  local t="$1" e raw src hit_btn=0
   [[ -n "$scopelist" ]] || return 1
-  while IFS= read -r e; do
-    [[ -z "$e" ]] && continue
-    [[ "$t" == "$e" ]] && return 0
-    [[ "$t" == "${e%/}"/* ]] && return 0
+  while IFS= read -r raw; do
+    [[ -z "$raw" ]] && continue
+    e="$raw"; src="plan"
+    [[ "$raw" == button:* ]] && { e="${raw#button:}"; src="button"; }
+    if [[ "$t" == "$e" || "$t" == "${e%/}"/* ]]; then
+      [[ "$src" == "plan" ]] && { MATCH_SRC="plan"; return 0; }
+      hit_btn=1
+    fi
   done <<<"$scopelist"
+  [[ "$hit_btn" -eq 1 ]] && { MATCH_SRC="button"; return 0; }
   return 1
 }
+
+# Плановая часть периметра — lock ветки времянок: кнопочные цели её не открывают.
+plan_scope_nonempty() { grep -v '^button:' <<<"$scopelist" | grep -q '[^[:space:]]'; }
 
 deny() {
   jq -cn --arg r "$1" \
@@ -139,21 +151,74 @@ scope_content_check() {
   esac
 }
 
-# button_spend — одноразовая кнопка Влада «Разрешаю без плана (одну правку)»
-# (universal-plan-gate-button.sh). Тратится ровно там, где иначе был бы deny:
-# эфемерная правка и правка, прошедшая по периметру, маркер не трогают — иначе
-# тап сгорал бы на действии, которое и так было свободно. Снятие атомарно
-# переименованием: из параллельных вызовов одного хода по одному тапу проходит
-# ровно один. Классификатор для кнопочной правки не зовётся — тап старше
-# вердикта модели.
+# button_spend <цели…> — кнопка Влада «Разрешаю без плана (эту цель)»
+# (universal-plan-gate-button.sh) — микро-план: тап одобряет цель и описание
+# правки из вопроса. Трата дописывает цели в периметр строками «button:цель»
+# и вопрос из сайдкара в файл микро-планов «‹маркер›.button-plans» секциями
+# «Цель: …» — предмет сверки содержания для повторных правок цели. Тратится
+# там, где иначе был бы deny: эфемерная и периметровая правка тап не сжигают.
+# Снятие атомарно переименованием: из параллельных вызовов проходит один.
+# На самой трате классификатор не зовётся — первая правка цели идёт по тапу.
+# Маркер периметра недоступен (нет env и session-id) — разовый пропуск без следа.
 button_spend() {
-  local bm=""
+  local bm="" q="" t
   if [[ -n "${PLAN_GATE_BUTTON_MARKER:-}" ]]; then bm="$PLAN_GATE_BUTTON_MARKER"
   elif [[ -n "$sid" ]]; then bm="/tmp/plan-gate-button.${sid}.one"; fi
   [[ -n "$bm" && -e "$bm" ]] || return 1
   mv "$bm" "${bm}.spent.$$" 2>/dev/null || return 1
   rm -f "${bm}.spent.$$" 2>/dev/null
+  if [[ -n "$marker" && "$#" -gt 0 ]]; then
+    q="$(cat "${bm}.question" 2>/dev/null)"
+    for t in "$@"; do
+      [[ -z "$t" ]] && continue
+      printf 'button:%s
+' "$t" >> "$marker" 2>/dev/null || true
+      { printf '## Цель: %s
+' "$t"; [[ -n "$q" ]] && printf '%s
+' "$q"; printf '
+'; }         >> "${marker}.button-plans" 2>/dev/null || true
+    done
+  fi
+  rm -f "${bm}.question" 2>/dev/null
   return 0
+}
+
+# button_content_check <описание> <цель> <отн.цель> — сверка правки кнопочной
+# цели против секции её вопроса из файла микро-планов; секции нет — сверка
+# невозможна: пропуск по путь-матчу с видимым следом деградации.
+button_content_check() {
+  local desc="$1" t="$2" rel="$3" bp sec verdict
+  bp="${marker}.button-plans"
+  if ! [[ -r "$bp" ]] || ! [[ -x "$classifier" || -r "$classifier" ]]; then
+    classifier_degraded; return 0
+  fi
+  sec="$(mktemp "${TMPDIR:-/tmp}/btn-plan.XXXXXX")"
+  awk -v a="## Цель: $t" -v b="## Цель: $rel" \
+    '$0==a || (b!="## Цель: " && $0==b) {f=1; print; next} /^## Цель: /{f=0} f' \
+    "$bp" > "$sec" 2>/dev/null
+  if [[ ! -s "$sec" ]]; then rm -f "$sec"; classifier_degraded; return 0; fi
+  verdict="$(printf '%s' "$desc" | bash "$classifier" match "$sec" 2>/dev/null)"
+  rm -f "$sec"
+  case "$verdict" in
+    NOMATCH:*) deny "Заблокировано план-гейтом: правка кнопочной цели расходится с одобренным вопросом — ${verdict#NOMATCH:}. Пути дальше: спроси кнопку заново или покажи план." ;;
+    *) return 0 ;;
+  esac
+}
+
+# mixed_content_check <описание> — смешанная Bash-команда: цели плана и кнопочные
+# сверяются против плана сессии и файла микро-планов вместе; deny-текст плановый.
+mixed_content_check() {
+  local desc="$1" plan comb verdict
+  plan="${CRAFT_PLAN_FILE:-$(cat "${CRAFT_PLAN_FILE_MARKER:-/tmp/plan-file.${sid:-default}.path}" 2>/dev/null)}"
+  comb="$(mktemp "${TMPDIR:-/tmp}/mixed-plan.XXXXXX")"
+  { [[ -n "$plan" && -r "$plan" ]] && cat "$plan"; cat "${marker}.button-plans" 2>/dev/null; } > "$comb"
+  if [[ ! -s "$comb" ]]; then rm -f "$comb"; classifier_degraded; return 0; fi
+  verdict="$(printf '%s' "$desc" | bash "$classifier" match "$comb" 2>/dev/null)"
+  rm -f "$comb"
+  case "$verdict" in
+    NOMATCH:*) deny "Заблокировано план-гейтом: правка цели из периметра расходится с одобренным планом — ${verdict#NOMATCH:}. Пути дальше: дельта плана, кнопка разрешения, режим acceptEdits." ;;
+    *) return 0 ;;
+  esac
 }
 
 # throwaway_check <описание> <цель> → пропуск времянки или deny
@@ -217,12 +282,16 @@ $(jq -r '.tool_input.new_string // .tool_input.content // "" ' <<<"$input" 2>/de
   # записи плана: строки «- где:» пишутся от корня репозитория.
   rel="${fp#"$PWD"/}"
   if in_scope "$fp" || { [[ "$rel" != "$fp" ]] && in_scope "$rel"; }; then
-    scope_content_check "$desc"
+    if [[ "$MATCH_SRC" == "button" ]]; then
+      button_content_check "$desc" "$fp" "$rel"
+    else
+      scope_content_check "$desc"
+    fi
     exit 0
   fi
 
-  button_spend && exit 0
-  [[ -n "$scopelist" ]] && { throwaway_check "$desc" "$fp"; exit 0; }
+  button_spend "$rel" && exit 0
+  plan_scope_nonempty && { throwaway_check "$desc" "$fp"; exit 0; }
   deny "Заблокировано план-гейтом: правка файла ($fp) без одобренного плана. Правки кода и системы идут через план-гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
@@ -278,7 +347,7 @@ if [[ "$is_bash" -eq 1 ]]; then
 
   # Команда проходит, только когда КАЖДАЯ неэфемерная цель в периметре: смешанная
   # команда (одна цель из плана, другая нет) не проезжает по половине разрешения.
-  offender=""; scoped=0
+  offender=""; scoped=0; saw_button=0; bash_goals=()
   while IFS= read -r t; do
     [[ -z "${t//[[:space:]]/}" ]] && continue
     # Дескрипторы и устройства целями записи в дерево не являются.
@@ -288,10 +357,11 @@ if [[ "$is_bash" -eq 1 ]]; then
     t="${t%\"}"; t="${t#\"}"; t="${t%\'}"; t="${t#\'}"
     is_ephemeral "$t" && continue
     git_ephemeral "$t" && continue
-    in_scope "$t" && { scoped=1; continue; }
     rel="${t#"$PWD"/}"
-    [[ "$rel" != "$t" ]] && in_scope "$rel" && { scoped=1; continue; }
-    offender="$t"; break
+    bash_goals+=("$rel")
+    in_scope "$t" && { scoped=1; [[ "$MATCH_SRC" == button ]] && saw_button=1; continue; }
+    [[ "$rel" != "$t" ]] && in_scope "$rel" && { scoped=1; [[ "$MATCH_SRC" == button ]] && saw_button=1; continue; }
+    [[ -z "$offender" ]] && offender="$t"
   done <<<"$targets"
   bdesc="инструмент: Bash
 команда:
@@ -299,12 +369,20 @@ $(head -c 4000 <<<"$cmd")"
   if [[ -z "$offender" ]]; then
     # Сверка содержания одним вызовом на команду — только когда хоть одна цель
     # прошла именно по периметру: чисто эфемерная запись классификатора не стоит.
-    [[ "$scoped" -eq 1 && -n "$scopelist" ]] && scope_content_check "$bdesc"
+    # Кнопочные цели в команде сверяются против файла микро-планов вместе с
+    # планом сессии (смешанная команда), deny-текст — плановый.
+    if [[ "$scoped" -eq 1 && -n "$scopelist" ]]; then
+      if [[ "$saw_button" -eq 1 ]]; then
+        mixed_content_check "$bdesc"
+      else
+        scope_content_check "$bdesc"
+      fi
+    fi
     exit 0
   fi
 
-  button_spend && exit 0
-  [[ -n "$scopelist" ]] && { throwaway_check "$bdesc" "$offender"; exit 0; }
+  button_spend "${bash_goals[@]}" && exit 0
+  plan_scope_nonempty && { throwaway_check "$bdesc" "$offender"; exit 0; }
   deny "Заблокировано план-гейтом: запись в файл ($offender) через Bash без одобренного плана. Шелл-запись — та же правка файла, что Write/Edit, и идёт через тот же гейт: план-мод → ExitPlanMode (одобрение Влада именно тулзой, не текстом) → правки целей плана. Сборка, вывод во временный каталог и в игнорируемый гитом путь проходят без плана. Автономному прогону — CRAFT_AUTONOMOUS=1."
 fi
 
@@ -340,14 +418,25 @@ if [[ -n "$scopelist" && -n "$ids" ]]; then
     in_scope "$lid" || in_scope "$id" || { all_in=0; break; }
   done <<<"$ids"
   if [[ "$all_in" -eq 1 ]]; then
-    scope_content_check "инструмент: craft_write
+    cdesc="инструмент: craft_write
 команда:
 $(head -c 4000 <<<"$cmd")"
+    if [[ "$MATCH_SRC" == "button" ]]; then
+      button_content_check "$cdesc" "$(head -1 <<<"$ids" | tr 'A-F' 'a-f')" ""
+    else
+      scope_content_check "$cdesc"
+    fi
     exit 0
   fi
-  button_spend && exit 0
+  button_spend $(tr 'A-F' 'a-f' <<<"$ids") && exit 0
   deny_scope "craft: $(head -c 120 <<<"$ids" | tr '\n' ' ')"
 fi
 
-button_spend && exit 0
+# Команда с UUID при недоступном периметре: цели известны — трата оставляет след;
+# без единого UUID целей нет — разовый пропуск без следа (правило по признаку).
+if [[ -n "$ids" ]]; then
+  button_spend $(tr 'A-F' 'a-f' <<<"$ids") && exit 0
+else
+  button_spend && exit 0
+fi
 deny "Заблокировано план-гейтом: запись в Craft без одобренного плана. Сначала покажи план и получи ок Влада (план-мод → ExitPlanMode), потом пиши цели плана. Запись целиком внутри предодобренной зоны (напр. «Продукты») проходит без плана. Автономному прогону (рутина, евал) — CRAFT_AUTONOMOUS=1."

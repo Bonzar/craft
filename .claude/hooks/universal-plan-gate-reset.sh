@@ -39,6 +39,9 @@ done < "$ANCHORS" 2>/dev/null
 rm -f "$serviceturn" "$planshown" "$criticpend" 2>/dev/null || true
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 # Периметр гасит только явная фраза: сверка префиксом сообщения, как у якорей.
+# Вместе с маркером уходят его производные (микро-планы кнопки, след деградации
+# классификатора) и непотраченный тап с сайдкаром вопроса: после фразы дельта
+# не помнит кнопочных одобрений и сверять правки не с чем.
 if [[ "$prompt" == "закрой гейт"* ]]; then
   sid="${CLAUDE_CODE_SESSION_ID:-}"
   if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
@@ -48,6 +51,14 @@ if [[ "$prompt" == "закрой гейт"* ]]; then
   else
     marker=""
   fi
-  [[ -n "$marker" ]] && rm -f "$marker" 2>/dev/null || true
+  [[ -n "$marker" ]] && rm -f "$marker" "${marker}.button-plans" "${marker}.classifier-degraded" 2>/dev/null || true
+  if [[ -n "${PLAN_GATE_BUTTON_MARKER:-}" ]]; then
+    bmarker="$PLAN_GATE_BUTTON_MARKER"
+  elif [[ -n "$sid" ]]; then
+    bmarker="/tmp/plan-gate-button.${sid}.one"
+  else
+    bmarker=""
+  fi
+  [[ -n "$bmarker" ]] && rm -f "$bmarker" "${bmarker}.question" 2>/dev/null || true
 fi
 exit 0

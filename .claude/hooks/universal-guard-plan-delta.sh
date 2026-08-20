@@ -89,7 +89,33 @@ if [[ "$event" == "PostToolUse" ]]; then
   exit 0
 fi
 
-[[ -s "$store" ]] || exit 0
+# Файл микро-планов кнопки — производная маркера периметра, путь тем же
+# правилом, что у гейта: env-переопределение маркера, иначе непустой
+# session-id, при пустом session-id файла нет (общий default не читается).
+if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
+  bp="${CRAFT_PLAN_GATE_MARKER}.button-plans"
+elif [[ -n "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
+  bp="/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID}.approved.button-plans"
+else
+  bp=""
+fi
+self1="$(realpath "$0" 2>/dev/null || echo "$0")"
+classifier="${PLAN_CLASSIFIER_BIN:-$(cd "$(dirname "$self1")/../.." && pwd)/tools/plan-scope-classifier.sh}"
+
+# Одобренных планов ещё нет, но кнопочные одобрения есть: повтор одобренного
+# кнопкой ловится сравнением по смыслу против файла микро-планов — иначе показ
+# плана, повторяющего кнопочную цель, шёл бы как первый план сессии.
+if [[ ! -s "$store" ]]; then
+  if [[ -n "$bp" && -s "$bp" && -r "$classifier" ]]; then
+    verdict="$(: | bash "$classifier" delta "$bp" "$plan" 2>/dev/null)"
+    if [[ "$verdict" == REPEATS:* ]]; then
+      jq -cn --arg r "План повторяет одобренное кнопкой:${verdict#REPEATS:}. Одобренное повторно не показывается — покажи только новое. Аварийный выключатель — PLAN_DELTA=off." \
+        '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+      exit 0
+    fi
+  fi
+  exit 0
+fi
 approved="$(cat "$store" 2>/dev/null)"
 
 total=0; rep=0; names=""
@@ -109,10 +135,18 @@ done <<<"$now"
 # недоступность возвращает к хеш-поведению — ложный отказ дороже пропуска.
 if [[ "$rep" -eq 0 ]]; then
   snap="${store}.snapshot"
-  self1="$(realpath "$0" 2>/dev/null || echo "$0")"
-  classifier="${PLAN_CLASSIFIER_BIN:-$(cd "$(dirname "$self1")/../.." && pwd)/tools/plan-scope-classifier.sh}"
   if [[ -r "$snap" && -r "$classifier" ]]; then
-    verdict="$(: | bash "$classifier" delta "$snap" "$plan" 2>/dev/null)"
+    # Вход сравнения — снапшот плана вместе с микро-планами кнопки: кнопочное
+    # одобрение равносильно плановому и в дельте. Снапшот кнопочный файл не
+    # затирает — конкатенация собирается на время вызова.
+    if [[ -n "$bp" && -s "$bp" ]]; then
+      merged="$(mktemp "${TMPDIR:-/tmp}/plan-delta-approved.XXXXXX")"
+      cat "$snap" "$bp" > "$merged" 2>/dev/null
+      verdict="$(: | bash "$classifier" delta "$merged" "$plan" 2>/dev/null)"
+      rm -f "$merged" 2>/dev/null
+    else
+      verdict="$(: | bash "$classifier" delta "$snap" "$plan" 2>/dev/null)"
+    fi
     if [[ "$verdict" == REPEATS:* ]]; then
       jq -cn --arg r "План повторяет уже одобренные юниты по смыслу:${verdict#REPEATS:}. Одобренное повторно не показывается — оставь только изменившееся с прошлого одобрения, а изменённый юнит пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off." \
         '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
