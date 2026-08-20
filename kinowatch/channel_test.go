@@ -257,3 +257,42 @@ func TestUncoveredDatesWithoutWindow(t *testing.T) {
 		t.Errorf("без окна источника посчитались непокрытые даты: %v", got)
 	}
 }
+
+// Объявление источника обязательно: вид без него не имеет ни признака позиции,
+// ни смысла даты, а значит его разбор нечем проверить и нечем правильно
+// датировать. Перебор идёт по тому же списку, из которого разбор вызывается.
+func TestEverySourceIsDeclared(t *testing.T) {
+	for _, kind := range channelKinds {
+		spec, ok := sourceSpecs[kind]
+		if !ok {
+			t.Errorf("вид %q без объявления: нечем считать позиции и нечем датировать", kind)
+			continue
+		}
+		if spec.anchor == nil && !spec.weakAnchor {
+			t.Errorf("вид %q: нет признака позиции, а ослабленная сверка не объявлена", kind)
+		}
+		if spec.anchor != nil && spec.weakAnchor {
+			t.Errorf("вид %q: признак есть, но сверка объявлена ослабленной — противоречие", kind)
+		}
+		if spec.dateMeaning == 0 {
+			t.Errorf("вид %q: не объявлено, что означает его дата", kind)
+		}
+	}
+}
+
+// Список видов и карта объявлений обязаны совпадать поимённо: объявление без
+// вида — мусор, вид без объявления — дыра в гарантии.
+func TestChannelKindsMatchSpecs(t *testing.T) {
+	inList := map[string]bool{}
+	for _, k := range channelKinds {
+		inList[k] = true
+	}
+	for kind := range sourceSpecs {
+		if !inList[kind] {
+			t.Errorf("объявление вида %q есть, а самого вида в списке нет", kind)
+		}
+	}
+	if len(sourceSpecs) != len(channelKinds) {
+		t.Errorf("объявлений %d, видов %d", len(sourceSpecs), len(channelKinds))
+	}
+}
