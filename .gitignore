@@ -12,6 +12,10 @@
 # for the plan-gate scope exemption. Ephemeral snapshot of live Craft — never commit.
 .claude/craft-gate-exempt-scope.txt
 
+# Снимки, которые кейсы инжект-хуков пишут рядом с фикстурами во время прогона:
+# артефакт, а не входные данные. Сами фикстуры лежат в гите обычными файлами.
+tests/hooks/fixtures/tmp-*-snapshot.md
+
 # Session worktrees and machine-local permission overrides — per-machine state,
 # not part of the system.
 .claude/worktrees/
