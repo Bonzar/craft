@@ -209,4 +209,38 @@ else
   echo "craft.env: already present"
 fi
 
+# --- 4. канал импорта живых правил -------------------------------------------
+# stdout SessionStart-хука обрезается на 10 000 символах, и страницы правил давно
+# длиннее: печатью терялся хвост, причём молча. Поэтому инжект-хуки пишут тело в
+# файлы-снимки, а подтягивает их `@`-импорт в пользовательском CLAUDE.md — у
+# импортов потолка нет. Здесь ставится сам канал: каталог снимков и две строки
+# импорта, идемпотентно и с бэкапом личного файла.
+LIVE_DIR="$CLAUDE_DIR/craft-live"
+USER_MD="$CLAUDE_DIR/CLAUDE.md"
+mkdir -p "$LIVE_DIR"
+
+md_added=0
+for snap in behavior-rules code-rules; do
+  line="@$LIVE_DIR/$snap.md"
+  # Снимок заводится пустым: до первого прогона хука импортировать нечего, а
+  # отсутствующий файл делает импорт битым.
+  [[ -f "$LIVE_DIR/$snap.md" ]] || : > "$LIVE_DIR/$snap.md"
+  if [[ -f "$USER_MD" ]] && grep -qxF "$line" "$USER_MD"; then
+    continue
+  fi
+  if (( ! md_added )) && [[ -f "$USER_MD" ]]; then
+    md_backup="$USER_MD.bak.$(date +%Y%m%d%H%M%S)"
+    cp "$USER_MD" "$md_backup"
+    echo "CLAUDE.md: backup at $md_backup"
+  fi
+  printf '\n%s\n' "$line" >> "$USER_MD"
+  md_added=1
+done
+
+if (( md_added )); then
+  echo "live-rules: канал импорта установлен в $USER_MD (снимки в $LIVE_DIR)"
+else
+  echo "live-rules: канал импорта уже стоит"
+fi
+
 echo "Done. Новые регистрации действуют в активных сессиях без перезапуска."
