@@ -5,19 +5,24 @@
 // сверка гоняет обе версии хука на одном входе и валит кейс на любом различии
 // вывода. Порядок ключей в объектах ниже — тот же, в котором их собирал jq.
 
-function emit(payload) {
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+// Форм у ответа две, потому что bash-версии печатали двумя командами: компактной
+// (`jq -cn`) и развёрнутой (`jq -n`, отступ в два пробела). Харнессу разницы нет,
+// он читает JSON, но дифференциальная сверка на переезде сравнивает вывод
+// побайтно — значит форму держим ту же, что была у переносимого хука.
+function emit(payload, { compact = true } = {}) {
+  const text = compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
+  process.stdout.write(`${text}\n`);
 }
 
 // PreToolUse: запрет вызова с причиной, которую прочитает модель.
-export function deny(reason) {
+export function deny(reason, options) {
   emit({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason: reason,
     },
-  });
+  }, options);
   process.exit(0);
 }
 
