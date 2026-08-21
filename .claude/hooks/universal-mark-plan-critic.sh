@@ -16,7 +16,12 @@
 # Хеш берётся в момент ЗАПУСКА: критик читал именно ту версию плана. Правка плана после
 # запуска отметку обесценит сама — гейт сверяет её с текущим файлом.
 #
-# Различитель подагента — subagent_type: без него гейт обходился бы запуском любого.
+# Различитель подагента — subagent_type, и отбираются только роли, ПЕЧАТАЮЩИЕ вердикт:
+# сводящий веера (plan-critic-verdict) и одиночный критик всего плана (plan-critic). Юнитные
+# критики и критик швов вердикта не печатают и события не отмечают: счётчик ниже считает
+# круги обкатки, а не запуски агентов, иначе один веер из нескольких критиков набивал бы
+# плато за первый же круг и гейт переставал бы держать показ. Без различителя вовсе гейт
+# обходился бы запуском любого подагента.
 #
 # Fail quiet: не смог посчитать хеш — отметки нет, гейт просто не пропустит.
 set -u
@@ -42,6 +47,7 @@ sid="${CLAUDE_CODE_SESSION_ID:-default}"
 marker="${CRAFT_PLAN_CRITIC_MARKER:-/tmp/plan-critic.${sid}.done}"
 pending="${CRAFT_PLAN_CRITIC_PENDING:-/tmp/plan-critic.${sid}.pending}"
 runs="${CRAFT_PLAN_CRITIC_RUNS:-/tmp/plan-critic.${sid}.runs}"
+round="${CRAFT_PLAN_CRITIC_ROUND:-/tmp/plan-critic.${sid}.round}"
 event="$(jq -r '.hook_event_name // "PostToolUse"' <<<"$input" 2>/dev/null)" || exit 0
 
 # Счётчик завершённых прогонов критика — машинное «Плато»: гейт по нему пропускает показ,
@@ -110,12 +116,33 @@ if [[ "$event" == "UserPromptSubmit" ]]; then
   exit 0
 fi
 
-jq -e '(.tool_input.subagent_type // "") == "plan-critic"' >/dev/null 2>&1 <<<"$input" || exit 0
+role="$(jq -r '.tool_input.subagent_type // ""' <<<"$input" 2>/dev/null)"
+case "$role" in
+  plan-critic|plan-critic-verdict|plan-critic-unit|plan-critic-seams) ;;
+  *) exit 0 ;;
+esac
 
 plan="${CRAFT_PLAN_FILE:-$(cat "${CRAFT_PLAN_FILE_MARKER:-/tmp/plan-file.${sid}.path}" 2>/dev/null)}"
 [[ -n "$plan" && -r "$plan" ]] || exit 0
 hash="$(hash_of "$plan")"
 [[ -n "$hash" ]] || exit 0
+
+# Веерные роли отметки не ставят и счётчик не крутят — они лишь запоминают ВЕРСИЮ плана,
+# которую читали. Первый критик круга и задаёт эту версию: сводящий план не читает вовсе,
+# и без такой памяти его отметка вставала бы на текущий файл — то есть заверяла бы версию,
+# которой не видел ни один критик, если план правился между веером и сводящим. С памятью
+# круга правка между ними ломает сверку гейта, как и должна.
+if [[ "$role" == "plan-critic-unit" || "$role" == "plan-critic-seams" ]]; then
+  [[ -s "$round" ]] || printf '%s\n' "$hash" > "$round" 2>/dev/null || true
+  exit 0
+fi
+
+# Роль, печатающая вердикт: отметка идёт на версию круга, если веер её запомнил, и на
+# текущую — если критик работал одиночкой. Память круга снимается тут же: следующая
+# обкатка начинается с чистого листа.
+round_hash="$(cat "$round" 2>/dev/null)"
+[[ -n "$round_hash" ]] && hash="$round_hash"
+rm -f "$round" 2>/dev/null || true
 
 resp="$(jq -r '.tool_response | tostring' <<<"$input" 2>/dev/null)"
 id="$(sed -n 's/.*agentId: \([A-Za-z0-9_-]*\).*/\1/p' <<<"$resp" | head -1)"

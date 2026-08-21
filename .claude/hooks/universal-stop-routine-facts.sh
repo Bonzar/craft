@@ -17,7 +17,9 @@ if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
 fi
 
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] || exit 0
-[[ -n "${CRAFT_EVAL:-}" ]] && exit 0
+# Евал и служебный вложенный вызов исключены одной причиной: у обоих нет рутины,
+# чьи «Факты завершения» можно сверить, а лишний ход ломает сам вызов.
+[[ -n "${CRAFT_EVAL:-}" || -n "${CRAFT_NESTED_CALL:-}" ]] && exit 0
 
 input="$(cat)"
 active="$(jq -r '.stop_hook_active // false' <<<"$input" 2>/dev/null)" || exit 0

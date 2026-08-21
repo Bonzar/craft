@@ -6,3 +6,4 @@
 {"name":"flush is silent on stop_hook_active (anti-loop)","hook":"universal-instinct-flush","expect":"silent","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":true}}
 {"name":"текст флеша несёт служебный префикс","hook":"universal-instinct-flush","expect":"contains:[stop-hook]","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log"},"input":{"stop_hook_active":false}}
 {"name":"flush is silent in eval runs (CRAFT_EVAL)","hook":"universal-instinct-flush","expect":"silent","env":{"OBSERVE_BUFFER":"{TESTS_DIR}/fixtures/observe-buffer.log","CRAFT_EVAL":"1"},"input":{"stop_hook_active":false}}
+{"name": "служебный вложенный вызов — молчит", "hook": "universal-instinct-flush", "expect": "silent", "env": {"CRAFT_NESTED_CALL": "1"}, "input": {"stop_hook_active": false}}
