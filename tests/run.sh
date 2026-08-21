@@ -215,6 +215,21 @@ for f in "${files[@]}"; do
       err-contains:*) grep -qF -- "${expect#err-contains:}" <<<"$err" && ok=1 ;;
       # Отрицание: иногда доказательство — именно ОТСУТСТВИЕ строки (хук не
       # пошёл по короткому пути, гвард не сработал вхолостую).
+      # Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком,
+      # а не печатью, и по stdout проверить запись нечем. Путь берётся из env
+      # самого кейса — переменной ASSERT_FILE, той же, что кейс отдаёт хуку.
+      file-contains:*|file-not-contains:*)
+        af=""
+        for kv in ${caseenv[@]+"${caseenv[@]}"}; do
+          [[ "$kv" == ASSERT_FILE=* ]] && af="${kv#ASSERT_FILE=}"
+        done
+        if [[ -n "$af" ]]; then
+          if [[ "$expect" == file-contains:* ]]; then
+            grep -qF -- "${expect#file-contains:}" "$af" 2>/dev/null && ok=1
+          else
+            grep -qF -- "${expect#file-not-contains:}" "$af" 2>/dev/null || ok=1
+          fi
+        fi ;;
       not-contains:*)     grep -qF -- "${expect#not-contains:}" <<<"$out" || ok=1 ;;
       err-not-contains:*) grep -qF -- "${expect#err-not-contains:}" <<<"$err" || ok=1 ;;
       *)      fails+=("$hook / $name — unknown expect '$expect'") ;;

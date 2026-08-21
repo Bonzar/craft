@@ -56,9 +56,24 @@ jq -e '.hooks.PostToolUse[]?.hooks[]?.command
   "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
   || FAILS+=("foreign hook in the Task group was lost")
 
+# Канал импорта живых правил: две строки в CLAUDE.md и пустые снимки под них.
+# Без файла-снимка импорт битый, без строки — снимок никто не прочитает.
+for snap in behavior-rules code-rules; do
+  [[ -f "$TESTHOME/.claude/craft-live/$snap.md" ]] \
+    || FAILS+=("snapshot $snap.md was not created")
+  grep -qxF "@$TESTHOME/.claude/craft-live/$snap.md" "$TESTHOME/.claude/CLAUDE.md" 2>/dev/null \
+    || FAILS+=("import line for $snap.md missing in CLAUDE.md")
+done
+
 out2="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$REPO/install.sh" 2>&1)" \
   || FAILS+=("second run exited non-zero: $out2")
 grep -q 'no changes needed' <<<"$out2" || FAILS+=("second run changed settings (not idempotent)")
+
+# Вторая установка не задваивает строки импорта в личном файле Влада.
+for snap in behavior-rules code-rules; do
+  n="$(grep -cxF "@$TESTHOME/.claude/craft-live/$snap.md" "$TESTHOME/.claude/CLAUDE.md" 2>/dev/null || echo 0)"
+  [[ "$n" == "1" ]] || FAILS+=("import line for $snap.md duplicated on second run (count=$n)")
+done
 
 # --- 4. Дом, где уже разложен СТАРЫЙ слой ------------------------------------
 # У Влада на машине симлинки и регистрации с адресом ~/.claude/hooks стоят с
