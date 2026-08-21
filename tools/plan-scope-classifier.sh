@@ -18,7 +18,11 @@
 # Вложенный вызов модели: haiku, один ход, без инструментов, из /tmp (вне
 # проекта — проектные SessionStart-хуки не поднимаются), env сессии очищен тем
 # же набором, что у раннера евалов, CRAFT_AUTONOMOUS=1 глушит гейты обоих
-# контуров. Таймаут, обрыв и нераспознанный ответ = UNAVAILABLE — решение о
+# контуров, CRAFT_NESTED_CALL=1 представляет вызов служебным.
+#
+# Второй признак обязателен и не выводится из первого: автономный режим гейты
+# глушит, но ВКЛЮЧАЕТ стоп-хуки рутин, а их блокировка добавляет ход — вызов
+# с --max-turns 1 падает, и классификатор молча вырождается в UNAVAILABLE. Таймаут, обрыв и нераспознанный ответ = UNAVAILABLE — решение о
 # судьбе правки принимает гейт, не помощник.
 #
 # Env: PLAN_CLASSIFIER_CMD — команда модели (тесты подменяют моком);
@@ -83,7 +87,7 @@ esac
 answer="$(cd /tmp && timeout "$budget" env \
     -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION \
     -u CLAUDE_PID -u CLAUDE_CODE_REMOTE_SESSION_ID \
-    CRAFT_AUTONOMOUS=1 \
+    CRAFT_AUTONOMOUS=1 CRAFT_NESTED_CALL=1 \
     "$cmd" -p "$prompt" --model claude-haiku-4-5-20251001 \
     --max-turns 1 < /dev/null 2>/dev/null)" || { echo "UNAVAILABLE"; exit 0; }
 
