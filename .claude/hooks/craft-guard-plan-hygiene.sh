@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# PreToolUse guard on plan writes (Write/Edit to */plans/*.md). Rules 3 and 4 run
-# first and apply to EVERY plan; rules 0–2 police ONLY Craft «План правок» files —
-# detected by their structure (a «где:» locator line or a Craft link/ref) —
-# and pass plans про КОД through untouched, since those legitimately name
-# files, commands and IDs.
+# PreToolUse guard on plan writes (Write/Edit/MultiEdit to */plans/*.md). Rules 3, 5 and 6
+# run first and apply to EVERY plan; rules 0–2 and 4 police ONLY Craft «План правок»
+# files — detected by their structure (a «где:» locator line, a Craft link/ref or a
+# сущностный заголовок) — and pass plans про КОД through untouched, since those
+# legitimately name files, commands and IDs.
 #
-# Enforces five of Влад's plan rules that the built-in Plan-mode actively pushes
+# Enforces seven of Влад's plan rules that the built-in Plan-mode actively pushes
 # against (it templates a verification/order section and doesn't produce links):
 #   0. NO fence longer than three backticks — a nested code block reads worse
 #      than a quote, for humans and for gates alike.
@@ -15,10 +15,15 @@
 #   2. Block references are clickable docs.craft.do links, not bare UUIDs.
 #   3. NO hard-wrapped paragraphs — Влад reads plans on a phone, where every
 #      wrapped line renders as its own paragraph and the sentence breaks apart.
-#   4. NO relative file paths — inside a plan file the app resolves a path
+#   4. EVERY entity block carries its «где:» locator — a plan without an address
+#      cannot be executed, and the critic used to spend a whole round on it.
+#   5. NO relative file paths — inside a plan file the app resolves a path
 #      against the PLANS folder, not the session root, so a relative path opens
 #      nothing. Applies to markdown links and to bare mentions alike: the app
 #      makes a path in plain text clickable too.
+#   6. NO link label repeating its own absolute address — the address stays
+#      absolute, the label is trimmed to a recognisable root, or the line turns
+#      into a wall of slashes on a phone screen.
 #
 # Heuristic — narrow patterns to limit false positives; on a hit it denies the
 # write with a reason so the plan gets rewritten. Fail quiet on anything odd.
@@ -34,8 +39,20 @@ case "$tool" in Write|Edit|MultiEdit) ;; *) exit 0 ;; esac
 fp="$(jq -r '.tool_input.file_path // ""' <<<"$input" 2>/dev/null)"
 [[ "$fp" == */plans/*.md ]] || exit 0
 
-content="$(jq -r '.tool_input.content // .tool_input.new_string // ""' <<<"$input" 2>/dev/null)"
-[[ -n "$content" ]] || exit 0
+# Записываемый текст лежит в разных полях у разных инструментов: целиком в content,
+# одиночным фрагментом в new_string и ПАЧКОЙ фрагментов в edits[].new_string. Читать
+# только первые два — значит пропускать пакетную правку насквозь: у неё верхние поля
+# пусты, проверка выходила на пустом содержимом и правила не работали вовсе.
+#
+# Фрагменты склеиваются ЧЕРЕЗ ПУСТУЮ СТРОКУ: встык хвост одного и начало другого
+# прочитались бы соседями и дали ложный жёсткий перенос, которого в файле нет.
+# Известная граница: незакрытый забор кода внутри фрагмента гасит проверки для
+# остатка пачки — это промах, а не ложный отказ.
+content="$(jq -r '[(.tool_input.content // empty),
+                   (.tool_input.new_string // empty),
+                   ((.tool_input.edits // [])[] | .new_string // empty)]
+                  | join("\n\n")' <<<"$input" 2>/dev/null)"
+[[ -n "${content//[[:space:]]/}" ]] || exit 0
 
 # Обе чистки ниже снимают с текста код-заборы, поэтому опознание забора живёт одной
 # функцией. Забор — ряд бэктиков ИЛИ тильд от трёх знаков с любым отступом; у
@@ -122,7 +139,7 @@ if (( ${#wrap_probe} == 5 )); then
   fi
 fi
 
-# 4. Относительный путь к файлу. Правило действует на ЛЮБОЙ план — улика пришла как раз
+# 5. Относительный путь к файлу. Правило действует на ЛЮБОЙ план — улика пришла как раз
 # из плана про код, — поэтому проверка тоже стоит ДО детекта Craft-плана. Внутри файла
 # плана база относительного пути — папка планов, а не корень сессии, так что ссылка ведёт
 # в никуда; кликается и голое упоминание пути текстом, поэтому проверяются оба вида.
@@ -138,8 +155,10 @@ plan_root="$(jq -r '.cwd // ""' <<<"$input" 2>/dev/null)" || plan_root=""
 pathbody="$(strip_fenced drop <<<"$content" | grep -v '^[[:space:]]*>')"
 # Адрес ссылки и голый текст разбираются порознь. Текст ссылки в квадратных скобках —
 # подпись, а не адрес: у `[tests/run.sh](/абсолютный/путь)` ссылка исправна, и ловить в
-# ней подпись нельзя. Поэтому сперва снимаются адреса, потом ссылки удаляются целиком, и
-# только остаток читается как проза.
+# ней ОТНОСИТЕЛЬНОСТЬ нельзя — так и задумано. Проверяется у подписи другое: не
+# повторяет ли она свой абсолютный адрес целиком (правило ниже) — тогда строка
+# превращается в полотно из слешей. Сперва снимаются адреса, потом ссылки удаляются
+# целиком, и только остаток читается как проза.
 plan_cands="$(grep -oE '\]\([^)]*\)' <<<"$pathbody" | sed -E 's/^\]\(//; s/\)$//; s/^<//; s/>$//')"
 plan_rest="$(sed -E 's/\[[^]]*\]\([^)]*\)//g' <<<"$pathbody")"
 # Из остатка убираются адреса, у которых относительной части быть не может: URL со схемой
@@ -167,12 +186,36 @@ if [[ ${#rel_hits[@]} -gt 0 ]]; then
   exit 0
 fi
 
-# Only Craft-plans («План правок») are policed by rules 0–2. A plan про КОД legitimately
-# names files, commands and flags, so the mechanics/command/ID checks below must not
-# touch it. Detect a Craft-plan by its structural signals — the «где:» locator
-# line every entity carries, or a Craft link/ref — and pass anything else (a code
-# or other plan) straight through.
-grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:' <<<"$content" || exit 0
+# 6. Подпись, дословно повторяющая свой абсолютный адрес. Признак без порогов на длину:
+# адресу положено быть абсолютным, подписи — обрезанной до узнаваемого корня, поэтому
+# их равенство и есть неукороченная подпись.
+dup_hits=()
+while IFS= read -r pair; do
+  [[ -z "${pair//[[:space:]]/}" ]] && continue
+  dl="${pair%%\](*}"; dl="${dl#[}"
+  da="${pair#*\](}"; da="${da%)}"
+  [[ "$da" == /* || "$da" == \~/* ]] || continue
+  [[ "$dl" == "$da" ]] || continue
+  dup_hits+=("$dl")
+done < <(grep -oE '\[[^]]*\]\([^)]*\)' <<<"$pathbody" | sort -u)
+
+if [[ ${#dup_hits[@]} -gt 0 ]]; then
+  dup_list="$(printf '%s, ' "${dup_hits[@]}")"
+  dup_reason="В плане подписью ссылки показан абсолютный путь целиком: ${dup_list%, } — Влад читает план с телефона, и строка превращается в полотно из слешей. Адрес оставь абсолютным, подпись обрежь до узнаваемого корня — репозитория, маунта или пакета."
+  jq -cn --arg r "$dup_reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+fi
+
+# Only Craft-plans («План правок») are policed by rules 0–2 and 4. A plan про КОД
+# legitimately names files, commands and flags, so the mechanics/command/ID checks below
+# must not touch it. Detect a Craft-plan by its structural signals — the «где:» locator
+# line every entity carries, a Craft link/ref, or a сущностный заголовок вида
+# «## [тип · операция]» — and pass anything else (a code or other plan) straight through.
+#
+# Заголовок сущности в списке сигналов обязателен: без него план, где адрес забыт у ВСЕХ
+# сущностей разом, не опознавался Craft-планом и проезжал мимо правила 4 — то есть мимо
+# ровно того случая, ради которого правило заведено.
+grep -qE 'docs\.craft\.do|block://|(^|[[:space:]])где:|^[[:space:]]*#+[[:space:]]*\[' <<<"$content" || exit 0
 
 # Dictated verbatim text in a «План правок» sits in a QUOTE block, and code examples in
 # ``` or ~~~ fences; both may legitimately contain command tokens, IDs, even a «Проверка»
@@ -201,6 +244,22 @@ fi
 # 1b. explicit execution commands / mechanics tokens
 if grep -qE '(blocks (get|update|add|move|delete|learn)|tasks (update|add|delete)|(^|[[:space:]])--(json|id|markdown|siblingId|depth)([[:space:]]|=)|git (commit|push|add)|curl )' <<<"$body"; then
   problems+=("команды/механика выполнения в тексте плана")
+fi
+
+# 4. Сущность без адреса правки. Сущностный блок — заголовок ЛЮБОГО уровня, открытый
+# скобкой типа и операции («## [заметка · новая] …»), и строки до следующего заголовка;
+# такой блок обязан нести строку «где:». Строки юнита вне сущностного блока не смотрим:
+# у мета юнита свои лейблы («приёмка:», «риск:»), словаря операций они не нарушают.
+# Только на записи ЦЕЛОГО файла: на правке фрагмента хук целого текста не видит, и
+# сущность без адреса там законна — адрес остался в неправленой части.
+if [[ -n "$(jq -r '.tool_input.content // ""' <<<"$input" 2>/dev/null)" ]] \
+   && awk '
+     /^[[:space:]]*#+[[:space:]]*\[/ { if (ent && !found) { bad=1; exit } ent=1; found=0; next }
+     /^[[:space:]]*#/               { if (ent && !found) { bad=1; exit } ent=0; next }
+     { if (ent && $0 ~ /^[[:space:]]*[-*+]?[[:space:]]*где:/) found=1 }
+     END { if (!bad && ent && !found) bad=1; exit !bad }
+   ' <<<"$body"; then
+  problems+=("сущность без строки «где:» — у каждой сущности плана есть адрес правки, путь крошками от контейнера до позиции")
 fi
 
 # 2. bare block-IDs (UUID) not inside a docs.craft.do link.

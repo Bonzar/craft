@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# UserPromptSubmit: a new message from Влад starts a new turn — the previous plan
-# approval no longer covers it, so clear the plan-gate marker. The next craft_write
-# must be preceded by a fresh approved plan (guard-plan-gate.sh). Never blocks the
-# message (no stdout, exit 0).
+# UserPromptSubmit: обычная реплика Влада ПЕРИМЕТР ГЕЙТА НЕ ГАСИТ — маркер
+# одобрения хранит список целей и живёт до смены сессии (файл в /tmp с id);
+# отзыв разрешений — обычная просьба Влада, не магическая фраза. Хук чистит
+# пометки хода (служебный ход, показ плана, ожидания критика), никогда не
+# блокирует сообщение (no stdout, exit 0) — и дописывает реплику Влада в окно
+# разрешений: прямое указание («сделай короче») видно классификатору гейта и
+# открывает цель без нового плана.
 #
 # СЛУЖЕБНОЕ СОБЫТИЕ ходом не считается: сброс по нему обнулял одобрение посреди
 # исполнения. Якоря и правила их пополнения — в service-anchors.txt рядом.
@@ -37,6 +40,27 @@ done < "$ANCHORS" 2>/dev/null
 # в этом разговоре не было. Цена — такой критик отметки не поставит, нужен новый прогон.
 rm -f "$serviceturn" "$planshown" "$criticpend" 2>/dev/null || true
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
-marker="${CRAFT_PLAN_GATE_MARKER:-/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID:-default}.approved}"
-rm -f "$marker" 2>/dev/null || true
+# Реплика-указание — в окно разрешений (тот же файл, что пары кнопочного хука):
+# прямое доуточнение к сделанной правке открывает цель через классификатор.
+# Служебные сообщения выше уже вышли по якорям и сюда не доходят; пустая
+# реплика не пишется. Длинные вставки режутся — классификатору хватает начала.
+[[ -z "${prompt//[[:space:]]/}" ]] && exit 0
+sid="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
+  marker="$CRAFT_PLAN_GATE_MARKER"
+elif [[ -n "$sid" ]]; then
+  marker="/tmp/craft-plan-gate.${sid}.approved"
+else
+  exit 0
+fi
+qa="${marker}.qa-window"
+{ cat "$qa" 2>/dev/null
+  printf '## Запись: указание\n%s\n\n' "$(head -c 2000 <<<"$prompt")"
+} > "${qa}.tmp" 2>/dev/null || exit 0
+awk '
+  /^## Запись/ { n++ }
+  { line[NR] = $0; rec[NR] = n }
+  END { for (i = 1; i <= NR; i++) if (rec[i] > n - 5) print line[i] }
+' "${qa}.tmp" > "$qa" 2>/dev/null || true
+rm -f "${qa}.tmp" 2>/dev/null
 exit 0
