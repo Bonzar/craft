@@ -18,7 +18,9 @@ set -u
 . "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] || exit 0
-[[ -n "${CRAFT_EVAL:-}" ]] && exit 0
+# Евал и служебный вложенный вызов исключены одной причиной: у обоих нет рутины,
+# чьи «Факты завершения» можно сверить, а лишний ход ломает сам вызов.
+[[ -n "${CRAFT_EVAL:-}" || -n "${CRAFT_NESTED_CALL:-}" ]] && exit 0
 
 input="$(cat)"
 declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }

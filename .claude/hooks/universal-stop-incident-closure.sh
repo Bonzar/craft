@@ -25,7 +25,8 @@ set -u
 # shellcheck disable=SC1091
 . "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
-[[ -n "${CRAFT_AUTONOMOUS:-}" || -n "${CRAFT_EVAL:-}" ]] && exit 0
+# Служебный вложенный вызов — тот же класс, что евал: разбирать инцидент там некому.
+[[ -n "${CRAFT_AUTONOMOUS:-}" || -n "${CRAFT_EVAL:-}" || -n "${CRAFT_NESTED_CALL:-}" ]] && exit 0
 
 sid="${CLAUDE_CODE_SESSION_ID:-}"
 [[ -n "$sid" ]] || exit 0

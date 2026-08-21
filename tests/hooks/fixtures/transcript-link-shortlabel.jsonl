@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"покажи, что правил"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Правил [bin/sh](/bin/sh) — адрес абсолютный, подпись обрезана до узнаваемого корня."}]}}

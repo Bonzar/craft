@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"дай ссылку на фикстуру"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Фикстура: [transcript-link-ok.jsonl](tests/hooks/fixtures/transcript-link-ok.jsonl)."}]}}

@@ -121,6 +121,7 @@ for f in "${files[@]}"; do
     criticpend="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-pending-test.XXXXXX")"
     planshown="$(mktemp -u "${TMPDIR:-/tmp}/plan-shown-test.XXXXXX")"
     criticruns="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-runs-test.XXXXXX")"
+    relstate="$(mktemp -u "${TMPDIR:-/tmp}/relative-link-test.XXXXXX")"
     criticround="$(mktemp -u "${TMPDIR:-/tmp}/plan-critic-round-test.XXXXXX")"
     # Классификатор гейта в тестах ВСЕГДА мок (дефолтный ответ «СООТВЕТСТВУЕТ»),
     # иначе кейс с периметром сделал бы сетевой вызов настоящей модели. След
@@ -139,6 +140,7 @@ for f in "${files[@]}"; do
              "CRAFT_PLAN_CRITIC_PENDING=$criticpend"
              "CRAFT_PLAN_SHOWN_MARKER=$planshown"
              "CRAFT_PLAN_CRITIC_RUNS=$criticruns"
+             "RELATIVE_LINK_STATE=$relstate"
              "SYNC_SYSTEM_STATE=$syncstate"
              "HOOK_ONCE=off" "HOOK_ONCE_DIR=$oncedir"
              "CRAFT_PLAN_CRITIC_ROUND=$criticround"
@@ -197,7 +199,7 @@ for f in "${files[@]}"; do
           "$obsbuf" "$rfmark" "$planpath" "$criticmark" \
           "$deltastore" "${deltastore}.snapshot" \
           "$icmark" "${icmark%.armed}.reminded" "$serviceturn" "$criticpend" "$planshown" "$criticruns" \
-          "$criticround"; rm -rf "$fgdir"
+          "$criticround" "$relstate"; rm -rf "$fgdir"
     ok=0
     case "$expect" in
       deny)   is_deny "$out" && ok=1 ;;
