@@ -321,7 +321,21 @@ const isAsk = (o) => jsonField(o, (j) => j.hookSpecificOutput?.permissionDecisio
 const isBlock = (o) => jsonField(o, (j) => j.decision) === 'block';
 const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 
-function grade(expect, out, err) {
+function grade(expect, out, err, env) {
+  // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
+  // не печатью, и по stdout проверить запись нечем. Путь берётся из переменной
+  // ASSERT_FILE самого кейса — той же, что кейс отдаёт хуку. Переменной нет —
+  // незачёт; нечитаемый файл равен пустому.
+  if (expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
+    const file = (env || {}).ASSERT_FILE || '';
+    if (!file) return false;
+    let text = '';
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch { /* файла нет — считаем пустым */ }
+    const needle = expect.slice(expect.indexOf(':') + 1);
+    return expect.startsWith('file-contains:') ? text.includes(needle) : !text.includes(needle);
+  }
   if (expect === 'deny') return isDeny(out);
   if (expect === 'allow') return !(isDeny(out) || isAsk(out) || isBlock(out));
   if (expect === 'ask') return isAsk(out);
@@ -418,16 +432,24 @@ function smokeChecks() {
     registry += `\n${fs.readFileSync(path.join(REPO, 'install.sh'), 'utf8')}`;
   } catch { /* установщика нет — смотрим только настройки */ }
 
+  // Пара «одно имя, два расширения» на время переезда считается одной проверкой:
+  // перенесённый JS-хук кладётся рядом с ещё зарегистрированной bash-версией, и
+  // требовать ему собственной регистрации значило бы валить прогон на каждом шаге
+  // миграции. Поблажка уходит вместе с последней bash-версией.
   const orphans = (files) => files.filter((f) => {
-    const b = path.basename(f);
-    if (REVERSE_WHITELIST.includes(b.replace(/\.(sh|js)$/, ''))) return false;
-    return !registry.includes(b);
+    const base = path.basename(f).replace(/\.(sh|js)$/, '');
+    if (REVERSE_WHITELIST.includes(base)) return false;
+    return !(registry.includes(`${base}.sh`) || registry.includes(`${base}.js`));
   }).map((f) => path.basename(f));
 
   // Самотест: красный путь обязан быть достижим — вымышленная сирота должна
   // ловиться, иначе сама проверка молча сломалась.
-  if (orphans([path.join(HOOKS, 'zz-selftest-orphan.sh')]).join('') !== 'zz-selftest-orphan.sh') {
-    smoke.push('reverse-smoke self-test failed: fictitious orphan not caught');
+  // Обе формы: поблажка про соседа не должна пропускать имя, которого нет в
+  // регистрациях ни с одним расширением.
+  for (const probe of ['zz-selftest-orphan.sh', 'zz-selftest-orphan.js']) {
+    if (orphans([path.join(HOOKS, probe)]).join('') !== probe) {
+      smoke.push(`reverse-smoke self-test failed: fictitious orphan not caught (${probe})`);
+    }
   }
   const hookFiles = fs.readdirSync(HOOKS)
     .filter((f) => f.endsWith('.sh') || f.endsWith('.js'))
@@ -551,7 +573,7 @@ function main() {
         return;
       }
 
-      let ok = grade(c.expect, r.out, r.err);
+      let ok = grade(c.expect, r.out, r.err, { ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || '') });
       let got = r.out;
       if (ok === null) {
         fails.push(`${c.hook} / ${c.name} — unknown expect '${c.expect}'`);
@@ -585,7 +607,11 @@ function main() {
           if (alt.out !== r.out) diffs.push('stdout');
           if (alt.err !== r.err) diffs.push('stderr');
           if (JSON.stringify(alt.state) !== JSON.stringify(r.state)) diffs.push('состояние');
+          // След классификатора сверяется содержимым, а не фактом наличия: обе
+          // версии могут его вызвать, но по-разному сериализовать правку — и
+          // тогда расхождение проехало бы незамеченным.
           if (alt.traced !== r.traced) diffs.push('вызов классификатора');
+          else if (alt.trace !== r.trace) diffs.push('промпт классификатора');
           if (diffs.length > 0) {
             ok = false;
             got = `версии разошлись (${diffs.join(', ')}): ${path.basename(r.script)} против ${path.basename(alt.script)}`;
