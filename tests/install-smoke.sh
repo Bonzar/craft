@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Smoke-тест install.sh: идемпотентность и сохранность чужих настроек.
 # Гоняется во временном HOME — реальный ~/.claude не трогается.
-#   1. Первый прогон: симлинки созданы, регистрации в settings.json есть.
+#   1. Первый прогон: регистрации в settings.json указывают в чекаут репы.
 #   2. Чужой hook-блок, существовавший до установки, не затёрт.
-#   3. Второй прогон: no-op (0 новых симлинков, "no changes needed").
+#   3. Второй прогон: no-op ("no changes needed").
+#   4. Дом со СТАРЫМ слоем: симлинки на репу сняты, регистрации со старым
+#      адресом ~/.claude/hooks не остались рядом с новыми.
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,8 +23,13 @@ JSON
 out1="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$REPO/install.sh" 2>&1)" \
   || FAILS+=("first run exited non-zero: $out1")
 
+# Команда регистрации ведёт в чекаут репы, а не в ~/.claude/hooks.
+jq -e --arg h "$REPO/.claude/hooks" '.hooks.PreToolUse[]?.hooks[]?.command
+       | select(. == ($h + "/universal-guard-plan-gate.sh"))' \
+  "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
+  || FAILS+=("plan-gate registration does not point at the checkout")
 [[ -L "$TESTHOME/.claude/hooks/universal-guard-plan-gate.sh" ]] \
-  || FAILS+=("plan-gate symlink missing after install")
+  && FAILS+=("install created a symlink layer again")
 jq -e '.hooks.PreToolUse[]?.hooks[]?.command
        | select(contains("universal-guard-plan-gate.sh"))' \
   "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
@@ -51,8 +58,35 @@ jq -e '.hooks.PostToolUse[]?.hooks[]?.command
 
 out2="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$REPO/install.sh" 2>&1)" \
   || FAILS+=("second run exited non-zero: $out2")
-grep -q 'hooks: 0 new symlink' <<<"$out2" || FAILS+=("second run created hook symlinks (not idempotent)")
 grep -q 'no changes needed' <<<"$out2" || FAILS+=("second run changed settings (not idempotent)")
+
+# --- 4. Дом, где уже разложен СТАРЫЙ слой ------------------------------------
+# У Влада на машине симлинки и регистрации с адресом ~/.claude/hooks стоят с
+# прошлой установки: обязаны исчезнуть, иначе скиллы задвоятся, а сорок записей
+# будут указывать на снесённые файлы.
+OLDHOME="$(mktemp -d)"
+mkdir -p "$OLDHOME/.claude/hooks" "$OLDHOME/.claude/skills"
+ln -s "$REPO/.claude/hooks/universal-guard-plan-gate.sh" "$OLDHOME/.claude/hooks/universal-guard-plan-gate.sh"
+ln -s "$REPO/.claude/skills/council" "$OLDHOME/.claude/skills/council"
+cat > "$OLDHOME/.claude/settings.json" <<'JSON'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"\"$HOME\"/.claude/hooks/universal-guard-plan-gate.sh"},{"type":"command","command":"/opt/foreign-guard.sh"}]}]}}
+JSON
+
+out3="$(HOME="$OLDHOME" INSTALL_ALLOW_WORKTREE=1 bash "$REPO/install.sh" 2>&1)" \
+  || FAILS+=("upgrade run exited non-zero: $out3")
+
+[[ -L "$OLDHOME/.claude/hooks/universal-guard-plan-gate.sh" ]] \
+  && FAILS+=("stale hook symlink survived the upgrade")
+[[ -L "$OLDHOME/.claude/skills/council" ]] \
+  && FAILS+=("stale skill symlink survived the upgrade")
+jq -e '[.hooks[]?[]?.hooks[]?.command
+       | select(startswith("\"$HOME\"/.claude/hooks/universal-"))] | length == 0' \
+  "$OLDHOME/.claude/settings.json" >/dev/null 2>&1 \
+  || FAILS+=("stale registrations pointing at ~/.claude/hooks survived")
+jq -e '.hooks.PreToolUse[]?.hooks[]?.command | select(. == "/opt/foreign-guard.sh")' \
+  "$OLDHOME/.claude/settings.json" >/dev/null 2>&1 \
+  || FAILS+=("foreign hook was lost during the upgrade")
+rm -rf "$OLDHOME"
 
 if [[ ${#FAILS[@]} -gt 0 ]]; then
   echo "install-smoke: FAIL"

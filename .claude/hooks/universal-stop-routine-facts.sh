@@ -11,10 +11,11 @@
 # Анти-цикл: stop_hook_active → молчим. Fail quiet.
 set -u
 
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
-      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
-  exit 0
-fi
+# Уступка второму вызову того же события: хук зарегистрирован и project-level, и
+# пользовательски (install.sh), а после сноса симлинков обе регистрации ведут в
+# ОДИН файл — различить их путями нельзя. Признак — метка занятия события.
+# shellcheck disable=SC1091
+. "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] || exit 0
 # Евал и служебный вложенный вызов исключены одной причиной: у обоих нет рутины,
@@ -22,6 +23,7 @@ fi
 [[ -n "${CRAFT_EVAL:-}" || -n "${CRAFT_NESTED_CALL:-}" ]] && exit 0
 
 input="$(cat)"
+declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }
 active="$(jq -r '.stop_hook_active // false' <<<"$input" 2>/dev/null)" || exit 0
 [[ "$active" == "true" || "${CLAUDE_STOP_HOOK_ACTIVE:-}" == "true" ]] && exit 0
 

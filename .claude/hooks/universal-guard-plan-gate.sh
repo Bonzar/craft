@@ -36,18 +36,16 @@
 # Fail open on anything unexpected: a broken gate must never wedge legit work.
 set -u
 
-# When this same hook is ALSO installed at user level (~/.claude, via
-# install.sh), the project-level registration yields to it — otherwise a craft
-# session would run the gate twice per call. Cloud sessions have no user-level
-# install, so the project copy stays active there.
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
-      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
-  exit 0
-fi
+# Уступка второму вызову того же события: хук зарегистрирован и project-level, и
+# пользовательски (install.sh), а после сноса симлинков обе регистрации ведут в
+# ОДИН файл — различить их путями нельзя. Признак — метка занятия события.
+# shellcheck disable=SC1091
+. "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 [[ -n "${CRAFT_AUTONOMOUS:-}" ]] && exit 0
 
 input="$(cat)"
+declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }
 # Явный клик Влада старше гейта: режимы acceptEdits и bypassPermissions он
 # включает сам штатным переключателем — белый список, ровно два значения.
 # auto в списке НЕТ намеренно (решение Влада): авто-режим — доверие харнесса,
@@ -283,9 +281,15 @@ if [[ "$is_file_edit" -eq 1 ]]; then
 
   # Текст правки по инструменту: Edit/Write — new_string/content, MultiEdit —
   # все edits[].new_string, NotebookEdit — new_source; без них классификатор
-  # видел бы пустую правку и не мог ловить выход за одобренное.
+  # видел бы пустую правку и не мог ловить выход за одобренное. Заменяемый
+  # текст (old_string) сериализуется тоже: без него у Edit новый текст читается
+  # как ДОБАВЛЕНИЕ целиком, и якорные строки замены дают ложное «сверх плана».
   desc="инструмент: $tool
 файл: $fp
+заменяемый текст:
+$(jq -r '.tool_input.old_string
+         // (((.tool_input.edits // []) | map(.old_string // "") | join("\n---\n")) | select(. != ""))
+         // ""' <<<"$input" 2>/dev/null | head -c 2000)
 новый текст:
 $(jq -r '.tool_input.new_string // .tool_input.content // .tool_input.new_source
          // (((.tool_input.edits // []) | map(.new_string // "") | join("\n---\n")) | select(. != ""))

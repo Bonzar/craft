@@ -33,15 +33,16 @@ hash_stdin() {
   fi
 }
 
-# Уступаем user-level копии — иначе двойной прогон на локальной машине.
-if [[ -n "${CLAUDE_PROJECT_DIR:-}" && "$0" == "$CLAUDE_PROJECT_DIR"/* \
-      && -e "$HOME/.claude/hooks/$(basename "$0")" ]]; then
-  exit 0
-fi
+# Уступка второму вызову того же события: хук зарегистрирован и project-level, и
+# пользовательски (install.sh), а после сноса симлинков обе регистрации ведут в
+# ОДИН файл — различить их путями нельзя. Признак — метка занятия события.
+# shellcheck disable=SC1091
+. "$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")/_hook-once.sh" 2>/dev/null || true
 
 [[ "${PLAN_DELTA:-}" == "off" ]] && exit 0
 
 input="$(cat)"
+declare -F hook_once >/dev/null 2>&1 && { hook_once "$input" || exit 0; }
 tool="$(jq -r '.tool_name // ""' <<<"$input" 2>/dev/null)" || exit 0
 [[ "$tool" == "ExitPlanMode" ]] || exit 0
 event="$(jq -r '.hook_event_name // "PreToolUse"' <<<"$input" 2>/dev/null)"
@@ -89,16 +90,31 @@ if [[ "$event" == "PostToolUse" ]]; then
   exit 0
 fi
 
-# Файл микро-планов разрешений — производная маркера периметра, путь тем же
-# правилом, что у гейта: env-переопределение маркера, иначе непустой
-# session-id, при пустом session-id файла нет (общий default не читается).
+# Файл микро-планов разрешений и окно нерастраченных записей — производные
+# маркера периметра, путь тем же правилом, что у гейта: env-переопределение
+# маркера, иначе непустой session-id, при пустом session-id файлов нет
+# (общий default не читается). Окно (qa-window) участвует в сверке показа
+# НАРАВНЕ со сработавшими разрешениями: план, целиком покрытый свежим
+# указанием Влада («бампни канарейку»), не показывается — уже разрешено,
+# правильный ход — выполнять, а не собирать план.
 if [[ -n "${CRAFT_PLAN_GATE_MARKER:-}" ]]; then
   bp="${CRAFT_PLAN_GATE_MARKER}.button-plans"
+  qa="${CRAFT_PLAN_GATE_MARKER}.qa-window"
 elif [[ -n "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
   bp="/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID}.approved.button-plans"
+  qa="/tmp/craft-plan-gate.${CLAUDE_CODE_SESSION_ID}.approved.qa-window"
 else
-  bp=""
+  bp=""; qa=""
 fi
+# Конкатенация непустых файлов разрешений во временный вход сравнения.
+approvals_input() {  # $1 — файл-приёмник; печатает "1", если что-то собрано
+  local out="$1" got=0 f
+  : > "$out"
+  for f in "$bp" "$qa"; do
+    [[ -n "$f" && -s "$f" ]] && { cat "$f" >> "$out"; got=1; }
+  done
+  [[ "$got" -eq 1 ]] && echo 1 || echo 0
+}
 self1="$(realpath "$0" 2>/dev/null || echo "$0")"
 classifier="${PLAN_CLASSIFIER_BIN:-$(cd "$(dirname "$self1")/../.." && pwd)/tools/plan-scope-classifier.sh}"
 
@@ -107,12 +123,18 @@ classifier="${PLAN_CLASSIFIER_BIN:-$(cd "$(dirname "$self1")/../.." && pwd)/tool
 # микро-планов — иначе показ плана, повторяющего разрешённую цель, шёл бы как
 # первый план сессии.
 if [[ ! -s "$store" ]]; then
-  if [[ -n "$bp" && -s "$bp" && -r "$classifier" ]]; then
-    verdict="$(: | bash "$classifier" delta "$bp" "$plan" 2>/dev/null)"
-    if [[ "$verdict" == REPEATS:* ]]; then
-      jq -cn --arg r "План повторяет одобренное вопросом-разрешением:${verdict#REPEATS:}. Одобренное повторно не показывается — покажи только новое. Аварийный выключатель — PLAN_DELTA=off." \
-        '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
-      exit 0
+  if [[ -r "$classifier" ]]; then
+    merged="$(mktemp "${TMPDIR:-/tmp}/plan-delta-approvals.XXXXXX")"
+    if [[ "$(approvals_input "$merged")" == "1" ]]; then
+      verdict="$(: | bash "$classifier" delta "$merged" "$plan" 2>/dev/null)"
+      rm -f "$merged" 2>/dev/null
+      if [[ "$verdict" == REPEATS:* ]]; then
+        jq -cn --arg r "План повторяет одобренное вопросом-разрешением или прямым указанием Влада:${verdict#REPEATS:}. Уже разрешено — выполняй сразу, показывать план не нужно. Аварийный выключатель — PLAN_DELTA=off." \
+          '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+        exit 0
+      fi
+    else
+      rm -f "$merged" 2>/dev/null
     fi
   fi
   exit 0
@@ -137,17 +159,17 @@ done <<<"$now"
 if [[ "$rep" -eq 0 ]]; then
   snap="${store}.snapshot"
   if [[ -r "$snap" && -r "$classifier" ]]; then
-    # Вход сравнения — снапшот плана вместе с микро-планами разрешений:
-    # семантическое одобрение равносильно плановому и в дельте. Снапшот файл
-    # разрешений не затирает — конкатенация собирается на время вызова.
-    if [[ -n "$bp" && -s "$bp" ]]; then
-      merged="$(mktemp "${TMPDIR:-/tmp}/plan-delta-approved.XXXXXX")"
-      cat "$snap" "$bp" > "$merged" 2>/dev/null
-      verdict="$(: | bash "$classifier" delta "$merged" "$plan" 2>/dev/null)"
-      rm -f "$merged" 2>/dev/null
-    else
-      verdict="$(: | bash "$classifier" delta "$snap" "$plan" 2>/dev/null)"
-    fi
+    # Вход сравнения — снапшот плана вместе с микро-планами разрешений и
+    # окном нерастраченных указаний: семантическое одобрение равносильно
+    # плановому и в дельте. Снапшот файлы разрешений не затирает —
+    # конкатенация собирается на время вызова.
+    merged="$(mktemp "${TMPDIR:-/tmp}/plan-delta-approved.XXXXXX")"
+    cat "$snap" > "$merged" 2>/dev/null
+    for af in "$bp" "$qa"; do
+      [[ -n "$af" && -s "$af" ]] && cat "$af" >> "$merged" 2>/dev/null
+    done
+    verdict="$(: | bash "$classifier" delta "$merged" "$plan" 2>/dev/null)"
+    rm -f "$merged" 2>/dev/null
     if [[ "$verdict" == REPEATS:* ]]; then
       jq -cn --arg r "План повторяет уже одобренные юниты по смыслу:${verdict#REPEATS:}. Одобренное повторно не показывается — оставь только изменившееся с прошлого одобрения, а изменённый юнит пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off." \
         '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
