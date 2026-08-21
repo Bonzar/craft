@@ -294,6 +294,17 @@ function runPass(c, ext) {
   const traced = fs.existsSync(s.classtrace);
   const trace = traced ? fs.readFileSync(s.classtrace, 'utf8') : '';
   const state = stateSnapshot(s);
+  // Файл, по которому кейс судит о записи (исходы file-contains), тоже след
+  // прогона: обе версии хука пишут в один путь, и без снимка расхождение между
+  // ними прошло бы незамеченным — вторая версия просто затирает первую.
+  const assertFile = caseEnv.ASSERT_FILE || '';
+  if (assertFile) {
+    try {
+      state['assert-file'] = fs.readFileSync(assertFile, 'utf8');
+    } catch {
+      state['assert-file'] = '';
+    }
+  }
   cleanState(s);
 
   return {
