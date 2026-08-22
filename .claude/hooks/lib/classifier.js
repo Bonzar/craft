@@ -13,9 +13,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { repoRootOf } from './paths.js';
 
-export function classifierPath(moduleUrl) {
+// Корень считается от ЭТОГО модуля, а не от файла вызывающего хука: у них разная
+// глубина (хук лежит на уровень выше), и общая формула на стороне вызова давала
+// бы каталог мимо чекаута — классификатор молча оказывался бы недоступен.
+export function classifierPath() {
   return process.env.PLAN_CLASSIFIER_BIN
-    || path.join(repoRootOf(moduleUrl), 'tools', 'plan-scope-classifier.sh');
+    || path.join(repoRootOf(import.meta.url), 'tools', 'plan-scope-classifier.sh');
 }
 
 export function classifierAvailable(bin) {
