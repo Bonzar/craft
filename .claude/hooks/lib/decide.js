@@ -45,6 +45,14 @@ export function block(reason) {
   process.exit(0);
 }
 
+// Текст, дописываемый в контекст агента. Имя события идёт параметром: один и тот
+// же приём работает на старте сессии, на реплике, после вызова и после его
+// провала, а харнесс сверяет имя с тем событием, на которое хук подписан.
+export function inject(hookEventName, additionalContext, options) {
+  emit({ hookSpecificOutput: { hookEventName, additionalContext } }, options);
+  process.exit(0);
+}
+
 // Проход. Гварды на проходе молчат — пустой stdout и есть «разрешено».
 export function allow() {
   process.exit(0);
