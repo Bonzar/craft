@@ -121,8 +121,10 @@ eval__validate() {
       # Буфер наблюдений подменяется: детектор пишет в него сигнал инцидента, и
       # предполётная проверка иначе мусорит в живое состояние текущей сессии.
       local out tmpbuf; tmpbuf="$(mktemp)"
+      # Хук запускается своим шебангом, а не заданным интерпретатором: слой на
+      # node, и жёсткое «bash» молча превратило бы проверку в пустой вывод.
       out="$(jq -n --arg p "$prompt" '{prompt:$p}' \
-             | CLAUDE_PROJECT_DIR="$PWD" OBSERVE_BUFFER="$tmpbuf" bash "$trig" 2>/dev/null)"
+             | CLAUDE_PROJECT_DIR="$PWD" OBSERVE_BUFFER="$tmpbuf" "$trig" 2>/dev/null)"
       rm -f "$tmpbuf"
       [[ -z "${out//[[:space:]]/}" ]] && { echo "промпт не запускает подачу правила ($trig молчит)"; return; }
     fi

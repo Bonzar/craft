@@ -259,9 +259,9 @@ vcheck "формат / ассерт по инструменту засчитан
 # Промпт, не запускающий подачу правила, бракуется ДО прогона: правило до сессии
 # не дойдёт, и вердикт был бы о памяти модели, а не о соблюдении.
 vcheck "формат / промпт не запускает подачу правила" "не запускает подачу правила" \
-  '{"name":"x","prompt":"посчитай два плюс два","expect_present":["a"],"rule_evidence":"incident doc cached","rule_trigger_hook":".claude/hooks/universal-detect-incident.sh"}'
+  '{"name":"x","prompt":"посчитай два плюс два","expect_present":["a"],"rule_evidence":"incident doc cached","rule_trigger_hook":".claude/hooks/universal-detect-incident.js"}'
 vcheck "формат / промпт запускает подачу правила" "-" \
-  '{"name":"x","prompt":"ты нарушил записанное правило, разбери инцидент","expect_present":["a"],"rule_evidence":"incident doc cached","rule_trigger_hook":".claude/hooks/universal-detect-incident.sh"}'
+  '{"name":"x","prompt":"ты нарушил записанное правило, разбери инцидент","expect_present":["a"],"rule_evidence":"incident doc cached","rule_trigger_hook":".claude/hooks/universal-detect-incident.js"}'
 vcheck "формат / кейс про разбор без материала" "нет поля material" \
   '{"name":"x","prompt":"y","expect_present":["a"],"expect_no_refusal":true}'
 covered["validate:BAD"]=1; covered["validate:OK"]=1; covered["trigger:BAD"]=1; covered["trigger:OK"]=1
