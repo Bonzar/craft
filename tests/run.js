@@ -99,8 +99,9 @@ const REQUIRED = [
   'stop-relative-link:block', 'stop-relative-link:silent',
 ];
 
-// Помощники, которые подключаются другими хуками и сами хуками не являются.
-const REVERSE_WHITELIST = ['_load-env', '_hook-once'];
+// Помощники, которые подключаются другими хуками и сами хуками не являются:
+// диспетчер с его таблицей маршрутов — сам механизм регистрации, а не хук.
+const REVERSE_WHITELIST = ['_load-env', '_hook-once', 'dispatch', 'dispatch-table'];
 
 // --- запуск хуков ------------------------------------------------------------
 
@@ -121,10 +122,10 @@ function resolveHook(base, ext) {
 // Хук запускается своим интерпретатором: bash-файлы через bash (исполняемый бит
 // им не нужен), JS — текущим node, чтобы прогон не зависел от того, что лежит в
 // PATH у тестов.
-function runHook(script, input, env) {
+function runHook(script, input, env, args = []) {
   const isJs = script.endsWith('.js');
   const cmd = isJs ? process.execPath : 'bash';
-  return spawnSync(cmd, [script], {
+  return spawnSync(cmd, [script, ...args], {
     input,
     env,
     encoding: 'utf8',
@@ -282,7 +283,8 @@ function runPass(c, ext) {
   // проверяется ответ ПОСЛЕДНЕГО вызова).
   let res = { stdout: '', stderr: '' };
   const repeat = Number(c.repeat || 1);
-  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv);
+  const args = Array.isArray(c.args) ? c.args.map(subst) : [];
+  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
 
   // Число записей окна разрешений снимается ДО уборки — его сверяют кейсы
   // вытеснения и фильтра служебных сообщений.
@@ -388,6 +390,7 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-exit-failure', 'PostToolUseFailure', 'ExitPlanMode'],
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
 ];
+const DISPATCH = path.join(HOOKS, 'dispatch.js');
 
 function readSettings() {
   try {
@@ -425,23 +428,30 @@ function smokeChecks() {
     }
   }
 
-  for (const [base, event, want] of NEEDS_MATCHER) {
-    const groups = (settings.hooks || {})[event] || [];
-    const ok = groups.some((g) => (g.matcher || '') === want
-      && (g.hooks || []).some((h) => {
-        const cmd = h.command || '';
-        return cmd.endsWith(`${base}.js`) || cmd.endsWith(`${base}.sh`);
-      }));
-    if (!ok) smoke.push(`hook ${base} not registered on ${event} matcher ${want}`);
+  // Маршрут спрашивается у самого диспетчера, а не вычитывается из таблицы
+  // глазами: сверяется то, кого он ПОЗОВЁТ, а не то, что где-то написано.
+  const routed = (event, tool) => {
+    const res = spawnSync(process.execPath, [DISPATCH, '--list', event, tool], { encoding: 'utf8' });
+    return (res.stdout || '').split('\n').filter(Boolean);
+  };
+  for (const [base, event, tool] of NEEDS_MATCHER) {
+    if (!routed(event, tool).includes(base)) {
+      smoke.push(`hook ${base} not routed on ${event} for tool ${tool}`);
+    }
   }
 
   // Обратный смоук: каждый ФАЙЛ хука обязан быть зарегистрирован хотя бы в одном
   // контуре (проектные настройки или установщик) — незарегистрированный хук
   // лежит мёртвым, выглядя установленным.
+  // Состав слоя живёт в таблице маршрутов; настройки и установщик держат лишь
+  // регистрацию самого диспетчера. Поэтому «зарегистрирован» — значит назван в
+  // таблице (или, для переходных случаев, прямо в командах и установщике).
   let registry = registeredCommands(settings).join('\n');
-  try {
-    registry += `\n${fs.readFileSync(path.join(REPO, 'install.sh'), 'utf8')}`;
-  } catch { /* установщика нет — смотрим только настройки */ }
+  for (const extra of [path.join(REPO, 'install.sh'), path.join(HOOKS, 'dispatch-table.js')]) {
+    try {
+      registry += `\n${fs.readFileSync(extra, 'utf8')}`;
+    } catch { /* файла нет — смотрим то, что есть */ }
+  }
 
   // Пара «одно имя, два расширения» на время переезда считается одной проверкой:
   // перенесённый JS-хук кладётся рядом с ещё зарегистрированной bash-версией, и
@@ -450,7 +460,11 @@ function smokeChecks() {
   const orphans = (files) => files.filter((f) => {
     const base = path.basename(f).replace(/\.(sh|js)$/, '');
     if (REVERSE_WHITELIST.includes(base)) return false;
-    return !(registry.includes(`${base}.sh`) || registry.includes(`${base}.js`));
+    // В таблице маршрутов хук назван БЕЗ расширения, в прямых регистрациях — с
+    // ним. Считается любое из имён: файл, названный хоть где-то, не мёртв.
+    return !(registry.includes(`${base}.sh`)
+      || registry.includes(`${base}.js`)
+      || registry.includes(`'${base}'`));
   }).map((f) => path.basename(f));
 
   // Самотест: красный путь обязан быть достижим — вымышленная сирота должна

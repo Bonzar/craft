@@ -5,13 +5,20 @@
 // работу, поэтому пустое или неразборное событие даёт пустые поля, а не падение.
 import { readFileSync } from 'node:fs';
 
+// Прочитанный текст запоминается: под диспетчером одно событие читают несколько
+// хуков подряд, а поток входа отдаёт его лишь однажды — второй хук получил бы
+// пустоту и молча ничего не сделал.
+let cached = null;
+
 export function readEvent() {
-  let raw = '';
-  try {
-    raw = readFileSync(0, 'utf8');
-  } catch {
-    raw = '';
+  if (cached === null) {
+    try {
+      cached = readFileSync(0, 'utf8');
+    } catch {
+      cached = '';
+    }
   }
+  const raw = cached;
 
   let event = {};
   try {

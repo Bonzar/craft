@@ -105,10 +105,12 @@ export function factGateStateDir() {
 export function routineFactsMarker() {
   return perSessionOrDefault('ROUTINE_FACTS_MARKER', 'routine-facts.{sid}.reminded');
 }
-export function syncSystemState() {
+// Синк системы берёт идентификатор сессии из САМОГО события, а не из окружения:
+// он работает и там, где переменной нет, — поэтому сессия передаётся аргументом.
+export function syncSystemState(sid) {
   const override = process.env.SYNC_SYSTEM_STATE;
   if (override) return override;
-  return path.join(os.tmpdir(), `sync-system.${sessionId() || 'default'}`);
+  return path.join(os.tmpdir(), `sync-system.${sid || sessionId() || 'default'}`);
 }
 export function relativeLinkState() {
   const override = process.env.RELATIVE_LINK_STATE;

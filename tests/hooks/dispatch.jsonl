@@ -1,0 +1,13 @@
+# Диспетчер: одна регистрация на событие вместо строки на хук. Проверяется, что
+# он зовёт тех же хуков, что звал харнесс, обрывает цепочку на первом решении и
+# сверяет матчер с именем инструмента ЦЕЛИКОМ.
+
+{"name":"диспетчер зовёт гвард ожидания на Bash","hook":"dispatch","expect":"deny","input":{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"sleep 300"}}}
+{"name":"матчер сверяется целиком: BashOutput — не Bash","hook":"dispatch","expect":"silent","input":{"hook_event_name":"PreToolUse","tool_name":"BashOutput","tool_input":{"command":"sleep 300"}}}
+{"name":"цепочка обрывается на первом решении — один ответ, не два","hook":"dispatch","expect":"deny","input":{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}}
+{"name":"диспетчер зовёт гвард провала показа плана","hook":"dispatch","expect":"contains:одобрения НЕТ","input":{"hook_event_name":"PostToolUseFailure","tool_name":"ExitPlanMode","tool_input":{}}}
+{"name":"инструмент без своих хуков — молчание","hook":"dispatch","expect":"silent","input":{"hook_event_name":"PreToolUse","tool_name":"Glob","tool_input":{"pattern":"*.ts"}}}
+{"name":"незнакомое событие — молчание","hook":"dispatch","expect":"silent","input":{"hook_event_name":"Notification","tool_name":"Bash"}}
+{"name":"событие без имени — молчание","hook":"dispatch","expect":"silent","input":{"tool_name":"Bash","tool_input":{"command":"sleep 300"}}}
+{"name":"проектный контур зовёт краевой craft-гвард первым","hook":"dispatch","expect":"contains:только через --json","input":{"hook_event_name":"PreToolUse","tool_name":"mcp__Craft__craft_write","tool_input":{"command":"blocks add --markdown x"}}}
+{"name":"контур universal краевых craft-хуков не зовёт — отвечает план-гейт","hook":"dispatch","expect":"contains:Заблокировано план-гейтом","args":["universal"],"input":{"hook_event_name":"PreToolUse","tool_name":"mcp__Craft__craft_write","tool_input":{"command":"blocks add --markdown x"}}}

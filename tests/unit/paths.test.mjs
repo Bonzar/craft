@@ -1,18 +1,14 @@
-// Имена файлов состояния — инвариант переезда: пока часть хуков на bash, а часть
-// на JS, они разговаривают через одни и те же файлы, и разъехавшаяся строчка
-// рвёт связку молча. Поэтому тест не сверяет модуль сам с собой: он вытаскивает
-// дефолты ИЗ bash-хуков и требует, чтобы модуль давал то же самое.
+// Имена файлов состояния — контракт между хуками: по ним они разговаривают друг
+// с другом, и разъехавшаяся строчка рвёт связку молча. Пока слой переезжал,
+// эталоном служили дефолты bash-версий; теперь их нет, и эталон закреплён здесь
+// списком — тест намеренно ловит ЛЮБОЕ переименование, а не подтверждает код
+// сам собой.
 //
 // Расширение .mjs, а не .js: в каталоге тестов нет манифеста модулей, и .js
 // читался бы как обычный скрипт, которому импорт недоступен.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const HOOKS = path.join(REPO, '.claude', 'hooks');
 const SID = 'test-session-id';
 
 async function freshPaths(env = {}) {
@@ -29,39 +25,26 @@ async function freshPaths(env = {}) {
   return import(`../../.claude/hooks/lib/paths.js?t=${Date.now()}${Math.random()}`);
 }
 
-// Дефолты из bash-хуков: `${ENV:-/tmp/имя.${sid}.суффикс}`.
-function bashDefaults() {
-  const found = new Map();
-  for (const file of fs.readdirSync(HOOKS).filter((f) => f.endsWith('.sh'))) {
-    const text = fs.readFileSync(path.join(HOOKS, file), 'utf8');
-    // Дефолт бывает с вложенной подстановкой (`${TMPDIR:-/tmp}`,
-    // `${CLAUDE_CODE_SESSION_ID:-default}`), поэтому вложенные скобки входят в
-    // захват: без них эталон обрезался бы на первой закрывающей и сверка шла бы
-    // с половиной строки.
-    const re = /\$\{([A-Z_]+):-((?:[^{}]|\$\{[^{}]*\})*)\}/g;
-    let m = re.exec(text);
-    while (m) {
-      const [, name, raw] = m;
-      // Та же запись служит и проверкой «переменная задана» (`${VAR:-}`), и
-      // путём по умолчанию. Сверять есть смысл только второе.
-      const isPath = raw.startsWith('/tmp') || raw.startsWith('${TMPDIR');
-      if (isPath && !found.has(name)) found.set(name, raw);
-      m = re.exec(text);
-    }
-  }
-  return found;
-}
+// Эталон: имя переменной-переопределения → путь по умолчанию при заданной
+// сессии. Меняешь строку здесь — меняешь контракт со всеми хуками разом.
+const EXPECTED = {
+  CRAFT_PLAN_GATE_MARKER: `/tmp/craft-plan-gate.${SID}.approved`,
+  CRAFT_PLAN_FILE_MARKER: `/tmp/plan-file.${SID}.path`,
+  CRAFT_PLAN_CRITIC_MARKER: `/tmp/plan-critic.${SID}.done`,
+  CRAFT_PLAN_CRITIC_PENDING: `/tmp/plan-critic.${SID}.pending`,
+  CRAFT_PLAN_CRITIC_RUNS: `/tmp/plan-critic.${SID}.runs`,
+  CRAFT_PLAN_CRITIC_ROUND: `/tmp/plan-critic.${SID}.round`,
+  CRAFT_PLAN_DELTA_STORE: `/tmp/plan-delta.${SID}.hashes`,
+  CRAFT_PLAN_SHOWN_MARKER: `/tmp/plan-shown.${SID}`,
+  CRAFT_SERVICE_TURN_MARKER: `/tmp/plan-service-turn.${SID}`,
+  OBSERVE_BUFFER: `/tmp/agent-observe.${SID}.log`,
+  INCIDENT_CLOSURE_MARKER: `/tmp/incident-closure.${SID}.armed`,
+  ROUTINE_FACTS_MARKER: `/tmp/routine-facts.${SID}.reminded`,
+  SYNC_SYSTEM_STATE: `/tmp/sync-system.${SID}`,
+  RELATIVE_LINK_STATE: `/tmp/relative-link.${SID}.blocked`,
+};
 
-// Как bash развернул бы дефолт при заданной сессии.
-function expand(raw) {
-  return raw
-    .replace(/\$\{TMPDIR:-\/tmp\}/g, '/tmp')
-    .replace(/\$\{CLAUDE_CODE_SESSION_ID:-default\}/g, SID)
-    .replace(/\$\{sid\}/g, SID)
-    .replace(/\$sid\b/g, SID);
-}
-
-test('пути состояния совпадают с дефолтами bash-хуков', async () => {
+test('пути состояния совпадают с закреплённым эталоном', async () => {
   const paths = await freshPaths();
   const byEnv = {
     CRAFT_PLAN_GATE_MARKER: paths.planGateMarker(),
@@ -80,16 +63,12 @@ test('пути состояния совпадают с дефолтами bash-
     RELATIVE_LINK_STATE: paths.relativeLinkState(),
   };
 
-  const defaults = bashDefaults();
-  let checked = 0;
-  for (const [name, raw] of defaults) {
-    if (!(name in byEnv)) continue;
-    assert.equal(byEnv[name], expand(raw), `дефолт ${name} разошёлся с bash-версией`);
-    checked += 1;
+  // Набор сверяется целиком: новый путь без строки в эталоне так же опасен, как
+  // переименованный, — его никто не проверяет.
+  assert.deepEqual(Object.keys(byEnv).sort(), Object.keys(EXPECTED).sort());
+  for (const [name, expected] of Object.entries(EXPECTED)) {
+    assert.equal(byEnv[name], expected, `путь ${name} разошёлся с эталоном`);
   }
-  // Сам тест обязан различать исходы: если регулярка перестанет находить
-  // дефолты, он молча пройдёт на пустом наборе.
-  assert.ok(checked >= 10, `сверено всего ${checked} путей — эталон не разобрался`);
 });
 
 test('переопределение окружением сильнее дефолта', async () => {

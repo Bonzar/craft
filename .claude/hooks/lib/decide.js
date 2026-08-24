@@ -12,6 +12,9 @@
 function emit(payload, { compact = true } = {}) {
   const text = compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
   process.stdout.write(`${text}\n`);
+  // Признак «решение принято» для диспетчера: под ним хуки одного события делят
+  // общий вывод, и второе решение подряд легло бы в него следом за первым.
+  globalThis.hookDecided = true;
 }
 
 // PreToolUse: запрет вызова с причиной, которую прочитает модель.

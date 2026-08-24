@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { readEvent } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
+import { syncSystemState } from './lib/paths.js';
 
 if (process.env.SYNC_SYSTEM === 'off') process.exit(0);
 // Автономный прогон (рутина) не мутирует систему под собой на середине, евал —
@@ -54,8 +55,9 @@ const sid = event.session_id || 'default';
 if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
 
 const TARGET = process.env.SYNC_SYSTEM_TARGET || path.resolve(dir, '..', '..');
-const STATE = process.env.SYNC_SYSTEM_STATE
-  || path.join(process.env.TMPDIR || '/tmp', `sync-system.${sid}`);
+// Сессия берётся из СОБЫТИЯ, а не из окружения: синк работает и там, где
+// переменной сессии нет вовсе.
+const STATE = syncSystemState(sid);
 const INTERVAL = process.env.SYNC_SYSTEM_INTERVAL ?? '900';
 const BUDGET = Number(process.env.SYNC_SYSTEM_DELTA_BUDGET || 5000);
 
