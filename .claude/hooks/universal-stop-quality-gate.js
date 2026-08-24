@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { readEvent } from './lib/event.js';
 import { block } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
+import { editedFiles, sourceFiles } from './lib/transcript.js';
 
 // Анти-зацикливание: этот Stop уже вызван из-под стоп-хука → пропуск.
 if (process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') process.exit(0);
@@ -37,42 +38,7 @@ if (!fs.existsSync(path.join(proj, 'tsconfig.json'))
 
 if (!transcript || !fs.existsSync(transcript)) process.exit(0);
 
-// Правленные файлы — из транскрипта: каждая строка jsonl несёт сообщение, в
-// содержимом которого лежат вызовы инструментов записи.
-function editedFiles(file) {
-  let text = '';
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch {
-    return [];
-  }
-  const found = new Set();
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue; // битую строку транскрипта пропускаем, как это делал try в jq
-    }
-    const content = entry && entry.message && entry.message.content;
-    if (!Array.isArray(content)) continue;
-    for (const item of content) {
-      if (!item || item.type !== 'tool_use') continue;
-      if (!['Edit', 'Write', 'MultiEdit'].includes(item.name)) continue;
-      const fp = item.input && item.input.file_path;
-      if (typeof fp === 'string' && fp) found.add(fp);
-    }
-  }
-  return [...found].sort();
-}
-
-const files = editedFiles(transcript).filter((f) => {
-  if (!fs.existsSync(f)) return false;
-  if (f.includes('node_modules/')) return false;
-  if (/\.test\.|\.spec\.|__tests__/.test(f)) return false;
-  return /\.(ts|tsx|js|jsx)$/.test(f);
-});
+const files = sourceFiles(editedFiles(transcript));
 if (files.length === 0) process.exit(0);
 
 // Запуск в каталоге проекта с общим бюджетом 120 с. Таймаут и отсутствие тулзы
