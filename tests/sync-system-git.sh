@@ -13,7 +13,15 @@ set -u
 export LC_ALL=C.UTF-8
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-HOOK="$REPO/.claude/hooks/universal-sync-system.sh"
+# Версия хука: JS предпочитается, bash — фолбек, как в раннере кейсов. Пока
+# слой переезжает, обе версии проверяются одним и тем же набором — SYNC_HOOK_EXT
+# выбирает, какую гонять.
+EXT="${SYNC_HOOK_EXT:-}"
+if [[ -z "$EXT" ]]; then
+  [[ -f "$REPO/.claude/hooks/universal-sync-system.js" ]] && EXT=js || EXT=sh
+fi
+HOOK="$REPO/.claude/hooks/universal-sync-system.$EXT"
+[[ "$EXT" == js ]] && RUNNER=node || RUNNER=bash
 
 pass=0; fail=0; fails=()
 ok()  { pass=$((pass+1)); printf 'PASS  %s\n' "$1"; }
@@ -57,7 +65,7 @@ run_hook() {
           SYNC_SYSTEM_INTERVAL=0 \
           HOOK_ONCE=off \
           CLAUDE_PROJECT_DIR="$4" \
-          bash "$HOOK" 2>/dev/null
+          "$RUNNER" "$HOOK" 2>/dev/null
 }
 
 # --- A. свой чекаут, дерево чистое: подтянуто ---------------------------------
@@ -273,7 +281,7 @@ rules_case() {  # $1 база, $2 свежий снимок; печатает st
   printf 'ahead=0\nscope=own\nbranch=main\nhead_before=x\nrules=%s\n' "$st.rules-fresh" > "$st.report"
   printf '{"hook_event_name":"UserPromptSubmit","session_id":"rules-test","prompt":"проба %s"}' "$RANDOM" \
     | env SYNC_SYSTEM_STATE="$st" SYNC_SYSTEM_TARGET="$sb/target" HOOK_ONCE=off \
-          CLAUDE_PROJECT_DIR="$sb/target" bash "$HOOK" 2>/dev/null
+          CLAUDE_PROJECT_DIR="$sb/target" "$RUNNER" "$HOOK" 2>/dev/null
   rm -rf "$sb"
 }
 
@@ -327,7 +335,7 @@ printf '%s\nПравило.' "$HEAD_LINE" > "$st.rules-fresh"
 printf 'ahead=0\nscope=own\nbranch=main\nhead_before=x\nrules=%s\n' "$st.rules-fresh" > "$st.report"
 out="$(printf '{"hook_event_name":"UserPromptSubmit","session_id":"seed-test","prompt":"x"}' \
   | env SYNC_SYSTEM_STATE="$st" SYNC_SYSTEM_TARGET="$sb/target" HOOK_ONCE=off \
-        CLAUDE_PROJECT_DIR="$sb/target" bash "$HOOK" 2>/dev/null)"
+        CLAUDE_PROJECT_DIR="$sb/target" "$RUNNER" "$HOOK" 2>/dev/null)"
 if [[ -n "${out//[$' \t\n\r']/}" ]]; then
   bad "$t" "вместо молчания напечатан обрезок роутера: ${out:0:150}"
 elif [[ ! -s "$st.rules-base" ]]; then
@@ -351,7 +359,7 @@ rules_case_snapshot() {  # $1 снимок в чекауте сессии, $2 с
   printf 'ahead=0\nscope=shared\nbranch=main\nhead_before=x\nrules=%s\n' "$st.rules-fresh" > "$st.report"
   printf '{"hook_event_name":"UserPromptSubmit","session_id":"seed-%s","prompt":"x","cwd":"%s"}' "$RANDOM" "$sb/session" \
     | env SYNC_SYSTEM_STATE="$st" SYNC_SYSTEM_TARGET="$sb/target" HOOK_ONCE=off \
-          CLAUDE_PROJECT_DIR="$sb/session" bash "$HOOK" 2>/dev/null
+          CLAUDE_PROJECT_DIR="$sb/session" "$RUNNER" "$HOOK" 2>/dev/null
   rm -rf "$sb"
 }
 
