@@ -23,17 +23,20 @@ JSON
 out1="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$REPO/install.sh" 2>&1)" \
   || FAILS+=("first run exited non-zero: $out1")
 
-# Команда регистрации ведёт в чекаут репы, а не в ~/.claude/hooks.
+# Регистрация одна на событие — диспетчер, и ведёт она в чекаут репы, а не в
+# ~/.claude/hooks. Состав хуков живёт в таблице маршрутов, не в настройках.
 jq -e --arg h "$REPO/.claude/hooks" '.hooks.PreToolUse[]?.hooks[]?.command
-       | select(. == ($h + "/universal-guard-plan-gate.sh"))' \
+       | select(. == ($h + "/dispatch.js universal"))' \
   "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
-  || FAILS+=("plan-gate registration does not point at the checkout")
+  || FAILS+=("dispatcher registration does not point at the checkout")
 [[ -L "$TESTHOME/.claude/hooks/universal-guard-plan-gate.sh" ]] \
   && FAILS+=("install created a symlink layer again")
-jq -e '.hooks.PreToolUse[]?.hooks[]?.command
-       | select(contains("universal-guard-plan-gate.sh"))' \
-  "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
-  || FAILS+=("plan-gate registration missing in settings.json")
+for ev in SessionStart UserPromptSubmit PreToolUse PostToolUse PostToolUseFailure Stop PreCompact; do
+  jq -e --arg e "$ev" --arg h "$REPO/.claude/hooks" '.hooks[$e][]?.hooks[]?.command
+         | select(. == ($h + "/dispatch.js universal"))' \
+    "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
+    || FAILS+=("dispatcher not registered on $ev")
+done
 jq -e '.hooks.PreToolUse[]?.hooks[]?.command
        | select(. == "/opt/foreign-guard.sh")' \
   "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
@@ -42,15 +45,13 @@ jq -e '.permissions.allow | index("Bash(ls:*)")' \
   "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
   || FAILS+=("foreign permissions were lost")
 
-# Миграция матчера: устаревшая регистрация отметки критика на «Task» снята, новая на
-# «Task|Agent» одна, чужая команда в той же группе цела.
-n_mark="$(jq '[.hooks.PostToolUse[]?.hooks[]?.command
-       | select(endswith("universal-mark-plan-critic.sh"))] | length' \
+# Поштучные регистрации прежнего слоя сняты: их место занял диспетчер, и
+# оставленная запись звала бы тот же хук вторым процессом. Чужая команда в той
+# же группе цела.
+n_mark="$(jq '[.hooks[]?[]?.hooks[]?.command
+       | select(contains("universal-mark-plan-critic"))] | length' \
   "$TESTHOME/.claude/settings.json")"
-[[ "$n_mark" == "1" ]] || FAILS+=("mark-plan-critic registered $n_mark times, expected 1")
-jq -e '.hooks.PostToolUse[]? | select((.matcher // "") == "Task|Agent")
-       | .hooks[]? | select(endswith("universal-mark-plan-critic.sh") | not) | empty,
-       (.hooks | length)' "$TESTHOME/.claude/settings.json" >/dev/null 2>&1
+[[ "$n_mark" == "0" ]] || FAILS+=("stale per-hook registration survived ($n_mark left)")
 jq -e '.hooks.PostToolUse[]?.hooks[]?.command
        | select(. == "/opt/foreign-on-task.sh")' \
   "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \

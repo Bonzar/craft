@@ -21,7 +21,7 @@
 #     Идемпотентен: та же пара «хеш+вердикт» уже стоит — счётчик не крутится.
 #
 # Пути отметки/счётчика и формат отметки — те же, что у
-# .claude/hooks/universal-mark-plan-critic.sh (env-переопределения совпадают).
+# .claude/hooks/universal-mark-plan-critic.js (env-переопределения совпадают).
 set -u
 
 sid="${CLAUDE_CODE_SESSION_ID:-default}"

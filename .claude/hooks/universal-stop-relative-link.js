@@ -1,0 +1,177 @@
+#!/usr/bin/env node
+// Stop-хук (БЛОКИРУЮЩИЙ): гейт ссылок на файлы в тексте хода.
+//
+// Приложение резолвит путь ссылки от ЕДИНСТВЕННОГО корня сессии — её рабочей
+// директории. Дополнительные рабочие директории (--add-dir) корнями не являются,
+// поэтому относительный путь, отсчитанный от чужого маунта, не открывается
+// никогда. Абсолютный путь работает и внутри корня, и снаружи.
+//
+// Механика: из события Stop берутся transcript_path и cwd. Из JSONL берётся ВЕСЬ
+// текст хода — все текстовые блоки агента после последней реплики Влада, — а не
+// только последнее сообщение: отчёт, после которого агент ещё работал, иначе не
+// проверяется вовсе, а Владу он уже показан. Сообщения подагентов (isSidechain)
+// пропускаются: их Влад не видит.
+//
+// Границу хода задаёт последняя настоящая реплика Влада — запись last-prompt или
+// user-запись с текстом и без tool_result. Просто «последняя user-запись» не
+// годится: в живом транскрипте их сотни, и почти все — результаты инструментов.
+//
+// Что считается дефектом:
+//   * относительный путь, не существующий ОТ КОРНЯ СЕССИИ (другие базы не
+//     пробуются — приложение их не пробует тоже);
+//   * абсолютный путь, которого нет на диске;
+//   * адрес, который приложение не соберёт в принципе: с пробелом внутри или
+//     завёрнутый в угловые скобки — markdown-экранирование пробела уезжает в
+//     адрес вместе со скобками;
+//   * подпись, дословно повторяющая свой же абсолютный адрес: адресу положено
+//     быть абсолютным, а показывается пусть обрезанный путь — иначе строка
+//     превращается в полотно из слешей. Гейт смотрит два предмета: резолвится ли
+//     адрес и читается ли подпись.
+//
+// Схема опознаётся строго: правило «любой токен + двоеточие» принимало за схему
+// имя файла с суффиксом строки, и битые `tsconfig.json:12` проходили молча.
+// Срезать суффикс раньше проверки нельзя — тогда у `tel:1800…` срежется весь
+// хвост и телефонная ссылка уедет в блок как битый путь.
+//
+// Анти-зацикливание — дедупом, а не глушением: один и тот же набор битых ссылок
+// блокируется один раз, и не больше трёх блокировок на сессию. Глушение по
+// stop_hook_active выключало проверку целиком, стоило любому другому стоп-хуку
+// сработать раньше. Fail open на всём неожиданном.
+import fs from 'node:fs';
+import path from 'node:path';
+import { readEvent } from './lib/event.js';
+import { block } from './lib/decide.js';
+import { hookOnce } from './lib/once.js';
+import { cksum } from './lib/hash.js';
+import { relativeLinkState } from './lib/paths.js';
+
+// Служебный вложенный вызов (классификатор план-гейта) исключён: Владу его ответ не
+// показывается, ссылок в нём нет, а лишний ход от блокировки роняет сам вызов.
+if (process.env.CRAFT_NESTED_CALL) process.exit(0);
+
+const { raw, event, cwd, transcript } = readEvent();
+if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+if (!transcript || !fs.existsSync(transcript)) process.exit(0);
+
+// Корень ровно один и тот же, что у приложения: рабочая директория сессии.
+const root = cwd || process.env.PWD || process.cwd();
+
+let lines = [];
+try {
+  lines = fs.readFileSync(transcript, 'utf8').split('\n');
+} catch {
+  process.exit(0);
+}
+// Хвостовая пустая строка записью не является: у bash её не видел ни один из
+// проходов по файлу.
+if (lines.length && lines[lines.length - 1] === '') lines.pop();
+
+const parsed = lines.map((line) => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return {}; // битая строка нумерацию не сдвигает
+  }
+});
+
+// Граница хода: индекс последней настоящей реплики Влада.
+function isTurnStart(r) {
+  if (r.type === 'last-prompt') return true;
+  if (r.type !== 'user' || r.isSidechain) return false;
+  const content = r.message && r.message.content;
+  if (typeof content === 'string') return true;
+  if (!Array.isArray(content)) return false;
+  return content.some((c) => c && c.type === 'text')
+    && content.every((c) => !c || c.type !== 'tool_result');
+}
+
+let start = 0;
+parsed.forEach((r, i) => {
+  if (isTurnStart(r)) start = i + 1;
+});
+
+const chunks = [];
+for (const r of parsed.slice(start)) {
+  if (r.type !== 'assistant' || r.isSidechain) continue;
+  const content = Array.isArray(r.message && r.message.content) ? r.message.content : [];
+  for (const item of content) {
+    if (item && item.type === 'text' && typeof item.text === 'string') chunks.push(item.text);
+  }
+}
+const text = chunks.join('\n').replace(/\n+$/, '');
+if (!text) process.exit(0);
+
+const home = process.env.HOME || '';
+const bad = new Set();
+
+for (const m of text.matchAll(/\]\([^)]*\)/g)) {
+  const address = m[0].slice(2, -1);
+  if (!/\S/.test(address)) continue;
+  // Угловые скобки и пробел: приложение берёт адрес как есть, вместе со скобками,
+  // и такой ссылки не существует ни при каком пути.
+  if ((address.startsWith('<') && address.endsWith('>')) || address.includes(' ')) {
+    bad.add(address);
+    continue;
+  }
+  // Якорь и настоящая схема — не файловый путь. Схемой считаем только адрес с
+  // двойной косой (http://, block://, craftdocs://) плюс короткий список тех, что
+  // ей не пользуются. Просто «токен:» схемой не считаем: под неё маскируется имя
+  // файла с суффиксом строки — `tsconfig.json:12` или `CRM-52256:15`.
+  if (address.startsWith('#')) continue;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(address)) continue;
+  if (/^(mailto|tel|sms):/.test(address)) continue;
+  let p = address.split('#')[0]; // якорь на конце
+  p = p.replace(/:[0-9]+(-[0-9]+)?$/, ''); // суффикс строки path:42
+  if (home && p.startsWith('~/')) p = path.join(home, p.slice(2)); // ~/ — тоже абсолютный
+  if (!p) continue;
+  const target = p.startsWith('/') ? p : path.join(root, p);
+  if (fs.existsSync(target)) continue;
+  bad.add(address);
+}
+
+// Подпись ссылки: адрес обязан быть абсолютным, а показывается пусть обрезанный
+// путь — от узнаваемого корня. Признак дефекта машинный и без порогов на длину:
+// подпись, дословно повторяющая свой же абсолютный адрес, и есть неукороченная.
+const dup = new Set();
+for (const m of text.matchAll(/\[[^\]]*\]\([^)]*\)/g)) {
+  const pair = m[0];
+  const at = pair.indexOf('](');
+  const label = pair.slice(1, at);
+  const address = pair.slice(at + 2, -1);
+  if (!(address.startsWith('/') || address.startsWith('~/'))) continue;
+  if (label !== address) continue;
+  dup.add(label);
+}
+
+if (bad.size === 0 && dup.size === 0) process.exit(0);
+
+const asBlock = (items) => [...items].map((i) => `  ${i}\n`).join('');
+const badText = asBlock(bad);
+const dupText = asBlock(dup);
+
+// Дедуп блокировок: один и тот же набор битых ссылок предъявляется один раз,
+// и не больше трёх раз за сессию — иначе ход не закончится никогда.
+const state = relativeLinkState();
+const signature = cksum(badText + dupText).replace(/ /g, '');
+let seen = [];
+try {
+  seen = fs.readFileSync(state, 'utf8').split('\n');
+} catch { /* блокировок ещё не было */ }
+if (seen.includes(signature)) process.exit(0);
+// Строк в файле — по числу переводов строки, как их считал wc.
+if (seen.length - 1 >= 3) process.exit(0);
+try {
+  fs.appendFileSync(state, `${signature}\n`);
+} catch { /* не записалось — дедуп просто не сработает */ }
+
+let reason = '';
+if (badText) {
+  reason = `Ссылки на файлы в этом ходе у Влада не откроются:\n${badText}\nПриложение резолвит относительный путь только от корня сессии (${root}) — дополнительные рабочие директории корнями не являются. Дай абсолютный путь; путь с пробелами ссылкой не оформляется вовсе (угловые скобки уезжают в адрес) — такой путь дай простым текстом. Битый путь — исправь.`;
+}
+if (dupText) {
+  if (reason) reason += '\n\n';
+  reason += `Подписью ссылки показан абсолютный путь целиком:\n${dupText}\nАдрес оставь абсолютным, а подпись обрежь до узнаваемого корня — репозитория, маунта или пакета: полотно из слешей Влад читает с телефона.`;
+}
+reason += '\nПовтори список ссылок в финальном сообщении: показанный текст Влад уже увидел.';
+
+block(reason);

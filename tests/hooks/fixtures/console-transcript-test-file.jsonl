@@ -1,0 +1,1 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"tests/hooks/fixtures/console-sample.test.ts"}}]}}

@@ -1,0 +1,3 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"tests/hooks/fixtures/console-sample.ts"}}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"правка без записи"}]}}
+битая строка транскрипта — разбор её пропускает

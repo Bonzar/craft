@@ -1,8 +1,8 @@
 name: hooks-tests
 
-# Регресс-тесты bash-хуков Claude Code (.claude/hooks/) и чистых кусков JS-инструментов.
-# Детерминированно, без сети и моделей — реальный Craft не трогается. Инструментам нужен
-# node, всему остальному хватает bash + jq. См. tests/README.md.
+# Регресс-тесты слоя хуков Claude Code (.claude/hooks/) и чистых кусков JS-инструментов.
+# Детерминированно, без сети и моделей — реальный Craft не трогается. Слой и раннер на
+# node; jq остался нужен установщику и части тестовых скриптов. См. tests/README.md.
 on:
   push:
   pull_request:
@@ -22,11 +22,17 @@ jobs:
       - name: Ensure jq
         run: jq --version || { sudo apt-get update && sudo apt-get install -y jq; }
 
-      - name: Make hooks and runner executable
-        run: chmod +x .claude/hooks/*.sh tests/run.sh
+      - name: Make hooks executable
+        run: chmod +x .claude/hooks/*.js
 
       - name: Run hook regression tests
-        run: bash tests/run.sh
+        run: node tests/run.js
+
+      # Ядро слоя (чтение события, ответы, пути состояния, уступка второму вызову)
+      # проверяется юнит-тестами: кейсы гоняют хуки целиком и разъехавшийся модуль
+      # ловят только там, где он уже кому-то сломал ответ.
+      - name: Core unit tests
+        run: node --test tests/unit/*.test.mjs
 
       - name: Install.sh idempotency smoke
         run: bash tests/install-smoke.sh
