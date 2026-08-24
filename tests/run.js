@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Регресс-тесты хуков Claude Code (.claude/hooks/). Перенос tests/run.sh на JS
+// Регресс-тесты хуков Claude Code (.claude/hooks/). Раннер набора кейсов
 // один в один: тот же формат кейсов, те же исходы, те же смоуки, тот же отчёт.
 //
 // Кейс (tests/hooks/*.jsonl) — один JSON-объект на строку:
@@ -99,8 +99,9 @@ const REQUIRED = [
   'stop-relative-link:block', 'stop-relative-link:silent',
 ];
 
-// Помощники, которые подключаются другими хуками и сами хуками не являются.
-const REVERSE_WHITELIST = ['_load-env', '_hook-once'];
+// Файлы каталога, которые хуками не являются: диспетчер с его таблицей
+// маршрутов — сам механизм регистрации.
+const REVERSE_WHITELIST = ['dispatch', 'dispatch-table'];
 
 // --- запуск хуков ------------------------------------------------------------
 
@@ -121,10 +122,10 @@ function resolveHook(base, ext) {
 // Хук запускается своим интерпретатором: bash-файлы через bash (исполняемый бит
 // им не нужен), JS — текущим node, чтобы прогон не зависел от того, что лежит в
 // PATH у тестов.
-function runHook(script, input, env) {
+function runHook(script, input, env, args = []) {
   const isJs = script.endsWith('.js');
   const cmd = isJs ? process.execPath : 'bash';
-  return spawnSync(cmd, [script], {
+  return spawnSync(cmd, [script, ...args], {
     input,
     env,
     encoding: 'utf8',
@@ -282,7 +283,8 @@ function runPass(c, ext) {
   // проверяется ответ ПОСЛЕДНЕГО вызова).
   let res = { stdout: '', stderr: '' };
   const repeat = Number(c.repeat || 1);
-  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv);
+  const args = Array.isArray(c.args) ? c.args.map(subst) : [];
+  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
 
   // Число записей окна разрешений снимается ДО уборки — его сверяют кейсы
   // вытеснения и фильтра служебных сообщений.
@@ -294,6 +296,17 @@ function runPass(c, ext) {
   const traced = fs.existsSync(s.classtrace);
   const trace = traced ? fs.readFileSync(s.classtrace, 'utf8') : '';
   const state = stateSnapshot(s);
+  // Файл, по которому кейс судит о записи (исходы file-contains), тоже след
+  // прогона: обе версии хука пишут в один путь, и без снимка расхождение между
+  // ними прошло бы незамеченным — вторая версия просто затирает первую.
+  const assertFile = caseEnv.ASSERT_FILE || '';
+  if (assertFile) {
+    try {
+      state['assert-file'] = fs.readFileSync(assertFile, 'utf8');
+    } catch {
+      state['assert-file'] = '';
+    }
+  }
   cleanState(s);
 
   return {
@@ -321,7 +334,21 @@ const isAsk = (o) => jsonField(o, (j) => j.hookSpecificOutput?.permissionDecisio
 const isBlock = (o) => jsonField(o, (j) => j.decision) === 'block';
 const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 
-function grade(expect, out, err) {
+function grade(expect, out, err, env) {
+  // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
+  // не печатью, и по stdout проверить запись нечем. Путь берётся из переменной
+  // ASSERT_FILE самого кейса — той же, что кейс отдаёт хуку. Переменной нет —
+  // незачёт; нечитаемый файл равен пустому.
+  if (expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
+    const file = (env || {}).ASSERT_FILE || '';
+    if (!file) return false;
+    let text = '';
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch { /* файла нет — считаем пустым */ }
+    const needle = expect.slice(expect.indexOf(':') + 1);
+    return expect.startsWith('file-contains:') ? text.includes(needle) : !text.includes(needle);
+  }
   if (expect === 'deny') return isDeny(out);
   if (expect === 'allow') return !(isDeny(out) || isAsk(out) || isBlock(out));
   if (expect === 'ask') return isAsk(out);
@@ -363,6 +390,7 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-exit-failure', 'PostToolUseFailure', 'ExitPlanMode'],
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
 ];
+const DISPATCH = path.join(HOOKS, 'dispatch.js');
 
 function readSettings() {
   try {
@@ -400,34 +428,53 @@ function smokeChecks() {
     }
   }
 
-  for (const [base, event, want] of NEEDS_MATCHER) {
-    const groups = (settings.hooks || {})[event] || [];
-    const ok = groups.some((g) => (g.matcher || '') === want
-      && (g.hooks || []).some((h) => {
-        const cmd = h.command || '';
-        return cmd.endsWith(`${base}.js`) || cmd.endsWith(`${base}.sh`);
-      }));
-    if (!ok) smoke.push(`hook ${base} not registered on ${event} matcher ${want}`);
+  // Маршрут спрашивается у самого диспетчера, а не вычитывается из таблицы
+  // глазами: сверяется то, кого он ПОЗОВЁТ, а не то, что где-то написано.
+  const routed = (event, tool) => {
+    const res = spawnSync(process.execPath, [DISPATCH, '--list', event, tool], { encoding: 'utf8' });
+    return (res.stdout || '').split('\n').filter(Boolean);
+  };
+  for (const [base, event, tool] of NEEDS_MATCHER) {
+    if (!routed(event, tool).includes(base)) {
+      smoke.push(`hook ${base} not routed on ${event} for tool ${tool}`);
+    }
   }
 
   // Обратный смоук: каждый ФАЙЛ хука обязан быть зарегистрирован хотя бы в одном
   // контуре (проектные настройки или установщик) — незарегистрированный хук
   // лежит мёртвым, выглядя установленным.
+  // Состав слоя живёт в таблице маршрутов; настройки и установщик держат лишь
+  // регистрацию самого диспетчера. Поэтому «зарегистрирован» — значит назван в
+  // таблице (или, для переходных случаев, прямо в командах и установщике).
   let registry = registeredCommands(settings).join('\n');
-  try {
-    registry += `\n${fs.readFileSync(path.join(REPO, 'install.sh'), 'utf8')}`;
-  } catch { /* установщика нет — смотрим только настройки */ }
+  for (const extra of [path.join(REPO, 'install.sh'), path.join(HOOKS, 'dispatch-table.js')]) {
+    try {
+      registry += `\n${fs.readFileSync(extra, 'utf8')}`;
+    } catch { /* файла нет — смотрим то, что есть */ }
+  }
 
+  // Пара «одно имя, два расширения» на время переезда считается одной проверкой:
+  // перенесённый JS-хук кладётся рядом с ещё зарегистрированной bash-версией, и
+  // требовать ему собственной регистрации значило бы валить прогон на каждом шаге
+  // миграции. Поблажка уходит вместе с последней bash-версией.
   const orphans = (files) => files.filter((f) => {
-    const b = path.basename(f);
-    if (REVERSE_WHITELIST.includes(b.replace(/\.(sh|js)$/, ''))) return false;
-    return !registry.includes(b);
+    const base = path.basename(f).replace(/\.(sh|js)$/, '');
+    if (REVERSE_WHITELIST.includes(base)) return false;
+    // В таблице маршрутов хук назван БЕЗ расширения, в прямых регистрациях — с
+    // ним. Считается любое из имён: файл, названный хоть где-то, не мёртв.
+    return !(registry.includes(`${base}.sh`)
+      || registry.includes(`${base}.js`)
+      || registry.includes(`'${base}'`));
   }).map((f) => path.basename(f));
 
   // Самотест: красный путь обязан быть достижим — вымышленная сирота должна
   // ловиться, иначе сама проверка молча сломалась.
-  if (orphans([path.join(HOOKS, 'zz-selftest-orphan.sh')]).join('') !== 'zz-selftest-orphan.sh') {
-    smoke.push('reverse-smoke self-test failed: fictitious orphan not caught');
+  // Обе формы: поблажка про соседа не должна пропускать имя, которого нет в
+  // регистрациях ни с одним расширением.
+  for (const probe of ['zz-selftest-orphan.sh', 'zz-selftest-orphan.js']) {
+    if (orphans([path.join(HOOKS, probe)]).join('') !== probe) {
+      smoke.push(`reverse-smoke self-test failed: fictitious orphan not caught (${probe})`);
+    }
   }
   const hookFiles = fs.readdirSync(HOOKS)
     .filter((f) => f.endsWith('.sh') || f.endsWith('.js'))
@@ -551,7 +598,7 @@ function main() {
         return;
       }
 
-      let ok = grade(c.expect, r.out, r.err);
+      let ok = grade(c.expect, r.out, r.err, { ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || '') });
       let got = r.out;
       if (ok === null) {
         fails.push(`${c.hook} / ${c.name} — unknown expect '${c.expect}'`);
@@ -585,7 +632,11 @@ function main() {
           if (alt.out !== r.out) diffs.push('stdout');
           if (alt.err !== r.err) diffs.push('stderr');
           if (JSON.stringify(alt.state) !== JSON.stringify(r.state)) diffs.push('состояние');
+          // След классификатора сверяется содержимым, а не фактом наличия: обе
+          // версии могут его вызвать, но по-разному сериализовать правку — и
+          // тогда расхождение проехало бы незамеченным.
           if (alt.traced !== r.traced) diffs.push('вызов классификатора');
+          else if (alt.trace !== r.trace) diffs.push('промпт классификатора');
           if (diffs.length > 0) {
             ok = false;
             got = `версии разошлись (${diffs.join(', ')}): ${path.basename(r.script)} против ${path.basename(alt.script)}`;
