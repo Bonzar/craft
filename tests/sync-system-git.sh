@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Тест git-логики universal-sync-system.sh на временных репозиториях. Сети не
+# Тест git-логики universal-sync-system.js на временных репозиториях. Сети не
 # требует: «origin» — локальный bare-репозиторий, fetch ходит по файловому пути.
 #
-# Раннер кейсов (tests/run.sh) кормит хук событием на stdin и смотрит stdout —
+# Раннер кейсов (tests/run.js) кормит хук событием на вход и смотрит вывод —
 # этого хватает для печати директив, но не для того, ЧТО хук делает с гитом:
 # сдвинулся ли HEAD, цел ли незакоммиченный файл, откачен ли конфликт, продвинут
 # ли указатель main у общего чекаута. Проверяется это здесь — по состоянию
@@ -13,15 +13,8 @@ set -u
 export LC_ALL=C.UTF-8
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-# Версия хука: JS предпочитается, bash — фолбек, как в раннере кейсов. Пока
-# слой переезжает, обе версии проверяются одним и тем же набором — SYNC_HOOK_EXT
-# выбирает, какую гонять.
-EXT="${SYNC_HOOK_EXT:-}"
-if [[ -z "$EXT" ]]; then
-  [[ -f "$REPO/.claude/hooks/universal-sync-system.js" ]] && EXT=js || EXT=sh
-fi
-HOOK="$REPO/.claude/hooks/universal-sync-system.$EXT"
-[[ "$EXT" == js ]] && RUNNER=node || RUNNER=bash
+HOOK="$REPO/.claude/hooks/universal-sync-system.js"
+RUNNER=node
 
 pass=0; fail=0; fails=()
 ok()  { pass=$((pass+1)); printf 'PASS  %s\n' "$1"; }

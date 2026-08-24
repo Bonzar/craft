@@ -2,5 +2,5 @@
 
 ## [заметка · новая] «Разбор хука»
 
-- где: `.claude/hooks/universal-plan-gate-reset.sh` › шапка
+- где: `.claude/hooks/universal-plan-gate-reset.js` › шапка
 - тело: правка комментария

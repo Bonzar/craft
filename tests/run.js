@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Регресс-тесты хуков Claude Code (.claude/hooks/). Перенос tests/run.sh на JS
+// Регресс-тесты хуков Claude Code (.claude/hooks/). Раннер набора кейсов
 // один в один: тот же формат кейсов, те же исходы, те же смоуки, тот же отчёт.
 //
 // Кейс (tests/hooks/*.jsonl) — один JSON-объект на строку:
