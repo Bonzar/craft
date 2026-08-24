@@ -1,0 +1,150 @@
+// Маршруты хуков: какое событие, при каком инструменте и в каком порядке зовёт
+// какие хуки. Это ЕДИНСТВЕННОЕ место, где живёт состав слоя: раньше он был
+// расписан дважды — в проектных настройках и в установщике, — и любая правка
+// требовала не забыть про второй контур.
+//
+// Порядок внутри события значим: хуки идут сверху вниз, и первый же ответ
+// с решением (запрет, вопрос, блокировка конца хода) обрывает цепочку — иначе
+// в общий вывод легли бы два решения подряд.
+//
+// КОНТУР (scope) — где хук зарегистрирован:
+//   project   — только в этой репе (краевые craft-хуки: роутер, инцидент, сборка);
+//   universal — только в пользовательском слое, в сессиях ЧУЖИХ проектов
+//               (инжекторы правил: в craft-репо их работу делает роутер);
+//   both      — в обоих.
+//
+// МАТЧЕР сверяется с именем инструмента ЦЕЛИКОМ, а не подстрокой: иначе `Bash`
+// поймал бы и `BashOutput`. Пустой матчер означает «на любое событие этого типа».
+export const TABLE = {
+  SessionStart: [
+    { hooks: ['craft-sync-local-main', 'craft-build-sync'], scope: 'project' },
+    { hooks: ['craft-inject-router', 'craft-inject-incident'], scope: 'project' },
+    {
+      hooks: ['universal-inject-behavior-rules', 'universal-inject-code-rules', 'universal-inject-instincts'],
+      scope: 'universal',
+    },
+    { hooks: ['universal-cache-gate-exempt-scope', 'universal-env-capabilities'], scope: 'both' },
+  ],
+
+  UserPromptSubmit: [
+    {
+      hooks: [
+        'universal-detect-incident',
+        'universal-plan-gate-reset',
+        'universal-mark-plan-critic',
+        'universal-sync-system',
+      ],
+      scope: 'both',
+    },
+  ],
+
+  PreToolUse: [
+    { matcher: 'Task|Agent', hooks: ['universal-guard-critic-plateau'], scope: 'both' },
+    {
+      matcher: 'ExitPlanMode',
+      hooks: [
+        'universal-guard-plan-critic',
+        'universal-guard-plan-delta',
+        'universal-guard-plan-service-turn',
+      ],
+      scope: 'both',
+    },
+    {
+      matcher: 'mcp__.*__craft_write',
+      hooks: ['craft-guard-markdown'],
+      scope: 'project',
+    },
+    {
+      matcher: 'mcp__.*__craft_write',
+      hooks: ['universal-guard-plan-gate', 'universal-fact-gate'],
+      scope: 'both',
+    },
+    {
+      matcher: 'Write|Edit|MultiEdit|NotebookEdit',
+      hooks: ['universal-guard-plan-gate'],
+      scope: 'both',
+    },
+    {
+      matcher: 'Write|Edit|MultiEdit|NotebookEdit',
+      hooks: ['craft-guard-plan-hygiene'],
+      scope: 'project',
+    },
+    {
+      matcher: 'Bash',
+      hooks: [
+        'universal-sleep-waiter-guard',
+        'universal-kill-by-name-guard',
+        'universal-block-no-verify',
+        'universal-fact-gate',
+        'universal-guard-plan-gate',
+      ],
+      scope: 'both',
+    },
+    { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-config-protection'], scope: 'both' },
+    { matcher: 'Read|Grep|Glob', hooks: ['universal-eval-materials-guard'], scope: 'both' },
+  ],
+
+  PostToolUse: [
+    { matcher: 'AskUserQuestion', hooks: ['universal-plan-gate-button'], scope: 'both' },
+    {
+      matcher: 'ExitPlanMode',
+      hooks: ['universal-plan-gate-approve', 'universal-guard-plan-delta'],
+      scope: 'both',
+    },
+    { matcher: 'Task|Agent|Workflow', hooks: ['universal-mark-plan-critic'], scope: 'both' },
+    { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-mark-plan-file'], scope: 'both' },
+    { hooks: ['universal-observe-buffer'], scope: 'both' },
+  ],
+
+  PostToolUseFailure: [
+    { matcher: 'ExitPlanMode', hooks: ['universal-guard-plan-exit-failure'], scope: 'both' },
+  ],
+
+  Stop: [
+    {
+      hooks: [
+        'universal-check-console-log',
+        'universal-stop-quality-gate',
+        'universal-instinct-flush',
+        'universal-stop-routine-facts',
+        'universal-stop-incident-closure',
+        'universal-stop-relative-link',
+        'universal-sync-system',
+      ],
+      scope: 'both',
+    },
+  ],
+
+  PreCompact: [
+    { hooks: ['universal-pre-compact'], scope: 'both' },
+  ],
+};
+
+// События, на которые ставится сама регистрация диспетчера.
+export const EVENTS = Object.keys(TABLE);
+
+// Совпадение матчера с именем инструмента. Пустой матчер — «всегда».
+function matches(matcher, tool) {
+  if (!matcher) return true;
+  try {
+    return new RegExp(`^(?:${matcher})$`).test(tool);
+  } catch {
+    return false; // нечитаемый матчер никого не зовёт, а не всех подряд
+  }
+}
+
+// Имена хуков для события и инструмента, в порядке таблицы и без повторов.
+export function hooksFor(event, tool, scope) {
+  const seen = new Set();
+  const out = [];
+  for (const entry of TABLE[event] || []) {
+    if (entry.scope !== 'both' && entry.scope !== scope) continue;
+    if (!matches(entry.matcher, tool)) continue;
+    for (const name of entry.hooks) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}

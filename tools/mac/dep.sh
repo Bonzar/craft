@@ -5,7 +5,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CM="${DB_SSH_CTL:-/tmp/sshcm}"
 mkdir -p "$CM"
 # Адрес узла — из окружения: в репозитории его нет, это персональные данные Влада.
-_env_helper="$(cd "$DIR/../.." && pwd)/.claude/hooks/_load-env.sh"
+_env_helper="$(cd "$DIR/../.." && pwd)/tools/_load-env.sh"
 [[ -f "$_env_helper" ]] && . "$_env_helper"
 [[ -n "${MAC_NODE_ADDR:-}" ]] || { echo "нет MAC_NODE_ADDR в окружении — tailnet-адрес мака кладётся в настройки облачного окружения"; exit 1; }
 HOST="agent@$MAC_NODE_ADDR"

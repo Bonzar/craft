@@ -34,6 +34,9 @@ HOOKS_DST="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required" >&2; exit 1; }
+# Слой хуков исполняется node: без него зарегистрированные команды не запустятся
+# вовсе, и сессия молча останется без гвардов. Проверяем до правки настроек.
+command -v node >/dev/null 2>&1 || { echo "ERROR: node is required (слой хуков на JS)" >&2; exit 1; }
 
 mkdir -p "$HOOKS_DST"
 
@@ -91,94 +94,27 @@ merged="$(jq --arg hooks "$HOOKS_SRC" '
           else {"matcher":matcher,"hooks":[{"type":"command","command":cmd}]} end ]
       end;
 
-  # Чистка прежнего слоя: записи, указывающие на снесённые симлинки в
-  # ~/.claude/hooks, иначе остались бы мёртвыми рядом с новыми.
-  def purge_symlink_layer:
+  # Чистка прежнего слоя: поштучные регистрации хуков. Их место занял диспетчер,
+  # и оставленные записи звали бы те же хуки во второй раз.
+  def purge_hook_layer:
     .hooks = ((.hooks // {}) | with_entries(
       .value = [ .value[]
         | .hooks = [ (.hooks // [])[]
-            | select(((.command // "") | startswith("\"$HOME\"/.claude/hooks/universal-")) | not) ]
+            | select(((.command // "") | startswith("\"$HOME\"/.claude/hooks/universal-")) | not)
+            | select(((.command // "") | startswith($hooks + "/universal-")) | not)
+            | select(((.command // "") | startswith($hooks + "/craft-")) | not) ]
         | select(((.hooks // []) | length) > 0) ]));
 
-  purge_symlink_layer
-  | drop("PostToolUse"; "Task";
-         "\($hooks)/universal-mark-plan-critic.sh")
-  | ensure("PreToolUse"; "Write|Edit|MultiEdit|NotebookEdit";
-         "\($hooks)/universal-guard-plan-gate.sh")
-  | ensure("PreToolUse"; "mcp__.*__craft_write";
-         "\($hooks)/universal-guard-plan-gate.sh")
-  | ensure("PreToolUse"; "Bash";
-         "\($hooks)/universal-guard-plan-gate.sh")
-  | ensure("PostToolUseFailure"; "ExitPlanMode";
-         "\($hooks)/universal-guard-plan-exit-failure.sh")
-  | ensure("PreToolUse"; "Bash";
-         "\($hooks)/universal-sleep-waiter-guard.sh")
-  | ensure("PreToolUse"; "Bash";
-         "\($hooks)/universal-kill-by-name-guard.sh")
-  | ensure("PreToolUse"; "Bash";
-         "\($hooks)/universal-block-no-verify.sh")
-  | ensure("PreToolUse"; "Write|Edit|MultiEdit";
-         "\($hooks)/universal-config-protection.sh")
-  | ensure("Stop"; "";
-         "\($hooks)/universal-check-console-log.sh")
-  | ensure("Stop"; "";
-         "\($hooks)/universal-stop-quality-gate.sh")
-  | ensure("PreCompact"; "";
-         "\($hooks)/universal-pre-compact.sh")
-  | ensure("PostToolUse"; "ExitPlanMode";
-         "\($hooks)/universal-plan-gate-approve.sh")
-  | ensure("PreToolUse"; "ExitPlanMode";
-         "\($hooks)/universal-guard-plan-critic.sh")
-  | ensure("PreToolUse"; "ExitPlanMode";
-         "\($hooks)/universal-guard-plan-delta.sh")
-  | ensure("PreToolUse"; "ExitPlanMode";
-         "\($hooks)/universal-guard-plan-service-turn.sh")
-  | ensure("PostToolUse"; "ExitPlanMode";
-         "\($hooks)/universal-guard-plan-delta.sh")
-  | ensure("PostToolUse"; "Task|Agent";
-         "\($hooks)/universal-mark-plan-critic.sh")
-  | ensure("PreToolUse"; "Task|Agent";
-         "\($hooks)/universal-guard-critic-plateau.sh")
-  | ensure("PostToolUse"; "AskUserQuestion";
-         "\($hooks)/universal-plan-gate-button.sh")
-  | ensure("PostToolUse"; "Write|Edit|MultiEdit";
-         "\($hooks)/universal-mark-plan-file.sh")
-  | ensure("UserPromptSubmit"; "";
-         "\($hooks)/universal-plan-gate-reset.sh")
-  | ensure("UserPromptSubmit"; "";
-         "\($hooks)/universal-mark-plan-critic.sh")
-  | ensure("UserPromptSubmit"; "";
-         "\($hooks)/universal-detect-incident.sh")
-  | ensure("SessionStart"; "";
-         "\($hooks)/universal-env-capabilities.sh")
-  | ensure("SessionStart"; "";
-         "\($hooks)/universal-inject-behavior-rules.sh")
-  | ensure("SessionStart"; "";
-         "\($hooks)/universal-inject-code-rules.sh")
-  | ensure("SessionStart"; "";
-         "\($hooks)/universal-inject-instincts.sh")
-  | ensure("SessionStart"; "";
-         "\($hooks)/universal-cache-gate-exempt-scope.sh")
-  | ensure("PostToolUse"; "";
-         "\($hooks)/universal-observe-buffer.sh")
-  | ensure("Stop"; "";
-         "\($hooks)/universal-instinct-flush.sh")
-  | ensure("PreToolUse"; "Bash";
-         "\($hooks)/universal-fact-gate.sh")
-  | ensure("PreToolUse"; "mcp__.*__craft_write";
-         "\($hooks)/universal-fact-gate.sh")
-  | ensure("Stop"; "";
-         "\($hooks)/universal-stop-routine-facts.sh")
-  | ensure("Stop"; "";
-         "\($hooks)/universal-stop-incident-closure.sh")
-  | ensure("Stop"; "";
-         "\($hooks)/universal-stop-relative-link.sh")
-  | ensure("PreToolUse"; "Read|Grep|Glob";
-         "\($hooks)/universal-eval-materials-guard.sh")
-  | ensure("UserPromptSubmit"; "";
-         "\($hooks)/universal-sync-system.sh")
-  | ensure("Stop"; "";
-         "\($hooks)/universal-sync-system.sh")
+  # Одна регистрация на событие: состав и порядок хуков живут в таблице маршрутов
+  # (.claude/hooks/dispatch-table.js), аргумент задаёт пользовательский контур.
+  purge_hook_layer
+  | ensure("SessionStart"; ""; "\($hooks)/dispatch.js universal")
+  | ensure("UserPromptSubmit"; ""; "\($hooks)/dispatch.js universal")
+  | ensure("PreToolUse"; ""; "\($hooks)/dispatch.js universal")
+  | ensure("PostToolUse"; ""; "\($hooks)/dispatch.js universal")
+  | ensure("PostToolUseFailure"; ""; "\($hooks)/dispatch.js universal")
+  | ensure("Stop"; ""; "\($hooks)/dispatch.js universal")
+  | ensure("PreCompact"; ""; "\($hooks)/dispatch.js universal")
 ' "$SETTINGS")"
 
 if [[ "$(jq -S . <<<"$merged")" == "$(jq -S . "$SETTINGS")" ]]; then

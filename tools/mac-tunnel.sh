@@ -32,7 +32,7 @@ die(){ log "$*"; exit 1; }
 
 # Env репозитория: TAILSCALE_AUTHKEY кладётся в настройки окружения, Claude Code сам .env
 # не читает. Хелпер лежит в хуках; отсутствует — не фатально, переменная может быть в env.
-_env_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.claude/hooks/_load-env.sh"
+_env_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/_load-env.sh"
 [[ -f "$_env_helper" ]] && . "$_env_helper"
 
 # Адрес узла — из окружения: в репозитории его нет, это персональные данные Влада. Читается
