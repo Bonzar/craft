@@ -5,4 +5,4 @@
 
 ## [система · новая] настоящий юнит
 
-- где: `.claude/hooks/universal-fact-gate.sh` › шапка
+- где: `.claude/hooks/universal-fact-gate.js` › шапка

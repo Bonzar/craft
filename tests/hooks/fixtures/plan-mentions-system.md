@@ -3,4 +3,4 @@
 ## [заметка · новая] «Как устроены хуки»
 
 - где: 🌐 Дом › #1 Активное
-- тело: пересказ того, что делает `.claude/hooks/universal-guard-plan-gate.sh`
+- тело: пересказ того, что делает `.claude/hooks/universal-guard-plan-gate.js`
