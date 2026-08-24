@@ -49,8 +49,12 @@ function apply(file, { onlyIfUnset = false } = {}) {
   return true;
 }
 
-export function loadEnv(moduleUrl) {
-  const self = new URL(moduleUrl).pathname;
+// Корень чекаута считается от ЭТОГО модуля, а не от файла вызывающего хука: у
+// них разная глубина (хук лежит на уровень выше), и общая формула на стороне
+// вызова уводила бы поиск `.env` мимо чекаута — доступ к connect-API молча
+// оставался бы незаданным.
+export function loadEnv() {
+  const self = new URL(import.meta.url).pathname;
   const root = process.env.CLAUDE_PROJECT_DIR || path.resolve(path.dirname(self), '..', '..', '..');
 
   let envFile = path.join(root, '.env');
