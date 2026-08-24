@@ -9,10 +9,16 @@
 # the sphere about the agent itself, so they are NOT machine-checked; the
 # written rule covers them.
 #
-# Exemptions: a command touching one of the zones in voice-exempt-roots.txt
-# (system-zone docs, the sphere about the agent) passes — there this vocabulary
-# IS the subject. An unrecognised target passes too: a false refusal costs more
-# than a miss, and the written rule still applies.
+# Two exemptions, and the second is the load-bearing one. A command touching a
+# zone from voice-exempt-roots.txt passes — there this vocabulary IS the subject.
+# But that root ID only appears when the write targets the doc itself: an update
+# of a paragraph deep inside the router carries the CHILD block ID and nothing
+# else, so the root check silently misses it. Resolving ancestry would need a
+# subtree cache (Craft has no parent lookup in the command), so the guard instead
+# narrows WHAT it inspects: it fires only on text shaped like a sphere entity —
+# a task checkbox or a type tag. Rules and skill docs are plain paragraphs and
+# pass untouched. An unrecognised target passes too: a false refusal costs more
+# than a miss, and the written rule still covers the gap.
 set -u
 
 input="$(cat)"
@@ -33,6 +39,11 @@ if [[ -f "$EXEMPT" ]]; then
     grep -qiF -- "$id" <<<"$cmd" && exit 0
   done < "$EXEMPT"
 fi
+
+# Shape check: only a sphere entity is inspected — a task checkbox or a type
+# tag. This is what keeps legitimate system-zone edits (plain paragraphs of the
+# router and skill docs, addressed by child block ID) out of the guard's reach.
+grep -qE -- '- \[[ xX]\]|#задача|#заметка|#тема|#алгоритм' <<<"$cmd" || exit 0
 
 [[ -f "$LEXIS" ]] || exit 0
 
