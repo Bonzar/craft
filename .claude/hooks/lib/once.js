@@ -47,16 +47,26 @@ function yieldsToSessionCheckout(event, selfPath) {
     return false;
   }
 
-  const base = path.basename(selfPath);
+  // Имя без расширения — по той же причине, что и ключ метки ниже: пока слой
+  // переезжает, чекаут сессии может нести .sh там, где исполняется .js. Файл
+  // чекаута и есть код этой сессии независимо от того, чем он написан.
+  const base = path.basename(selfPath).replace(/\.[^.]+$/, '');
+  const selfDir = path.dirname(selfPath);
   // Чекаут — ближайший каталог вверх от рабочего, у которого есть свой
   // .claude/hooks с файлом этого имени. Именно файл, а не сам факт репозитория:
   // воркри может быть старее основного чекаута и нужного хука ещё не содержать.
+  // Сравниваются КАТАЛОГИ, а не пути файлов: у одноимённых файлов это одно и то
+  // же, а при разных расширениях сравнение путей объявило бы посторонним свой же
+  // экземпляр из того же каталога.
   while (probe && probe !== '/') {
-    const candidate = path.join(probe, '.claude', 'hooks', base);
-    if (fs.existsSync(candidate)) {
-      const selfReal = fs.existsSync(selfPath) ? fs.realpathSync(selfPath) : selfPath;
-      const candReal = fs.realpathSync(candidate);
-      return selfReal !== candReal;
+    const hooks = path.join(probe, '.claude', 'hooks');
+    let names = [];
+    try {
+      names = fs.readdirSync(hooks);
+    } catch { /* каталога хуков здесь нет — идём выше */ }
+    if (names.some((n) => n.replace(/\.[^.]+$/, '') === base)) {
+      const selfReal = fs.existsSync(selfDir) ? fs.realpathSync(selfDir) : selfDir;
+      return selfReal !== fs.realpathSync(hooks);
     }
     probe = path.dirname(probe);
   }
