@@ -47,7 +47,10 @@ const state = sessionAnchor();
 // Печать голым текстом, как у остальных инжекторов старта: харнесс кладёт stdout
 // SessionStart-хука в контекст сам.
 if (name === 'SessionStart') {
-  if (state && fs.existsSync(state)) process.exit(0);
+  // Пустой идентификатор сессии: запомнить ответ негде, и гвард всё равно
+  // пропустит запись — просить выбор, который ни на что не влияет, нечестно.
+  if (!state) process.exit(0);
+  if (fs.existsSync(state)) process.exit(0);
   process.stdout.write(`${DIRECTIVE}\n`);
   process.exit(0);
 }

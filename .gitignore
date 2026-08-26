@@ -17,6 +17,7 @@
 tests/hooks/fixtures/tmp-*-snapshot.md
 tests/hooks/fixtures/tmp-session-anchor.txt
 tests/hooks/fixtures/tmp-anchor-dispatch.txt
+tests/hooks/fixtures/tmp-anchor-carry.md
 
 # Session worktrees and machine-local permission overrides — per-machine state,
 # not part of the system.

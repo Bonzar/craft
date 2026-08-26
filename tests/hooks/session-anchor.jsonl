@@ -20,3 +20,4 @@
 {"name":"вложенный вызов подагента — якоря не требует","hook":"session-anchor","expect":"allow","env":{"CRAFT_NESTED_CALL":"1"},"input":{"hook_event_name":"PreToolUse","tool_name":"mcp__Craft__craft_write","tool_input":{"command":"blocks add --id X --json {}"}}}
 {"name":"пустой идентификатор сессии — не запирает насмерть","hook":"session-anchor","expect":"allow","env":{"SESSION_ANCHOR_STATE":""},"input":{"hook_event_name":"PreToolUse","tool_name":"mcp__Craft__craft_write","tool_input":{"command":"blocks add --id X --json {}"}}}
 {"name":"отказ называет, чего ждут от агента","hook":"session-anchor","expect":"contains:задач","input":{"hook_event_name":"PreToolUse","tool_name":"mcp__Craft__craft_write","tool_input":{"command":"blocks add --id X --json {}"}}}
+{"name":"пустой идентификатор сессии — старт молчит, выбор просить незачем","hook":"session-anchor","expect":"silent","env":{"SESSION_ANCHOR_STATE":""},"input":{"hook_event_name":"SessionStart"}}
