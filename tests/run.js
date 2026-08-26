@@ -166,9 +166,11 @@ function makeState() {
     relstate: tmpName('relative-link-test'),
     syncstate: tmpName('sync-system-test'),
     classtrace: tmpName('mock-classifier-trace'),
+    registry: tmpName('approval-registry-test'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
+    CRAFT_APPROVAL_REGISTRY: s.registry,
     OBSERVE_BUFFER: s.obsbuf,
     FACT_GATE_STATE_DIR: s.fgdir,
     ROUTINE_FACTS_MARKER: s.rfmark,
@@ -210,7 +212,7 @@ function stateSnapshot(s) {
     ['incident-closure', s.icmark], ['service-turn', s.serviceturn],
     ['plan-critic-pending', s.criticpend], ['plan-shown', s.planshown],
     ['plan-critic-runs', s.criticruns], ['relative-link', s.relstate],
-    ['sync-system', s.syncstate],
+    ['sync-system', s.syncstate], ['approval-registry', s.registry],
   ];
   for (const [label, file] of files) {
     if (fs.existsSync(file)) out[label] = fs.readFileSync(file, 'utf8');
@@ -230,7 +232,7 @@ function cleanState(s) {
     s.criticmark, s.deltastore, `${s.deltastore}.snapshot`, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
-    s.syncstate, s.classtrace,
+    s.syncstate, s.classtrace, s.registry,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
@@ -239,8 +241,13 @@ function cleanState(s) {
 
 // --- прогон одного кейса -----------------------------------------------------
 
-function subst(value) {
-  return typeof value === 'string' ? value.split('{TESTS_DIR}').join(CASES_DIR) : value;
+function subst(value, s) {
+  if (typeof value !== 'string') return value;
+  const withDir = value.split('{TESTS_DIR}').join(CASES_DIR);
+  // {REGISTRY} — герметичный путь реестра этого прогона. Кейсу он нужен, чтобы
+  // указать ASSERT_FILE на тот же файл, куда пишет хук: путь генерится раннером
+  // и заранее кейсу неизвестен.
+  return s ? withDir.split('{REGISTRY}').join(s.registry) : withDir;
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`
@@ -253,9 +260,9 @@ function runPass(c, ext) {
 
   const s = makeState();
   const caseEnv = { ...BASE_ENV, ...s.env };
-  for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v);
+  for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v, s);
 
-  const input = subst(JSON.stringify(c.input ?? {}));
+  const input = subst(JSON.stringify(c.input ?? {}), s);
 
   // `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт из
   // окружения, создаётся до прогона (взводом в жизни занимается другой хук).
@@ -342,10 +349,15 @@ function grade(expect, out, err, env) {
   if (expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
     const file = (env || {}).ASSERT_FILE || '';
     if (!file) return false;
-    let text = '';
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch { /* файла нет — считаем пустым */ }
+    // Снимок, снятый до уборки прогона, старше чтения с диска: файлы состояния
+    // самого прогона к этому моменту уже убраны, и читать их было бы поздно.
+    let text = (env || {}).ASSERT_TEXT;
+    if (text === undefined) {
+      text = '';
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch { /* файла нет — считаем пустым */ }
+    }
     const needle = expect.slice(expect.indexOf(':') + 1);
     return expect.startsWith('file-contains:') ? text.includes(needle) : !text.includes(needle);
   }
@@ -598,7 +610,10 @@ function main() {
         return;
       }
 
-      let ok = grade(c.expect, r.out, r.err, { ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || '') });
+      let ok = grade(c.expect, r.out, r.err, {
+        ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || ''),
+        ASSERT_TEXT: r.state['assert-file'],
+      });
       let got = r.out;
       if (ok === null) {
         fails.push(`${c.hook} / ${c.name} — unknown expect '${c.expect}'`);

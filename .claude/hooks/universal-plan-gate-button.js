@@ -1,26 +1,19 @@
 #!/usr/bin/env node
-// PostToolUse на AskUserQuestion: регистратор пар «вопрос + выбранный ответ»
-// для семантического разрешения план-гейта. Каждый завершённый вопрос с
-// ответом ложится записью в файл окна разрешений у маркера периметра; гейт
-// (universal-guard-plan-gate) на правке вне периметра сверяет её с этим
-// окном классификатором — явное разрешение открывает цель. Дословного лейбла
-// и маркера тапа больше нет: решение «это было разрешение» принимает модель,
-// а не совпадение строки.
+// PostToolUse на AskUserQuestion: выбранный Владом ответ уходит в реестр
+// одобренного тем же фоновым приёмом, что реплика. Разбор сам решает, заводить
+// новую цель или дописать задачу к уже одобренной; окна записей как отдельного
+// файла больше нет.
 //
 // Схема входа снята с живого следа сессии (см. отладочный след ниже):
 // выбранный ответ лежит в .tool_response.answers — карта «текст вопроса →
 // лейбл выбранной опции». Ответ по вопросу не разобрался — пара не пишется:
-// окна из одних вопросов без ответов не бывает. Событие рождается только
-// настоящим тапом: PostToolUse не срабатывает на отклонённый вопрос.
-//
-// Окно — последние 5 записей (вместе с репликами-указаниями, которые пишет
-// universal-plan-gate-reset), старые вытесняются. Гасит окно только смена
-// сессии — файл в /tmp с session-id.
+// вопроса без ответа в реестре не бывает. Событие рождается только настоящим
+// тапом: PostToolUse не срабатывает на отклонённый вопрос.
 import fs from 'node:fs';
 import { readEvent } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
-import { permissionWindow, lastInputTrace } from './lib/paths.js';
-import { appendRecord } from './lib/qa-window.js';
+import { lastInputTrace, approvalRegistry } from './lib/paths.js';
+import { ingestInBackground } from './lib/registry.js';
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
@@ -34,9 +27,6 @@ try {
 
 if (tool !== 'AskUserQuestion') process.exit(0);
 
-const qa = permissionWindow();
-if (!qa) process.exit(0);
-
 // Значение так, как его подставлял jq: строка остаётся собой, всё прочее
 // сериализуется в JSON.
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value));
@@ -47,18 +37,22 @@ const answers = (response && typeof response === 'object' && !Array.isArray(resp
 const questions = Array.isArray(input.questions) ? input.questions : [];
 
 // Пары «вопрос + ответ»: все вопросы вызова, у которых есть выбранный ответ.
-const pairs = questions
+// Один вызов законно несёт до четырёх вопросов, и каждая пара — свой факт.
+const chosen = questions
   .map((q) => {
     const text = q && typeof q === 'object' ? q.question : undefined;
-    if (typeof text !== 'string' || text === '') return '';
+    if (typeof text !== 'string' || text === '') return null;
     const answer = answers && typeof answers === 'object' ? answers[text] : undefined;
-    if (answer === null || answer === undefined || answer === '') return '';
-    return `## Запись: вопрос\nВопрос: ${text}\nОтвет: ${asText(answer)}\n`;
+    if (answer === null || answer === undefined || answer === '') return null;
+    return { question: text, answer: asText(answer) };
   })
-  .filter(Boolean)
-  .join('\n');
-if (!/\S/.test(pairs)) process.exit(0);
+  .filter(Boolean);
 
-// Запись оканчивается ровно одним переводом строки: у bash-версии хвостовые
-// переводы срезала подстановка команды, и один добавлял printf.
-appendRecord(qa, `${pairs.replace(/\n+$/, '')}\n`);
+// Пары уходят в реестр тем же фоновым приёмом, что реплика: разбор сам решит,
+// заводить новую цель или дописать задачу к уже одобренной.
+for (const { question, answer } of chosen) {
+  ingestInBackground(approvalRegistry(), 'button', `Вопрос: ${question}\nОтвет: ${answer}`);
+}
+
+// Окна записей больше нет: разрешение живёт целью в реестре, и сверка читает
+// его оттуда.
