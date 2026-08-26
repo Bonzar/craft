@@ -37,6 +37,12 @@ if (tool !== 'AskUserQuestion') process.exit(0);
 const qa = permissionWindow();
 if (!qa) process.exit(0);
 
+// Вопрос о задаче-якоре в окно не пишется. Он задаётся на старте КАЖДОЙ сессии,
+// разрешением правки не является, а окно держит последние пять записей — иначе
+// якорь вытеснял бы из него настоящий ответ Влада и гонял бы классификатор на
+// каждой записи. Опознаётся заголовком, который диктует директива якоря.
+const ANCHOR_HEADER = 'Якорь сессии';
+
 // Значение так, как его подставлял jq: строка остаётся собой, всё прочее
 // сериализуется в JSON.
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value));
@@ -51,6 +57,7 @@ const pairs = questions
   .map((q) => {
     const text = q && typeof q === 'object' ? q.question : undefined;
     if (typeof text !== 'string' || text === '') return '';
+    if (q.header === ANCHOR_HEADER) return '';
     const answer = answers && typeof answers === 'object' ? answers[text] : undefined;
     if (answer === null || answer === undefined || answer === '') return '';
     return `## Запись: вопрос\nВопрос: ${text}\nОтвет: ${asText(answer)}\n`;

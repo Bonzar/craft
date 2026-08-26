@@ -24,6 +24,7 @@ export const TABLE = {
       scope: 'universal',
     },
     { hooks: ['universal-cache-gate-exempt-scope', 'universal-env-capabilities'], scope: 'both' },
+    { hooks: ['universal-session-anchor'], scope: 'both' },
   ],
 
   UserPromptSubmit: [
@@ -56,12 +57,12 @@ export const TABLE = {
     },
     {
       matcher: 'mcp__.*__craft_write',
-      hooks: ['universal-guard-plan-gate', 'universal-fact-gate'],
+      hooks: ['universal-session-anchor', 'universal-guard-plan-gate', 'universal-fact-gate'],
       scope: 'both',
     },
     {
       matcher: 'Write|Edit|MultiEdit|NotebookEdit',
-      hooks: ['universal-guard-plan-gate'],
+      hooks: ['universal-session-anchor', 'universal-guard-plan-gate'],
       scope: 'both',
     },
     {
@@ -76,6 +77,7 @@ export const TABLE = {
         'universal-kill-by-name-guard',
         'universal-block-no-verify',
         'universal-fact-gate',
+        'universal-session-anchor',
         'universal-guard-plan-gate',
       ],
       scope: 'both',
@@ -85,7 +87,7 @@ export const TABLE = {
   ],
 
   PostToolUse: [
-    { matcher: 'AskUserQuestion', hooks: ['universal-plan-gate-button'], scope: 'both' },
+    { matcher: 'AskUserQuestion', hooks: ['universal-session-anchor', 'universal-plan-gate-button'], scope: 'both' },
     {
       matcher: 'ExitPlanMode',
       hooks: ['universal-plan-gate-approve', 'universal-guard-plan-delta'],
