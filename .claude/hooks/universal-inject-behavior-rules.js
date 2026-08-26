@@ -87,7 +87,46 @@ if (process.env.BEHAVIOR_RULES_TEST_MD) {
   stamp = utcStamp();
 }
 
-const out = `=== Craft: «Общение с Владом», живой инжект (${stamp}) ===\n${md}\n=== конец правил общения — действуют в этой сессии ===`;
+// Правило якоря сессии живёт подстраницей роутера, а роутер в чужие проекты не
+// едет — тянем его тем же каналом. Гвард якоря стоит в обоих контурах, и без
+// этого куска он отказывал бы в записи по правилу, текста которого в сессии нет.
+// Не дотянулось — это не повод терять правила общения: их тело уже собрано.
+const ANCHOR_OPEN = '=== Craft: «Задача-якорь сессии», живой инжект';
+const ANCHOR_CLOSE = '=== конец правила якоря ===';
+const anchorId = process.env.CRAFT_ANCHOR_RULE_ID || 'eba151a5-ba0e-f173-3eb3-e4b65a8d95ce';
+let anchorMd = '';
+if (anchorId && !process.env.BEHAVIOR_RULES_TEST_MD) {
+  const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
+  if (base) {
+    const fetched = await fetchText(`${base}/blocks?id=${anchorId}&maxDepth=-1`);
+    if (fetched) anchorMd = fetched.replace(/\n+$/, '');
+  }
+}
+
+// Правило якоря не дотянулось, а в прошлом снимке оно есть — переносим оттуда.
+// Перезапись снимка телом без якоря выбросила бы последний известный текст
+// правила, по которому гвард якоря отказывает в записи: сессия осталась бы с
+// отказом и без объяснения, чего от неё хотят. Протухший текст правила лучше
+// его отсутствия — тем же обменом живёт и весь снимок.
+function anchorFromSnapshot() {
+  let previous = '';
+  try {
+    previous = fs.readFileSync(snapshot, 'utf8');
+  } catch {
+    return '';
+  }
+  const start = previous.indexOf(ANCHOR_OPEN);
+  if (start === -1) return '';
+  const end = previous.indexOf(ANCHOR_CLOSE, start);
+  if (end === -1) return '';
+  return previous.slice(start, end + ANCHOR_CLOSE.length).replace(/\n+$/, '');
+}
+
+const anchorPart = anchorMd
+  ? `\n${ANCHOR_OPEN} (${stamp}) ===\n${anchorMd}\n${ANCHOR_CLOSE}`
+  : (anchorFromSnapshot() ? `\n${anchorFromSnapshot()}` : '');
+
+const out = `=== Craft: «Общение с Владом», живой инжект (${stamp}) ===\n${md}\n=== конец правил общения — действуют в этой сессии ===${anchorPart}`;
 
 if (process.env.BEHAVIOR_RULES_TEST_SNAPSHOT || channelReady()) {
   // Атомарная перезапись: соседняя сессия читает целую версию, не половину.

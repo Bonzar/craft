@@ -27,6 +27,12 @@ try {
 
 if (tool !== 'AskUserQuestion') process.exit(0);
 
+// Вопрос о задаче-якоре в реестр не пишется. Он задаётся на старте КАЖДОЙ
+// сессии, разрешением правки не является и работы не поручает — приём на нём
+// вхолостую гонял бы модель на каждом старте. Опознаётся заголовком, который
+// диктует директива якоря.
+const ANCHOR_HEADER = 'Якорь сессии';
+
 // Значение так, как его подставлял jq: строка остаётся собой, всё прочее
 // сериализуется в JSON.
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value));
@@ -42,6 +48,7 @@ const chosen = questions
   .map((q) => {
     const text = q && typeof q === 'object' ? q.question : undefined;
     if (typeof text !== 'string' || text === '') return null;
+    if (q.header === ANCHOR_HEADER) return null;
     const answer = answers && typeof answers === 'object' ? answers[text] : undefined;
     if (answer === null || answer === undefined || answer === '') return null;
     return { question: text, answer: asText(answer) };
