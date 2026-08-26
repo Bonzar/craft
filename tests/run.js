@@ -64,6 +64,7 @@ const SCRIPT = {
   'block-no-verify': 'universal-block-no-verify',
   'fact-gate': 'universal-fact-gate',
   'stop-routine-facts': 'universal-stop-routine-facts',
+  'session-anchor': 'universal-session-anchor',
   'guard-plan-critic': 'universal-guard-plan-critic',
   'guard-plan-delta': 'universal-guard-plan-delta',
   'guard-plan-service-turn': 'universal-guard-plan-service-turn',
@@ -97,6 +98,7 @@ const REQUIRED = [
   'mark-plan-critic:silent', 'mark-plan-file:silent',
   'stop-incident-closure:block', 'stop-incident-closure:silent',
   'stop-relative-link:block', 'stop-relative-link:silent',
+  'session-anchor:deny', 'session-anchor:allow',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
@@ -166,6 +168,7 @@ function makeState() {
     relstate: tmpName('relative-link-test'),
     syncstate: tmpName('sync-system-test'),
     classtrace: tmpName('mock-classifier-trace'),
+    anchor: tmpName('session-anchor-test'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -182,6 +185,7 @@ function makeState() {
     CRAFT_PLAN_CRITIC_RUNS: s.criticruns,
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
+    SESSION_ANCHOR_STATE: s.anchor,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
@@ -210,7 +214,7 @@ function stateSnapshot(s) {
     ['incident-closure', s.icmark], ['service-turn', s.serviceturn],
     ['plan-critic-pending', s.criticpend], ['plan-shown', s.planshown],
     ['plan-critic-runs', s.criticruns], ['relative-link', s.relstate],
-    ['sync-system', s.syncstate],
+    ['sync-system', s.syncstate], ['session-anchor', s.anchor],
   ];
   for (const [label, file] of files) {
     if (fs.existsSync(file)) out[label] = fs.readFileSync(file, 'utf8');
@@ -230,7 +234,7 @@ function cleanState(s) {
     s.criticmark, s.deltastore, `${s.deltastore}.snapshot`, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
-    s.syncstate, s.classtrace,
+    s.syncstate, s.classtrace, s.anchor,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
@@ -389,6 +393,8 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-gate', 'PreToolUse', 'Bash'],
   ['universal-guard-plan-exit-failure', 'PostToolUseFailure', 'ExitPlanMode'],
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
+  ['universal-session-anchor', 'PreToolUse', 'Bash'],
+  ['universal-session-anchor', 'PostToolUse', 'AskUserQuestion'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
 

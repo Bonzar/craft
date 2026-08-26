@@ -87,7 +87,25 @@ if (process.env.BEHAVIOR_RULES_TEST_MD) {
   stamp = utcStamp();
 }
 
-const out = `=== Craft: «Общение с Владом», живой инжект (${stamp}) ===\n${md}\n=== конец правил общения — действуют в этой сессии ===`;
+// Правило якоря сессии живёт подстраницей роутера, а роутер в чужие проекты не
+// едет — тянем его тем же каналом. Гвард якоря стоит в обоих контурах, и без
+// этого куска он отказывал бы в записи по правилу, текста которого в сессии нет.
+// Не дотянулось — это не повод терять правила общения: их тело уже собрано.
+const anchorId = process.env.CRAFT_ANCHOR_RULE_ID || 'eba151a5-ba0e-f173-3eb3-e4b65a8d95ce';
+let anchorMd = '';
+if (anchorId && !process.env.BEHAVIOR_RULES_TEST_MD) {
+  const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
+  if (base) {
+    const fetched = await fetchText(`${base}/blocks?id=${anchorId}&maxDepth=-1`);
+    if (fetched) anchorMd = fetched.replace(/\n+$/, '');
+  }
+}
+
+const anchorPart = anchorMd
+  ? `\n=== Craft: «Задача-якорь сессии», живой инжект (${stamp}) ===\n${anchorMd}\n=== конец правила якоря ===`
+  : '';
+
+const out = `=== Craft: «Общение с Владом», живой инжект (${stamp}) ===\n${md}\n=== конец правил общения — действуют в этой сессии ===${anchorPart}`;
 
 if (process.env.BEHAVIOR_RULES_TEST_SNAPSHOT || channelReady()) {
   // Атомарная перезапись: соседняя сессия читает целую версию, не половину.
