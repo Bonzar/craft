@@ -1,0 +1,394 @@
+// Реестр одобренного: одна структура вместо пяти файлов состояния. Всё, на что
+// Влад дал ок — одобренный план, ответ на кнопочный вопрос, прямая реплика, —
+// ложится сюда целями, а цель состоит из задач.
+//
+// Цель — то, что Влад окнул одним куском; её заголовок дословен и служит
+// признаком тождества при повторном одобрении. Задача — часть работы под целью;
+// своего якоря у неё нет, задачи замещаются вместе со своей целью.
+//
+// Лог живёт на ЦЕЛИ, а не на задаче: по нему следующая правка видит соседей по
+// всей работе, а не только по своему файлу, — это и есть ответ на «гейт не видит
+// соседних правок хода».
+//
+// Формат — строка JSON на цель. Многострочные тексты (реплики, дословные цитаты
+// из плана) в самодельный строковый формат не лезут: первая же реплика с
+// переводом строки порвала бы запись.
+//
+// Глушилка CRAFT_REGISTRY=off выключает запись целиком, как у соседних
+// автоматических контуров. Чтение при этом работает: выключенная запись не
+// повод соврать про уже накопленное.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawn } from 'node:child_process';
+import { sha256 } from './hash.js';
+
+// Лог обрезается сверху: длинный ход иначе растит реестр без предела, а он
+// целиком уходит в каждую сверку.
+export const LOG_KEEP = 20;
+
+// Причина, с которой цель уходит надгробием. Пока она одна: вся работа под целью
+// закрыта. Вытеснения по размеру нет и не будет — реестр не кэш, запись уходит
+// потому, что её работа кончилась, а не потому, что файл потолстел.
+const TOMBSTONE_REASON = 'работа закрыта';
+
+function off() {
+  return process.env.CRAFT_REGISTRY === 'off';
+}
+
+// Чтение никогда не бросает: реестр читают гейт и дельта, и упавшее чтение
+// закрыло бы работу целиком. Нечитаемая строка пропускается — потерять одну
+// запись дешевле, чем потерять файл.
+export function readRegistry(file) {
+  if (!file) return [];
+  let text = '';
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
+  const goals = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const goal = JSON.parse(line);
+      if (goal && typeof goal === 'object') goals.push(goal);
+    } catch { /* битая строка — пропускаем, файл остаётся цел */ }
+  }
+  return goals;
+}
+
+// Запись атомарная: временный файл рядом и переименование. Соседняя сессия или
+// параллельный хук читают либо прежний реестр, либо новый, но не половину.
+function writeRegistry(file, goals) {
+  if (!file || off()) return;
+  const body = goals.map((goal) => JSON.stringify(goal)).join('\n');
+  const tmp = `${file}.tmp.${process.pid}`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, body ? `${body}\n` : '');
+    fs.renameSync(tmp, file);
+  } catch {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* и убрать не вышло */ }
+  }
+}
+
+// Слепок содержания цели: по нему отличается ревизия от перепоказа. В слепок
+// идёт то, что одобряется, — текст и тела задач; состояние и лог не идут, иначе
+// перепоказ того же плана читался бы как изменение.
+//
+// У ЗАКРЫТОЙ задачи в слепок идёт только имя: тело у неё снято закрытием, и
+// сравнение с телом из перепоказанного плана всегда расходилось бы — тот же план
+// читался бы ревизией и сбрасывал закрытое вместе с логом. Цена: правка тела уже
+// закрытой задачи ревизией не считается, но работа под ней и так кончилась.
+function sameContent(stored, fresh) {
+  const closed = new Set((stored.tasks || [])
+    .filter((t) => t.state === 'closed')
+    .map((t) => t.title || ''));
+  // У закрытой задачи тела уже нет — сравнивать её с телом из перепоказанного
+  // плана нечем. Поэтому закрытие оставляет ХЕШ тела: перепоказ того же плана
+  // сходится и закрытое не сбрасывается, а настоящая ревизия тела расходится и
+  // отменяет прежнюю редакцию, как и положено.
+  const slice = (goal, hashed) => JSON.stringify({
+    text: goal.text || '',
+    tasks: (goal.tasks || []).map((t) => {
+      const title = t.title || '';
+      if (!closed.has(title)) return { title, where: t.where || [], body: t.body || '' };
+      return { title, closed: true, body: hashed ? (t.bodyHash || '') : sha256(t.body || '') };
+    }),
+  });
+  return slice(stored, true) === slice(fresh, false);
+}
+
+function normalize(goal) {
+  return {
+    title: goal.title || '',
+    source: goal.source || 'plan',
+    state: 'live',
+    text: goal.text || '',
+    log: [],
+    tasks: (goal.tasks || []).map((t, i) => ({
+      n: i + 1,
+      title: t.title || '',
+      where: t.where || [],
+      body: t.body || '',
+      state: 'open',
+    })),
+  };
+}
+
+// Добавить цель или заместить прежнюю с тем же заголовком. Содержание не
+// изменилось — не трогаем вовсе: перепоказ плана штатен, а замещение сбросило бы
+// закрытые задачи и лог. Изменилось — прежняя редакция отменяется целиком:
+// ревизия не продолжает старое, она его заменяет.
+export function upsertGoal(file, goal) {
+  if (!file || off() || !goal || !goal.title) return;
+  const goals = readRegistry(file);
+  const fresh = normalize(goal);
+  const at = goals.findIndex((g) => g.title === fresh.title);
+  if (at === -1) {
+    goals.push(fresh);
+  } else {
+    if (sameContent(goals[at], fresh)) return;
+    goals[at] = fresh;
+  }
+  writeRegistry(file, goals);
+}
+
+// Дописать задачи к существующей цели. Это ответ на «моя реплика про ту же
+// цель, но новую задачу»: материал про уже одобренную работу не заводит вторую
+// такую же цель, а пополняет её. Совпавшая по заголовку задача не дублируется.
+export function addTasks(file, title, tasks) {
+  patch(file, title, (goal) => {
+    // На надгробие задачи не вешаются: работа под целью кончилась, тела у неё
+    // нет, и новая задача открыла бы правки, опираясь на пустую запись. Промпт
+    // приёма говорит то же, но запрет обязан стоять и здесь.
+    if (goal.state === 'tombstone') return;
+    const have = new Set((goal.tasks || []).map((t) => t.title));
+    let n = (goal.tasks || []).length;
+    for (const task of tasks) {
+      if (have.has(task.title)) continue;
+      n += 1;
+      goal.tasks = [...(goal.tasks || []), {
+        n,
+        title: task.title,
+        where: task.where || [],
+        body: task.body || '',
+        state: 'open',
+      }];
+    }
+  });
+}
+
+function patch(file, title, change) {
+  if (!file || off()) return;
+  const goals = readRegistry(file);
+  const at = goals.findIndex((g) => g.title === title);
+  if (at === -1) return;
+  change(goals[at]);
+  writeRegistry(file, goals);
+}
+
+// Строка лога — задача, файл, суть. Суть приходит от сверки: она и так зовёт
+// модель на каждой правке и видит её целиком, поэтому отдельного вызова нет.
+export function appendLog(file, title, entry) {
+  if (!entry) return;
+  patch(file, title, (goal) => {
+    goal.log = [...(goal.log || []), entry].slice(-LOG_KEEP);
+  });
+}
+
+// --- Закрытие ----------------------------------------------------------------
+// Реестр чистится закрытием, а не порогом: каждая запись заведена под конкретную
+// работу и уходит потому, что работа кончилась.
+
+// Адрес задачи — «Ц‹цель›.‹задача›»: цель по позиции в файле, задача по номеру
+// внутри неё. Разбор общий для пульта, приёма и хука лога.
+export function parseAddress(address) {
+  const at = /^Ц(\d+)\.(\d+)$/i.exec(String(address).trim());
+  if (!at) return null;
+  return { goal: Number(at[1]) - 1, task: Number(at[2]) };
+}
+
+// Есть ли в логе цели запись про эту задачу. Приём закрывает только такие: без
+// записи нет и доказательства, что правка вообще была.
+export function hasLogFor(goal, address) {
+  const needle = String(address).trim();
+  return (goal.log || []).some((entry) => String(entry).includes(needle));
+}
+
+// Надгробие: заголовок цели и имена её задач остаются, тело уходит. Заголовок
+// нужен не для покрытия — покрывать надгробие перестаёт, — а чтобы отказ говорил
+// правду: работа была одобрена и сделана.
+function tombstone(goal) {
+  return {
+    title: goal.title,
+    source: goal.source,
+    state: 'tombstone',
+    reason: TOMBSTONE_REASON,
+    text: '',
+    log: [],
+    tasks: (goal.tasks || []).map((t) => ({
+      n: t.n, title: t.title, where: [], body: '', state: 'closed',
+    })),
+  };
+}
+
+// Закрыть задачи по адресам. Строка цели НЕ удаляется даже когда закрыто всё:
+// цель адресуется номером по позиции в файле, и удаление сдвинуло бы нумерацию —
+// метка лога, выданная сверкой минуту назад, села бы на чужую цель.
+//
+// requireLog включает приём: он закрывает по логу, а не по своему усмотрению.
+// Пульт закрывает без этого условия — там решает агент, и он же отвечает.
+export function closeTasks(file, addresses, { requireLog = false } = {}) {
+  const done = { closed: [], unknown: [] };
+  if (!file || off()) {
+    done.unknown = [...addresses];
+    return done;
+  }
+  const goals = readRegistry(file);
+  let touched = false;
+
+  for (const address of addresses) {
+    const at = parseAddress(address);
+    const goal = at ? goals[at.goal] : undefined;
+    const task = goal && goal.state !== 'tombstone'
+      ? (goal.tasks || []).find((t) => t.n === at.task)
+      : undefined;
+    if (!task || (requireLog && !hasLogFor(goal, address))) {
+      done.unknown.push(address);
+      continue;
+    }
+    task.state = 'closed';
+    task.bodyHash = sha256(task.body || '');
+    task.body = '';
+    task.where = [];
+    done.closed.push(address);
+    touched = true;
+  }
+
+  // Цель, у которой закрылась последняя задача, уходит надгробием тем же
+  // проходом: держать её тело незачем, работы под ней больше нет.
+  goals.forEach((goal, i) => {
+    if (goal.state === 'tombstone') return;
+    const tasks = goal.tasks || [];
+    if (!tasks.length || tasks.some((t) => t.state !== 'closed')) return;
+    goals[i] = tombstone(goal);
+    touched = true;
+  });
+
+  if (touched) writeRegistry(file, goals);
+  return done;
+}
+
+// Запустить приём материала ФОНОМ: ход Влада не ждёт модель. Метка ставится
+// синхронно, до отпускания процесса, — иначе сверка правки успела бы прочитать
+// реестр раньше, чем узнала бы, что разбор идёт.
+export function ingestInBackground(file, source, text) {
+  if (!file || off() || !/\S/.test(text || '')) return;
+  const id = `${process.pid}-${Date.now()}`;
+  const mark = markParsing(file, id);
+  if (!mark) return;
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-ingest-'));
+    const material = path.join(dir, 'material.txt');
+    fs.writeFileSync(material, text);
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const helper = path.resolve(here, '..', '..', '..', 'tools', 'registry-ingest.mjs');
+    if (!fs.existsSync(helper)) { unmarkParsing(mark); return; }
+    // Тестам нужен детерминированный порядок: фоновый приём допишет реестр
+    // когда-нибудь, а кейс проверяет файл сразу. В жизни режим не включается —
+    // иначе ход Влада ждал бы модель.
+    if (process.env.CRAFT_REGISTRY_SYNC) {
+      execFileSync(process.execPath, [helper, source, material, file, id], { stdio: 'ignore' });
+      return;
+    }
+    const child = spawn(process.execPath, [helper, source, material, file, id], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+  } catch {
+    unmarkParsing(mark);
+  }
+}
+
+// --- Метки идущего разбора ---------------------------------------------------
+// Разбор реплики и кнопочного ответа идёт ФОНОМ: ход Влада не должен ждать
+// модель. Но сверка правки обязана видеть уже полный реестр — иначе правка,
+// которую он только что разрешил, упрётся в гейт, потому что разрешение ещё не
+// доехало. Поэтому каждый идущий разбор оставляет метку, а сверка ждёт, пока
+// меток не останется.
+function parsingDir(file) {
+  return `${file}.parsing`;
+}
+
+// Метка на один разбор. Имя уникально — разборов может идти несколько разом
+// (реплика и следом кнопочный ответ).
+export function markParsing(file, id) {
+  if (!file || off()) return '';
+  const mark = path.join(parsingDir(file), String(id));
+  try {
+    fs.mkdirSync(parsingDir(file), { recursive: true });
+    fs.writeFileSync(mark, String(Date.now()));
+    return mark;
+  } catch {
+    return '';
+  }
+}
+
+export function unmarkParsing(mark) {
+  if (!mark) return;
+  try {
+    fs.rmSync(mark, { force: true });
+  } catch { /* метка не снялась — её добьёт потолок ожидания */ }
+}
+
+// Сколько разборов идёт сейчас. Метка старше потолка считается брошенной:
+// упавший разбор не должен запирать работу навсегда.
+// Ждать, пока идущие разборы допишутся. Ожидание не таймаутное по замыслу:
+// потолок нужен на случай зависшего разбора, а не как «подождём немного и
+// пойдём» — сверка по неполному реестру отклонила бы только что разрешённое.
+export function waitForParsing(file, capMs = 120000, stepMs = 200) {
+  const until = Date.now() + capMs;
+  while (parsingCount(file) > 0 && Date.now() < until) {
+    // Пауза без таймеров: хук синхронный, и событийного ожидания чужого
+    // процесса здесь нет.
+    try {
+      execFileSync('sleep', [String(stepMs / 1000)], { stdio: 'ignore' });
+    } catch {
+      break;
+    }
+  }
+  return parsingCount(file) === 0;
+}
+
+export function parsingCount(file, staleMs = 120000) {
+  if (!file) return 0;
+  let names = [];
+  try {
+    names = fs.readdirSync(parsingDir(file));
+  } catch {
+    return 0;
+  }
+  let live = 0;
+  for (const name of names) {
+    const mark = path.join(parsingDir(file), name);
+    let started = 0;
+    try {
+      started = Number(fs.readFileSync(mark, 'utf8')) || 0;
+    } catch { /* метка исчезла между чтением каталога и файла */ }
+    if (started && Date.now() - started < staleMs) live += 1;
+    else unmarkParsing(mark);
+  }
+  return live;
+}
+
+// Читаемый вид для классификатора и для текста отказа. Модель читает то же, что
+// человек: отдельный машинный формат для неё разъезжался бы с тем, что видно в
+// отказе.
+// Цели НУМЕРУЮТСЯ, и адресуются потом номером, а не заголовком. Дедупликация не
+// может держаться на том, что модель дословно повторит формулировку: разбирая
+// новый материал, она назовёт ту же работу своими словами, и цель задвоится.
+// Номер сравнивается точно.
+//
+// bodies=false печатает скелет — цели и имена задач без тел и логов. Им отвечает
+// пульт: агенту нужен адрес, а не 40 000 символов в контекст.
+export function render(goals, { bodies = true } = {}) {
+  const out = [];
+  goals.forEach((goal, i) => {
+    const dead = goal.state === 'tombstone';
+    const tail = dead ? `, ${goal.reason || TOMBSTONE_REASON}` : '';
+    out.push(`Ц${i + 1} «${goal.title}» — источник: ${goal.source}${tail}`);
+    if (bodies && goal.text) out.push(`  текст: ${goal.text}`);
+    for (const task of goal.tasks || []) {
+      const state = task.state === 'closed' ? 'закрыта' : 'открыта';
+      out.push(`  задача Ц${i + 1}.${task.n} «${task.title}» — ${state}`);
+      if (task.where && task.where.length) out.push(`    где: ${task.where.join(', ')}`);
+      if (bodies && task.body) out.push(`    что: ${task.body}`);
+    }
+    if (bodies) for (const entry of goal.log || []) out.push(`  сделано: ${entry}`);
+  });
+  return out.join('\n');
+}

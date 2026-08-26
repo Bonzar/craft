@@ -3,9 +3,9 @@
 // одобрения хранит список целей и живёт до смены сессии (файл в /tmp с id);
 // отзыв разрешений — обычная просьба Влада, не магическая фраза. Хук чистит
 // пометки хода (служебный ход, показ плана, ожидания критика), никогда не
-// блокирует сообщение (нет вывода, тихий выход) — и дописывает реплику Влада в
-// окно разрешений: прямое указание («сделай короче») видно классификатору гейта
-// и открывает цель без нового плана.
+// блокирует сообщение (нет вывода, тихий выход) — и отправляет реплику Влада в
+// реестр одобренного фоновым приёмом: прямое указание («сделай короче») видно
+// сверке и открывает работу без нового плана.
 //
 // СЛУЖЕБНОЕ СОБЫТИЕ ходом не считается: сброс по нему обнулял одобрение посреди
 // исполнения. Якоря и правила их пополнения — в service-anchors.txt рядом.
@@ -19,8 +19,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readEvent } from './lib/event.js';
-import { serviceTurnMarker, planShownMarker, planCriticPending, permissionWindow } from './lib/paths.js';
-import { appendRecord } from './lib/qa-window.js';
+import {
+  serviceTurnMarker, planShownMarker, planCriticPending, approvalRegistry,
+} from './lib/paths.js';
+import { ingestInBackground } from './lib/registry.js';
 
 const { prompt } = readEvent();
 
@@ -66,18 +68,18 @@ for (const file of [serviceTurn, planShownMarker(), planCriticPending()]) {
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
-// Реплика-указание — в окно разрешений (тот же файл, что пары кнопочного хука):
-// прямое доуточнение к сделанной правке открывает цель через классификатор.
-// Служебные сообщения выше уже вышли по якорям и сюда не доходят; пустая
-// реплика не пишется. Длинные вставки режутся — классификатору хватает начала.
+// Пустая реплика в реестр не идёт; длинные вставки режутся — разбору хватает
+// начала. Срез по БАЙТАМ с хвостовым переводом строки, как его делал bash.
 if (!/\S/.test(prompt)) process.exit(0);
-const qa = permissionWindow();
-if (!qa) process.exit(0);
 
-// Срез по БАЙТАМ с хвостовым переводом строки — тот же, что делала подстановка
-// команды у bash-версии.
 const cut = Buffer.from(`${prompt}\n`, 'utf8').subarray(0, 2000);
 let end = cut.length;
 while (end > 0 && cut[end - 1] === 0x0a) end -= 1;
+const said = cut.subarray(0, end).toString('utf8');
 
-appendRecord(qa, `## Запись: указание\n${cut.subarray(0, end).toString('utf8')}\n\n`);
+// Реплика уходит в реестр ФОНОВЫМ приёмом: разбор решает, что тут цель, что
+// задача и относится ли материал к уже одобренному, — а ход Влада при этом не
+// ждёт модель. Пока приём идёт, у реестра стоит метка, и сверка правки её
+// дожидается: сверять по недособранному реестру значит отклонять только что
+// разрешённое.
+ingestInBackground(approvalRegistry(), 'reply', said);

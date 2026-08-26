@@ -28,7 +28,7 @@ async function freshPaths(env = {}) {
 // Эталон: имя переменной-переопределения → путь по умолчанию при заданной
 // сессии. Меняешь строку здесь — меняешь контракт со всеми хуками разом.
 const EXPECTED = {
-  CRAFT_PLAN_GATE_MARKER: `/tmp/craft-plan-gate.${SID}.approved`,
+  CRAFT_APPROVAL_REGISTRY: `/tmp/craft-approvals.${SID}.jsonl`,
   CRAFT_PLAN_FILE_MARKER: `/tmp/plan-file.${SID}.path`,
   CRAFT_PLAN_CRITIC_MARKER: `/tmp/plan-critic.${SID}.done`,
   CRAFT_PLAN_CRITIC_PENDING: `/tmp/plan-critic.${SID}.pending`,
@@ -47,7 +47,7 @@ const EXPECTED = {
 test('пути состояния совпадают с закреплённым эталоном', async () => {
   const paths = await freshPaths();
   const byEnv = {
-    CRAFT_PLAN_GATE_MARKER: paths.planGateMarker(),
+    CRAFT_APPROVAL_REGISTRY: paths.approvalRegistry(),
     CRAFT_PLAN_FILE_MARKER: paths.planFileMarker(),
     CRAFT_PLAN_CRITIC_MARKER: paths.planCriticMarker(),
     CRAFT_PLAN_CRITIC_PENDING: paths.planCriticPending(),
@@ -72,15 +72,13 @@ test('пути состояния совпадают с закреплённым
 });
 
 test('переопределение окружением сильнее дефолта', async () => {
-  const paths = await freshPaths({ CRAFT_PLAN_GATE_MARKER: '/tmp/своя-метка' });
-  assert.equal(paths.planGateMarker(), '/tmp/своя-метка');
-  assert.equal(paths.approvedPlans(), '/tmp/своя-метка.plans');
+  const paths = await freshPaths({ CRAFT_APPROVAL_REGISTRY: '/tmp/свой-реестр' });
+  assert.equal(paths.approvalRegistry(), '/tmp/свой-реестр');
 });
 
 test('при пустой сессии периметра нет вовсе', async () => {
   const paths = await freshPaths({ CLAUDE_CODE_SESSION_ID: '' });
-  assert.equal(paths.planGateMarker(), '', 'общий default открыл бы периметр чужой сессии');
-  assert.equal(paths.approvedPlans(), '');
+  assert.equal(paths.approvalRegistry(), '', 'реестр держит одобрения: общий default открыл бы записи чужой сессии');
   // А счётчики и метки общий default переживают: они ничего не открывают.
   assert.equal(paths.planCriticRuns(), '/tmp/plan-critic.default.runs');
 });

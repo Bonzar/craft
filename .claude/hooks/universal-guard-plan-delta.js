@@ -27,9 +27,10 @@ import { deny } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
 import { sha256 } from './lib/hash.js';
 import {
-  planFileMarker, planDeltaStore, planDeltaSnapshot, buttonPlans, permissionWindow,
+  planFileMarker, planDeltaStore, approvalRegistry,
 } from './lib/paths.js';
 import { classify, classifierPath, classifierAvailable } from './lib/classifier.js';
+import { readRegistry, render } from './lib/registry.js';
 
 if (process.env.PLAN_DELTA === 'off') process.exit(0);
 
@@ -98,26 +99,23 @@ if (eventName === 'PostToolUse') {
   // план обратно не ловится; ложный отказ дороже пропущенного повтора.
   try {
     fs.writeFileSync(store, `${now.map((u) => u.hash).join('\n')}\n`);
-    // Рядом с хешами — ТЕКСТ одобренного плана: вход сравнения по смыслу.
-    fs.copyFileSync(plan, planDeltaSnapshot());
   } catch { /* не записалось — следующая дельта просто не поймает повтор */ }
   process.exit(0);
 }
 
-// Вход сравнения по смыслу: микро-планы разрешений и окно нерастраченных
-// указаний. Окно участвует наравне со сработавшими разрешениями: план, целиком
-// покрытый свежим указанием Влада, не показывается — уже разрешено, правильный
-// ход выполнять, а не собирать план.
+// Вход сравнения по смыслу — СРЕЗ РЕЕСТРА: цели последнего одобрения вместе с
+// целями-разрешениями. Весь реестр брать нельзя: копилка за всю сессию
+// блокировала бы новый план навсегда, от неё отказались осознанно. Разрешение
+// участвует наравне с планом — план, целиком покрытый свежим указанием Влада,
+// показывать незачем, его надо выполнять.
+// Надгробия из среза выброшены: у них не осталось текста, и сравнивать новый
+// план с голыми заголовками — значит тихо перестать ловить повторы.
 function approvalsText() {
-  let out = '';
-  for (const file of [buttonPlans(), permissionWindow()]) {
-    if (!file) continue;
-    try {
-      const part = fs.readFileSync(file, 'utf8');
-      if (part) out += part;
-    } catch { /* файла нет — нечего добавлять */ }
-  }
-  return out;
+  const goals = readRegistry(approvalRegistry()).filter((g) => g.state !== 'tombstone');
+  if (!goals.length) return '';
+  const lastPlan = goals.filter((g) => g.source === 'plan').slice(-1);
+  const permissions = goals.filter((g) => g.source !== 'plan');
+  return render([...lastPlan, ...permissions]);
 }
 
 const classifier = classifierPath();
@@ -168,14 +166,14 @@ if (repeated.length === now.length) process.exit(0); // перепоказ то�
 // закрывает это; его недоступность возвращает к хеш-поведению — ложный отказ
 // дороже пропуска.
 if (repeated.length === 0) {
-  let snapshot = '';
-  try {
-    snapshot = fs.readFileSync(planDeltaSnapshot(), 'utf8');
-  } catch { /* снимка нет — сравнивать не с чем */ }
-  if (snapshot) {
-    const repeats = semanticRepeats(snapshot + approvalsText());
+  // Текст одобренного берётся из РЕЕСТРА, а не из снимка плана рядом с хешами:
+  // снимок держал одну редакцию последнего плана, а реестр несёт и его цели, и
+  // разрешения Влада — то есть всё, что уже одобрено.
+  const approved = approvalsText();
+  if (approved) {
+    const repeats = semanticRepeats(approved);
     if (repeats) {
-      deny(`План повторяет уже одобренные юниты по смыслу:${repeats}. Одобренное повторно не показывается — оставь только изменившееся с прошлого одобрения, а изменённый юнит пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off.`);
+      deny(`План повторяет уже одобренное по смыслу:${repeats}. Одобренное повторно не показывается — оставь только изменившееся с прошлого одобрения, а изменённый юнит пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off.`);
     }
   }
   process.exit(0); // чистая дельта
