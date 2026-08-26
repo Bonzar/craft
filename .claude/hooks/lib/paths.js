@@ -98,6 +98,13 @@ export function incidentClosureMarker() {
   return perSessionOrDefault('INCIDENT_CLOSURE_MARKER', 'incident-closure.{sid}.armed');
 }
 
+// Якорь сессии: задача в базе, выбранная Владом на старте. Путь строится по
+// НЕПУСТОМУ идентификатору сессии — общий адрес открывал бы одной сессии якорь
+// другой, а гвард на нём решает, можно ли писать.
+export function sessionAnchor() {
+  return perSession('SESSION_ANCHOR_STATE', 'session-anchor.{sid}');
+}
+
 // Прочее состояние.
 export function factGateStateDir() {
   return process.env.FACT_GATE_STATE_DIR || '/tmp';
