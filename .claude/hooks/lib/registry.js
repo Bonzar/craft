@@ -48,10 +48,19 @@ export function readRegistry(file) {
     if (!line.trim()) continue;
     try {
       const goal = JSON.parse(line);
-      if (goal && typeof goal === 'object') goals.push(goal);
+      if (goal && typeof goal === 'object') goals.push(revive(goal));
     } catch { /* битая строка — пропускаем, файл остаётся цел */ }
   }
   return goals;
+}
+
+// Реестр живёт файлом в /tmp и переживает обновление кода: сессия, начатая до
+// того, как надгробия сняли, продолжается уже новой версией. Похороненная цель
+// оживает на чтении — иначе ровно в такой сессии повторился бы дефект, ради
+// которого надгробия и снимали: материал про продолжение работы отсеивался бы
+// как дубль, а сверка отказывала бы «работа уже закрыта».
+function revive(goal) {
+  return goal.state === 'tombstone' ? { ...goal, state: 'live' } : goal;
 }
 
 // Лок на ЦИКЛ правки: сама запись атомарна переименованием, а «прочитал —
