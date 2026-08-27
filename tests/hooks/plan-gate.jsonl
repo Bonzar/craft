@@ -101,3 +101,5 @@
 {"name": "отложенная проверка себя — allow", "hook": "guard-plan-gate", "expect": "allow", "input": {"tool_name": "mcp__claude-code-remote__send_later", "tool_input": {"delay_minutes": 60, "message": "проверь PR"}}, "env": {}}
 {"name": "переход вверх из /tmp не делает правку репозитория эфемерной — deny", "hook": "guard-plan-gate", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "cd /tmp && cat > ../home/user/craft/README.md"}}, "env": {}}
 {"name": "запись ДО перехода во временный каталог остаётся правкой репозитория — deny", "hook": "guard-plan-gate", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "cat > README.md && cd /tmp"}}, "env": {}}
+{"name": "цель в кавычках не проходит мимо гейта — deny", "hook": "guard-plan-gate", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "cat > \"/home/user/craft/README.md\""}}, "env": {}}
+{"name": "сравнение в кавычках целью записи не становится — allow", "hook": "guard-plan-gate", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "jq 'select(.size > 10)' /home/user/craft/README.md"}}, "env": {}}
