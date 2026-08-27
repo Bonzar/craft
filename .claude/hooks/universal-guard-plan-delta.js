@@ -30,7 +30,7 @@ import {
   planFileMarker, planDeltaStore, approvalRegistry,
 } from './lib/paths.js';
 import { classify, classifierPath, classifierAvailable } from './lib/classifier.js';
-import { readRegistry, render } from './lib/registry.js';
+import { readRegistry, render, waitForParsing } from './lib/registry.js';
 
 if (process.env.PLAN_DELTA === 'off') process.exit(0);
 
@@ -111,6 +111,10 @@ if (eventName === 'PostToolUse') {
 // Надгробия из среза выброшены: у них не осталось текста, и сравнивать новый
 // план с голыми заголовками — значит тихо перестать ловить повторы.
 function approvalsText() {
+  // Дельта ждёт разбора наравне со сверкой: требование сформулировано как
+  // принцип, а не про одну функцию. Иначе план, покрытый только что данным
+  // согласием, показывался бы снова.
+  waitForParsing(approvalRegistry());
   const goals = readRegistry(approvalRegistry()).filter((g) => g.state !== 'tombstone');
   if (!goals.length) return '';
   const lastPlan = goals.filter((g) => g.source === 'plan').slice(-1);
