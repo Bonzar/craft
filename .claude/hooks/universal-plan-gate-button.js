@@ -14,10 +14,11 @@ import { readEvent } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
 import { lastInputTrace, approvalRegistry } from './lib/paths.js';
 import { ingestInBackground, switchOn, switchOff } from './lib/registry.js';
+import { withAgentContext } from './lib/transcript.js';
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
-const { raw, event, tool, input, response } = readEvent();
+const { raw, event, tool, input, response, transcript } = readEvent();
 if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
 
 // Отладочный след входа: по нему проверяются факты о схеме tool_response.
@@ -46,6 +47,8 @@ const answers = (response && typeof response === 'object' && !Array.isArray(resp
   || input.answers
   || {};
 const questions = Array.isArray(input.questions) ? input.questions : [];
+// Заметки Влада к выбору: карта «текст вопроса → { notes }».
+const annotations = input.annotations && typeof input.annotations === 'object' ? input.annotations : {};
 
 // Пары «вопрос + ответ»: все вопросы вызова, у которых есть выбранный ответ.
 // Один вызов законно несёт до четырёх вопросов, и каждая пара — свой факт.
@@ -64,14 +67,37 @@ const chosen = questions
     }
     const answer = answers && typeof answers === 'object' ? answers[text] : undefined;
     if (answer === null || answer === undefined || answer === '') return null;
-    return { question: text, answer: asText(answer) };
+    const label = asText(answer);
+    // Ярлык кнопки — два-три слова: «Вид у записи», «Да, обнови». Что именно
+    // выбрано, сказано в ОПИСАНИИ варианта, и без него разбор получает материал,
+    // из которого работы не собрать. Заметку Влада к выбору берём туда же:
+    // она уточняет решение и в ярлык не помещается.
+    const option = (Array.isArray(q.options) ? q.options : [])
+      .find((o) => o && o.label === label);
+    const note = annotations && typeof annotations === 'object' && annotations[text]
+      ? annotations[text].notes
+      : '';
+    return {
+      question: text,
+      answer: label,
+      description: option && typeof option.description === 'string' ? option.description : '',
+      note: typeof note === 'string' ? note : '',
+    };
   })
   .filter(Boolean);
 
 // Пары уходят в реестр тем же фоновым приёмом, что реплика: разбор сам решит,
-// заводить новую цель или дописать задачу к уже одобренной.
-for (const { question, answer } of chosen) {
-  ingestInBackground(approvalRegistry(), 'button', `Вопрос: ${question}\nОтвет: ${answer}`);
+// заводить новую цель или дописать задачу к уже одобренной. Вместе с выбором
+// уходит и то, на что Влад отвечает, — последнее сообщение агента: вопрос
+// формулирует агент, но что стоит за вариантами, сказано в тексте перед ним.
+for (const { question, answer, description, note } of chosen) {
+  const said = [
+    `Вопрос: ${question}`,
+    `Ответ: ${answer}`,
+    description ? `Что это значит: ${description}` : '',
+    note ? `Заметка Влада: ${note}` : '',
+  ].filter(Boolean).join('\n');
+  ingestInBackground(approvalRegistry(), 'button', withAgentContext(transcript, said));
 }
 
 // Окна записей больше нет: разрешение живёт целью в реестре, и сверка читает

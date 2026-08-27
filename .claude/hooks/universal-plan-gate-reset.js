@@ -23,8 +23,9 @@ import {
   serviceTurnMarker, planShownMarker, planCriticPending, approvalRegistry,
 } from './lib/paths.js';
 import { ingestInBackground } from './lib/registry.js';
+import { withAgentContext } from './lib/transcript.js';
 
-const { prompt } = readEvent();
+const { prompt, transcript } = readEvent();
 
 const selfPath = fileURLToPath(import.meta.url);
 let dir = path.dirname(selfPath);
@@ -82,4 +83,10 @@ const said = String(prompt).replace(/\n+$/, '');
 // ждёт модель. Пока приём идёт, у реестра стоит метка, и сверка правки её
 // дожидается: сверять по недособранному реестру значит отклонять только что
 // разрешённое.
-ingestInBackground(approvalRegistry(), 'reply', said);
+//
+// Вместе с репликой уходит и то, на что она отвечает, — последнее сообщение
+// агента. Короткое указание («убирай хвосты», «да, делай») само по себе не
+// называет ни работы, ни адресов: перечень стоит в ответе агента прямо над ним,
+// и без него разбор возвращает пустоту, а правка следом упирается в гейт.
+// Транскрипта нет или он пуст — уходит одна реплика, как раньше.
+ingestInBackground(approvalRegistry(), 'reply', withAgentContext(transcript, said));

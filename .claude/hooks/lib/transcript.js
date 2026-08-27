@@ -48,3 +48,56 @@ export function sourceFiles(files) {
     return /\.(ts|tsx|js|jsx)$/.test(file);
   });
 }
+
+// Текст последнего сообщения агента. Короткая реплика Влада — «убирай хвосты»,
+// «да, делай», «согласен» — осмысленна только вместе с тем, на что отвечает:
+// сам по себе её текст не называет ни работы, ни адресов, и разбор материала
+// не соберёт из него ни цели, ни задачи. Перечень же лежит в ответе агента
+// прямо над репликой.
+//
+// Берётся ПОСЛЕДНЕЕ сообщение роли assistant с текстовым содержимым: записи с
+// одними вызовами инструментов пропускаются — им не отвечают. Транскрипт
+// читается с конца, поэтому длина файла на цену не влияет.
+export function lastAssistantText(file) {
+  let text = '';
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    const message = entry && entry.message;
+    if (!message || message.role !== 'assistant') continue;
+    const content = message.content;
+    if (typeof content === 'string' && content.trim()) return content.trim();
+    if (!Array.isArray(content)) continue;
+    const said = content
+      .filter((item) => item && item.type === 'text' && typeof item.text === 'string')
+      .map((item) => item.text)
+      .join('\n')
+      .trim();
+    if (said) return said;
+  }
+  return '';
+}
+
+// Материал источника вместе с тем, на что Влад отвечает. Формой пользуются оба
+// источника — реплика и ответ кнопкой, — поэтому она живёт здесь, а не копией в
+// каждом хуке: разъехавшиеся формулировки дали бы разбору два разных материала
+// на одинаковый по смыслу вход.
+//
+// Транскрипта нет, он не читается или в нём ещё нет ответов агента — уходит одно
+// сказанное, как было раньше. Обрезки нет: срез отрезал бы согласие на середине.
+export function withAgentContext(transcriptFile, said) {
+  const context = transcriptFile ? lastAssistantText(transcriptFile) : '';
+  if (!context) return said;
+  return `Последнее сообщение агента (на него отвечает Влад):\n\n${context}\n\nСказанное Владом:\n\n${said}`;
+}
