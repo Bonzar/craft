@@ -164,13 +164,13 @@ esac
 # правила, окружение, — и на разметке плана он раскачивал ответ (замер: одна
 # цель, семь целей, ноль целей на одном и том же плане).
 ask() {
-  cd /tmp && timeout "$budget" env \
+  cd /tmp && printf '%s' "$prompt" | timeout "$budget" env \
     -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION \
     -u CLAUDE_PID -u CLAUDE_CODE_REMOTE_SESSION_ID \
     CRAFT_AUTONOMOUS=1 CRAFT_NESTED_CALL=1 \
-    "$cmd" -p "$prompt" --model claude-haiku-4-5-20251001 \
+    "$cmd" -p --model claude-haiku-4-5-20251001 \
     --max-turns 1 --system-prompt "$sysprompt" \
-    --exclude-dynamic-system-prompt-sections < /dev/null 2>/dev/null
+    --exclude-dynamic-system-prompt-sections 2>/dev/null
 }
 
 answer="$(ask)" || { echo "UNAVAILABLE"; exit 0; }
