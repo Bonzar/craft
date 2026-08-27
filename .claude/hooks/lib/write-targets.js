@@ -69,6 +69,57 @@ function matchAll(text, re) {
 
 const lastField = (s) => s.trim().split(/\s+/).pop();
 
+// Обезвредить закавыченное во ВСЕЙ команде разом, а не построчно.
+//
+// Содержимое кавычек СОХРАНЯЕТСЯ, меняются только служебные символы внутри них.
+// Прежний разбор выбрасывал закавыченное целиком — и `cat > "/repo/README.md"`
+// не давал ни одной цели: правка репозитория проходила гейт молча, потому что
+// гейтить было нечего. Обратная беда там же: `jq \'select(.size > 10)\'` давала
+// ложную цель, если кавычки не учесть вовсе.
+//
+// Замена одного символа на другой держит оба конца: путь внутри кавычек остаётся
+// целым словом и виден как цель, а «больше», труба и точка с запятой внутри
+// кавычек перестают выглядеть перенаправлением и разделителем.
+//
+// Ещё две беды жили в прежних двух заменах регуляркой — сперва одинарные
+// кавычки, потом двойные. Вложенные: одинарные внутри двойных съедались первыми,
+// двойные оставались непарными, и в остатке всплывал знак «больше». И строка в
+// кавычках, охватывающая перевод строки: многострочная `node -e "…"` разбиралась
+// по строкам, со второй строки разбор считал себя вне кавычек, и стрелка `=>` в
+// JS-коде читалась как запись в файл.
+//
+// Переводы строк сохраняются: дальнейшие регулярки работают построчно, и склейка
+// строк дала бы им чужие соседства.
+//
+// Кавычка внутри чужих кавычек — обычный символ, а не открывающая: ровно так её
+// читает и сам шелл.
+const NEUTRAL = '~';
+
+function stripQuoted(text) {
+  let out = '';
+  let quote = '';
+  for (const ch of text) {
+    if (ch === '\n') {
+      out += ch;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) {
+        quote = '';
+        continue;
+      }
+      out += '<>|&;()'.includes(ch) ? NEUTRAL : ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 // Цели записи Bash-команды: перенаправление (> >>), tee, правка на месте (-i),
 // cp/mv (последний аргумент либо явная цель после -t), запись из интерпретатора
 // (open(…,'w'), write_text/bytes). Гейтится цель, а не команда: сборка,
@@ -78,29 +129,55 @@ export function bashWriteTargets(cmd) {
   // скобках ([[ a > b ]]). Оба места вычёркиваются — но в ОТДЕЛЬНУЮ строку: разбору
   // записи из интерпретатора нужны буквальные кавычки вокруг пути, на вычеркнутой он бы
   // ослеп. Цена — перенаправление в закавыченную цель (> "мой файл") не увидится.
-  const scan = stripQuotedHeredocs(cmd).split('\n').map((line) => line
-    .replace(/'[^']*'/g, ' ')
-    .replace(/"[^"]*"/g, ' ')
+  const scan = stripQuoted(stripQuotedHeredocs(cmd)).split('\n').map((line) => line
     .replace(/\[\[[^\]]*\]\]/g, ' ')
     .replace(/\(\([^)]*\)\)/g, ' ')).join('\n').replace(/\n+$/, '');
 
+  // Команда идёт КУСКАМИ слева направо, и каждый резолвится тем каталогом,
+  // который действует В ЭТОМ МЕСТЕ. Брать последний cd на всю команду нельзя:
+  // «cat > README.md && cd /tmp» пишет в текущий каталог, а не во временный, и
+  // общий cd выдавал бы запись в репозиторий за эфемерную.
   const targets = [];
-  for (const m of matchAll(scan, />>?[ \t]*[^|&;()<>\s]+/.source)) {
+  let cwd = '';
+  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
+    for (const t of pieceTargets(piece)) targets.push(resolveTarget(cwd, t));
+    const cd = /(?:^|[ \t])cd[ \t]+(\/[^\s|&;()<>]*)/.exec(piece);
+    if (cd) cwd = cd[1].replace(/\/$/, '');
+  }
+  return targets.concat(interpreterTargets(cmd));
+}
+
+// Цели одного куска команды. Разбор целей не зависит от того, где кусок стоит:
+// зависит только резолв относительного пути, и он живёт снаружи.
+function pieceTargets(piece) {
+  const targets = [];
+  for (const m of matchAll(piece, />>?[ \t]*[^|&;()<>\s]+/.source)) {
     targets.push(m.replace(/^>>?[ \t]*/, ''));
   }
-  for (const m of matchAll(scan, /\btee\b([ \t]+-[a-zA-Z]+)*[ \t]+[^|&;()<>\s]+/.source)) {
+  for (const m of matchAll(piece, /\btee\b([ \t]+-[a-zA-Z]+)*[ \t]+[^|&;()<>\s]+/.source)) {
     targets.push(lastField(m));
   }
-  for (const m of matchAll(scan, /\b(sed|perl)\b[^|&;]*[ \t]-i[^|&;]*/.source)) {
+  for (const m of matchAll(piece, /\b(sed|perl)\b[^|&;]*[ \t]-i[^|&;]*/.source)) {
     for (const word of m.split(' ')) if (/[/.]/.test(word)) targets.push(word);
   }
-  for (const m of matchAll(scan, /\b(cp|mv)\b[^|&;]*[ \t]-t[ \t]+[^\s|&;]+/.source)) {
+  for (const m of matchAll(piece, /\b(cp|mv)\b[^|&;]*[ \t]-t[ \t]+[^\s|&;]+/.source)) {
     targets.push(m.replace(/^.*[ \t]-t[ \t]+/, ''));
   }
-  const noDashT = scan.split('\n').filter((line) => !/[ \t]-t[ \t]/.test(line)).join('\n');
-  for (const m of matchAll(noDashT, /\b(cp|mv)\b[ \t]+[^|&;()<>]+/.source)) {
-    targets.push(lastField(m));
+  if (!/[ \t]-t[ \t]/.test(piece)) {
+    for (const m of matchAll(piece, /\b(cp|mv)\b[ \t]+[^|&;()<>]+/.source)) {
+      targets.push(lastField(m));
+    }
   }
+  return targets;
+}
+
+// Запись из интерпретатора ищется в ИСХОДНОЙ команде, а не в очищенном тексте:
+// путь там стоит в кавычках, и на вычеркнутой строке разбор бы ослеп. По кускам
+// такие цели не разложить — регулярка смотрит на весь текст, — поэтому они
+// собираются отдельно и каталогом перехода не резолвятся: интерпретатор
+// запускается со своим рабочим каталогом, и угадывать его разбор не берётся.
+function interpreterTargets(cmd) {
+  const targets = [];
   for (const m of matchAll(cmd, /open\([ \t]*['"][^'"]+['"][ \t]*,[ \t]*['"][wa]/.source)) {
     targets.push(m.replace(/^open\([ \t]*['"]/, '').replace(/['"].*$/, ''));
   }
@@ -108,6 +185,41 @@ export function bashWriteTargets(cmd) {
     targets.push(m.replace(/^Path\([ \t]*['"]/, '').replace(/['"].*$/, ''));
   }
   return targets;
+}
+
+// Цель записи, приведённая к настоящему пути. Команда часто переходит в каталог
+// и пишет уже относительным именем: «cd /tmp/work && cat > notes.md». Цель,
+// взятая как написана, начинается не с /tmp — и запись во временный каталог
+// гейтилась, хотя та же запись абсолютным путём проходила свободно.
+//
+// База берётся из АБСОЛЮТНОГО cd: относительный («cd ..») перевёл бы из
+// каталога, которого разбор не знает, и склейка соврала бы.
+//
+// Путь НОРМАЛИЗУЕТСЯ: без этого «cd /tmp && cat > ../repo/README.md» давал
+// /tmp/../repo/README.md, и эфемерность решалась по префиксу /tmp — правка
+// репозитория проходила бы гейт через переход вверх.
+function resolveTarget(cwd, target) {
+  if (!target || target.startsWith('-')) return target;
+  const joined = target.startsWith('/') || !cwd
+    ? target
+    : `${cwd}/${target.replace(/^\.\//, '')}`;
+  return joined.startsWith('/') ? normalizePath(joined) : joined;
+}
+
+// Свёртка «..» и «.» в абсолютном пути. Свой разбор, а не path.posix.normalize:
+// поведение здесь должно быть одинаковым для гейта и гварда якоря независимо от
+// платформы, на которой их запустили.
+function normalizePath(fp) {
+  const parts = [];
+  for (const part of fp.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join('/')}`;
 }
 
 // Цель записи, очищенная от кавычек; дескрипторы и устройства целями не
