@@ -121,46 +121,93 @@ export function bashWriteTargets(cmd) {
     .replace(/\[\[[^\]]*\]\]/g, ' ')
     .replace(/\(\([^)]*\)\)/g, ' ')).join('\n').replace(/\n+$/, '');
 
+  // Команда идёт КУСКАМИ слева направо, и каждый резолвится тем каталогом,
+  // который действует В ЭТОМ МЕСТЕ. Брать последний cd на всю команду нельзя:
+  // «cat > README.md && cd /tmp» пишет в текущий каталог, а не во временный, и
+  // общий cd выдавал бы запись в репозиторий за эфемерную.
   const targets = [];
-  for (const m of matchAll(scan, />>?[ \t]*[^|&;()<>\s]+/.source)) {
+  let cwd = '';
+  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
+    for (const t of pieceTargets(piece)) targets.push(resolveTarget(cwd, t));
+    const cd = /(?:^|[ \t])cd[ \t]+(\/[^\s|&;()<>]*)/.exec(piece);
+    if (cd) cwd = cd[1].replace(/\/$/, '');
+  }
+  return targets.concat(interpreterTargets(cmd));
+}
+
+// Цели одного куска команды. Разбор целей не зависит от того, где кусок стоит:
+// зависит только резолв относительного пути, и он живёт снаружи.
+function pieceTargets(piece) {
+  const targets = [];
+  for (const m of matchAll(piece, />>?[ \t]*[^|&;()<>\s]+/.source)) {
     targets.push(m.replace(/^>>?[ \t]*/, ''));
   }
-  for (const m of matchAll(scan, /\btee\b([ \t]+-[a-zA-Z]+)*[ \t]+[^|&;()<>\s]+/.source)) {
+  for (const m of matchAll(piece, /\btee\b([ \t]+-[a-zA-Z]+)*[ \t]+[^|&;()<>\s]+/.source)) {
     targets.push(lastField(m));
   }
-  for (const m of matchAll(scan, /\b(sed|perl)\b[^|&;]*[ \t]-i[^|&;]*/.source)) {
+  for (const m of matchAll(piece, /\b(sed|perl)\b[^|&;]*[ \t]-i[^|&;]*/.source)) {
     for (const word of m.split(' ')) if (/[/.]/.test(word)) targets.push(word);
   }
-  for (const m of matchAll(scan, /\b(cp|mv)\b[^|&;]*[ \t]-t[ \t]+[^\s|&;]+/.source)) {
+  for (const m of matchAll(piece, /\b(cp|mv)\b[^|&;]*[ \t]-t[ \t]+[^\s|&;]+/.source)) {
     targets.push(m.replace(/^.*[ \t]-t[ \t]+/, ''));
   }
-  const noDashT = scan.split('\n').filter((line) => !/[ \t]-t[ \t]/.test(line)).join('\n');
-  for (const m of matchAll(noDashT, /\b(cp|mv)\b[ \t]+[^|&;()<>]+/.source)) {
-    targets.push(lastField(m));
+  if (!/[ \t]-t[ \t]/.test(piece)) {
+    for (const m of matchAll(piece, /\b(cp|mv)\b[ \t]+[^|&;()<>]+/.source)) {
+      targets.push(lastField(m));
+    }
   }
+  return targets;
+}
+
+// Запись из интерпретатора ищется в ИСХОДНОЙ команде, а не в очищенном тексте:
+// путь там стоит в кавычках, и на вычеркнутой строке разбор бы ослеп. По кускам
+// такие цели не разложить — регулярка смотрит на весь текст, — поэтому они
+// собираются отдельно и каталогом перехода не резолвятся: интерпретатор
+// запускается со своим рабочим каталогом, и угадывать его разбор не берётся.
+function interpreterTargets(cmd) {
+  const targets = [];
   for (const m of matchAll(cmd, /open\([ \t]*['"][^'"]+['"][ \t]*,[ \t]*['"][wa]/.source)) {
     targets.push(m.replace(/^open\([ \t]*['"]/, '').replace(/['"].*$/, ''));
   }
   for (const m of matchAll(cmd, /Path\([ \t]*['"][^'"]+['"][ \t]*\)[ \t]*\.[ \t]*write_(text|bytes)/.source)) {
     targets.push(m.replace(/^Path\([ \t]*['"]/, '').replace(/['"].*$/, ''));
   }
-  return targets.map((t) => resolveAgainstCd(scan, t));
+  return targets;
 }
 
-// Команда часто переходит в каталог и пишет уже относительным именем:
-// «cd /tmp/work && cat > notes.md». Цель, взятая как написана, начинается не с
-// /tmp — и запись во временный каталог гейтилась, хотя та же запись абсолютным
-// путём проходила свободно.
+// Цель записи, приведённая к настоящему пути. Команда часто переходит в каталог
+// и пишет уже относительным именем: «cd /tmp/work && cat > notes.md». Цель,
+// взятая как написана, начинается не с /tmp — и запись во временный каталог
+// гейтилась, хотя та же запись абсолютным путём проходила свободно.
 //
 // База берётся из АБСОЛЮТНОГО cd: относительный («cd ..») перевёл бы из
-// каталога, которого разбор не знает, и склейка соврала бы. Последний cd в
-// команде выигрывает — он и есть тот, в котором команда пишет.
-function resolveAgainstCd(scan, target) {
-  if (!target || target.startsWith('/') || target.startsWith('-')) return target;
-  const dirs = matchAll(scan, /\bcd[ \t]+\/[^\s|&;()<>]*/.source)
-    .map((m) => m.replace(/^cd[ \t]+/, '').replace(/\/$/, ''));
-  if (!dirs.length) return target;
-  return `${dirs[dirs.length - 1]}/${target.replace(/^\.\//, '')}`;
+// каталога, которого разбор не знает, и склейка соврала бы.
+//
+// Путь НОРМАЛИЗУЕТСЯ: без этого «cd /tmp && cat > ../repo/README.md» давал
+// /tmp/../repo/README.md, и эфемерность решалась по префиксу /tmp — правка
+// репозитория проходила бы гейт через переход вверх.
+function resolveTarget(cwd, target) {
+  if (!target || target.startsWith('-')) return target;
+  const joined = target.startsWith('/') || !cwd
+    ? target
+    : `${cwd}/${target.replace(/^\.\//, '')}`;
+  return joined.startsWith('/') ? normalizePath(joined) : joined;
+}
+
+// Свёртка «..» и «.» в абсолютном пути. Свой разбор, а не path.posix.normalize:
+// поведение здесь должно быть одинаковым для гейта и гварда якоря независимо от
+// платформы, на которой их запустили.
+function normalizePath(fp) {
+  const parts = [];
+  for (const part of fp.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join('/')}`;
 }
 
 // Цель записи, очищенная от кавычек; дескрипторы и устройства целями не
