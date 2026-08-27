@@ -111,7 +111,7 @@ test('скелет печатает адреса без тел и логов', (
   assert.doesNotMatch(text, /завела чтение/, 'лог не печатается');
 });
 
-test('закрытие снимает тело и адреса, имя остаётся', () => {
+test('закрытие держит тело в файле, но не печатает его', () => {
   const file = tmpFile();
   registry.upsertGoal(file, goal());
   const done = registry.closeTasks(file, ['Ц1.1']);
@@ -121,9 +121,11 @@ test('закрытие снимает тело и адреса, имя оста�
   const [saved] = registry.readRegistry(file);
   assert.equal(saved.tasks[0].state, 'closed');
   assert.equal(saved.tasks[0].title, 'модуль реестра', 'имя нужно, чтобы отказ говорил правду');
-  assert.equal(saved.tasks[0].body, '', 'тело закрытой задачи не хранится');
-  assert.deepEqual(saved.tasks[0].where, []);
-  assert.equal(saved.state, 'live', 'вторая задача открыта — цель ещё живая');
+  assert.match(saved.tasks[0].body, /форма записи и команды/, 'тело остаётся историей сессии');
+  assert.ok(saved.tasks[0].where.length, 'адреса остаются историей сессии');
+
+  const text = registry.render([saved]);
+  assert.doesNotMatch(text, /форма записи и команды/, 'тело закрытой задачи в сверку не идёт');
 });
 
 test('неизвестный адрес не закрывает ничего и возвращается назад', () => {
@@ -135,26 +137,32 @@ test('неизвестный адрес не закрывает ничего и 
   assert.equal(registry.readRegistry(file)[0].tasks[0].state, 'open');
 });
 
-test('цель со всеми закрытыми задачами становится надгробием', () => {
+test('цель со всеми закрытыми задачами не хоронится: текст и лог целы', () => {
   const file = tmpFile();
-  registry.upsertGoal(file, goal());
+  registry.upsertGoal(file, goal({ text: 'зачем эта работа' }));
   registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
   registry.closeTasks(file, ['Ц1.1', 'Ц1.2']);
 
   const [saved] = registry.readRegistry(file);
-  assert.equal(saved.state, 'tombstone');
-  assert.equal(saved.text, '', 'текст цели уходит');
-  assert.deepEqual(saved.log, [], 'лог уходит');
-  assert.equal(saved.tasks.length, 2, 'имена задач остаются');
-  assert.match(registry.render([saved]), /работа закрыта/, 'надгробие видно в рендере');
+  assert.equal(saved.state, 'live', 'терминального состояния у цели нет');
+  assert.equal(saved.text, 'зачем эта работа', 'текст цели остаётся');
+  assert.deepEqual(saved.log, ['задача Ц1.1 · registry.js · завела чтение'], 'лог остаётся историей');
+  assert.equal(saved.tasks.length, 2);
+
+  const text = registry.render([saved]);
+  assert.doesNotMatch(text, /работа закрыта/, 'пометки, глушившей приём, в тексте нет');
 });
 
-test('на надгробие задачи не вешаются', () => {
+test('цель с закрытыми задачами принимает новую задачу и возвращается в работу', () => {
   const file = tmpFile();
   registry.upsertGoal(file, goal());
   registry.closeTasks(file, ['Ц1.1', 'Ц1.2']);
-  registry.addTasks(file, 0, [{ title: 'третья задача', where: [], body: 'тело' }]);
-  assert.equal(registry.readRegistry(file)[0].tasks.length, 2, 'надгробие не оживает дописыванием');
+  registry.addTasks(file, 0, [{ title: 'третья задача', where: ['tools/registry.mjs'], body: 'тело' }]);
+
+  const [saved] = registry.readRegistry(file);
+  assert.equal(saved.tasks.length, 3, 'работа под целью продолжается новой задачей');
+  assert.equal(saved.tasks[2].state, 'open');
+  assert.equal(saved.tasks[2].n, 3, 'номер продолжает нумерацию цели');
 });
 
 test('нумерация после закрытия не едет: строка цели остаётся на месте', () => {
@@ -306,4 +314,42 @@ test('рендер держит номер цели, заданный явно',
   const text = registry.render([{ ...second, n: 2 }], { bodies: false });
   assert.match(text, /^Ц2 «вторая»/m, 'цель осталась второй');
   assert.match(text, /задача Ц2\.1 «её задача»/, 'адрес задачи не съехал');
+});
+
+// Сквозной приём поверх ЗАКОНЧЕННОЙ работы. Это тот самый случай, на котором
+// контур онемел: цель одна, все её задачи закрыты, и материал про продолжение
+// той же работы (обновить описание PR, ответить ревьюеру) не ложился никуда —
+// приём отклонял его, а сверка потом отказывала «работа уже закрыта».
+//
+// Кейс гоняет НАСТОЯЩИЙ приём, а не только ядро: между ответом модели и файлом
+// стоит tools/registry-ingest.mjs, и запрет жил именно на этом пути.
+test('приём вешает новую задачу на цель, вся работа под которой закрыта', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.closeTasks(file, ['Ц1.1', 'Ц1.2']);
+  assert.ok(registry.readRegistry(file)[0].tasks.every((t) => t.state === 'closed'),
+    'предусловие: под целью не осталось открытой работы');
+
+  const material = path.join(path.dirname(file), 'material.txt');
+  fs.writeFileSync(material, 'обнови описание PR под то, что реально сделано');
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_CMD: path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh'),
+      MOCK_CLASSIFIER_INGEST: JSON.stringify({
+        add: [{ goal: 'Ц1', tasks: [{ title: 'работа продолжается', where: ['README.md'], anchor: '' }] }],
+        close: [],
+      }),
+    },
+  });
+
+  const [saved] = registry.readRegistry(file);
+  assert.equal(saved.tasks.length, 3, 'материал лёг задачей под ту же цель');
+  assert.equal(saved.tasks[2].title, 'работа продолжается');
+  assert.equal(saved.tasks[2].state, 'open', 'цель снова в работе');
 });

@@ -28,11 +28,6 @@ import { sha256 } from './hash.js';
 // целиком уходит в каждую сверку.
 export const LOG_KEEP = 20;
 
-// Причина, с которой цель уходит надгробием. Пока она одна: вся работа под целью
-// закрыта. Вытеснения по размеру нет и не будет — реестр не кэш, запись уходит
-// потому, что её работа кончилась, а не потому, что файл потолстел.
-const TOMBSTONE_REASON = 'работа закрыта';
-
 function off() {
   return process.env.CRAFT_REGISTRY === 'off';
 }
@@ -148,23 +143,20 @@ function writeRegistry(file, goals) {
 // сравнение с телом из перепоказанного плана всегда расходилось бы — тот же план
 // читался бы ревизией и сбрасывал закрытое вместе с логом. Цена: правка тела уже
 // закрытой задачи ревизией не считается, но работа под ней и так кончилась.
+// Тело закрытой задачи остаётся в файле, поэтому сравнивать её с телом из
+// перепоказанного плана есть чем: сравнение идёт напрямую, одинаково у закрытых
+// и открытых. Перепоказ того же плана сходится и закрытое не сбрасывается, а
+// настоящая ревизия тела расходится и отменяет прежнюю редакцию.
 function sameContent(stored, fresh) {
-  const closed = new Set((stored.tasks || [])
-    .filter((t) => t.state === 'closed')
-    .map((t) => t.title || ''));
-  // У закрытой задачи тела уже нет — сравнивать её с телом из перепоказанного
-  // плана нечем. Поэтому закрытие оставляет ХЕШ тела: перепоказ того же плана
-  // сходится и закрытое не сбрасывается, а настоящая ревизия тела расходится и
-  // отменяет прежнюю редакцию, как и положено.
-  const slice = (goal, hashed) => JSON.stringify({
+  const slice = (goal) => JSON.stringify({
     text: goal.text || '',
-    tasks: (goal.tasks || []).map((t) => {
-      const title = t.title || '';
-      if (!closed.has(title)) return { title, where: t.where || [], body: t.body || '' };
-      return { title, closed: true, body: hashed ? (t.bodyHash || '') : sha256(t.body || '') };
-    }),
+    tasks: (goal.tasks || []).map((t) => ({
+      title: t.title || '',
+      where: t.where || [],
+      body: t.body || '',
+    })),
   });
-  return slice(stored, true) === slice(fresh, false);
+  return slice(stored) === slice(fresh);
 }
 
 function normalize(goal) {
@@ -207,12 +199,13 @@ export function upsertGoal(file, goal) {
 // Дописать задачи к существующей цели. Это ответ на «моя реплика про ту же
 // цель, но новую задачу»: материал про уже одобренную работу не заводит вторую
 // такую же цель, а пополняет её. Совпавшая по заголовку задача не дублируется.
+//
+// Цель с закрытыми задачами принимает новые наравне с прочими: работа под целью
+// продолжается — доработка, ответ ревьюеру, обслуживание PR, — и новая задача
+// возвращает цель в работу сама. Терминального состояния у цели нет: закрытие
+// её задач необратимым не бывает.
 export function addTasks(file, at, tasks) {
   patch(file, at, (goal) => {
-    // На надгробие задачи не вешаются: работа под целью кончилась, тела у неё
-    // нет, и новая задача открыла бы правки, опираясь на пустую запись. Промпт
-    // приёма говорит то же, но запрет обязан стоять и здесь.
-    if (goal.state === 'tombstone') return;
     const have = new Set((goal.tasks || []).map((t) => t.title));
     let n = (goal.tasks || []).length;
     for (const task of tasks) {
@@ -305,23 +298,6 @@ export function parseAddress(address) {
   return { goal: Number(at[1]) - 1, task: Number(at[2]) };
 }
 
-// Надгробие: заголовок цели и имена её задач остаются, тело уходит. Заголовок
-// нужен не для покрытия — покрывать надгробие перестаёт, — а чтобы отказ говорил
-// правду: работа была одобрена и сделана.
-function tombstone(goal) {
-  return {
-    title: goal.title,
-    source: goal.source,
-    state: 'tombstone',
-    reason: TOMBSTONE_REASON,
-    text: '',
-    log: [],
-    tasks: (goal.tasks || []).map((t) => ({
-      n: t.n, title: t.title, where: [], body: '', state: 'closed',
-    })),
-  };
-}
-
 // Закрыть задачи по адресам. Строка цели НЕ удаляется даже когда закрыто всё:
 // цель адресуется номером по позиции в файле, и удаление сдвинуло бы нумерацию —
 // метка лога, выданная сверкой минуту назад, села бы на чужую цель.
@@ -344,31 +320,23 @@ function closeUnderLock(file, addresses, done) {
   for (const address of addresses) {
     const at = parseAddress(address);
     const goal = at ? goals[at.goal] : undefined;
-    const task = goal && goal.state !== 'tombstone'
-      ? (goal.tasks || []).find((t) => t.n === at.task)
-      : undefined;
+    const task = goal ? (goal.tasks || []).find((t) => t.n === at.task) : undefined;
     if (!task) {
       done.unknown.push(address);
       continue;
     }
+    // Тело и адреса закрытой задачи остаются на месте: реестр держит не только
+    // разрешения, но и историю сессии — что было одобрено, что сделано и где.
+    // Из текста для модели тело закрытой задачи всё равно уходит (см. render),
+    // поэтому сохранение истории объём сверки не растит.
     task.state = 'closed';
-    task.bodyHash = sha256(task.body || '');
-    task.body = '';
-    task.where = [];
     done.closed.push(address);
     touched = true;
   }
 
-  // Цель, у которой закрылась последняя задача, уходит надгробием тем же
-  // проходом: держать её тело незачем, работы под ней больше нет.
-  goals.forEach((goal, i) => {
-    if (goal.state === 'tombstone') return;
-    const tasks = goal.tasks || [];
-    if (!tasks.length || tasks.some((t) => t.state !== 'closed')) return;
-    goals[i] = tombstone(goal);
-    touched = true;
-  });
-
+  // Цель, у которой закрылась последняя задача, никуда не девается и остаётся
+  // принимающей: работа под ней может продолжиться — доработка, ответ
+  // ревьюеру, обслуживание PR, — и новая задача вернёт цель в работу.
   if (touched) writeRegistry(file, goals);
   return done;
 }
@@ -490,17 +458,23 @@ export function parsingCount(file, staleMs = 3600000) {
 // Номер цели берётся из поля n, когда оно есть: список работы показывает не весь
 // реестр, а его живую часть, и нумерация по позиции в отфильтрованном массиве
 // адресовала бы закрытие на чужую цель.
+// У цели состояния нет: закрытость видна по её задачам, и отдельной пометки
+// «работа закрыта» в строке цели не появляется. Пометка была текстовым запретом
+// вешать на такую цель новые задачи — и ровно поэтому материал про продолжение
+// уже одобренной работы отсеивался как дубль вместо того, чтобы лечь задачей.
+//
+// Тело и адреса ЗАКРЫТОЙ задачи в текст не идут: в файле они остаются историей
+// сессии, но сверке нужен только след того, что работа была и кончилась.
 export function render(goals, { bodies = true } = {}) {
   const out = [];
   goals.forEach((goal, i) => {
     const num = Number.isInteger(goal.n) ? goal.n : i + 1;
-    const dead = goal.state === 'tombstone';
-    const tail = dead ? `, ${goal.reason || TOMBSTONE_REASON}` : '';
-    out.push(`Ц${num} «${goal.title}» — источник: ${goal.source}${tail}`);
+    out.push(`Ц${num} «${goal.title}» — источник: ${goal.source}`);
     if (bodies && goal.text) out.push(`  текст: ${goal.text}`);
     for (const task of goal.tasks || []) {
-      const state = task.state === 'closed' ? 'закрыта' : 'открыта';
-      out.push(`  задача Ц${num}.${task.n} «${task.title}» — ${state}`);
+      const closed = task.state === 'closed';
+      out.push(`  задача Ц${num}.${task.n} «${task.title}» — ${closed ? 'закрыта' : 'открыта'}`);
+      if (closed) continue;
       if (task.where && task.where.length) out.push(`    где: ${task.where.join(', ')}`);
       if (bodies && task.body) out.push(`    что: ${task.body}`);
     }

@@ -51,14 +51,16 @@ try {
 
 const classifier = classifierPath();
 
-// Вход сравнения: всё одобренное сессии, без надгробий.
+// Вход сравнения: ВСЁ одобренное сессии, включая цели, работа под которыми уже
+// закрыта. Сделанное — тем более не новое: Влад не должен видеть его в плане
+// второй раз только потому, что оно успело завершиться.
 function approvedText() {
   // Дельта ждёт разбора наравне со сверкой: требование сформулировано как
   // принцип, а не про одну функцию. Иначе план, покрытый только что данным
   // согласием, показывался бы снова.
   const registry = approvalRegistry();
   waitForParsing(registry);
-  const goals = readRegistry(registry).filter((goal) => goal.state !== 'tombstone');
+  const goals = readRegistry(registry);
   return goals.length ? render(goals) : '';
 }
 
