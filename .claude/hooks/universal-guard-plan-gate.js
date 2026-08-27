@@ -122,6 +122,16 @@ function touchesWorld() {
 
 if (!isCraftWrite && !isFileEdit && !isBash && !touchesWorld()) process.exit(0);
 
+// Предел описания правки. Раньше он был 2000 байт на заменяемый текст и 4000 на
+// новый и стоял из-за потолка в 128 КБ на один аргумент командной строки:
+// описание уходило модели в argv. Промпт давно идёт на СТАНДАРТНЫЙ ВВОД, потолка
+// нет, а обрез остался и резал живую правку посреди кода — сверка видела обрубок
+// и отказывала «текст обрезан на середине».
+//
+// Число здесь — страховка от бинарного мусора (случайный дамп, картинка), а не
+// бюджет: правка такого размера в промпт не помещается по смыслу, а не по форме.
+const DESC_LIMIT = 200000;
+
 // Срез по БАЙТАМ с хвостовым переводом строки, как его делал bash: подстановка
 // команды добавляла к тексту перевод строки, резала head -c и снимала хвостовые
 // переводы обратно. Возвращается буфер — срез посреди многобайтного символа
@@ -131,6 +141,31 @@ function headBytes(text, limit) {
   let end = cut.length;
   while (end > 0 && cut[end - 1] === 0x0a) end -= 1;
   return cut.subarray(0, end);
+}
+
+// Разрешающие исходы сверки. Остальное — отказ либо неответ.
+const ALLOWING = /^(OVERRIDE|COVERED|DRAFT)/;
+
+// Сверка — вызов модели, и на пограничной правке она отвечает по-разному на
+// одном и том же входе: замер пяти прогонов подряд дал четыре отказа и одно
+// «покрыта». Цена разброса ложится на Влада — он повторяет разрешение по два-три
+// раза, пока не повезёт.
+//
+// Поэтому отказ не окончателен с первого раза: он переспрашивается, а разошлись
+// ответы — решает третий голос. Проход остаётся проходом сразу: лишние вызовы
+// тратятся только там, где иначе Влад теряет минуты. Отказ возвращается ПЕРВЫЙ
+// из полученных — его причина уже написана про эту правку.
+function steadyVerdict(view, desc) {
+  const first = classify(classifier, 'cover', [view], desc);
+  if (ALLOWING.test(first)) return first;
+
+  const second = classify(classifier, 'cover', [view], desc);
+  const agree = ALLOWING.test(first) === ALLOWING.test(second);
+  if (agree) return first;
+
+  const third = classify(classifier, 'cover', [view], desc);
+  if (ALLOWING.test(third)) return ALLOWING.test(second) ? second : third;
+  return ALLOWING.test(first) ? second : first;
 }
 
 function tempFile(prefix) {
@@ -194,7 +229,7 @@ function coverCheck(desc) {
   // Потолка сверке гейт не назначает: решения ждём, сколько бы оно ни заняло.
   // Своё число у неё есть — страховка от зависшего вызова, и живёт оно там же,
   // где сама проверка.
-  const verdict = classify(classifier, 'cover', [view], desc);
+  const verdict = steadyVerdict(view, desc);
   try { fs.rmSync(view, { force: true }); } catch { /* временный вид не убрался */ }
 
   if (verdict.startsWith('OVERRIDE')) return;
@@ -236,9 +271,9 @@ if (isFileEdit) {
 
   const desc = Buffer.concat([
     Buffer.from(`инструмент: ${tool}\nфайл: ${fp}\nзаменяемый текст:\n`, 'utf8'),
-    headBytes(oldText, 2000),
+    headBytes(oldText, DESC_LIMIT),
     Buffer.from('\nновый текст:\n', 'utf8'),
-    headBytes(newText, 4000),
+    headBytes(newText, DESC_LIMIT),
   ]);
 
   // Абсолютный путь к цели внутри текущего репо матчится и по репо-относительной
@@ -268,7 +303,7 @@ if (isBash) {
 
   const bdesc = Buffer.concat([
     Buffer.from('инструмент: Bash\nкоманда:\n', 'utf8'),
-    headBytes(cmd, 4000),
+    headBytes(cmd, DESC_LIMIT),
   ]);
 
   coverCheck(bdesc);
@@ -282,7 +317,7 @@ if (isBash) {
 if (!isCraftWrite) {
   const odesc = Buffer.concat([
     Buffer.from(`инструмент: ${tool}\nвход:\n`, 'utf8'),
-    headBytes(JSON.stringify(input), 4000),
+    headBytes(JSON.stringify(input), DESC_LIMIT),
   ]);
   coverCheck(odesc);
   process.exit(0);
@@ -310,7 +345,7 @@ if (ids.length && nonEmptyFile(scopeFile)) {
 
 const cdesc = Buffer.concat([
   Buffer.from('инструмент: craft_write\nкоманда:\n', 'utf8'),
-  headBytes(craftCmd, 4000),
+  headBytes(craftCmd, DESC_LIMIT),
 ]);
 const lowerIds = ids.map((id) => id.replace(/[A-F]/g, (c) => c.toLowerCase()));
 

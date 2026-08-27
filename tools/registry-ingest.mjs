@@ -48,17 +48,10 @@ function cutByAnchors(text, tasks) {
   });
 }
 
-function main() {
-  if (!materialFile || !registryFile) return 1;
-  let material = '';
-  try {
-    material = fs.readFileSync(materialFile, 'utf8');
-  } catch {
-    return 1;
-  }
-
-  // Реестр отдаётся модели в том же читаемом виде, в каком его увидит сверка:
-  // отдельный машинный формат для неё разъезжался бы с тем, что видно в отказе.
+// Один проход разбора: реестр отдаётся модели в том же читаемом виде, в каком
+// его увидит сверка — отдельный машинный формат разъезжался бы с тем, что видно
+// в отказе, — и ответ применяется к файлу.
+function pass(material) {
   const current = readRegistry(registryFile);
   const view = path.join(path.dirname(materialFile), 'registry-view.txt');
   try {
@@ -137,6 +130,30 @@ function main() {
     // правки, которых Влад не одобрял.
     if (title) upsertGoal(registryFile, { title, source, tasks: prepared });
   }
+  return 0;
+}
+
+function main() {
+  if (!materialFile || !registryFile) return 1;
+  let material = '';
+  try {
+    material = fs.readFileSync(materialFile, 'utf8');
+  } catch {
+    return 1;
+  }
+
+  const code = pass(material);
+  if (code !== 0) return code;
+
+  // ВТОРОЙ проход по тому же материалу — проверка полноты. Разбор нестабилен так
+  // же, как сверка: тот же вход даёт то полный набор задач, то набор без одной, и
+  // пропавший кусок молча остаётся неодобренным. Второй проход видит реестр уже с
+  // заведённым и по правилу «задача, которая уже есть, не добавляется» дозаводит
+  // ровно пропущенное.
+  //
+  // Проходов ровно два: третий ловил бы уже не пропажу, а переформулировку —
+  // и плодил бы дубли вместо того, чтобы сходиться.
+  pass(material);
   return 0;
 }
 

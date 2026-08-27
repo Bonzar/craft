@@ -36,6 +36,20 @@ if printf '%s' "$prompt" | grep -qF 'Верни ТОЛЬКО JSON-объект';
   # close несёт адреса задач, которые приём закрывает; у реплики и кнопки он
   # выброшен вызывающим кодом, поэтому дефолт пустой.
   default='{"add":[{"goal_new":"# Юнит тестовой цели","tasks":[{"title":"задача","where":["tests/run.sh"],"anchor":""}]}],"close":[]}'
+  # MOCK_CLASSIFIER_INGESTS — ответы разбора ПО ОЧЕРЕДИ через «||»: ими
+  # проверяется второй проход, дозаводящий пропущенное. Одним ответом такой кейс
+  # не выразить — он зеленел бы и на коде, который разбирает материал однажды.
+  # Разделитель двойной: одиночная палка встречается внутри JSON-текста задач.
+  if [[ -n "${MOCK_CLASSIFIER_INGESTS:-}" ]]; then
+    pass_file="${MOCK_CLASSIFIER_TRACE:-/tmp/mock-classifier}.pass"
+    pass="$(cat "$pass_file" 2>/dev/null || echo 0)"
+    printf '%s' "$((pass + 1))" > "$pass_file"
+    mapfile -t passes < <(printf '%s' "$MOCK_CLASSIFIER_INGESTS" | sed 's/||/\n/g')
+    idx="$pass"
+    (( idx >= ${#passes[@]} )) && idx=$(( ${#passes[@]} - 1 ))
+    printf '%s\n' "${passes[$idx]}"
+    exit 0
+  fi
   printf '%s\n' "${MOCK_CLASSIFIER_INGEST:-$default}"
   exit 0
 fi
@@ -43,6 +57,20 @@ fi
 # Сверка правки по реестру отвечает своими формами, а не «СООТВЕТСТВУЕТ»: общий
 # дефолт для неё нераспознаваем и вырождался бы в отказ на каждом кейсе.
 if printf '%s' "$prompt" | grep -qF 'Ниже реестр одобренного'; then
+  # MOCK_CLASSIFIER_ANSWERS — ответы ПО ОЧЕРЕДИ через «|»: ими проверяется, что
+  # гейт переспрашивает отказ и решает большинством. Один ответ на все вызовы
+  # такой кейс не выразит — он и на прежнем коде, спрашивавшем однажды, зеленел
+  # бы. Счётчик живёт рядом со следом вызовов: у каждого прогона он свой.
+  if [[ -n "${MOCK_CLASSIFIER_ANSWERS:-}" ]]; then
+    turn_file="${MOCK_CLASSIFIER_TRACE:-/tmp/mock-classifier}.turn"
+    turn="$(cat "$turn_file" 2>/dev/null || echo 0)"
+    printf '%s' "$((turn + 1))" > "$turn_file"
+    IFS='|' read -ra answers <<< "$MOCK_CLASSIFIER_ANSWERS"
+    idx="$turn"
+    (( idx >= ${#answers[@]} )) && idx=$(( ${#answers[@]} - 1 ))
+    printf '%s\n' "${answers[$idx]}"
+    exit 0
+  fi
   printf '%s\n' "${MOCK_CLASSIFIER_ANSWER:-ПОКРЫТА Ц1.1: правка по одобренной задаче}"
   exit 0
 fi

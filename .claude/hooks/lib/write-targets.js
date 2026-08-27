@@ -107,7 +107,23 @@ export function bashWriteTargets(cmd) {
   for (const m of matchAll(cmd, /Path\([ \t]*['"][^'"]+['"][ \t]*\)[ \t]*\.[ \t]*write_(text|bytes)/.source)) {
     targets.push(m.replace(/^Path\([ \t]*['"]/, '').replace(/['"].*$/, ''));
   }
-  return targets;
+  return targets.map((t) => resolveAgainstCd(scan, t));
+}
+
+// Команда часто переходит в каталог и пишет уже относительным именем:
+// «cd /tmp/work && cat > notes.md». Цель, взятая как написана, начинается не с
+// /tmp — и запись во временный каталог гейтилась, хотя та же запись абсолютным
+// путём проходила свободно.
+//
+// База берётся из АБСОЛЮТНОГО cd: относительный («cd ..») перевёл бы из
+// каталога, которого разбор не знает, и склейка соврала бы. Последний cd в
+// команде выигрывает — он и есть тот, в котором команда пишет.
+function resolveAgainstCd(scan, target) {
+  if (!target || target.startsWith('/') || target.startsWith('-')) return target;
+  const dirs = matchAll(scan, /\bcd[ \t]+\/[^\s|&;()<>]*/.source)
+    .map((m) => m.replace(/^cd[ \t]+/, '').replace(/\/$/, ''));
+  if (!dirs.length) return target;
+  return `${dirs[dirs.length - 1]}/${target.replace(/^\.\//, '')}`;
 }
 
 // Цель записи, очищенная от кавычек; дескрипторы и устройства целями не
