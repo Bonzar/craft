@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn, execFileSync } from 'node:child_process';
 
 const registry = await import('../../.claude/hooks/lib/registry.js');
 
@@ -50,7 +51,7 @@ test('цель с тем же заголовком и тем же телом н�
   const file = tmpFile();
   registry.upsertGoal(file, goal());
   registry.closeTasks(file, ['Ц1.1']);
-  registry.appendLog(file, goal().title, 'задача Ц1.1 · registry.js · завела чтение');
+  registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
 
   registry.upsertGoal(file, goal());
 
@@ -64,7 +65,7 @@ test('изменившаяся цель замещает прежнюю вмес
   const file = tmpFile();
   registry.upsertGoal(file, goal());
   registry.closeTasks(file, ['Ц1.1']);
-  registry.appendLog(file, goal().title, 'задача Ц1.1 · registry.js · завела чтение');
+  registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
 
   const revised = goal();
   revised.tasks[0].body = 'форма записи, команды и глушилка';
@@ -80,7 +81,7 @@ test('лог живёт на цели и ограничен сверху', () =>
   const file = tmpFile();
   registry.upsertGoal(file, goal());
   for (let i = 1; i <= registry.LOG_KEEP + 5; i += 1) {
-    registry.appendLog(file, goal().title, `задача 1 · registry.js · правка ${i}`);
+    registry.appendLog(file, 0, `задача 1 · registry.js · правка ${i}`);
   }
   const [saved] = registry.readRegistry(file);
   assert.equal(saved.log.length, registry.LOG_KEEP);
@@ -92,7 +93,7 @@ test('рендер несёт цели, задачи и лог', () => {
   const file = tmpFile();
   registry.upsertGoal(file, goal());
   registry.closeTasks(file, ['Ц1.2']);
-  registry.appendLog(file, goal().title, 'задача Ц1.1 · registry.js · завела чтение');
+  registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
   const text = registry.render(registry.readRegistry(file));
   assert.match(text, /# Юнит 1\. Реестр/);
   assert.match(text, /модуль реестра/);
@@ -103,7 +104,7 @@ test('рендер несёт цели, задачи и лог', () => {
 test('скелет печатает адреса без тел и логов', () => {
   const file = tmpFile();
   registry.upsertGoal(file, goal());
-  registry.appendLog(file, goal().title, 'задача Ц1.1 · registry.js · завела чтение');
+  registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
   const text = registry.render(registry.readRegistry(file), { bodies: false });
   assert.match(text, /задача Ц1\.1 «модуль реестра»/, 'адрес и имя на месте');
   assert.doesNotMatch(text, /форма записи и команды/, 'тела задач не печатаются');
@@ -137,7 +138,7 @@ test('неизвестный адрес не закрывает ничего и 
 test('цель со всеми закрытыми задачами становится надгробием', () => {
   const file = tmpFile();
   registry.upsertGoal(file, goal());
-  registry.appendLog(file, goal().title, 'задача Ц1.1 · registry.js · завела чтение');
+  registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
   registry.closeTasks(file, ['Ц1.1', 'Ц1.2']);
 
   const [saved] = registry.readRegistry(file);
@@ -152,7 +153,7 @@ test('на надгробие задачи не вешаются', () => {
   const file = tmpFile();
   registry.upsertGoal(file, goal());
   registry.closeTasks(file, ['Ц1.1', 'Ц1.2']);
-  registry.addTasks(file, goal().title, [{ title: 'третья задача', where: [], body: 'тело' }]);
+  registry.addTasks(file, 0, [{ title: 'третья задача', where: [], body: 'тело' }]);
   assert.equal(registry.readRegistry(file)[0].tasks.length, 2, 'надгробие не оживает дописыванием');
 });
 
@@ -168,16 +169,18 @@ test('нумерация после закрытия не едет: строка
   assert.match(registry.render(goals), /задача Ц2\.1 «её задача»/);
 });
 
-test('приём закрывает только то, про что есть запись в логе', () => {
+// Закрывает агент по смыслу сделанного: следа в логе для этого не требуется —
+// раньше без него закрытие не проходило, и работа оставалась вечно открытой.
+test('закрытие идёт по адресу и следа в логе не требует', () => {
   const file = tmpFile();
   registry.upsertGoal(file, goal());
-  registry.appendLog(file, goal().title, 'задача Ц1.1 · registry.js · завела чтение');
 
-  const done = registry.closeTasks(file, ['Ц1.1', 'Ц1.2'], { requireLog: true });
+  const done = registry.closeTasks(file, ['Ц1.1']);
   assert.deepEqual(done.closed, ['Ц1.1']);
-  assert.deepEqual(done.unknown, ['Ц1.2'], 'без записи в логе нет доказательства правки');
+  assert.deepEqual(done.unknown, []);
 
   const [saved] = registry.readRegistry(file);
+  assert.equal(saved.tasks[0].state, 'closed');
   assert.equal(saved.tasks[1].state, 'open');
   assert.equal(saved.state, 'live');
 });
@@ -202,4 +205,91 @@ test('глушилка выключает запись целиком', () => {
 test('пустой путь ничего не пишет и не падает', () => {
   assert.doesNotThrow(() => registry.upsertGoal('', goal()));
   assert.deepEqual(registry.readRegistry(''), []);
+});
+
+// Заголовки целей повторяются: один и тот же план законно одобряется дважды, и
+// вторая цель носит то же имя. Пока дописывание искало цель по заголовку, задача
+// и запись лога садились на ПЕРВУЮ совпавшую — то есть на уже завершённую работу,
+// а живая цель оставалась пустой и не закрывалась.
+test('задача садится на цель по позиции, а не на первую с тем же заголовком', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal({ title: 'общий заголовок' }));
+  fs.appendFileSync(file, `${JSON.stringify({
+    title: 'общий заголовок', source: 'reply', state: 'live', text: '', log: [], tasks: [],
+  })}\n`);
+
+  registry.addTasks(file, 1, [{ title: 'третья задача', where: [], body: 'тело' }]);
+
+  const goals = registry.readRegistry(file);
+  assert.equal(goals[0].tasks.length, 2, 'первая цель не тронута');
+  assert.equal(goals[1].tasks.length, 1, 'задача легла во вторую цель');
+  assert.equal(goals[1].tasks[0].title, 'третья задача');
+});
+
+test('запись лога садится на цель по позиции', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal({ title: 'общий заголовок' }));
+  fs.appendFileSync(file, `${JSON.stringify({
+    title: 'общий заголовок', source: 'reply', state: 'live', text: '', log: [], tasks: [],
+  })}\n`);
+
+  registry.appendLog(file, 1, 'задача Ц2.1 · registry.js · правка прошла');
+
+  const goals = registry.readRegistry(file);
+  assert.deepEqual(goals[0].log, [], 'первая цель без записи');
+  assert.equal(goals[1].log.length, 1, 'запись легла во вторую цель');
+});
+
+// Лок на цикл правки. Без него два параллельных процесса читают одно состояние и
+// второй затирает правку первого: записи теряются молча. Проверяется на ЗАДАЧАХ,
+// а не на логе: лог по замыслу хранит только последние записи, и счётчик по нему
+// ничего не доказал бы. Одной задачи на процесс мало — окна не накладываются; по
+// двадцать подряд накладываются всегда. Кейс идёт со встречным замером: та же
+// нагрузка наивной записью обязана терять, иначе он зеленел бы и на сломанном локе.
+const WRITERS = 10;
+const PER_WRITER = 20;
+const EXPECTED = WRITERS * PER_WRITER;
+
+function runWriters(script, file) {
+  return Promise.all(Array.from({ length: WRITERS }, (unused, i) => new Promise((done) => {
+    spawn(process.execPath, [script, file, String(i)], { stdio: 'ignore' }).on('exit', done);
+  })));
+}
+
+test('параллельные правки реестра не теряют записей', async () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal({ tasks: [] }));
+
+  const script = path.join(path.dirname(file), 'writer.mjs');
+  fs.writeFileSync(script, `
+    const registry = await import(${JSON.stringify(path.resolve('.claude/hooks/lib/registry.js'))});
+    for (let i = 0; i < ${PER_WRITER}; i += 1) {
+      registry.addTasks(process.argv[2], 0, [{ title: 'з' + process.argv[3] + '.' + i, where: [], body: '' }]);
+    }
+  `);
+  await runWriters(script, file);
+
+  const [saved] = registry.readRegistry(file);
+  assert.equal(saved.tasks.length, EXPECTED, 'ни одна задача не потеряна');
+
+  // Встречный замер: та же нагрузка наивной записью, без лока.
+  const naive = path.join(path.dirname(file), 'naive.mjs');
+  const plain = path.join(path.dirname(file), 'plain.jsonl');
+  fs.writeFileSync(plain, `${JSON.stringify({ title: 'ц', source: 'plan', state: 'live', text: '', log: [], tasks: [] })}\n`);
+  fs.writeFileSync(naive, `
+    import fs from 'node:fs';
+    const file = process.argv[2];
+    for (let i = 0; i < ${PER_WRITER}; i += 1) {
+      const goals = fs.readFileSync(file, 'utf8').split('\\n').filter(Boolean).map(JSON.parse);
+      goals[0].tasks = [...goals[0].tasks, { n: goals[0].tasks.length + 1, title: 'з' + process.argv[3] + '.' + i, where: [], body: '', state: 'open' }];
+      const tmp = file + '.tmp.' + process.pid;
+      fs.writeFileSync(tmp, goals.map((g) => JSON.stringify(g)).join('\\n') + '\\n');
+      fs.renameSync(tmp, file);
+    }
+  `);
+  await runWriters(naive, plain);
+
+  const [raced] = registry.readRegistry(plain);
+  assert.ok(raced.tasks.length < EXPECTED,
+    `без лока часть записей теряется, осталось ${raced.tasks.length}`);
 });

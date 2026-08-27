@@ -68,14 +68,12 @@ for (const file of [serviceTurn, planShownMarker(), planCriticPending()]) {
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
-// Пустая реплика в реестр не идёт; длинные вставки режутся — разбору хватает
-// начала. Срез по БАЙТАМ с хвостовым переводом строки, как его делал bash.
+// Пустая реплика в реестр не идёт. Длинная — идёт ЦЕЛИКОМ: срез по длине
+// отрезал согласие на середине, и разбор получал полтребования вместо
+// требования. Хвостовые переводы строки снимаются, на этом обработка кончается.
 if (!/\S/.test(prompt)) process.exit(0);
 
-const cut = Buffer.from(`${prompt}\n`, 'utf8').subarray(0, 2000);
-let end = cut.length;
-while (end > 0 && cut[end - 1] === 0x0a) end -= 1;
-const said = cut.subarray(0, end).toString('utf8');
+const said = String(prompt).replace(/\n+$/, '');
 
 // Реплика уходит в реестр ФОНОВЫМ приёмом: разбор решает, что тут цель, что
 // задача и относится ли материал к уже одобренному, — а ход Влада при этом не

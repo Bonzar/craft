@@ -82,12 +82,10 @@ function main() {
   // работа идёт. Проверка стоит здесь, а не только в промпте: суждение модели
   // на этом уже мерили, и оно ошибается примерно в каждом пятом разборе.
   //
-  // requireLog добавляет второе условие: закрыть можно лишь то, про что в логе
-  // цели есть запись, — без неё нет доказательства, что правка вообще была.
-  // Закрытие идёт ДО добавления: задачи, заводимые этим же вызовом, лога ещё не
-  // имеют и попасть под нож не могут даже по ошибке модели.
+  // Закрытие идёт ДО добавления: задачи, заводимые этим же вызовом, попасть под
+  // нож не могут даже по ошибке модели.
   if (source === 'plan' && Array.isArray(answer.close) && answer.close.length) {
-    closeTasks(registryFile, answer.close.map(String), { requireLog: true });
+    closeTasks(registryFile, answer.close.map(String));
   }
 
   for (const add of additions) {
@@ -99,7 +97,8 @@ function main() {
     // задвоило бы цель при первом же пересказе.
     const ref = String(add.goal || '').trim();
     const at = /^Ц(\d+)$/i.exec(ref);
-    const existing = at ? current[Number(at[1]) - 1] : undefined;
+    const index = at ? Number(at[1]) - 1 : -1;
+    const existing = index >= 0 ? current[index] : undefined;
 
     const bodies = cutByAnchors(material, tasks);
     const prepared = tasks.map((t, i) => ({
@@ -108,8 +107,10 @@ function main() {
       body: bodies[i],
     }));
 
+    // Цель адресуется ПОЗИЦИЕЙ, а не заголовком: заголовки повторяются, и
+    // дописывание по имени садилось на первую совпавшую — то есть на чужую цель.
     if (existing) {
-      addTasks(registryFile, existing.title, prepared);
+      addTasks(registryFile, index, prepared);
       continue;
     }
     const title = String(add.goal_new || '').trim();

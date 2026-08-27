@@ -59,6 +59,72 @@ export function readRegistry(file) {
   return goals;
 }
 
+// Лок на ЦИКЛ правки: сама запись атомарна переименованием, а «прочитал —
+// поправил — записал» вокруг неё нет. Два параллельных хука читали одно
+// состояние, и второй затирал правку первого: терялись строки лога и закрытие
+// задач. Каталог — атомарная примитивная блокировка на любой файловой системе:
+// mkdir либо создал, либо застал чужой.
+//
+// Занят — ЖДЁМ, а не пропускаем: пропущенная запись роняет ту работу, ради
+// которой лок и берётся. Своего потолка у ожидания нет; снимается только лок,
+// брошенный упавшим процессом, — по возрасту каталога.
+const LOCK_STALE_MS = 300000;
+
+function lockDir(file) {
+  return `${file}.lock`;
+}
+
+function takeLock(file) {
+  const dir = lockDir(file);
+  for (;;) {
+    try {
+      fs.mkdirSync(dir);
+      return dir;
+    } catch (err) {
+      if (err && err.code !== 'EEXIST') return '';
+      let age = 0;
+      try {
+        age = Date.now() - fs.statSync(dir).mtimeMs;
+      } catch {
+        continue; // лок исчез между попыткой и замером — пробуем снова
+      }
+      if (age > LOCK_STALE_MS) {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* уже снят */ }
+        continue;
+      }
+      try {
+        execFileSync('sleep', ['0.05'], { stdio: 'ignore' });
+      } catch {
+        return '';
+      }
+    }
+  }
+}
+
+function freeLock(dir) {
+  if (!dir) return;
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch { /* лок не снялся — его добьёт следующий по возрасту */ }
+}
+
+// withLock(файл, действие) — единственная точка взятия лока. Вложенные вызовы
+// лок повторно НЕ берут: иначе дописывание задач, сделанное поверх общей правки,
+// клинило бы само себя.
+let held = false;
+
+function withLock(file, run) {
+  if (held) return run();
+  const dir = takeLock(file);
+  held = true;
+  try {
+    return run();
+  } finally {
+    held = false;
+    freeLock(dir);
+  }
+}
+
 // Запись атомарная: временный файл рядом и переименование. Соседняя сессия или
 // параллельный хук читают либо прежний реестр, либо новый, но не половину.
 function writeRegistry(file, goals) {
@@ -124,23 +190,25 @@ function normalize(goal) {
 // ревизия не продолжает старое, она его заменяет.
 export function upsertGoal(file, goal) {
   if (!file || off() || !goal || !goal.title) return;
-  const goals = readRegistry(file);
-  const fresh = normalize(goal);
-  const at = goals.findIndex((g) => g.title === fresh.title);
-  if (at === -1) {
-    goals.push(fresh);
-  } else {
-    if (sameContent(goals[at], fresh)) return;
-    goals[at] = fresh;
-  }
-  writeRegistry(file, goals);
+  withLock(file, () => {
+    const goals = readRegistry(file);
+    const fresh = normalize(goal);
+    const at = goals.findIndex((g) => g.title === fresh.title);
+    if (at === -1) {
+      goals.push(fresh);
+    } else {
+      if (sameContent(goals[at], fresh)) return;
+      goals[at] = fresh;
+    }
+    writeRegistry(file, goals);
+  });
 }
 
 // Дописать задачи к существующей цели. Это ответ на «моя реплика про ту же
 // цель, но новую задачу»: материал про уже одобренную работу не заводит вторую
 // такую же цель, а пополняет её. Совпавшая по заголовку задача не дублируется.
-export function addTasks(file, title, tasks) {
-  patch(file, title, (goal) => {
+export function addTasks(file, at, tasks) {
+  patch(file, at, (goal) => {
     // На надгробие задачи не вешаются: работа под целью кончилась, тела у неё
     // нет, и новая задача открыла бы правки, опираясь на пустую запись. Промпт
     // приёма говорит то же, но запрет обязан стоять и здесь.
@@ -161,20 +229,26 @@ export function addTasks(file, title, tasks) {
   });
 }
 
-function patch(file, title, change) {
+// Цель адресуется ПОЗИЦИЕЙ, а не заголовком: заголовки повторяются — один и тот
+// же план законно одобряется дважды, — и поиск по имени сажал задачу или запись
+// лога на первую совпавшую, то есть на уже завершённую работу.
+function patch(file, at, change) {
   if (!file || off()) return;
-  const goals = readRegistry(file);
-  const at = goals.findIndex((g) => g.title === title);
-  if (at === -1) return;
-  change(goals[at]);
-  writeRegistry(file, goals);
+  const i = Number(at);
+  if (!Number.isInteger(i) || i < 0) return;
+  withLock(file, () => {
+    const goals = readRegistry(file);
+    if (!goals[i]) return;
+    change(goals[i]);
+    writeRegistry(file, goals);
+  });
 }
 
 // Строка лога — задача, файл, суть. Суть приходит от сверки: она и так зовёт
 // модель на каждой правке и видит её целиком, поэтому отдельного вызова нет.
-export function appendLog(file, title, entry) {
+export function appendLog(file, at, entry) {
   if (!entry) return;
-  patch(file, title, (goal) => {
+  patch(file, at, (goal) => {
     goal.log = [...(goal.log || []), entry].slice(-LOG_KEEP);
   });
 }
@@ -189,13 +263,6 @@ export function parseAddress(address) {
   const at = /^Ц(\d+)\.(\d+)$/i.exec(String(address).trim());
   if (!at) return null;
   return { goal: Number(at[1]) - 1, task: Number(at[2]) };
-}
-
-// Есть ли в логе цели запись про эту задачу. Приём закрывает только такие: без
-// записи нет и доказательства, что правка вообще была.
-export function hasLogFor(goal, address) {
-  const needle = String(address).trim();
-  return (goal.log || []).some((entry) => String(entry).includes(needle));
 }
 
 // Надгробие: заголовок цели и имена её задач остаются, тело уходит. Заголовок
@@ -219,14 +286,18 @@ function tombstone(goal) {
 // цель адресуется номером по позиции в файле, и удаление сдвинуло бы нумерацию —
 // метка лога, выданная сверкой минуту назад, села бы на чужую цель.
 //
-// requireLog включает приём: он закрывает по логу, а не по своему усмотрению.
-// Пульт закрывает без этого условия — там решает агент, и он же отвечает.
-export function closeTasks(file, addresses, { requireLog = false } = {}) {
+// Закрывает агент — по смыслу сделанного, а не по следу в логе. Доказательство
+// правки тут не спрашивается: тот, кто закрывает, и есть тот, кто работал.
+export function closeTasks(file, addresses) {
   const done = { closed: [], unknown: [] };
   if (!file || off()) {
     done.unknown = [...addresses];
     return done;
   }
+  return withLock(file, () => closeUnderLock(file, addresses, done));
+}
+
+function closeUnderLock(file, addresses, done) {
   const goals = readRegistry(file);
   let touched = false;
 
@@ -236,7 +307,7 @@ export function closeTasks(file, addresses, { requireLog = false } = {}) {
     const task = goal && goal.state !== 'tombstone'
       ? (goal.tasks || []).find((t) => t.n === at.task)
       : undefined;
-    if (!task || (requireLog && !hasLogFor(goal, address))) {
+    if (!task) {
       done.unknown.push(address);
       continue;
     }

@@ -95,13 +95,6 @@ export const TABLE = {
     },
     { matcher: 'Task|Agent|Workflow', hooks: ['universal-mark-plan-critic'], scope: 'both' },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-mark-plan-file'], scope: 'both' },
-    // Лог реестра пишется по ФАКТУ правки, поэтому висит на тех же поверхностях,
-    // что гейтит план-гейт: правки файлов, шелл-запись, запись в Craft.
-    {
-      matcher: 'Write|Edit|MultiEdit|NotebookEdit|Bash|mcp__.*__craft_write',
-      hooks: ['universal-registry-log'],
-      scope: 'both',
-    },
     { hooks: ['universal-observe-buffer'], scope: 'both' },
   ],
 

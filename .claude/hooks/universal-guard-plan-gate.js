@@ -136,21 +136,7 @@ function coverCheck(desc) {
   if (verdict.startsWith('FORBIDDEN')) {
     deny(`Заблокировано план-гейтом: это запрещено твоей же записью —${verdict.slice('FORBIDDEN:'.length)}. Пути дальше: сними запрет прямо в диалоге, либо покажи план с этой целью.`);
   }
-  if (verdict.startsWith('COVERED')) {
-    // Адрес покрывшей задачи ложится меткой рядом с реестром: по ней хук после
-    // инструмента допишет лог. Метка одноразовая и привязана к вызову.
-    const at = /Ц\d+\.\d+/.exec(verdict);
-    if (at) {
-      try {
-        fs.writeFileSync(`${registry}.covered`, JSON.stringify({
-          task: at[0],
-          tool_use_id: event.tool_use_id || '',
-          said: verdict.slice(verdict.indexOf(':', verdict.indexOf(at[0])) + 1).trim(),
-        }));
-      } catch { /* метка не встала — лог не пополнится */ }
-    }
-    return;
-  }
+  if (verdict.startsWith('COVERED')) return;
   if (verdict === 'DRAFT') {
     // Черновое проходит только при плановой цели в реестре: иначе в свежей
     // сессии достаточно, чтобы модель назвала правку отладочной. Надгробие
