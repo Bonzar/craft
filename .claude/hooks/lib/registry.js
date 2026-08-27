@@ -386,6 +386,41 @@ function closeUnderLock(file, addresses, done) {
   return done;
 }
 
+// Вернуть закрытую задачу в работу. Закрывает задачу агент, по смыслу
+// сделанного, — значит он же в этом суждении и ошибается: записал лог, счёл
+// работу законченной, а тег не проставил. Без возврата такая ошибка кончалась
+// тупиком: сверка отказывала «работа по этой задаче уже закрыта», и доделка
+// требовала нового разрешения Влада на то, что он уже разрешил.
+//
+// Нового разрешения переоткрытие не создаёт: оно отменяет ошибку агента внутри
+// той же цели, а цель одобрена и никуда не девалась. Тело и адреса задачи всё
+// это время лежали на месте — возвращать нечего, кроме состояния.
+export function reopenTasks(file, addresses) {
+  const done = { reopened: [], unknown: [] };
+  if (!file || off()) {
+    done.unknown = [...addresses];
+    return done;
+  }
+  return withLock(file, () => {
+    const goals = readRegistry(file);
+    let touched = false;
+    for (const address of addresses) {
+      const at = parseAddress(address);
+      const goal = at ? goals[at.goal] : undefined;
+      const task = goal ? (goal.tasks || []).find((t) => t.n === at.task) : undefined;
+      if (!task || task.state !== 'closed') {
+        done.unknown.push(address);
+        continue;
+      }
+      task.state = 'open';
+      done.reopened.push(address);
+      touched = true;
+    }
+    if (touched) writeRegistry(file, goals);
+    return done;
+  });
+}
+
 // Запустить приём материала ФОНОМ: ход Влада не ждёт модель. Метка ставится
 // синхронно, до отпускания процесса, — иначе сверка правки успела бы прочитать
 // реестр раньше, чем узнала бы, что разбор идёт.

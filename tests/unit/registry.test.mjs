@@ -410,3 +410,33 @@ test('снять можно только живой запрет: работа �
   assert.deepEqual(registry.liftBans(file, ['Ц2']).unknown, ['Ц2'], 'снятый второй раз не снимается');
   assert.deepEqual(registry.liftBans(file, ['Ц9', 'мусор']).unknown, ['Ц9', 'мусор']);
 });
+
+// Переоткрытие задачи. Закрывает её агент по смыслу сделанного — значит он же в
+// этом суждении ошибается: записал лог, счёл работу законченной, а тег не
+// проставил. Без возврата ошибка кончалась тупиком: сверка отказывала «работа
+// закрыта», и доделку приходилось разрешать заново, хотя цель одобрена.
+test('закрытая задача возвращается в работу и снова видна в тексте', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.closeTasks(file, ['Ц1.1']);
+
+  const done = registry.reopenTasks(file, ['Ц1.1']);
+  assert.deepEqual(done.reopened, ['Ц1.1']);
+  assert.deepEqual(done.unknown, []);
+
+  const [saved] = registry.readRegistry(file);
+  assert.equal(saved.tasks[0].state, 'open');
+  assert.match(saved.tasks[0].body, /форма записи и команды/, 'тело всё это время лежало на месте');
+
+  const text = registry.render([saved]);
+  assert.match(text, /задача Ц1\.1 «модуль реестра» — открыта/, 'сверка снова видит задачу открытой');
+  assert.match(text, /форма записи и команды/, 'и её тело вернулось в текст');
+});
+
+test('возвращать нечего: открытая задача и неизвестный адрес уходят в неизвестные', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  const done = registry.reopenTasks(file, ['Ц1.1', 'Ц9.9', 'мусор']);
+  assert.deepEqual(done.reopened, []);
+  assert.deepEqual(done.unknown, ['Ц1.1', 'Ц9.9', 'мусор']);
+});
