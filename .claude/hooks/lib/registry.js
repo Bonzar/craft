@@ -22,7 +22,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
-import { sha256 } from './hash.js';
 
 // Лог обрезается сверху: длинный ход иначе растит реестр без предела, а он
 // целиком уходит в каждую сверку.
