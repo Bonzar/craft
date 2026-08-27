@@ -34,25 +34,11 @@ function perSessionOrDefault(envName, name) {
   return `/tmp/${name.replace('{sid}', sessionId() || 'default')}`;
 }
 
-// Периметр одобренного плана и четыре его спутника.
-export function planGateMarker() {
-  return perSession('CRAFT_PLAN_GATE_MARKER', 'craft-plan-gate.{sid}.approved');
-}
-function besideMarker(suffix) {
-  const marker = planGateMarker();
-  return marker ? `${marker}.${suffix}` : '';
-}
-export function approvedPlans() {
-  return besideMarker('plans');
-}
-export function buttonPlans() {
-  return besideMarker('button-plans');
-}
-export function permissionWindow() {
-  return besideMarker('qa-window');
-}
-export function classifierDegraded() {
-  return besideMarker('classifier-degraded');
+// Реестр одобренного: цели и задачи, в которые раскладывается всё, на что Влад
+// дал ок. Правило строгое, как у периметра, а не как у счётчиков: реестр держит
+// одобрения, и общий default открыл бы записи одной сессии другой.
+export function approvalRegistry() {
+  return perSession('CRAFT_APPROVAL_REGISTRY', 'craft-approvals.{sid}.jsonl');
 }
 
 // Файл плана этой сессии: путь к нему лежит в метке, которую пишет свой хук.
@@ -74,14 +60,6 @@ export function planCriticRound() {
   return perSessionOrDefault('CRAFT_PLAN_CRITIC_ROUND', 'plan-critic.{sid}.round');
 }
 
-// Дельта планов: хеши юнитов последнего одобренного и его текст рядом.
-export function planDeltaStore() {
-  return perSessionOrDefault('CRAFT_PLAN_DELTA_STORE', 'plan-delta.{sid}.hashes');
-}
-export function planDeltaSnapshot() {
-  return `${planDeltaStore()}.snapshot`;
-}
-
 // Метки хода: показанный план и служебный ход.
 export function planShownMarker() {
   return perSessionOrDefault('CRAFT_PLAN_SHOWN_MARKER', 'plan-shown.{sid}');
@@ -96,6 +74,13 @@ export function observeBuffer() {
 }
 export function incidentClosureMarker() {
   return perSessionOrDefault('INCIDENT_CLOSURE_MARKER', 'incident-closure.{sid}.armed');
+}
+
+// Якорь сессии: задача в базе, выбранная Владом на старте. Путь строится по
+// НЕПУСТОМУ идентификатору сессии — общий адрес открывал бы одной сессии якорь
+// другой, а гвард на нём решает, можно ли писать.
+export function sessionAnchor() {
+  return perSession('SESSION_ANCHOR_STATE', 'session-anchor.{sid}');
 }
 
 // Прочее состояние.

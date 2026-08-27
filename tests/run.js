@@ -64,6 +64,7 @@ const SCRIPT = {
   'block-no-verify': 'universal-block-no-verify',
   'fact-gate': 'universal-fact-gate',
   'stop-routine-facts': 'universal-stop-routine-facts',
+  'session-anchor': 'universal-session-anchor',
   'guard-plan-critic': 'universal-guard-plan-critic',
   'guard-plan-delta': 'universal-guard-plan-delta',
   'guard-plan-service-turn': 'universal-guard-plan-service-turn',
@@ -92,11 +93,12 @@ const REQUIRED = [
   'stop-routine-facts:block', 'stop-routine-facts:silent',
   'guard-plan-critic:deny', 'guard-plan-critic:allow',
   'guard-critic-plateau:deny', 'guard-critic-plateau:allow',
-  'guard-plan-delta:deny', 'guard-plan-delta:allow', 'guard-plan-delta:silent',
+  'guard-plan-delta:deny', 'guard-plan-delta:allow',
   'guard-plan-service-turn:deny', 'guard-plan-service-turn:allow',
   'mark-plan-critic:silent', 'mark-plan-file:silent',
   'stop-incident-closure:block', 'stop-incident-closure:silent',
   'stop-relative-link:block', 'stop-relative-link:silent',
+  'session-anchor:deny', 'session-anchor:allow',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
@@ -158,7 +160,6 @@ function makeState() {
     rfmark: tmpName('routine-facts-test'),
     planpath: tmpName('plan-file-test'),
     criticmark: tmpName('plan-critic-test'),
-    deltastore: tmpName('plan-delta-test'),
     serviceturn: tmpName('plan-service-turn-test'),
     criticpend: tmpName('plan-critic-pending-test'),
     planshown: tmpName('plan-shown-test'),
@@ -166,15 +167,17 @@ function makeState() {
     relstate: tmpName('relative-link-test'),
     syncstate: tmpName('sync-system-test'),
     classtrace: tmpName('mock-classifier-trace'),
+    registry: tmpName('approval-registry-test'),
+    anchor: tmpName('session-anchor-test'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
+    CRAFT_APPROVAL_REGISTRY: s.registry,
     OBSERVE_BUFFER: s.obsbuf,
     FACT_GATE_STATE_DIR: s.fgdir,
     ROUTINE_FACTS_MARKER: s.rfmark,
     CRAFT_PLAN_FILE_MARKER: s.planpath,
     CRAFT_PLAN_CRITIC_MARKER: s.criticmark,
-    CRAFT_PLAN_DELTA_STORE: s.deltastore,
     INCIDENT_CLOSURE_MARKER: s.icmark,
     CRAFT_SERVICE_TURN_MARKER: s.serviceturn,
     CRAFT_PLAN_CRITIC_PENDING: s.criticpend,
@@ -182,6 +185,7 @@ function makeState() {
     CRAFT_PLAN_CRITIC_RUNS: s.criticruns,
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
+    SESSION_ANCHOR_STATE: s.anchor,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
@@ -206,11 +210,11 @@ function stateSnapshot(s) {
     ['marker.classifier-degraded', `${s.marker}.classifier-degraded`],
     ['observe-buffer', s.obsbuf], ['routine-facts', s.rfmark],
     ['plan-file', s.planpath], ['plan-critic', s.criticmark],
-    ['plan-delta', s.deltastore], ['plan-delta.snapshot', `${s.deltastore}.snapshot`],
     ['incident-closure', s.icmark], ['service-turn', s.serviceturn],
     ['plan-critic-pending', s.criticpend], ['plan-shown', s.planshown],
     ['plan-critic-runs', s.criticruns], ['relative-link', s.relstate],
-    ['sync-system', s.syncstate],
+    ['sync-system', s.syncstate], ['approval-registry', s.registry],
+    ['session-anchor', s.anchor],
   ];
   for (const [label, file] of files) {
     if (fs.existsSync(file)) out[label] = fs.readFileSync(file, 'utf8');
@@ -227,10 +231,10 @@ function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
     `${s.marker}.qa-window`, `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
-    s.criticmark, s.deltastore, `${s.deltastore}.snapshot`, s.icmark,
+    s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
-    s.syncstate, s.classtrace,
+    s.syncstate, s.classtrace, s.registry, s.anchor,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
@@ -239,8 +243,19 @@ function cleanState(s) {
 
 // --- прогон одного кейса -----------------------------------------------------
 
-function subst(value) {
-  return typeof value === 'string' ? value.split('{TESTS_DIR}').join(CASES_DIR) : value;
+function subst(value, s) {
+  if (typeof value !== 'string') return value;
+  const withDir = value.split('{TESTS_DIR}').join(CASES_DIR);
+  // {REGISTRY} — герметичный путь реестра этого прогона. Кейсу он нужен, чтобы
+  // указать ASSERT_FILE на тот же файл, куда пишет хук: путь генерится раннером
+  // и заранее кейсу неизвестен.
+  //
+  // {CLASSTRACE} — след вызовов мока классификатора. По нему судят кейсы про
+  // МАТЕРИАЛ: что именно хук положил в промпт разбора. По реестру этого не
+  // видно — там лежит ответ заглушки, заданный самим кейсом, а не то, что ушло
+  // в вопрос.
+  if (!s) return withDir;
+  return withDir.split('{REGISTRY}').join(s.registry).split('{CLASSTRACE}').join(s.classtrace);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`
@@ -253,13 +268,23 @@ function runPass(c, ext) {
 
   const s = makeState();
   const caseEnv = { ...BASE_ENV, ...s.env };
-  for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v);
+  for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v, s);
 
-  const input = subst(JSON.stringify(c.input ?? {}));
+  const input = subst(JSON.stringify(c.input ?? {}), s);
 
   // `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт из
   // окружения, создаётся до прогона (взводом в жизни занимается другой хук).
   if (c.arm === true) fs.writeFileSync(s.icmark, '');
+
+  // `registry_seed` — стартовое состояние реестра одобренного: массив целей,
+  // который кладётся в {REGISTRY} до прогона. Собирать такое состояние цепочкой
+  // подготовительных хуков нельзя: у всех шагов подготовки одно окружение, а
+  // значит и один ответ мока, — «завести цель, потом её закрыть» двумя разными
+  // ответами не выразить. Кейс, собранный так, тихо получал бы не то
+  // предусловие, которое обещает, и зеленел бы независимо от кода.
+  if (Array.isArray(c.registry_seed)) {
+    fs.writeFileSync(s.registry, `${c.registry_seed.map((g) => JSON.stringify(g)).join('\n')}\n`);
+  }
 
   // Подготовке по умолчанию подаётся ТОТ ЖЕ вход и то же окружение, что целевому
   // хуку; кейс может задать своё событие (setup_input) и свои переменные
@@ -342,10 +367,15 @@ function grade(expect, out, err, env) {
   if (expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
     const file = (env || {}).ASSERT_FILE || '';
     if (!file) return false;
-    let text = '';
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch { /* файла нет — считаем пустым */ }
+    // Снимок, снятый до уборки прогона, старше чтения с диска: файлы состояния
+    // самого прогона к этому моменту уже убраны, и читать их было бы поздно.
+    let text = (env || {}).ASSERT_TEXT;
+    if (text === undefined) {
+      text = '';
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch { /* файла нет — считаем пустым */ }
+    }
     const needle = expect.slice(expect.indexOf(':') + 1);
     return expect.startsWith('file-contains:') ? text.includes(needle) : !text.includes(needle);
   }
@@ -389,6 +419,8 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-gate', 'PreToolUse', 'Bash'],
   ['universal-guard-plan-exit-failure', 'PostToolUseFailure', 'ExitPlanMode'],
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
+  ['universal-session-anchor', 'PreToolUse', 'Bash'],
+  ['universal-session-anchor', 'PostToolUse', 'AskUserQuestion'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
 
@@ -598,7 +630,10 @@ function main() {
         return;
       }
 
-      let ok = grade(c.expect, r.out, r.err, { ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || '') });
+      let ok = grade(c.expect, r.out, r.err, {
+        ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || ''),
+        ASSERT_TEXT: r.state['assert-file'],
+      });
       let got = r.out;
       if (ok === null) {
         fails.push(`${c.hook} / ${c.name} — unknown expect '${c.expect}'`);
