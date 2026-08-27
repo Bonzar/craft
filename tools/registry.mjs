@@ -7,10 +7,11 @@
 //   node tools/registry.mjs show [--bodies]
 //   node tools/registry.mjs close Ц1.2 Ц1.3
 //
-// show по умолчанию печатает СКЕЛЕТ — цели и имена задач с адресами, без тел и
-// логов: для выбора адреса тела не нужны, а полный рендер живого реестра тянет
-// десятки тысяч символов в контекст. Полный вид — по --bodies, он же уходит в
-// сверку правки.
+// show по умолчанию печатает СПИСОК РАБОТЫ: живые цели и незакрытые задачи,
+// скелетом — имена с адресами, без тел и логов. Закрытые задачи и надгробия из
+// него уходят: это список того, что делать, и он обязан коротеть по мере работы.
+// Тела — по --bodies, закрытое и надгробия — по --all; вместе они дают полный
+// вид, тот же, что уходит в сверку правки.
 //
 // close закрывает по адресу и снимает у задачи тело: работа кончилась, держать
 // её текст незачем. Цель, у которой закрылась последняя задача, уходит
@@ -25,13 +26,33 @@ import { readRegistry, render, closeTasks } from '../.claude/hooks/lib/registry.
 const [, , command, ...rest] = process.argv;
 
 function show() {
-  const goals = readRegistry(approvalRegistry());
-  if (!goals.length) {
+  const all = readRegistry(approvalRegistry());
+  if (!all.length) {
     process.stdout.write('Реестр пуст: одобренного нет.\n');
+    return 0;
+  }
+  const goals = rest.includes('--all') ? all : working(all);
+  if (!goals.length) {
+    process.stdout.write('Работы не осталось: всё одобренное закрыто.\n');
     return 0;
   }
   process.stdout.write(`${render(goals, { bodies: rest.includes('--bodies') })}\n`);
   return 0;
+}
+
+// Живая часть реестра: надгробия уходят целиком, у живых целей остаются только
+// незакрытые задачи. Нумерация при этом СОХРАНЯЕТСЯ — и номер цели, и номер
+// задачи: по ним закрывают, и сдвиг адресовал бы закрытие на чужую работу.
+function working(goals) {
+  return goals
+    .map((goal, i) => ({ goal, n: i + 1 }))
+    .filter(({ goal }) => goal.state !== 'tombstone')
+    .map(({ goal, n }) => ({
+      ...goal,
+      n,
+      tasks: (goal.tasks || []).filter((t) => t.state !== 'closed'),
+    }))
+    .filter((goal) => goal.tasks.length);
 }
 
 function close() {
@@ -58,5 +79,5 @@ if (!registry) {
 if (command === 'show') process.exit(show());
 if (command === 'close') process.exit(close());
 
-process.stderr.write('Команды: show [--bodies] | close Ц1.2 [Ц1.3 …]\n');
+process.stderr.write('Команды: show [--bodies] [--all] | close Ц1.2 [Ц1.3 …]\n');
 process.exit(1);

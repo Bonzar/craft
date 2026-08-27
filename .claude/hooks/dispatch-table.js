@@ -57,12 +57,12 @@ export const TABLE = {
     },
     {
       matcher: 'mcp__.*__craft_write',
-      hooks: ['universal-session-anchor', 'universal-guard-plan-gate', 'universal-fact-gate'],
+      hooks: ['universal-session-anchor', 'universal-fact-gate'],
       scope: 'both',
     },
     {
       matcher: 'Write|Edit|MultiEdit|NotebookEdit',
-      hooks: ['universal-session-anchor', 'universal-guard-plan-gate'],
+      hooks: ['universal-session-anchor'],
       scope: 'both',
     },
     {
@@ -78,12 +78,16 @@ export const TABLE = {
         'universal-block-no-verify',
         'universal-fact-gate',
         'universal-session-anchor',
-        'universal-guard-plan-gate',
       ],
       scope: 'both',
     },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-config-protection'], scope: 'both' },
     { matcher: 'Read|Grep|Glob', hooks: ['universal-eval-materials-guard'], scope: 'both' },
+    // Гейт слушает ВСЕ вызовы, а не три набора инструментов: своя команда записи
+    // есть у любого стороннего сервера, и перечислением их не закрыть. Сам гейт
+    // пропускает то, про что видно, что оно только читает; матчер здесь широкий
+    // намеренно — решение принимает хук, а не список имён.
+    { hooks: ['universal-guard-plan-gate'], scope: 'both' },
   ],
 
   PostToolUse: [

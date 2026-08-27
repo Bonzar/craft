@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "timeout": 3600
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "timeout": 3600
           }
         ]
       }
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "timeout": 3600
           }
         ]
       }
@@ -36,7 +39,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "timeout": 3600
           }
         ]
       }
@@ -46,7 +50,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "timeout": 3600
           }
         ]
       }
@@ -56,7 +61,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "timeout": 3600
           }
         ]
       }
@@ -66,7 +72,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "timeout": 3600
           }
         ]
       }

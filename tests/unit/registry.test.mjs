@@ -293,3 +293,17 @@ test('параллельные правки реестра не теряют з�
   assert.ok(raced.tasks.length < EXPECTED,
     `без лока часть записей теряется, осталось ${raced.tasks.length}`);
 });
+
+// Список работы — живая часть реестра, и нумерация в нём обязана остаться
+// настоящей: по этим адресам закрывают, а сдвиг адресовал бы закрытие на чужую
+// цель. Поле n у цели задаёт номер явно, минуя позицию в массиве.
+test('рендер держит номер цели, заданный явно', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal({ title: 'первая' }));
+  registry.upsertGoal(file, goal({ title: 'вторая', tasks: [{ title: 'её задача', where: [], body: 'тело' }] }));
+
+  const [, second] = registry.readRegistry(file);
+  const text = registry.render([{ ...second, n: 2 }], { bodies: false });
+  assert.match(text, /^Ц2 «вторая»/m, 'цель осталась второй');
+  assert.match(text, /задача Ц2\.1 «её задача»/, 'адрес задачи не съехал');
+});

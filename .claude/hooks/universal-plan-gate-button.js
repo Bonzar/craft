@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import { readEvent } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
 import { lastInputTrace, approvalRegistry } from './lib/paths.js';
-import { ingestInBackground } from './lib/registry.js';
+import { ingestInBackground, switchOn, switchOff } from './lib/registry.js';
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
@@ -33,6 +33,11 @@ if (tool !== 'AskUserQuestion') process.exit(0);
 // диктует директива якоря.
 const ANCHOR_HEADER = 'Якорь сессии';
 
+// Тап по вопросу с этим заголовком снимает или возвращает проверки. Рубильник
+// включает ТОЛЬКО Влад: агент такой вопрос по своей инициативе не задаёт.
+const SWITCH_HEADER = 'Проверки';
+const SWITCH_OFF = /^(сн(я|и)ть|без проверок|да)/i;
+
 // Значение так, как его подставлял jq: строка остаётся собой, всё прочее
 // сериализуется в JSON.
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value));
@@ -49,6 +54,14 @@ const chosen = questions
     const text = q && typeof q === 'object' ? q.question : undefined;
     if (typeof text !== 'string' || text === '') return null;
     if (q.header === ANCHOR_HEADER) return null;
+    if (q.header === SWITCH_HEADER) {
+      const chosen = answers && typeof answers === 'object' ? answers[text] : undefined;
+      if (typeof chosen === 'string') {
+        if (SWITCH_OFF.test(chosen.trim())) switchOn(approvalRegistry());
+        else switchOff(approvalRegistry());
+      }
+      return null;
+    }
     const answer = answers && typeof answers === 'object' ? answers[text] : undefined;
     if (answer === null || answer === undefined || answer === '') return null;
     return { question: text, answer: asText(answer) };

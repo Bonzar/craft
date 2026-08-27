@@ -253,6 +253,46 @@ export function appendLog(file, at, entry) {
   });
 }
 
+// --- Рубильник ---------------------------------------------------------------
+// Режим «проверки сняты» живёт ЗАПИСЬЮ в реестре, а не переменной окружения:
+// так он переживает перезапуск, виден в тексте отказа и его нельзя включить
+// незаметно. Гаснет со сменой сессии сам — реестр у каждой сессии свой.
+//
+// Ставит его только тап Влада по кнопке; агент себе рубильник не выдаёт.
+export const SWITCH_TITLE = 'Проверки сняты по тапу Влада';
+
+export function switchOn(file) {
+  if (!file || off()) return;
+  withLock(file, () => {
+    const goals = readRegistry(file);
+    if (goals.some((g) => g.title === SWITCH_TITLE && g.state === 'live')) return;
+    goals.push({
+      title: SWITCH_TITLE,
+      source: 'switch',
+      state: 'live',
+      text: 'Влад снял проверки тапом. Правки идут без сверки и пишутся в лог этой записи.',
+      log: [],
+      tasks: [],
+    });
+    writeRegistry(file, goals);
+  });
+}
+
+export function switchOff(file) {
+  if (!file || off()) return;
+  withLock(file, () => {
+    const goals = readRegistry(file).filter((g) => g.title !== SWITCH_TITLE);
+    writeRegistry(file, goals);
+  });
+}
+
+// Индекс живого рубильника или -1. Индекс, а не булево: под этой же записью
+// ведётся лог пропущенных правок — след того, что делалось при снятых
+// проверках, обязан остаться.
+export function switchAt(goals) {
+  return goals.findIndex((g) => g.title === SWITCH_TITLE && g.state === 'live');
+}
+
 // --- Закрытие ----------------------------------------------------------------
 // Реестр чистится закрытием, а не порогом: каждая запись заведена под конкретную
 // работу и уходит потому, что работа кончилась.
@@ -446,16 +486,20 @@ export function parsingCount(file, staleMs = 120000) {
 //
 // bodies=false печатает скелет — цели и имена задач без тел и логов. Им отвечает
 // пульт: агенту нужен адрес, а не 40 000 символов в контекст.
+// Номер цели берётся из поля n, когда оно есть: список работы показывает не весь
+// реестр, а его живую часть, и нумерация по позиции в отфильтрованном массиве
+// адресовала бы закрытие на чужую цель.
 export function render(goals, { bodies = true } = {}) {
   const out = [];
   goals.forEach((goal, i) => {
+    const num = Number.isInteger(goal.n) ? goal.n : i + 1;
     const dead = goal.state === 'tombstone';
     const tail = dead ? `, ${goal.reason || TOMBSTONE_REASON}` : '';
-    out.push(`Ц${i + 1} «${goal.title}» — источник: ${goal.source}${tail}`);
+    out.push(`Ц${num} «${goal.title}» — источник: ${goal.source}${tail}`);
     if (bodies && goal.text) out.push(`  текст: ${goal.text}`);
     for (const task of goal.tasks || []) {
       const state = task.state === 'closed' ? 'закрыта' : 'открыта';
-      out.push(`  задача Ц${i + 1}.${task.n} «${task.title}» — ${state}`);
+      out.push(`  задача Ц${num}.${task.n} «${task.title}» — ${state}`);
       if (task.where && task.where.length) out.push(`    где: ${task.where.join(', ')}`);
       if (bodies && task.body) out.push(`    что: ${task.body}`);
     }

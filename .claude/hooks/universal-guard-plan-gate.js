@@ -23,8 +23,9 @@
 // Приём материала в реестр идёт фоном, и сверка ЖДЁТ его конца: правка, которую
 // Влад только что разрешил репликой, иначе упёрлась бы в гейт.
 //
-// CRAFT_AUTONOMOUS=1 обходит гейт целиком — рутины и headless-евалы
-// предавторизованы, интерактивного Влада там нет.
+// Выходов у гейта нет: ни автономного прогона, ни режима харнесса. Снять
+// проверки можно только тапом Влада — рубильником, который живёт записью в
+// реестре и гаснет со сменой сессии.
 //
 // Непокрыто и названо честно: неопознанная конструкция записи; пакетные
 // менеджеры и операции гита над рабочим деревом (пишут своей логикой, не
@@ -40,23 +41,19 @@ import {
   isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget,
 } from './lib/write-targets.js';
 import { lastInputTrace, exemptScopeFile, approvalRegistry } from './lib/paths.js';
-import { waitForParsing, readRegistry, render } from './lib/registry.js';
+import {
+  waitForParsing, readRegistry, render, switchAt, appendLog,
+} from './lib/registry.js';
 import { classify, classifierPath } from './lib/classifier.js';
-
-if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
 const { raw, event, tool, input } = readEvent();
 if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
 
-// Гейт открывает только bypassPermissions: он снимает и вопросы харнесса, то
-// есть Влад им действительно отказывается от проверок целиком.
-//
-// acceptEdits в списке БОЛЬШЕ НЕТ. Он назывался разрешением, но давал худшее из
-// двух: смысловую сверку снимал, а вопросы харнесса оставлял — записи в .claude
-// лежат среди его защищённых путей, и правила разрешений их не пре-одобряют.
-// Влад всё равно жал ок на каждую правку, только уже без проверки.
-const mode = event.permission_mode || '';
-if (mode === 'bypassPermissions') process.exit(0);
+// Режимов харнесса гейт больше не слушает — ни bypassPermissions, ни acceptEdits.
+// Снять проверки можно, но только тапом Влада, и след этого живёт записью в
+// реестре: переменная окружения и режим клиента такого следа не оставляют.
+// Автономный прогон тоже не выход: его задание ложится в реестр целью, и правки
+// рутины сверяются с ним наравне со всеми.
 
 // Отладочный след последнего входа (эфемерный): по нему проверяются факты о
 // составе hook-входа (напр. поле permission_mode) без правки харнесса.
@@ -70,7 +67,51 @@ try {
 const isCraftWrite = /__craft_write$/.test(tool);
 const isFileEdit = !isCraftWrite && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool);
 const isBash = !isCraftWrite && tool === 'Bash';
-if (!isCraftWrite && !isFileEdit && !isBash) process.exit(0);
+const isSubagent = ['Task', 'Agent', 'Workflow'].includes(tool);
+
+// Инструменты, про которые ВИДНО, что они только читают. Список закрытый и
+// короткий: всё остальное идёт в сверку. Перечислять пишущие бесполезно —
+// свой инструмент записи есть у любого стороннего сервера, и завтра появится
+// ещё один; правка через него шла бы мимо гейта молча.
+const READING_TOOLS = new Set([
+  'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'BashOutput',
+  'TaskList', 'TaskGet', 'TaskOutput', 'ListAgents', 'ListSkills', 'ListPlugins',
+  // Таск-лист харнесса — ОТРАЖЕНИЕ реестра, а не системная правка: работа и так
+  // берётся из одобренного, и гейт на её отметке спрашивал бы про самого себя.
+  'TaskCreate', 'TaskUpdate',
+  'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode', 'Skill', 'ReadNotifications',
+]);
+
+// Читающие подагенты названы поимённо: разведка и критика ничего не правят, а
+// гейт на их запуске стоил бы вызова модели на каждом плане.
+const READING_AGENTS = new Set([
+  'Explore', 'Plan', 'plan-critic', 'plan-critic-unit', 'plan-critic-seams',
+  'plan-critic-verdict', 'comment-analyzer', 'type-design-analyzer',
+  'silent-failure-hunter', 'typescript-reviewer', 'react-reviewer',
+  'pr-test-analyzer', 'claude-code-guide',
+]);
+
+// Имя MCP-инструмента говорит само за себя, когда в нём стоит глагол чтения.
+// Это не догадка о поведении, а признак: сервер, который пишет, называет
+// операцию иначе.
+const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
+
+function mcpReads(name) {
+  const op = String(name).replace(/^mcp__.*?__/, '');
+  // Глагол стоит либо в начале имени (list_repos), либо на конце после
+  // подчёркивания (craft_read): сервер, который пишет, называет операцию иначе.
+  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
+    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
+}
+
+function toolReads() {
+  if (READING_TOOLS.has(tool)) return true;
+  if (isSubagent) return READING_AGENTS.has(String(input.subagent_type || ''));
+  if (/^mcp__/.test(tool)) return mcpReads(tool);
+  return false;
+}
+
+if (!isCraftWrite && !isFileEdit && !isBash && toolReads()) process.exit(0);
 
 // Срез по БАЙТАМ с хвостовым переводом строки, как его делал bash: подстановка
 // команды добавляла к тексту перевод строки, резала head -c и снимала хвостовые
@@ -111,14 +152,24 @@ const classifier = classifierPath();
 // черновое, не покрыта. Запрет проверяется раньше покрытия, а более позднее
 // явное разрешение бьёт запрет.
 //
-// Классификатор недоступен — отказ. Мягкой деградации к путь-матчу больше нет:
-// пути перестали быть основанием для решения.
+// Нет решения — отказ, всегда: ни падение проверки, ни недоступность модели, ни
+// смерть самого хука проходом не становятся. Мягкой деградации к путь-матчу
+// больше нет — пути перестали быть основанием для решения.
 function coverCheck(desc) {
   const registry = approvalRegistry();
   const goals = readRegistry(registry);
+
+  // Рубильник Влада: проверки сняты, но след остаётся — каждая пропущенная
+  // правка ложится в лог его записи. Молча пропускать нельзя: иначе непонятно,
+  // что делалось, пока проверки не работали.
+  const off = switchAt(goals);
+  if (off >= 0) {
+    appendLog(registry, off, `без сверки · ${String(desc).split('\n')[0].slice(0, 120)}`);
+    return;
+  }
   // Пустой реестр модель не зовёт: одобренного нет, и спрашивать не о чем.
   if (!goals.length) {
-    deny('Заблокировано план-гейтом: одобренного нет — реестр пуст. Покажи план и получи ок Влада, либо задай предметный вопрос-разрешение. Автономному прогону — CRAFT_AUTONOMOUS=1.');
+    deny('Заблокировано план-гейтом: одобренного нет — реестр пуст. Покажи план и получи ок Влада, либо задай предметный вопрос-разрешение.');
   }
 
   const view = tempFile('registry-view');
@@ -127,9 +178,10 @@ function coverCheck(desc) {
   } catch {
     deny('Заблокировано план-гейтом: реестр одобренного не читается, сверить правку не с чем.');
   }
-  const verdict = classify(classifier, 'cover', [view], desc, {
-    timeoutSec: process.env.PLAN_CLASSIFIER_TIMEOUT || 60,
-  });
+  // Потолка сверке гейт не назначает: решения ждём, сколько бы оно ни заняло.
+  // Своё число у неё есть — страховка от зависшего вызова, и живёт оно там же,
+  // где сама проверка.
+  const verdict = classify(classifier, 'cover', [view], desc);
   try { fs.rmSync(view, { force: true }); } catch { /* временный вид не убрался */ }
 
   if (verdict.startsWith('OVERRIDE')) return;
@@ -148,7 +200,7 @@ function coverCheck(desc) {
   if (verdict.startsWith('UNCOVERED')) {
     deny(`Заблокировано план-гейтом: одобренное этого не покрывает —${verdict.slice('UNCOVERED:'.length)}. Пути дальше: покажи план с этой целью или дай прямое разрешение в диалоге.`);
   }
-  deny('Заблокировано план-гейтом: сверка недоступна, а без неё решение принять нечем. Аварийный выключатель — PLAN_CLASSIFIER=off, автономному прогону — CRAFT_AUTONOMOUS=1.');
+  deny('Заблокировано план-гейтом: сверка не дала решения, а без него правка не идёт. Нет решения — блок: ни падение проверки, ни недоступность модели проходом не становятся.');
 }
 
 // --- Правки файлов (Write/Edit/MultiEdit/NotebookEdit) -----------------------
@@ -207,6 +259,19 @@ if (isBash) {
   ]);
 
   coverCheck(bdesc);
+  process.exit(0);
+}
+
+// --- Прочие инструменты ------------------------------------------------------
+// Всё, про что не видно, что оно только читает: чужие MCP-серверы, подагенты,
+// которые правят, и то, чего сегодня ещё нет. Сверяется тем же вопросом —
+// описанием служит имя инструмента и его вход.
+if (!isCraftWrite) {
+  const odesc = Buffer.concat([
+    Buffer.from(`инструмент: ${tool}\nвход:\n`, 'utf8'),
+    headBytes(JSON.stringify(input), 4000),
+  ]);
+  coverCheck(odesc);
   process.exit(0);
 }
 
