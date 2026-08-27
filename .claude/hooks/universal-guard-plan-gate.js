@@ -113,8 +113,17 @@ const READING_AGENTS = new Set([
   'pr-test-analyzer', 'claude-code-guide',
 ]);
 
+// Обслуживание СОБСТВЕННОГО хода: подписаться на события своего PR, разбудить
+// себя проверкой через час, снять подписку, переименовать сессию. Мир от этого
+// не меняется — меняется то, когда и на что агент проснётся, и реестр про такие
+// вещи ничего не знает. Без этого правила гейт запирал агента ровно там, где он
+// обязан довести работу до зелёного: подписку и отложенную проверку не
+// пропускал, и красный PR оставался без присмотра.
+const SESSION_OPS = /(subscribe_pr_activity|send_later|_wakeup|set_session_(title|tags))$/;
+
 function touchesWorld() {
   if (READING_TOOLS.has(tool) || SESSION_TOOLS.has(tool)) return false;
+  if (SESSION_OPS.test(tool)) return false;
   if (isSubagent) return !READING_AGENTS.has(String(input.subagent_type || ''));
   if (/^mcp__/.test(tool)) return !mcpReads(tool);
   return true;
