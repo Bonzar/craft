@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { classifierPath, classify } from '../.claude/hooks/lib/classifier.js';
 import {
-  readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks,
+  readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans,
 } from '../.claude/hooks/lib/registry.js';
 
 const [, , source, materialFile, registryFile, markId] = process.argv;
@@ -88,8 +88,26 @@ function main() {
     closeTasks(registryFile, answer.close.map(String));
   }
 
+  // Снятие запрета принимается от ЛЮБОГО источника, в отличие от закрытия задач:
+  // «можно снова .ts» — это решение Влада, и он говорит его репликой или кнопкой
+  // так же часто, как планом. Закрытие же спрашивается только у плана, потому
+  // что план и есть граница работы.
+  if (Array.isArray(answer.lift) && answer.lift.length) {
+    liftBans(registryFile, answer.lift.map(String));
+  }
+
   for (const add of additions) {
     const tasks = Array.isArray(add.tasks) ? add.tasks : [];
+
+    // ЗАПРЕТ — запись без задач: работы под ним нет, он лишь очерчивает, чего
+    // не делать. Заводится только новой записью: дописать запрет к цели-работе
+    // некуда, а вид у записи один.
+    if (add.kind === 'ban') {
+      const banned = String(add.goal_new || '').trim();
+      if (banned) upsertGoal(registryFile, { title: banned, source, kind: 'ban', text: material.trim() });
+      continue;
+    }
+
     if (!tasks.length) continue;
 
     // Существующая цель адресуется НОМЕРОМ из рендера, а не заголовком:

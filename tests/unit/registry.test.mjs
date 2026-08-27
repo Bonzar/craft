@@ -353,3 +353,60 @@ test('приём вешает новую задачу на цель, вся ра
   assert.equal(saved.tasks[2].title, 'работа продолжается');
   assert.equal(saved.tasks[2].state, 'open', 'цель снова в работе');
 });
+
+// Вид записи: работа или запрет. До него запрет лежал такой же записью, как
+// рабочая цель, и сверка на каждой правке заново решала по смыслу текста, где
+// тут запрет, — находила его в теле задачи и блокировала работу, которую это же
+// тело описывает.
+test('запрет ложится записью своего вида и без задач', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.upsertGoal(file, {
+    title: 'никогда не создавай .ts',
+    source: 'reply',
+    kind: 'ban',
+    text: 'никогда не создавай .ts',
+    tasks: [{ title: 'задача, которой у запрета быть не должно' }],
+  });
+
+  const [work, ban] = registry.readRegistry(file);
+  assert.equal(work.kind, 'work', 'обычная цель — работа');
+  assert.equal(ban.kind, 'ban');
+  assert.deepEqual(ban.tasks, [], 'у запрета задач не бывает: работы под ним нет');
+
+  const text = registry.render(registry.readRegistry(file), { bodies: false });
+  assert.match(text, /«никогда не создавай \.ts» — ЗАПРЕТ/, 'вид виден сверке в тексте');
+  assert.match(text, /«# Юнит 1[^»]*» — работа/, 'у работы вид тоже назван');
+});
+
+// Снятие запрета: Влад передумал. Без него запрет жил вечно — приём умел
+// добавлять записи и закрывать задачи, а у запрета задач нет, и убрать его было
+// нечем. Строка остаётся в файле: на её позиции держится нумерация соседей.
+test('снятый запрет уходит из текста для сверки, но остаётся в файле', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, { title: 'никогда не создавай .ts', source: 'reply', kind: 'ban' });
+  registry.upsertGoal(file, goal());
+
+  const done = registry.liftBans(file, ['Ц1']);
+  assert.deepEqual(done.lifted, ['Ц1']);
+  assert.deepEqual(done.unknown, []);
+
+  const goals = registry.readRegistry(file);
+  assert.equal(goals.length, 2, 'строка запрета остаётся — на ней держится нумерация');
+  assert.equal(goals[0].state, 'lifted');
+
+  const text = registry.render(goals, { bodies: false });
+  assert.doesNotMatch(text, /не создавай \.ts/, 'снятый запрет сверке не показывается');
+  assert.match(text, /Ц2 «# Юнит 1[^»]*» — работа/, 'номер соседа не съехал');
+});
+
+test('снять можно только живой запрет: работа и повтор уходят в неизвестные', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.upsertGoal(file, { title: 'не трогай прод', source: 'reply', kind: 'ban' });
+
+  assert.deepEqual(registry.liftBans(file, ['Ц1']).unknown, ['Ц1'], 'работа запретом не бывает');
+  assert.deepEqual(registry.liftBans(file, ['Ц2']).lifted, ['Ц2']);
+  assert.deepEqual(registry.liftBans(file, ['Ц2']).unknown, ['Ц2'], 'снятый второй раз не снимается');
+  assert.deepEqual(registry.liftBans(file, ['Ц9', 'мусор']).unknown, ['Ц9', 'мусор']);
+});

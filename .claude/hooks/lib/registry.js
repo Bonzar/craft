@@ -147,10 +147,6 @@ function writeRegistry(file, goals) {
 // идёт то, что одобряется, — текст и тела задач; состояние и лог не идут, иначе
 // перепоказ того же плана читался бы как изменение.
 //
-// У ЗАКРЫТОЙ задачи в слепок идёт только имя: тело у неё снято закрытием, и
-// сравнение с телом из перепоказанного плана всегда расходилось бы — тот же план
-// читался бы ревизией и сбрасывал закрытое вместе с логом. Цена: правка тела уже
-// закрытой задачи ревизией не считается, но работа под ней и так кончилась.
 // Тело закрытой задачи остаётся в файле, поэтому сравнивать её с телом из
 // перепоказанного плана есть чем: сравнение идёт напрямую, одинаково у закрытых
 // и открытых. Перепоказ того же плана сходится и закрытое не сбрасывается, а
@@ -167,14 +163,23 @@ function sameContent(stored, fresh) {
   return slice(stored) === slice(fresh);
 }
 
+// Вид записи. «Работа» — то, что Влад поручил сделать; «запрет» — то, что он
+// велел не делать («никогда не создавай .ts»). Раньше вида не было, и сверка на
+// каждой правке заново решала по смыслу текста, где тут запрет: находила его в
+// теле задачи и блокировала работу, которую это же тело и описывает. Решение
+// принимается ОДИН раз, при приёме, и лежит в записи.
+//
+// У запрета задач нет: работы под ним не бывает.
 function normalize(goal) {
+  const kind = goal.kind === 'ban' ? 'ban' : 'work';
   return {
     title: goal.title || '',
     source: goal.source || 'plan',
+    kind,
     state: 'live',
     text: goal.text || '',
     log: [],
-    tasks: (goal.tasks || []).map((t, i) => ({
+    tasks: kind === 'ban' ? [] : (goal.tasks || []).map((t, i) => ({
       n: i + 1,
       title: t.title || '',
       where: t.where || [],
@@ -312,6 +317,38 @@ export function parseAddress(address) {
 //
 // Закрывает агент — по смыслу сделанного, а не по следу в логе. Доказательство
 // правки тут не спрашивается: тот, кто закрывает, и есть тот, кто работал.
+// Снять запрет. Влад передумал — «можно снова .ts», «отменяю запрет на прод», —
+// и запрет перестаёт действовать. Работает из всех трёх источников: снятие
+// приходит тем же приёмом, что и сама запись, а решает по смыслу разбор.
+//
+// Строка из файла НЕ удаляется: на позиции держится нумерация, и удаление
+// сдвинуло бы адреса соседей. Снятый запрет остаётся историей сессии, но в
+// текст для сверки больше не идёт — иначе он продолжал бы блокировать.
+export function liftBans(file, addresses) {
+  const done = { lifted: [], unknown: [] };
+  if (!file || off()) {
+    done.unknown = [...addresses];
+    return done;
+  }
+  return withLock(file, () => {
+    const goals = readRegistry(file);
+    let touched = false;
+    for (const address of addresses) {
+      const at = /^Ц(\d+)$/i.exec(String(address).trim());
+      const goal = at ? goals[Number(at[1]) - 1] : undefined;
+      if (!goal || goal.kind !== 'ban' || goal.state === 'lifted') {
+        done.unknown.push(address);
+        continue;
+      }
+      goal.state = 'lifted';
+      done.lifted.push(address);
+      touched = true;
+    }
+    if (touched) writeRegistry(file, goals);
+    return done;
+  });
+}
+
 export function closeTasks(file, addresses) {
   const done = { closed: [], unknown: [] };
   if (!file || off()) {
@@ -477,7 +514,12 @@ export function render(goals, { bodies = true } = {}) {
   const out = [];
   goals.forEach((goal, i) => {
     const num = Number.isInteger(goal.n) ? goal.n : i + 1;
-    out.push(`Ц${num} «${goal.title}» — источник: ${goal.source}`);
+    // Снятый запрет в текст не идёт вовсе: Влад его отменил, и показывать его
+    // сверке значило бы продолжать блокировать. Строка при этом остаётся в
+    // файле — на позиции держится нумерация соседей.
+    if (goal.kind === 'ban' && goal.state === 'lifted') return;
+    const kind = goal.kind === 'ban' ? 'ЗАПРЕТ' : 'работа';
+    out.push(`Ц${num} «${goal.title}» — ${kind}, источник: ${goal.source}`);
     if (bodies && goal.text) out.push(`  текст: ${goal.text}`);
     for (const task of goal.tasks || []) {
       const closed = task.state === 'closed';
