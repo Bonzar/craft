@@ -60,12 +60,6 @@ export function planCriticRound() {
   return perSessionOrDefault('CRAFT_PLAN_CRITIC_ROUND', 'plan-critic.{sid}.round');
 }
 
-// Дельта планов: хеши юнитов последнего одобренного. Текста рядом больше нет —
-// вход сравнения по смыслу даёт реестр.
-export function planDeltaStore() {
-  return perSessionOrDefault('CRAFT_PLAN_DELTA_STORE', 'plan-delta.{sid}.hashes');
-}
-
 // Метки хода: показанный план и служебный ход.
 export function planShownMarker() {
   return perSessionOrDefault('CRAFT_PLAN_SHOWN_MARKER', 'plan-shown.{sid}');
