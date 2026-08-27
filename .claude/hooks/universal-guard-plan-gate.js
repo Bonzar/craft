@@ -69,20 +69,42 @@ const isFileEdit = !isCraftWrite && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit
 const isBash = !isCraftWrite && tool === 'Bash';
 const isSubagent = ['Task', 'Agent', 'Workflow'].includes(tool);
 
-// Инструменты, про которые ВИДНО, что они только читают. Список закрытый и
-// короткий: всё остальное идёт в сверку. Перечислять пишущие бесполезно —
-// свой инструмент записи есть у любого стороннего сервера, и завтра появится
-// ещё один; правка через него шла бы мимо гейта молча.
+// Гейт стоит на правках МИРА: файлы, командная строка, база, внешние сервисы.
+// Всё, что мир не трогает, — не его дело. Отсюда два основания пройти, и у
+// каждого своё.
+//
+// Первое: инструмент только ЧИТАЕТ — менять ему нечего.
 const READING_TOOLS = new Set([
   'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'BashOutput',
   'TaskList', 'TaskGet', 'TaskOutput', 'ListAgents', 'ListSkills', 'ListPlugins',
-  // Таск-лист харнесса — ОТРАЖЕНИЕ реестра, а не системная правка: работа и так
-  // берётся из одобренного, и гейт на её отметке спрашивал бы про самого себя.
-  'TaskCreate', 'TaskUpdate',
-  'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode', 'Skill', 'ReadNotifications',
+  'ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadNotifications',
 ]);
 
-// Читающие подагенты названы поимённо: разведка и критика ничего не правят, а
+// Второе: инструмент правит ход САМОЙ СЕССИИ, а не мир. План, вопрос Владу,
+// список работы, расписание пробуждения — это состояние разговора: реестр про
+// них ничего не знает и знать не должен, а сверка спрашивала бы гейт про самого
+// себя. Тот же принцип уже записан для файлов: служебное состояние харнесса
+// эфемерно, и тудушки названы там прямым текстом.
+const SESSION_TOOLS = new Set([
+  'TaskCreate', 'TaskUpdate', 'TaskStop', 'ExitPlanMode', 'EnterPlanMode',
+  'AskUserQuestion', 'Skill', 'ScheduleWakeup', 'SendMessage', 'SendUserFile',
+  'ReportFindings', 'SuggestSkills', 'ShowOnboardingRolePicker',
+]);
+
+const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
+
+// Имя MCP-инструмента говорит само за себя, когда в нём стоит глагол чтения.
+// Это не догадка о поведении, а признак: сервер, который пишет, называет
+// операцию иначе.
+function mcpReads(name) {
+  const op = String(name).replace(/^mcp__.*?__/, '');
+  // Глагол стоит либо в начале имени (list_repos), либо на конце после
+  // подчёркивания (craft_read).
+  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
+    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
+}
+
+// Читающие подагенты названы поимённо: разведка и критика мира не трогают, а
 // гейт на их запуске стоил бы вызова модели на каждом плане.
 const READING_AGENTS = new Set([
   'Explore', 'Plan', 'plan-critic', 'plan-critic-unit', 'plan-critic-seams',
@@ -91,27 +113,14 @@ const READING_AGENTS = new Set([
   'pr-test-analyzer', 'claude-code-guide',
 ]);
 
-// Имя MCP-инструмента говорит само за себя, когда в нём стоит глагол чтения.
-// Это не догадка о поведении, а признак: сервер, который пишет, называет
-// операцию иначе.
-const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
-
-function mcpReads(name) {
-  const op = String(name).replace(/^mcp__.*?__/, '');
-  // Глагол стоит либо в начале имени (list_repos), либо на конце после
-  // подчёркивания (craft_read): сервер, который пишет, называет операцию иначе.
-  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
-    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
+function touchesWorld() {
+  if (READING_TOOLS.has(tool) || SESSION_TOOLS.has(tool)) return false;
+  if (isSubagent) return !READING_AGENTS.has(String(input.subagent_type || ''));
+  if (/^mcp__/.test(tool)) return !mcpReads(tool);
+  return true;
 }
 
-function toolReads() {
-  if (READING_TOOLS.has(tool)) return true;
-  if (isSubagent) return READING_AGENTS.has(String(input.subagent_type || ''));
-  if (/^mcp__/.test(tool)) return mcpReads(tool);
-  return false;
-}
-
-if (!isCraftWrite && !isFileEdit && !isBash && toolReads()) process.exit(0);
+if (!isCraftWrite && !isFileEdit && !isBash && !touchesWorld()) process.exit(0);
 
 // Срез по БАЙТАМ с хвостовым переводом строки, как его делал bash: подстановка
 // команды добавляла к тексту перевод строки, резала head -c и снимала хвостовые
