@@ -244,6 +244,11 @@ function cleanState(s) {
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
   fs.rmSync(s.oncedir, { recursive: true, force: true });
+  // Дом codex убирается обязательно: в нём лежит вход, а хук входа зовётся и из
+  // посторонних стартовых кейсов. Не убрать — копии токена копились бы в /tmp
+  // после каждого прогона, и на машине разработчика туда осел бы настоящий
+  // CODEX_AUTH_JSON, унаследованный от окружения.
+  fs.rmSync(s.codexhome, { recursive: true, force: true });
 }
 
 // --- прогон одного кейса -----------------------------------------------------
@@ -295,6 +300,15 @@ function runPass(c, ext) {
   // предусловие, которое обещает, и зеленел бы независимо от кода.
   if (Array.isArray(c.registry_seed)) {
     fs.writeFileSync(s.registry, `${c.registry_seed.map((g) => JSON.stringify(g)).join('\n')}\n`);
+  }
+
+  // `codex_seed` — вход, уже лежащий в доме codex до прогона. Тем же приёмом и
+  // по той же причине, что реестр: предусловие «свой вход новее, чем в
+  // настройках» подготовительным хуком не выразить, а без него кейс про выбор
+  // «переписывать или нет» зеленел бы на любом коде.
+  if (typeof c.codex_seed === 'string') {
+    fs.mkdirSync(s.codexhome, { recursive: true });
+    fs.writeFileSync(path.join(s.codexhome, 'auth.json'), c.codex_seed);
   }
 
   // Подготовке по умолчанию подаётся ТОТ ЖЕ вход и то же окружение, что целевому
