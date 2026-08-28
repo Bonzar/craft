@@ -485,3 +485,12 @@ test('совпавший заголовок у другого источника
   assert.equal(saved[0].log.length, 1, 'и лог её цел');
   assert.equal(saved[1].source, 'plan');
 });
+
+test('второй проход приёма находит цель, заведённую первым', () => {
+  const before = [{ title: 'работа прошлого плана', source: 'plan', kind: 'work', tasks: [] }];
+  const after = [...before, { title: 'работа этого плана', source: 'plan', kind: 'work', tasks: [] }];
+  // ownFrom = 1: всё до неё лежало в реестре до приёма и для плана чужое.
+  assert.equal(registry.landingGoal(after, 'Ц2', 'plan', 1), 1, 'своя цель этого же приёма');
+  assert.equal(registry.landingGoal(after, 'Ц1', 'plan', 1), -1, 'цель прошлого плана по-прежнему чужая');
+  assert.equal(registry.landingGoal(after, 'Ц2', 'plan'), -1, 'без границы своих целей нет');
+});

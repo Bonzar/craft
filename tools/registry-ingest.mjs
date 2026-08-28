@@ -67,7 +67,7 @@ function cutByAnchors(text, tasks) {
 // Один проход разбора: реестр отдаётся модели в том же читаемом виде, в каком
 // его увидит сверка — отдельный машинный формат разъезжался бы с тем, что видно
 // в отказе, — и ответ применяется к файлу.
-function pass(material, n) {
+function pass(material, n, ownFrom) {
   const current = readRegistry(registryFile);
   const view = path.join(path.dirname(materialFile), 'registry-view.txt');
   try {
@@ -125,7 +125,7 @@ function pass(material, n) {
     // Куда приземлить запись, решает ядро реестра: цель адресуется НОМЕРОМ из
     // рендера, а не заголовком (формулировку модель каждый раз пишет свою), и от
     // ПЛАНА слияние не принимается вовсе — у плана всегда своя цель.
-    const index = landingGoal(current, add.goal, source);
+    const index = landingGoal(current, add.goal, source, ownFrom);
 
     const bodies = cutByAnchors(material, tasks);
     const prepared = tasks.map((t, i) => ({
@@ -167,8 +167,13 @@ function main() {
   // Проходов ровно два: третий ловил бы уже не пропажу, а переформулировку —
   // и плодил бы дубли вместо того, чтобы сходиться. Их число знает и хук
   // одобрения: свой срок он выводит из него и бюджета прохода.
+  // Граница своих целей: всё, что лежало в реестре ДО этого приёма, для плана
+  // чужое, а заведённое его первым проходом — своё. Иначе второй проход, который
+  // дозаводит пропущенное, не нашёл бы цель первого и завёл третью.
+  const ownFrom = readRegistry(registryFile).length;
+
   for (let n = 1; n <= INGEST_PASSES; n += 1) {
-    const code = pass(material, n);
+    const code = pass(material, n, ownFrom);
     // Первый проход не дал разбора — второму брать нечего: он лишь дозаводит
     // пропущенное первым.
     if (code !== 0) return n === 1 ? code : 0;
