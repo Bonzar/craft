@@ -169,6 +169,7 @@ function makeState() {
     classtrace: tmpName('mock-classifier-trace'),
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
+    codexhome: tmpName('codex-home-test'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -186,6 +187,10 @@ function makeState() {
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
     SESSION_ANCHOR_STATE: s.anchor,
+    // Дом codex — герметичный у КАЖДОГО кейса, а не только у своих. Хук входа
+    // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
+    // кладёт живой токен в настоящий ~/.codex рабочей машины.
+    CODEX_HOME: s.codexhome,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
@@ -254,8 +259,14 @@ function subst(value, s) {
   // МАТЕРИАЛ: что именно хук положил в промпт разбора. По реестру этого не
   // видно — там лежит ответ заглушки, заданный самим кейсом, а не то, что ушло
   // в вопрос.
+  //
+  // {CODEXHOME} — герметичный дом codex этого прогона: по нему кейс наводит
+  // ASSERT_FILE на файл входа, который заводит хук.
   if (!s) return withDir;
-  return withDir.split('{REGISTRY}').join(s.registry).split('{CLASSTRACE}').join(s.classtrace);
+  return withDir
+    .split('{REGISTRY}').join(s.registry)
+    .split('{CLASSTRACE}').join(s.classtrace)
+    .split('{CODEXHOME}').join(s.codexhome);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`

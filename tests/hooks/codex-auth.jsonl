@@ -1,0 +1,2 @@
+{"name": "вход из настроек окружения ложится в файл клиента", "hook": "universal-codex-auth", "expect": "file-contains:refresh_token", "env": {"CODEX_AUTH_JSON": "{\"auth_mode\":\"chatgpt\",\"tokens\":{\"id_token\":\"i\",\"access_token\":\"a\",\"refresh_token\":\"r\",\"account_id\":\"c\"},\"last_refresh\":\"2026-08-28T05:35:31Z\"}", "ASSERT_FILE": "{CODEXHOME}/auth.json"}, "input": {"hook_event_name": "SessionStart"}}
+{"name": "переменной нет — хук молчит", "hook": "universal-codex-auth", "expect": "silent", "input": {"hook_event_name": "SessionStart"}}
