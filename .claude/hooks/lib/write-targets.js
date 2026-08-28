@@ -125,6 +125,18 @@ function stripQuoted(text) {
 // (open(…,'w'), write_text/bytes). Гейтится цель, а не команда: сборка,
 // копирование в игнорируемый путь и любое чтение целей не дают.
 export function bashWriteTargets(cmd) {
+  const targets = [];
+  eachPiece(cmd, (piece, cwd) => {
+    for (const t of pieceTargets(piece)) targets.push(resolveTarget(cwd, t));
+  });
+  return targets.concat(interpreterTargets(cmd));
+}
+
+// Проход по кускам команды слева направо с каталогом, действующим В ЭТОМ МЕСТЕ.
+// Брать последний cd на всю команду нельзя: «cat > README.md && cd /tmp» пишет в
+// текущий каталог, а не во временный, и общий cd выдавал бы запись в репозиторий
+// за эфемерную.
+function eachPiece(cmd, fn) {
   // Знак «больше» бывает и сравнением: в кавычках (jq 'select(.size > 10)') и в условных
   // скобках ([[ a > b ]]). Оба места вычёркиваются — но в ОТДЕЛЬНУЮ строку: разбору
   // записи из интерпретатора нужны буквальные кавычки вокруг пути, на вычеркнутой он бы
@@ -133,18 +145,95 @@ export function bashWriteTargets(cmd) {
     .replace(/\[\[[^\]]*\]\]/g, ' ')
     .replace(/\(\([^)]*\)\)/g, ' ')).join('\n').replace(/\n+$/, '');
 
-  // Команда идёт КУСКАМИ слева направо, и каждый резолвится тем каталогом,
-  // который действует В ЭТОМ МЕСТЕ. Брать последний cd на всю команду нельзя:
-  // «cat > README.md && cd /tmp» пишет в текущий каталог, а не во временный, и
-  // общий cd выдавал бы запись в репозиторий за эфемерную.
-  const targets = [];
   let cwd = '';
   for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
-    for (const t of pieceTargets(piece)) targets.push(resolveTarget(cwd, t));
+    fn(piece, cwd);
     const cd = /(?:^|[ \t])cd[ \t]+(\/[^\s|&;()<>]*)/.exec(piece);
     if (cd) cwd = cd[1].replace(/\/$/, '');
   }
-  return targets.concat(interpreterTargets(cmd));
+}
+
+// Команды, которые меняют дерево САМИ, не перенаправлением: целями у них служат
+// их же пути-аргументы. Разбор записи их не видит вовсе — он ищет перенаправление
+// и копирование, — и до появления этого списка каждая проходила гейт молча.
+//
+// Список свой и точный. Взять вместо него отказы предиката чтения (lib/read-only-command.js)
+// нельзя: тот консервативен нарочно, у него `sed -e` и `awk -f` уже «не доказано»,
+// хотя дерево они не трогают, — и гейт спрашивал бы про обычный `sed -e`.
+const TREE_MUTATORS = ['rm', 'rmdir', 'mkdir', 'touch', 'ln', 'truncate', 'shred', 'unlink', 'install'];
+
+// У этих первый неопционный аргумент — не путь, а режим или владелец.
+const MODE_MUTATORS = ['chmod', 'chown', 'chgrp'];
+
+// Подкоманды гита, меняющие рабочее дерево. Фиксации (add, commit, push) здесь
+// нет намеренно: содержимого дерева она не меняет, а всё, что в неё попадает,
+// гейт просудил на самих правках.
+const GIT_MUTATORS = ['checkout', 'restore', 'clean', 'reset', 'stash', 'rm', 'mv'];
+
+// Флаги, у которых следующее слово — значение, а не путь.
+const VALUE_FLAGS = ['-s', '--size', '-m', '--mode', '-t', '--target-directory'];
+
+// Изменения дерева, найденные в команде: пути-цели и имена тех мутаторов, у
+// которых путей в аргументах нет вовсе (`git clean`, `git reset --hard`).
+// У последних эфемерность проверять не на чем — они запись без целей.
+export function treeMutations(cmd) {
+  const targets = [];
+  const unscoped = [];
+  eachPiece(cmd, (piece, cwd) => {
+    const found = mutatorInPiece(piece);
+    if (!found) return;
+    const { name, args } = found;
+    if (args.length) {
+      for (const a of args) targets.push(resolveTarget(cwd, a));
+    } else {
+      unscoped.push(name);
+    }
+  });
+  return { targets, unscoped };
+}
+
+// Мутатор засчитывается только в НАЧАЛЕ своего куска: иначе `echo 'rm README.md'`
+// давал бы цель — кавычки к этому месту уже сняты, и слова внутри неотличимы от
+// настоящей команды.
+function mutatorInPiece(piece) {
+  const words = piece.trim().split(/\s+/).filter(Boolean);
+  let at = 0;
+  while (words[at] && (words[at] === 'sudo' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]))) at += 1;
+  const head = words[at];
+  if (!head) return null;
+
+  const simple = head.replace(/^.*\//, '');
+  if (TREE_MUTATORS.includes(simple)) return { name: simple, args: pathArgs(words.slice(at + 1)) };
+  if (MODE_MUTATORS.includes(simple)) return { name: simple, args: pathArgs(words.slice(at + 1)).slice(1) };
+  if (simple === 'git') {
+    const sub = words[at + 1];
+    if (GIT_MUTATORS.includes(sub)) return { name: `git ${sub}`, args: pathArgs(words.slice(at + 2)) };
+  }
+  return null;
+}
+
+// Пути среди аргументов: флаги и их значения целями не являются. Всё, что стоит
+// после разделителя `--`, — путь, даже когда начинается с дефиса.
+function pathArgs(words) {
+  const out = [];
+  let literal = false;
+  for (let i = 0; i < words.length; i += 1) {
+    const w = words[i];
+    if (literal) {
+      out.push(w);
+      continue;
+    }
+    if (w === '--') {
+      literal = true;
+      continue;
+    }
+    if (w.startsWith('-')) {
+      if (VALUE_FLAGS.includes(w)) i += 1;
+      continue;
+    }
+    out.push(w);
+  }
+  return out;
 }
 
 // Цели одного куска команды. Разбор целей не зависит от того, где кусок стоит:
