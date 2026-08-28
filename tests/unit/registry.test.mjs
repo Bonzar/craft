@@ -61,13 +61,13 @@ test('цель с тем же заголовком и тем же телом н�
   assert.equal(saved.log.length, 1, 'и не стирает лог');
 });
 
-test('изменившаяся цель замещает прежнюю вместе с задачами и логом', () => {
+test('изменившаяся цель реплики замещает прежнюю вместе с задачами и логом', () => {
   const file = tmpFile();
-  registry.upsertGoal(file, goal());
+  registry.upsertGoal(file, goal({ source: 'reply' }));
   registry.closeTasks(file, ['Ц1.1']);
   registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
 
-  const revised = goal();
+  const revised = goal({ source: 'reply' });
   revised.tasks[0].body = 'форма записи, команды и глушилка';
   registry.upsertGoal(file, revised);
 
@@ -75,6 +75,33 @@ test('изменившаяся цель замещает прежнюю вмес
   assert.equal(registry.readRegistry(file).length, 1);
   assert.equal(saved.tasks[0].state, 'open', 'ревизия отменяет прежнюю редакцию, а не продолжает её');
   assert.deepEqual(saved.log, []);
+});
+
+// Два разных плана про одну цель работы легко получают от модели один и тот же
+// заголовок. Замещение стёрло бы открытые задачи первого — и гейт закрыл бы
+// правки, которые Влад уже разрешил.
+test('второй план с тем же заголовком заводит свою цель, а не затирает первую', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.closeTasks(file, ['Ц1.1']);
+  registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
+
+  const second = goal();
+  second.tasks[0].body = 'другая работа под тем же именем';
+  registry.upsertGoal(file, second);
+
+  const saved = registry.readRegistry(file);
+  assert.equal(saved.length, 2, 'план не замещает план');
+  assert.equal(saved[0].tasks[0].state, 'closed', 'закрытое первого плана цело');
+  assert.equal(saved[0].log.length, 1, 'и лог его цел');
+  assert.equal(saved[1].tasks[0].state, 'open');
+});
+
+test('перепоказ того же плана цель не задваивает', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.upsertGoal(file, goal());
+  assert.equal(registry.readRegistry(file).length, 1, 'то же содержание — та же цель');
 });
 
 test('лог живёт на цели и ограничен сверху', () => {
@@ -439,4 +466,58 @@ test('возвращать нечего: открытая задача и неи
   const done = registry.reopenTasks(file, ['Ц1.1', 'Ц9.9', 'мусор']);
   assert.deepEqual(done.reopened, []);
   assert.deepEqual(done.unknown, ['Ц1.1', 'Ц9.9', 'мусор']);
+});
+
+// Выбор цели, под которую ложится материал. Дефект, ради которого функция и
+// появилась: второй план сессии садился задачами на цель первого — и юниты
+// нового плана оказывались чужой работой, а сверка искала покрытие не там.
+test('план на существующую цель не садится — ни на чужую, ни на план', () => {
+  const goals = [
+    { title: 'работа прошлого плана', source: 'plan', kind: 'work', tasks: [] },
+    { title: 'реплика про то же самое', source: 'reply', kind: 'work', tasks: [] },
+  ];
+  assert.equal(registry.landingGoal(goals, 'Ц1', 'plan'), -1, 'даже цель прошлого плана — чужая граница работы');
+  assert.equal(registry.landingGoal(goals, 'Ц2', 'plan'), -1, 'реплико-цель тем более');
+});
+
+test('реплика и кнопка садятся на цель любого источника', () => {
+  const goals = [
+    { title: 'работа плана', source: 'plan', kind: 'work', tasks: [] },
+    { title: 'работа реплики', source: 'reply', kind: 'work', tasks: [] },
+  ];
+  assert.equal(registry.landingGoal(goals, 'Ц1', 'reply'), 0, 'реплика уточняет работу плана');
+  assert.equal(registry.landingGoal(goals, 'Ц1', 'button'), 0, 'кнопка тоже');
+  assert.equal(registry.landingGoal(goals, 'Ц2', 'reply'), 1);
+});
+
+test('негодный адрес цели приземления не даёт', () => {
+  const goals = [{ title: 'работа плана', source: 'plan', kind: 'work', tasks: [] }];
+  for (const ref of ['', 'Ц9', 'мусор', 'Ц0']) {
+    assert.equal(registry.landingGoal(goals, ref, 'reply'), -1, `адрес «${ref}» цели не даёт`);
+  }
+});
+
+test('совпавший заголовок у другого источника заводит вторую цель, а не затирает первую', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, { title: 'Журнал решений', source: 'reply', tasks: [{ title: 'завести журнал' }] });
+  registry.closeTasks(file, ['Ц1.1']);
+  registry.appendLog(file, 0, 'задача Ц1.1 · craft · завела страницу');
+
+  registry.upsertGoal(file, { title: 'Журнал решений', source: 'plan', tasks: [{ title: 'наполнить журнал' }] });
+
+  const saved = registry.readRegistry(file);
+  assert.equal(saved.length, 2, 'цель опознаётся заголовком вместе с источником');
+  assert.equal(saved[0].source, 'reply');
+  assert.equal(saved[0].tasks[0].state, 'closed', 'прежняя цель цела');
+  assert.equal(saved[0].log.length, 1, 'и лог её цел');
+  assert.equal(saved[1].source, 'plan');
+});
+
+test('второй проход приёма находит цель, заведённую первым', () => {
+  const before = [{ title: 'работа прошлого плана', source: 'plan', kind: 'work', tasks: [] }];
+  const after = [...before, { title: 'работа этого плана', source: 'plan', kind: 'work', tasks: [] }];
+  // ownFrom = 1: всё до неё лежало в реестре до приёма и для плана чужое.
+  assert.equal(registry.landingGoal(after, 'Ц2', 'plan', 1), 1, 'своя цель этого же приёма');
+  assert.equal(registry.landingGoal(after, 'Ц1', 'plan', 1), -1, 'цель прошлого плана по-прежнему чужая');
+  assert.equal(registry.landingGoal(after, 'Ц2', 'plan'), -1, 'без границы своих целей нет');
 });
