@@ -59,12 +59,7 @@ export const TABLE = {
     },
     {
       matcher: 'mcp__.*__craft_write',
-      hooks: ['universal-session-anchor', 'universal-fact-gate'],
-      scope: 'both',
-    },
-    {
-      matcher: 'Write|Edit|MultiEdit|NotebookEdit',
-      hooks: ['universal-session-anchor'],
+      hooks: ['universal-fact-gate'],
       scope: 'both',
     },
     {
@@ -79,16 +74,17 @@ export const TABLE = {
         'universal-kill-by-name-guard',
         'universal-block-no-verify',
         'universal-fact-gate',
-        'universal-session-anchor',
       ],
       scope: 'both',
     },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-config-protection'], scope: 'both' },
     { matcher: 'Read|Grep|Glob', hooks: ['universal-eval-materials-guard'], scope: 'both' },
     // Гейт слушает ВСЕ вызовы, а не три набора инструментов: своя команда записи
-    // есть у любого стороннего сервера, и перечислением их не закрыть. Сам гейт
-    // пропускает то, про что видно, что оно только читает; матчер здесь широкий
-    // намеренно — решение принимает хук, а не список имён.
+    // есть у любого стороннего сервера, и перечислением их не закрыть. Что вызов
+    // делает, гейт спрашивает у инструмента признаков записи и пропускает всё,
+    // в чём этих признаков не видно; матчер здесь широкий намеренно — решение
+    // принимает хук, а не список имён. Правило якоря живёт плагином внутри него,
+    // поэтому отдельной регистрации у якоря на вызовах больше нет.
     { hooks: ['universal-guard-plan-gate'], scope: 'both' },
   ],
 

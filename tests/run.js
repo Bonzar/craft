@@ -98,7 +98,6 @@ const REQUIRED = [
   'mark-plan-critic:silent', 'mark-plan-file:silent',
   'stop-incident-closure:block', 'stop-incident-closure:silent',
   'stop-relative-link:block', 'stop-relative-link:silent',
-  'session-anchor:deny', 'session-anchor:allow',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
@@ -455,7 +454,6 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-gate', 'PreToolUse', 'Bash'],
   ['universal-guard-plan-exit-failure', 'PostToolUseFailure', 'ExitPlanMode'],
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
-  ['universal-session-anchor', 'PreToolUse', 'Bash'],
   ['universal-session-anchor', 'PostToolUse', 'AskUserQuestion'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
