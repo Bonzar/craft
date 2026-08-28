@@ -440,3 +440,48 @@ test('возвращать нечего: открытая задача и неи
   assert.deepEqual(done.reopened, []);
   assert.deepEqual(done.unknown, ['Ц1.1', 'Ц9.9', 'мусор']);
 });
+
+// Выбор цели, под которую ложится материал. Дефект, ради которого функция и
+// появилась: второй план сессии садился задачами на цель первого — и юниты
+// нового плана оказывались чужой работой, а сверка искала покрытие не там.
+test('план на существующую цель не садится — ни на чужую, ни на план', () => {
+  const goals = [
+    { title: 'работа прошлого плана', source: 'plan', kind: 'work', tasks: [] },
+    { title: 'реплика про то же самое', source: 'reply', kind: 'work', tasks: [] },
+  ];
+  assert.equal(registry.landingGoal(goals, 'Ц1', 'plan'), -1, 'даже цель прошлого плана — чужая граница работы');
+  assert.equal(registry.landingGoal(goals, 'Ц2', 'plan'), -1, 'реплико-цель тем более');
+});
+
+test('реплика и кнопка садятся на цель любого источника', () => {
+  const goals = [
+    { title: 'работа плана', source: 'plan', kind: 'work', tasks: [] },
+    { title: 'работа реплики', source: 'reply', kind: 'work', tasks: [] },
+  ];
+  assert.equal(registry.landingGoal(goals, 'Ц1', 'reply'), 0, 'реплика уточняет работу плана');
+  assert.equal(registry.landingGoal(goals, 'Ц1', 'button'), 0, 'кнопка тоже');
+  assert.equal(registry.landingGoal(goals, 'Ц2', 'reply'), 1);
+});
+
+test('негодный адрес цели приземления не даёт', () => {
+  const goals = [{ title: 'работа плана', source: 'plan', kind: 'work', tasks: [] }];
+  for (const ref of ['', 'Ц9', 'мусор', 'Ц0']) {
+    assert.equal(registry.landingGoal(goals, ref, 'reply'), -1, `адрес «${ref}» цели не даёт`);
+  }
+});
+
+test('совпавший заголовок у другого источника заводит вторую цель, а не затирает первую', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, { title: 'Журнал решений', source: 'reply', tasks: [{ title: 'завести журнал' }] });
+  registry.closeTasks(file, ['Ц1.1']);
+  registry.appendLog(file, 0, 'задача Ц1.1 · craft · завела страницу');
+
+  registry.upsertGoal(file, { title: 'Журнал решений', source: 'plan', tasks: [{ title: 'наполнить журнал' }] });
+
+  const saved = registry.readRegistry(file);
+  assert.equal(saved.length, 2, 'цель опознаётся заголовком вместе с источником');
+  assert.equal(saved[0].source, 'reply');
+  assert.equal(saved[0].tasks[0].state, 'closed', 'прежняя цель цела');
+  assert.equal(saved[0].log.length, 1, 'и лог её цел');
+  assert.equal(saved[1].source, 'plan');
+});

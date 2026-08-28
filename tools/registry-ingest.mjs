@@ -22,12 +22,28 @@
 // реестру значит отклонять только что разрешённое.
 import fs from 'node:fs';
 import path from 'node:path';
-import { classifierPath, classify } from '../.claude/hooks/lib/classifier.js';
 import {
-  readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans,
+  classifierPath, classify, INGEST_BUDGET_SEC, INGEST_PASSES,
+} from '../.claude/hooks/lib/classifier.js';
+import {
+  readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
 
 const [, , source, materialFile, registryFile, markId] = process.argv;
+
+// След приёма: файл рядом с реестром, куда ложится ход разбора. Без него провал
+// приёма неотличим от того, что приёма не было вовсе — вызов идёт со сброшенным
+// выводом и в пустом catch, а помощник проверки ничего не логирует. Ровно
+// поэтому пропажу целого плана из реестра заметил Влад, а не система.
+//
+// Файл лежит в общем /tmp контейнера и читаем всем, кто в него попал: в след
+// идёт только то, что уже есть в реестре и материале, ничего сверх.
+export function trace(line) {
+  if (!registryFile) return;
+  try {
+    fs.appendFileSync(`${registryFile}.ingest.log`, `${new Date().toISOString()} ${source} ${line}\n`);
+  } catch { /* след не записался — работу приёма это не меняет */ }
+}
 
 function cutByAnchors(text, tasks) {
   // Куски материала между якорями: якорь — дословная первая строка задачи.
@@ -51,14 +67,17 @@ function cutByAnchors(text, tasks) {
 // Один проход разбора: реестр отдаётся модели в том же читаемом виде, в каком
 // его увидит сверка — отдельный машинный формат разъезжался бы с тем, что видно
 // в отказе, — и ответ применяется к файлу.
-function pass(material) {
+function pass(material, n) {
   const current = readRegistry(registryFile);
   const view = path.join(path.dirname(materialFile), 'registry-view.txt');
   try {
     fs.writeFileSync(view, render(current));
   } catch { /* вид не записался — модель увидит пустой реестр */ }
 
-  const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '');
+  const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '', {
+    timeoutSec: INGEST_BUDGET_SEC,
+  });
+  trace(`проход ${n}: целей в реестре ${current.length}, ответ модели: ${verdict}`);
   if (!verdict || verdict === 'UNAVAILABLE') return 1;
 
   let answer;
@@ -103,13 +122,10 @@ function pass(material) {
 
     if (!tasks.length) continue;
 
-    // Существующая цель адресуется НОМЕРОМ из рендера, а не заголовком:
-    // формулировку модель каждый раз пишет свою, и сравнение заголовков
-    // задвоило бы цель при первом же пересказе.
-    const ref = String(add.goal || '').trim();
-    const at = /^Ц(\d+)$/i.exec(ref);
-    const index = at ? Number(at[1]) - 1 : -1;
-    const existing = index >= 0 ? current[index] : undefined;
+    // Куда приземлить запись, решает ядро реестра: цель адресуется НОМЕРОМ из
+    // рендера, а не заголовком (формулировку модель каждый раз пишет свою), и от
+    // ПЛАНА слияние не принимается вовсе — у плана всегда своя цель.
+    const index = landingGoal(current, add.goal, source);
 
     const bodies = cutByAnchors(material, tasks);
     const prepared = tasks.map((t, i) => ({
@@ -118,17 +134,17 @@ function pass(material) {
       body: bodies[i],
     }));
 
-    // Цель адресуется ПОЗИЦИЕЙ, а не заголовком: заголовки повторяются, и
-    // дописывание по имени садилось на первую совпавшую — то есть на чужую цель.
-    if (existing) {
+    if (index >= 0) {
       addTasks(registryFile, index, prepared);
       continue;
     }
-    const title = String(add.goal_new || '').trim();
-    // Ни номера существующей цели, ни заголовка новой — приземлять запись
-    // некуда. Молча заводить цель с выдуманным именем нельзя: она открыла бы
-    // правки, которых Влад не одобрял.
-    if (title) upsertGoal(registryFile, { title, source, tasks: prepared });
+    // Заголовок новой цели — от модели: сперва goal_new, иначе имя первой
+    // задачи. Второе не выдумка и не пустая строка: задачи в куске есть всегда
+    // (пустой кусок отсеян выше), и имя им дала та же модель по тому же
+    // материалу. Из разметки материала заголовок не выводится — у плана таких
+    // строк несколько и они про разное, а у реплики их нет вовсе.
+    const title = String(add.goal_new || '').trim() || prepared[0].title;
+    upsertGoal(registryFile, { title, source, tasks: prepared });
   }
   return 0;
 }
@@ -142,9 +158,6 @@ function main() {
     return 1;
   }
 
-  const code = pass(material);
-  if (code !== 0) return code;
-
   // ВТОРОЙ проход по тому же материалу — проверка полноты. Разбор нестабилен так
   // же, как сверка: тот же вход даёт то полный набор задач, то набор без одной, и
   // пропавший кусок молча остаётся неодобренным. Второй проход видит реестр уже с
@@ -152,8 +165,14 @@ function main() {
   // ровно пропущенное.
   //
   // Проходов ровно два: третий ловил бы уже не пропажу, а переформулировку —
-  // и плодил бы дубли вместо того, чтобы сходиться.
-  pass(material);
+  // и плодил бы дубли вместо того, чтобы сходиться. Их число знает и хук
+  // одобрения: свой срок он выводит из него и бюджета прохода.
+  for (let n = 1; n <= INGEST_PASSES; n += 1) {
+    const code = pass(material, n);
+    // Первый проход не дал разбора — второму брать нечего: он лишь дозаводит
+    // пропущенное первым.
+    if (code !== 0) return n === 1 ? code : 0;
+  }
   return 0;
 }
 
