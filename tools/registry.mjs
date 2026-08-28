@@ -6,6 +6,7 @@
 //
 //   node tools/registry.mjs show [--bodies]
 //   node tools/registry.mjs close Ц1.2 Ц1.3
+//   node tools/registry.mjs reopen Ц1.2
 //
 // show по умолчанию печатает СПИСОК РАБОТЫ: незакрытые задачи и цели, у которых
 // они есть, скелетом — имена с адресами, без тел и логов. Закрытое из него
@@ -19,10 +20,15 @@
 // список. Неизвестный адрес — строка и ненулевой код, а не молчание: закрытие,
 // которое не случилось, обязано быть видно.
 //
+// reopen возвращает закрытую задачу в работу. Закрывает её агент по смыслу
+// сделанного — значит он же и ошибается: записал лог, счёл работу законченной,
+// а тег не проставил. Без возврата такая ошибка кончалась тупиком, где доделку
+// приходилось разрешать заново, хотя цель одобрена и никуда не девалась.
+//
 // Расширение .mjs обязательно: в tools/ нет манифеста модулей, и .js читался бы
 // как обычный скрипт, которому импорт недоступен.
 import { approvalRegistry } from '../.claude/hooks/lib/paths.js';
-import { readRegistry, render, closeTasks } from '../.claude/hooks/lib/registry.js';
+import { readRegistry, render, closeTasks, reopenTasks } from '../.claude/hooks/lib/registry.js';
 
 const [, , command, ...rest] = process.argv;
 
@@ -72,6 +78,21 @@ function close() {
   return 0;
 }
 
+function reopen() {
+  const addresses = rest.filter((a) => !a.startsWith('--'));
+  if (!addresses.length) {
+    process.stderr.write('Нечего возвращать в работу: нужен адрес вида Ц1.2.\n');
+    return 1;
+  }
+  const done = reopenTasks(approvalRegistry(), addresses);
+  if (done.reopened.length) process.stdout.write(`Снова в работе: ${done.reopened.join(', ')}\n`);
+  if (done.unknown.length) {
+    process.stderr.write(`Не найдено закрытой задачи: ${done.unknown.join(', ')}\n`);
+    return 1;
+  }
+  return 0;
+}
+
 const registry = approvalRegistry();
 if (!registry) {
   process.stderr.write('Реестра нет: сессия не опознана.\n');
@@ -80,6 +101,7 @@ if (!registry) {
 
 if (command === 'show') process.exit(show());
 if (command === 'close') process.exit(close());
+if (command === 'reopen') process.exit(reopen());
 
-process.stderr.write('Команды: show [--bodies] [--all] | close Ц1.2 [Ц1.3 …]\n');
+process.stderr.write('Команды: show [--bodies] [--all] | close Ц1.2 [Ц1.3 …] | reopen Ц1.2\n');
 process.exit(1);
