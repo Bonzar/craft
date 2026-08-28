@@ -42,27 +42,32 @@ try {
 } catch { /* своего входа нет — это штатный случай, решение примет функция */ }
 
 const { write, why } = decideCodexAuth(iz, svoy);
-if (!write) {
+if (write) {
+  try {
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    // Права задаются вторым шагом: mkdir с mode подчиняется umask, а у файла с
+    // refresh-токеном права — не косметика.
+    fs.chmodSync(home, 0o700);
+    fs.writeFileSync(file, iz, { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+    log(`вход разложен в ${file}: ${why}`);
+  } catch (err) {
+    log(`вход разложить не удалось: ${err && err.message}`);
+  }
+} else {
   log(`вход не тронут: ${why}`);
-  process.exit(0);
 }
 
-try {
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  // Права задаются вторым шагом: mkdir с mode подчиняется umask, а у файла с
-  // refresh-токеном права — не косметика.
-  fs.chmodSync(home, 0o700);
-  fs.writeFileSync(file, iz, { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
-  log(`вход разложен в ${file}: ${why}`);
-} catch (err) {
-  log(`вход разложить не удалось: ${err && err.message}`);
+// Клиент проверяется ВСЕГДА, независимо от того, тронули мы вход или нет.
+// Иначе достаточно одной неудачной установки: первый старт кладёт вход и
+// спотыкается на npm, а каждый следующий видит «свой вход не старее», выходит
+// раньше — и клиента не будет уже никогда.
+//
+// Ставим, только когда команды не нашлось, то есть один раз на контейнер.
+if (hasCommand('codex')) {
+  log('клиент codex на месте');
   process.exit(0);
 }
-
-// Клиент в контейнере не предустановлен. Ставим, только когда команды не
-// нашлось, то есть один раз на контейнер, а не на сессию.
-if (hasCommand('codex')) process.exit(0);
 if (!hasCommand('npm')) {
   log('npm не найден — клиент не поставить, вход останется лежать');
   process.exit(0);
