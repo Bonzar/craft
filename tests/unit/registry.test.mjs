@@ -61,13 +61,13 @@ test('цель с тем же заголовком и тем же телом н�
   assert.equal(saved.log.length, 1, 'и не стирает лог');
 });
 
-test('изменившаяся цель замещает прежнюю вместе с задачами и логом', () => {
+test('изменившаяся цель реплики замещает прежнюю вместе с задачами и логом', () => {
   const file = tmpFile();
-  registry.upsertGoal(file, goal());
+  registry.upsertGoal(file, goal({ source: 'reply' }));
   registry.closeTasks(file, ['Ц1.1']);
   registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
 
-  const revised = goal();
+  const revised = goal({ source: 'reply' });
   revised.tasks[0].body = 'форма записи, команды и глушилка';
   registry.upsertGoal(file, revised);
 
@@ -75,6 +75,33 @@ test('изменившаяся цель замещает прежнюю вмес
   assert.equal(registry.readRegistry(file).length, 1);
   assert.equal(saved.tasks[0].state, 'open', 'ревизия отменяет прежнюю редакцию, а не продолжает её');
   assert.deepEqual(saved.log, []);
+});
+
+// Два разных плана про одну цель работы легко получают от модели один и тот же
+// заголовок. Замещение стёрло бы открытые задачи первого — и гейт закрыл бы
+// правки, которые Влад уже разрешил.
+test('второй план с тем же заголовком заводит свою цель, а не затирает первую', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.closeTasks(file, ['Ц1.1']);
+  registry.appendLog(file, 0, 'задача Ц1.1 · registry.js · завела чтение');
+
+  const second = goal();
+  second.tasks[0].body = 'другая работа под тем же именем';
+  registry.upsertGoal(file, second);
+
+  const saved = registry.readRegistry(file);
+  assert.equal(saved.length, 2, 'план не замещает план');
+  assert.equal(saved[0].tasks[0].state, 'closed', 'закрытое первого плана цело');
+  assert.equal(saved[0].log.length, 1, 'и лог его цел');
+  assert.equal(saved[1].tasks[0].state, 'open');
+});
+
+test('перепоказ того же плана цель не задваивает', () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  registry.upsertGoal(file, goal());
+  assert.equal(registry.readRegistry(file).length, 1, 'то же содержание — та же цель');
 });
 
 test('лог живёт на цели и ограничен сверху', () => {
