@@ -169,6 +169,7 @@ function makeState() {
     classtrace: tmpName('mock-classifier-trace'),
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
+    codexhome: tmpName('codex-home-test'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -186,6 +187,10 @@ function makeState() {
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
     SESSION_ANCHOR_STATE: s.anchor,
+    // Дом codex — герметичный у КАЖДОГО кейса, а не только у своих. Хук входа
+    // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
+    // кладёт живой токен в настоящий ~/.codex рабочей машины.
+    CODEX_HOME: s.codexhome,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
@@ -239,6 +244,11 @@ function cleanState(s) {
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
   fs.rmSync(s.oncedir, { recursive: true, force: true });
+  // Дом codex убирается обязательно: в нём лежит вход, а хук входа зовётся и из
+  // посторонних стартовых кейсов. Не убрать — копии токена копились бы в /tmp
+  // после каждого прогона, и на машине разработчика туда осел бы настоящий
+  // CODEX_AUTH_JSON, унаследованный от окружения.
+  fs.rmSync(s.codexhome, { recursive: true, force: true });
 }
 
 // --- прогон одного кейса -----------------------------------------------------
@@ -254,8 +264,14 @@ function subst(value, s) {
   // МАТЕРИАЛ: что именно хук положил в промпт разбора. По реестру этого не
   // видно — там лежит ответ заглушки, заданный самим кейсом, а не то, что ушло
   // в вопрос.
+  //
+  // {CODEXHOME} — герметичный дом codex этого прогона: по нему кейс наводит
+  // ASSERT_FILE на файл входа, который заводит хук.
   if (!s) return withDir;
-  return withDir.split('{REGISTRY}').join(s.registry).split('{CLASSTRACE}').join(s.classtrace);
+  return withDir
+    .split('{REGISTRY}').join(s.registry)
+    .split('{CLASSTRACE}').join(s.classtrace)
+    .split('{CODEXHOME}').join(s.codexhome);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`
@@ -284,6 +300,15 @@ function runPass(c, ext) {
   // предусловие, которое обещает, и зеленел бы независимо от кода.
   if (Array.isArray(c.registry_seed)) {
     fs.writeFileSync(s.registry, `${c.registry_seed.map((g) => JSON.stringify(g)).join('\n')}\n`);
+  }
+
+  // `codex_seed` — вход, уже лежащий в доме codex до прогона. Тем же приёмом и
+  // по той же причине, что реестр: предусловие «свой вход новее, чем в
+  // настройках» подготовительным хуком не выразить, а без него кейс про выбор
+  // «переписывать или нет» зеленел бы на любом коде.
+  if (typeof c.codex_seed === 'string') {
+    fs.mkdirSync(s.codexhome, { recursive: true });
+    fs.writeFileSync(path.join(s.codexhome, 'auth.json'), c.codex_seed);
   }
 
   // Подготовке по умолчанию подаётся ТОТ ЖЕ вход и то же окружение, что целевому

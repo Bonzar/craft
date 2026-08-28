@@ -23,7 +23,9 @@ export const TABLE = {
       hooks: ['universal-inject-behavior-rules', 'universal-inject-code-rules', 'universal-inject-instincts'],
       scope: 'universal',
     },
-    { hooks: ['universal-cache-gate-exempt-scope', 'universal-env-capabilities'], scope: 'both' },
+    // Вход в codex раскладывается ДО карты возможностей: карта сообщает, что в
+    // сессии доступно, и к этому моменту вход уже должен лежать на месте.
+    { hooks: ['universal-cache-gate-exempt-scope', 'universal-codex-auth', 'universal-env-capabilities'], scope: 'both' },
     { hooks: ['universal-session-anchor'], scope: 'both' },
   ],
 
