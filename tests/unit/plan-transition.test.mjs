@@ -13,6 +13,7 @@ test('supported adapter creates a native next-turn planning operation', async ()
   assert.equal(result.operation.params.collaborationMode.settings.reasoning_effort, 'medium');
   assert.equal(result.operation.params.collaborationMode.settings.developer_instructions, null);
   assert.equal(result.operation.params.input[0].text, 'Refactor the gate');
+  assert.deepEqual(result.operation.params.input[0].text_elements, []);
 });
 
 test('plan_required has a strict versioned schema', () => {
