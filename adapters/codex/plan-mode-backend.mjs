@@ -7,7 +7,7 @@ export function createPlanTurn(request, config) {
       method: 'turn/start',
       params: {
         threadId: request.sessionRef,
-        input: [{ type: 'text', text: request.intent }],
+        input: [{ type: 'text', text: request.intent, text_elements: [] }],
         collaborationMode: {
           mode: 'plan',
           settings: {
