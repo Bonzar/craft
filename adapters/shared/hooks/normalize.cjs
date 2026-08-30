@@ -28,7 +28,9 @@ const SESSION_ROUTES = new Map([
   ['ShowOnboardingRolePicker', 'session.ui'],
 ]);
 
-const READ_OPERATIONS = new Set(['craft_read', 'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
+const CRAFT_READ_OPERATIONS = new Set(['craft_read', 'craft_mcp_craft_read']);
+const CRAFT_WRITE_OPERATIONS = new Set(['craft_write', 'craft_mcp_craft_write']);
+const READ_OPERATIONS = new Set([...CRAFT_READ_OPERATIONS, 'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 const SCHEDULE_OPS = /(subscribe_pr_activity|send_later|_wakeup)$/;
 const UI_OPS = /set_session_(title|tags)$/;
 
@@ -49,19 +51,20 @@ function mcpOperation(name) {
 }
 
 function routeFor(name) {
+  const operation = /^mcp__/.test(name) ? mcpOperation(name) : '';
   if (name === 'ExitPlanMode') return 'plan.submit';
   if (name === 'AskUserQuestion' || name === 'request_user_input') return 'session.question';
   if (['Task', 'Agent', 'Workflow', 'spawn_agent', 'create_thread'].includes(name)) return 'agent.invoke';
   if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(name)) return 'file.mutate';
   if (name === 'apply_patch') return 'file.patch';
   if (name === 'Bash' || name === 'exec_command' || name === 'write_stdin') return 'command.run';
-  if (/__craft_write$/.test(name)) return 'data.mutate';
-  if (/__craft_read$/.test(name)) return 'read';
+  if (CRAFT_WRITE_OPERATIONS.has(operation)) return 'data.mutate';
+  if (CRAFT_READ_OPERATIONS.has(operation)) return 'read';
   if (READ_NAMES.has(name)) return 'read';
   if (SESSION_ROUTES.has(name)) return SESSION_ROUTES.get(name);
   if (SCHEDULE_OPS.test(name)) return 'session.schedule';
   if (UI_OPS.test(name)) return 'session.ui';
-  if (/^mcp__/.test(name) && READ_OPERATIONS.has(mcpOperation(name))) return 'read';
+  if (READ_OPERATIONS.has(operation)) return 'read';
   return name ? 'unknown' : 'none';
 }
 
