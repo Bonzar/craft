@@ -108,6 +108,15 @@ test('real Craft app read tool is recognized by its exact operation suffix', () 
   assert.equal(event.action.route, 'read');
 });
 
+test('real Craft app write tool is recognized by its exact operation suffix', () => {
+  const event = normalizeHarnessEvent({
+    hook_event_name: 'PreToolUse',
+    tool_name: 'mcp__codex_apps__craft_mcp_craft_write',
+    tool_input: { command: 'blocks update --id ABC --json {}' },
+  }, 'test');
+  assert.equal(event.action.route, 'data.mutate');
+});
+
 test('native session tools map to granular provider-neutral effects', () => {
   const cases = new Map([
     ['TaskCreate', 'session.work'],
