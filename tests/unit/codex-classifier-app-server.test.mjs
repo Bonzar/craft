@@ -32,6 +32,10 @@ input.on('line', (line) => {
     send({ id: message.id, result: { thread: { id: 'thread-test' } } });
   } else if (message.method === 'turn/start') {
     send({ id: message.id, result: { turn: { id: 'turn-test', status: 'inProgress', items: [], error: null } } });
+    send({ method: 'error', params: {
+      error: { message: 'transient fake transport error' },
+      willRetry: true, threadId: 'thread-test', turnId: 'turn-test',
+    } });
     const text = process.env.FAKE_CODEX_MALFORMED === '1'
       ? JSON.stringify({ output: 'ALLOW_SESSION:typed session action', extra: true })
       : JSON.stringify({ output: 'ALLOW_SESSION:typed session action' });
