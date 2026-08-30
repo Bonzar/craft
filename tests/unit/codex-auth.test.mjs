@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { decideCodexAuth } = await import('../../.claude/hooks/lib/codex-auth.js');
+const { decideCodexAuth } = await import('../../adapters/codex/hooks/lib/auth.js');
 
 // Вход из настроек окружения: та же форма, что у файла клиента, — важны только
 // наличие токенов и дата обновления.

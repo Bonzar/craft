@@ -1,5 +1,6 @@
-// Доказательство чтения: гвард якоря спрашивает не «куда команда пишет», а
-// «видно ли, что она только читает». Список записи разрешал по умолчанию —
+// Доказательство чтения: read-only-классификатор спрашивает не «куда команда
+// пишет», а «видно ли, что она только читает». Список write‑действий
+// не даёт прохода по умолчанию —
 // незнакомая утилита проходила молча, а своя команда записи есть у любого
 // стороннего инструмента. Здесь закреплено поведение на границах: что считается
 // доказанным чтением, что — недоказанным, и по какой причине.
@@ -9,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { classifyCommand } = await import('../../.claude/hooks/lib/read-only-command.js');
+const { classifyCommand } = await import('../../core/hooks/lib/read-only-command.js');
 
 const readOnly = (cmd) => classifyCommand(cmd).readOnly;
 const cause = (cmd) => classifyCommand(cmd).cause;

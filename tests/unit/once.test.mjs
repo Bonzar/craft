@@ -20,7 +20,7 @@ function tmpDir() {
 async function loadOnce(dir) {
   delete process.env.HOOK_ONCE;
   process.env.HOOK_ONCE_DIR = dir;
-  return import(`../../.claude/hooks/lib/once.js?t=${Date.now()}${Math.random()}`);
+  return import(`../../core/hooks/lib/once.js?t=${Date.now()}${Math.random()}`);
 }
 
 test('второй вызов того же события уступает', async () => {
@@ -31,6 +31,34 @@ test('второй вызов того же события уступает', as
 
   assert.equal(hookOnce(raw, JSON.parse(raw), self), true, 'первый вызов обязан работать');
   assert.equal(hookOnce(raw, JSON.parse(raw), self), false, 'второй вызов обязан уступить');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('action.before без invocation id не дедуплицируется fail-closed', async () => {
+  const dir = tmpDir();
+  const { hookOnce } = await loadOnce(dir);
+  const event = { name: 'action.before' };
+  const raw = JSON.stringify({ event, action: { route: 'file.mutate' } });
+  const self = `file://${HOOKS}/universal-guard-plan-gate.js`;
+
+  assert.equal(hookOnce(raw, event, self), true);
+  assert.equal(hookOnce(raw, event, self), true, 'неразличимый retry нельзя пропускать');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('invocation id дедуплицирует регистрацию, но не новый retry', async () => {
+  const dir = tmpDir();
+  const { hookOnce } = await loadOnce(dir);
+  const self = `file://${HOOKS}/universal-guard-plan-gate.js`;
+  const call = (id) => {
+    const event = { name: 'action.before', invocationId: id };
+    const raw = JSON.stringify({ event, action: { route: 'file.mutate' } });
+    return hookOnce(raw, event, self);
+  };
+
+  assert.equal(call('call-1'), true);
+  assert.equal(call('call-1'), false, 'двойная регистрация одного вызова не должна работать дважды');
+  assert.equal(call('call-2'), true, 'новый нативный вызов обязан пройти гейт заново');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -82,8 +110,8 @@ test('посторонний экземпляр уступает своему ч
   // В чекауте сессии лежит файл хука с тем же именем — значит исполняемый файл
   // из другого места посторонний и работать не должен.
   const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'checkout.'));
-  fs.mkdirSync(path.join(checkout, '.claude', 'hooks'), { recursive: true });
-  fs.writeFileSync(path.join(checkout, '.claude', 'hooks', 'universal-fact-gate.js'), '// свой');
+  fs.mkdirSync(path.join(checkout, 'core', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'core', 'hooks', 'universal-fact-gate.js'), '// свой');
   const event = { cwd: checkout };
 
   assert.equal(
@@ -93,8 +121,27 @@ test('посторонний экземпляр уступает своему ч
   );
   // А свой файл из того же чекаута работает.
   assert.equal(
-    hookOnce('{"a":1}', event, `file://${checkout}/.claude/hooks/universal-fact-gate.js`),
+    hookOnce('{"a":1}', event, `file://${checkout}/core/hooks/universal-fact-gate.js`),
     true,
+  );
+
+  fs.rmSync(checkout, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('blocking guard не уступает одному лишь одноимённому файлу в checkout', async () => {
+  const dir = tmpDir();
+  const { hookOnce } = await loadOnce(dir);
+  const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'checkout-no-registration.'));
+  fs.mkdirSync(path.join(checkout, 'core', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'core', 'hooks', 'universal-guard-plan-gate.js'), '// не зарегистрирован');
+  const event = { name: 'action.before', invocationId: 'call-1', cwd: checkout };
+
+  assert.equal(
+    hookOnce('{"event":{"name":"action.before","invocationId":"call-1"}}', event,
+      `file://${HOOKS}/universal-guard-plan-gate.js`),
+    true,
+    'critical guard must run unless another invocation is proven to have handled the call',
   );
 
   fs.rmSync(checkout, { recursive: true, force: true });

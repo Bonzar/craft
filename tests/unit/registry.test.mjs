@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 
-const registry = await import('../../.claude/hooks/lib/registry.js');
+const registry = await import('../../core/hooks/lib/registry.js');
 
 function tmpFile() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-')), 'approvals.jsonl');
@@ -297,7 +297,7 @@ test('параллельные правки реестра не теряют з�
 
   const script = path.join(path.dirname(file), 'writer.mjs');
   fs.writeFileSync(script, `
-    const registry = await import(${JSON.stringify(path.resolve('.claude/hooks/lib/registry.js'))});
+    const registry = await import(${JSON.stringify(path.resolve('core/hooks/lib/registry.js'))});
     for (let i = 0; i < ${PER_WRITER}; i += 1) {
       registry.addTasks(process.argv[2], 0, [{ title: 'з' + process.argv[3] + '.' + i, where: [], body: '' }]);
     }

@@ -1,0 +1,29 @@
+{
+  "description": "Connect Codex lifecycle events to the shared Craft core.",
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "startup|resume|clear|compact",
+      "hooks": [{
+        "type": "command",
+        "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"",
+        "timeout": 3600,
+        "statusMessage": "Loading the Craft core",
+        "additionalContextLimit": 0
+      }]
+    }],
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"",
+        "timeout": 3600,
+        "additionalContextLimit": 0
+      }]
+    }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"", "timeout": 3600, "additionalContextLimit": 0 }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"", "timeout": 3600 }] }],
+    "PreToolUse": [{ "hooks": [{ "type": "command", "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"", "timeout": 3600 }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"", "timeout": 3600 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"", "timeout": 3600 }] }],
+    "PreCompact": [{ "hooks": [{ "type": "command", "command": "node \"$(git rev-parse --show-toplevel)/adapters/codex/hooks/dispatch.mjs\"", "timeout": 3600 }] }]
+  }
+}

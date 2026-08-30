@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "command": "node $CLAUDE_PROJECT_DIR/adapters/claude/hooks/dispatch.mjs",
             "timeout": 3600
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "command": "node $CLAUDE_PROJECT_DIR/adapters/claude/hooks/dispatch.mjs",
             "timeout": 3600
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "command": "node $CLAUDE_PROJECT_DIR/adapters/claude/hooks/dispatch.mjs",
             "timeout": 3600
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "command": "node $CLAUDE_PROJECT_DIR/adapters/claude/hooks/dispatch.mjs",
             "timeout": 3600
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "command": "node $CLAUDE_PROJECT_DIR/adapters/claude/hooks/dispatch.mjs",
             "timeout": 3600
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "command": "node $CLAUDE_PROJECT_DIR/adapters/claude/hooks/dispatch.mjs",
             "timeout": 3600
           }
         ]
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.js",
+            "command": "node $CLAUDE_PROJECT_DIR/adapters/claude/hooks/dispatch.mjs",
             "timeout": 3600
           }
         ]

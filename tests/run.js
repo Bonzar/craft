@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Регресс-тесты хуков Claude Code (.claude/hooks/). Раннер набора кейсов
+// Регресс-тесты общего hook core. Клиентские адаптеры проверяются отдельно.
 // один в один: тот же формат кейсов, те же исходы, те же смоуки, тот же отчёт.
 //
 // Кейс (tests/hooks/*.jsonl) — один JSON-объект на строку:
@@ -34,9 +34,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { normalizeHarnessEvent, routeFor, eventRouteFor } = require('../adapters/shared/hooks/normalize.cjs');
 
 const REPO = path.resolve(__dirname, '..');
-const HOOKS = path.join(REPO, '.claude', 'hooks');
+const HOOKS = path.join(REPO, 'core', 'hooks');
 const CASES_DIR = path.join(REPO, 'tests', 'hooks');
 const SETTINGS = path.join(REPO, '.claude', 'settings.json');
 const EXTRA_HOOKS_DIR = process.env.EXTRA_HOOKS_DIR || '';
@@ -48,7 +49,7 @@ const DIFF = process.argv.includes('--diff');
 // вместе с этим символом и валит скрипт по set -u, а в локали C та же строка
 // работает. Из-за этого сломанный guard-plan-delta прошёл ревью: CI был зелёный,
 // а на рабочей машине гвард молча падал.
-const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8' };
+const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8', CRAFT_RUNTIME: 'claude' };
 
 // Ключ кейса → файл хука без расширения. Незнакомый ключ резолвится по имени
 // самого ключа, поэтому карта нужна только там, где они расходятся.
@@ -77,6 +78,7 @@ const SCRIPT = {
   'stop-incident-closure': 'universal-stop-incident-closure',
   'stop-relative-link': 'universal-stop-relative-link',
   'detect-incident-arm': 'universal-detect-incident',
+  'universal-codex-auth': 'client-auth',
 };
 
 // Каждый хук обязан хоть раз показать каждый свой исход: кейс-набор, где у
@@ -98,7 +100,6 @@ const REQUIRED = [
   'mark-plan-critic:silent', 'mark-plan-file:silent',
   'stop-incident-closure:block', 'stop-incident-closure:silent',
   'stop-relative-link:block', 'stop-relative-link:silent',
-  'session-anchor:deny', 'session-anchor:allow',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
@@ -110,7 +111,8 @@ const REVERSE_WHITELIST = ['dispatch', 'dispatch-table'];
 // Файл хука по имени без расширения: JS предпочитается, bash — фолбек. Внешний
 // набор (EXTRA_HOOKS_DIR) идёт после репозиторного тем же правилом.
 function resolveHook(base, ext) {
-  const dirs = EXTRA_HOOKS_DIR ? [HOOKS, EXTRA_HOOKS_DIR] : [HOOKS];
+  const adapterHooks = path.join(REPO, 'adapters', 'codex', 'hooks');
+  const dirs = EXTRA_HOOKS_DIR ? [HOOKS, adapterHooks, EXTRA_HOOKS_DIR] : [HOOKS, adapterHooks];
   const exts = ext ? [ext] : ['.js', '.sh'];
   for (const dir of dirs) {
     for (const e of exts) {
@@ -169,8 +171,10 @@ function makeState() {
     classtrace: tmpName('mock-classifier-trace'),
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
+    edited: tmpName('edited-files-test'),
     codexhome: tmpName('codex-home-test'),
   };
+  fs.mkdirSync(s.codexhome, { recursive: true });
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
     CRAFT_APPROVAL_REGISTRY: s.registry,
@@ -187,6 +191,7 @@ function makeState() {
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
     SESSION_ANCHOR_STATE: s.anchor,
+    CRAFT_EDITED_FILES_STATE: s.edited,
     // Дом codex — герметичный у КАЖДОГО кейса, а не только у своих. Хук входа
     // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
     // кладёт живой токен в настоящий ~/.codex рабочей машины.
@@ -220,6 +225,7 @@ function stateSnapshot(s) {
     ['plan-critic-runs', s.criticruns], ['relative-link', s.relstate],
     ['sync-system', s.syncstate], ['approval-registry', s.registry],
     ['session-anchor', s.anchor],
+    ['edited-files', s.edited],
   ];
   for (const [label, file] of files) {
     if (fs.existsSync(file)) out[label] = fs.readFileSync(file, 'utf8');
@@ -239,7 +245,7 @@ function cleanState(s) {
     s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
-    s.syncstate, s.classtrace, s.registry, s.anchor,
+    s.syncstate, s.classtrace, s.registry, s.anchor, s.edited,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
@@ -285,8 +291,21 @@ function runPass(c, ext) {
   const s = makeState();
   const caseEnv = { ...BASE_ENV, ...s.env };
   for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v, s);
+  if (caseEnv.CLAUDE_PROJECT_DIR && !caseEnv.CRAFT_PROJECT_DIR) caseEnv.CRAFT_PROJECT_DIR = caseEnv.CLAUDE_PROJECT_DIR;
+  if (caseEnv.CLAUDE_CODE_SESSION_ID !== undefined && caseEnv.CRAFT_SESSION_ID === undefined) {
+    caseEnv.CRAFT_SESSION_ID = caseEnv.CLAUDE_CODE_SESSION_ID;
+  }
 
-  const input = subst(JSON.stringify(c.input ?? {}), s);
+  const canonicalize = (value) => {
+    const parsed = JSON.parse(subst(JSON.stringify(value ?? {}), s));
+    return JSON.stringify(parsed.schemaVersion === 1 ? parsed : normalizeHarnessEvent(
+      parsed,
+      'claude',
+      '',
+      { planRoot: '/root/.claude/plans' },
+    ));
+  };
+  const input = canonicalize(c.input ?? {});
 
   // `arm: true` — предусловие «маркер взведён»: файл, путь которого хук берёт из
   // окружения, создаётся до прогона (взводом в жизни занимается другой хук).
@@ -300,6 +319,16 @@ function runPass(c, ext) {
   // предусловие, которое обещает, и зеленел бы независимо от кода.
   if (Array.isArray(c.registry_seed)) {
     fs.writeFileSync(s.registry, `${c.registry_seed.map((g) => JSON.stringify(g)).join('\n')}\n`);
+  }
+  if (Array.isArray(c.edited_files_seed)) {
+    fs.writeFileSync(s.edited, `${c.edited_files_seed.map((file) => subst(file, s)).join('\n')}\n`);
+  }
+
+  // Enforcement moved into plan-gate. Gate cases seed an already selected
+  // anchor by default so each one still tests the rule named in its title;
+  // anchor-specific gate cases opt out explicitly.
+  if (c.hook === 'guard-plan-gate' && c.anchor_seed !== false) {
+    fs.writeFileSync(s.anchor, 'test anchor\n');
   }
 
   // `codex_seed` — вход, уже лежащий в доме codex до прогона. Тем же приёмом и
@@ -315,17 +344,17 @@ function runPass(c, ext) {
   // хуку; кейс может задать своё событие (setup_input) и свои переменные
   // (setup_env). Список setup_input — свой элемент каждому шагу подготовки.
   const setupEnv = { ...caseEnv };
-  for (const [k, v] of Object.entries(c.setup_env || {})) setupEnv[k] = subst(v);
+  for (const [k, v] of Object.entries(c.setup_env || {})) setupEnv[k] = subst(v, s);
   const setupList = Array.isArray(c.setup_input) ? c.setup_input : null;
   const setupOne = !setupList && c.setup_input !== undefined
-    ? subst(JSON.stringify(c.setup_input)) : '';
+    ? canonicalize(c.setup_input) : '';
 
   (c.setup || []).forEach((name, i) => {
     const sBase = SCRIPT[name] || name;
     const sScript = resolveHook(sBase, ext) || resolveHook(sBase);
     if (!sScript) return;
     let step = setupOne;
-    if (setupList) step = subst(JSON.stringify(setupList[i] ?? null));
+    if (setupList) step = canonicalize(setupList[i] ?? {});
     runHook(sScript, step && step !== 'null' ? step : input, setupEnv);
   });
 
@@ -379,9 +408,9 @@ function jsonField(text, pick) {
     return undefined;
   }
 }
-const isDeny = (o) => jsonField(o, (j) => j.hookSpecificOutput?.permissionDecision) === 'deny';
-const isAsk = (o) => jsonField(o, (j) => j.hookSpecificOutput?.permissionDecision) === 'ask';
-const isBlock = (o) => jsonField(o, (j) => j.decision) === 'block';
+const isDeny = (o) => ['deny', 'plan_required'].includes(jsonField(o, (j) => j.type));
+const isAsk = (o) => jsonField(o, (j) => j.type) === 'ask';
+const isBlock = (o) => jsonField(o, (j) => j.type) === 'block';
 const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 
 function grade(expect, out, err, env) {
@@ -444,7 +473,6 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-gate', 'PreToolUse', 'Bash'],
   ['universal-guard-plan-exit-failure', 'PostToolUseFailure', 'ExitPlanMode'],
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
-  ['universal-session-anchor', 'PreToolUse', 'Bash'],
   ['universal-session-anchor', 'PostToolUse', 'AskUserQuestion'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
@@ -474,9 +502,10 @@ function smokeChecks() {
   // Каждая зарегистрированная команда обязана существовать и быть исполняемой —
   // ловит регрессии путей после переименований и переносов.
   for (const c of registeredCommands(settings)) {
-    const p = c.split('$CLAUDE_PROJECT_DIR').join(REPO);
+    const nodeWrapped = /^node\s+/.test(c);
+    const p = c.replace(/^node\s+/, '').split('$CLAUDE_PROJECT_DIR').join(REPO).split(/\s+/)[0];
     if (!fs.existsSync(p)) smoke.push(`missing hook file: ${p}`);
-    else {
+    else if (!nodeWrapped) {
       try {
         fs.accessSync(p, fs.constants.X_OK);
       } catch {
@@ -488,7 +517,7 @@ function smokeChecks() {
   // Маршрут спрашивается у самого диспетчера, а не вычитывается из таблицы
   // глазами: сверяется то, кого он ПОЗОВЁТ, а не то, что где-то написано.
   const routed = (event, tool) => {
-    const res = spawnSync(process.execPath, [DISPATCH, '--list', event, tool], { encoding: 'utf8' });
+    const res = spawnSync(process.execPath, [DISPATCH, '--list', eventRouteFor(event), routeFor(tool)], { encoding: 'utf8' });
     return (res.stdout || '').split('\n').filter(Boolean);
   };
   for (const [base, event, tool] of NEEDS_MATCHER) {

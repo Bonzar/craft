@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "agentModels": { "fast": "haiku", "balanced": "sonnet", "deep": "opus" },
+  "classifier": { "model": "haiku", "fallbackModels": [] },
+  "planning": { "model": "sonnet", "reasoningEffort": "medium" },
+  "capabilities": {
+    "agent-invocation": true,
+    "classifier": true,
+    "native-plan-transition": false,
+    "native-subagent-lifecycle": false,
+    "structured-classifier-output": true
+  }
+}

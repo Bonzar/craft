@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agentId", "task"],
+  "properties": {
+    "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "task": { "type": "string", "minLength": 1 },
+    "context": {},
+    "backend": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "depth": { "type": "integer", "minimum": 0 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "cwd": { "type": "string", "minLength": 1 }
+  }
+}

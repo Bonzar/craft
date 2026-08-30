@@ -1,9 +1,3 @@
-// Форма ответа хука обязана совпадать с bash-версией байт в байт: на переезде
-// обе версии одного хука сверяются дифференциальным режимом раннера, и лишний
-// пробел или другой порядок ключей развалит сверку на первом же порте.
-//
-// Эталон берётся не из головы: тот же текст прогоняется через jq ровно так, как
-// его печатали bash-хуки, и сравнивается с выводом модуля.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -12,14 +6,6 @@ import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DECIDE = path.join(REPO, '.claude', 'hooks', 'lib', 'decide.js');
-
-const hasJq = spawnSync('jq', ['--version'], { stdio: 'ignore' }).status === 0;
-
-// Как печатал bash: jq -cn --arg r "…" '{hookSpecificOutput:{…}}'.
-function viaJq(filter, reason) {
-  const res = spawnSync('jq', ['-cn', '--arg', 'r', reason, filter], { encoding: 'utf8' });
-  return res.stdout;
-}
 
 // Как печатает модуль: вызов в отдельном процессе, потому что решение
 // заканчивается выходом.
@@ -35,22 +21,19 @@ const REASONS = [
   'Перенос строки в причине:\nвторая строка',
 ];
 
-test('запрет печатается той же формой, что печатал jq', { skip: !hasJq && 'нет jq' }, () => {
-  const filter = '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}';
+test('core emits a provider-neutral deny decision', () => {
   for (const reason of REASONS) {
-    assert.equal(viaModule('deny', reason), viaJq(filter, reason));
+    assert.deepEqual(JSON.parse(viaModule('deny', reason)), { type: 'deny', reason });
   }
 });
 
-test('вопрос человеку печатается той же формой', { skip: !hasJq && 'нет jq' }, () => {
-  const filter = '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}';
-  assert.equal(viaModule('ask', REASONS[0]), viaJq(filter, REASONS[0]));
+test('core emits a provider-neutral ask decision', () => {
+  assert.deepEqual(JSON.parse(viaModule('ask', REASONS[0])), { type: 'ask', reason: REASONS[0] });
 });
 
-test('блокировка конца хода печатается той же формой', { skip: !hasJq && 'нет jq' }, () => {
-  const filter = '{"decision":"block","reason":$r}';
+test('core emits a provider-neutral block decision', () => {
   for (const reason of REASONS) {
-    assert.equal(viaModule('block', reason), viaJq(filter, reason));
+    assert.deepEqual(JSON.parse(viaModule('block', reason)), { type: 'block', reason });
   }
 });
 

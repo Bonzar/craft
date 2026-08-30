@@ -1,0 +1,12 @@
+{
+  "basenamePatterns": [
+    "^\\.env(?:\\..*)?$",
+    "^\\.envrc$",
+    "^\\.(?:npmrc|pypirc|netrc|git-credentials)$",
+    "^(?:credentials?|secrets?)(?:\\.[^.]+)?$",
+    "\\.(?:pem|key|p12|pfx|jks|keystore)$"
+  ],
+  "pathSegmentPatterns": [
+    "^\\.(?:direnv|ssh|gnupg)$"
+  ]
+}

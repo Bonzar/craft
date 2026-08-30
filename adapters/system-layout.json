@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "homeZones": [
+    {
+      "root": ".claude",
+      "gatedDirectories": ["skills", "hooks", "agents", "rules", "commands", "workflows"],
+      "gatedFiles": ["settings.json", "settings.local.json", "craft.env"]
+    },
+    {
+      "root": ".codex",
+      "gatedDirectories": ["agents", "skills", "hooks", "plugins", "rules"],
+      "gatedFiles": ["AGENTS.md", "AGENTS.override.md", "config.toml", "hooks.json"]
+    },
+    {
+      "root": ".agents",
+      "gatedDirectories": ["skills", "plugins"],
+      "gatedFiles": []
+    }
+  ],
+  "planSystemPattern": "core/|adapters/|\\.claude/|\\.codex/|\\.agents/|CLAUDE\\.md|AGENTS\\.md",
+  "lessonPattern": "/(core/(skills|hooks|agents|classifier|workflows)|adapters/|\\.claude/(skills|hooks|agents|rules|commands|workflows)|\\.codex/|\\.agents/)",
+  "livePattern": "^(core/(hooks|skills|agents|classifier|workflows)|adapters/|\\.claude/(hooks|skills|agents|commands)|\\.codex/agents|\\.agents/skills)/",
+  "watchedPattern": "^(\\.claude/settings\\.json|\\.codex/hooks\\.json|\\.codex/config\\.toml)$",
+  "coldPattern": "^(CLAUDE\\.md|AGENTS\\.md|\\.claude/CLAUDE\\.md|\\.claude/rules/)"
+}

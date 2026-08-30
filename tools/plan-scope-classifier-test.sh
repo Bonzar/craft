@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Самотест разбора ответов классификатора: гоняет tools/plan-scope-classifier.sh
+# Самотест разбора ответов классификатора: гоняет core/classifier/run.sh
 # с фейковой командой модели и сверяет разбор форм. Ловушка, ради которой тест
 # существует: положительная форма входит в отрицательную подстрокой — «ПОКРЫТА»
 # сидит внутри «НЕ ПОКРЫТА», — и разбор обязан сверять отрицательную первой.
@@ -18,7 +18,7 @@ pass=0; fail=0
 check() { # <имя> <режим+аргументы...> <ответ мока> <ожидание>
   local name="$1" mode="$2" answer="$3" want="$4" got
   got="$(echo тест | PLAN_CLASSIFIER_CMD="$PWD/$MOCK" MOCK_CLASSIFIER_ANSWER="$answer" \
-    bash tools/plan-scope-classifier.sh $mode 2>/dev/null)"
+    bash core/classifier/run.sh $mode 2>/dev/null)"
   if [[ "$got" == $want ]]; then
     pass=$((pass+1)); printf 'PASS  %-52s %s\n' "$name" "$got"
   else

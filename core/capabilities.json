@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "features": [
+    "agent-invocation",
+    "classifier",
+    "native-plan-transition",
+    "native-subagent-lifecycle",
+    "structured-classifier-output"
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "schemaVersion": 1,
+  "limits": { "maxDepth": 3, "maxConcurrency": 4, "timeoutMs": 3600000, "maxContextBytes": 1048576 }
+}

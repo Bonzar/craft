@@ -27,8 +27,8 @@
 //
 // Расширение .mjs обязательно: в tools/ нет манифеста модулей, и .js читался бы
 // как обычный скрипт, которому импорт недоступен.
-import { approvalRegistry } from '../.claude/hooks/lib/paths.js';
-import { readRegistry, render, closeTasks, reopenTasks } from '../.claude/hooks/lib/registry.js';
+import { approvalRegistry } from '../core/hooks/lib/paths.js';
+import { readRegistry, render, closeTasks, reopenTasks } from '../core/hooks/lib/registry.js';
 
 const [, , command, ...rest] = process.argv;
 

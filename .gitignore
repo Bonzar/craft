@@ -3,6 +3,12 @@
 # a per-session snapshot of a live Craft document.
 .claude/craft-router-context.md
 
+# Codex receives the same live data through a SessionStart hook. User-global
+# snapshots live outside the repository; these entries cover explicit test or
+# development overrides that point the bridge into the checkout.
+.codex/craft-router-context.md
+.codex/code-rules.md
+
 # Same: per-session snapshot of the live "Разбор инцидента" SKILL doc, fetched by
 # .claude/hooks/craft-inject-incident.sh for the incident detector. Never commit.
 .claude/craft-incident-context.md

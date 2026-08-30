@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "agentId", "backend", "model", "depth", "result"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["ok", "error"] },
+    "agentId": { "type": "string", "minLength": 1 },
+    "backend": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "depth": { "type": "integer", "minimum": 0 },
+    "result": { "type": "string" },
+    "error": { "type": "string" }
+  }
+}

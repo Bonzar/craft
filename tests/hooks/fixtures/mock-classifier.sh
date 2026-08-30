@@ -24,6 +24,19 @@ prompt="$(cat)"
 # зеленел бы и на коде, который ничего не ждёт.
 [[ -n "${MOCK_CLASSIFIER_DELAY:-}" ]] && sleep "$MOCK_CLASSIFIER_DELAY"
 
+if printf '%s' "$prompt" | grep -qF 'обязательная предварительная проверка'; then
+  if [[ -n "${MOCK_CLASSIFIER_PREFLIGHT:-}" ]]; then
+    printf '%s\n' "$MOCK_CLASSIFIER_PREFLIGHT"
+  elif printf '%s' "$prompt" | grep -qF '"effect":"session"'; then
+    echo 'ALLOW_SESSION:typed session action'
+  elif printf '%s' "$prompt" | grep -qF '"effect":"ephemeral"'; then
+    echo 'ALLOW_EPHEMERAL:temporary target'
+  else
+    echo 'CHECK_REGISTRY:protected or unknown effect'
+  fi
+  exit 0
+fi
+
 # Разбор плана в структуру отвечает не вердиктом, а JSON-ом, и общий дефолт
 # «СООТВЕТСТВУЕТ» для него был бы неразборным ответом — то есть кейсы одобрения
 # плана молча получали бы пустой разбор. Режим опознаётся по промпту со

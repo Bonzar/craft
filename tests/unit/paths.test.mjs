@@ -8,6 +8,7 @@
 // читался бы как обычный скрипт, которому импорт недоступен.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 const SID = 'test-session-id';
 
@@ -18,11 +19,11 @@ async function freshPaths(env = {}) {
       delete process.env[key];
     }
   }
-  process.env.CLAUDE_CODE_SESSION_ID = SID;
+  process.env.CRAFT_SESSION_ID = SID;
   Object.assign(process.env, env);
   // Кэша у модуля нет, но импорт с меткой делает намерение явным: каждый тест
   // читает окружение заново.
-  return import(`../../.claude/hooks/lib/paths.js?t=${Date.now()}${Math.random()}`);
+  return import(`../../core/hooks/lib/paths.js?t=${Date.now()}${Math.random()}`);
 }
 
 // Эталон: имя переменной-переопределения → путь по умолчанию при заданной
@@ -75,8 +76,26 @@ test('переопределение окружением сильнее деф�
 });
 
 test('при пустой сессии периметра нет вовсе', async () => {
-  const paths = await freshPaths({ CLAUDE_CODE_SESSION_ID: '' });
+  const paths = await freshPaths({ CRAFT_SESSION_ID: '' });
   assert.equal(paths.approvalRegistry(), '', 'реестр держит одобрения: общий default открыл бы записи чужой сессии');
   // А счётчики и метки общий default переживают: они ничего не открывают.
   assert.equal(paths.planCriticRuns(), '/tmp/plan-critic.default.runs');
+});
+
+test('якорь хранится в постоянном каталоге по безопасному ключу сессии', async () => {
+  const root = '/persistent/craft-state';
+  const paths = await freshPaths({
+    CRAFT_SESSION_ID: '../unsafe/session',
+    CRAFT_PERSISTENT_STATE_DIR: root,
+  });
+  const key = createHash('sha256').update('../unsafe/session').digest('hex');
+  assert.equal(paths.sessionAnchor(), `${root}/session-anchor.${key}`);
+});
+
+test('постоянный каталог не создаёт общий якорь без идентификатора сессии', async () => {
+  const paths = await freshPaths({
+    CRAFT_SESSION_ID: '',
+    CRAFT_PERSISTENT_STATE_DIR: '/persistent/craft-state',
+  });
+  assert.equal(paths.sessionAnchor(), '');
 });

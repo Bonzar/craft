@@ -1,6 +1,6 @@
 name: hooks-tests
 
-# Регресс-тесты слоя хуков Claude Code (.claude/hooks/) и чистых кусков JS-инструментов.
+# Регресс-тесты общего hook core и клиентских адаптеров.
 # Детерминированно, без сети и моделей — реальный Craft не трогается. Слой и раннер на
 # node; jq остался нужен установщику и части тестовых скриптов. См. tests/README.md.
 on:
@@ -23,7 +23,7 @@ jobs:
         run: jq --version || { sudo apt-get update && sudo apt-get install -y jq; }
 
       - name: Make hooks executable
-        run: chmod +x .claude/hooks/*.js
+        run: chmod +x core/hooks/*.js
 
       - name: Run hook regression tests
         run: node tests/run.js

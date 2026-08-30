@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "agentModels": { "fast": "gpt-5.3-codex-spark", "balanced": "gpt-5.6-terra", "deep": "gpt-5.6-sol" },
+  "classifier": { "model": "gpt-5.3-codex-spark", "fallbackModels": [] },
+  "planning": { "model": "gpt-5.6-terra", "reasoningEffort": "medium" },
+  "capabilities": {
+    "agent-invocation": true,
+    "classifier": true,
+    "native-plan-transition": true,
+    "native-subagent-lifecycle": true,
+    "structured-classifier-output": true
+  }
+}

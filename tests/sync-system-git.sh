@@ -13,7 +13,7 @@ set -u
 export LC_ALL=C.UTF-8
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-HOOK="$REPO/.claude/hooks/universal-sync-system.js"
+HOOK="$REPO/core/hooks/universal-sync-system.js"
 RUNNER=node
 
 pass=0; fail=0; fails=()
@@ -28,10 +28,10 @@ sandbox() {
   local sb; sb="$(mktemp -d "${TMPDIR:-/tmp}/sync-system-test.XXXXXX")"
   G init --quiet --bare "$sb/origin.git"
   G clone --quiet "$sb/origin.git" "$sb/seed" 2>/dev/null
-  mkdir -p "$sb/seed/.claude/hooks"
+  mkdir -p "$sb/seed/core/hooks"
   echo "base" > "$sb/seed/file.txt"
   echo "rule v1" > "$sb/seed/CLAUDE.md"
-  echo "hook v1" > "$sb/seed/.claude/hooks/universal-example.sh"
+  echo "hook v1" > "$sb/seed/core/hooks/universal-example.js"
   G -C "$sb/seed" add -A
   G -C "$sb/seed" commit --quiet -m "base"
   G -C "$sb/seed" push --quiet origin main
@@ -41,7 +41,7 @@ sandbox() {
   git -C "$sb/work" config user.email t@t
   git -C "$sb/work" config user.name t
   echo "base + upstream" > "$sb/seed/file.txt"
-  echo "hook v2" > "$sb/seed/.claude/hooks/universal-example.sh"
+  echo "hook v2" > "$sb/seed/core/hooks/universal-example.js"
   echo "rule v2" > "$sb/seed/CLAUDE.md"
   G -C "$sb/seed" add -A
   G -C "$sb/seed" commit --quiet -m "upstream work"
@@ -51,13 +51,19 @@ sandbox() {
 
 # $1 — событие, $2 — префикс состояния, $3 — цель синка, $4 — корень проекта сессии.
 run_hook() {
-  printf '{"hook_event_name":"%s","session_id":"git-test","prompt":"проба %s"}' "$1" "$RANDOM" \
+  local event_name
+  case "$1" in
+    Stop) event_name="turn.stop" ;;
+    UserPromptSubmit) event_name="user.prompt" ;;
+    *) event_name="unknown" ;;
+  esac
+  printf '{"schemaVersion":1,"event":{"name":"%s","sessionId":"git-test","cwd":"%s","prompt":"проба %s"},"action":{"route":"none","payload":{"raw":{}}}}' "$event_name" "$4" "$RANDOM" \
     | env SYNC_SYSTEM_STATE="$2" \
           SYNC_SYSTEM_TARGET="$3" \
           SYNC_SYSTEM_WORKER_INLINE=1 \
           SYNC_SYSTEM_INTERVAL=0 \
           HOOK_ONCE=off \
-          CLAUDE_PROJECT_DIR="$4" \
+          CRAFT_PROJECT_DIR="$4" \
           "$RUNNER" "$HOOK" 2>/dev/null
 }
 
@@ -268,17 +274,17 @@ rules_case() {  # $1 база, $2 свежий снимок; печатает st
   local sb st
   sb="$(mktemp -d "${TMPDIR:-/tmp}/sync-rules-test.XXXXXX")"
   st="$sb/state"
-  mkdir -p "$sb/target/.claude"
+  mkdir -p "$sb/target/.craft"
   printf '%s' "$1" > "$st.rules-base"
   printf '%s' "$2" > "$st.rules-fresh"
   printf 'ahead=0\nscope=own\nbranch=main\nhead_before=x\nrules=%s\n' "$st.rules-fresh" > "$st.report"
-  printf '{"hook_event_name":"UserPromptSubmit","session_id":"rules-test","prompt":"проба %s"}' "$RANDOM" \
+  printf '{"schemaVersion":1,"event":{"name":"user.prompt","sessionId":"rules-test","cwd":"%s","prompt":"проба %s"},"action":{"route":"none","payload":{"raw":{}}}}' "$sb/target" "$RANDOM" \
     | env SYNC_SYSTEM_STATE="$st" SYNC_SYSTEM_TARGET="$sb/target" HOOK_ONCE=off \
-          CLAUDE_PROJECT_DIR="$sb/target" "$RUNNER" "$HOOK" 2>/dev/null
+          CRAFT_PROJECT_DIR="$sb/target" "$RUNNER" "$HOOK" 2>/dev/null
   rm -rf "$sb"
 }
 
-HEAD_LINE='=== Craft: роутер «Память для Claude», авто-обновлён SessionStart-хуком (2026-08-20T11:00:00Z) ==='
+HEAD_LINE='=== Craft: роутер «Память агента», авто-обновлён стартовым хуком (2026-08-20T11:00:00Z) ==='
 MEM_OPEN='<page id="604c8d7f"><pageTitle>🧠 Память (регенерируемая)</pageTitle>'
 
 t="правила изменились — печатается дельта"
@@ -299,7 +305,7 @@ fi
 
 t="правила те же, отличается только время сборки — молчание"
 out="$(rules_case "$HEAD_LINE
-Правило: одно и то же." '=== Craft: роутер «Память для Claude», авто-обновлён SessionStart-хуком (2026-08-20T23:59:59Z) ===
+Правило: одно и то же." '=== Craft: роутер «Память агента», авто-обновлён стартовым хуком (2026-08-20T23:59:59Z) ===
 Правило: одно и то же.')"
 if [[ -n "${out//[$' \t\n\r']/}" ]]; then
   bad "$t" "напечатана ложная дельта: ${out:0:150}"
@@ -323,12 +329,12 @@ fi
 
 t="базы нет — молчание и засев"
 sb="$(mktemp -d "${TMPDIR:-/tmp}/sync-rules-seed.XXXXXX")"; st="$sb/state"
-mkdir -p "$sb/target/.claude"
+mkdir -p "$sb/target/.craft"
 printf '%s\nПравило.' "$HEAD_LINE" > "$st.rules-fresh"
 printf 'ahead=0\nscope=own\nbranch=main\nhead_before=x\nrules=%s\n' "$st.rules-fresh" > "$st.report"
-out="$(printf '{"hook_event_name":"UserPromptSubmit","session_id":"seed-test","prompt":"x"}' \
+out="$(printf '{"schemaVersion":1,"event":{"name":"user.prompt","sessionId":"seed-test","cwd":"%s","prompt":"x"},"action":{"route":"none","payload":{"raw":{}}}}' "$sb/target" \
   | env SYNC_SYSTEM_STATE="$st" SYNC_SYSTEM_TARGET="$sb/target" HOOK_ONCE=off \
-        CLAUDE_PROJECT_DIR="$sb/target" "$RUNNER" "$HOOK" 2>/dev/null)"
+        CRAFT_PROJECT_DIR="$sb/target" "$RUNNER" "$HOOK" 2>/dev/null)"
 if [[ -n "${out//[$' \t\n\r']/}" ]]; then
   bad "$t" "вместо молчания напечатан обрезок роутера: ${out:0:150}"
 elif [[ ! -s "$st.rules-base" ]]; then
@@ -338,21 +344,21 @@ else
 fi
 rm -rf "$sb"
 
-# Базой обязан быть снимок ЭТОЙ сессии — тот, что импортировал её CLAUDE.md.
+# Базой обязан быть снимок ЭТОЙ сессии — тот, что импортировал её harness.
 # Снимок из чекаута цели за базу не годится: в сессии другого проекта это чужой
 # файл произвольного возраста.
 rules_case_snapshot() {  # $1 снимок в чекауте сессии, $2 снимок в чекауте цели, $3 свежий
   local sb st
   sb="$(mktemp -d "${TMPDIR:-/tmp}/sync-seed-test.XXXXXX")"
   st="$sb/state"
-  mkdir -p "$sb/session/.claude" "$sb/target/.claude"
-  [[ -n "$1" ]] && printf '%s' "$1" > "$sb/session/.claude/craft-router-context.md"
-  [[ -n "$2" ]] && printf '%s' "$2" > "$sb/target/.claude/craft-router-context.md"
+  mkdir -p "$sb/session/.craft" "$sb/target/.craft"
+  [[ -n "$1" ]] && printf '%s' "$1" > "$sb/session/.craft/router-context.md"
+  [[ -n "$2" ]] && printf '%s' "$2" > "$sb/target/.craft/router-context.md"
   printf '%s' "$3" > "$st.rules-fresh"
   printf 'ahead=0\nscope=shared\nbranch=main\nhead_before=x\nrules=%s\n' "$st.rules-fresh" > "$st.report"
-  printf '{"hook_event_name":"UserPromptSubmit","session_id":"seed-%s","prompt":"x","cwd":"%s"}' "$RANDOM" "$sb/session" \
+  printf '{"schemaVersion":1,"event":{"name":"user.prompt","sessionId":"seed-%s","cwd":"%s","prompt":"x"},"action":{"route":"none","payload":{"raw":{}}}}' "$RANDOM" "$sb/session" \
     | env SYNC_SYSTEM_STATE="$st" SYNC_SYSTEM_TARGET="$sb/target" HOOK_ONCE=off \
-          CLAUDE_PROJECT_DIR="$sb/session" "$RUNNER" "$HOOK" 2>/dev/null
+          CRAFT_PROJECT_DIR="$sb/session" "$RUNNER" "$HOOK" 2>/dev/null
   rm -rf "$sb"
 }
 
