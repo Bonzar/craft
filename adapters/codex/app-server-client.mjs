@@ -128,8 +128,17 @@ function handle(message) {
     return;
   }
 
+  if (message.method === 'error') {
+    if (message.params?.willRetry === true
+      && message.params?.threadId === threadId && message.params?.turnId === turnId) return;
+    const detail = String(message.params?.error?.message || '')
+      .replace(/\b(?:Bearer|Api-Key)\s+\S+/gi, '<redacted>')
+      .replace(/\b(?:y[01]_|t[01]_|AQAD-)[A-Za-z0-9._-]+/g, '<redacted>')
+      .slice(0, 500);
+    return fail(`classifier app-server reported an error (retry=${String(message.params?.willRetry)}, threadMatch=${String(message.params?.threadId === threadId)}, turnMatch=${String(message.params?.turnId === turnId)}): ${detail}`);
+  }
+
   if (message.id !== undefined && message.method) fail('classifier requested unsupported interaction');
-  if (message.method === 'error') fail('classifier app-server reported an error');
 }
 
 const lines = readline.createInterface({ input: child.stdout });
