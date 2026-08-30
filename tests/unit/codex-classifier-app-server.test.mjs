@@ -35,9 +35,13 @@ input.on('line', (line) => {
     const text = process.env.FAKE_CODEX_MALFORMED === '1'
       ? JSON.stringify({ output: 'ALLOW_SESSION:typed session action', extra: true })
       : JSON.stringify({ output: 'ALLOW_SESSION:typed session action' });
+    const foreign = process.env.FAKE_CODEX_FOREIGN_ONLY === '1';
+    const commentary = process.env.FAKE_CODEX_COMMENTARY_ONLY === '1';
     send({ method: 'item/completed', params: {
-      item: { type: 'agentMessage', id: 'message-test', text },
-      threadId: 'thread-test', turnId: 'turn-test', completedAtMs: 1,
+      item: { type: 'agentMessage', id: 'message-test', text, phase: commentary ? 'commentary' : null },
+      threadId: foreign ? 'thread-foreign' : 'thread-test',
+      turnId: foreign ? 'turn-foreign' : 'turn-test',
+      completedAtMs: 1,
     } });
     send({ method: 'turn/completed', params: {
       threadId: 'thread-test',
@@ -102,6 +106,24 @@ test('Codex classifier rejects an agent message that violates the output schema'
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-invalid.'));
   try {
     assert.throws(() => invoke(dir, { FAKE_CODEX_MALFORMED: '1' }), /classifier|schema|output/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Codex classifier never accepts an agent message from another thread or turn', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-foreign.'));
+  try {
+    assert.throws(() => invoke(dir, { FAKE_CODEX_FOREIGN_ONLY: '1' }), /classifier|message|turn/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Codex classifier never treats commentary as its final decision', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-commentary.'));
+  try {
+    assert.throws(() => invoke(dir, { FAKE_CODEX_COMMENTARY_ONLY: '1' }), /classifier|message|turn/i);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
