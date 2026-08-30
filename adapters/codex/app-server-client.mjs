@@ -16,7 +16,7 @@ if (!request.command || !request.model || !request.prompt || !request.schema
   throw new Error('invalid classifier app-server request');
 }
 
-const child = spawn(request.command, ['app-server', '--stdio'], {
+const child = spawn(request.command, ['--disable', 'hooks', 'app-server', '--stdio'], {
   cwd: '/tmp',
   env: process.env,
   stdio: ['pipe', 'pipe', 'pipe'],
