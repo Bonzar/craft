@@ -24,6 +24,8 @@ const child = spawn(request.command, ['app-server', '--stdio'], {
 
 let settled = false;
 let finalMessage = null;
+let threadId = null;
+let turnId = null;
 let stderr = '';
 
 const timer = setTimeout(() => fail('classifier app-server timed out'), timeoutMs);
@@ -76,7 +78,7 @@ function handle(message) {
   if (!message || typeof message !== 'object') return fail('invalid app-server message');
   if (message.error) return fail('classifier app-server RPC failed');
 
-  if (message.id === 1) {
+  if (message.id === 1 && !message.method) {
     send({ method: 'initialized' });
     send({ id: 2, method: 'thread/start', params: {
       model: request.model,
@@ -93,8 +95,8 @@ function handle(message) {
     return;
   }
 
-  if (message.id === 2) {
-    const threadId = message.result?.thread?.id;
+  if (message.id === 2 && !message.method) {
+    threadId = message.result?.thread?.id;
     if (typeof threadId !== 'string' || !threadId) return fail('classifier thread did not start');
     send({ id: 3, method: 'turn/start', params: {
       threadId,
@@ -105,18 +107,22 @@ function handle(message) {
     return;
   }
 
-  if (message.id === 3) {
-    if (!message.result?.turn?.id) fail('classifier turn did not start');
+  if (message.id === 3 && !message.method) {
+    turnId = message.result?.turn?.id;
+    if (typeof turnId !== 'string' || !turnId) fail('classifier turn did not start');
     return;
   }
 
   if (message.method === 'item/completed' && message.params?.item?.type === 'agentMessage') {
+    if (message.params.threadId !== threadId || message.params.turnId !== turnId) return;
+    if (![null, 'final_answer'].includes(message.params.item.phase)) return;
     if (typeof message.params.item.text !== 'string') return fail('invalid classifier agent message');
     finalMessage = message.params.item.text;
     return;
   }
 
   if (message.method === 'turn/completed') {
+    if (message.params?.threadId !== threadId || message.params?.turn?.id !== turnId) return;
     if (message.params?.turn?.status !== 'completed') return fail('classifier turn failed');
     complete();
     return;
