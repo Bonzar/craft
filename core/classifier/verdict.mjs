@@ -1,6 +1,6 @@
 const COVERED = /^COVERED:(Ц[0-9]+\.[0-9]+):\s*(\S.*)$/;
 const WITH_DETAIL = /^(OVERRIDE|FORBIDDEN|UNCOVERED):(\S.*)$/;
-const PREFLIGHT_WITH_DETAIL = /^(ALLOW_SESSION|ALLOW_EPHEMERAL|CHECK_REGISTRY|DENY):(\S.*)$/;
+const PREFLIGHT_WITH_DETAIL = /^(ALLOW_SESSION|ALLOW_EPHEMERAL|CHECK_REGISTRY|DENY):[ \t]*(\S.*)$/;
 
 export function parsePreflightVerdict(value) {
   if (typeof value !== 'string' || value.includes('\n') || value.includes('\r')) return null;
