@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 
 fs.writeFileSync(process.env.FAKE_CODEX_ARGS, JSON.stringify(process.argv.slice(2)));
-if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['app-server', '--stdio'])) process.exit(41);
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['--disable', 'hooks', 'app-server', '--stdio'])) process.exit(41);
 
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 const input = readline.createInterface({ input: process.stdin });
@@ -83,7 +83,9 @@ test('Codex classifier uses one app-server JSONL lifecycle with structured outpu
   try {
     const { env, value } = invoke(dir);
     assert.deepEqual(value, { output: 'ALLOW_SESSION:typed session action' });
-    assert.deepEqual(JSON.parse(fs.readFileSync(env.FAKE_CODEX_ARGS, 'utf8')), ['app-server', '--stdio']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(env.FAKE_CODEX_ARGS, 'utf8')), [
+      '--disable', 'hooks', 'app-server', '--stdio',
+    ]);
 
     const messages = fs.readFileSync(env.FAKE_CODEX_MESSAGES, 'utf8').trim().split('\n').map(JSON.parse);
     assert.deepEqual(messages.map(({ method }) => method), [
