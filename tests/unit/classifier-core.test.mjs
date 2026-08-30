@@ -56,6 +56,9 @@ test('preflight verdict has a strict fail-closed schema', () => {
   assert.deepEqual(parsePreflightVerdict('DENY:malformed action'), {
     kind: 'DENY', allowing: false, detail: 'malformed action',
   });
+  assert.deepEqual(parsePreflightVerdict('ALLOW_SESSION: typed session action'), {
+    kind: 'ALLOW_SESSION', allowing: true, detail: 'typed session action',
+  });
   for (const invalid of ['ALLOW_SESSION', 'ALLOW_EPHEMERAL:', 'CHECK_REGISTRY', 'allow session:x', 'DENY:x\nextra', 'UNAVAILABLE:reason']) {
     assert.equal(parsePreflightVerdict(invalid), null, invalid);
   }
