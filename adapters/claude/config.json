@@ -1,7 +1,13 @@
 {
   "schemaVersion": 1,
   "agentModels": { "fast": "haiku", "balanced": "sonnet", "deep": "opus" },
-  "classifier": { "model": "haiku", "fallbackModels": [] },
+  "classifier": {
+    "candidates": [
+      { "backend": "codex", "model": "gpt-5.3-codex-spark" },
+      { "backend": "codex", "model": "gpt-5.6-luna" },
+      { "backend": "claude", "model": "haiku" }
+    ]
+  },
   "planning": { "model": "sonnet", "reasoningEffort": "medium" },
   "capabilities": {
     "agent-invocation": true,

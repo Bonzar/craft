@@ -83,13 +83,15 @@ test('adapter extracts the whole visible turn and edited files from native trans
   }
 });
 
-test('unknown tools stay unknown and therefore cannot acquire read permission', () => {
+test('unknown tools stay unknown and carry their opaque operation for semantic classification', () => {
   const event = normalizeHarnessEvent({
     hook_event_name: 'PreToolUse',
     tool_name: 'future_mutator',
     tool_input: { value: 1 },
   }, 'test');
   assert.equal(event.action.route, 'unknown');
+  assert.equal(event.action.operation, 'future_mutator');
+  assert.deepEqual(event.action.payload, { raw: { value: 1 } });
 });
 
 test('read-looking compound operations do not bypass exact capability mapping', () => {

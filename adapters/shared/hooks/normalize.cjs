@@ -4,8 +4,9 @@ const path = require('node:path');
 const { lastAssistantText, visibleTurnText, editedFiles } = require('./transcript.cjs');
 const { parsePatchChanges } = require('./patch.cjs');
 
-// Harness events and native tool vocabularies stop here. Core receives only
-// the canonical envelope produced by this module.
+// Harness wire fields stop here. Core receives a canonical envelope plus an
+// opaque operation identifier for semantic classification when the route does
+// not prove an effect.
 
 const READ_NAMES = new Set([
   'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'BashOutput',
@@ -223,6 +224,7 @@ function normalizeHarnessEvent(event, runtime, originalIntent, options = {}) {
     },
     action: {
       route,
+      operation: name,
       payload,
     },
     response,

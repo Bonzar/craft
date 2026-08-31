@@ -8,13 +8,16 @@ import { parsePreflightVerdict } from '../../core/classifier/verdict.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-test('classifier backend configuration pins Codex to Spark and has no implicit fallback', () => {
+test('both harnesses use the same explicit Spark to Luna to Haiku classifier chain', () => {
   const claude = JSON.parse(fs.readFileSync(path.join(repo, 'adapters/claude/config.json'), 'utf8'));
   const codex = JSON.parse(fs.readFileSync(path.join(repo, 'adapters/codex/config.json'), 'utf8'));
-  assert.equal(claude.classifier.model, 'haiku');
-  assert.equal(codex.classifier.model, 'gpt-5.3-codex-spark');
-  assert.deepEqual(claude.classifier.fallbackModels, []);
-  assert.deepEqual(codex.classifier.fallbackModels, []);
+  const expected = [
+    { backend: 'codex', model: 'gpt-5.3-codex-spark' },
+    { backend: 'codex', model: 'gpt-5.6-luna' },
+    { backend: 'claude', model: 'haiku' },
+  ];
+  assert.deepEqual(codex.classifier.candidates, expected);
+  assert.deepEqual(claude.classifier.candidates, expected);
 });
 
 test('ingest schema validator accepts exact decisions and rejects extra fields', () => {
@@ -44,6 +47,9 @@ test('cover transport rejects multiline and empty-detail model answers', () => {
 });
 
 test('preflight verdict has a strict fail-closed schema', () => {
+  assert.deepEqual(parsePreflightVerdict('ALLOW_READ:semantic read-only operation'), {
+    kind: 'ALLOW_READ', allowing: true, detail: 'semantic read-only operation',
+  });
   assert.deepEqual(parsePreflightVerdict('ALLOW_SESSION:typed session action'), {
     kind: 'ALLOW_SESSION', allowing: true, detail: 'typed session action',
   });
@@ -59,7 +65,7 @@ test('preflight verdict has a strict fail-closed schema', () => {
   assert.deepEqual(parsePreflightVerdict('ALLOW_SESSION: typed session action'), {
     kind: 'ALLOW_SESSION', allowing: true, detail: 'typed session action',
   });
-  for (const invalid of ['ALLOW_SESSION', 'ALLOW_EPHEMERAL:', 'CHECK_REGISTRY', 'allow session:x', 'DENY:x\nextra', 'UNAVAILABLE:reason']) {
+  for (const invalid of ['ALLOW_READ', 'ALLOW_SESSION', 'ALLOW_EPHEMERAL:', 'CHECK_REGISTRY', 'allow session:x', 'DENY:x\nextra', 'UNAVAILABLE:reason']) {
     assert.equal(parsePreflightVerdict(invalid), null, invalid);
   }
 });
@@ -73,6 +79,7 @@ test('preflight transport rejects malformed model output', () => {
     input: JSON.stringify({ intent: { effect: 'session' }, action: { route: 'session.plan', payload: {} } }),
     env: { ...process.env, PLAN_CLASSIFIER_CMD: mock, MOCK_CLASSIFIER_PREFLIGHT: answer },
   }).stdout.trim();
+  assert.equal(classify('ALLOW_READ:semantic read-only operation'), 'ALLOW_READ:semantic read-only operation');
   assert.equal(classify('ALLOW_SESSION:typed session action'), 'ALLOW_SESSION:typed session action');
   assert.equal(classify('explanation\nALLOW_SESSION:typed session action'), 'UNAVAILABLE');
   assert.equal(classify('ALLOW_SESSION'), 'UNAVAILABLE');

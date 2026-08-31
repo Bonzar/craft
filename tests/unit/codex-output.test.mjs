@@ -23,6 +23,14 @@ test('PreToolUse preserves a denial and attaches earlier context', () => {
   assert.equal(payload.hookSpecificOutput.additionalContext, 'fact');
 });
 
+test('PreToolUse renders a classifier warning as a user-visible notification', () => {
+  const payload = JSON.parse(renderCodexOutput('PreToolUse', [
+    JSON.stringify({ type: 'notice', level: 'warning', message: 'primary unavailable; fallback selected' }),
+  ]));
+  assert.equal(payload.systemMessage, 'primary unavailable; fallback selected');
+  assert.equal(payload.hookSpecificOutput.additionalContext, 'primary unavailable; fallback selected');
+});
+
 test('unsupported ask is fail-closed as deny in Codex', () => {
   const payload = JSON.parse(renderCodexOutput('PreToolUse', [
     JSON.stringify({ type: 'ask', reason: 'confirm destructive action' }),

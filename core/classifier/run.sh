@@ -53,7 +53,8 @@ case "$mode" in
 
 ALLOW_SESSION: ‹краткая причина› — только если effect=session и вызов меняет исключительно состояние текущей сессии или её интерфейса.
 ALLOW_EPHEMERAL: ‹краткая причина› — только если effect=ephemeral и все изменения ограничены временными или явно помеченными артефактами.
-CHECK_REGISTRY: ‹краткая причина› — если вызов меняет внешний мир, постоянные данные или effect=world/unknown; его должна дополнительно сверить детерминированная логика реестра одобренного.
+ALLOW_READ: ‹краткая причина› — только если effect=unknown, а операция со всеми аргументами по смыслу является чистым чтением и ничего не меняет. Не решай по словам read/get/list/search/inspect в имени. Составная операция с возможной записью чтением не считается.
+CHECK_REGISTRY: ‹краткая причина› — если вызов меняет внешний мир или постоянные данные; также если effect=unknown и чистое чтение по смыслу не доказано. Его должна дополнительно сверить детерминированная логика реестра одобренного.
 DENY: ‹краткая причина› — если вход противоречив, опасен или указанного эффекта недостаточно для решения.
 
 Не исправляй вход и не предлагай действий. Решение должно соответствовать полю effect; сомнение означает DENY.
@@ -186,9 +187,10 @@ ask() {
   here="$(cd "$(dirname "$0")" && pwd)"
   cd /tmp && printf '%s' "$prompt" | timeout "$budget" env \
     CRAFT_AUTONOMOUS=1 CRAFT_NESTED_CALL=1 \
+    CRAFT_CLASSIFIER_MODE="$mode" \
     CRAFT_CLASSIFIER_TURNS="$turns" CRAFT_CLASSIFIER_TOOLS="$tools" \
     CRAFT_CLASSIFIER_SYSTEM_PROMPT="$sysprompt" PLAN_CLASSIFIER_TIMEOUT="$budget" \
-    node "$here/invoke.mjs" 2>/dev/null
+    node "$here/invoke.mjs"
 }
 
 answer="$(ask)" || { echo "UNAVAILABLE"; exit 0; }
@@ -217,6 +219,7 @@ last="$answer"
 case "$mode" in
   preflight)
     case "$last" in
+      "ALLOW_READ:"?*) printf '%s\n' "$last" ;;
       "ALLOW_SESSION:"?*) printf '%s\n' "$last" ;;
       "ALLOW_EPHEMERAL:"?*) printf '%s\n' "$last" ;;
       "CHECK_REGISTRY:"?*) printf '%s\n' "$last" ;;
@@ -228,6 +231,7 @@ case "$mode" in
     # частичный повтор — нет, и спутать их значит отбить показ, который правила
     # прямо разрешают.
     case "$last" in
+      "REPEATSALL"|"CLEAN"|"REPEATS:"?*) printf '%s\n' "$last" ;;
       "ПОВТОРЯЕТ ВСЁ") echo "REPEATSALL" ;;
       "ПОВТОРЫ: "?*) printf 'REPEATS:%s\n' "${last#ПОВТОРЫ: }" ;;
       "ДЕЛЬТА ЧИСТАЯ") echo "CLEAN" ;;
@@ -238,6 +242,7 @@ case "$mode" in
     # «РАЗРЕШЕНО ПОВЕРХ» — «ЗАПРЕЩЕНО» не содержит, но оба про запрет, и
     # разрешающая форма обязана проверяться раньше запрещающей.
     case "$last" in
+      "OVERRIDE:"?*|"FORBIDDEN:"?*|"UNCOVERED:"?*|"COVERED:"?*|"DRAFT") printf '%s\n' "$last" ;;
       "РАЗРЕШЕНО ПОВЕРХ "?*) printf 'OVERRIDE:%s\n' "${last#РАЗРЕШЕНО ПОВЕРХ }" ;;
       "ЗАПРЕЩЕНО "?*) printf 'FORBIDDEN:%s\n' "${last#ЗАПРЕЩЕНО }" ;;
       "НЕ ПОКРЫТА: "?*) printf 'UNCOVERED:%s\n' "${last#НЕ ПОКРЫТА: }" ;;

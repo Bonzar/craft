@@ -2,12 +2,12 @@ import { createPlanRequired } from '../../contracts/plan-required.mjs';
 
 // Provider-neutral decisions. Adapters translate these values into the native
 // hook wire protocol; core never emits harness fields.
-function emit(payload, { compact = true } = {}) {
+function emit(payload, { compact = true, terminal = true } = {}) {
   const text = compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
   process.stdout.write(`${text}\n`);
   // Признак «решение принято» для диспетчера: под ним хуки одного события делят
   // общий вывод, и второе решение подряд легло бы в него следом за первым.
-  globalThis.hookDecided = true;
+  if (terminal) globalThis.hookDecided = true;
 }
 
 // PreToolUse: запрет вызова с причиной, которую прочитает модель.
@@ -34,6 +34,13 @@ export function block(reason) {
 // провала, а харнесс сверяет имя с тем событием, на которое хук подписан.
 export function inject(hookEventName, additionalContext, options) {
   emit({ type: 'context', event: hookEventName, content: additionalContext }, options);
+  process.exit(0);
+}
+
+// User-visible informational event. It does not decide the tool call and must
+// never stop the remaining policy hooks in the dispatcher.
+export function notify(message, level = 'warning') {
+  emit({ type: 'notice', level, message }, { terminal: false });
   process.exit(0);
 }
 

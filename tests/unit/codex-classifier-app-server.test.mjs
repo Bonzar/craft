@@ -32,6 +32,13 @@ input.on('line', (line) => {
     send({ id: message.id, result: { thread: { id: 'thread-test' } } });
   } else if (message.method === 'turn/start') {
     send({ id: message.id, result: { turn: { id: 'turn-test', status: 'inProgress', items: [], error: null } } });
+    if (process.env.FAKE_CODEX_TERMINAL_ERROR === 'usage') {
+      send({ method: 'error', params: {
+        error: { message: \"You've hit your usage limit. Switch models, or try again at 3:52 PM.\" },
+        willRetry: false, threadId: 'thread-test', turnId: 'turn-test',
+      } });
+      return;
+    }
     send({ method: 'error', params: {
       error: { message: 'transient fake transport error' },
       willRetry: true, threadId: 'thread-test', turnId: 'turn-test',
@@ -58,7 +65,7 @@ input.on('line', (line) => {
   return command;
 }
 
-function invoke(dir, extraEnv = {}) {
+function invoke(dir, extraEnv = {}, tools = '') {
   const schemaFile = path.join(dir, 'backend-output.schema.json');
   fs.writeFileSync(schemaFile, JSON.stringify(outputSchema));
   const env = {
@@ -77,6 +84,7 @@ function invoke(dir, extraEnv = {}) {
       schema: outputSchema,
       schemaFile,
       timeoutMs: 5_000,
+      tools,
       env,
     }),
   };
@@ -108,6 +116,20 @@ test('Codex classifier uses one app-server JSONL lifecycle with structured outpu
   }
 });
 
+test('Codex cover classifier receives read-only capability guidance', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-read-tools.'));
+  try {
+    const { env } = invoke(dir, {}, 'file.read,text.search,file.list');
+    const messages = fs.readFileSync(env.FAKE_CODEX_MESSAGES, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.match(messages[2].params.developerInstructions, /read-only/i);
+    assert.doesNotMatch(messages[2].params.developerInstructions, /Do not call tools/);
+    assert.equal(messages[2].params.sandbox, 'read-only');
+    assert.equal(messages[2].params.approvalPolicy, 'never');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Codex classifier rejects an agent message that violates the output schema', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-invalid.'));
   try {
@@ -130,6 +152,23 @@ test('Codex classifier never treats commentary as its final decision', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-commentary.'));
   try {
     assert.throws(() => invoke(dir, { FAKE_CODEX_COMMENTARY_ONLY: '1' }), /classifier|message|turn/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Codex classifier preserves a sanitized typed usage-limit failure', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-usage.'));
+  try {
+    assert.throws(
+      () => invoke(dir, { FAKE_CODEX_TERMINAL_ERROR: 'usage' }),
+      (error) => {
+        assert.equal(error.classifierReason, 'usage_limit');
+        assert.equal(error.retryAt, '3:52 PM');
+        assert.match(error.classifierDetail, /usage limit/i);
+        return true;
+      },
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

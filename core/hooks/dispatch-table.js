@@ -47,6 +47,7 @@ export const TABLE = {
         'universal-plan-gate-reset',
         'universal-mark-plan-critic',
         'universal-sync-system',
+        'universal-classifier-notifications',
       ],
       scope: 'both',
     },

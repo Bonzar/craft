@@ -21,8 +21,8 @@
 //   - data.mutate — сверяется так же; отдельно и раньше сверки проходит
 //     предодобренная зона (exempt-scope, напр. «Продукты»).
 //   - любой прочий, в том числе ещё неизвестный системе инструмент, — тоже
-//     идёт в сверку. Белый список состоит только из доказанного чтения и
-//     операций над ходом самой сессии.
+//     идёт в модельную проверку. Она может доказать чистое чтение по смыслу
+//     операции и всех аргументов; иначе вызов идёт в реестр одобренного.
 //
 // Приём материала в реестр идёт фоном, и сверка ЖДЁТ его конца: правка, которую
 // Влад только что разрешил репликой, иначе упёрлась бы в гейт.
@@ -37,13 +37,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { readEvent } from './lib/event.js';
-import { planRequired } from './lib/decide.js';
+import { notify, planRequired } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
 import { lastInputTrace, exemptScopeFile, approvalRegistry } from './lib/paths.js';
 import {
   waitForParsing, readRegistry, render, switchAt, appendLog,
 } from './lib/registry.js';
-import { classify, classifierPath } from './lib/classifier.js';
+import { classify, classifierNoticeText, classifierPath } from './lib/classifier.js';
 import { sessionAnchor } from './lib/paths.js';
 import { writeIntent, requiresPlanGate } from '../plan-gate/write-intent.js';
 import { runPlanGateRules } from '../plan-gate/rules/index.js';
@@ -68,41 +68,56 @@ try {
 
 const classifier = classifierPath();
 
+function withClassifierNotice(reason) {
+  const message = classifierNoticeText();
+  return message ? `${message}\n\n${reason}` : reason;
+}
+
+function requirePlan(reason, resume) {
+  planRequired(withClassifierNotice(reason), resume);
+}
+
+function finishAllowed() {
+  const message = classifierNoticeText();
+  if (message) notify(message);
+  process.exit(0);
+}
+
 // Deterministic normalization may prove a call to be read-only. Every other
 // call is first classified by the model before any rule can allow it. The model
 // returns only a typed decision; core validates it against the deterministic
 // effect, and only deterministic code may consult or mutate the registry.
 const intent = writeIntent(action);
-if (!requiresPlanGate(intent)) process.exit(0);
+if (!requiresPlanGate(intent)) finishAllowed();
 
 const preflightInput = JSON.stringify({ action, intent });
 const preflightRaw = classify(classifier, 'preflight', [], preflightInput);
 const preflight = parsePreflightVerdict(preflightRaw);
 
 if (preflight?.kind === 'DENY') {
-  planRequired(`Заблокировано план-гейтом: предварительная модельная проверка отказала — ${preflight.detail}`, {
+  requirePlan(`Заблокировано план-гейтом: предварительная модельная проверка отказала — ${preflight.detail}`, {
     blockedAction: action,
     originalIntent: event.originalIntent || '',
     transitionId: sha256(`${event.sessionId || ''}\n${raw}`),
   });
 }
 
-const expectedPreflight = {
-  session: 'ALLOW_SESSION',
-  ephemeral: 'ALLOW_EPHEMERAL',
-  world: 'CHECK_REGISTRY',
-  unknown: 'CHECK_REGISTRY',
+const compatiblePreflight = {
+  session: new Set(['ALLOW_SESSION']),
+  ephemeral: new Set(['ALLOW_EPHEMERAL']),
+  world: new Set(['CHECK_REGISTRY']),
+  unknown: new Set(['ALLOW_READ', 'CHECK_REGISTRY']),
 }[intent.effect];
 
-if (!preflight || preflight.kind !== expectedPreflight) {
-  planRequired('Заблокировано план-гейтом: обязательная предварительная модельная проверка недоступна, невалидна или противоречит вычисленному эффекту. Конечный результат остаётся fail-closed.', {
+if (!preflight || !compatiblePreflight?.has(preflight.kind)) {
+  requirePlan('Заблокировано план-гейтом: обязательная предварительная модельная проверка недоступна, невалидна или противоречит вычисленному эффекту. Конечный результат остаётся fail-closed.', {
     blockedAction: action,
     originalIntent: event.originalIntent || '',
     transitionId: sha256(`${event.sessionId || ''}\n${raw}`),
   });
 }
 
-if (preflight.allowing) process.exit(0);
+if (preflight.allowing) finishAllowed();
 
 // Предел описания правки. Раньше он был 2000 байт на заменяемый текст и 4000 на
 // новый и стоял из-за потолка в 128 КБ на один аргумент командной строки:
@@ -219,7 +234,7 @@ function coverCheck(desc) {
     registryDecision,
   });
 
-  if (result.decision === 'deny') planRequired(result.reason, {
+  if (result.decision === 'deny') requirePlan(result.reason, {
     blockedAction: action,
     originalIntent: event.originalIntent || '',
     transitionId: sha256(`${event.sessionId || ''}\n${raw}`),
@@ -247,7 +262,7 @@ if (route === 'file.mutate') {
   // Абсолютный путь к цели внутри текущего репо матчится и по репо-относительной
   // записи плана: строки «- где:» пишутся от корня репозитория.
   coverCheck(desc);
-  process.exit(0);
+  finishAllowed();
 }
 
 // A multi-file patch tool sends one patch containing one or more changes. Gate the complete
@@ -259,7 +274,7 @@ if (route === 'file.patch') {
   const changes = canonicalPatchChanges(input);
   if (!changes?.length) {
     coverCheck(Buffer.from('действие: file.patch\nцель и материал: неизвестны', 'utf8'));
-    process.exit(0);
+    finishAllowed();
   }
   const desc = changes.map((change) => [
     `действие: file.patch\nоперация: ${change.kind}\nфайл: ${change.file}${change.destination ? `\nперемещение в: ${change.destination}` : ''}\nзаменяемый текст:`,
@@ -268,7 +283,7 @@ if (route === 'file.patch') {
     headBytes(change.newText, DESC_LIMIT).toString(),
   ].join('\n')).join('\n---\n');
   coverCheck(Buffer.from(desc, 'utf8'));
-  process.exit(0);
+  finishAllowed();
 }
 
 // --- Command calls ------------------------------------------------------------
@@ -279,7 +294,7 @@ if (route === 'command.run') {
     headBytes(cmd || input.streamInput || '<неограниченный транспорт>', DESC_LIMIT),
   ]);
   coverCheck(bdesc);
-  process.exit(0);
+  finishAllowed();
 }
 
 // --- Прочие инструменты ------------------------------------------------------
@@ -288,11 +303,11 @@ if (route === 'command.run') {
 // описанием служит имя инструмента и его вход.
 if (route !== 'data.mutate') {
   const odesc = Buffer.concat([
-    Buffer.from(`действие: ${route}\nвход:\n`, 'utf8'),
+    Buffer.from(`действие: ${route}\nоперация: ${action.operation || 'неизвестна'}\nвход:\n`, 'utf8'),
     headBytes(JSON.stringify(input), DESC_LIMIT),
   ]);
   coverCheck(odesc);
-  process.exit(0);
+  finishAllowed();
 }
 
 // --- Database writes ---------------------------------------------------------

@@ -35,6 +35,11 @@ export function renderCodexOutput(eventName, outputs) {
       continue;
     }
     const payload = item.json;
+    if (payload.type === 'notice' && typeof payload.message === 'string' && payload.message) {
+      messages.push(payload.message);
+      contexts.push(payload.message);
+      continue;
+    }
     const context = contextOf(payload);
     if (context) contexts.push(context);
     if (payload.type === 'deny' || payload.type === 'ask' || payload.type === 'plan_required') {

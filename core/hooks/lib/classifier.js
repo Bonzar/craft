@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { repoRootOf } from './paths.js';
 import { parseCoverVerdict, parsePreflightVerdict } from '../../classifier/verdict.mjs';
+import { drainClassifierNotices, formatClassifierNotices, recordClassifierNotice } from '../../classifier/notices.mjs';
 
 // Корень считается от ЭТОГО модуля, а не от файла вызывающего хука: у них разная
 // глубина (хук лежит на уровень выше), и общая формула на стороне вызова давала
@@ -48,10 +49,28 @@ export function classifierAvailable(bin) {
   return Boolean(bin) && fs.existsSync(bin);
 }
 
+function captureNotices(stderr) {
+  let count = 0;
+  for (const line of String(stderr || '').split('\n')) {
+    if (!line.startsWith('CRAFT_CLASSIFIER_NOTICE ')) continue;
+    try {
+      if (recordClassifierNotice(JSON.parse(line.slice('CRAFT_CLASSIFIER_NOTICE '.length)))) count += 1;
+    } catch { /* malformed backend notice is not user-visible */ }
+  }
+  return count;
+}
+
+export function classifierNoticeText() {
+  return formatClassifierNotices(drainClassifierNotices());
+}
+
 // classify(bin, mode, args, description) → строка вердикта.
 // Аварийный выключатель PLAN_CLASSIFIER=off обрабатывает сам классификатор.
 export function classify(bin, mode, args, description, { timeoutSec } = {}) {
-  if (!classifierAvailable(bin)) return 'UNAVAILABLE';
+  if (!classifierAvailable(bin)) {
+    recordClassifierNotice({ type: 'classifier_unavailable', attempts: [] });
+    return 'UNAVAILABLE';
+  }
   const env = { ...process.env };
   if (timeoutSec) env.PLAN_CLASSIFIER_TIMEOUT = String(timeoutSec);
   const res = spawnSync('bash', [bin, mode, ...args], {
@@ -60,10 +79,17 @@ export function classify(bin, mode, args, description, { timeoutSec } = {}) {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
-  if (res.error || res.signal || res.status !== 0) return 'UNAVAILABLE';
+  const captured = captureNotices(res.stderr);
+  if (res.error || res.signal || res.status !== 0) {
+    if (!captured) recordClassifierNotice({ type: 'classifier_unavailable', attempts: [] });
+    return 'UNAVAILABLE';
+  }
   const verdict = (res.stdout || '').trim();
-  if (!verdict) return 'UNAVAILABLE';
-  if (mode === 'cover') return parseCoverVerdict(verdict) ? verdict : 'UNAVAILABLE';
-  if (mode === 'preflight') return parsePreflightVerdict(verdict) ? verdict : 'UNAVAILABLE';
+  if (!verdict) {
+    if (!captured) recordClassifierNotice({ type: 'classifier_unavailable', attempts: [] });
+    return 'UNAVAILABLE';
+  }
+  if (mode === 'cover' && !parseCoverVerdict(verdict)) return 'UNAVAILABLE';
+  if (mode === 'preflight' && !parsePreflightVerdict(verdict)) return 'UNAVAILABLE';
   return verdict;
 }

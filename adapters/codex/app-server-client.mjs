@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
+import {
+  extractRetryAt, inferClassifierReason, sanitizeClassifierDetail,
+} from '../../core/classifier/failure.mjs';
 
 const request = JSON.parse(await new Promise((resolve, reject) => {
   let text = '';
@@ -15,6 +18,7 @@ if (!request.command || !request.model || !request.prompt || !request.schema
   || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
   throw new Error('invalid classifier app-server request');
 }
+const readCapabilities = String(request.tools || '').split(',').filter(Boolean);
 
 const child = spawn(request.command, ['--disable', 'hooks', 'app-server', '--stdio'], {
   cwd: '/tmp',
@@ -28,7 +32,7 @@ let threadId = null;
 let turnId = null;
 let stderr = '';
 
-const timer = setTimeout(() => fail('classifier app-server timed out'), timeoutMs);
+const timer = setTimeout(() => fail('classifier app-server timed out', 'timeout'), timeoutMs);
 child.stderr.setEncoding('utf8');
 child.stderr.on('data', (chunk) => {
   if (stderr.length < 8_192) stderr += chunk.slice(0, 8_192 - stderr.length);
@@ -40,11 +44,14 @@ function stop() {
   child.kill('SIGTERM');
 }
 
-function fail(message) {
+function fail(message, reason = inferClassifierReason(message), retryAt = extractRetryAt(message)) {
   if (settled) return;
   settled = true;
   stop();
-  process.stderr.write(`${message}\n`);
+  const detail = sanitizeClassifierDetail(message);
+  process.stderr.write(`CRAFT_CLASSIFIER_BACKEND_ERROR ${JSON.stringify({
+    reason, ...(detail ? { detail } : {}), ...(retryAt ? { retryAt } : {}),
+  })}\n`);
   process.exitCode = 1;
 }
 
@@ -70,7 +77,7 @@ function complete() {
     stop();
     process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch (error) {
-    fail(error.message);
+    fail(error.message, 'invalid_output');
   }
 }
 
@@ -87,7 +94,10 @@ function handle(message) {
       sandbox: 'read-only',
       developerInstructions: [
         request.systemPrompt || '',
-        'Return exactly one JSON object satisfying the supplied output schema. Put only the requested classifier decision in the output string. Do not call tools.',
+        'Return exactly one JSON object satisfying the supplied output schema. Put only the requested classifier decision in the output string.',
+        readCapabilities.length
+          ? `You may inspect local context using only read-only capabilities: ${readCapabilities.join(', ')}. Never modify files, settings, processes, or external state.`
+          : 'Do not call tools.',
       ].filter(Boolean).join('\n\n'),
       ephemeral: true,
       dynamicTools: [],
@@ -131,11 +141,8 @@ function handle(message) {
   if (message.method === 'error') {
     if (message.params?.willRetry === true
       && message.params?.threadId === threadId && message.params?.turnId === turnId) return;
-    const detail = String(message.params?.error?.message || '')
-      .replace(/\b(?:Bearer|Api-Key)\s+\S+/gi, '<redacted>')
-      .replace(/\b(?:y[01]_|t[01]_|AQAD-)[A-Za-z0-9._-]+/g, '<redacted>')
-      .slice(0, 500);
-    return fail(`classifier app-server reported an error (retry=${String(message.params?.willRetry)}, threadMatch=${String(message.params?.threadId === threadId)}, turnMatch=${String(message.params?.turnId === turnId)}): ${detail}`);
+    const detail = sanitizeClassifierDetail(message.params?.error?.message || 'classifier app-server error');
+    return fail(detail);
   }
 
   if (message.id !== undefined && message.method) fail('classifier requested unsupported interaction');

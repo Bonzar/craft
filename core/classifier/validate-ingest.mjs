@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 function strings(value) {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
@@ -24,13 +25,20 @@ function validAdd(add) {
   return Array.isArray(add.tasks) && add.tasks.every(validTask);
 }
 
-try {
-  const value = JSON.parse(fs.readFileSync(0, 'utf8'));
+export function normalizeIngest(text) {
+  try {
+  const value = JSON.parse(text);
   const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [];
   const valid = keys.length > 0 && keys.every((key) => ['add', 'close', 'lift'].includes(key))
     && Array.isArray(value.add) && value.add.every(validAdd)
     && (value.close === undefined || strings(value.close))
     && (value.lift === undefined || strings(value.lift));
-  if (!valid) process.exit(1);
-  process.stdout.write(`${JSON.stringify(value)}\n`);
-} catch { process.exit(1); }
+  return valid ? JSON.stringify(value) : '';
+  } catch { return ''; }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const output = normalizeIngest(fs.readFileSync(0, 'utf8'));
+  if (!output) process.exit(1);
+  process.stdout.write(`${output}\n`);
+}

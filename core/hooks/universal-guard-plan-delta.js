@@ -21,10 +21,10 @@
 // Аварийный выключатель — PLAN_DELTA=off.
 import fs from 'node:fs';
 import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { deny, notify } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
 import { planFileMarker, approvalRegistry } from './lib/paths.js';
-import { classify, classifierPath } from './lib/classifier.js';
+import { classify, classifierNoticeText, classifierPath } from './lib/classifier.js';
 import { readRegistry, render, waitForParsing } from './lib/registry.js';
 
 if (process.env.PLAN_DELTA === 'off') process.exit(0);
@@ -84,12 +84,23 @@ if (!approved) process.exit(0);
 
 const verdict = compare(approved);
 
-// Перепоказ того же плана целиком законен: правило прямо велит показывать заново
-// план, в котором нового нет вовсе.
-if (verdict === 'REPEATSALL' || verdict === 'CLEAN') process.exit(0);
-
-if (verdict.startsWith('REPEATS:')) {
-  deny(`План повторяет уже одобренное:${verdict.slice('REPEATS:'.length)}. Одобренное повторно не показывается — оставь только изменившееся, а изменённый кусок пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off.`);
+function finishAllowed() {
+  const message = classifierNoticeText();
+  if (message) notify(message);
+  process.exit(0);
 }
 
-deny('Показ плана остановлен: сравнить его с одобренным не удалось, а без сравнения Влад увидит то, что уже принимал. Повтори показ; если проверка не поднимается — аварийный выключатель PLAN_DELTA=off.');
+function denyWithNotice(reason) {
+  const message = classifierNoticeText();
+  deny(message ? `${message}\n\n${reason}` : reason);
+}
+
+// Перепоказ того же плана целиком законен: правило прямо велит показывать заново
+// план, в котором нового нет вовсе.
+if (verdict === 'REPEATSALL' || verdict === 'CLEAN') finishAllowed();
+
+if (verdict.startsWith('REPEATS:')) {
+  denyWithNotice(`План повторяет уже одобренное:${verdict.slice('REPEATS:'.length)}. Одобренное повторно не показывается — оставь только изменившееся, а изменённый кусок пометь ревизией с причиной. Аварийный выключатель — PLAN_DELTA=off.`);
+}
+
+denyWithNotice('Показ плана остановлен: сравнить его с одобренным не удалось, а без сравнения Влад увидит то, что уже принимал. Повтори показ; если проверка не поднимается — аварийный выключатель PLAN_DELTA=off.');
