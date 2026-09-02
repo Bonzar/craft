@@ -20,6 +20,8 @@
 **/craft-gate-exempt-scope.txt
 !tests/hooks/fixtures/warm-cache/.claude/craft-router-context.md
 !tests/hooks/fixtures/warm-cache/.claude/craft-incident-context.md
+!tests/hooks/fixtures/warm-cache/.craft/
+!tests/hooks/fixtures/warm-cache/.craft/router-context.md
 
 # Per-session cache of block-IDs under the pre-authorised «direct-edit» pages
 # (gate-exempt-pages.txt), built by .claude/hooks/universal-cache-gate-exempt-scope.sh

@@ -66,7 +66,7 @@ test('инцидент: роутер в .craft/ ловится по маске �
   const dir = repo();
   write(dir, '.craft/router-context.md', `${TITLE}\n${MEMORY_HEADER}\n`);
   write(dir, '.craft/incident-context.md', 'skill doc\n');
-  write(dir, 'tests/hooks/fixtures/warm-cache/.craft/router-context.md', 'x\n');
+  write(dir, 'tests/hooks/fixtures/warm-cache/.craft/router-context.md', `${TITLE}\n${MEMORY_HEADER}\n`);
   write(dir, 'some/dir/craft-gate-exempt-scope.txt', 'ids\n');
   commitAll(dir);
   const r = guard(dir, '--tree', 'HEAD');
@@ -81,6 +81,7 @@ test('заглушки фикстур warm-cache разрешены, пока о
   const dir = repo();
   write(dir, 'tests/hooks/fixtures/warm-cache/.claude/craft-router-context.md', 'роутер памяти (фикстура прогретого кэша)\n');
   write(dir, 'tests/hooks/fixtures/warm-cache/.claude/craft-incident-context.md', 'skill doc stub\n');
+  write(dir, 'tests/hooks/fixtures/warm-cache/.craft/router-context.md', 'роутер памяти (фикстура прогретого кэша)\n');
   commitAll(dir);
   assert.equal(guard(dir, '--tree', 'HEAD').status, 0);
 

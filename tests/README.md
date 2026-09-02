@@ -14,8 +14,8 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 
 Отдельно CI проверяет дерево коммита гвардом `tools/no-snapshot-files.js`:
 снимки живого Craft (`*router-context*`, `*incident-context*`,
-`*craft-gate-exempt-scope*`, `*warm-cache*`) в git не лежат — кроме двух
-заглушек в `tests/hooks/fixtures/warm-cache/.claude/`, и те только пока их
+`*craft-gate-exempt-scope*`, `*warm-cache*`) в git не лежат — кроме заглушек
+в `tests/hooks/fixtures/warm-cache/` (`.claude/` и `.craft/`), и те только пока их
 содержимое не похоже на настоящий снимок (шапка инжект-хука, заголовок памяти). Локально то же делает pre-commit из
 `.githooks` (`install.sh` ставит `core.hooksPath`). Тест гварда —
 `tests/unit/no-snapshot-files.test.mjs`.

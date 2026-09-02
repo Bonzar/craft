@@ -44,6 +44,8 @@ const MASKS = [/router-context/i, /incident-context/i, /craft-gate-exempt-scope/
 const ALLOWED_FIXTURES = new Set([
   'tests/hooks/fixtures/warm-cache/.claude/craft-router-context.md',
   'tests/hooks/fixtures/warm-cache/.claude/craft-incident-context.md',
+  // Ветки с ядром в core/ пишут снимки в .craft/ — та же заглушка под тем же кейсом.
+  'tests/hooks/fixtures/warm-cache/.craft/router-context.md',
 ]);
 
 // Признаки настоящего снимка. Строки собраны из частей, чтобы сам гвард
