@@ -9,6 +9,7 @@
 // прочитанного транскрипта) живёт рядом с журналом в `<журнал>.state.json`.
 // Все функции fail quiet: сломанные метрики не должны трогать ход.
 import fs from 'node:fs';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { metricsLog, sessionId } from './paths.js';
 
@@ -19,15 +20,56 @@ export function append(file, record) {
   } catch { /* журнал не пополнился — метрика потеряна, ход цел */ }
 }
 
+// Журнал текущего процесса: переопределение, иначе сессия из прочитанного
+// события (его кладёт readEvent), иначе из окружения. Ничего из этого нет —
+// пустая строка: относить записи не к чему.
+export function currentMetricsLog() {
+  if (process.env.CRAFT_METRICS_LOG) return process.env.CRAFT_METRICS_LOG;
+  const ev = globalThis.hookEvent;
+  const sid = (ev && typeof ev.session_id === 'string' && ev.session_id) || sessionId();
+  return sid ? metricsLog(sid) : '';
+}
+
+// Окружение для дочернего процесса (фоновый приём реестра): журнал передаётся
+// явно, потому что события у дочернего процесса нет.
+export function childEnv(base = process.env) {
+  const log = currentMetricsLog();
+  return log ? { ...base, CRAFT_METRICS_LOG: log } : { ...base };
+}
+
 // Вызов модели из хука: пишется самим местом вызова (обёртка в classifier.js),
 // а не хуком метрик — приём реестра идёт в отдельном фоновом процессе, и хуку
-// метрик его не видно. Журнал берётся по сессии из окружения; без сессии и без
-// переопределения записи нет: относить вызов не к чему.
+// метрик его не видно.
 export function recordModelCall({ mode, ms, outcome }) {
-  if (!process.env.CRAFT_METRICS_LOG && !sessionId()) return;
-  append(metricsLog(), {
+  const log = currentMetricsLog();
+  if (!log) return;
+  append(log, {
     kind: 'model', ts: new Date().toISOString(), mode: String(mode || ''), ms, outcome,
   });
+}
+
+// Есть ли у чекаута, в котором идёт сессия, СВОЯ регистрация диспетчера
+// (проектный .claude/settings.json с dispatch.js). Если есть, проектный
+// диспетчер ведёт полную цепочку, и пользовательскому контуру метрики писать
+// нельзя: он не видел проектных хуков и записал бы «allow» там, где проектный
+// гвард отказал. Ищется вверх от рабочего каталога события.
+export function projectDispatcherAt(cwd) {
+  if (!cwd) return false;
+  let probe;
+  try {
+    if (!fs.statSync(cwd).isDirectory()) return false;
+    probe = fs.realpathSync(cwd);
+  } catch {
+    return false;
+  }
+  while (probe && probe !== path.dirname(probe)) {
+    const settings = path.join(probe, '.claude', 'settings.json');
+    try {
+      return fs.readFileSync(settings, 'utf8').includes('dispatch.js');
+    } catch { /* здесь настроек нет — выше */ }
+    probe = path.dirname(probe);
+  }
+  return false;
 }
 
 // Класс ответа модели: первый токен вердикта либо «json» у разбора. Текст

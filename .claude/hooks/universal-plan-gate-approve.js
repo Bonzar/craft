@@ -20,6 +20,7 @@ import {
   planFileMarker, planCriticRuns, planCriticRound, approvalRegistry,
 } from './lib/paths.js';
 import { ingestDeadlineMs } from './lib/classifier.js';
+import { childEnv } from './lib/metrics.js';
 import { hookOnce } from './lib/once.js';
 import { readEvent } from './lib/event.js';
 
@@ -70,6 +71,7 @@ function ingestPlan(planFile) {
     const res = spawnSync(process.execPath, [ingest, 'plan', planFile, approvalRegistry()], {
       stdio: 'ignore',
       timeout: ingestDeadlineMs(),
+      env: childEnv(),
     });
     const spent = Math.round((Date.now() - started) / 1000);
     // Убитый по сроку процесс приходит с signal, а не с кодом: это тот самый

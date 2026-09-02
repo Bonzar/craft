@@ -77,3 +77,53 @@ test('запись вызова модели идёт в переопредел�
   delete process.env.CRAFT_METRICS_LOG;
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// --- журнал по событию -----------------------------------------------------------
+
+test('вызов модели ложится в журнал сессии из события, когда переменной сессии нет', () => {
+  delete process.env.CRAFT_METRICS_LOG;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  const sid = `unit-${process.pid}-${Date.now()}`;
+  globalThis.hookEvent = { session_id: sid };
+  const log = `/tmp/metrics.${sid}.jsonl`;
+  try {
+    metrics.recordModelCall({ mode: 'cover', ms: 3, outcome: 'COVERED' });
+    assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model","ts":".*","mode":"cover","ms":3/);
+    assert.equal(metrics.childEnv({}).CRAFT_METRICS_LOG, log, 'дочерний процесс получает журнал явно');
+  } finally {
+    delete globalThis.hookEvent;
+    fs.rmSync(log, { force: true });
+  }
+});
+
+test('фоновый приём пишет вызов модели в журнал сессии события', async () => {
+  delete process.env.CRAFT_METRICS_LOG;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  const sid = `unit-ingest-${process.pid}-${Date.now()}`;
+  globalThis.hookEvent = { session_id: sid };
+  const log = `/tmp/metrics.${sid}.jsonl`;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const repo = path.resolve(HERE, '..', '..');
+  process.env.PLAN_CLASSIFIER_CMD = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');
+  process.env.CRAFT_REGISTRY_SYNC = '1';
+  try {
+    const registry = await import(`../../.claude/hooks/lib/registry.js?t=${Date.now()}`);
+    registry.ingestInBackground(path.join(dir, 'registry.jsonl'), 'reply', 'поправь README');
+    assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model".*"mode":"ingest"/);
+  } finally {
+    delete globalThis.hookEvent;
+    delete process.env.PLAN_CLASSIFIER_CMD;
+    delete process.env.CRAFT_REGISTRY_SYNC;
+    fs.rmSync(log, { force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('проектная регистрация диспетчера находится вверх от рабочего каталога', () => {
+  const repo = path.resolve(HERE, '..', '..');
+  assert.equal(metrics.projectDispatcherAt(path.join(repo, 'tests', 'hooks')), true);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  assert.equal(metrics.projectDispatcherAt(dir), false);
+  assert.equal(metrics.projectDispatcherAt(''), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
