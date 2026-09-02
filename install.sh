@@ -179,4 +179,19 @@ else
   echo "live-rules: канал импорта уже стоит"
 fi
 
+# --- 5. git-хуки репо ---------------------------------------------------------
+# pre-commit из .githooks не пускает в коммит снимки живого Craft (роутер,
+# инцидент, кэш зоны, прогретый кэш): .gitignore закрывает их по пути, а хук —
+# по маске имени, в любом каталоге. Тот же скрипт гоняет CI по дереву коммита.
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  if [[ "$(git -C "$REPO" config --get core.hooksPath || true)" == ".githooks" ]]; then
+    echo "git-hooks: core.hooksPath уже .githooks"
+  else
+    git -C "$REPO" config core.hooksPath .githooks
+    echo "git-hooks: core.hooksPath=.githooks (pre-commit: tools/no-snapshot-files.js)"
+  fi
+else
+  echo "git-hooks: $REPO не git-чекаут, pre-commit не подключён"
+fi
+
 echo "Done. Новые регистрации действуют в активных сессиях без перезапуска."
