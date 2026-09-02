@@ -160,3 +160,78 @@ test('сводка: пустой журнал даёт пустую сводку
   assert.equal(s.tokens_first_turn, null);
   assert.equal(s.incidents.share, null);
 });
+
+// --- журнал по событию -----------------------------------------------------------
+
+test('вызов модели ложится в журнал сессии из события, когда переменной сессии нет', () => {
+  delete process.env.CRAFT_METRICS_LOG;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  const sid = `unit-${process.pid}-${Date.now()}`;
+  globalThis.hookEvent = { session_id: sid };
+  const log = `/tmp/metrics.${sid}.jsonl`;
+  try {
+    metrics.recordModelCall({ mode: 'cover', ms: 3, outcome: 'COVERED' });
+    assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model","ts":".*","mode":"cover","ms":3/);
+    assert.equal(metrics.childEnv({}).CRAFT_METRICS_LOG, log, 'дочерний процесс получает журнал явно');
+  } finally {
+    delete globalThis.hookEvent;
+    fs.rmSync(log, { force: true });
+  }
+});
+
+test('фоновый приём пишет вызов модели в журнал сессии события', async () => {
+  delete process.env.CRAFT_METRICS_LOG;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  const sid = `unit-ingest-${process.pid}-${Date.now()}`;
+  globalThis.hookEvent = { session_id: sid };
+  const log = `/tmp/metrics.${sid}.jsonl`;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const repo = path.resolve(HERE, '..', '..');
+  process.env.PLAN_CLASSIFIER_CMD = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');
+  process.env.CRAFT_REGISTRY_SYNC = '1';
+  try {
+    const registry = await import(`../../.claude/hooks/lib/registry.js?t=${Date.now()}`);
+    registry.ingestInBackground(path.join(dir, 'registry.jsonl'), 'reply', 'поправь README');
+    assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model".*"mode":"ingest"/);
+  } finally {
+    delete globalThis.hookEvent;
+    delete process.env.PLAN_CLASSIFIER_CMD;
+    delete process.env.CRAFT_REGISTRY_SYNC;
+    fs.rmSync(log, { force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('проектная регистрация диспетчера находится вверх от рабочего каталога', () => {
+  const repo = path.resolve(HERE, '..', '..');
+  assert.equal(metrics.projectDispatcherAt(path.join(repo, 'tests', 'hooks')), true);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  assert.equal(metrics.projectDispatcherAt(dir), false);
+  assert.equal(metrics.projectDispatcherAt(''), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('сводка: повторный старт (компакт) не двигает начало сессии', () => {
+  const records = [
+    { kind: 'session', ts: T(0), turn: 0, harness: 'claude', repo: 'r', sid: 's', source: 'startup' },
+    { kind: 'prompt', ts: T(1), turn: 1 },
+    { kind: 'session', ts: T(5), turn: 1, harness: 'claude', repo: 'r', sid: 's', source: 'compact' },
+    { kind: 'prompt', ts: T(6), turn: 2 },
+  ];
+  const s = metrics.summarize(records);
+  assert.equal(s.started_at, T(0));
+  assert.equal(s.turns, 2);
+});
+
+test('сводка: токены первого хода складываются из всех его Stop', () => {
+  const records = [
+    { kind: 'prompt', ts: T(1), turn: 1 },
+    { kind: 'stop', ts: T(2), turn: 1, blocked_by: 'universal-stop-routine-facts', usage: { input: 1, output: 10, cache_read: 0, cache_create: 0 } },
+    { kind: 'stop', ts: T(3), turn: 1, blocked_by: '', usage: { input: 2, output: 20, cache_read: 5, cache_create: 0 } },
+    { kind: 'prompt', ts: T(4), turn: 2 },
+    { kind: 'stop', ts: T(5), turn: 2, blocked_by: '', usage: { input: 100, output: 100, cache_read: 100, cache_create: 100 } },
+  ];
+  const s = metrics.summarize(records);
+  assert.deepEqual(s.tokens_first_turn, { input: 3, output: 30, cache_read: 5, cache_create: 0 });
+  assert.deepEqual(s.tokens, { input: 103, output: 130, cache_read: 105, cache_create: 100 });
+});

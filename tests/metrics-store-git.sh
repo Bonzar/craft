@@ -129,6 +129,24 @@ if G -C "$sb/origin.git" rev-parse --verify --quiet refs/heads/metrics >/dev/nul
   bad "$t" "ветка появилась при выключателе"
 else ok "$t"; fi
 
+# --- G. брошенный замок не запирает очередь навсегда --------------------------
+t="брошенный замок забирается, живой держит"
+sb="$(sandbox)"
+mkdir -p "$sb/queue.jsonl.lock"
+touch -d '2 hours ago' "$sb/queue.jsonl.lock"
+run_hook "$sb" s1 2026-09-02T10:00:00Z 1 >/dev/null
+if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"s1"'; then
+  bad "$t" "сводка не доехала при протухшем замке"
+else
+  mkdir -p "$sb/queue.jsonl.lock"
+  out="$(run_hook "$sb" s2 2026-09-02T11:00:00Z 1)"
+  if ! grep -q "locked" <<<"$out"; then
+    bad "$t" "свежий замок не удержал: $out"
+  elif ! grep -q '"sid":"s2"' "$sb/queue.jsonl"; then
+    bad "$t" "очередь при занятом замке не сохранила сводку"
+  else ok "$t"; fi
+fi
+
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"
 for f in "${fails[@]:-}"; do [[ -n "$f" ]] && printf '  - %s\n' "$f"; done
 [[ "$fail" -eq 0 ]]
