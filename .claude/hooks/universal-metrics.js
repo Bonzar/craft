@@ -11,6 +11,12 @@
 // записей assistant транскрипта). Вызовы модели из хуков пишет сама обёртка
 // вызова (classifier.js) — они идут из фоновых процессов.
 //
+// На Stop, следом за строкой хода, в журнал ложится СВОДКА сессии одной строкой
+// (kind: summary) — свёртка всего журнала с начала сессии: ходы, токены,
+// вызовы модели, отказы гейта и ложные отказы, циклы плана, инциденты, время
+// до первой правки, исход по записям в Craft и пушу. Её же копия — в
+// `<журнал>.summary.json`, откуда её забирает хранение.
+//
 // В журнал не попадает содержимое: ни правок, ни команд, ни промптов, ни
 // текста отказов. Ничего не печатает, сети и модели не зовёт, укладывается в
 // миллисекунды. Без идентификатора сессии (ни в событии, ни в окружении, ни
@@ -18,12 +24,14 @@
 import { readEvent } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
 import { metricsLog, sessionId } from './lib/paths.js';
+import { sha256 } from './lib/hash.js';
 import {
   append, loadState, saveState, reasonClass, repoOf, turnUsage, responseIsError,
+  readJournal, summarize, writeSummary,
 } from './lib/metrics.js';
 
 const {
-  raw, event, tool, cwd, transcript, response,
+  raw, event, tool, cwd, transcript, response, input,
 } = readEvent();
 const name = event.hook_event_name || '';
 if (!name) process.exit(0);
@@ -63,7 +71,8 @@ if (name === 'SessionStart') {
 } else if (name === 'UserPromptSubmit') {
   state.turn += 1;
   state.turn_started_at = now;
-  append(log, { kind: 'prompt', ts, turn: state.turn });
+  const flags = globalThis.hookFlags && typeof globalThis.hookFlags === 'object' ? globalThis.hookFlags : {};
+  append(log, { kind: 'prompt', ts, turn: state.turn, incident: flags.incident === true });
 } else if (name === 'PreToolUse') {
   if (!tool) process.exit(0);
   if (id) {
@@ -73,12 +82,19 @@ if (name === 'SessionStart') {
     if (ids.length > 50) for (const old of ids.slice(0, ids.length - 50)) delete state.inflight[old];
   }
   const kind = decision ? decision.kind : 'allow';
-  append(log, {
+  const record = {
     kind: 'pre', ...base, tool, id, decision: kind,
     by: decision ? decision.hook : '',
     class: decision && (kind === 'deny' || kind === 'ask') ? reasonClass(decision.hook, decision.reason) : '',
+    // Хеш вызова (инструмент + вход): по нему сводка узнаёт «тот же вызов»
+    // для ложных отказов. Сам вход в журнал не идёт.
+    h: sha256(`${tool}\n${JSON.stringify(input)}`).slice(0, 16),
     hooks_ms: hooksMs, hooks,
-  });
+  };
+  // Признаки исхода сессии и инцидентного контура: пуш и имя вызванного скилла.
+  if (tool === 'Bash' && /\bgit\b[^|;&]*\bpush\b/.test(String(input.command || ''))) record.push = true;
+  if (tool === 'Skill' && typeof input.skill === 'string') record.skill = input.skill;
+  append(log, record);
 } else if (name === 'PostToolUse' || name === 'PostToolUseFailure') {
   if (!tool) process.exit(0);
   const started = id ? Number(state.inflight[id]) : NaN;
@@ -98,6 +114,10 @@ if (name === 'SessionStart') {
   };
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
   append(log, record);
+  // Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
+  const summary = summarize(readJournal(log), { sid, now });
+  append(log, { kind: 'summary', ts, ...summary });
+  writeSummary(log, { ts, ...summary });
 } else {
   process.exit(0);
 }

@@ -77,3 +77,86 @@ test('запись вызова модели идёт в переопредел�
   delete process.env.CRAFT_METRICS_LOG;
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// --- сводка ------------------------------------------------------------------
+
+const T = (sec) => new Date(Date.UTC(2026, 8, 2, 10, 0, sec)).toISOString();
+
+test('сводка: ложный отказ — deny, затем тот же вызов прошёл в ходе после реплики', () => {
+  const records = [
+    { kind: 'session', ts: T(0), turn: 0, harness: 'claude', repo: 'github.com/Bonzar/craft', sid: 's' },
+    { kind: 'prompt', ts: T(1), turn: 1, incident: false },
+    { kind: 'pre', ts: T(2), turn: 1, tool: 'Edit', id: 'a', decision: 'deny', by: 'universal-guard-plan-gate', class: 'gate.uncovered', h: 'h1' },
+    { kind: 'prompt', ts: T(3), turn: 2, incident: false },
+    { kind: 'pre', ts: T(4), turn: 2, tool: 'Edit', id: 'b', decision: 'allow', by: '', class: '', h: 'h1' },
+    { kind: 'post', ts: T(5), turn: 2, tool: 'Edit', id: 'b', error: false },
+    { kind: 'stop', ts: T(6), turn: 2, blocked_by: '', usage: { input: 1, output: 2, cache_read: 3, cache_create: 4 } },
+  ];
+  const s = metrics.summarize(records, { sid: 's', now: Date.parse(T(7)) });
+  assert.equal(s.false_denies, 1);
+  assert.equal(s.denies.total, 1);
+  assert.deepEqual(s.denies.by_class, { 'gate.uncovered': 1 });
+  assert.equal(s.turns, 2);
+  assert.equal(s.first_edit_ms, 5000, 'первая правка — post правящего инструмента без ошибки');
+  assert.equal(s.started_at, T(0));
+  assert.equal(s.repo, 'github.com/Bonzar/craft');
+  assert.deepEqual(s.tokens, { input: 1, output: 2, cache_read: 3, cache_create: 4 });
+});
+
+test('сводка: тот же вызов, прошедший без реплики или кнопки, ложным отказом не считается', () => {
+  const records = [
+    { kind: 'prompt', ts: T(1), turn: 1 },
+    { kind: 'pre', ts: T(2), turn: 1, tool: 'Edit', id: 'a', decision: 'deny', class: 'gate.empty', h: 'h1' },
+    { kind: 'pre', ts: T(3), turn: 1, tool: 'Edit', id: 'b', decision: 'allow', h: 'h1' },
+  ];
+  assert.equal(metrics.summarize(records).false_denies, 0);
+});
+
+test('сводка: ответ кнопкой снимает замок в том же ходе', () => {
+  const records = [
+    { kind: 'prompt', ts: T(1), turn: 1 },
+    { kind: 'pre', ts: T(2), turn: 1, tool: 'Bash', id: 'a', decision: 'deny', class: 'gate.uncovered', h: 'h1' },
+    { kind: 'pre', ts: T(3), turn: 1, tool: 'AskUserQuestion', id: 'q', decision: 'allow', h: 'hq' },
+    { kind: 'post', ts: T(4), turn: 1, tool: 'AskUserQuestion', id: 'q', error: false },
+    { kind: 'pre', ts: T(5), turn: 1, tool: 'Bash', id: 'b', decision: 'allow', h: 'h1' },
+  ];
+  assert.equal(metrics.summarize(records).false_denies, 1);
+});
+
+test('сводка: циклы плана, инциденты, блокировки Stop, ошибки, исход', () => {
+  const records = [
+    { kind: 'prompt', ts: T(1), turn: 1, incident: true },
+    { kind: 'pre', ts: T(2), turn: 1, tool: 'Skill', id: 'k', decision: 'allow', skill: 'craft-incident', h: 'hk' },
+    { kind: 'pre', ts: T(3), turn: 1, tool: 'ExitPlanMode', id: 'p1', decision: 'deny', class: 'delta.repeats', h: 'hp' },
+    { kind: 'pre', ts: T(4), turn: 1, tool: 'ExitPlanMode', id: 'p2', decision: 'allow', h: 'hp' },
+    { kind: 'post', ts: T(5), turn: 1, tool: 'ExitPlanMode', id: 'p2', error: false },
+    { kind: 'pre', ts: T(6), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', decision: 'allow', h: 'hw' },
+    { kind: 'post', ts: T(7), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', error: false },
+    { kind: 'pre', ts: T(8), turn: 1, tool: 'Bash', id: 'g', decision: 'allow', h: 'hg', push: true },
+    { kind: 'post', ts: T(9), turn: 1, tool: 'Bash', id: 'g', error: false },
+    { kind: 'post', ts: T(10), turn: 1, tool: 'Bash', id: 'e', error: true },
+    { kind: 'fail', ts: T(11), turn: 1, tool: 'Read', id: 'f' },
+    { kind: 'model', ts: T(12), mode: 'cover', ms: 900, outcome: 'COVERED' },
+    { kind: 'model', ts: T(13), mode: 'ingest', ms: 2000, outcome: 'json' },
+    { kind: 'stop', ts: T(14), turn: 1, blocked_by: 'universal-stop-routine-facts', usage: {} },
+    { kind: 'prompt', ts: T(15), turn: 2, incident: true },
+    { kind: 'stop', ts: T(16), turn: 2, blocked_by: '', usage: {} },
+  ];
+  const s = metrics.summarize(records);
+  assert.deepEqual(s.plan, { shown: 1, bounced: 1, approved: 1 });
+  assert.deepEqual(s.incidents, { detected: 2, skill_called: 1, share: 0.5 });
+  assert.deepEqual(s.stop_blocks, { 'universal-stop-routine-facts': 1 });
+  assert.equal(s.tool_errors, 2);
+  assert.deepEqual(s.outcome, { craft_writes: 1, pushed: true });
+  assert.equal(s.model_calls.count, 2);
+  assert.equal(s.model_calls.ms, 2900);
+  assert.deepEqual(s.model_calls.by_mode, { cover: { count: 1, ms: 900 }, ingest: { count: 1, ms: 2000 } });
+  assert.equal(s.first_edit_ms, 6000, 'первая правка — craft_write, план правкой не считается');
+});
+
+test('сводка: пустой журнал даёт пустую сводку без падения', () => {
+  const s = metrics.summarize([]);
+  assert.equal(s.turns, 0);
+  assert.equal(s.tokens_first_turn, null);
+  assert.equal(s.incidents.share, null);
+});

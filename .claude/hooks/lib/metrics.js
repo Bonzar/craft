@@ -174,6 +174,141 @@ export function turnUsage(transcript, from = 0) {
   return { usage, offset };
 }
 
+// --- сводка сессии -------------------------------------------------------------
+
+// Записи журнала без строк сводки. Битые строки пропускаются.
+export function readJournal(log) {
+  let text = '';
+  try {
+    text = fs.readFileSync(log, 'utf8');
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const rec = JSON.parse(line);
+      if (rec && typeof rec === 'object' && rec.kind !== 'summary') out.push(rec);
+    } catch { /* битая строка — не запись */ }
+  }
+  return out;
+}
+
+export function writeSummary(log, summary) {
+  try {
+    fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify(summary)}\n`);
+  } catch { /* копия сводки не легла — в журнале она есть */ }
+}
+
+const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+const isCraftWrite = (tool) => /__craft_write$/.test(String(tool || ''));
+const isEdit = (tool) => EDIT_TOOLS.has(tool) || isCraftWrite(tool);
+const ms = (iso) => {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : NaN;
+};
+
+// Свёртка журнала сессии в одну сводку. Чистая функция над записями.
+//
+// Ложный отказ — «deny, затем тот же вызов прошёл в течение хода после реплики
+// или кнопки»: отказ запоминается по хешу вызова; реплика (новый ход) или ответ
+// кнопкой снимают с него замок; тот же хеш, прошедший в ЭТОМ ходе после снятия,
+// засчитывается ложным отказом.
+export function summarize(records, { sid = '', now = Date.now() } = {}) {
+  const s = {
+    sid, harness: '', repo: '', started_at: '', ended_at: new Date(now).toISOString(),
+    turns: 0,
+    tokens: { input: 0, output: 0, cache_read: 0, cache_create: 0 },
+    tokens_first_turn: null,
+    model_calls: { count: 0, ms: 0, by_mode: {} },
+    denies: { total: 0, by_class: {} },
+    false_denies: 0,
+    plan: { shown: 0, bounced: 0, approved: 0 },
+    incidents: { detected: 0, skill_called: 0, share: null },
+    stop_blocks: {},
+    tool_errors: 0,
+    first_edit_ms: null,
+    outcome: { craft_writes: 0, pushed: false },
+  };
+  let started = NaN;
+  const pending = new Map(); // hash → { unlockTurn }
+  const pres = new Map();    // id → pre-запись
+  const incidentTurns = new Set();
+  const skillTurns = new Set();
+
+  const unlock = (turn) => {
+    for (const p of pending.values()) p.unlockTurn = turn;
+  };
+
+  for (const r of records) {
+    const t = ms(r.ts);
+    if (!Number.isFinite(started) && Number.isFinite(t)) started = t;
+    if (Number.isFinite(r.turn)) s.turns = Math.max(s.turns, r.turn);
+
+    if (r.kind === 'session') {
+      s.harness = r.harness || s.harness;
+      s.repo = r.repo || s.repo;
+      s.sid = s.sid || r.sid || '';
+      if (Number.isFinite(t)) started = t;
+    } else if (r.kind === 'prompt') {
+      unlock(r.turn);
+      if (r.incident === true) incidentTurns.add(r.turn);
+    } else if (r.kind === 'pre') {
+      if (r.id) pres.set(r.id, r);
+      if (r.decision === 'deny') {
+        s.denies.total += 1;
+        const cls = r.class || 'unknown';
+        s.denies.by_class[cls] = (s.denies.by_class[cls] || 0) + 1;
+        if (r.h) pending.set(r.h, { unlockTurn: null });
+        if (r.tool === 'ExitPlanMode') s.plan.bounced += 1;
+      } else if (r.decision === 'allow') {
+        if (r.tool === 'ExitPlanMode') s.plan.shown += 1;
+        if (r.h && pending.has(r.h)) {
+          const p = pending.get(r.h);
+          if (p.unlockTurn !== null && p.unlockTurn === r.turn) s.false_denies += 1;
+          pending.delete(r.h);
+        }
+      }
+      if (r.tool === 'Skill' && /incident/i.test(String(r.skill || ''))) skillTurns.add(r.turn);
+    } else if (r.kind === 'post' || r.kind === 'fail') {
+      const failed = r.kind === 'fail' || r.error === true;
+      if (failed) s.tool_errors += 1;
+      if (r.tool === 'AskUserQuestion' && !failed) unlock(r.turn);
+      if (r.tool === 'ExitPlanMode' && !failed) s.plan.approved += 1;
+      if (!failed && isCraftWrite(r.tool)) s.outcome.craft_writes += 1;
+      if (!failed && isEdit(r.tool) && s.first_edit_ms === null
+          && Number.isFinite(t) && Number.isFinite(started)) s.first_edit_ms = t - started;
+      const pre = r.id ? pres.get(r.id) : null;
+      if (!failed && pre && pre.push === true) s.outcome.pushed = true;
+    } else if (r.kind === 'stop') {
+      if (r.blocked_by) s.stop_blocks[r.blocked_by] = (s.stop_blocks[r.blocked_by] || 0) + 1;
+      const u = r.usage && typeof r.usage === 'object' ? r.usage : {};
+      for (const key of Object.keys(s.tokens)) s.tokens[key] += Number(u[key]) || 0;
+      if (s.tokens_first_turn === null) {
+        s.tokens_first_turn = {
+          input: Number(u.input) || 0, output: Number(u.output) || 0,
+          cache_read: Number(u.cache_read) || 0, cache_create: Number(u.cache_create) || 0,
+        };
+      }
+    } else if (r.kind === 'model') {
+      s.model_calls.count += 1;
+      s.model_calls.ms += Number(r.ms) || 0;
+      const mode = r.mode || 'unknown';
+      const m = s.model_calls.by_mode[mode] || { count: 0, ms: 0 };
+      m.count += 1;
+      m.ms += Number(r.ms) || 0;
+      s.model_calls.by_mode[mode] = m;
+    }
+  }
+
+  s.incidents.detected = incidentTurns.size;
+  s.incidents.skill_called = [...incidentTurns].filter((turn) => skillTurns.has(turn)).length;
+  s.incidents.share = incidentTurns.size ? s.incidents.skill_called / incidentTurns.size : null;
+  s.started_at = Number.isFinite(started) ? new Date(started).toISOString() : '';
+  return s;
+}
+
 // --- ошибка инструмента в ответе -------------------------------------------------
 
 // Тот же признак, по которому буфер наблюдений пишет tool-error: is_error либо
