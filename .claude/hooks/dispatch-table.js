@@ -132,7 +132,9 @@ export const TABLE = {
       ],
       scope: 'both',
     },
-    { hooks: ['universal-metrics'], scope: 'both' },
+    // Хранение идёт ПОСЛЕ метрик: оно забирает сводку, которую те только что
+    // записали.
+    { hooks: ['universal-metrics', 'universal-metrics-store'], scope: 'both' },
   ],
 
   PreCompact: [
@@ -144,7 +146,7 @@ export const TABLE = {
 export const EVENTS = Object.keys(TABLE);
 
 // Хуки, которые зовутся и ПОСЛЕ решения: они не печатают и лишь наблюдают.
-export const ALWAYS = new Set(['universal-metrics']);
+export const ALWAYS = new Set(['universal-metrics', 'universal-metrics-store']);
 
 // Совпадение матчера с именем инструмента. Пустой матчер — «всегда».
 function matches(matcher, tool) {

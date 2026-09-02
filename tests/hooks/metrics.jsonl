@@ -30,3 +30,9 @@
 {"name":"сводка: вызов скилла пишется именем","hook":"universal-metrics","expect":"file-contains:\"skill\":\"code-incident\"","env":{"ASSERT_FILE":"{METRICS}"},"input":{"hook_event_name":"PreToolUse","session_id":"m-sid","tool_name":"Skill","tool_use_id":"toolu_s2","tool_input":{"skill":"code-incident"}}}
 {"name":"сводка: срабатывание детектора инцидентов видно в строке реплики под диспетчером","hook":"dispatch","expect":"file-contains:\"incident\":true","env":{"ASSERT_FILE":"{METRICS}"},"input":{"hook_event_name":"UserPromptSubmit","session_id":"m-sid","prompt":"ты сломал мою заметку, откатись"}}
 {"name":"сводка: обычная реплика детектор не поднимает","hook":"dispatch","expect":"file-contains:\"incident\":false","env":{"ASSERT_FILE":"{METRICS}"},"input":{"hook_event_name":"UserPromptSubmit","session_id":"m-sid","prompt":"расскажи, как устроен детектор"}}
+
+# Хранение сводок: в кейсах выключено (METRICS_STORE=off у раннера), здесь
+# проверяется только тишина; git-логика — в tests/metrics-store-git.sh.
+{"name":"хранение: на Stop ничего не печатает","hook":"universal-metrics-store","expect":"silent","input":{"hook_event_name":"Stop","session_id":"m-sid"}}
+{"name":"хранение: чужое событие — молчание","hook":"universal-metrics-store","expect":"silent","env":{"METRICS_STORE":""},"input":{"hook_event_name":"PreToolUse","session_id":"m-sid","tool_name":"Bash","tool_input":{"command":"ls"}}}
+{"name":"хранение: Stop без сводки на диске — молчание и без работника","hook":"universal-metrics-store","expect":"silent","env":{"METRICS_STORE":"","METRICS_STORE_INLINE":"1"},"input":{"hook_event_name":"Stop","session_id":"m-sid"}}

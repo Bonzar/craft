@@ -191,6 +191,10 @@ function makeState() {
     // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
     // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
     CRAFT_METRICS_LOG: s.metrics,
+    // Хранение сводок выключено ВСЕГДА: иначе кейс Stop пушил бы в настоящую
+    // ветку metrics. Его git-логика проверяется отдельно
+    // (tests/metrics-store-git.sh) на временных репозиториях.
+    METRICS_STORE: 'off',
     // Дом codex — герметичный у КАЖДОГО кейса, а не только у своих. Хук входа
     // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
     // кладёт живой токен в настоящий ~/.codex рабочей машины.
@@ -244,7 +248,7 @@ function cleanState(s) {
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
-    s.metrics, `${s.metrics}.state.json`,
+    s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });

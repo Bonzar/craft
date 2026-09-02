@@ -12,6 +12,10 @@ Exit 0 — все кейсы зелёные и каждый исход кажд�
 или непокрытый исход (детали печатаются). Exit 2 — нет файлов кейсов.
 CI гоняет это на push и pull_request (`.github/workflows/hooks-tests.yml`).
 
+Git-логика синка системы и хранения метрик проверяется на временных
+репозиториях без сети: `bash tests/sync-system-git.sh`,
+`bash tests/metrics-store-git.sh`.
+
 Отдельно CI проверяет дерево коммита гвардом `tools/no-snapshot-files.js`:
 снимки живого Craft (`*router-context*`, `*incident-context*`,
 `*craft-gate-exempt-scope*`, `*warm-cache*`) в git не лежат — кроме заглушек
