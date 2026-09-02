@@ -36,20 +36,6 @@ if printf '%s' "$prompt" | grep -qF 'Верни ТОЛЬКО JSON-объект';
   # close несёт адреса задач, которые приём закрывает; у реплики и кнопки он
   # выброшен вызывающим кодом, поэтому дефолт пустой.
   default='{"add":[{"goal_new":"# Юнит тестовой цели","tasks":[{"title":"задача","where":["tests/run.sh"],"anchor":""}]}],"close":[]}'
-  # MOCK_CLASSIFIER_INGESTS — ответы разбора ПО ОЧЕРЕДИ через «||»: ими
-  # проверяется второй проход, дозаводящий пропущенное. Одним ответом такой кейс
-  # не выразить — он зеленел бы и на коде, который разбирает материал однажды.
-  # Разделитель двойной: одиночная палка встречается внутри JSON-текста задач.
-  if [[ -n "${MOCK_CLASSIFIER_INGESTS:-}" ]]; then
-    pass_file="${MOCK_CLASSIFIER_TRACE:-/tmp/mock-classifier}.pass"
-    pass="$(cat "$pass_file" 2>/dev/null || echo 0)"
-    printf '%s' "$((pass + 1))" > "$pass_file"
-    mapfile -t passes < <(printf '%s' "$MOCK_CLASSIFIER_INGESTS" | sed 's/||/\n/g')
-    idx="$pass"
-    (( idx >= ${#passes[@]} )) && idx=$(( ${#passes[@]} - 1 ))
-    printf '%s\n' "${passes[$idx]}"
-    exit 0
-  fi
   printf '%s\n' "${MOCK_CLASSIFIER_INGEST:-$default}"
   exit 0
 fi

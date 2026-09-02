@@ -53,6 +53,39 @@ test('ключ метки не зависит от расширения файл
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('инструментальное событие занимается по tool_use_id: одинаковые вызовы с разными идентификаторами работают оба', async () => {
+  const dir = tmpDir();
+  const { hookOnce } = await loadOnce(dir);
+  const self = `file://${HOOKS}/universal-fact-gate.js`;
+  const call = (id) => JSON.stringify({ tool_name: 'Bash', tool_use_id: id, tool_input: { command: 'echo hi' } });
+
+  assert.equal(hookOnce(call('toolu_1'), JSON.parse(call('toolu_1')), self), true);
+  assert.equal(
+    hookOnce(call('toolu_2'), JSON.parse(call('toolu_2')), self),
+    true,
+    'второй такой же вызов с другим идентификатором — другое событие, хук обязан работать',
+  );
+  assert.equal(
+    hookOnce(call('toolu_1'), JSON.parse(call('toolu_1')), self),
+    false,
+    'повтор идентификатора — второй вызов того же события, он уступает',
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('метка по tool_use_id не протухает: срок хеш-меток на неё не действует', async () => {
+  const dir = tmpDir();
+  const { hookOnce } = await loadOnce(dir);
+  process.env.HOOK_ONCE_TTL = '0';
+  const self = `file://${HOOKS}/universal-fact-gate.js`;
+  const raw = JSON.stringify({ tool_name: 'Bash', tool_use_id: 'toolu_ttl' });
+
+  assert.equal(hookOnce(raw, JSON.parse(raw), self), true);
+  assert.equal(hookOnce(raw, JSON.parse(raw), self), false, 'нулевой срок не вернул занятое событие');
+  delete process.env.HOOK_ONCE_TTL;
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('разные события занимают разные метки', async () => {
   const dir = tmpDir();
   const { hookOnce } = await loadOnce(dir);
