@@ -160,3 +160,38 @@ test('сводка: пустой журнал даёт пустую сводку
   assert.equal(s.tokens_first_turn, null);
   assert.equal(s.incidents.share, null);
 });
+
+// --- сигналы -----------------------------------------------------------------
+
+test('хеш реплики не зависит от регистра, пробелов и знаков препинания', () => {
+  assert.equal(metrics.promptHash('Убери хвосты, из README!'), metrics.promptHash('убери   хвосты из readme'));
+  assert.notEqual(metrics.promptHash('убери хвосты'), metrics.promptHash('добавь хвосты'));
+  assert.equal(metrics.promptHash('   '), '');
+});
+
+test('маркеры переуказания', () => {
+  assert.equal(metrics.looksLikeReinstruction('я же просил не трогать README'), true);
+  assert.equal(metrics.looksLikeReinstruction('Ещё раз: без хвостов'), true);
+  assert.equal(metrics.looksLikeReinstruction('опять то же самое'), true);
+  assert.equal(metrics.looksLikeReinstruction('поправь README'), false);
+  assert.equal(metrics.looksLikeReinstruction('сноваяркий'), false, 'маркер внутри слова не считается');
+});
+
+test('сводка: сигналы складываются из признаков событий', () => {
+  const records = [
+    { kind: 'prompt', ts: T(1), turn: 1, repeat: false, reinstruct: true },
+    { kind: 'pre', ts: T(2), turn: 1, tool: 'Bash', id: 'a', decision: 'allow', h: 'h1' },
+    { kind: 'post', ts: T(3), turn: 1, tool: 'Bash', id: 'a', error: true },
+    { kind: 'pre', ts: T(4), turn: 1, tool: 'Bash', id: 'b', decision: 'allow', h: 'h1', repeat_call: true },
+    { kind: 'post', ts: T(5), turn: 1, tool: 'Bash', id: 'b', error: true },
+    { kind: 'pre', ts: T(6), turn: 1, tool: 'ExitPlanMode', id: 'p', decision: 'allow', h: 'hp', stage_repeat: true },
+    { kind: 'post', ts: T(7), turn: 1, tool: 'ExitPlanMode', id: 'p', error: false },
+    { kind: 'stop', ts: T(8), turn: 1, blocked_by: '', usage: {}, no_progress: false, tool_errors: 2 },
+    { kind: 'prompt', ts: T(9), turn: 2, repeat: true, reinstruct: false },
+    { kind: 'stop', ts: T(10), turn: 2, blocked_by: '', usage: {}, no_progress: true, tool_errors: 0 },
+  ];
+  const s = metrics.summarize(records);
+  assert.deepEqual(s.signals, {
+    reinstructions: 2, call_repeats: 1, stage_repeats: 1, turns_without_progress: 1, error_streak_max: 2,
+  });
+});

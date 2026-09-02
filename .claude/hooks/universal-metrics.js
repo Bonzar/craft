@@ -11,6 +11,11 @@
 // записей assistant транскрипта). Вызовы модели из хуков пишет сама обёртка
 // вызова (classifier.js) — они идут из фоновых процессов.
 //
+// Сигналы (каталог 1.4): повтор реплики и переуказание (repeat, reinstruct у
+// prompt), повтор того же вызова и повтор стадии в ходе (repeat_call,
+// stage_repeat у pre), ход без прогресса и счёт ошибок хода (no_progress,
+// tool_errors у stop). Всё — булевы признаки и числа, текста нет.
+//
 // На Stop, следом за строкой хода, в журнал ложится СВОДКА сессии одной строкой
 // (kind: summary) — свёртка всего журнала с начала сессии: ходы, токены,
 // вызовы модели, отказы гейта и ложные отказы, циклы плана, инциденты, время
@@ -28,10 +33,11 @@ import { sha256 } from './lib/hash.js';
 import {
   append, loadState, saveState, reasonClass, repoOf, turnUsage, responseIsError,
   readJournal, summarize, writeSummary,
+  promptHash, looksLikeReinstruction, STAGE_TOOLS, isProgress,
 } from './lib/metrics.js';
 
 const {
-  raw, event, tool, cwd, transcript, response, input,
+  raw, event, tool, cwd, transcript, response, input, prompt,
 } = readEvent();
 const name = event.hook_event_name || '';
 if (!name) process.exit(0);
@@ -50,6 +56,14 @@ const state = loadState(log);
 if (!state.started_at) state.started_at = now;
 if (!Number.isFinite(state.turn)) state.turn = 0;
 if (!state.inflight || typeof state.inflight !== 'object') state.inflight = {};
+// Состояние хода для сигналов: хеши вызовов и стадии этого хода, признак
+// прогресса, счётчики; хеши прежних реплик — для повторов.
+if (!Array.isArray(state.prompt_hashes)) state.prompt_hashes = [];
+if (!state.turn_calls || typeof state.turn_calls !== 'object') state.turn_calls = {};
+if (!state.turn_stages || typeof state.turn_stages !== 'object') state.turn_stages = {};
+if (!Number.isFinite(state.turn_tools)) state.turn_tools = 0;
+if (!Number.isFinite(state.turn_errors)) state.turn_errors = 0;
+if (!state.pre_flags || typeof state.pre_flags !== 'object') state.pre_flags = {};
 
 // Время хуков цепочки до этого: диспетчер складывает замеры в общее состояние.
 const timings = Array.isArray(globalThis.hookTimings) ? globalThis.hookTimings : [];
@@ -72,7 +86,19 @@ if (name === 'SessionStart') {
   state.turn += 1;
   state.turn_started_at = now;
   const flags = globalThis.hookFlags && typeof globalThis.hookFlags === 'object' ? globalThis.hookFlags : {};
-  append(log, { kind: 'prompt', ts, turn: state.turn, incident: flags.incident === true });
+  const h = promptHash(prompt);
+  const repeat = Boolean(h) && state.prompt_hashes.includes(h);
+  if (h) state.prompt_hashes = [...state.prompt_hashes, h].slice(-50);
+  // Новый ход — новые стадии и вызовы.
+  state.turn_calls = {};
+  state.turn_stages = {};
+  state.turn_tools = 0;
+  state.turn_errors = 0;
+  state.turn_progress = false;
+  append(log, {
+    kind: 'prompt', ts, turn: state.turn, incident: flags.incident === true,
+    repeat, reinstruct: looksLikeReinstruction(prompt),
+  });
 } else if (name === 'PreToolUse') {
   if (!tool) process.exit(0);
   if (id) {
@@ -94,6 +120,19 @@ if (name === 'SessionStart') {
   // Признаки исхода сессии и инцидентного контура: пуш и имя вызванного скилла.
   if (tool === 'Bash' && /\bgit\b[^|;&]*\bpush\b/.test(String(input.command || ''))) record.push = true;
   if (tool === 'Skill' && typeof input.skill === 'string') record.skill = input.skill;
+  // Сигналы хода: тот же вызов повторно, стадия повторно.
+  state.turn_tools += 1;
+  if (state.turn_calls[record.h]) record.repeat_call = true;
+  state.turn_calls[record.h] = (state.turn_calls[record.h] || 0) + 1;
+  if (STAGE_TOOLS.has(tool)) {
+    if (state.turn_stages[tool]) record.stage_repeat = true;
+    state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
+  }
+  if (id) {
+    state.pre_flags[id] = { tool, push: record.push === true };
+    const ids = Object.keys(state.pre_flags);
+    if (ids.length > 50) for (const old of ids.slice(0, ids.length - 50)) delete state.pre_flags[old];
+  }
   append(log, record);
 } else if (name === 'PostToolUse' || name === 'PostToolUseFailure') {
   if (!tool) process.exit(0);
@@ -104,6 +143,10 @@ if (name === 'SessionStart') {
   };
   if (Number.isFinite(started)) record.tool_ms = now - started;
   record.error = name === 'PostToolUseFailure' || responseIsError(response);
+  if (record.error) state.turn_errors += 1;
+  const pre = id ? state.pre_flags[id] : null;
+  if (id) delete state.pre_flags[id];
+  if (isProgress(pre, record)) state.turn_progress = true;
   append(log, record);
 } else if (name === 'Stop') {
   const { usage, offset } = turnUsage(transcript, Number(state.transcript_offset) || 0);
@@ -113,6 +156,10 @@ if (name === 'SessionStart') {
     hooks_ms: hooksMs, hooks, usage,
   };
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
+  // Ход без прогресса: инструменты звались, а ни правки, ни записи, ни плана,
+  // ни вопроса, ни пуша не вышло. Ход без единого вызова — разговор, не в счёт.
+  record.no_progress = state.turn_tools > 0 && state.turn_progress !== true;
+  record.tool_errors = state.turn_errors;
   append(log, record);
   // Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
   const summary = summarize(readJournal(log), { sid, now });

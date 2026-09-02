@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { metricsLog, sessionId } from './paths.js';
+import { sha256 } from './hash.js';
 
 export function append(file, record) {
   if (!file) return;
@@ -230,7 +231,11 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     tool_errors: 0,
     first_edit_ms: null,
     outcome: { craft_writes: 0, pushed: false },
+    signals: {
+      reinstructions: 0, call_repeats: 0, stage_repeats: 0, turns_without_progress: 0, error_streak_max: 0,
+    },
   };
+  let streak = 0;
   let started = NaN;
   const pending = new Map(); // hash → { unlockTurn }
   const pres = new Map();    // id → pre-запись
@@ -254,6 +259,7 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     } else if (r.kind === 'prompt') {
       unlock(r.turn);
       if (r.incident === true) incidentTurns.add(r.turn);
+      if (r.repeat === true || r.reinstruct === true) s.signals.reinstructions += 1;
     } else if (r.kind === 'pre') {
       if (r.id) pres.set(r.id, r);
       if (r.decision === 'deny') {
@@ -271,9 +277,13 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
         }
       }
       if (r.tool === 'Skill' && /incident/i.test(String(r.skill || ''))) skillTurns.add(r.turn);
+      if (r.repeat_call === true) s.signals.call_repeats += 1;
+      if (r.stage_repeat === true) s.signals.stage_repeats += 1;
     } else if (r.kind === 'post' || r.kind === 'fail') {
       const failed = r.kind === 'fail' || r.error === true;
       if (failed) s.tool_errors += 1;
+      streak = failed ? streak + 1 : 0;
+      if (streak > s.signals.error_streak_max) s.signals.error_streak_max = streak;
       if (r.tool === 'AskUserQuestion' && !failed) unlock(r.turn);
       if (r.tool === 'ExitPlanMode' && !failed) s.plan.approved += 1;
       if (!failed && isCraftWrite(r.tool)) s.outcome.craft_writes += 1;
@@ -283,6 +293,7 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
       if (!failed && pre && pre.push === true) s.outcome.pushed = true;
     } else if (r.kind === 'stop') {
       if (r.blocked_by) s.stop_blocks[r.blocked_by] = (s.stop_blocks[r.blocked_by] || 0) + 1;
+      if (r.no_progress === true) s.signals.turns_without_progress += 1;
       const u = r.usage && typeof r.usage === 'object' ? r.usage : {};
       for (const key of Object.keys(s.tokens)) s.tokens[key] += Number(u[key]) || 0;
       if (s.tokens_first_turn === null) {
@@ -307,6 +318,38 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
   s.incidents.share = incidentTurns.size ? s.incidents.skill_called / incidentTurns.size : null;
   s.started_at = Number.isFinite(started) ? new Date(started).toISOString() : '';
   return s;
+}
+
+// --- сигналы -------------------------------------------------------------------
+
+// Нормализованный хеш реплики: регистр, пробелы и знаки препинания не в счёт.
+// По нему узнаётся ПОВТОР той же реплики; сам текст никуда не идёт.
+export function promptHash(prompt) {
+  const norm = String(prompt || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!norm) return '';
+  return sha256(norm).slice(0, 16);
+}
+
+// Переуказание: Влад повторяет уже данное указание. Признаки — маркеры повтора
+// в тексте («ещё раз», «я же сказал», «опять», «повторяю»). Совпадение с
+// прежней репликой считает вызывающий код по хешу.
+const REINSTRUCT = /(^|[^\p{L}])(ещ[её] раз|я же (сказал|говорил|просил|писал)|опять|снова|повторяю|в который раз|сколько раз)([^\p{L}]|$)/iu;
+export function looksLikeReinstruction(prompt) {
+  return REINSTRUCT.test(String(prompt || ''));
+}
+
+// Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
+export const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
+
+// Инструменты, чей успешный вызов — прогресс хода: правка мира, запись в Craft,
+// показ плана, вопрос Владу, пуш.
+export function isProgress(pre, post) {
+  if (!pre || !post || post.error === true) return false;
+  return isEdit(pre.tool) || STAGE_TOOLS.has(pre.tool) || pre.push === true;
 }
 
 // --- ошибка инструмента в ответе -------------------------------------------------
