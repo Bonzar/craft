@@ -25,6 +25,14 @@ jobs:
       - name: Make hooks executable
         run: chmod +x .claude/hooks/*.js
 
+      # Снимки живого Craft (роутер памяти, SKILL-док инцидента, кэш зоны,
+      # прогретый кэш) — регенерируемая память о жизни Влада, в git им не место.
+      # .gitignore закрывает их по пути; здесь — по маске имени и по содержимому,
+      # для дерева проверяемого коммита. Локально то же делает pre-commit из
+      # .githooks (ставит install.sh).
+      - name: No Craft snapshots in the tree
+        run: node tools/no-snapshot-files.js --tree HEAD
+
       - name: Run hook regression tests
         run: node tests/run.js
 

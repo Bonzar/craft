@@ -12,6 +12,14 @@ Exit 0 — все кейсы зелёные и каждый исход кажд�
 или непокрытый исход (детали печатаются). Exit 2 — нет файлов кейсов.
 CI гоняет это на push и pull_request (`.github/workflows/hooks-tests.yml`).
 
+Отдельно CI проверяет дерево коммита гвардом `tools/no-snapshot-files.js`:
+снимки живого Craft (`*router-context*`, `*incident-context*`,
+`*craft-gate-exempt-scope*`, `*warm-cache*`) в git не лежат — кроме заглушек
+в `tests/hooks/fixtures/warm-cache/` (`.claude/` и `.craft/`), и те только пока их
+содержимое не похоже на настоящий снимок (шапка инжект-хука, заголовок памяти). Локально то же делает pre-commit из
+`.githooks` (`install.sh` ставит `core.hooksPath`). Тест гварда —
+`tests/unit/no-snapshot-files.test.mjs`.
+
 Флаг `--diff` прогоняет кейс ДВУМЯ версиями одного хука (`.js` и `.sh`) в
 раздельном состоянии и валит его на любом расхождении вывода, следа на диске или
 вызова классификатора. Он писался под переезд слоя с bash на JS; сейчас
