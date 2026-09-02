@@ -41,6 +41,7 @@ const EXPECTED = {
   ROUTINE_FACTS_MARKER: `/tmp/routine-facts.${SID}.reminded`,
   SYNC_SYSTEM_STATE: `/tmp/sync-system.${SID}`,
   RELATIVE_LINK_STATE: `/tmp/relative-link.${SID}.blocked`,
+  CRAFT_METRICS_LOG: `/tmp/metrics.${SID}.jsonl`,
 };
 
 test('пути состояния совпадают с закреплённым эталоном', async () => {
@@ -59,6 +60,7 @@ test('пути состояния совпадают с закреплённым
     ROUTINE_FACTS_MARKER: paths.routineFactsMarker(),
     SYNC_SYSTEM_STATE: paths.syncSystemState(),
     RELATIVE_LINK_STATE: paths.relativeLinkState(),
+    CRAFT_METRICS_LOG: paths.metricsLog(),
   };
 
   // Набор сверяется целиком: новый путь без строки в эталоне так же опасен, как

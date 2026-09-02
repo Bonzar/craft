@@ -1,0 +1,104 @@
+#!/usr/bin/env node
+// Хук метрик: журнал событий сессии в JSONL. Стоит ПОСЛЕДНИМ в каждой цепочке
+// диспетчера и зовётся всегда, даже когда цепочка уже дала решение: решение
+// предыдущих хуков он читает из общего состояния события (globalThis, его
+// заполняют decide.js и dispatch.js), а не из stdout.
+//
+// События: SessionStart (старт, харнес, репо), UserPromptSubmit (номер хода),
+// PreToolUse (инструмент, исход гейта и класс причины, время хуков),
+// PostToolUse / PostToolUseFailure (длительность вызова, ошибка инструмента),
+// Stop (блокировка по имени хука, длительность хода, токены хода по usage
+// записей assistant транскрипта). Вызовы модели из хуков пишет сама обёртка
+// вызова (classifier.js) — они идут из фоновых процессов.
+//
+// В журнал не попадает содержимое: ни правок, ни команд, ни промптов, ни
+// текста отказов. Ничего не печатает, сети и модели не зовёт, укладывается в
+// миллисекунды. Без идентификатора сессии (ни в событии, ни в окружении, ни
+// переопределением) молчит: относить события не к чему.
+import { readEvent } from './lib/event.js';
+import { hookOnce } from './lib/once.js';
+import { metricsLog, sessionId } from './lib/paths.js';
+import {
+  append, loadState, saveState, reasonClass, repoOf, turnUsage, responseIsError,
+} from './lib/metrics.js';
+
+const {
+  raw, event, tool, cwd, transcript, response,
+} = readEvent();
+const name = event.hook_event_name || '';
+if (!name) process.exit(0);
+
+const sid = (typeof event.session_id === 'string' && event.session_id) || sessionId();
+if (!sid && !process.env.CRAFT_METRICS_LOG) process.exit(0);
+const log = metricsLog(sid);
+
+// Хук зарегистрирован в двух контурах — второй вызов того же события уступает,
+// иначе каждое событие считалось бы дважды.
+if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+
+const now = Date.now();
+const ts = new Date(now).toISOString();
+const state = loadState(log);
+if (!state.started_at) state.started_at = now;
+if (!Number.isFinite(state.turn)) state.turn = 0;
+if (!state.inflight || typeof state.inflight !== 'object') state.inflight = {};
+
+// Время хуков цепочки до этого: диспетчер складывает замеры в общее состояние.
+const timings = Array.isArray(globalThis.hookTimings) ? globalThis.hookTimings : [];
+const hooksMs = timings.reduce((sum, t) => sum + (Number(t.ms) || 0), 0);
+const hooks = Object.fromEntries(timings.map((t) => [t.name, t.ms]));
+const decision = globalThis.hookDecision && typeof globalThis.hookDecision === 'object'
+  ? globalThis.hookDecision : null;
+
+const id = typeof event.tool_use_id === 'string' ? event.tool_use_id : '';
+const base = { ts, turn: state.turn };
+
+if (name === 'SessionStart') {
+  state.started_at = now;
+  state.turn = 0;
+  state.repo = repoOf(cwd);
+  append(log, {
+    kind: 'session', ...base, harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
+  });
+} else if (name === 'UserPromptSubmit') {
+  state.turn += 1;
+  state.turn_started_at = now;
+  append(log, { kind: 'prompt', ts, turn: state.turn });
+} else if (name === 'PreToolUse') {
+  if (!tool) process.exit(0);
+  if (id) {
+    state.inflight[id] = now;
+    // Полёт бывает недописанным (вызов отменён) — держим не больше полусотни.
+    const ids = Object.keys(state.inflight);
+    if (ids.length > 50) for (const old of ids.slice(0, ids.length - 50)) delete state.inflight[old];
+  }
+  const kind = decision ? decision.kind : 'allow';
+  append(log, {
+    kind: 'pre', ...base, tool, id, decision: kind,
+    by: decision ? decision.hook : '',
+    class: decision && (kind === 'deny' || kind === 'ask') ? reasonClass(decision.hook, decision.reason) : '',
+    hooks_ms: hooksMs, hooks,
+  });
+} else if (name === 'PostToolUse' || name === 'PostToolUseFailure') {
+  if (!tool) process.exit(0);
+  const started = id ? Number(state.inflight[id]) : NaN;
+  if (id) delete state.inflight[id];
+  const record = {
+    kind: name === 'PostToolUse' ? 'post' : 'fail', ...base, tool, id, hooks_ms: hooksMs, hooks,
+  };
+  if (Number.isFinite(started)) record.tool_ms = now - started;
+  record.error = name === 'PostToolUseFailure' || responseIsError(response);
+  append(log, record);
+} else if (name === 'Stop') {
+  const { usage, offset } = turnUsage(transcript, Number(state.transcript_offset) || 0);
+  state.transcript_offset = offset;
+  const record = {
+    kind: 'stop', ...base, blocked_by: decision && decision.kind === 'block' ? decision.hook : '',
+    hooks_ms: hooksMs, hooks, usage,
+  };
+  if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
+  append(log, record);
+} else {
+  process.exit(0);
+}
+saveState(log, state);

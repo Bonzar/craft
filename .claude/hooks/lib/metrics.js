@@ -1,0 +1,186 @@
+// Метрики слоя: что считается по событиям хуков и как это ложится на диск.
+//
+// Журнал — JSONL в файле сессии (metricsLog из paths.js): по строке на событие.
+// Содержимого правок, команд и промптов в журнале нет — только имена, классы
+// исходов, длительности и числа. Текст отказа сюда не пишется: из него
+// вычисляется КЛАСС причины, и только он попадает в строку.
+//
+// Состояние между событиями (номер хода, начало хода, вызовы в полёте, смещение
+// прочитанного транскрипта) живёт рядом с журналом в `<журнал>.state.json`.
+// Все функции fail quiet: сломанные метрики не должны трогать ход.
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { metricsLog, sessionId } from './paths.js';
+
+export function append(file, record) {
+  if (!file) return;
+  try {
+    fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
+  } catch { /* журнал не пополнился — метрика потеряна, ход цел */ }
+}
+
+// Вызов модели из хука: пишется самим местом вызова (обёртка в classifier.js),
+// а не хуком метрик — приём реестра идёт в отдельном фоновом процессе, и хуку
+// метрик его не видно. Журнал берётся по сессии из окружения; без сессии и без
+// переопределения записи нет: относить вызов не к чему.
+export function recordModelCall({ mode, ms, outcome }) {
+  if (!process.env.CRAFT_METRICS_LOG && !sessionId()) return;
+  append(metricsLog(), {
+    kind: 'model', ts: new Date().toISOString(), mode: String(mode || ''), ms, outcome,
+  });
+}
+
+// Класс ответа модели: первый токен вердикта либо «json» у разбора. Текст
+// ответа целиком в журнал не идёт.
+export function verdictClass(verdict) {
+  const text = String(verdict || '').trim();
+  if (!text || text === 'UNAVAILABLE') return 'unavailable';
+  if (text.startsWith('{')) return 'json';
+  const m = text.match(/^[A-ZА-ЯЁ_]+/);
+  return m ? m[0].slice(0, 20) : 'other';
+}
+
+// --- состояние ---------------------------------------------------------------
+
+function stateFile(log) {
+  return `${log}.state.json`;
+}
+
+export function loadState(log) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(stateFile(log), 'utf8'));
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch { /* состояния ещё нет */ }
+  return {};
+}
+
+export function saveState(log, state) {
+  try {
+    fs.writeFileSync(stateFile(log), JSON.stringify(state));
+  } catch { /* состояние не сохранилось — следующий ход начнёт заново */ }
+}
+
+// --- классы причин -----------------------------------------------------------
+
+// Короткое имя хука: без контурного префикса.
+export function hookShort(name) {
+  return String(name || '').replace(/^(universal|craft)-/, '');
+}
+
+// Класс причины отказа по хуку и тексту. Текст нужен только план-гейту и
+// дельте: у остальных хуков один исход на файл. Возвращается класс, текст
+// дальше не идёт.
+const GATE_CLASSES = [
+  ['реестр пуст', 'gate.empty'],
+  ['запрещено твоей же записью', 'gate.forbidden'],
+  ['не покрывает', 'gate.uncovered'],
+  ['черновой', 'gate.draft'],
+  ['не читается', 'gate.unreadable'],
+  ['не дала решения', 'gate.no-verdict'],
+];
+
+export function reasonClass(hook, reason) {
+  const short = hookShort(hook);
+  const text = String(reason || '');
+  if (short === 'guard-plan-gate') {
+    const hit = GATE_CLASSES.find(([needle]) => text.includes(needle));
+    return hit ? hit[1] : 'gate.other';
+  }
+  if (short === 'guard-plan-delta') {
+    return text.includes('повторяет') ? 'delta.repeats' : 'delta.unavailable';
+  }
+  return short || 'unknown';
+}
+
+// --- репозиторий -------------------------------------------------------------
+
+// Репо сессии по remote origin: host/owner/repo без схемы, учётки и .git.
+// Не репозиторий, нет remote — пустая строка.
+export function repoOf(cwd) {
+  if (!cwd) return '';
+  const res = spawnSync('git', ['-C', cwd, 'config', '--get', 'remote.origin.url'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (res.status !== 0) return '';
+  return normalizeRemote((res.stdout || '').trim());
+}
+
+export function normalizeRemote(url) {
+  let s = String(url || '').trim();
+  if (!s) return '';
+  s = s.replace(/^[a-z+]+:\/\//i, '');       // схема
+  s = s.replace(/^[^@/]+@/, '');            // учётка перед хостом
+  s = s.replace(/^([^:/]+):(?!\/)/, '$1/'); // scp-форма host:owner/repo
+  s = s.replace(/\.git$/, '').replace(/\/+$/, '');
+  return s;
+}
+
+// --- токены хода из транскрипта ------------------------------------------------
+
+// Сумма usage записей assistant, начиная с байтового смещения. Один ответ модели
+// лежит в транскрипте несколькими записями с одним message.id (по записи на
+// блок содержимого) и одним и тем же usage — считается один раз, по последней
+// записи. Возвращается сумма и смещение за последней ПОЛНОЙ строкой: хвост без
+// перевода строки ещё дописывается и будет прочитан в следующий раз.
+export function turnUsage(transcript, from = 0) {
+  const empty = {
+    input: 0, output: 0, cache_read: 0, cache_create: 0, messages: 0,
+  };
+  if (!transcript) return { usage: empty, offset: from };
+  let fd;
+  let text = '';
+  try {
+    const size = fs.statSync(transcript).size;
+    if (size <= from) return { usage: empty, offset: from };
+    fd = fs.openSync(transcript, 'r');
+    const buf = Buffer.alloc(size - from);
+    fs.readSync(fd, buf, 0, buf.length, from);
+    text = buf.toString('utf8');
+  } catch {
+    return { usage: empty, offset: from };
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  const lastNl = text.lastIndexOf('\n');
+  if (lastNl < 0) return { usage: empty, offset: from };
+  const complete = text.slice(0, lastNl + 1);
+  const offset = from + Buffer.byteLength(complete, 'utf8');
+
+  const byId = new Map();
+  let anon = 0;
+  for (const line of complete.split('\n')) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!entry || entry.type !== 'assistant') continue;
+    const message = entry.message;
+    if (!message || !message.usage || typeof message.usage !== 'object') continue;
+    const id = typeof message.id === 'string' && message.id ? message.id : `anon-${anon += 1}`;
+    byId.set(id, message.usage);
+  }
+  const usage = { ...empty };
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  for (const u of byId.values()) {
+    usage.input += num(u.input_tokens);
+    usage.output += num(u.output_tokens);
+    usage.cache_read += num(u.cache_read_input_tokens);
+    usage.cache_create += num(u.cache_creation_input_tokens);
+    usage.messages += 1;
+  }
+  return { usage, offset };
+}
+
+// --- ошибка инструмента в ответе -------------------------------------------------
+
+// Тот же признак, по которому буфер наблюдений пишет tool-error: is_error либо
+// непустое поле error в ответе инструмента.
+export function responseIsError(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
+  if (response.is_error === true || response.isError === true) return true;
+  const err = response.error;
+  return err !== undefined && err !== null && err !== false && err !== '';
+}

@@ -15,6 +15,28 @@ function emit(payload, { compact = true } = {}) {
   // Признак «решение принято» для диспетчера: под ним хуки одного события делят
   // общий вывод, и второе решение подряд легло бы в него следом за первым.
   globalThis.hookDecided = true;
+  // Само решение — в общее состояние события: хук метрик стоит после решения и
+  // читает его отсюда, а не из stdout. Имя решившего хука ставит диспетчер.
+  globalThis.hookDecision = describe(payload);
+}
+
+// Вид решения по форме ответа: deny/ask (PreToolUse), block (Stop), inject
+// (дописанный контекст). Текст причины остаётся в памяти процесса — метрики
+// вычисляют по нему класс и в журнал не пишут.
+function describe(payload) {
+  const specific = payload && payload.hookSpecificOutput;
+  let kind = '';
+  let reason = '';
+  if (specific && specific.permissionDecision) {
+    kind = specific.permissionDecision;
+    reason = specific.permissionDecisionReason || '';
+  } else if (payload && payload.decision === 'block') {
+    kind = 'block';
+    reason = payload.reason || '';
+  } else if (specific && specific.additionalContext !== undefined) {
+    kind = 'inject';
+  }
+  return { hook: globalThis.hookCurrent || '', kind, reason };
 }
 
 // PreToolUse: запрет вызова с причиной, которую прочитает модель.

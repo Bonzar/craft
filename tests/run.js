@@ -170,6 +170,7 @@ function makeState() {
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
+    metrics: tmpName('metrics-test'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -187,6 +188,9 @@ function makeState() {
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
     SESSION_ANCHOR_STATE: s.anchor,
+    // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
+    // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
+    CRAFT_METRICS_LOG: s.metrics,
     // Дом codex — герметичный у КАЖДОГО кейса, а не только у своих. Хук входа
     // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
     // кладёт живой токен в настоящий ~/.codex рабочей машины.
@@ -240,6 +244,7 @@ function cleanState(s) {
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
+    s.metrics, `${s.metrics}.state.json`,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
@@ -267,11 +272,15 @@ function subst(value, s) {
   //
   // {CODEXHOME} — герметичный дом codex этого прогона: по нему кейс наводит
   // ASSERT_FILE на файл входа, который заводит хук.
+  //
+  // {METRICS} — журнал метрик этого прогона: кейсы хука метрик судят по его
+  // строкам.
   if (!s) return withDir;
   return withDir
     .split('{REGISTRY}').join(s.registry)
     .split('{CLASSTRACE}').join(s.classtrace)
-    .split('{CODEXHOME}').join(s.codexhome);
+    .split('{CODEXHOME}').join(s.codexhome)
+    .split('{METRICS}').join(s.metrics);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`

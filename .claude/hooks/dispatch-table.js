@@ -17,6 +17,10 @@
 //
 // МАТЧЕР сверяется с именем инструмента ЦЕЛИКОМ, а не подстрокой: иначе `Bash`
 // поймал бы и `BashOutput`. Пустой матчер означает «на любое событие этого типа».
+//
+// Хук метрик стоит ПОСЛЕДНИМ в каждой цепочке и зовётся всегда (см. ALWAYS):
+// он ничего не печатает и читает решение предыдущих хуков из общего состояния
+// события — так видно и исход гейта, и блокировку конца хода.
 export const TABLE = {
   SessionStart: [
     { hooks: ['craft-sync-local-main', 'craft-build-sync'], scope: 'project' },
@@ -29,6 +33,7 @@ export const TABLE = {
     // сессии доступно, и к этому моменту вход уже должен лежать на месте.
     { hooks: ['universal-cache-gate-exempt-scope', 'universal-codex-auth', 'universal-env-capabilities'], scope: 'both' },
     { hooks: ['universal-session-anchor'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   UserPromptSubmit: [
@@ -41,6 +46,7 @@ export const TABLE = {
       ],
       scope: 'both',
     },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PreToolUse: [
@@ -92,6 +98,7 @@ export const TABLE = {
     // пропускает то, про что видно, что оно только читает; матчер здесь широкий
     // намеренно — решение принимает хук, а не список имён.
     { hooks: ['universal-guard-plan-gate'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PostToolUse: [
@@ -104,10 +111,12 @@ export const TABLE = {
     { matcher: 'Task|Agent|Workflow', hooks: ['universal-mark-plan-critic'], scope: 'both' },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-mark-plan-file'], scope: 'both' },
     { hooks: ['universal-observe-buffer'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PostToolUseFailure: [
     { matcher: 'ExitPlanMode', hooks: ['universal-guard-plan-exit-failure'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   Stop: [
@@ -123,6 +132,7 @@ export const TABLE = {
       ],
       scope: 'both',
     },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PreCompact: [
@@ -132,6 +142,9 @@ export const TABLE = {
 
 // События, на которые ставится сама регистрация диспетчера.
 export const EVENTS = Object.keys(TABLE);
+
+// Хуки, которые зовутся и ПОСЛЕ решения: они не печатают и лишь наблюдают.
+export const ALWAYS = new Set(['universal-metrics']);
 
 // Совпадение матчера с именем инструмента. Пустой матчер — «всегда».
 function matches(matcher, tool) {

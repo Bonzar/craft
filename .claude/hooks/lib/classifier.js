@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { repoRootOf } from './paths.js';
+import { recordModelCall, verdictClass } from './metrics.js';
 
 // Корень считается от ЭТОГО модуля, а не от файла вызывающего хука: у них разная
 // глубина (хук лежит на уровень выше), и общая формула на стороне вызова давала
@@ -49,16 +50,23 @@ export function classifierAvailable(bin) {
 
 // classify(bin, mode, args, description) → строка вердикта.
 // Аварийный выключатель PLAN_CLASSIFIER=off обрабатывает сам классификатор.
+//
+// Каждый вызов — событие метрик: режим, длительность и класс ответа. Это
+// единственное место, откуда хуки зовут модель, поэтому счёт вызовов живёт
+// здесь, а не в хуке метрик, — приём реестра идёт в отдельном фоновом
+// процессе, и хуку его не видно.
 export function classify(bin, mode, args, description, { timeoutSec } = {}) {
   if (!classifierAvailable(bin)) return 'UNAVAILABLE';
   const env = { ...process.env };
   if (timeoutSec) env.PLAN_CLASSIFIER_TIMEOUT = String(timeoutSec);
+  const started = Date.now();
   const res = spawnSync('bash', [bin, mode, ...args], {
     input: description,
     env,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
-  const verdict = (res.stdout || '').trim();
-  return verdict || 'UNAVAILABLE';
+  const verdict = (res.stdout || '').trim() || 'UNAVAILABLE';
+  recordModelCall({ mode, ms: Date.now() - started, outcome: verdictClass(verdict) });
+  return verdict;
 }
