@@ -45,6 +45,9 @@ if (argv[0] === '--list') {
 }
 
 const scope = argv[0] === 'universal' ? 'universal' : 'project';
+// Контур — в общее состояние: хук метрик по нему решает, писать ли ему, когда
+// у чекаута сессии есть и проектная регистрация.
+globalThis.hookScope = scope;
 
 const { event, tool } = readEvent();
 const eventName = event.hook_event_name || '';

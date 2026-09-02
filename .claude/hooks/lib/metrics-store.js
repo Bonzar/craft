@@ -54,13 +54,15 @@ export function enqueue(queueFile, summary) {
   }
 }
 
-function readQueue(queueFile) {
-  let text = '';
+function readQueueText(queueFile) {
   try {
-    text = fs.readFileSync(queueFile, 'utf8');
+    return fs.readFileSync(queueFile, 'utf8');
   } catch {
-    return [];
+    return '';
   }
+}
+
+export function parseQueue(text) {
   const out = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -100,26 +102,68 @@ export function upsertLines(text, summaries) {
   return `${order.map((k) => bySid.get(k)).join('\n')}\n`;
 }
 
+// Замок выгрузки. Работник может умереть посреди fetch или push (перезагрузка,
+// kill), и finally его не снимет — поэтому замок с возрастом: старше STALE_MS
+// считается брошенным и забирается. Срок заведомо больше любой живой выгрузки.
+export const STALE_MS = 10 * 60 * 1000;
+
+export function acquireLock(lock, staleMs = STALE_MS) {
+  try {
+    fs.mkdirSync(lock);
+    return true;
+  } catch { /* замок занят — смотрим, жив ли */ }
+  let age = 0;
+  try {
+    age = Date.now() - fs.statSync(lock).mtimeMs;
+  } catch {
+    return false;
+  }
+  if (age <= staleMs) return false;
+  try {
+    fs.rmSync(lock, { recursive: true, force: true });
+    fs.mkdirSync(lock);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Снять из очереди ровно доставленное: то, что дописано ПОСЛЕ снимка, остаётся.
+// Файл не начинается со снимка (переписан кем-то ещё) — не трогаем: следующий
+// заход доставит всё заново, строка сессии на ветке заменяется, дубля не будет.
+export function removeDelivered(queueFile, snapshot) {
+  const current = readQueueText(queueFile);
+  if (!current.startsWith(snapshot)) return false;
+  const rest = current.slice(snapshot.length);
+  try {
+    if (rest.trim()) fs.writeFileSync(queueFile, rest);
+    else fs.rmSync(queueFile, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Выгрузить очередь в ветку. Возвращает { status, delivered }:
-//   stored — коммит ушёл, очередь пуста; nothing — очередь пуста и до этого;
-//   offline — origin недоступен, очередь цела; push-failed — push отклонён
-//   (гонка или сеть), очередь цела; locked — параллельный заход уже работает;
-//   error — сборка коммита не удалась, очередь цела.
+//   stored — коммит ушёл, доставленное снято с очереди; nothing — очередь
+//   пуста; offline — origin недоступен, очередь цела; push-failed — push
+//   отклонён (гонка или сеть), очередь цела; locked — параллельный заход уже
+//   работает; error — сборка коммита не удалась, очередь цела.
+//
+// Снимок очереди берётся ПОД замком: иначе параллельный заход дописал бы
+// сводку между чтением и снятием очереди, и она пропала бы вместе с файлом.
 export function flushQueue({
   target, queueFile, branch = 'metrics', remote = 'origin', dir = 'summaries',
 }) {
-  const pending = readQueue(queueFile);
-  if (!pending.length) return { status: 'nothing', delivered: 0 };
-
   const lock = `${queueFile}.lock`;
-  try {
-    fs.mkdirSync(lock);
-  } catch {
-    return { status: 'locked', delivered: 0 };
-  }
+  if (!acquireLock(lock)) return { status: 'locked', delivered: 0 };
   const indexFile = path.join(os.tmpdir(), `metrics-index.${process.pid}.${Date.now()}`);
   const g = gitIn(target, { GIT_INDEX_FILE: indexFile });
   try {
+    const snapshot = readQueueText(queueFile);
+    const pending = parseQueue(snapshot);
+    if (!pending.length) return { status: 'nothing', delivered: 0 };
+
     const remoteRef = `refs/remotes/${remote}/${branch}`;
     const fetched = g('fetch', '--quiet', remote, `+refs/heads/${branch}:${remoteRef}`);
     let base = '';
@@ -172,9 +216,7 @@ export function flushQueue({
     if (!g('push', '--quiet', remote, `${commit}:refs/heads/${branch}`).ok) {
       return { status: 'push-failed', delivered: 0 };
     }
-    try {
-      fs.rmSync(queueFile, { force: true });
-    } catch { /* очередь не снялась — сводки уедут второй раз, строка та же */ }
+    removeDelivered(queueFile, snapshot);
     return { status: 'stored', delivered: latest.size };
   } finally {
     try { fs.rmSync(indexFile, { force: true }); } catch { /* индекса нет */ }

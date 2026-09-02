@@ -9,9 +9,13 @@
 // прочитанного транскрипта) живёт рядом с журналом в `<журнал>.state.json`.
 // Все функции fail quiet: сломанные метрики не должны трогать ход.
 import fs from 'node:fs';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { metricsLog, sessionId } from './paths.js';
 import { sha256 } from './hash.js';
+import {
+  isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget,
+} from './write-targets.js';
 
 export function append(file, record) {
   if (!file) return;
@@ -20,15 +24,56 @@ export function append(file, record) {
   } catch { /* журнал не пополнился — метрика потеряна, ход цел */ }
 }
 
+// Журнал текущего процесса: переопределение, иначе сессия из прочитанного
+// события (его кладёт readEvent), иначе из окружения. Ничего из этого нет —
+// пустая строка: относить записи не к чему.
+export function currentMetricsLog() {
+  if (process.env.CRAFT_METRICS_LOG) return process.env.CRAFT_METRICS_LOG;
+  const ev = globalThis.hookEvent;
+  const sid = (ev && typeof ev.session_id === 'string' && ev.session_id) || sessionId();
+  return sid ? metricsLog(sid) : '';
+}
+
+// Окружение для дочернего процесса (фоновый приём реестра): журнал передаётся
+// явно, потому что события у дочернего процесса нет.
+export function childEnv(base = process.env) {
+  const log = currentMetricsLog();
+  return log ? { ...base, CRAFT_METRICS_LOG: log } : { ...base };
+}
+
 // Вызов модели из хука: пишется самим местом вызова (обёртка в classifier.js),
 // а не хуком метрик — приём реестра идёт в отдельном фоновом процессе, и хуку
-// метрик его не видно. Журнал берётся по сессии из окружения; без сессии и без
-// переопределения записи нет: относить вызов не к чему.
+// метрик его не видно.
 export function recordModelCall({ mode, ms, outcome }) {
-  if (!process.env.CRAFT_METRICS_LOG && !sessionId()) return;
-  append(metricsLog(), {
+  const log = currentMetricsLog();
+  if (!log) return;
+  append(log, {
     kind: 'model', ts: new Date().toISOString(), mode: String(mode || ''), ms, outcome,
   });
+}
+
+// Есть ли у чекаута, в котором идёт сессия, СВОЯ регистрация диспетчера
+// (проектный .claude/settings.json с dispatch.js). Если есть, проектный
+// диспетчер ведёт полную цепочку, и пользовательскому контуру метрики писать
+// нельзя: он не видел проектных хуков и записал бы «allow» там, где проектный
+// гвард отказал. Ищется вверх от рабочего каталога события.
+export function projectDispatcherAt(cwd) {
+  if (!cwd) return false;
+  let probe;
+  try {
+    if (!fs.statSync(cwd).isDirectory()) return false;
+    probe = fs.realpathSync(cwd);
+  } catch {
+    return false;
+  }
+  while (probe && probe !== path.dirname(probe)) {
+    const settings = path.join(probe, '.claude', 'settings.json');
+    try {
+      return fs.readFileSync(settings, 'utf8').includes('dispatch.js');
+    } catch { /* здесь настроек нет — выше */ }
+    probe = path.dirname(probe);
+  }
+  return false;
 }
 
 // Класс ответа модели: первый токен вердикта либо «json» у разбора. Текст
@@ -237,6 +282,10 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
   };
   let streak = 0;
   let started = NaN;
+  let firstTurn = null;
+  // Ход без прогресса — по ХОДУ, а не по записи Stop: заблокированный конец
+  // хода даёт второй Stop с тем же номером, решает последний.
+  const noProgressByTurn = new Map();
   const pending = new Map(); // hash → { unlockTurn }
   const pres = new Map();    // id → pre-запись
   const incidentTurns = new Set();
@@ -252,10 +301,11 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     if (Number.isFinite(r.turn)) s.turns = Math.max(s.turns, r.turn);
 
     if (r.kind === 'session') {
+      // Стартов бывает несколько (компакт, возобновление): начало сессии —
+      // самая ранняя запись, поздние старты его не двигают.
       s.harness = r.harness || s.harness;
       s.repo = r.repo || s.repo;
       s.sid = s.sid || r.sid || '';
-      if (Number.isFinite(t)) started = t;
     } else if (r.kind === 'prompt') {
       unlock(r.turn);
       if (r.incident === true) incidentTurns.add(r.turn);
@@ -293,14 +343,17 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
       if (!failed && pre && pre.push === true) s.outcome.pushed = true;
     } else if (r.kind === 'stop') {
       if (r.blocked_by) s.stop_blocks[r.blocked_by] = (s.stop_blocks[r.blocked_by] || 0) + 1;
-      if (r.no_progress === true) s.signals.turns_without_progress += 1;
+      if (typeof r.no_progress === 'boolean') noProgressByTurn.set(r.turn, r.no_progress);
       const u = r.usage && typeof r.usage === 'object' ? r.usage : {};
       for (const key of Object.keys(s.tokens)) s.tokens[key] += Number(u[key]) || 0;
-      if (s.tokens_first_turn === null) {
-        s.tokens_first_turn = {
-          input: Number(u.input) || 0, output: Number(u.output) || 0,
-          cache_read: Number(u.cache_read) || 0, cache_create: Number(u.cache_create) || 0,
-        };
+      // Токены первого хода — сумма ВСЕХ его Stop: заблокированный конец хода
+      // даёт второй Stop с тем же номером и своей долей usage.
+      if (s.tokens_first_turn === null || firstTurn === r.turn) {
+        if (s.tokens_first_turn === null) {
+          firstTurn = r.turn;
+          s.tokens_first_turn = { input: 0, output: 0, cache_read: 0, cache_create: 0 };
+        }
+        for (const key of Object.keys(s.tokens_first_turn)) s.tokens_first_turn[key] += Number(u[key]) || 0;
       }
     } else if (r.kind === 'model') {
       s.model_calls.count += 1;
@@ -313,6 +366,7 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     }
   }
 
+  s.signals.turns_without_progress = [...noProgressByTurn.values()].filter(Boolean).length;
   s.incidents.detected = incidentTurns.size;
   s.incidents.skill_called = [...incidentTurns].filter((turn) => skillTurns.has(turn)).length;
   s.incidents.share = incidentTurns.size ? s.incidents.skill_called / incidentTurns.size : null;
@@ -345,11 +399,37 @@ export function looksLikeReinstruction(prompt) {
 // Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
 export const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
 
-// Инструменты, чей успешный вызов — прогресс хода: правка мира, запись в Craft,
-// показ плана, вопрос Владу, пуш.
+// Мутирует ли вызов мир: правящие инструменты, запись в Craft, Bash с
+// настоящей (не эфемерной) целью записи или гит-операцией над репозиторием,
+// чужой MCP-инструмент без глагола чтения в имени. Тот же признак, которым
+// план-гейт отличает чтение от записи.
+const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
+const GIT_MUTATION = /\bgit\b[^|;&]*\b(push|commit|merge|rebase|reset|checkout|switch|stash|tag|cherry-pick|am|apply|revert|worktree)\b/;
+function mcpReads(name) {
+  const op = String(name).replace(/^mcp__.*?__/, '');
+  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
+    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
+}
+export function looksMutating(tool, input = {}) {
+  if (isEdit(tool)) return true;
+  if (tool === 'Bash') {
+    const cmd = String(input.command || '');
+    if (!cmd) return false;
+    if (GIT_MUTATION.test(cmd)) return true;
+    return bashWriteTargets(cmd).some((raw) => {
+      const t = cleanTarget(raw);
+      return Boolean(t) && !isEphemeral(t) && !gitEphemeral(t);
+    });
+  }
+  if (/^mcp__/.test(tool)) return !mcpReads(tool);
+  return false;
+}
+
+// Прогресс хода — удавшийся вызов, который мутирует мир, показ плана, вопрос
+// Владу или пуш.
 export function isProgress(pre, post) {
   if (!pre || !post || post.error === true) return false;
-  return isEdit(pre.tool) || STAGE_TOOLS.has(pre.tool) || pre.push === true;
+  return pre.mutates === true || isEdit(pre.tool) || STAGE_TOOLS.has(pre.tool) || pre.push === true;
 }
 
 // --- ошибка инструмента в ответе -------------------------------------------------

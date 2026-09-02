@@ -26,6 +26,11 @@
 // текста отказов. Ничего не печатает, сети и модели не зовёт, укладывается в
 // миллисекунды. Без идентификатора сессии (ни в событии, ни в окружении, ни
 // переопределением) молчит: относить события не к чему.
+//
+// Двойная регистрация (проектная и пользовательская) — два ПРОЦЕССА, и общее
+// состояние события у каждого своё. Пишет тот, кто вёл полную цепочку: при
+// проектной регистрации в чекауте сессии пользовательский контур молчит —
+// иначе он записал бы «allow» там, где проектный гвард отказал.
 import { readEvent } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
 import { metricsLog, sessionId } from './lib/paths.js';
@@ -33,7 +38,8 @@ import { sha256 } from './lib/hash.js';
 import {
   append, loadState, saveState, reasonClass, repoOf, turnUsage, responseIsError,
   readJournal, summarize, writeSummary,
-  promptHash, looksLikeReinstruction, STAGE_TOOLS, isProgress,
+  promptHash, looksLikeReinstruction, STAGE_TOOLS, isProgress, looksMutating,
+  projectDispatcherAt,
 } from './lib/metrics.js';
 
 const {
@@ -45,6 +51,10 @@ if (!name) process.exit(0);
 const sid = (typeof event.session_id === 'string' && event.session_id) || sessionId();
 if (!sid && !process.env.CRAFT_METRICS_LOG) process.exit(0);
 const log = metricsLog(sid);
+
+// Пользовательский контур уступает проектному, когда тот зарегистрирован в
+// чекауте сессии. Вне диспетчера контур не задан — считается проектным.
+if ((globalThis.hookScope || 'project') === 'universal' && projectDispatcherAt(cwd)) process.exit(0);
 
 // Хук зарегистрирован в двух контурах — второй вызов того же события уступает,
 // иначе каждое событие считалось бы дважды.
@@ -76,11 +86,13 @@ const id = typeof event.tool_use_id === 'string' ? event.tool_use_id : '';
 const base = { ts, turn: state.turn };
 
 if (name === 'SessionStart') {
-  state.started_at = now;
-  state.turn = 0;
-  state.repo = repoOf(cwd);
+  // Старт бывает не только первым: компакт и возобновление дают SessionStart
+  // с тем же идентификатором. Счётчики и начало сессии при этом не сбрасываются
+  // — журнал продолжается, а причина старта пишется полем source.
+  if (!state.repo) state.repo = repoOf(cwd);
   append(log, {
-    kind: 'session', ...base, harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
+    kind: 'session', ...base, source: typeof event.source === 'string' ? event.source : '',
+    harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
   });
 } else if (name === 'UserPromptSubmit') {
   state.turn += 1;
@@ -128,8 +140,10 @@ if (name === 'SessionStart') {
     if (state.turn_stages[tool]) record.stage_repeat = true;
     state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
   }
+  // Мутирующий вызов помечается: по нему на Stop решается прогресс хода.
+  if (looksMutating(tool, input)) record.mut = true;
   if (id) {
-    state.pre_flags[id] = { tool, push: record.push === true };
+    state.pre_flags[id] = { tool, push: record.push === true, mutates: record.mut === true };
     const ids = Object.keys(state.pre_flags);
     if (ids.length > 50) for (const old of ids.slice(0, ids.length - 50)) delete state.pre_flags[old];
   }

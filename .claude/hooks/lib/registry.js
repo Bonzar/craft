@@ -22,6 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
+import { childEnv } from './metrics.js';
 
 // Лог обрезается сверху: длинный ход иначе растит реестр без предела, а он
 // целиком уходит в каждую сверку.
@@ -483,13 +484,17 @@ export function ingestInBackground(file, source, text) {
     // Тестам нужен детерминированный порядок: фоновый приём допишет реестр
     // когда-нибудь, а кейс проверяет файл сразу. В жизни режим не включается —
     // иначе ход Влада ждал бы модель.
+    // Журнал метрик уходит дочернему процессу явно: события у него нет, а
+    // вызовы модели из приёма должны лечь в журнал этой сессии.
+    const env = childEnv();
     if (process.env.CRAFT_REGISTRY_SYNC) {
-      execFileSync(process.execPath, [helper, source, material, file, id], { stdio: 'ignore' });
+      execFileSync(process.execPath, [helper, source, material, file, id], { stdio: 'ignore', env });
       return;
     }
     const child = spawn(process.execPath, [helper, source, material, file, id], {
       detached: true,
       stdio: 'ignore',
+      env,
     });
     child.unref();
   } catch {
