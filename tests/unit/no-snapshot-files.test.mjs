@@ -19,6 +19,7 @@ const GUARD = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '
 const MEMORY_HEADER = ['Память', ' (регенерируемая)'].join('');
 const IDENTITY = ['Общий', ' контекст'].join('');
 const TITLE = ['<pageTitle>', '🧠 Память агента</pageTitle>'].join('');
+const SNAPSHOT_HEADER = ['=== Craft: «⚙️ SKILL: Разбор инцидента», авто-обновлён', ' SessionStart-хуком (2026-08-03T13:55:34Z) ==='].join('');
 
 function sh(cwd, cmd, args) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8' });
@@ -52,6 +53,8 @@ function guard(dir, ...args) {
 test('чистое дерево проходит', () => {
   const dir = repo();
   write(dir, 'README.md', 'обычный док, упоминает страницу 🧠 Память — это не снимок\n');
+  // «Общий контекст» — обычный заголовок архитектурного дока: сам по себе не улика.
+  write(dir, 'docs/arch.md', `# ${IDENTITY}\n\nкак устроена система\n`);
   write(dir, 'tools/x.js', `const h = '${MEMORY_HEADER}'; // код ссылается на заголовок\n`);
   commitAll(dir);
   const r = guard(dir, '--tree', 'HEAD');
@@ -85,7 +88,17 @@ test('заглушки фикстур warm-cache разрешены, пока о
   commitAll(dir, 'real router into fixture');
   const r = guard(dir, '--tree', 'HEAD');
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /разрешённая фикстура, но содержимое — настоящий роутер/);
+  assert.match(r.stderr, /разрешённая фикстура, но содержимое — настоящий снимок/);
+  assert.match(r.stderr, /craft-router-context\.md/);
+
+  // Снимок SKILL-дока инцидента под именем фикстуры — тоже снимок: у него шапка
+  // инжект-хука, а роутерных признаков нет.
+  write(dir, 'tests/hooks/fixtures/warm-cache/.claude/craft-router-context.md', 'заглушка\n');
+  write(dir, 'tests/hooks/fixtures/warm-cache/.claude/craft-incident-context.md', `${SNAPSHOT_HEADER}\n<page id="x">\n  <pageTitle>⚙️ SKILL: Разбор инцидента</pageTitle>\n`);
+  commitAll(dir, 'real incident doc into fixture');
+  const r2 = guard(dir, '--tree', 'HEAD');
+  assert.equal(r2.status, 1);
+  assert.match(r2.stderr, /craft-incident-context\.md: разрешённая фикстура, но содержимое — настоящий снимок/);
 });
 
 test('роутер под чужим именем ловится по содержимому', () => {
@@ -94,7 +107,7 @@ test('роутер под чужим именем ловится по содер
   commitAll(dir);
   const r = guard(dir, '--tree', 'HEAD');
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /docs\/notes\.md: содержимое несёт признаки роутера/);
+  assert.match(r.stderr, /docs\/notes\.md: содержимое несёт признаки снимка Craft/);
 });
 
 test('--tree проверяет названный коммит, не только HEAD', () => {

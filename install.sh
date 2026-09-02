@@ -184,8 +184,16 @@ fi
 # инцидент, кэш зоны, прогретый кэш): .gitignore закрывает их по пути, а хук —
 # по маске имени, в любом каталоге. Тот же скрипт гоняет CI по дереву коммита.
 if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-  if [[ "$(git -C "$REPO" config --get core.hooksPath || true)" == ".githooks" ]]; then
+  hooks_path="$(git -C "$REPO" config --get core.hooksPath || true)"
+  if [[ "$hooks_path" == ".githooks" ]]; then
     echo "git-hooks: core.hooksPath уже .githooks"
+  elif [[ -n "$hooks_path" ]]; then
+    # Чужой каталог хуков не затирается: в нём могут жить свои pre-commit и
+    # pre-push, и подмена молча выключила бы их все. Решение — Влада.
+    echo "git-hooks: core.hooksPath=$hooks_path уже задан — оставлен как есть." >&2
+    echo "git-hooks: чтобы включить гвард снимков, добавь в $hooks_path/pre-commit строку" >&2
+    echo "           node tools/no-snapshot-files.js --staged" >&2
+    echo "           или переключи: git -C $REPO config core.hooksPath .githooks" >&2
   else
     git -C "$REPO" config core.hooksPath .githooks
     echo "git-hooks: core.hooksPath=.githooks (pre-commit: tools/no-snapshot-files.js)"

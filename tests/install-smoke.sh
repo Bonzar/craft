@@ -104,6 +104,27 @@ jq -e '.hooks.PreToolUse[]?.hooks[]?.command | select(. == "/opt/foreign-guard.s
   || FAILS+=("foreign hook was lost during the upgrade")
 rm -rf "$OLDHOME"
 
+# --- 5. git-хуки репо ---------------------------------------------------------
+# Чекаут без core.hooksPath получает .githooks; чекаут с чужим каталогом хуков
+# остаётся при своём — подмена молча выключила бы его pre-commit и pre-push.
+# Гоняется на временных чекаутах: конфиг настоящего репо не трогается.
+HOOKREPO="$(mktemp -d)"
+mkdir -p "$HOOKREPO/.claude/hooks"
+cp "$REPO/install.sh" "$HOOKREPO/install.sh"
+git -C "$HOOKREPO" init -q
+out5="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$HOOKREPO/install.sh" 2>&1)" \
+  || FAILS+=("hooks run (fresh checkout) exited non-zero: $out5")
+[[ "$(git -C "$HOOKREPO" config --get core.hooksPath)" == ".githooks" ]] \
+  || FAILS+=("fresh checkout did not get core.hooksPath=.githooks")
+
+git -C "$HOOKREPO" config core.hooksPath .foreign-hooks
+out6="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$HOOKREPO/install.sh" 2>&1)" \
+  || FAILS+=("hooks run (foreign hooksPath) exited non-zero: $out6")
+[[ "$(git -C "$HOOKREPO" config --get core.hooksPath)" == ".foreign-hooks" ]] \
+  || FAILS+=("foreign core.hooksPath was overwritten")
+grep -q 'оставлен как есть' <<<"$out6" || FAILS+=("foreign hooksPath kept silently, no notice printed")
+rm -rf "$HOOKREPO"
+
 if [[ ${#FAILS[@]} -gt 0 ]]; then
   echo "install-smoke: FAIL"
   for f in "${FAILS[@]}"; do echo "  - $f"; done

@@ -18,12 +18,15 @@
 //   1. Путь, в котором есть сегмент по маске (router-context, incident-context,
 //      craft-gate-exempt-scope, warm-cache) — где угодно, кроме явно
 //      разрешённых фикстур ниже.
-//   2. Разрешённая фикстура, чьё содержимое несёт признаки настоящего роутера:
-//      заголовок «Память (регенерируемая)», секция «Общий контекст», XML-титул
-//      снимка «<pageTitle>🧠 Память» (упоминание страницы в обычном доке — не
-//      снимок). Фикстура — заглушка на строку, а не копия живого дока.
-//   3. Любой .md/.txt с теми же признаками: роутер, сохранённый под другим
-//      именем, — всё равно роутер.
+//   2. Разрешённая фикстура, чьё содержимое несёт признаки настоящего снимка:
+//      шапка, которую пишет инжект-хук («авто-обновлён SessionStart-хуком»),
+//      заголовок «Память (регенерируемая)», XML-титул «<pageTitle>🧠 Память»
+//      (упоминание страницы в обычном доке — не снимок). Секция «Общий
+//      контекст» — признак слабый: обычный док с таким заголовком законен,
+//      она считается только вместе с сильным. Фикстура — заглушка на строку,
+//      а не копия живого дока, роутера или SKILL-дока.
+//   3. Любой .md/.txt с теми же признаками: снимок, сохранённый под другим
+//      именем, — всё равно снимок.
 //
 // Exit 0 — чисто, 1 — найдены снимки (список в stderr), 2 — ошибка запуска.
 // Зависимости: только node и git.
@@ -43,13 +46,18 @@ const ALLOWED_FIXTURES = new Set([
   'tests/hooks/fixtures/warm-cache/.claude/craft-incident-context.md',
 ]);
 
-// Признаки настоящего роутера. Строки собраны из частей, чтобы сам гвард
-// (и его тест) не ловился собственной проверкой содержимого.
-const CONTENT_MARKERS = [
+// Признаки настоящего снимка. Строки собраны из частей, чтобы сам гвард
+// (и его тест) не ловился собственной проверкой содержимого. Сильный признак
+// достаточен сам по себе; слабый — только рядом с сильным.
+const STRONG_MARKERS = [
+  ['авто-обновлён', ' SessionStart-хуком'].join(''), // шапка любого снимка инжект-хука
   ['Память', ' (регенерируемая)'].join(''),
-  ['Общий', ' контекст'].join(''),
   ['<pageTitle>', '🧠 Память'].join(''),
 ];
+const WEAK_MARKERS = [
+  ['Общий', ' контекст'].join(''),
+];
+const CONTENT_MARKERS = [...STRONG_MARKERS, ...WEAK_MARKERS];
 
 const CONTENT_SCAN_EXT = new Set(['.md', '.txt']);
 
@@ -75,7 +83,9 @@ function pathMatchesMask(file) {
 }
 
 function contentMarkers(text) {
-  return CONTENT_MARKERS.filter((m) => text.includes(m));
+  const strong = STRONG_MARKERS.filter((m) => text.includes(m));
+  if (!strong.length) return [];
+  return [...strong, ...WEAK_MARKERS.filter((m) => text.includes(m))];
 }
 
 // Источник списка файлов и их содержимого — по режиму.
@@ -128,7 +138,7 @@ function check(source) {
     }
     const hits = contentMarkers(text);
     if (hits.length) {
-      const where = allowed ? 'разрешённая фикстура, но содержимое — настоящий роутер' : 'содержимое несёт признаки роутера';
+      const where = allowed ? 'разрешённая фикстура, но содержимое — настоящий снимок' : 'содержимое несёт признаки снимка Craft';
       violations.push(`${file}: ${where} (${hits.map((h) => `«${h}»`).join(', ')})`);
     }
   }
@@ -152,4 +162,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { MASKS, ALLOWED_FIXTURES, CONTENT_MARKERS, pathMatchesMask, contentMarkers, check };
+module.exports = { MASKS, ALLOWED_FIXTURES, STRONG_MARKERS, WEAK_MARKERS, CONTENT_MARKERS, pathMatchesMask, contentMarkers, check };
