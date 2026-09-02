@@ -3,6 +3,10 @@
 # a per-session snapshot of a live Craft document.
 .claude/craft-router-context.md
 
+# Ядро пишет те же снимки в .craft/ чекаута (роутер, инцидент, кэш зоны).
+# Закрыт весь каталог: точечный путь однажды пропустил роутер в историю.
+/.craft/
+
 # Codex receives the same live data through a SessionStart hook. User-global
 # snapshots live outside the repository; these entries cover explicit test or
 # development overrides that point the bridge into the checkout.
