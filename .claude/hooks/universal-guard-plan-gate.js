@@ -190,11 +190,6 @@ function nonEmptyFile(file) {
   }
 }
 
-
-function relativeTo(fp) {
-  return fp.startsWith(`${PWD}/`) ? fp.slice(PWD.length + 1) : fp;
-}
-
 const classifier = classifierPath();
 
 // --- Сверка по реестру одобренного -------------------------------------------
@@ -356,8 +351,6 @@ const cdesc = Buffer.concat([
   Buffer.from('инструмент: craft_write\nкоманда:\n', 'utf8'),
   headBytes(craftCmd, DESC_LIMIT),
 ]);
-const lowerIds = ids.map((id) => id.replace(/[A-F]/g, (c) => c.toLowerCase()));
-
 // Craft-запись сверяется тем же вопросом, что правки файлов и шелла: решает
 // реестр одобренного, а не совпадение идентификаторов блоков со списком целей.
 coverCheck(cdesc);
