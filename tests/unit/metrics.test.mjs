@@ -120,7 +120,7 @@ test('сводка: ответ кнопкой снимает замок в то�
 test('сводка: циклы плана, инциденты, блокировки Stop, ошибки, исход', () => {
   const records = [
     { kind: 'prompt', ts: T(1), turn: 1, incident: true },
-    { kind: 'pre', ts: T(2), turn: 1, tool: 'Skill', id: 'k', decision: 'allow', skill: 'craft-incident', incident_skill: true, h: 'hk' },
+    { kind: 'pre', ts: T(2), turn: 1, tool: 'Skill', id: 'k', decision: 'allow', incident_skill: true, h: 'hk' },
     { kind: 'post', ts: T(2), turn: 1, tool: 'Skill', id: 'k', error: false },
     { kind: 'pre', ts: T(3), turn: 1, tool: 'ExitPlanMode', id: 'p1', decision: 'deny', class: 'delta.repeats', h: 'hp', plan: true, stage: true },
     { kind: 'pre', ts: T(4), turn: 1, tool: 'ExitPlanMode', id: 'p2', decision: 'allow', h: 'hp', plan: true, stage: true },

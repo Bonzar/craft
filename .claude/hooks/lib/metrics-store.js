@@ -169,9 +169,14 @@ export function queueSummary(summary, log, adapter) {
   return ok;
 }
 
-// Выгрузить очередь. Возвращает { status, delivered }.
-export function flushQueue({ target, queueFile, adapter, ...where }) {
-  if (!adapter || !adapter.available(target)) {
+// Выгрузить очередь. Возвращает { status, delivered }. Срок ожидания лока
+// приходит СНАРУЖИ, как и у постановки: у работника он свой, большой, а у
+// края, идущего следом за ходом, — короткий. Умолчание короткое: длинное
+// ожидание должен просить тот, кому и правда некуда спешить.
+export function flushQueue({
+  target, queueFile, adapter, waitMs = QUEUE_WAIT_MS, ...where
+}) {
+  if (!adapter || typeof adapter.available !== 'function' || !adapter.available(target)) {
     return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
   }
   const { locked, value } = withLock(queueFile, () => {
@@ -210,6 +215,6 @@ export function flushQueue({ target, queueFile, adapter, ...where }) {
       fs.rmSync(queueFile, { force: true });
     } catch { /* очередь не снялась — сводки уедут второй раз, строка та же */ }
     return { status: 'stored', delivered: latest.size };
-  });
+  }, { waitMs });
   return locked ? value : { status: 'locked', delivered: 0 };
 }

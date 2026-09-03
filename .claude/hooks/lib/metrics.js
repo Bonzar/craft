@@ -221,50 +221,52 @@ export function reasonClass(hook, reason) {
 
 // --- токены хода из транскрипта ------------------------------------------------
 
-// Сумма usage записей assistant, начиная с байтового смещения. Один ответ модели
-// лежит в транскрипте несколькими записями с одним message.id (по записи на
-// блок содержимого) и одним и тем же usage — считается один раз, по последней
-// записи. Возвращается сумма и смещение за последней ПОЛНОЙ строкой: хвост без
-// перевода строки ещё дописывается и будет прочитан в следующий раз.
-export function turnUsage(transcript, from = 0) {
-  const empty = {
-    input: 0, output: 0, cache_read: 0, cache_create: 0, messages: 0,
-  };
-  if (!transcript) return { usage: empty, offset: from };
-  let fd;
-  let text = '';
+// turnUsage(транскрипт, смещение) → {usage, offset}: сумма usage записей
+// assistant с этого байтового смещения и смещение за последней полной строкой.
+// Прочитанный хвост транскрипта: полные строки с байтового смещения и новое
+// смещение за последней ПОЛНОЙ строкой. Хвост без перевода строки ещё
+// дописывается и будет прочитан в следующий раз.
+function tailFrom(file, from) {
   let start = from;
+  let fd;
   try {
-    const size = fs.statSync(transcript).size;
+    const size = fs.statSync(file).size;
     // Файл КОРОЧЕ прежнего смещения — это другой транскрипт (сессия начата
     // заново, файл подменён): читаем с начала, иначе смещение никогда уже не
     // сойдётся и токены до конца сессии останутся нулевыми.
     if (size < start) start = 0;
-    if (size <= start) return { usage: empty, offset: start };
-    fd = fs.openSync(transcript, 'r');
+    if (size <= start) return { text: '', offset: start };
+    fd = fs.openSync(file, 'r');
     const buf = Buffer.alloc(size - start);
     fs.readSync(fd, buf, 0, buf.length, start);
-    text = buf.toString('utf8');
+    const text = buf.toString('utf8');
+    const lastNl = text.lastIndexOf('\n');
+    if (lastNl < 0) return { text: '', offset: start };
+    const complete = text.slice(0, lastNl + 1);
+    return { text: complete, offset: start + Buffer.byteLength(complete, 'utf8') };
   } catch {
-    return { usage: empty, offset: from };
+    return { text: '', offset: from };
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
-  const lastNl = text.lastIndexOf('\n');
-  if (lastNl < 0) return { usage: empty, offset: start };
-  const complete = text.slice(0, lastNl + 1);
-  const offset = start + Buffer.byteLength(complete, 'utf8');
+}
 
+// Сумма usage по записям assistant. Один ответ модели лежит в транскрипте
+// несколькими записями с одним message.id (по записи на блок содержимого) и
+// одним и тем же usage — считается один раз, по последней записи.
+function sumUsage(text) {
   const byId = new Map();
   let anon = 0;
-  eachJsonl(complete, (entry) => {
+  eachJsonl(text, (entry) => {
     if (entry.type !== 'assistant') return;
     const message = entry.message;
     if (!message || !message.usage || typeof message.usage !== 'object') return;
     const id = typeof message.id === 'string' && message.id ? message.id : `anon-${anon += 1}`;
     byId.set(id, message.usage);
   });
-  const usage = { ...empty };
+  const usage = {
+    input: 0, output: 0, cache_read: 0, cache_create: 0, messages: 0,
+  };
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   for (const u of byId.values()) {
     usage.input += num(u.input_tokens);
@@ -273,7 +275,13 @@ export function turnUsage(transcript, from = 0) {
     usage.cache_create += num(u.cache_creation_input_tokens);
     usage.messages += 1;
   }
-  return { usage, offset };
+  return usage;
+}
+
+export function turnUsage(transcript, from = 0) {
+  if (!transcript) return { usage: sumUsage(''), offset: from };
+  const { text, offset } = tailFrom(transcript, from);
+  return { usage: sumUsage(text), offset };
 }
 
 // --- сводка сессии -------------------------------------------------------------

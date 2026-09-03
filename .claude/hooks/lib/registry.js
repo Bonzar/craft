@@ -23,7 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { childEnv } from './metrics.js';
-import { withLock, atomicWrite } from './lock.js';
+import { withLock, atomicWrite, pause } from './lock.js';
 import { eachJsonl } from './jsonl.js';
 
 // Лог обрезается сверху: длинный ход иначе растит реестр без предела, а он
@@ -483,12 +483,9 @@ export function waitForParsing(file, capMs = 3600000, stepMs = 200) {
   const until = Date.now() + capMs;
   while (parsingCount(file) > 0 && Date.now() < until) {
     // Пауза без таймеров: хук синхронный, и событийного ожидания чужого
-    // процесса здесь нет.
-    try {
-      execFileSync('sleep', [String(stepMs / 1000)], { stdio: 'ignore' });
-    } catch {
-      break;
-    }
+    // процесса здесь нет. Пауза общая на слой (lib/lock.js): своя стоила форка
+    // на каждый шаг ожидания.
+    pause(stepMs);
   }
   return parsingCount(file) === 0;
 }

@@ -57,7 +57,9 @@ function store(summaryFile, { waitMs }) {
   // у него означал бы потерянную сводку: предыдущая выгрузка держит лок всё
   // время сети, а следующего Stop у сессии может не быть.
   let queued = enqueue(queue, summary, { waitMs });
-  const res = flushQueue({ target: TARGET, queueFile: queue, adapter: ADAPTER });
+  const res = flushQueue({
+    target: TARGET, queueFile: queue, adapter: ADAPTER, waitMs,
+  });
   // Не встали в очередь до выгрузки — пробуем ещё раз: лок теперь свободен.
   if (!queued) queued = enqueue(queue, summary, { waitMs });
   return queued ? res : { ...res, queued: false };

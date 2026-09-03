@@ -224,11 +224,18 @@ else ok "$t"; fi
 t="сводка встаёт в очередь, даже когда лок занят соседней выгрузкой"
 sb="$(sandbox)"
 G -C "$sb/work" remote set-url origin "$sb/nowhere.git"   # без сети: очередь остаётся
+printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
+  2026-09-02T10:00:00Z 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z > "$sb/log.s1.summary.json"
 mkdir -p "$sb/queue.jsonl.lock"
 sleep 30 & holder=$!
 printf '%s' "$holder" > "$sb/queue.jsonl.lock/owner"
 ( sleep 2; rm -rf "$sb/queue.jsonl.lock" ) &
-out="$(run_hook "$sb" s1 2026-09-02T10:00:00Z 1)"
+# Ждать долго имеет право только ОТСОЕДИНЁННЫЙ работник, и гоняется здесь именно
+# он, как в бою: инлайн-режим идёт в процессе хука и ждёт срок хода (кейс M).
+out="$(env -u CRAFT_METRICS_LOG METRICS_STORE_WORKER=1 \
+        METRICS_STORE_SUMMARY="$sb/log.s1.summary.json" \
+        METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
+        HOOK_ONCE=off node "$HOOK" 2>&1)"
 kill "$holder" 2>/dev/null
 if ! grep -q '"sid":"s1"' "$sb/queue.jsonl" 2>/dev/null; then
   bad "$t" "сводка не встала в очередь после освобождения лока: $out"
@@ -251,8 +258,8 @@ kill "$holder" 2>/dev/null
 rm -rf "$sb/queue.jsonl.lock"
 if [[ "$out" == *"[timeout]"* ]]; then
   bad "$t" "хук не вернулся за 90 с: ждал лок сроком работника"
-elif (( spent > 30 )); then
-  bad "$t" "хук вернулся за ${spent} с — это срок работника, а не хода"
+elif (( spent > 5 )); then
+  bad "$t" "хук вернулся за ${spent} с — это не срок хода"
 elif ! grep -q '"kind":"store"' "$sb/log.s1"; then
   bad "$t" "исход не назван строкой журнала: $out"
 else ok "$t"; fi
