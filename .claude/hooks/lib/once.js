@@ -93,6 +93,15 @@ const SWEEP_EVERY_MS = 10 * 60 * 1000;
 const MARK_TTL_MS = 60 * 60 * 1000;
 const SWEEP_STAMP = 'hook-once.sweep';
 
+// Протухла ли метка. Метки нет вовсе — считаем протухшей: событие свободно.
+function markExpired(mark) {
+  try {
+    return Date.now() - fs.statSync(mark).mtimeMs > MARK_TTL_MS;
+  } catch {
+    return true;
+  }
+}
+
 function sweep(dir) {
   const stamp = path.join(dir, SWEEP_STAMP);
   try {
@@ -141,9 +150,11 @@ export function hookOnce(raw, event, moduleUrl) {
       sweep(dir);
       return true;
     } catch {
-      // Метка есть — событие занято. Каталог не создался по иной причине —
-      // работаем: уступка без метки означала бы хук, выключенный молча.
-      return !fs.existsSync(idMark);
+      // Метка есть — событие занято, но только пока она не протухла: уборка
+      // сносит метки старше MARK_TTL_MS, и метка того же возраста, до которой
+      // уборка ещё не дошла, обязана значить то же самое. Иначе исход зависел
+      // бы от того, успел ли кто-то прибраться.
+      return markExpired(idMark);
     }
   }
 

@@ -185,10 +185,14 @@ function main() {
   // чужое; заведённое этим приёмом — своё.
   const ownFrom = readRegistry(registryFile).length;
 
+  // Проход сейчас один (INGEST_PASSES = 1), и цикл написан под несколько:
+  // сорвавшийся проход роняет приём только если он ПЕРВЫЙ — на втором и дальше
+  // в реестре уже что-то лежит, и терять это из-за неответа модели незачем.
+  let done = 0;
   for (let n = 1; n <= INGEST_PASSES; n += 1) {
     const code = pass(material, n, ownFrom);
-    // Первый проход не дал разбора — дальше брать нечего.
-    if (code !== 0) return n === 1 ? code : 0;
+    if (code !== 0) return done === 0 ? code : 0;
+    done += 1;
   }
   return 0;
 }

@@ -42,9 +42,15 @@ export function append(file, record) {
 // берётся из прочитанного события (его кладёт readEvent), иначе из окружения;
 // переопределение разбирает metricsLog. Ни сессии, ни переопределения — пустая
 // строка: относить записи не к чему.
-export function currentMetricsLog() {
+// Сессия текущего процесса — ЕДИНСТВЕННАЯ формула на слой: из прочитанного
+// события (его кладёт readEvent), иначе из окружения.
+export function currentSessionId() {
   const ev = globalThis.hookEvent;
-  const sid = (ev && typeof ev.session_id === 'string' && ev.session_id) || sessionId();
+  return (ev && typeof ev.session_id === 'string' && ev.session_id) || sessionId();
+}
+
+export function currentMetricsLog() {
+  const sid = currentSessionId();
   if (!sid && !process.env.CRAFT_METRICS_LOG) return '';
   return metricsLog(sid);
 }

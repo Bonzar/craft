@@ -351,6 +351,7 @@ function runPass(c) {
 
   return {
     script,
+    assertFile,
     out: res.stdout || '',
     err: res.stderr || '',
     traced,
@@ -649,10 +650,9 @@ function main() {
         return;
       }
 
-      const env = {
-        ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || ''),
-        ASSERT_TEXT: r.assertText,
-      };
+      // Путь и текст приходят из прогона уже подставленными: подставлять здесь
+      // заново было бы нечем — состояния прогона тут уже нет.
+      const env = { ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText };
       let ok = true;
       let got = r.out;
       for (const one of expects) {

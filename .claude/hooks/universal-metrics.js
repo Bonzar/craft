@@ -41,23 +41,24 @@
 // секунды, и два одинаковых Stop подряд (заблокированный конец хода) или две
 // одинаковые короткие реплики теряли бы вторую запись.
 import { readEvent, responseIsError } from './lib/event.js';
-import { sessionId } from './lib/paths.js';
 import {
   append, updateState, reasonClass, turnUsage,
   projectDispatcherAt, currentMetricsLog, transcriptSize,
   refreshSummary, callHash,
-  promptHash, looksLikeReinstruction, isProgress,
+  promptHash, looksLikeReinstruction, isProgress, currentSessionId,
 } from './lib/metrics.js';
 import { toolFlags, looksMutating } from './lib/write-targets.js';
 import { repoOf } from './lib/repo-git.js';
 
 const {
-  raw, event, tool, cwd, transcript, response, input, prompt,
+  event, tool, cwd, transcript, response, input, prompt,
 } = readEvent();
 const name = event.hook_event_name || '';
 if (!name) process.exit(0);
 
-const sid = (typeof event.session_id === 'string' && event.session_id) || sessionId();
+// Формула сессии одна на слой и живёт в lib/metrics.js: своя копия здесь уже
+// расходилась бы с той, по которой резолвится путь журнала.
+const sid = currentSessionId();
 const log = currentMetricsLog();
 if (!log) process.exit(0);
 
@@ -152,6 +153,10 @@ const stop = updateState(log, (state) => {
     state.turn_tools += 1;
     if (state.turn_calls[record.h]) record.repeat_call = true;
     state.turn_calls[record.h] = (state.turn_calls[record.h] || 0) + 1;
+    // Потолок тот же, что у полёта и признаков: длинный ход иначе растит
+    // состояние без предела, а оно читается и пишется на каждом вызове.
+    const hashes = Object.keys(state.turn_calls);
+    if (hashes.length > 50) for (const old of hashes.slice(0, hashes.length - 50)) delete state.turn_calls[old];
     if (flags.stage === true) {
       if (state.turn_stages[tool]) record.stage_repeat = true;
       state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
