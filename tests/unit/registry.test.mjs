@@ -521,3 +521,35 @@ test('второй проход приёма находит цель, завед
   assert.equal(registry.landingGoal(after, 'Ц1', 'plan', 1), -1, 'цель прошлого плана по-прежнему чужая');
   assert.equal(registry.landingGoal(after, 'Ц2', 'plan'), -1, 'без границы своих целей нет');
 });
+
+// Ссылка внутри ОДНОГО ответа разбора: вторая запись адресует цель, заведённую
+// первой записью того же ответа. Раньше это дозаводил второй проход приёма;
+// проход теперь один, и реестр перечитывается на каждой записи — без этого
+// вторая запись не находила цель первой и заводила третью.
+test('приём видит цель, заведённую предыдущей записью того же ответа', () => {
+  const file = tmpFile();
+  const material = path.join(path.dirname(file), 'material.txt');
+  fs.writeFileSync(material, 'план: сперва ядро, потом кейсы под него');
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'plan', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_CMD: path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh'),
+      MOCK_CLASSIFIER_INGEST: JSON.stringify({
+        add: [
+          { goal_new: 'Работа плана', tasks: [{ title: 'ядро', where: ['lib/registry.js'], anchor: '' }] },
+          { goal: 'Ц1', tasks: [{ title: 'кейсы под ядро', where: ['tests/'], anchor: '' }] },
+        ],
+        close: [],
+      }),
+    },
+  });
+
+  const goals = registry.readRegistry(file);
+  assert.equal(goals.length, 1, 'вторая запись ответа села на цель первой, а не завела свою');
+  assert.deepEqual(goals[0].tasks.map((t) => t.title), ['ядро', 'кейсы под ядро']);
+});

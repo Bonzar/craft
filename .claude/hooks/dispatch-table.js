@@ -103,11 +103,10 @@ export const TABLE = {
 
   PostToolUse: [
     { matcher: 'AskUserQuestion', hooks: ['universal-session-anchor', 'universal-plan-gate-button'], scope: 'both' },
-    {
-      matcher: 'ExitPlanMode',
-      hooks: ['universal-plan-gate-approve', 'universal-guard-plan-delta'],
-      scope: 'both',
-    },
+    // Дельта стоит только ДО показа (PreToolUse): после одобрения план уже
+    // лежит в реестре, и сравнивать его с реестром значило бы отбивать
+    // собственное одобрение.
+    { matcher: 'ExitPlanMode', hooks: ['universal-plan-gate-approve'], scope: 'both' },
     { matcher: 'Task|Agent|Workflow', hooks: ['universal-mark-plan-critic'], scope: 'both' },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-mark-plan-file'], scope: 'both' },
     { hooks: ['universal-observe-buffer'], scope: 'both' },
