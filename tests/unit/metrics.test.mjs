@@ -51,13 +51,6 @@ test('токены хода: недописанный хвост без пере
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('remote нормализуется до host/owner/repo', () => {
-  assert.equal(metrics.normalizeRemote('https://github.com/Bonzar/craft.git'), 'github.com/Bonzar/craft');
-  assert.equal(metrics.normalizeRemote('https://x-access-token:abc@github.com/Bonzar/craft'), 'github.com/Bonzar/craft');
-  assert.equal(metrics.normalizeRemote('git@github.com:Bonzar/craft.git'), 'github.com/Bonzar/craft');
-  assert.equal(metrics.normalizeRemote(''), '');
-});
-
 test('запись вызова модели без сессии и переопределения не делается', () => {
   delete process.env.CRAFT_METRICS_LOG;
   delete process.env.CLAUDE_CODE_SESSION_ID;
@@ -88,7 +81,7 @@ test('сводка: ложный отказ — deny, затем тот же в�
     { kind: 'prompt', ts: T(1), turn: 1, incident: false },
     { kind: 'pre', ts: T(2), turn: 1, tool: 'Edit', id: 'a', decision: 'deny', by: 'universal-guard-plan-gate', class: 'gate.uncovered', h: 'h1' },
     { kind: 'prompt', ts: T(3), turn: 2, incident: false },
-    { kind: 'pre', ts: T(4), turn: 2, tool: 'Edit', id: 'b', decision: 'allow', by: '', class: '', h: 'h1' },
+    { kind: 'pre', ts: T(4), turn: 2, tool: 'Edit', id: 'b', decision: 'allow', by: '', class: '', h: 'h1', edit: true },
     { kind: 'post', ts: T(5), turn: 2, tool: 'Edit', id: 'b', error: false },
     { kind: 'stop', ts: T(6), turn: 2, blocked_by: '', usage: { input: 1, output: 2, cache_read: 3, cache_create: 4 } },
   ];
@@ -116,7 +109,7 @@ test('сводка: ответ кнопкой снимает замок в то�
   const records = [
     { kind: 'prompt', ts: T(1), turn: 1 },
     { kind: 'pre', ts: T(2), turn: 1, tool: 'Bash', id: 'a', decision: 'deny', class: 'gate.uncovered', h: 'h1' },
-    { kind: 'pre', ts: T(3), turn: 1, tool: 'AskUserQuestion', id: 'q', decision: 'allow', h: 'hq' },
+    { kind: 'pre', ts: T(3), turn: 1, tool: 'AskUserQuestion', id: 'q', decision: 'allow', h: 'hq', question: true, stage: true },
     { kind: 'post', ts: T(4), turn: 1, tool: 'AskUserQuestion', id: 'q', error: false },
     { kind: 'pre', ts: T(5), turn: 1, tool: 'Bash', id: 'b', decision: 'allow', h: 'h1' },
   ];
@@ -127,10 +120,11 @@ test('сводка: циклы плана, инциденты, блокиров�
   const records = [
     { kind: 'prompt', ts: T(1), turn: 1, incident: true },
     { kind: 'pre', ts: T(2), turn: 1, tool: 'Skill', id: 'k', decision: 'allow', skill: 'craft-incident', h: 'hk' },
-    { kind: 'pre', ts: T(3), turn: 1, tool: 'ExitPlanMode', id: 'p1', decision: 'deny', class: 'delta.repeats', h: 'hp' },
-    { kind: 'pre', ts: T(4), turn: 1, tool: 'ExitPlanMode', id: 'p2', decision: 'allow', h: 'hp' },
+    { kind: 'post', ts: T(2), turn: 1, tool: 'Skill', id: 'k', error: false },
+    { kind: 'pre', ts: T(3), turn: 1, tool: 'ExitPlanMode', id: 'p1', decision: 'deny', class: 'delta.repeats', h: 'hp', plan: true, stage: true },
+    { kind: 'pre', ts: T(4), turn: 1, tool: 'ExitPlanMode', id: 'p2', decision: 'allow', h: 'hp', plan: true, stage: true },
     { kind: 'post', ts: T(5), turn: 1, tool: 'ExitPlanMode', id: 'p2', error: false },
-    { kind: 'pre', ts: T(6), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', decision: 'allow', h: 'hw' },
+    { kind: 'pre', ts: T(6), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', decision: 'allow', h: 'hw', edit: true, craft_write: true },
     { kind: 'post', ts: T(7), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', error: false },
     { kind: 'pre', ts: T(8), turn: 1, tool: 'Bash', id: 'g', decision: 'allow', h: 'hg', push: true },
     { kind: 'post', ts: T(9), turn: 1, tool: 'Bash', id: 'g', error: false },
@@ -169,14 +163,6 @@ test('хеш реплики не зависит от регистра, проб�
   assert.equal(metrics.promptHash('   '), '');
 });
 
-test('маркеры переуказания', () => {
-  assert.equal(metrics.looksLikeReinstruction('я же просил не трогать README'), true);
-  assert.equal(metrics.looksLikeReinstruction('Ещё раз: без хвостов'), true);
-  assert.equal(metrics.looksLikeReinstruction('опять то же самое'), true);
-  assert.equal(metrics.looksLikeReinstruction('поправь README'), false);
-  assert.equal(metrics.looksLikeReinstruction('сноваяркий'), false, 'маркер внутри слова не считается');
-});
-
 test('сводка: сигналы складываются из признаков событий', () => {
   const records = [
     { kind: 'prompt', ts: T(1), turn: 1, repeat: false, reinstruct: true },
@@ -186,14 +172,22 @@ test('сводка: сигналы складываются из признак�
     { kind: 'post', ts: T(5), turn: 1, tool: 'Bash', id: 'b', error: true },
     { kind: 'pre', ts: T(6), turn: 1, tool: 'ExitPlanMode', id: 'p', decision: 'allow', h: 'hp', stage_repeat: true },
     { kind: 'post', ts: T(7), turn: 1, tool: 'ExitPlanMode', id: 'p', error: false },
-    { kind: 'stop', ts: T(8), turn: 1, blocked_by: '', usage: {}, no_progress: false, tool_errors: 2 },
+    { kind: 'stop', ts: T(8), turn: 1, blocked_by: '', usage: {}, no_progress: false },
     { kind: 'prompt', ts: T(9), turn: 2, repeat: true, reinstruct: false },
-    { kind: 'stop', ts: T(10), turn: 2, blocked_by: '', usage: {}, no_progress: true, tool_errors: 0 },
+    { kind: 'stop', ts: T(10), turn: 2, blocked_by: '', usage: {}, no_progress: true },
   ];
   const s = metrics.summarize(records);
+  // Повтор реплики и словесный маркер — РАЗНЫЕ признаки: в одном счётчике по
+  // сводке нельзя было сказать, чего именно было больше.
   assert.deepEqual(s.signals, {
-    reinstructions: 2, call_repeats: 1, stage_repeats: 1, turns_without_progress: 1, error_streak_max: 2,
+    prompt_repeats: 1,
+    reinstructions: 1,
+    call_repeats: 1,
+    stage_repeats: 1,
+    turns_without_progress: 1,
+    error_streak_max: 2,
   });
+  assert.equal(s.tool_errors, 2, 'ошибки инструментов считает сводка, а запись Stop такого поля не несёт');
 });
 
 test('сводка: ход без прогресса считается по ходу, по последнему его Stop', () => {
@@ -209,23 +203,6 @@ test('сводка: ход без прогресса считается по х�
     { kind: 'stop', ts: T(3), turn: 1, blocked_by: '', usage: {}, no_progress: true },
   ];
   assert.equal(metrics.summarize(stuck).signals.turns_without_progress, 1, 'два Stop одного хода — один ход');
-});
-
-test('прогресс: удавшаяся мутация через Bash или чужой MCP-инструмент записи', () => {
-  assert.equal(metrics.looksMutating('Bash', { command: 'echo x >> README.md' }), true);
-  assert.equal(metrics.looksMutating('Bash', { command: 'git commit -m x' }), true);
-  assert.equal(metrics.looksMutating('Bash', { command: 'ls -la' }), false);
-  assert.equal(metrics.looksMutating('Bash', { command: 'echo x > /tmp/scratch.txt' }), false, 'эфемерная цель — не мутация');
-  assert.equal(metrics.looksMutating('mcp__github__create_pull_request', {}), true);
-  assert.equal(metrics.looksMutating('mcp__github__list_pull_requests', {}), false);
-  assert.equal(metrics.looksMutating('Edit', { file_path: '/home/user/craft/README.md' }), true);
-  assert.equal(metrics.looksMutating('Edit', { file_path: '/tmp/scratch.txt' }), false,
-    'правка эфемерной цели прогрессом не считается — как и запись в неё через шелл');
-  assert.equal(metrics.looksMutating('Edit', {}), false, 'правка без цели мир не меняет');
-  assert.equal(metrics.looksMutating('Read', {}), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), true);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: true }), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: false }, { error: false }), false);
 });
 
 // --- журнал по событию -----------------------------------------------------------
@@ -349,12 +326,6 @@ test('укоротившийся транскрипт читается зано�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('remote с портом не превращает порт во владельца', () => {
-  assert.equal(metrics.normalizeRemote('ssh://git@github.com:2222/Bonzar/craft.git'), 'github.com/Bonzar/craft');
-  assert.equal(metrics.normalizeRemote('https://github.com:443/Bonzar/craft.git'), 'github.com/Bonzar/craft');
-  assert.equal(metrics.normalizeRemote('git@github.com:Bonzar/craft.git'), 'github.com/Bonzar/craft', 'scp-форма цела');
-});
-
 test('вызов с аварийным выключателем в счётчик вызовов модели не идёт', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
   const log = path.join(dir, 'm.jsonl');
@@ -388,15 +359,6 @@ test('хеш вызова не зависит от служебных полей
     metrics.callHash('Edit', { new_string: 'y', old_string: 'x', file_path: 'a' }),
     'порядок полей во входе не обещан — хеш от него не зависит',
   );
-});
-
-test('пуш опознаётся по подкоманде, а не по слову в строке', () => {
-  assert.equal(metrics.looksLikePush('git push -u origin main'), true);
-  assert.equal(metrics.looksLikePush('git push'), true);
-  assert.equal(metrics.looksLikePush('git stash push -m wip'), false);
-  assert.equal(metrics.looksLikePush('git commit -m "fix push hook"'), false);
-  assert.equal(metrics.looksLikePush('git log --grep push'), false);
-  assert.equal(metrics.looksLikePush('git push --dry-run'), false, 'пробный прогон не пуш');
 });
 
 test('журнал: нет файла — пусто, не прочитался — null', () => {
@@ -434,56 +396,6 @@ test('короткое подтверждение повтором не счит
   assert.notEqual(metrics.promptHash('убери хвосты из readme'), '');
 });
 
-test('вежливый оборот с тем же маркером переуказанием не считается', () => {
-  assert.equal(metrics.looksLikeReinstruction('Ещё раз спасибо!'), false);
-  assert.equal(metrics.looksLikeReinstruction('и снова здравствуйте'), false);
-  assert.equal(metrics.looksLikeReinstruction('я же просил не трогать README'), true);
-  assert.equal(metrics.looksLikeReinstruction('Ещё раз: без хвостов'), true);
-});
-
-test('вежливая поправка остаётся переуказанием', () => {
-  assert.equal(metrics.looksLikeReinstruction('Спасибо, но я же просил не трогать README'), true,
-    'вежливый зачин вычёркивается, признак считается по остатку');
-  assert.equal(metrics.looksLikeReinstruction('Привет! Опять ты трогаешь README'), true);
-  assert.equal(metrics.looksLikeReinstruction('благодарю, снова забыл про тесты'), true);
-  assert.equal(metrics.looksLikeReinstruction('спасибо!'), false, 'чистая вежливость остатка не оставляет');
-  assert.equal(metrics.looksLikeReinstruction('Добрый день'), false);
-});
-
-test('читающие команды гита мутацией не считаются', () => {
-  for (const cmd of ['git diff --merge-base main', 'git log --oneline -- lib/tag.js',
-    'git show HEAD:src/reset.js', 'git stash list', 'git stash show', 'git tag',
-    'git tag --list', "git tag -l 'v*'", 'git branch', 'git branch -a', 'git branch -r',
-    'git remote', 'git remote -v', 'git remote show origin', 'git worktree list',
-    'git worktree list', 'git status']) {
-    assert.equal(metrics.looksMutating('Bash', { command: cmd }), false, cmd);
-  }
-  for (const cmd of ['git commit -m x', 'git -C /repo push origin main', 'git stash push -m wip',
-    'git stash', 'git tag v1', 'git checkout -b feature',
-    // Правящие формы тех же подкоманд и сетевые вызовы: они пишут ссылки и
-    // объекты в локальный репозиторий, и ход с ними ходом без изменений не был.
-    'git fetch origin', 'git pull', 'git branch feature', 'git branch -d old',
-    'git remote add origin https://example.invalid/r.git', 'git worktree add /tmp/w']) {
-    assert.equal(metrics.looksMutating('Bash', { command: cmd }), true, cmd);
-  }
-});
-
-// В цепочке смотрятся ВСЕ вызовы: по одному первому «git status && git commit»
-// читался бы как ход без единого изменения, а слово в кавычках — как правка.
-test('правка видна в любом месте цепочки, а слово в кавычках правкой не считается', () => {
-  assert.equal(metrics.looksMutating('Bash', { command: 'git status && git commit -m x' }), true);
-  assert.equal(metrics.looksMutating('Bash', { command: 'git log --oneline | head; git tag v1' }), true);
-  assert.equal(metrics.looksMutating('Bash', { command: "printf 'git commit -m x'" }), false);
-  assert.equal(metrics.looksMutating('Bash', { command: 'echo git push' }), false);
-});
-
-test('работа через подагента считается прогрессом, чтение — нет', () => {
-  assert.equal(metrics.looksMutating('Task', { subagent_type: 'general-purpose' }), true);
-  assert.equal(metrics.looksMutating('Task', { subagent_type: 'Explore' }), false, 'разведка мир не трогает');
-  assert.equal(metrics.looksMutating('mcp__Claude_Code_Remote__subscribe_pr_activity', {}), false,
-    'обслуживание своего хода — не правка мира, как и у гейта');
-});
-
 test('сводка: серия ошибок не переходит через реплику Влада', () => {
   const records = [
     { kind: 'prompt', ts: T(1), turn: 1 },
@@ -494,19 +406,6 @@ test('сводка: серия ошибок не переходит через �
   ];
   assert.equal(metrics.summarize(records).signals.error_streak_max, 2,
     'три ошибки, но между второй и третьей — вмешательство Влада');
-});
-
-// Пуш опознаётся по вызову git, а не по слову в строке: `printf 'git push'`
-// пушем не является, и исход сессии на нём не помечается пушем.
-test('пуш: вызов git, а не слово где угодно в команде', () => {
-  assert.equal(metrics.looksLikePush('git push -u origin main'), true);
-  assert.equal(metrics.looksLikePush('cd /repo && git push'), true);
-  assert.equal(metrics.looksLikePush('git -C /repo push'), true);
-  assert.equal(metrics.looksLikePush("printf 'git push'"), false, 'слово в кавычках командой не является');
-  assert.equal(metrics.looksLikePush('echo git push'), false, 'аргумент чужой команды');
-  assert.equal(metrics.looksLikePush('git commit -m "fix push"'), false);
-  assert.equal(metrics.looksLikePush('git stash push'), false);
-  assert.equal(metrics.looksLikePush('git push --dry-run'), false);
 });
 
 // Хеш вызова канонизируется на ВСЕХ уровнях: порядок полей во вложенном объекте
@@ -571,4 +470,30 @@ test('состояние под занятым локом: запись проп
   assert.match(line, /"kind":"skip"/, 'пропуск назван в журнале');
   assert.match(line, /"what":"state"/);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Переуказание — это обращение К АГЕНТУ, а не разговор о мире. Одиночные
+// усилители («опять», «снова», «ещё раз») из словаря убраны: «запусти тесты ещё
+// раз» и «в который раз упал CI» — обычная работа, а признак на них срабатывал
+// и завышал число переуказаний в каждой сводке.
+test('переуказание считается по обращению к агенту, а не по усилителю', () => {
+  for (const p of ['я же просил не трогать README', 'повторяю: не трогай прод',
+    'сколько раз можно говорить', 'русским языком: без хвостов']) {
+    assert.equal(metrics.looksLikeReinstruction(p), true, p);
+  }
+  for (const p of ['запусти тесты ещё раз', 'в который раз упал CI', 'опять красный CI',
+    'снова падает установка', 'поправь README', 'сноваяркий']) {
+    assert.equal(metrics.looksLikeReinstruction(p), false, p);
+  }
+});
+
+// Вежливость вычёркивается, а не гасит реплику целиком: «спасибо, но я же
+// просил» — это поправка с вежливым зачином. Чисто вежливая реплика остатка не
+// оставляет.
+test('вежливый зачин не отменяет переуказания, а сам переуказанием не становится', () => {
+  assert.equal(metrics.looksLikeReinstruction('Спасибо, но я же просил не трогать README'), true);
+  assert.equal(metrics.looksLikeReinstruction('благодарю, повторяю: тесты гоняем до пуша'), true);
+  assert.equal(metrics.looksLikeReinstruction('Ещё раз спасибо!'), false);
+  assert.equal(metrics.looksLikeReinstruction('и снова здравствуйте'), false);
+  assert.equal(metrics.looksLikeReinstruction('спасибо!'), false);
 });

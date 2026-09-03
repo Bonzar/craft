@@ -10,15 +10,9 @@
 // Все функции fail quiet: сломанные метрики не должны трогать ход.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { metricsLog, sessionId } from './paths.js';
 import { withLock, atomicWrite } from './lock.js';
-import {
-  isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget,
-  touchesWorld, gitMutates,
-} from './write-targets.js';
 import { sha256 } from './hash.js';
-import { gitInvocations } from './write-targets.js';
 
 export function append(file, record) {
   if (!file) return;
@@ -198,34 +192,6 @@ export function reasonClass(hook, reason) {
   return short || 'unknown';
 }
 
-// --- репозиторий -------------------------------------------------------------
-
-// Репо сессии по remote origin: host/owner/repo без схемы, учётки и .git.
-// Не репозиторий, нет remote — пустая строка.
-export function repoOf(cwd) {
-  if (!cwd) return '';
-  const res = spawnSync('git', ['-C', cwd, 'config', '--get', 'remote.origin.url'], {
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  if (res.status !== 0) return '';
-  return normalizeRemote((res.stdout || '').trim());
-}
-
-export function normalizeRemote(url) {
-  let s = String(url || '').trim();
-  if (!s) return '';
-  const hadScheme = /^[a-z+]+:\/\//i.test(s);
-  s = s.replace(/^[a-z+]+:\/\//i, '');       // схема
-  s = s.replace(/^[^@/]+@/, '');            // учётка перед хостом
-  // scp-форма host:owner/repo — только там, где схемы НЕ было: с ней двоеточие
-  // отделяет порт, и «github.com:443/a/b» превращалось в «github.com/443/a/b»,
-  // то есть выдуманный владелец у каждого self-hosted remote на своём порту.
-  if (!hadScheme) s = s.replace(/^([^:/]+):(?!\/)/, '$1/');
-  else s = s.replace(/^([^:/]+):\d+\//, '$1/'); // порт из адреса выбрасывается
-  s = s.replace(/\.git$/, '').replace(/\/+$/, '');
-  return s;
-}
-
 // --- токены хода из транскрипта ------------------------------------------------
 
 // Сумма usage записей assistant, начиная с байтового смещения. Один ответ модели
@@ -353,14 +319,6 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-// Пуш опознаётся по ВЫЗОВУ git и его подкоманде, а не по слову где угодно в
-// строке: `git stash push`, `git commit -m "fix push"`, `git log --grep push`
-// и `printf 'git push'` пушем не являются. Пробный прогон (--dry-run) тоже.
-export function looksLikePush(command) {
-  return gitInvocations(command)
-    .some((inv) => inv.sub === 'push' && !inv.flags.includes('--dry-run'));
-}
-
 export function writeSummary(log, summary) {
   try {
     fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify(summary)}\n`);
@@ -396,9 +354,10 @@ export function refreshSummary(log, { sid = '', now = Date.now(), record = false
   return value;
 }
 
-const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
-const isCraftWrite = (tool) => /__craft_write$/.test(String(tool || ''));
-const isEdit = (tool) => EDIT_TOOLS.has(tool) || isCraftWrite(tool);
+// Скиллы разбора инцидента: код-сессия и сессия над базой Craft. Список точный,
+// потому что признак «скилл вызван» — это доля разборов, а не похожие имена.
+const INCIDENT_SKILLS = new Set(['code-incident', 'craft-incident']);
+
 const ms = Date.parse;
 
 // Свёртка журнала сессии в одну сводку. Чистая функция над записями.
@@ -423,13 +382,23 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     first_edit_ms: null,
     outcome: { craft_writes: 0, pushed: false },
     signals: {
-      reinstructions: 0, call_repeats: 0, stage_repeats: 0, turns_without_progress: 0, error_streak_max: 0,
+      // Повтор реплики и словесный маркер переуказания — РАЗНЫЕ признаки: первый
+      // ловит дословно ту же реплику, второй — обращение «я же просил». В одном
+      // счётчике они складывались, и по сводке нельзя было сказать, чего именно
+      // было больше.
+      prompt_repeats: 0, reinstructions: 0,
+      call_repeats: 0, stage_repeats: 0, turns_without_progress: 0, error_streak_max: 0,
     },
   };
   let streak = 0;
-  // Ход без прогресса считается по ХОДУ, а не по записи Stop: заблокированный
-  // конец хода даёт второй Stop с тем же номером, и решает последний.
+  // Ход без прогресса считается по ХОДУ, а не по записи Stop: у одного хода
+  // записей Stop бывает несколько, и решает последняя.
   const noProgressByTurn = new Map();
+  // Ходы — по числу РАЗЛИЧНЫХ номеров, а не по максимуму: максимум считал ходы,
+  // которых в журнале нет (сессия, возобновлённая с чужим номером), и не считал
+  // пропуски. Нулевой ход ходом не является: реплики ещё не было, это Stop
+  // служебного вызова до начала разговора.
+  const turnsSeen = new Set();
   let started = NaN;
   let firstTurn = null;
   const pending = new Map(); // hash → { unlockTurn }
@@ -437,22 +406,27 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
   const incidentTurns = new Set();
   const skillTurns = new Set();
 
-  // Реплика или ответ кнопкой снимают замок с ОТЛОЖЕННЫХ отказов — но ровно на
-  // один ход. Раньше замок снимался заново на каждой реплике, и отказ с первого
-  // хода оставался взведённым до конца сессии: правильный отказ, снятый через
-  // пять ходов новым планом, засчитывался ложным. Отказ, чей ход прошёл, из
-  // ожидания выбрасывается.
+  // Реплика или ответ кнопкой снимают замок с ОТЛОЖЕННЫХ отказов, и снимают его
+  // КАЖДЫЙ РАЗ заново: между отказом и повтором Влад успевает и ответить кнопкой,
+  // и написать реплику, а замок, снятый однажды и потом выброшенный, терял
+  // ровно тот случай, ради которого признак заведён.
+  //
+  // Из ожидания отказ уходит по СВОЕМУ возрасту, а не по возрасту снятия:
+  // «сразу после реплики» — это ход отказа или следующий за ним, дальше это уже
+  // новая работа, и правильный отказ, снятый через пять ходов новым планом,
+  // ложным не считается.
+  const DENY_WINDOW_TURNS = 1;
   const unlock = (turn) => {
     for (const [hash, p] of pending) {
-      if (p.unlockTurn === null) p.unlockTurn = turn;
-      else if (p.unlockTurn < turn) pending.delete(hash);
+      if (turn - p.denyTurn > DENY_WINDOW_TURNS) pending.delete(hash);
+      else p.unlockTurn = turn;
     }
   };
 
   for (const r of records) {
     const t = ms(r.ts);
     if (!Number.isFinite(started) && Number.isFinite(t)) started = t;
-    if (Number.isFinite(r.turn)) s.turns = Math.max(s.turns, r.turn);
+    if (Number.isFinite(r.turn) && r.turn > 0) turnsSeen.add(r.turn);
 
     if (r.kind === 'session') {
       // Стартов бывает несколько (компакт, возобновление): начало сессии —
@@ -463,7 +437,8 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     } else if (r.kind === 'prompt') {
       unlock(r.turn);
       if (r.incident === true) incidentTurns.add(r.turn);
-      if (r.repeat === true || r.reinstruct === true) s.signals.reinstructions += 1;
+      if (r.repeat === true) s.signals.prompt_repeats += 1;
+      if (r.reinstruct === true) s.signals.reinstructions += 1;
       // Серия ошибок — про то, как агент бьётся ВНУТРИ хода: реплика Влада её
       // разрывает, иначе ошибки по обе стороны его вмешательства сложились бы
       // в одну серию, которой не было.
@@ -474,34 +449,39 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
         s.denies.total += 1;
         const cls = r.class || 'unknown';
         s.denies.by_class[cls] = (s.denies.by_class[cls] || 0) + 1;
-        if (r.h) pending.set(r.h, { unlockTurn: null });
-        if (r.tool === 'ExitPlanMode') s.plan.bounced += 1;
+        if (r.h) pending.set(r.h, { unlockTurn: null, denyTurn: r.turn });
+        if (r.plan === true) s.plan.bounced += 1;
       } else if (r.decision === 'allow') {
-        if (r.tool === 'ExitPlanMode') s.plan.shown += 1;
+        if (r.plan === true) s.plan.shown += 1;
         if (r.h && pending.has(r.h)) {
           const p = pending.get(r.h);
           if (p.unlockTurn !== null && p.unlockTurn === r.turn) s.false_denies += 1;
           pending.delete(r.h);
         }
       }
-      if (r.tool === 'Skill' && /incident/i.test(String(r.skill || ''))) skillTurns.add(r.turn);
       if (r.repeat_call === true) s.signals.call_repeats += 1;
       if (r.stage_repeat === true) s.signals.stage_repeats += 1;
     } else if (r.kind === 'post' || r.kind === 'fail') {
+      const pre = r.id ? pres.get(r.id) : null;
       const failed = r.kind === 'fail' || r.error === true;
       if (failed) s.tool_errors += 1;
       streak = failed ? streak + 1 : 0;
       if (streak > s.signals.error_streak_max) s.signals.error_streak_max = streak;
-      if (r.tool === 'AskUserQuestion' && !failed) unlock(r.turn);
-      if (r.tool === 'ExitPlanMode' && !failed) s.plan.approved += 1;
-      if (!failed && isCraftWrite(r.tool)) s.outcome.craft_writes += 1;
-      if (!failed && isEdit(r.tool) && s.first_edit_ms === null
+      if (!failed && pre && pre.question === true) unlock(r.turn);
+      // Скилл разбора засчитывается только УСПЕШНЫМ вызовом и по точному имени:
+      // отказанный вызов разбора не делает, а подстрока incident ловила и
+      // соседние скиллы, и сводка говорила, что разбор был, когда его не было.
+      if (!failed && pre && INCIDENT_SKILLS.has(String(pre.skill || ''))) skillTurns.add(r.turn);
+      if (!failed && pre && pre.plan === true) s.plan.approved += 1;
+      if (!failed && pre && pre.craft_write === true) s.outcome.craft_writes += 1;
+      if (!failed && pre && pre.edit === true && s.first_edit_ms === null
           && Number.isFinite(t) && Number.isFinite(started)) s.first_edit_ms = t - started;
-      const pre = r.id ? pres.get(r.id) : null;
       if (!failed && pre && pre.push === true) s.outcome.pushed = true;
     } else if (r.kind === 'stop') {
       if (r.blocked_by) s.stop_blocks[r.blocked_by] = (s.stop_blocks[r.blocked_by] || 0) + 1;
-      if (typeof r.no_progress === 'boolean') noProgressByTurn.set(r.turn, r.no_progress);
+      // Нулевой ход в счёт не идёт: до первой реплики Влада хода не было, а
+      // Stop служебного вызова давал «ход без прогресса», которого не случалось.
+      if (typeof r.no_progress === 'boolean' && r.turn > 0) noProgressByTurn.set(r.turn, r.no_progress);
       const u = r.usage && typeof r.usage === 'object' ? r.usage : {};
       for (const key of Object.keys(s.tokens)) s.tokens[key] += Number(u[key]) || 0;
       // Токены первого хода — сумма ВСЕХ его Stop: заблокированный конец хода
@@ -524,6 +504,7 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     }
   }
 
+  s.turns = turnsSeen.size;
   s.signals.turns_without_progress = [...noProgressByTurn.values()].filter(Boolean).length;
   s.incidents.detected = incidentTurns.size;
   s.incidents.skill_called = [...incidentTurns].filter((turn) => skillTurns.has(turn)).length;
@@ -563,11 +544,15 @@ export function promptHash(prompt) {
 
 // Переуказание: Влад повторяет уже данное указание. Это ЭВРИСТИКА по словарю —
 // она предупреждает, а не доказывает, и словарь растёт по живым сводкам.
-const REINSTRUCT = /(^|[^\p{L}])(ещ[её] раз|я же (сказал|говорил|просил|писал)|опять|снова|повторяю|в который раз|сколько раз)([^\p{L}]|$)/iu;
+//
+// В словаре только формулы, ОБРАЩЁННЫЕ К АГЕНТУ: «я же просил», «повторяю».
+// Одиночные усилители («опять», «снова», «ещё раз», «в который раз») из него
+// убраны — они куда чаще про мир, чем про указание: «запусти тесты ещё раз» и
+// «в который раз упал CI» переуказаниями не являются, а признак на них
+// срабатывал.
+const REINSTRUCT = /(^|[^\p{L}])(я же (сказал|говорил|просил|писал|просила)|я (просил|говорил|сказал) (же |уже )|повторяю|сколько раз (можно|повторять|говорить)|русским языком)([^\p{L}]|$)/iu;
 // Вежливая формула целиком, вместе с прилипшим к ней усилителем («ещё раз
-// спасибо», «снова здравствуйте»): усилитель тут часть оборота, а не указания,
-// и вычёркивать его надо вместе со словом, иначе от «ещё раз спасибо» останется
-// голое «ещё раз» и вежливость превратится в переуказание.
+// спасибо», «снова здравствуйте»): усилитель тут часть оборота, а не указания.
 const COURTESY = /(?:(ещ[её] раз|снова|опять|вновь)\s+)?(спасибо\p{L}*|благодар\p{L}*|здравствуй\p{L}*|привет\p{L}*|добр(ый|ое)\s+(день|вечер|утро))(?:\s+(ещ[её] раз|снова|вновь))?/giu;
 
 export function looksLikeReinstruction(prompt) {
@@ -578,43 +563,12 @@ export function looksLikeReinstruction(prompt) {
   return REINSTRUCT.test(text);
 }
 
-// Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
-export const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
-
-const EDIT_TOOL_PATH = {
-  Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path',
-};
-
-// Мутирует ли вызов мир. Основание одно с план-гейтом (touchesWorld), а сверх
-// него отсеивается эфемерное: правка в /tmp прогрессом хода не считается — так
-// же, как `echo x > /tmp/...` у шелла, иначе два пути к одному и тому же
-// расходились бы. У Bash мутацией считается настоящая цель записи или
-// подкоманда гита, меняющая репозиторий.
-export function looksMutating(tool, input = {}) {
-  if (!touchesWorld(tool, input)) return false;
-  const editPath = EDIT_TOOL_PATH[tool];
-  if (editPath) {
-    const fp = input[editPath] || '';
-    return Boolean(fp) && !isEphemeral(fp) && !gitEphemeral(fp);
-  }
-  if (tool === 'Bash') {
-    const cmd = String(input.command || '');
-    if (!cmd) return false;
-    if (gitMutates(cmd)) return true;
-    return bashWriteTargets(cmd).some((raw) => {
-      const t = cleanTarget(raw);
-      return Boolean(t) && !isEphemeral(t) && !gitEphemeral(t);
-    });
-  }
-  return true;
-}
-
-// Прогресс хода — удавшийся вызов, который мутирует мир, показ плана, вопрос
-// Владу или пуш. Мутирующим вызов помечается на PreToolUse: на PostToolUse
-// входа уже нет.
+// Прогресс хода — удавшийся вызов, который менял мир, показывал план, спрашивал
+// Влада или отправлял сделанное. Признаки ставит обёртка на PreToolUse: на
+// PostToolUse входа вызова уже нет.
 export function isProgress(pre, post) {
   if (!pre || !post || post.error === true) return false;
-  return pre.mutates === true || STAGE_TOOLS.has(pre.tool) || pre.push === true;
+  return pre.mutates === true || pre.stage === true || pre.push === true;
 }
 
 // --- ошибка инструмента в ответе -------------------------------------------------

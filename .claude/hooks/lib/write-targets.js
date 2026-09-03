@@ -3,6 +3,7 @@
 // этих предикатов дали бы поверхность, где одно и то же место у одного гварда
 // гейтится, а у другого нет, и заметно это стало бы только на живом прогоне.
 import { isIgnored } from './git.js';
+import { gitMutates, looksLikePush } from './write-targets-git.js';
 
 // Путь, правка которого системным изменением не является.
 export function isEphemeral(fp) {
@@ -39,7 +40,7 @@ export function gitEphemeral(fp) {
 // (i>0:), не перенаправление; сама строка-открыватель остаётся в скане целиком,
 // потому что перенаправление формы `cat <<'EOF' > файл` стоит именно на ней.
 // Незакавыченный маркер не вычёркивается: в его теле живут подстановки.
-function stripQuotedHeredocs(text) {
+export function stripQuotedHeredocs(text) {
   const out = [];
   let mark = '';
   let inside = false;
@@ -95,7 +96,7 @@ const lastField = (s) => s.trim().split(/\s+/).pop();
 // читает и сам шелл.
 const NEUTRAL = '~';
 
-function stripQuoted(text) {
+export function stripQuoted(text) {
   let out = '';
   let quote = '';
   for (const ch of text) {
@@ -299,97 +300,57 @@ export function touchesWorld(tool, input = {}) {
   return true;
 }
 
-// --- вызовы git в команде ------------------------------------------------------
+// --- мутирует ли вызов мир ------------------------------------------------------
 
-// Что стоит ПЕРЕД git и вызова не отменяет: присваивания окружения и обёртки
-// запуска. Всё прочее впереди значит, что слово git — аргумент чужой команды
-// («echo git push»), а не вызов.
-const GIT_WRAPPERS = new Set(['sudo', 'env', 'command', 'time', 'nice', 'ionice', 'nohup', 'stdbuf']);
+// Пути входа у правящих инструментов. Один список на слой: раньше их было два,
+// и они разъезжались.
+const EDIT_TOOL_PATH = {
+  Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path',
+};
 
-// Глобальные ключи git, которые ЗАБИРАЮТ значение следующим словом: без этого
-// «git -C /repo push» читалось бы как подкоманда /repo.
-const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+const isCraftWrite = (tool) => /__craft_write$/.test(String(tool || ''));
 
-// Все вызовы git в команде: {sub, rest, flags} на каждый.
-//
-// Разбор идёт по КУСКАМ между разделителями и по тексту БЕЗ КАВЫЧЕК. Иначе
-// «printf 'git push'» считался бы пушем (слово в кавычках — не команда), а в
-// «git status && git commit -m x» виден был бы только первый вызов, и правка
-// цепочкой выглядела бы как ход без единого изменения.
-export function gitInvocations(command) {
-  const scan = stripQuoted(stripQuotedHeredocs(String(command || '')));
-  const out = [];
-  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
-    const parsed = gitParts(piece);
-    if (parsed.sub) out.push(parsed);
+// Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
+const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
+
+// Мутирует ли вызов мир. Основание одно с план-гейтом (touchesWorld), а сверх
+// него отсеивается эфемерное: правка в /tmp прогрессом хода не считается — так
+// же, как `echo x > /tmp/...` у шелла, иначе два пути к одному и тому же
+// расходились бы. У команды мутацией считается настоящая цель записи или разбор
+// команды адаптером инструмента.
+export function looksMutating(tool, input = {}) {
+  if (!touchesWorld(tool, input)) return false;
+  const editPath = EDIT_TOOL_PATH[tool];
+  if (editPath) {
+    const fp = input[editPath] || '';
+    return Boolean(fp) && !isEphemeral(fp) && !gitEphemeral(fp);
   }
-  return out;
-}
-
-export function gitSubcommand(command) {
-  const [first] = gitInvocations(command);
-  return first ? first.sub : '';
-}
-
-// Подкоманда, слова за ней и её ключи. Ключи нужны отдельно: у части подкоманд
-// именно ключ отличает перечисление от правки (`git tag --list 'v*'`).
-function gitParts(piece) {
-  const words = piece.trim().split(/\s+/).filter(Boolean);
-  let i = 0;
-  // Голова куска: присваивания и обёртки пропускаются, на всём остальном разбор
-  // прекращается — git дальше уже не вызов, а аргумент.
-  while (i < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || GIT_WRAPPERS.has(words[i]))) i += 1;
-  const head = words[i] || '';
-  if (head !== 'git' && !head.endsWith('/git')) return { sub: '', rest: [], flags: [] };
-  let sub = '';
-  i += 1;
-  for (; i < words.length; i += 1) {
-    const word = words[i];
-    if (GIT_GLOBAL_WITH_VALUE.has(word)) { i += 1; continue; }
-    if (word.startsWith('-')) continue;
-    sub = word;
-    i += 1;
-    break;
+  if (tool === 'Bash') {
+    const cmd = String(input.command || '');
+    if (!cmd) return false;
+    if (gitMutates(cmd)) return true;
+    return bashWriteTargets(cmd).some((raw) => {
+      const t = cleanTarget(raw);
+      return Boolean(t) && !isEphemeral(t) && !gitEphemeral(t);
+    });
   }
-  const tail = words.slice(i);
-  return { sub, rest: tail.filter((w) => !w.startsWith('-')), flags: tail.filter((w) => w.startsWith('-')) };
-}
-
-// Подкоманды гита, которые меняют репозиторий или рабочее дерево. Сетевые
-// fetch и pull здесь же: они пишут ссылки и объекты в локальный репозиторий.
-export const GIT_MUTATIONS = new Set([
-  'push', 'commit', 'merge', 'rebase', 'reset', 'checkout', 'switch', 'restore',
-  'stash', 'tag', 'cherry-pick', 'am', 'apply', 'revert', 'clean', 'rm', 'mv', 'add',
-  'fetch', 'pull', 'branch', 'remote', 'worktree', 'init', 'clone',
-]);
-
-// У части мутирующих подкоманд есть ЧИТАЮЩИЕ формы, и решают их следующее слово
-// или ключ: `git stash list`, `git remote show`, `git tag --list 'v*'` и
-// `git branch -a` ничего не меняют. Ключ приходится смотреть отдельно от слов:
-// у `git tag -l 'v*'` образец стоит обычным аргументом, и по одному его наличию
-// перечисление выглядело бы как заведение метки.
-const GIT_READING_SUBVERBS = new Set(['list', 'show']);
-const GIT_READING_REMOTE = new Set(['show', 'get-url']);
-const GIT_LISTING_FLAGS = new Set([
-  '-l', '--list', '-n', '--contains', '--no-contains', '--points-at',
-  '--merged', '--no-merged', '--sort', '--format', '-a', '--all', '-r', '--remotes',
-]);
-
-const listing = (flags) => flags.some((f) => GIT_LISTING_FLAGS.has(f.split('=')[0]));
-
-function mutatingInvocation({ sub, rest, flags }) {
-  if (!sub || !GIT_MUTATIONS.has(sub)) return false;
-  if (sub === 'stash') return rest.length === 0 || !GIT_READING_SUBVERBS.has(rest[0]);
-  if (sub === 'remote') return rest.length > 0 && !GIT_READING_REMOTE.has(rest[0]);
-  if (sub === 'worktree') return rest.length > 0 && !GIT_READING_SUBVERBS.has(rest[0]);
-  if (sub === 'tag' || sub === 'branch') return !listing(flags) && rest.length > 0;
   return true;
 }
 
-// Меняет ли команда репозиторий. Смотрятся ВСЕ вызовы в цепочке: у
-// «git status && git commit -m x» правка стоит вторым, и по первому вызову ход
-// выглядел бы как ход без единого изменения.
-export function gitMutates(command) {
-  return gitInvocations(command).some(mutatingInvocation);
+// Признаки вызова для журнала метрик. Здесь и только здесь живут имена
+// инструментов: сводка считает по признакам и про инструменты не знает.
+//
+// edit — правка содержимого; craft_write — запись в базу Craft; plan — показ
+// плана; question — вопрос Владу; stage — стадия хода, повтор которой внутри
+// хода является сигналом; push — отправка; mutates — вызов меняет мир.
+export function toolFlags(tool, input = {}) {
+  const flags = {};
+  if (EDIT_TOOL_PATH[tool] || isCraftWrite(tool)) flags.edit = true;
+  if (isCraftWrite(tool)) flags.craft_write = true;
+  if (tool === 'ExitPlanMode') flags.plan = true;
+  if (tool === 'AskUserQuestion') flags.question = true;
+  if (STAGE_TOOLS.has(tool)) flags.stage = true;
+  if (tool === 'Bash' && looksLikePush(input.command)) flags.push = true;
+  if (tool === 'Skill' && typeof input.skill === 'string') flags.skill = input.skill;
+  return flags;
 }
-

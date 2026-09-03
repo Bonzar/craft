@@ -21,6 +21,12 @@
 // pre), ход без прогресса (no_progress у stop). Всё — булевы признаки, текста
 // в них нет.
 //
+// Контракт записи вызова (по нему судят и сводка, и кейсы): pre несёт признаки
+// `edit`, `craft_write`, `plan`, `question`, `stage`, `push`, `skill` и
+// `mutates` — «этот вызов менял мир». Их ставит здесь обёртка, потому что имена
+// инструментов знает она; сводка считает по признакам и про инструменты не
+// знает ничего.
+//
 // В журнал не попадает содержимое: ни правок, ни команд, ни промптов, ни
 // текста отказов. Ничего не печатает, сети и модели не зовёт, укладывается в
 // миллисекунды. Без идентификатора сессии (ни в событии, ни в окружении, ни
@@ -37,11 +43,13 @@
 import { readEvent } from './lib/event.js';
 import { sessionId } from './lib/paths.js';
 import {
-  append, updateState, reasonClass, repoOf, turnUsage, responseIsError,
+  append, updateState, reasonClass, turnUsage, responseIsError,
   projectDispatcherAt, currentMetricsLog, transcriptSize,
-  refreshSummary, callHash, looksLikePush,
-  promptHash, looksLikeReinstruction, STAGE_TOOLS, isProgress, looksMutating,
+  refreshSummary, callHash,
+  promptHash, looksLikeReinstruction, isProgress,
 } from './lib/metrics.js';
+import { toolFlags, looksMutating } from './lib/write-targets.js';
+import { repoOf } from './lib/repo-git.js';
 
 const {
   raw, event, tool, cwd, transcript, response, input, prompt,
@@ -135,23 +143,27 @@ const stop = updateState(log, (state) => {
       h: callHash(tool, input),
       hooks_ms: hooksMs, hooks,
     };
-    // Признаки исхода сессии и инцидентного контура: пуш и имя вызванного скилла.
-    if (tool === 'Bash' && looksLikePush(input.command)) record.push = true;
-    if (tool === 'Skill' && typeof input.skill === 'string') record.skill = input.skill;
+    // Признаки вызова: правка, запись в Craft, показ плана, вопрос, стадия,
+    // пуш, имя скилла. Их ставит обёртка, потому что имена инструментов знает
+    // она; сводка считает по признакам.
+    const flags = toolFlags(tool, input);
+    Object.assign(record, flags);
     // Сигналы хода: тот же вызов повторно, стадия повторно.
     state.turn_tools += 1;
     if (state.turn_calls[record.h]) record.repeat_call = true;
     state.turn_calls[record.h] = (state.turn_calls[record.h] || 0) + 1;
-    if (STAGE_TOOLS.has(tool)) {
+    if (flags.stage === true) {
       if (state.turn_stages[tool]) record.stage_repeat = true;
       state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
     }
     // Мутирующий вызов помечается ТОЛЬКО у прошедших: у отказанного не будет
     // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
     if (kind === 'allow') {
-      if (looksMutating(tool, input)) record.mut = true;
+      if (looksMutating(tool, input)) record.mutates = true;
       if (id) {
-        state.pre_flags[id] = { tool, push: record.push === true, mutates: record.mut === true };
+        state.pre_flags[id] = {
+          push: record.push === true, stage: record.stage === true, mutates: record.mutates === true,
+        };
         const ids = Object.keys(state.pre_flags);
         if (ids.length > 50) for (const old of ids.slice(0, ids.length - 50)) delete state.pre_flags[old];
       }
