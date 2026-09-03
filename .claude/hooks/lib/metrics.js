@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { metricsLog, sessionId } from './paths.js';
+import { withLock, atomicWrite } from './lock.js';
 
 export function append(file, record) {
   if (!file) return;
@@ -20,14 +21,15 @@ export function append(file, record) {
   } catch { /* журнал не пополнился — метрика потеряна, ход цел */ }
 }
 
-// Журнал текущего процесса: переопределение, иначе сессия из прочитанного
-// события (его кладёт readEvent), иначе из окружения. Ничего из этого нет —
-// пустая строка: относить записи не к чему.
+// Журнал текущего процесса — ЕДИНСТВЕННАЯ формула резолва на весь слой: сессия
+// берётся из прочитанного события (его кладёт readEvent), иначе из окружения;
+// переопределение разбирает metricsLog. Ни сессии, ни переопределения — пустая
+// строка: относить записи не к чему.
 export function currentMetricsLog() {
-  if (process.env.CRAFT_METRICS_LOG) return process.env.CRAFT_METRICS_LOG;
   const ev = globalThis.hookEvent;
   const sid = (ev && typeof ev.session_id === 'string' && ev.session_id) || sessionId();
-  return sid ? metricsLog(sid) : '';
+  if (!sid && !process.env.CRAFT_METRICS_LOG) return '';
+  return metricsLog(sid);
 }
 
 // Окружение для дочернего процесса (фоновый приём реестра): журнал передаётся
@@ -96,10 +98,23 @@ export function loadState(log) {
   return {};
 }
 
-export function saveState(log, state) {
-  try {
-    fs.writeFileSync(stateFile(log), JSON.stringify(state));
-  } catch { /* состояние не сохранилось — следующий ход начнёт заново */ }
+// «Прочитал — поправил — записал» под локом и одной атомарной записью.
+//
+// Без лока параллельные вызовы инструментов (харнесс шлёт их пачкой) читают
+// одно состояние и затирают правки друг друга: из восьми вызовов в полёте
+// выживает три, и у остальных потом нет длительности. Без атомарной записи
+// сосед успевает прочитать пустой файл посреди записи — и это хуже потери
+// записи: обнуляются номер хода и смещение транскрипта, то есть следующий Stop
+// пересчитывает весь транскрипт заново.
+//
+// Возвращает то, что вернуло действие.
+export function updateState(log, run) {
+  return withLock(stateFile(log), () => {
+    const state = loadState(log);
+    const out = run(state);
+    atomicWrite(stateFile(log), JSON.stringify(state));
+    return out;
+  });
 }
 
 // --- классы причин -----------------------------------------------------------
@@ -150,9 +165,14 @@ export function repoOf(cwd) {
 export function normalizeRemote(url) {
   let s = String(url || '').trim();
   if (!s) return '';
+  const hadScheme = /^[a-z+]+:\/\//i.test(s);
   s = s.replace(/^[a-z+]+:\/\//i, '');       // схема
   s = s.replace(/^[^@/]+@/, '');            // учётка перед хостом
-  s = s.replace(/^([^:/]+):(?!\/)/, '$1/'); // scp-форма host:owner/repo
+  // scp-форма host:owner/repo — только там, где схемы НЕ было: с ней двоеточие
+  // отделяет порт, и «github.com:443/a/b» превращалось в «github.com/443/a/b»,
+  // то есть выдуманный владелец у каждого self-hosted remote на своём порту.
+  if (!hadScheme) s = s.replace(/^([^:/]+):(?!\/)/, '$1/');
+  else s = s.replace(/^([^:/]+):\d+\//, '$1/'); // порт из адреса выбрасывается
   s = s.replace(/\.git$/, '').replace(/\/+$/, '');
   return s;
 }
@@ -171,12 +191,17 @@ export function turnUsage(transcript, from = 0) {
   if (!transcript) return { usage: empty, offset: from };
   let fd;
   let text = '';
+  let start = from;
   try {
     const size = fs.statSync(transcript).size;
-    if (size <= from) return { usage: empty, offset: from };
+    // Файл КОРОЧЕ прежнего смещения — это другой транскрипт (сессия начата
+    // заново, файл подменён): читаем с начала, иначе смещение никогда уже не
+    // сойдётся и токены до конца сессии останутся нулевыми.
+    if (size < start) start = 0;
+    if (size <= start) return { usage: empty, offset: start };
     fd = fs.openSync(transcript, 'r');
-    const buf = Buffer.alloc(size - from);
-    fs.readSync(fd, buf, 0, buf.length, from);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
     text = buf.toString('utf8');
   } catch {
     return { usage: empty, offset: from };
@@ -184,9 +209,9 @@ export function turnUsage(transcript, from = 0) {
     if (fd !== undefined) fs.closeSync(fd);
   }
   const lastNl = text.lastIndexOf('\n');
-  if (lastNl < 0) return { usage: empty, offset: from };
+  if (lastNl < 0) return { usage: empty, offset: start };
   const complete = text.slice(0, lastNl + 1);
-  const offset = from + Buffer.byteLength(complete, 'utf8');
+  const offset = start + Buffer.byteLength(complete, 'utf8');
 
   const byId = new Map();
   let anon = 0;
@@ -214,6 +239,16 @@ export function turnUsage(transcript, from = 0) {
     usage.messages += 1;
   }
   return { usage, offset };
+}
+
+// Размер транскрипта на сейчас; нет файла — ноль.
+export function transcriptSize(file) {
+  if (!file) return 0;
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
 }
 
 // --- ошибка инструмента в ответе -------------------------------------------------

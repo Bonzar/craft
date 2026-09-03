@@ -127,3 +127,76 @@ test('проектная регистрация диспетчера наход�
   assert.equal(metrics.projectDispatcherAt(''), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// --- состояние под локом ---------------------------------------------------------
+
+test('параллельные правки состояния не теряют вызовов в полёте', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const log = path.join(dir, 'm.jsonl');
+  const hook = path.resolve(HERE, '..', '..', '.claude', 'hooks', 'universal-metrics.js');
+  const { execFile } = await import('node:child_process');
+
+  // Восемь вызовов инструмента, поданных разом, — обычная пачка от харнесса.
+  const calls = Array.from({ length: 8 }, (_, i) => `toolu_par_${i}`);
+  await Promise.all(calls.map((id) => new Promise((done) => {
+    const child = execFile(process.execPath, [hook], {
+      env: { ...process.env, CRAFT_METRICS_LOG: log, HOOK_ONCE: 'off' },
+    }, () => done());
+    child.stdin.end(JSON.stringify({
+      hook_event_name: 'PreToolUse', session_id: 'par', tool_name: 'Read', tool_use_id: id,
+      tool_input: { file_path: 'README.md' },
+    }));
+  })));
+
+  const state = JSON.parse(fs.readFileSync(`${log}.state.json`, 'utf8'));
+  assert.deepEqual(Object.keys(state.inflight).sort(), calls.sort(), 'ни один вызов в полёте не потерян');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('смещение транскрипта засевается длиной файла: хвост до старта в ход не идёт', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const transcript = path.join(dir, 't.jsonl');
+  fs.copyFileSync(path.join(FIXTURES, 'transcript-usage.jsonl'), transcript);
+  assert.equal(metrics.transcriptSize(transcript), fs.statSync(transcript).size);
+  const { usage } = metrics.turnUsage(transcript, metrics.transcriptSize(transcript));
+  assert.equal(usage.messages, 0, 'засеянное смещение не даёт засчитать историю в первый ход');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('укоротившийся транскрипт читается заново, а не молчит навсегда', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const file = path.join(dir, 't.jsonl');
+  const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 9 } } });
+  fs.writeFileSync(file, `${line}\n`);
+  const r = metrics.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
+  assert.equal(r.usage.output, 9, 'после подмены транскрипт читается с начала');
+  assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('remote с портом не превращает порт во владельца', () => {
+  assert.equal(metrics.normalizeRemote('ssh://git@github.com:2222/Bonzar/craft.git'), 'github.com/Bonzar/craft');
+  assert.equal(metrics.normalizeRemote('https://github.com:443/Bonzar/craft.git'), 'github.com/Bonzar/craft');
+  assert.equal(metrics.normalizeRemote('git@github.com:Bonzar/craft.git'), 'github.com/Bonzar/craft', 'scp-форма цела');
+});
+
+test('вызов с аварийным выключателем в счётчик вызовов модели не идёт', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const log = path.join(dir, 'm.jsonl');
+  process.env.CRAFT_METRICS_LOG = log;
+  const repo = path.resolve(HERE, '..', '..');
+  const bin = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');
+  const classifier = await import(`../../.claude/hooks/lib/classifier.js?t=${Date.now()}`);
+  try {
+    process.env.PLAN_CLASSIFIER = 'off';
+    classifier.classify(bin, 'cover', [], 'проба');
+    assert.equal(fs.existsSync(log), false, 'выключенный классификатор модель не звал — записи нет');
+    delete process.env.PLAN_CLASSIFIER;
+    classifier.classify(bin, 'cover', [], 'проба');
+    assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model"/, 'обычный вызов пишется');
+  } finally {
+    delete process.env.PLAN_CLASSIFIER;
+    delete process.env.CRAFT_METRICS_LOG;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
