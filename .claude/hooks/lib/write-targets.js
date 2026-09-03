@@ -3,7 +3,7 @@
 // этих предикатов дали бы поверхность, где одно и то же место у одного гварда
 // гейтится, а у другого нет, и заметно это стало бы только на живом прогоне.
 import { isIgnored } from './git.js';
-import { gitMutates, looksLikePush } from './write-targets-git.js';
+import { gitMutates } from './write-targets-git.js';
 
 // Путь, правка которого системным изменением не является.
 export function isEphemeral(fp) {
@@ -302,31 +302,24 @@ export function touchesWorld(tool, input = {}) {
 
 // --- мутирует ли вызов мир ------------------------------------------------------
 
-// Пути входа у правящих инструментов. Один список на слой: раньше их было два,
-// и они разъезжались.
-const EDIT_TOOL_PATH = {
-  Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path',
-};
-
-const isCraftWrite = (tool) => /__craft_write$/.test(String(tool || ''));
-
-// Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
-const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
-
 // Мутирует ли вызов мир. Основание одно с план-гейтом (touchesWorld), а сверх
 // него отсеивается эфемерное: правка в /tmp прогрессом хода не считается — так
 // же, как `echo x > /tmp/...` у шелла, иначе два пути к одному и тому же
-// расходились бы. У команды мутацией считается настоящая цель записи или разбор
-// команды адаптером инструмента.
-export function looksMutating(tool, input = {}) {
+// расходились бы.
+//
+// ЧЕМ именно был вызов, говорит третий аргумент — его собирает обёртка, которая
+// знает имена инструментов харнеса (tool-flags-claude.js):
+//   {kind: 'edit', path}    — правка содержимого по этому пути;
+//   {kind: 'command', text} — команда интерпретатора;
+//   ничего                  — всё прочее, что трогает мир.
+export function looksMutating(tool, input = {}, call = {}) {
   if (!touchesWorld(tool, input)) return false;
-  const editPath = EDIT_TOOL_PATH[tool];
-  if (editPath) {
-    const fp = input[editPath] || '';
+  if (call.kind === 'edit') {
+    const fp = call.path || '';
     return Boolean(fp) && !isEphemeral(fp) && !gitEphemeral(fp);
   }
-  if (tool === 'Bash') {
-    const cmd = String(input.command || '');
+  if (call.kind === 'command') {
+    const cmd = String(call.text || '');
     if (!cmd) return false;
     if (gitMutates(cmd)) return true;
     return bashWriteTargets(cmd).some((raw) => {
@@ -335,22 +328,4 @@ export function looksMutating(tool, input = {}) {
     });
   }
   return true;
-}
-
-// Признаки вызова для журнала метрик. Здесь и только здесь живут имена
-// инструментов: сводка считает по признакам и про инструменты не знает.
-//
-// edit — правка содержимого; craft_write — запись в базу Craft; plan — показ
-// плана; question — вопрос Владу; stage — стадия хода, повтор которой внутри
-// хода является сигналом; push — отправка; mutates — вызов меняет мир.
-export function toolFlags(tool, input = {}) {
-  const flags = {};
-  if (EDIT_TOOL_PATH[tool] || isCraftWrite(tool)) flags.edit = true;
-  if (isCraftWrite(tool)) flags.craft_write = true;
-  if (tool === 'ExitPlanMode') flags.plan = true;
-  if (tool === 'AskUserQuestion') flags.question = true;
-  if (STAGE_TOOLS.has(tool)) flags.stage = true;
-  if (tool === 'Bash' && looksLikePush(input.command)) flags.push = true;
-  if (tool === 'Skill' && typeof input.skill === 'string') flags.skill = input.skill;
-  return flags;
 }

@@ -28,6 +28,8 @@ import {
 import {
   readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
+import { currentMetricsLog } from '../.claude/hooks/lib/metrics.js';
+import { queueSummary } from '../.claude/hooks/lib/metrics-store.js';
 
 const [, , source, materialFile, registryFile, markId] = process.argv;
 
@@ -197,10 +199,28 @@ function main() {
   return 0;
 }
 
+// Приём кончается ПОЗЖЕ последнего Stop сессии, и его вызов модели попадает в
+// сводку, которую работник хранения уже увёз. Возврат в очередь делается здесь,
+// на краю: журнал про хранение не знает, а знать, что этот процесс последний,
+// может только сам процесс. Сводки нет — приём шёл до первого Stop, её сложит
+// он сам.
+function requeueSummary() {
+  const log = currentMetricsLog();
+  if (!log) return;
+  let summary;
+  try {
+    summary = JSON.parse(fs.readFileSync(`${log}.summary.json`, 'utf8'));
+  } catch {
+    return; // сводки ещё нет — возвращать нечего
+  }
+  if (summary && summary.sid) queueSummary(summary, log);
+}
+
 let code = 1;
 try {
   code = main();
 } finally {
   if (markId) unmarkParsing(path.join(`${registryFile}.parsing`, markId));
+  requeueSummary();
 }
 process.exit(code);

@@ -8,11 +8,14 @@
 // queueDir(target) → каталог, переживающий смену воркри, или ''.
 // fetchBase(target, {remote, branch}) → {status: 'ok'|'offline', base}
 //   base — пустая строка, когда ветки на сервере ещё нет: это не ошибка.
-// readDay(target, {base, file}) → {status: 'ok'|'missing'|'error', text}
+// readDay(target, {base, day, …}) → {status: 'ok'|'missing'|'error', text}
 //   missing и error различаются обязательно: сбой, принятый за «файла нет»,
 //   заменяет дневной файл сервера своими строками и стирает чужие сессии.
-// publish(target, {base, files, message, remote, branch}) → {status}
-//   ok | error | push-failed. files — [{file, content}].
+// publish(target, {base, files, days, sessions, …}) → {status}
+//   ok | error | push-failed. files — [{day, content}].
+//
+// Куда именно ложатся сводки — ВЕТКА, remote, каталог и текст коммита — знает
+// только этот файл: общая часть говорит «день такой-то, строки такие-то».
 //
 // Ветка не выкачивается и не чекаутится: коммит собирается plumbing-командами
 // поверх свежего origin/<branch> во временном индексе. Рабочее дерево и ветка
@@ -31,6 +34,13 @@ const IDENTITY = {
 // Потолок на команду: сетевой вызов, повисший навсегда, держал бы лок очереди и
 // не давал выгрузиться никому.
 const GIT_TIMEOUT_MS = 120000;
+
+// Куда ложатся сводки. Знает только адаптер: общая часть говорит «день такой-то».
+const BRANCH = 'metrics';
+const REMOTE = 'origin';
+const DIR = 'summaries';
+
+const dayFile = (day) => `${DIR}/${day}.jsonl`;
 
 function gitIn(target, extraEnv = {}) {
   return (args, input) => {
@@ -58,7 +68,7 @@ export function queueDir(target) {
   return commonDir(target);
 }
 
-export function fetchBase(target, { remote = 'origin', branch = 'metrics' } = {}) {
+export function fetchBase(target, { remote = REMOTE, branch = BRANCH } = {}) {
   const g = gitIn(target);
   const remoteRef = `refs/remotes/${remote}/${branch}`;
   const fetched = g(['fetch', '--quiet', remote, `+refs/heads/${branch}:${remoteRef}`]);
@@ -71,8 +81,9 @@ export function fetchBase(target, { remote = 'origin', branch = 'metrics' } = {}
 // Содержимое файла дня в базе. Отсутствие пути проверяется ОТДЕЛЬНО от чтения:
 // у `git show` любой сбой — таймаут, переполненный буфер — выглядит так же, как
 // «такого файла нет», и молча превращает дополнение дневного файла в замену.
-export function readDay(target, { base, file }) {
+export function readDay(target, { base, day }) {
   if (!base) return { status: 'missing', text: '' };
+  const file = dayFile(day);
   const g = gitIn(target);
   // Наличие пути спрашивается через ls-tree, а не через `cat-file -e`: у
   // последнего отсутствующий путь даёт тот же ненулевой код, что и сбой. У
@@ -85,8 +96,9 @@ export function readDay(target, { base, file }) {
 }
 
 export function publish(target, {
-  base = '', files = [], message = '', remote = 'origin', branch = 'metrics',
+  base = '', files = [], days = [], sessions = 0, remote = REMOTE, branch = BRANCH,
 } = {}) {
+  const message = `metrics: ${days.join(', ')} — ${sessions} сводок`;
   const indexFile = path.join(os.tmpdir(), `metrics-index.${process.pid}.${Date.now()}`);
   const g = gitIn(target, { GIT_INDEX_FILE: indexFile });
   try {
@@ -97,10 +109,10 @@ export function publish(target, {
       if (!g(['read-tree', '--empty']).ok) return { status: 'error' };
     }
 
-    for (const { file, content } of files) {
+    for (const { day, content } of files) {
       const blob = g(['hash-object', '-w', '--stdin'], content);
       if (!blob.ok || !blob.out) return { status: 'error' };
-      if (!g(['update-index', '--add', '--cacheinfo', `100644,${blob.out},${file}`]).ok) {
+      if (!g(['update-index', '--add', '--cacheinfo', `100644,${blob.out},${dayFile(day)}`]).ok) {
         return { status: 'error' };
       }
     }

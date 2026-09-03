@@ -47,7 +47,8 @@ import {
   refreshSummary, callHash,
   promptHash, looksLikeReinstruction, isProgress, currentSessionId,
 } from './lib/metrics.js';
-import { toolFlags, looksMutating } from './lib/write-targets.js';
+import { looksMutating } from './lib/write-targets.js';
+import { toolFlags, callShape } from './lib/tool-flags-claude.js';
 import { repoOf } from './lib/repo-git.js';
 
 const {
@@ -164,7 +165,7 @@ const stop = updateState(log, (state) => {
     // Мутирующий вызов помечается ТОЛЬКО у прошедших: у отказанного не будет
     // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
     if (kind === 'allow') {
-      if (looksMutating(tool, input)) record.mutates = true;
+      if (looksMutating(tool, input, callShape(tool, input))) record.mutates = true;
       if (id) {
         state.pre_flags[id] = {
           push: record.push === true, stage: record.stage === true, mutates: record.mutates === true,

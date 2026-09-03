@@ -5,24 +5,15 @@ import assert from 'node:assert/strict';
 const git = await import('../../.claude/hooks/lib/write-targets-git.js');
 
 
-test('пуш опознаётся по подкоманде, а не по слову в строке', () => {
-  assert.equal(git.looksLikePush('git push -u origin main'), true);
-  assert.equal(git.looksLikePush('git push'), true);
-  assert.equal(git.looksLikePush('git stash push -m wip'), false);
-  assert.equal(git.looksLikePush('git commit -m "fix push hook"'), false);
-  assert.equal(git.looksLikePush('git log --grep push'), false);
-  assert.equal(git.looksLikePush('git push --dry-run'), false, 'пробный прогон не пуш');
-});
-
-// Пуш опознаётся по вызову git, а не по слову в строке: `printf 'git push'`
-// пушем не является, и исход сессии на нём не помечается пушем.
-test('пуш: вызов git, а не слово где угодно в команде', () => {
-  assert.equal(git.looksLikePush('git push -u origin main'), true);
-  assert.equal(git.looksLikePush('cd /repo && git push'), true);
-  assert.equal(git.looksLikePush('git -C /repo push'), true);
-  assert.equal(git.looksLikePush("printf 'git push'"), false, 'слово в кавычках командой не является');
-  assert.equal(git.looksLikePush('echo git push'), false, 'аргумент чужой команды');
-  assert.equal(git.looksLikePush('git commit -m "fix push"'), false);
-  assert.equal(git.looksLikePush('git stash push'), false);
-  assert.equal(git.looksLikePush('git push --dry-run'), false);
+// Пуш — это ВЫЗОВ git с подкомандой push, а не слово в строке: `git stash push`,
+// `git commit -m "fix push"`, `git log --grep push`, `printf 'git push'` и
+// `echo git push` пушем не являются. Пробный прогон — тоже.
+test('пуш опознаётся по вызову git и его подкоманде', () => {
+  for (const cmd of ['git push', 'git push -u origin main', 'cd /repo && git push', 'git -C /repo push']) {
+    assert.equal(git.looksLikePush(cmd), true, cmd);
+  }
+  for (const cmd of ['git stash push', 'git stash push -m wip', 'git commit -m "fix push"',
+    'git log --grep push', "printf 'git push'", 'echo git push', 'git push --dry-run']) {
+    assert.equal(git.looksLikePush(cmd), false, cmd);
+  }
 });

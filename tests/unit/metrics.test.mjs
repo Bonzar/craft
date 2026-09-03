@@ -499,33 +499,22 @@ test('вежливый зачин не отменяет переуказания
   assert.equal(metrics.looksLikeReinstruction('спасибо!'), false);
 });
 
-// Фоновый приём реестра кончается ПОЗЖЕ последнего Stop сессии: работник
-// хранения к тому времени уже увёз прежнюю сводку и снял очередь. Без возврата
-// в очередь поздний вызов модели остался бы только в локальной копии сводки,
-// которую никто больше не заберёт.
-test('поздняя пересборка сводки возвращает её в очередь хранения', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-requeue-'));
-  const log = path.join(dir, 'm.jsonl');
-  const queue = path.join(dir, 'queue.jsonl');
-  metrics.append(log, { kind: 'session', ts: new Date().toISOString(), turn: 0, sid: 'm-sid' });
-  metrics.refreshSummary(log, { sid: 'm-sid', record: true });
-
-  const saved = { ...process.env };
-  process.env.CRAFT_METRICS_LOG = log;
-  process.env.METRICS_STORE_QUEUE = queue;
-  delete process.env.METRICS_STORE;
-  try {
-    metrics.recordModelCall({ mode: 'ingest', ms: 1200, outcome: 'json' });
-  } finally {
-    for (const key of ['CRAFT_METRICS_LOG', 'METRICS_STORE_QUEUE', 'METRICS_STORE']) {
-      if (saved[key] === undefined) delete process.env[key];
-      else process.env[key] = saved[key];
-    }
-  }
-
-  const queued = fs.readFileSync(queue, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.equal(queued.length, 1, 'сводка встала в очередь одной строкой');
-  assert.equal(queued[0].sid, 'm-sid');
-  assert.equal(queued[0].model_calls.count, 1, 'в очередь ушла сводка С поздним вызовом модели');
-  fs.rmSync(dir, { recursive: true, force: true });
+// Нулевой ход — это Stop служебного вызова ДО первой реплики: хода ещё не было.
+// Считая его, сводка давала три хода при двух и «ход без прогресса», которого
+// не случалось, а токены первого хода брались нулевые.
+test('нулевой ход не считается ни ходом, ни ходом без прогресса, ни первым', () => {
+  const records = [
+    { kind: 'session', ts: T(0), turn: 0, sid: 's' },
+    { kind: 'stop', ts: T(1), turn: 0, blocked_by: '', usage: { input: 9, output: 9 }, no_progress: true },
+    { kind: 'prompt', ts: T(2), turn: 1 },
+    { kind: 'stop', ts: T(3), turn: 1, blocked_by: '', usage: { input: 1, output: 2 }, no_progress: false },
+    { kind: 'prompt', ts: T(4), turn: 2 },
+    { kind: 'stop', ts: T(5), turn: 2, blocked_by: '', usage: { input: 4, output: 8 }, no_progress: true },
+  ];
+  const s = summarize(records);
+  assert.equal(s.turns, 2, 'ходов два, а не три');
+  assert.equal(s.signals.turns_without_progress, 1, 'нулевой ход в ходы без прогресса не идёт');
+  assert.deepEqual(s.tokens_first_turn, { input: 1, output: 2, cache_read: 0, cache_create: 0 },
+    'первый ход — первый НАСТОЯЩИЙ ход, а не служебный Stop до реплики');
+  assert.equal(s.tokens.input, 14, 'в общие токены служебный Stop входит: он тоже стоил денег');
 });

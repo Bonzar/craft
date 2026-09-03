@@ -604,3 +604,86 @@ test('вид реестра переживает параллельный при
     assert.match(ln, /^READABLE /, `вид дожил до чтения: ${ln}`);
   }
 });
+
+// Приём кончается ПОЗЖЕ последнего Stop сессии: работник хранения к тому времени
+// увёз сводку и снял очередь, а вызов модели этого приёма попал в сводку уже
+// после. Без возврата в очередь он не доехал бы никуда — следующего Stop у
+// сессии может не быть.
+test('приём возвращает пересобранную сводку в очередь хранения', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const log = path.join(dir, 'metrics.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+      CRAFT_METRICS_LOG: log,
+      METRICS_STORE_QUEUE: queue,
+      METRICS_STORE: '',
+    },
+  });
+
+  const rows = fs.readFileSync(queue, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(rows.length, 1, 'сводка встала в очередь одной строкой');
+  assert.equal(rows[0].sid, 'm-sid');
+  assert.equal(rows[0].model_calls.count, 1, 'в очередь ушла сводка С вызовом модели этого приёма');
+});
+
+// Приём идёт СЛЕДОМ за ходом, и вставать на лок очереди, который отсоединённый
+// работник хранения держит всё время сети, ему нельзя: пять минут ожидания в
+// этом месте — это пять минут, которые ждёт Влад. Не встали — пропуск виден
+// строкой в журнале, а не тишиной.
+test('занятый лок очереди не задерживает приём', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const log = path.join(dir, 'metrics.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+  // Лок держит ЖИВОЙ чужой процесс: отобрать его нельзя, дождаться — тоже.
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  fs.mkdirSync(`${queue}.lock`);
+  fs.writeFileSync(path.join(`${queue}.lock`, 'owner'), String(holder.pid));
+
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  const started = Date.now();
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+      CRAFT_METRICS_LOG: log,
+      METRICS_STORE_QUEUE: queue,
+      METRICS_STORE: '',
+    },
+  });
+  const spent = Date.now() - started;
+  holder.kill('SIGKILL');
+
+  assert.ok(spent < 10000, `приём не встал на чужой лок: ${spent} мс`);
+  const lines = fs.readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const skip = lines.find((r) => r.kind === 'skip' && r.what === 'queue');
+  assert.ok(skip, 'пропуск постановки в очередь назван в журнале');
+});

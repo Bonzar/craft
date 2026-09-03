@@ -22,26 +22,36 @@
 // записи; error — сборка не удалась; unsupported — адаптера для этой цели нет;
 // locked — лок занят дольше срока, выгрузка не начиналась.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { withLock, atomicWrite } from './lock.js';
 import { eachJsonl } from './jsonl.js';
+import { repoRootOf } from './paths.js';
+import { append } from './metrics.js';
 import * as store from './metrics-store-git.js';
 
 // Потолок очереди в строках. Строка на сессию, так что потолок — про число
 // сессий, накопившихся, пока доставка не проходит.
 export const QUEUE_CAP = 500;
 
-// Постановку в очередь делает ОТСОЕДИНЁННЫЙ работник, а не цепочка хода: его
-// никто не ждёт, и ждать лок он может долго. Короткий срок здесь означал бы
-// потерянную сводку — предыдущая выгрузка держит лок всё время сети, и сводка
-// последнего Stop не стала бы durable вовсе.
-const ENQUEUE_WAIT_MS = 5 * 60 * 1000;
+// Сколько ждать лок очереди. Умолчание КОРОТКОЕ: постановку зовут и с края,
+// который идёт следом за ходом, а ход ждать нельзя. Работник хранения —
+// отсоединённый, его никто не ждёт, и он передаёт свой большой срок сам.
+export const QUEUE_WAIT_MS = 300;
+export const WORKER_WAIT_MS = 5 * 60 * 1000;
 
-// Файл очереди по умолчанию — в каталоге, который переживает и сессии, и смену
-// воркри, а в дерево не попадает. Каталог называет адаптер.
+// Цель хранения — ОДНА формула на всех: переопределение окружения, иначе корень
+// того чекаута, где лежит сам слой. Две формулы уже разъезжались, и
+// переопределение игнорировалось одной из них.
+export function storeTarget() {
+  return process.env.METRICS_STORE_TARGET || repoRootOf(import.meta.url);
+}
+
+// Файл очереди — в каталоге, который переживает и сессии, и смену воркри, а в
+// дерево не попадает; каталог называет адаптер. Адаптера нет — очереди тоже:
+// копить сводки в /tmp значит копить то, что никто никогда не увезёт.
 export function defaultQueue(target) {
-  return path.join(store.queueDir(target) || os.tmpdir(), 'metrics-queue.jsonl');
+  const dir = store.queueDir(target);
+  return dir ? path.join(dir, 'metrics-queue.jsonl') : '';
 }
 
 function readQueueText(queueFile) {
@@ -67,7 +77,7 @@ function writeQueue(queueFile, rows) {
 
 // Поставить сводку в очередь. Сводка ЗАМЕНЯЕТ прежнюю сводку той же сессии:
 // каждый Stop пишет её заново, и хранить все промежуточные незачем.
-export function enqueue(queueFile, summary, { waitMs = ENQUEUE_WAIT_MS } = {}) {
+export function enqueue(queueFile, summary, { waitMs = QUEUE_WAIT_MS } = {}) {
   if (!queueFile || !summary || !summary.sid) return false;
   const { locked, value } = withLock(queueFile, () => {
     const bySid = new Map(parseQueue(readQueueText(queueFile)).map((r) => [r.sid, r]));
@@ -111,28 +121,36 @@ export function upsertLines(text, summaries) {
 }
 
 // Сделать сводку durable, не выгружая: очередь и есть то, что переживёт этот
-// процесс. Зовётся из ФОНОВОГО приёма реестра — он кончается позже последнего
-// Stop сессии, и его запись «model» иначе осталась бы только в локальной копии
-// сводки, которую уже никто не увезёт.
+// процесс. Зовётся с края, который кончается ПОЗЖЕ последнего Stop сессии
+// (фоновый приём реестра): его запись «model» иначе осталась бы только в
+// локальной копии сводки, которую уже никто не увезёт.
 //
-// Путь очереди резолвится здесь же: у приёма нет ни события, ни цели.
+// Срок ожидания короткий: этот край идёт следом за ходом, и вставать на лок,
+// который работник хранения держит всё время сети, нельзя. Не встали — про это
+// говорится строкой в журнале, а не тишиной.
+//
 // Выключатель хранения гасит и это — иначе прогон кейсов копил бы очередь.
-export function queueSummary(summary, target) {
+export function queueSummary(summary, log) {
   if (process.env.METRICS_STORE === 'off') return false;
-  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(target);
-  return enqueue(queue, summary);
+  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(storeTarget());
+  if (!queue) return false;
+  const ok = enqueue(queue, summary);
+  if (!ok && log) {
+    append(log, {
+      kind: 'skip', ts: new Date().toISOString(), what: 'queue', wait_ms: QUEUE_WAIT_MS,
+    });
+  }
+  return ok;
 }
 
 // Выгрузить очередь. Возвращает { status, delivered }.
-export function flushQueue({
-  target, queueFile, branch = 'metrics', remote = 'origin', dir = 'summaries',
-}) {
+export function flushQueue({ target, queueFile, ...where }) {
   if (!store.available(target)) return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
   const { locked, value } = withLock(queueFile, () => {
     const pending = parseQueue(readQueueText(queueFile));
     if (!pending.length) return { status: 'nothing', delivered: 0 };
 
-    const fetched = store.fetchBase(target, { remote, branch });
+    const fetched = store.fetchBase(target, where);
     if (fetched.status !== 'ok') return { status: fetched.status, delivered: 0 };
     const { base } = fetched;
 
@@ -148,15 +166,13 @@ export function flushQueue({
 
     const files = [];
     for (const [day, list] of byDay) {
-      const file = `${dir}/${day}.jsonl`;
-      const current = store.readDay(target, { base, file });
+      const current = store.readDay(target, { ...where, base, day });
       if (current.status === 'error') return { status: 'error', delivered: 0 };
-      files.push({ file, content: upsertLines(current.text, list) });
+      files.push({ day, content: upsertLines(current.text, list) });
     }
 
-    const days = [...byDay.keys()].sort().join(', ');
     const published = store.publish(target, {
-      base, files, message: `metrics: ${days} — ${latest.size} сводок`, remote, branch,
+      ...where, base, files, days: [...byDay.keys()].sort(), sessions: latest.size,
     });
     if (published.status !== 'ok') return { status: published.status, delivered: 0 };
 

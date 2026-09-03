@@ -84,6 +84,23 @@ function ageOf(dir) {
   }
 }
 
+// Отбор брошенного лока: каталог сперва ПЕРЕИМЕНОВЫВАЕТСЯ, и только потом
+// сносится. Прямой rmSync тут гонка: двое ждущих видят одного мёртвого хозяина,
+// первый сносит и заводит свой лок, второй сносит уже ЕГО — и оба внутри.
+// Переименование удаётся ровно одному: второму нечего переименовывать.
+function reclaim(dir) {
+  const aside = `${dir}.stale.${process.pid}.${Date.now()}`;
+  try {
+    fs.renameSync(dir, aside);
+  } catch {
+    return; // отобрал кто-то другой — ждём его на общих основаниях
+  }
+  try {
+    fs.rmSync(aside, { recursive: true, force: true });
+  } catch { /* остался мусорный каталог; лок это не держит */ }
+}
+
+// Снятие СВОЕГО лока: тут гонки нет — каталог наш, и переименовывать незачем.
 function drop(dir) {
   try {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -116,11 +133,11 @@ function takeLock(file, waitMs) {
       // Мёртвый хозяин — лок брошен наверняка, возраста ждать незачем.
       // Хозяин неизвестен — по LOCK_STALE_MS. Живой — только по абсолютному.
       if (owner && !alive(owner)) {
-        drop(dir);
+        reclaim(dir);
         continue;
       }
       if (age > (owner ? LOCK_MAX_AGE_MS : LOCK_STALE_MS)) {
-        drop(dir);
+        reclaim(dir);
         continue;
       }
       const left = deadline - Date.now();

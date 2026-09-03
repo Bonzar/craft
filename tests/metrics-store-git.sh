@@ -192,12 +192,18 @@ else ok "$t"; fi
 t="исход доставки ложится в журнал строкой kind: store"
 sb="$(sandbox)"
 G -C "$sb/work" remote set-url origin "$sb/nowhere.git"
-out="$(run_hook "$sb" s1 2026-09-02T10:00:00Z 1)"
+# Работник запускается КАК В БОЮ: без CRAFT_METRICS_LOG, только с путём к
+# сводке. Журнал он выводит из этого пути; кейс, задающий переменную руками,
+# зеленел бы и тогда, когда в живой сессии исход не пишется никуда.
+printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
+  2026-09-02T10:00:00Z 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z > "$sb/log.s1.summary.json"
+out="$(env -u CRAFT_METRICS_LOG METRICS_STORE_WORKER=1 \
+        METRICS_STORE_SUMMARY="$sb/log.s1.summary.json" \
+        METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
+        HOOK_ONCE=off node "$HOOK" 2>&1)"
 line="$(grep '"kind":"store"' "$sb/log.s1" 2>/dev/null | tail -1)"
-if ! grep -q "offline" <<<"$out"; then
-  bad "$t" "без сети ожидался исход offline: $out"
-elif [[ -z "$line" ]]; then
-  bad "$t" "строки kind: store в журнале нет"
+if [[ -z "$line" ]]; then
+  bad "$t" "строки kind: store в журнале нет: $out"
 elif ! grep -q '"status":"offline"' <<<"$line"; then
   bad "$t" "в строке журнала не тот исход: $line"
 elif ! grep -q '"sid":"s1"' "$sb/queue.jsonl"; then

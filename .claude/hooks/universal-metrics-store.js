@@ -24,19 +24,18 @@
 // прогон тестов пушил бы в настоящую ветку. METRICS_STORE_INLINE=1 — работа в
 // том же процессе (тест хранения на временных репозиториях).
 import fs from 'node:fs';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { defaultQueue, enqueue, flushQueue } from './lib/metrics-store.js';
+import {
+  defaultQueue, enqueue, flushQueue, storeTarget, WORKER_WAIT_MS,
+} from './lib/metrics-store.js';
 
 if (process.env.METRICS_STORE === 'off') process.exit(0);
 
 const selfPath = fileURLToPath(import.meta.url);
-let dir = path.dirname(selfPath);
-try {
-  dir = path.dirname(fs.realpathSync(selfPath));
-} catch { /* нечего резолвить — берём каталог как есть */ }
-const TARGET = process.env.METRICS_STORE_TARGET || path.resolve(dir, '..', '..');
+// Цель считает одна функция на весь слой (lib/metrics-store.js): своя формула
+// здесь уже расходилась с той, и переопределение окружения игнорировалось.
+const TARGET = storeTarget();
 
 function store(summaryFile) {
   let summary;
@@ -47,19 +46,26 @@ function store(summaryFile) {
   }
   if (!summary || typeof summary !== 'object' || !summary.sid) return { status: 'no-summary', delivered: 0 };
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(TARGET);
-  let queued = enqueue(queue, summary);
+  if (!queue) return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
+  // Работник ОТСОЕДИНЁН, его никто не ждёт — лок он ждёт долго. Короткий срок
+  // здесь означал бы потерянную сводку: предыдущая выгрузка держит лок всё
+  // время сети, а следующего Stop у сессии может не быть.
+  let queued = enqueue(queue, summary, { waitMs: WORKER_WAIT_MS });
   const res = flushQueue({ target: TARGET, queueFile: queue });
   // Не встали в очередь до выгрузки — пробуем ещё раз: лок теперь свободен.
-  // Иначе сводка последнего Stop сессии не станет durable вовсе: следующего
-  // Stop, который положил бы её заново, у сессии уже не будет.
-  if (!queued) queued = enqueue(queue, summary);
+  if (!queued) queued = enqueue(queue, summary, { waitMs: WORKER_WAIT_MS });
   return queued ? res : { ...res, queued: false };
 }
 
-// Исход доставки — строкой в журнал той сессии, чью сводку везли. Журнал берётся
-// из окружения: у работника события нет.
-function noteOutcome(res) {
-  const log = process.env.CRAFT_METRICS_LOG || '';
+// Исход доставки — строкой в журнал той сессии, чью сводку везли. Журнал
+// выводится из пути к её сводке: у работника нет ни события, ни переменной
+// сессии — та, что была у хука, ему не передаётся.
+function logOf(summaryFile) {
+  return summaryFile.endsWith('.summary.json') ? summaryFile.slice(0, -'.summary.json'.length) : '';
+}
+
+function noteOutcome(res, summaryFile) {
+  const log = logOf(summaryFile);
   if (!log) return;
   const line = {
     kind: 'store', ts: new Date().toISOString(), status: res.status, delivered: res.delivered || 0,
@@ -73,7 +79,8 @@ function noteOutcome(res) {
 
 // Фоновый работник: без события, сводка — из окружения.
 if (process.env.METRICS_STORE_WORKER) {
-  noteOutcome(store(process.env.METRICS_STORE_SUMMARY || ''));
+  const file = process.env.METRICS_STORE_SUMMARY || '';
+  noteOutcome(store(file), file);
   process.exit(0);
 }
 
@@ -96,7 +103,7 @@ if (!fs.existsSync(summaryFile)) process.exit(0);
 
 if (process.env.METRICS_STORE_INLINE) {
   const res = store(summaryFile);
-  noteOutcome(res);
+  noteOutcome(res, summaryFile);
   process.stderr.write(`[metrics-store] ${res.status}${res.delivered ? ` ×${res.delivered}` : ''}\n`);
   process.exit(0);
 }
