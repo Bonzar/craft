@@ -1,15 +1,24 @@
-// Признаки вызова: трогает ли он мир и чем именно. Здесь живут имена
-// инструментов, поэтому и кейсы про них — здесь, а не в ядре метрик.
+// Признаки вызова: трогает ли он мир и чем именно. Имена инструментов живут в
+// адаптере харнеса, разбор команды — в адаптере шелла, решение — в общей части;
+// кейсы гоняют их в связке, как это делает обёртка.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const tools = await import('../../.claude/hooks/lib/write-targets.js');
 const claude = await import('../../.claude/hooks/lib/tool-flags-claude.js');
+const bash = await import('../../.claude/hooks/lib/write-targets-bash.js');
+const git = await import('../../.claude/hooks/lib/write-targets-git.js');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
 
-// Форму вызова собирает адаптер харнеса, а решение принимает общая часть: кейсы
-// гоняют их в паре — порознь каждый доказывал бы половину.
-const mutates = (tool, input = {}) => tools.looksMutating(tool, input, claude.callShape(tool, input));
+// Та же связка, что собирает обёртка (universal-metrics.js): область вызова и
+// его форма от адаптера харнеса, разбор команды от адаптеров шелла и git.
+const ADAPTERS = {
+  commandWrites: (text) => ({ mutates: git.gitMutates(text), targets: bash.commandTargets(text) }),
+};
+const mutation = (tool, input = {}) => tools.mutationOf(
+  claude.toolScope(tool, input), claude.callShape(tool, input), ADAPTERS,
+);
+const mutates = (tool, input = {}) => mutation(tool, input).mutates === true;
 
 
 test('читающие команды гита мутацией не считаются', () => {
@@ -17,7 +26,7 @@ test('читающие команды гита мутацией не счита�
     'git show HEAD:src/reset.js', 'git stash list', 'git stash show', 'git tag',
     'git tag --list', "git tag -l 'v*'", 'git branch', 'git branch -a', 'git branch -r',
     'git remote', 'git remote -v', 'git remote show origin', 'git worktree list',
-    'git worktree list', 'git status']) {
+    'git status']) {
     assert.equal(mutates('Bash', { command: cmd }), false, cmd);
   }
   for (const cmd of ['git commit -m x', 'git -C /repo push origin main', 'git stash push -m wip',
@@ -61,4 +70,27 @@ test('прогресс: удавшаяся мутация через Bash или
   assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), true);
   assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: true }), false);
   assert.equal(metrics.isProgress({ tool: 'Bash', mutates: false }, { error: false }), false);
+});
+
+// Без адаптера интерпретатора общая часть НЕ говорит «мир не менялся»: своего
+// разбора команд у неё нет, и молчаливое «false» соврало бы про каждый ход,
+// который работал шеллом. Отсутствие возможности называется явно.
+test('команда без адаптера даёт unsupported, а не тихое «не менял»', () => {
+  const scope = claude.toolScope('Bash', { command: 'echo x >> README.md' });
+  const call = claude.callShape('Bash', { command: 'echo x >> README.md' });
+  assert.deepEqual(tools.mutationOf(scope, call, {}),
+    { status: 'unsupported', capability: 'write-targets' });
+  assert.deepEqual(tools.mutationOf(scope, call, ADAPTERS), { status: 'ok', mutates: true });
+});
+
+// Область вызова приходит ДАННЫМИ: общая часть про имена инструментов не знает
+// вовсе, и одного адаптера довольно, чтобы подключить другой харнес.
+test('область вызова решает вопрос «трогает ли мир» без имён инструментов', () => {
+  assert.equal(tools.touchesWorld({ reads: true }), false);
+  assert.equal(tools.touchesWorld({ session: true }), false);
+  assert.equal(tools.touchesWorld({}), true);
+  assert.deepEqual(claude.toolScope('Read', {}), { reads: true });
+  assert.deepEqual(claude.toolScope('ExitPlanMode', {}), { session: true });
+  assert.deepEqual(claude.toolScope('Task', { subagent_type: 'Explore' }), { reads: true });
+  assert.deepEqual(claude.toolScope('Bash', {}), {});
 });

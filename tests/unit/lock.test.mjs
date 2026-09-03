@@ -151,3 +151,35 @@ test('вложенный лок на другой файл берётся по-�
   });
   assert.ok(!fs.existsSync(`${outer}.lock`), 'внешний снят');
 });
+
+// Отбор брошенного лока приходит с ОПОЗДАНИЕМ: пока второй ждущий решал, что
+// хозяин мёртв, первый успел отобрать лок и завести свой, свежий. Второй
+// переименует уже ЕГО — и оба окажутся внутри. Проверяется ровно это состояние:
+// решение принято по мёртвому хозяину, а на месте уже лок живого.
+test('отбор не сносит чужой свежий лок', () => {
+  const dir = tmpDir('lock-race-');
+  const file = path.join(dir, 'state');
+  fs.mkdirSync(`${file}.lock`);
+  fs.writeFileSync(path.join(`${file}.lock`, 'owner'), String(process.pid));
+
+  lock.reclaimStale(file, 2147483646);
+
+  assert.ok(fs.existsSync(`${file}.lock`), 'свежий лок остался на месте');
+  assert.equal(fs.readFileSync(path.join(`${file}.lock`, 'owner'), 'utf8'), String(process.pid),
+    'хозяин свежего лока не потерян');
+  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.stale.')), [],
+    'отодвинутый каталог не остался мусором');
+});
+
+// Свой случай отбора работает: лок ТОГО хозяина, ради которого затевался отбор,
+// снимается целиком.
+test('отбор снимает лок названного хозяина', () => {
+  const dir = tmpDir('lock-reclaim-');
+  const file = path.join(dir, 'state');
+  fs.mkdirSync(`${file}.lock`);
+  fs.writeFileSync(path.join(`${file}.lock`, 'owner'), '2147483646');
+
+  lock.reclaimStale(file, 2147483646);
+
+  assert.ok(!fs.existsSync(`${file}.lock`), 'брошенный лок снят');
+});

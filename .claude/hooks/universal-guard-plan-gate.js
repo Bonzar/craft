@@ -37,9 +37,9 @@ import { randomBytes } from 'node:crypto';
 import { readEvent } from './lib/event.js';
 import { deny } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
-import {
-  isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget, touchesWorld,
-} from './lib/write-targets.js';
+import { isEphemeral, gitEphemeral, touchesWorld } from './lib/write-targets.js';
+import { bashWriteTargets, cleanTarget } from './lib/write-targets-bash.js';
+import { toolScope } from './lib/tool-flags-claude.js';
 import { exemptScopeFile, approvalRegistry } from './lib/paths.js';
 import {
   waitForParsing, readRegistry, render, switchAt, appendLog,
@@ -63,10 +63,12 @@ const isFileEdit = !isCraftWrite && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit
 const isBash = !isCraftWrite && tool === 'Bash';
 
 // Гейт стоит на правках МИРА: файлы, командная строка, база, внешние сервисы.
-// Всё, что мир не трогает, — не его дело. Сам предикат живёт в write-targets.js:
-// по нему же метрики решают, менял ли ход мир, и разъехавшиеся копии дали бы
-// поверхность, где одно и то же у гварда гейтится, а у метрик не считается.
-if (!isCraftWrite && !isFileEdit && !isBash && !touchesWorld(tool, input)) process.exit(0);
+// Всё, что мир не трогает, — не его дело. Сам предикат живёт в write-targets.js
+// и имён инструментов не знает: область вызова ему приносит адаптер харнеса
+// (toolScope). По тому же предикату метрики решают, менял ли ход мир, и
+// разъехавшиеся копии дали бы поверхность, где одно и то же у гварда гейтится,
+// а у метрик не считается.
+if (!isCraftWrite && !isFileEdit && !isBash && !touchesWorld(toolScope(tool, input))) process.exit(0);
 
 // Предел описания правки. Раньше он был 2000 байт на заменяемый текст и 4000 на
 // новый и стоял из-за потолка в 128 КБ на один аргумент командной строки:

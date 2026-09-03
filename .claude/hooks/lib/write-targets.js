@@ -1,9 +1,14 @@
-// Что считать записью и куда она метит. Общий дом для гвардов, которые стоят на
-// одних и тех же вызовах: план-гейт и гвард якоря сессии. Разъехавшиеся копии
-// этих предикатов дали бы поверхность, где одно и то же место у одного гварда
+// Что считать записью мира. Общий дом для гвардов, которые стоят на одних и тех
+// же вызовах: план-гейт, гвард якоря сессии и метрики. Разъехавшиеся копии этих
+// предикатов дали бы поверхность, где одно и то же место у одного гварда
 // гейтится, а у другого нет, и заметно это стало бы только на живом прогоне.
+//
+// Имён инструментов здесь нет: область вызова и его форму приносит обёртка,
+// разбор команды — адаптер интерпретатора (write-targets-bash.js).
+//
+// touchesWorld(область) → трогает ли вызов мир вообще.
+// mutationOf(область, форма, {commandWrites}) → {status, mutates}.
 import { isIgnored } from './git.js';
-import { gitMutates } from './write-targets-git.js';
 
 // Путь, правка которого системным изменением не является.
 export function isEphemeral(fp) {
@@ -34,270 +39,18 @@ export function gitEphemeral(fp) {
   return isIgnored(fp);
 }
 
-// Тела heredoc с ЗАКАВЫЧЕННЫМ маркером вычёркиваются ПЕРВЫМИ, до снятия кавычек:
-// после снятия маркер <<'PY' неотличим от << и опознать его нечем. Внутри такого
-// тела shell-подстановок не бывает по определению, а «больше» там — сравнение кода
-// (i>0:), не перенаправление; сама строка-открыватель остаётся в скане целиком,
-// потому что перенаправление формы `cat <<'EOF' > файл` стоит именно на ней.
-// Незакавыченный маркер не вычёркивается: в его теле живут подстановки.
-export function stripQuotedHeredocs(text) {
-  const out = [];
-  let mark = '';
-  let inside = false;
-  for (const line of text.split('\n')) {
-    if (inside) {
-      if (line === mark) inside = false;
-      continue;
-    }
-    const found = line.match(/<<[ \t]*["'][A-Za-z_][A-Za-z0-9_]*["']/);
-    if (found) {
-      mark = found[0].replace(/^<<[ \t]*["']/, '').replace(/["']$/, '');
-      inside = true;
-    }
-    out.push(line);
-  }
-  return out.join('\n');
-}
-
-// Все совпадения регулярки по строкам текста — как их печатал grep -oE.
-function matchAll(text, re) {
-  const found = [];
-  for (const line of text.split('\n')) {
-    for (const m of line.matchAll(new RegExp(re, 'g'))) found.push(m[0]);
-  }
-  return found;
-}
-
-const lastField = (s) => s.trim().split(/\s+/).pop();
-
-// Обезвредить закавыченное во ВСЕЙ команде разом, а не построчно.
-//
-// Содержимое кавычек СОХРАНЯЕТСЯ, меняются только служебные символы внутри них.
-// Прежний разбор выбрасывал закавыченное целиком — и `cat > "/repo/README.md"`
-// не давал ни одной цели: правка репозитория проходила гейт молча, потому что
-// гейтить было нечего. Обратная беда там же: `jq \'select(.size > 10)\'` давала
-// ложную цель, если кавычки не учесть вовсе.
-//
-// Замена одного символа на другой держит оба конца: путь внутри кавычек остаётся
-// целым словом и виден как цель, а «больше», труба и точка с запятой внутри
-// кавычек перестают выглядеть перенаправлением и разделителем.
-//
-// Ещё две беды жили в прежних двух заменах регуляркой — сперва одинарные
-// кавычки, потом двойные. Вложенные: одинарные внутри двойных съедались первыми,
-// двойные оставались непарными, и в остатке всплывал знак «больше». И строка в
-// кавычках, охватывающая перевод строки: многострочная `node -e "…"` разбиралась
-// по строкам, со второй строки разбор считал себя вне кавычек, и стрелка `=>` в
-// JS-коде читалась как запись в файл.
-//
-// Переводы строк сохраняются: дальнейшие регулярки работают построчно, и склейка
-// строк дала бы им чужие соседства.
-//
-// Кавычка внутри чужих кавычек — обычный символ, а не открывающая: ровно так её
-// читает и сам шелл.
-const NEUTRAL = '~';
-
-export function stripQuoted(text) {
-  let out = '';
-  let quote = '';
-  for (const ch of text) {
-    if (ch === '\n') {
-      out += ch;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = '';
-        continue;
-      }
-      out += '<>|&;()'.includes(ch) ? NEUTRAL : ch;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    out += ch;
-  }
-  return out;
-}
-
-// Цели записи Bash-команды: перенаправление (> >>), tee, правка на месте (-i),
-// cp/mv (последний аргумент либо явная цель после -t), запись из интерпретатора
-// (open(…,'w'), write_text/bytes). Гейтится цель, а не команда: сборка,
-// копирование в игнорируемый путь и любое чтение целей не дают.
-export function bashWriteTargets(cmd) {
-  // Знак «больше» бывает и сравнением: в кавычках (jq 'select(.size > 10)') и в условных
-  // скобках ([[ a > b ]]). Оба места вычёркиваются — но в ОТДЕЛЬНУЮ строку: разбору
-  // записи из интерпретатора нужны буквальные кавычки вокруг пути, на вычеркнутой он бы
-  // ослеп. Цена — перенаправление в закавыченную цель (> "мой файл") не увидится.
-  const scan = stripQuoted(stripQuotedHeredocs(cmd)).split('\n').map((line) => line
-    .replace(/\[\[[^\]]*\]\]/g, ' ')
-    .replace(/\(\([^)]*\)\)/g, ' ')).join('\n').replace(/\n+$/, '');
-
-  // Команда идёт КУСКАМИ слева направо, и каждый резолвится тем каталогом,
-  // который действует В ЭТОМ МЕСТЕ. Брать последний cd на всю команду нельзя:
-  // «cat > README.md && cd /tmp» пишет в текущий каталог, а не во временный, и
-  // общий cd выдавал бы запись в репозиторий за эфемерную.
-  const targets = [];
-  let cwd = '';
-  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
-    for (const t of pieceTargets(piece)) targets.push(resolveTarget(cwd, t));
-    const cd = /(?:^|[ \t])cd[ \t]+(\/[^\s|&;()<>]*)/.exec(piece);
-    if (cd) cwd = cd[1].replace(/\/$/, '');
-  }
-  return targets.concat(interpreterTargets(cmd));
-}
-
-// Цели одного куска команды. Разбор целей не зависит от того, где кусок стоит:
-// зависит только резолв относительного пути, и он живёт снаружи.
-function pieceTargets(piece) {
-  const targets = [];
-  for (const m of matchAll(piece, />>?[ \t]*[^|&;()<>\s]+/.source)) {
-    targets.push(m.replace(/^>>?[ \t]*/, ''));
-  }
-  for (const m of matchAll(piece, /\btee\b([ \t]+-[a-zA-Z]+)*[ \t]+[^|&;()<>\s]+/.source)) {
-    targets.push(lastField(m));
-  }
-  for (const m of matchAll(piece, /\b(sed|perl)\b[^|&;]*[ \t]-i[^|&;]*/.source)) {
-    for (const word of m.split(' ')) if (/[/.]/.test(word)) targets.push(word);
-  }
-  for (const m of matchAll(piece, /\b(cp|mv)\b[^|&;]*[ \t]-t[ \t]+[^\s|&;]+/.source)) {
-    targets.push(m.replace(/^.*[ \t]-t[ \t]+/, ''));
-  }
-  if (!/[ \t]-t[ \t]/.test(piece)) {
-    for (const m of matchAll(piece, /\b(cp|mv)\b[ \t]+[^|&;()<>]+/.source)) {
-      targets.push(lastField(m));
-    }
-  }
-  return targets;
-}
-
-// Запись из интерпретатора ищется в ИСХОДНОЙ команде, а не в очищенном тексте:
-// путь там стоит в кавычках, и на вычеркнутой строке разбор бы ослеп. По кускам
-// такие цели не разложить — регулярка смотрит на весь текст, — поэтому они
-// собираются отдельно и каталогом перехода не резолвятся: интерпретатор
-// запускается со своим рабочим каталогом, и угадывать его разбор не берётся.
-function interpreterTargets(cmd) {
-  const targets = [];
-  for (const m of matchAll(cmd, /open\([ \t]*['"][^'"]+['"][ \t]*,[ \t]*['"][wa]/.source)) {
-    targets.push(m.replace(/^open\([ \t]*['"]/, '').replace(/['"].*$/, ''));
-  }
-  for (const m of matchAll(cmd, /Path\([ \t]*['"][^'"]+['"][ \t]*\)[ \t]*\.[ \t]*write_(text|bytes)/.source)) {
-    targets.push(m.replace(/^Path\([ \t]*['"]/, '').replace(/['"].*$/, ''));
-  }
-  return targets;
-}
-
-// Цель записи, приведённая к настоящему пути. Команда часто переходит в каталог
-// и пишет уже относительным именем: «cd /tmp/work && cat > notes.md». Цель,
-// взятая как написана, начинается не с /tmp — и запись во временный каталог
-// гейтилась, хотя та же запись абсолютным путём проходила свободно.
-//
-// База берётся из АБСОЛЮТНОГО cd: относительный («cd ..») перевёл бы из
-// каталога, которого разбор не знает, и склейка соврала бы.
-//
-// Путь НОРМАЛИЗУЕТСЯ: без этого «cd /tmp && cat > ../repo/README.md» давал
-// /tmp/../repo/README.md, и эфемерность решалась по префиксу /tmp — правка
-// репозитория проходила бы гейт через переход вверх.
-function resolveTarget(cwd, target) {
-  if (!target || target.startsWith('-')) return target;
-  const joined = target.startsWith('/') || !cwd
-    ? target
-    : `${cwd}/${target.replace(/^\.\//, '')}`;
-  return joined.startsWith('/') ? normalizePath(joined) : joined;
-}
-
-// Свёртка «..» и «.» в абсолютном пути. Свой разбор, а не path.posix.normalize:
-// поведение здесь должно быть одинаковым для гейта и гварда якоря независимо от
-// платформы, на которой их запустили.
-function normalizePath(fp) {
-  const parts = [];
-  for (const part of fp.split('/')) {
-    if (part === '' || part === '.') continue;
-    if (part === '..') {
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-  return `/${parts.join('/')}`;
-}
-
-// Цель записи, очищенная от кавычек; дескрипторы и устройства целями не
-// являются и отсеиваются здесь же — пустая строка означает «это не цель».
-export function cleanTarget(rawTarget) {
-  if (!/\S/.test(rawTarget)) return '';
-  if (rawTarget.startsWith('/dev/') || rawTarget.startsWith('-')) return '';
-  if (['0', '1', '2', '&1', '&2'].includes(rawTarget)) return '';
-  return rawTarget.replace(/"$/, '').replace(/^"/, '').replace(/'$/, '').replace(/^'/, '');
-}
-
-// --- Трогает ли вызов мир -----------------------------------------------------
+// --- трогает ли вызов мир -----------------------------------------------------
 
 // Гейт стоит на правках МИРА: файлы, командная строка, база, внешние сервисы.
-// Всё, что мир не трогает, — не его дело. Отсюда два основания пройти, и у
-// каждого своё.
-//
-// Первое: инструмент только ЧИТАЕТ — менять ему нечего.
-const READING_TOOLS = new Set([
-  'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'BashOutput',
-  'TaskList', 'TaskGet', 'TaskOutput', 'ListAgents', 'ListSkills', 'ListPlugins',
-  'ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadNotifications',
-]);
-
-// Второе: инструмент правит ход САМОЙ СЕССИИ, а не мир. План, вопрос Владу,
-// список работы, расписание пробуждения — это состояние разговора: реестр про
-// них ничего не знает и знать не должен, а сверка спрашивала бы гейт про самого
-// себя. Тот же принцип уже записан для файлов: служебное состояние харнесса
-// эфемерно, и тудушки названы там прямым текстом.
-const SESSION_TOOLS = new Set([
-  'TaskCreate', 'TaskUpdate', 'TaskStop', 'ExitPlanMode', 'EnterPlanMode',
-  'AskUserQuestion', 'Skill', 'ScheduleWakeup', 'SendMessage', 'SendUserFile',
-  'ReportFindings', 'SuggestSkills', 'ShowOnboardingRolePicker',
-]);
-
-const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
-
-// Имя MCP-инструмента говорит само за себя, когда в нём стоит глагол чтения.
-// Это не догадка о поведении, а признак: сервер, который пишет, называет
-// операцию иначе.
-function mcpReads(name) {
-  const op = String(name).replace(/^mcp__.*?__/, '');
-  // Глагол стоит либо в начале имени (list_repos), либо на конце после
-  // подчёркивания (craft_read).
-  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
-    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
-}
-
-// Подагенты: их запуск сам по себе мир не трогает — трогает то, что делает
-// подагент, и решает это имя его роли.
-const SUBAGENT_TOOLS = new Set(['Task', 'Agent', 'Workflow']);
-
-// Читающие подагенты названы поимённо: разведка и критика мира не трогают, а
-// гейт на их запуске стоил бы вызова модели на каждом плане.
-const READING_AGENTS = new Set([
-  'Explore', 'Plan', 'plan-critic', 'plan-critic-unit', 'plan-critic-seams',
-  'plan-critic-verdict', 'comment-analyzer', 'type-design-analyzer',
-  'silent-failure-hunter', 'typescript-reviewer', 'react-reviewer',
-  'pr-test-analyzer', 'claude-code-guide',
-]);
-
-// Обслуживание СОБСТВЕННОГО хода: подписаться на события своего PR, разбудить
-// себя проверкой через час, снять подписку, переименовать сессию. Мир от этого
-// не меняется — меняется то, когда и на что агент проснётся, и реестр про такие
-// вещи ничего не знает. Без этого правила гейт запирал агента ровно там, где он
-// обязан довести работу до зелёного: подписку и отложенную проверку не
-// пропускал, и красный PR оставался без присмотра.
-const SESSION_OPS = /(subscribe_pr_activity|send_later|_wakeup|set_session_(title|tags))$/;
-
-// Трогает ли вызов мир. Единственный источник этого признака на весь слой:
-// на нём стоит план-гейт (что вообще сверять) и метрики (менял ли ход мир).
-export function touchesWorld(tool, input = {}) {
-  if (READING_TOOLS.has(tool) || SESSION_TOOLS.has(tool)) return false;
-  if (SESSION_OPS.test(tool)) return false;
-  if (SUBAGENT_TOOLS.has(tool)) return !READING_AGENTS.has(String(input.subagent_type || ''));
-  if (/^mcp__/.test(tool)) return !mcpReads(tool);
-  return true;
+// Всё, что мир не трогает, — не его дело. ЧЕМ был вызов, общая часть не знает:
+// область вызова приходит данными от обёртки, которая одна и знает имена
+// инструментов харнеса (tool-flags-claude.js: toolScope):
+//   {reads: true}   — вызов только читает, менять ему нечего;
+//   {session: true} — вызов правит ход САМОЙ СЕССИИ (план, вопрос, список
+//                     работы, расписание пробуждения), а не мир;
+//   {}              — всё остальное.
+export function touchesWorld(scope = {}) {
+  return !(scope.reads === true || scope.session === true);
 }
 
 // --- мутирует ли вызов мир ------------------------------------------------------
@@ -307,25 +60,32 @@ export function touchesWorld(tool, input = {}) {
 // же, как `echo x > /tmp/...` у шелла, иначе два пути к одному и тому же
 // расходились бы.
 //
-// ЧЕМ именно был вызов, говорит третий аргумент — его собирает обёртка, которая
-// знает имена инструментов харнеса (tool-flags-claude.js):
+// ЧЕМ именно был вызов, говорит форма вызова от обёртки:
 //   {kind: 'edit', path}    — правка содержимого по этому пути;
 //   {kind: 'command', text} — команда интерпретатора;
 //   ничего                  — всё прочее, что трогает мир.
-export function looksMutating(tool, input = {}, call = {}) {
-  if (!touchesWorld(tool, input)) return false;
+//
+// Команду разбирает АДАПТЕР интерпретатора: writes(текст) → {mutates, targets}.
+// Своего разбора у общей части нет, и адаптера ей никто не зашивает — нет
+// адаптера, нет и ответа: {status: 'unsupported', capability: 'write-targets'}.
+// Молчаливое «не мутирует» тут соврало бы про каждый ход, где работали шеллом.
+export function mutationOf(scope = {}, call = {}, adapters = {}) {
+  if (!touchesWorld(scope)) return { status: 'ok', mutates: false };
   if (call.kind === 'edit') {
     const fp = call.path || '';
-    return Boolean(fp) && !isEphemeral(fp) && !gitEphemeral(fp);
+    return { status: 'ok', mutates: Boolean(fp) && !isEphemeral(fp) && !gitEphemeral(fp) };
   }
   if (call.kind === 'command') {
     const cmd = String(call.text || '');
-    if (!cmd) return false;
-    if (gitMutates(cmd)) return true;
-    return bashWriteTargets(cmd).some((raw) => {
-      const t = cleanTarget(raw);
-      return Boolean(t) && !isEphemeral(t) && !gitEphemeral(t);
-    });
+    if (!cmd) return { status: 'ok', mutates: false };
+    const writes = adapters.commandWrites;
+    if (!writes) return { status: 'unsupported', capability: 'write-targets' };
+    const { mutates = false, targets = [] } = writes(cmd) || {};
+    if (mutates) return { status: 'ok', mutates: true };
+    return {
+      status: 'ok',
+      mutates: targets.some((t) => Boolean(t) && !isEphemeral(t) && !gitEphemeral(t)),
+    };
   }
-  return true;
+  return { status: 'ok', mutates: true };
 }

@@ -17,6 +17,8 @@
 // доставки очередь снимается целиком, без сверки со снимком. Лок не достался —
 // об этом говорится исходом, а не тишиной.
 //
+// Постановка в очередь: enqueueSummary(...) → {ok, reason}, enqueue(...) → true/false.
+//
 // Исходы flushQueue: stored — доставлено, очередь снята; nothing — очередь
 // пуста; offline — хранилище недоступно, очередь цела; push-failed — отказ на
 // записи; error — сборка не удалась; unsupported — адаптера для этой цели нет;
@@ -77,8 +79,12 @@ function writeQueue(queueFile, rows) {
 
 // Поставить сводку в очередь. Сводка ЗАМЕНЯЕТ прежнюю сводку той же сессии:
 // каждый Stop пишет её заново, и хранить все промежуточные незачем.
-export function enqueue(queueFile, summary, { waitMs = QUEUE_WAIT_MS } = {}) {
-  if (!queueFile || !summary || !summary.sid) return false;
+//
+// Причина отказа возвращается ОТДЕЛЬНО от самого отказа: «лок занят» и «запись
+// не удалась» — разные беды, и в журнале они прежде выглядели одинаково.
+// enqueueSummary(...) → {ok, reason}: reason — 'locked' либо 'write-failed'.
+export function enqueueSummary(queueFile, summary, { waitMs = QUEUE_WAIT_MS } = {}) {
+  if (!queueFile || !summary || !summary.sid) return { ok: false, reason: 'no-summary' };
   const { locked, value } = withLock(queueFile, () => {
     const bySid = new Map(parseQueue(readQueueText(queueFile)).map((r) => [r.sid, r]));
     bySid.delete(summary.sid);
@@ -86,7 +92,14 @@ export function enqueue(queueFile, summary, { waitMs = QUEUE_WAIT_MS } = {}) {
     const rows = [...bySid.values()].slice(-QUEUE_CAP);
     return writeQueue(queueFile, rows);
   }, { waitMs });
-  return locked ? value : false;
+  if (!locked) return { ok: false, reason: 'locked' };
+  return value ? { ok: true } : { ok: false, reason: 'write-failed' };
+}
+
+// Тот же вызов исходом «получилось или нет» — для края, которому причина не
+// нужна.
+export function enqueue(queueFile, summary, opts = {}) {
+  return enqueueSummary(queueFile, summary, opts).ok;
 }
 
 // День сводки — по НАЧАЛУ сессии и по UTC: один календарь у всех машин, и одна
@@ -133,12 +146,24 @@ export function upsertLines(text, summaries) {
 export function queueSummary(summary, log) {
   if (process.env.METRICS_STORE === 'off') return false;
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(storeTarget());
-  if (!queue) return false;
-  const ok = enqueue(queue, summary);
+  // Очереди нет — значит нет и адаптера хранения. Это тоже пропуск, и назван он
+  // возможностью: молчание здесь читалось бы как «сводка уехала».
+  if (!queue) {
+    if (log) {
+      append(log, {
+        kind: 'skip', ts: new Date().toISOString(), what: 'queue', capability: 'metrics-store',
+      });
+    }
+    return false;
+  }
+  const { ok, reason } = enqueueSummary(queue, summary);
   if (!ok && log) {
-    append(log, {
-      kind: 'skip', ts: new Date().toISOString(), what: 'queue', wait_ms: QUEUE_WAIT_MS,
-    });
+    const line = {
+      kind: 'skip', ts: new Date().toISOString(), what: 'queue', reason,
+    };
+    // Срок называется только там, где он и был причиной.
+    if (reason === 'locked') line.wait_ms = QUEUE_WAIT_MS;
+    append(log, line);
   }
   return ok;
 }

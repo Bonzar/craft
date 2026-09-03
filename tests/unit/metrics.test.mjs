@@ -125,7 +125,7 @@ test('сводка: циклы плана, инциденты, блокиров�
     { kind: 'pre', ts: T(3), turn: 1, tool: 'ExitPlanMode', id: 'p1', decision: 'deny', class: 'delta.repeats', h: 'hp', plan: true, stage: true },
     { kind: 'pre', ts: T(4), turn: 1, tool: 'ExitPlanMode', id: 'p2', decision: 'allow', h: 'hp', plan: true, stage: true },
     { kind: 'post', ts: T(5), turn: 1, tool: 'ExitPlanMode', id: 'p2', error: false },
-    { kind: 'pre', ts: T(6), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', decision: 'allow', h: 'hw', edit: true, craft_write: true },
+    { kind: 'pre', ts: T(6), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', decision: 'allow', h: 'hw', edit: true, note_write: true },
     { kind: 'post', ts: T(7), turn: 1, tool: 'mcp__Craft__craft_write', id: 'w', error: false },
     { kind: 'pre', ts: T(8), turn: 1, tool: 'Bash', id: 'g', decision: 'allow', h: 'hg', push: true },
     { kind: 'post', ts: T(9), turn: 1, tool: 'Bash', id: 'g', error: false },
@@ -142,11 +142,11 @@ test('сводка: циклы плана, инциденты, блокиров�
   assert.deepEqual(s.incidents, { detected: 2, skill_called: 1, share: 0.5 });
   assert.deepEqual(s.stop_blocks, { 'universal-stop-routine-facts': 1 });
   assert.equal(s.tool_errors, 2);
-  assert.deepEqual(s.outcome, { craft_writes: 1, pushed: true });
+  assert.deepEqual(s.outcome, { note_writes: 1, pushed: true });
   assert.equal(s.model_calls.count, 2);
   assert.equal(s.model_calls.ms, 2900);
   assert.deepEqual(s.model_calls.by_mode, { cover: { count: 1, ms: 900 }, ingest: { count: 1, ms: 2000 } });
-  assert.equal(s.first_edit_ms, 6000, 'первая правка — craft_write, план правкой не считается');
+  assert.equal(s.first_edit_ms, 6000, 'первая правка — запись в базу заметок, план правкой не считается');
 });
 
 test('сводка: пустой журнал даёт пустую сводку без падения', () => {
@@ -478,7 +478,9 @@ test('состояние под занятым локом: запись проп
 // раз» и «в который раз упал CI» — обычная работа, а признак на них срабатывал
 // и завышал число переуказаний в каждой сводке.
 test('переуказание считается по обращению к агенту, а не по усилителю', () => {
-  for (const p of ['я же просил не трогать README', 'повторяю: не трогай прод',
+  for (const p of ['я же просил не трогать README', 'я уже просил не трогать README',
+    'я же просила не трогать README', 'я уже говорила про хвосты',
+    'повторяю: не трогай прод',
     'сколько раз можно говорить', 'русским языком: без хвостов']) {
     assert.equal(metrics.looksLikeReinstruction(p), true, p);
   }

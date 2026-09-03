@@ -3,11 +3,15 @@
 // плана. Общая часть получает от него ПРИЗНАКИ и форму вызова данными.
 //
 // toolFlags(инструмент, вход) → признаки записи журнала:
-//   edit — правка содержимого; craft_write — запись в базу Craft; plan — показ
-//   плана; question — вопрос Владу; stage — стадия хода, повтор которой внутри
-//   хода является сигналом; push — отправка сделанного; skill — имя скилла.
+//   edit — правка содержимого; note_write — запись в базу заметок (у Claude Code
+//   это Craft); plan — показ плана; question — вопрос Владу; stage — стадия
+//   хода, повтор которой внутри хода является сигналом; push — отправка
+//   сделанного; skill — имя скилла.
 // callShape(инструмент, вход) → чем был вызов: {kind: 'edit', path},
 //   {kind: 'command', text} либо {} — по нему считается «менял ли мир».
+// toolScope(инструмент, вход) → область вызова: {reads: true} — только читает,
+//   {session: true} — правит ход самой сессии, {} — всё остальное. По ней общая
+//   часть решает, трогает ли вызов мир.
 import { looksLikePush } from './write-targets-git.js';
 
 // Путь входа у правящих инструментов. Один список: их было два, и они
@@ -16,15 +20,17 @@ const EDIT_TOOL_PATH = {
   Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path',
 };
 
-const isCraftWrite = (tool) => /__craft_write$/.test(String(tool || ''));
+// Запись в базу заметок: у этого харнеса — MCP-инструмент Craft. Имя базы живёт
+// ЗДЕСЬ; общая часть знает только возможность «запись в базу заметок».
+const isNoteWrite = (tool) => /__craft_write$/.test(String(tool || ''));
 
 // Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
 const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
 
 export function toolFlags(tool, input = {}) {
   const flags = {};
-  if (EDIT_TOOL_PATH[tool] || isCraftWrite(tool)) flags.edit = true;
-  if (isCraftWrite(tool)) flags.craft_write = true;
+  if (EDIT_TOOL_PATH[tool] || isNoteWrite(tool)) flags.edit = true;
+  if (isNoteWrite(tool)) flags.note_write = true;
   if (tool === 'ExitPlanMode') flags.plan = true;
   if (tool === 'AskUserQuestion') flags.question = true;
   if (STAGE_TOOLS.has(tool)) flags.stage = true;
@@ -36,7 +42,75 @@ export function toolFlags(tool, input = {}) {
 export function callShape(tool, input = {}) {
   const editPath = EDIT_TOOL_PATH[tool];
   if (editPath) return { kind: 'edit', path: input[editPath] || '' };
-  if (isCraftWrite(tool)) return { kind: 'edit', path: String(input.block_id || input.id || tool) };
+  if (isNoteWrite(tool)) return { kind: 'edit', path: String(input.block_id || input.id || tool) };
   if (tool === 'Bash') return { kind: 'command', text: String(input.command || '') };
+  return {};
+}
+
+// Гейт стоит на правках МИРА: файлы, командная строка, база, внешние сервисы.
+// Всё, что мир не трогает, — не его дело. Отсюда два основания пройти, и у
+// каждого своё.
+//
+// Первое: инструмент только ЧИТАЕТ — менять ему нечего.
+const READING_TOOLS = new Set([
+  'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'BashOutput',
+  'TaskList', 'TaskGet', 'TaskOutput', 'ListAgents', 'ListSkills', 'ListPlugins',
+  'ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadNotifications',
+]);
+
+// Второе: инструмент правит ход САМОЙ СЕССИИ, а не мир. План, вопрос Владу,
+// список работы, расписание пробуждения — это состояние разговора: реестр про
+// них ничего не знает и знать не должен, а сверка спрашивала бы гейт про самого
+// себя. Тот же принцип уже записан для файлов: служебное состояние харнесса
+// эфемерно, и тудушки названы там прямым текстом.
+const SESSION_TOOLS = new Set([
+  'TaskCreate', 'TaskUpdate', 'TaskStop', 'ExitPlanMode', 'EnterPlanMode',
+  'AskUserQuestion', 'Skill', 'ScheduleWakeup', 'SendMessage', 'SendUserFile',
+  'ReportFindings', 'SuggestSkills', 'ShowOnboardingRolePicker',
+]);
+
+const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
+
+// Имя MCP-инструмента говорит само за себя, когда в нём стоит глагол чтения.
+// Это не догадка о поведении, а признак: сервер, который пишет, называет
+// операцию иначе.
+function mcpReads(name) {
+  const op = String(name).replace(/^mcp__.*?__/, '');
+  // Глагол стоит либо в начале имени (list_repos), либо на конце после
+  // подчёркивания (craft_read).
+  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
+    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
+}
+
+// Подагенты: их запуск сам по себе мир не трогает — трогает то, что делает
+// подагент, и решает это имя его роли.
+const SUBAGENT_TOOLS = new Set(['Task', 'Agent', 'Workflow']);
+
+// Читающие подагенты названы поимённо: разведка и критика мира не трогают, а
+// гейт на их запуске стоил бы вызова модели на каждом плане.
+const READING_AGENTS = new Set([
+  'Explore', 'Plan', 'plan-critic', 'plan-critic-unit', 'plan-critic-seams',
+  'plan-critic-verdict', 'comment-analyzer', 'type-design-analyzer',
+  'silent-failure-hunter', 'typescript-reviewer', 'react-reviewer',
+  'pr-test-analyzer', 'claude-code-guide',
+]);
+
+// Обслуживание СОБСТВЕННОГО хода: подписаться на события своего PR, разбудить
+// себя проверкой через час, снять подписку, переименовать сессию. Мир от этого
+// не меняется — меняется то, когда и на что агент проснётся, и реестр про такие
+// вещи ничего не знает. Без этого правила гейт запирал агента ровно там, где он
+// обязан довести работу до зелёного: подписку и отложенную проверку не
+// пропускал, и красный PR оставался без присмотра.
+const SESSION_OPS = /(subscribe_pr_activity|send_later|_wakeup|set_session_(title|tags))$/;
+
+// Область вызова для общей части: только чтение, обслуживание собственного хода
+// или всё остальное. Имена инструментов кончаются ЗДЕСЬ.
+export function toolScope(tool, input = {}) {
+  if (READING_TOOLS.has(tool)) return { reads: true };
+  if (SESSION_TOOLS.has(tool) || SESSION_OPS.test(tool)) return { session: true };
+  if (SUBAGENT_TOOLS.has(tool)) {
+    return READING_AGENTS.has(String(input.subagent_type || '')) ? { reads: true } : {};
+  }
+  if (/^mcp__/.test(tool)) return mcpReads(tool) ? { reads: true } : {};
   return {};
 }

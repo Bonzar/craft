@@ -14,7 +14,7 @@
 // На Stop, следом за строкой хода, в журнал ложится СВОДКА сессии одной строкой
 // (kind: summary) — свёртка всего журнала с начала сессии; её копия лежит в
 // `<журнал>.summary.json`, откуда её забирает хранение. Состав полей сводки —
-// в summarize (lib/metrics.js); здесь он не пересказывается.
+// в summarize (lib/metrics-summary.js); здесь он не пересказывается.
 //
 // Сигналы: повтор реплики и маркер переуказания (repeat, reinstruct у prompt),
 // повтор того же вызова и повтор стадии в ходе (repeat_call, stage_repeat у
@@ -22,7 +22,7 @@
 // в них нет.
 //
 // Контракт записи вызова (по нему судят и сводка, и кейсы): pre несёт признаки
-// `edit`, `craft_write`, `plan`, `question`, `stage`, `push`, `skill` и
+// `edit`, `note_write`, `plan`, `question`, `stage`, `push`, `skill` и
 // `mutates` — «этот вызов менял мир». Их ставит здесь обёртка, потому что имена
 // инструментов знает она; сводка считает по признакам и про инструменты не
 // знает ничего.
@@ -47,8 +47,19 @@ import {
   refreshSummary, callHash,
   promptHash, looksLikeReinstruction, isProgress, currentSessionId,
 } from './lib/metrics.js';
-import { looksMutating } from './lib/write-targets.js';
-import { toolFlags, callShape } from './lib/tool-flags-claude.js';
+import { mutationOf } from './lib/write-targets.js';
+import { toolFlags, callShape, toolScope } from './lib/tool-flags-claude.js';
+import { commandTargets } from './lib/write-targets-bash.js';
+import { gitMutates } from './lib/write-targets-git.js';
+
+// Адаптеры инструментов для общей части. Собирает их ОБЁРТКА: сама общая часть
+// ни одного инструмента по имени не знает и ничего себе не выбирает — без
+// адаптера она отвечает `unsupported`, и это видно строкой журнала. Команда
+// интерпретатора разбирается двумя: шелл даёт цели записи, git — правку,
+// которая целями не видна («git commit» ничего не перенаправляет).
+const ADAPTERS = {
+  commandWrites: (text) => ({ mutates: gitMutates(text), targets: commandTargets(text) }),
+};
 import { repoOf } from './lib/repo-git.js';
 
 const {
@@ -145,7 +156,7 @@ const stop = updateState(log, (state) => {
       h: callHash(tool, input),
       hooks_ms: hooksMs, hooks,
     };
-    // Признаки вызова: правка, запись в Craft, показ плана, вопрос, стадия,
+    // Признаки вызова: правка, запись в базу заметок, показ плана, вопрос, стадия,
     // пуш, имя скилла. Их ставит обёртка, потому что имена инструментов знает
     // она; сводка считает по признакам.
     const flags = toolFlags(tool, input);
@@ -165,7 +176,9 @@ const stop = updateState(log, (state) => {
     // Мутирующий вызов помечается ТОЛЬКО у прошедших: у отказанного не будет
     // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
     if (kind === 'allow') {
-      if (looksMutating(tool, input, callShape(tool, input))) record.mutates = true;
+      const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
+      if (mutation.status !== 'ok') record.unsupported = mutation.capability;
+      else if (mutation.mutates) record.mutates = true;
       if (id) {
         state.pre_flags[id] = {
           push: record.push === true, stage: record.stage === true, mutates: record.mutates === true,

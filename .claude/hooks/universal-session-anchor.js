@@ -36,7 +36,8 @@ import { readEvent } from './lib/event.js';
 import { deny } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
 import { sessionAnchor } from './lib/paths.js';
-import { isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget } from './lib/write-targets.js';
+import { isEphemeral, gitEphemeral } from './lib/write-targets.js';
+import { commandTargets } from './lib/write-targets-bash.js';
 import { classifyCommand } from './lib/read-only-command.js';
 
 const ANCHOR_HEADER = 'Якорь сессии';
@@ -118,7 +119,7 @@ if (isBash) {
   // Недоказанная команда всё же проходит, когда всё, во что она пишет, —
   // временное: тем же правом пользуется правка файла, и расхождение между
   // ветками одного гварда было бы заметно только на живом прогоне.
-  const targets = bashWriteTargets(cmd).map(cleanTarget).filter(Boolean);
+  const targets = commandTargets(cmd);
   if (targets.length && targets.every((t) => isEphemeral(t) || gitEphemeral(t))) {
     process.exit(0);
   }

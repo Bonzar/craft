@@ -69,3 +69,56 @@ test('без адаптера хранение отвечает unsupported с �
   assert.match(fs.readFileSync(queue, 'utf8'), /"sid":"s1"/, 'очередь цела');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// Отказ постановки называется ПРИЧИНОЙ: занятый лок и неудавшаяся запись — разные
+// беды, и в журнале они выглядели одинаково («ждали столько-то»), из-за чего
+// сломанный диск читался как чужая долгая выгрузка.
+test('отказ постановки в очередь называет причину', () => {
+  const dir = tmp();
+  const queue = path.join(dir, 'queue.jsonl');
+
+  // Лок занят живым чужим процессом: наш собственный номер, которого этот вызов
+  // не держит.
+  fs.mkdirSync(`${queue}.lock`);
+  fs.writeFileSync(path.join(`${queue}.lock`, 'owner'), String(process.pid));
+  assert.deepEqual(store.enqueueSummary(queue, summary('s1', 1), { waitMs: 50 }),
+    { ok: false, reason: 'locked' });
+  fs.rmSync(`${queue}.lock`, { recursive: true, force: true });
+
+  // Записать некуда: на месте файла очереди каталог.
+  fs.mkdirSync(queue);
+  assert.deepEqual(store.enqueueSummary(queue, summary('s1', 1), { waitMs: 50 }),
+    { ok: false, reason: 'write-failed' });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Нет адаптера — нет и очереди, и это ПРОПУСК, а не тишина: сводка не уехала и
+// не уедет, и в журнале это названо возможностью.
+test('без адаптера постановка в очередь названа пропуском в журнале', () => {
+  const dir = tmp();
+  const log = path.join(dir, 'metrics.jsonl');
+  const saved = {
+    queue: process.env.METRICS_STORE_QUEUE,
+    target: process.env.METRICS_STORE_TARGET,
+    off: process.env.METRICS_STORE,
+  };
+  delete process.env.METRICS_STORE_QUEUE;
+  process.env.METRICS_STORE_TARGET = dir;
+  process.env.METRICS_STORE = '';
+
+  const ok = store.queueSummary(summary('s1', 1), log);
+
+  if (saved.queue === undefined) delete process.env.METRICS_STORE_QUEUE;
+  else process.env.METRICS_STORE_QUEUE = saved.queue;
+  if (saved.target === undefined) delete process.env.METRICS_STORE_TARGET;
+  else process.env.METRICS_STORE_TARGET = saved.target;
+  if (saved.off === undefined) delete process.env.METRICS_STORE;
+  else process.env.METRICS_STORE = saved.off;
+
+  assert.equal(ok, false);
+  const line = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n').pop());
+  assert.equal(line.kind, 'skip');
+  assert.equal(line.what, 'queue');
+  assert.equal(line.capability, 'metrics-store');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

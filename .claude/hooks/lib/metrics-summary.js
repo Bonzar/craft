@@ -47,7 +47,7 @@ function blank(sid, now) {
     stop_blocks: {},
     tool_errors: 0,
     first_edit_ms: null,
-    outcome: { craft_writes: 0, pushed: false },
+    outcome: { note_writes: 0, pushed: false },
     signals: {
       prompt_repeats: 0,
       reinstructions: 0,
@@ -210,13 +210,14 @@ function fillToolErrors(s, records) {
   }
 }
 
-// Исход сессии: сколько записей ушло в Craft и был ли пуш.
+// Исход сессии: сколько записей ушло в базу заметок и был ли пуш. Инструмент,
+// которым эта база ведётся, свёртке неизвестен: признак ставит обёртка.
 function fillOutcome(s, records, pres) {
   for (const r of records) {
     if (!succeeded(r)) continue;
     const pre = r.id ? pres.get(r.id) : null;
     if (!pre) continue;
-    if (pre.craft_write === true) s.outcome.craft_writes += 1;
+    if (pre.note_write === true) s.outcome.note_writes += 1;
     if (pre.push === true) s.outcome.pushed = true;
   }
 }

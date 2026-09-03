@@ -22,12 +22,13 @@
 //
 // Выключатель METRICS_STORE=off; в кейсах раннера он выставлен всегда — иначе
 // прогон тестов пушил бы в настоящую ветку. METRICS_STORE_INLINE=1 — работа в
-// том же процессе (тест хранения на временных репозиториях).
+// том же процессе (тест хранения на временных репозиториях); лок очереди она
+// ждёт коротким сроком хода, а не сроком работника.
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import {
-  defaultQueue, enqueue, flushQueue, storeTarget, WORKER_WAIT_MS,
+  defaultQueue, enqueue, flushQueue, storeTarget, WORKER_WAIT_MS, QUEUE_WAIT_MS,
 } from './lib/metrics-store.js';
 
 if (process.env.METRICS_STORE === 'off') process.exit(0);
@@ -37,7 +38,10 @@ const selfPath = fileURLToPath(import.meta.url);
 // здесь уже расходилась с той, и переопределение окружения игнорировалось.
 const TARGET = storeTarget();
 
-function store(summaryFile) {
+// waitMs — сколько ждать лок очереди. Своё число ПРИХОДИТ СНАРУЖИ: пять минут
+// имеет право ждать только отсоединённый работник, а инлайн-режим идёт в
+// процессе хука, и зашитый большой срок оказался бы ожиданием в цепочке хода.
+function store(summaryFile, { waitMs }) {
   let summary;
   try {
     summary = JSON.parse(fs.readFileSync(summaryFile, 'utf8'));
@@ -48,12 +52,12 @@ function store(summaryFile) {
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(TARGET);
   if (!queue) return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
   // Работник ОТСОЕДИНЁН, его никто не ждёт — лок он ждёт долго. Короткий срок
-  // здесь означал бы потерянную сводку: предыдущая выгрузка держит лок всё
+  // у него означал бы потерянную сводку: предыдущая выгрузка держит лок всё
   // время сети, а следующего Stop у сессии может не быть.
-  let queued = enqueue(queue, summary, { waitMs: WORKER_WAIT_MS });
+  let queued = enqueue(queue, summary, { waitMs });
   const res = flushQueue({ target: TARGET, queueFile: queue });
   // Не встали в очередь до выгрузки — пробуем ещё раз: лок теперь свободен.
-  if (!queued) queued = enqueue(queue, summary, { waitMs: WORKER_WAIT_MS });
+  if (!queued) queued = enqueue(queue, summary, { waitMs });
   return queued ? res : { ...res, queued: false };
 }
 
@@ -80,7 +84,7 @@ function noteOutcome(res, summaryFile) {
 // Фоновый работник: без события, сводка — из окружения.
 if (process.env.METRICS_STORE_WORKER) {
   const file = process.env.METRICS_STORE_SUMMARY || '';
-  noteOutcome(store(file), file);
+  noteOutcome(store(file, { waitMs: WORKER_WAIT_MS }), file);
   process.exit(0);
 }
 
@@ -102,7 +106,7 @@ const summaryFile = `${log}.summary.json`;
 if (!fs.existsSync(summaryFile)) process.exit(0);
 
 if (process.env.METRICS_STORE_INLINE) {
-  const res = store(summaryFile);
+  const res = store(summaryFile, { waitMs: QUEUE_WAIT_MS });
   noteOutcome(res, summaryFile);
   process.stderr.write(`[metrics-store] ${res.status}${res.delivered ? ` ×${res.delivered}` : ''}\n`);
   process.exit(0);
