@@ -244,7 +244,7 @@ function cleanState(s) {
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
-    s.metrics, `${s.metrics}.state.json`,
+    s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
