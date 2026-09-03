@@ -40,7 +40,7 @@ import { hookOnce } from './lib/once.js';
 import {
   isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget, touchesWorld,
 } from './lib/write-targets.js';
-import { lastInputTrace, exemptScopeFile, approvalRegistry } from './lib/paths.js';
+import { exemptScopeFile, approvalRegistry } from './lib/paths.js';
 import {
   waitForParsing, readRegistry, render, switchAt, appendLog,
 } from './lib/registry.js';
@@ -54,12 +54,6 @@ if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
 // реестре: переменная окружения и режим клиента такого следа не оставляют.
 // Автономный прогон тоже не выход: его задание ложится в реестр целью, и правки
 // рутины сверяются с ним наравне со всеми.
-
-// Отладочный след последнего входа (эфемерный): по нему проверяются факты о
-// составе hook-входа (напр. поле permission_mode) без правки харнесса.
-try {
-  fs.writeFileSync(lastInputTrace('plan-gate'), raw);
-} catch { /* след не записался — на решение гейта это не влияет */ }
 
 // Craft-запись опознаётся по СУФФИКСУ имени, а не по полному: префикс MCP-сервера
 // Craft меняется на переподключении (mcp__Craft__… в одной сессии, mcp__‹uuid›__…
@@ -131,11 +125,6 @@ function nonEmptyFile(file) {
   } catch {
     return false;
   }
-}
-
-
-function relativeTo(fp) {
-  return fp.startsWith(`${PWD}/`) ? fp.slice(PWD.length + 1) : fp;
 }
 
 const classifier = classifierPath();
@@ -299,8 +288,6 @@ const cdesc = Buffer.concat([
   Buffer.from('инструмент: craft_write\nкоманда:\n', 'utf8'),
   headBytes(craftCmd, DESC_LIMIT),
 ]);
-const lowerIds = ids.map((id) => id.replace(/[A-F]/g, (c) => c.toLowerCase()));
-
 // Craft-запись сверяется тем же вопросом, что правки файлов и шелла: решает
 // реестр одобренного, а не совпадение идентификаторов блоков со списком целей.
 coverCheck(cdesc);
