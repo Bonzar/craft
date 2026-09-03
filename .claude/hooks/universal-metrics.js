@@ -77,14 +77,13 @@ updateState(log, (state) => {
     // с тем же идентификатором. Счётчики и начало сессии при этом не сбрасываются
     // — журнал продолжается, а причина старта пишется полем source.
     if (!state.repo) state.repo = repoOf(cwd);
-    // Засев смещения транскрипта. У возобновлённой или скомпакченной сессии он
-    // на старте уже несёт историю, и без засева первый же Stop записал бы её
-    // всю в один ход. Пересев идёт и когда файл КОРОЧЕ прежнего смещения —
-    // это другой транскрипт, и старое смещение уже никогда не сойдётся.
-    const size = transcriptSize(transcript);
-    if (!Number.isFinite(state.transcript_offset) || size < state.transcript_offset) {
-      state.transcript_offset = size;
-    }
+    // Засев смещения транскрипта — ВСЕГДА по текущему размеру файла. Всё, что
+    // написано до старта, принадлежит прошлым ходам, чем бы старт ни был вызван.
+    // Условный засев («только если файла стало меньше») пропускал обратный
+    // случай: после нечистого выхода или компакта в БОЛЬШИЙ транскрипт файл
+    // длиннее сохранённого смещения, и первый же Stop записывал дорезумную
+    // историю в новый ход.
+    state.transcript_offset = transcriptSize(transcript);
     append(log, {
       kind: 'session', ...base, source: typeof event.source === 'string' ? event.source : '',
       harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,

@@ -298,18 +298,21 @@ function runPass(c) {
   // Подготовке по умолчанию подаётся ТОТ ЖЕ вход и то же окружение, что целевому
   // хуку; кейс может задать своё событие (setup_input) и свои переменные
   // (setup_env). Список setup_input — свой элемент каждому шагу подготовки.
+  // Подстановка подготовке идёт С СОСТОЯНИЕМ прогона: без него {TESTS_DIR} ещё
+  // раскрывался, а {METRICS}, {SID} и прочие пути прогона — нет, и шаг молча
+  // получал literal вместо пути.
   const setupEnv = { ...caseEnv };
-  for (const [k, v] of Object.entries(c.setup_env || {})) setupEnv[k] = subst(v);
+  for (const [k, v] of Object.entries(c.setup_env || {})) setupEnv[k] = subst(v, s);
   const setupList = Array.isArray(c.setup_input) ? c.setup_input : null;
   const setupOne = !setupList && c.setup_input !== undefined
-    ? subst(JSON.stringify(c.setup_input)) : '';
+    ? subst(JSON.stringify(c.setup_input), s) : '';
 
   (c.setup || []).forEach((name, i) => {
     const sBase = SCRIPT[name] || name;
     const sScript = resolveHook(sBase);
     if (!sScript) return;
     let step = setupOne;
-    if (setupList) step = subst(JSON.stringify(setupList[i] ?? null));
+    if (setupList) step = subst(JSON.stringify(setupList[i] ?? null), s);
     runHook(sScript, step && step !== 'null' ? step : input, setupEnv);
   });
 
