@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { commonDir } from './git.js';
 
 function parse(text) {
   const out = {};
@@ -59,10 +59,7 @@ export function loadEnv() {
 
   let envFile = path.join(root, '.env');
   if (!fs.existsSync(envFile)) {
-    const res = spawnSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
-      encoding: 'utf8',
-    });
-    const common = (res.stdout || '').trim();
+    const common = commonDir(root);
     if (common) envFile = path.join(path.dirname(common), '.env');
   }
   apply(envFile);
