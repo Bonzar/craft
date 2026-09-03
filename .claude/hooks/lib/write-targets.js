@@ -230,3 +230,56 @@ export function cleanTarget(rawTarget) {
   if (['0', '1', '2', '&1', '&2'].includes(rawTarget)) return '';
   return rawTarget.replace(/"$/, '').replace(/^"/, '').replace(/'$/, '').replace(/^'/, '');
 }
+
+// --- вызовы git в команде ------------------------------------------------------
+
+// Что стоит ПЕРЕД git и вызова не отменяет: присваивания окружения и обёртки
+// запуска. Всё прочее впереди значит, что слово git — аргумент чужой команды
+// («echo git push»), а не вызов.
+const GIT_WRAPPERS = new Set(['sudo', 'env', 'command', 'time', 'nice', 'ionice', 'nohup', 'stdbuf']);
+
+// Глобальные ключи git, которые ЗАБИРАЮТ значение следующим словом: без этого
+// «git -C /repo push» читалось бы как подкоманда /repo.
+const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+
+// Все вызовы git в команде: {sub, rest} на каждый.
+//
+// Разбор идёт по КУСКАМ между разделителями и по тексту БЕЗ КАВЫЧЕК. Иначе
+// «printf 'git push'» считался бы пушем (слово в кавычках — не команда), а в
+// «git status && git commit -m x» виден был бы только первый вызов, и правка
+// цепочкой выглядела бы как ход без единого изменения.
+export function gitInvocations(command) {
+  const scan = stripQuoted(stripQuotedHeredocs(String(command || '')));
+  const out = [];
+  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
+    const parsed = gitParts(piece);
+    if (parsed.sub) out.push(parsed);
+  }
+  return out;
+}
+
+export function gitSubcommand(command) {
+  const [first] = gitInvocations(command);
+  return first ? first.sub : '';
+}
+
+function gitParts(piece) {
+  const words = piece.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  // Голова куска: присваивания и обёртки пропускаются, на всём остальном разбор
+  // прекращается — git дальше уже не вызов, а аргумент.
+  while (i < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || GIT_WRAPPERS.has(words[i]))) i += 1;
+  const head = words[i] || '';
+  if (head !== 'git' && !head.endsWith('/git')) return { sub: '', rest: [] };
+  let sub = '';
+  i += 1;
+  for (; i < words.length; i += 1) {
+    const word = words[i];
+    if (GIT_GLOBAL_WITH_VALUE.has(word)) { i += 1; continue; }
+    if (word.startsWith('-')) continue;
+    sub = word;
+    i += 1;
+    break;
+  }
+  return { sub, rest: words.slice(i) };
+}

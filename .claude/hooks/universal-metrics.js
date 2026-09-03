@@ -34,7 +34,7 @@ import { sessionId } from './lib/paths.js';
 import {
   append, updateState, reasonClass, repoOf, turnUsage, responseIsError,
   projectDispatcherAt, currentMetricsLog, transcriptSize,
-  readJournal, summarize, writeSummary, callHash, looksLikePush,
+  refreshSummary, callHash, looksLikePush,
 } from './lib/metrics.js';
 
 const {
@@ -58,7 +58,7 @@ const ts = new Date(now).toISOString();
 // process.exit недопустим: он не разматывает finally, и лок остался бы взятым
 // до истечения его срока, то есть следующий хук ждал бы минуты. Поэтому выходы
 // внутри — обычные return.
-updateState(log, (state) => {
+const stop = updateState(log, (state) => {
   if (!state.started_at) state.started_at = now;
   if (!Number.isFinite(state.turn)) state.turn = 0;
   if (!state.inflight || typeof state.inflight !== 'object') state.inflight = {};
@@ -134,15 +134,13 @@ updateState(log, (state) => {
     };
     if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
     append(log, record);
-
-    // Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
-    // Журнал НЕ ПРОЧИТАЛСЯ (это не то же, что «пуст») — сводку не трогаем:
-    // нулевая сводка затёрла бы хорошую, и хранение увезло бы пустую сессию.
-    const records = readJournal(log);
-    if (records) {
-      const summary = summarize(records, { sid, now });
-      append(log, { kind: 'summary', ts, ...summary });
-      writeSummary(log, { ts, ...summary });
-    }
+    return true;
   }
+  return false;
 });
+
+// Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
+// Складывается ВНЕ правки состояния: у общего лока одна занятость на процесс,
+// и вложенный вызов внутри неё не залочился бы вовсе — сводку тогда могла бы
+// затереть та, что собирает параллельный фоновый вызов модели.
+if (stop) refreshSummary(log, { sid, now, record: true });

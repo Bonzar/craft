@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { metricsLog, sessionId } from './paths.js';
 import { withLock, atomicWrite } from './lock.js';
 import { sha256 } from './hash.js';
+import { gitInvocations } from './write-targets.js';
 
 export function append(file, record) {
   if (!file) return;
@@ -49,6 +50,11 @@ export function recordModelCall({ mode, ms, outcome }) {
   append(log, {
     kind: 'model', ts: new Date().toISOString(), mode: String(mode || ''), ms, outcome,
   });
+  // Сводка пересобирается ТУТ ЖЕ, если она уже сложена: фоновый приём кончается
+  // позже последнего Stop хода, и его вызов модели иначе не попал бы ни в одну
+  // сводку — ни в эту (её уже написали), ни в следующую (ход мог быть
+  // последним). Сводки ещё нет — пересобирать нечего, её сложит ближайший Stop.
+  if (fs.existsSync(`${log}.summary.json`)) refreshSummary(log, { sid: sessionId() });
 }
 
 // Есть ли у чекаута, в котором идёт сессия, СВОЯ регистрация диспетчера
@@ -313,26 +319,60 @@ export function callHash(tool, input) {
   const semantic = Object.keys(src)
     .filter((k) => !VOLATILE_INPUT.has(k))
     .sort()
-    .map((k) => `${k}=${JSON.stringify(src[k])}`)
+    .map((k) => `${k}=${canonical(src[k])}`)
     .join('\n');
   return sha256(`${tool}\n${semantic}`).slice(0, 16);
 }
 
-// Пуш опознаётся по ПОДКОМАНДЕ, а не по слову где угодно в строке: `git stash
-// push`, `git commit -m "fix push"` и `git log --grep push` пушем не являются.
-// Пробный прогон (--dry-run) тоже не пуш.
-const GIT_PUSH = /\bgit\b(?:\s+(?:-[^\s]+|--[^\s]+)(?:\s+[^\s-][^\s]*)?)*\s+push\b/;
+// Значение в устойчивом виде: ключи сортируются на КАЖДОМ уровне, а не только
+// на верхнем. Порядок полей смысла не несёт, и на вложенных объектах (правки
+// MultiEdit, ячейки NotebookEdit) один и тот же вызов давал разные хеши — то
+// есть повтор после отказа не узнавался и ложный отказ не засчитывался.
+// Порядок элементов массива, наоборот, значим и сохраняется.
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
 
+// Пуш опознаётся по ВЫЗОВУ git и его подкоманде, а не по слову где угодно в
+// строке: `git stash push`, `git commit -m "fix push"`, `git log --grep push`
+// и `printf 'git push'` пушем не являются. Пробный прогон (--dry-run) тоже.
 export function looksLikePush(command) {
-  const cmd = String(command || '');
-  if (!GIT_PUSH.test(cmd)) return false;
-  return !/--dry-run\b/.test(cmd);
+  return gitInvocations(command)
+    .some((inv) => inv.sub === 'push' && !inv.rest.includes('--dry-run'));
 }
 
 export function writeSummary(log, summary) {
   try {
     fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify(summary)}\n`);
   } catch { /* копия сводки не легла — в журнале она есть */ }
+}
+
+// Пересборка сводки по журналу — под локом сводки, чтобы читающий журнал и
+// пишущий копию не разъезжались с параллельным вызовом.
+//
+// Зовётся с конца хода (record: true — тогда сводка ещё и ложится строкой в
+// журнал) и из ФОНОВОГО вызова модели. Второе обязательно: приём реестра уходит
+// отдельным процессом, его запись «model» приходит уже после того, как сводка
+// сложена, и без пересборки хранение увозило бы сессию с недосчитанными
+// вызовами модели и их временем.
+//
+// Журнал НЕ ПРОЧИТАЛСЯ (это не то же, что «пуст») — сводку не трогаем: нулевая
+// затёрла бы хорошую.
+export function refreshSummary(log, { sid = '', now = Date.now(), record = false } = {}) {
+  if (!log) return null;
+  return withLock(`${log}.summary.json`, () => {
+    const records = readJournal(log);
+    if (!records) return null;
+    const ts = new Date(now).toISOString();
+    const summary = summarize(records, { sid, now });
+    if (record) append(log, { kind: 'summary', ts, ...summary });
+    writeSummary(log, { ts, ...summary });
+    return summary;
+  });
 }
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
