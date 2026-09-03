@@ -37,7 +37,8 @@ const [, , source, materialFile, registryFile, markId] = process.argv;
 // поэтому пропажу целого плана из реестра заметил Влад, а не система.
 //
 // Файл лежит в общем /tmp контейнера и читаем всем, кто в него попал: в след
-// идёт только то, что уже есть в реестре и материале, ничего сверх.
+// идёт только ход приёма — номер прохода, размер реестра, исход и размер
+// ответа модели. Сам текст ответа в след не пишется.
 export function trace(line) {
   if (!registryFile) return;
   try {
@@ -69,7 +70,10 @@ function cutByAnchors(text, tasks) {
 // в отказе, — и ответ применяется к файлу.
 function pass(material, n, ownFrom) {
   const current = readRegistry(registryFile);
-  const view = path.join(path.dirname(materialFile), 'registry-view.txt');
+  // Вид кладётся рядом с РЕЕСТРОМ, а не с материалом: материалом у плана служит
+  // сам файл плана, и вид ложился бы в каталог планов (в кейсах — в фикстуры,
+  // затирая их).
+  const view = `${registryFile}.view`;
   try {
     fs.writeFileSync(view, render(current));
   } catch { /* вид не записался — модель увидит пустой реестр */ }
@@ -77,17 +81,25 @@ function pass(material, n, ownFrom) {
   const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '', {
     timeoutSec: INGEST_BUDGET_SEC,
   });
-  trace(`проход ${n}: целей в реестре ${current.length}, ответ модели: ${verdict}`);
-  if (!verdict || verdict === 'UNAVAILABLE') return 1;
+  try { fs.rmSync(view, { force: true }); } catch { /* вид переживёт приём */ }
+  if (!verdict || verdict === 'UNAVAILABLE') {
+    trace(`проход ${n}: целей в реестре ${current.length}, модель недоступна`);
+    return 1;
+  }
 
   let answer;
   try {
     answer = JSON.parse(verdict);
   } catch {
+    trace(`проход ${n}: целей в реестре ${current.length}, ответ модели неразборен (${verdict.length} символов)`);
     return 1;
   }
-  if (!answer || !Array.isArray(answer.add)) return 1;
+  if (!answer || !Array.isArray(answer.add)) {
+    trace(`проход ${n}: целей в реестре ${current.length}, ответ модели без списка добавлений`);
+    return 1;
+  }
   const additions = answer.add;
+  trace(`проход ${n}: целей в реестре ${current.length}, ответ модели: добавить ${additions.length}, закрыть ${Array.isArray(answer.close) ? answer.close.length : 0}, снять ${Array.isArray(answer.lift) ? answer.lift.length : 0}`);
 
   // Закрытия принимаются ТОЛЬКО от одобренного плана: новый план и есть граница
   // работы, а реплика ей не является — «продолжай» и «работай» значат, что
@@ -109,6 +121,10 @@ function pass(material, n, ownFrom) {
   }
 
   for (const add of additions) {
+    // Реестр перечитывается на КАЖДОЙ записи ответа: цель, заведённая
+    // предыдущей записью этого же ответа, обязана быть видна следующей —
+    // прохода, который раньше дозаводил такие ссылки, больше нет.
+    const goals = readRegistry(registryFile);
     const tasks = Array.isArray(add.tasks) ? add.tasks : [];
 
     // ЗАПРЕТ — запись без задач: работы под ним нет, он лишь очерчивает, чего
@@ -125,7 +141,7 @@ function pass(material, n, ownFrom) {
     // Куда приземлить запись, решает ядро реестра: цель адресуется НОМЕРОМ из
     // рендера, а не заголовком (формулировку модель каждый раз пишет свою), и от
     // ПЛАНА слияние не принимается вовсе — у плана всегда своя цель.
-    const index = landingGoal(current, add.goal, source, ownFrom);
+    const index = landingGoal(goals, add.goal, source, ownFrom);
 
     const bodies = cutByAnchors(material, tasks);
     const prepared = tasks.map((t, i) => ({
@@ -158,24 +174,15 @@ function main() {
     return 1;
   }
 
-  // ВТОРОЙ проход по тому же материалу — проверка полноты. Разбор нестабилен так
-  // же, как сверка: тот же вход даёт то полный набор задач, то набор без одной, и
-  // пропавший кусок молча остаётся неодобренным. Второй проход видит реестр уже с
-  // заведённым и по правилу «задача, которая уже есть, не добавляется» дозаводит
-  // ровно пропущенное.
-  //
-  // Проходов ровно два: третий ловил бы уже не пропажу, а переформулировку —
-  // и плодил бы дубли вместо того, чтобы сходиться. Их число знает и хук
-  // одобрения: свой срок он выводит из него и бюджета прохода.
+  // Число проходов задаёт классификатор (INGEST_PASSES); его же знает хук
+  // одобрения — свой срок он выводит из него и бюджета прохода.
   // Граница своих целей: всё, что лежало в реестре ДО этого приёма, для плана
-  // чужое, а заведённое его первым проходом — своё. Иначе второй проход, который
-  // дозаводит пропущенное, не нашёл бы цель первого и завёл третью.
+  // чужое; заведённое этим приёмом — своё.
   const ownFrom = readRegistry(registryFile).length;
 
   for (let n = 1; n <= INGEST_PASSES; n += 1) {
     const code = pass(material, n, ownFrom);
-    // Первый проход не дал разбора — второму брать нечего: он лишь дозаводит
-    // пропущенное первым.
+    // Первый проход не дал разбора — дальше брать нечего.
     if (code !== 0) return n === 1 ? code : 0;
   }
   return 0;
