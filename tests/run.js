@@ -4,6 +4,8 @@
 //
 // Кейс (tests/hooks/*.jsonl) — один JSON-объект на строку:
 //   {"name","hook","input":{…событие…},"expect":"deny|allow|ask|block|inject|silent|contains:<строка>"}
+//   expect — строка либо СПИСОК: список значит «всё сразу», им выражается пара
+//   вроде «запись есть, а текста отказа в ней нет».
 // Раннер подаёт `input` хуку на stdin и проверяет исход:
 //   deny   — stdout с permissionDecision "deny"
 //   allow  — хук НЕ отказал и не заблокировал (гварды на проходе молчат)
@@ -375,21 +377,21 @@ function grade(expect, out, err, env) {
   // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
   // не печатью, и по stdout проверить запись нечем. Путь берётся из переменной
   // ASSERT_FILE самого кейса — той же, что кейс отдаёт хуку. Переменной нет —
-  // незачёт; нечитаемый файл равен пустому.
-  if (expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
+  // незачёт. Текст всегда приходит снимком, снятым ДО уборки прогона: файлы
+  // состояния к моменту разбора уже убраны, и читать их с диска было бы поздно.
+  //
+  // file-not-contains требует НЕПУСТОГО файла: «в файле нет строки» на файле,
+  // которого нет, зеленеет и при сломанном хуке — то есть проверяет ровно ничто.
+  // Пара к нему — file-empty: «не написано вовсе», и это отдельное утверждение,
+  // которое кейс делает явно.
+  if (expect === 'file-empty' || expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
     const file = (env || {}).ASSERT_FILE || '';
     if (!file) return false;
-    // Снимок, снятый до уборки прогона, старше чтения с диска: файлы состояния
-    // самого прогона к этому моменту уже убраны, и читать их было бы поздно.
-    let text = (env || {}).ASSERT_TEXT;
-    if (text === undefined) {
-      text = '';
-      try {
-        text = fs.readFileSync(file, 'utf8');
-      } catch { /* файла нет — считаем пустым */ }
-    }
+    const text = (env || {}).ASSERT_TEXT || '';
+    if (expect === 'file-empty') return text === '';
     const needle = expect.slice(expect.indexOf(':') + 1);
-    return expect.startsWith('file-contains:') ? text.includes(needle) : !text.includes(needle);
+    if (expect.startsWith('file-contains:')) return text.includes(needle);
+    return text !== '' && !text.includes(needle);
   }
   if (expect === 'deny') return isDeny(out);
   if (expect === 'allow') return !(isDeny(out) || isAsk(out) || isBlock(out));
@@ -633,23 +635,38 @@ function main() {
         return;
       }
 
-      covered.add(`${c.hook}:${c.expect}`);
+      // Исходов у кейса бывает несколько: «строка есть И текста в ней нет» одним
+      // утверждением не выразить, а порознь такая пара кейсов зеленеет по
+      // отдельности и не проверяет связку.
+      const expects = Array.isArray(c.expect) ? c.expect : [c.expect];
+      const label = expects.join(' + ');
+      covered.add(`${c.hook}:${expects[0]}`);
       const r = runPass(c);
       if (r.missing) {
         fail += 1;
         fails.push(`${c.hook} / ${c.name} — unknown hook or missing script`);
-        row('FAIL', c.hook, c.expect, c.name);
+        row('FAIL', c.hook, label, c.name);
         return;
       }
 
-      let ok = grade(c.expect, r.out, r.err, {
+      const env = {
         ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || ''),
         ASSERT_TEXT: r.assertText,
-      });
+      };
+      let ok = true;
       let got = r.out;
-      if (ok === null) {
-        fails.push(`${c.hook} / ${c.name} — unknown expect '${c.expect}'`);
-        ok = false;
+      for (const one of expects) {
+        const verdict = grade(one, r.out, r.err, env);
+        if (verdict === null) {
+          fails.push(`${c.hook} / ${c.name} — unknown expect '${one}'`);
+          ok = false;
+          break;
+        }
+        if (!verdict) {
+          ok = false;
+          got = one.startsWith('file-') ? `по файлу: ${one}` : r.out;
+          break;
+        }
       }
 
       // Ассерты следа классификатора: ответ хука в этих исходах одинаков,
@@ -665,11 +682,11 @@ function main() {
       }
       if (ok) {
         pass += 1;
-        row('PASS', c.hook, c.expect, c.name);
+        row('PASS', c.hook, label, c.name);
       } else {
         fail += 1;
-        fails.push(`${c.hook} / ${c.name} — expected ${c.expect}, got: ${trim(String(got).slice(0, 120))}`);
-        row('FAIL', c.hook, c.expect, c.name);
+        fails.push(`${c.hook} / ${c.name} — expected ${label}, got: ${trim(String(got).slice(0, 120))}`);
+        row('FAIL', c.hook, label, c.name);
       }
     });
   }

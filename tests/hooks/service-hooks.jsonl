@@ -6,29 +6,29 @@
 # репозитория (так же его запускает CI).
 
 # --- гейт отладочных логов ---------------------------------------------------
-{"name":"console.log в правленном файле — назван со строкой","hook":"universal-check-console-log","expect":"contains:console-sample.ts:4","input":{"hook_event_name":"Stop","transcript_path":"{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
-{"name":"строка с keep-console в отчёт не попадает","hook":"universal-check-console-log","expect":"not-contains:console-sample.ts:5","input":{"hook_event_name":"Stop","transcript_path":"{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
-{"name":"тестовый файл гейт логов не смотрит","hook":"universal-check-console-log","expect":"silent","input":{"hook_event_name":"Stop","transcript_path":"{TESTS_DIR}/fixtures/console-transcript-test-file.jsonl"}}
-{"name":"нет транскрипта — молчание","hook":"universal-check-console-log","expect":"silent","input":{"hook_event_name":"Stop"}}
+{"name": "console.log в правленном файле — назван со строкой", "hook": "universal-check-console-log", "expect": "contains:console-sample.ts:4", "input": {"hook_event_name": "Stop", "transcript_path": "{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
+{"name": "строка с keep-console в отчёт не попадает", "hook": "universal-check-console-log", "expect": "not-contains:console-sample.ts:5", "input": {"hook_event_name": "Stop", "transcript_path": "{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
+{"name": "тестовый файл гейт логов не смотрит", "hook": "universal-check-console-log", "expect": "silent", "input": {"hook_event_name": "Stop", "transcript_path": "{TESTS_DIR}/fixtures/console-transcript-test-file.jsonl"}}
+{"name": "нет транскрипта — молчание", "hook": "universal-check-console-log", "expect": "silent", "input": {"hook_event_name": "Stop"}}
 
 # --- стоп-гейт качества ------------------------------------------------------
-{"name":"проект без package.json и tsconfig — гейт качества молчит","hook":"universal-stop-quality-gate","expect":"silent","env":{"CLAUDE_PROJECT_DIR":"{TESTS_DIR}/fixtures"},"input":{"hook_event_name":"Stop","transcript_path":"{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
-{"name":"повторный Stop гейт качества не запускает","hook":"universal-stop-quality-gate","expect":"silent","input":{"hook_event_name":"Stop","stop_hook_active":true,"transcript_path":"{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
+{"name": "проект без package.json и tsconfig — гейт качества молчит", "hook": "universal-stop-quality-gate", "expect": "silent", "env": {"CLAUDE_PROJECT_DIR": "{TESTS_DIR}/fixtures"}, "input": {"hook_event_name": "Stop", "transcript_path": "{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
+{"name": "повторный Stop гейт качества не запускает", "hook": "universal-stop-quality-gate", "expect": "silent", "input": {"hook_event_name": "Stop", "stop_hook_active": true, "transcript_path": "{TESTS_DIR}/fixtures/console-transcript.jsonl"}}
 
 # --- инжектор инстинктов -----------------------------------------------------
-{"name":"в craft-репо инжектор инстинктов молчит (роутер уже несёт их)","hook":"universal-inject-instincts","expect":"silent","env":{"CLAUDE_PROJECT_DIR":"{TESTS_DIR}/fixtures/fake-checkout"},"input":{}}
+{"name": "в craft-репо инжектор инстинктов молчит (роутер уже несёт их)", "hook": "universal-inject-instincts", "expect": "silent", "env": {"CLAUDE_PROJECT_DIR": "{TESTS_DIR}/fixtures/fake-checkout"}, "input": {}}
 
 # --- сборщик предодобренной зоны --------------------------------------------
-{"name":"нет конфига страниц — зона не строится, гейт гейтит как обычно","hook":"universal-cache-gate-exempt-scope","expect":"err-contains:scope not built","env":{"CRAFT_GATE_EXEMPT_PAGES":"{TESTS_DIR}/fixtures/нет-такого-конфига.txt","CRAFT_GATE_EXEMPT_SCOPE":"{TESTS_DIR}/fixtures/tmp-exempt-scope.txt"},"input":{}}
+{"name": "нет конфига страниц — зона не строится, гейт гейтит как обычно", "hook": "universal-cache-gate-exempt-scope", "expect": "err-contains:scope not built", "env": {"CRAFT_GATE_EXEMPT_PAGES": "{TESTS_DIR}/fixtures/нет-такого-конфига.txt", "CRAFT_GATE_EXEMPT_SCOPE": "{TESTS_DIR}/fixtures/tmp-exempt-scope.txt"}, "input": {}}
 
 # --- сборка craft-sync -------------------------------------------------------
-{"name":"нет исходников craft-sync — сборка пропускается","hook":"craft-build-sync","expect":"err-contains:source not found","env":{"CRAFT_SYNC_BUILD":"1","CLAUDE_PROJECT_DIR":"{TESTS_DIR}/fixtures"},"input":{}}
+{"name": "нет исходников craft-sync — сборка пропускается", "hook": "craft-build-sync", "expect": "err-contains:source not found", "env": {"CRAFT_SYNC_BUILD": "1", "CLAUDE_PROJECT_DIR": "{TESTS_DIR}/fixtures"}, "input": {}}
 
 # --- синк локальной main -----------------------------------------------------
 # Цель — каталог вне репозитория: перемотка невозможна, и хук печатает свой
 # отказ, ничего не трогая. Так ветка проверяется без правок настоящего чекаута.
-{"name":"цель не репозиторий — синк main отказывает без мутаций","hook":"craft-sync-local-main","expect":"err-contains:main sync skipped","env":{"CRAFT_LOCAL":"1","CLAUDE_PROJECT_DIR":"/tmp"},"input":{}}
+{"name": "цель не репозиторий — синк main отказывает без мутаций", "hook": "craft-sync-local-main", "expect": "err-contains:main sync skipped", "env": {"CRAFT_LOCAL": "1", "CLAUDE_PROJECT_DIR": "/tmp"}, "input": {}}
 
 # --- снимок перед компакцией -------------------------------------------------
-{"name":"снимок перед компакцией печатью не шумит","hook":"universal-pre-compact","expect":"silent","input":{"hook_event_name":"PreCompact","session_id":"precompact-case","transcript_path":"{TESTS_DIR}/fixtures/console-transcript.jsonl","cwd":"{TESTS_DIR}"}}
-{"name":"уступка: второй вызов снимка перед компакцией молчит","hook":"universal-pre-compact","expect":"silent","env":{"HOOK_ONCE":"on"},"repeat":2,"input":{"hook_event_name":"PreCompact","session_id":"precompact-once"}}
+{"name": "снимок перед компакцией печатью не шумит", "hook": "universal-pre-compact", "expect": "silent", "input": {"hook_event_name": "PreCompact", "session_id": "precompact-case", "transcript_path": "{TESTS_DIR}/fixtures/console-transcript.jsonl", "cwd": "{TESTS_DIR}"}}
+{"name": "уступка: второй вызов снимка перед компакцией молчит", "hook": "universal-pre-compact", "expect": "silent", "env": {"HOOK_ONCE": "on"}, "repeat": 2, "input": {"hook_event_name": "PreCompact", "session_id": "precompact-once"}}

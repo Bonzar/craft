@@ -40,10 +40,10 @@
 // её ключ для событий без идентификатора вызова — хеш события со сроком в
 // секунды, и два одинаковых Stop подряд (заблокированный конец хода) или две
 // одинаковые короткие реплики теряли бы вторую запись.
-import { readEvent } from './lib/event.js';
+import { readEvent, responseIsError } from './lib/event.js';
 import { sessionId } from './lib/paths.js';
 import {
-  append, updateState, reasonClass, turnUsage, responseIsError,
+  append, updateState, reasonClass, turnUsage,
   projectDispatcherAt, currentMetricsLog, transcriptSize,
   refreshSummary, callHash,
   promptHash, looksLikeReinstruction, isProgress,

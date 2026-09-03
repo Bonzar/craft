@@ -570,14 +570,3 @@ export function isProgress(pre, post) {
   if (!pre || !post || post.error === true) return false;
   return pre.mutates === true || pre.stage === true || pre.push === true;
 }
-
-// --- ошибка инструмента в ответе -------------------------------------------------
-
-// Тот же признак, по которому буфер наблюдений пишет tool-error: is_error либо
-// непустое поле error в ответе инструмента.
-export function responseIsError(response) {
-  if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
-  if (response.is_error === true || response.isError === true) return true;
-  const err = response.error;
-  return err !== undefined && err !== null && err !== false && err !== '';
-}

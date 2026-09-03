@@ -49,3 +49,14 @@ export function readEvent() {
     response: event.tool_response,
   };
 }
+
+// Ошибка инструмента в ответе: is_error либо непустое поле error. Признак живёт
+// рядом с самим событием и один на слой — буфер наблюдений и метрики обязаны
+// считать ошибкой одно и то же, а двумя копиями они уже разъезжались по полю
+// error.
+export function responseIsError(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
+  if (response.is_error === true || response.isError === true) return true;
+  const err = response.error;
+  return err !== undefined && err !== null && err !== false && err !== '';
+}
