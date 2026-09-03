@@ -441,6 +441,15 @@ test('вежливый оборот с тем же маркером переук
   assert.equal(metrics.looksLikeReinstruction('Ещё раз: без хвостов'), true);
 });
 
+test('вежливая поправка остаётся переуказанием', () => {
+  assert.equal(metrics.looksLikeReinstruction('Спасибо, но я же просил не трогать README'), true,
+    'вежливый зачин вычёркивается, признак считается по остатку');
+  assert.equal(metrics.looksLikeReinstruction('Привет! Опять ты трогаешь README'), true);
+  assert.equal(metrics.looksLikeReinstruction('благодарю, снова забыл про тесты'), true);
+  assert.equal(metrics.looksLikeReinstruction('спасибо!'), false, 'чистая вежливость остатка не оставляет');
+  assert.equal(metrics.looksLikeReinstruction('Добрый день'), false);
+});
+
 test('читающие команды гита мутацией не считаются', () => {
   for (const cmd of ['git diff --merge-base main', 'git log --oneline -- lib/tag.js',
     'git show HEAD:src/reset.js', 'git stash list', 'git stash show', 'git tag',
