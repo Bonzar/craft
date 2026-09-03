@@ -25,7 +25,8 @@
 // взять лок — правка не делается, и это видно строкой kind: 'skip' в журнале.
 import fs from 'node:fs';
 import path from 'node:path';
-import { metricsLog, sessionId } from './paths.js';
+import { metricsLog, sessionId, repoRootOf } from './paths.js';
+import { queueSummary } from './metrics-store.js';
 import { withLock, atomicWrite } from './lock.js';
 import { sha256 } from './hash.js';
 import { eachJsonl } from './jsonl.js';
@@ -75,7 +76,13 @@ export function recordModelCall({ mode, ms, outcome }) {
   // позже последнего Stop хода, и его вызов модели иначе не попал бы ни в одну
   // сводку — ни в эту (её уже написали), ни в следующую (ход мог быть
   // последним). Сводки ещё нет — пересобирать нечего, её сложит ближайший Stop.
-  if (fs.existsSync(`${log}.summary.json`)) refreshSummary(log, { sid: sessionId() });
+  //
+  // Пересобранная сводка возвращается В ОЧЕРЕДЬ: работник хранения отработал на
+  // том Stop и увёз ПРЕЖНЮЮ, а нового Stop может не случиться — без этого
+  // поздний вызов модели остался бы только в локальной копии.
+  if (!fs.existsSync(`${log}.summary.json`)) return;
+  const summary = refreshSummary(log, { sid: currentSessionId() });
+  if (summary) queueSummary({ ...summary, ts: new Date().toISOString() }, repoRootOf(import.meta.url));
 }
 
 // Есть ли у чекаута, в котором идёт сессия, СВОЯ регистрация диспетчера

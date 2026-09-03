@@ -204,6 +204,24 @@ elif ! grep -q '"sid":"s1"' "$sb/queue.jsonl"; then
   bad "$t" "очередь не сохранила сводку"
 else ok "$t"; fi
 
+# --- L. занятый лок очереди не теряет сводку ---------------------------------
+# Постановку в очередь делает отсоединённый работник, и его никто не ждёт:
+# предыдущая выгрузка держит лок всё время сети, а короткий срок ожидания
+# означал бы, что сводка последнего Stop сессии не стала durable вовсе —
+# следующего Stop, который положил бы её заново, у сессии уже не будет.
+t="сводка встаёт в очередь, даже когда лок занят соседней выгрузкой"
+sb="$(sandbox)"
+G -C "$sb/work" remote set-url origin "$sb/nowhere.git"   # без сети: очередь остаётся
+mkdir -p "$sb/queue.jsonl.lock"
+sleep 30 & holder=$!
+printf '%s' "$holder" > "$sb/queue.jsonl.lock/owner"
+( sleep 2; rm -rf "$sb/queue.jsonl.lock" ) &
+out="$(run_hook "$sb" s1 2026-09-02T10:00:00Z 1)"
+kill "$holder" 2>/dev/null
+if ! grep -q '"sid":"s1"' "$sb/queue.jsonl" 2>/dev/null; then
+  bad "$t" "сводка не встала в очередь после освобождения лока: $out"
+else ok "$t"; fi
+
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"
 for f in "${fails[@]:-}"; do [[ -n "$f" ]] && printf '  - %s\n' "$f"; done
 [[ "$fail" -eq 0 ]]

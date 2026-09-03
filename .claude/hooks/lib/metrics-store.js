@@ -32,8 +32,11 @@ import * as store from './metrics-store-git.js';
 // сессий, накопившихся, пока доставка не проходит.
 export const QUEUE_CAP = 500;
 
-// Ждать лок в хуке нельзя: постановка в очередь стоит в цепочке Stop.
-const ENQUEUE_WAIT_MS = 300;
+// Постановку в очередь делает ОТСОЕДИНЁННЫЙ работник, а не цепочка хода: его
+// никто не ждёт, и ждать лок он может долго. Короткий срок здесь означал бы
+// потерянную сводку — предыдущая выгрузка держит лок всё время сети, и сводка
+// последнего Stop не стала бы durable вовсе.
+const ENQUEUE_WAIT_MS = 5 * 60 * 1000;
 
 // Файл очереди по умолчанию — в каталоге, который переживает и сессии, и смену
 // воркри, а в дерево не попадает. Каталог называет адаптер.
@@ -64,7 +67,7 @@ function writeQueue(queueFile, rows) {
 
 // Поставить сводку в очередь. Сводка ЗАМЕНЯЕТ прежнюю сводку той же сессии:
 // каждый Stop пишет её заново, и хранить все промежуточные незачем.
-export function enqueue(queueFile, summary) {
+export function enqueue(queueFile, summary, { waitMs = ENQUEUE_WAIT_MS } = {}) {
   if (!queueFile || !summary || !summary.sid) return false;
   const { locked, value } = withLock(queueFile, () => {
     const bySid = new Map(parseQueue(readQueueText(queueFile)).map((r) => [r.sid, r]));
@@ -72,7 +75,7 @@ export function enqueue(queueFile, summary) {
     bySid.set(summary.sid, summary);
     const rows = [...bySid.values()].slice(-QUEUE_CAP);
     return writeQueue(queueFile, rows);
-  }, { waitMs: ENQUEUE_WAIT_MS });
+  }, { waitMs });
   return locked ? value : false;
 }
 
@@ -105,6 +108,19 @@ export function upsertLines(text, summaries) {
     bySid.set(key, JSON.stringify(s));
   }
   return `${order.map((k) => bySid.get(k)).join('\n')}\n`;
+}
+
+// Сделать сводку durable, не выгружая: очередь и есть то, что переживёт этот
+// процесс. Зовётся из ФОНОВОГО приёма реестра — он кончается позже последнего
+// Stop сессии, и его запись «model» иначе осталась бы только в локальной копии
+// сводки, которую уже никто не увезёт.
+//
+// Путь очереди резолвится здесь же: у приёма нет ни события, ни цели.
+// Выключатель хранения гасит и это — иначе прогон кейсов копил бы очередь.
+export function queueSummary(summary, target) {
+  if (process.env.METRICS_STORE === 'off') return false;
+  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(target);
+  return enqueue(queue, summary);
 }
 
 // Выгрузить очередь. Возвращает { status, delivered }.

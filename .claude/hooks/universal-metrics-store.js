@@ -47,8 +47,12 @@ function store(summaryFile) {
   }
   if (!summary || typeof summary !== 'object' || !summary.sid) return { status: 'no-summary', delivered: 0 };
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(TARGET);
-  const queued = enqueue(queue, summary);
+  let queued = enqueue(queue, summary);
   const res = flushQueue({ target: TARGET, queueFile: queue });
+  // Не встали в очередь до выгрузки — пробуем ещё раз: лок теперь свободен.
+  // Иначе сводка последнего Stop сессии не станет durable вовсе: следующего
+  // Stop, который положил бы её заново, у сессии уже не будет.
+  if (!queued) queued = enqueue(queue, summary);
   return queued ? res : { ...res, queued: false };
 }
 

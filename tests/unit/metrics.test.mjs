@@ -498,3 +498,34 @@ test('вежливый зачин не отменяет переуказания
   assert.equal(metrics.looksLikeReinstruction('и снова здравствуйте'), false);
   assert.equal(metrics.looksLikeReinstruction('спасибо!'), false);
 });
+
+// Фоновый приём реестра кончается ПОЗЖЕ последнего Stop сессии: работник
+// хранения к тому времени уже увёз прежнюю сводку и снял очередь. Без возврата
+// в очередь поздний вызов модели остался бы только в локальной копии сводки,
+// которую никто больше не заберёт.
+test('поздняя пересборка сводки возвращает её в очередь хранения', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-requeue-'));
+  const log = path.join(dir, 'm.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  metrics.append(log, { kind: 'session', ts: new Date().toISOString(), turn: 0, sid: 'm-sid' });
+  metrics.refreshSummary(log, { sid: 'm-sid', record: true });
+
+  const saved = { ...process.env };
+  process.env.CRAFT_METRICS_LOG = log;
+  process.env.METRICS_STORE_QUEUE = queue;
+  delete process.env.METRICS_STORE;
+  try {
+    metrics.recordModelCall({ mode: 'ingest', ms: 1200, outcome: 'json' });
+  } finally {
+    for (const key of ['CRAFT_METRICS_LOG', 'METRICS_STORE_QUEUE', 'METRICS_STORE']) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+
+  const queued = fs.readFileSync(queue, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(queued.length, 1, 'сводка встала в очередь одной строкой');
+  assert.equal(queued[0].sid, 'm-sid');
+  assert.equal(queued[0].model_calls.count, 1, 'в очередь ушла сводка С поздним вызовом модели');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
