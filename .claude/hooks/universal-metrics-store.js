@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { defaultQueue, enqueue, flushQueue, dueForFlush } from './lib/metrics-store.js';
+import { defaultQueue, enqueue, flushQueue } from './lib/metrics-store.js';
 
 if (process.env.METRICS_STORE === 'off') process.exit(0);
 
@@ -45,9 +45,10 @@ function store(summaryFile) {
   if (!summary || typeof summary !== 'object' || !summary.sid) return { status: 'no-summary', delivered: 0 };
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(TARGET);
   enqueue(queue, summary);
+  // Интервал уходит В выгрузку: решение «пора» принимается под тем же локом,
+  // под которым очередь читается, — иначе оно устаревает, пока работник ждёт лок.
   const interval = process.env.METRICS_STORE_INTERVAL ?? '600';
-  if (!dueForFlush(queue, interval)) return { status: 'queued', delivered: 0 };
-  return flushQueue({ target: TARGET, queueFile: queue });
+  return flushQueue({ target: TARGET, queueFile: queue, intervalSec: interval });
 }
 
 // Фоновый работник: без события, сводка — из окружения.

@@ -193,6 +193,31 @@ else
   else ok "$t"; fi
 fi
 
+# --- K. отказавшая выгрузка тоже отмечается -----------------------------------
+# Отметка ставится на ПОПЫТКУ, а не на удачу: пока origin недоступен, интервал
+# обязан держать работников от сети. Отмечали только успех — каждый следующий
+# Stop снова шёл в сеть и висел на fetch до потолка.
+t="неудачная выгрузка отмечается: следующая ждёт интервал"
+sb="$(sandbox)"
+G -C "$sb/work" remote set-url origin "$sb/nowhere.git"
+first="$(printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
+  2026-09-02T10:00:00Z 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z > "$sb/log.s1.summary.json"
+  printf '{"hook_event_name":"Stop","session_id":"s1"}' \
+  | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
+        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=600 HOOK_ONCE=off node "$HOOK" 2>&1)"
+printf '{"ts":"%s","sid":"s2","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
+  2026-09-02T10:01:00Z 2026-09-02T10:01:00Z 2026-09-02T10:01:00Z > "$sb/log.s2.summary.json"
+second="$(printf '{"hook_event_name":"Stop","session_id":"s2"}' \
+  | env CRAFT_METRICS_LOG="$sb/log.s2" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
+        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=600 HOOK_ONCE=off node "$HOOK" 2>&1)"
+if ! grep -q "offline" <<<"$first"; then
+  bad "$t" "первая попытка без сети ожидалась offline: $first"
+elif ! grep -q "queued" <<<"$second"; then
+  bad "$t" "вторая попытка снова полезла в сеть вместо ожидания интервала: $second"
+elif ! grep -q '"sid":"s2"' "$sb/queue.jsonl"; then
+  bad "$t" "очередь не сохранила сводку, пока выгрузка отложена"
+else ok "$t"; fi
+
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"
 for f in "${fails[@]:-}"; do [[ -n "$f" ]] && printf '  - %s\n' "$f"; done
 [[ "$fail" -eq 0 ]]
