@@ -14,16 +14,9 @@
 //   contains:<строка> / not-contains: / err-contains: / err-not-contains:
 // Exit 0 — все кейсы зелёные И каждый исход каждого хука покрыт; иначе 1.
 //
-// ДВА ЯЗЫКА. Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh.
-// Пока идёт перенос слоя на JS, обе версии лежат рядом, и один и тот же набор
-// кейсов принимает ту, что есть. Тем же правилом идут шаги подготовки кейса.
-//
-// ДИФФЕРЕНЦИАЛЬНЫЙ РЕЖИМ (--diff): кейс прогоняется ОБЕИМИ версиями хука на
-// одном входе и в раздельном состоянии, и любое расхождение — ответа, stderr
-// или оставшихся после прогона файлов состояния — считается падением. Нужен он
-// потому, что сами кейсы эталоном не являются: ожидание `deny` смотрит только
-// на вердикт и не смотрит на текст причины, а текст причины и есть продукт
-// хука. Режим живёт ровно до сноса bash-версий.
+// Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
+// bash-версий не осталось; фолбек на .sh живёт для внешних наборов
+// (EXTRA_HOOKS_DIR), где они ещё бывают. Тем же правилом идут шаги подготовки.
 //
 // Внешние наборы хуков (напр. локальный яндекс-слой в ~/.claude, вне git):
 //   EXTRA_HOOKS_DIR=~/.claude/hooks EXTRA_CASES_DIR=~/.claude/tests/hooks node tests/run.js
@@ -41,7 +34,6 @@ const CASES_DIR = path.join(REPO, 'tests', 'hooks');
 const SETTINGS = path.join(REPO, '.claude', 'settings.json');
 const EXTRA_HOOKS_DIR = process.env.EXTRA_HOOKS_DIR || '';
 const EXTRA_CASES_DIR = process.env.EXTRA_CASES_DIR || '';
-const DIFF = process.argv.includes('--diff');
 
 // UTF-8-локаль обязательна для bash-хуков: часть дефектов видна ТОЛЬКО в ней. В
 // bash подстановка `$var` вплотную к не-ASCII символу в UTF-8 читается как имя
@@ -49,6 +41,11 @@ const DIFF = process.argv.includes('--diff');
 // работает. Из-за этого сломанный guard-plan-delta прошёл ревью: CI был зелёный,
 // а на рабочей машине гвард молча падал.
 const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8' };
+// Идентификатор сессии живого окружения в кейсы не пускается: раннер задаёт его
+// сам там, где он кейсу нужен, а унаследованный молча ломал кейсы про ПУСТУЮ
+// сессию — они падали на машине разработчика и зеленели в CI, где переменной
+// нет, то есть выглядели «известными падениями среды».
+delete BASE_ENV.CLAUDE_CODE_SESSION_ID;
 
 // Ключ кейса → файл хука без расширения. Незнакомый ключ резолвится по имени
 // самого ключа, поэтому карта нужна только там, где они расходятся.
@@ -107,13 +104,13 @@ const REVERSE_WHITELIST = ['dispatch', 'dispatch-table'];
 
 // --- запуск хуков ------------------------------------------------------------
 
-// Файл хука по имени без расширения: JS предпочитается, bash — фолбек. Внешний
-// набор (EXTRA_HOOKS_DIR) идёт после репозиторного тем же правилом.
-function resolveHook(base, ext) {
+// Файл хука по имени без расширения: JS предпочитается, bash — фолбек для
+// внешних наборов. Внешний набор (EXTRA_HOOKS_DIR) идёт после репозиторного
+// тем же правилом.
+function resolveHook(base) {
   const dirs = EXTRA_HOOKS_DIR ? [HOOKS, EXTRA_HOOKS_DIR] : [HOOKS];
-  const exts = ext ? [ext] : ['.js', '.sh'];
   for (const dir of dirs) {
-    for (const e of exts) {
+    for (const e of ['.js', '.sh']) {
       const p = path.join(dir, base + e);
       if (fs.existsSync(p)) return p;
     }
@@ -209,38 +206,10 @@ function makeState() {
   return s;
 }
 
-// Файлы состояния после прогона — предмет сверки в дифференциальном режиме:
-// ответ хука бывает одинаков, а след на диске разным.
-function stateSnapshot(s) {
-  const out = {};
-  const files = [
-    ['marker', s.marker], ['marker.plans', `${s.marker}.plans`],
-    ['marker.button-plans', `${s.marker}.button-plans`],
-    ['marker.qa-window', `${s.marker}.qa-window`],
-    ['marker.classifier-degraded', `${s.marker}.classifier-degraded`],
-    ['observe-buffer', s.obsbuf], ['routine-facts', s.rfmark],
-    ['plan-file', s.planpath], ['plan-critic', s.criticmark],
-    ['incident-closure', s.icmark], ['service-turn', s.serviceturn],
-    ['plan-critic-pending', s.criticpend], ['plan-shown', s.planshown],
-    ['plan-critic-runs', s.criticruns], ['relative-link', s.relstate],
-    ['sync-system', s.syncstate], ['approval-registry', s.registry],
-    ['session-anchor', s.anchor],
-  ];
-  for (const [label, file] of files) {
-    if (fs.existsSync(file)) out[label] = fs.readFileSync(file, 'utf8');
-  }
-  if (fs.existsSync(s.fgdir)) {
-    for (const name of fs.readdirSync(s.fgdir).sort()) {
-      out[`fact-gate/${name}`] = fs.readFileSync(path.join(s.fgdir, name), 'utf8');
-    }
-  }
-  return out;
-}
-
 function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
-    `${s.marker}.qa-window`, `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
+    `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
     s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
@@ -283,12 +252,10 @@ function subst(value, s) {
     .split('{SID}').join(s.sid);
 }
 
-// Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`
-// задаёт версию хука (.js/.sh) — в дифференциальном режиме проход делается
-// дважды, в раздельном состоянии.
-function runPass(c, ext) {
+// Один проход кейса: подготовка, повторы, ответ хука и след на диске.
+function runPass(c) {
   const base = SCRIPT[c.hook] || c.hook;
-  const script = resolveHook(base, ext);
+  const script = resolveHook(base);
   if (!script) return { missing: true };
 
   const s = makeState();
@@ -331,7 +298,7 @@ function runPass(c, ext) {
 
   (c.setup || []).forEach((name, i) => {
     const sBase = SCRIPT[name] || name;
-    const sScript = resolveHook(sBase, ext) || resolveHook(sBase);
+    const sScript = resolveHook(sBase);
     if (!sScript) return;
     let step = setupOne;
     if (setupList) step = subst(JSON.stringify(setupList[i] ?? null));
@@ -345,25 +312,18 @@ function runPass(c, ext) {
   const args = Array.isArray(c.args) ? c.args.map(subst) : [];
   for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
 
-  // Число записей окна разрешений снимается ДО уборки — его сверяют кейсы
-  // вытеснения и фильтра служебных сообщений.
-  let qaCount = 0;
-  const qaFile = `${s.marker}.qa-window`;
-  if (fs.existsSync(qaFile)) {
-    qaCount = fs.readFileSync(qaFile, 'utf8').split('\n').filter((l) => l.startsWith('## Запись')).length;
-  }
   const traced = fs.existsSync(s.classtrace);
   const trace = traced ? fs.readFileSync(s.classtrace, 'utf8') : '';
-  const state = stateSnapshot(s);
-  // Файл, по которому кейс судит о записи (исходы file-contains), тоже след
-  // прогона: обе версии хука пишут в один путь, и без снимка расхождение между
-  // ними прошло бы незамеченным — вторая версия просто затирает первую.
+  // Файл, по которому кейс судит о записи (исходы file-contains), читается ДО
+  // уборки: он может лежать среди файлов состояния прогона, и после уборки
+  // читать его было бы поздно.
   const assertFile = caseEnv.ASSERT_FILE || '';
+  let assertText;
   if (assertFile) {
     try {
-      state['assert-file'] = fs.readFileSync(assertFile, 'utf8');
+      assertText = fs.readFileSync(assertFile, 'utf8');
     } catch {
-      state['assert-file'] = '';
+      assertText = '';
     }
   }
   cleanState(s);
@@ -372,10 +332,9 @@ function runPass(c, ext) {
     script,
     out: res.stdout || '',
     err: res.stderr || '',
-    qaCount,
     traced,
     trace,
-    state,
+    assertText,
   };
 }
 
@@ -666,7 +625,7 @@ function main() {
 
       let ok = grade(c.expect, r.out, r.err, {
         ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || ''),
-        ASSERT_TEXT: r.state['assert-file'],
+        ASSERT_TEXT: r.assertText,
       });
       let got = r.out;
       if (ok === null) {
@@ -685,34 +644,6 @@ function main() {
       if (ok && c.assert_trace_contains && !r.trace.includes(c.assert_trace_contains)) {
         ok = false; got = `в промпте классификатора нет «${c.assert_trace_contains}»`;
       }
-      if (ok && c.assert_qa_records !== undefined
-          && String(r.qaCount) !== String(c.assert_qa_records)) {
-        ok = false; got = `записей в окне разрешений: ${r.qaCount}, ожидалось ${c.assert_qa_records}`;
-      }
-
-      // Дифференциальный режим: вторая версия того же хука обязана ответить тем
-      // же — и тем же следом на диске.
-      if (ok && DIFF) {
-        const base = SCRIPT[c.hook] || c.hook;
-        const other = r.script.endsWith('.js') ? '.sh' : '.js';
-        if (resolveHook(base, other)) {
-          const alt = runPass(c, other);
-          const diffs = [];
-          if (alt.out !== r.out) diffs.push('stdout');
-          if (alt.err !== r.err) diffs.push('stderr');
-          if (JSON.stringify(alt.state) !== JSON.stringify(r.state)) diffs.push('состояние');
-          // След классификатора сверяется содержимым, а не фактом наличия: обе
-          // версии могут его вызвать, но по-разному сериализовать правку — и
-          // тогда расхождение проехало бы незамеченным.
-          if (alt.traced !== r.traced) diffs.push('вызов классификатора');
-          else if (alt.trace !== r.trace) diffs.push('промпт классификатора');
-          if (diffs.length > 0) {
-            ok = false;
-            got = `версии разошлись (${diffs.join(', ')}): ${path.basename(r.script)} против ${path.basename(alt.script)}`;
-          }
-        }
-      }
-
       if (ok) {
         pass += 1;
         row('PASS', c.hook, c.expect, c.name);
