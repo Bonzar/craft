@@ -5,6 +5,7 @@
 // собран здесь, потому что по нему судят два гейта — качества и отладочных
 // логов, — и разъехавшиеся копии дали бы гейты, проверяющие разные наборы.
 import fs from 'node:fs';
+import { eachJsonl } from './jsonl.js';
 
 const WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit'];
 
@@ -18,23 +19,16 @@ export function editedFiles(file) {
     return [];
   }
   const found = new Set();
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const content = entry && entry.message && entry.message.content;
-    if (!Array.isArray(content)) continue;
+  eachJsonl(text, (entry) => {
+    const content = entry.message && entry.message.content;
+    if (!Array.isArray(content)) return;
     for (const item of content) {
       if (!item || item.type !== 'tool_use') continue;
       if (!WRITE_TOOLS.includes(item.name)) continue;
       const path = item.input && item.input.file_path;
       if (typeof path === 'string' && path) found.add(path);
     }
-  }
+  });
   return [...found].sort();
 }
 

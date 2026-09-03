@@ -1,18 +1,35 @@
-// Метрики слоя: что считается по событиям хуков и как это ложится на диск.
+// Метрики слоя: журнал событий сессии, состояние между событиями и признаки,
+// которые из событий вычисляются.
 //
 // Журнал — JSONL в файле сессии (metricsLog из paths.js): по строке на событие.
 // Содержимого правок, команд и промптов в журнале нет — только имена, классы
 // исходов, длительности и числа. Текст отказа сюда не пишется: из него
-// вычисляется КЛАСС причины, и только он попадает в строку.
+// вычисляется КЛАСС причины (reasonClass), и только он попадает в строку.
 //
-// Состояние между событиями (номер хода, начало хода, вызовы в полёте, смещение
-// прочитанного транскрипта) живёт рядом с журналом в `<журнал>.state.json`.
-// Все функции fail quiet: сломанные метрики не должны трогать ход.
+// Что здесь есть:
+// — append/currentMetricsLog/childEnv — куда и чем писать;
+// — updateState — правка `<журнал>.state.json` под локом (номер хода, начало
+//   хода, вызовы в полёте, смещение прочитанного транскрипта);
+// — reasonClass/verdictClass — классы отказа гейта и ответа модели;
+// — callHash — хеш вызова, по которому узнаётся «тот же вызов» после отказа;
+// — promptHash/looksLikeReinstruction — признаки реплики;
+// — turnUsage — токены хода из транскрипта;
+// — isProgress — был ли в ходе прогресс, по признакам вызова;
+// — readJournal/refreshSummary/writeSummary — сводка сессии и её копия.
+//
+// Чего здесь НЕТ: имён инструментов и команд. Признаки вызова ставит обёртка
+// (universal-metrics.js) через write-targets.js, метку репозитория даёт
+// repo-git.js, саму свёртку журнала — metrics-summary.js.
+//
+// Все функции fail quiet: сломанные метрики не должны трогать ход. Не удалось
+// взять лок — правка не делается, и это видно строкой kind: 'skip' в журнале.
 import fs from 'node:fs';
 import path from 'node:path';
 import { metricsLog, sessionId } from './paths.js';
 import { withLock, atomicWrite } from './lock.js';
 import { sha256 } from './hash.js';
+import { eachJsonl } from './jsonl.js';
+import { summarize } from './metrics-summary.js';
 
 export function append(file, record) {
   if (!file) return;
@@ -251,21 +268,6 @@ export function turnUsage(transcript, from = 0) {
 
 // --- сводка сессии -------------------------------------------------------------
 
-// Разбор JSONL: по объекту на строку, битая строка пропускается. Общий на весь
-// модуль — его же правилам подчиняются и записи журнала, и записи транскрипта.
-export function eachJsonl(text, fn) {
-  for (const line of String(text).split('\n')) {
-    if (!line.trim()) continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry && typeof entry === 'object') fn(entry, line);
-  }
-}
-
 // Записи журнала без строк сводки.
 //
 // Возвращает null, когда журнал НЕ ПРОЧИТАЛСЯ, и [] — когда его просто нет.
@@ -306,11 +308,9 @@ export function callHash(tool, input) {
   return sha256(`${tool}\n${semantic}`).slice(0, 16);
 }
 
-// Значение в устойчивом виде: ключи сортируются на КАЖДОМ уровне, а не только
-// на верхнем. Порядок полей смысла не несёт, и на вложенных объектах (правки
-// MultiEdit, ячейки NotebookEdit) один и тот же вызов давал разные хеши — то
-// есть повтор после отказа не узнавался и ложный отказ не засчитывался.
-// Порядок элементов массива, наоборот, значим и сохраняется.
+// Значение в устойчивом виде: ключи сортируются на КАЖДОМ уровне. Порядок полей
+// смысла не несёт, а один и тот же вызов обязан давать один хеш — на нём стоит
+// узнавание повтора после отказа. Порядок элементов массива, наоборот, значим.
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -354,164 +354,6 @@ export function refreshSummary(log, { sid = '', now = Date.now(), record = false
   return value;
 }
 
-// Скиллы разбора инцидента: код-сессия и сессия над базой Craft. Список точный,
-// потому что признак «скилл вызван» — это доля разборов, а не похожие имена.
-const INCIDENT_SKILLS = new Set(['code-incident', 'craft-incident']);
-
-const ms = Date.parse;
-
-// Свёртка журнала сессии в одну сводку. Чистая функция над записями.
-//
-// Ложный отказ — «deny, затем тот же вызов прошёл в течение хода после реплики
-// или кнопки»: отказ запоминается по хешу вызова; реплика (новый ход) или ответ
-// кнопкой снимают с него замок; тот же хеш, прошедший в ЭТОМ ходе после снятия,
-// засчитывается ложным отказом.
-export function summarize(records, { sid = '', now = Date.now() } = {}) {
-  const s = {
-    sid, harness: '', repo: '', started_at: '', ended_at: new Date(now).toISOString(),
-    turns: 0,
-    tokens: { input: 0, output: 0, cache_read: 0, cache_create: 0 },
-    tokens_first_turn: null,
-    model_calls: { count: 0, ms: 0, by_mode: {} },
-    denies: { total: 0, by_class: {} },
-    false_denies: 0,
-    plan: { shown: 0, bounced: 0, approved: 0 },
-    incidents: { detected: 0, skill_called: 0, share: null },
-    stop_blocks: {},
-    tool_errors: 0,
-    first_edit_ms: null,
-    outcome: { craft_writes: 0, pushed: false },
-    signals: {
-      // Повтор реплики и словесный маркер переуказания — РАЗНЫЕ признаки: первый
-      // ловит дословно ту же реплику, второй — обращение «я же просил». В одном
-      // счётчике они складывались, и по сводке нельзя было сказать, чего именно
-      // было больше.
-      prompt_repeats: 0, reinstructions: 0,
-      call_repeats: 0, stage_repeats: 0, turns_without_progress: 0, error_streak_max: 0,
-    },
-  };
-  let streak = 0;
-  // Ход без прогресса считается по ХОДУ, а не по записи Stop: у одного хода
-  // записей Stop бывает несколько, и решает последняя.
-  const noProgressByTurn = new Map();
-  // Ходы — по числу РАЗЛИЧНЫХ номеров, а не по максимуму: максимум считал ходы,
-  // которых в журнале нет (сессия, возобновлённая с чужим номером), и не считал
-  // пропуски. Нулевой ход ходом не является: реплики ещё не было, это Stop
-  // служебного вызова до начала разговора.
-  const turnsSeen = new Set();
-  let started = NaN;
-  let firstTurn = null;
-  const pending = new Map(); // hash → { unlockTurn }
-  const pres = new Map();    // id → pre-запись
-  const incidentTurns = new Set();
-  const skillTurns = new Set();
-
-  // Реплика или ответ кнопкой снимают замок с ОТЛОЖЕННЫХ отказов, и снимают его
-  // КАЖДЫЙ РАЗ заново: между отказом и повтором Влад успевает и ответить кнопкой,
-  // и написать реплику, а замок, снятый однажды и потом выброшенный, терял
-  // ровно тот случай, ради которого признак заведён.
-  //
-  // Из ожидания отказ уходит по СВОЕМУ возрасту, а не по возрасту снятия:
-  // «сразу после реплики» — это ход отказа или следующий за ним, дальше это уже
-  // новая работа, и правильный отказ, снятый через пять ходов новым планом,
-  // ложным не считается.
-  const DENY_WINDOW_TURNS = 1;
-  const unlock = (turn) => {
-    for (const [hash, p] of pending) {
-      if (turn - p.denyTurn > DENY_WINDOW_TURNS) pending.delete(hash);
-      else p.unlockTurn = turn;
-    }
-  };
-
-  for (const r of records) {
-    const t = ms(r.ts);
-    if (!Number.isFinite(started) && Number.isFinite(t)) started = t;
-    if (Number.isFinite(r.turn) && r.turn > 0) turnsSeen.add(r.turn);
-
-    if (r.kind === 'session') {
-      // Стартов бывает несколько (компакт, возобновление): начало сессии —
-      // самая ранняя запись, поздние старты его не двигают.
-      s.harness = r.harness || s.harness;
-      s.repo = r.repo || s.repo;
-      s.sid = s.sid || r.sid || '';
-    } else if (r.kind === 'prompt') {
-      unlock(r.turn);
-      if (r.incident === true) incidentTurns.add(r.turn);
-      if (r.repeat === true) s.signals.prompt_repeats += 1;
-      if (r.reinstruct === true) s.signals.reinstructions += 1;
-      // Серия ошибок — про то, как агент бьётся ВНУТРИ хода: реплика Влада её
-      // разрывает, иначе ошибки по обе стороны его вмешательства сложились бы
-      // в одну серию, которой не было.
-      streak = 0;
-    } else if (r.kind === 'pre') {
-      if (r.id) pres.set(r.id, r);
-      if (r.decision === 'deny') {
-        s.denies.total += 1;
-        const cls = r.class || 'unknown';
-        s.denies.by_class[cls] = (s.denies.by_class[cls] || 0) + 1;
-        if (r.h) pending.set(r.h, { unlockTurn: null, denyTurn: r.turn });
-        if (r.plan === true) s.plan.bounced += 1;
-      } else if (r.decision === 'allow') {
-        if (r.plan === true) s.plan.shown += 1;
-        if (r.h && pending.has(r.h)) {
-          const p = pending.get(r.h);
-          if (p.unlockTurn !== null && p.unlockTurn === r.turn) s.false_denies += 1;
-          pending.delete(r.h);
-        }
-      }
-      if (r.repeat_call === true) s.signals.call_repeats += 1;
-      if (r.stage_repeat === true) s.signals.stage_repeats += 1;
-    } else if (r.kind === 'post' || r.kind === 'fail') {
-      const pre = r.id ? pres.get(r.id) : null;
-      const failed = r.kind === 'fail' || r.error === true;
-      if (failed) s.tool_errors += 1;
-      streak = failed ? streak + 1 : 0;
-      if (streak > s.signals.error_streak_max) s.signals.error_streak_max = streak;
-      if (!failed && pre && pre.question === true) unlock(r.turn);
-      // Скилл разбора засчитывается только УСПЕШНЫМ вызовом и по точному имени:
-      // отказанный вызов разбора не делает, а подстрока incident ловила и
-      // соседние скиллы, и сводка говорила, что разбор был, когда его не было.
-      if (!failed && pre && INCIDENT_SKILLS.has(String(pre.skill || ''))) skillTurns.add(r.turn);
-      if (!failed && pre && pre.plan === true) s.plan.approved += 1;
-      if (!failed && pre && pre.craft_write === true) s.outcome.craft_writes += 1;
-      if (!failed && pre && pre.edit === true && s.first_edit_ms === null
-          && Number.isFinite(t) && Number.isFinite(started)) s.first_edit_ms = t - started;
-      if (!failed && pre && pre.push === true) s.outcome.pushed = true;
-    } else if (r.kind === 'stop') {
-      if (r.blocked_by) s.stop_blocks[r.blocked_by] = (s.stop_blocks[r.blocked_by] || 0) + 1;
-      // Нулевой ход в счёт не идёт: до первой реплики Влада хода не было, а
-      // Stop служебного вызова давал «ход без прогресса», которого не случалось.
-      if (typeof r.no_progress === 'boolean' && r.turn > 0) noProgressByTurn.set(r.turn, r.no_progress);
-      const u = r.usage && typeof r.usage === 'object' ? r.usage : {};
-      for (const key of Object.keys(s.tokens)) s.tokens[key] += Number(u[key]) || 0;
-      // Токены первого хода — сумма ВСЕХ его Stop: заблокированный конец хода
-      // даёт второй Stop с тем же номером и своей долей usage.
-      if (s.tokens_first_turn === null) {
-        firstTurn = r.turn;
-        s.tokens_first_turn = { input: 0, output: 0, cache_read: 0, cache_create: 0 };
-      }
-      if (firstTurn === r.turn) {
-        for (const key of Object.keys(s.tokens_first_turn)) s.tokens_first_turn[key] += Number(u[key]) || 0;
-      }
-    } else if (r.kind === 'model') {
-      s.model_calls.count += 1;
-      s.model_calls.ms += Number(r.ms) || 0;
-      const mode = r.mode || 'unknown';
-      const m = s.model_calls.by_mode[mode] || { count: 0, ms: 0 };
-      m.count += 1;
-      m.ms += Number(r.ms) || 0;
-      s.model_calls.by_mode[mode] = m;
-    }
-  }
-
-  s.turns = turnsSeen.size;
-  s.signals.turns_without_progress = [...noProgressByTurn.values()].filter(Boolean).length;
-  s.incidents.detected = incidentTurns.size;
-  s.incidents.skill_called = [...incidentTurns].filter((turn) => skillTurns.has(turn)).length;
-  s.incidents.share = incidentTurns.size ? s.incidents.skill_called / incidentTurns.size : null;
-  s.started_at = Number.isFinite(started) ? new Date(started).toISOString() : '';
-  return s;
-}
 
 // Размер транскрипта на сейчас; нет файла — ноль.
 export function transcriptSize(file) {

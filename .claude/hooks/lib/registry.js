@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { childEnv } from './metrics.js';
 import { withLock, atomicWrite } from './lock.js';
+import { eachJsonl } from './jsonl.js';
 
 // Лог обрезается сверху: длинный ход иначе растит реестр без предела, а он
 // целиком уходит в каждую сверку.
@@ -62,13 +63,7 @@ export function readRegistry(file) {
     return [];
   }
   const goals = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const goal = JSON.parse(line);
-      if (goal && typeof goal === 'object') goals.push(revive(goal));
-    } catch { /* битая строка — пропускаем, файл остаётся цел */ }
-  }
+  eachJsonl(text, (goal) => goals.push(revive(goal)));
   return goals;
 }
 

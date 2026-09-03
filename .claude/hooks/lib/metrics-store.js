@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { withLock, atomicWrite } from './lock.js';
-import { eachJsonl } from './metrics.js';
+import { eachJsonl } from './jsonl.js';
 import * as store from './metrics-store-git.js';
 
 // Потолок очереди в строках. Строка на сессию, так что потолок — про число

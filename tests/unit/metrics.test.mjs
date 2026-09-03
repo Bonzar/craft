@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'hooks', 'fixtures');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
+const { summarize } = await import('../../.claude/hooks/lib/metrics-summary.js');
 
 test('класс причины: план-гейт по тексту, остальные по имени хука', () => {
   assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'Заблокировано план-гейтом: одобренного нет — реестр пуст.'), 'gate.empty');
@@ -85,7 +86,7 @@ test('сводка: ложный отказ — deny, затем тот же в�
     { kind: 'post', ts: T(5), turn: 2, tool: 'Edit', id: 'b', error: false },
     { kind: 'stop', ts: T(6), turn: 2, blocked_by: '', usage: { input: 1, output: 2, cache_read: 3, cache_create: 4 } },
   ];
-  const s = metrics.summarize(records, { sid: 's', now: Date.parse(T(7)) });
+  const s = summarize(records, { sid: 's', now: Date.parse(T(7)) });
   assert.equal(s.false_denies, 1);
   assert.equal(s.denies.total, 1);
   assert.deepEqual(s.denies.by_class, { 'gate.uncovered': 1 });
@@ -102,7 +103,7 @@ test('сводка: тот же вызов, прошедший без репли
     { kind: 'pre', ts: T(2), turn: 1, tool: 'Edit', id: 'a', decision: 'deny', class: 'gate.empty', h: 'h1' },
     { kind: 'pre', ts: T(3), turn: 1, tool: 'Edit', id: 'b', decision: 'allow', h: 'h1' },
   ];
-  assert.equal(metrics.summarize(records).false_denies, 0);
+  assert.equal(summarize(records).false_denies, 0);
 });
 
 test('сводка: ответ кнопкой снимает замок в том же ходе', () => {
@@ -113,7 +114,7 @@ test('сводка: ответ кнопкой снимает замок в то�
     { kind: 'post', ts: T(4), turn: 1, tool: 'AskUserQuestion', id: 'q', error: false },
     { kind: 'pre', ts: T(5), turn: 1, tool: 'Bash', id: 'b', decision: 'allow', h: 'h1' },
   ];
-  assert.equal(metrics.summarize(records).false_denies, 1);
+  assert.equal(summarize(records).false_denies, 1);
 });
 
 test('сводка: циклы плана, инциденты, блокировки Stop, ошибки, исход', () => {
@@ -136,7 +137,7 @@ test('сводка: циклы плана, инциденты, блокиров�
     { kind: 'prompt', ts: T(15), turn: 2, incident: true },
     { kind: 'stop', ts: T(16), turn: 2, blocked_by: '', usage: {} },
   ];
-  const s = metrics.summarize(records);
+  const s = summarize(records);
   assert.deepEqual(s.plan, { shown: 1, bounced: 1, approved: 1 });
   assert.deepEqual(s.incidents, { detected: 2, skill_called: 1, share: 0.5 });
   assert.deepEqual(s.stop_blocks, { 'universal-stop-routine-facts': 1 });
@@ -149,7 +150,7 @@ test('сводка: циклы плана, инциденты, блокиров�
 });
 
 test('сводка: пустой журнал даёт пустую сводку без падения', () => {
-  const s = metrics.summarize([]);
+  const s = summarize([]);
   assert.equal(s.turns, 0);
   assert.equal(s.tokens_first_turn, null);
   assert.equal(s.incidents.share, null);
@@ -176,7 +177,7 @@ test('сводка: сигналы складываются из признак�
     { kind: 'prompt', ts: T(9), turn: 2, repeat: true, reinstruct: false },
     { kind: 'stop', ts: T(10), turn: 2, blocked_by: '', usage: {}, no_progress: true },
   ];
-  const s = metrics.summarize(records);
+  const s = summarize(records);
   // Повтор реплики и словесный маркер — РАЗНЫЕ признаки: в одном счётчике по
   // сводке нельзя было сказать, чего именно было больше.
   assert.deepEqual(s.signals, {
@@ -196,13 +197,13 @@ test('сводка: ход без прогресса считается по х�
     { kind: 'stop', ts: T(2), turn: 1, blocked_by: 'universal-stop-routine-facts', usage: {}, no_progress: true },
     { kind: 'stop', ts: T(3), turn: 1, blocked_by: '', usage: {}, no_progress: false },
   ];
-  assert.equal(metrics.summarize(blockedThenDone).signals.turns_without_progress, 0, 'ход в итоге дал прогресс');
+  assert.equal(summarize(blockedThenDone).signals.turns_without_progress, 0, 'ход в итоге дал прогресс');
   const stuck = [
     { kind: 'prompt', ts: T(1), turn: 1 },
     { kind: 'stop', ts: T(2), turn: 1, blocked_by: 'universal-stop-routine-facts', usage: {}, no_progress: true },
     { kind: 'stop', ts: T(3), turn: 1, blocked_by: '', usage: {}, no_progress: true },
   ];
-  assert.equal(metrics.summarize(stuck).signals.turns_without_progress, 1, 'два Stop одного хода — один ход');
+  assert.equal(summarize(stuck).signals.turns_without_progress, 1, 'два Stop одного хода — один ход');
 });
 
 // --- журнал по событию -----------------------------------------------------------
@@ -262,7 +263,7 @@ test('сводка: повторный старт (компакт) не двиг
     { kind: 'session', ts: T(5), turn: 1, harness: 'claude', repo: 'r', sid: 's', source: 'compact' },
     { kind: 'prompt', ts: T(6), turn: 2 },
   ];
-  const s = metrics.summarize(records);
+  const s = summarize(records);
   assert.equal(s.started_at, T(0));
   assert.equal(s.turns, 2);
 });
@@ -275,7 +276,7 @@ test('сводка: токены первого хода складываютс�
     { kind: 'prompt', ts: T(4), turn: 2 },
     { kind: 'stop', ts: T(5), turn: 2, blocked_by: '', usage: { input: 100, output: 100, cache_read: 100, cache_create: 100 } },
   ];
-  const s = metrics.summarize(records);
+  const s = summarize(records);
   assert.deepEqual(s.tokens_first_turn, { input: 3, output: 30, cache_read: 5, cache_create: 0 });
   assert.deepEqual(s.tokens, { input: 103, output: 130, cache_read: 105, cache_create: 100 });
 });
@@ -373,13 +374,13 @@ test('сводка: отказ, снятый ходами позже, ложны
     { kind: 'prompt', ts: T(1), turn: 1 },
     { kind: 'pre', ts: T(2), turn: 1, tool: 'Edit', id: 'a', decision: 'deny', class: 'gate.uncovered', h: 'h1' },
   ];
-  const next = metrics.summarize([...base,
+  const next = summarize([...base,
     { kind: 'prompt', ts: T(3), turn: 2 },
     { kind: 'pre', ts: T(4), turn: 2, tool: 'Edit', id: 'b', decision: 'allow', h: 'h1' },
   ]);
   assert.equal(next.false_denies, 1, 'ход сразу после реплики — это и есть ложный отказ');
 
-  const later = metrics.summarize([...base,
+  const later = summarize([...base,
     { kind: 'prompt', ts: T(3), turn: 2 },
     { kind: 'prompt', ts: T(4), turn: 3 },
     { kind: 'prompt', ts: T(5), turn: 4 },
@@ -404,7 +405,7 @@ test('сводка: серия ошибок не переходит через �
     { kind: 'prompt', ts: T(4), turn: 2 },
     { kind: 'post', ts: T(5), turn: 2, tool: 'Bash', id: 'c', error: true },
   ];
-  assert.equal(metrics.summarize(records).signals.error_streak_max, 2,
+  assert.equal(summarize(records).signals.error_streak_max, 2,
     'три ошибки, но между второй и третьей — вмешательство Влада');
 });
 
