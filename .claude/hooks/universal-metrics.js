@@ -39,7 +39,7 @@ import { sessionId } from './lib/paths.js';
 import {
   append, updateState, reasonClass, repoOf, turnUsage, responseIsError,
   projectDispatcherAt, currentMetricsLog, transcriptSize,
-  readJournal, summarize, writeSummary, callHash, looksLikePush,
+  refreshSummary, callHash, looksLikePush,
   promptHash, looksLikeReinstruction, STAGE_TOOLS, isProgress, looksMutating,
 } from './lib/metrics.js';
 
@@ -64,7 +64,7 @@ const ts = new Date(now).toISOString();
 // process.exit недопустим: он не разматывает finally, и лок остался бы взятым
 // до истечения его срока, то есть следующий хук ждал бы минуты. Поэтому выходы
 // внутри — обычные return.
-updateState(log, (state) => {
+const stop = updateState(log, (state) => {
   if (!state.started_at) state.started_at = now;
   if (!Number.isFinite(state.turn)) state.turn = 0;
   if (!state.inflight || typeof state.inflight !== 'object') state.inflight = {};
@@ -90,14 +90,13 @@ updateState(log, (state) => {
     // с тем же идентификатором. Счётчики и начало сессии при этом не сбрасываются
     // — журнал продолжается, а причина старта пишется полем source.
     if (!state.repo) state.repo = repoOf(cwd);
-    // Засев смещения транскрипта. У возобновлённой или скомпакченной сессии он
-    // на старте уже несёт историю, и без засева первый же Stop записал бы её
-    // всю в один ход. Пересев идёт и когда файл КОРОЧЕ прежнего смещения —
-    // это другой транскрипт, и старое смещение уже никогда не сойдётся.
-    const size = transcriptSize(transcript);
-    if (!Number.isFinite(state.transcript_offset) || size < state.transcript_offset) {
-      state.transcript_offset = size;
-    }
+    // Засев смещения транскрипта — ВСЕГДА по текущему размеру файла. Всё, что
+    // написано до старта, принадлежит прошлым ходам, чем бы старт ни был вызван.
+    // Условный засев («только если файла стало меньше») пропускал обратный
+    // случай: после нечистого выхода или компакта в БОЛЬШИЙ транскрипт файл
+    // длиннее сохранённого смещения, и первый же Stop записывал дорезумную
+    // историю в новый ход.
+    state.transcript_offset = transcriptSize(transcript);
     append(log, {
       kind: 'session', ...base, source: typeof event.source === 'string' ? event.source : '',
       harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
@@ -183,15 +182,13 @@ updateState(log, (state) => {
     // ни вопроса, ни пуша не вышло. Ход без единого вызова — разговор, не в счёт.
     record.no_progress = state.turn_tools > 0 && state.turn_progress !== true;
     append(log, record);
-
-    // Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
-    // Журнал НЕ ПРОЧИТАЛСЯ (это не то же, что «пуст») — сводку не трогаем:
-    // нулевая сводка затёрла бы хорошую, и хранение увезло бы пустую сессию.
-    const records = readJournal(log);
-    if (records) {
-      const summary = summarize(records, { sid, now });
-      append(log, { kind: 'summary', ts, ...summary });
-      writeSummary(log, { ts, ...summary });
-    }
+    return true;
   }
+  return false;
 });
+
+// Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
+// Складывается ВНЕ правки состояния: у общего лока одна занятость на процесс,
+// и вложенный вызов внутри неё не залочился бы вовсе — сводку тогда могла бы
+// затереть та, что собирает параллельный фоновый вызов модели.
+if (stop) refreshSummary(log, { sid, now, record: true });

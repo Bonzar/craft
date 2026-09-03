@@ -139,6 +139,10 @@ export function dueForFlush(queueFile, intervalSec) {
   }
 }
 
+// Отметка ПОПЫТКИ, а не удачи: интервал ограничивает поход в сеть. Отмечать
+// только успех значило бы, что при недоступном origin или отклонённом push
+// каждый следующий Stop снова лезет в сеть — а fetch там до двух минут, и
+// работники копятся на локе очереди всю аварию.
 function markFlushed(queueFile) {
   try {
     fs.writeFileSync(`${queueFile}.stamp`, '');
@@ -151,10 +155,18 @@ function markFlushed(queueFile) {
 //   (гонка или права), очередь цела; error — сборка коммита не удалась.
 export function flushQueue({
   target, queueFile, branch = 'metrics', remote = 'origin', dir = 'summaries',
+  intervalSec = 0,
 }) {
   return withLock(queueFile, () => {
+    // «Пора ли» проверяется ПОД ЛОКОМ, вместе с чтением очереди. Снаружи это
+    // решение успевало устареть: пока второй работник ждал лок, первый успевал
+    // выгрузиться и поставить отметку, а ждавший всё равно шёл в сеть — то есть
+    // интервал не соблюдался ровно тогда, когда работников больше одного.
+    if (!dueForFlush(queueFile, intervalSec)) return { status: 'queued', delivered: 0 };
     const pending = parseQueue(readQueueText(queueFile));
     if (!pending.length) return { status: 'nothing', delivered: 0 };
+    // Отметка ставится ДО сети: интервал ограничивает попытки, а не удачи.
+    markFlushed(queueFile);
 
     const indexFile = path.join(os.tmpdir(), `metrics-index.${process.pid}.${Date.now()}`);
     const g = gitIn(target, { GIT_INDEX_FILE: indexFile });
@@ -219,7 +231,6 @@ export function flushQueue({
       try {
         fs.rmSync(queueFile, { force: true });
       } catch { /* очередь не снялась — сводки уедут второй раз, строка та же */ }
-      markFlushed(queueFile);
       return { status: 'stored', delivered: latest.size };
     } finally {
       try { fs.rmSync(indexFile, { force: true }); } catch { /* индекса нет */ }

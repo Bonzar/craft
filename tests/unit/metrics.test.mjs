@@ -453,13 +453,28 @@ test('вежливая поправка остаётся переуказани�
 test('читающие команды гита мутацией не считаются', () => {
   for (const cmd of ['git diff --merge-base main', 'git log --oneline -- lib/tag.js',
     'git show HEAD:src/reset.js', 'git stash list', 'git stash show', 'git tag',
+    'git tag --list', "git tag -l 'v*'", 'git branch', 'git branch -a', 'git branch -r',
+    'git remote', 'git remote -v', 'git remote show origin', 'git worktree list',
     'git worktree list', 'git status']) {
     assert.equal(metrics.looksMutating('Bash', { command: cmd }), false, cmd);
   }
   for (const cmd of ['git commit -m x', 'git -C /repo push origin main', 'git stash push -m wip',
-    'git stash', 'git tag v1', 'git checkout -b feature']) {
+    'git stash', 'git tag v1', 'git checkout -b feature',
+    // Правящие формы тех же подкоманд и сетевые вызовы: они пишут ссылки и
+    // объекты в локальный репозиторий, и ход с ними ходом без изменений не был.
+    'git fetch origin', 'git pull', 'git branch feature', 'git branch -d old',
+    'git remote add origin https://example.invalid/r.git', 'git worktree add /tmp/w']) {
     assert.equal(metrics.looksMutating('Bash', { command: cmd }), true, cmd);
   }
+});
+
+// В цепочке смотрятся ВСЕ вызовы: по одному первому «git status && git commit»
+// читался бы как ход без единого изменения, а слово в кавычках — как правка.
+test('правка видна в любом месте цепочки, а слово в кавычках правкой не считается', () => {
+  assert.equal(metrics.looksMutating('Bash', { command: 'git status && git commit -m x' }), true);
+  assert.equal(metrics.looksMutating('Bash', { command: 'git log --oneline | head; git tag v1' }), true);
+  assert.equal(metrics.looksMutating('Bash', { command: "printf 'git commit -m x'" }), false);
+  assert.equal(metrics.looksMutating('Bash', { command: 'echo git push' }), false);
 });
 
 test('работа через подагента считается прогрессом, чтение — нет', () => {
@@ -479,4 +494,57 @@ test('сводка: серия ошибок не переходит через �
   ];
   assert.equal(metrics.summarize(records).signals.error_streak_max, 2,
     'три ошибки, но между второй и третьей — вмешательство Влада');
+});
+
+// Пуш опознаётся по вызову git, а не по слову в строке: `printf 'git push'`
+// пушем не является, и исход сессии на нём не помечается пушем.
+test('пуш: вызов git, а не слово где угодно в команде', () => {
+  assert.equal(metrics.looksLikePush('git push -u origin main'), true);
+  assert.equal(metrics.looksLikePush('cd /repo && git push'), true);
+  assert.equal(metrics.looksLikePush('git -C /repo push'), true);
+  assert.equal(metrics.looksLikePush("printf 'git push'"), false, 'слово в кавычках командой не является');
+  assert.equal(metrics.looksLikePush('echo git push'), false, 'аргумент чужой команды');
+  assert.equal(metrics.looksLikePush('git commit -m "fix push"'), false);
+  assert.equal(metrics.looksLikePush('git stash push'), false);
+  assert.equal(metrics.looksLikePush('git push --dry-run'), false);
+});
+
+// Хеш вызова канонизируется на ВСЕХ уровнях: порядок полей во вложенном объекте
+// смысла не несёт, а на разном хеше повтор после отказа не узнавался и ложный
+// отказ не засчитывался. Порядок элементов массива, наоборот, значим.
+test('хеш вызова: вложенные поля сортируются, порядок массива значим', () => {
+  const a = { file_path: '/a', edits: [{ old_string: 'x', new_string: 'y' }] };
+  const b = { edits: [{ new_string: 'y', old_string: 'x' }], file_path: '/a' };
+  assert.equal(metrics.callHash('MultiEdit', a), metrics.callHash('MultiEdit', b));
+  assert.notEqual(
+    metrics.callHash('MultiEdit', { edits: [{ t: 1 }, { t: 2 }] }),
+    metrics.callHash('MultiEdit', { edits: [{ t: 2 }, { t: 1 }] }),
+  );
+});
+
+// Фоновый приём реестра кончается ПОЗЖЕ последнего Stop хода: его вызов модели
+// приходит в журнал, когда сводка уже сложена. Без пересборки такой вызов не
+// попадал ни в одну сводку, и хранение увозило сессию с недосчитанными
+// вызовами модели.
+test('вызов модели после сводки пересобирает её копию', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-model-'));
+  const log = path.join(dir, 'm.jsonl');
+  metrics.append(log, { kind: 'session', ts: new Date().toISOString(), turn: 0 });
+  metrics.refreshSummary(log, { sid: 'm-sid', record: true });
+  const before = JSON.parse(fs.readFileSync(`${log}.summary.json`, 'utf8'));
+  assert.equal(before.model_calls.count, 0, 'предусловие: сводка сложена и вызовов в ней нет');
+
+  const saved = process.env.CRAFT_METRICS_LOG;
+  process.env.CRAFT_METRICS_LOG = log;
+  try {
+    metrics.recordModelCall({ mode: 'ingest', ms: 1200, outcome: 'json' });
+  } finally {
+    if (saved === undefined) delete process.env.CRAFT_METRICS_LOG;
+    else process.env.CRAFT_METRICS_LOG = saved;
+  }
+
+  const after = JSON.parse(fs.readFileSync(`${log}.summary.json`, 'utf8'));
+  assert.equal(after.model_calls.count, 1, 'вызов из фонового процесса дошёл до копии сводки');
+  assert.equal(after.model_calls.ms, 1200);
+  assert.equal(after.model_calls.by_mode.ingest.count, 1);
 });
