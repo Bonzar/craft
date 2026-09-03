@@ -44,6 +44,10 @@ function unknownAll(done, addresses) {
   return { ...done, unknown: [...done.unknown, ...addresses] };
 }
 
+// Ожидание лока реестра — умолчание модуля лока (5 с). Реестр правят и гейт на
+// PreToolUse, и приём следом за ходом, то есть эти секунды стоят в цепочке хода;
+// свой, короткий срок появится здесь вместе с переносом приёма за пределы хода
+// (фаза 4), а не раньше: сегодня пропущенная запись реестра дороже ожидания.
 function underLock(file, run, fallback) {
   const { locked, value } = withLock(file, run);
   if (locked) return value;

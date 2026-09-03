@@ -62,11 +62,14 @@ const TOOL_NAMES = new RegExp([
 const HARNESS_NAMES = new RegExp([
   'CLAUDE_[A-Z_]+',
   '\\.claude\\b',
-  'hook_event_name|tool_name|tool_input|tool_response|tool_use_id|session_id|transcript_path',
+  'hook_event_name|tool_name|tool_input|tool_response|tool_use_id|session_id|transcript_path|permission_mode',
   'hookSpecificOutput|permissionDecision|permissionDecisionReason|systemMessage',
-  "'assistant'|\"assistant\"",
+  "'assistant'|\"assistant\"|'user'|\"user\"|'tool_use'|\"tool_use\"|'tool_result'|\"tool_result\"",
   'input_tokens|output_tokens|cache_read_input_tokens|cache_creation_input_tokens',
   'file_path|notebook_path|subagent_type',
+  // Форма ЗАПИСИ транскрипта, а не только имена полей usage: без неё новая
+  // привязка вида `entry.message.model` заводилась молча.
+  '\\bentry\\.(type|message)\\b|\\bmessage\\.(usage|id|role|content|model)\\b|\\bitem\\.(name|input|type)\\b',
 ].join('|'));
 
 // Долг по харнесу — тоже счётом. Правило 10 запрещает заводить НОВУЮ привязку,
@@ -74,11 +77,11 @@ const HARNESS_NAMES = new RegExp([
 const HARNESS_DEBT = new Map([
   ['decide.js', 11], // формат решения харнеса
   ['env.js', 2], // каталог состояния харнеса
-  ['event.js', 5], // поля события харнеса
-  ['metrics.js', 8], // регистрация диспетчера, session_id и поля usage транскрипта
+  ['event.js', 6], // поля события харнеса
+  ['metrics.js', 12], // регистрация диспетчера, session_id и формат транскрипта
   ['once.js', 3], // ключ уступки по полям события
   ['paths.js', 2], // CLAUDE_CODE_SESSION_ID и каталог состояния
-  ['transcript.js', 2], // формат транскрипта Claude
+  ['transcript.js', 8], // формат транскрипта Claude целиком
   ['write-targets.js', 3], // политика ~/.claude как системной зоны
 ]);
 
@@ -157,6 +160,9 @@ test('гвард имён ловит имя инструмента в коде �
     "return u.cache_creation_input_tokens;",
     "const p = input.file_path;",
     "out.hookSpecificOutput = { permissionDecision: 'deny' };",
+    "const model = entry.message && entry.message.model;",
+    "const mode = event.permission_mode || '';",
+    "if (item.type === 'tool_use') return item.name;",
   ]) {
     assert.equal(probe(code, HARNESS_NAMES), 1, code);
   }

@@ -392,7 +392,13 @@ function grade(expect, out, err, env) {
     const file = (env || {}).ASSERT_FILE || '';
     if (!file) return false;
     const text = (env || {}).ASSERT_TEXT || '';
-    if (expect === 'file-empty') return text === '' && (env || {}).CODE === 0;
+    // Молчание засчитывается только УДАВШЕМУСЯ хуку: код возврата плюс отсутствие
+    // строки диспетчера о падении. Через диспетчер упавший хук возвращает ноль —
+    // он гасит падение, чтобы не унести цепочку, — и один код возврата тут не
+    // отличил бы «смолчал» от «упал».
+    if (expect === 'file-empty') {
+      return text === '' && (env || {}).CODE === 0 && !/\[dispatch\] хук .* упал/.test(err || '');
+    }
     const needle = expect.slice(expect.indexOf(':') + 1);
     if (expect.startsWith('file-contains:')) return text.includes(needle);
     return text !== '' && !text.includes(needle);
