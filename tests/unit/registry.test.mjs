@@ -553,3 +553,54 @@ test('приём видит цель, заведённую предыдущей 
   assert.equal(goals.length, 1, 'вторая запись ответа села на цель первой, а не завела свою');
   assert.deepEqual(goals[0].tasks.map((t) => t.title), ['ядро', 'кейсы под ядро']);
 });
+
+// Два приёма одной сессии идут ПАРАЛЛЕЛЬНО: реплика уходит в фон, и ответ на
+// кнопку следом за ней — тоже. На общем имени вида один приём подчищал за
+// собой файл, который второй ещё не прочитал, и тот разбирал пустой реестр:
+// заводил цель заново вместо того, чтобы сесть на существующую.
+//
+// Кейс подменяет КЛАССИФИКАТОР (не команду модели): ему видно имя вида и то,
+// доживает ли файл до чтения. Медленный приём стартует первым и читает вид
+// после того, как быстрый закончил и убрался.
+test('вид реестра переживает параллельный приём', async () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const seen = path.join(dir, 'seen.log');
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, [
+    '#!/usr/bin/env bash',
+    'view="$2"',
+    'sleep "${STUB_DELAY:-0}"',
+    'if [[ -r "$view" ]]; then state=READABLE; else state=MISSING; fi',
+    'printf "%s %s\\n" "$state" "$view" >> "$STUB_SEEN"',
+    'printf \'{"add":[],"close":[]}\\n\'',
+  ].join('\n'));
+
+  const run = (delay) => new Promise((done) => {
+    const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+    const child = spawn(process.execPath, [
+      path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, `проба-${delay}`,
+    ], {
+      stdio: 'ignore',
+      env: { ...process.env, PLAN_CLASSIFIER_BIN: stub, STUB_SEEN: seen, STUB_DELAY: String(delay) },
+    });
+    child.on('exit', done);
+  });
+
+  const slow = run(2);
+  await new Promise((r) => { setTimeout(r, 200); });
+  await run(0);
+  await slow;
+
+  const lines = fs.readFileSync(seen, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 2, 'оба приёма дошли до классификатора');
+  const paths = lines.map((ln) => ln.split(' ')[1]);
+  assert.notEqual(paths[0], paths[1], 'у каждого приёма своё имя вида');
+  for (const ln of lines) {
+    assert.match(ln, /^READABLE /, `вид дожил до чтения: ${ln}`);
+  }
+});
