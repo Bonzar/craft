@@ -66,10 +66,36 @@ export function projectDispatcherAt(cwd) {
   }
   while (probe && probe !== path.dirname(probe)) {
     const settings = path.join(probe, '.claude', 'settings.json');
+    let text;
     try {
-      return fs.readFileSync(settings, 'utf8').includes('dispatch.js');
-    } catch { /* здесь настроек нет — выше */ }
-    probe = path.dirname(probe);
+      text = fs.readFileSync(settings, 'utf8');
+    } catch { probe = path.dirname(probe); continue; }
+    return registersDispatcher(text);
+  }
+  return false;
+}
+
+// Проектный диспетчер опознаётся по РЕГИСТРАЦИИ, а не по слову в файле: имя
+// dispatch.js не наше, и в чужом проекте оно встречается своим скриптом. По
+// подстроке такой проект считался бы ведущим полную цепочку, и метрики его
+// сессий не писал бы никто.
+function registersDispatcher(text) {
+  let hooks;
+  try {
+    hooks = JSON.parse(text).hooks;
+  } catch { return false; }
+  if (!hooks || typeof hooks !== 'object') return false;
+  for (const groups of Object.values(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      const list = group && Array.isArray(group.hooks) ? group.hooks : [];
+      for (const hook of list) {
+        const cmd = hook && typeof hook.command === 'string' ? hook.command : '';
+        if (cmd.split(/\s+/).some((w) => w.replace(/^["']|["']$/g, '').endsWith('/.claude/hooks/dispatch.js'))) {
+          return true;
+        }
+      }
+    }
   }
   return false;
 }
