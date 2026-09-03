@@ -78,11 +78,55 @@ test('метка по tool_use_id не протухает: срок хеш-ме�
   const { hookOnce } = await loadOnce(dir);
   process.env.HOOK_ONCE_TTL = '0';
   const self = `file://${HOOKS}/universal-fact-gate.js`;
-  const raw = JSON.stringify({ tool_name: 'Bash', tool_use_id: 'toolu_ttl' });
+  const raw = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'toolu_ttl' });
 
+  // Восстановление окружения — в finally: падение утверждения иначе оставило бы
+  // нулевой срок следующим тестам и валило бы их вместо этого.
+  try {
+    assert.equal(hookOnce(raw, JSON.parse(raw), self), true);
+    assert.equal(hookOnce(raw, JSON.parse(raw), self), false, 'нулевой срок не вернул занятое событие');
+  } finally {
+    delete process.env.HOOK_ONCE_TTL;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('одно событие вызова не гасит другое: PostToolUse работает после PreToolUse', async () => {
+  const dir = tmpDir();
+  const { hookOnce } = await loadOnce(dir);
+  const self = `file://${HOOKS}/universal-fact-gate.js`;
+  const pre = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'toolu_pp' });
+  const post = JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_pp' });
+
+  assert.equal(hookOnce(pre, JSON.parse(pre), self), true);
+  assert.equal(
+    hookOnce(post, JSON.parse(post), self),
+    true,
+    'идентификатор вызова общий у Pre и Post — без имени события хук терял бы половину событий',
+  );
+  assert.equal(hookOnce(post, JSON.parse(post), self), false, 'второй вызов того же события уступает');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('метки убираются по возрасту: старая уходит, свежая остаётся', async () => {
+  const dir = tmpDir();
+  const { hookOnce } = await loadOnce(dir);
+  const self = `file://${HOOKS}/universal-fact-gate.js`;
+
+  const stale = path.join(dir, 'hook-once.universal-fact-gate.id.PreToolUse.toolu_old');
+  fs.mkdirSync(stale);
+  const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  fs.utimesSync(stale, old, old);
+
+  const raw = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'toolu_new' });
   assert.equal(hookOnce(raw, JSON.parse(raw), self), true);
-  assert.equal(hookOnce(raw, JSON.parse(raw), self), false, 'нулевой срок не вернул занятое событие');
-  delete process.env.HOOK_ONCE_TTL;
+
+  assert.equal(fs.existsSync(stale), false, 'метка старше часа обязана убираться');
+  assert.equal(
+    fs.existsSync(path.join(dir, 'hook-once.universal-fact-gate.id.PreToolUse.toolu_new')),
+    true,
+    'свежая метка уборкой не трогается',
+  );
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

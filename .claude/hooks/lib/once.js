@@ -19,11 +19,18 @@
 // буквально и признака «кто из двух» не остаётся. Тогда решает занятие события:
 // первый вызов ставит метку, второй видит занятое и выходит.
 //
-// Ключ метки — имя файла хука и ИДЕНТИФИКАТОР ВЫЗОВА инструмента
-// (tool_use_id), который несёт каждое инструментальное событие. Он свой у
-// каждого вызова, поэтому два одинаковых вызова подряд — два разных события:
-// по хешу содержимого второй из них гасился бы меткой первого. Срока у такой
-// метки нет: другого вызова с этим идентификатором не будет.
+// Ключ метки — имя файла хука, ИМЯ СОБЫТИЯ и ИДЕНТИФИКАТОР ВЫЗОВА инструмента
+// (tool_use_id), который несёт каждое инструментальное событие.
+//
+// Имя события в ключе обязательно: у одного вызова инструмента идентификатор
+// общий на PreToolUse и PostToolUse, и хук, стоящий на обоих (метрики стоят),
+// по ключу из одного идентификатора гасил бы свой же PostToolUse меткой,
+// оставленной на PreToolUse, — то есть молча терял бы половину событий.
+//
+// Идентификатор вызова точнее хеша содержимого: он не зависит от того, byte-in-
+// byte ли совпали два вызова одной регистрации, и не требует срока — другого
+// вызова с этим идентификатором и этим событием не будет. Метки поэтому
+// убираются по возрасту, а не протухают (см. sweep ниже).
 //
 // У событий без идентификатора (реплика, старт, конец хода, компакция) ключ —
 // содержимое события, а срок жизни метки — единицы секунд: два вызова одной
@@ -77,6 +84,41 @@ function yieldsToSessionCheckout(event, selfPath) {
   return false;
 }
 
+// Метка по идентификатору вызова не протухает, поэтому её убирает уборщик:
+// вызов с этим идентификатором больше не повторится, и метка старше часа не
+// нужна никому. Каталог сканируется не чаще раза в десять минут — право на
+// уборку забирает тот, кто обновил файл-отметку; без этого метки копились бы
+// в /tmp по каталогу на каждый вызов каждого хука до конца жизни машины.
+const SWEEP_EVERY_MS = 10 * 60 * 1000;
+const MARK_TTL_MS = 60 * 60 * 1000;
+const SWEEP_STAMP = 'hook-once.sweep';
+
+function sweep(dir) {
+  const stamp = path.join(dir, SWEEP_STAMP);
+  try {
+    if (Date.now() - fs.statSync(stamp).mtimeMs < SWEEP_EVERY_MS) return;
+  } catch { /* отметки ещё нет — убираем и заводим её */ }
+  try {
+    fs.writeFileSync(stamp, '');
+  } catch {
+    return; // каталог не пишется — уборка не наше дело
+  }
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  for (const name of names) {
+    if (!name.startsWith('hook-once.') || name === SWEEP_STAMP) continue;
+    const mark = path.join(dir, name);
+    try {
+      if (now - fs.statSync(mark).mtimeMs > MARK_TTL_MS) fs.rmSync(mark, { recursive: true, force: true });
+    } catch { /* метка пропала сама */ }
+  }
+}
+
 // true — работай; false — уступи (посторонний экземпляр либо занятое событие).
 export function hookOnce(raw, event, moduleUrl) {
   // Выключатель гасит ОБА шага разом: иначе исход кейсов зависел бы от того, из
@@ -87,14 +129,16 @@ export function hookOnce(raw, event, moduleUrl) {
   if (yieldsToSessionCheckout(event, selfPath)) return false;
 
   const name = path.basename(selfPath).replace(/\.[^.]+$/, '');
+  const dir = hookOnceDir();
 
-  // Инструментальное событие: ключ — идентификатор вызова, срока нет.
+  // Инструментальное событие: ключ — событие и идентификатор вызова, срока нет.
   const id = event && typeof event.tool_use_id === 'string' ? event.tool_use_id.trim() : '';
   if (id) {
-    const safe = id.replace(/[^A-Za-z0-9_-]/g, '_');
-    const idMark = path.join(hookOnceDir(), `hook-once.${name}.id.${safe}`);
+    const safe = (text) => String(text).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+    const idMark = path.join(dir, `hook-once.${name}.id.${safe(event.hook_event_name || 'event')}.${safe(id)}`);
     try {
       fs.mkdirSync(idMark);
+      sweep(dir);
       return true;
     } catch {
       // Метка есть — событие занято. Каталог не создался по иной причине —
@@ -105,7 +149,7 @@ export function hookOnce(raw, event, moduleUrl) {
 
   // Событие без идентификатора: ключ — содержимое, срок — секунды.
   const key = sha256(raw ?? '');
-  const mark = path.join(hookOnceDir(), `hook-once.${name}.${key}`);
+  const mark = path.join(dir, `hook-once.${name}.${key}`);
   const ttl = Number(process.env.HOOK_ONCE_TTL || 5);
 
   // Создание каталога атомарно: из двух одновременных вызовов ровно один его

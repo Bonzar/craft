@@ -70,7 +70,10 @@ function cutByAnchors(text, tasks) {
 // в отказе, — и ответ применяется к файлу.
 function pass(material, n, ownFrom) {
   const current = readRegistry(registryFile);
-  const view = path.join(path.dirname(materialFile), 'registry-view.txt');
+  // Вид кладётся рядом с РЕЕСТРОМ, а не с материалом: материалом у плана служит
+  // сам файл плана, и вид ложился бы в каталог планов (в кейсах — в фикстуры,
+  // затирая их).
+  const view = `${registryFile}.view`;
   try {
     fs.writeFileSync(view, render(current));
   } catch { /* вид не записался — модель увидит пустой реестр */ }
@@ -78,6 +81,7 @@ function pass(material, n, ownFrom) {
   const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '', {
     timeoutSec: INGEST_BUDGET_SEC,
   });
+  try { fs.rmSync(view, { force: true }); } catch { /* вид переживёт приём */ }
   if (!verdict || verdict === 'UNAVAILABLE') {
     trace(`проход ${n}: целей в реестре ${current.length}, модель недоступна`);
     return 1;
@@ -117,6 +121,10 @@ function pass(material, n, ownFrom) {
   }
 
   for (const add of additions) {
+    // Реестр перечитывается на КАЖДОЙ записи ответа: цель, заведённая
+    // предыдущей записью этого же ответа, обязана быть видна следующей —
+    // прохода, который раньше дозаводил такие ссылки, больше нет.
+    const goals = readRegistry(registryFile);
     const tasks = Array.isArray(add.tasks) ? add.tasks : [];
 
     // ЗАПРЕТ — запись без задач: работы под ним нет, он лишь очерчивает, чего
@@ -133,7 +141,7 @@ function pass(material, n, ownFrom) {
     // Куда приземлить запись, решает ядро реестра: цель адресуется НОМЕРОМ из
     // рендера, а не заголовком (формулировку модель каждый раз пишет свою), и от
     // ПЛАНА слияние не принимается вовсе — у плана всегда своя цель.
-    const index = landingGoal(current, add.goal, source, ownFrom);
+    const index = landingGoal(goals, add.goal, source, ownFrom);
 
     const bodies = cutByAnchors(material, tasks);
     const prepared = tasks.map((t, i) => ({

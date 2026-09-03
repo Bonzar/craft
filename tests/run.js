@@ -148,6 +148,10 @@ function tmpName(prefix) {
 // сессию, а параллельные прогоны — делить состояние друг с другом.
 function makeState() {
   const marker = tmpName('plan-gate-test');
+  // Идентификатор сессии свой у каждого прогона: кейсы, которые доказывают
+  // ОТСУТСТВИЕ файла с сессией в имени, на общем идентификаторе читали бы файл,
+  // оставленный прошлым прогоном ещё старого кода, и были бы красными вечно.
+  const sid = path.basename(tmpName('test-sid'));
   const fgdir = fs.mkdtempSync(path.join(os.tmpdir(), 'fact-gate-test.'));
   const oncedir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-once-test.'));
   const icmark = `${tmpName('incident-closure-test')}.armed`;
@@ -170,6 +174,7 @@ function makeState() {
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
+    sid,
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -267,11 +272,15 @@ function subst(value, s) {
   //
   // {CODEXHOME} — герметичный дом codex этого прогона: по нему кейс наводит
   // ASSERT_FILE на файл входа, который заводит хук.
+  //
+  // {SID} — идентификатор сессии этого прогона: им кейс задаёт хуку сессию и
+  // наводит ASSERT_FILE на путь, который из неё строится.
   if (!s) return withDir;
   return withDir
     .split('{REGISTRY}').join(s.registry)
     .split('{CLASSTRACE}').join(s.classtrace)
-    .split('{CODEXHOME}').join(s.codexhome);
+    .split('{CODEXHOME}').join(s.codexhome)
+    .split('{SID}').join(s.sid);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`
