@@ -230,3 +230,118 @@ export function cleanTarget(rawTarget) {
   if (['0', '1', '2', '&1', '&2'].includes(rawTarget)) return '';
   return rawTarget.replace(/"$/, '').replace(/^"/, '').replace(/'$/, '').replace(/^'/, '');
 }
+
+// --- Трогает ли вызов мир -----------------------------------------------------
+
+// Гейт стоит на правках МИРА: файлы, командная строка, база, внешние сервисы.
+// Всё, что мир не трогает, — не его дело. Отсюда два основания пройти, и у
+// каждого своё.
+//
+// Первое: инструмент только ЧИТАЕТ — менять ему нечего.
+const READING_TOOLS = new Set([
+  'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'BashOutput',
+  'TaskList', 'TaskGet', 'TaskOutput', 'ListAgents', 'ListSkills', 'ListPlugins',
+  'ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadNotifications',
+]);
+
+// Второе: инструмент правит ход САМОЙ СЕССИИ, а не мир. План, вопрос Владу,
+// список работы, расписание пробуждения — это состояние разговора: реестр про
+// них ничего не знает и знать не должен, а сверка спрашивала бы гейт про самого
+// себя. Тот же принцип уже записан для файлов: служебное состояние харнесса
+// эфемерно, и тудушки названы там прямым текстом.
+const SESSION_TOOLS = new Set([
+  'TaskCreate', 'TaskUpdate', 'TaskStop', 'ExitPlanMode', 'EnterPlanMode',
+  'AskUserQuestion', 'Skill', 'ScheduleWakeup', 'SendMessage', 'SendUserFile',
+  'ReportFindings', 'SuggestSkills', 'ShowOnboardingRolePicker',
+]);
+
+const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
+
+// Имя MCP-инструмента говорит само за себя, когда в нём стоит глагол чтения.
+// Это не догадка о поведении, а признак: сервер, который пишет, называет
+// операцию иначе.
+function mcpReads(name) {
+  const op = String(name).replace(/^mcp__.*?__/, '');
+  // Глагол стоит либо в начале имени (list_repos), либо на конце после
+  // подчёркивания (craft_read).
+  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
+    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
+}
+
+// Подагенты: их запуск сам по себе мир не трогает — трогает то, что делает
+// подагент, и решает это имя его роли.
+const SUBAGENT_TOOLS = new Set(['Task', 'Agent', 'Workflow']);
+
+// Читающие подагенты названы поимённо: разведка и критика мира не трогают, а
+// гейт на их запуске стоил бы вызова модели на каждом плане.
+const READING_AGENTS = new Set([
+  'Explore', 'Plan', 'plan-critic', 'plan-critic-unit', 'plan-critic-seams',
+  'plan-critic-verdict', 'comment-analyzer', 'type-design-analyzer',
+  'silent-failure-hunter', 'typescript-reviewer', 'react-reviewer',
+  'pr-test-analyzer', 'claude-code-guide',
+]);
+
+// Обслуживание СОБСТВЕННОГО хода: подписаться на события своего PR, разбудить
+// себя проверкой через час, снять подписку, переименовать сессию. Мир от этого
+// не меняется — меняется то, когда и на что агент проснётся, и реестр про такие
+// вещи ничего не знает. Без этого правила гейт запирал агента ровно там, где он
+// обязан довести работу до зелёного: подписку и отложенную проверку не
+// пропускал, и красный PR оставался без присмотра.
+const SESSION_OPS = /(subscribe_pr_activity|send_later|_wakeup|set_session_(title|tags))$/;
+
+// Трогает ли вызов мир. Единственный источник этого признака на весь слой:
+// на нём стоит план-гейт (что вообще сверять) и метрики (менял ли ход мир).
+export function touchesWorld(tool, input = {}) {
+  if (READING_TOOLS.has(tool) || SESSION_TOOLS.has(tool)) return false;
+  if (SESSION_OPS.test(tool)) return false;
+  if (SUBAGENT_TOOLS.has(tool)) return !READING_AGENTS.has(String(input.subagent_type || ''));
+  if (/^mcp__/.test(tool)) return !mcpReads(tool);
+  return true;
+}
+
+// Подкоманда гита из строки команды: пропускаются глобальные флаги (-C dir,
+// -c k=v) и берётся первое слово без дефиса. Слово в аргументах подкомандой не
+// становится — иначе `git log --grep push` читался бы как пуш, а
+// `git stash push` как отправка в origin.
+const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+
+export function gitSubcommand(command) {
+  return gitParts(command).sub;
+}
+
+// Подкоманда и оставшиеся за ней слова без флагов.
+function gitParts(command) {
+  const words = String(command || '').trim().split(/\s+/);
+  const at = words.findIndex((w) => w === 'git' || w.endsWith('/git'));
+  if (at < 0) return { sub: '', rest: [] };
+  let sub = '';
+  const rest = [];
+  for (let i = at + 1; i < words.length; i += 1) {
+    const word = words[i];
+    if (!sub && GIT_GLOBAL_WITH_VALUE.has(word)) { i += 1; continue; }
+    if (word.startsWith('-')) continue;
+    if (!sub) sub = word;
+    else rest.push(word);
+  }
+  return { sub, rest };
+}
+
+// Подкоманды гита, которые меняют репозиторий или рабочее дерево.
+export const GIT_MUTATIONS = new Set([
+  'push', 'commit', 'merge', 'rebase', 'reset', 'checkout', 'switch', 'restore',
+  'stash', 'tag', 'cherry-pick', 'am', 'apply', 'revert', 'clean', 'rm', 'mv', 'add',
+]);
+
+// У части мутирующих подкоманд есть ЧИТАЮЩИЕ формы, и решает их следующее
+// слово: `git stash list` и `git stash show` ничего не меняют, `git tag` без
+// аргументов просто перечисляет метки.
+const GIT_READING_SUBVERBS = new Set(['list', 'show']);
+
+export function gitMutates(command) {
+  const { sub, rest } = gitParts(command);
+  if (!sub || !GIT_MUTATIONS.has(sub)) return false;
+  if (sub === 'stash') return rest.length === 0 || !GIT_READING_SUBVERBS.has(rest[0]);
+  if (sub === 'tag') return rest.length > 0;
+  return true;
+}
+

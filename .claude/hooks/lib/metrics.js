@@ -12,10 +12,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { metricsLog, sessionId } from './paths.js';
-import { sha256 } from './hash.js';
+import { withLock, atomicWrite } from './lock.js';
 import {
   isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget,
+  touchesWorld, gitMutates,
 } from './write-targets.js';
+import { sha256 } from './hash.js';
 
 export function append(file, record) {
   if (!file) return;
@@ -24,14 +26,15 @@ export function append(file, record) {
   } catch { /* журнал не пополнился — метрика потеряна, ход цел */ }
 }
 
-// Журнал текущего процесса: переопределение, иначе сессия из прочитанного
-// события (его кладёт readEvent), иначе из окружения. Ничего из этого нет —
-// пустая строка: относить записи не к чему.
+// Журнал текущего процесса — ЕДИНСТВЕННАЯ формула резолва на весь слой: сессия
+// берётся из прочитанного события (его кладёт readEvent), иначе из окружения;
+// переопределение разбирает metricsLog. Ни сессии, ни переопределения — пустая
+// строка: относить записи не к чему.
 export function currentMetricsLog() {
-  if (process.env.CRAFT_METRICS_LOG) return process.env.CRAFT_METRICS_LOG;
   const ev = globalThis.hookEvent;
   const sid = (ev && typeof ev.session_id === 'string' && ev.session_id) || sessionId();
-  return sid ? metricsLog(sid) : '';
+  if (!sid && !process.env.CRAFT_METRICS_LOG) return '';
+  return metricsLog(sid);
 }
 
 // Окружение для дочернего процесса (фоновый приём реестра): журнал передаётся
@@ -100,10 +103,23 @@ export function loadState(log) {
   return {};
 }
 
-export function saveState(log, state) {
-  try {
-    fs.writeFileSync(stateFile(log), JSON.stringify(state));
-  } catch { /* состояние не сохранилось — следующий ход начнёт заново */ }
+// «Прочитал — поправил — записал» под локом и одной атомарной записью.
+//
+// Без лока параллельные вызовы инструментов (харнесс шлёт их пачкой) читают
+// одно состояние и затирают правки друг друга: из восьми вызовов в полёте
+// выживает три, и у остальных потом нет длительности. Без атомарной записи
+// сосед успевает прочитать пустой файл посреди записи — и это хуже потери
+// записи: обнуляются номер хода и смещение транскрипта, то есть следующий Stop
+// пересчитывает весь транскрипт заново.
+//
+// Возвращает то, что вернуло действие.
+export function updateState(log, run) {
+  return withLock(stateFile(log), () => {
+    const state = loadState(log);
+    const out = run(state);
+    atomicWrite(stateFile(log), JSON.stringify(state));
+    return out;
+  });
 }
 
 // --- классы причин -----------------------------------------------------------
@@ -154,9 +170,14 @@ export function repoOf(cwd) {
 export function normalizeRemote(url) {
   let s = String(url || '').trim();
   if (!s) return '';
+  const hadScheme = /^[a-z+]+:\/\//i.test(s);
   s = s.replace(/^[a-z+]+:\/\//i, '');       // схема
   s = s.replace(/^[^@/]+@/, '');            // учётка перед хостом
-  s = s.replace(/^([^:/]+):(?!\/)/, '$1/'); // scp-форма host:owner/repo
+  // scp-форма host:owner/repo — только там, где схемы НЕ было: с ней двоеточие
+  // отделяет порт, и «github.com:443/a/b» превращалось в «github.com/443/a/b»,
+  // то есть выдуманный владелец у каждого self-hosted remote на своём порту.
+  if (!hadScheme) s = s.replace(/^([^:/]+):(?!\/)/, '$1/');
+  else s = s.replace(/^([^:/]+):\d+\//, '$1/'); // порт из адреса выбрасывается
   s = s.replace(/\.git$/, '').replace(/\/+$/, '');
   return s;
 }
@@ -175,12 +196,17 @@ export function turnUsage(transcript, from = 0) {
   if (!transcript) return { usage: empty, offset: from };
   let fd;
   let text = '';
+  let start = from;
   try {
     const size = fs.statSync(transcript).size;
-    if (size <= from) return { usage: empty, offset: from };
+    // Файл КОРОЧЕ прежнего смещения — это другой транскрипт (сессия начата
+    // заново, файл подменён): читаем с начала, иначе смещение никогда уже не
+    // сойдётся и токены до конца сессии останутся нулевыми.
+    if (size < start) start = 0;
+    if (size <= start) return { usage: empty, offset: start };
     fd = fs.openSync(transcript, 'r');
-    const buf = Buffer.alloc(size - from);
-    fs.readSync(fd, buf, 0, buf.length, from);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
     text = buf.toString('utf8');
   } catch {
     return { usage: empty, offset: from };
@@ -188,26 +214,19 @@ export function turnUsage(transcript, from = 0) {
     if (fd !== undefined) fs.closeSync(fd);
   }
   const lastNl = text.lastIndexOf('\n');
-  if (lastNl < 0) return { usage: empty, offset: from };
+  if (lastNl < 0) return { usage: empty, offset: start };
   const complete = text.slice(0, lastNl + 1);
-  const offset = from + Buffer.byteLength(complete, 'utf8');
+  const offset = start + Buffer.byteLength(complete, 'utf8');
 
   const byId = new Map();
   let anon = 0;
-  for (const line of complete.split('\n')) {
-    if (!line.trim()) continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!entry || entry.type !== 'assistant') continue;
+  eachJsonl(complete, (entry) => {
+    if (entry.type !== 'assistant') return;
     const message = entry.message;
-    if (!message || !message.usage || typeof message.usage !== 'object') continue;
+    if (!message || !message.usage || typeof message.usage !== 'object') return;
     const id = typeof message.id === 'string' && message.id ? message.id : `anon-${anon += 1}`;
     byId.set(id, message.usage);
-  }
+  });
   const usage = { ...empty };
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   for (const u of byId.values()) {
@@ -222,23 +241,70 @@ export function turnUsage(transcript, from = 0) {
 
 // --- сводка сессии -------------------------------------------------------------
 
-// Записи журнала без строк сводки. Битые строки пропускаются.
+// Разбор JSONL: по объекту на строку, битая строка пропускается. Общий на весь
+// модуль — его же правилам подчиняются и записи журнала, и записи транскрипта.
+export function eachJsonl(text, fn) {
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry && typeof entry === 'object') fn(entry, line);
+  }
+}
+
+// Записи журнала без строк сводки.
+//
+// Возвращает null, когда журнал НЕ ПРОЧИТАЛСЯ, и [] — когда его просто нет.
+// Разница существенная: на пустом списке сводка выходит нулевой, а ею
+// перезаписывается копия, которую увозит хранение, — то есть разовый сбой
+// чтения стирал бы живую сессию.
 export function readJournal(log) {
   let text = '';
   try {
     text = fs.readFileSync(log, 'utf8');
-  } catch {
-    return [];
+  } catch (err) {
+    return err && err.code === 'ENOENT' ? [] : null;
   }
   const out = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const rec = JSON.parse(line);
-      if (rec && typeof rec === 'object' && rec.kind !== 'summary') out.push(rec);
-    } catch { /* битая строка — не запись */ }
-  }
+  eachJsonl(text, (rec, line) => {
+    // Строки сводки отсеиваются ДО разбора там, где это видно по началу строки:
+    // их в журнале накапливается по одной на Stop, и разбирать их заново на
+    // каждой сводке — самая дорогая часть чтения.
+    if (line.startsWith('{"kind":"summary"')) return;
+    if (rec.kind !== 'summary') out.push(rec);
+  });
   return out;
+}
+
+// Хеш вызова: инструмент и СМЫСЛОВАЯ часть входа. Служебные поля (описание
+// команды, таймаут, фоновый режим) в хеш не идут — модель переписывает их при
+// повторе, и «тот же вызов» переставал узнаваться, то есть ложный отказ гейта
+// не засчитывался. Ключи сортируются: порядок полей во входе не обещан.
+const VOLATILE_INPUT = new Set(['description', 'timeout', 'run_in_background', 'shell_id']);
+
+export function callHash(tool, input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const semantic = Object.keys(src)
+    .filter((k) => !VOLATILE_INPUT.has(k))
+    .sort()
+    .map((k) => `${k}=${JSON.stringify(src[k])}`)
+    .join('\n');
+  return sha256(`${tool}\n${semantic}`).slice(0, 16);
+}
+
+// Пуш опознаётся по ПОДКОМАНДЕ, а не по слову где угодно в строке: `git stash
+// push`, `git commit -m "fix push"` и `git log --grep push` пушем не являются.
+// Пробный прогон (--dry-run) тоже не пуш.
+const GIT_PUSH = /\bgit\b(?:\s+(?:-[^\s]+|--[^\s]+)(?:\s+[^\s-][^\s]*)?)*\s+push\b/;
+
+export function looksLikePush(command) {
+  const cmd = String(command || '');
+  if (!GIT_PUSH.test(cmd)) return false;
+  return !/--dry-run\b/.test(cmd);
 }
 
 export function writeSummary(log, summary) {
@@ -250,10 +316,7 @@ export function writeSummary(log, summary) {
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const isCraftWrite = (tool) => /__craft_write$/.test(String(tool || ''));
 const isEdit = (tool) => EDIT_TOOLS.has(tool) || isCraftWrite(tool);
-const ms = (iso) => {
-  const t = Date.parse(iso);
-  return Number.isFinite(t) ? t : NaN;
-};
+const ms = Date.parse;
 
 // Свёртка журнала сессии в одну сводку. Чистая функция над записями.
 //
@@ -281,18 +344,26 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
     },
   };
   let streak = 0;
+  // Ход без прогресса считается по ХОДУ, а не по записи Stop: заблокированный
+  // конец хода даёт второй Stop с тем же номером, и решает последний.
+  const noProgressByTurn = new Map();
   let started = NaN;
   let firstTurn = null;
-  // Ход без прогресса — по ХОДУ, а не по записи Stop: заблокированный конец
-  // хода даёт второй Stop с тем же номером, решает последний.
-  const noProgressByTurn = new Map();
   const pending = new Map(); // hash → { unlockTurn }
   const pres = new Map();    // id → pre-запись
   const incidentTurns = new Set();
   const skillTurns = new Set();
 
+  // Реплика или ответ кнопкой снимают замок с ОТЛОЖЕННЫХ отказов — но ровно на
+  // один ход. Раньше замок снимался заново на каждой реплике, и отказ с первого
+  // хода оставался взведённым до конца сессии: правильный отказ, снятый через
+  // пять ходов новым планом, засчитывался ложным. Отказ, чей ход прошёл, из
+  // ожидания выбрасывается.
   const unlock = (turn) => {
-    for (const p of pending.values()) p.unlockTurn = turn;
+    for (const [hash, p] of pending) {
+      if (p.unlockTurn === null) p.unlockTurn = turn;
+      else if (p.unlockTurn < turn) pending.delete(hash);
+    }
   };
 
   for (const r of records) {
@@ -310,6 +381,10 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
       unlock(r.turn);
       if (r.incident === true) incidentTurns.add(r.turn);
       if (r.repeat === true || r.reinstruct === true) s.signals.reinstructions += 1;
+      // Серия ошибок — про то, как агент бьётся ВНУТРИ хода: реплика Влада её
+      // разрывает, иначе ошибки по обе стороны его вмешательства сложились бы
+      // в одну серию, которой не было.
+      streak = 0;
     } else if (r.kind === 'pre') {
       if (r.id) pres.set(r.id, r);
       if (r.decision === 'deny') {
@@ -348,11 +423,11 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
       for (const key of Object.keys(s.tokens)) s.tokens[key] += Number(u[key]) || 0;
       // Токены первого хода — сумма ВСЕХ его Stop: заблокированный конец хода
       // даёт второй Stop с тем же номером и своей долей usage.
-      if (s.tokens_first_turn === null || firstTurn === r.turn) {
-        if (s.tokens_first_turn === null) {
-          firstTurn = r.turn;
-          s.tokens_first_turn = { input: 0, output: 0, cache_read: 0, cache_create: 0 };
-        }
+      if (s.tokens_first_turn === null) {
+        firstTurn = r.turn;
+        s.tokens_first_turn = { input: 0, output: 0, cache_read: 0, cache_create: 0 };
+      }
+      if (firstTurn === r.turn) {
         for (const key of Object.keys(s.tokens_first_turn)) s.tokens_first_turn[key] += Number(u[key]) || 0;
       }
     } else if (r.kind === 'model') {
@@ -374,7 +449,22 @@ export function summarize(records, { sid = '', now = Date.now() } = {}) {
   return s;
 }
 
+// Размер транскрипта на сейчас; нет файла — ноль.
+export function transcriptSize(file) {
+  if (!file) return 0;
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
 // --- сигналы -------------------------------------------------------------------
+
+// Ниже порога реплика в узнавание повторов не идёт: «ок», «да», «продолжай» —
+// обычные подтверждения, и второе такое же за сессию не означает, что Влад
+// повторяет указание. Пустой хеш выключает и признак повтора, и запоминание.
+export const REPEAT_MIN_CHARS = 12;
 
 // Нормализованный хеш реплики: регистр, пробелы и знаки препинания не в счёт.
 // По нему узнаётся ПОВТОР той же реплики; сам текст никуда не идёт.
@@ -384,52 +474,60 @@ export function promptHash(prompt) {
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!norm) return '';
+  if (norm.length < REPEAT_MIN_CHARS) return '';
   return sha256(norm).slice(0, 16);
 }
 
-// Переуказание: Влад повторяет уже данное указание. Признаки — маркеры повтора
-// в тексте («ещё раз», «я же сказал», «опять», «повторяю»). Совпадение с
-// прежней репликой считает вызывающий код по хешу.
+// Переуказание: Влад повторяет уже данное указание. Это ЭВРИСТИКА по словарю —
+// она предупреждает, а не доказывает, и словарь растёт по живым сводкам.
+// Вежливые обороты («ещё раз спасибо», «и снова здравствуйте») вычитаются:
+// маркер в них тот же, а переуказания нет.
 const REINSTRUCT = /(^|[^\p{L}])(ещ[её] раз|я же (сказал|говорил|просил|писал)|опять|снова|повторяю|в который раз|сколько раз)([^\p{L}]|$)/iu;
+const COURTESY = /(спасибо|благодар|здравствуй|привет|добр(ый|ое) (день|вечер|утро))/iu;
+
 export function looksLikeReinstruction(prompt) {
-  return REINSTRUCT.test(String(prompt || ''));
+  const text = String(prompt || '');
+  if (COURTESY.test(text)) return false;
+  return REINSTRUCT.test(text);
 }
 
 // Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
 export const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
 
-// Мутирует ли вызов мир: правящие инструменты, запись в Craft, Bash с
-// настоящей (не эфемерной) целью записи или гит-операцией над репозиторием,
-// чужой MCP-инструмент без глагола чтения в имени. Тот же признак, которым
-// план-гейт отличает чтение от записи.
-const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
-const GIT_MUTATION = /\bgit\b[^|;&]*\b(push|commit|merge|rebase|reset|checkout|switch|stash|tag|cherry-pick|am|apply|revert|worktree)\b/;
-function mcpReads(name) {
-  const op = String(name).replace(/^mcp__.*?__/, '');
-  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
-    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
-}
+const EDIT_TOOL_PATH = {
+  Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path',
+};
+
+// Мутирует ли вызов мир. Основание одно с план-гейтом (touchesWorld), а сверх
+// него отсеивается эфемерное: правка в /tmp прогрессом хода не считается — так
+// же, как `echo x > /tmp/...` у шелла, иначе два пути к одному и тому же
+// расходились бы. У Bash мутацией считается настоящая цель записи или
+// подкоманда гита, меняющая репозиторий.
 export function looksMutating(tool, input = {}) {
-  if (isEdit(tool)) return true;
+  if (!touchesWorld(tool, input)) return false;
+  const editPath = EDIT_TOOL_PATH[tool];
+  if (editPath) {
+    const fp = input[editPath] || '';
+    return Boolean(fp) && !isEphemeral(fp) && !gitEphemeral(fp);
+  }
   if (tool === 'Bash') {
     const cmd = String(input.command || '');
     if (!cmd) return false;
-    if (GIT_MUTATION.test(cmd)) return true;
+    if (gitMutates(cmd)) return true;
     return bashWriteTargets(cmd).some((raw) => {
       const t = cleanTarget(raw);
       return Boolean(t) && !isEphemeral(t) && !gitEphemeral(t);
     });
   }
-  if (/^mcp__/.test(tool)) return !mcpReads(tool);
-  return false;
+  return true;
 }
 
 // Прогресс хода — удавшийся вызов, который мутирует мир, показ плана, вопрос
-// Владу или пуш.
+// Владу или пуш. Мутирующим вызов помечается на PreToolUse: на PostToolUse
+// входа уже нет.
 export function isProgress(pre, post) {
   if (!pre || !post || post.error === true) return false;
-  return pre.mutates === true || isEdit(pre.tool) || STAGE_TOOLS.has(pre.tool) || pre.push === true;
+  return pre.mutates === true || STAGE_TOOLS.has(pre.tool) || pre.push === true;
 }
 
 // --- ошибка инструмента в ответе -------------------------------------------------

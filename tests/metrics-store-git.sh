@@ -39,6 +39,7 @@ run_hook() {
           METRICS_STORE_TARGET="$sb/work" \
           METRICS_STORE_QUEUE="$sb/queue.jsonl" \
           METRICS_STORE_INLINE=1 \
+          METRICS_STORE_INTERVAL=0 \
           HOOK_ONCE=off \
           node "$HOOK" 2>&1
 }
@@ -124,26 +125,71 @@ sb="$(sandbox)"
 printf '{"ts":"2026-09-02T10:00:00Z","sid":"s1","ended_at":"2026-09-02T10:00:00Z","turns":1}\n' > "$sb/log.s1.summary.json"
 printf '{"hook_event_name":"Stop","session_id":"s1"}' \
   | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
-        METRICS_STORE_INLINE=1 METRICS_STORE=off HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
+        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=0 METRICS_STORE=off HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
 if G -C "$sb/origin.git" rev-parse --verify --quiet refs/heads/metrics >/dev/null; then
   bad "$t" "ветка появилась при выключателе"
 else ok "$t"; fi
 
-# --- G. брошенный замок не запирает очередь навсегда --------------------------
-t="брошенный замок забирается, живой держит"
+# --- G. лок общий: очередь не теряется и не бросается ------------------------
+# Прежний свой замок бросал выгрузку исходом locked, и сводка, дописанная во
+# время чужой выгрузки, оставалась несданной. Общий лок ждёт, а брошенный
+# упавшим процессом снимает по возрасту — проверяется тем, что выгрузка
+# проходит при заведомо протухшем локе.
+t="протухший лок не запирает очередь навсегда"
 sb="$(sandbox)"
 mkdir -p "$sb/queue.jsonl.lock"
-touch -d '2 hours ago' "$sb/queue.jsonl.lock"
-run_hook "$sb" s1 2026-09-02T10:00:00Z 1 >/dev/null
+node -e 'const fs=require("fs");const p=process.argv[1];const t=new Date(Date.now()-6*60*1000);fs.utimesSync(p,t,t);' "$sb/queue.jsonl.lock"
+out="$(run_hook "$sb" s1 2026-09-02T10:00:00Z 1)"
 if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"s1"'; then
-  bad "$t" "сводка не доехала при протухшем замке"
+  bad "$t" "сводка не доехала при протухшем локе: $out"
+elif [[ -e "$sb/queue.jsonl" ]]; then
+  bad "$t" "очередь не опустела"
+else ok "$t"; fi
+
+# --- H. очередь держит по одной строке на сессию -----------------------------
+t="очередь сжимается по сессиям, а не растёт строкой на ход"
+sb="$(sandbox)"
+G -C "$sb/work" remote set-url origin "$sb/nowhere.git"
+for n in 1 2 3 4 5; do run_hook "$sb" s1 2026-09-02T10:0${n}:00Z "$n" >/dev/null; done
+run_hook "$sb" s2 2026-09-02T10:06:00Z 1 >/dev/null
+lines="$(wc -l < "$sb/queue.jsonl" | tr -d ' ')"
+if [[ "$lines" != "2" ]]; then
+  bad "$t" "пять Stop одной сессии дали $lines строк, ожидалось 2 (s1 и s2)"
+elif ! grep -q '"turns":5' "$sb/queue.jsonl"; then
+  bad "$t" "в очереди осталась не последняя сводка сессии"
+else ok "$t"; fi
+
+# --- I. день по началу сессии ------------------------------------------------
+t="сессия через полночь UTC остаётся одной строкой одного дня"
+sb="$(sandbox)"
+printf '{"ts":"%s","sid":"s1","started_at":"2026-09-02T23:50:00Z","ended_at":"%s","turns":%s,"repo":"x"}\n' \
+  2026-09-03T00:10:00Z 2026-09-03T00:10:00Z 6 > "$sb/log.s1.summary.json"
+printf '{"hook_event_name":"Stop","session_id":"s1"}' \
+  | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
+        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=0 HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
+if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"s1"'; then
+  bad "$t" "строка не легла в день НАЧАЛА сессии"
+elif day_file "$sb" 2026-09-03 | grep -q '"sid":"s1"'; then
+  bad "$t" "сессия посчиталась дважды: строка есть и в дне окончания"
+else ok "$t"; fi
+
+# --- J. троттлинг выгрузки ----------------------------------------------------
+t="выгрузка не чаще интервала, очередь при этом пополняется"
+sb="$(sandbox)"
+run_hook "$sb" s1 2026-09-02T10:00:00Z 1 >/dev/null   # первая идёт сразу, ставит отметку
+printf '{"ts":"%s","sid":"s2","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
+  2026-09-02T10:01:00Z 2026-09-02T10:01:00Z 2026-09-02T10:01:00Z > "$sb/log.s2.summary.json"
+printf '{"hook_event_name":"Stop","session_id":"s2"}' \
+  | env CRAFT_METRICS_LOG="$sb/log.s2" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
+        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=600 HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
+if day_file "$sb" 2026-09-02 | grep -q '"sid":"s2"'; then
+  bad "$t" "выгрузка пошла раньше интервала"
+elif ! grep -q '"sid":"s2"' "$sb/queue.jsonl"; then
+  bad "$t" "сводка не встала в очередь, пока выгрузка отложена"
 else
-  mkdir -p "$sb/queue.jsonl.lock"
-  out="$(run_hook "$sb" s2 2026-09-02T11:00:00Z 1)"
-  if ! grep -q "locked" <<<"$out"; then
-    bad "$t" "свежий замок не удержал: $out"
-  elif ! grep -q '"sid":"s2"' "$sb/queue.jsonl"; then
-    bad "$t" "очередь при занятом замке не сохранила сводку"
+  out="$(run_hook "$sb" s3 2026-09-02T10:02:00Z 1)"   # интервал 0 — выгружает всё
+  if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"s2"'; then
+    bad "$t" "отложенная сводка не уехала следующей выгрузкой: $out"
   else ok "$t"; fi
 fi
 

@@ -23,6 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { childEnv } from './metrics.js';
+import { withLock, atomicWrite } from './lock.js';
 
 // Лог обрезается сверху: длинный ход иначе растит реестр без предела, а он
 // целиком уходит в каждую сверку.
@@ -63,85 +64,12 @@ function revive(goal) {
   return goal.state === 'tombstone' ? { ...goal, state: 'live' } : goal;
 }
 
-// Лок на ЦИКЛ правки: сама запись атомарна переименованием, а «прочитал —
-// поправил — записал» вокруг неё нет. Два параллельных хука читали одно
-// состояние, и второй затирал правку первого: терялись строки лога и закрытие
-// задач. Каталог — атомарная примитивная блокировка на любой файловой системе:
-// mkdir либо создал, либо застал чужой.
-//
-// Занят — ЖДЁМ, а не пропускаем: пропущенная запись роняет ту работу, ради
-// которой лок и берётся. Своего потолка у ожидания нет; снимается только лок,
-// брошенный упавшим процессом, — по возрасту каталога.
-const LOCK_STALE_MS = 300000;
-
-function lockDir(file) {
-  return `${file}.lock`;
-}
-
-function takeLock(file) {
-  const dir = lockDir(file);
-  for (;;) {
-    try {
-      fs.mkdirSync(dir);
-      return dir;
-    } catch (err) {
-      if (err && err.code !== 'EEXIST') return '';
-      let age = 0;
-      try {
-        age = Date.now() - fs.statSync(dir).mtimeMs;
-      } catch {
-        continue; // лок исчез между попыткой и замером — пробуем снова
-      }
-      if (age > LOCK_STALE_MS) {
-        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* уже снят */ }
-        continue;
-      }
-      try {
-        execFileSync('sleep', ['0.05'], { stdio: 'ignore' });
-      } catch {
-        return '';
-      }
-    }
-  }
-}
-
-function freeLock(dir) {
-  if (!dir) return;
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch { /* лок не снялся — его добьёт следующий по возрасту */ }
-}
-
-// withLock(файл, действие) — единственная точка взятия лока. Вложенные вызовы
-// лок повторно НЕ берут: иначе дописывание задач, сделанное поверх общей правки,
-// клинило бы само себя.
-let held = false;
-
-function withLock(file, run) {
-  if (held) return run();
-  const dir = takeLock(file);
-  held = true;
-  try {
-    return run();
-  } finally {
-    held = false;
-    freeLock(dir);
-  }
-}
-
-// Запись атомарная: временный файл рядом и переименование. Соседняя сессия или
-// параллельный хук читают либо прежний реестр, либо новый, но не половину.
+// Лок на цикл правки и атомарная запись — общие с журналом метрик, живут в
+// lib/lock.js.
 function writeRegistry(file, goals) {
   if (!file || off()) return;
   const body = goals.map((goal) => JSON.stringify(goal)).join('\n');
-  const tmp = `${file}.tmp.${process.pid}`;
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(tmp, body ? `${body}\n` : '');
-    fs.renameSync(tmp, file);
-  } catch {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* и убрать не вышло */ }
-  }
+  atomicWrite(file, body ? `${body}\n` : '');
 }
 
 // Слепок содержания цели: по нему отличается ревизия от перепоказа. В слепок

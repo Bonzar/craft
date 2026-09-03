@@ -1,5 +1,5 @@
-// Очередь и замок хранения сводок: доставленное снимается ровно по снимку,
-// брошенный замок забирается, живой — нет.
+// Очередь сводок: сжатие по сессиям, потолок, день по началу сессии, интервал
+// выгрузки. Git-логика — в tests/metrics-store-git.sh на временных репозиториях.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,44 +11,56 @@ const store = await import('../../.claude/hooks/lib/metrics-store.js');
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-store-test.'));
 }
+const summary = (sid, turns, at = '2026-09-02T10:00:00Z') => ({
+  sid, turns, started_at: at, ended_at: at, ts: at,
+});
 
-test('снятие доставленного оставляет дописанное после снимка', () => {
+test('очередь держит по одной строке на сессию: последняя сводка побеждает', () => {
   const dir = tmp();
   const queue = path.join(dir, 'queue.jsonl');
-  const snapshot = '{"sid":"a","ts":"2026-09-02T10:00:00Z"}\n';
-  fs.writeFileSync(queue, `${snapshot}{"sid":"b","ts":"2026-09-02T10:01:00Z"}\n`);
-  assert.equal(store.removeDelivered(queue, snapshot), true);
-  assert.equal(fs.readFileSync(queue, 'utf8'), '{"sid":"b","ts":"2026-09-02T10:01:00Z"}\n');
+  for (let n = 1; n <= 5; n += 1) store.enqueue(queue, summary('s1', n));
+  store.enqueue(queue, summary('s2', 1));
+
+  const rows = store.parseQueue(fs.readFileSync(queue, 'utf8'));
+  assert.deepEqual(rows.map((r) => r.sid), ['s1', 's2']);
+  assert.equal(rows[0].turns, 5, 'осталась последняя сводка сессии');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('снятие доставленного убирает файл, когда после снимка ничего нет', () => {
+test('очередь обрезана сверху: на запрещённом push она не растёт бесконечно', () => {
   const dir = tmp();
   const queue = path.join(dir, 'queue.jsonl');
-  const snapshot = '{"sid":"a"}\n';
-  fs.writeFileSync(queue, snapshot);
-  assert.equal(store.removeDelivered(queue, snapshot), true);
+  for (let n = 0; n < store.QUEUE_CAP + 25; n += 1) store.enqueue(queue, summary(`s${n}`, 1));
+
+  const rows = store.parseQueue(fs.readFileSync(queue, 'utf8'));
+  assert.equal(rows.length, store.QUEUE_CAP);
+  assert.equal(rows[rows.length - 1].sid, `s${store.QUEUE_CAP + 24}`, 'свежие сводки остаются');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('сводка без сессии в очередь не идёт', () => {
+  const dir = tmp();
+  const queue = path.join(dir, 'queue.jsonl');
+  assert.equal(store.enqueue(queue, { turns: 1 }), false);
   assert.equal(fs.existsSync(queue), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('переписанная кем-то очередь не трогается', () => {
-  const dir = tmp();
-  const queue = path.join(dir, 'queue.jsonl');
-  fs.writeFileSync(queue, '{"sid":"z"}\n');
-  assert.equal(store.removeDelivered(queue, '{"sid":"a"}\n'), false);
-  assert.equal(fs.readFileSync(queue, 'utf8'), '{"sid":"z"}\n');
-  fs.rmSync(dir, { recursive: true, force: true });
+test('день считается по началу сессии, а не по её концу', () => {
+  assert.equal(store.dayOf({ started_at: '2026-09-02T23:50:00Z', ended_at: '2026-09-03T00:10:00Z' }), '2026-09-02');
+  assert.equal(store.dayOf({ ended_at: '2026-09-03T00:10:00Z' }), '2026-09-03', 'без начала — по концу');
 });
 
-test('живой замок держит, брошенный забирается', () => {
+test('интервал выгрузки: первая идёт сразу, следующая ждёт отметку', () => {
   const dir = tmp();
-  const lock = path.join(dir, 'queue.jsonl.lock');
-  assert.equal(store.acquireLock(lock), true, 'свободный замок берётся');
-  assert.equal(store.acquireLock(lock), false, 'свежий замок занят');
-  const old = new Date(Date.now() - store.STALE_MS - 60000);
-  fs.utimesSync(lock, old, old);
-  assert.equal(store.acquireLock(lock), true, 'протухший замок забирается');
+  const queue = path.join(dir, 'queue.jsonl');
+  assert.equal(store.dueForFlush(queue, 600), true, 'отметки ещё нет — выгрузка идёт');
+  fs.writeFileSync(`${queue}.stamp`, '');
+  assert.equal(store.dueForFlush(queue, 600), false, 'сразу после выгрузки — не пора');
+  assert.equal(store.dueForFlush(queue, 0), true, 'нулевой интервал — всегда пора');
+  const old = new Date(Date.now() - 700 * 1000);
+  fs.utimesSync(`${queue}.stamp`, old, old);
+  assert.equal(store.dueForFlush(queue, 600), true, 'интервал прошёл');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
