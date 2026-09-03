@@ -20,6 +20,12 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 `.githooks` (`install.sh` ставит `core.hooksPath`). Тест гварда —
 `tests/unit/no-snapshot-files.test.mjs`.
 
+Флаг `--diff` прогоняет кейс ДВУМЯ версиями одного хука (`.js` и `.sh`) в
+раздельном состоянии и валит его на любом расхождении вывода, следа на диске или
+вызова классификатора. Он писался под переезд слоя с bash на JS; сейчас
+bash-версий нет, и режим ждёт следующей миграции.
+
+
 ## Проверка при утечке снимка
 
 Смотреть ВСЮ историю, а не вершины веток, и в том репозитории, где она живёт:
@@ -31,14 +37,16 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 Первый заход — по маскам имён, одной командой на всю историю; он дешёвый и
 находит снимок, лежавший под своим именем:
 
-    git log --all --reflog --name-only --format= | sort -u       | grep -iE 'router-context|incident-context|craft-gate-exempt-scope|warm-cache'
+    git log --all --reflog --name-only --format= | sort -u \
+      | grep -iE 'router-context|incident-context|craft-gate-exempt-scope|warm-cache'
 
 Второй — по содержимому, гвардом. Коммиты берутся из достижимых, из reflog и
 из НЕДОСТИЖИМЫХ: снимок с удалённой ветки или из снесённого воркри в
 `rev-list` уже не попадает, а объект остаётся:
 
     { git rev-list --all --reflog;
-      git fsck --unreachable --no-reflogs 2>/dev/null | awk '$2=="commit"{print $3}'; }     | sort -u | while read -r rev; do
+      git fsck --unreachable --no-reflogs 2>/dev/null | awk '$2=="commit"{print $3}'; } \
+    | sort -u | while read -r rev; do
         node tools/no-snapshot-files.js --tree "$rev" >/dev/null 2>&1
         case $? in 1) echo "утечка: $rev";; 0) ;; *) echo "ошибка: $rev";; esac
       done
@@ -49,11 +57,6 @@ CI гоняет это на push и pull_request (`.github/workflows/hooks-tests
 
 Удаление веток утечку не выносит: объекты остаются, пока их не выбросит
 сборщик мусора, а на GitHub — только поддержка.
-
-Флаг `--diff` прогоняет кейс ДВУМЯ версиями одного хука (`.js` и `.sh`) в
-раздельном состоянии и валит его на любом расхождении вывода, следа на диске или
-вызова классификатора. Он писался под переезд слоя с bash на JS; сейчас
-bash-версий нет, и режим ждёт следующей миграции.
 
 ## Формат кейса
 
