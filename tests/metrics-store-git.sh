@@ -251,15 +251,15 @@ G -C "$sb/work" remote set-url origin "$sb/nowhere.git"   # без сети: д�
 mkdir -p "$sb/queue.jsonl.lock"
 sleep 120 & holder=$!
 printf '%s' "$holder" > "$sb/queue.jsonl.lock/owner"      # лок занят живым процессом и не отпускается
-started=$(date +%s)
+started=$(date +%s%3N)
 out="$(timeout 90 bash -c 'run_hook_export "$@"' _ "$sb" s1 2026-09-02T10:00:00Z 1 2>&1)" || out="$out[timeout]"
-spent=$(( $(date +%s) - started ))
+spent=$(( $(date +%s%3N) - started ))
 kill "$holder" 2>/dev/null
 rm -rf "$sb/queue.jsonl.lock"
 if [[ "$out" == *"[timeout]"* ]]; then
   bad "$t" "хук не вернулся за 90 с: ждал лок сроком работника"
-elif (( spent > 5 )); then
-  bad "$t" "хук вернулся за ${spent} с — это не срок хода"
+elif (( spent > 2500 )); then
+  bad "$t" "хук вернулся за ${spent} мс — это не срок хода: и постановка, и выгрузка обязаны уложиться в сотни миллисекунд"
 elif ! grep -q '"kind":"store"' "$sb/log.s1"; then
   bad "$t" "исход не назван строкой журнала: $out"
 else ok "$t"; fi

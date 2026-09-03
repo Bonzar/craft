@@ -83,11 +83,138 @@ if ((globalThis.hookScope || 'project') === 'universal' && projectDispatcherAt(c
 const now = Date.now();
 const ts = new Date(now).toISOString();
 
-// Всё, что трогает состояние, идёт ОДНОЙ залоченной правкой. Внутри неё
-// process.exit недопустим: он не разматывает finally, и лок остался бы взятым
-// до истечения его срока, то есть следующий хук ждал бы минуты. Поэтому выходы
-// внутри — обычные return.
-const stop = updateState(log, (state) => {
+// По функции на событие: у каждого свой вопрос, и в одном теле они не
+// помещались на экран. Каждая получает состояние и общий контекст хода
+// (ts, base, id, hooksMs, hooks, decision) и дописывает свою строку в журнал.
+// Возвращают true только там, где ход закончился (Stop): по этому и решается,
+// пересобирать ли сводку.
+
+function onSessionStart(state, ctx) {
+  // Старт бывает не только первым: компакт и возобновление дают SessionStart
+  // с тем же идентификатором. Счётчики и начало сессии при этом не сбрасываются
+  // — журнал продолжается, а причина старта пишется полем source.
+  if (!state.repo) state.repo = repoOf(cwd);
+  // Засев смещения транскрипта — ВСЕГДА по текущему размеру файла. Всё, что
+  // написано до старта, принадлежит прошлым ходам, чем бы старт ни был вызван.
+  // Условный засев («только если файла стало меньше») пропускал обратный
+  // случай: после нечистого выхода или компакта в БОЛЬШИЙ транскрипт файл
+  // длиннее сохранённого смещения, и первый же Stop записывал дорезумную
+  // историю в новый ход.
+  state.transcript_offset = transcriptSize(transcript);
+  append(log, {
+    kind: 'session', ...ctx.base, source: typeof event.source === 'string' ? event.source : '',
+    harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
+  });
+}
+
+function onPrompt(state, ctx) {
+  state.turn += 1;
+  state.turn_started_at = now;
+  const flags = globalThis.hookFlags && typeof globalThis.hookFlags === 'object' ? globalThis.hookFlags : {};
+  const h = promptHash(prompt);
+  const repeat = Boolean(h) && state.prompt_hashes.includes(h);
+  if (h) state.prompt_hashes = [...state.prompt_hashes, h].slice(-50);
+  // Новый ход — новые стадии, вызовы и прогресс.
+  state.turn_calls = {};
+  state.turn_stages = {};
+  state.turn_tools = 0;
+  state.turn_progress = false;
+  append(log, {
+    kind: 'prompt', ts: ctx.ts, turn: state.turn, incident: flags.incident === true,
+    repeat, reinstruct: looksLikeReinstruction(prompt),
+  });
+}
+
+// Потолок у всех карт состояния один: длинный ход иначе растит состояние без
+// предела, а оно читается и пишется на каждом вызове.
+function capMap(map, cap = 50) {
+  const keys = Object.keys(map);
+  if (keys.length > cap) for (const old of keys.slice(0, keys.length - cap)) delete map[old];
+}
+
+function onPre(state, ctx) {
+  if (!tool) return;
+  const { id } = ctx;
+  if (id) {
+    state.inflight[id] = now;
+    capMap(state.inflight); // полёт бывает недописанным: вызов отменён
+  }
+  const kind = ctx.decision ? ctx.decision.kind : 'allow';
+  const record = {
+    kind: 'pre', ...ctx.base, tool, id, decision: kind,
+    by: ctx.decision ? ctx.decision.hook : '',
+    class: ctx.decision && (kind === 'deny' || kind === 'ask')
+      ? reasonClass(ctx.decision.hook, ctx.decision.reason) : '',
+    // Хеш вызова: по нему сводка узнаёт «тот же вызов» для ложных отказов.
+    // Сам вход в журнал не идёт ни в каком виде.
+    h: callHash(tool, input),
+    hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
+  };
+  // Признаки вызова: правка, запись в базу заметок, показ плана, вопрос, стадия,
+  // пуш, имя скилла. Их ставит обёртка, потому что имена инструментов знает
+  // она; сводка считает по признакам.
+  const flags = toolFlags(tool, input);
+  Object.assign(record, flags);
+  // Сигналы хода: тот же вызов повторно, стадия повторно.
+  state.turn_tools += 1;
+  if (state.turn_calls[record.h]) record.repeat_call = true;
+  state.turn_calls[record.h] = (state.turn_calls[record.h] || 0) + 1;
+  capMap(state.turn_calls);
+  if (flags.stage === true) {
+    if (state.turn_stages[tool]) record.stage_repeat = true;
+    state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
+  }
+  // Мутирующий вызов помечается ТОЛЬКО у прошедших: у отказанного не будет
+  // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
+  if (kind === 'allow') {
+    const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
+    if (mutation.status !== 'ok') record.unsupported = mutation.capability;
+    else if (mutation.mutates) record.mutates = true;
+    if (id) {
+      state.pre_flags[id] = {
+        push: record.push === true, stage: record.stage === true, mutates: record.mutates === true,
+      };
+      capMap(state.pre_flags);
+    }
+  }
+  append(log, record);
+}
+
+function onPost(state, ctx) {
+  if (!tool) return;
+  const { id } = ctx;
+  const started = id ? Number(state.inflight[id]) : NaN;
+  if (id) delete state.inflight[id];
+  const record = {
+    kind: ctx.name === 'PostToolUse' ? 'post' : 'fail',
+    ...ctx.base, tool, id, hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
+  };
+  if (Number.isFinite(started)) record.tool_ms = now - started;
+  record.error = ctx.name === 'PostToolUseFailure' || responseIsError(response);
+  const pre = id ? state.pre_flags[id] : null;
+  if (id) delete state.pre_flags[id];
+  if (isProgress(pre, record)) state.turn_progress = true;
+  append(log, record);
+}
+
+function onStop(state, ctx) {
+  const { usage, offset } = turnUsage(transcript, Number(state.transcript_offset) || 0);
+  state.transcript_offset = offset;
+  const record = {
+    kind: 'stop', ...ctx.base,
+    blocked_by: ctx.decision && ctx.decision.kind === 'block' ? ctx.decision.hook : '',
+    hooks_ms: ctx.hooksMs, hooks: ctx.hooks, usage,
+  };
+  if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
+  // Ход без прогресса: инструменты звались, а ни правки, ни записи, ни плана,
+  // ни вопроса, ни пуша не вышло. Ход без единого вызова — разговор, не в счёт.
+  record.no_progress = state.turn_tools > 0 && state.turn_progress !== true;
+  append(log, record);
+}
+
+// Поля состояния, которых может не быть: журнал переживает и старую сессию, и
+// битый файл состояния.
+function ensureShape(state) {
   if (!state.started_at) state.started_at = now;
   if (!Number.isFinite(state.turn)) state.turn = 0;
   if (!state.inflight || typeof state.inflight !== 'object') state.inflight = {};
@@ -98,123 +225,33 @@ const stop = updateState(log, (state) => {
   if (!state.turn_stages || typeof state.turn_stages !== 'object') state.turn_stages = {};
   if (!Number.isFinite(state.turn_tools)) state.turn_tools = 0;
   if (!state.pre_flags || typeof state.pre_flags !== 'object') state.pre_flags = {};
+}
+
+// Всё, что трогает состояние, идёт ОДНОЙ залоченной правкой. Внутри неё
+// process.exit недопустим: он не разматывает finally, и лок остался бы взятым
+// до истечения его срока, то есть следующий хук ждал бы минуты. Поэтому выходы
+// внутри — обычные return.
+const stop = updateState(log, (state) => {
+  ensureShape(state);
   // Время хуков цепочки до этого: диспетчер складывает замеры в общее состояние.
   const timings = Array.isArray(globalThis.hookTimings) ? globalThis.hookTimings : [];
-  const hooksMs = timings.reduce((sum, t) => sum + (Number(t.ms) || 0), 0);
-  const hooks = Object.fromEntries(timings.map((t) => [t.name, t.ms]));
-  const decision = globalThis.hookDecision && typeof globalThis.hookDecision === 'object'
-    ? globalThis.hookDecision : null;
+  const ctx = {
+    name,
+    ts,
+    id: typeof event.tool_use_id === 'string' ? event.tool_use_id : '',
+    hooksMs: timings.reduce((sum, t) => sum + (Number(t.ms) || 0), 0),
+    hooks: Object.fromEntries(timings.map((t) => [t.name, t.ms])),
+    decision: globalThis.hookDecision && typeof globalThis.hookDecision === 'object'
+      ? globalThis.hookDecision : null,
+    base: { ts, turn: state.turn },
+  };
 
-  const id = typeof event.tool_use_id === 'string' ? event.tool_use_id : '';
-  const base = { ts, turn: state.turn };
-
-  if (name === 'SessionStart') {
-    // Старт бывает не только первым: компакт и возобновление дают SessionStart
-    // с тем же идентификатором. Счётчики и начало сессии при этом не сбрасываются
-    // — журнал продолжается, а причина старта пишется полем source.
-    if (!state.repo) state.repo = repoOf(cwd);
-    // Засев смещения транскрипта — ВСЕГДА по текущему размеру файла. Всё, что
-    // написано до старта, принадлежит прошлым ходам, чем бы старт ни был вызван.
-    // Условный засев («только если файла стало меньше») пропускал обратный
-    // случай: после нечистого выхода или компакта в БОЛЬШИЙ транскрипт файл
-    // длиннее сохранённого смещения, и первый же Stop записывал дорезумную
-    // историю в новый ход.
-    state.transcript_offset = transcriptSize(transcript);
-    append(log, {
-      kind: 'session', ...base, source: typeof event.source === 'string' ? event.source : '',
-      harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
-    });
-  } else if (name === 'UserPromptSubmit') {
-    state.turn += 1;
-    state.turn_started_at = now;
-    const flags = globalThis.hookFlags && typeof globalThis.hookFlags === 'object' ? globalThis.hookFlags : {};
-    const h = promptHash(prompt);
-    const repeat = Boolean(h) && state.prompt_hashes.includes(h);
-    if (h) state.prompt_hashes = [...state.prompt_hashes, h].slice(-50);
-    // Новый ход — новые стадии, вызовы и прогресс.
-    state.turn_calls = {};
-    state.turn_stages = {};
-    state.turn_tools = 0;
-    state.turn_progress = false;
-    append(log, {
-      kind: 'prompt', ts, turn: state.turn, incident: flags.incident === true,
-      repeat, reinstruct: looksLikeReinstruction(prompt),
-    });
-  } else if (name === 'PreToolUse') {
-    if (!tool) return;
-    if (id) {
-      state.inflight[id] = now;
-      // Полёт бывает недописанным (вызов отменён) — держим не больше полусотни.
-      const ids = Object.keys(state.inflight);
-      if (ids.length > 50) for (const old of ids.slice(0, ids.length - 50)) delete state.inflight[old];
-    }
-    const kind = decision ? decision.kind : 'allow';
-    const record = {
-      kind: 'pre', ...base, tool, id, decision: kind,
-      by: decision ? decision.hook : '',
-      class: decision && (kind === 'deny' || kind === 'ask') ? reasonClass(decision.hook, decision.reason) : '',
-      // Хеш вызова: по нему сводка узнаёт «тот же вызов» для ложных отказов.
-      // Сам вход в журнал не идёт ни в каком виде.
-      h: callHash(tool, input),
-      hooks_ms: hooksMs, hooks,
-    };
-    // Признаки вызова: правка, запись в базу заметок, показ плана, вопрос, стадия,
-    // пуш, имя скилла. Их ставит обёртка, потому что имена инструментов знает
-    // она; сводка считает по признакам.
-    const flags = toolFlags(tool, input);
-    Object.assign(record, flags);
-    // Сигналы хода: тот же вызов повторно, стадия повторно.
-    state.turn_tools += 1;
-    if (state.turn_calls[record.h]) record.repeat_call = true;
-    state.turn_calls[record.h] = (state.turn_calls[record.h] || 0) + 1;
-    // Потолок тот же, что у полёта и признаков: длинный ход иначе растит
-    // состояние без предела, а оно читается и пишется на каждом вызове.
-    const hashes = Object.keys(state.turn_calls);
-    if (hashes.length > 50) for (const old of hashes.slice(0, hashes.length - 50)) delete state.turn_calls[old];
-    if (flags.stage === true) {
-      if (state.turn_stages[tool]) record.stage_repeat = true;
-      state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
-    }
-    // Мутирующий вызов помечается ТОЛЬКО у прошедших: у отказанного не будет
-    // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
-    if (kind === 'allow') {
-      const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
-      if (mutation.status !== 'ok') record.unsupported = mutation.capability;
-      else if (mutation.mutates) record.mutates = true;
-      if (id) {
-        state.pre_flags[id] = {
-          push: record.push === true, stage: record.stage === true, mutates: record.mutates === true,
-        };
-        const ids = Object.keys(state.pre_flags);
-        if (ids.length > 50) for (const old of ids.slice(0, ids.length - 50)) delete state.pre_flags[old];
-      }
-    }
-    append(log, record);
-  } else if (name === 'PostToolUse' || name === 'PostToolUseFailure') {
-    if (!tool) return;
-    const started = id ? Number(state.inflight[id]) : NaN;
-    if (id) delete state.inflight[id];
-    const record = {
-      kind: name === 'PostToolUse' ? 'post' : 'fail', ...base, tool, id, hooks_ms: hooksMs, hooks,
-    };
-    if (Number.isFinite(started)) record.tool_ms = now - started;
-    record.error = name === 'PostToolUseFailure' || responseIsError(response);
-    const pre = id ? state.pre_flags[id] : null;
-    if (id) delete state.pre_flags[id];
-    if (isProgress(pre, record)) state.turn_progress = true;
-    append(log, record);
-  } else if (name === 'Stop') {
-    const { usage, offset } = turnUsage(transcript, Number(state.transcript_offset) || 0);
-    state.transcript_offset = offset;
-    const record = {
-      kind: 'stop', ...base, blocked_by: decision && decision.kind === 'block' ? decision.hook : '',
-      hooks_ms: hooksMs, hooks, usage,
-    };
-    if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
-    // Ход без прогресса: инструменты звались, а ни правки, ни записи, ни плана,
-    // ни вопроса, ни пуша не вышло. Ход без единого вызова — разговор, не в счёт.
-    record.no_progress = state.turn_tools > 0 && state.turn_progress !== true;
-    append(log, record);
+  if (name === 'SessionStart') onSessionStart(state, ctx);
+  else if (name === 'UserPromptSubmit') onPrompt(state, ctx);
+  else if (name === 'PreToolUse') onPre(state, ctx);
+  else if (name === 'PostToolUse' || name === 'PostToolUseFailure') onPost(state, ctx);
+  else if (name === 'Stop') {
+    onStop(state, ctx);
     return true;
   }
   return false;

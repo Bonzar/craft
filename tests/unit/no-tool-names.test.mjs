@@ -11,8 +11,11 @@
 // «долга нет»:
 // — хуки (`universal-*`, `craft-*`): сегодня они и есть обёртки, и имена
 //   инструментов в них законны; долг «обёртка тоже не должна знать имён» — 1.6;
-// — привязку к ХАРНЕСУ (`CLAUDE_*`, `.claude/`, поля события) в `lib/` ловит
-//   отдельный счёт ниже, тоже по списку, а не по обещанию.
+// — привязку к ХАРНЕСУ (`CLAUDE_*`, `.claude/`, поля события, формат решения и
+//   транскрипта) в `lib/` ловит отдельный счёт ниже, тоже по списку;
+// — ДАННЫЕ: смотрятся только `.js`, поэтому имена инструментов в соседних
+//   `.json` (например `lib/vendor/read-only-rules.json` с перечнем читающих
+//   команд) счётом не покрыты — перенос имён из кода в данные гвард не заметит.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -31,7 +34,7 @@ const isAdapter = (name) => TOOLS.some((t) => name.endsWith(`-${t}.js`));
 // Долг: сколько строк с именами инструментов ЕЩЁ живёт в общем модуле. Счёт
 // точный, а не «файл разрешён целиком»: новая строка в файле долга — такое же
 // нарушение, как первая строка в чистом файле, и гвард обязан её показать.
-// Каждая строка списка названа в теле PR разделом 1.6 или заметкой на фазу 4.
+// Файлы списка названы в теле PR разделом 1.6 или заметкой на фазу 4.
 const DEBT = new Map([
   ['git.js', 2], // команды git; файл целиком уезжает в адаптер
   ['transcript.js', 1], // WRITE_TOOLS: имена правящих инструментов харнеса
@@ -52,17 +55,30 @@ const TOOL_NAMES = new RegExp([
   'mcp__[A-Za-z_]',
 ].join('|'));
 
-// Привязка к харнесу: переменные, пути его состояния и поля его события.
-const HARNESS_NAMES = /CLAUDE_[A-Z_]+|\.claude\b|hook_event_name|tool_name|tool_input|tool_response|session_id/;
+// Привязка к харнесу: его переменные, пути его состояния, поля его события,
+// формат его решения и формат его транскрипта. Первый список ловил только
+// переменные и поля события — то есть транскрипт Claude в общей части проходил
+// молча, хотя тело PR называет его тем же долгом.
+const HARNESS_NAMES = new RegExp([
+  'CLAUDE_[A-Z_]+',
+  '\\.claude\\b',
+  'hook_event_name|tool_name|tool_input|tool_response|tool_use_id|session_id|transcript_path',
+  'hookSpecificOutput|permissionDecision|permissionDecisionReason|systemMessage',
+  "'assistant'|\"assistant\"",
+  'input_tokens|output_tokens|cache_read_input_tokens|cache_creation_input_tokens',
+  'file_path|notebook_path|subagent_type',
+].join('|'));
 
 // Долг по харнесу — тоже счётом. Правило 10 запрещает заводить НОВУЮ привязку,
 // а не требует снять старую сегодня.
 const HARNESS_DEBT = new Map([
+  ['decide.js', 11], // формат решения харнеса
   ['env.js', 2], // каталог состояния харнеса
-  ['event.js', 4], // поля события харнеса
-  ['metrics.js', 3], // регистрация диспетчера и session_id события
-  ['once.js', 2], // ключ уступки по полям события
+  ['event.js', 5], // поля события харнеса
+  ['metrics.js', 8], // регистрация диспетчера, session_id и поля usage транскрипта
+  ['once.js', 3], // ключ уступки по полям события
   ['paths.js', 2], // CLAUDE_CODE_SESSION_ID и каталог состояния
+  ['transcript.js', 2], // формат транскрипта Claude
   ['write-targets.js', 3], // политика ~/.claude как системной зоны
 ]);
 
@@ -137,6 +153,10 @@ test('гвард имён ловит имя инструмента в коде �
     "const sid = process.env.CLAUDE_CODE_SESSION_ID;",
     "const f = path.join(home, '.claude', 'settings.json');",
     "return event.hook_event_name || '';",
+    "if (entry.type !== 'assistant') return 0;",
+    "return u.cache_creation_input_tokens;",
+    "const p = input.file_path;",
+    "out.hookSpecificOutput = { permissionDecision: 'deny' };",
   ]) {
     assert.equal(probe(code, HARNESS_NAMES), 1, code);
   }

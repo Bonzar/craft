@@ -144,7 +144,7 @@ export function upsertLines(text, summaries) {
 // говорится строкой в журнале, а не тишиной.
 //
 // Выключатель хранения гасит и это — иначе прогон кейсов копил бы очередь.
-export function queueSummary(summary, log, adapter) {
+export function queueSummary(summary, log, adapter, { waitMs = QUEUE_WAIT_MS } = {}) {
   if (process.env.METRICS_STORE === 'off') return false;
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(storeTarget(), adapter);
   // Очереди нет — значит нет и адаптера хранения. Это тоже пропуск, и назван он
@@ -157,13 +157,13 @@ export function queueSummary(summary, log, adapter) {
     }
     return false;
   }
-  const { ok, reason } = enqueueSummary(queue, summary);
+  const { ok, reason } = enqueueSummary(queue, summary, { waitMs });
   if (!ok && log) {
     const line = {
       kind: 'skip', ts: new Date().toISOString(), what: 'queue', reason,
     };
     // Срок называется только там, где он и был причиной.
-    if (reason === 'locked') line.wait_ms = QUEUE_WAIT_MS;
+    if (reason === 'locked') line.wait_ms = waitMs;
     append(log, line);
   }
   return ok;

@@ -354,6 +354,7 @@ function runPass(c) {
     assertFile,
     out: res.stdout || '',
     err: res.stderr || '',
+    code: typeof res.status === 'number' ? res.status : 1,
     traced,
     trace,
     assertText,
@@ -384,12 +385,14 @@ function grade(expect, out, err, env) {
   // file-not-contains требует НЕПУСТОГО файла: «в файле нет строки» на файле,
   // которого нет, зеленеет и при сломанном хуке — то есть проверяет ровно ничто.
   // Пара к нему — file-empty: «не написано вовсе», и это отдельное утверждение,
-  // которое кейс делает явно.
+  // которое кейс делает явно. Пустой файл считается только при УДАВШЕМСЯ хуке:
+  // упавший хук тоже ничего не пишет, и без кода возврата этот исход зеленел бы
+  // на любой поломке — той самой дырой, ради которой заводился file-empty.
   if (expect === 'file-empty' || expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
     const file = (env || {}).ASSERT_FILE || '';
     if (!file) return false;
     const text = (env || {}).ASSERT_TEXT || '';
-    if (expect === 'file-empty') return text === '';
+    if (expect === 'file-empty') return text === '' && (env || {}).CODE === 0;
     const needle = expect.slice(expect.indexOf(':') + 1);
     if (expect.startsWith('file-contains:')) return text.includes(needle);
     return text !== '' && !text.includes(needle);
@@ -652,7 +655,7 @@ function main() {
 
       // Путь и текст приходят из прогона уже подставленными: подставлять здесь
       // заново было бы нечем — состояния прогона тут уже нет.
-      const env = { ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText };
+      const env = { ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code };
       let ok = true;
       let got = r.out;
       for (const one of expects) {

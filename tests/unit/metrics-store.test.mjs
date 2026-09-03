@@ -59,6 +59,17 @@ test('разбор очереди пропускает битые строки �
 // Цель не под тем инструментом, для которого есть адаптер, — это не ошибка
 // доставки, а отсутствие возможности, и называется явно: молчаливый error здесь
 // выглядел бы как сломанное хранение.
+test('адаптер без available — тоже unsupported, а не падение', () => {
+  const dir = tmp();
+  const queue = path.join(dir, 'queue.jsonl');
+  store.enqueue(queue, summary('s1', 1));
+  const res = store.flushQueue({ target: dir, queueFile: queue, adapter: {} });
+  assert.equal(res.status, 'unsupported');
+  assert.equal(res.capability, 'metrics-store');
+  assert.match(fs.readFileSync(queue, 'utf8'), /"sid":"s1"/, 'очередь цела');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('без адаптера хранение отвечает unsupported с именем возможности', () => {
   const dir = tmp();
   const queue = path.join(dir, 'queue.jsonl');
