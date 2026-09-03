@@ -8,12 +8,14 @@ const tools = await import('../../.claude/hooks/lib/write-targets.js');
 const claude = await import('../../.claude/hooks/lib/tool-flags-claude.js');
 const bash = await import('../../.claude/hooks/lib/write-targets-bash.js');
 const git = await import('../../.claude/hooks/lib/write-targets-git.js');
+const repo = await import('../../.claude/hooks/lib/repo-git.js');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
 
 // Та же связка, что собирает обёртка (universal-metrics.js): область вызова и
 // его форма от адаптера харнеса, разбор команды от адаптеров шелла и git.
 const ADAPTERS = {
   commandWrites: (text) => ({ mutates: git.gitMutates(text), targets: bash.commandTargets(text) }),
+  ignored: repo.isIgnored,
 };
 const mutation = (tool, input = {}) => tools.mutationOf(
   claude.toolScope(tool, input), claude.callShape(tool, input), ADAPTERS,
@@ -93,4 +95,16 @@ test('область вызова решает вопрос «трогает л�
   assert.deepEqual(claude.toolScope('ExitPlanMode', {}), { session: true });
   assert.deepEqual(claude.toolScope('Task', { subagent_type: 'Explore' }), { reads: true });
   assert.deepEqual(claude.toolScope('Bash', {}), {});
+});
+
+// Игнорируемый путь эфемерен, но спрашивают об этом АДАПТЕР: без него общая
+// часть не смеет считать путь игнорируемым — иначе мимо гейта прошла бы любая
+// правка на цели, про которую слой ничего не знает.
+test('игнорируемое репозиторием эфемерно, и вопрос задаёт адаптер', () => {
+  const ignored = (fp) => fp.endsWith('.log');
+  assert.equal(tools.ignoredEphemeral('build/out.log', ignored), true);
+  assert.equal(tools.ignoredEphemeral('build/out.log', undefined), false,
+    'без адаптера ответ «нет», а не «да»');
+  assert.equal(tools.ignoredEphemeral('.claude/hooks/x.log', ignored), false,
+    'внутри .claude/ игнор не оправдание');
 });

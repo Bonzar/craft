@@ -51,16 +51,18 @@ import { mutationOf } from './lib/write-targets.js';
 import { toolFlags, callShape, toolScope } from './lib/tool-flags-claude.js';
 import { commandTargets } from './lib/write-targets-bash.js';
 import { gitMutates } from './lib/write-targets-git.js';
+import { repoOf, isIgnored } from './lib/repo-git.js';
 
 // Адаптеры инструментов для общей части. Собирает их ОБЁРТКА: сама общая часть
 // ни одного инструмента по имени не знает и ничего себе не выбирает — без
 // адаптера она отвечает `unsupported`, и это видно строкой журнала. Команда
-// интерпретатора разбирается двумя: шелл даёт цели записи, git — правку,
-// которая целями не видна («git commit» ничего не перенаправляет).
+// интерпретатора разбирается двумя: шелл даёт цели записи, git — правку, которая
+// целями не видна («git commit» ничего не перенаправляет); третьим приходит
+// вопрос «игнорирует ли путь репозиторий».
 const ADAPTERS = {
   commandWrites: (text) => ({ mutates: gitMutates(text), targets: commandTargets(text) }),
+  ignored: isIgnored,
 };
-import { repoOf } from './lib/repo-git.js';
 
 const {
   event, tool, cwd, transcript, response, input, prompt,

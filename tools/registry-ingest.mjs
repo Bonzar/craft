@@ -30,6 +30,8 @@ import {
 } from '../.claude/hooks/lib/registry.js';
 import { currentMetricsLog } from '../.claude/hooks/lib/metrics.js';
 import { queueSummary } from '../.claude/hooks/lib/metrics-store.js';
+// Адаптер хранения выбирает край, а не общая часть.
+import * as STORE_ADAPTER from '../.claude/hooks/lib/metrics-store-git.js';
 
 const [, , source, materialFile, registryFile, markId] = process.argv;
 
@@ -204,7 +206,12 @@ function main() {
 // на краю: журнал про хранение не знает, а знать, что этот процесс последний,
 // может только сам процесс. Сводки нет — приём шёл до первого Stop, её сложит
 // он сам.
+//
+// Приём ПЛАНА — исключение: он идёт внутри хода, синхронным вызовом из хука
+// одобрения, и подпроцесс git с ожиданием лока там были бы платой хода за
+// работу, которую следующий Stop сделает сам.
 function requeueSummary() {
+  if (source === 'plan') return;
   const log = currentMetricsLog();
   if (!log) return;
   let summary;
@@ -213,7 +220,7 @@ function requeueSummary() {
   } catch {
     return; // сводки ещё нет — возвращать нечего
   }
-  if (summary && summary.sid) queueSummary(summary, log);
+  if (summary && summary.sid) queueSummary(summary, log, STORE_ADAPTER);
 }
 
 let code = 1;

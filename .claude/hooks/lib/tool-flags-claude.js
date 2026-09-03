@@ -6,7 +6,8 @@
 //   edit — правка содержимого; note_write — запись в базу заметок (у Claude Code
 //   это Craft); plan — показ плана; question — вопрос Владу; stage — стадия
 //   хода, повтор которой внутри хода является сигналом; push — отправка
-//   сделанного; skill — имя скилла.
+//   сделанного; skill — имя скилла; incident_skill — этот скилл разбирает
+//   инцидент.
 // callShape(инструмент, вход) → чем был вызов: {kind: 'edit', path},
 //   {kind: 'command', text} либо {} — по нему считается «менял ли мир».
 // toolScope(инструмент, вход) → область вызова: {reads: true} — только читает,
@@ -27,6 +28,11 @@ const isNoteWrite = (tool) => /__craft_write$/.test(String(tool || ''));
 // Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
 const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
 
+// Скиллы разбора инцидента: код-сессия и сессия над базой заметок. Список
+// точный, потому что признак «разбор вызван» — это доля разборов, а не похожие
+// имена. Живёт рядом с именем инструмента `Skill`, а не в свёртке.
+const INCIDENT_SKILLS = new Set(['code-incident', 'craft-incident']);
+
 export function toolFlags(tool, input = {}) {
   const flags = {};
   if (EDIT_TOOL_PATH[tool] || isNoteWrite(tool)) flags.edit = true;
@@ -35,7 +41,10 @@ export function toolFlags(tool, input = {}) {
   if (tool === 'AskUserQuestion') flags.question = true;
   if (STAGE_TOOLS.has(tool)) flags.stage = true;
   if (tool === 'Bash' && looksLikePush(input.command)) flags.push = true;
-  if (tool === 'Skill' && typeof input.skill === 'string') flags.skill = input.skill;
+  if (tool === 'Skill' && typeof input.skill === 'string') {
+    flags.skill = input.skill;
+    if (INCIDENT_SKILLS.has(input.skill)) flags.incident_skill = true;
+  }
   return flags;
 }
 

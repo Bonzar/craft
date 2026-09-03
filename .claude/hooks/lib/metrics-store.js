@@ -1,6 +1,8 @@
 // Хранение сводок сессий: очередь и раскладка по дням. Про инструмент, которым
-// сводки уезжают, этот файл не знает ничего — команды живут в адаптере
-// (metrics-store-git.js), сюда приходят данные.
+// сводки уезжают, этот файл не знает ничего и сам его не выбирает: АДАПТЕР
+// приходит параметром от края (queueDir, available, fetchBase, readDay,
+// publish), а сюда — только данные. Адаптера нет — исход `unsupported`, а не
+// молчание и не ошибка.
 //
 // Файл на стороне хранилища — `summaries/<дата UTC>.jsonl`, по строке на
 // сессию; день берётся по НАЧАЛУ сессии, чтобы сессия, перешагнувшая полночь,
@@ -29,7 +31,6 @@ import { withLock, atomicWrite } from './lock.js';
 import { eachJsonl } from './jsonl.js';
 import { repoRootOf } from './paths.js';
 import { append } from './metrics.js';
-import * as store from './metrics-store-git.js';
 
 // Потолок очереди в строках. Строка на сессию, так что потолок — про число
 // сессий, накопившихся, пока доставка не проходит.
@@ -51,8 +52,8 @@ export function storeTarget() {
 // Файл очереди — в каталоге, который переживает и сессии, и смену воркри, а в
 // дерево не попадает; каталог называет адаптер. Адаптера нет — очереди тоже:
 // копить сводки в /tmp значит копить то, что никто никогда не увезёт.
-export function defaultQueue(target) {
-  const dir = store.queueDir(target);
+export function defaultQueue(target, adapter) {
+  const dir = adapter && adapter.queueDir ? adapter.queueDir(target) : '';
   return dir ? path.join(dir, 'metrics-queue.jsonl') : '';
 }
 
@@ -143,9 +144,9 @@ export function upsertLines(text, summaries) {
 // говорится строкой в журнале, а не тишиной.
 //
 // Выключатель хранения гасит и это — иначе прогон кейсов копил бы очередь.
-export function queueSummary(summary, log) {
+export function queueSummary(summary, log, adapter) {
   if (process.env.METRICS_STORE === 'off') return false;
-  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(storeTarget());
+  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(storeTarget(), adapter);
   // Очереди нет — значит нет и адаптера хранения. Это тоже пропуск, и назван он
   // возможностью: молчание здесь читалось бы как «сводка уехала».
   if (!queue) {
@@ -169,13 +170,15 @@ export function queueSummary(summary, log) {
 }
 
 // Выгрузить очередь. Возвращает { status, delivered }.
-export function flushQueue({ target, queueFile, ...where }) {
-  if (!store.available(target)) return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
+export function flushQueue({ target, queueFile, adapter, ...where }) {
+  if (!adapter || !adapter.available(target)) {
+    return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
+  }
   const { locked, value } = withLock(queueFile, () => {
     const pending = parseQueue(readQueueText(queueFile));
     if (!pending.length) return { status: 'nothing', delivered: 0 };
 
-    const fetched = store.fetchBase(target, where);
+    const fetched = adapter.fetchBase(target, where);
     if (fetched.status !== 'ok') return { status: fetched.status, delivered: 0 };
     const { base } = fetched;
 
@@ -191,12 +194,12 @@ export function flushQueue({ target, queueFile, ...where }) {
 
     const files = [];
     for (const [day, list] of byDay) {
-      const current = store.readDay(target, { ...where, base, day });
+      const current = adapter.readDay(target, { ...where, base, day });
       if (current.status === 'error') return { status: 'error', delivered: 0 };
       files.push({ day, content: upsertLines(current.text, list) });
     }
 
-    const published = store.publish(target, {
+    const published = adapter.publish(target, {
       ...where, base, files, days: [...byDay.keys()].sort(), sessions: latest.size,
     });
     if (published.status !== 'ok') return { status: published.status, delivered: 0 };

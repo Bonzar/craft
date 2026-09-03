@@ -36,7 +36,8 @@ import { readEvent } from './lib/event.js';
 import { deny } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
 import { sessionAnchor } from './lib/paths.js';
-import { isEphemeral, gitEphemeral } from './lib/write-targets.js';
+import { isEphemeral, ignoredEphemeral } from './lib/write-targets.js';
+import { isIgnored } from './lib/repo-git.js';
 import { commandTargets } from './lib/write-targets-bash.js';
 import { classifyCommand } from './lib/read-only-command.js';
 
@@ -105,7 +106,7 @@ if (isCraftWrite) refuse('запись в базу');
 if (isFileEdit) {
   const fp = input.file_path || input.notebook_path || '';
   if (!fp) process.exit(0);
-  if (isEphemeral(fp) || gitEphemeral(fp)) process.exit(0);
+  if (isEphemeral(fp) || ignoredEphemeral(fp, isIgnored)) process.exit(0);
   refuse(`правка файла (${fp})`);
 }
 
@@ -120,7 +121,7 @@ if (isBash) {
   // временное: тем же правом пользуется правка файла, и расхождение между
   // ветками одного гварда было бы заметно только на живом прогоне.
   const targets = commandTargets(cmd);
-  if (targets.length && targets.every((t) => isEphemeral(t) || gitEphemeral(t))) {
+  if (targets.length && targets.every((t) => isEphemeral(t) || ignoredEphemeral(t, isIgnored))) {
     process.exit(0);
   }
 

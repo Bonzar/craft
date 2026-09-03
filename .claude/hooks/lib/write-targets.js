@@ -7,8 +7,10 @@
 // разбор команды — адаптер интерпретатора (write-targets-bash.js).
 //
 // touchesWorld(область) → трогает ли вызов мир вообще.
-// mutationOf(область, форма, {commandWrites}) → {status, mutates}.
-import { isIgnored } from './git.js';
+// mutationOf(область, форма, {commandWrites, ignored}) → {status, mutates}.
+// isEphemeral(путь) → путь, правка которого системным изменением не является.
+// ignoredEphemeral(путь, предикат) → та же политика для путей, которые
+//   репозиторий игнорирует; сам предикат приносит адаптер репозитория.
 
 // Путь, правка которого системным изменением не является.
 export function isEphemeral(fp) {
@@ -32,11 +34,14 @@ export function isEphemeral(fp) {
   return false;
 }
 
-// Игнорируемое гитом эфемерно (сборка, логи) для ЛЮБОГО инструмента записи,
-// кроме путей внутри .claude/: там игнор не оправдание.
-export function gitEphemeral(fp) {
+// Игнорируемое репозиторием эфемерно (сборка, логи) для ЛЮБОГО инструмента
+// записи, кроме путей внутри .claude/: там игнор не оправдание. Сам вопрос
+// «игнорируется ли путь» задаёт адаптер репозитория: общая часть держит только
+// политику. Предиката нет — ответ «нет»: молча считать игнорируемым всё подряд
+// значило бы пропустить мимо гейта любую правку.
+export function ignoredEphemeral(fp, ignored) {
   if (fp.startsWith('.claude/') || fp.includes('/.claude/')) return false;
-  return isIgnored(fp);
+  return typeof ignored === 'function' && ignored(fp) === true;
 }
 
 // --- трогает ли вызов мир -----------------------------------------------------
@@ -65,16 +70,16 @@ export function touchesWorld(scope = {}) {
 //   {kind: 'command', text} — команда интерпретатора;
 //   ничего                  — всё прочее, что трогает мир.
 //
-// Команду разбирает АДАПТЕР интерпретатора: writes(текст) → {mutates, targets}.
-// Своего разбора у общей части нет, и адаптера ей никто не зашивает — нет
-// адаптера, нет и ответа: {status: 'unsupported', capability: 'write-targets'}.
-// Молчаливое «не мутирует» тут соврало бы про каждый ход, где работали шеллом.
+// Команду разбирает АДАПТЕР интерпретатора: commandWrites(текст) → {mutates,
+// targets}; вопрос «игнорирует ли путь репозиторий» — адаптер репозитория
+// (ignored). Своего разбора у общей части нет, и адаптера ей никто не зашивает —
+// нет адаптера, нет и ответа: {status: 'unsupported', capability:
+// 'write-targets'}. Молчаливое «не мутирует» тут соврало бы про каждый ход, где
+// работали шеллом.
 export function mutationOf(scope = {}, call = {}, adapters = {}) {
+  const durable = (fp) => Boolean(fp) && !isEphemeral(fp) && !ignoredEphemeral(fp, adapters.ignored);
   if (!touchesWorld(scope)) return { status: 'ok', mutates: false };
-  if (call.kind === 'edit') {
-    const fp = call.path || '';
-    return { status: 'ok', mutates: Boolean(fp) && !isEphemeral(fp) && !gitEphemeral(fp) };
-  }
+  if (call.kind === 'edit') return { status: 'ok', mutates: durable(call.path || '') };
   if (call.kind === 'command') {
     const cmd = String(call.text || '');
     if (!cmd) return { status: 'ok', mutates: false };
@@ -82,10 +87,7 @@ export function mutationOf(scope = {}, call = {}, adapters = {}) {
     if (!writes) return { status: 'unsupported', capability: 'write-targets' };
     const { mutates = false, targets = [] } = writes(cmd) || {};
     if (mutates) return { status: 'ok', mutates: true };
-    return {
-      status: 'ok',
-      mutates: targets.some((t) => Boolean(t) && !isEphemeral(t) && !gitEphemeral(t)),
-    };
+    return { status: 'ok', mutates: targets.some(durable) };
   }
   return { status: 'ok', mutates: true };
 }

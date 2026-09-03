@@ -10,10 +10,6 @@
 // требовала перечитывать все.
 
 
-// Скиллы разбора инцидента: код-сессия и сессия над базой Craft. Список точный,
-// потому что признак «скилл вызван» — это доля разборов, а не похожие имена.
-const INCIDENT_SKILLS = new Set(['code-incident', 'craft-incident']);
-
 // «Сразу после реплики» — это ход отказа или следующий за ним. Дальше уже новая
 // работа, и правильный отказ, снятый через несколько ходов новым планом, ложным
 // не считается.
@@ -188,7 +184,9 @@ function fillIncidents(s, records, pres) {
     if (r.kind === 'prompt' && r.incident === true) detected.add(r.turn);
     else if (succeeded(r)) {
       const pre = r.id ? pres.get(r.id) : null;
-      if (pre && INCIDENT_SKILLS.has(String(pre.skill || ''))) analyzed.add(r.turn);
+      // Разбор опознаётся ПРИЗНАКОМ от обёртки: имена скиллов знает она, а не
+      // свёртка — иначе список имён жил бы в двух местах и разъезжался.
+      if (pre && pre.incident_skill === true) analyzed.add(r.turn);
     }
   }
   s.incidents.detected = detected.size;

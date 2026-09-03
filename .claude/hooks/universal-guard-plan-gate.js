@@ -37,7 +37,8 @@ import { randomBytes } from 'node:crypto';
 import { readEvent } from './lib/event.js';
 import { deny } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
-import { isEphemeral, gitEphemeral, touchesWorld } from './lib/write-targets.js';
+import { isEphemeral, ignoredEphemeral, touchesWorld } from './lib/write-targets.js';
+import { isIgnored } from './lib/repo-git.js';
 import { bashWriteTargets, cleanTarget } from './lib/write-targets-bash.js';
 import { toolScope } from './lib/tool-flags-claude.js';
 import { exemptScopeFile, approvalRegistry } from './lib/paths.js';
@@ -199,7 +200,7 @@ if (isFileEdit) {
   const fp = input.file_path || input.notebook_path || '';
   if (!fp) process.exit(0);
   if (isEphemeral(fp)) process.exit(0);
-  if (gitEphemeral(fp)) process.exit(0);
+  if (ignoredEphemeral(fp, isIgnored)) process.exit(0);
 
   // Текст правки по инструменту: Edit/Write — new_string/content, MultiEdit —
   // все edits[].new_string, NotebookEdit — new_source; без них классификатор
@@ -240,7 +241,7 @@ if (isBash) {
   const realTargets = targets.filter((rawTarget) => {
     const t = cleanTarget(rawTarget);
     if (!t) return false;
-    return !isEphemeral(t) && !gitEphemeral(t);
+    return !isEphemeral(t) && !ignoredEphemeral(t, isIgnored);
   });
   if (!realTargets.length) process.exit(0);
 

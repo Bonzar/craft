@@ -147,21 +147,26 @@ function takeLock(file, waitMs) {
       return dir;
     } catch (err) {
       if (err && err.code !== 'EEXIST') return '';
+      // Лок занят. Брошенный отбирается: мёртвый хозяин — наверняка, возраста
+      // ждать незачем; хозяин неизвестен — по LOCK_STALE_MS; живой — только по
+      // абсолютному потолку. Возраст -1 значит, что лока уже нет ИЛИ на его
+      // месте не каталог (битая ссылка): судить не по чему, ждём как о занятом.
       const age = ageOf(dir);
-      if (age < 0) continue; // лок исчез между попыткой и замером
-      const owner = ownerPid(dir);
-      // Мёртвый хозяин — лок брошен наверняка, возраста ждать незачем.
-      // Хозяин неизвестен — по LOCK_STALE_MS. Живой — только по абсолютному.
-      if (owner && !alive(owner)) {
-        reclaimStale(file, owner);
-        continue;
+      if (age >= 0) {
+        const owner = ownerPid(dir);
+        if ((owner && !alive(owner)) || age > (owner ? LOCK_MAX_AGE_MS : LOCK_STALE_MS)) {
+          reclaimStale(file, owner);
+        }
       }
-      if (age > (owner ? LOCK_MAX_AGE_MS : LOCK_STALE_MS)) {
-        reclaimStale(file, owner);
-        continue;
-      }
+      // Срок проверяется на КАЖДОМ круге, включая круги отбора. Отбор бывает
+      // безуспешным навсегда: каталог чужого пользователя в /tmp со sticky-битом
+      // не переименовать ни разу, а битая ссылка на месте лока не даёт даже
+      // возраста. Без этой проверки такой круг шёл бы вечно — то есть хук висел
+      // бы на чужом локе, чего инвариант модуля не допускает.
       const left = deadline - Date.now();
       if (left <= 0) return '';
+      // Пауза и после отбора: неудавшийся отбор иначе крутил бы цикл на полном
+      // процессоре весь отведённый срок.
       pause(Math.min(STEP_MS, left));
     }
   }

@@ -45,6 +45,12 @@ run_hook() {
 }
 day_file() { G -C "$1/origin.git" show "metrics:summaries/$2.jsonl" 2>/dev/null; }
 
+# Тот же вызов под `timeout`: зависание кейса — это и есть регресс, и ловится
+# оно только сроком снаружи процесса хука.
+run_hook_export() { run_hook "$@"; }
+export -f run_hook_export run_hook G
+export HOOK
+
 # --- A. первая сводка заводит ветку и файл дня --------------------------------
 t="первая сводка заводит ветку metrics и файл дня"
 sb="$(sandbox)"
@@ -226,6 +232,29 @@ out="$(run_hook "$sb" s1 2026-09-02T10:00:00Z 1)"
 kill "$holder" 2>/dev/null
 if ! grep -q '"sid":"s1"' "$sb/queue.jsonl" 2>/dev/null; then
   bad "$t" "сводка не встала в очередь после освобождения лока: $out"
+else ok "$t"; fi
+
+# --- M. инлайн-режим не ждёт лок сроком работника ----------------------------
+# Пять минут ожидания лока имеет право ждать только ОТСОЕДИНЁННЫЙ работник:
+# инлайн-режим идёт в процессе хука, и зашитый срок работника превращал бы
+# занятый лок очереди в пятиминутную паузу на конце хода.
+t="инлайн-режим возвращается со срока хода, а не со срока работника"
+sb="$(sandbox)"
+G -C "$sb/work" remote set-url origin "$sb/nowhere.git"   # без сети: доставки не будет
+mkdir -p "$sb/queue.jsonl.lock"
+sleep 120 & holder=$!
+printf '%s' "$holder" > "$sb/queue.jsonl.lock/owner"      # лок занят живым процессом и не отпускается
+started=$(date +%s)
+out="$(timeout 90 bash -c 'run_hook_export "$@"' _ "$sb" s1 2026-09-02T10:00:00Z 1 2>&1)" || out="$out[timeout]"
+spent=$(( $(date +%s) - started ))
+kill "$holder" 2>/dev/null
+rm -rf "$sb/queue.jsonl.lock"
+if [[ "$out" == *"[timeout]"* ]]; then
+  bad "$t" "хук не вернулся за 90 с: ждал лок сроком работника"
+elif (( spent > 30 )); then
+  bad "$t" "хук вернулся за ${spent} с — это срок работника, а не хода"
+elif ! grep -q '"kind":"store"' "$sb/log.s1"; then
+  bad "$t" "исход не назван строкой журнала: $out"
 else ok "$t"; fi
 
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"

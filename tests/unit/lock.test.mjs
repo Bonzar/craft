@@ -183,3 +183,36 @@ test('отбор снимает лок названного хозяина', () 
 
   assert.ok(!fs.existsSync(`${file}.lock`), 'брошенный лок снят');
 });
+
+// Лок, который НЕ ОТОБРАТЬ, всё равно ограничен сроком. Отбор бывает
+// безуспешным навсегда: каталог чужого пользователя в /tmp со sticky-битом не
+// переименовать ни разу, а битая ссылка на месте лока не даёт даже возраста —
+// и круг «поглядели, отобрать не вышло, пошли снова» шёл бы вечно, вопреки
+// инварианту модуля. Проверяется ЧУЖИМ процессом со сроком: регресс здесь —
+// это зависание, и в своём процессе кейс висел бы вместе с ним.
+test('лок, который не отобрать, не держит вызывающего дольше срока', () => {
+  const dir = tmpDir('lock-unreclaimable-');
+  const file = path.join(dir, 'state');
+  const done = path.join(dir, 'done');
+  // Битая ссылка на месте каталога лока: mkdir говорит «занято», а возраст
+  // измерить не по чему.
+  fs.symlinkSync(path.join(dir, 'no-such-target'), `${file}.lock`);
+
+  const script = path.join(dir, 'waiter.mjs');
+  fs.writeFileSync(script, [
+    `import { withLock } from ${JSON.stringify(LOCK)};`,
+    "import fs from 'node:fs';",
+    'const [file, done] = process.argv.slice(2);',
+    'const started = Date.now();',
+    'const { locked } = withLock(file, () => true, { waitMs: 200 });',
+    'fs.writeFileSync(done, JSON.stringify({ locked, spent: Date.now() - started }));',
+  ].join('\n'));
+  const child = spawn(process.execPath, [script, file, done], { stdio: 'ignore' });
+  const got = waitFor(() => fs.existsSync(done), 8000);
+  child.kill('SIGKILL');
+
+  assert.ok(got, 'вызов не вернулся за отведённое кейсу время — цикл не ограничен сроком');
+  const res = JSON.parse(fs.readFileSync(done, 'utf8'));
+  assert.equal(res.locked, false, 'лок не достался, и это сказано исходом');
+  assert.ok(res.spent < 5000, `ожидание уложилось в срок: ${res.spent} мс`);
+});
