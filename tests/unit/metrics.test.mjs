@@ -235,3 +235,126 @@ test('сводка: токены первого хода складываютс�
   assert.deepEqual(s.tokens_first_turn, { input: 3, output: 30, cache_read: 5, cache_create: 0 });
   assert.deepEqual(s.tokens, { input: 103, output: 130, cache_read: 105, cache_create: 100 });
 });
+
+// --- состояние под локом ---------------------------------------------------------
+
+test('параллельные правки состояния не теряют вызовов в полёте', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const log = path.join(dir, 'm.jsonl');
+  const hook = path.resolve(HERE, '..', '..', '.claude', 'hooks', 'universal-metrics.js');
+  const { execFile } = await import('node:child_process');
+
+  // Восемь вызовов инструмента, поданных разом, — обычная пачка от харнесса.
+  const calls = Array.from({ length: 8 }, (_, i) => `toolu_par_${i}`);
+  await Promise.all(calls.map((id) => new Promise((done) => {
+    const child = execFile(process.execPath, [hook], {
+      env: { ...process.env, CRAFT_METRICS_LOG: log, HOOK_ONCE: 'off' },
+    }, () => done());
+    child.stdin.end(JSON.stringify({
+      hook_event_name: 'PreToolUse', session_id: 'par', tool_name: 'Read', tool_use_id: id,
+      tool_input: { file_path: 'README.md' },
+    }));
+  })));
+
+  const state = JSON.parse(fs.readFileSync(`${log}.state.json`, 'utf8'));
+  assert.deepEqual(Object.keys(state.inflight).sort(), calls.sort(), 'ни один вызов в полёте не потерян');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('смещение транскрипта засевается длиной файла: хвост до старта в ход не идёт', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const transcript = path.join(dir, 't.jsonl');
+  fs.copyFileSync(path.join(FIXTURES, 'transcript-usage.jsonl'), transcript);
+  assert.equal(metrics.transcriptSize(transcript), fs.statSync(transcript).size);
+  const { usage } = metrics.turnUsage(transcript, metrics.transcriptSize(transcript));
+  assert.equal(usage.messages, 0, 'засеянное смещение не даёт засчитать историю в первый ход');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('укоротившийся транскрипт читается заново, а не молчит навсегда', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const file = path.join(dir, 't.jsonl');
+  const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 9 } } });
+  fs.writeFileSync(file, `${line}\n`);
+  const r = metrics.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
+  assert.equal(r.usage.output, 9, 'после подмены транскрипт читается с начала');
+  assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('remote с портом не превращает порт во владельца', () => {
+  assert.equal(metrics.normalizeRemote('ssh://git@github.com:2222/Bonzar/craft.git'), 'github.com/Bonzar/craft');
+  assert.equal(metrics.normalizeRemote('https://github.com:443/Bonzar/craft.git'), 'github.com/Bonzar/craft');
+  assert.equal(metrics.normalizeRemote('git@github.com:Bonzar/craft.git'), 'github.com/Bonzar/craft', 'scp-форма цела');
+});
+
+test('вызов с аварийным выключателем в счётчик вызовов модели не идёт', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  const log = path.join(dir, 'm.jsonl');
+  process.env.CRAFT_METRICS_LOG = log;
+  const repo = path.resolve(HERE, '..', '..');
+  const bin = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');
+  const classifier = await import(`../../.claude/hooks/lib/classifier.js?t=${Date.now()}`);
+  try {
+    process.env.PLAN_CLASSIFIER = 'off';
+    classifier.classify(bin, 'cover', [], 'проба');
+    assert.equal(fs.existsSync(log), false, 'выключенный классификатор модель не звал — записи нет');
+    delete process.env.PLAN_CLASSIFIER;
+    classifier.classify(bin, 'cover', [], 'проба');
+    assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model"/, 'обычный вызов пишется');
+  } finally {
+    delete process.env.PLAN_CLASSIFIER;
+    delete process.env.CRAFT_METRICS_LOG;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- узнавание вызова и пуша -----------------------------------------------------
+
+test('хеш вызова не зависит от служебных полей входа', () => {
+  const a = metrics.callHash('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 });
+  const b = metrics.callHash('Bash', { command: 'git push', description: 'Push the branch to origin' });
+  assert.equal(a, b, 'переписанное описание не должно делать повтор другим вызовом');
+  assert.notEqual(a, metrics.callHash('Bash', { command: 'git status' }));
+  assert.equal(
+    metrics.callHash('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }),
+    metrics.callHash('Edit', { new_string: 'y', old_string: 'x', file_path: 'a' }),
+    'порядок полей во входе не обещан — хеш от него не зависит',
+  );
+});
+
+test('пуш опознаётся по подкоманде, а не по слову в строке', () => {
+  assert.equal(metrics.looksLikePush('git push -u origin main'), true);
+  assert.equal(metrics.looksLikePush('git push'), true);
+  assert.equal(metrics.looksLikePush('git stash push -m wip'), false);
+  assert.equal(metrics.looksLikePush('git commit -m "fix push hook"'), false);
+  assert.equal(metrics.looksLikePush('git log --grep push'), false);
+  assert.equal(metrics.looksLikePush('git push --dry-run'), false, 'пробный прогон не пуш');
+});
+
+test('журнал: нет файла — пусто, не прочитался — null', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
+  assert.deepEqual(metrics.readJournal(path.join(dir, 'нет.jsonl')), []);
+  assert.equal(metrics.readJournal(dir), null, 'каталог вместо файла — не пустой журнал, а сбой чтения');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('сводка: отказ, снятый ходами позже, ложным не считается', () => {
+  const base = [
+    { kind: 'prompt', ts: T(1), turn: 1 },
+    { kind: 'pre', ts: T(2), turn: 1, tool: 'Edit', id: 'a', decision: 'deny', class: 'gate.uncovered', h: 'h1' },
+  ];
+  const next = metrics.summarize([...base,
+    { kind: 'prompt', ts: T(3), turn: 2 },
+    { kind: 'pre', ts: T(4), turn: 2, tool: 'Edit', id: 'b', decision: 'allow', h: 'h1' },
+  ]);
+  assert.equal(next.false_denies, 1, 'ход сразу после реплики — это и есть ложный отказ');
+
+  const later = metrics.summarize([...base,
+    { kind: 'prompt', ts: T(3), turn: 2 },
+    { kind: 'prompt', ts: T(4), turn: 3 },
+    { kind: 'prompt', ts: T(5), turn: 4 },
+    { kind: 'pre', ts: T(6), turn: 4, tool: 'Edit', id: 'b', decision: 'allow', h: 'h1' },
+  ]);
+  assert.equal(later.false_denies, 0, 'через три хода это уже не «сразу после реплики», а новая работа');
+});

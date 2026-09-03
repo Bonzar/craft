@@ -67,6 +67,12 @@ export function classify(bin, mode, args, description, { timeoutSec } = {}) {
     maxBuffer: 16 * 1024 * 1024,
   });
   const verdict = (res.stdout || '').trim() || 'UNAVAILABLE';
-  recordModelCall({ mode, ms: Date.now() - started, outcome: verdictClass(verdict) });
+  // С аварийным выключателем классификатор отвечает сам и модель не зовёт —
+  // такой вызов в счётчик вызовов модели не идёт. Исход `unavailable` остаётся
+  // общим для настоящего неответа и прочих ранних выходов классификатора
+  // (нечитаемый материал, нет реестра): снаружи они неразличимы.
+  if (process.env.PLAN_CLASSIFIER !== 'off') {
+    recordModelCall({ mode, ms: Date.now() - started, outcome: verdictClass(verdict) });
+  }
   return verdict;
 }
