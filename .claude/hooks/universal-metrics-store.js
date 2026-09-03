@@ -3,14 +3,17 @@
 // уезжает в ветку `metrics` репозитория системы — того чекаута, где лежит сам
 // файл хука, тем же origin, что использует синк системы.
 //
-// Сеть живёт в фоновом работнике: ход уже закончен, ждать push некому. Сводка
-// сперва ложится в локальную очередь и оттуда уезжает; нет сети — доедет на
-// следующем Stop. Стоит в ALWAYS: блокировка конца хода сводку не отменяет.
+// Сеть живёт в фоновом работнике: ход уже закончен, ждать доставку некому.
+// Сводка сперва ложится в локальную очередь и оттуда уезжает; не уехала —
+// доедет следующей выгрузкой. Стоит в ALWAYS: блокировка конца хода сводку не
+// отменяет.
 //
-// В очередь сводка идёт на КАЖДОМ Stop, а выгрузка (сеть, коммит, push) — не
-// чаще, чем раз в METRICS_STORE_INTERVAL секунд: иначе ветка получала бы сотню
-// коммитов за сессию. Отложенная выгрузка ничего не теряет — очередь durable и
-// уезжает пачкой.
+// Выгрузка идёт на КАЖДОМ Stop: хук её не ждёт, а отложенная сводка — это
+// сводка, которой может не стать вовсе, если чекаут одноразовый.
+//
+// Исход выгрузки виден в журнале метрик строкой kind: 'store': работник
+// отсоединён, его stdout и stderr никто не читает, и без этой строки провал
+// доставки в бою неотличим от того, что доставки не было.
 //
 // Пишет тот же контур, что и метрики: при проектной регистрации в чекауте
 // сессии пользовательский молчит. Без этого правила пользовательский процесс
@@ -19,7 +22,7 @@
 //
 // Выключатель METRICS_STORE=off; в кейсах раннера он выставлен всегда — иначе
 // прогон тестов пушил бы в настоящую ветку. METRICS_STORE_INLINE=1 — работа в
-// том же процессе (git-тест на временных репозиториях).
+// том же процессе (тест хранения на временных репозиториях).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,16 +47,29 @@ function store(summaryFile) {
   }
   if (!summary || typeof summary !== 'object' || !summary.sid) return { status: 'no-summary', delivered: 0 };
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(TARGET);
-  enqueue(queue, summary);
-  // Интервал уходит В выгрузку: решение «пора» принимается под тем же локом,
-  // под которым очередь читается, — иначе оно устаревает, пока работник ждёт лок.
-  const interval = process.env.METRICS_STORE_INTERVAL ?? '600';
-  return flushQueue({ target: TARGET, queueFile: queue, intervalSec: interval });
+  const queued = enqueue(queue, summary);
+  const res = flushQueue({ target: TARGET, queueFile: queue });
+  return queued ? res : { ...res, queued: false };
+}
+
+// Исход доставки — строкой в журнал той сессии, чью сводку везли. Журнал берётся
+// из окружения: у работника события нет.
+function noteOutcome(res) {
+  const log = process.env.CRAFT_METRICS_LOG || '';
+  if (!log) return;
+  const line = {
+    kind: 'store', ts: new Date().toISOString(), status: res.status, delivered: res.delivered || 0,
+  };
+  if (res.queued === false) line.queued = false;
+  if (res.capability) line.capability = res.capability;
+  try {
+    fs.appendFileSync(log, `${JSON.stringify(line)}\n`);
+  } catch { /* журнала нет — исход виден только в stderr инлайн-режима */ }
 }
 
 // Фоновый работник: без события, сводка — из окружения.
 if (process.env.METRICS_STORE_WORKER) {
-  store(process.env.METRICS_STORE_SUMMARY || '');
+  noteOutcome(store(process.env.METRICS_STORE_SUMMARY || ''));
   process.exit(0);
 }
 
@@ -76,6 +92,7 @@ if (!fs.existsSync(summaryFile)) process.exit(0);
 
 if (process.env.METRICS_STORE_INLINE) {
   const res = store(summaryFile);
+  noteOutcome(res);
   process.stderr.write(`[metrics-store] ${res.status}${res.delivered ? ` ×${res.delivered}` : ''}\n`);
   process.exit(0);
 }

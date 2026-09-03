@@ -33,6 +33,23 @@ function off() {
   return process.env.CRAFT_REGISTRY === 'off';
 }
 
+// Правка реестра под локом. Лок не достался — правка НЕ СДЕЛАНА, и молчать об
+// этом нельзя: реестр решает, что гейт пропустит, и «тихо не записали» значит
+// отказ в правке, которую Влад уже одобрил. Возвращается fallback, а причина
+// уходит в stderr — его харнес показывает в логе хука.
+// Исход «ничего не сделали»: все адреса необработанными. Им отвечают операции,
+// которые вернули бы разбор по адресам, если бы лок достался.
+function unknownAll(done, addresses) {
+  return { ...done, unknown: [...done.unknown, ...addresses] };
+}
+
+function underLock(file, run, fallback) {
+  const { locked, value } = withLock(file, run);
+  if (locked) return value;
+  process.stderr.write(`[registry] лок занят дольше срока, запись пропущена: ${file}\n`);
+  return fallback;
+}
+
 // Чтение никогда не бросает: реестр читают гейт и дельта, и упавшее чтение
 // закрыло бы работу целиком. Нечитаемая строка пропускается — потерять одну
 // запись дешевле, чем потерять файл.
@@ -166,7 +183,7 @@ function sameGoal(a, b) {
 // сделанным или снятым, и разбор их закрывает.
 export function upsertGoal(file, goal) {
   if (!file || off() || !goal || !goal.title) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file);
     const fresh = normalize(goal);
     const at = goals.findIndex((g) => sameGoal(g, fresh));
@@ -215,7 +232,7 @@ function patch(file, at, change) {
   if (!file || off()) return;
   const i = Number(at);
   if (!Number.isInteger(i) || i < 0) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file);
     if (!goals[i]) return;
     change(goals[i]);
@@ -242,7 +259,7 @@ export const SWITCH_TITLE = 'Проверки сняты по тапу Влад�
 
 export function switchOn(file) {
   if (!file || off()) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file);
     if (goals.some((g) => g.title === SWITCH_TITLE && g.state === 'live')) return;
     goals.push({
@@ -259,7 +276,7 @@ export function switchOn(file) {
 
 export function switchOff(file) {
   if (!file || off()) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file).filter((g) => g.title !== SWITCH_TITLE);
     writeRegistry(file, goals);
   });
@@ -303,7 +320,7 @@ export function liftBans(file, addresses) {
     done.unknown = [...addresses];
     return done;
   }
-  return withLock(file, () => {
+  return underLock(file, () => {
     const goals = readRegistry(file);
     let touched = false;
     for (const address of addresses) {
@@ -319,7 +336,7 @@ export function liftBans(file, addresses) {
     }
     if (touched) writeRegistry(file, goals);
     return done;
-  });
+  }, unknownAll(done, addresses));
 }
 
 export function closeTasks(file, addresses) {
@@ -328,7 +345,7 @@ export function closeTasks(file, addresses) {
     done.unknown = [...addresses];
     return done;
   }
-  return withLock(file, () => closeUnderLock(file, addresses, done));
+  return underLock(file, () => closeUnderLock(file, addresses, done), unknownAll(done, addresses));
 }
 
 function closeUnderLock(file, addresses, done) {
@@ -374,7 +391,7 @@ export function reopenTasks(file, addresses) {
     done.unknown = [...addresses];
     return done;
   }
-  return withLock(file, () => {
+  return underLock(file, () => {
     const goals = readRegistry(file);
     let touched = false;
     for (const address of addresses) {
@@ -391,7 +408,7 @@ export function reopenTasks(file, addresses) {
     }
     if (touched) writeRegistry(file, goals);
     return done;
-  });
+  }, unknownAll(done, addresses));
 }
 
 // Запустить приём материала ФОНОМ: ход Влада не ждёт модель. Метка ставится

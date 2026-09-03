@@ -39,7 +39,7 @@ run_hook() {
           METRICS_STORE_TARGET="$sb/work" \
           METRICS_STORE_QUEUE="$sb/queue.jsonl" \
           METRICS_STORE_INLINE=1 \
-          METRICS_STORE_INTERVAL=0 \
+          \
           HOOK_ONCE=off \
           node "$HOOK" 2>&1
 }
@@ -125,7 +125,7 @@ sb="$(sandbox)"
 printf '{"ts":"2026-09-02T10:00:00Z","sid":"s1","ended_at":"2026-09-02T10:00:00Z","turns":1}\n' > "$sb/log.s1.summary.json"
 printf '{"hook_event_name":"Stop","session_id":"s1"}' \
   | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
-        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=0 METRICS_STORE=off HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
+        METRICS_STORE_INLINE=1 METRICS_STORE=off HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
 if G -C "$sb/origin.git" rev-parse --verify --quiet refs/heads/metrics >/dev/null; then
   bad "$t" "ветка появилась при выключателе"
 else ok "$t"; fi
@@ -166,56 +166,42 @@ printf '{"ts":"%s","sid":"s1","started_at":"2026-09-02T23:50:00Z","ended_at":"%s
   2026-09-03T00:10:00Z 2026-09-03T00:10:00Z 6 > "$sb/log.s1.summary.json"
 printf '{"hook_event_name":"Stop","session_id":"s1"}' \
   | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
-        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=0 HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
+        METRICS_STORE_INLINE=1 HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
 if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"s1"'; then
   bad "$t" "строка не легла в день НАЧАЛА сессии"
 elif day_file "$sb" 2026-09-03 | grep -q '"sid":"s1"'; then
   bad "$t" "сессия посчиталась дважды: строка есть и в дне окончания"
 else ok "$t"; fi
 
-# --- J. троттлинг выгрузки ----------------------------------------------------
-t="выгрузка не чаще интервала, очередь при этом пополняется"
+# --- J. выгрузка идёт на каждом Stop -----------------------------------------
+# Троттлинга нет: отложенная сводка это сводка, которой может не стать вовсе —
+# в облаке чекаут одноразовый и умирает вместе с непроехавшей очередью.
+t="каждая сводка уезжает своим Stop, без ожидания интервала"
 sb="$(sandbox)"
-run_hook "$sb" s1 2026-09-02T10:00:00Z 1 >/dev/null   # первая идёт сразу, ставит отметку
-printf '{"ts":"%s","sid":"s2","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
-  2026-09-02T10:01:00Z 2026-09-02T10:01:00Z 2026-09-02T10:01:00Z > "$sb/log.s2.summary.json"
-printf '{"hook_event_name":"Stop","session_id":"s2"}' \
-  | env CRAFT_METRICS_LOG="$sb/log.s2" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
-        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=600 HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
-if day_file "$sb" 2026-09-02 | grep -q '"sid":"s2"'; then
-  bad "$t" "выгрузка пошла раньше интервала"
-elif ! grep -q '"sid":"s2"' "$sb/queue.jsonl"; then
-  bad "$t" "сводка не встала в очередь, пока выгрузка отложена"
-else
-  out="$(run_hook "$sb" s3 2026-09-02T10:02:00Z 1)"   # интервал 0 — выгружает всё
-  if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"s2"'; then
-    bad "$t" "отложенная сводка не уехала следующей выгрузкой: $out"
-  else ok "$t"; fi
-fi
+run_hook "$sb" s1 2026-09-02T10:00:00Z 1 >/dev/null
+out="$(run_hook "$sb" s2 2026-09-02T10:01:00Z 1)"
+if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"s2"'; then
+  bad "$t" "вторая сводка не уехала своим Stop: $out"
+elif [[ -e "$sb/queue.jsonl" ]]; then
+  bad "$t" "очередь не опустела"
+else ok "$t"; fi
 
-# --- K. отказавшая выгрузка тоже отмечается -----------------------------------
-# Отметка ставится на ПОПЫТКУ, а не на удачу: пока origin недоступен, интервал
-# обязан держать работников от сети. Отмечали только успех — каждый следующий
-# Stop снова шёл в сеть и висел на fetch до потолка.
-t="неудачная выгрузка отмечается: следующая ждёт интервал"
+# --- K. исход доставки виден в журнале ---------------------------------------
+# Работник отсоединён, его вывод никто не читает: без строки в журнале провал
+# доставки в бою неотличим от того, что доставки не было.
+t="исход доставки ложится в журнал строкой kind: store"
 sb="$(sandbox)"
 G -C "$sb/work" remote set-url origin "$sb/nowhere.git"
-first="$(printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
-  2026-09-02T10:00:00Z 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z > "$sb/log.s1.summary.json"
-  printf '{"hook_event_name":"Stop","session_id":"s1"}' \
-  | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
-        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=600 HOOK_ONCE=off node "$HOOK" 2>&1)"
-printf '{"ts":"%s","sid":"s2","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
-  2026-09-02T10:01:00Z 2026-09-02T10:01:00Z 2026-09-02T10:01:00Z > "$sb/log.s2.summary.json"
-second="$(printf '{"hook_event_name":"Stop","session_id":"s2"}' \
-  | env CRAFT_METRICS_LOG="$sb/log.s2" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
-        METRICS_STORE_INLINE=1 METRICS_STORE_INTERVAL=600 HOOK_ONCE=off node "$HOOK" 2>&1)"
-if ! grep -q "offline" <<<"$first"; then
-  bad "$t" "первая попытка без сети ожидалась offline: $first"
-elif ! grep -q "queued" <<<"$second"; then
-  bad "$t" "вторая попытка снова полезла в сеть вместо ожидания интервала: $second"
-elif ! grep -q '"sid":"s2"' "$sb/queue.jsonl"; then
-  bad "$t" "очередь не сохранила сводку, пока выгрузка отложена"
+out="$(run_hook "$sb" s1 2026-09-02T10:00:00Z 1)"
+line="$(grep '"kind":"store"' "$sb/log.s1" 2>/dev/null | tail -1)"
+if ! grep -q "offline" <<<"$out"; then
+  bad "$t" "без сети ожидался исход offline: $out"
+elif [[ -z "$line" ]]; then
+  bad "$t" "строки kind: store в журнале нет"
+elif ! grep -q '"status":"offline"' <<<"$line"; then
+  bad "$t" "в строке журнала не тот исход: $line"
+elif ! grep -q '"sid":"s1"' "$sb/queue.jsonl"; then
+  bad "$t" "очередь не сохранила сводку"
 else ok "$t"; fi
 
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"

@@ -62,7 +62,8 @@ test('лок живого процесса не отбирается по воз
   const old = new Date(Date.now() - 6 * 60 * 1000);
   fs.utimesSync(`${file}.lock`, old, old);
 
-  lock.withLock(file, () => { fs.appendFileSync(trace, 'B-in\n'); });
+  const { locked } = lock.withLock(file, () => { fs.appendFileSync(trace, 'B-in\n'); }, { waitMs: 5000 });
+  assert.equal(locked, true, 'второй дождался лока в отведённый срок');
   await exited;
 
   assert.deepEqual(
@@ -93,4 +94,60 @@ test('лок умершего хозяина снимается', () => {
   const got = waitFor(() => fs.existsSync(done), 15000);
   child.kill('SIGKILL');
   assert.ok(got, 'лок мёртвого хозяина не снялся за отведённый срок');
+});
+
+// Ожидание ограничено ВСЕГДА. Прежде хук на брошенном каталоге лока стоял до
+// пяти минут, форкая `sleep` каждые 50 мс, — то есть один мусорный каталог
+// замораживал ход Влада. Теперь срок вышел — действие не выполняется вовсе, и
+// вызывающий об этом узнаёт.
+test('лок не достался за срок: действие не выполняется, вызывающий это видит', () => {
+  const dir = tmpDir('lock-budget-');
+  const file = path.join(dir, 'state');
+  fs.mkdirSync(`${file}.lock`);
+  fs.writeFileSync(path.join(`${file}.lock`, 'owner'), String(process.pid + 0));
+  // Хозяин — «живой» чужой номер: наш собственный pid, которого этот вызов не
+  // держит. Лок свежий, отбирать нельзя, ждать бесконечно тоже.
+  const started = Date.now();
+  let ran = false;
+  const { locked, value } = lock.withLock(file, () => { ran = true; return 'значение'; }, { waitMs: 200 });
+  const spent = Date.now() - started;
+  assert.equal(locked, false, 'исход говорит, что лок не взят');
+  assert.equal(ran, false, 'действие не выполнялось');
+  assert.equal(value, undefined);
+  assert.ok(spent < 3000, `ожидание уложилось в срок: ${spent} мс`);
+});
+
+// Абсолютный потолок возраста снимает лок и у ЖИВОГО хозяина: номер процесса
+// после перезагрузки переиспользуется, и без потолка состояние запиралось бы
+// навсегда — метрики не уезжали бы вообще, а каждый Stop плодил бы ещё один
+// вечный фоновый процесс.
+test('лок старше абсолютного потолка снимается и при живом хозяине', () => {
+  const dir = tmpDir('lock-max-');
+  const file = path.join(dir, 'state');
+  fs.mkdirSync(`${file}.lock`);
+  fs.writeFileSync(path.join(`${file}.lock`, 'owner'), String(process.pid));
+  const ancient = new Date(Date.now() - 16 * 60 * 1000);
+  fs.utimesSync(`${file}.lock`, ancient, ancient);
+  const { locked } = lock.withLock(file, () => 'ок', { waitMs: 200 });
+  assert.equal(locked, true, 'вечный лок отобран, работа пошла');
+});
+
+// Занятость считается по ПУТЯМ. С одним флагом на процесс вложенный лок на
+// другой файл не брался вовсе: второе состояние оставалось без защиты, а
+// вызывающий думал, что оно под локом.
+test('вложенный лок на другой файл берётся по-настоящему', () => {
+  const dir = tmpDir('lock-nested-');
+  const outer = path.join(dir, 'outer');
+  const inner = path.join(dir, 'inner');
+  lock.withLock(outer, () => {
+    assert.ok(fs.existsSync(`${outer}.lock`), 'внешний лок взят');
+    lock.withLock(inner, () => {
+      assert.ok(fs.existsSync(`${inner}.lock`), 'внутренний лок на другом пути тоже взят');
+    });
+    assert.ok(!fs.existsSync(`${inner}.lock`), 'внутренний снят на выходе');
+    const again = lock.withLock(outer, () => 'вложенный на тот же путь', { waitMs: 50 });
+    assert.deepEqual(again, { locked: true, value: 'вложенный на тот же путь' },
+      'тот же путь повторно не лочится и не клинит сам себя');
+  });
+  assert.ok(!fs.existsSync(`${outer}.lock`), 'внешний снят');
 });

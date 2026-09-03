@@ -225,6 +225,10 @@ function cleanState(s) {
     s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
+  // Каталоги локов убираются вместе с файлами, которые они защищают: лок,
+  // оставшийся от упавшего кейса, следующему кейсу стоил бы всего срока
+  // ожидания, а его состояние — пропущенной записи.
+  for (const f of files) fs.rmSync(`${f}.lock`, { recursive: true, force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
   fs.rmSync(s.oncedir, { recursive: true, force: true });
   // Дом codex убирается обязательно: в нём лежит вход, а хук входа зовётся и из

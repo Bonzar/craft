@@ -548,3 +548,27 @@ test('вызов модели после сводки пересобирает �
   assert.equal(after.model_calls.ms, 1200);
   assert.equal(after.model_calls.by_mode.ingest.count, 1);
 });
+
+// Хук стоит в цепочке хода: ждать чужой лок дольше отведённого срока он не
+// вправе. Не дождался — состояние не трогается, а пропуск виден строкой в
+// журнале: молчаливый пропуск выглядит как ход, которого не было.
+test('состояние под занятым локом: запись пропускается и названа в журнале', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-skip-'));
+  const log = path.join(dir, 'm.jsonl');
+  const state = `${log}.state.json`;
+  fs.mkdirSync(`${state}.lock`);
+  fs.writeFileSync(path.join(`${state}.lock`, 'owner'), String(process.pid));
+
+  const started = Date.now();
+  let ran = false;
+  const out = metrics.updateState(log, () => { ran = true; return 'значение'; });
+  const spent = Date.now() - started;
+
+  assert.equal(ran, false, 'правка состояния не выполнялась');
+  assert.equal(out, undefined);
+  assert.ok(spent < 3000, `хук не завис на чужом локе: ${spent} мс`);
+  const line = fs.readFileSync(log, 'utf8').trim().split('\n').pop();
+  assert.match(line, /"kind":"skip"/, 'пропуск назван в журнале');
+  assert.match(line, /"what":"state"/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -144,14 +144,26 @@ export function loadState(log) {
 // записи: обнуляются номер хода и смещение транскрипта, то есть следующий Stop
 // пересчитывает весь транскрипт заново.
 //
-// Возвращает то, что вернуло действие.
+// Ждать лок долго НЕЛЬЗЯ: хук стоит в цепочке хода, и метрика не стоит того,
+// чтобы её ждал Влад. Не дождались — состояние не трогаем, а в журнал уходит
+// строка kind: 'skip': пропуск обязан быть виден в сводке, иначе он выглядит
+// как ход, которого не было.
+//
+// Возвращает то, что вернуло действие, либо undefined, когда лок не достался.
+export const STATE_WAIT_MS = 300;
+
 export function updateState(log, run) {
-  return withLock(stateFile(log), () => {
+  const { locked, value } = withLock(stateFile(log), () => {
     const state = loadState(log);
     const out = run(state);
     atomicWrite(stateFile(log), JSON.stringify(state));
     return out;
-  });
+  }, { waitMs: STATE_WAIT_MS });
+  if (!locked) {
+    append(log, { kind: 'skip', ts: new Date().toISOString(), what: 'state', wait_ms: STATE_WAIT_MS });
+    return undefined;
+  }
+  return value;
 }
 
 // --- классы причин -----------------------------------------------------------
@@ -368,7 +380,7 @@ export function writeSummary(log, summary) {
 // затёрла бы хорошую.
 export function refreshSummary(log, { sid = '', now = Date.now(), record = false } = {}) {
   if (!log) return null;
-  return withLock(`${log}.summary.json`, () => {
+  const { locked, value } = withLock(`${log}.summary.json`, () => {
     const records = readJournal(log);
     if (!records) return null;
     const ts = new Date(now).toISOString();
@@ -376,7 +388,12 @@ export function refreshSummary(log, { sid = '', now = Date.now(), record = false
     if (record) append(log, { kind: 'summary', ts, ...summary });
     writeSummary(log, { ts, ...summary });
     return summary;
-  });
+  }, { waitMs: STATE_WAIT_MS });
+  if (!locked) {
+    append(log, { kind: 'skip', ts: new Date(now).toISOString(), what: 'summary', wait_ms: STATE_WAIT_MS });
+    return null;
+  }
+  return value;
 }
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
