@@ -514,9 +514,21 @@ test('нулевой ход не считается ни ходом, ни ход
     { kind: 'stop', ts: T(5), turn: 2, blocked_by: '', usage: { input: 4, output: 8 }, no_progress: true },
   ];
   const s = summarize(records);
-  assert.equal(s.turns, 2, 'ходов два, а не три');
+  assert.equal(s.turns, 2, 'служебный Stop до первой реплики ходом не стал');
   assert.equal(s.signals.turns_without_progress, 1, 'нулевой ход в ходы без прогресса не идёт');
   assert.deepEqual(s.tokens_first_turn, { input: 1, output: 2, cache_read: 0, cache_create: 0 },
     'первый ход — первый НАСТОЯЩИЙ ход, а не служебный Stop до реплики');
   assert.equal(s.tokens.input, 14, 'в общие токены служебный Stop входит: он тоже стоил денег');
+
+  // Журнал живёт в /tmp и переживает не всё: контейнер перезапустился, сессия
+  // продолжилась — и записи начинаются с седьмого хода. Ходы считаются по числу
+  // РАЗЛИЧНЫХ номеров: по максимуму номера сводка сказала бы «восемь ходов»
+  // там, где их было два.
+  const resumed = [
+    { kind: 'prompt', ts: T(6), turn: 7 },
+    { kind: 'stop', ts: T(7), turn: 7, blocked_by: '', usage: {}, no_progress: false },
+    { kind: 'prompt', ts: T(8), turn: 8 },
+    { kind: 'stop', ts: T(9), turn: 8, blocked_by: '', usage: {}, no_progress: false },
+  ];
+  assert.equal(summarize(resumed).turns, 2, 'ходы — число различных номеров, а не максимум');
 });
