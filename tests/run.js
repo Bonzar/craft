@@ -105,6 +105,8 @@ const REQUIRED = [
   'stop-incident-closure:block', 'stop-incident-closure:silent',
   'stop-relative-link:block', 'stop-relative-link:silent',
   'session-anchor:deny', 'session-anchor:allow',
+  'universal-journal:silent',
+  'universal-instinct-flush:block', 'universal-instinct-flush:silent',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
@@ -174,7 +176,8 @@ function makeState() {
     fgdir,
     oncedir,
     icmark,
-    obsbuf: tmpName('observe-buffer-test'),
+    journal: tmpName('journal-test'),
+    flushmark: tmpName('instinct-flush-test'),
     rfmark: tmpName('routine-facts-test'),
     planpath: tmpName('plan-file-test'),
     criticmark: tmpName('plan-critic-test'),
@@ -198,7 +201,12 @@ function makeState() {
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
     CRAFT_APPROVAL_REGISTRY: s.registry,
-    OBSERVE_BUFFER: s.obsbuf,
+    // Журнал событий сессии и отметка инстинкт-контура — герметичные у каждого
+    // кейса: производитель журнала зовётся на КАЖДОМ состоявшемся вызове, и общий
+    // путь означал бы, что прогон дописывает журнал живой сессии, а кейсы про
+    // сигналы читают чужие строки.
+    CRAFT_JOURNAL_LOG: s.journal,
+    INSTINCT_FLUSH_MARKER: s.flushmark,
     FACT_GATE_STATE_DIR: s.fgdir,
     ROUTINE_FACTS_MARKER: s.rfmark,
     CRAFT_PLAN_FILE_MARKER: s.planpath,
@@ -283,7 +291,7 @@ function siblings(registry) {
 function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
-    `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
+    `${s.marker}.plans`, s.journal, s.flushmark, s.rfmark, s.planpath,
     s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
@@ -335,6 +343,13 @@ function subst(value, s) {
   //
   // {DECISIONS} — журнал решений кейса: им проверяется САМ канал между хуками.
   //
+  // {JOURNAL} — журнал событий сессии этого прогона: по его строкам судят кейсы
+  // производителя журнала, и им же кейс наводит ASSERT_FILE на тот файл, куда
+  // пишет хук.
+  //
+  // {FLUSHMARK} — отметка инстинкт-контура: ею кейс задаёт предусловие «сигналы
+  // до этого места уже разобраны».
+  //
   // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
   // не переопределён. По нему кейс доказывает, что записи не было: свой
   // {METRICS} тут не годится — хук о нём и не знал бы.
@@ -345,6 +360,8 @@ function subst(value, s) {
     .split('{CODEXHOME}').join(s.codexhome)
     .split('{METRICS_DEFAULT}').join(s.metricsdefault)
     .split('{METRICS}').join(s.metrics)
+    .split('{JOURNAL}').join(s.journal)
+    .split('{FLUSHMARK}').join(s.flushmark)
     .split('{DECISIONS}').join(s.decisions);
 }
 

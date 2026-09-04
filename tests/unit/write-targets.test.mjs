@@ -144,3 +144,34 @@ test('служебные поля входа отсеивает адаптер �
   assert.deepEqual(claude.semanticInput('Edit', { file_path: 'a' }), { file_path: 'a' });
   assert.deepEqual(claude.semanticInput('Bash', undefined), {});
 });
+
+// Цели записи и признак «менял ли» обязаны идти ОТ ОДНОЙ политики эфемерности:
+// разъехавшись, они дали бы вызов, помеченный записью, с пустым списком целей —
+// и это было бы видно только на живом прогоне.
+test('цели записи чистятся тем же правилом, каким считается «менял ли вызов мир»', () => {
+  const shape = (tool, input) => claude.callShape(tool, input);
+  const mutates = (tool, input) => tools.mutationOf(claude.toolScope(tool, input), shape(tool, input), ADAPTERS);
+
+  assert.deepEqual(tools.durableTargets(shape('Write', { file_path: '/repo/README.md' }), ADAPTERS),
+    ['/repo/README.md']);
+  // Эфемерная правка: и «менял» ложно, и целей нет. Проверяются ОБА ответа
+  // разом — одна половина, зелёная в одиночку, ничего не значит.
+  assert.equal(mutates('Write', { file_path: '/tmp/x' }).mutates, false);
+  assert.deepEqual(tools.durableTargets(shape('Write', { file_path: '/tmp/x' }), ADAPTERS), []);
+
+  const cmd = { command: 'printf x > /repo/out.txt' };
+  assert.equal(mutates('Bash', cmd).mutates, true);
+  assert.deepEqual(tools.durableTargets(shape('Bash', cmd), ADAPTERS), ['/repo/out.txt']);
+
+  // Правка репозитория без перенаправления: «менял» истинно, а целей нет вовсе.
+  // Значит по длине списка про запись судить нельзя.
+  const commit = { command: 'git commit -m x' };
+  assert.equal(mutates('Bash', commit).mutates, true);
+  assert.deepEqual(tools.durableTargets(shape('Bash', commit), ADAPTERS), []);
+
+  // Нет адаптера команды — целей нет и назвать их нечем; имя недостающего
+  // называет сам вопрос «менял ли».
+  assert.deepEqual(tools.durableTargets(shape('Bash', cmd), {}), []);
+  assert.equal(tools.mutationOf(claude.toolScope('Bash', cmd), shape('Bash', cmd), {}).capability,
+    'write-targets');
+});

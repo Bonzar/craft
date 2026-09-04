@@ -91,3 +91,25 @@ export function mutationOf(scope = {}, call = {}, adapters = {}) {
   }
   return { status: 'ok', mutates: true };
 }
+
+// ЦЕЛИ записи вызова, очищенные от эфемерного, — то есть ровно те пути, из-за
+// которых mutationOf выше и сказал «менял». Живут здесь, а не у журнала: политика
+// эфемерности одна, и вторая её копия дала бы вызов, помеченный записью, с
+// пустым списком целей — расхождение, заметное только на живом прогоне.
+//
+// Пустой список записи не отменяет: `git commit` меняет репозиторий, ничего не
+// перенаправляя, и целей у него нет вовсе. Про «менял ли» спрашивают mutationOf,
+// а не длину этого списка.
+export function durableTargets(call = {}, adapters = {}) {
+  const durable = (fp) => Boolean(fp) && !isEphemeral(fp) && !ignoredEphemeral(fp, adapters.ignored);
+  if (call.kind === 'edit') return [call.path || ''].filter(durable);
+  if (call.kind === 'command') {
+    const writes = adapters.commandWrites;
+    // Адаптера нет — целей нет и назвать их нечем. Само «менял ли» на этом же
+    // месте отвечает `unsupported`, и имя недостающего называет оно.
+    if (!writes) return [];
+    const { targets = [] } = writes(String(call.text || '')) || {};
+    return targets.filter(durable);
+  }
+  return [];
+}

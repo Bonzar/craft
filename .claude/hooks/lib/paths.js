@@ -83,10 +83,25 @@ export function serviceTurnMarker() {
   return perSessionOrDefault('CRAFT_SERVICE_TURN_MARKER', 'plan-service-turn.{sid}');
 }
 
-// Инцидентный контур: буфер наблюдений и взвод закрытия.
-export function observeBuffer() {
-  return perSessionOrDefault('OBSERVE_BUFFER', 'agent-observe.{sid}.log');
+// Журнал событий сессии: строка на каждое чтение и каждую запись, плюс сигналы
+// хода. Правило СТРОГОЕ, как у периметра, а не как у счётчиков: по журналу
+// читатели судят, что эта сессия читала и писала, и общий default дал бы одной
+// сессии право править по чтению другой.
+//
+// Он же — факт `journal` канонического события: путь кладёт обёртка, прочитав
+// событие, а хук, которому журнал нужен, объявляет факт списком и на его
+// отсутствие отвечает `unsupported` с именем.
+export function journalLog() {
+  return perSession('CRAFT_JOURNAL_LOG', 'journal.{sid}.jsonl');
 }
+
+// Отметка инстинкт-контура: досюда сигналы журнала уже выданы на разбор. Держит
+// ЧИСЛО (смещение в журнале), а не периметр, — общий default тут законен.
+export function instinctFlushMarker() {
+  return perSessionOrDefault('INSTINCT_FLUSH_MARKER', 'instinct-flush.{sid}.done');
+}
+
+// Инцидентный контур: взвод закрытия разбора.
 export function incidentClosureMarker() {
   return perSessionOrDefault('INCIDENT_CLOSURE_MARKER', 'incident-closure.{sid}.armed');
 }

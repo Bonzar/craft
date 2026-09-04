@@ -1,0 +1,3 @@
+{"ts":"2026-09-04T10:00:00.000Z","op":"read","tool":"Read","call_id":"toolu_q1","targets":["/repo/lib/error-handling.js"]}
+{"ts":"2026-09-04T10:00:01.000Z","op":"write","tool":"Write","call_id":"toolu_q2","targets":["/repo/incident-report.md"]}
+{"ts":"2026-09-04T10:00:02.000Z","op":"unknown","tool":"Bash","call_id":"toolu_q3","unsupported":"write-targets"}

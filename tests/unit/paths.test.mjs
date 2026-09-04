@@ -21,7 +21,7 @@ const TMP = STATE;
 async function freshPaths(env = {}) {
   for (const key of Object.keys(process.env)) {
     if (key.startsWith('CRAFT_') || key.startsWith('HOOK_ONCE') || key.endsWith('_MARKER')
-        || key.endsWith('_STATE') || key === 'OBSERVE_BUFFER' || key === 'FACT_GATE_STATE_DIR') {
+        || key.endsWith('_STATE') || key === 'FACT_GATE_STATE_DIR') {
       delete process.env[key];
     }
   }
@@ -46,7 +46,8 @@ const EXPECTED = {
   CRAFT_PLAN_CRITIC_ROUND: `${STATE}/plan-critic.${SID}.round`,
   CRAFT_PLAN_SHOWN_MARKER: `${STATE}/plan-shown.${SID}`,
   CRAFT_SERVICE_TURN_MARKER: `${STATE}/plan-service-turn.${SID}`,
-  OBSERVE_BUFFER: `${STATE}/agent-observe.${SID}.log`,
+  CRAFT_JOURNAL_LOG: `${STATE}/journal.${SID}.jsonl`,
+  INSTINCT_FLUSH_MARKER: `${STATE}/instinct-flush.${SID}.done`,
   INCIDENT_CLOSURE_MARKER: `${STATE}/incident-closure.${SID}.armed`,
   ROUTINE_FACTS_MARKER: `${STATE}/routine-facts.${SID}.reminded`,
   SYNC_SYSTEM_STATE: `${TMP}/sync-system.${SID}`,
@@ -70,7 +71,8 @@ const BY_EXPORT = {
   CRAFT_PLAN_CRITIC_ROUND: 'planCriticRound',
   CRAFT_PLAN_SHOWN_MARKER: 'planShownMarker',
   CRAFT_SERVICE_TURN_MARKER: 'serviceTurnMarker',
-  OBSERVE_BUFFER: 'observeBuffer',
+  CRAFT_JOURNAL_LOG: 'journalLog',
+  INSTINCT_FLUSH_MARKER: 'instinctFlushMarker',
   INCIDENT_CLOSURE_MARKER: 'incidentClosureMarker',
   ROUTINE_FACTS_MARKER: 'routineFactsMarker',
   SYNC_SYSTEM_STATE: 'syncSystemState',
@@ -132,6 +134,11 @@ test('переопределение окружением сильнее деф�
 test('при пустой сессии периметра нет вовсе', async () => {
   const paths = await freshPaths({ CRAFT_SESSION_ID: '' });
   assert.equal(paths.approvalRegistry(), '', 'реестр держит одобрения: общий default открыл бы записи чужой сессии');
+  // Журнал событий — тот же периметр: по нему читатели судят, что ЭТА сессия
+  // читала и писала, и общий default дал бы одной сессии право править по чтению
+  // другой. Пустой путь здесь — это ещё и вход в ответ `unsupported: journal`:
+  // факта нет, и хук говорит об этом вслух вместо тихого прохода.
+  assert.equal(paths.journalLog(), '', 'журнал держит периметр чтения и записи сессии');
   // А счётчики и метки общий default переживают: они ничего не открывают.
   assert.equal(paths.planCriticRuns(), `${STATE}/plan-critic.default.runs`);
 });

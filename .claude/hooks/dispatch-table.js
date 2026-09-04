@@ -106,7 +106,10 @@ export const TABLE = {
   ],
 
   PostToolUse: [
-    { hooks: ['universal-metrics'], scope: 'both' },
+    // Журнал стоит СРАЗУ ЗА наблюдателем и по той же причине: первое решение
+    // цепочку обрывает, и производитель фактов, стоящий последним, не звался бы
+    // ровно там, где что-то пошло не так.
+    { hooks: ['universal-metrics', 'universal-journal'], scope: 'both' },
     { matcher: 'AskUserQuestion', hooks: ['universal-session-anchor', 'universal-plan-gate-button'], scope: 'both' },
     // Дельта стоит только ДО показа (PreToolUse): после одобрения план уже
     // лежит в реестре, и сравнивать его с реестром значило бы отбивать
@@ -114,7 +117,6 @@ export const TABLE = {
     { matcher: 'ExitPlanMode', hooks: ['universal-plan-gate-approve'], scope: 'both' },
     { matcher: 'Task|Agent|Workflow', hooks: ['universal-mark-plan-critic'], scope: 'both' },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-mark-plan-file'], scope: 'both' },
-    { hooks: ['universal-observe-buffer'], scope: 'both' },
   ],
 
   PostToolUseFailure: [
