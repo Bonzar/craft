@@ -25,26 +25,41 @@ const injects = new Set(fs.readdirSync(HOOKS)
 
 // Инструменты берутся из матчеров самой таблицы: цепочка складывается под
 // конкретный инструмент, и «на любой» — тоже случай.
+//
+// Матчер бывает регуляркой (`mcp__.*__craft_write`), и молча пропускать такие
+// нельзя: именно под ней стоят три хука подряд. Из каждой альтернативы делается
+// ОБРАЗЕЦ имени — `.*` заменяется куском текста, — и образец обязан самому матчеру
+// подойти. Не подошёл — цепочка не проверена, и это провал кейса, а не пропуск:
+// молчаливый пропуск уже однажды выключил проверку целиком.
 function toolsOf(groups) {
   const out = new Set(['']);
+  const unreachable = [];
   for (const g of groups) {
     for (const name of String(g.matcher || '').split('|')) {
-      if (name && !name.includes('.*')) out.add(name);
+      if (!name) continue;
+      const sample = name.replace(/\.\*/g, 'x');
+      let ok = false;
+      try { ok = new RegExp(`^(?:${name})$`).test(sample); } catch { ok = false; }
+      if (ok) out.add(sample); else unreachable.push(name);
     }
   }
-  return [...out];
+  return { tools: [...out], unreachable };
 }
 
 test('в одной цепочке не больше одного инжектора JSON', () => {
   assert.ok(injects.size > 0, 'инжекторы вообще должны находиться — иначе проверка пуста');
   const crowded = [];
+  const unreachable = [];
   for (const [event, groups] of Object.entries(TABLE)) {
+    const sampled = toolsOf(groups);
+    for (const name of sampled.unreachable) unreachable.push(`${event}: ${name}`);
     for (const scope of ['project', 'universal']) {
-      for (const tool of toolsOf(groups)) {
+      for (const tool of sampled.tools) {
         const chain = hooksFor(event, tool, scope).filter((name) => injects.has(name));
         if (chain.length > 1) crowded.push(`${event}/${scope}/${tool || 'любой'}: ${chain.join(', ')}`);
       }
     }
   }
+  assert.deepEqual(unreachable, [], 'матчер, под который не удалось подобрать имя, оставляет цепочку непроверенной');
   assert.deepEqual(crowded, []);
 });

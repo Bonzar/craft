@@ -28,11 +28,16 @@ import { sha256 } from './hash.js';
 import { eachJsonl } from './jsonl.js';
 import { summarize } from './metrics-summary.js';
 
+// Возвращает, ЛЕГЛА ли строка. Почти всем вызывающим это безразлично — журнал не
+// пополнился, метрика потеряна, ход цел, — но запасному пути канала не безразлично:
+// без ответа он не отличал бы «записал» от «не смог» и молчал бы там, где обещал
+// сказать вслух.
 export function append(file, record) {
-  if (!file) return;
+  if (!file) return false;
   try {
     fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
-  } catch { /* журнал не пополнился — метрика потеряна, ход цел */ }
+    return true;
+  } catch { return false; }
 }
 
 // Журнал текущего процесса. Сессию даёт paths.sessionId() — её кладёт обёртка,
@@ -53,11 +58,7 @@ export function currentMetricsLog() {
 // ответа харнеса это отношения не имеет.
 export function keepChannelLine({ ok, line }) {
   if (ok) return true;
-  const log = currentMetricsLog();
-  if (log) {
-    append(log, line);
-    return true;
-  }
+  if (append(currentMetricsLog(), line)) return true;
   // Оба журнала недоступны — строка исчезает совсем, и об этом говорится вслух.
   // Служебный поток ход не трогает, а тишина тут была бы ровно тем молчаливым
   // проглатыванием, ради которого весь этот запасной путь и заведён.

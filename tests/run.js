@@ -144,9 +144,15 @@ function runHook(script, input, env, args = []) {
 // --- состояние кейса ---------------------------------------------------------
 
 let tmpSeq = 0;
+// Имена, выданные раннером. Уборка в конце прогона ходит ПО НИМ, а не по всему,
+// в чьё имя попал наш pid: во временном каталоге лежат и чужие файлы, и совпасть
+// с числом pid они могут запросто.
+const tmpMade = new Set();
 function tmpName(prefix) {
   tmpSeq += 1;
-  return path.join(os.tmpdir(), `${prefix}.${process.pid}.${tmpSeq}`);
+  const name = `${prefix}.${process.pid}.${tmpSeq}`;
+  tmpMade.add(name);
+  return path.join(os.tmpdir(), name);
 }
 
 // Герметичное состояние на один прогон: хуки с побочными эффектами (буфер
@@ -685,19 +691,23 @@ function utf8GlueChecks() {
 
 // --- прогон ------------------------------------------------------------------
 
-// Хвосты прогона во временном каталоге: всё, что этот раннер называл по своему
-// pid. Зовётся в конце main(), после того как отсоединённые процессы отработали.
+// Хвосты прогона во временном каталоге: имена, которые раннер выдал сам, и
+// производные от них (`….armed`, `….summary.json` — их дописывают уже хуки).
+// Зовётся в конце main(), после того как отсоединённые процессы отработали.
 function sweepLeftovers() {
   const dir = os.tmpdir();
-  const mine = `.${process.pid}.`;
   let names = [];
   try {
     names = fs.readdirSync(dir);
   } catch {
     return;
   }
+  const mine = (name) => {
+    for (const made of tmpMade) if (name === made || name.startsWith(`${made}.`)) return true;
+    return false;
+  };
   for (const name of names) {
-    if (!name.includes(mine)) continue;
+    if (!mine(name)) continue;
     try {
       fs.rmSync(path.join(dir, name), { recursive: true, force: true });
     } catch { /* уже убрано кем-то другим */ }
