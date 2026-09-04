@@ -39,8 +39,7 @@ import { hookOnce } from './lib/once.js';
 import { sessionAnchor } from './lib/paths.js';
 import { isEphemeral, ignoredEphemeral } from './lib/write-targets.js';
 import { isIgnored } from './lib/repo-git.js';
-import { commandTargets } from './lib/write-targets-bash.js';
-import { classifyCommand } from './lib/write-targets-bash.js';
+import { commandTargets, classifyCommand } from './lib/write-targets-bash.js';
 
 const ANCHOR_HEADER = 'Якорь сессии';
 

@@ -151,7 +151,10 @@ function onPrompt(state, ctx) {
   // наблюдателя, поэтому в записи его нет: он придёт строкой журнала решений и
   // будет сшит по `occ`, как и решение.
   append(log, {
-    kind: 'prompt', ts: ctx.ts, turn: state.turn, occ: ctx.occ,
+    // Общая часть — из ctx.base, как у всех записей: своя копия «ts + turn»
+    // теряла признак диспетчера, и свёртка переставала спрашивать у реплики, а
+    // доехали ли её строки. Номер хода тут свой: он только что вырос.
+    kind: 'prompt', ...ctx.base, turn: state.turn, occ: ctx.occ,
     repeat, reinstruct: looksLikeReinstruction(prompt),
   });
 }
@@ -272,8 +275,6 @@ function ensureShape(state) {
   if (!state.pre_flags || typeof state.pre_flags !== 'object') state.pre_flags = {};
   if (!Number.isFinite(state.decisions_offset)) state.decisions_offset = 0;
   if (typeof state.decisions_head !== 'string') state.decisions_head = '';
-  if (typeof state.last_occ !== 'string') state.last_occ = '';
-  if (typeof state.last_dispatched !== 'boolean') state.last_dispatched = false;
 }
 
 // Перенести в свой журнал всё, что дописали в журнал решений с прошлого раза.
@@ -284,38 +285,23 @@ function ensureShape(state) {
 // Не прочитался журнал — это НЕ «решений не было»: пропуск называется словом, и
 // видно его строкой в журнале, а не пустотой в сводке.
 function drainDecisions(state) {
-  // Событие, записанное ПРОШЛЫЙ раз: его строки обязаны приехать сейчас. Замеры
-  // цепочки кладёт диспетчер на КАЖДОМ событии, поэтому «ни одной строки с тем
-  // номером появления» значит не «решения не было», а «канал не доехал».
-  const prev = String(state.last_occ || '');
-  const expected = Boolean(prev) && state.last_dispatched === true;
   const { records, offset, head, status } = readSince(event, {
     offset: Number(state.decisions_offset) || 0,
     head: String(state.decisions_head || ''),
   });
   if (status !== 'ok') {
-    // Терять нечего, если ждать нечего: на первом событии сессии прошлого нет.
-    if (expected) lost(prev);
+    // Журнал не прочитался — это НЕ «решений не было». Непокрытое называется
+    // словом. КАКИЕ события остались без исхода, здесь не гадают: у каждой записи
+    // это спрашивает свёртка, и вторая линейка для того же вопроса давала бы
+    // ложную тревогу на параллельных вызовах — их строки приходят позже.
+    append(log, {
+      kind: 'skip', ts, what: 'decisions', capability: 'decision-log',
+    });
     return;
   }
-  let arrived = !expected;
-  for (const rec of records) {
-    if (rec.occurrence && rec.occurrence === prev) arrived = true;
-    append(log, rec);
-  }
-  if (!arrived) lost(prev);
+  for (const rec of records) append(log, rec);
   state.decisions_offset = offset;
   state.decisions_head = head;
-}
-
-// Строки прошлого события не приехали. Молчать нельзя: пустота на месте решения
-// читается как проход, то есть у отказа поменялся бы ЗНАК. Непокрытое называется
-// словом и адресуется НОМЕРОМ ПОЯВЛЕНИЯ — свёртка по нему пометит то событие
-// неизвестным, а не прошедшим.
-function lost(occ) {
-  append(log, {
-    kind: 'skip', ts, what: 'decisions', capability: 'decision-log', occ,
-  });
 }
 
 // Всё, что трогает состояние, идёт ОДНОЙ залоченной правкой. Внутри неё
@@ -344,11 +330,6 @@ const stop = updateState(log, (state) => {
     // такой обязанности нет, признак не ставится, и пустота значит проход.
     base: { ts, turn: state.turn, ...(dispatched ? { disp: true } : {}) },
   };
-
-  // Что записали сейчас — то и ждём в журнале решений на следующем событии.
-  // Признак диспетчера: вне его замеров цепочки не бывает вовсе, и ждать нечего.
-  state.last_occ = event.occurrence || '';
-  state.last_dispatched = dispatched;
 
   if (name === EVENTS.SESSION_START) onSessionStart(state, ctx);
   else if (name === EVENTS.PROMPT) onPrompt(state, ctx);

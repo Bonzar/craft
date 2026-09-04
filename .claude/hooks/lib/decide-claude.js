@@ -9,16 +9,14 @@
 // потом печатается: печать может уйти в закрытый поток, а process.exit ничего не
 // разматывает.
 //
-// Не записалось — строка кладётся В ЖУРНАЛ МЕТРИК, туда же, откуда её возьмёт
-// свёртка. Молчание тут читалось бы как «решения не было», то есть как проход: у
-// отказа поменялся бы ЗНАК, а не точность. Оба журнала лежат в одном каталоге, так
-// что запасной путь спасает ровно те случаи, когда сорвался один файл, а не весь
-// каталог; отказ обоих виден тем, что сводки не станет вовсе.
+// Не записалось — строка кладётся В ЖУРНАЛ МЕТРИК (keepChannelLine в lib/metrics.js),
+// туда же, откуда её возьмёт свёртка: молчание тут читалось бы как «решения не
+// было», то есть как проход.
 import { OUTCOMES, record } from './decide.js';
 import { markDecided } from './decided.js';
 import { readEvent, harnessEventName } from './event-claude.js';
 import { EVENTS } from './event.js';
-import { append, currentMetricsLog } from './metrics.js';
+import { keepChannelLine } from './metrics.js';
 
 function print(payload, { compact = true } = {}) {
   const text = compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
@@ -40,15 +38,9 @@ function currentHook() {
 function finish(outcome, reason, payload, options) {
   const event = readEvent();
   markDecided();
-  keep(record(event, outcome, reason, { hook: currentHook() }));
+  keepChannelLine(record(event, outcome, reason, { hook: currentHook() }));
   print(payload, options);
   process.exit(0);
-}
-
-// Запасной путь для строки, не легшей в журнал решений.
-function keep({ ok, line }) {
-  if (ok) return;
-  append(currentMetricsLog(), line);
 }
 
 // PreToolUse: запрет вызова с причиной, которую прочитает модель.
@@ -89,7 +81,7 @@ export function block(reason) {
 // ставит только finish() — на запрете, вопросе и блокировке.
 export function inject(event, additionalContext, options) {
   const hookEventName = harnessEventName(event);
-  keep(record(readEvent(), OUTCOMES.NONE, '', { hook: currentHook() }));
+  keepChannelLine(record(readEvent(), OUTCOMES.NONE, '', { hook: currentHook() }));
   print({ hookSpecificOutput: { hookEventName, additionalContext } }, options);
   process.exit(0);
 }

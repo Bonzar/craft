@@ -18,14 +18,20 @@
 # состояние — во временном каталоге, который снимается за собой.
 set -u
 side() {
-  local repo="$1" tail_mode="$2"
+  local repo="$1" tail_mode="$2" broken="${3:-}"
   local st cwd; st=$(mktemp -d); cwd=$(mktemp -d)
   local SID="fix-$$-${RANDOM}"
   local PLAN="$st/plan.md"
   local AUTO=""
   printf '# [система] правка диспетчера\n- где: .claude/hooks/dispatch.js\n' > "$PLAN"
+  # Третий прогон рвёт КАНАЛ: журнал решений уводится в непишущийся каталог. Это
+  # единственное место, где голова и база обязаны разойтись — и разойтись честно:
+  # голова говорит «не знаю» числом, а не выдаёт отказ за проход.
+  local journal=""
+  [ -n "$broken" ] && journal="/proc/нет-такого-каталога/decisions.jsonl"
   send() {
     echo "$1" | env \
+      ${journal:+CRAFT_DECISION_LOG="$journal"} \
       CRAFT_STATE_DIR="$st" CRAFT_SESSION_ID="$SID" CLAUDE_CODE_SESSION_ID="$SID" \
       CRAFT_METRICS_LOG="$st/metrics.jsonl" SESSION_ANCHOR_STATE="$st/anchor" \
       CRAFT_APPROVAL_REGISTRY="$st/approvals.jsonl" CRAFT_PLAN_CRITIC_MARKER="$st/critic.done" \
@@ -69,7 +75,7 @@ side() {
   # Конец сессии в обоих вариантах: сводка снимается после него, и в ней нет
   # события, чьи строки ещё в пути. Без этого сравнивать было бы нечестно — у
   # последнего события сессии исход и правда неизвестен, о чём сводка и говорит
-  # числом `unknown_decisions`.
+  # числом `unknown_events`.
   ev SessionEnd '"reason":"clear"'
   local sum="$st/metrics.jsonl.summary.json"
   if [ -f "$sum" ]; then
@@ -85,7 +91,7 @@ side() {
         plan: s.plan,
         stop_blocks: s.stop_blocks,
         incidents: s.incidents,
-        unknown_decisions: s.unknown_decisions,
+        unknown_events: s.unknown_events,
       }));
     ' "$sum"
   else
@@ -96,3 +102,4 @@ side() {
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 echo "ход продолжился:            $(side "$ROOT" next-stop)"
 echo "сессия кончилась на блоке:  $(side "$ROOT" session-end)"
+echo "канал решений оборван:      $(side "$ROOT" next-stop broken)"

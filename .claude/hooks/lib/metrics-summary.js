@@ -43,7 +43,7 @@ function blank(sid, now) {
     false_denies: 0,
     plan: { shown: 0, bounced: 0, approved: 0 },
     incidents: { detected: 0, skill_called: 0, share: null },
-    unknown_decisions: 0,
+    unknown_events: 0,
     stop_blocks: {},
     tool_errors: 0,
     first_edit_ms: null,
@@ -334,13 +334,13 @@ function stitch(records) {
   });
 }
 
-// Сколько событий осталось без исхода. Считается по ЛЮБЫМ записям, а не только по
-// вызовам и концам хода: тем же каналом приходят признаки реплики, и потерянный
-// признак инцидента роняет долю разборов так же тихо, как потерянный отказ ронял
-// счёт отказов. Пока число ноль — остальные метрики считаны по полному материалу;
-// выросло — видно, на сколько именно сводка неполна.
+// Сколько СОБЫТИЙ не доказали доставку своих строк — отсюда и имя поля: считаются
+// любые записи, а не только вызовы и концы хода. Тем же каналом приходят признаки
+// реплики, и потерянный признак инцидента роняет долю разборов так же тихо, как
+// потерянный отказ ронял счёт отказов. Пока число ноль — остальные метрики считаны
+// по полному материалу; выросло — видно, на сколько именно сводка неполна.
 function fillUnknown(s, records) {
-  s.unknown_decisions = records.filter((r) => r.unknown === true || r.decision === UNKNOWN).length;
+  s.unknown_events = records.filter((r) => r.unknown === true || r.decision === UNKNOWN).length;
 }
 
 export function summarize(raw, { sid = '', now = Date.now() } = {}) {

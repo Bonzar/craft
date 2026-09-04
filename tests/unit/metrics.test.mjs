@@ -693,7 +693,7 @@ test('сшивка: строки события не доехали — исхо
   assert.equal(s.plan.shown, 0, 'неизвестный исход показом не считается');
   assert.equal(s.plan.bounced, 0, 'и отказом тоже: мы не знаем');
   assert.equal(s.denies.total, 0);
-  assert.equal(s.unknown_decisions, 1, 'зато видно, сколько событий осталось без исхода');
+  assert.equal(s.unknown_events, 1, 'зато видно, сколько событий осталось без исхода');
 });
 
 test('сшивка: строки доехали, решения нет — это проход', () => {
@@ -709,7 +709,7 @@ test('сшивка: строки доехали, решения нет — эт�
   ];
   const s = summarize(records, { sid: 's' });
   assert.equal(s.plan.shown, 1);
-  assert.equal(s.unknown_decisions, 0);
+  assert.equal(s.unknown_events, 0);
 });
 
 test('сшивка: потерянный признак реплики тоже виден числом, а не тихим false', () => {
@@ -720,7 +720,7 @@ test('сшивка: потерянный признак реплики тоже 
   ];
   const s = summarize(records, { sid: 's' });
   assert.equal(s.incidents.detected, 0);
-  assert.equal(s.unknown_decisions, 1);
+  assert.equal(s.unknown_events, 1);
 });
 
 test('сшивка: найденная строка сильнее отметки о пропаже', () => {
@@ -736,5 +736,5 @@ test('сшивка: найденная строка сильнее отметк�
   ];
   const s = summarize(records, { sid: 's' });
   assert.equal(s.denies.total, 1);
-  assert.equal(s.unknown_decisions, 0);
+  assert.equal(s.unknown_events, 0);
 });

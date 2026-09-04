@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { appendFlag } from './lib/decision-log.js';
+import { keepChannelLine } from './lib/metrics.js';
 import { observeBuffer, incidentClosureMarker, sessionId } from './lib/paths.js';
 
 // Резолв через симлинки: установленный симлинком в ~/.claude хук обязан найти
@@ -108,5 +109,8 @@ if (cache !== null) {
 }
 // Сигнал — в журнал решений: хук метрик считает срабатывания детектора по нему, а
 // не по stdout. Тот же канал, что и у решения, и живёт он дольше процесса.
-appendFlag(readEvent(), 'incident');
+// Признак идёт тем же каналом, что и решение, — и запасной путь у него тот же:
+// не легла строка в журнал решений, кладём её в журнал метрик. Иначе неписучий
+// диск ронял бы долю разборов молча, тогда как отказ в тех же условиях уцелел бы.
+keepChannelLine(appendFlag(readEvent(), 'incident'));
 process.stdout.write(out);

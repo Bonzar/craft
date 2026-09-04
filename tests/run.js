@@ -538,6 +538,26 @@ function smokeChecks() {
     }
   }
 
+  // Каждое событие ТАБЛИЦЫ обязано быть зарегистрировано в настройках репы.
+  // Смоук установки сверяет то же самое для пользовательского контура; здесь —
+  // проектный, и по той же линейке: список событий берётся из таблицы, а не
+  // пишется рукой. Пропущенная регистрация означала бы, что событие приходит, а
+  // хуков на нём нет — молча, и как раз в этой репе, где проектный контур гасит
+  // пользовательский.
+  const table = path.join(HOOKS, 'dispatch-table.js');
+  const tableEvents = spawnSync(process.execPath, [
+    '-e', `import(${JSON.stringify(`file://${table}`)}).then((m) => console.log(m.EVENTS.join('\\n')))`,
+  ], { encoding: 'utf8' });
+  const events = (tableEvents.stdout || '').split('\n').filter(Boolean);
+  if (!events.length) smoke.push('routing table gave no events');
+  for (const ev of events) {
+    const hooks = ((settings.hooks || {})[ev] || [])
+      .flatMap((g) => (g.hooks || []).map((h) => h.command || ''));
+    if (!hooks.some((c) => c.includes('dispatch.js'))) {
+      smoke.push(`dispatcher not registered on ${ev} in .claude/settings.json`);
+    }
+  }
+
   // Маршрут спрашивается у самого диспетчера, а не вычитывается из таблицы
   // глазами: сверяется то, кого он ПОЗОВЁТ, а не то, что где-то написано.
   const routed = (event, tool) => {

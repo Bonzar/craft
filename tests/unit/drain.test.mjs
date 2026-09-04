@@ -57,10 +57,10 @@ test('решение прошлого события приезжает к на�
     assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'sleep-waiter-guard': 1 } });
     // В сводке САМОГО конца хода он же и неизвестен: блокировать его могут хуки,
     // которые ещё не отработали. Это «пока не знаем», а не «потеряли».
-    assert.equal(s.summary().unknown_decisions, 1);
+    assert.equal(s.summary().unknown_events, 1);
     // Конец сессии добирает строки последнего хода — и неизвестного не остаётся.
     s.send({ hook_event_name: 'SessionEnd', reason: 'clear' });
-    assert.equal(s.summary().unknown_decisions, 0);
+    assert.equal(s.summary().unknown_events, 0);
     assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'sleep-waiter-guard': 1 } });
   } finally {
     fs.rmSync(s.dir, { recursive: true, force: true });
@@ -76,12 +76,49 @@ test('журнал решений исчез между событиями — �
     for (const name of s.journal()) fs.rmSync(path.join(s.dir, name));
     s.send({ hook_event_name: 'Stop' });
 
-    const skip = s.records().find((r) => r.kind === 'skip' && r.what === 'decisions');
-    assert.equal(skip.capability, 'decision-log', 'пропажа названа словом, а не пустотой');
     s.send({ hook_event_name: 'SessionEnd', reason: 'clear' });
     const summary = s.summary();
     assert.equal(summary.denies.total, 0, 'отказа мы не видели — и не выдумываем его');
-    assert.equal(summary.unknown_decisions, 1, 'но и проходом его не считаем: видно числом');
+    assert.equal(summary.unknown_events, 1, 'но и проходом его не считаем: видно числом');
+  } finally {
+    fs.rmSync(s.dir, { recursive: true, force: true });
+  }
+});
+
+// Контракт записи проверяется на ТОМ, ЧТО ПИШЕТ ХУК, а не на форме, собранной
+// руками в тесте: своя копия общей части в одном обработчике уже теряла признак
+// диспетчера, и свёртка переставала спрашивать у реплики, доехали ли её строки.
+test('под диспетчером КАЖДАЯ запись события несёт признак диспетчера', () => {
+  const s = session();
+  try {
+    s.send({ hook_event_name: 'SessionStart', source: 'startup' });
+    s.send({ hook_event_name: 'UserPromptSubmit', prompt: 'поехали работать над задачей' });
+    s.send({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'r1', tool_input: { file_path: '/tmp/x' } });
+    s.send({
+      hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'r1', tool_input: { file_path: '/tmp/x' }, tool_response: {},
+    });
+    s.send({ hook_event_name: 'Stop' });
+
+    const own = s.records().filter((r) => r.occ);
+    assert.ok(own.length >= 5, `записей события ожидалось не меньше пяти, вышло ${own.length}`);
+    const forgot = own.filter((r) => r.disp !== true).map((r) => r.kind);
+    assert.deepEqual(forgot, [], 'признак диспетчера обязан быть у всех записей');
+  } finally {
+    fs.rmSync(s.dir, { recursive: true, force: true });
+  }
+});
+
+test('потерянный признак инцидента виден числом на ЖИВОМ пути', () => {
+  const s = session();
+  try {
+    s.send({ hook_event_name: 'UserPromptSubmit', prompt: 'ты сломал мою заметку, откатись немедленно' });
+    for (const name of s.journal()) fs.rmSync(path.join(s.dir, name));
+    s.send({ hook_event_name: 'Stop' });
+    s.send({ hook_event_name: 'SessionEnd', reason: 'clear' });
+
+    const summary = s.summary();
+    assert.equal(summary.incidents.detected, 0, 'признака мы не видели');
+    assert.ok(summary.unknown_events >= 1, 'но реплика названа неизвестной, а не «инцидента не было»');
   } finally {
     fs.rmSync(s.dir, { recursive: true, force: true });
   }
