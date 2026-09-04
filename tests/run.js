@@ -14,6 +14,12 @@
 //   inject — stdout несёт директиву инцидента
 //   silent — stdout пуст
 //   contains:<строка> / not-contains: / err-contains:
+//   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
+//     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
+//     stdout запись не проверить.
+// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, file-empty,
+// file-not-contains:), засчитывается только удавшемуся хуку: код возврата 0 и ни
+// строки диспетчера о падении. Упавший хук молчит так же.
 // Exit 0 — все кейсы зелёные И каждый исход каждого хука покрыт; иначе 1.
 //
 // Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
@@ -318,8 +324,8 @@ function runPass(c) {
   // хуку; кейс может задать своё событие (setup_input) и свои переменные
   // (setup_env). Список setup_input — свой элемент каждому шагу подготовки.
   // Подстановка подготовке идёт С СОСТОЯНИЕМ прогона: без него {TESTS_DIR} ещё
-  // раскрывался, а {METRICS}, {SID} и прочие пути прогона — нет, и шаг молча
-  // получал literal вместо пути.
+  // раскрывался, а {METRICS} и прочие пути прогона — нет, и шаг молча получал
+  // literal вместо пути.
   const setupEnv = { ...caseEnv };
   for (const [k, v] of Object.entries(c.setup_env || {})) setupEnv[k] = subst(v, s);
   const setupList = Array.isArray(c.setup_input) ? c.setup_input : null;
@@ -408,7 +414,9 @@ function grade(expect, out, err, env) {
     if (expect === 'file-empty') return text === '' && !crashed(err, env);
     const needle = expect.slice(expect.indexOf(':') + 1);
     if (expect.startsWith('file-contains:')) return text.includes(needle);
-    return text !== '' && !text.includes(needle);
+    // «В файле нет строки» — тоже утверждение о молчании: хук мог дописать своё
+    // и упасть до того места, которое кейс сторожит.
+    return text !== '' && !text.includes(needle) && !crashed(err, env);
   }
   if (expect === 'deny') return isDeny(out);
   // allow — тоже утверждение о молчании: «гвард не сработал». Упавший гвард
@@ -425,8 +433,6 @@ function grade(expect, out, err, env) {
   // Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет улику
   // доставки правила. Без отдельной проверки эта половина вывода не покрыта.
   if (expect.startsWith('err-contains:')) return err.includes(expect.slice('err-contains:'.length));
-  // Отрицание: иногда доказательство — именно ОТСУТСТВИЕ строки (хук не пошёл по
-  // короткому пути, гвард не сработал вхолостую).
   return null; // неизвестное ожидание
 }
 
