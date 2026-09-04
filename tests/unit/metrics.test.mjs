@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'hooks', 'fixtures');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
-const usage = await import('../../.claude/hooks/lib/usage-claude.js');
+const tokens = await import('../../.claude/hooks/lib/usage-claude.js');
 const registration = await import('../../.claude/hooks/lib/registration-claude.js');
 const hash = await import('../../.claude/hooks/lib/call-hash.js');
 const reason = await import('../../.claude/hooks/lib/reason-class.js');
@@ -36,12 +36,12 @@ test('класс ответа модели: токен вердикта, json у
 
 test('токены хода: дубли одного message.id считаются однажды, смещение за последней полной строкой', () => {
   const file = path.join(FIXTURES, 'transcript-usage.jsonl');
-  const first = usage.turnUsage(file, 0);
+  const first = tokens.turnUsage(file, 0);
   assert.deepEqual(first.usage, {
     input: 5, output: 140, cache_read: 2200, cache_create: 50, messages: 2,
   });
   assert.equal(first.offset, fs.statSync(file).size);
-  const second = usage.turnUsage(file, first.offset);
+  const second = tokens.turnUsage(file, first.offset);
   assert.equal(second.usage.messages, 0, 'посчитанное второй раз не считается');
 });
 
@@ -50,7 +50,7 @@ test('токены хода: недописанный хвост без пере
   const file = path.join(dir, 't.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 7 } } });
   fs.writeFileSync(file, `${line}\n${line.slice(0, 20)}`);
-  const r = usage.turnUsage(file, 0);
+  const r = tokens.turnUsage(file, 0);
   assert.equal(r.usage.output, 7);
   assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
   fs.rmSync(dir, { recursive: true, force: true });
@@ -216,27 +216,27 @@ test('сводка: ход без прогресса считается по х�
 
 // --- журнал по событию -----------------------------------------------------------
 
-test('вызов модели ложится в журнал сессии из события, когда переменной сессии нет', () => {
+test('вызов модели ложится в журнал сессии, которую положила обёртка', () => {
   delete process.env.CRAFT_METRICS_LOG;
-  delete process.env.CLAUDE_CODE_SESSION_ID;
+  // Сессию в окружение кладёт АДАПТЕР события, прочитав её из самого события;
+  // общая часть берёт её уже под своим именем и имени переменной харнеса не знает.
   const sid = `unit-${process.pid}-${Date.now()}`;
-  globalThis.hookEvent = { session_id: sid };
+  process.env.CRAFT_SESSION_ID = sid;
   const log = path.join(os.tmpdir(), `metrics.${sid}.jsonl`);
   try {
     metrics.recordModelCall({ mode: 'cover', ms: 3, outcome: 'COVERED' });
     assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model","ts":".*","mode":"cover","ms":3/);
     assert.equal(metrics.childEnv({}).CRAFT_METRICS_LOG, log, 'дочерний процесс получает журнал явно');
   } finally {
-    delete globalThis.hookEvent;
+    delete process.env.CRAFT_SESSION_ID;
     fs.rmSync(log, { force: true });
   }
 });
 
 test('фоновый приём пишет вызов модели в журнал сессии события', async () => {
   delete process.env.CRAFT_METRICS_LOG;
-  delete process.env.CLAUDE_CODE_SESSION_ID;
   const sid = `unit-ingest-${process.pid}-${Date.now()}`;
-  globalThis.hookEvent = { session_id: sid };
+  process.env.CRAFT_SESSION_ID = sid;
   const log = path.join(os.tmpdir(), `metrics.${sid}.jsonl`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
   const repo = path.resolve(HERE, '..', '..');
@@ -253,7 +253,7 @@ test('фоновый приём пишет вызов модели в журна
     registry.ingestInBackground(path.join(dir, 'registry.jsonl'), 'reply', 'поправь README');
     assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model".*"mode":"ingest"/);
   } finally {
-    delete globalThis.hookEvent;
+    delete process.env.CRAFT_SESSION_ID;
     delete process.env.PLAN_CLASSIFIER_CMD;
     delete process.env.CRAFT_REGISTRY_SYNC;
     if (savedStore === undefined) delete process.env.METRICS_STORE;
@@ -342,8 +342,8 @@ test('смещение транскрипта засевается длиной 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
   const transcript = path.join(dir, 't.jsonl');
   fs.copyFileSync(path.join(FIXTURES, 'transcript-usage.jsonl'), transcript);
-  assert.equal(usage.transcriptSize(transcript), fs.statSync(transcript).size);
-  const { usage } = usage.turnUsage(transcript, usage.transcriptSize(transcript));
+  assert.equal(tokens.transcriptSize(transcript), fs.statSync(transcript).size);
+  const { usage } = tokens.turnUsage(transcript, tokens.transcriptSize(transcript));
   assert.equal(usage.messages, 0, 'засеянное смещение не даёт засчитать историю в первый ход');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -353,7 +353,7 @@ test('укоротившийся транскрипт читается зано�
   const file = path.join(dir, 't.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 9 } } });
   fs.writeFileSync(file, `${line}\n`);
-  const r = usage.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
+  const r = tokens.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
   assert.equal(r.usage.output, 9, 'после подмены транскрипт читается с начала');
   assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
   fs.rmSync(dir, { recursive: true, force: true });

@@ -34,6 +34,13 @@ import { queueSummary, storeTarget } from '../.claude/hooks/lib/summary-store.js
 // Адаптер хранения выбирает край, а не общая часть.
 import * as STORE_ADAPTER from '../.claude/hooks/lib/summary-store-git.js';
 
+// Приём — КРАЙ, и перевод сессии из переменной харнеса в свою делает он. Общая
+// часть (paths.js) читает уже переведённое значение и имени переменной харнеса не
+// знает. Своя переменная сильнее: её кладёт вызывающий, когда знает сессию точно.
+if (!process.env.CRAFT_SESSION_ID && process.env.CLAUDE_CODE_SESSION_ID) {
+  process.env.CRAFT_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID;
+}
+
 const [, , source, materialFile, registryFile, markId] = process.argv;
 
 // След приёма: файл рядом с реестром, куда ложится ход разбора. Без него провал
