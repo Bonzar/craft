@@ -5,7 +5,6 @@
 //
 // available(target) → есть ли под каталогом git-чекаут. Нет — у возможности
 //   «хранение» нет адаптера, и хранение отвечает unsupported, а не error.
-// queueDir(target) → каталог, переживающий смену воркри, или ''.
 // fetchBase(target, {remote, branch}) → {status: 'ok'|'offline', base}
 //   base — пустая строка, когда ветки на сервере ещё нет: это не ошибка.
 // readDay(target, {base, day, …}) → {status: 'ok'|'missing'|'error', text}
@@ -62,10 +61,6 @@ function gitIn(target, extraEnv = {}) {
 
 export function available(target) {
   return Boolean(target) && Boolean(commonDir(target));
-}
-
-export function queueDir(target) {
-  return commonDir(target);
 }
 
 export function fetchBase(target, { remote = REMOTE, branch = BRANCH } = {}) {

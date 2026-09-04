@@ -29,7 +29,7 @@ const LIB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 // Адаптер узнаётся по имени: `<возможность>-<инструмент>.js`. Инструменты, под
 // которые адаптеры уже есть, названы поимённо — иначе в список попадал бы любой
 // файл с дефисом.
-const TOOLS = ['git', 'bash', 'claude', 'craft'];
+const TOOLS = ['git', 'bash', 'claude', 'craft', 'curl'];
 const isAdapter = (name) => TOOLS.some((t) => name.endsWith(`-${t}.js`));
 
 // Долг: сколько ВХОЖДЕНИЙ имени инструмента ЕЩЁ живёт в общем модуле. Счёт по
@@ -37,12 +37,12 @@ const isAdapter = (name) => TOOLS.some((t) => name.endsWith(`-${t}.js`));
 // дописанная в уже посчитанную строку, при счёте строк проходила молча, поэтому
 // у `classifier.js` два вхождения на двух строках. Файлы списка названы в теле
 // PR разделом 1.6 или заметкой на фазу 4.
-const DEBT = new Map([
-  ['transcript.js', 3], // WRITE_TOOLS: имена правящих инструментов харнеса
-  ['env.js', 1], // выбор адаптера: имя repo-git.js в импорте, а не команда
-  ['classifier.js', 2], // запуск классификатора шеллом и путь к .sh
-  ['net.js', 1], // curl
-]);
+// Долга по именам инструментов в общей части БОЛЬШЕ НЕТ: разбор транскрипта
+// уехал в transcript-claude.js, запуск классификатора — в classify-bash.js,
+// запасной канал сети — в fetch-curl.js, а адаптер рабочей копии приходит
+// параметром с края. Пустая карта — это утверждение, а не пропуск проверки:
+// любое новое имя разойдётся с ней и уронит кейс.
+const DEBT = new Map([]);
 
 // Имена инструментов харнеса и рабочих систем. Слово ищется целиком, чтобы
 // «читать» в русском комментарии не путалось с `Read`; префикс MCP ловится по
@@ -64,7 +64,10 @@ const TOOL_NAMES = new RegExp(TOOL_SOURCE.join('|'));
 const HARNESS_SOURCE = [
   'CLAUDE_[A-Z_]+',
   '\\.claude\\b',
-  'hook_event_name|tool_name|tool_input|tool_response|tool_use_id|session_id|transcript_path|permission_mode',
+  // `session_id` из списка УБРАН: по решению 17 это имя КАНОНИЧЕСКОГО ядра
+  // события, а не поле харнеса, и общая часть обязана его знать. Имена, которые
+  // остались, — только харнесные: своего аналога у них нет.
+  'hook_event_name|tool_name|tool_input|tool_response|tool_use_id|transcript_path|permission_mode',
   'hookSpecificOutput|permissionDecision|permissionDecisionReason|systemMessage',
   "'assistant'|\"assistant\"|'user'|\"user\"|'tool_use'|\"tool_use\"|'tool_result'|\"tool_result\"",
   'input_tokens|output_tokens|cache_read_input_tokens|cache_creation_input_tokens',
@@ -74,7 +77,9 @@ const HARNESS_SOURCE = [
   // `event.` тут носитель, и слабость та же, что ниже: `const ev = raw.event`
   // счёт обойдёт. Без носителя `cwd` и `prompt` ловили бы `process.cwd()` и наши
   // собственные поля, поэтому счёт здесь — нижняя граница.
-  '\\bevent\\.(cwd|prompt|source|stop_hook_active)\\b|is_error|isError',
+  // `event.cwd` тоже ушёл из списка: `cwd` — поле ядра. Остались поля, которых у
+  // ядра нет и которые читает только обёртка.
+  '\\bevent\\.(prompt|source|stop_hook_active)\\b|is_error|isError',
   'globalThis\\.hook[A-Z]',
   // Поля транскрипта ловятся по ИМЕНИ ПОЛЯ, а не по имени переменной: с
   // привязкой к носителю (`entry.`, `item.`) хватало переименования локальной
@@ -101,14 +106,12 @@ const HARNESS_NAMES = new RegExp(HARNESS_SOURCE.join('|'));
 // Долг по харнесу — тоже счётом. Правило 10 запрещает заводить НОВУЮ привязку,
 // а не требует снять старую сегодня.
 const HARNESS_DEBT = new Map([
-  ['decide.js', 20], // формат решения харнеса, имена его событий и канал между хуками
-  ['env.js', 2], // каталог состояния харнеса
-  ['event.js', 13], // поля события харнеса, включая форму ответа инструмента
-  ['metrics.js', 18], // регистрация диспетчера, session_id и формат транскрипта
-  ['once.js', 6], // ключ уступки по полям события
-  ['paths.js', 2], // CLAUDE_CODE_SESSION_ID и каталог состояния
-  ['transcript.js', 15], // формат транскрипта Claude целиком
-  ['write-targets.js', 4], // политика ~/.claude как системной зоны
+  // Оба оставшихся долга — про КАТАЛОГ настроек харнеса как место на диске, а не
+  // про его событие, решение или транскрипт. Они уйдут вместе с решением о том,
+  // где живут файлы слоя, и здесь названы поимённо, чтобы зелёный прогон не
+  // читался как «долга нет».
+  ['paths.js', 1], // свой файл предодобренной зоны лежит в каталоге настроек харнеса
+  ['write-targets.js', 4], // политика «каталог настроек — системная зона»
 ]);
 
 // Код строки без комментария. Внутри строковых литералов `//` МАСКИРУЕТСЯ, а
@@ -199,9 +202,10 @@ test('гвард имён ловит имя инструмента в коде �
     "const p = input.file_path;",
     "out.hookSpecificOutput = { permissionDecision: 'deny' };",
     "const model = entry.message && entry.message.model;",
-    "const dir = event.cwd || '';",
     "if (response.is_error === true) return true;",
     "const ev = globalThis.hookEvent;",
+    "const id = event.tool_use_id;",
+    "const t = event.transcript_path;",
     "const mode = event.permission_mode || '';",
     "if (item.type === 'tool_use') return item.name;",
     "const out = { hookEventName: 'PreToolUse' };",
@@ -212,10 +216,51 @@ test('гвард имён ловит имя инструмента в коде �
   ]) {
     assert.equal(probe(code, HARNESS_NAMES), 1, code);
   }
+  // Имена КАНОНИЧЕСКОГО ядра (решение 17) привязкой не являются: общая часть
+  // обязана их знать, и счёт их не трогает.
+  for (const code of [
+    "const sid = event.session_id || '';",
+    "const dir = event.cwd || '';",
+    "return { call_id: event.call_id, state_dir: event.state_dir };",
+  ]) {
+    assert.equal(probe(code, HARNESS_NAMES), 0, code);
+  }
+
   assert.equal(probe('// имя Bash знает только адаптер\nreturn scope.reads;'), 0,
     'в комментарии имя инструмента законно: он объясняет, почему имени нет в коде');
   assert.equal(probe('return scope.reads === true;'), 0);
   assert.equal(probe('const gitLike = 0;'), 0, 'часть слова именем инструмента не является');
+});
+
+// Три формы, у которых долга нет и быть не может: переменные харнеса, путь его
+// транскрипта и идентификатор его вызова. Ядро даёт им замену (`session_id`,
+// факт `tokens`, `call_id`), поэтому здесь не счёт с долгом, а НОЛЬ — иначе
+// «долг уменьшился» читалось бы как «работа сделана», пока привязка жива.
+const FORBIDDEN = ['CLAUDE_[A-Z_]+', '\\btranscript_path\\b', '\\btool_use_id\\b'];
+
+test('CLAUDE_*, transcript_path и tool_use_id в общей части не встречаются вовсе', () => {
+  const found = [];
+  for (const name of fs.readdirSync(LIB)) {
+    if (!name.endsWith('.js') || isAdapter(name)) continue;
+    found.push(...offenders(path.join(LIB, name), undefined, new RegExp(FORBIDDEN.join('|'))));
+  }
+  assert.deepEqual(found, [],
+    'переменные харнеса, его транскрипт и идентификатор его вызова живут только в обёртках и адаптерах');
+});
+
+// Сам этот запрет обязан ловить: без пробы «список пуст» ничего не значит.
+test('запрет трёх форм ловит каждую из них', () => {
+  const rx = new RegExp(FORBIDDEN.join('|'));
+  for (const code of [
+    "const sid = process.env.CLAUDE_CODE_SESSION_ID;",
+    "const root = process.env.CLAUDE_PROJECT_DIR;",
+    "const t = event.transcript_path || '';",
+    "const id = event.tool_use_id;",
+  ]) {
+    assert.equal(offenders('probe.js', code, rx).length, 1, code);
+  }
+  assert.equal(offenders('probe.js', "const id = event.call_id;", rx).length, 0,
+    'замена из ядра запретом не считается');
 });
 
 test('счёт считает вхождения, а не строки', () => {

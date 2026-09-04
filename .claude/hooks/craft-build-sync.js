@@ -14,11 +14,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { hasCommand } from './lib/system.js';
 
 const log = (message) => process.stderr.write(`[build-craft-sync] ${message}\n`);
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 if (process.argv[2] !== '--force' && process.env.CRAFT_SYNC_BUILD !== '1') {
   log('CRAFT_SYNC_BUILD != 1; skipping build (run with --force to build now)');

@@ -24,8 +24,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  classifierPath, classify, INGEST_BUDGET_SEC, INGEST_PASSES,
+  classify, INGEST_BUDGET_SEC, INGEST_PASSES,
 } from '../.claude/hooks/lib/classifier.js';
+// Адаптер классификатора выбирает КРАЙ, а не общая часть.
+import * as CLASSIFY from '../.claude/hooks/lib/classify-bash.js';
 import {
   readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
@@ -95,7 +97,7 @@ function pass(material, n, ownFrom) {
     fs.writeFileSync(view, render(current));
   } catch { /* вид не записался — модель увидит пустой реестр */ }
 
-  const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '', {
+  const verdict = classify(CLASSIFY, CLASSIFY.classifierPath(), 'ingest', [view, materialFile, source], '', {
     timeoutSec: INGEST_BUDGET_SEC,
   });
   try { fs.rmSync(view, { force: true }); } catch { /* вид переживёт приём */ }

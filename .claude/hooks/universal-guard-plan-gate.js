@@ -45,7 +45,9 @@ import { exemptScopeFile, approvalRegistry } from './lib/paths.js';
 import {
   waitForParsing, readRegistry, render, switchAt, appendLog,
 } from './lib/registry.js';
-import { classify, classifierPath } from './lib/classifier.js';
+import { classify } from './lib/classifier.js';
+// Адаптер классификатора выбирает КРАЙ, а не общая часть.
+import * as CLASSIFY from './lib/classify-bash.js';
 
 const { raw, core, tool, input } = readEvent();
 if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
@@ -105,14 +107,14 @@ const ALLOWING = /^(OVERRIDE|COVERED|DRAFT)/;
 // тратятся только там, где иначе Влад теряет минуты. Отказ возвращается ПЕРВЫЙ
 // из полученных — его причина уже написана про эту правку.
 function steadyVerdict(view, desc) {
-  const first = classify(classifier, 'cover', [view], desc);
+  const first = classify(CLASSIFY, classifier, 'cover', [view], desc);
   if (ALLOWING.test(first)) return first;
 
-  const second = classify(classifier, 'cover', [view], desc);
+  const second = classify(CLASSIFY, classifier, 'cover', [view], desc);
   const agree = ALLOWING.test(first) === ALLOWING.test(second);
   if (agree) return first;
 
-  const third = classify(classifier, 'cover', [view], desc);
+  const third = classify(CLASSIFY, classifier, 'cover', [view], desc);
   if (ALLOWING.test(third)) return ALLOWING.test(second) ? second : third;
   return ALLOWING.test(first) ? second : first;
 }
@@ -130,7 +132,7 @@ function nonEmptyFile(file) {
   }
 }
 
-const classifier = classifierPath();
+const classifier = CLASSIFY.classifierPath();
 
 // --- Сверка по реестру одобренного -------------------------------------------
 // Одна сверка вместо трёх веток. Прежние спрашивали каждая про своё — план,

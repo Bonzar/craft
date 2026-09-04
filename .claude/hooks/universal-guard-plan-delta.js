@@ -24,7 +24,9 @@ import { readEvent } from './lib/event-claude.js';
 import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { planFileMarker, approvalRegistry } from './lib/paths.js';
-import { classify, classifierPath } from './lib/classifier.js';
+import { classify } from './lib/classifier.js';
+// Адаптер классификатора выбирает КРАЙ, а не общая часть.
+import * as CLASSIFY from './lib/classify-bash.js';
 import { readRegistry, render, waitForParsing } from './lib/registry.js';
 
 if (process.env.PLAN_DELTA === 'off') process.exit(0);
@@ -49,7 +51,7 @@ try {
   process.exit(0); // файла плана нет — сравнивать нечего
 }
 
-const classifier = classifierPath();
+const classifier = CLASSIFY.classifierPath();
 
 // Вход сравнения: ВСЁ одобренное сессии, включая цели, работа под которыми уже
 // закрыта. Сделанное — тем более не новое: Влад не должен видеть его в плане
@@ -72,7 +74,7 @@ function compare(approved) {
   } catch {
     return 'UNAVAILABLE';
   }
-  const verdict = classify(classifier, 'delta', [input, plan], '');
+  const verdict = classify(CLASSIFY, classifier, 'delta', [input, plan], '');
   try {
     fs.rmSync(input, { force: true });
   } catch { /* временный вход переживёт прогон, на вердикт это не влияет */ }

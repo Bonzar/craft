@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { classifyCommand } = await import('../../.claude/hooks/lib/read-only-command.js');
+const { classifyCommand } = await import('../../.claude/hooks/lib/write-targets-bash.js');
 
 const readOnly = (cmd) => classifyCommand(cmd).readOnly;
 const cause = (cmd) => classifyCommand(cmd).cause;

@@ -230,9 +230,10 @@ function makeState() {
 }
 
 // Файлы и каталоги, которые приём кладёт РЯДОМ с реестром под своими именами:
-// `<реестр>.parsing` (каталог меток разбора) и `<реестр>.view.<pid>-<n>` (снимок
-// вида для классификатора). Имена содержат pid, поэтому список строится чтением
-// каталога, а не перечислением.
+// `<реестр>.parsing` (каталог меток разбора), `<реестр>.view.<pid>-<n>` (снимок
+// вида для классификатора) и `<реестр>.ingest.log` (след приёма). Имена содержат
+// pid, поэтому список строится чтением каталога, а не перечислением: отдельным
+// именем след здесь не стоит — маска покрывает его целиком.
 function siblings(registry) {
   const dir = path.dirname(registry);
   const base = `${path.basename(registry)}.`;
@@ -254,10 +255,6 @@ function cleanState(s) {
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
     s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
-    // Спутники реестра: след приёма и снимки вида, которые приём кладёт рядом.
-    // Без них прогон оставлял в общем /tmp по каталогу и по файлу следа на
-    // каждый кейс приёма — а этот же каталог служит состоянием хуков.
-    `${s.registry}.ingest.log`,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   // Спутники с ДОПИСАННЫМ именем: снимки вида реестра и каталоги меток разбора
@@ -660,6 +657,25 @@ function utf8GlueChecks() {
 
 // --- прогон ------------------------------------------------------------------
 
+// Хвосты прогона во временном каталоге: всё, что этот раннер называл по своему
+// pid. Зовётся в конце main(), после того как отсоединённые процессы отработали.
+function sweepLeftovers() {
+  const dir = os.tmpdir();
+  const mine = `.${process.pid}.`;
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.includes(mine)) continue;
+    try {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    } catch { /* уже убрано кем-то другим */ }
+  }
+}
+
 function main() {
   const files = caseFiles();
   if (files.length === 0) {
@@ -765,6 +781,13 @@ function main() {
     process.stdout.write('Settings smoke failures:\n');
     for (const m of smoke) process.stdout.write(`  - ${m}\n`);
   }
+  // Приём реестра ОТСОЕДИНЁН, а уборка кейса идёт сразу за хуком: изредка он
+  // дописывает свой след и снимок вида уже после неё, и в общем временном
+  // каталоге оставалось 1–3 записи вместо нуля. Подметаем ещё раз в конце
+  // прогона, когда отсоединённым уже некуда писать. Маска несёт pid ЭТОГО
+  // раннера, поэтому чужой параллельный прогон не заденется.
+  sweepLeftovers();
+
   process.stdout.write(
     `TOTAL: ${pass}/${total} passed; ${fail} failed; uncovered outcomes: ${missing.length}; settings smoke: ${smoke.length}\n`,
   );

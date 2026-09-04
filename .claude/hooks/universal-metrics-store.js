@@ -52,7 +52,7 @@ function store(summaryFile, { waitMs }) {
     return { status: 'no-summary', delivered: 0 };
   }
   if (!summary || typeof summary !== 'object' || !summary.sid) return { status: 'no-summary', delivered: 0 };
-  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(TARGET, ADAPTER);
+  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(ADAPTER);
   if (!queue) return { status: 'unsupported', capability: 'summary-store', delivered: 0 };
   // Работник ОТСОЕДИНЁН, его никто не ждёт — лок он ждёт долго. Короткий срок
   // у него означал бы потерянную сводку: предыдущая выгрузка держит лок всё

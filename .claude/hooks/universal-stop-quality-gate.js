@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { readEvent } from './lib/event-claude.js';
 import { block } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
-import { editedFiles, sourceFiles } from './lib/transcript.js';
+import { editedFiles, sourceFiles } from './lib/transcript-claude.js';
 
 // Анти-зацикливание: этот Stop уже вызван из-под стоп-хука → пропуск.
 if (process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') process.exit(0);

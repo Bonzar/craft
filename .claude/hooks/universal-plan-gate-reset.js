@@ -24,7 +24,7 @@ import {
   serviceTurnMarker, planShownMarker, planCriticPending, approvalRegistry,
 } from './lib/paths.js';
 import { ingestInBackground } from './lib/registry.js';
-import { withAgentContext } from './lib/transcript.js';
+import { withAgentContext } from './lib/transcript-claude.js';
 
 const { raw, core, prompt, transcript } = readEvent();
 // Уступка второму вызову события: хук зарегистрирован в двух контурах, и без

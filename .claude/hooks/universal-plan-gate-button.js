@@ -13,7 +13,7 @@ import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { approvalRegistry } from './lib/paths.js';
 import { ingestInBackground, switchOn, switchOff } from './lib/registry.js';
-import { withAgentContext } from './lib/transcript.js';
+import { withAgentContext } from './lib/transcript-claude.js';
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 

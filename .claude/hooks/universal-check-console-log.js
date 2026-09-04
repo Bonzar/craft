@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
-import { editedFiles, sourceFiles } from './lib/transcript.js';
+import { editedFiles, sourceFiles } from './lib/transcript-claude.js';
 
 const { raw, core, transcript } = readEvent();
 if (!hookOnce(raw, core, import.meta.url)) process.exit(0);

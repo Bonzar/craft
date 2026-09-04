@@ -15,6 +15,9 @@ import path from 'node:path';
 import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { hasCommand } from './lib/system.js';
 
 // Project-уровень уступает user-уровню (install.sh), иначе карта печатается
@@ -22,7 +25,7 @@ import { hasCommand } from './lib/system.js';
 const { raw, core } = readEvent();
 if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 const platform = os.platform() === 'darwin' ? 'локальный мак' : 'облачный контейнер (Linux)';
 

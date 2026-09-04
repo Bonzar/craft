@@ -1,14 +1,16 @@
 // Хранение сводок сессий: очередь и раскладка по дням. Про инструмент, которым
 // сводки уезжают, этот файл не знает ничего и сам его не выбирает: АДАПТЕР
-// приходит параметром от края (queueDir, available, fetchBase, readDay,
-// publish), а сюда — только данные. Адаптера нет — исход `unsupported`, а не
+// приходит параметром от края (available, fetchBase, readDay, publish), а сюда —
+// только данные. Адаптера нет — исход `unsupported`, а не
 // молчание и не ошибка.
 //
 // Файл на стороне хранилища — `summaries/<дата UTC>.jsonl`, по строке на
 // сессию; день берётся по НАЧАЛУ сессии, чтобы сессия, перешагнувшая полночь,
 // не оставила две строки в двух файлах и не посчиталась дважды.
 //
-// Очередь: сводка сначала ложится в локальный файл очереди и уезжает оттуда.
+// Очередь лежит в КАТАЛОГЕ СОСТОЯНИЯ слоя, а не в каталоге инструмента доставки:
+// сводки сессии — состояние слоя, и в чужой рабочей копии им делать нечего.
+// Сводка сначала ложится в локальный файл очереди и уезжает оттуда.
 // Не уехала — очередь цела и доедет следующей выгрузкой. Очередь держит по
 // ОДНОЙ строке на сессию (сводка каждого Stop заменяет прежнюю) и обрезана
 // сверху: иначе на репозитории, куда push запрещён навсегда, она росла бы
@@ -29,7 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { withLock, atomicWrite } from './lock.js';
 import { eachJsonl } from './jsonl.js';
-import { repoRootOf } from './paths.js';
+import { repoRootOf, stateDir } from './paths.js';
 import { append } from './metrics.js';
 
 // Потолок очереди в строках. Строка на сессию, так что потолок — про число
@@ -50,12 +52,18 @@ export function storeTarget(override = '') {
   return override || repoRootOf(import.meta.url);
 }
 
-// Файл очереди — в каталоге, который переживает и сессии, и смену воркри, а в
-// дерево не попадает; каталог называет адаптер. Адаптера нет — очереди тоже:
-// копить сводки в /tmp значит копить то, что никто никогда не увезёт.
-export function defaultQueue(target, adapter) {
-  const dir = adapter && adapter.queueDir ? adapter.queueDir(target) : '';
-  return dir ? path.join(dir, 'metrics-queue.jsonl') : '';
+// Файл очереди лежит в КАТАЛОГЕ СОСТОЯНИЯ, а не в каталоге инструмента доставки.
+// Прежде его называл адаптер, и очередь оказывалась внутри git-каталога рабочей
+// копии: сводки сессии — состояние слоя, а не содержимое чекаута, и в чужой
+// рабочей копии им делать нечего.
+//
+// Адаптера доставки нет — очереди тоже НЕ ЗАВОДИТСЯ: копить сводки, которые никто
+// никогда не увезёт, значит тихо копить мусор вместо явного `unsupported`
+// (решение 8). Поэтому адаптер здесь всё ещё спрашивается — но только про то,
+// есть ли доставка, а не про то, где лежать очереди.
+export function defaultQueue(adapter) {
+  return adapter && typeof adapter.available === 'function'
+    ? path.join(stateDir(), 'metrics-queue.jsonl') : '';
 }
 
 function readQueueText(queueFile) {
@@ -151,7 +159,7 @@ function upsertLines(text, summaries) {
 // прогон кейсов копил бы очередь.
 export function queueSummary(summary, log, adapter, { off = false, queueFile = '', target = '' } = {}) {
   if (off) return false;
-  const queue = queueFile || defaultQueue(target || storeTarget(), adapter);
+  const queue = queueFile || defaultQueue(adapter);
   // Очереди нет — значит нет и адаптера хранения. Это тоже пропуск, и назван он
   // возможностью: молчание здесь читалось бы как «сводка уехала».
   if (!queue) {

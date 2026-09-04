@@ -21,7 +21,7 @@
 // У КОМАНД ВОПРОС ОБРАТНЫЙ ОСТАЛЬНЫМ ВЕТКАМ. Правка файла судится по цели: куда
 // пишем. Командная строка так не судится — список шаблонов записи разрешает по
 // умолчанию, и своя команда записи есть у любого стороннего инструмента. Поэтому
-// команда должна ДОКАЗАТЬ, что только читает (lib/read-only-command.js), а
+// команда должна ДОКАЗАТЬ, что только читает (lib/write-targets-bash.js), а
 // недоказанная ждёт ответа. Исключение одно: если все распознанные цели записи
 // временные, команда проходит — иначе шелл потерял бы то, что правке файла
 // разрешено.
@@ -39,7 +39,7 @@ import { sessionAnchor } from './lib/paths.js';
 import { isEphemeral, ignoredEphemeral } from './lib/write-targets.js';
 import { isIgnored } from './lib/repo-git.js';
 import { commandTargets } from './lib/write-targets-bash.js';
-import { classifyCommand } from './lib/read-only-command.js';
+import { classifyCommand } from './lib/write-targets-bash.js';
 
 const ANCHOR_HEADER = 'Якорь сессии';
 

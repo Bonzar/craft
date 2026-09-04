@@ -22,7 +22,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { fetchText } from './lib/net.js';
+// Запасной канал сети выбирает КРАЙ, а не общая часть.
+import { viaExternal } from './lib/fetch-curl.js';
 import { exemptScopeFile } from './lib/paths.js';
 
 const log = (message) => process.stderr.write(`[universal-cache-gate-exempt-scope] ${message}\n`);
@@ -33,7 +38,7 @@ try {
   dir = path.dirname(fs.realpathSync(selfPath));
 } catch { /* нечего резолвить — берём каталог как есть */ }
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 const config = process.env.CRAFT_GATE_EXEMPT_PAGES || path.join(dir, 'gate-exempt-pages.txt');
 const out = exemptScopeFile();
@@ -70,7 +75,7 @@ for (const line of lines) {
   // Формат ответа не задаётся намеренно: набор block-ID полон только в
   // машинном представлении, а Accept: markdown отдал бы текст без адресов.
   const body = await fetchText(`${base}/blocks?id=${page}&maxDepth=-1`, {
-    accept: '*/*', timeoutMs: 60000,
+    accept: '*/*', timeoutMs: 60000, viaExternal,
   });
   if (!body) {
     log(`fetch failed for ${page}; skipped`);

@@ -366,13 +366,18 @@ test('вызов с аварийным выключателем в счётчи�
   const repo = path.resolve(HERE, '..', '..');
   const bin = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');
   const classifier = await import(`../../.claude/hooks/lib/classifier.js?t=${Date.now()}`);
+  // Адаптер запуска приходит ПАРАМЕТРОМ: сам классификатор его не выбирает.
+  const adapter = await import(`../../.claude/hooks/lib/classify-bash.js?t=${Date.now()}`);
   try {
     process.env.PLAN_CLASSIFIER = 'off';
-    classifier.classify(bin, 'cover', [], 'проба');
+    classifier.classify(adapter, bin, 'cover', [], 'проба');
     assert.equal(fs.existsSync(log), false, 'выключенный классификатор модель не звал — записи нет');
     delete process.env.PLAN_CLASSIFIER;
-    classifier.classify(bin, 'cover', [], 'проба');
+    classifier.classify(adapter, bin, 'cover', [], 'проба');
     assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model"/, 'обычный вызов пишется');
+    // Без адаптера возможности нет вовсе, и это НАЗВАНО, а не сведено к «модель
+    // промолчала»: молчание тут неотличимо от настоящего неответа модели.
+    assert.equal(classifier.classify(null, bin, 'cover', [], 'проба'), 'UNSUPPORTED');
   } finally {
     delete process.env.PLAN_CLASSIFIER;
     delete process.env.CRAFT_METRICS_LOG;
