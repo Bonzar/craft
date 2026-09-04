@@ -55,9 +55,13 @@ test('токены хода: недописанный хвост без пере
 test('запись вызова модели без сессии и переопределения не делается', () => {
   delete process.env.CRAFT_METRICS_LOG;
   delete process.env.CLAUDE_CODE_SESSION_ID;
-  const before = fs.existsSync('/tmp/metrics.default.jsonl') ? fs.statSync('/tmp/metrics.default.jsonl').size : 0;
+  // Путь строит сам модуль — от os.tmpdir(), а не от зашитого /tmp: с
+  // подменённым TMPDIR кейс иначе смотрел бы не на тот файл.
+  const shared = path.join(os.tmpdir(), 'metrics.default.jsonl');
+  const sizeOf = () => (fs.existsSync(shared) ? fs.statSync(shared).size : 0);
+  const before = sizeOf();
   metrics.recordModelCall({ mode: 'cover', ms: 1, outcome: 'COVERED' });
-  const after = fs.existsSync('/tmp/metrics.default.jsonl') ? fs.statSync('/tmp/metrics.default.jsonl').size : 0;
+  const after = sizeOf();
   assert.equal(after, before, 'общий журнал default не пополняется');
 });
 
@@ -213,7 +217,7 @@ test('вызов модели ложится в журнал сессии из �
   delete process.env.CLAUDE_CODE_SESSION_ID;
   const sid = `unit-${process.pid}-${Date.now()}`;
   globalThis.hookEvent = { session_id: sid };
-  const log = `/tmp/metrics.${sid}.jsonl`;
+  const log = path.join(os.tmpdir(), `metrics.${sid}.jsonl`);
   try {
     metrics.recordModelCall({ mode: 'cover', ms: 3, outcome: 'COVERED' });
     assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model","ts":".*","mode":"cover","ms":3/);
@@ -229,7 +233,7 @@ test('фоновый приём пишет вызов модели в журна
   delete process.env.CLAUDE_CODE_SESSION_ID;
   const sid = `unit-ingest-${process.pid}-${Date.now()}`;
   globalThis.hookEvent = { session_id: sid };
-  const log = `/tmp/metrics.${sid}.jsonl`;
+  const log = path.join(os.tmpdir(), `metrics.${sid}.jsonl`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
   const repo = path.resolve(HERE, '..', '..');
   process.env.PLAN_CLASSIFIER_CMD = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');

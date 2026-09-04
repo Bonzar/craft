@@ -22,8 +22,9 @@ function tmpFile() {
 // во временный каталог: без этого приём пишет в журнал ЖИВОЙ сессии (журнал
 // резолвится по идентификатору сессии, а он у запускающего есть) и кладёт
 // очередь в общий git-каталог НАСТОЯЩЕГО чекаута, откуда следующий Stop увезёт
-// её в ветку metrics. Кейсы, которые хранение как раз и проверяют, выставляют
-// эти переменные сами и по-своему.
+// её в ветку metrics. Приём ПЛАНА очередь не заводит, но журнал и сводку правит
+// так же, поэтому помощник нужен и ему. Кейсы, которые хранение как раз и
+// проверяют, выставляют эти переменные сами и по-своему.
 const storeOff = (dir) => ({
   CRAFT_METRICS_LOG: path.join(dir, 'metrics.jsonl'),
   METRICS_STORE_QUEUE: path.join(dir, 'queue.jsonl'),
@@ -552,6 +553,7 @@ test('приём видит цель, заведённую предыдущей 
     stdio: 'ignore',
     env: {
       ...process.env,
+      ...storeOff(path.dirname(file)),
       PLAN_CLASSIFIER_CMD: path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh'),
       MOCK_CLASSIFIER_INGEST: JSON.stringify({
         add: [

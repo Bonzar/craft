@@ -8,8 +8,17 @@
 // читался бы как обычный скрипт, которому импорт недоступен.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
 
 const SID = 'test-session-id';
+// Каталогов у состояния ДВА, и эталон это показывает, а не сглаживает.
+// STATE — каталог меток и реестра: `factGateStateDir()` возвращает зашитый
+// `/tmp`, и подменённый TMPDIR его не двигает. TMP — то, что берут три
+// новых пути (`os.tmpdir()`). Разъезд настоящий и назван в теле PR заметкой
+// на фазу 4; зашей эталон целиком в `/tmp` — и он краснел бы на подменённом
+// TMPDIR там, где код прав.
+const STATE = '/tmp';
+const TMP = os.tmpdir();
 
 async function freshPaths(env = {}) {
   for (const key of Object.keys(process.env)) {
@@ -28,20 +37,20 @@ async function freshPaths(env = {}) {
 // Эталон: имя переменной-переопределения → путь по умолчанию при заданной
 // сессии. Меняешь строку здесь — меняешь контракт со всеми хуками разом.
 const EXPECTED = {
-  CRAFT_APPROVAL_REGISTRY: `/tmp/craft-approvals.${SID}.jsonl`,
-  CRAFT_PLAN_FILE_MARKER: `/tmp/plan-file.${SID}.path`,
-  CRAFT_PLAN_CRITIC_MARKER: `/tmp/plan-critic.${SID}.done`,
-  CRAFT_PLAN_CRITIC_PENDING: `/tmp/plan-critic.${SID}.pending`,
-  CRAFT_PLAN_CRITIC_RUNS: `/tmp/plan-critic.${SID}.runs`,
-  CRAFT_PLAN_CRITIC_ROUND: `/tmp/plan-critic.${SID}.round`,
-  CRAFT_PLAN_SHOWN_MARKER: `/tmp/plan-shown.${SID}`,
-  CRAFT_SERVICE_TURN_MARKER: `/tmp/plan-service-turn.${SID}`,
-  OBSERVE_BUFFER: `/tmp/agent-observe.${SID}.log`,
-  INCIDENT_CLOSURE_MARKER: `/tmp/incident-closure.${SID}.armed`,
-  ROUTINE_FACTS_MARKER: `/tmp/routine-facts.${SID}.reminded`,
-  SYNC_SYSTEM_STATE: `/tmp/sync-system.${SID}`,
-  RELATIVE_LINK_STATE: `/tmp/relative-link.${SID}.blocked`,
-  CRAFT_METRICS_LOG: `/tmp/metrics.${SID}.jsonl`,
+  CRAFT_APPROVAL_REGISTRY: `${STATE}/craft-approvals.${SID}.jsonl`,
+  CRAFT_PLAN_FILE_MARKER: `${STATE}/plan-file.${SID}.path`,
+  CRAFT_PLAN_CRITIC_MARKER: `${STATE}/plan-critic.${SID}.done`,
+  CRAFT_PLAN_CRITIC_PENDING: `${STATE}/plan-critic.${SID}.pending`,
+  CRAFT_PLAN_CRITIC_RUNS: `${STATE}/plan-critic.${SID}.runs`,
+  CRAFT_PLAN_CRITIC_ROUND: `${STATE}/plan-critic.${SID}.round`,
+  CRAFT_PLAN_SHOWN_MARKER: `${STATE}/plan-shown.${SID}`,
+  CRAFT_SERVICE_TURN_MARKER: `${STATE}/plan-service-turn.${SID}`,
+  OBSERVE_BUFFER: `${STATE}/agent-observe.${SID}.log`,
+  INCIDENT_CLOSURE_MARKER: `${STATE}/incident-closure.${SID}.armed`,
+  ROUTINE_FACTS_MARKER: `${STATE}/routine-facts.${SID}.reminded`,
+  SYNC_SYSTEM_STATE: `${TMP}/sync-system.${SID}`,
+  RELATIVE_LINK_STATE: `${TMP}/relative-link.${SID}.blocked`,
+  CRAFT_METRICS_LOG: `${TMP}/metrics.${SID}.jsonl`,
 };
 
 test('пути состояния совпадают с закреплённым эталоном', async () => {
