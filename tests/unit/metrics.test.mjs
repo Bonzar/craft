@@ -238,6 +238,12 @@ test('фоновый приём пишет вызов модели в журна
   const repo = path.resolve(HERE, '..', '..');
   process.env.PLAN_CLASSIFIER_CMD = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');
   process.env.CRAFT_REGISTRY_SYNC = '1';
+  // Приём кончается возвратом сводки в очередь хранения. Кейс про журнал, а не
+  // про хранение, и гасит его ЯВНО: сегодня очередь не заводится лишь потому,
+  // что сводки по этому пути нет, — то есть защита держится на том, что кейс не
+  // станет её складывать.
+  const savedStore = process.env.METRICS_STORE;
+  process.env.METRICS_STORE = 'off';
   try {
     const registry = await import(`../../.claude/hooks/lib/registry.js?t=${Date.now()}`);
     registry.ingestInBackground(path.join(dir, 'registry.jsonl'), 'reply', 'поправь README');
@@ -246,6 +252,8 @@ test('фоновый приём пишет вызов модели в журна
     delete globalThis.hookEvent;
     delete process.env.PLAN_CLASSIFIER_CMD;
     delete process.env.CRAFT_REGISTRY_SYNC;
+    if (savedStore === undefined) delete process.env.METRICS_STORE;
+    else process.env.METRICS_STORE = savedStore;
     fs.rmSync(log, { force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -468,6 +476,7 @@ test('вызов модели после сводки пересобирает �
   assert.equal(after.model_calls.count, 1, 'вызов из фонового процесса дошёл до копии сводки');
   assert.equal(after.model_calls.ms, 1200);
   assert.equal(after.model_calls.by_mode.ingest.count, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // Хук стоит в цепочке хода: ждать чужой лок дольше отведённого срока он не

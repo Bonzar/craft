@@ -21,6 +21,7 @@
 // реестра стоит метка, и сверка правки её дожидается: сверять по недособранному
 // реестру значит отклонять только что разрешённое.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   classifierPath, classify, INGEST_BUDGET_SEC, INGEST_PASSES,
@@ -230,11 +231,26 @@ function requeueSummary() {
   }
 }
 
+// Материал приёма кладёт вызывающий во ВРЕМЕННЫЙ каталог и сам его не убирает:
+// приём отсоединён, и ждать его там некому. Значит убирает приём — за собой, в
+// конце. Каталог сносится только если он и правда наш: имя по маске вызывающего
+// и место под системным временным каталогом. Иначе прогон копил бы по каталогу
+// на каждую реплику Влада ровно там, где хуки держат состояние.
+function dropMaterial() {
+  try {
+    const dir = path.dirname(path.resolve(materialFile || ''));
+    if (!/^registry-ingest-/.test(path.basename(dir))) return;
+    if (path.dirname(dir) !== os.tmpdir()) return;
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch { /* не убралось — это мусор, а не работа */ }
+}
+
 let code = 1;
 try {
   code = main();
 } finally {
   if (markId) unmarkParsing(path.join(`${registryFile}.parsing`, markId));
   requeueSummary();
+  dropMaterial();
 }
 process.exit(code);

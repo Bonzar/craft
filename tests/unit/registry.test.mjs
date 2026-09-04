@@ -4,7 +4,7 @@
 //
 // Расширение .mjs, а не .js: в каталоге тестов нет манифеста модулей, и .js
 // читался бы как обычный скрипт, которому импорт недоступен.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,8 +13,17 @@ import { spawn, execFileSync } from 'node:child_process';
 
 const registry = await import('../../.claude/hooks/lib/registry.js');
 
+// Песочницы кейсов сносятся одним разом в конце файла: их тут по одной на кейс,
+// а временный каталог здесь же служит каталогом состояния хуков.
+const sandboxes = [];
+after(() => {
+  for (const dir of sandboxes) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function tmpFile() {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-')), 'approvals.jsonl');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-'));
+  sandboxes.push(dir);
+  return path.join(dir, 'approvals.jsonl');
 }
 
 // Приём кончается ПОЗЖЕ хода и возвращает сводку сессии в очередь хранения.
@@ -731,6 +740,44 @@ test('приём с выключенным хранением очередь н�
   });
 
   assert.equal(fs.existsSync(queue), false, 'при METRICS_STORE=off очередь не заводится');
+});
+
+// Материал приёма кладёт вызывающий во временный каталог и не убирает: приём
+// отсоединён, ждать его некому. Значит убирает приём — и только СВОЙ каталог:
+// временный каталог здесь же служит каталогом состояния хуков, и снести чужое
+// там дороже, чем оставить своё.
+test('приём убирает за собой каталог материала и не трогает чужой', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+
+  const run = (material) => execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      ...storeOff(dir),
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+    },
+  });
+
+  // Свой каталог — по маске вызывающего и под системным временным каталогом.
+  const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-ingest-'));
+  const material = path.join(mine, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+  run(material);
+  assert.equal(fs.existsSync(mine), false, 'свой каталог материала убран');
+
+  // Чужой каталог остаётся: приём не сторож чужому временному файлу.
+  const alien = path.join(dir, 'material.txt');
+  fs.writeFileSync(alien, 'продолжаем ту же работу');
+  run(alien);
+  assert.equal(fs.existsSync(alien), true, 'чужой материал не тронут');
+  sandboxes.push(mine);
 });
 
 // Приём идёт СЛЕДОМ за ходом, и вставать на лок очереди, который отсоединённый

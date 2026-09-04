@@ -4,7 +4,7 @@
 // заведомо долгой: выгрузка метрик ходит в сеть и гоняет цепочку команд гита, у
 // каждой свой потолок в две минуты. По одному возрасту такой лок отбирали бы у
 // работающего процесса.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,9 +18,20 @@ const lock = await import(LOCK);
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+// Песочницы кейсов сносятся ОДНИМ разом в конце файла: у половины из них внутри
+// живут чужие процессы и каталоги локов, и убирать их по месту значило бы
+// повторить одно и то же в каждом кейсе. Временный каталог здесь же служит
+// каталогом состояния хуков, и мусор в нём — не только гигиена.
+const sandboxes = [];
 function tmpDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  sandboxes.push(dir);
+  return dir;
 }
+
+after(() => {
+  for (const dir of sandboxes) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 function waitFor(check, budgetMs = 10000) {
   const started = Date.now();

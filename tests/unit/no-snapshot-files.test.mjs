@@ -6,7 +6,7 @@
 //
 // Расширение .mjs — как у соседей: без манифеста модулей .js читается как
 // обычный скрипт.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,8 +26,16 @@ function sh(cwd, cmd, args) {
   return r;
 }
 
+// Песочницы (по репозиторию на кейс) сносятся одним разом в конце файла:
+// временный каталог здесь же служит каталогом состояния хуков.
+const sandboxes = [];
+after(() => {
+  for (const dir of sandboxes) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function repo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'no-snapshot-'));
+  sandboxes.push(dir);
   sh(dir, 'git', ['init', '-q', '-b', 'main']);
   sh(dir, 'git', ['config', 'user.email', 't@example.com']);
   sh(dir, 'git', ['config', 'user.name', 't']);
