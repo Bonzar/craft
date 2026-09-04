@@ -571,3 +571,106 @@ test('нулевой ход не считается ни ходом, ни ход
   ];
   assert.equal(summarize(resumed).turns, 2, 'ходы — число различных номеров, а не максимум');
 });
+
+// --- сшивка события с его решением ---------------------------------------------
+//
+// Наблюдатель зовётся ПЕРВЫМ в цепочке (иначе отказ обрывал бы её до него), поэтому
+// исхода в записи события нет: решение приходит отдельной строкой от того, кто
+// решил, и переносится в журнал метрик следующим событием. Кейсы держат то, ради
+// чего это затевалось: четыре метрики, которые считаются по исходу, считаются
+// по-прежнему.
+const line = (n) => `2026-01-01T00:0${n}:00.000Z`;
+
+test('сшивка: отказ приходит СТРОКОЙ и считается отказом', () => {
+  const records = [
+    { kind: 'session', ts: line(0), turn: 0, occ: 'o0', harness: 'claude', sid: 's' },
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, occ: 'o2', tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-guard-plan-gate', outcome: 'deny', class: 'gate.empty', h: 'H1', tool: 'Bash',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 1);
+  assert.deepEqual(s.denies.by_class, { 'gate.empty': 1 });
+});
+
+test('сшивка: строки решения нет — это проход, а не пропуск', () => {
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, occ: 'o2', tool: 'Bash', id: 'c1', h: 'H1', plan: true },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.plan.shown, 1, 'показ плана без отказа — показ');
+});
+
+test('сшивка: ПОВТОРНО перенесённая строка счёт не двоит', () => {
+  const decision = {
+    kind: 'decision', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+    hook: 'universal-guard-plan-gate', outcome: 'deny', class: 'gate.empty', h: 'H1', tool: 'Bash',
+  };
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, occ: 'o2', tool: 'Bash', id: 'c1', h: 'H1' },
+    decision, { ...decision },
+  ];
+  // Журнал решений могли перечитать сначала (его подмели, сессия вернулась) —
+  // строка легла дважды. Считается ЗАПИСЬ СОБЫТИЯ, а их по одной на событие.
+  assert.equal(summarize(records, { sid: 's' }).denies.total, 1);
+});
+
+test('сшивка: решение принадлежит СВОЕМУ появлению события, а не следующему', () => {
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    { kind: 'stop', ts: line(2), turn: 1, occ: 'o2' },
+    {
+      kind: 'decision', ts: line(2), occurrence: 'o2', sid: 's', call_id: '', event: 'stop',
+      hook: 'universal-stop-quality-gate', outcome: 'block', class: '',
+    },
+    { kind: 'stop', ts: line(3), turn: 1, occ: 'o3' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.deepEqual(s.stop_blocks, { 'universal-stop-quality-gate': 1 },
+    'второй конец хода блокировку первого не наследует');
+});
+
+test('сшивка: признак инцидента приходит той же строкой канала', () => {
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    { kind: 'flag', ts: line(1), occurrence: 'o1', sid: 's', call_id: '', event: 'prompt', flag: 'incident' },
+    { kind: 'prompt', ts: line(2), turn: 2, occ: 'o2' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.incidents.detected, 1, 'признак принадлежит своей реплике, а не всем следующим');
+});
+
+test('сшивка: ложный отказ виден и когда исход пришёл строкой', () => {
+  const records = [
+    { kind: 'prompt', ts: line(0), turn: 1, occ: 'o0' },
+    { kind: 'pre', ts: line(1), turn: 1, occ: 'o1', tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(1), occurrence: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-guard-plan-gate', outcome: 'deny', class: 'gate.uncovered', h: 'H1', tool: 'Bash',
+    },
+    // Влад вмешался репликой — и ТОТ ЖЕ вызов прошёл.
+    { kind: 'prompt', ts: line(2), turn: 2, occ: 'o2' },
+    { kind: 'pre', ts: line(3), turn: 2, occ: 'o3', tool: 'Bash', id: 'c2', h: 'H1' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.false_denies, 1);
+  assert.equal(s.denies.total, 1);
+});
+
+test('сшивка: своё поле записи сильнее строки — журнал переживает обновление слоя', () => {
+  // Записи, сделанные прежним слоем, несут исход прямо в себе; строки решения к
+  // ним нет вовсе, и «нет строки» для них не значит «прошёл».
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    {
+      kind: 'pre', ts: line(2), turn: 1, tool: 'Bash', id: 'c1', h: 'H1', decision: 'deny', class: 'gate.empty', by: 'x',
+    },
+  ];
+  assert.equal(summarize(records, { sid: 's' }).denies.total, 1);
+});

@@ -1,9 +1,13 @@
-// Канал между хуками одного события: журнал решений в каталоге состояния.
+// Канал от решателя к наблюдателю: журнал решений в каталоге состояния.
 //
 // Прежде каналом была общая память процесса (globalThis). Кейсы ниже держат ровно
-// то, чего у неё не было: решение видно ДРУГОМУ процессу и переживает смерть того,
+// то, чего у неё не было: строка видна ДРУГОМУ процессу и переживает смерть того,
 // кто решил; замеры и признаки идут тем же каналом; молчание гварда строки не
-// пишет, и «строки нет» значит проход.
+// пишет.
+//
+// Читатель один — наблюдатель, и читает он ОТ СМЕЩЕНИЯ: строки этого события он
+// заберёт на следующем и перенесёт в свой журнал. Сшивку строки с событием держат
+// кейсы свёртки (tests/unit/metrics.test.mjs): ключ — номер появления события.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -29,7 +33,7 @@ const EVENT = {
   occurrence: 'occ-1', session_id: 'sid-1', event: 'pre-tool', call_id: 'toolu_1', tool: 'Bash',
 };
 
-test('решение видно ДРУГОМУ процессу: канал переживает того, кто решил', async () => {
+test('строка видна ДРУГОМУ процессу: канал переживает того, кто решил', async () => {
   const { dir, file } = sandbox();
   try {
     // Решение пишет отдельный процесс и умирает — ровно как хук, который принял
@@ -42,117 +46,86 @@ test('решение видно ДРУГОМУ процессу: канал пе
     const res = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
     assert.equal(res.status, 0, res.stderr);
 
-    const { decisionFor } = await load(file);
-    const d = decisionFor(EVENT);
+    const { readSince } = await load(file);
+    const { records, offset, status } = readSince(EVENT, {});
+    assert.equal(status, 'ok');
+    assert.equal(records.length, 1);
+    const [d] = records;
     assert.equal(d.outcome, 'deny');
     assert.equal(d.hook, 'universal-guard-plan-gate');
     assert.equal(d.class, 'gate.empty');
-    assert.equal(d.h, 'abc123', 'хеш вызова нужен сводке: у отказанного вызова записи метрик нет');
+    assert.equal(d.h, 'abc123', 'хеш вызова нужен сводке: по нему узнаётся тот же вызов');
+    assert.equal(d.occurrence, EVENT.occurrence, 'номер появления — ключ сшивки с событием');
+    assert.ok(offset > 0, 'смещение сдвинулось: следующее чтение начнётся отсюда');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('решения нет — значит проход: молчащий гвард строки не пишет', async () => {
+test('молчащий гвард строки не пишет — читать нечего, и это не ошибка', async () => {
   const { dir, file } = sandbox();
   try {
-    const { decisionFor } = await load(file);
-    assert.equal(decisionFor(EVENT), null);
+    const { readSince } = await load(file);
+    assert.deepEqual(readSince(EVENT, {}), { records: [], offset: 0, head: '', status: 'ok' });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('решения разных вызовов не путаются: ключ — событие и идентификатор вызова', async () => {
+test('от смещения читается ТОЛЬКО новое: длинная сессия не делает чтение дороже', async () => {
   const { dir, file } = sandbox();
   try {
-    const { appendDecision, decisionFor } = await load(file);
-    appendDecision({ ...EVENT, call_id: 'toolu_1' }, { outcome: 'deny', hook: 'a' });
-    appendDecision({ ...EVENT, call_id: 'toolu_2' }, { outcome: 'ask', hook: 'b' });
-    assert.equal(decisionFor({ ...EVENT, call_id: 'toolu_1' }).outcome, 'deny');
-    assert.equal(decisionFor({ ...EVENT, call_id: 'toolu_2' }).outcome, 'ask');
-    // Одно и то же событие с одним идентификатором, но ДО и ПОСЛЕ вызова — разные
-    // события: у хука, стоящего на обоих, иначе гасилось бы второе.
-    assert.equal(decisionFor({ ...EVENT, event: 'post-tool', call_id: 'toolu_1' }), null);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('повторный запуск того же события перекрывает прежнее решение', async () => {
-  const { dir, file } = sandbox();
-  try {
-    const { appendDecision, decisionFor } = await load(file);
+    const { appendDecision, readSince } = await load(file);
     appendDecision(EVENT, { outcome: 'deny', hook: 'a' });
-    appendDecision(EVENT, { outcome: 'allow', hook: 'b' });
-    assert.equal(decisionFor(EVENT).outcome, 'allow', 'решает ПОСЛЕДНЯЯ строка');
+    const first = readSince(EVENT, {});
+    assert.equal(first.records.length, 1);
+
+    // Ничего не дописали — второе чтение с тем же смещением пусто.
+    assert.deepEqual(readSince(EVENT, first).records, []);
+
+    appendDecision({ ...EVENT, call_id: 'toolu_2' }, { outcome: 'ask', hook: 'b' });
+    const second = readSince(EVENT, first);
+    assert.equal(second.records.length, 1, 'прочитано только дописанное');
+    assert.equal(second.records[0].outcome, 'ask');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('журнал читается ХВОСТОМ: длинная сессия не делает чтение дороже', async () => {
+test('журнал подмели — читаем сначала, а не молчим', async () => {
   const { dir, file } = sandbox();
   try {
-    const { appendDecision, decisionFor } = await load(file);
-    // Больше хвоста в 64 КиБ: строки давних ходов до текущего события не
-    // дочитываются вовсе, и цена чтения не растёт вместе с сессией.
-    const line = (id) => `${JSON.stringify({ kind: 'decision', occurrence: 'occ-1', sid: 'sid-1', event: 'pre-tool', call_id: id, outcome: 'deny', pad: 'x'.repeat(500) })}\n`;
-    // Самая ПЕРВАЯ строка — давний ход; за ней столько, что она уходит за хвост.
-    const rows = [line('ancient'), ...Array.from({ length: 300 }, (_, i) => line(`filler-${i}`))];
-    fs.writeFileSync(file, rows.join(''));
-    const size = fs.statSync(file).size;
-    assert.ok(size > 64 * 1024, `нужен файл длиннее хвоста, вышло ${size}`);
-
-    appendDecision(EVENT, { outcome: 'ask', hook: 'late' });
-    assert.equal(decisionFor(EVENT).outcome, 'ask', 'свежая строка в хвосте читается');
-    assert.equal(decisionFor({ ...EVENT, call_id: 'ancient' }), null,
-      'строка за пределами хвоста не читается — это и есть цена, которую мы не платим');
-    assert.equal(decisionFor({ ...EVENT, call_id: 'filler-299' }).outcome, 'deny',
-      'а всё, что в хвосте, читается по-прежнему');
+    const { appendDecision, readSince } = await load(file);
+    appendDecision(EVENT, { outcome: 'deny', hook: 'a' });
+    const seen = readSince(EVENT, {});
+    // Уборщик СНЁС журнал сессии, вернувшейся после долгого перерыва, и следующая
+    // запись завела новый — с новым номером файла и своей длиной, которая запросто
+    // окажется больше запомненного смещения. По одному смещению его читали бы с
+    // середины, а начало пропадало бы молча.
+    fs.rmSync(file);
+    appendDecision(EVENT, { outcome: 'block', hook: 'ccc' });
+    const again = readSince(EVENT, seen);
+    assert.equal(again.records.length, 1, 'строка нового журнала не пропущена');
+    assert.equal(again.records[0].outcome, 'block');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('решение ПРОШЛОГО хода не течёт в следующий: ключ у каждого появления свой', async () => {
+test('каждая строка несёт свой ключ: событие, появление, вызов и сессию', async () => {
   const { dir, file } = sandbox();
   try {
-    const { appendDecision, decisionFor, appendFlag, hasFlag } = await load(file);
-    // У конца хода и реплики идентификатора вызова НЕТ, и без номера появления
-    // ключ был бы один на всю сессию: второй конец хода читал бы блокировку
-    // первого, а признак инцидента держался бы на каждой следующей реплике.
-    // Появление — процесс: у каждого прочтения события свой номер.
-    const stopOne = { occurrence: 'occ-1', session_id: 'sid-1', event: 'stop', call_id: '' };
-    const stopTwo = { occurrence: 'occ-2', session_id: 'sid-1', event: 'stop', call_id: '' };
-    appendDecision(stopOne, { outcome: 'block', hook: 'universal-stop-quality-gate' });
-    assert.equal(decisionFor(stopOne).outcome, 'block', 'свой ход блокировку видит');
-    assert.equal(decisionFor(stopTwo), null,
-      'следующий конец хода блокировку прошлого не наследует');
-
-    const promptOne = { occurrence: 'occ-3', session_id: 'sid-1', event: 'prompt', call_id: '' };
-    const promptTwo = { occurrence: 'occ-4', session_id: 'sid-1', event: 'prompt', call_id: '' };
-    appendFlag(promptOne, 'incident');
-    assert.equal(hasFlag(promptOne, 'incident'), true);
-    assert.equal(hasFlag(promptTwo, 'incident'), false,
-      'признак инцидента принадлежит своей реплике, а не всем последующим');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('решение чужой сессии не читается своей: сессия входит в ключ', async () => {
-  const { dir, file } = sandbox();
-  try {
-    const { appendDecision, decisionFor } = await load(file);
-    // При пустом идентификаторе путь журнала общий (`decisions.default.jsonl`), и
-    // без сверки сессии отказ одной сессии читался бы решением другой — а канал
-    // несёт deny и block, обрывающие цепочку.
-    const mine = { occurrence: 'occ-1', session_id: 'sid-A', event: 'pre-tool', call_id: 'toolu_1' };
-    const alien = { occurrence: 'occ-1', session_id: 'sid-B', event: 'pre-tool', call_id: 'toolu_1' };
-    appendDecision(alien, { outcome: 'deny', hook: 'чужой' });
-    assert.equal(decisionFor(alien).outcome, 'deny');
-    assert.equal(decisionFor(mine), null, 'чужая сессия своей цепочки не обрывает');
+    const { appendDecision, appendFlag, readSince } = await load(file);
+    appendDecision({ ...EVENT, call_id: 'toolu_1' }, { outcome: 'deny', hook: 'a' });
+    appendDecision({ occurrence: 'occ-2', session_id: 'sid-1', event: 'stop', call_id: '' },
+      { outcome: 'block', hook: 'b' });
+    appendFlag({ occurrence: 'occ-3', session_id: 'sid-1', event: 'prompt', call_id: '' }, 'incident');
+    const { records } = readSince(EVENT, {});
+    assert.deepEqual(records.map((r) => [r.kind, r.occurrence, r.event, r.call_id, r.sid]), [
+      ['decision', 'occ-1', 'pre-tool', 'toolu_1', 'sid-1'],
+      ['decision', 'occ-2', 'stop', '', 'sid-1'],
+      ['flag', 'occ-3', 'prompt', '', 'sid-1'],
+    ]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -168,7 +141,7 @@ test('каталог состояния берётся ИЗ СОБЫТИЯ, а �
     mod.appendDecision(ev, { outcome: 'block', hook: 'h' });
     assert.equal(fs.existsSync(path.join(own, 'decisions.sid-1.jsonl')), true,
       'журнал лёг в каталог, который принесло событие');
-    assert.equal(mod.decisionFor(ev).outcome, 'block');
+    assert.equal(mod.readSince(ev, {}).records[0].outcome, 'block');
     fs.rmSync(own, { recursive: true, force: true });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -178,33 +151,27 @@ test('каталог состояния берётся ИЗ СОБЫТИЯ, а �
 test('замеры и признаки идут тем же каналом', async () => {
   const { dir, file } = sandbox();
   try {
-    const { appendTimings, timingsFor, appendFlag, hasFlag } = await load(file);
-    assert.deepEqual(timingsFor(EVENT), {}, 'замеров ещё нет — пусто, а не выдумка');
+    const { appendTimings, appendFlag, readSince } = await load(file);
     appendTimings(EVENT, { 'universal-guard-plan-gate': 12, 'universal-metrics': 3 });
-    assert.deepEqual(timingsFor(EVENT), { 'universal-guard-plan-gate': 12, 'universal-metrics': 3 });
-
-    const prompt = { session_id: 'sid-1', event: 'prompt', call_id: '' };
-    assert.equal(hasFlag(prompt, 'incident'), false);
-    appendFlag(prompt, 'incident');
-    assert.equal(hasFlag(prompt, 'incident'), true);
-    assert.equal(hasFlag(EVENT, 'incident'), false, 'признак принадлежит своему событию');
+    appendFlag({ session_id: 'sid-1', event: 'prompt', call_id: '' }, 'incident');
+    const { records } = readSince(EVENT, {});
+    assert.deepEqual(records.map((r) => r.kind), ['timing', 'flag']);
+    assert.deepEqual(records[0].hooks, { 'universal-guard-plan-gate': 12, 'universal-metrics': 3 });
+    assert.equal(records[1].flag, 'incident');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('отметка журнала меняется только когда в него написали', async () => {
-  const { dir, file } = sandbox();
+test('нечитаемый журнал назван ошибкой, а не пустотой', async () => {
+  const { dir } = sandbox();
   try {
-    const { appendDecision, journalStamp } = await load(file);
-    // Диспетчер спрашивает «решили ли уже» после КАЖДОГО хука цепочки хода.
-    // Отметка отвечает на это без разбора хвоста: не выросла — решения не было.
-    const empty = journalStamp(EVENT);
-    assert.equal(journalStamp(EVENT), empty, 'без записи отметка не двигается');
-    appendDecision(EVENT, { outcome: 'deny', hook: 'a' });
-    const after = journalStamp(EVENT);
-    assert.notEqual(after, empty, 'запись решения отметку сдвинула');
-    assert.equal(journalStamp(EVENT), after, 'и снова стоит, пока не пишут');
+    // Пустота значит «никто не решал». Беда чтения — не пустота, и назвать её так
+    // значило бы посчитать отказ прошедшим вызовом.
+    const { readSince } = await load(dir); // каталог вместо файла: EISDIR
+    const res = readSince(EVENT, {});
+    assert.equal(res.status, 'error');
+    assert.deepEqual(res.records, []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -219,7 +186,7 @@ test('без сессии и переопределения журнала не�
     const mod = await import(`${LIB}/decision-log.js?t=${Date.now()}${Math.random()}`);
     // Путь по умолчанию есть всегда (счётчик, а не периметр), поэтому проверяется
     // не отказ записи, а то, что вызов не роняет хук.
-    assert.doesNotThrow(() => mod.decisionFor({ session_id: '', event: 'prompt', call_id: '' }));
+    assert.doesNotThrow(() => mod.readSince({ session_id: '', event: 'prompt', call_id: '' }, {}));
   } finally {
     if (saved !== undefined) process.env.CRAFT_DECISION_LOG = saved;
     if (savedSid !== undefined) process.env.CRAFT_SESSION_ID = savedSid;

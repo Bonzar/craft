@@ -262,8 +262,54 @@ function fillSignals(s, records) {
   s.signals.turns_without_progress = [...noProgress.values()].filter(Boolean).length;
 }
 
-export function summarize(records, { sid = '', now = Date.now() } = {}) {
+// Сшивка события с его решением. Наблюдатель записывает событие ДО решателей
+// (иначе отказ обрывал бы цепочку до него), а решение, признак и замеры приходят
+// отдельными строками — их переносит он же на следующем событии. Общий ключ —
+// номер появления события: `occ` у записи события, `occurrence` у строки решения.
+//
+// Повтор переноса безвреден: строки складываются в карту по ключу, а считаются
+// потом по ЗАПИСЯМ СОБЫТИЙ, которых по одной на событие.
+//
+// Своё поле записи, если оно есть, сильнее: журнал переживает обновление слоя, и
+// у записей, сделанных до него, исход стоит прямо в них.
+function stitch(records) {
+  const decisions = new Map();
+  const flags = new Map();
+  for (const r of records) {
+    if (!r.occurrence) continue;
+    if (r.kind === 'decision') decisions.set(r.occurrence, r);
+    else if (r.kind === 'flag' && r.flag) {
+      if (!flags.has(r.occurrence)) flags.set(r.occurrence, new Set());
+      flags.get(r.occurrence).add(r.flag);
+    }
+  }
+  return records.map((r) => {
+    if (!r.occ) return r;
+    const d = decisions.get(r.occ);
+    if (r.kind === 'pre') {
+      // Строки решения нет — значит решения не было, то есть проход: молчащий
+      // гвард в журнал не пишет.
+      return {
+        ...r,
+        decision: r.decision || (d ? d.outcome : 'allow'),
+        by: r.by || (d ? d.hook : ''),
+        class: r.class || (d ? d.class || '' : ''),
+      };
+    }
+    if (r.kind === 'stop') {
+      return { ...r, blocked_by: r.blocked_by || (d && d.outcome === 'block' ? d.hook : '') };
+    }
+    if (r.kind === 'prompt') {
+      const set = flags.get(r.occ);
+      return { ...r, incident: r.incident === true || Boolean(set && set.has('incident')) };
+    }
+    return r;
+  });
+}
+
+export function summarize(raw, { sid = '', now = Date.now() } = {}) {
   const s = blank(sid, now);
+  const records = stitch(raw);
   const pres = preById(records);
   fillSession(s, records);
   fillTurns(s, records);

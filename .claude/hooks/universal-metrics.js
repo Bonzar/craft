@@ -1,15 +1,28 @@
 #!/usr/bin/env node
-// Хук метрик: журнал событий сессии в JSONL. Стоит ПОСЛЕДНИМ в каждой цепочке
-// диспетчера и зовётся всегда, даже когда цепочка уже дала решение: решение
-// предыдущих хуков он читает из ЖУРНАЛА РЕШЕНИЙ в каталоге состояния
-// (lib/decision-log.js), а не из stdout и не из общей памяти процесса.
+// Хук метрик: журнал событий сессии в JSONL. Стоит ПЕРВЫМ в каждой цепочке
+// диспетчера — первое решение цепочку обрывает, и наблюдатель, стоящий последним,
+// не звался бы ровно на отказах, которые он и считает.
+//
+// Отсюда правило: событие он записывает ДО решения, поэтому исхода вызова в его
+// записи нет вовсе. Решение по событию пишет тот, кто решил, — строкой в ЖУРНАЛ
+// РЕШЕНИЙ (lib/decision-log.js), а наблюдатель переносит новые строки этого
+// журнала в свой на СЛЕДУЮЩЕМ событии и запоминает смещение. Сшивает их обратно
+// свёртка — по номеру появления события (lib/metrics-summary.js).
+//
+// Почему переносом, а не чтением журнала решений на месте: журнал решений живёт
+// час после последней записи, а журнал метрик — вся сессия, и сводка складывается
+// по нему целиком. Считать отказы по тому, что вот-вот подметут, нельзя.
+//
+// Ничего не теряется на последнем событии: за отказом всегда идёт следующее
+// событие (агент получает отказ и ходит дальше), а за блокированным концом хода —
+// следующий конец хода.
 //
 // События: SessionStart (старт, харнес, репо), UserPromptSubmit (номер хода),
-// PreToolUse (инструмент, исход гейта и класс причины, время хуков),
-// PostToolUse / PostToolUseFailure (длительность вызова, ошибка инструмента),
-// Stop (блокировка по имени хука, длительность хода, токены хода по usage
-// записей assistant транскрипта). Вызовы модели из хуков пишет сама обёртка
-// вызова (classifier.js) — они идут из фоновых процессов.
+// PreToolUse (инструмент и признаки вызова), PostToolUse / PostToolUseFailure
+// (длительность вызова, ошибка инструмента, правил ли вызов мир),
+// Stop (длительность хода, токены хода по usage записей assistant транскрипта).
+// Вызовы модели из хуков пишет сама обёртка вызова (classifier.js) — они идут из
+// фоновых процессов.
 //
 // На Stop, следом за строкой хода, в журнал ложится СВОДКА сессии одной строкой
 // (kind: summary) — свёртка всего журнала с начала сессии; её копия лежит в
@@ -22,10 +35,15 @@
 // в них нет.
 //
 // Контракт записи вызова (по нему судят и сводка, и кейсы): pre несёт признаки
-// `edit`, `note_write`, `plan`, `question`, `stage`, `push`, `skill` и
-// `mutates` — «этот вызов менял мир». Их ставит здесь обёртка, потому что имена
+// `edit`, `note_write`, `plan`, `question`, `stage`, `push` и `skill`; признак
+// `mutates` — «этот вызов менял мир» — стоит на записи СОСТОЯВШЕГОСЯ вызова
+// (post), потому что разбор целей записи стоит запусков git, а до решения ещё
+// неизвестно, состоится ли вызов вообще. Их ставит здесь обёртка, потому что имена
 // инструментов знает она; сводка считает по признакам и про инструменты не
 // знает ничего.
+//
+// Ключ сшивки — `occ`, номер появления события: он же стоит в строке журнала
+// решений.
 //
 // В журнал не попадает содержимое: ни правок, ни команд, ни промптов, ни
 // текста отказов. Ничего не печатает, сети и модели не зовёт, укладывается в
@@ -49,9 +67,7 @@ import {
 import { callHash } from './lib/call-hash.js';
 import { turnUsage, transcriptSize } from './lib/usage-claude.js';
 import { projectDispatcherAt } from './lib/registration-claude.js';
-import {
-  decisionFor, timingsFor, hasFlag, journalBroken,
-} from './lib/decision-log.js';
+import { readSince } from './lib/decision-log.js';
 import { mutationOf } from './lib/write-targets.js';
 import { toolFlags, callShape, toolScope, semanticInput } from './lib/tool-flags-claude.js';
 import { commandTargets } from './lib/write-targets-bash.js';
@@ -115,7 +131,7 @@ function onSessionStart(state, ctx) {
   // историю в новый ход.
   state.transcript_offset = transcriptSize(transcript);
   append(log, {
-    kind: 'session', ...ctx.base, source: event.source,
+    kind: 'session', ...ctx.base, occ: ctx.occ, source: event.source,
     harness: event.harness, repo: state.repo, sid,
   });
 }
@@ -123,7 +139,6 @@ function onSessionStart(state, ctx) {
 function onPrompt(state, ctx) {
   state.turn += 1;
   state.turn_started_at = now;
-  const incident = hasFlag(event, 'incident');
   const h = promptHash(prompt);
   const repeat = Boolean(h) && state.prompt_hashes.includes(h);
   if (h) state.prompt_hashes = [...state.prompt_hashes, h].slice(-50);
@@ -132,8 +147,11 @@ function onPrompt(state, ctx) {
   state.turn_stages = {};
   state.turn_tools = 0;
   state.turn_progress = false;
+  // Признак инцидента ставит другой хук той же цепочки — и ставит ПОСЛЕ
+  // наблюдателя, поэтому в записи его нет: он придёт строкой журнала решений и
+  // будет сшит по `occ`, как и решение.
   append(log, {
-    kind: 'prompt', ts: ctx.ts, turn: state.turn, incident,
+    kind: 'prompt', ts: ctx.ts, turn: state.turn, occ: ctx.occ,
     repeat, reinstruct: looksLikeReinstruction(prompt),
   });
 }
@@ -152,25 +170,16 @@ function onPre(state, ctx) {
     state.inflight[id] = now;
     capMap(state.inflight); // полёт бывает недописанным: вызов отменён
   }
-  // Решение предыдущих хуков цепочки — из журнала решений, а не из общей памяти
-  // процесса: строку пишет тот, кто решил, ещё до выхода, поэтому решение видно и
-  // когда решивший хук следом упал. Строки нет — решения не было, то есть проход.
-  // Класс причины считает решивший: текста причины в журнале нет вовсе.
-  // Пустота значит проход, ТОЛЬКО пока канал цел: сорвавшаяся запись даёт ту же
-  // пустоту, и записать по ней «allow» значило бы назвать отказанный вызов
-  // прошедшим — соврать ровно там, где сводка считает отказы.
-  const kind = ctx.decision ? ctx.decision.outcome : (ctx.decisionKnown ? 'allow' : '');
+  // Исхода вызова в записи НЕТ: наблюдатель зовётся до решателей, и в эту секунду
+  // решения ещё не существует. Оно придёт строкой журнала решений, а сшито будет
+  // по `occ` — номеру появления события.
   const record = {
-    kind: 'pre', ...ctx.base, tool, id, decision: kind,
-    by: ctx.decision ? ctx.decision.hook : '',
-    class: ctx.decision ? ctx.decision.class || '' : '',
+    kind: 'pre', ...ctx.base, occ: ctx.occ, tool, id,
     // Хеш вызова: по нему сводка узнаёт «тот же вызов» для ложных отказов.
     // Служебные поля входа этого харнеса отсеиваются ЗДЕСЬ — общая часть их имён
     // не знает. Сам вход в журнал не идёт ни в каком виде.
     h: callHash(tool, semanticInput(tool, input)),
-    hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
   };
-  if (!ctx.decisionKnown) markUnsupported(record, 'decision-log');
   // Признаки вызова: правка, запись в базу заметок, показ плана, вопрос, стадия,
   // пуш, имя скилла. Их ставит обёртка, потому что имена инструментов знает
   // она; сводка считает по признакам.
@@ -185,18 +194,9 @@ function onPre(state, ctx) {
     if (state.turn_stages[tool]) record.stage_repeat = true;
     state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
   }
-  // Мутирующий вызов помечается ТОЛЬКО у прошедших: у отказанного не будет
-  // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
-  if (kind === 'allow') {
-    const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
-    if (mutation.status !== 'ok') markUnsupported(record, mutation.capability);
-    else if (mutation.mutates) record.mutates = true;
-    if (id) {
-      state.pre_flags[id] = {
-        push: record.push === true, stage: record.stage === true, mutates: record.mutates === true,
-      };
-      capMap(state.pre_flags);
-    }
+  if (id) {
+    state.pre_flags[id] = { push: record.push === true, stage: record.stage === true };
+    capMap(state.pre_flags);
   }
   append(log, record);
 }
@@ -208,10 +208,17 @@ function onPost(state, ctx) {
   if (id) delete state.inflight[id];
   const record = {
     kind: ctx.name === EVENTS.POST_TOOL ? 'post' : 'fail',
-    ...ctx.base, tool, id, hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
+    ...ctx.base, occ: ctx.occ, tool, id,
   };
   if (Number.isFinite(started)) record.tool_ms = now - started;
   record.error = ctx.name === EVENTS.POST_TOOL_FAILURE || responseIsError(response);
+  // «Менял ли вызов мир» считается на СОСТОЯВШЕМСЯ вызове, а не до него: разбор
+  // целей записи стоит запусков git на каждую цель, и платить их за вызов, который
+  // ещё могут запретить, незачем. До решения этого и не узнать — наблюдатель
+  // зовётся первым.
+  const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
+  if (mutation.status !== 'ok') markUnsupported(record, mutation.capability);
+  else if (mutation.mutates) record.mutates = true;
   // Прогресс хода держится на идентификаторе вызова: без него признаки события до
   // вызова не с чем связать. Молча писать «прогресса не было» нельзя — это ложь
   // про ход; непокрытое называется явно (решение 8).
@@ -237,17 +244,10 @@ function onStop(state, ctx) {
   const fact = measured ? { tokens: measured.usage } : {};
   const missing = missingFact(fact, ['tokens']);
   if (measured) state.transcript_offset = measured.offset;
-  const record = {
-    kind: 'stop', ...ctx.base,
-    hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
-  };
-  // Кто заблокировал конец хода — вопрос к каналу решений. Канал оборван — поля
-  // нет вовсе: пустое `blocked_by` читалось бы как «никто не блокировал».
-  if (ctx.decisionKnown) {
-    record.blocked_by = ctx.decision && ctx.decision.outcome === 'block' ? ctx.decision.hook : '';
-  } else {
-    markUnsupported(record, 'decision-log');
-  }
+  // Кто заблокировал конец хода — узнается из журнала решений: гвард решает ПОСЛЕ
+  // наблюдателя. Строка сшивается по `occ`, а блокировка не теряется — за
+  // блокированным концом хода всегда идёт следующий, и он её перенесёт.
+  const record = { kind: 'stop', ...ctx.base, occ: ctx.occ };
   if (missing) markUnsupported(record, unsupported(missing).capability);
   else record.usage = fact.tokens;
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
@@ -270,6 +270,31 @@ function ensureShape(state) {
   if (!state.turn_stages || typeof state.turn_stages !== 'object') state.turn_stages = {};
   if (!Number.isFinite(state.turn_tools)) state.turn_tools = 0;
   if (!state.pre_flags || typeof state.pre_flags !== 'object') state.pre_flags = {};
+  if (!Number.isFinite(state.decisions_offset)) state.decisions_offset = 0;
+  if (typeof state.decisions_head !== 'string') state.decisions_head = '';
+}
+
+// Перенести в свой журнал всё, что дописали в журнал решений с прошлого раза.
+// Смещение помнится в состоянии; журнал подмели или он начался заново — читаем с
+// начала, а повторно перенесённая строка не двоится: свёртка складывает строки по
+// ключу, а не по счёту.
+//
+// Не прочитался журнал — это НЕ «решений не было»: пропуск называется словом, и
+// видно его строкой в журнале, а не пустотой в сводке.
+function drainDecisions(state) {
+  const { records, offset, head, status } = readSince(event, {
+    offset: Number(state.decisions_offset) || 0,
+    head: String(state.decisions_head || ''),
+  });
+  if (status !== 'ok') {
+    append(log, {
+      kind: 'skip', ts, what: 'decisions', capability: 'decision-log',
+    });
+    return;
+  }
+  for (const rec of records) append(log, rec);
+  state.decisions_offset = offset;
+  state.decisions_head = head;
 }
 
 // Всё, что трогает состояние, идёт ОДНОЙ залоченной правкой. Внутри неё
@@ -278,19 +303,16 @@ function ensureShape(state) {
 // внутри — обычные return.
 const stop = updateState(log, (state) => {
   ensureShape(state);
-  // Замеры времени хуков цепочки — из журнала: их кладёт туда диспетчер одной
-  // строкой перед последним хуком.
-  const timings = timingsFor(event);
+  // Перенос строк журнала решений — ПЕРВЫМ делом и внутри той же залоченной
+  // правки: смещение лежит в состоянии, и без лока два процесса перенесли бы
+  // одно и то же дважды. Строки прошлых событий (решение, признак, замеры) ложатся
+  // в журнал метрик как есть, ключом им служит номер появления события.
+  drainDecisions(state);
   const ctx = {
     name,
     ts,
     id: event.call_id,
-    hooksMs: Object.values(timings).reduce((sum, ms) => sum + (Number(ms) || 0), 0),
-    hooks: timings,
-    decision: decisionFor(event),
-    // Знаем ли мы исход вообще. Найденная строка — факт сама по себе; её
-    // отсутствие — факт лишь пока канал цел (lib/decision-log.js).
-    decisionKnown: !!decisionFor(event) || !journalBroken(),
+    occ: event.occurrence,
     base: { ts, turn: state.turn },
   };
 

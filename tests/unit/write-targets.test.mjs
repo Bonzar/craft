@@ -70,9 +70,14 @@ test('прогресс: удавшаяся мутация через Bash или
     'правка эфемерной цели прогрессом не считается — как и запись в неё через шелл');
   assert.equal(mutates('Edit', {}), false, 'правка без цели мир не меняет');
   assert.equal(mutates('Read', {}), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), true);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: true }), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: false }, { error: false }), false);
+  // «Менял ли мир» стоит на записи СОСТОЯВШЕГОСЯ вызова: до решения этого не
+  // спрашивают вовсе — наблюдатель зовётся до решателей, и разбор целей записи
+  // стоил бы запусков git за вызов, который ещё могут запретить.
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: false, mutates: true }), true);
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: true, mutates: true }), false);
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: false, mutates: false }), false);
+  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), false,
+    'признак на записи ДО вызова прогрессом больше не считается: вызов мог не состояться');
 });
 
 // Без адаптера интерпретатора общая часть НЕ говорит «мир не менялся»: своего
