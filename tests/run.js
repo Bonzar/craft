@@ -13,7 +13,7 @@
 //   block  — stdout с decision "block" (стоп-хуки)
 //   inject — stdout несёт директиву инцидента
 //   silent — stdout пуст
-//   contains:<строка> / not-contains: / err-contains: / err-not-contains:
+//   contains:<строка> / not-contains: / err-contains:
 // Exit 0 — все кейсы зелёные И каждый исход каждого хука покрыт; иначе 1.
 //
 // Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
@@ -147,11 +147,13 @@ function tmpName(prefix) {
 // сессию, а параллельные прогоны — делить состояние друг с другом.
 function makeState() {
   const marker = tmpName('plan-gate-test');
-  // Идентификатор сессии свой у каждого прогона: кейсы, которые доказывают
-  // ОТСУТСТВИЕ файла с сессией в имени, на общем идентификаторе читали бы файл,
-  // оставленный прошлым прогоном ещё старого кода, и были бы красными вечно.
-  const sid = path.basename(tmpName('test-sid'));
   const fgdir = fs.mkdtempSync(path.join(os.tmpdir(), 'fact-gate-test.'));
+  // Свой временный дом на прогон. Пути, которые хук строит САМ через os.tmpdir()
+  // (журнал метрик без сессии и без переопределения), кейс иначе проверить не
+  // может: он смотрел бы на свой файл, а хук писал бы в общий /tmp — и «записи
+  // нет» зеленело бы при живой записи. Заодно прогон не делит эти файлы с
+  // живой сессией и с соседним прогоном.
+  const tmphome = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-tmp-test.'));
   const oncedir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-once-test.'));
   const icmark = `${tmpName('incident-closure-test')}.armed`;
   const s = {
@@ -174,7 +176,8 @@ function makeState() {
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
     metrics: tmpName('metrics-test'),
-    sid,
+    tmphome,
+    metricsdefault: path.join(tmphome, 'metrics.default.jsonl'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -192,6 +195,9 @@ function makeState() {
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
     SESSION_ANCHOR_STATE: s.anchor,
+    // Временный каталог прогона: пути, которые хук строит сам через os.tmpdir(),
+    // должны лечь сюда, а не в общий /tmp.
+    TMPDIR: s.tmphome,
     // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
     // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
     CRAFT_METRICS_LOG: s.metrics,
@@ -238,6 +244,7 @@ function cleanState(s) {
   // после каждого прогона, и на машине разработчика туда осел бы настоящий
   // CODEX_AUTH_JSON, унаследованный от окружения.
   fs.rmSync(s.codexhome, { recursive: true, force: true });
+  fs.rmSync(s.tmphome, { recursive: true, force: true });
 }
 
 // --- прогон одного кейса -----------------------------------------------------
@@ -259,15 +266,17 @@ function subst(value, s) {
   //
   // {METRICS} — журнал метрик этого прогона: кейсы хука метрик судят по его
   // строкам.
-  // {SID} — идентификатор сессии этого прогона: им кейс задаёт хуку сессию и
-  // наводит ASSERT_FILE на путь, который из неё строится.
+  //
+  // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
+  // не переопределён. По нему кейс доказывает, что записи не было: свой
+  // {METRICS} тут не годится — хук о нём и не знал бы.
   if (!s) return withDir;
   return withDir
     .split('{REGISTRY}').join(s.registry)
     .split('{CLASSTRACE}').join(s.classtrace)
     .split('{CODEXHOME}').join(s.codexhome)
-    .split('{METRICS}').join(s.metrics)
-    .split('{SID}').join(s.sid);
+    .split('{METRICS_DEFAULT}').join(s.metricsdefault)
+    .split('{METRICS}').join(s.metrics);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске.
@@ -330,7 +339,7 @@ function runPass(c) {
   // проверяется ответ ПОСЛЕДНЕГО вызова).
   let res = { stdout: '', stderr: '' };
   const repeat = Number(c.repeat || 1);
-  const args = Array.isArray(c.args) ? c.args.map(subst) : [];
+  const args = Array.isArray(c.args) ? c.args.map((v) => subst(v, s)) : [];
   for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
 
   const traced = fs.existsSync(s.classtrace);
@@ -418,7 +427,6 @@ function grade(expect, out, err, env) {
   if (expect.startsWith('err-contains:')) return err.includes(expect.slice('err-contains:'.length));
   // Отрицание: иногда доказательство — именно ОТСУТСТВИЕ строки (хук не пошёл по
   // короткому пути, гвард не сработал вхолостую).
-  if (expect.startsWith('err-not-contains:')) return !err.includes(expect.slice('err-not-contains:'.length));
   return null; // неизвестное ожидание
 }
 

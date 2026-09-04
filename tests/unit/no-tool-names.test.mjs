@@ -13,9 +13,10 @@
 //   инструментов в них законны; долг «обёртка тоже не должна знать имён» — 1.6;
 // — привязку к ХАРНЕСУ (`CLAUDE_*`, `.claude/`, поля события, формат решения и
 //   транскрипта) в `lib/` ловит отдельный счёт ниже, тоже по списку;
-// — ДАННЫЕ: смотрятся только `.js`, поэтому имена инструментов в соседних
-//   `.json` (например `lib/vendor/read-only-rules.json` с перечнем читающих
-//   команд) счётом не покрыты — перенос имён из кода в данные гвард не заметит.
+// — ДАННЫЕ и ПОДКАТАЛОГИ: смотрятся только `.js` в самом `lib/`, поэтому имена
+//   в соседних `.json` (`lib/vendor/read-only-rules.json` с перечнем читающих
+//   команд) и в `lib/vendor/*.js` счётом не покрыты — перенос имён из кода в
+//   данные или в подкаталог гвард не заметит.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -72,6 +73,9 @@ const HARNESS_SOURCE = [
   'file_path|notebook_path|subagent_type',
   // Поля события, которые общая часть читает напрямую, и канал между хуками
   // одного события: и то и другое — привязка к харнесу, и новую заводить нельзя.
+  // `event.` тут носитель, и слабость та же, что ниже: `const ev = raw.event`
+  // счёт обойдёт. Без носителя `cwd` и `prompt` ловили бы `process.cwd()` и наши
+  // собственные поля, поэтому счёт здесь — нижняя граница.
   '\\bevent\\.(cwd|prompt|source|stop_hook_active)\\b|is_error|isError',
   'globalThis\\.hook[A-Z]',
   // Поля транскрипта ловятся по ИМЕНИ ПОЛЯ, а не по имени переменной: с
@@ -102,13 +106,13 @@ const HARNESS_DEBT = new Map([
 // само содержимое литерала остаётся кодом: `spawnSync('git', …)` — это вызов
 // инструмента, а не комментарий. Без маскировки `//` в 'https://…' обрубал
 // строку, и имя инструмента за ним пропадало.
-export function codeOf(line) {
+function codeOf(line) {
   const bare = line.replace(/'[^']*'|"[^"]*"|`[^`]*`/g, (lit) => lit.replace(/\/\//g, '~~'));
   const cut = bare.indexOf('//');
   return (cut < 0 ? bare : bare.slice(0, cut)).replace(/~~/g, '//');
 }
 
-export function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TOOL_NAMES) {
+function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TOOL_NAMES) {
   const found = [];
   for (const [n, line] of text.split('\n').entries()) {
     // Комментарий имеет право назвать инструмент: он объясняет, ПОЧЕМУ имени
@@ -118,9 +122,8 @@ export function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TO
   return found;
 }
 
-// Сколько ВХОЖДЕНИЙ имени в файле. Не строк: вторая привязка, дописанная в уже
-// посчитанную строку, при счёте строк проходила молча.
-export function hits(file, source) {
+// Сколько ВХОЖДЕНИЙ имени в файле (см. шапку про счёт у DEBT).
+function hits(file, source) {
   const g = new RegExp(source.join('|'), 'g');
   let total = 0;
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
@@ -201,8 +204,6 @@ test('гвард имён ловит имя инструмента в коде �
   assert.equal(probe('const gitLike = 0;'), 0, 'часть слова именем инструмента не является');
 });
 
-// Счёт идёт по ВХОЖДЕНИЯМ: вторая привязка, дописанная в уже посчитанную
-// строку, при счёте строк проходила молча — ровно так её и заводят.
 test('счёт считает вхождения, а не строки', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tool-hits-'));
   try {

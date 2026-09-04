@@ -26,7 +26,7 @@ const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '
 // «printf 'git push'» считался бы пушем (слово в кавычках — не команда), а в
 // «git status && git commit -m x» виден был бы только первый вызов, и правка
 // цепочкой выглядела бы как ход без единого изменения.
-export function gitInvocations(command) {
+function gitInvocations(command) {
   const scan = stripQuoted(stripQuotedHeredocs(String(command || '')));
   const out = [];
   for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
@@ -63,7 +63,7 @@ function gitParts(piece) {
 
 // Подкоманды гита, которые меняют репозиторий или рабочее дерево. Сетевые
 // fetch и pull здесь же: они пишут ссылки и объекты в локальный репозиторий.
-export const GIT_MUTATIONS = new Set([
+const GIT_MUTATIONS = new Set([
   'push', 'commit', 'merge', 'rebase', 'reset', 'checkout', 'switch', 'restore',
   'stash', 'tag', 'cherry-pick', 'am', 'apply', 'revert', 'clean', 'rm', 'mv', 'add',
   'fetch', 'pull', 'branch', 'remote', 'worktree', 'init', 'clone',

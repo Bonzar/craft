@@ -148,7 +148,7 @@ function stateFile(log) {
   return `${log}.state.json`;
 }
 
-export function loadState(log) {
+function loadState(log) {
   try {
     const parsed = JSON.parse(fs.readFileSync(stateFile(log), 'utf8'));
     if (parsed && typeof parsed === 'object') return parsed;
@@ -171,7 +171,7 @@ export function loadState(log) {
 // как ход, которого не было.
 //
 // Возвращает то, что вернуло действие, либо undefined, когда лок не достался.
-export const STATE_WAIT_MS = 300;
+const STATE_WAIT_MS = 300;
 
 export function updateState(log, run) {
   const { locked, value } = withLock(stateFile(log), () => {
@@ -190,7 +190,7 @@ export function updateState(log, run) {
 // --- классы причин -----------------------------------------------------------
 
 // Короткое имя хука: без контурного префикса.
-export function hookShort(name) {
+function hookShort(name) {
   return String(name || '').replace(/^(universal|craft)-/, '');
 }
 
@@ -337,7 +337,7 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-export function writeSummary(log, summary) {
+function writeSummary(log, summary) {
   try {
     fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify(summary)}\n`);
   } catch { /* копия сводки не легла — в журнале она есть */ }
@@ -388,7 +388,7 @@ export function transcriptSize(file) {
 // Ниже порога реплика в узнавание повторов не идёт: «ок», «да», «продолжай» —
 // обычные подтверждения, и второе такое же за сессию не означает, что Влад
 // повторяет указание. Пустой хеш выключает и признак повтора, и запоминание.
-export const REPEAT_MIN_CHARS = 12;
+const REPEAT_MIN_CHARS = 12;
 
 // Нормализованный хеш реплики: регистр, пробелы и знаки препинания не в счёт.
 // По нему узнаётся ПОВТОР той же реплики; сам текст никуда не идёт.

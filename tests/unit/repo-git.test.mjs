@@ -30,17 +30,20 @@ test('remote с портом не превращает порт во владе�
 // форков, а СЛЕДСТВИЕМ памяти: ответ не меняется вслед за .gitignore.
 test('ответ об игнорировании пути запоминается в пределах процесса', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ignored-memo-'));
-  const G = (...args) => spawnSync('git', ['-C', dir, ...args], { stdio: 'ignore' });
-  G('init', '--quiet');
-  fs.writeFileSync(path.join(dir, '.gitignore'), 'memo.log\n');
-  fs.writeFileSync(path.join(dir, 'memo.log'), 'x');
+  try {
+    const G = (...args) => spawnSync('git', ['-C', dir, ...args], { stdio: 'ignore' });
+    G('init', '--quiet');
+    fs.writeFileSync(path.join(dir, '.gitignore'), 'memo.log\n');
+    fs.writeFileSync(path.join(dir, 'memo.log'), 'x');
 
-  const before = repo.isIgnored('memo.log', dir);
-  fs.writeFileSync(path.join(dir, '.gitignore'), '');
-  const after = repo.isIgnored('memo.log', dir);
+    const before = repo.isIgnored('memo.log', dir);
+    fs.writeFileSync(path.join(dir, '.gitignore'), '');
+    const after = repo.isIgnored('memo.log', dir);
 
-  assert.equal(before, true, 'путь игнорируется по .gitignore');
-  assert.equal(after, true, 'второй ответ пришёл из памяти, а не из нового вызова git');
-  assert.equal(repo.isIgnored('other.log', dir), false, 'память не отвечает за чужой путь');
-  fs.rmSync(dir, { recursive: true, force: true });
+    assert.equal(before, true, 'путь игнорируется по .gitignore');
+    assert.equal(after, true, 'второй ответ пришёл из памяти, а не из нового вызова git');
+    assert.equal(repo.isIgnored('other.log', dir), false, 'память не отвечает за чужой путь');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

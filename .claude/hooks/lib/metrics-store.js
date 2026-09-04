@@ -113,7 +113,7 @@ export function dayOf(summary) {
 
 // Строки дня со вставленными сводками: своя строка на сессию, порядок прежних
 // строк сохраняется, чужие строки не трогаются.
-export function upsertLines(text, summaries) {
+function upsertLines(text, summaries) {
   const lines = text.split('\n').filter((l) => l.trim());
   const bySid = new Map();
   const order = [];
