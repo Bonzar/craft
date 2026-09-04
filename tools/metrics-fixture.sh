@@ -11,11 +11,14 @@
 #   bash tools/metrics-fixture.sh /путь/к/чекауту
 #   bash tools/metrics-fixture.sh            # текущий чекаут
 #
+# Печатает ДВА прогона: обычный (за блокированным концом хода идёт следующий) и
+# тот, где сессия кончилась прямо на блокировке.
+#
 # Сеть и модель не зовутся (PLAN_CLASSIFIER=off), хранение выключено, всё
 # состояние — во временном каталоге, который снимается за собой.
 set -u
 side() {
-  local repo="$1"
+  local repo="$1" tail_mode="$2"
   local st cwd; st=$(mktemp -d); cwd=$(mktemp -d)
   local SID="fix-$$-${RANDOM}"
   local PLAN="$st/plan.md"
@@ -54,7 +57,15 @@ side() {
   ev PreToolUse "\"tool_use_id\":\"t6\",\"tool_name\":\"ExitPlanMode\",\"tool_input\":{\"plan\":\"# [система] правка диспетчера\n- где: .claude/hooks/dispatch.js\"}"
   AUTO=1
   ev Stop ''
-  ev Stop ''
+  # Хвост задаётся вызывающим: либо ход продолжился (второй конец хода), либо
+  # сессия кончилась прямо на заблокированном конце хода. Второй случай отдельный:
+  # строки решений приезжают к наблюдателю СЛЕДУЮЩИМ событием, и если следующего
+  # хода нет, донести блокировку может только конец сессии.
+  if [ "$tail_mode" = "session-end" ]; then
+    ev SessionEnd '"reason":"clear"'
+  else
+    ev Stop ''
+  fi
   local sum="$st/metrics.jsonl.summary.json"
   if [ -f "$sum" ]; then
     node -e '
@@ -69,4 +80,5 @@ side() {
   rm -rf "$st" "$cwd"
 }
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-side "$ROOT"
+echo "ход продолжился:            $(side "$ROOT" next-stop)"
+echo "сессия кончилась на блоке:  $(side "$ROOT" session-end)"

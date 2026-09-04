@@ -674,3 +674,37 @@ test('сшивка: своё поле записи сильнее строки �
   ];
   assert.equal(summarize(records, { sid: 's' }).denies.total, 1);
 });
+
+test('сшивка: пропавшие строки — исход НЕИЗВЕСТЕН, а не «прошёл»', () => {
+  // Наблюдатель заметил, что строки прошлого события не приехали, и назвал это
+  // словом. Молчание на месте решения нельзя считать проходом: у отказа
+  // поменялся бы ЗНАК — отбитый показ плана уехал бы в сводку как показанный.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, occ: 'o2', tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true },
+    {
+      kind: 'skip', ts: line(3), what: 'decisions', capability: 'decision-log', occ: 'o2',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 0, 'неизвестный исход показом не считается');
+  assert.equal(s.plan.bounced, 0, 'и отказом тоже: мы не знаем');
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.unknown_decisions, 1, 'зато видно, сколько событий осталось без исхода');
+});
+
+test('сшивка: найденная строка сильнее отметки о пропаже', () => {
+  // Канал сорвался позже, а решение этого события уже доехало — оно и есть факт.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, occ: 'o2', tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+    },
+    { kind: 'skip', ts: line(3), what: 'decisions', capability: 'decision-log', occ: 'o2' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 1);
+  assert.equal(s.unknown_decisions, 0);
+});

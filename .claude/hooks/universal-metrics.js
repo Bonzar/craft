@@ -272,6 +272,8 @@ function ensureShape(state) {
   if (!state.pre_flags || typeof state.pre_flags !== 'object') state.pre_flags = {};
   if (!Number.isFinite(state.decisions_offset)) state.decisions_offset = 0;
   if (typeof state.decisions_head !== 'string') state.decisions_head = '';
+  if (typeof state.last_occ !== 'string') state.last_occ = '';
+  if (typeof state.last_dispatched !== 'boolean') state.last_dispatched = false;
 }
 
 // Перенести в свой журнал всё, что дописали в журнал решений с прошлого раза.
@@ -282,19 +284,37 @@ function ensureShape(state) {
 // Не прочитался журнал — это НЕ «решений не было»: пропуск называется словом, и
 // видно его строкой в журнале, а не пустотой в сводке.
 function drainDecisions(state) {
+  // Событие, записанное ПРОШЛЫЙ раз: его строки обязаны приехать сейчас. Замеры
+  // цепочки кладёт диспетчер на КАЖДОМ событии, поэтому «ни одной строки с тем
+  // номером появления» значит не «решения не было», а «канал не доехал».
+  const prev = String(state.last_occ || '');
+  const expected = Boolean(prev) && state.last_dispatched === true;
   const { records, offset, head, status } = readSince(event, {
     offset: Number(state.decisions_offset) || 0,
     head: String(state.decisions_head || ''),
   });
   if (status !== 'ok') {
-    append(log, {
-      kind: 'skip', ts, what: 'decisions', capability: 'decision-log',
-    });
+    lost(prev);
     return;
   }
-  for (const rec of records) append(log, rec);
+  let arrived = !expected;
+  for (const rec of records) {
+    if (rec.occurrence && rec.occurrence === prev) arrived = true;
+    append(log, rec);
+  }
+  if (!arrived) lost(prev);
   state.decisions_offset = offset;
   state.decisions_head = head;
+}
+
+// Строки прошлого события не приехали. Молчать нельзя: пустота на месте решения
+// читается как проход, то есть у отказа поменялся бы ЗНАК. Непокрытое называется
+// словом и адресуется НОМЕРОМ ПОЯВЛЕНИЯ — свёртка по нему пометит то событие
+// неизвестным, а не прошедшим.
+function lost(occ) {
+  append(log, {
+    kind: 'skip', ts, what: 'decisions', capability: 'decision-log', occ,
+  });
 }
 
 // Всё, что трогает состояние, идёт ОДНОЙ залоченной правкой. Внутри неё
@@ -316,12 +336,23 @@ const stop = updateState(log, (state) => {
     base: { ts, turn: state.turn },
   };
 
+  // Что записали сейчас — то и ждём в журнале решений на следующем событии.
+  // Признак диспетчера: вне его замеров цепочки не бывает вовсе, и ждать нечего.
+  state.last_occ = event.occurrence || '';
+  state.last_dispatched = Boolean(process.env.CRAFT_HOOK_SCOPE);
+
   if (name === EVENTS.SESSION_START) onSessionStart(state, ctx);
   else if (name === EVENTS.PROMPT) onPrompt(state, ctx);
   else if (name === EVENTS.PRE_TOOL) onPre(state, ctx);
   else if (name === EVENTS.POST_TOOL || name === EVENTS.POST_TOOL_FAILURE) onPost(state, ctx);
   else if (name === EVENTS.STOP) {
     onStop(state, ctx);
+    return true;
+  } else if (name === EVENTS.SESSION_END) {
+    // Конец сессии своей записи не имеет: события хода он не описывает. Он нужен
+    // ради ПЕРЕНОСА — строки последнего хода приезжают сюда, — и ради пересборки
+    // сводки по ним: заблокированный последний конец хода иначе не попал бы в ту
+    // сводку, что уезжает в хранение.
     return true;
   }
   return false;

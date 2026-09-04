@@ -41,7 +41,7 @@ test('строка видна ДРУГОМУ процессу: канал пер
     const code = `
       process.env.CRAFT_DECISION_LOG = ${JSON.stringify(file)};
       const { appendDecision } = await import(${JSON.stringify(`${LIB}/decision-log.js`)});
-      appendDecision(${JSON.stringify(EVENT)}, { outcome: 'deny', hook: 'universal-guard-plan-gate', reasonClass: 'gate.empty', h: 'abc123', tool: 'Bash' });
+      appendDecision(${JSON.stringify(EVENT)}, { outcome: 'deny', hook: 'universal-guard-plan-gate', reasonClass: 'gate.empty' });
     `;
     const res = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
     assert.equal(res.status, 0, res.stderr);
@@ -54,8 +54,9 @@ test('строка видна ДРУГОМУ процессу: канал пер
     assert.equal(d.outcome, 'deny');
     assert.equal(d.hook, 'universal-guard-plan-gate');
     assert.equal(d.class, 'gate.empty');
-    assert.equal(d.h, 'abc123', 'хеш вызова нужен сводке: по нему узнаётся тот же вызов');
     assert.equal(d.occurrence, EVENT.occurrence, 'номер появления — ключ сшивки с событием');
+    assert.equal(d.h, undefined,
+      'хеш вызова живёт на записи ВЫЗОВА: у отказанного вызова она теперь есть, и вторая копия разъезжалась бы');
     assert.ok(offset > 0, 'смещение сдвинулось: следующее чтение начнётся отсюда');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

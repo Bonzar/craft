@@ -40,13 +40,18 @@ test('сносится старое, живое остаётся', () => {
   }
 });
 
-test('уборщик не сносит сам себя, даже когда отметка старая', () => {
+test('отметка переживает уборку, потому что её обновляют ПЕРЕД сканом', () => {
   const d = dir();
   try {
     aged(path.join(d, 'decisions.sweep'), 3 * HOUR);
     aged(path.join(d, 'decisions.старая.jsonl'), 3 * HOUR);
+    const before = fs.statSync(path.join(d, 'decisions.sweep')).mtimeMs;
     assert.equal(sweepOld(d, OPTS), true);
+    // Старая отметка не мешает убирать, сама остаётся и становится свежей: по ней
+    // отмеряется следующий скан. Если бы её обновляли ПОСЛЕ скана, она попала бы
+    // под собственный срок и сносилась.
     assert.deepEqual(fs.readdirSync(d), ['decisions.sweep']);
+    assert.ok(fs.statSync(path.join(d, 'decisions.sweep')).mtimeMs > before);
   } finally {
     fs.rmSync(d, { recursive: true, force: true });
   }

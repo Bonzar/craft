@@ -14,6 +14,10 @@
 // не считается.
 const DENY_WINDOW_TURNS = 1;
 
+// Исход, которого мы не знаем. Отдельное слово, а не пустая строка и не `allow`:
+// «не доехало» и «прошёл» — разные вещи, и вторая тут была бы выгодной ложью.
+const UNKNOWN = 'unknown';
+
 // Время записи в миллисекундах; нет времени — NaN.
 const ms = (ts) => Date.parse(ts);
 
@@ -39,6 +43,7 @@ function blank(sid, now) {
     false_denies: 0,
     plan: { shown: 0, bounced: 0, approved: 0 },
     incidents: { detected: 0, skill_called: 0, share: null },
+    unknown_decisions: 0,
     stop_blocks: {},
     tool_errors: 0,
     first_edit_ms: null,
@@ -275,7 +280,11 @@ function fillSignals(s, records) {
 function stitch(records) {
   const decisions = new Map();
   const flags = new Map();
+  // События, чьи строки НЕ ДОЕХАЛИ: наблюдатель заметил пропажу и назвал её
+  // словом. Пустота на их месте не значит «прошёл» — она значит «не знаем».
+  const unsettled = new Set();
   for (const r of records) {
+    if (r.kind === 'skip' && r.what === 'decisions' && r.occ) unsettled.add(r.occ);
     if (!r.occurrence) continue;
     if (r.kind === 'decision') decisions.set(r.occurrence, r);
     else if (r.kind === 'flag' && r.flag) {
@@ -286,17 +295,22 @@ function stitch(records) {
   return records.map((r) => {
     if (!r.occ) return r;
     const d = decisions.get(r.occ);
+    // Строка решения найдена — она и есть факт, даже если канал потом сорвался.
+    const unknown = !d && unsettled.has(r.occ);
     if (r.kind === 'pre') {
-      // Строки решения нет — значит решения не было, то есть проход: молчащий
-      // гвард в журнал не пишет.
+      // Строки решения нет и канал цел — значит решения не было, то есть проход:
+      // молчащий гвард в журнал не пишет.
       return {
         ...r,
-        decision: r.decision || (d ? d.outcome : 'allow'),
+        decision: r.decision || (d ? d.outcome : (unknown ? UNKNOWN : 'allow')),
         by: r.by || (d ? d.hook : ''),
         class: r.class || (d ? d.class || '' : ''),
       };
     }
     if (r.kind === 'stop') {
+      // Поля нет вовсе, когда неизвестно: пустое `blocked_by` читалось бы как
+      // «никто не блокировал».
+      if (unknown && !r.blocked_by) return { ...r, decision: UNKNOWN };
       return { ...r, blocked_by: r.blocked_by || (d && d.outcome === 'block' ? d.hook : '') };
     }
     if (r.kind === 'prompt') {
@@ -305,6 +319,13 @@ function stitch(records) {
     }
     return r;
   });
+}
+
+// Сколько событий осталось без исхода. Число само по себе метрика: пока оно ноль,
+// остальные считаны по полному материалу; выросло — сводка неполна, и видно, на
+// сколько именно, а не «где-то что-то могло пропасть».
+function fillUnknown(s, records) {
+  s.unknown_decisions = records.filter((r) => r.decision === UNKNOWN).length;
 }
 
 export function summarize(raw, { sid = '', now = Date.now() } = {}) {
@@ -324,5 +345,6 @@ export function summarize(raw, { sid = '', now = Date.now() } = {}) {
   fillOutcome(s, records, pres);
   fillFirstEdit(s, records, pres);
   fillSignals(s, records);
+  fillUnknown(s, records);
   return s;
 }

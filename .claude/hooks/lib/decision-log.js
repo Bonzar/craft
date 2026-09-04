@@ -24,12 +24,16 @@ function logOf(event) {
 }
 
 // Журнал переживает сессию, а его никто не снимает за собой: процесс, дописавший
-// последнюю строку, о конце сессии не знает. Файл, которого не касались дольше
-// срока, принадлежит кончившейся сессии — читают из журнала только строки ТЕКУЩЕГО
-// события, поэтому терять в нём нечего. Уборщик общий с метками уступки.
+// последнюю строку, о конце сессии не знает. Уборщик общий с метками уступки.
+//
+// Срок — СУТКИ, а не час. Строки этого события забирает наблюдатель на СЛЕДУЮЩЕМ
+// событии, и пауза между событиями бывает длинной: Влад ушёл на обед, сессия
+// висит. Часовой срок сносил бы журнал с ещё не перенесённым решением — и отказ
+// пропадал бы из счёта. Сутки заведомо больше любой паузы внутри живой сессии, а
+// цена ошибки в другую сторону — несколько килобайт, лежащих лишний день.
 const JOURNAL_PREFIX = 'decisions.';
 const SWEEP_STAMP = 'decisions.sweep';
-const JOURNAL_TTL_MS = 60 * 60 * 1000;
+const JOURNAL_TTL_MS = 24 * 60 * 60 * 1000;
 const SWEEP_EVERY_MS = 10 * 60 * 1000;
 
 // Сколько байт начала журнала читается ради отпечатка «тот ли это файл».
@@ -37,17 +41,13 @@ const HEAD_BYTES = 256;
 
 // Одна запись на все три вида строк: собрать общую часть, дописать, назвать
 // неудачу. Три копии этого тела уже разъезжались бы по составу полей.
-function appendRecord(event, kind, extra) {
-  const file = logOf(event);
-  if (!file) return false;
-  // Ключ строки — ПОЯВЛЕНИЕ события: его номер, имя и идентификатор вызова. По
-  // нему наблюдатель сшивает решение с записью события, а сессия в ключе нужна
-  // потому, что при пустом идентификаторе путь журнала общий
-  // (`decisions.default.jsonl`) — без неё решение одной сессии читалось бы как
-  // решение другой. Номер появления даёт обёртка: он свой у каждого прочтения
-  // события (event-claude.js), и без него у событий без вызова (реплика, конец
-  // хода) ключ был бы один на всю сессию.
-  const record = {
+// Строка канала: общая часть плюс своё. Ключ строки — ПОЯВЛЕНИЕ события: его номер
+// даёт обёртка, он свой у каждого прочтения события (event-claude.js). Сшивают по
+// нему, а сессия, имя события и идентификатор вызова стоят рядом ради того, кто
+// читает журнал глазами, — сшивке они не нужны: номер появления уникален сам по
+// себе.
+function line(event, kind, extra) {
+  return {
     kind,
     ts: new Date().toISOString(),
     occurrence: (event && event.occurrence) || '',
@@ -56,33 +56,28 @@ function appendRecord(event, kind, extra) {
     event: (event && event.event) || '',
     ...extra,
   };
+}
+
+// Дописать строку. Возвращает {ok, line}: САМА СТРОКА нужна вызывающему на случай
+// неудачи — решение не имеет права пропасть молча, и обёртка кладёт ту же строку в
+// журнал метрик, откуда её возьмёт свёртка. Тишина вместо строки читалась бы как
+// «решения не было», то есть как проход.
+function appendRecord(event, kind, extra) {
+  const file = logOf(event);
+  const record = line(event, kind, extra);
   try {
     fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
     sweepOld(path.dirname(file), {
       prefix: JOURNAL_PREFIX, stamp: SWEEP_STAMP, ttlMs: JOURNAL_TTL_MS, everyMs: SWEEP_EVERY_MS,
     });
-    return true;
+    return { ok: true, line: record };
   } catch {
-    // Журнал не пополнился. Ход это не рвёт — решение уже напечатано, — но строка
-    // потеряна, и вызывающему об этом говорится «нет», а не тишиной: сорвавшуюся
-    // запись видно исходом, а не догадкой по пустоте.
-    return false;
+    return { ok: false, line: record };
   }
 }
 
-export function appendDecision(event, {
-  outcome, hook = '', reasonClass = '', h = '', tool = '',
-}) {
-  return appendRecord(event, 'decision', {
-    hook,
-    outcome,
-    class: reasonClass,
-    // Хеш вызова: по нему сводка узнаёт «тот же вызов, прошедший после отказа».
-    // Без него отказ и последующий проход не сшить — у отказанного вызова записи
-    // метрик нет вовсе, цепочка обрывается на решении.
-    h,
-    tool,
-  });
+export function appendDecision(event, { outcome, hook = '', reasonClass = '' }) {
+  return appendRecord(event, 'decision', { hook, outcome, class: reasonClass });
 }
 
 // Признак, замеченный одним хуком цепочки для другого (сегодня — «в реплике есть
@@ -120,7 +115,6 @@ export function appendTimings(event, hooks) {
 export function readSince(event, { offset = 0, head = '' } = {}) {
   const file = logOf(event);
   const empty = { records: [], offset: 0, head: '' };
-  if (!file) return { ...empty, status: 'unsupported' };
   let size = 0;
   try {
     size = fs.statSync(file).size;
