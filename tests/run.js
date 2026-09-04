@@ -189,6 +189,7 @@ function makeState() {
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
     exemptscope: tmpName('gate-exempt-scope-test'),
+    synctarget: tmpName('sync-system-target-test'),
     metrics: tmpName('metrics-test'),
     decisions: tmpName('decisions-test'),
     tmphome,
@@ -241,6 +242,14 @@ function makeState() {
     // Корень проекта — временный: иначе `.env` чекаута перекрыл бы строку выше,
     // и доступ вернулся бы обратно.
     CLAUDE_PROJECT_DIR: s.tmphome,
+    // Цель синка системы — временный каталог, а НЕ чекаут, из которого хук
+    // запущен. Иначе прогон кейсов делает настоящий `git fetch origin main` в
+    // рабочую копию: ходит в сеть и переписывает `.git` (FETCH_HEAD, ссылку
+    // origin/main, объекты). Выключателем `SYNC_SYSTEM=off` этого делать нельзя —
+    // он проверяется собственным кейсом и стал бы зелёным тривиально. Что синк
+    // делает С ГИТОМ, проверяет tests/sync-system-git.sh на временных
+    // репозиториях; здесь его git-путь и не нужен.
+    SYNC_SYSTEM_TARGET: s.synctarget,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
@@ -280,7 +289,7 @@ function cleanState(s) {
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
     s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
-    s.decisions,
+    s.decisions, s.exemptscope,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   // Спутники с ДОПИСАННЫМ именем: снимки вида реестра и каталоги меток разбора
