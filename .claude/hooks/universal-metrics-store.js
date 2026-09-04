@@ -22,6 +22,9 @@
 // успевал забрать сводку раньше, чем проектный её перезапишет, и на ветку
 // уезжала сводка ПРОШЛОГО хода, а последняя не уезжала никогда.
 //
+// Публикуется НЕ всякая найденная сводка, а только сводка настоящей сессии —
+// признак её в поле `harness`, см. предикат ниже.
+//
 // Выключатель METRICS_STORE=off; в кейсах раннера он выставлен всегда — иначе
 // прогон тестов пушил бы в настоящую ветку. METRICS_STORE_INLINE=1 — работа в
 // том же процессе (тест хранения на временных репозиториях); лок очереди она
@@ -74,6 +77,20 @@ function logOf(summaryFile) {
   return summaryFile.endsWith('.summary.json') ? summaryFile.slice(0, -'.summary.json'.length) : '';
 }
 
+// Харнес сводки. Возвращает null, когда сводка НЕ ПРОЧИТАЛАСЬ: это не «харнеса
+// нет», и решать по такому чтению нельзя — нечитаемую сводку называет своим
+// исходом `no-summary` уже store(), и перехват здесь отнял бы у неё эту строку.
+function summaryHarness(file) {
+  let summary;
+  try {
+    summary = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!summary || typeof summary !== 'object') return null;
+  return String(summary.harness || '');
+}
+
 function noteOutcome(res, summaryFile) {
   const log = logOf(summaryFile);
   if (!log) return;
@@ -99,7 +116,7 @@ if (process.env.METRICS_STORE_WORKER) {
 }
 
 const { readEvent } = await import('./lib/event-claude.js');
-const { currentMetricsLog } = await import('./lib/metrics.js');
+const { currentMetricsLog, append } = await import('./lib/metrics.js');
 const { projectDispatcherAt } = await import('./lib/registration-claude.js');
 
 const { EVENTS } = await import('./lib/event.js');
@@ -118,6 +135,33 @@ if ((process.env.CRAFT_HOOK_SCOPE || 'project') === 'universal' && projectDispat
 
 const summaryFile = `${log}.summary.json`;
 if (!fs.existsSync(summaryFile)) process.exit(0);
+
+// Публикуется только сводка НАСТОЯЩЕЙ сессии, и признак её — имя харнеса.
+// У живой сессии оно непусто всегда: край берёт его как `CRAFT_HARNESS ||
+// 'claude'` (lib/event-claude.js), то есть пустым не бывает, а в сводку его
+// переносит запись `session` (lib/metrics-summary.js). Пусто оно ровно у той
+// сводки, которую собрал не харнес, — у ручного прогона и у замера субагента:
+// они выключатель не выставляют, и 4 сентября две такие уехали в боевую ветку.
+//
+// Признак выбран ПО ДАННЫМ ветки `metrics`, а не на вкус: за всю её историю
+// девятнадцать различных строк, у семнадцати настоящих `harness` — «claude», и
+// пуст он только у двух синтетических. Соседние признаки не годятся: по `repo`
+// фильтровать нельзя — у настоящей сессии вне репозитория или без remote он
+// пуст по устройству (lib/repo-git.js), а по числу ходов нельзя — у
+// синтетической строки было turns: 1, как у настоящей короткой сессии.
+//
+// Стоит ДО очереди и работника: поднимать доставку ради сводки, которую всё
+// равно не публикуем, незачем.
+//
+// Пропуск НАЗЫВАЕТСЯ строкой журнала: тихий выход здесь читался бы как
+// уехавшая сводка, а это ровно тот дефект, который чинит сам пункт.
+const harness = summaryHarness(summaryFile);
+if (harness === '') {
+  append(log, {
+    kind: 'skip', ts: new Date().toISOString(), what: 'summary', reason: 'no-harness',
+  });
+  process.exit(0);
+}
 
 // Файл очереди считает КРАЙ, у которого есть событие: каталог состояния — поле
 // ядра, и очередь резолвится по нему, а не по своей копии формулы. Работнику он
