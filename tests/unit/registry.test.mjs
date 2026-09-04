@@ -17,6 +17,19 @@ function tmpFile() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-')), 'approvals.jsonl');
 }
 
+// Приём кончается ПОЗЖЕ хода и возвращает сводку сессии в очередь хранения.
+// Кейсу, который про хранение ничего не проверяет, это надо выключить и увести
+// во временный каталог: без этого приём пишет в журнал ЖИВОЙ сессии (журнал
+// резолвится по идентификатору сессии, а он у запускающего есть) и кладёт
+// очередь в общий git-каталог НАСТОЯЩЕГО чекаута, откуда следующий Stop увезёт
+// её в ветку metrics. Кейсы, которые хранение как раз и проверяют, выставляют
+// эти переменные сами и по-своему.
+const storeOff = (dir) => ({
+  CRAFT_METRICS_LOG: path.join(dir, 'metrics.jsonl'),
+  METRICS_STORE_QUEUE: path.join(dir, 'queue.jsonl'),
+  METRICS_STORE: 'off',
+});
+
 const goal = (over = {}) => ({
   title: '# Юнит 1. Реестр: форма и сборка',
   source: 'plan',
@@ -367,6 +380,7 @@ test('приём вешает новую задачу на цель, вся ра
     stdio: 'ignore',
     env: {
       ...process.env,
+      ...storeOff(path.dirname(file)),
       PLAN_CLASSIFIER_CMD: path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh'),
       MOCK_CLASSIFIER_INGEST: JSON.stringify({
         add: [{ goal: 'Ц1', tasks: [{ title: 'работа продолжается', where: ['README.md'], anchor: '' }] }],
@@ -586,7 +600,13 @@ test('вид реестра переживает параллельный при
       path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, `проба-${delay}`,
     ], {
       stdio: 'ignore',
-      env: { ...process.env, PLAN_CLASSIFIER_BIN: stub, STUB_SEEN: seen, STUB_DELAY: String(delay) },
+      env: {
+        ...process.env,
+        ...storeOff(path.dirname(file)),
+        PLAN_CLASSIFIER_BIN: stub,
+        STUB_SEEN: seen,
+        STUB_DELAY: String(delay),
+      },
     });
     child.on('exit', done);
   });
