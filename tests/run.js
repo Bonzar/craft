@@ -183,6 +183,7 @@ function makeState() {
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
     metrics: tmpName('metrics-test'),
+    decisions: tmpName('decisions-test'),
     tmphome,
     metricsdefault: path.join(tmphome, 'metrics.default.jsonl'),
   };
@@ -208,6 +209,9 @@ function makeState() {
     // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
     // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
     CRAFT_METRICS_LOG: s.metrics,
+    // Журнал решений — канал между хуками одного события; у каждого кейса свой,
+    // иначе решение соседнего кейса читалось бы как своё.
+    CRAFT_DECISION_LOG: s.decisions,
     // Хранение сводок выключено ВСЕГДА: иначе кейс Stop пушил бы в настоящую
     // ветку metrics. Его git-логика проверяется отдельно
     // (tests/metrics-store-git.sh) на временных репозиториях.
@@ -255,6 +259,7 @@ function cleanState(s) {
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
     s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
+    s.decisions,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   // Спутники с ДОПИСАННЫМ именем: снимки вида реестра и каталоги меток разбора
@@ -298,7 +303,8 @@ function subst(value, s) {
   // {METRICS} — журнал метрик этого прогона: кейсы хука метрик судят по его
   // строкам.
   //
-  // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
+  // {DECISIONS} — журнал решений кейса: им проверяется САМ канал между хуками.
+// {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
   // не переопределён. По нему кейс доказывает, что записи не было: свой
   // {METRICS} тут не годится — хук о нём и не знал бы.
   if (!s) return withDir;
@@ -307,7 +313,8 @@ function subst(value, s) {
     .split('{CLASSTRACE}').join(s.classtrace)
     .split('{CODEXHOME}').join(s.codexhome)
     .split('{METRICS_DEFAULT}').join(s.metricsdefault)
-    .split('{METRICS}').join(s.metrics);
+    .split('{METRICS}').join(s.metrics)
+    .split('{DECISIONS}').join(s.decisions);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске.
