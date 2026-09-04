@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Форму ответа печатает ОБЁРТКА харнеса; общая часть знает только словарь
@@ -61,9 +61,10 @@ test('блокировка конца хода печатается той же 
   }
 });
 
-test('проход молчит', () => {
-  const code = `import { allow } from ${JSON.stringify(DECIDE)}; allow();`;
-  const res = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', env: ENV, input: '' });
-  assert.equal(res.stdout, '');
-  assert.equal(res.status, 0);
+// Проход — это молчание самого гварда, а не вход в обёртке: печатать на проходе
+// нечего, и строки в журнале у него нет. Вход, который только выходил из
+// процесса, стоял без вызывающих и давал третий способ закончить хук.
+test('у обёртки ровно четыре входа — и прохода среди них нет', async () => {
+  const mod = await import(pathToFileURL(DECIDE).href);
+  assert.deepEqual(Object.keys(mod).sort(), ['ask', 'block', 'deny', 'inject']);
 });

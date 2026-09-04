@@ -49,7 +49,9 @@ import {
 import { callHash } from './lib/call-hash.js';
 import { turnUsage, transcriptSize } from './lib/usage-claude.js';
 import { projectDispatcherAt } from './lib/registration-claude.js';
-import { decisionFor, timingsFor, hasFlag } from './lib/decision-log.js';
+import {
+  decisionFor, timingsFor, hasFlag, journalBroken,
+} from './lib/decision-log.js';
 import { mutationOf } from './lib/write-targets.js';
 import { toolFlags, callShape, toolScope, semanticInput } from './lib/tool-flags-claude.js';
 import { commandTargets } from './lib/write-targets-bash.js';
@@ -91,6 +93,14 @@ const ts = new Date(now).toISOString();
 // (ts, base, id, hooksMs, hooks, decision) и дописывает свою строку в журнал.
 // Возвращают true только там, где ход закончился (Stop): по этому и решается,
 // пересобирать ли сводку.
+
+// Непокрытое называется СЛОВОМ, а не нулём и не умолчанием (решение 8). Имён
+// бывает больше одного разом — на конце хода могут и токены не измериться, и
+// канал решений оборваться, — поэтому они копятся через запятую: потерянное
+// второе имя снова выдавало бы неизвестное за известное.
+function markUnsupported(record, capability) {
+  record.unsupported = record.unsupported ? `${record.unsupported},${capability}` : capability;
+}
 
 function onSessionStart(state, ctx) {
   // Старт бывает не только первым: компакт и возобновление дают SessionStart
@@ -146,7 +156,10 @@ function onPre(state, ctx) {
   // процесса: строку пишет тот, кто решил, ещё до выхода, поэтому решение видно и
   // когда решивший хук следом упал. Строки нет — решения не было, то есть проход.
   // Класс причины считает решивший: текста причины в журнале нет вовсе.
-  const kind = ctx.decision ? ctx.decision.outcome : 'allow';
+  // Пустота значит проход, ТОЛЬКО пока канал цел: сорвавшаяся запись даёт ту же
+  // пустоту, и записать по ней «allow» значило бы назвать отказанный вызов
+  // прошедшим — соврать ровно там, где сводка считает отказы.
+  const kind = ctx.decision ? ctx.decision.outcome : (ctx.decisionKnown ? 'allow' : '');
   const record = {
     kind: 'pre', ...ctx.base, tool, id, decision: kind,
     by: ctx.decision ? ctx.decision.hook : '',
@@ -157,6 +170,7 @@ function onPre(state, ctx) {
     h: callHash(tool, semanticInput(tool, input)),
     hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
   };
+  if (!ctx.decisionKnown) markUnsupported(record, 'decision-log');
   // Признаки вызова: правка, запись в базу заметок, показ плана, вопрос, стадия,
   // пуш, имя скилла. Их ставит обёртка, потому что имена инструментов знает
   // она; сводка считает по признакам.
@@ -175,7 +189,7 @@ function onPre(state, ctx) {
   // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
   if (kind === 'allow') {
     const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
-    if (mutation.status !== 'ok') record.unsupported = mutation.capability;
+    if (mutation.status !== 'ok') markUnsupported(record, mutation.capability);
     else if (mutation.mutates) record.mutates = true;
     if (id) {
       state.pre_flags[id] = {
@@ -202,7 +216,7 @@ function onPost(state, ctx) {
   // вызова не с чем связать. Молча писать «прогресса не было» нельзя — это ложь
   // про ход; непокрытое называется явно (решение 8).
   if (!id) {
-    record.unsupported = 'call-id';
+    markUnsupported(record, 'call-id');
   } else {
     const pre = state.pre_flags[id];
     delete state.pre_flags[id];
@@ -225,10 +239,16 @@ function onStop(state, ctx) {
   if (measured) state.transcript_offset = measured.offset;
   const record = {
     kind: 'stop', ...ctx.base,
-    blocked_by: ctx.decision && ctx.decision.outcome === 'block' ? ctx.decision.hook : '',
     hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
   };
-  if (missing) record.unsupported = unsupported(missing).capability;
+  // Кто заблокировал конец хода — вопрос к каналу решений. Канал оборван — поля
+  // нет вовсе: пустое `blocked_by` читалось бы как «никто не блокировал».
+  if (ctx.decisionKnown) {
+    record.blocked_by = ctx.decision && ctx.decision.outcome === 'block' ? ctx.decision.hook : '';
+  } else {
+    markUnsupported(record, 'decision-log');
+  }
+  if (missing) markUnsupported(record, unsupported(missing).capability);
   else record.usage = fact.tokens;
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
   // Ход без прогресса: инструменты звались, а ни правки, ни записи, ни плана,
@@ -268,6 +288,9 @@ const stop = updateState(log, (state) => {
     hooksMs: Object.values(timings).reduce((sum, ms) => sum + (Number(ms) || 0), 0),
     hooks: timings,
     decision: decisionFor(event),
+    // Знаем ли мы исход вообще. Найденная строка — факт сама по себе; её
+    // отсутствие — факт лишь пока канал цел (lib/decision-log.js).
+    decisionKnown: !!decisionFor(event) || !journalBroken(),
     base: { ts, turn: state.turn },
   };
 

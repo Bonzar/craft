@@ -33,6 +33,7 @@
 // дисциплину, а не безопасность.
 import fs from 'node:fs';
 import { readEvent } from './lib/event-claude.js';
+import { EVENTS } from './lib/event.js';
 import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { sessionAnchor } from './lib/paths.js';
@@ -49,7 +50,7 @@ if (process.env.CRAFT_AUTONOMOUS || process.env.CRAFT_EVAL || process.env.CRAFT_
   process.exit(0);
 }
 
-const { raw, core, tool, harness_event, input, response } = readEvent();
+const { raw, core, tool, event: eventName, input, response } = readEvent();
 if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const state = sessionAnchor();
@@ -57,7 +58,7 @@ const state = sessionAnchor();
 // --- Старт сессии ------------------------------------------------------------
 // Печать голым текстом, как у остальных инжекторов старта: харнесс кладёт stdout
 // SessionStart-хука в контекст сам.
-if (harness_event === 'SessionStart') {
+if (eventName === EVENTS.SESSION_START) {
   // Пустой идентификатор сессии: запомнить ответ негде, и гвард всё равно
   // пропустит запись — просить выбор, который ни на что не влияет, нечестно.
   if (!state) process.exit(0);
@@ -67,7 +68,7 @@ if (harness_event === 'SessionStart') {
 }
 
 // --- Приём тапа по якорному вопросу -----------------------------------------
-if (harness_event === 'PostToolUse' && tool === 'AskUserQuestion') {
+if (eventName === EVENTS.POST_TOOL && tool === 'AskUserQuestion') {
   if (!state) process.exit(0);
   const questions = Array.isArray(input.questions) ? input.questions : [];
   const answers = (response && typeof response === 'object' && !Array.isArray(response) && response.answers)
@@ -89,7 +90,7 @@ if (harness_event === 'PostToolUse' && tool === 'AskUserQuestion') {
 }
 
 // --- Гвард записи ------------------------------------------------------------
-if (harness_event && harness_event !== 'PreToolUse') process.exit(0);
+if (eventName && eventName !== EVENTS.PRE_TOOL) process.exit(0);
 // Пустой идентификатор сессии: файла состояния не существует в принципе, и
 // отказывать по нему значило бы запереть сессию без единого способа открыться.
 if (!state) process.exit(0);

@@ -41,7 +41,7 @@ import { isEphemeral, ignoredEphemeral, touchesWorld } from './lib/write-targets
 import { isIgnored } from './lib/repo-git.js';
 import { bashWriteTargets, cleanTarget } from './lib/write-targets-bash.js';
 import { toolScope } from './lib/tool-flags-claude.js';
-import { exemptScopeFile, approvalRegistry } from './lib/paths.js';
+import { exemptScopeFile, approvalRegistry, stateDir } from './lib/paths.js';
 import {
   waitForParsing, readRegistry, render, switchAt, appendLog,
 } from './lib/registry.js';
@@ -119,9 +119,11 @@ function steadyVerdict(view, desc) {
   return ALLOWING.test(first) ? second : first;
 }
 
+// Материал классификатора кладётся в КАТАЛОГ СОСТОЯНИЯ — по той же формуле, что и
+// всё остальное состояние слоя (lib/paths.js). Своя копия формулы тут уже
+// расходилась с общей: переопределение видел один, а писал другой.
 function tempFile(prefix) {
-  const dir = process.env.TMPDIR || '/tmp';
-  return path.join(dir, `${prefix}.${randomBytes(3).toString('hex')}`);
+  return path.join(stateDir(), `${prefix}.${randomBytes(3).toString('hex')}`);
 }
 
 function nonEmptyFile(file) {

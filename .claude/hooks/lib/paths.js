@@ -23,6 +23,11 @@ export function stateDir() {
 // Идентификатор сессии кладёт ОБЁРТКА: имя переменной харнеса знает она, сюда
 // значение приходит под своим именем. Без обёртки (дочерний процесс, ручной
 // запуск) переменной нет — и это законно, путь тогда просто не строится.
+//
+// Читают его отсюда только пути БЕЗ аргумента: там, куда событие доходит, сессия
+// приходит значением (metricsLog, decisionLog, syncSystemState), и второго канала
+// у них нет — иначе один и тот же путь считался бы то по событию, то по
+// окружению, и разъехался бы ровно там, где они разошлись.
 export function sessionId() {
   return process.env.CRAFT_SESSION_ID || '';
 }
@@ -105,7 +110,7 @@ export function routineFactsMarker() {
 export function syncSystemState(sid) {
   const override = process.env.SYNC_SYSTEM_STATE;
   if (override) return override;
-  return path.join(stateDir(), `sync-system.${sid || sessionId() || 'default'}`);
+  return path.join(stateDir(), `sync-system.${sid || 'default'}`);
 }
 export function relativeLinkState() {
   const override = process.env.RELATIVE_LINK_STATE;
@@ -120,7 +125,7 @@ export function relativeLinkState() {
 export function metricsLog(sid) {
   const override = process.env.CRAFT_METRICS_LOG;
   if (override) return override;
-  return path.join(stateDir(), `metrics.${sid || sessionId() || 'default'}.jsonl`);
+  return path.join(stateDir(), `metrics.${sid || 'default'}.jsonl`);
 }
 
 // Журнал решений хуков ОДНОГО события: канал между хуками цепочки. Решение
@@ -131,7 +136,7 @@ export function decisionLog(sid, dir = '') {
   if (override) return override;
   // Каталог берётся ИЗ СОБЫТИЯ, когда оно его принесло: `state_dir` — поле ядра,
   // и канал решений резолвится по нему, а не по своей копии формулы.
-  return path.join(dir || stateDir(), `decisions.${sid || sessionId() || 'default'}.jsonl`);
+  return path.join(dir || stateDir(), `decisions.${sid || 'default'}.jsonl`);
 }
 
 // Каталог меток уступки второму вызову события.

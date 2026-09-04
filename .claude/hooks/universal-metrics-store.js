@@ -44,7 +44,7 @@ const TARGET = storeTarget(process.env.METRICS_STORE_TARGET);
 // waitMs — сколько ждать лок очереди. Своё число ПРИХОДИТ СНАРУЖИ: пять минут
 // имеет право ждать только отсоединённый работник, а инлайн-режим идёт в
 // процессе хука, и зашитый большой срок оказался бы ожиданием в цепочке хода.
-function store(summaryFile, { waitMs }) {
+function store(summaryFile, { waitMs, queue }) {
   let summary;
   try {
     summary = JSON.parse(fs.readFileSync(summaryFile, 'utf8'));
@@ -52,7 +52,6 @@ function store(summaryFile, { waitMs }) {
     return { status: 'no-summary', delivered: 0 };
   }
   if (!summary || typeof summary !== 'object' || !summary.sid) return { status: 'no-summary', delivered: 0 };
-  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(ADAPTER, TARGET);
   if (!queue) return { status: 'unsupported', capability: 'summary-store', delivered: 0 };
   // Работник ОТСОЕДИНЁН, его никто не ждёт — лок он ждёт долго. Короткий срок
   // у него означал бы потерянную сводку: предыдущая выгрузка держит лок всё
@@ -89,7 +88,11 @@ function noteOutcome(res, summaryFile) {
 // Фоновый работник: без события, сводка — из окружения.
 if (process.env.METRICS_STORE_WORKER) {
   const file = process.env.METRICS_STORE_SUMMARY || '';
-  noteOutcome(store(file, { waitMs: WORKER_WAIT_MS }), file);
+  // Файл очереди работнику передаёт тот, кто его запустил: события у работника
+  // нет, а каталог состояния — поле события. Своя формула остаётся запасной для
+  // прямого запуска работника руками.
+  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(ADAPTER, TARGET);
+  noteOutcome(store(file, { waitMs: WORKER_WAIT_MS, queue }), file);
   process.exit(0);
 }
 
@@ -97,8 +100,9 @@ const { readEvent } = await import('./lib/event-claude.js');
 const { currentMetricsLog } = await import('./lib/metrics.js');
 const { projectDispatcherAt } = await import('./lib/registration-claude.js');
 
-const { cwd, harness_event } = readEvent();
-if ((harness_event || '') !== 'Stop') process.exit(0);
+const { EVENTS } = await import('./lib/event.js');
+const { cwd, event: name, state_dir: stateDirOfEvent } = readEvent();
+if (name !== EVENTS.STOP) process.exit(0);
 const log = currentMetricsLog();
 if (!log) process.exit(0);
 
@@ -111,8 +115,13 @@ if ((process.env.CRAFT_HOOK_SCOPE || 'project') === 'universal' && projectDispat
 const summaryFile = `${log}.summary.json`;
 if (!fs.existsSync(summaryFile)) process.exit(0);
 
+// Файл очереди считает КРАЙ, у которого есть событие: каталог состояния — поле
+// ядра, и очередь резолвится по нему, а не по своей копии формулы. Работнику он
+// уходит готовым значением — событием тот не располагает.
+const QUEUE = process.env.METRICS_STORE_QUEUE || defaultQueue(ADAPTER, TARGET, stateDirOfEvent);
+
 if (process.env.METRICS_STORE_INLINE) {
-  const res = store(summaryFile, { waitMs: QUEUE_WAIT_MS });
+  const res = store(summaryFile, { waitMs: QUEUE_WAIT_MS, queue: QUEUE });
   noteOutcome(res, summaryFile);
   process.stderr.write(`[summary-store] ${res.status}${res.delivered ? ` ×${res.delivered}` : ''}\n`);
   process.exit(0);
@@ -122,7 +131,11 @@ const worker = spawn(process.execPath, [selfPath], {
   detached: true,
   stdio: 'ignore',
   env: {
-    ...process.env, METRICS_STORE_WORKER: '1', METRICS_STORE_SUMMARY: summaryFile, HOOK_ONCE: 'off',
+    ...process.env,
+    METRICS_STORE_WORKER: '1',
+    METRICS_STORE_SUMMARY: summaryFile,
+    METRICS_STORE_QUEUE: QUEUE,
+    HOOK_ONCE: 'off',
   },
 });
 worker.unref();

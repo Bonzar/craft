@@ -127,11 +127,16 @@ test('очередь НЕ заводится там, где доставка н�
     const dead = { available: () => false };
     const live = { available: () => true };
     assert.equal(store.defaultQueue(dead, dir), '', 'доставка невозможна — очереди нет');
-    assert.ok(store.defaultQueue(live, dir).endsWith('metrics-queue.jsonl'),
-      'доставка возможна — очередь в каталоге состояния');
+    assert.ok(/metrics-queue\.[0-9a-f]{12}\.jsonl$/.test(store.defaultQueue(live, dir, dir)),
+      'доставка возможна — очередь в переданном каталоге состояния');
+    assert.equal(path.dirname(store.defaultQueue(live, dir, dir)), dir,
+      'каталог состояния приходит параметром, а не считается своей формулой');
     assert.equal(store.defaultQueue(null, dir), '', 'без адаптера очереди тоже нет');
     // Проверка «есть ли такая функция» вместо ВЫЗОВА пропускала мёртвую цель.
     assert.equal(store.defaultQueue({ available: 'не функция' }, dir), '');
+    // Очередь общая на все цели увозила бы в СВОЙ репозиторий сводки чужого
+    // чекаута: выгрузка забирает из файла ВСЕ строки.
+    assert.notEqual(store.defaultQueue(live, dir, dir), store.defaultQueue(live, `${dir}-другая`, dir));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

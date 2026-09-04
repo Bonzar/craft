@@ -9,6 +9,7 @@
 // потом печатается: печать может уйти в закрытый поток, а process.exit ничего не
 // разматывает.
 import { OUTCOMES, record } from './decide.js';
+import { markDecided } from './decided.js';
 import { readEvent, harnessEventName } from './event-claude.js';
 import { EVENTS } from './event.js';
 import { callHash } from './call-hash.js';
@@ -32,6 +33,11 @@ function currentHook() {
 // сшить «отказ, затем тот же вызов прошёл» больше не по чему.
 function finish(outcome, reason, payload, options) {
   const event = readEvent();
+  // Пометка «решение принято» — ПЕРВОЙ и не зависит от записи журнала: цепочку
+  // обрывает она, и отказ диска не имеет права её снять. Ставится она здесь, а не
+  // в общей части: сюда приходят только исключающие исходы, и только они дают
+  // харнесу ответ, второй экземпляр которого он прочитать не должен.
+  markDecided();
   record(event, outcome, reason, {
     hook: currentHook(),
     tool: event.tool,
@@ -75,14 +81,16 @@ export function block(reason) {
 // на которое хук подписан. Перевод в имя харнеса — здесь.
 export function inject(event, additionalContext, options) {
   const hookEventName = harnessEventName(event);
+  // Строка в журнал ложится, а цепочка НЕ обрывается: дописанный контекст не
+  // исключает чужого, и инжекторов в цепочке бывает несколько подряд. Пометку
+  // ставит только finish() — на запрете, вопросе и блокировке.
   record(readEvent(), OUTCOMES.NONE, '', { hook: currentHook() });
   print({ hookSpecificOutput: { hookEventName, additionalContext } }, options);
   process.exit(0);
 }
 
-// Проход. Гварды на проходе молчат — пустой stdout и есть «разрешено», и строки в
-// журнале у него нет: молчание каждого гварда на каждом вызове раздуло бы журнал,
-// а «решения не было» и значит allow.
-export function allow() {
-  process.exit(0);
-}
+// Прохода отдельным входом ЗДЕСЬ НЕТ. Гвард на проходе молча выходит сам: пустой
+// stdout и есть «разрешено», и строки в журнале у него нет — молчание каждого
+// гварда на каждом вызове раздуло бы журнал, а «решения не было» и значит allow.
+// Обёртка, которая только вызывает process.exit(0), не давала ни одного из этих
+// свойств и стояла без единого вызывающего.

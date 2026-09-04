@@ -44,6 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sha256 } from './hash.js';
 import { hookOnceDir } from './paths.js';
+import { sweepOld } from './sweep.js';
 
 // true — в чекауте сессии лежит файл ЭТОГО же хука, а исполняется другой:
 // значит вызов посторонний и уступает.
@@ -106,30 +107,13 @@ function markExpired(mark) {
   }
 }
 
+// Уборка — общим уборщиком (lib/sweep.js): тот же приём (возраст, отметка, скан
+// не чаще срока) держит и журналы решений, и две копии этого тела уже разъезжались
+// бы по сроку и по исключению самой отметки.
 function sweep(dir) {
-  const stamp = path.join(dir, SWEEP_STAMP);
-  try {
-    if (Date.now() - fs.statSync(stamp).mtimeMs < SWEEP_EVERY_MS) return;
-  } catch { /* отметки ещё нет — убираем и заводим её */ }
-  try {
-    fs.writeFileSync(stamp, '');
-  } catch {
-    return; // каталог не пишется — уборка не наше дело
-  }
-  let names = [];
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return;
-  }
-  const now = Date.now();
-  for (const name of names) {
-    if (!name.startsWith('hook-once.') || name === SWEEP_STAMP) continue;
-    const mark = path.join(dir, name);
-    try {
-      if (now - fs.statSync(mark).mtimeMs > MARK_TTL_MS) fs.rmSync(mark, { recursive: true, force: true });
-    } catch { /* метка пропала сама */ }
-  }
+  sweepOld(dir, {
+    prefix: 'hook-once.', stamp: SWEEP_STAMP, ttlMs: MARK_TTL_MS, everyMs: SWEEP_EVERY_MS,
+  });
 }
 
 // true — работай; false — уступи (посторонний экземпляр либо занятое событие).

@@ -32,6 +32,7 @@ import path from 'node:path';
 import { withLock, atomicWrite } from './lock.js';
 import { eachJsonl } from './jsonl.js';
 import { repoRootOf, stateDir } from './paths.js';
+import { sha256 } from './hash.js';
 import { append } from './metrics.js';
 
 // Потолок очереди в строках. Строка на сессию, так что потолок — про число
@@ -52,6 +53,9 @@ export function storeTarget(override = '') {
   return override || repoRootOf(import.meta.url);
 }
 
+// Каталог состояния приходит ПАРАМЕТРОМ — его несёт поле ядра `state_dir`; своя
+// формула остаётся только для краёв без события (фоновый работник).
+//
 // Файл очереди лежит в КАТАЛОГЕ СОСТОЯНИЯ, а не в каталоге инструмента доставки:
 // сводки сессии — состояние слоя, а не содержимое чекаута, и в чужой рабочей копии
 // им делать нечего. Плата за это названа в шапке модуля: каталог состояния
@@ -61,12 +65,18 @@ export function storeTarget(override = '') {
 // никогда не увезёт, значит тихо копить мусор вместо явного `unsupported`
 // (решение 8). Поэтому адаптер здесь всё ещё спрашивается — но только про то,
 // есть ли доставка, а не про то, где лежать очереди.
-export function defaultQueue(adapter, target) {
+export function defaultQueue(adapter, target, dir = '') {
   if (!adapter || typeof adapter.available !== 'function') return '';
   // Адаптер СПРАШИВАЕТСЯ, а не проверяется на существование: доставка бывает
   // невозможна и при живом адаптере (цель — не рабочая копия его инструмента), и
   // тогда очередь копила бы то, что никто никогда не увезёт.
-  return adapter.available(target) ? path.join(stateDir(), 'metrics-queue.jsonl') : '';
+  if (!adapter.available(target)) return '';
+  // Своя очередь на КАЖДУЮ цель. Пока очередь лежала в каталоге инструмента
+  // доставки, её делил тот же чекаут, в который и уезжали сводки; в общем каталоге
+  // состояния один файл на всех означал бы, что выгрузка увозит в СВОЮ цель и
+  // чужие строки — сводки другого чекаута. Цель в имени, а не в строке: строка
+  // очереди уезжает в хранилище как есть, и служебному полю там не место.
+  return path.join(dir || stateDir(), `metrics-queue.${sha256(String(target)).slice(0, 12)}.jsonl`);
 }
 
 function readQueueText(queueFile) {

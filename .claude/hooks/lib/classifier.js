@@ -44,7 +44,12 @@ export function ingestDeadlineMs() {
 // а не в хуке метрик, — приём реестра идёт в отдельном фоновом процессе, и хуку
 // его не видно.
 export function classify(adapter, bin, mode, args, description, { timeoutSec } = {}) {
-  if (!adapter || typeof adapter.run !== 'function') return 'UNSUPPORTED';
+  // Спрашивается КАЖДАЯ функция, которую тут зовут, а не одна за всех: адаптер с
+  // `run`, но без `available` давал бы исключение вместо честного «возможности
+  // нет» — то самое молчаливое падение, ради которого исход и назван словом.
+  if (!adapter || ['run', 'available', 'offSwitchOn'].some((fn) => typeof adapter[fn] !== 'function')) {
+    return 'UNSUPPORTED';
+  }
   if (!adapter.available(bin)) return 'UNAVAILABLE';
   const started = Date.now();
   const verdict = adapter.run(bin, mode, args, description, { timeoutSec }) || 'UNAVAILABLE';

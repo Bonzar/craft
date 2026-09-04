@@ -31,20 +31,20 @@
 // Fail quiet: не смог посчитать хеш — отметки нет, гейт просто не пропустит.
 import fs from 'node:fs';
 import { readEvent } from './lib/event-claude.js';
+import { EVENTS } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
 import { sha256File } from './lib/hash.js';
 import {
   planCriticMarker, planCriticPending, planCriticRuns, planCriticRound, planFileMarker,
 } from './lib/paths.js';
 
-const { raw, core, tool, harness_event, input, response, prompt } = readEvent();
+const { raw, core, tool, event: eventName, input, response, prompt } = readEvent();
 if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const marker = planCriticMarker();
 const pending = planCriticPending();
 const runs = planCriticRuns();
 const round = planCriticRound();
-const eventName = harness_event || 'PostToolUse';
 
 // Счётчик завершённых прогонов критика — машинное «Плато»: гейт по нему пропускает показ,
 // когда обкатка перестала двигать план. Считается ПРОГОН, а не версия файла: правка по
@@ -119,7 +119,7 @@ function planPath() {
   }
 }
 
-if (eventName === 'UserPromptSubmit') {
+if (eventName === EVENTS.PROMPT) {
   if (!prompt.includes('<task-notification>')) process.exit(0);
   const id = lastMatch(prompt, /<task-id>([^<]*)<\/task-id>/.source);
   if (!id) process.exit(0);

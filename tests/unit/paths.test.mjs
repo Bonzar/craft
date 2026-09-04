@@ -56,6 +56,10 @@ const EXPECTED = {
   CRAFT_DECISION_LOG: `${STATE}/decisions.${SID}.jsonl`,
 };
 
+// Пути, которым сессия приходит АРГУМЕНТОМ: у них один канал — тот, кто зовёт.
+// Остальные читают её из окружения, куда её кладёт адаптер события.
+const TAKES_SID = new Set(['syncSystemState', 'metricsLog', 'decisionLog']);
+
 // Имя переменной-переопределения → имя экспорта, который этот путь отдаёт.
 const BY_EXPORT = {
   CRAFT_APPROVAL_REGISTRY: 'approvalRegistry',
@@ -91,7 +95,9 @@ const NOT_A_PATH = new Set([
 test('пути состояния совпадают с закреплённым эталоном', async () => {
   const paths = await freshPaths();
   const byEnv = Object.fromEntries(
-    Object.entries(BY_EXPORT).map(([envName, fn]) => [envName, paths[fn]()]),
+    Object.entries(BY_EXPORT).map(([envName, fn]) => [
+      envName, TAKES_SID.has(fn) ? paths[fn](SID) : paths[fn](),
+    ]),
   );
 
   // Набор сверяется целиком: новый путь без строки в эталоне так же опасен, как
@@ -106,6 +112,16 @@ test('пути состояния совпадают с закреплённым
   for (const [name, expected] of Object.entries(EXPECTED)) {
     assert.equal(byEnv[name], expected, `путь ${name} разошёлся с эталоном`);
   }
+});
+
+// Второй канал сессии — это тот же globalThis, только в окружении: путь считался
+// бы то по событию, то по переменной, и разъехался бы ровно там, где они
+// разошлись (дочерний процесс, ручной запуск, чужая сессия в том же каталоге).
+test('пути с аргументом сессию из окружения НЕ угадывают', async () => {
+  const paths = await freshPaths(); // в окружении CRAFT_SESSION_ID = SID
+  assert.equal(paths.metricsLog(), `${STATE}/metrics.default.jsonl`);
+  assert.equal(paths.decisionLog(), `${STATE}/decisions.default.jsonl`);
+  assert.equal(paths.syncSystemState(), `${STATE}/sync-system.default`);
 });
 
 test('переопределение окружением сильнее дефолта', async () => {
