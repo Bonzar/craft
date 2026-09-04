@@ -193,3 +193,36 @@ test('без сессии и переопределения журнала не�
     if (savedSid !== undefined) process.env.CRAFT_SESSION_ID = savedSid;
   }
 });
+
+test('срок журнала — СУТКИ: пауза между событиями бывает длиннее часа', async () => {
+  // Строки этого события забирает СЛЕДУЮЩЕЕ, а между ними Влад успевает уйти на
+  // обед. Часовой срок сносил бы журнал с ещё не перенесённым решением — отказ
+  // пропадал бы из счёта. Срок проверяется через сам journal, а не через параметр
+  // уборщика: параметром покрыта механика, а не число, с которым её зовут.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'journal-ttl-test.'));
+  const saved = process.env.CRAFT_DECISION_LOG;
+  try {
+    delete process.env.CRAFT_DECISION_LOG;
+    const aged = (name, ageMs) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, '{}\n');
+      const when = new Date(Date.now() - ageMs);
+      fs.utimesSync(file, when, when);
+      return file;
+    };
+    const HOUR = 60 * 60 * 1000;
+    const pause = aged('decisions.обеденный-перерыв.jsonl', 2 * HOUR);
+    const old = aged('decisions.позавчерашний.jsonl', 25 * HOUR);
+
+    const mod = await import(`${LIB}/decision-log.js?t=${Date.now()}${Math.random()}`);
+    mod.appendDecision(
+      { occurrence: 'occ-1', session_id: 'своя', event: 'pre-tool', call_id: 'c1', state_dir: dir },
+      { outcome: 'deny', hook: 'h' },
+    );
+    assert.equal(fs.existsSync(pause), true, 'двухчасовая пауза журнал не хоронит');
+    assert.equal(fs.existsSync(old), false, 'позавчерашний журнал никому не нужен');
+  } finally {
+    if (saved !== undefined) process.env.CRAFT_DECISION_LOG = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

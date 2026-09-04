@@ -55,7 +55,13 @@ test('решение прошлого события приезжает к на�
     assert.equal(decision.outcome, 'deny');
     assert.equal(decision.hook, 'universal-sleep-waiter-guard');
     assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'sleep-waiter-guard': 1 } });
+    // В сводке САМОГО конца хода он же и неизвестен: блокировать его могут хуки,
+    // которые ещё не отработали. Это «пока не знаем», а не «потеряли».
+    assert.equal(s.summary().unknown_decisions, 1);
+    // Конец сессии добирает строки последнего хода — и неизвестного не остаётся.
+    s.send({ hook_event_name: 'SessionEnd', reason: 'clear' });
     assert.equal(s.summary().unknown_decisions, 0);
+    assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'sleep-waiter-guard': 1 } });
   } finally {
     fs.rmSync(s.dir, { recursive: true, force: true });
   }
@@ -72,6 +78,7 @@ test('журнал решений исчез между событиями — �
 
     const skip = s.records().find((r) => r.kind === 'skip' && r.what === 'decisions');
     assert.equal(skip.capability, 'decision-log', 'пропажа названа словом, а не пустотой');
+    s.send({ hook_event_name: 'SessionEnd', reason: 'clear' });
     const summary = s.summary();
     assert.equal(summary.denies.total, 0, 'отказа мы не видели — и не выдумываем его');
     assert.equal(summary.unknown_decisions, 1, 'но и проходом его не считаем: видно числом');

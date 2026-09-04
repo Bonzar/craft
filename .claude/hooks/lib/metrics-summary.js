@@ -280,12 +280,14 @@ function fillSignals(s, records) {
 function stitch(records) {
   const decisions = new Map();
   const flags = new Map();
-  // События, чьи строки НЕ ДОЕХАЛИ: наблюдатель заметил пропажу и назвал её
-  // словом. Пустота на их месте не значит «прошёл» — она значит «не знаем».
-  const unsettled = new Set();
+  // Появления событий, чьи строки ДОЕХАЛИ. Замеры цепочки диспетчер кладёт на
+  // КАЖДОМ событии, поэтому одна перенесённая строка с этим номером — доказательство
+  // того, что канал по этому событию отработал целиком. Ни одной строки — не
+  // «решения не было», а «мы ещё (или уже) не знаем».
+  const delivered = new Set();
   for (const r of records) {
-    if (r.kind === 'skip' && r.what === 'decisions' && r.occ) unsettled.add(r.occ);
     if (!r.occurrence) continue;
+    delivered.add(r.occurrence);
     if (r.kind === 'decision') decisions.set(r.occurrence, r);
     else if (r.kind === 'flag' && r.flag) {
       if (!flags.has(r.occurrence)) flags.set(r.occurrence, new Set());
@@ -296,10 +298,17 @@ function stitch(records) {
     if (!r.occ) return r;
     const d = decisions.get(r.occ);
     // Строка решения найдена — она и есть факт, даже если канал потом сорвался.
-    const unknown = !d && unsettled.has(r.occ);
+    // Ничего не пришло — исход НЕИЗВЕСТЕН. Так честнее в обе стороны: и когда
+    // канал сорвался посреди сессии, и на её ХВОСТЕ, где переносить решение уже
+    // некому — последнее событие сессии своих строк не дождалось.
+    //
+    // Спрашивается это только у записей, сделанных под диспетчером (`disp`): вне
+    // его замеров цепочки не бывает вовсе, и ждать нечего — там пустота значит
+    // ровно то, чем была всегда, то есть проход.
+    const unknown = !d && r.disp === true && !delivered.has(r.occ);
     if (r.kind === 'pre') {
-      // Строки решения нет и канал цел — значит решения не было, то есть проход:
-      // молчащий гвард в журнал не пишет.
+      // Строки решения нет, а прочие строки события доехали — значит решения не
+      // было, то есть проход: молчащий гвард в журнал не пишет.
       return {
         ...r,
         decision: r.decision || (d ? d.outcome : (unknown ? UNKNOWN : 'allow')),
@@ -310,22 +319,28 @@ function stitch(records) {
     if (r.kind === 'stop') {
       // Поля нет вовсе, когда неизвестно: пустое `blocked_by` читалось бы как
       // «никто не блокировал».
-      if (unknown && !r.blocked_by) return { ...r, decision: UNKNOWN };
+      if (unknown && !r.blocked_by) return { ...r, unknown: true };
       return { ...r, blocked_by: r.blocked_by || (d && d.outcome === 'block' ? d.hook : '') };
     }
     if (r.kind === 'prompt') {
       const set = flags.get(r.occ);
+      // Признак инцидента ставит другой хук той же цепочки, и приходит он тем же
+      // каналом. Не доехало — поля НЕТ: `false` здесь утверждало бы, что инцидента
+      // не было, и роняло бы долю разборов ровно так же, как пустота роняла отказ.
+      if (unknown && r.incident !== true) return { ...r, unknown: true };
       return { ...r, incident: r.incident === true || Boolean(set && set.has('incident')) };
     }
-    return r;
+    return unknown ? { ...r, unknown: true } : r;
   });
 }
 
-// Сколько событий осталось без исхода. Число само по себе метрика: пока оно ноль,
-// остальные считаны по полному материалу; выросло — сводка неполна, и видно, на
-// сколько именно, а не «где-то что-то могло пропасть».
+// Сколько событий осталось без исхода. Считается по ЛЮБЫМ записям, а не только по
+// вызовам и концам хода: тем же каналом приходят признаки реплики, и потерянный
+// признак инцидента роняет долю разборов так же тихо, как потерянный отказ ронял
+// счёт отказов. Пока число ноль — остальные метрики считаны по полному материалу;
+// выросло — видно, на сколько именно сводка неполна.
 function fillUnknown(s, records) {
-  s.unknown_decisions = records.filter((r) => r.decision === UNKNOWN).length;
+  s.unknown_decisions = records.filter((r) => r.unknown === true || r.decision === UNKNOWN).length;
 }
 
 export function summarize(raw, { sid = '', now = Date.now() } = {}) {

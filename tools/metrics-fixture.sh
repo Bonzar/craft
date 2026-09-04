@@ -40,7 +40,9 @@ side() {
   }
   local RM="\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf $cwd/junk\"}"
   ev SessionStart '"source":"startup"'
-  ev UserPromptSubmit '"prompt":"поправь README, пожалуйста, это важно"'
+  # Реплика намеренно инцидентная: признак инцидента ставит другой хук цепочки и
+  # приходит он тем же каналом, что и решение, — значит и его надо сверять.
+  ev UserPromptSubmit '"prompt":"ты сломал мою заметку, откатись и поправь README"'
   # отказ гварда якоря: писать в мир, пока якорь не выбран, нельзя
   ev PreToolUse "\"tool_use_id\":\"t1\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/home/user/craft/README.md\",\"content\":\"x\"}"
   # отказ факт-гейта на деструктиве
@@ -61,17 +63,29 @@ side() {
   # сессия кончилась прямо на заблокированном конце хода. Второй случай отдельный:
   # строки решений приезжают к наблюдателю СЛЕДУЮЩИМ событием, и если следующего
   # хода нет, донести блокировку может только конец сессии.
-  if [ "$tail_mode" = "session-end" ]; then
-    ev SessionEnd '"reason":"clear"'
-  else
+  if [ "$tail_mode" != "session-end" ]; then
     ev Stop ''
   fi
+  # Конец сессии в обоих вариантах: сводка снимается после него, и в ней нет
+  # события, чьи строки ещё в пути. Без этого сравнивать было бы нечестно — у
+  # последнего события сессии исход и правда неизвестен, о чём сводка и говорит
+  # числом `unknown_decisions`.
+  ev SessionEnd '"reason":"clear"'
   local sum="$st/metrics.jsonl.summary.json"
   if [ -f "$sum" ]; then
     node -e '
       const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      // Кроме четырёх метрик приёмки печатаются ещё две: доля разборов (она тоже
+      // переехала на новый канал — признак инцидента приходит строкой) и число
+      // событий без исхода. Без последнего «числа совпали» ничего не значит: они
+      // совпали бы и на сводке, где половина событий потерялась.
       console.log(JSON.stringify({
-        denies: s.denies, false_denies: s.false_denies, plan: s.plan, stop_blocks: s.stop_blocks,
+        denies: s.denies,
+        false_denies: s.false_denies,
+        plan: s.plan,
+        stop_blocks: s.stop_blocks,
+        incidents: s.incidents,
+        unknown_decisions: s.unknown_decisions,
       }));
     ' "$sum"
   else
