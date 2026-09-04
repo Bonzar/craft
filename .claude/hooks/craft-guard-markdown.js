@@ -14,8 +14,8 @@
 // Структурной формы мало: она обязана НЕСТИ структурные поля, а не полагаться на
 // текст. Разделитель — тот случай, где умолчание молчит: без lineStyle Craft
 // ставит regular, каким бы ни был шаблон, и подмена видна только в json.
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 
 const LINE_STYLES = new Set(['strong', 'regular', 'light', 'extraLight', 'pageBreak']);
 

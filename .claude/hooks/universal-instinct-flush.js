@@ -12,8 +12,8 @@
 // Уступки второму вызову здесь нет намеренно, как и у bash-версии: блок и так
 // одноразовый по признаку буфера, а повторный Stop проходит.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { block } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { block } from './lib/decide-claude.js';
 import { observeBuffer } from './lib/paths.js';
 
 // Headless-евалы исключены признаком CRAFT_EVAL=1, как и у stop-routine-facts:
@@ -24,8 +24,8 @@ import { observeBuffer } from './lib/paths.js';
 // возвращает одну строку — лишний ход от блокировки роняет сам вызов.
 if (process.env.CRAFT_EVAL || process.env.CRAFT_NESTED_CALL) process.exit(0);
 
-const { event } = readEvent();
-if (event.stop_hook_active === true || process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') {
+const { core, stop_active } = readEvent();
+if (stop_active || process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') {
   process.exit(0);
 }
 

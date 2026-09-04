@@ -32,8 +32,8 @@
 // сессию насмерть. Fail open во всех этих случаях сознателен: гвард якоря страхует
 // дисциплину, а не безопасность.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { sessionAnchor } from './lib/paths.js';
 import { isEphemeral, ignoredEphemeral } from './lib/write-targets.js';
@@ -49,15 +49,15 @@ if (process.env.CRAFT_AUTONOMOUS || process.env.CRAFT_EVAL || process.env.CRAFT_
   process.exit(0);
 }
 
-const { raw, event, tool, name, input, response } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, harness_event, input, response } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const state = sessionAnchor();
 
 // --- Старт сессии ------------------------------------------------------------
 // Печать голым текстом, как у остальных инжекторов старта: харнесс кладёт stdout
 // SessionStart-хука в контекст сам.
-if (name === 'SessionStart') {
+if (harness_event === 'SessionStart') {
   // Пустой идентификатор сессии: запомнить ответ негде, и гвард всё равно
   // пропустит запись — просить выбор, который ни на что не влияет, нечестно.
   if (!state) process.exit(0);
@@ -67,7 +67,7 @@ if (name === 'SessionStart') {
 }
 
 // --- Приём тапа по якорному вопросу -----------------------------------------
-if (name === 'PostToolUse' && tool === 'AskUserQuestion') {
+if (harness_event === 'PostToolUse' && tool === 'AskUserQuestion') {
   if (!state) process.exit(0);
   const questions = Array.isArray(input.questions) ? input.questions : [];
   const answers = (response && typeof response === 'object' && !Array.isArray(response) && response.answers)
@@ -89,7 +89,7 @@ if (name === 'PostToolUse' && tool === 'AskUserQuestion') {
 }
 
 // --- Гвард записи ------------------------------------------------------------
-if (name && name !== 'PreToolUse') process.exit(0);
+if (harness_event && harness_event !== 'PreToolUse') process.exit(0);
 // Пустой идентификатор сессии: файла состояния не существует в принципе, и
 // отказывать по нему значило бы запереть сессию без единого способа открыться.
 if (!state) process.exit(0);

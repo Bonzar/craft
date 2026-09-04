@@ -32,7 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { syncSystemState } from './lib/paths.js';
 
@@ -47,12 +47,12 @@ try {
   dir = path.dirname(fs.realpathSync(selfPath));
 } catch { /* нечего резолвить — берём каталог как есть */ }
 
-const { raw, event, cwd } = readEvent();
-const eventName = event.hook_event_name || '';
-const sid = event.session_id || 'default';
+const { raw, core, cwd, harness_event, session_id } = readEvent();
+const eventName = harness_event || '';
+const sid = session_id || 'default';
 
 // Хук зарегистрирован и project-level, и пользовательски — уступаем второму вызову.
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const TARGET = process.env.SYNC_SYSTEM_TARGET || path.resolve(dir, '..', '..');
 // Сессия берётся из СОБЫТИЯ, а не из окружения: синк работает и там, где

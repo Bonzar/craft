@@ -30,21 +30,21 @@
 //
 // Fail quiet: не смог посчитать хеш — отметки нет, гейт просто не пропустит.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { sha256File } from './lib/hash.js';
 import {
   planCriticMarker, planCriticPending, planCriticRuns, planCriticRound, planFileMarker,
 } from './lib/paths.js';
 
-const { raw, event, tool, name, input, response, prompt } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, harness_event, input, response, prompt } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const marker = planCriticMarker();
 const pending = planCriticPending();
 const runs = planCriticRuns();
 const round = planCriticRound();
-const eventName = name || 'PostToolUse';
+const eventName = harness_event || 'PostToolUse';
 
 // Счётчик завершённых прогонов критика — машинное «Плато»: гейт по нему пропускает показ,
 // когда обкатка перестала двигать план. Считается ПРОГОН, а не версия файла: правка по

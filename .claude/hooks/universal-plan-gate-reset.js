@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import {
   serviceTurnMarker, planShownMarker, planCriticPending, approvalRegistry,
@@ -26,10 +26,10 @@ import {
 import { ingestInBackground } from './lib/registry.js';
 import { withAgentContext } from './lib/transcript.js';
 
-const { raw, event, prompt, transcript } = readEvent();
+const { raw, core, prompt, transcript } = readEvent();
 // Уступка второму вызову события: хук зарегистрирован в двух контурах, и без
 // неё каждая реплика уходила бы в приём дважды — два разбора, две цели.
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const selfPath = fileURLToPath(import.meta.url);
 let dir = path.dirname(selfPath);

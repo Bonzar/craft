@@ -18,10 +18,15 @@
 //
 // Первое же РЕШЕНИЕ (запрет, вопрос человеку, блокировка конца хода) обрывает
 // цепочку: вывод у хуков общий, и второе решение легло бы в него следом за
-// первым — харнесс прочитал бы два ответа на один вопрос. Исключение — хуки из
+// первым — харнес прочитал бы два ответа на один вопрос. Исключение — хуки из
 // ALWAYS (метрики): они ничего не печатают и зовутся после решения, чтобы его
-// увидеть. Решение и замеры времени хуков лежат в общем состоянии события
-// (globalThis.hookDecision, globalThis.hookTimings, globalThis.hookCurrent).
+// увидеть.
+//
+// Решение и замеры времени идут через ЖУРНАЛ РЕШЕНИЙ в каталоге состояния
+// (lib/decision-log.js), а не через общую память процесса: решение переживает
+// падение решившего хука, и его видит любой процесс, а не только тот, кого
+// позвали следом. Имя текущего хука и контур передаются окружением — их читает
+// тот, кто записывает решение.
 //
 // Аргумент задаёт контур: `universal` — пользовательский слой в чужих проектах,
 // без аргумента — проектный. Fail open: сломанный хук не рвёт цепочку, а
@@ -29,7 +34,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
+import { appendTimings, decisionFor } from './lib/decision-log.js';
 import { hooksFor, ALWAYS } from './dispatch-table.js';
 
 const argv = process.argv.slice(2);
@@ -45,19 +51,20 @@ if (argv[0] === '--list') {
 }
 
 const scope = argv[0] === 'universal' ? 'universal' : 'project';
-// Контур — в общее состояние: хук метрик по нему решает, писать ли ему, когда
-// у чекаута сессии есть и проектная регистрация.
-globalThis.hookScope = scope;
+// Контур — окружением: хук метрик по нему решает, писать ли ему, когда у чекаута
+// сессии есть и проектная регистрация.
+process.env.CRAFT_HOOK_SCOPE = scope;
 
-const { event, tool } = readEvent();
-const eventName = event.hook_event_name || '';
+const event = readEvent();
+// Таблица маршрутов и регистрация в настройках — сторона харнеса, поэтому и
+// ключом здесь остаётся ЕГО имя события. Хукам достаётся каноническое.
+const eventName = event.harness_event;
 if (!eventName) process.exit(0);
 
 // Выход хука из процесса — не ошибка, а его нормальный конец.
 class HookFinished extends Error {}
 
-// Замеры времени хуков цепочки — для хука метрик, который идёт последним.
-globalThis.hookTimings = [];
+const timings = {};
 
 async function runHook(name) {
   const file = path.join(dir, `${name}.js`);
@@ -67,7 +74,7 @@ async function runHook(name) {
   process.exit = () => {
     throw new HookFinished(name);
   };
-  globalThis.hookCurrent = name;
+  process.env.CRAFT_HOOK_NAME = name;
   const started = Date.now();
   try {
     await import(pathToFileURL(file).href);
@@ -79,13 +86,22 @@ async function runHook(name) {
     }
   } finally {
     process.exit = realExit;
-    globalThis.hookCurrent = '';
-    globalThis.hookTimings.push({ name, ms: Date.now() - started });
+    process.env.CRAFT_HOOK_NAME = '';
+    timings[name] = Date.now() - started;
   }
 }
 
-for (const name of hooksFor(eventName, tool, scope)) {
-  // После решения идут только хуки, которым положено видеть его (ALWAYS).
-  if (globalThis.hookDecided && !ALWAYS.has(name)) continue;
+const chain = hooksFor(eventName, event.tool, scope);
+let decided = false;
+for (const [i, name] of chain.entries()) {
+  // Замеры кладутся ОДНОЙ строкой перед последним хуком цепочки: последним стоит
+  // наблюдатель, и это единственный, кому они нужны. Строка на каждый хук стоила
+  // бы записи на диск на каждом шаге хода.
+  if (i === chain.length - 1) appendTimings(event, timings);
+  // После решения идут только хуки, которым положено видеть его (ALWAYS). Само
+  // решение лежит в журнале — его пишет тот, кто решил, ещё до выхода из
+  // процесса, поэтому оно видно и когда решивший хук следом упал.
+  if (decided && !ALWAYS.has(name)) continue;
   await runHook(name);
+  if (!decided && decisionFor(event)) decided = true;
 }

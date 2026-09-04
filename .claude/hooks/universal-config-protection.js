@@ -15,8 +15,8 @@
 // Fail open на всём неожиданном: сломанный гейт не должен клинить работу.
 import path from 'node:path';
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 
 const PROTECTED = [
@@ -28,8 +28,8 @@ const PROTECTED = [
   /^\.editorconfig$/,
 ];
 
-const { raw, event, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const file = input.file_path || '';
 if (!file) process.exit(0);

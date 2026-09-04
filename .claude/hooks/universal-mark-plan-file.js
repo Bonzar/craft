@@ -10,12 +10,12 @@
 //
 // Fail quiet: сломанная запоминалка не должна клинить работу.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { planFileMarker } from './lib/paths.js';
 
-const { raw, event, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const fp = input.file_path || '';
 if (!/\/plans\/.*\.md$/.test(fp)) process.exit(0);

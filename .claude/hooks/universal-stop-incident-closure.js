@@ -18,8 +18,8 @@
 // закрывать разбор). Пустой session-id → молчим: маркер общий на все сессии,
 // ложный блок дороже пропуска. Fail quiet везде.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { block } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { block } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { incidentClosureMarker, sessionId } from './lib/paths.js';
 
@@ -34,9 +34,9 @@ if (!fs.existsSync(armed)) process.exit(0);
 const reminded = `${armed.replace(/\.armed$/, '')}.reminded`;
 if (fs.existsSync(reminded)) process.exit(0);
 
-const { raw, event, transcript } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
-if (event.stop_hook_active === true || process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') {
+const { raw, core, transcript, stop_active } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
+if (stop_active || process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') {
   process.exit(0);
 }
 if (!transcript || !fs.existsSync(transcript)) process.exit(0);

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Хук метрик: журнал событий сессии в JSONL. Стоит ПОСЛЕДНИМ в каждой цепочке
 // диспетчера и зовётся всегда, даже когда цепочка уже дала решение: решение
-// предыдущих хуков он читает из общего состояния события (globalThis, его
-// заполняют decide.js и dispatch.js), а не из stdout.
+// предыдущих хуков он читает из ЖУРНАЛА РЕШЕНИЙ в каталоге состояния
+// (lib/decision-log.js), а не из stdout и не из общей памяти процесса.
 //
 // События: SessionStart (старт, харнес, репо), UserPromptSubmit (номер хода),
 // PreToolUse (инструмент, исход гейта и класс причины, время хуков),
@@ -40,13 +40,16 @@
 // её ключ для событий без идентификатора вызова — хеш события со сроком в
 // секунды, и два одинаковых Stop подряд (заблокированный конец хода) или две
 // одинаковые короткие реплики теряли бы вторую запись.
-import { readEvent, responseIsError } from './lib/event.js';
+import { readEvent, responseIsError } from './lib/event-claude.js';
+import { EVENTS } from './lib/event.js';
 import {
-  append, updateState, reasonClass, turnUsage,
-  projectDispatcherAt, currentMetricsLog, transcriptSize,
-  refreshSummary, callHash,
-  promptHash, looksLikeReinstruction, isProgress, currentSessionId,
+  append, updateState, currentMetricsLog,
+  refreshSummary, promptHash, looksLikeReinstruction, isProgress,
 } from './lib/metrics.js';
+import { callHash } from './lib/call-hash.js';
+import { turnUsage, transcriptSize } from './lib/usage-claude.js';
+import { projectDispatcherAt } from './lib/registration-claude.js';
+import { decisionFor, timingsFor, hasFlag } from './lib/decision-log.js';
 import { mutationOf } from './lib/write-targets.js';
 import { toolFlags, callShape, toolScope, semanticInput } from './lib/tool-flags-claude.js';
 import { commandTargets } from './lib/write-targets-bash.js';
@@ -64,21 +67,21 @@ const ADAPTERS = {
   ignored: isIgnored,
 };
 
+const event = readEvent();
 const {
-  event, tool, cwd, transcript, response, input, prompt,
-} = readEvent();
-const name = event.hook_event_name || '';
+  tool, cwd, transcript, response, input, prompt,
+} = event;
+const name = event.event;
 if (!name) process.exit(0);
 
-// Формула сессии одна на слой и живёт в lib/metrics.js: своя копия здесь уже
-// расходилась бы с той, по которой резолвится путь журнала.
-const sid = currentSessionId();
+// Сессия берётся из ядра события — по ней же резолвится путь журнала.
+const sid = event.session_id;
 const log = currentMetricsLog();
 if (!log) process.exit(0);
 
 // Пользовательский контур уступает проектному, когда тот зарегистрирован в
 // чекауте сессии. Вне диспетчера контур не задан — считается проектным.
-if ((globalThis.hookScope || 'project') === 'universal' && projectDispatcherAt(cwd)) process.exit(0);
+if ((process.env.CRAFT_HOOK_SCOPE || 'project') === 'universal' && projectDispatcherAt(cwd)) process.exit(0);
 
 const now = Date.now();
 const ts = new Date(now).toISOString();
@@ -102,15 +105,15 @@ function onSessionStart(state, ctx) {
   // историю в новый ход.
   state.transcript_offset = transcriptSize(transcript);
   append(log, {
-    kind: 'session', ...ctx.base, source: typeof event.source === 'string' ? event.source : '',
-    harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
+    kind: 'session', ...ctx.base, source: event.source,
+    harness: event.harness, repo: state.repo, sid,
   });
 }
 
 function onPrompt(state, ctx) {
   state.turn += 1;
   state.turn_started_at = now;
-  const flags = globalThis.hookFlags && typeof globalThis.hookFlags === 'object' ? globalThis.hookFlags : {};
+  const incident = hasFlag(event, 'incident');
   const h = promptHash(prompt);
   const repeat = Boolean(h) && state.prompt_hashes.includes(h);
   if (h) state.prompt_hashes = [...state.prompt_hashes, h].slice(-50);
@@ -120,7 +123,7 @@ function onPrompt(state, ctx) {
   state.turn_tools = 0;
   state.turn_progress = false;
   append(log, {
-    kind: 'prompt', ts: ctx.ts, turn: state.turn, incident: flags.incident === true,
+    kind: 'prompt', ts: ctx.ts, turn: state.turn, incident,
     repeat, reinstruct: looksLikeReinstruction(prompt),
   });
 }
@@ -139,12 +142,15 @@ function onPre(state, ctx) {
     state.inflight[id] = now;
     capMap(state.inflight); // полёт бывает недописанным: вызов отменён
   }
-  const kind = ctx.decision ? ctx.decision.kind : 'allow';
+  // Решение предыдущих хуков цепочки — из журнала решений, а не из общей памяти
+  // процесса: строку пишет тот, кто решил, ещё до выхода, поэтому решение видно и
+  // когда решивший хук следом упал. Строки нет — решения не было, то есть проход.
+  // Класс причины считает решивший: текста причины в журнале нет вовсе.
+  const kind = ctx.decision ? ctx.decision.outcome : 'allow';
   const record = {
     kind: 'pre', ...ctx.base, tool, id, decision: kind,
     by: ctx.decision ? ctx.decision.hook : '',
-    class: ctx.decision && (kind === 'deny' || kind === 'ask')
-      ? reasonClass(ctx.decision.hook, ctx.decision.reason) : '',
+    class: ctx.decision ? ctx.decision.class || '' : '',
     // Хеш вызова: по нему сводка узнаёт «тот же вызов» для ложных отказов.
     // Служебные поля входа этого харнеса отсеиваются ЗДЕСЬ — общая часть их имён
     // не знает. Сам вход в журнал не идёт ни в каком виде.
@@ -187,14 +193,21 @@ function onPost(state, ctx) {
   const started = id ? Number(state.inflight[id]) : NaN;
   if (id) delete state.inflight[id];
   const record = {
-    kind: ctx.name === 'PostToolUse' ? 'post' : 'fail',
+    kind: ctx.name === EVENTS.POST_TOOL ? 'post' : 'fail',
     ...ctx.base, tool, id, hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
   };
   if (Number.isFinite(started)) record.tool_ms = now - started;
-  record.error = ctx.name === 'PostToolUseFailure' || responseIsError(response);
-  const pre = id ? state.pre_flags[id] : null;
-  if (id) delete state.pre_flags[id];
-  if (isProgress(pre, record)) state.turn_progress = true;
+  record.error = ctx.name === EVENTS.POST_TOOL_FAILURE || responseIsError(response);
+  // Прогресс хода держится на идентификаторе вызова: без него признаки события до
+  // вызова не с чем связать. Молча писать «прогресса не было» нельзя — это ложь
+  // про ход; непокрытое называется явно (решение 8).
+  if (!id) {
+    record.unsupported = 'call-id';
+  } else {
+    const pre = state.pre_flags[id];
+    delete state.pre_flags[id];
+    if (isProgress(pre, record)) state.turn_progress = true;
+  }
   append(log, record);
 }
 
@@ -203,7 +216,7 @@ function onStop(state, ctx) {
   state.transcript_offset = offset;
   const record = {
     kind: 'stop', ...ctx.base,
-    blocked_by: ctx.decision && ctx.decision.kind === 'block' ? ctx.decision.hook : '',
+    blocked_by: ctx.decision && ctx.decision.outcome === 'block' ? ctx.decision.hook : '',
     hooks_ms: ctx.hooksMs, hooks: ctx.hooks, usage,
   };
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
@@ -234,32 +247,31 @@ function ensureShape(state) {
 // внутри — обычные return.
 const stop = updateState(log, (state) => {
   ensureShape(state);
-  // Время хуков цепочки до этого: диспетчер складывает замеры в общее состояние.
-  const timings = Array.isArray(globalThis.hookTimings) ? globalThis.hookTimings : [];
+  // Замеры времени хуков цепочки — из журнала: их кладёт туда диспетчер одной
+  // строкой перед последним хуком.
+  const timings = timingsFor(event);
   const ctx = {
     name,
     ts,
-    id: typeof event.tool_use_id === 'string' ? event.tool_use_id : '',
-    hooksMs: timings.reduce((sum, t) => sum + (Number(t.ms) || 0), 0),
-    hooks: Object.fromEntries(timings.map((t) => [t.name, t.ms])),
-    decision: globalThis.hookDecision && typeof globalThis.hookDecision === 'object'
-      ? globalThis.hookDecision : null,
+    id: event.call_id,
+    hooksMs: Object.values(timings).reduce((sum, ms) => sum + (Number(ms) || 0), 0),
+    hooks: timings,
+    decision: decisionFor(event),
     base: { ts, turn: state.turn },
   };
 
-  if (name === 'SessionStart') onSessionStart(state, ctx);
-  else if (name === 'UserPromptSubmit') onPrompt(state, ctx);
-  else if (name === 'PreToolUse') onPre(state, ctx);
-  else if (name === 'PostToolUse' || name === 'PostToolUseFailure') onPost(state, ctx);
-  else if (name === 'Stop') {
+  if (name === EVENTS.SESSION_START) onSessionStart(state, ctx);
+  else if (name === EVENTS.PROMPT) onPrompt(state, ctx);
+  else if (name === EVENTS.PRE_TOOL) onPre(state, ctx);
+  else if (name === EVENTS.POST_TOOL || name === EVENTS.POST_TOOL_FAILURE) onPost(state, ctx);
+  else if (name === EVENTS.STOP) {
     onStop(state, ctx);
     return true;
   }
   return false;
 });
 
-// Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
-// Складывается ВНЕ правки состояния: у общего лока одна занятость на процесс,
-// и вложенный вызов внутри неё не залочился бы вовсе — сводку тогда могла бы
-// затереть та, что собирает параллельный фоновый вызов модели.
+// Сводка — свёртка журнала с начала сессии; пишется на каждом конце хода заново.
+// Складывается ВНЕ правки состояния: свёртка читает журнал целиком, и держать под
+// ней лок хода незачем — ход ждал бы чтения, которое его не касается.
 if (stop) refreshSummary(log, { sid, now, record: true });

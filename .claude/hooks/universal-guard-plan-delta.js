@@ -20,8 +20,8 @@
 //
 // Аварийный выключатель — PLAN_DELTA=off.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { planFileMarker, approvalRegistry } from './lib/paths.js';
 import { classify, classifierPath } from './lib/classifier.js';
@@ -29,8 +29,8 @@ import { readRegistry, render, waitForParsing } from './lib/registry.js';
 
 if (process.env.PLAN_DELTA === 'off') process.exit(0);
 
-const { raw, event, tool } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 if (tool !== 'ExitPlanMode') process.exit(0);
 
 function planPath() {

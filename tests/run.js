@@ -54,6 +54,7 @@ const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8' };
 // сессию — они падали на машине разработчика и зеленели в CI, где переменной
 // нет, то есть выглядели «известными падениями среды».
 delete BASE_ENV.CLAUDE_CODE_SESSION_ID;
+delete BASE_ENV.CRAFT_SESSION_ID;
 
 // Ключ кейса → файл хука без расширения. Незнакомый ключ резолвится по имени
 // самого ключа, поэтому карта нужна только там, где они расходятся.
@@ -321,6 +322,11 @@ function runPass(c) {
   const s = makeState();
   const caseEnv = { ...BASE_ENV, ...s.env };
   for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v, s);
+  // Кейс описывает событие ХАРНЕСА и сессию задаёт его переменной. Пути состояния
+  // резолвятся по своей (paths.js), и перевод — дело обёртки: в живой сессии его
+  // делает адаптер события, здесь — раннер. Без перевода хук и раннер считали бы
+  // пути от разных сессий, и предусловия ложились бы мимо.
+  if ('CLAUDE_CODE_SESSION_ID' in caseEnv) caseEnv.CRAFT_SESSION_ID = caseEnv.CLAUDE_CODE_SESSION_ID;
 
   const input = subst(JSON.stringify(c.input ?? {}), s);
 

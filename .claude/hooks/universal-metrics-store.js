@@ -93,11 +93,12 @@ if (process.env.METRICS_STORE_WORKER) {
   process.exit(0);
 }
 
-const { readEvent } = await import('./lib/event.js');
-const { currentMetricsLog, projectDispatcherAt } = await import('./lib/metrics.js');
+const { readEvent } = await import('./lib/event-claude.js');
+const { currentMetricsLog } = await import('./lib/metrics.js');
+const { projectDispatcherAt } = await import('./lib/registration-claude.js');
 
-const { event, cwd } = readEvent();
-if ((event.hook_event_name || '') !== 'Stop') process.exit(0);
+const { core, cwd, harness_event } = readEvent();
+if ((harness_event || '') !== 'Stop') process.exit(0);
 const log = currentMetricsLog();
 if (!log) process.exit(0);
 
@@ -105,7 +106,7 @@ if (!log) process.exit(0);
 // Уступки по hookOnce здесь нет намеренно — её ключ для Stop это хеш события со
 // сроком в секунды, и второй одинаковый Stop (заблокированный конец хода)
 // терял бы сводку.
-if ((globalThis.hookScope || 'project') === 'universal' && projectDispatcherAt(cwd)) process.exit(0);
+if ((process.env.CRAFT_HOOK_SCOPE || 'project') === 'universal' && projectDispatcherAt(cwd)) process.exit(0);
 
 const summaryFile = `${log}.summary.json`;
 if (!fs.existsSync(summaryFile)) process.exit(0);

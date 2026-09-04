@@ -24,10 +24,10 @@
 // реализации, где длина ряда знаков считалась неверно.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 
-const { event, tool, input } = readEvent();
+const { core, tool, input, cwd } = readEvent();
 if (!['Write', 'Edit', 'MultiEdit'].includes(tool)) process.exit(0);
 
 const file = input.file_path || '';
@@ -113,7 +113,7 @@ for (const line of wrapBody.split('\n')) {
 // сессии: значит автор имел в виду реальный файл и записал его относительно.
 // Неразрешимый путь и имя без косой черты не трогаются — это прозаическое
 // упоминание. Каталог тоже не адрес: хлебная крошка называет место, а не файл.
-const planRoot = event.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const planRoot = cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const pathBody = stripFenced(content, 'drop').split('\n').filter((l) => !/^\s*>/.test(l)).join('\n');
 
 // Адрес ссылки и голый текст разбираются порознь: подпись в квадратных скобках —

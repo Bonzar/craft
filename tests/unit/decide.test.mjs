@@ -8,7 +8,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const DECIDE = path.join(REPO, '.claude', 'hooks', 'lib', 'decide.js');
+// Форму ответа печатает ОБЁРТКА харнеса; общая часть знает только словарь
+// исходов, печатать ей нечем.
+const DECIDE = path.join(REPO, '.claude', 'hooks', 'lib', 'decide-claude.js');
+
+// Журнал решений уводится во временный файл: решение пишет строку туда, и без
+// подмены прогон сорил бы в каталог состояния живой сессии.
+import fs from 'node:fs';
+import os from 'node:os';
+const LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'decide-test.'));
+const ENV = { ...process.env, CRAFT_DECISION_LOG: path.join(LOG_DIR, 'decisions.jsonl') };
+process.on('exit', () => fs.rmSync(LOG_DIR, { recursive: true, force: true }));
 
 const hasJq = spawnSync('jq', ['--version'], { stdio: 'ignore' }).status === 0;
 
@@ -22,7 +32,7 @@ function viaJq(filter, reason) {
 // заканчивается выходом.
 function viaModule(fn, reason) {
   const code = `import { ${fn} } from ${JSON.stringify(DECIDE)}; ${fn}(process.argv[1]);`;
-  const res = spawnSync(process.execPath, ['--input-type=module', '-e', code, reason], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, ['--input-type=module', '-e', code, reason], { encoding: 'utf8', env: ENV, input: '' });
   return res.stdout;
 }
 
@@ -53,7 +63,7 @@ test('блокировка конца хода печатается той же 
 
 test('проход молчит', () => {
   const code = `import { allow } from ${JSON.stringify(DECIDE)}; allow();`;
-  const res = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', env: ENV, input: '' });
   assert.equal(res.stdout, '');
   assert.equal(res.status, 0);
 });

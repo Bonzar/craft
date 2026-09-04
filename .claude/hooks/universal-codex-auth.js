@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { loadEnv } from './lib/env.js';
 import { hasCommand } from './lib/system.js';
@@ -22,8 +22,8 @@ import { decideCodexAuth } from './lib/codex-auth.js';
 
 const log = (m) => process.stderr.write(`[codex-auth] ${m}\n`);
 
-const { raw, event } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 loadEnv();
 

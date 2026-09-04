@@ -9,7 +9,7 @@ const claude = await import('../../.claude/hooks/lib/tool-flags-claude.js');
 const bash = await import('../../.claude/hooks/lib/write-targets-bash.js');
 const git = await import('../../.claude/hooks/lib/write-targets-git.js');
 const repo = await import('../../.claude/hooks/lib/repo-git.js');
-const metrics = await import('../../.claude/hooks/lib/metrics.js');
+const hash = await import('../../.claude/hooks/lib/call-hash.js');
 
 // Та же связка, что собирает обёртка (universal-metrics.js): область вызова и
 // его форма от адаптера харнеса, разбор команды от адаптеров шелла и git.
@@ -111,7 +111,7 @@ test('игнорируемое репозиторием эфемерно, и в�
 
 test('служебные поля входа отсеивает адаптер харнеса, а не хеш вызова', () => {
   // Та же связка, что в обёртке: `callHash(инструмент, semanticInput(...))`.
-  const hash = (tool, input) => metrics.callHash(tool, claude.semanticInput(tool, input));
+  const hash = (tool, input) => hash.callHash(tool, claude.semanticInput(tool, input));
   assert.equal(
     hash('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 }),
     hash('Bash', { command: 'git push', description: 'Push the branch to origin' }),

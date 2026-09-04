@@ -19,8 +19,8 @@
 //
 // Регулярки построчные (флаг m): bash-версия звала grep, а он смотрит каждую
 // строку отдельно — без этого флага многострочная команда читалась бы иначе.
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 
 const REASON = 'Гашение по имени процесса бьёт по чужим экземплярам: на общей машине браузер, демон или сервер подняты несколькими сессиями, и точное имя (-x) от маски (-f) тут ничем не отличается. Адресуй СВОЙ экземпляр: номер процесса из своего pid-файла (kill "$(cat mypid)") либо порт, на котором он слушает (lsof -ti tcp:PORT -sTCP:LISTEN). Своего идентификатора нет — сначала заведи его, а не гаси по имени.';
@@ -33,8 +33,8 @@ const BY_NAME = [
   /(pgrep|pidof)[^|;&]*\|\s*xargs[^|;&]*kill/m,
 ];
 
-const { raw, event, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const command = input.command || '';
 if (BY_NAME.some((re) => re.test(command))) {

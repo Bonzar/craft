@@ -10,10 +10,10 @@
 // Уступки второму вызову здесь нет намеренно — её не было и у bash-версии:
 // буфер копит сигналы, и лишняя строка в нём безобиднее пропущенной.
 import fs from 'node:fs';
-import { readEvent, responseIsError } from './lib/event.js';
+import { readEvent, responseIsError } from './lib/event-claude.js';
 import { observeBuffer } from './lib/paths.js';
 
-const { event, tool, response } = readEvent();
+const { core, tool, response } = readEvent();
 
 // Индексирование не-объекта роняло jq, и хук выходил молча: строка или число в
 // tool_response — не тот ответ, в котором ищут ошибку.
@@ -42,7 +42,7 @@ function headBytes(text, limit) {
   return cut.subarray(0, end).toString('utf8');
 }
 
-// Ошибка инструмента опознаётся ОБЩИМ предикатом (lib/event.js): буфер и
+// Ошибка инструмента опознаётся предикатом обёртки (lib/event-claude.js): буфер и
 // метрики обязаны считать ошибкой одно и то же, а две копии этой логики уже
 // разъехались по полю error.
 if (!responseIsError(res)) process.exit(0);
@@ -59,7 +59,7 @@ if (asText(firstSet(res.is_error, res.isError, false)) === 'true') {
 // Однострочная запись: перевод строки в тексте ошибки схлопывается. Хвостовой
 // пробел остаётся от того же схлопывания у bash-версии — строки буфера читает
 // дистиллятор, и менять их форму на переезде нельзя.
-const toolName = asText(firstSet(event.tool_name, '?'));
+const toolName = asText(firstSet(tool, '?'));
 const line = `tool-error ${toolName}: ${errText.replace(/\n/g, ' ')} \n`;
 try {
   fs.appendFileSync(observeBuffer(), line);

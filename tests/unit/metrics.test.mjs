@@ -9,17 +9,21 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'hooks', 'fixtures');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
+const usage = await import('../../.claude/hooks/lib/usage-claude.js');
+const registration = await import('../../.claude/hooks/lib/registration-claude.js');
+const hash = await import('../../.claude/hooks/lib/call-hash.js');
+const reason = await import('../../.claude/hooks/lib/reason-class.js');
 const { summarize } = await import('../../.claude/hooks/lib/metrics-summary.js');
 
 test('класс причины: план-гейт по тексту, остальные по имени хука', () => {
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'Заблокировано план-гейтом: одобренного нет — реестр пуст.'), 'gate.empty');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'одобренное этого не покрывает — …'), 'gate.uncovered');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'это запрещено твоей же записью —'), 'gate.forbidden');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'сверка не дала решения'), 'gate.no-verdict');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'что-то новое'), 'gate.other');
-  assert.equal(metrics.reasonClass('universal-guard-plan-delta', 'План повторяет уже одобренное'), 'delta.repeats');
-  assert.equal(metrics.reasonClass('universal-sleep-waiter-guard', 'любой текст'), 'sleep-waiter-guard');
-  assert.equal(metrics.reasonClass('craft-guard-markdown', ''), 'guard-markdown');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'Заблокировано план-гейтом: одобренного нет — реестр пуст.'), 'gate.empty');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'одобренное этого не покрывает — …'), 'gate.uncovered');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'это запрещено твоей же записью —'), 'gate.forbidden');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'сверка не дала решения'), 'gate.no-verdict');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'что-то новое'), 'gate.other');
+  assert.equal(reason.reasonClass('universal-guard-plan-delta', 'План повторяет уже одобренное'), 'delta.repeats');
+  assert.equal(reason.reasonClass('universal-sleep-waiter-guard', 'любой текст'), 'sleep-waiter-guard');
+  assert.equal(reason.reasonClass('craft-guard-markdown', ''), 'guard-markdown');
 });
 
 test('класс ответа модели: токен вердикта, json у разбора, unavailable у неответа', () => {
@@ -32,12 +36,12 @@ test('класс ответа модели: токен вердикта, json у
 
 test('токены хода: дубли одного message.id считаются однажды, смещение за последней полной строкой', () => {
   const file = path.join(FIXTURES, 'transcript-usage.jsonl');
-  const first = metrics.turnUsage(file, 0);
+  const first = usage.turnUsage(file, 0);
   assert.deepEqual(first.usage, {
     input: 5, output: 140, cache_read: 2200, cache_create: 50, messages: 2,
   });
   assert.equal(first.offset, fs.statSync(file).size);
-  const second = metrics.turnUsage(file, first.offset);
+  const second = usage.turnUsage(file, first.offset);
   assert.equal(second.usage.messages, 0, 'посчитанное второй раз не считается');
 });
 
@@ -46,7 +50,7 @@ test('токены хода: недописанный хвост без пере
   const file = path.join(dir, 't.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 7 } } });
   fs.writeFileSync(file, `${line}\n${line.slice(0, 20)}`);
-  const r = metrics.turnUsage(file, 0);
+  const r = usage.turnUsage(file, 0);
   assert.equal(r.usage.output, 7);
   assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
   fs.rmSync(dir, { recursive: true, force: true });
@@ -261,10 +265,10 @@ test('фоновый приём пишет вызов модели в журна
 
 test('проектная регистрация диспетчера находится вверх от рабочего каталога', () => {
   const repo = path.resolve(HERE, '..', '..');
-  assert.equal(metrics.projectDispatcherAt(path.join(repo, 'tests', 'hooks')), true);
+  assert.equal(registration.projectDispatcherAt(path.join(repo, 'tests', 'hooks')), true);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
-  assert.equal(metrics.projectDispatcherAt(dir), false);
-  assert.equal(metrics.projectDispatcherAt(''), false);
+  assert.equal(registration.projectDispatcherAt(dir), false);
+  assert.equal(registration.projectDispatcherAt(''), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -338,8 +342,8 @@ test('смещение транскрипта засевается длиной 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
   const transcript = path.join(dir, 't.jsonl');
   fs.copyFileSync(path.join(FIXTURES, 'transcript-usage.jsonl'), transcript);
-  assert.equal(metrics.transcriptSize(transcript), fs.statSync(transcript).size);
-  const { usage } = metrics.turnUsage(transcript, metrics.transcriptSize(transcript));
+  assert.equal(usage.transcriptSize(transcript), fs.statSync(transcript).size);
+  const { usage } = usage.turnUsage(transcript, usage.transcriptSize(transcript));
   assert.equal(usage.messages, 0, 'засеянное смещение не даёт засчитать историю в первый ход');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -349,7 +353,7 @@ test('укоротившийся транскрипт читается зано�
   const file = path.join(dir, 't.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 9 } } });
   fs.writeFileSync(file, `${line}\n`);
-  const r = metrics.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
+  const r = usage.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
   assert.equal(r.usage.output, 9, 'после подмены транскрипт читается с начала');
   assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
   fs.rmSync(dir, { recursive: true, force: true });
@@ -379,16 +383,16 @@ test('вызов с аварийным выключателем в счётчи�
 // --- узнавание вызова и пуша -----------------------------------------------------
 
 test('хеш вызова считает ВЕСЬ данный ему вход и не зависит от порядка полей', () => {
-  const a = metrics.callHash('Bash', { command: 'git push' });
-  assert.notEqual(a, metrics.callHash('Bash', { command: 'git status' }));
+  const a = hash.callHash('Bash', { command: 'git push' });
+  assert.notEqual(a, hash.callHash('Bash', { command: 'git status' }));
   assert.equal(
-    metrics.callHash('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }),
-    metrics.callHash('Edit', { new_string: 'y', old_string: 'x', file_path: 'a' }),
+    hash.callHash('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }),
+    hash.callHash('Edit', { new_string: 'y', old_string: 'x', file_path: 'a' }),
     'порядок полей во входе не обещан — хеш от него не зависит',
   );
   // Отсев служебных полей — дело адаптера харнеса, а не этой функции: что
   // подали, то и сосчитано (кейс на отсев — в write-targets.test.mjs).
-  assert.notEqual(a, metrics.callHash('Bash', { command: 'git push', description: 'Push branch' }));
+  assert.notEqual(a, hash.callHash('Bash', { command: 'git push', description: 'Push branch' }));
 });
 
 test('журнал: нет файла — пусто, не прочитался — null', () => {
@@ -444,10 +448,10 @@ test('сводка: серия ошибок не переходит через �
 test('хеш вызова: вложенные поля сортируются, порядок массива значим', () => {
   const a = { file_path: '/a', edits: [{ old_string: 'x', new_string: 'y' }] };
   const b = { edits: [{ new_string: 'y', old_string: 'x' }], file_path: '/a' };
-  assert.equal(metrics.callHash('MultiEdit', a), metrics.callHash('MultiEdit', b));
+  assert.equal(hash.callHash('MultiEdit', a), hash.callHash('MultiEdit', b));
   assert.notEqual(
-    metrics.callHash('MultiEdit', { edits: [{ t: 1 }, { t: 2 }] }),
-    metrics.callHash('MultiEdit', { edits: [{ t: 2 }, { t: 1 }] }),
+    hash.callHash('MultiEdit', { edits: [{ t: 1 }, { t: 2 }] }),
+    hash.callHash('MultiEdit', { edits: [{ t: 2 }, { t: 1 }] }),
   );
 });
 

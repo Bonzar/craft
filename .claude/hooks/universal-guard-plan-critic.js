@@ -16,14 +16,14 @@
 //
 // Fail open на всём неожиданном.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { sha256File } from './lib/hash.js';
 import { planFileMarker, planCriticMarker, planCriticRuns } from './lib/paths.js';
 
-const { raw, event, tool, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 if (tool !== 'ExitPlanMode') process.exit(0);
 
 function planPath() {

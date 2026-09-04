@@ -34,8 +34,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { isEphemeral, ignoredEphemeral, touchesWorld } from './lib/write-targets.js';
 import { isIgnored } from './lib/repo-git.js';
@@ -47,8 +47,8 @@ import {
 } from './lib/registry.js';
 import { classify, classifierPath } from './lib/classifier.js';
 
-const { raw, event, tool, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 // Режимов харнесса гейт больше не слушает — ни bypassPermissions, ни acceptEdits.
 // Снять проверки можно, но только тапом Влада, и след этого живёт записью в

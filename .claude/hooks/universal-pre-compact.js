@@ -7,17 +7,16 @@
 // Тихий и fail open: любая ошибка — молчаливый exit 0, компакцию не задерживаем.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 
-const { raw, event, cwd } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, cwd, transcript, session_id } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 // Имя файла собирается из идентификатора сессии, поэтому всё, что не буква,
 // цифра, подчёркивание или дефис, заменяется подчёркиванием: чужой разделитель
 // пути увёл бы запись из каталога.
-const sid = (event.session_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
-const transcript = event.transcript_path || '';
+const sid = (session_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
 
 const dir = path.join(process.env.HOME || '', '.claude', 'session-data');
 try {

@@ -18,8 +18,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
+import { appendFlag } from './lib/decision-log.js';
 import { observeBuffer, incidentClosureMarker, sessionId } from './lib/paths.js';
 
 // Резолв через симлинки: установленный симлинком в ~/.claude хук обязан найти
@@ -34,8 +35,8 @@ const anchorsFile = process.env.CRAFT_SERVICE_ANCHORS || path.join(dir, 'service
 const projectDir = process.env.CLAUDE_PROJECT_DIR || path.resolve(dir, '..', '..');
 const cacheFile = path.join(projectDir, '.claude', 'craft-incident-context.md');
 
-const { raw, event, prompt } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, prompt } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 if (!prompt) process.exit(0);
 
 // Строки файла-словаря: пустые и начатые решёткой не в счёт.
@@ -105,7 +106,7 @@ if (cache !== null) {
 } else {
   out += '(кэш тела отсутствует. Доступен Craft MCP → прочитай скилл живьём: blocks get cbb1ba47-c05b-60b5-f86e-16c05b77bb4f --depth -1. Craft недоступен → веди разбор по каркасу: 1) причина — какое действие/допущение привело к дефекту; 2) как было надо; 3) исправить результат; 4) записать переносимый урок «при [сигнале] → [действие]» с РЫЧАГОМ соблюдения (гейт, хук, чек-лист, перестановка правила в точку решения) — для кода см. скилл code-incident. Без рычага инцидент не закрыт.)\n';
 }
-// Сигнал — в общее состояние события: хук метрик считает срабатывания детектора
-// по нему, а не по stdout.
-globalThis.hookFlags = { ...(globalThis.hookFlags || {}), incident: true };
+// Сигнал — в журнал решений: хук метрик считает срабатывания детектора по нему, а
+// не по stdout. Тот же канал, что и у решения, и живёт он дольше процесса.
+appendFlag(readEvent(), 'incident');
 process.stdout.write(out);
