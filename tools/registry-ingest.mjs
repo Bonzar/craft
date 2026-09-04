@@ -32,7 +32,7 @@ import {
   readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
 import { currentMetricsLog } from '../.claude/hooks/lib/metrics.js';
-import { queueSummary, storeTarget } from '../.claude/hooks/lib/summary-store.js';
+import { queueSummary } from '../.claude/hooks/lib/summary-store.js';
 // Адаптер хранения выбирает край, а не общая часть.
 import * as STORE_ADAPTER from '../.claude/hooks/lib/summary-store-git.js';
 
@@ -235,7 +235,6 @@ function requeueSummary() {
     queueSummary(summary, log, STORE_ADAPTER, {
       off: process.env.METRICS_STORE === 'off',
       queueFile: process.env.METRICS_STORE_QUEUE || '',
-      target: storeTarget(process.env.METRICS_STORE_TARGET),
     });
   }
 }

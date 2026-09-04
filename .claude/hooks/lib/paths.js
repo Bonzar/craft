@@ -14,9 +14,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Каталог состояния — ОДНА формула на весь слой, и он же поле `state_dir`
-// канонического события. Прежде их было две: зашитый `/tmp` у одних путей и
-// os.tmpdir() у других, из-за чего герметичный прогон с подменённым TMPDIR видел
-// половину состояния в чужом каталоге.
+// канонического события. Ту же формулу обязан считать и bash-веер критика: две
+// формулы означают, что отметку пишут в один каталог, а читают из другого.
 export function stateDir() {
   return process.env.CRAFT_STATE_DIR || os.tmpdir();
 }
@@ -127,10 +126,12 @@ export function metricsLog(sid) {
 // Журнал решений хуков ОДНОГО события: канал между хуками цепочки. Решение
 // пишет тот, кто решает (emit в decide.js), метрики читают журнал. Ключ — сессия
 // и идентификатор вызова, поэтому параллельные вызовы не мешают друг другу.
-export function decisionLog(sid) {
+export function decisionLog(sid, dir = '') {
   const override = process.env.CRAFT_DECISION_LOG;
   if (override) return override;
-  return path.join(stateDir(), `decisions.${sid || sessionId() || 'default'}.jsonl`);
+  // Каталог берётся ИЗ СОБЫТИЯ, когда оно его принесло: `state_dir` — поле ядра,
+  // и канал решений резолвится по нему, а не по своей копии формулы.
+  return path.join(dir || stateDir(), `decisions.${sid || sessionId() || 'default'}.jsonl`);
 }
 
 // Каталог меток уступки второму вызову события.

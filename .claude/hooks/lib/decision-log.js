@@ -1,12 +1,9 @@
 // Журнал решений хуков одного события: КАНАЛ между хуками цепочки.
 //
-// Прежде им была общая память процесса (globalThis). У неё две беды: решение
-// жило только пока жив процесс, и увидеть его мог лишь тот, кого позвали ПОСЛЕ
-// решившего — то есть порядок в таблице диспетчера был частью контракта.
-//
-// Здесь пишет тот, кто решает, и строка ложится ДО выхода из процесса: упавший
-// следом хук своего решения уже не теряет. Читают журнал диспетчер (оборвать ли
-// цепочку) и свёртка метрик (каким был исход вызова).
+// Пишет тот, кто решает, и строка ложится ДО печати и до выхода из процесса:
+// упавший следом хук своего решения не теряет, и видит его любой процесс, а не
+// только тот, кого позвали следом. Читают журнал диспетчер (оборвать ли цепочку) и
+// хук метрик (каким был исход вызова).
 //
 // Строка: {ts, sid, call_id, event, hook, outcome, reason_class}. Текста причины
 // в журнале НЕТ — только класс: журнал переживает сессию, а причина отказа
@@ -14,6 +11,12 @@
 import fs from 'node:fs';
 import { decisionLog } from './paths.js';
 import { eachJsonl } from './jsonl.js';
+
+// Путь журнала: сессия и КАТАЛОГ СОСТОЯНИЯ берутся из самого события — оба поля
+// ядра. Своей копии формулы каталога здесь нет.
+function logOf(event) {
+  return decisionLog(event && event.session_id, event && event.state_dir);
+}
 
 // Ключ строки — ПОЯВЛЕНИЕ события: его номер, имя и идентификатор вызова.
 //
@@ -24,21 +27,41 @@ import { eachJsonl } from './jsonl.js';
 // решение, пропускал бы оставшиеся гварды цепочки. Номер даёт обёртка — он свой у
 // каждого прочтения события (event-claude.js).
 function keyOf(event) {
-  return [event.occurrence || '', event.event || '', event.call_id || ''].join('|');
+  // Сессия в ключе обязательна: при пустом идентификаторе путь журнала общий
+  // (`decisions.default.jsonl`), и без сверки отказ одной сессии читался бы как
+  // решение другой — а канал несёт `deny` и `block`, обрывающие цепочку.
+  return [event.sid || event.session_id || '', event.occurrence || '', event.event || '', event.call_id || ''].join('|');
 }
 
-export function appendDecision(event, {
-  outcome, hook = '', reasonClass = '', h = '', tool = '',
-}) {
-  const file = decisionLog(event && event.session_id);
+// Одна запись на все три вида строк: собрать общую часть, дописать, назвать
+// неудачу. Три копии этого тела уже разъезжались бы по составу полей.
+function appendRecord(event, kind, extra) {
+  const file = logOf(event);
   if (!file) return false;
   const record = {
-    kind: 'decision',
+    kind,
     ts: new Date().toISOString(),
     occurrence: (event && event.occurrence) || '',
     sid: (event && event.session_id) || '',
     call_id: (event && event.call_id) || '',
     event: (event && event.event) || '',
+    ...extra,
+  };
+  try {
+    fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
+    return true;
+  } catch {
+    // Журнал не пополнился. Решение всё равно напечатано и ход цел, поэтому
+    // здесь не падение, а «нет» вызывающему: пострадала одна метрика, и её
+    // отсутствие видно пустотой в сводке.
+    return false;
+  }
+}
+
+export function appendDecision(event, {
+  outcome, hook = '', reasonClass = '', h = '', tool = '',
+}) {
+  return appendRecord(event, 'decision', {
     hook,
     outcome,
     class: reasonClass,
@@ -47,60 +70,20 @@ export function appendDecision(event, {
     // метрик нет вовсе, цепочка обрывается на решении.
     h,
     tool,
-  };
-  try {
-    fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
-    return true;
-  } catch {
-    // Журнал не пополнился — решение всё равно напечатано, ход цел. Молчать тут
-    // нечем: единственный пострадавший — метрика, и её пропуск виден пустотой.
-    return false;
-  }
+  });
 }
 
 // Признак, замеченный одним хуком цепочки для другого (сегодня — «в реплике есть
 // инцидент»). Тот же канал, что и решение: пишет заметивший, читает наблюдатель.
 export function appendFlag(event, flag) {
-  const file = decisionLog(event && event.session_id);
-  if (!file) return false;
-  const record = {
-    kind: 'flag',
-    ts: new Date().toISOString(),
-    occurrence: (event && event.occurrence) || '',
-    sid: (event && event.session_id) || '',
-    call_id: (event && event.call_id) || '',
-    event: (event && event.event) || '',
-    flag,
-  };
-  try {
-    fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
-    return true;
-  } catch {
-    return false;
-  }
+  return appendRecord(event, 'flag', { flag });
 }
 
 // Замеры времени хуков цепочки: одна строка на событие, пишет диспетчер перед
 // последним хуком. Одна, а не по строке на хук: цепочка стоит в ходе, и лишние
 // записи на диск в ней платит Влад ожиданием.
 export function appendTimings(event, hooks) {
-  const file = decisionLog(event && event.session_id);
-  if (!file) return false;
-  const record = {
-    kind: 'timing',
-    ts: new Date().toISOString(),
-    occurrence: (event && event.occurrence) || '',
-    sid: (event && event.session_id) || '',
-    call_id: (event && event.call_id) || '',
-    event: (event && event.event) || '',
-    hooks,
-  };
-  try {
-    fs.appendFileSync(file, `${JSON.stringify(record)}\n`);
-    return true;
-  } catch {
-    return false;
-  }
+  return appendRecord(event, 'timing', { hooks });
 }
 
 // Строки журнала по ЭТОМУ событию, последняя каждого вида. Берётся последняя:
@@ -123,6 +106,10 @@ function readTail(file) {
     fs.readSync(fd, buf, 0, buf.length, start);
     return buf.toString('utf8');
   } catch {
+    // Журнала нет или он не читается. Вернуть пустоту здесь безопасно и НЕ
+    // означает «решения не было»: решение пишется до печати и до выхода, так что
+    // нечитаемый журнал — это сбой диска, а не проход. Цепочка в этом случае
+    // просто не оборвётся раньше времени, а решение уже напечатано.
     return '';
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
@@ -130,7 +117,7 @@ function readTail(file) {
 }
 
 function lastByKind(event) {
-  const file = decisionLog(event && event.session_id);
+  const file = logOf(event);
   const out = { decision: null, timing: null, flags: new Set() };
   if (!file) return out;
   const text = readTail(file);
@@ -155,7 +142,7 @@ export function hasFlag(event, flag) {
 // 0.76 мс на вызов при журнале в 962 КиБ, то есть 3.8 мс на цепочку из пяти
 // хуков. Отметка стоит 0.002 мс, и разбор нужен только когда журнал ВЫРОС.
 export function journalStamp(event) {
-  const file = decisionLog(event && event.session_id);
+  const file = logOf(event);
   if (!file) return -1;
   try {
     return fs.statSync(file).size;

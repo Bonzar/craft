@@ -41,7 +41,7 @@
 // секунды, и два одинаковых Stop подряд (заблокированный конец хода) или две
 // одинаковые короткие реплики теряли бы вторую запись.
 import { readEvent, responseIsError } from './lib/event-claude.js';
-import { EVENTS } from './lib/event.js';
+import { EVENTS, missingFact, unsupported } from './lib/event.js';
 import {
   append, updateState, currentMetricsLog,
   refreshSummary, promptHash, looksLikeReinstruction, isProgress,
@@ -211,14 +211,23 @@ function onPost(state, ctx) {
   append(log, record);
 }
 
+// Хуку метрик нужен ФАКТ `tokens`. Даёт его обёртка: она читает транскрипт своего
+// харнеса и отдаёт числа. Транскрипта нет — факта нет, и это НАЗЫВАЕТСЯ, а не
+// подменяется нулями: нулевые токены и неизмеренные токены — разные вещи, и в
+// сводке они складывались бы одинаково.
 function onStop(state, ctx) {
-  const { usage, offset } = turnUsage(transcript, Number(state.transcript_offset) || 0);
-  state.transcript_offset = offset;
+  const from = Number(state.transcript_offset) || 0;
+  const measured = transcript ? turnUsage(transcript, from) : null;
+  const fact = measured ? { tokens: measured.usage } : {};
+  const missing = missingFact(fact, ['tokens']);
+  if (measured) state.transcript_offset = measured.offset;
   const record = {
     kind: 'stop', ...ctx.base,
     blocked_by: ctx.decision && ctx.decision.outcome === 'block' ? ctx.decision.hook : '',
-    hooks_ms: ctx.hooksMs, hooks: ctx.hooks, usage,
+    hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
   };
+  if (missing) record.unsupported = unsupported(missing).capability;
+  else record.usage = fact.tokens;
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
   // Ход без прогресса: инструменты звались, а ни правки, ни записи, ни плана,
   // ни вопроса, ни пуша не вышло. Ход без единого вызова — разговор, не в счёт.

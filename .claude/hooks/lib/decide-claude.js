@@ -19,13 +19,21 @@ function print(payload, { compact = true } = {}) {
   process.stdout.write(`${text}\n`);
 }
 
+// Имя исполняемого сейчас хука ставит диспетчер перед вызовом. Читает его ОБЁРТКА
+// и передаёт общей части значением: вне диспетчера хук запущен поштучно, имени у
+// него нет, и это законно — поле остаётся пустым.
+function currentHook() {
+  return process.env.CRAFT_HOOK_NAME || '';
+}
+
 // Хеш вызова считает ОБЁРТКА: служебные поля входа этого харнеса отсеивает его
-// адаптер, а общая часть их имён не знает. Хеш идёт в журнал решений, потому что
-// у отказанного вызова записи метрик нет вовсе — цепочка обрывается на решении, и
+// адаптер, а общая часть их имён не знает. Хеш идёт в журнал решений, потому что у
+// отказанного вызова записи метрик нет вовсе — цепочка обрывается на решении, и
 // сшить «отказ, затем тот же вызов прошёл» больше не по чему.
 function finish(outcome, reason, payload, options) {
   const event = readEvent();
   record(event, outcome, reason, {
+    hook: currentHook(),
     tool: event.tool,
     h: event.tool ? callHash(event.tool, semanticInput(event.tool, event.input)) : '',
   });
@@ -67,7 +75,7 @@ export function block(reason) {
 // на которое хук подписан. Перевод в имя харнеса — здесь.
 export function inject(event, additionalContext, options) {
   const hookEventName = harnessEventName(event);
-  record(readEvent(), OUTCOMES.NONE, '');
+  record(readEvent(), OUTCOMES.NONE, '', { hook: currentHook() });
   print({ hookSpecificOutput: { hookEventName, additionalContext } }, options);
   process.exit(0);
 }

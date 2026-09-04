@@ -141,6 +141,40 @@ test('решение ПРОШЛОГО хода не течёт в следующ
   }
 });
 
+test('решение чужой сессии не читается своей: сессия входит в ключ', async () => {
+  const { dir, file } = sandbox();
+  try {
+    const { appendDecision, decisionFor } = await load(file);
+    // При пустом идентификаторе путь журнала общий (`decisions.default.jsonl`), и
+    // без сверки сессии отказ одной сессии читался бы решением другой — а канал
+    // несёт deny и block, обрывающие цепочку.
+    const mine = { occurrence: 'occ-1', session_id: 'sid-A', event: 'pre-tool', call_id: 'toolu_1' };
+    const alien = { occurrence: 'occ-1', session_id: 'sid-B', event: 'pre-tool', call_id: 'toolu_1' };
+    appendDecision(alien, { outcome: 'deny', hook: 'чужой' });
+    assert.equal(decisionFor(alien).outcome, 'deny');
+    assert.equal(decisionFor(mine), null, 'чужая сессия своей цепочки не обрывает');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('каталог состояния берётся ИЗ СОБЫТИЯ, а не из своей копии формулы', async () => {
+  const { dir } = sandbox();
+  try {
+    delete process.env.CRAFT_DECISION_LOG;
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'own-state.'));
+    const mod = await import(`${LIB}/decision-log.js?t=${Date.now()}${Math.random()}`);
+    const ev = { occurrence: 'occ-1', session_id: 'sid-1', event: 'stop', call_id: '', state_dir: own };
+    mod.appendDecision(ev, { outcome: 'block', hook: 'h' });
+    assert.equal(fs.existsSync(path.join(own, 'decisions.sid-1.jsonl')), true,
+      'журнал лёг в каталог, который принесло событие');
+    assert.equal(mod.decisionFor(ev).outcome, 'block');
+    fs.rmSync(own, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('замеры и признаки идут тем же каналом', async () => {
   const { dir, file } = sandbox();
   try {

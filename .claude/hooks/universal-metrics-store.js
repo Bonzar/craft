@@ -97,7 +97,7 @@ const { readEvent } = await import('./lib/event-claude.js');
 const { currentMetricsLog } = await import('./lib/metrics.js');
 const { projectDispatcherAt } = await import('./lib/registration-claude.js');
 
-const { core, cwd, harness_event } = readEvent();
+const { cwd, harness_event } = readEvent();
 if ((harness_event || '') !== 'Stop') process.exit(0);
 const log = currentMetricsLog();
 if (!log) process.exit(0);
