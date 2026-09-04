@@ -39,7 +39,7 @@ const isAdapter = (name) => TOOLS.some((t) => name.endsWith(`-${t}.js`));
 // PR разделом 1.6 или заметкой на фазу 4.
 const DEBT = new Map([
   ['transcript.js', 3], // WRITE_TOOLS: имена правящих инструментов харнеса
-  ['env.js', 1], // commonDir из адаптера repo-git.js
+  ['env.js', 1], // выбор адаптера: имя repo-git.js в импорте, а не команда
   ['classifier.js', 2], // запуск классификатора шеллом и путь к .sh
   ['net.js', 1], // curl
 ]);
@@ -87,13 +87,14 @@ const HARNESS_SOURCE = [
   // Имена событий харнеса и поле решения, которое их несёт: `PreToolUse` и
   // соседи — его словарь, и общая часть их знать не должна.
   'hookEventName',
-  "'(PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop|SessionStart|SessionEnd|PreCompact|Notification)'",
+  "'(PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop|SessionStart|SessionEnd|PreCompact|Notification)'"
+    + '|"(PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop|SessionStart|SessionEnd|PreCompact|Notification)"',
   // СЛУЖЕБНЫЕ поля входа инструментов харнеса: их отсеивает адаптер, и знать их
   // имена общая часть не должна. Ловятся строковым литералом — как их и пишут в
   // списке. `'timeout'` в список не входит: так же называется и утилита шелла, и
   // `read-only-command.js` законно упоминает её в своём словаре команд; поле
   // `input.timeout` ловится отдельно, а литерал — пробел, названный здесь.
-  "'(description|run_in_background|shell_id)'|\\binput\\.timeout\\b",
+  "'(description|run_in_background|shell_id)'|\"(description|run_in_background|shell_id)\"|\\binput\\.timeout\\b",
 ];
 const HARNESS_NAMES = new RegExp(HARNESS_SOURCE.join('|'));
 
@@ -178,7 +179,7 @@ test('гвард имён ловит имя инструмента в коде �
     "if (tool === 'Task') return true;",
     "const t = 'mcp__github__create_pull_request';",
     "spawnSync('git', ['check-ignore', file]);",
-    "import { isIgnored } from './git.js';",
+    "import { isIgnored } from './repo-git.js';",
     "if (cmd.startsWith('arc ')) return true;",
     "const q = 'tracker';",
     "if (name === 'yandex-team') return true;",
@@ -204,7 +205,9 @@ test('гвард имён ловит имя инструмента в коде �
     "const mode = event.permission_mode || '';",
     "if (item.type === 'tool_use') return item.name;",
     "const out = { hookEventName: 'PreToolUse' };",
+    'const out = { name: "PostToolUse" };',
     "const VOLATILE = new Set(['description', 'run_in_background']);",
+    'const VOLATILE = new Set(["shell_id"]);',
     "if (input.timeout) return true;",
   ]) {
     assert.equal(probe(code, HARNESS_NAMES), 1, code);

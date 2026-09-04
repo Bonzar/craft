@@ -119,10 +119,12 @@ test('служебные поля входа отсеивает адаптер �
   );
   assert.notEqual(hash('Bash', { command: 'git push' }), hash('Bash', { command: 'git status' }));
   assert.equal(
-    hash('BashOutput', { bash_id: 'a', shell_id: '1' }),
-    hash('BashOutput', { bash_id: 'a', shell_id: '2' }),
+    hash('KillShell', { shell_id: '1' }),
+    hash('KillShell', { shell_id: '2' }),
     'номер фонового запуска смыслом вызова не является',
   );
+  // А чтение чужого вывода — является: у него идентификатор говорит, ЧЕЙ вывод.
+  assert.notEqual(hash('BashOutput', { bash_id: 'a' }), hash('BashOutput', { bash_id: 'b' }));
   // Список служебных полей — ПО ИНСТРУМЕНТУ: у правки `description` нет вовсе, и
   // общий список отсеивал бы поле там, где оно могло быть смыслом.
   assert.notEqual(

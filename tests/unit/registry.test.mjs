@@ -677,6 +677,40 @@ test('приём плана сводку в очередь не возвраща
   assert.equal(fs.existsSync(queue), false, 'очередь на приёме плана не заводится');
 });
 
+// Выключатель хранения читает КРАЙ и передаёт его в постановку готовым
+// значением. Без этого прогон кейсов копил бы очередь в общем git-каталоге
+// НАСТОЯЩЕГО чекаута: сводки тестовых сессий уехали бы в ветку metrics.
+test('приём с выключенным хранением очередь не заводит', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const log = path.join(dir, 'metrics.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+      CRAFT_METRICS_LOG: log,
+      METRICS_STORE_QUEUE: queue,
+      METRICS_STORE: 'off',
+    },
+  });
+
+  assert.equal(fs.existsSync(queue), false, 'при METRICS_STORE=off очередь не заводится');
+});
+
 // Приём идёт СЛЕДОМ за ходом, и вставать на лок очереди, который отсоединённый
 // работник хранения держит всё время сети, ему нельзя: пять минут ожидания в
 // этом месте — это пять минут, которые ждёт Влад. Не встали — пропуск виден
