@@ -402,7 +402,9 @@ function grade(expect, out, err, env) {
     return text !== '' && !text.includes(needle);
   }
   if (expect === 'deny') return isDeny(out);
-  if (expect === 'allow') return !(isDeny(out) || isAsk(out) || isBlock(out));
+  // allow — тоже утверждение о молчании: «гвард не сработал». Упавший гвард
+  // молчит так же, поэтому падение здесь тоже незачёт.
+  if (expect === 'allow') return !(isDeny(out) || isAsk(out) || isBlock(out)) && !crashed(err, env);
   if (expect === 'ask') return isAsk(out);
   if (expect === 'block') return isBlock(out);
   if (expect === 'inject') return out.includes('СИГНАЛ ИНЦИДЕНТА');

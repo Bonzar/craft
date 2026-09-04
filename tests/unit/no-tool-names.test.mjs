@@ -31,10 +31,12 @@ const LIB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 const TOOLS = ['git', 'bash', 'claude'];
 const isAdapter = (name) => TOOLS.some((t) => name.endsWith(`-${t}.js`));
 
-// Долг: сколько строк с именами инструментов ЕЩЁ живёт в общем модуле. Счёт
-// точный, а не «файл разрешён целиком»: новая строка в файле долга — такое же
-// нарушение, как первая строка в чистом файле, и гвард обязан её показать.
-// Файлы списка названы в теле PR разделом 1.6 или заметкой на фазу 4.
+// Долг: сколько ВХОЖДЕНИЙ имени инструмента ЕЩЁ живёт в общем модуле. Счёт по
+// вхождениям, а не по строкам и не «файл разрешён целиком»: вторая привязка,
+// дописанная в уже посчитанную строку, при счёте строк проходила молча, поэтому
+// у `git.js` три вхождения на двух строках (`rev-parse --git-common-dir` даёт
+// два имени в одной строке). Файлы списка названы в теле PR разделом 1.6 или
+// заметкой на фазу 4.
 const DEBT = new Map([
   ['git.js', 3], // команды git; файл целиком уезжает в адаптер
   ['transcript.js', 3], // WRITE_TOOLS: имена правящих инструментов харнеса
@@ -68,6 +70,10 @@ const HARNESS_SOURCE = [
   "'assistant'|\"assistant\"|'user'|\"user\"|'tool_use'|\"tool_use\"|'tool_result'|\"tool_result\"",
   'input_tokens|output_tokens|cache_read_input_tokens|cache_creation_input_tokens',
   'file_path|notebook_path|subagent_type',
+  // Поля события, которые общая часть читает напрямую, и канал между хуками
+  // одного события: и то и другое — привязка к харнесу, и новую заводить нельзя.
+  '\\bevent\\.(cwd|prompt|source|stop_hook_active)\\b|is_error|isError',
+  'globalThis\\.hook[A-Z]',
   // Поля транскрипта ловятся по ИМЕНИ ПОЛЯ, а не по имени переменной: с
   // привязкой к носителю (`entry.`, `item.`) хватало переименования локальной
   // переменной, чтобы новая привязка прошла молча.
@@ -82,18 +88,20 @@ const HARNESS_NAMES = new RegExp(HARNESS_SOURCE.join('|'));
 // Долг по харнесу — тоже счётом. Правило 10 запрещает заводить НОВУЮ привязку,
 // а не требует снять старую сегодня.
 const HARNESS_DEBT = new Map([
-  ['decide.js', 11], // формат решения харнеса
+  ['decide.js', 14], // формат решения харнеса и канал между хуками
   ['env.js', 2], // каталог состояния харнеса
-  ['event.js', 8], // поля события харнеса
-  ['metrics.js', 17], // регистрация диспетчера, session_id и формат транскрипта
-  ['once.js', 4], // ключ уступки по полям события
+  ['event.js', 13], // поля события харнеса, включая форму ответа инструмента
+  ['metrics.js', 18], // регистрация диспетчера, session_id и формат транскрипта
+  ['once.js', 6], // ключ уступки по полям события
   ['paths.js', 2], // CLAUDE_CODE_SESSION_ID и каталог состояния
   ['transcript.js', 15], // формат транскрипта Claude целиком
   ['write-targets.js', 4], // политика ~/.claude как системной зоны
 ]);
 
-// Код строки без комментария. Строковые литералы вырезаются ПЕРВЫМИ: без этого
-// `//` внутри 'https://…' обрубал строку, и имя инструмента за ним пропадало.
+// Код строки без комментария. Внутри строковых литералов `//` МАСКИРУЕТСЯ, а
+// само содержимое литерала остаётся кодом: `spawnSync('git', …)` — это вызов
+// инструмента, а не комментарий. Без маскировки `//` в 'https://…' обрубал
+// строку, и имя инструмента за ним пропадало.
 export function codeOf(line) {
   const bare = line.replace(/'[^']*'|"[^"]*"|`[^`]*`/g, (lit) => lit.replace(/\/\//g, '~~'));
   const cut = bare.indexOf('//');
@@ -112,8 +120,8 @@ export function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TO
 
 // Сколько ВХОЖДЕНИЙ имени в файле. Не строк: вторая привязка, дописанная в уже
 // посчитанную строку, при счёте строк проходила молча.
-export function hits(file, names, source) {
-  const g = new RegExp(source.join ? source.join('|') : source, 'g');
+export function hits(file, source) {
+  const g = new RegExp(source.join('|'), 'g');
   let total = 0;
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     total += (codeOf(line).match(g) || []).length;
@@ -126,7 +134,7 @@ function census(source) {
   const counts = new Map();
   for (const name of fs.readdirSync(LIB)) {
     if (!name.endsWith('.js') || isAdapter(name)) continue;
-    const n = hits(path.join(LIB, name), null, source);
+    const n = hits(path.join(LIB, name), source);
     if (n) counts.set(name, n);
   }
   return counts;
@@ -179,6 +187,9 @@ test('гвард имён ловит имя инструмента в коде �
     "const p = input.file_path;",
     "out.hookSpecificOutput = { permissionDecision: 'deny' };",
     "const model = entry.message && entry.message.model;",
+    "const dir = event.cwd || '';",
+    "if (response.is_error === true) return true;",
+    "const ev = globalThis.hookEvent;",
     "const mode = event.permission_mode || '';",
     "if (item.type === 'tool_use') return item.name;",
   ]) {
@@ -188,6 +199,20 @@ test('гвард имён ловит имя инструмента в коде �
     'в комментарии имя инструмента законно: он объясняет, почему имени нет в коде');
   assert.equal(probe('return scope.reads === true;'), 0);
   assert.equal(probe('const gitLike = 0;'), 0, 'часть слова именем инструмента не является');
+});
+
+// Счёт идёт по ВХОЖДЕНИЯМ: вторая привязка, дописанная в уже посчитанную
+// строку, при счёте строк проходила молча — ровно так её и заводят.
+test('счёт считает вхождения, а не строки', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tool-hits-'));
+  try {
+    const file = path.join(dir, 'probe.js');
+    fs.writeFileSync(file, 'const c = entry.message && entry.message.content;\n');
+    assert.equal(offenders(file, undefined, HARNESS_NAMES).length, 1, 'строка одна');
+    assert.equal(hits(file, HARNESS_SOURCE), 2, 'а привязок в ней две');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // Временные файлы кейса живут в системном временном каталоге, а не в дереве:
