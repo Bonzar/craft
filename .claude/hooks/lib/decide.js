@@ -10,6 +10,7 @@
 // память процесса. Строка ложится ДО печати и выхода: упавший следом хук своего
 // решения уже не теряет.
 import { appendDecision } from './decision-log.js';
+import { markDecided } from './decided.js';
 import { reasonClass } from './reason-class.js';
 
 export const OUTCOMES = Object.freeze({
@@ -28,6 +29,9 @@ export const OUTCOMES = Object.freeze({
 // закрытый поток, а выход не разматывает ничего — решение обязано быть записано
 // раньше обоих.
 export function record(event, outcome, reason = '', { h = '', tool = '', hook = '' } = {}) {
+  // Пометка «решение принято» ставится ПЕРВОЙ и не зависит от записи журнала:
+  // цепочку обрывает она, и отказ диска не имеет права её снять.
+  markDecided();
   appendDecision(event, {
     outcome,
     hook,

@@ -35,7 +35,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvent } from './lib/event-claude.js';
-import { appendTimings, decisionFor, journalStamp } from './lib/decision-log.js';
+import { appendTimings } from './lib/decision-log.js';
+import { wasDecided } from './lib/decided.js';
 import { hooksFor, ALWAYS } from './dispatch-table.js';
 
 const argv = process.argv.slice(2);
@@ -92,24 +93,15 @@ async function runHook(name) {
 }
 
 const chain = hooksFor(eventName, event.tool, scope);
-let decided = false;
-// Отметка журнала вместо разбора после каждого хука: цепочка стоит в ходе, и
-// читать хвост ради вопроса «решили ли уже» дорого. Журнал не вырос — решения не
-// было, разбирать нечего.
-let stamp = journalStamp(event);
 for (const [i, name] of chain.entries()) {
   // Замеры кладутся ОДНОЙ строкой перед последним хуком цепочки: последним стоит
   // наблюдатель, и это единственный, кому они нужны. Строка на каждый хук стоила
   // бы записи на диск на каждом шаге хода.
   if (i === chain.length - 1) appendTimings(event, timings);
-  // После решения идут только хуки, которым положено видеть его (ALWAYS). Само
-  // решение лежит в журнале — его пишет тот, кто решил, ещё до выхода из
-  // процесса, поэтому оно видно и когда решивший хук следом упал.
-  if (decided && !ALWAYS.has(name)) continue;
+  // После решения идут только хуки, которым положено видеть его (ALWAYS).
+  // Признак — в памяти процесса (lib/decided.js), а не в журнале: журнал может не
+  // записаться, и тогда обрыв цепочки молча снялся бы, а харнес получил бы два
+  // решения на один вызов. Содержимое решения метрики по-прежнему берут из журнала.
+  if (wasDecided() && !ALWAYS.has(name)) continue;
   await runHook(name);
-  if (decided) continue;
-  const grown = journalStamp(event);
-  if (grown === stamp) continue;
-  stamp = grown;
-  decided = Boolean(decisionFor(event));
 }

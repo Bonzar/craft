@@ -25,11 +25,12 @@
 set -u
 
 sid="${CRAFT_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-default}}"
-# Каталог состояния — ТА ЖЕ формула, что у stateDir() в lib/paths.js. Зашитый
-# /tmp здесь и os.tmpdir() там расходятся везде, где TMPDIR задан (умолчание
-# macOS): отметку писал бы node в один каталог, а читал бы веер из другого, и
-# счётчик прогонов критика молча обнулялся бы.
-state="${CRAFT_STATE_DIR:-${TMPDIR:-/tmp}}"
+# Каталог состояния — ТА ЖЕ формула, что у stateDir() в lib/paths.js, включая
+# порядок переменных, который смотрит os.tmpdir(). Зашитый /tmp здесь и os.tmpdir()
+# там расходятся везде, где задан любой из них (TMPDIR — умолчание macOS): отметку
+# писал бы node в один каталог, а читал бы веер из другого, и счётчик прогонов
+# критика молча обнулялся бы.
+state="${CRAFT_STATE_DIR:-${TMPDIR:-${TMP:-${TEMP:-/tmp}}}}"
 state="${state%/}"
 marker="${CRAFT_PLAN_CRITIC_MARKER:-$state/plan-critic.${sid}.done}"
 runs="${CRAFT_PLAN_CRITIC_RUNS:-$state/plan-critic.${sid}.runs}"

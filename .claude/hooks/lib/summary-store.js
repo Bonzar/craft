@@ -61,9 +61,12 @@ export function storeTarget(override = '') {
 // никогда не увезёт, значит тихо копить мусор вместо явного `unsupported`
 // (решение 8). Поэтому адаптер здесь всё ещё спрашивается — но только про то,
 // есть ли доставка, а не про то, где лежать очереди.
-export function defaultQueue(adapter) {
-  return adapter && typeof adapter.available === 'function'
-    ? path.join(stateDir(), 'metrics-queue.jsonl') : '';
+export function defaultQueue(adapter, target) {
+  if (!adapter || typeof adapter.available !== 'function') return '';
+  // Адаптер СПРАШИВАЕТСЯ, а не проверяется на существование: доставка бывает
+  // невозможна и при живом адаптере (цель — не рабочая копия его инструмента), и
+  // тогда очередь копила бы то, что никто никогда не увезёт.
+  return adapter.available(target) ? path.join(stateDir(), 'metrics-queue.jsonl') : '';
 }
 
 function readQueueText(queueFile) {
@@ -154,13 +157,13 @@ function upsertLines(text, summaries) {
 // другого числа ни один вызывающий не просит. Не встали — про это
 // говорится строкой в журнале, а не тишиной.
 //
-// Выключатель и файл очереди приходят от КРАЯ готовыми значениями: их читает тот,
-// кто знает окружение. Цели тут больше нет: очередь лежит в каталоге состояния, и
-// куда её класть, от цели доставки не зависит. Выключатель гасит и постановку — иначе
+// Выключатель, файл очереди и цель приходят от КРАЯ готовыми значениями: их читает
+// тот, кто знает окружение. Цель нужна не для МЕСТА очереди (оно в каталоге
+// состояния), а для вопроса адаптеру «доставка отсюда вообще возможна». Выключатель гасит и постановку — иначе
 // прогон кейсов копил бы очередь.
-export function queueSummary(summary, log, adapter, { off = false, queueFile = '' } = {}) {
+export function queueSummary(summary, log, adapter, { off = false, queueFile = '', target = '' } = {}) {
   if (off) return false;
-  const queue = queueFile || defaultQueue(adapter);
+  const queue = queueFile || defaultQueue(adapter, target || storeTarget());
   // Очереди нет — значит нет и адаптера хранения. Это тоже пропуск, и назван он
   // возможностью: молчание здесь читалось бы как «сводка уехала».
   if (!queue) {

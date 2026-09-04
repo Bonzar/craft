@@ -116,27 +116,6 @@ function readTail(file) {
   }
 }
 
-function lastByKind(event) {
-  const file = logOf(event);
-  const out = { decision: null, timing: null, flags: new Set() };
-  if (!file) return out;
-  const text = readTail(file);
-  if (!text) return out;
-  const want = keyOf(event || {});
-  eachJsonl(text, (rec) => {
-    if (keyOf(rec) !== want) return;
-    if (rec.kind === 'decision') out.decision = rec;
-    else if (rec.kind === 'timing') out.timing = rec;
-    else if (rec.kind === 'flag' && rec.flag) out.flags.add(rec.flag);
-  });
-  return out;
-}
-
-// Поставлен ли признак по этому событию.
-export function hasFlag(event, flag) {
-  return lastByKind(event).flags.has(flag);
-}
-
 // Отметка журнала: его размер. Диспетчер стоит в цепочке ХОДА и спрашивает
 // «решили ли уже» после каждого хука; разбирать ради этого хвост каждый раз —
 // 0.76 мс на вызов при журнале в 962 КиБ, то есть 3.8 мс на цепочку из пяти
@@ -149,6 +128,37 @@ export function journalStamp(event) {
   } catch {
     return 0; // файла ещё нет — это тоже отметка, и она изменится с первой записью
   }
+}
+
+// Разбор хвоста запоминается НА ПРОЦЕСС и на размер файла: за одно событие его
+// спрашивают трижды (решение, замеры, признак), и каждый раз он стоил бы полного
+// чтения и разбора JSONL. Ключ памяти включает размер: дописал кто-то строку —
+// размер сменился, и разбор идёт заново.
+const parsed = new Map();
+
+function lastByKind(event) {
+  const file = logOf(event);
+  const out = { decision: null, timing: null, flags: new Set() };
+  if (!file) return out;
+  const memo = `${file}|${journalStamp(event)}|${keyOf(event || {})}`;
+  const hit = parsed.get(memo);
+  if (hit) return hit;
+  const text = readTail(file);
+  if (!text) return out;
+  const want = keyOf(event || {});
+  eachJsonl(text, (rec) => {
+    if (keyOf(rec) !== want) return;
+    if (rec.kind === 'decision') out.decision = rec;
+    else if (rec.kind === 'timing') out.timing = rec;
+    else if (rec.kind === 'flag' && rec.flag) out.flags.add(rec.flag);
+  });
+  parsed.set(memo, out);
+  return out;
+}
+
+// Поставлен ли признак по этому событию.
+export function hasFlag(event, flag) {
+  return lastByKind(event).flags.has(flag);
 }
 
 // Решение по этому событию, либо null. null значит «решения не было» — то есть
