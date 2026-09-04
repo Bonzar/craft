@@ -228,6 +228,22 @@ function makeState() {
   return s;
 }
 
+// Файлы и каталоги, которые приём кладёт РЯДОМ с реестром под своими именами:
+// `<реестр>.parsing` (каталог меток разбора) и `<реестр>.view.<pid>-<n>` (снимок
+// вида для классификатора). Имена содержат pid, поэтому список строится чтением
+// каталога, а не перечислением.
+function siblings(registry) {
+  const dir = path.dirname(registry);
+  const base = `${path.basename(registry)}.`;
+  try {
+    return fs.readdirSync(dir)
+      .filter((name) => name.startsWith(base))
+      .map((name) => path.join(dir, name));
+  } catch {
+    return [];
+  }
+}
+
 function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
@@ -237,8 +253,19 @@ function cleanState(s) {
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
     s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
+    // Спутники реестра: след приёма и снимки вида, которые приём кладёт рядом.
+    // Без них прогон оставлял в общем /tmp по каталогу и по файлу следа на
+    // каждый кейс приёма — а этот же каталог служит состоянием хуков.
+    `${s.registry}.ingest.log`,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
+  // Спутники с ДОПИСАННЫМ именем: снимки вида реестра и каталоги меток разбора
+  // (`<реестр>.view.<pid>-<n>`, `<реестр>.parsing`), незавершённая запись
+  // критика (`.tmp`) и след классификатора по ходам (`.turn`). Имена содержат
+  // pid и номер, поэтому убираются по маске, а не перечислением.
+  for (const base of [s.registry, s.criticpend, s.classtrace]) {
+    for (const f of siblings(base)) fs.rmSync(f, { recursive: true, force: true });
+  }
   // Каталоги локов убираются вместе с файлами, которые они защищают: лок,
   // оставшийся от упавшего кейса, следующему кейсу стоил бы всего срока
   // ожидания, а его состояние — пропущенной записи.

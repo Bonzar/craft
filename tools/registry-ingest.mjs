@@ -242,7 +242,11 @@ function dropMaterial() {
     if (!/^registry-ingest-/.test(path.basename(dir))) return;
     if (path.dirname(dir) !== os.tmpdir()) return;
     fs.rmSync(dir, { recursive: true, force: true });
-  } catch { /* не убралось — это мусор, а не работа */ }
+  } catch (err) {
+    // Молчание здесь уже стоило 6590 каталогов: работу это не рвёт, но узнать о
+    // нём надо из следа, а не из `ls` во временном каталоге.
+    trace(`каталог материала не убран: ${err && err.message}`);
+  }
 }
 
 let code = 1;

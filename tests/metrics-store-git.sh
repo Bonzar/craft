@@ -18,8 +18,16 @@ bad() { fail=$((fail+1)); fails+=("$1 — $2"); printf 'FAIL  %s — %s\n' "$1" 
 
 G() { git -c user.email=t@t -c user.name=t -c init.defaultBranch=main -c advice.detachedHead=false "$@"; }
 
+# Все песочницы прогона живут под ОДНИМ корнем, и он сносится на выходе, каким бы
+# тот ни был. Список в переменной не годится: `sandbox` зовут через подстановку
+# команды, то есть в подоболочке, и дописанное там до trap не доживает.
+# Временный каталог здесь же служит каталогом состояния хуков, и по одиннадцать
+# репозиториев на прогон в нём — не только гигиена.
+RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/metrics-store-run.XXXXXX")"
+trap 'rm -rf "$RUN_ROOT"' EXIT
+
 sandbox() {
-  local sb; sb="$(mktemp -d "${TMPDIR:-/tmp}/metrics-store-test.XXXXXX")"
+  local sb; sb="$(mktemp -d "$RUN_ROOT/metrics-store-test.XXXXXX")"
   G init --quiet --bare "$sb/origin.git"
   G clone --quiet "$sb/origin.git" "$sb/work" 2>/dev/null
   echo "base" > "$sb/work/file.txt"

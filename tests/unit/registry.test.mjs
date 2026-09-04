@@ -765,19 +765,29 @@ test('приём убирает за собой каталог материал�
     },
   });
 
-  // Свой каталог — по маске вызывающего и под системным временным каталогом.
+  // Свой каталог — по маске вызывающего И под системным временным каталогом.
   const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-ingest-'));
+  sandboxes.push(mine); // на случай, если приём упадёт раньше уборки
   const material = path.join(mine, 'material.txt');
   fs.writeFileSync(material, 'продолжаем ту же работу');
   run(material);
   assert.equal(fs.existsSync(mine), false, 'свой каталог материала убран');
 
-  // Чужой каталог остаётся: приём не сторож чужому временному файлу.
+  // Чужой по ИМЕНИ каталог остаётся: приём не сторож чужому временному файлу.
   const alien = path.join(dir, 'material.txt');
   fs.writeFileSync(alien, 'продолжаем ту же работу');
   run(alien);
   assert.equal(fs.existsSync(alien), true, 'чужой материал не тронут');
-  sandboxes.push(mine);
+
+  // И чужой по МЕСТУ — тоже: имя совпадает с маской вызывающего, но каталог
+  // лежит не под системным временным. Обе половины гварда проверяются, иначе
+  // снятая проверка места прошла бы молча.
+  const lookalike = path.join(dir, 'registry-ingest-подделка');
+  fs.mkdirSync(lookalike);
+  const inside = path.join(lookalike, 'material.txt');
+  fs.writeFileSync(inside, 'продолжаем ту же работу');
+  run(inside);
+  assert.equal(fs.existsSync(lookalike), true, 'каталог не под системным временным не трогается');
 });
 
 // Приём идёт СЛЕДОМ за ходом, и вставать на лок очереди, который отсоединённый
