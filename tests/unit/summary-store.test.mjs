@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const store = await import('../../.claude/hooks/lib/metrics-store.js');
+const store = await import('../../.claude/hooks/lib/summary-store.js');
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-store-test.'));
@@ -65,7 +65,7 @@ test('адаптер без available — тоже unsupported, а не паде
   store.enqueue(queue, summary('s1', 1));
   const res = store.flushQueue({ target: dir, queueFile: queue, adapter: {} });
   assert.equal(res.status, 'unsupported');
-  assert.equal(res.capability, 'metrics-store');
+  assert.equal(res.capability, 'summary-store');
   assert.match(fs.readFileSync(queue, 'utf8'), /"sid":"s1"/, 'очередь цела');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -76,7 +76,7 @@ test('без адаптера хранение отвечает unsupported с �
   store.enqueue(queue, summary('s1', 1));
   const res = store.flushQueue({ target: dir, queueFile: queue });
   assert.equal(res.status, 'unsupported');
-  assert.equal(res.capability, 'metrics-store');
+  assert.equal(res.capability, 'summary-store');
   assert.match(fs.readFileSync(queue, 'utf8'), /"sid":"s1"/, 'очередь цела');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -108,28 +108,13 @@ test('отказ постановки в очередь называет при�
 test('без адаптера постановка в очередь названа пропуском в журнале', () => {
   const dir = tmp();
   const log = path.join(dir, 'metrics.jsonl');
-  const saved = {
-    queue: process.env.METRICS_STORE_QUEUE,
-    target: process.env.METRICS_STORE_TARGET,
-    off: process.env.METRICS_STORE,
-  };
-  delete process.env.METRICS_STORE_QUEUE;
-  process.env.METRICS_STORE_TARGET = dir;
-  process.env.METRICS_STORE = '';
-
-  const ok = store.queueSummary(summary('s1', 1), log);
-
-  if (saved.queue === undefined) delete process.env.METRICS_STORE_QUEUE;
-  else process.env.METRICS_STORE_QUEUE = saved.queue;
-  if (saved.target === undefined) delete process.env.METRICS_STORE_TARGET;
-  else process.env.METRICS_STORE_TARGET = saved.target;
-  if (saved.off === undefined) delete process.env.METRICS_STORE;
-  else process.env.METRICS_STORE = saved.off;
+  // Выключатель, файл очереди и цель приходят готовыми: окружение читает край.
+  const ok = store.queueSummary(summary('s1', 1), log, undefined, { target: dir });
 
   assert.equal(ok, false);
   const line = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n').pop());
   assert.equal(line.kind, 'skip');
   assert.equal(line.what, 'queue');
-  assert.equal(line.capability, 'metrics-store');
+  assert.equal(line.capability, 'summary-store');
   fs.rmSync(dir, { recursive: true, force: true });
 });

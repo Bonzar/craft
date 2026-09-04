@@ -29,16 +29,17 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import {
   defaultQueue, enqueue, flushQueue, storeTarget, WORKER_WAIT_MS, QUEUE_WAIT_MS,
-} from './lib/metrics-store.js';
+} from './lib/summary-store.js';
 // Адаптер выбирает КРАЙ: общая часть хранения инструмента не знает и не ищет.
-import * as ADAPTER from './lib/metrics-store-git.js';
+import * as ADAPTER from './lib/summary-store-git.js';
 
 if (process.env.METRICS_STORE === 'off') process.exit(0);
 
 const selfPath = fileURLToPath(import.meta.url);
-// Цель считает одна функция на весь слой (lib/metrics-store.js): своя формула
+// Цель считает одна функция на весь слой (lib/summary-store.js): своя формула
 // здесь уже расходилась с той, и переопределение окружения игнорировалось.
-const TARGET = storeTarget();
+// Само переопределение читает край — здесь.
+const TARGET = storeTarget(process.env.METRICS_STORE_TARGET);
 
 // waitMs — сколько ждать лок очереди. Своё число ПРИХОДИТ СНАРУЖИ: пять минут
 // имеет право ждать только отсоединённый работник, а инлайн-режим идёт в
@@ -52,7 +53,7 @@ function store(summaryFile, { waitMs }) {
   }
   if (!summary || typeof summary !== 'object' || !summary.sid) return { status: 'no-summary', delivered: 0 };
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(TARGET, ADAPTER);
-  if (!queue) return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
+  if (!queue) return { status: 'unsupported', capability: 'summary-store', delivered: 0 };
   // Работник ОТСОЕДИНЁН, его никто не ждёт — лок он ждёт долго. Короткий срок
   // у него означал бы потерянную сводку: предыдущая выгрузка держит лок всё
   // время сети, а следующего Stop у сессии может не быть.
@@ -112,7 +113,7 @@ if (!fs.existsSync(summaryFile)) process.exit(0);
 if (process.env.METRICS_STORE_INLINE) {
   const res = store(summaryFile, { waitMs: QUEUE_WAIT_MS });
   noteOutcome(res, summaryFile);
-  process.stderr.write(`[metrics-store] ${res.status}${res.delivered ? ` ×${res.delivered}` : ''}\n`);
+  process.stderr.write(`[summary-store] ${res.status}${res.delivered ? ` ×${res.delivered}` : ''}\n`);
   process.exit(0);
 }
 

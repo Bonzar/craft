@@ -1,5 +1,5 @@
 // Адаптер хранения сводок под git: единственное место, где хранение знает
-// команды git. Общая часть (metrics-store.js) держит очередь и склейку строк и
+// команды git. Общая часть (summary-store.js) держит очередь и склейку строк и
 // получает отсюда только ДАННЫЕ — есть ли база, что лежит в файле дня, ушёл ли
 // коммит, — и ни одной строки git не видит.
 //
@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { commonDir } from './git.js';
+import { commonDir } from './repo-git.js';
 
 const IDENTITY = {
   GIT_AUTHOR_NAME: 'metrics', GIT_AUTHOR_EMAIL: 'metrics@craft',

@@ -3,17 +3,23 @@
 // плана. Общая часть получает от него ПРИЗНАКИ и форму вызова данными.
 //
 // toolFlags(инструмент, вход) → признаки записи журнала:
-//   edit — правка содержимого; note_write — запись в базу заметок (у Claude Code
-//   это Craft); plan — показ плана; question — вопрос Владу; stage — стадия
-//   хода, повтор которой внутри хода является сигналом; push — отправка
-//   сделанного; skill — имя скилла; incident_skill — этот скилл разбирает
-//   инцидент.
+//   edit — правка содержимого; note_write — запись в базу заметок (какой
+//   инструмент ею является, знает адаптер базы); plan — показ плана;
+//   question — вопрос Владу; stage — стадия хода, повтор которой внутри хода
+//   является сигналом; push — отправка сделанного; skill — имя скилла;
+//   incident_skill — этот скилл разбирает инцидент.
 // callShape(инструмент, вход) → чем был вызов: {kind: 'edit', path},
 //   {kind: 'command', text} либо {} — по нему считается «менял ли мир».
 // toolScope(инструмент, вход) → область вызова: {reads: true} — только читает,
 //   {session: true} — правит ход самой сессии, {} — всё остальное. По ней общая
 //   часть решает, трогает ли вызов мир.
+// semanticInput(инструмент, вход) → вход без СЛУЖЕБНЫХ полей этого харнеса. По
+//   нему общая часть считает хеш вызова и не знает, какие поля входа служебные.
 import { looksLikePush } from './write-targets-git.js';
+// Рабочая система и скиллы проекта — не дело адаптера харнеса: он берёт от них
+// готовую возможность и готовый список.
+import { isNoteWrite, noteRef } from './note-write-craft.js';
+import { INCIDENT_SKILLS } from './incident-skills.js';
 
 // Путь входа у правящих инструментов. Один список: их было два, и они
 // разъезжались.
@@ -21,17 +27,8 @@ const EDIT_TOOL_PATH = {
   Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path',
 };
 
-// Запись в базу заметок: у этого харнеса — MCP-инструмент Craft. Имя базы живёт
-// ЗДЕСЬ; общая часть знает только возможность «запись в базу заметок».
-const isNoteWrite = (tool) => /__craft_write$/.test(String(tool || ''));
-
 // Стадии хода, повтор которых внутри одного хода — сигнал: показ плана и вопрос.
 const STAGE_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
-
-// Скиллы разбора инцидента: код-сессия и сессия над базой заметок. Список
-// точный, потому что признак «разбор вызван» — это доля разборов, а не похожие
-// имена. Живёт рядом с именем инструмента `Skill`, а не в свёртке.
-const INCIDENT_SKILLS = new Set(['code-incident', 'craft-incident']);
 
 export function toolFlags(tool, input = {}) {
   const flags = {};
@@ -51,7 +48,7 @@ export function toolFlags(tool, input = {}) {
 export function callShape(tool, input = {}) {
   const editPath = EDIT_TOOL_PATH[tool];
   if (editPath) return { kind: 'edit', path: input[editPath] || '' };
-  if (isNoteWrite(tool)) return { kind: 'edit', path: String(input.block_id || input.id || tool) };
+  if (isNoteWrite(tool)) return { kind: 'edit', path: noteRef(input) || tool };
   if (tool === 'Bash') return { kind: 'command', text: String(input.command || '') };
   return {};
 }
@@ -122,4 +119,26 @@ export function toolScope(tool, input = {}) {
   }
   if (/^mcp__/.test(tool)) return mcpReads(tool) ? { reads: true } : {};
   return {};
+}
+
+// Служебные поля входа: смысла вызова они не несут, а меняются от повтора к
+// повтору. Описание команды модель переписывает своими словами, таймаут ставит
+// по настроению, номер фонового запуска у каждого запуска свой — с ними «тот же
+// вызов» после отказа переставал узнаваться, и ложный отказ не засчитывался.
+// Список по инструментам, а не общий: `description` у одного харнеса — ярлык
+// вызова, у другого может быть смыслом.
+const VOLATILE_INPUT = new Map([
+  ['Bash', ['description', 'timeout', 'run_in_background']],
+  ['BashOutput', ['shell_id']],
+  ['KillShell', ['shell_id']],
+  ['Task', ['description']],
+]);
+
+export function semanticInput(tool, input = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const drop = VOLATILE_INPUT.get(tool);
+  if (!drop) return src;
+  const out = {};
+  for (const key of Object.keys(src)) if (!drop.includes(key)) out[key] = src[key];
+  return out;
 }

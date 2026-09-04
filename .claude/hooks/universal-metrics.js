@@ -48,7 +48,7 @@ import {
   promptHash, looksLikeReinstruction, isProgress, currentSessionId,
 } from './lib/metrics.js';
 import { mutationOf } from './lib/write-targets.js';
-import { toolFlags, callShape, toolScope } from './lib/tool-flags-claude.js';
+import { toolFlags, callShape, toolScope, semanticInput } from './lib/tool-flags-claude.js';
 import { commandTargets } from './lib/write-targets-bash.js';
 import { gitMutates } from './lib/write-targets-git.js';
 import { repoOf, isIgnored } from './lib/repo-git.js';
@@ -146,8 +146,9 @@ function onPre(state, ctx) {
     class: ctx.decision && (kind === 'deny' || kind === 'ask')
       ? reasonClass(ctx.decision.hook, ctx.decision.reason) : '',
     // Хеш вызова: по нему сводка узнаёт «тот же вызов» для ложных отказов.
-    // Сам вход в журнал не идёт ни в каком виде.
-    h: callHash(tool, input),
+    // Служебные поля входа этого харнеса отсеиваются ЗДЕСЬ — общая часть их имён
+    // не знает. Сам вход в журнал не идёт ни в каком виде.
+    h: callHash(tool, semanticInput(tool, input)),
     hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
   };
   // Признаки вызова: правка, запись в базу заметок, показ плана, вопрос, стадия,

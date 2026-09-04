@@ -39,16 +39,15 @@ run_hook() {
           METRICS_STORE_TARGET="$sb/work" \
           METRICS_STORE_QUEUE="$sb/queue.jsonl" \
           METRICS_STORE_INLINE=1 \
-          \
           HOOK_ONCE=off \
           node "$HOOK" 2>&1
 }
 day_file() { G -C "$1/origin.git" show "metrics:summaries/$2.jsonl" 2>/dev/null; }
 
-# Тот же вызов под `timeout`: зависание кейса — это и есть регресс, и ловится
-# оно только сроком снаружи процесса хука.
-run_hook_export() { run_hook "$@"; }
-export -f run_hook_export run_hook G
+# `run_hook` зовётся и из подоболочки под `timeout` (зависание кейса — это и есть
+# регресс, и ловится оно только сроком снаружи процесса хука), поэтому она и её
+# помощники экспортируются.
+export -f run_hook G
 export HOOK
 
 # --- A. первая сводка заводит ветку и файл дня --------------------------------
@@ -252,7 +251,7 @@ mkdir -p "$sb/queue.jsonl.lock"
 sleep 120 & holder=$!
 printf '%s' "$holder" > "$sb/queue.jsonl.lock/owner"      # лок занят живым процессом и не отпускается
 started=$(date +%s%3N)
-out="$(timeout 90 bash -c 'run_hook_export "$@"' _ "$sb" s1 2026-09-02T10:00:00Z 1 2>&1)" || out="$out[timeout]"
+out="$(timeout 90 bash -c 'run_hook "$@"' _ "$sb" s1 2026-09-02T10:00:00Z 1 2>&1)" || out="$out[timeout]"
 spent=$(( $(date +%s%3N) - started ))
 kill "$holder" 2>/dev/null
 rm -rf "$sb/queue.jsonl.lock"

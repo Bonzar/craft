@@ -108,3 +108,27 @@ test('игнорируемое репозиторием эфемерно, и в�
   assert.equal(tools.ignoredEphemeral('.claude/hooks/x.log', ignored), false,
     'внутри .claude/ игнор не оправдание');
 });
+
+test('служебные поля входа отсеивает адаптер харнеса, а не хеш вызова', () => {
+  // Та же связка, что в обёртке: `callHash(инструмент, semanticInput(...))`.
+  const hash = (tool, input) => metrics.callHash(tool, claude.semanticInput(tool, input));
+  assert.equal(
+    hash('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 }),
+    hash('Bash', { command: 'git push', description: 'Push the branch to origin' }),
+    'переписанное описание не должно делать повтор другим вызовом',
+  );
+  assert.notEqual(hash('Bash', { command: 'git push' }), hash('Bash', { command: 'git status' }));
+  assert.equal(
+    hash('BashOutput', { bash_id: 'a', shell_id: '1' }),
+    hash('BashOutput', { bash_id: 'a', shell_id: '2' }),
+    'номер фонового запуска смыслом вызова не является',
+  );
+  // Список служебных полей — ПО ИНСТРУМЕНТУ: у правки `description` нет вовсе, и
+  // общий список отсеивал бы поле там, где оно могло быть смыслом.
+  assert.notEqual(
+    hash('Edit', { file_path: 'a', description: 'x' }),
+    hash('Edit', { file_path: 'a', description: 'y' }),
+  );
+  assert.deepEqual(claude.semanticInput('Edit', { file_path: 'a' }), { file_path: 'a' });
+  assert.deepEqual(claude.semanticInput('Bash', undefined), {});
+});

@@ -15,7 +15,8 @@
 // — promptHash/looksLikeReinstruction — признаки реплики;
 // — turnUsage — токены хода из транскрипта;
 // — isProgress — был ли в ходе прогресс, по признакам вызова;
-// — readJournal/refreshSummary/writeSummary — сводка сессии и её копия.
+// — readJournal/refreshSummary — сводка сессии (её копия на диске — дело
+//   самой свёртки и наружу не выставлена).
 //
 // Чего здесь НЕТ: имён инструментов и команд. Признаки вызова ставит обёртка
 // (universal-metrics.js) через write-targets.js, метку репозитория даёт
@@ -310,16 +311,13 @@ export function readJournal(log) {
   return out;
 }
 
-// Хеш вызова: инструмент и СМЫСЛОВАЯ часть входа. Служебные поля (описание
-// команды, таймаут, фоновый режим) в хеш не идут — модель переписывает их при
-// повторе, и «тот же вызов» переставал узнаваться, то есть ложный отказ гейта
-// не засчитывался. Ключи сортируются: порядок полей во входе не обещан.
-const VOLATILE_INPUT = new Set(['description', 'timeout', 'run_in_background', 'shell_id']);
-
+// Хеш вызова: инструмент и СМЫСЛОВАЯ часть входа. Служебные поля отсеивает
+// обёртка (`semanticInput` адаптера харнеса) — какие поля входа служебные, знает
+// она, а сюда вход приходит уже готовым. Ключи сортируются: порядок полей во
+// входе не обещан.
 export function callHash(tool, input) {
   const src = input && typeof input === 'object' ? input : {};
   const semantic = Object.keys(src)
-    .filter((k) => !VOLATILE_INPUT.has(k))
     .sort()
     .map((k) => `${k}=${canonical(src[k])}`)
     .join('\n');
@@ -371,7 +369,6 @@ export function refreshSummary(log, { sid = '', now = Date.now(), record = false
   }
   return value;
 }
-
 
 // Размер транскрипта на сейчас; нет файла — ноль.
 export function transcriptSize(file) {

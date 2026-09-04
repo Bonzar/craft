@@ -42,11 +42,12 @@ export const QUEUE_CAP = 500;
 export const QUEUE_WAIT_MS = 300;
 export const WORKER_WAIT_MS = 5 * 60 * 1000;
 
-// Цель хранения — ОДНА формула на всех: переопределение окружения, иначе корень
-// того чекаута, где лежит сам слой. Две формулы уже разъезжались, и
-// переопределение игнорировалось одной из них.
-export function storeTarget() {
-  return process.env.METRICS_STORE_TARGET || repoRootOf(import.meta.url);
+// Цель хранения — ОДНА формула на всех: переопределение, иначе корень того
+// чекаута, где лежит сам слой. Две формулы уже разъезжались, и переопределение
+// игнорировалось одной из них. Само переопределение читает КРАЙ и передаёт
+// сюда готовым значением: окружения общая часть не знает.
+export function storeTarget(override = '') {
+  return override || repoRootOf(import.meta.url);
 }
 
 // Файл очереди — в каталоге, который переживает и сессии, и смену воркри, а в
@@ -145,16 +146,18 @@ function upsertLines(text, summaries) {
 // другого числа ни один вызывающий не просит. Не встали — про это
 // говорится строкой в журнале, а не тишиной.
 //
-// Выключатель хранения гасит и это — иначе прогон кейсов копил бы очередь.
-export function queueSummary(summary, log, adapter) {
-  if (process.env.METRICS_STORE === 'off') return false;
-  const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(storeTarget(), adapter);
+// Выключатель, файл очереди и цель приходят от КРАЯ готовыми значениями: их
+// читает тот, кто знает окружение. Выключатель гасит и постановку — иначе
+// прогон кейсов копил бы очередь.
+export function queueSummary(summary, log, adapter, { off = false, queueFile = '', target = '' } = {}) {
+  if (off) return false;
+  const queue = queueFile || defaultQueue(target || storeTarget(), adapter);
   // Очереди нет — значит нет и адаптера хранения. Это тоже пропуск, и назван он
   // возможностью: молчание здесь читалось бы как «сводка уехала».
   if (!queue) {
     if (log) {
       append(log, {
-        kind: 'skip', ts: new Date().toISOString(), what: 'queue', capability: 'metrics-store',
+        kind: 'skip', ts: new Date().toISOString(), what: 'queue', capability: 'summary-store',
       });
     }
     return false;
@@ -179,7 +182,7 @@ export function flushQueue({
   target, queueFile, adapter, waitMs = QUEUE_WAIT_MS, ...where
 }) {
   if (!adapter || typeof adapter.available !== 'function' || !adapter.available(target)) {
-    return { status: 'unsupported', capability: 'metrics-store', delivered: 0 };
+    return { status: 'unsupported', capability: 'summary-store', delivered: 0 };
   }
   const { locked, value } = withLock(queueFile, () => {
     const pending = parseQueue(readQueueText(queueFile));

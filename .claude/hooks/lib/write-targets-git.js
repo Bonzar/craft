@@ -36,7 +36,6 @@ function gitInvocations(command) {
   return out;
 }
 
-
 // Подкоманда, слова за ней и её ключи. Ключи нужны отдельно: у части подкоманд
 // именно ключ отличает перечисление от правки (`git tag --list 'v*'`).
 function gitParts(piece) {

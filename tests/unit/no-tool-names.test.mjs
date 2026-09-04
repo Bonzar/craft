@@ -29,19 +29,17 @@ const LIB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 // Адаптер узнаётся по имени: `<возможность>-<инструмент>.js`. Инструменты, под
 // которые адаптеры уже есть, названы поимённо — иначе в список попадал бы любой
 // файл с дефисом.
-const TOOLS = ['git', 'bash', 'claude'];
+const TOOLS = ['git', 'bash', 'claude', 'craft'];
 const isAdapter = (name) => TOOLS.some((t) => name.endsWith(`-${t}.js`));
 
 // Долг: сколько ВХОЖДЕНИЙ имени инструмента ЕЩЁ живёт в общем модуле. Счёт по
 // вхождениям, а не по строкам и не «файл разрешён целиком»: вторая привязка,
 // дописанная в уже посчитанную строку, при счёте строк проходила молча, поэтому
-// у `git.js` три вхождения на двух строках (`rev-parse --git-common-dir` даёт
-// два имени в одной строке). Файлы списка названы в теле PR разделом 1.6 или
-// заметкой на фазу 4.
+// у `classifier.js` два вхождения на двух строках. Файлы списка названы в теле
+// PR разделом 1.6 или заметкой на фазу 4.
 const DEBT = new Map([
-  ['git.js', 3], // команды git; файл целиком уезжает в адаптер
   ['transcript.js', 3], // WRITE_TOOLS: имена правящих инструментов харнеса
-  ['env.js', 1], // commonDir из git.js
+  ['env.js', 1], // commonDir из адаптера repo-git.js
   ['classifier.js', 2], // запуск классификатора шеллом и путь к .sh
   ['net.js', 1], // curl
 ]);
@@ -86,13 +84,23 @@ const HARNESS_SOURCE = [
   // носителей записи транскрипта: своё поле `usage` есть и у нашей записи
   // журнала, и считать его долгом было бы ложью.
   '\\bentry\\.(type|message|timestamp)\\b|\\bmessage\\.(id|usage|content)\\b|\\bitem\\.(name|input|type|text)\\b',
+  // Имена событий харнеса и поле решения, которое их несёт: `PreToolUse` и
+  // соседи — его словарь, и общая часть их знать не должна.
+  'hookEventName',
+  "'(PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop|SessionStart|SessionEnd|PreCompact|Notification)'",
+  // СЛУЖЕБНЫЕ поля входа инструментов харнеса: их отсеивает адаптер, и знать их
+  // имена общая часть не должна. Ловятся строковым литералом — как их и пишут в
+  // списке. `'timeout'` в список не входит: так же называется и утилита шелла, и
+  // `read-only-command.js` законно упоминает её в своём словаре команд; поле
+  // `input.timeout` ловится отдельно, а литерал — пробел, названный здесь.
+  "'(description|run_in_background|shell_id)'|\\binput\\.timeout\\b",
 ];
 const HARNESS_NAMES = new RegExp(HARNESS_SOURCE.join('|'));
 
 // Долг по харнесу — тоже счётом. Правило 10 запрещает заводить НОВУЮ привязку,
 // а не требует снять старую сегодня.
 const HARNESS_DEBT = new Map([
-  ['decide.js', 14], // формат решения харнеса и канал между хуками
+  ['decide.js', 20], // формат решения харнеса, имена его событий и канал между хуками
   ['env.js', 2], // каталог состояния харнеса
   ['event.js', 13], // поля события харнеса, включая форму ответа инструмента
   ['metrics.js', 18], // регистрация диспетчера, session_id и формат транскрипта
@@ -195,6 +203,9 @@ test('гвард имён ловит имя инструмента в коде �
     "const ev = globalThis.hookEvent;",
     "const mode = event.permission_mode || '';",
     "if (item.type === 'tool_use') return item.name;",
+    "const out = { hookEventName: 'PreToolUse' };",
+    "const VOLATILE = new Set(['description', 'run_in_background']);",
+    "if (input.timeout) return true;",
   ]) {
     assert.equal(probe(code, HARNESS_NAMES), 1, code);
   }

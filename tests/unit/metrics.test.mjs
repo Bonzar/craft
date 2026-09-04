@@ -350,16 +350,17 @@ test('вызов с аварийным выключателем в счётчи�
 
 // --- узнавание вызова и пуша -----------------------------------------------------
 
-test('хеш вызова не зависит от служебных полей входа', () => {
-  const a = metrics.callHash('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 });
-  const b = metrics.callHash('Bash', { command: 'git push', description: 'Push the branch to origin' });
-  assert.equal(a, b, 'переписанное описание не должно делать повтор другим вызовом');
+test('хеш вызова считает ВЕСЬ данный ему вход и не зависит от порядка полей', () => {
+  const a = metrics.callHash('Bash', { command: 'git push' });
   assert.notEqual(a, metrics.callHash('Bash', { command: 'git status' }));
   assert.equal(
     metrics.callHash('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }),
     metrics.callHash('Edit', { new_string: 'y', old_string: 'x', file_path: 'a' }),
     'порядок полей во входе не обещан — хеш от него не зависит',
   );
+  // Отсев служебных полей — дело адаптера харнеса, а не этой функции: что
+  // подали, то и сосчитано (кейс на отсев — в write-targets.test.mjs).
+  assert.notEqual(a, metrics.callHash('Bash', { command: 'git push', description: 'Push branch' }));
 });
 
 test('журнал: нет файла — пусто, не прочитался — null', () => {
