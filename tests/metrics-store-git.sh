@@ -41,7 +41,7 @@ sandbox() {
 # сводка нашлась.
 run_hook() {
   local sb="$1" sid="$2" at="$3" turns="$4"
-  printf '{"ts":"%s","sid":"%s","ended_at":"%s","turns":%s,"repo":"x"}\n' "$at" "$sid" "$at" "$turns" > "$sb/log.$sid.summary.json"
+  printf '{"ts":"%s","sid":"%s","ended_at":"%s","turns":%s,"repo":"x","harness":"claude"}\n' "$at" "$sid" "$at" "$turns" > "$sb/log.$sid.summary.json"
   printf '{"hook_event_name":"Stop","session_id":"%s"}' "$sid" \
     | env CRAFT_METRICS_LOG="$sb/log.$sid" \
           METRICS_STORE_TARGET="$sb/work" \
@@ -51,6 +51,23 @@ run_hook() {
           node "$HOOK" 2>&1
 }
 day_file() { G -C "$1/origin.git" show "metrics:summaries/$2.jsonl" 2>/dev/null; }
+# Сводка кейсов N и O задаётся ЦЕЛИКОМ здесь и отличается между ними РОВНО полем
+# harness: два кейса, разошедшиеся ещё чем-то, доказывали бы не предикат, а ту
+# другую разницу. `repo` пуст намеренно в обоих — он не признак: у настоящей
+# сессии вне репозитория он пуст по устройству, и кейс O это же и показывает.
+run_hook_harness() {
+  local sb="$1" sid="$2" harness="$3"
+  printf '{"ts":"%s","sid":"%s","started_at":"%s","ended_at":"%s","turns":1,"repo":"","harness":"%s"}\n' \
+    2026-09-02T10:00:00Z "$sid" 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z "$harness" \
+    > "$sb/log.$sid.summary.json"
+  printf '{"hook_event_name":"Stop","session_id":"%s"}' "$sid" \
+    | env CRAFT_METRICS_LOG="$sb/log.$sid" \
+          METRICS_STORE_TARGET="$sb/work" \
+          METRICS_STORE_QUEUE="$sb/queue.jsonl" \
+          METRICS_STORE_INLINE=1 \
+          HOOK_ONCE=off \
+          node "$HOOK" 2>&1
+}
 
 # `run_hook` зовётся и из подоболочки под `timeout` (зависание кейса — это и есть
 # регресс, и ловится оно только сроком снаружи процесса хука), поэтому она и её
@@ -135,7 +152,7 @@ else ok "$t"; fi
 # --- F. выключатель ---------------------------------------------------------------
 t="METRICS_STORE=off — ничего не уезжает"
 sb="$(sandbox)"
-printf '{"ts":"2026-09-02T10:00:00Z","sid":"s1","ended_at":"2026-09-02T10:00:00Z","turns":1}\n' > "$sb/log.s1.summary.json"
+printf '{"ts":"2026-09-02T10:00:00Z","sid":"s1","ended_at":"2026-09-02T10:00:00Z","turns":1,"harness":"claude"}\n' > "$sb/log.s1.summary.json"
 printf '{"hook_event_name":"Stop","session_id":"s1"}' \
   | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
         METRICS_STORE_INLINE=1 METRICS_STORE=off HOOK_ONCE=off node "$HOOK" >/dev/null 2>&1
@@ -175,7 +192,7 @@ else ok "$t"; fi
 # --- I. день по началу сессии ------------------------------------------------
 t="сессия через полночь UTC остаётся одной строкой одного дня"
 sb="$(sandbox)"
-printf '{"ts":"%s","sid":"s1","started_at":"2026-09-02T23:50:00Z","ended_at":"%s","turns":%s,"repo":"x"}\n' \
+printf '{"ts":"%s","sid":"s1","started_at":"2026-09-02T23:50:00Z","ended_at":"%s","turns":%s,"repo":"x","harness":"claude"}\n' \
   2026-09-03T00:10:00Z 2026-09-03T00:10:00Z 6 > "$sb/log.s1.summary.json"
 printf '{"hook_event_name":"Stop","session_id":"s1"}' \
   | env CRAFT_METRICS_LOG="$sb/log.s1" METRICS_STORE_TARGET="$sb/work" METRICS_STORE_QUEUE="$sb/queue.jsonl" \
@@ -208,7 +225,7 @@ G -C "$sb/work" remote set-url origin "$sb/nowhere.git"
 # Работник запускается КАК В БОЮ: без CRAFT_METRICS_LOG, только с путём к
 # сводке. Журнал он выводит из этого пути; кейс, задающий переменную руками,
 # зеленел бы и тогда, когда в живой сессии исход не пишется никуда.
-printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
+printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x","harness":"claude"}\n' \
   2026-09-02T10:00:00Z 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z > "$sb/log.s1.summary.json"
 out="$(env -u CRAFT_METRICS_LOG METRICS_STORE_WORKER=1 \
         METRICS_STORE_SUMMARY="$sb/log.s1.summary.json" \
@@ -231,7 +248,7 @@ else ok "$t"; fi
 t="сводка встаёт в очередь, даже когда лок занят соседней выгрузкой"
 sb="$(sandbox)"
 G -C "$sb/work" remote set-url origin "$sb/nowhere.git"   # без сети: очередь остаётся
-printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x"}\n' \
+printf '{"ts":"%s","sid":"s1","started_at":"%s","ended_at":"%s","turns":1,"repo":"x","harness":"claude"}\n' \
   2026-09-02T10:00:00Z 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z > "$sb/log.s1.summary.json"
 mkdir -p "$sb/queue.jsonl.lock"
 sleep 30 & holder=$!
@@ -269,6 +286,115 @@ elif (( spent > 2500 )); then
   bad "$t" "хук вернулся за ${spent} мс — это не срок хода: и постановка, и выгрузка обязаны уложиться в сотни миллисекунд"
 elif ! grep -q '"kind":"store"' "$sb/log.s1"; then
   bad "$t" "исход не назван строкой журнала: $out"
+else ok "$t"; fi
+
+# --- N. сводка без харнеса не публикуется, и пропуск назван -------------------
+# Публикуется только сводка НАСТОЯЩЕЙ сессии. Ручной прогон и замер субагента
+# выключатель не выставляют, а харнеса у их сводки нет: у живой сессии он
+# непуст всегда. 4 сентября две такие сводки уехали в боевую ветку.
+#
+# Проверяется ТРОЙКА, а не одна ветка: сводка не уехала, в очередь не встала
+# (иначе доехала бы следующим Stop — предикат обязан стоять ДО очереди) и
+# пропуск НАЗВАН строкой журнала. Тихий выход — это пропуск, выглядящий как
+# проход, то есть ровно тот дефект, который этот пункт и чинит.
+t="сводка с пустым harness не публикуется, и пропуск назван строкой журнала"
+sb="$(sandbox)"
+out="$(run_hook_harness "$sb" synth "")"
+line="$(grep '"kind":"skip"' "$sb/log.synth" 2>/dev/null | tail -1)"
+if G -C "$sb/origin.git" rev-parse --verify --quiet refs/heads/metrics >/dev/null; then
+  bad "$t" "сводка без харнеса уехала на ветку: $out"
+elif [[ -e "$sb/queue.jsonl" ]]; then
+  bad "$t" "сводка без харнеса встала в очередь — доедет следующим Stop"
+elif [[ -z "$line" ]]; then
+  bad "$t" "пропуск не назван: строки kind: skip в журнале нет: $out"
+elif ! grep -q '"what":"summary"' <<<"$line"; then
+  bad "$t" "в строке пропуска не названо, ЧТО пропущено: $line"
+elif ! grep -q '"reason":"no-harness"' <<<"$line"; then
+  bad "$t" "в строке пропуска не названа ПРИЧИНА: $line"
+else ok "$t"; fi
+
+# --- O. обратная сторона: сводка с харнесом уезжает как прежде ----------------
+# Без этого кейса предыдущий зелен тривиально: предикат, режущий ВСЁ, прошёл бы
+# его целиком. Форма сводки та же, отличается ровно поле harness — и пустой
+# `repo` здесь показывает, что режет именно харнес, а не соседний признак.
+t="сводка с непустым harness уезжает как прежде"
+sb="$(sandbox)"
+out="$(run_hook_harness "$sb" synth claude)"
+if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"synth"'; then
+  bad "$t" "сводка с харнесом не уехала: $out"
+elif [[ -e "$sb/queue.jsonl" ]]; then
+  bad "$t" "очередь не опустела"
+elif [[ ! -s "$sb/log.synth" ]]; then
+  bad "$t" "журнала нет — по чему судить, назван ли пропуск, нечему"
+elif grep -q '"reason":"no-harness"' "$sb/log.synth"; then
+  bad "$t" "сводка уехала, но пропуск всё равно назван строкой журнала"
+else ok "$t"; fi
+
+# --- P. нечитаемая сводка не выдаётся за сводку без харнеса -------------------
+# Предикат называет причину пропуска, и причина обязана быть ТОЙ, которая была.
+# Нечитаемая сводка — не «харнеса нет»: её пропуск называет своим исходом
+# `no-summary` уже store(), и предикат, записавший бы ей `no-harness`, выдал бы
+# догадку за факт. Без этого кейса такой предикат проходит оба кейса выше:
+# отличить его от верного они не могут.
+t="нечитаемая сводка называется своим исходом, а не пустым харнесом"
+sb="$(sandbox)"
+printf 'это не JSON\n' > "$sb/log.broken.summary.json"
+out="$(printf '{"hook_event_name":"Stop","session_id":"broken"}' \
+  | env CRAFT_METRICS_LOG="$sb/log.broken" METRICS_STORE_TARGET="$sb/work" \
+        METRICS_STORE_QUEUE="$sb/queue.jsonl" METRICS_STORE_INLINE=1 HOOK_ONCE=off \
+        node "$HOOK" 2>&1)"
+if [[ ! -s "$sb/log.broken" ]]; then
+  bad "$t" "исход не назван вовсе: журнал пуст: $out"
+elif grep -q '"reason":"no-harness"' "$sb/log.broken"; then
+  bad "$t" "нечитаемая сводка выдана за сводку без харнеса: $(grep '"reason":"no-harness"' "$sb/log.broken" | tail -1)"
+elif ! grep -q '"status":"no-summary"' "$sb/log.broken"; then
+  bad "$t" "исход нечитаемой сводки не назван: $(tail -1 "$sb/log.broken")"
+else ok "$t"; fi
+
+# --- Q. вторая дверь в очередь: приём реестра судит сводку тем же предикатом --
+# Дверей в ОБЩУЮ очередь две, и предикат у одной из них цели не достигает:
+# выгрузка везёт очередь КАК ЕСТЬ, и чужую строку увозит на боевую ветку
+# следующая настоящая сессия. Кейс гоняет весь маршрут инцидента целиком:
+# приём кладёт → Stop настоящей сессии выгружает.
+#
+# Проверяются ОБЕ стороны одним кейсом: сводка без харнеса до ветки не доезжает,
+# а сводка с харнесом — доезжает. Без второй стороны предикат, режущий у этой
+# двери ВСЁ, кейс бы прошёл.
+#
+# Приём доводится до постановки БЕЗ модели и без сети: материала нет, main()
+# возвращается на первом же чтении, не дойдя до классификатора, а возврат сводки
+# в очередь стоит в finally и потому отрабатывает.
+ingest() {
+  local sb="$1" sid="$2" harness="$3"
+  printf '{"ts":"%s","sid":"%s","started_at":"%s","ended_at":"%s","turns":1,"repo":"","harness":"%s"}\n' \
+    2026-09-02T10:00:00Z "$sid" 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z "$harness" \
+    > "$sb/log.$sid.summary.json"
+  env CRAFT_METRICS_LOG="$sb/log.$sid" METRICS_STORE_TARGET="$sb/work" \
+      METRICS_STORE_QUEUE="$sb/queue.jsonl" HOOK_ONCE=off \
+      node "$REPO/tools/registry-ingest.mjs" reply "$sb/no-material" "$sb/no-registry" 2>&1
+}
+t="приём реестра ставит в очередь сводку с харнесом и не ставит без него"
+sb="$(sandbox)"
+out="$(ingest "$sb" synth "")"
+out="$out$(ingest "$sb" passed claude)"
+line="$(grep '"kind":"skip"' "$sb/log.synth" 2>/dev/null | tail -1)"
+# Stop настоящей сессии выгружает очередь: на старом коде синтетическая строка
+# уехала бы вместе с её сводкой.
+run_hook_harness "$sb" real claude >/dev/null
+if day_file "$sb" 2026-09-02 | grep -q '"sid":"synth"'; then
+  bad "$t" "сводка без харнеса уехала на ветку маршрутом приёма: $out"
+elif ! day_file "$sb" 2026-09-02 | grep -q '"sid":"passed"'; then
+  bad "$t" "сводка С харнесом не уехала маршрутом приёма — предикат режет лишнее: $out"
+elif ! day_file "$sb" 2026-09-02 | grep -q '"sid":"real"'; then
+  bad "$t" "настоящая сводка не уехала — кейс проверяет не тот маршрут: $out"
+elif [[ -z "$line" ]]; then
+  bad "$t" "пропуск приёма не назван: строки kind: skip в журнале нет: $out"
+elif ! grep -q '"what":"summary"' <<<"$line"; then
+  bad "$t" "в строке пропуска не названо, ЧТО пропущено: $line"
+elif ! grep -q '"reason":"no-harness"' <<<"$line"; then
+  bad "$t" "в строке пропуска не названа ПРИЧИНА: $line"
+elif grep -q '"reason":"no-harness"' "$sb/log.passed" 2>/dev/null; then
+  bad "$t" "сводка с харнесом уехала, но пропуск ей всё равно назван"
 else ok "$t"; fi
 
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"
