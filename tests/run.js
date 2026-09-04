@@ -375,6 +375,12 @@ const isAsk = (o) => jsonField(o, (j) => j.hookSpecificOutput?.permissionDecisio
 const isBlock = (o) => jsonField(o, (j) => j.decision) === 'block';
 const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 
+// Хук УПАЛ, а не смолчал. Через диспетчер падение гасится и код возврата равен
+// нулю — он не уносит цепочку, — поэтому падение видно только по его строке в
+// служебном потоке. Любой исход, который утверждает МОЛЧАНИЕ, обязан это
+// различать: иначе поломка зеленит кейс.
+const crashed = (err, env) => (env || {}).CODE !== 0 || /\[dispatch\] хук .* упал/.test(err || '');
+
 function grade(expect, out, err, env) {
   // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
   // не печатью, и по stdout проверить запись нечем. Путь берётся из переменной
@@ -385,20 +391,12 @@ function grade(expect, out, err, env) {
   // file-not-contains требует НЕПУСТОГО файла: «в файле нет строки» на файле,
   // которого нет, зеленеет и при сломанном хуке — то есть проверяет ровно ничто.
   // Пара к нему — file-empty: «не написано вовсе», и это отдельное утверждение,
-  // которое кейс делает явно. Пустой файл считается только при УДАВШЕМСЯ хуке:
-  // упавший хук тоже ничего не пишет, и без кода возврата этот исход зеленел бы
-  // на любой поломке — той самой дырой, ради которой заводился file-empty.
+  // которое кейс делает явно.
   if (expect === 'file-empty' || expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
     const file = (env || {}).ASSERT_FILE || '';
     if (!file) return false;
     const text = (env || {}).ASSERT_TEXT || '';
-    // Молчание засчитывается только УДАВШЕМУСЯ хуку: код возврата плюс отсутствие
-    // строки диспетчера о падении. Через диспетчер упавший хук возвращает ноль —
-    // он гасит падение, чтобы не унести цепочку, — и один код возврата тут не
-    // отличил бы «смолчал» от «упал».
-    if (expect === 'file-empty') {
-      return text === '' && (env || {}).CODE === 0 && !/\[dispatch\] хук .* упал/.test(err || '');
-    }
+    if (expect === 'file-empty') return text === '' && !crashed(err, env);
     const needle = expect.slice(expect.indexOf(':') + 1);
     if (expect.startsWith('file-contains:')) return text.includes(needle);
     return text !== '' && !text.includes(needle);
@@ -408,14 +406,16 @@ function grade(expect, out, err, env) {
   if (expect === 'ask') return isAsk(out);
   if (expect === 'block') return isBlock(out);
   if (expect === 'inject') return out.includes('СИГНАЛ ИНЦИДЕНТА');
-  if (expect === 'silent') return trim(out) === '';
+  if (expect === 'silent') return trim(out) === '' && !crashed(err, env);
   if (expect.startsWith('contains:')) return out.includes(expect.slice('contains:'.length));
+  if (expect.startsWith('not-contains:')) {
+    return !out.includes(expect.slice('not-contains:'.length)) && !crashed(err, env);
+  }
   // Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет улику
   // доставки правила. Без отдельной проверки эта половина вывода не покрыта.
   if (expect.startsWith('err-contains:')) return err.includes(expect.slice('err-contains:'.length));
   // Отрицание: иногда доказательство — именно ОТСУТСТВИЕ строки (хук не пошёл по
   // короткому пути, гвард не сработал вхолостую).
-  if (expect.startsWith('not-contains:')) return !out.includes(expect.slice('not-contains:'.length));
   if (expect.startsWith('err-not-contains:')) return !err.includes(expect.slice('err-not-contains:'.length));
   return null; // неизвестное ожидание
 }

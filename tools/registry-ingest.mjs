@@ -29,7 +29,7 @@ import {
   readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
 import { currentMetricsLog } from '../.claude/hooks/lib/metrics.js';
-import { queueSummary, QUEUE_WAIT_MS } from '../.claude/hooks/lib/metrics-store.js';
+import { queueSummary } from '../.claude/hooks/lib/metrics-store.js';
 // Адаптер хранения выбирает край, а не общая часть.
 import * as STORE_ADAPTER from '../.claude/hooks/lib/metrics-store-git.js';
 
@@ -220,9 +220,7 @@ function requeueSummary() {
   } catch {
     return; // сводки ещё нет — возвращать нечего
   }
-  // Срок ожидания лока называет КРАЙ: приём идёт следом за ходом, и ждать он
-  // может только столько же, сколько ждут метрики внутри хода.
-  if (summary && summary.sid) queueSummary(summary, log, STORE_ADAPTER, { waitMs: QUEUE_WAIT_MS });
+  if (summary && summary.sid) queueSummary(summary, log, STORE_ADAPTER);
 }
 
 let code = 1;

@@ -133,33 +133,3 @@ test('без адаптера постановка в очередь назва�
   assert.equal(line.capability, 'metrics-store');
   fs.rmSync(dir, { recursive: true, force: true });
 });
-
-// Срок ожидания лока приходит С КРАЯ и в постановку: у приёма он свой, и в
-// журнале названо ровно то число, которое край передал, — иначе параметр был бы
-// мёртвым, а строка пропуска рассказывала бы про умолчание модуля.
-test('срок постановки приходит снаружи и попадает в строку пропуска', () => {
-  const dir = tmp();
-  const queue = path.join(dir, 'queue.jsonl');
-  const log = path.join(dir, 'metrics.jsonl');
-  // Лок держит живой чужой процесс: наш номер, которого этот вызов не держит.
-  fs.mkdirSync(`${queue}.lock`);
-  fs.writeFileSync(path.join(`${queue}.lock`, 'owner'), String(process.pid));
-
-  const saved = { queue: process.env.METRICS_STORE_QUEUE, off: process.env.METRICS_STORE };
-  process.env.METRICS_STORE_QUEUE = queue;
-  process.env.METRICS_STORE = '';
-  const started = Date.now();
-  const ok = store.queueSummary(summary('s1', 1), log, {}, { waitMs: 40 });
-  const spent = Date.now() - started;
-  if (saved.queue === undefined) delete process.env.METRICS_STORE_QUEUE;
-  else process.env.METRICS_STORE_QUEUE = saved.queue;
-  if (saved.off === undefined) delete process.env.METRICS_STORE;
-  else process.env.METRICS_STORE = saved.off;
-
-  assert.equal(ok, false);
-  assert.ok(spent < 2000, `ждали переданный срок, а не умолчание: ${spent} мс`);
-  const line = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n').pop());
-  assert.equal(line.reason, 'locked');
-  assert.equal(line.wait_ms, 40, 'в журнале названо переданное число, а не умолчание');
-  fs.rmSync(dir, { recursive: true, force: true });
-});

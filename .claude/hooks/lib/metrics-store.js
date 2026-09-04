@@ -139,12 +139,14 @@ export function upsertLines(text, summaries) {
 // (фоновый приём реестра): его запись «model» иначе осталась бы только в
 // локальной копии сводки, которую уже никто не увезёт.
 //
-// Срок ожидания короткий: этот край идёт следом за ходом, и вставать на лок,
-// который работник хранения держит всё время сети, нельзя. Не встали — про это
+// Срок ожидания короткий и берётся ЗДЕСЬ, а не приходит снаружи: этот вход
+// зовут только края, идущие следом за ходом, и ждать им можно ровно столько же,
+// сколько ждут метрики внутри хода. Параметр «свой срок» тут был бы мёртвым:
+// другого числа ни один вызывающий не просит. Не встали — про это
 // говорится строкой в журнале, а не тишиной.
 //
 // Выключатель хранения гасит и это — иначе прогон кейсов копил бы очередь.
-export function queueSummary(summary, log, adapter, { waitMs = QUEUE_WAIT_MS } = {}) {
+export function queueSummary(summary, log, adapter) {
   if (process.env.METRICS_STORE === 'off') return false;
   const queue = process.env.METRICS_STORE_QUEUE || defaultQueue(storeTarget(), adapter);
   // Очереди нет — значит нет и адаптера хранения. Это тоже пропуск, и назван он
@@ -157,13 +159,13 @@ export function queueSummary(summary, log, adapter, { waitMs = QUEUE_WAIT_MS } =
     }
     return false;
   }
-  const { ok, reason } = enqueueSummary(queue, summary, { waitMs });
+  const { ok, reason } = enqueueSummary(queue, summary, { waitMs: QUEUE_WAIT_MS });
   if (!ok && log) {
     const line = {
       kind: 'skip', ts: new Date().toISOString(), what: 'queue', reason,
     };
     // Срок называется только там, где он и был причиной.
-    if (reason === 'locked') line.wait_ms = waitMs;
+    if (reason === 'locked') line.wait_ms = QUEUE_WAIT_MS;
     append(log, line);
   }
   return ok;

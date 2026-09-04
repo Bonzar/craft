@@ -36,8 +36,8 @@ const isAdapter = (name) => TOOLS.some((t) => name.endsWith(`-${t}.js`));
 // нарушение, как первая строка в чистом файле, и гвард обязан её показать.
 // Файлы списка названы в теле PR разделом 1.6 или заметкой на фазу 4.
 const DEBT = new Map([
-  ['git.js', 2], // команды git; файл целиком уезжает в адаптер
-  ['transcript.js', 1], // WRITE_TOOLS: имена правящих инструментов харнеса
+  ['git.js', 3], // команды git; файл целиком уезжает в адаптер
+  ['transcript.js', 3], // WRITE_TOOLS: имена правящих инструментов харнеса
   ['env.js', 1], // commonDir из git.js
   ['classifier.js', 2], // запуск классификатора шеллом и путь к .sh
   ['net.js', 1], // curl
@@ -46,20 +46,21 @@ const DEBT = new Map([
 // Имена инструментов харнеса и рабочих систем. Слово ищется целиком, чтобы
 // «читать» в русском комментарии не путалось с `Read`; префикс MCP ловится по
 // следующей букве, потому что после `mcp__` границы слова нет.
-const TOOL_NAMES = new RegExp([
+const TOOL_SOURCE = [
   '\\b(Bash|BashOutput|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|LS)\\b',
   '\\b(Task|Agent|Workflow|Skill|ExitPlanMode|EnterPlanMode|AskUserQuestion)\\b',
   '\\b(TaskCreate|TaskUpdate|TaskList|TodoWrite|WebFetch|WebSearch|ToolSearch)\\b',
   '\\b(git|gh|npm|arc|arcadia|crm|tracker|startrek|yandex-team|craft_write|craft_read)\\b',
   '\\b(bash|sh|zsh|curl|wget|sleep|jq|rg|sed|awk|python|python3)\\b',
   'mcp__[A-Za-z_]',
-].join('|'));
+];
+const TOOL_NAMES = new RegExp(TOOL_SOURCE.join('|'));
 
 // Привязка к харнесу: его переменные, пути его состояния, поля его события,
 // формат его решения и формат его транскрипта. Первый список ловил только
 // переменные и поля события — то есть транскрипт Claude в общей части проходил
 // молча, хотя тело PR называет его тем же долгом.
-const HARNESS_NAMES = new RegExp([
+const HARNESS_SOURCE = [
   'CLAUDE_[A-Z_]+',
   '\\.claude\\b',
   'hook_event_name|tool_name|tool_input|tool_response|tool_use_id|session_id|transcript_path|permission_mode',
@@ -67,22 +68,28 @@ const HARNESS_NAMES = new RegExp([
   "'assistant'|\"assistant\"|'user'|\"user\"|'tool_use'|\"tool_use\"|'tool_result'|\"tool_result\"",
   'input_tokens|output_tokens|cache_read_input_tokens|cache_creation_input_tokens',
   'file_path|notebook_path|subagent_type',
-  // Форма ЗАПИСИ транскрипта, а не только имена полей usage: без неё новая
-  // привязка вида `entry.message.model` заводилась молча.
-  '\\bentry\\.(type|message)\\b|\\bmessage\\.(usage|id|role|content|model)\\b|\\bitem\\.(name|input|type)\\b',
-].join('|'));
+  // Поля транскрипта ловятся по ИМЕНИ ПОЛЯ, а не по имени переменной: с
+  // привязкой к носителю (`entry.`, `item.`) хватало переименования локальной
+  // переменной, чтобы новая привязка прошла молча.
+  '\\.(role|model|thinking|parentUuid|toolUseResult)\\b',
+  // Общие слова (`type`, `content`, `text`, `usage`, `id`) ловятся только у
+  // носителей записи транскрипта: своё поле `usage` есть и у нашей записи
+  // журнала, и считать его долгом было бы ложью.
+  '\\bentry\\.(type|message|timestamp)\\b|\\bmessage\\.(id|usage|content)\\b|\\bitem\\.(name|input|type|text)\\b',
+];
+const HARNESS_NAMES = new RegExp(HARNESS_SOURCE.join('|'));
 
 // Долг по харнесу — тоже счётом. Правило 10 запрещает заводить НОВУЮ привязку,
 // а не требует снять старую сегодня.
 const HARNESS_DEBT = new Map([
   ['decide.js', 11], // формат решения харнеса
   ['env.js', 2], // каталог состояния харнеса
-  ['event.js', 6], // поля события харнеса
-  ['metrics.js', 12], // регистрация диспетчера, session_id и формат транскрипта
-  ['once.js', 3], // ключ уступки по полям события
+  ['event.js', 8], // поля события харнеса
+  ['metrics.js', 17], // регистрация диспетчера, session_id и формат транскрипта
+  ['once.js', 4], // ключ уступки по полям события
   ['paths.js', 2], // CLAUDE_CODE_SESSION_ID и каталог состояния
-  ['transcript.js', 8], // формат транскрипта Claude целиком
-  ['write-targets.js', 3], // политика ~/.claude как системной зоны
+  ['transcript.js', 15], // формат транскрипта Claude целиком
+  ['write-targets.js', 4], // политика ~/.claude как системной зоны
 ]);
 
 // Код строки без комментария. Строковые литералы вырезаются ПЕРВЫМИ: без этого
@@ -103,12 +110,23 @@ export function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TO
   return found;
 }
 
-// Счёт нарушений по всем общим модулям: имя файла → сколько строк.
-function census(names) {
+// Сколько ВХОЖДЕНИЙ имени в файле. Не строк: вторая привязка, дописанная в уже
+// посчитанную строку, при счёте строк проходила молча.
+export function hits(file, names, source) {
+  const g = new RegExp(source.join ? source.join('|') : source, 'g');
+  let total = 0;
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    total += (codeOf(line).match(g) || []).length;
+  }
+  return total;
+}
+
+// Счёт нарушений по всем общим модулям: имя файла → сколько ВХОЖДЕНИЙ.
+function census(source) {
   const counts = new Map();
   for (const name of fs.readdirSync(LIB)) {
     if (!name.endsWith('.js') || isAdapter(name)) continue;
-    const n = offenders(path.join(LIB, name), undefined, names).length;
+    const n = hits(path.join(LIB, name), null, source);
     if (n) counts.set(name, n);
   }
   return counts;
@@ -116,7 +134,7 @@ function census(names) {
 
 test('в общей части слоя нет имён инструментов сверх названного долга', () => {
   assert.deepEqual(
-    [...census(TOOL_NAMES)].sort(),
+    [...census(TOOL_SOURCE)].sort(),
     [...DEBT].sort(),
     'счёт разошёлся с долгом: имя инструмента в общем модуле — это адаптер, которого нет, а исчезнувший долг надо снять из списка',
   );
@@ -124,7 +142,7 @@ test('в общей части слоя нет имён инструментов
 
 test('новых привязок к харнесу в общей части не заведено', () => {
   assert.deepEqual(
-    [...census(HARNESS_NAMES)].sort(),
+    [...census(HARNESS_SOURCE)].sort(),
     [...HARNESS_DEBT].sort(),
     'счёт разошёлся с долгом по харнесу: новую привязку заводить нельзя, снятую — надо убрать из списка',
   );

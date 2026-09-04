@@ -1,17 +1,17 @@
-{"name": "lone long sleep 30 → deny", "hook": "sleep-waiter-guard", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 30"}}}
-{"name": "lone sleep with minutes unit → deny", "hook": "sleep-waiter-guard", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 5m"}}}
-{"name": "short settle sleep 2 → allow", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 2"}}}
-{"name": "sleep inside a watch loop → allow (not a lone sleep)", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "while ! curl -sf http://localhost:3000; do sleep 5; done"}}}
-{"name": "conscious timer with timed-wait marker → allow", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 60 # timed-wait"}}}
-{"name": "non-sleep command → allow", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "npm run build"}}}
-{"name": "wait-then-check with ; → deny (the canonical anti-pattern)", "hook": "sleep-waiter-guard", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 420; cat /tmp/eval.log"}}}
-{"name": "wait-then-check with && → deny", "hook": "sleep-waiter-guard", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 150 && tail -20 /tmp/run.log"}}}
-{"name": "wait-then-check with minutes unit → deny", "hook": "sleep-waiter-guard", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 5m; git status"}}}
-{"name": "short settle then command → allow", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 2; echo ready"}}}
-{"name": "conscious timer marker in a chain → allow", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 60; curl -s localhost:9090/metrics # timed-wait"}}}
-{"name": "sleep inside a for loop → allow", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "for i in 1 2 3; do sleep 10; curl -sf localhost:3000 && break; done"}}}
-{"name": "blocking watcher on an event → allow", "hook": "sleep-waiter-guard", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "tail -n +1 -F /tmp/run.log | grep -q -m1 DONE"}}}
-{"name": "short-looking minutes in a chain → deny", "hook": "sleep-waiter-guard", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 2m; cat /tmp/x.log"}}}
+{"name":"lone long sleep 30 → deny","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 30"}}}
+{"name":"lone sleep with minutes unit → deny","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 5m"}}}
+{"name":"short settle sleep 2 → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"sleep 2"}}}
+{"name":"sleep inside a watch loop → allow (not a lone sleep)","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"while ! curl -sf http://localhost:3000; do sleep 5; done"}}}
+{"name":"conscious timer with timed-wait marker → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"sleep 60 # timed-wait"}}}
+{"name":"non-sleep command → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"npm run build"}}}
+{"name":"wait-then-check with ; → deny (the canonical anti-pattern)","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 420; cat /tmp/eval.log"}}}
+{"name":"wait-then-check with && → deny","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 150 && tail -20 /tmp/run.log"}}}
+{"name":"wait-then-check with minutes unit → deny","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 5m; git status"}}}
+{"name":"short settle then command → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"sleep 2; echo ready"}}}
+{"name":"conscious timer marker in a chain → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"sleep 60; curl -s localhost:9090/metrics # timed-wait"}}}
+{"name":"sleep inside a for loop → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"for i in 1 2 3; do sleep 10; curl -sf localhost:3000 && break; done"}}}
+{"name":"blocking watcher on an event → allow","hook":"sleep-waiter-guard","expect":"allow","input":{"tool_name":"Bash","tool_input":{"command":"tail -n +1 -F /tmp/run.log | grep -q -m1 DONE"}}}
+{"name":"short-looking minutes in a chain → deny","hook":"sleep-waiter-guard","expect":"deny","input":{"tool_name":"Bash","tool_input":{"command":"sleep 2m; cat /tmp/x.log"}}}
 {"name": "уступка по tool_use_id: два одинаковых вызова подряд — второй тоже гейтится", "hook": "sleep-waiter-guard", "expect": "deny", "env": {"HOOK_ONCE": "on"}, "setup": ["sleep-waiter-guard"], "setup_input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_first", "tool_input": {"command": "sleep 30"}}, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_second", "tool_input": {"command": "sleep 30"}}}
 {"name": "уступка по tool_use_id: тот же идентификатор второй раз — хук уступает", "hook": "sleep-waiter-guard", "expect": "allow", "env": {"HOOK_ONCE": "on"}, "repeat": 2, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_same", "tool_input": {"command": "sleep 30"}}}
 {"name": "уступка по tool_use_id: срок метки не истекает — повтор идентификатора уступает и после TTL", "hook": "sleep-waiter-guard", "expect": "allow", "env": {"HOOK_ONCE": "on", "HOOK_ONCE_TTL": "0"}, "repeat": 2, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_ttl", "tool_input": {"command": "sleep 30"}}}
