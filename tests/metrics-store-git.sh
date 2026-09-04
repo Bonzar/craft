@@ -351,6 +351,52 @@ elif ! grep -q '"status":"no-summary"' "$sb/log.broken"; then
   bad "$t" "исход нечитаемой сводки не назван: $(tail -1 "$sb/log.broken")"
 else ok "$t"; fi
 
+# --- Q. вторая дверь в очередь: приём реестра судит сводку тем же предикатом --
+# Дверей в ОБЩУЮ очередь две, и предикат у одной из них цели не достигает:
+# выгрузка везёт очередь КАК ЕСТЬ, и чужую строку увозит на боевую ветку
+# следующая настоящая сессия. Кейс гоняет весь маршрут инцидента целиком:
+# приём кладёт → Stop настоящей сессии выгружает.
+#
+# Проверяются ОБЕ стороны одним кейсом: сводка без харнеса до ветки не доезжает,
+# а сводка с харнесом — доезжает. Без второй стороны предикат, режущий у этой
+# двери ВСЁ, кейс бы прошёл.
+#
+# Приём доводится до постановки БЕЗ модели и без сети: материала нет, main()
+# возвращается на первом же чтении, не дойдя до классификатора, а возврат сводки
+# в очередь стоит в finally и потому отрабатывает.
+ingest() {
+  local sb="$1" sid="$2" harness="$3"
+  printf '{"ts":"%s","sid":"%s","started_at":"%s","ended_at":"%s","turns":1,"repo":"","harness":"%s"}\n' \
+    2026-09-02T10:00:00Z "$sid" 2026-09-02T10:00:00Z 2026-09-02T10:00:00Z "$harness" \
+    > "$sb/log.$sid.summary.json"
+  env CRAFT_METRICS_LOG="$sb/log.$sid" METRICS_STORE_TARGET="$sb/work" \
+      METRICS_STORE_QUEUE="$sb/queue.jsonl" HOOK_ONCE=off \
+      node "$REPO/tools/registry-ingest.mjs" reply "$sb/no-material" "$sb/no-registry" 2>&1
+}
+t="приём реестра ставит в очередь сводку с харнесом и не ставит без него"
+sb="$(sandbox)"
+out="$(ingest "$sb" synth "")"
+out="$out$(ingest "$sb" passed claude)"
+line="$(grep '"kind":"skip"' "$sb/log.synth" 2>/dev/null | tail -1)"
+# Stop настоящей сессии выгружает очередь: на старом коде синтетическая строка
+# уехала бы вместе с её сводкой.
+run_hook_harness "$sb" real claude >/dev/null
+if day_file "$sb" 2026-09-02 | grep -q '"sid":"synth"'; then
+  bad "$t" "сводка без харнеса уехала на ветку маршрутом приёма: $out"
+elif ! day_file "$sb" 2026-09-02 | grep -q '"sid":"passed"'; then
+  bad "$t" "сводка С харнесом не уехала маршрутом приёма — предикат режет лишнее: $out"
+elif ! day_file "$sb" 2026-09-02 | grep -q '"sid":"real"'; then
+  bad "$t" "настоящая сводка не уехала — кейс проверяет не тот маршрут: $out"
+elif [[ -z "$line" ]]; then
+  bad "$t" "пропуск приёма не назван: строки kind: skip в журнале нет: $out"
+elif ! grep -q '"what":"summary"' <<<"$line"; then
+  bad "$t" "в строке пропуска не названо, ЧТО пропущено: $line"
+elif ! grep -q '"reason":"no-harness"' <<<"$line"; then
+  bad "$t" "в строке пропуска не названа ПРИЧИНА: $line"
+elif grep -q '"reason":"no-harness"' "$sb/log.passed" 2>/dev/null; then
+  bad "$t" "сводка с харнесом уехала, но пропуск ей всё равно назван"
+else ok "$t"; fi
+
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"
 for f in "${fails[@]:-}"; do [[ -n "$f" ]] && printf '  - %s\n' "$f"; done
 [[ "$fail" -eq 0 ]]

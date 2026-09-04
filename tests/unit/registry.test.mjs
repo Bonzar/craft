@@ -648,7 +648,14 @@ test('приём возвращает пересобранную сводку в
 
   const log = path.join(dir, 'metrics.jsonl');
   const queue = path.join(dir, 'queue.jsonl');
-  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+  // Журнал несёт запись `session` — она есть у ЛЮБОЙ настоящей сессии, и из неё
+  // сводка берёт имя харнеса. Без неё пересборка сводки (её делает вызов модели
+  // этого же приёма) оставила бы харнес пустым, и кейс проверял бы не приём, а
+  // предикат, режущий сводку без харнеса.
+  fs.writeFileSync(log, `${JSON.stringify({
+    kind: 'session', ts: '2026-09-02T10:00:00Z', turn: 0, harness: 'claude', sid: 'm-sid',
+  })}\n`);
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2, harness: 'claude' })}\n`);
 
   const stub = path.join(dir, 'stub-classifier.sh');
   fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
@@ -685,7 +692,14 @@ test('приём плана сводку в очередь не возвраща
 
   const log = path.join(dir, 'metrics.jsonl');
   const queue = path.join(dir, 'queue.jsonl');
-  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+  // Журнал несёт запись `session` — она есть у ЛЮБОЙ настоящей сессии, и из неё
+  // сводка берёт имя харнеса. Без неё пересборка сводки (её делает вызов модели
+  // этого же приёма) оставила бы харнес пустым, и кейс проверял бы не приём, а
+  // предикат, режущий сводку без харнеса.
+  fs.writeFileSync(log, `${JSON.stringify({
+    kind: 'session', ts: '2026-09-02T10:00:00Z', turn: 0, harness: 'claude', sid: 'm-sid',
+  })}\n`);
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2, harness: 'claude' })}\n`);
 
   const stub = path.join(dir, 'stub-classifier.sh');
   fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
@@ -719,7 +733,14 @@ test('приём с выключенным хранением очередь н�
 
   const log = path.join(dir, 'metrics.jsonl');
   const queue = path.join(dir, 'queue.jsonl');
-  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+  // Журнал несёт запись `session` — она есть у ЛЮБОЙ настоящей сессии, и из неё
+  // сводка берёт имя харнеса. Без неё пересборка сводки (её делает вызов модели
+  // этого же приёма) оставила бы харнес пустым, и кейс проверял бы не приём, а
+  // предикат, режущий сводку без харнеса.
+  fs.writeFileSync(log, `${JSON.stringify({
+    kind: 'session', ts: '2026-09-02T10:00:00Z', turn: 0, harness: 'claude', sid: 'm-sid',
+  })}\n`);
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2, harness: 'claude' })}\n`);
 
   const stub = path.join(dir, 'stub-classifier.sh');
   fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
@@ -802,7 +823,14 @@ test('занятый лок очереди не задерживает приё�
 
   const log = path.join(dir, 'metrics.jsonl');
   const queue = path.join(dir, 'queue.jsonl');
-  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+  // Журнал несёт запись `session` — она есть у ЛЮБОЙ настоящей сессии, и из неё
+  // сводка берёт имя харнеса. Без неё пересборка сводки (её делает вызов модели
+  // этого же приёма) оставила бы харнес пустым, и кейс проверял бы не приём, а
+  // предикат, режущий сводку без харнеса.
+  fs.writeFileSync(log, `${JSON.stringify({
+    kind: 'session', ts: '2026-09-02T10:00:00Z', turn: 0, harness: 'claude', sid: 'm-sid',
+  })}\n`);
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2, harness: 'claude' })}\n`);
   // Лок держит ЖИВОЙ чужой процесс: отобрать его нельзя, дождаться — тоже.
   const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
   fs.mkdirSync(`${queue}.lock`);
