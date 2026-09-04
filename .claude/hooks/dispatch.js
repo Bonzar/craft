@@ -36,7 +36,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvent } from './lib/event-claude.js';
 import { appendTimings } from './lib/decision-log.js';
-import { keepChannelLine } from './lib/metrics.js';
+import { keepChannelLine, channelLost } from './lib/metrics.js';
 import { wasDecided } from './lib/decided.js';
 import { hooksFor } from './dispatch-table.js';
 
@@ -111,4 +111,9 @@ for (const name of hooksFor(eventName, event.tool, scope)) {
 // строка замеров есть у КАЖДОГО события, поэтому именно она служит свёртке
 // доказательством, что канал по событию отработал. Потеряв её, сводка называет
 // неизвестным даже то, что прошло без всяких решений.
-keepChannelLine(appendTimings(event, timings));
+//
+// И наоборот: если строка канала УЖЕ потеряна совсем (не легла ни в журнал
+// решений, ни в журнал метрик), замеры не кладутся вовсе. Доказательство доставки
+// при потерянном решении — это ровно то «выдать отказ за проход», от которого
+// весь этот механизм и заведён; молчание здесь честнее и даёт `unknown`.
+if (!channelLost()) keepChannelLine(appendTimings(event, timings));

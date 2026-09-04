@@ -801,11 +801,34 @@ test('сшивка: дописанный контекст — не решени�
       kind: 'decision', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
       hook: 'universal-inject-что-нибудь', outcome: 'none', class: '',
     },
+    // Замеры цепочки диспетчер кладёт на КАЖДОМ событии — без них форма записей
+    // была бы не той, что бывает на живом пути, и кейс проверял бы небылицу.
+    {
+      kind: 'timing', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool', hooks: {},
+    },
   ];
   const s = summarize(records, { sid: 's' });
   assert.equal(s.plan.shown, 1, 'план показан: инжектор его не отбивал');
   assert.equal(s.denies.total, 0);
   assert.equal(s.unknown_events, 0);
+});
+
+test('сшивка: дописанный контекст НЕ доказывает доставку — без замеров исход неизвестен', () => {
+  // Строка `none` говорит «я не решал». Считай её ответом на вопрос «а доехали ли
+  // строки этого события», и потерянный на том же появлении отказ прочитался бы
+  // как проход: показ плана превратился бы в состоявшийся, а отказ — в тишину.
+  const records = [
+    {
+      kind: 'pre', ts: line(1), turn: 1, occ: 'o1', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+    {
+      kind: 'decision', ts: line(1), occurrence: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-inject-что-нибудь', outcome: 'none', class: '',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.unknown_events, 1, 'замеров нет — канал по этому событию не доказан');
+  assert.equal(s.plan.shown, 0, 'показ плана не засчитывается по неизвестному исходу');
 });
 
 test('сшивка: своё поле записи сильнее строки — журнал переживает обновление слоя', () => {
@@ -882,4 +905,29 @@ test('сшивка: найденная строка сильнее отметк�
   const s = summarize(records, { sid: 's' });
   assert.equal(s.denies.total, 1);
   assert.equal(s.unknown_events, 0);
+});
+
+// Признак потери строки канала. Его спрашивают ЗАМЕРЫ: они служат свёртке
+// доказательством, что канал по событию отработал, и класть их после того, как
+// решение исчезло совсем, значило бы выдать отказ за проход.
+//
+// Признак — на процесс, поэтому кейс один и идёт последним в файле: следующий
+// увидел бы уже поднятый флаг.
+test('канал: потерянная строка снимает ПРИЗНАК доставки', () => {
+  const prev = process.env.CRAFT_METRICS_LOG;
+  const prevSid = process.env.CRAFT_SESSION_ID;
+  try {
+    delete process.env.CRAFT_METRICS_LOG;
+    delete process.env.CRAFT_SESSION_ID;
+    assert.equal(metrics.channelLost(), false, 'до потери признака быть не должно');
+    // Строка легла в журнал решений — терять нечего.
+    assert.equal(metrics.keepChannelLine({ ok: true, line: { kind: 'decision' } }), true);
+    assert.equal(metrics.channelLost(), false);
+    // Не легла, и запасного журнала тоже нет: строка исчезла совсем.
+    assert.equal(metrics.keepChannelLine({ ok: false, line: { kind: 'decision' } }), false);
+    assert.equal(metrics.channelLost(), true, 'потеря обязана быть видна тому, кто кладёт доказательство');
+  } finally {
+    if (prev === undefined) delete process.env.CRAFT_METRICS_LOG; else process.env.CRAFT_METRICS_LOG = prev;
+    if (prevSid === undefined) delete process.env.CRAFT_SESSION_ID; else process.env.CRAFT_SESSION_ID = prevSid;
+  }
 });

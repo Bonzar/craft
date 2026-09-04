@@ -21,8 +21,21 @@
 #
 #   bash tools/metrics-fixture.sh . /путь/к/базе   # сравнить и вернуть код
 #
-# Сеть и модель не зовутся (PLAN_CLASSIFIER=off), хранение выключено, всё
-# состояние — во временном каталоге, который снимается за собой.
+# ГЕРМЕТИЧНОСТЬ, перечислена поимённо — это не благое пожелание, а список
+# выключателей, и каждый закрывает свой путь наружу:
+#   PLAN_CLASSIFIER=off      — модель не зовётся;
+#   METRICS_STORE=off        — сводка никуда не увозится;
+#   CRAFT_API_BASE=          — ни один инжектор правил и ни сборщик зоны не идут
+#                              в connect-API (проверено strace: ноль connect);
+#   CRAFT_GATE_EXEMPT_PAGES= — сборщик зоны выходит на отсутствующем списке ДО
+#                              того, как сносит прежний снимок;
+#   CRAFT_GATE_EXEMPT_SCOPE= — и пишет он всё равно в свой временный файл, а не в
+#                              `.claude/craft-gate-exempt-scope.txt` ЧЕКАУТА;
+#   CODEX_AUTH_JSON=         — хук входа в codex выходит сразу и не ставит пакет
+#                              глобально (npm i -g) и не трогает ~/.codex;
+#   HOME=, CODEX_HOME=, CLAUDE_PROJECT_DIR= — личный `craft.env` и `.env` чекаута
+#                              из-под фикстуры не читаются.
+# Всё остальное состояние — во временном каталоге, который снимается за собой.
 set -u
 side() {
   local repo="$1" tail_mode="$2" broken="${3:-}"
@@ -43,6 +56,8 @@ side() {
       CRAFT_METRICS_LOG="$st/metrics.jsonl" SESSION_ANCHOR_STATE="$st/anchor" \
       CRAFT_APPROVAL_REGISTRY="$st/approvals.jsonl" CRAFT_PLAN_CRITIC_MARKER="$st/critic.done" \
       HOME="$st/home" CODEX_HOME="$st/codex" CLAUDE_PROJECT_DIR="$cwd" \
+      CRAFT_GATE_EXEMPT_SCOPE="$st/exempt-scope.txt" CODEX_AUTH_JSON= \
+      CRAFT_GATE_EXEMPT_PAGES="$st/нет-такого-списка.txt" CRAFT_API_BASE= \
       CRAFT_PLAN_FILE="$PLAN" CRAFT_PLAN_SHOWN_MARKER="$st/plan-shown" \
       CRAFT_SERVICE_TURN_MARKER="$st/service-turn" ROUTINE_FACTS_MARKER="$st/routine-facts" \
       OBSERVE_BUFFER="$st/observe.log" FACT_GATE_STATE_DIR="$st" \
