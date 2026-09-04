@@ -29,6 +29,11 @@ function run({ pages }) {
       CRAFT_GATE_EXEMPT_SCOPE: snapshot,
       CRAFT_GATE_EXEMPT_PAGES: pages === 'нет' ? path.join(dir, 'нет-такого-списка.txt') : pages,
       CRAFT_API_BASE: '',
+      // Корень проекта — временный: `apply(envFile)` в lib/env.js перекрывает
+      // окружение БЕЗУСЛОВНО, поэтому без этого `.env` чекаута вернул бы доступ к
+      // connect-API, и кейс на машине с настроенным доступом ходил бы в сеть.
+      CLAUDE_PROJECT_DIR: dir,
+      HOME: dir,
       HOOK_ONCE: 'off',
     },
   });

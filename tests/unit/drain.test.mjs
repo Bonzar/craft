@@ -31,6 +31,14 @@ function session() {
       HOOK_ONCE: 'off',
       SYNC_SYSTEM: 'off',
       PLAN_CLASSIFIER: 'off',
+      // Кейс гоняет ЖИВОЙ диспетчер, в том числе на SessionStart, — значит
+      // поднимает и инжекторы правил, и сборщик предодобренной зоны. Без этих
+      // четырёх он ходил бы в connect-API и сносил `.claude/craft-gate-exempt-scope.txt`
+      // САМОГО ЧЕКАУТА: файл гитигнорится, потеря невидима.
+      CRAFT_API_BASE: '',
+      CLAUDE_PROJECT_DIR: dir,
+      CRAFT_GATE_EXEMPT_SCOPE: path.join(dir, 'exempt-scope.txt'),
+      HOME: dir,
     },
   });
   const records = () => fs.readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));

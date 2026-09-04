@@ -188,6 +188,7 @@ function makeState() {
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
+    exemptscope: tmpName('gate-exempt-scope-test'),
     metrics: tmpName('metrics-test'),
     decisions: tmpName('decisions-test'),
     tmphome,
@@ -226,6 +227,20 @@ function makeState() {
     // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
     // кладёт живой токен в настоящий ~/.codex рабочей машины.
     CODEX_HOME: s.codexhome,
+    // Снимок предодобренной зоны — тоже герметичный у КАЖДОГО кейса. Сборщик
+    // зоны стоит в цепочке SessionStart и сносит прежний снимок, а по умолчанию
+    // это `.claude/craft-gate-exempt-scope.txt` САМОГО ЧЕКАУТА: любой стартовый
+    // кейс молча уносил бы рабочий снимок Влада. Файл гитигнорится, поэтому
+    // потеря не видна ни в `git status`, ни глазами.
+    CRAFT_GATE_EXEMPT_SCOPE: s.exemptscope,
+    // Доступа к connect-API у кейсов НЕТ. Пустая строка — это «канала нет», а не
+    // «добери из личного файла»: инжекторы правил и сборщик зоны выходят на ней
+    // молча, и прогон не ходит в сеть ни с чьей машины (см. lib/env.js — «не
+    // задано» там означает отсутствие ключа).
+    CRAFT_API_BASE: '',
+    // Корень проекта — временный: иначе `.env` чекаута перекрыл бы строку выше,
+    // и доступ вернулся бы обратно.
+    CLAUDE_PROJECT_DIR: s.tmphome,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
