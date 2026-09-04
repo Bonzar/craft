@@ -36,6 +36,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvent } from './lib/event-claude.js';
 import { appendTimings } from './lib/decision-log.js';
+import { keepChannelLine } from './lib/metrics.js';
 import { wasDecided } from './lib/decided.js';
 import { hooksFor } from './dispatch-table.js';
 
@@ -105,4 +106,9 @@ for (const name of hooksFor(eventName, event.tool, scope)) {
 // Замеры кладутся ОДНОЙ строкой в конце цепочки — в том числе оборванной: строка
 // на каждый хук стоила бы записи на диск на каждом шаге хода. Читает их наблюдатель
 // на СЛЕДУЮЩЕМ событии, вместе с решениями этого.
-appendTimings(event, timings);
+//
+// Запасной путь у неё тот же, что у решения и признака, и нужен он больше всех:
+// строка замеров есть у КАЖДОГО события, поэтому именно она служит свёртке
+// доказательством, что канал по событию отработал. Потеряв её, сводка называет
+// неизвестным даже то, что прошло без всяких решений.
+keepChannelLine(appendTimings(event, timings));

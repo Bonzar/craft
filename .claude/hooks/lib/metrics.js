@@ -54,9 +54,15 @@ export function currentMetricsLog() {
 export function keepChannelLine({ ok, line }) {
   if (ok) return true;
   const log = currentMetricsLog();
-  if (!log) return false;
-  append(log, line);
-  return true;
+  if (log) {
+    append(log, line);
+    return true;
+  }
+  // Оба журнала недоступны — строка исчезает совсем, и об этом говорится вслух.
+  // Служебный поток ход не трогает, а тишина тут была бы ровно тем молчаливым
+  // проглатыванием, ради которого весь этот запасной путь и заведён.
+  process.stderr.write('[metrics] строка канала потеряна: журнала решений нет, журнала метрик тоже\n');
+  return false;
 }
 
 // Окружение для дочернего процесса (фоновый приём реестра): журнал передаётся

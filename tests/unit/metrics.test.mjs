@@ -723,6 +723,112 @@ test('сшивка: потерянный признак реплики тоже 
   assert.equal(s.unknown_events, 1);
 });
 
+test('сшивка: доехавшая строка решения важнее того, что канал сорвался ПОЗЖЕ', () => {
+  // Строки этого события приехали, а на следующем канал упал. Первое событие от
+  // этого неизвестным не становится: доказательство доставки у него своё.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1', disp: true },
+    {
+      kind: 'timing', ts: line(1), occurrence: 'o1', sid: 's', call_id: '', event: 'prompt', hooks: {},
+    },
+    { kind: 'pre', ts: line(2), turn: 1, occ: 'o2', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+    },
+    // Следующее событие своих строк не дождалось — оно и только оно неизвестно.
+    { kind: 'stop', ts: line(3), turn: 1, occ: 'o3', disp: true },
+    { kind: 'skip', ts: line(3), what: 'decisions', capability: 'decision-log' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 1, 'отказ, чья строка доехала, посчитан');
+  assert.deepEqual(s.stop_blocks, {}, 'а про конец хода мы ничего не знаем');
+  assert.equal(s.unknown_events, 1);
+});
+
+test('сшивка: дописанный контекст — не решение, вызов считается прошедшим', () => {
+  // Инжектор пишет исход `none`. Считать его отказом нельзя, но и «не allow» тоже:
+  // тогда первый же инжектор на событии до вызова вычел бы вызов из ложных отказов
+  // и из показов плана — они сравнивают ровно с `allow`.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1', disp: true },
+    {
+      kind: 'timing', ts: line(1), occurrence: 'o1', sid: 's', call_id: '', event: 'prompt', hooks: {},
+    },
+    {
+      kind: 'pre', ts: line(2), turn: 1, occ: 'o2', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+    {
+      kind: 'decision', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-inject-что-нибудь', outcome: 'none', class: '',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 1, 'план показан: инжектор его не отбивал');
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.unknown_events, 0);
+});
+
+test('сшивка: своё поле записи сильнее строки — журнал переживает обновление слоя', () => {
+  // Записи, сделанные прежним слоем, несут исход прямо в себе; строки решения к
+  // ним нет вовсе, и «нет строки» для них не значит «прошёл».
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1' },
+    {
+      kind: 'pre', ts: line(2), turn: 1, tool: 'Bash', id: 'c1', h: 'H1', decision: 'deny', class: 'gate.empty', by: 'x',
+    },
+  ];
+  assert.equal(summarize(records, { sid: 's' }).denies.total, 1);
+});
+
+test('сшивка: строки события не доехали — исход НЕИЗВЕСТЕН, а не «прошёл»', () => {
+  // Под диспетчером у события обязаны появиться строки канала: замеры он кладёт на
+  // каждом. Ни одной строки с этим номером появления — значит канал не доехал
+  // (сорвался, подмели, сессия кончилась на этом событии). Считать такую пустоту
+  // проходом значило бы поменять ЗНАК: отбитый показ плана уехал бы показанным.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1', disp: true },
+    {
+      kind: 'timing', ts: line(1), occurrence: 'o1', sid: 's', call_id: '', event: 'prompt', hooks: {},
+    },
+    {
+      kind: 'pre', ts: line(2), turn: 1, occ: 'o2', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 0, 'неизвестный исход показом не считается');
+  assert.equal(s.plan.bounced, 0, 'и отказом тоже: мы не знаем');
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.unknown_events, 1, 'зато видно, сколько событий осталось без исхода');
+});
+
+test('сшивка: строки доехали, решения нет — это проход', () => {
+  // Ровно та же запись, но замеры её события переехали: канал отработал, и
+  // молчание гварда значит именно проход.
+  const records = [
+    {
+      kind: 'pre', ts: line(2), turn: 1, occ: 'o2', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+    {
+      kind: 'timing', ts: line(2), occurrence: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool', hooks: {},
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 1);
+  assert.equal(s.unknown_events, 0);
+});
+
+test('сшивка: потерянный признак реплики тоже виден числом, а не тихим false', () => {
+  // Инцидент приходит тем же каналом. `incident: false` на потерянной строке
+  // ронял бы долю разборов так же тихо, как пустота роняла отказ.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1', disp: true },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.incidents.detected, 0);
+  assert.equal(s.unknown_events, 1);
+});
+
 test('сшивка: найденная строка сильнее отметки о пропаже', () => {
   // Канал сорвался позже, а решение этого события уже доехало — оно и есть факт.
   const records = [

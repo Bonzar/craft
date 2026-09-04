@@ -309,11 +309,16 @@ function stitch(records) {
     if (r.kind === 'pre') {
       // Строки решения нет, а прочие строки события доехали — значит решения не
       // было, то есть проход: молчащий гвард в журнал не пишет.
+      // Исход `none` — это дописанный контекст, а не решение по вызову: инжектор
+      // ничего не запрещал, значит вызов ПРОШЁЛ. Без этой строчки первый же
+      // инжектор на событии до вызова тихо вычел бы вызов из ложных отказов и из
+      // показов плана — они сравнивают ровно с `allow`.
+      const outcome = d && d.outcome !== 'none' ? d.outcome : null;
       return {
         ...r,
-        decision: r.decision || (d ? d.outcome : (unknown ? UNKNOWN : 'allow')),
-        by: r.by || (d ? d.hook : ''),
-        class: r.class || (d ? d.class || '' : ''),
+        decision: r.decision || (outcome || (unknown ? UNKNOWN : 'allow')),
+        by: r.by || (outcome ? d.hook : ''),
+        class: r.class || (outcome ? d.class || '' : ''),
       };
     }
     if (r.kind === 'stop') {
