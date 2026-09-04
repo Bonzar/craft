@@ -350,8 +350,14 @@ function stitch(records) {
       // Признак инцидента ставит другой хук той же цепочки, и приходит он тем же
       // каналом. Не доехало — поля НЕТ: `false` здесь утверждало бы, что инцидента
       // не было, и роняло бы долю разборов ровно так же, как пустота роняла отказ.
-      if (unknown && r.incident !== true) return { ...r, unknown: true };
-      return { ...r, incident: r.incident === true || Boolean(set && set.has('incident')) };
+      // ДОЕХАВШАЯ строка сильнее отметки о пропаже — то же правило, по которому
+      // доехавшее решение важнее позднего обрыва. Доехавший признак не
+      // выбрасывается вместе с пометкой «исход неизвестен»: реплика и правда
+      // осталась без полного канала, но про инцидент мы уже знаем.
+      const seen = r.incident === true || Boolean(set && set.has('incident'));
+      if (unknown && !seen) return { ...r, unknown: true };
+      if (unknown) return { ...r, unknown: true, incident: true };
+      return { ...r, incident: seen };
     }
     return unknown ? { ...r, unknown: true } : r;
   });

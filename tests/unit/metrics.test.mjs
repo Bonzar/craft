@@ -911,18 +911,36 @@ test('сшивка: найденная строка сильнее отметк�
 // доказательством, что канал по событию отработал, и класть их после того, как
 // решение исчезло совсем, значило бы выдать отказ за проход.
 //
-// Признак — на процесс, поэтому кейс один и идёт последним в файле: следующий
-// увидел бы уже поднятый флаг.
+// Признак — на процесс и не сбрасывается, поэтому кейс сравнивает его С ПРЕЖНИМ
+// значением, а не с нулём: от места в файле он не зависит.
+test('сшивка: ДОЕХАВШИЙ признак инцидента не выбрасывается вместе с «не знаю»', () => {
+  // Реплика осталась без полного канала — исход её неизвестен, и это честно.
+  // Но признак инцидента по ней УЖЕ доехал, и терять его вместе с пометкой значит
+  // ронять долю разборов ровно так же тихо, как терялся бы сам признак.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'o1', disp: true },
+    {
+      kind: 'flag', ts: line(1), occurrence: 'o1', sid: 's', call_id: '', event: 'prompt', flag: 'incident',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.unknown_events, 1, 'замеров нет — исход реплики неизвестен');
+  assert.equal(s.incidents.detected, 1, 'но инцидент замечен, и это уже известно');
+});
+
 test('канал: потерянная строка снимает ПРИЗНАК доставки', () => {
   const prev = process.env.CRAFT_METRICS_LOG;
   const prevSid = process.env.CRAFT_SESSION_ID;
   try {
     delete process.env.CRAFT_METRICS_LOG;
     delete process.env.CRAFT_SESSION_ID;
-    assert.equal(metrics.channelLost(), false, 'до потери признака быть не должно');
+    // Признак — на процесс и не сбрасывается, поэтому кейс не спрашивает «сейчас
+    // ноль», а СРАВНИВАЕТ с тем, что было: иначе он ломался бы у любого, кто
+    // допишет тест после него, и чинить пришлось бы порядок строк в файле.
+    const before = metrics.channelLost();
     // Строка легла в журнал решений — терять нечего.
     assert.equal(metrics.keepChannelLine({ ok: true, line: { kind: 'decision' } }), true);
-    assert.equal(metrics.channelLost(), false);
+    assert.equal(metrics.channelLost(), before, 'легшая строка признака не поднимает');
     // Не легла, и запасного журнала тоже нет: строка исчезла совсем.
     assert.equal(metrics.keepChannelLine({ ok: false, line: { kind: 'decision' } }), false);
     assert.equal(metrics.channelLost(), true, 'потеря обязана быть видна тому, кто кладёт доказательство');

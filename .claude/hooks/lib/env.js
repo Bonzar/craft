@@ -41,7 +41,11 @@ function apply(file, { onlyIfUnset = false } = {}) {
     return false;
   }
   for (const [key, value] of Object.entries(parse(text))) {
-    if (onlyIfUnset && process.env[key]) continue;
+    // «Задано» — это НАЛИЧИЕ ключа, а не его непустота. Пустая строка ставится
+    // намеренно («этого канала у меня нет»), и перебивать её файлом значит
+    // отменять решение вызывающего: так фикстура, погасившая доступ к connect-API,
+    // получала его обратно из личного файла и шла в сеть.
+    if (onlyIfUnset && key in process.env) continue;
     process.env[key] = value;
   }
   return true;
@@ -71,7 +75,9 @@ export function loadEnv({ commonDir, root: given = '', personalEnv = '' } = {}) 
   }
   apply(envFile);
 
-  if (!process.env.CRAFT_API_BASE && personalEnv) {
+  // Личный файл доступа читается, только когда доступа НЕТ ВОВСЕ. Пустая строка —
+  // это тоже ответ («не ходи в сеть»), поэтому спрашивается наличие ключа.
+  if (!('CRAFT_API_BASE' in process.env) && personalEnv) {
     apply(personalEnv, { onlyIfUnset: true });
   }
 }

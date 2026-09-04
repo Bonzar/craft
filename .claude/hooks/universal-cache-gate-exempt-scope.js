@@ -43,12 +43,11 @@ loadEnv({ commonDir, ...harnessEnvPaths() });
 const config = process.env.CRAFT_GATE_EXEMPT_PAGES || path.join(dir, 'gate-exempt-pages.txt');
 const out = exemptScopeFile();
 
-// Прежний снимок сносится первым: устаревшая зона не должна выдавать себя за
-// свежую. Сборка ниже не удалась — файла нет, и гейт гейтит всё.
-try {
-  fs.rmSync(out, { force: true });
-} catch { /* сносить нечего */ }
-
+// Список страниц читается ПЕРВЫМ, и только потом сносится прежний снимок.
+// Наоборот было бы «сношу и, не найдя списка, ухожу»: снимок исчезал бы у любого,
+// кто позвал хук без конфига — например, из проверки, — а файл гитигнорится, и
+// потеря не видна ни в `git status`, ни глазами. Гейт при этом молча переставал бы
+// пропускать предодобренные записи до следующего старта сессии.
 let lines;
 try {
   lines = fs.readFileSync(config, 'utf8').split('\n');
@@ -56,6 +55,12 @@ try {
   log(`config ${config} missing; scope not built (gate applies as usual)`);
   process.exit(0);
 }
+
+// Дальше снос уместен: список есть, сборка началась. Устаревшая зона не должна
+// выдавать себя за свежую — не собралось, файла нет, и гейт гейтит всё.
+try {
+  fs.rmSync(out, { force: true });
+} catch { /* сносить нечего */ }
 
 const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
 if (!base) {
