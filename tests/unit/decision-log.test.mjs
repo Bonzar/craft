@@ -133,6 +133,23 @@ test('замеры и признаки идут тем же каналом', asy
   }
 });
 
+test('отметка журнала меняется только когда в него написали', async () => {
+  const { dir, file } = sandbox();
+  try {
+    const { appendDecision, journalStamp } = await load(file);
+    // Диспетчер спрашивает «решили ли уже» после КАЖДОГО хука цепочки хода.
+    // Отметка отвечает на это без разбора хвоста: не выросла — решения не было.
+    const empty = journalStamp(EVENT);
+    assert.equal(journalStamp(EVENT), empty, 'без записи отметка не двигается');
+    appendDecision(EVENT, { outcome: 'deny', hook: 'a' });
+    const after = journalStamp(EVENT);
+    assert.notEqual(after, empty, 'запись решения отметку сдвинула');
+    assert.equal(journalStamp(EVENT), after, 'и снова стоит, пока не пишут');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('без сессии и переопределения журнала нет — писать некуда, и это не падение', async () => {
   const saved = process.env.CRAFT_DECISION_LOG;
   const savedSid = process.env.CRAFT_SESSION_ID;

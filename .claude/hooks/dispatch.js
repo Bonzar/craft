@@ -35,7 +35,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvent } from './lib/event-claude.js';
-import { appendTimings, decisionFor } from './lib/decision-log.js';
+import { appendTimings, decisionFor, journalStamp } from './lib/decision-log.js';
 import { hooksFor, ALWAYS } from './dispatch-table.js';
 
 const argv = process.argv.slice(2);
@@ -93,6 +93,10 @@ async function runHook(name) {
 
 const chain = hooksFor(eventName, event.tool, scope);
 let decided = false;
+// Отметка журнала вместо разбора после каждого хука: цепочка стоит в ходе, и
+// читать хвост ради вопроса «решили ли уже» дорого. Журнал не вырос — решения не
+// было, разбирать нечего.
+let stamp = journalStamp(event);
 for (const [i, name] of chain.entries()) {
   // Замеры кладутся ОДНОЙ строкой перед последним хуком цепочки: последним стоит
   // наблюдатель, и это единственный, кому они нужны. Строка на каждый хук стоила
@@ -103,5 +107,9 @@ for (const [i, name] of chain.entries()) {
   // процесса, поэтому оно видно и когда решивший хук следом упал.
   if (decided && !ALWAYS.has(name)) continue;
   await runHook(name);
-  if (!decided && decisionFor(event)) decided = true;
+  if (decided) continue;
+  const grown = journalStamp(event);
+  if (grown === stamp) continue;
+  stamp = grown;
+  decided = Boolean(decisionFor(event));
 }
