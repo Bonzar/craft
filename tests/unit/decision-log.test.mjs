@@ -26,7 +26,7 @@ async function load(file) {
 }
 
 const EVENT = {
-  session_id: 'sid-1', event: 'pre-tool', call_id: 'toolu_1', tool: 'Bash',
+  occurrence: 'occ-1', session_id: 'sid-1', event: 'pre-tool', call_id: 'toolu_1', tool: 'Bash',
 };
 
 test('решение видно ДРУГОМУ процессу: канал переживает того, кто решил', async () => {
@@ -97,7 +97,7 @@ test('журнал читается ХВОСТОМ: длинная сессия 
     const { appendDecision, decisionFor } = await load(file);
     // Больше хвоста в 64 КиБ: строки давних ходов до текущего события не
     // дочитываются вовсе, и цена чтения не растёт вместе с сессией.
-    const line = (id) => `${JSON.stringify({ kind: 'decision', sid: 'sid-1', event: 'pre-tool', call_id: id, outcome: 'deny', pad: 'x'.repeat(500) })}\n`;
+    const line = (id) => `${JSON.stringify({ kind: 'decision', occurrence: 'occ-1', sid: 'sid-1', event: 'pre-tool', call_id: id, outcome: 'deny', pad: 'x'.repeat(500) })}\n`;
     // Самая ПЕРВАЯ строка — давний ход; за ней столько, что она уходит за хвост.
     const rows = [line('ancient'), ...Array.from({ length: 300 }, (_, i) => line(`filler-${i}`))];
     fs.writeFileSync(file, rows.join(''));
@@ -110,6 +110,32 @@ test('журнал читается ХВОСТОМ: длинная сессия 
       'строка за пределами хвоста не читается — это и есть цена, которую мы не платим');
     assert.equal(decisionFor({ ...EVENT, call_id: 'filler-299' }).outcome, 'deny',
       'а всё, что в хвосте, читается по-прежнему');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('решение ПРОШЛОГО хода не течёт в следующий: ключ у каждого появления свой', async () => {
+  const { dir, file } = sandbox();
+  try {
+    const { appendDecision, decisionFor, appendFlag, hasFlag } = await load(file);
+    // У конца хода и реплики идентификатора вызова НЕТ, и без номера появления
+    // ключ был бы один на всю сессию: второй конец хода читал бы блокировку
+    // первого, а признак инцидента держался бы на каждой следующей реплике.
+    // Появление — процесс: у каждого прочтения события свой номер.
+    const stopOne = { occurrence: 'occ-1', session_id: 'sid-1', event: 'stop', call_id: '' };
+    const stopTwo = { occurrence: 'occ-2', session_id: 'sid-1', event: 'stop', call_id: '' };
+    appendDecision(stopOne, { outcome: 'block', hook: 'universal-stop-quality-gate' });
+    assert.equal(decisionFor(stopOne).outcome, 'block', 'свой ход блокировку видит');
+    assert.equal(decisionFor(stopTwo), null,
+      'следующий конец хода блокировку прошлого не наследует');
+
+    const promptOne = { occurrence: 'occ-3', session_id: 'sid-1', event: 'prompt', call_id: '' };
+    const promptTwo = { occurrence: 'occ-4', session_id: 'sid-1', event: 'prompt', call_id: '' };
+    appendFlag(promptOne, 'incident');
+    assert.equal(hasFlag(promptOne, 'incident'), true);
+    assert.equal(hasFlag(promptTwo, 'incident'), false,
+      'признак инцидента принадлежит своей реплике, а не всем последующим');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
