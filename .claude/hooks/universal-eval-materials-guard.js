@@ -5,14 +5,14 @@
 //
 // Действует ТОЛЬКО внутри замера: в обычной сессии агент работает с эвалами как
 // с любым другим кодом. Fail open на всём неожиданном.
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 
 if (!process.env.CRAFT_EVAL) process.exit(0);
 
-const { raw, event, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 // Путь приходит в любом из трёх полей: у чтения файла, у поиска по каталогу и
 // самим шаблоном у обхода — проверяем все, иначе обход тривиален.

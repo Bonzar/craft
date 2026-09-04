@@ -18,13 +18,16 @@
 // МАТЧЕР сверяется с именем инструмента ЦЕЛИКОМ, а не подстрокой: иначе `Bash`
 // поймал бы и `BashOutput`. Пустой матчер означает «на любое событие этого типа».
 //
-// Хук метрик стоит последним среди печатающих решение и зовётся всегда (см.
-// ALWAYS): он ничего не печатает и читает решение предыдущих хуков из общего
-// состояния события — так видно и исход гейта, и блокировку конца хода. На Stop
-// за ним идёт хранение: оно забирает сводку, которую метрики только что
-// записали. В PreCompact метрик нет вовсе.
+// Хук метрик стоит ПЕРВЫМ, а не последним. Первое решение цепочку обрывает, и
+// исключений из этого правила нет ни для кого: стоя последним, наблюдатель просто
+// не звался бы на каждом отказе — а отказы и есть то, что он считает. Поэтому он
+// записывает событие ДО решения, а само решение читает из журнала решений на
+// СЛЕДУЮЩЕМ событии и переносит в свой журнал (см. шапку universal-metrics.js).
+// На Stop за ним сразу идёт хранение: оно забирает сводку, которую метрики только
+// что записали. В PreCompact метрик нет вовсе.
 export const TABLE = {
   SessionStart: [
+    { hooks: ['universal-metrics'], scope: 'both' },
     { hooks: ['craft-sync-local-main', 'craft-build-sync'], scope: 'project' },
     { hooks: ['craft-inject-router', 'craft-inject-incident'], scope: 'project' },
     {
@@ -35,10 +38,10 @@ export const TABLE = {
     // сессии доступно, и к этому моменту вход уже должен лежать на месте.
     { hooks: ['universal-cache-gate-exempt-scope', 'universal-codex-auth', 'universal-env-capabilities'], scope: 'both' },
     { hooks: ['universal-session-anchor'], scope: 'both' },
-    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   UserPromptSubmit: [
+    { hooks: ['universal-metrics'], scope: 'both' },
     {
       hooks: [
         'universal-detect-incident',
@@ -48,10 +51,10 @@ export const TABLE = {
       ],
       scope: 'both',
     },
-    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PreToolUse: [
+    { hooks: ['universal-metrics'], scope: 'both' },
     { matcher: 'Task|Agent', hooks: ['universal-guard-critic-plateau'], scope: 'both' },
     {
       matcher: 'ExitPlanMode',
@@ -100,10 +103,10 @@ export const TABLE = {
     // пропускает то, про что видно, что оно только читает; матчер здесь широкий
     // намеренно — решение принимает хук, а не список имён.
     { hooks: ['universal-guard-plan-gate'], scope: 'both' },
-    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PostToolUse: [
+    { hooks: ['universal-metrics'], scope: 'both' },
     { matcher: 'AskUserQuestion', hooks: ['universal-session-anchor', 'universal-plan-gate-button'], scope: 'both' },
     // Дельта стоит только ДО показа (PreToolUse): после одобрения план уже
     // лежит в реестре, и сравнивать его с реестром значило бы отбивать
@@ -112,15 +115,21 @@ export const TABLE = {
     { matcher: 'Task|Agent|Workflow', hooks: ['universal-mark-plan-critic'], scope: 'both' },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-mark-plan-file'], scope: 'both' },
     { hooks: ['universal-observe-buffer'], scope: 'both' },
-    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PostToolUseFailure: [
-    { matcher: 'ExitPlanMode', hooks: ['universal-guard-plan-exit-failure'], scope: 'both' },
     { hooks: ['universal-metrics'], scope: 'both' },
+    { matcher: 'ExitPlanMode', hooks: ['universal-guard-plan-exit-failure'], scope: 'both' },
   ],
 
   Stop: [
+    // Хранение идёт СРАЗУ ПОСЛЕ метрик: оно забирает сводку, которую те только что
+    // записали, и обоим нужно отработать до того, как гвард конца хода решит
+    // блокировать. Блокировка при этом не пропадает молча: она ложится строкой в
+    // журнал решений, а досчитывает её следующее событие — конец хода или конец
+    // сессии (см. SessionEnd ниже). Пока она не досчитана, сводка называет этот
+    // конец хода неизвестным, а не прошедшим.
+    { hooks: ['universal-metrics', 'universal-metrics-store'], scope: 'both' },
     {
       hooks: [
         'universal-check-console-log',
@@ -133,8 +142,14 @@ export const TABLE = {
       ],
       scope: 'both',
     },
-    // Хранение идёт ПОСЛЕ метрик: оно забирает сводку, которую те только что
-    // записали.
+  ],
+
+  // Конец СЕССИИ, а не хода. Здесь стоит только наблюдатель с хранением, и стоит
+  // он ради одного: строки решений последнего хода приезжают к наблюдателю на
+  // СЛЕДУЮЩЕМ событии, а если ход был заблокирован и сессия на этом кончилась,
+  // следующего хода не будет. Без этой регистрации блокировка последнего конца
+  // хода не попадала бы в уезжающую сводку.
+  SessionEnd: [
     { hooks: ['universal-metrics', 'universal-metrics-store'], scope: 'both' },
   ],
 
@@ -145,9 +160,6 @@ export const TABLE = {
 
 // События, на которые ставится сама регистрация диспетчера.
 export const EVENTS = Object.keys(TABLE);
-
-// Хуки, которые зовутся и ПОСЛЕ решения: они не печатают и лишь наблюдают.
-export const ALWAYS = new Set(['universal-metrics', 'universal-metrics-store']);
 
 // Совпадение матчера с именем инструмента. Пустой матчер — «всегда».
 function matches(matcher, tool) {

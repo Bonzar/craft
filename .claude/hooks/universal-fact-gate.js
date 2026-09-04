@@ -22,16 +22,16 @@
 // Fail open на всём неожиданном.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { sha256 } from './lib/hash.js';
 import { factGateStateDir, sessionId } from './lib/paths.js';
 
 if (process.env.FACT_GATE === 'off') process.exit(0);
 
-const { raw, event, tool, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const isCraftWrite = /__craft_write$/.test(tool);
 if (!isCraftWrite && tool !== 'Bash') process.exit(0);

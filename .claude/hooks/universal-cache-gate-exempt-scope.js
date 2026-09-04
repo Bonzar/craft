@@ -22,7 +22,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { fetchText } from './lib/net.js';
+// Запасной канал сети выбирает КРАЙ, а не общая часть.
+import { viaExternal } from './lib/fetch-curl.js';
 import { exemptScopeFile } from './lib/paths.js';
 
 const log = (message) => process.stderr.write(`[universal-cache-gate-exempt-scope] ${message}\n`);
@@ -33,17 +38,16 @@ try {
   dir = path.dirname(fs.realpathSync(selfPath));
 } catch { /* нечего резолвить — берём каталог как есть */ }
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 const config = process.env.CRAFT_GATE_EXEMPT_PAGES || path.join(dir, 'gate-exempt-pages.txt');
 const out = exemptScopeFile();
 
-// Прежний снимок сносится первым: устаревшая зона не должна выдавать себя за
-// свежую. Сборка ниже не удалась — файла нет, и гейт гейтит всё.
-try {
-  fs.rmSync(out, { force: true });
-} catch { /* сносить нечего */ }
-
+// Список страниц читается ПЕРВЫМ, и только потом сносится прежний снимок.
+// Наоборот было бы «сношу и, не найдя списка, ухожу»: снимок исчезал бы у любого,
+// кто позвал хук без конфига — например, из проверки, — а файл гитигнорится, и
+// потеря не видна ни в `git status`, ни глазами. Гейт при этом молча переставал бы
+// пропускать предодобренные записи до следующего старта сессии.
 let lines;
 try {
   lines = fs.readFileSync(config, 'utf8').split('\n');
@@ -51,6 +55,12 @@ try {
   log(`config ${config} missing; scope not built (gate applies as usual)`);
   process.exit(0);
 }
+
+// Дальше снос уместен: список есть, сборка началась. Устаревшая зона не должна
+// выдавать себя за свежую — не собралось, файла нет, и гейт гейтит всё.
+try {
+  fs.rmSync(out, { force: true });
+} catch { /* сносить нечего */ }
 
 const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
 if (!base) {
@@ -70,7 +80,7 @@ for (const line of lines) {
   // Формат ответа не задаётся намеренно: набор block-ID полон только в
   // машинном представлении, а Accept: markdown отдал бы текст без адресов.
   const body = await fetchText(`${base}/blocks?id=${page}&maxDepth=-1`, {
-    accept: '*/*', timeoutMs: 60000,
+    accept: '*/*', timeoutMs: 60000, viaExternal,
   });
   if (!body) {
     log(`fetch failed for ${page}; skipped`);

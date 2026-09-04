@@ -9,16 +9,16 @@
 // Ответ по вопросу не разобрался — пара не пишется: вопроса без ответа в
 // реестре не бывает. Событие рождается только настоящим
 // тапом: PostToolUse не срабатывает на отклонённый вопрос.
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
 import { approvalRegistry } from './lib/paths.js';
 import { ingestInBackground, switchOn, switchOff } from './lib/registry.js';
-import { withAgentContext } from './lib/transcript.js';
+import { withAgentContext } from './lib/transcript-claude.js';
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
-const { raw, event, tool, input, response, transcript } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, input, response, transcript } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 if (tool !== 'AskUserQuestion') process.exit(0);
 

@@ -11,15 +11,12 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 
 const SID = 'test-session-id';
-// Каталогов у состояния ДВА, и эталон это показывает, а не сглаживает.
-// STATE — каталог меток, реестра и якоря: его зашивают `perSession` и
-// `perSessionOrDefault` (`lib/paths.js:26, 34`), и подменённый TMPDIR его не
-// двигает. TMP — `os.tmpdir()`, его берут `syncSystemState`, `relativeLinkState`,
-// `metricsLog` и `hookOnceDir` (`:98, 103, 113, 118`). Разъезд настоящий и назван
-// в теле PR заметкой на фазу 4; зашей эталон целиком в `/tmp` — и он краснел бы
-// на подменённом TMPDIR там, где код прав.
-const STATE = '/tmp';
-const TMP = os.tmpdir();
+// Каталог состояния ОДИН: `stateDir()`. Прежде их было два — зашитый `/tmp` у
+// одних путей и `os.tmpdir()` у других, — и на подменённом TMPDIR половина
+// состояния уезжала в чужой каталог. Эталон зашит не в `/tmp`, а в ту же
+// формулу: иначе он краснел бы на подменённом TMPDIR там, где код прав.
+const STATE = os.tmpdir();
+const TMP = STATE;
 
 async function freshPaths(env = {}) {
   for (const key of Object.keys(process.env)) {
@@ -28,7 +25,10 @@ async function freshPaths(env = {}) {
       delete process.env[key];
     }
   }
-  process.env.CLAUDE_CODE_SESSION_ID = SID;
+  // Сессия — под СВОИМ именем: имя переменной харнеса знает только адаптер
+  // события, а paths.js читает уже переведённое значение. Ставится ПОСЛЕ уборки:
+  // та сносит всё с префиксом CRAFT_.
+  process.env.CRAFT_SESSION_ID = SID;
   Object.assign(process.env, env);
   // Кэша у модуля нет, но импорт с меткой делает намерение явным: каждый тест
   // читает окружение заново.
@@ -53,7 +53,12 @@ const EXPECTED = {
   RELATIVE_LINK_STATE: `${TMP}/relative-link.${SID}.blocked`,
   CRAFT_METRICS_LOG: `${TMP}/metrics.${SID}.jsonl`,
   SESSION_ANCHOR_STATE: `${STATE}/session-anchor.${SID}`,
+  CRAFT_DECISION_LOG: `${STATE}/decisions.${SID}.jsonl`,
 };
+
+// Пути, которым сессия приходит АРГУМЕНТОМ: у них один канал — тот, кто зовёт.
+// Остальные читают её из окружения, куда её кладёт адаптер события.
+const TAKES_SID = new Set(['syncSystemState', 'metricsLog', 'decisionLog']);
 
 // Имя переменной-переопределения → имя экспорта, который этот путь отдаёт.
 const BY_EXPORT = {
@@ -72,6 +77,7 @@ const BY_EXPORT = {
   RELATIVE_LINK_STATE: 'relativeLinkState',
   CRAFT_METRICS_LOG: 'metricsLog',
   SESSION_ANCHOR_STATE: 'sessionAnchor',
+  CRAFT_DECISION_LOG: 'decisionLog',
 };
 
 // Экспорты модуля, которые путём состояния НЕ являются, — каждый с причиной.
@@ -83,12 +89,15 @@ const NOT_A_PATH = new Set([
   'factGateStateDir', // КАТАЛОГ под состояние факт-гейта, а не файл в нём
   'hookOnceDir',    // каталог меток уступки, имена в нём строит сам hookOnce
   'exemptScopeFile', // путь внутри предодобренной зоны, у него свой кейс
+  'stateDir',       // КАТАЛОГ состояния, а не файл в нём
 ]);
 
 test('пути состояния совпадают с закреплённым эталоном', async () => {
   const paths = await freshPaths();
   const byEnv = Object.fromEntries(
-    Object.entries(BY_EXPORT).map(([envName, fn]) => [envName, paths[fn]()]),
+    Object.entries(BY_EXPORT).map(([envName, fn]) => [
+      envName, TAKES_SID.has(fn) ? paths[fn](SID) : paths[fn](),
+    ]),
   );
 
   // Набор сверяется целиком: новый путь без строки в эталоне так же опасен, как
@@ -105,14 +114,34 @@ test('пути состояния совпадают с закреплённым
   }
 });
 
+// Второй канал сессии — это тот же globalThis, только в окружении: путь считался
+// бы то по событию, то по переменной, и разъехался бы ровно там, где они
+// разошлись (дочерний процесс, ручной запуск, чужая сессия в том же каталоге).
+test('пути с аргументом сессию из окружения НЕ угадывают', async () => {
+  const paths = await freshPaths(); // в окружении CRAFT_SESSION_ID = SID
+  assert.equal(paths.metricsLog(), `${STATE}/metrics.default.jsonl`);
+  assert.equal(paths.decisionLog(), `${STATE}/decisions.default.jsonl`);
+  assert.equal(paths.syncSystemState(), `${STATE}/sync-system.default`);
+});
+
 test('переопределение окружением сильнее дефолта', async () => {
   const paths = await freshPaths({ CRAFT_APPROVAL_REGISTRY: '/tmp/свой-реестр' });
   assert.equal(paths.approvalRegistry(), '/tmp/свой-реестр');
 });
 
 test('при пустой сессии периметра нет вовсе', async () => {
-  const paths = await freshPaths({ CLAUDE_CODE_SESSION_ID: '' });
+  const paths = await freshPaths({ CRAFT_SESSION_ID: '' });
   assert.equal(paths.approvalRegistry(), '', 'реестр держит одобрения: общий default открыл бы записи чужой сессии');
   // А счётчики и метки общий default переживают: они ничего не открывают.
-  assert.equal(paths.planCriticRuns(), '/tmp/plan-critic.default.runs');
+  assert.equal(paths.planCriticRuns(), `${STATE}/plan-critic.default.runs`);
+});
+
+test('каталог состояния переопределяется одной переменной — и его слушают ВСЕ пути', async () => {
+  const paths = await freshPaths({ CRAFT_STATE_DIR: '/tmp/своё-состояние' });
+  // Прежде каталогов было два, и подменялся только один: половина состояния
+  // уезжала мимо. Кейс держит именно это — обе прежние половины сразу.
+  assert.equal(paths.approvalRegistry(), `/tmp/своё-состояние/craft-approvals.${SID}.jsonl`);
+  assert.equal(paths.metricsLog(SID), `/tmp/своё-состояние/metrics.${SID}.jsonl`);
+  assert.equal(paths.decisionLog(SID), `/tmp/своё-состояние/decisions.${SID}.jsonl`);
+  assert.equal(paths.hookOnceDir(), '/tmp/своё-состояние');
 });

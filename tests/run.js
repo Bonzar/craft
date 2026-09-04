@@ -54,6 +54,7 @@ const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8' };
 // сессию — они падали на машине разработчика и зеленели в CI, где переменной
 // нет, то есть выглядели «известными падениями среды».
 delete BASE_ENV.CLAUDE_CODE_SESSION_ID;
+delete BASE_ENV.CRAFT_SESSION_ID;
 
 // Ключ кейса → файл хука без расширения. Незнакомый ключ резолвится по имени
 // самого ключа, поэтому карта нужна только там, где они расходятся.
@@ -143,9 +144,15 @@ function runHook(script, input, env, args = []) {
 // --- состояние кейса ---------------------------------------------------------
 
 let tmpSeq = 0;
+// Имена, выданные раннером. Уборка в конце прогона ходит ПО НИМ, а не по всему,
+// в чьё имя попал наш pid: во временном каталоге лежат и чужие файлы, и совпасть
+// с числом pid они могут запросто.
+const tmpMade = new Set();
 function tmpName(prefix) {
   tmpSeq += 1;
-  return path.join(os.tmpdir(), `${prefix}.${process.pid}.${tmpSeq}`);
+  const name = `${prefix}.${process.pid}.${tmpSeq}`;
+  tmpMade.add(name);
+  return path.join(os.tmpdir(), name);
 }
 
 // Герметичное состояние на один прогон: хуки с побочными эффектами (буфер
@@ -181,7 +188,10 @@ function makeState() {
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
+    exemptscope: tmpName('gate-exempt-scope-test'),
+    synctarget: tmpName('sync-system-target-test'),
     metrics: tmpName('metrics-test'),
+    decisions: tmpName('decisions-test'),
     tmphome,
     metricsdefault: path.join(tmphome, 'metrics.default.jsonl'),
   };
@@ -207,6 +217,9 @@ function makeState() {
     // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
     // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
     CRAFT_METRICS_LOG: s.metrics,
+    // Журнал решений — канал между хуками одного события; у каждого кейса свой,
+    // иначе решение соседнего кейса читалось бы как своё.
+    CRAFT_DECISION_LOG: s.decisions,
     // Хранение сводок выключено ВСЕГДА: иначе кейс Stop пушил бы в настоящую
     // ветку metrics. Его git-логика проверяется отдельно
     // (tests/metrics-store-git.sh) на временных репозиториях.
@@ -215,6 +228,28 @@ function makeState() {
     // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
     // кладёт живой токен в настоящий ~/.codex рабочей машины.
     CODEX_HOME: s.codexhome,
+    // Снимок предодобренной зоны — тоже герметичный у КАЖДОГО кейса. Сборщик
+    // зоны стоит в цепочке SessionStart и сносит прежний снимок, а по умолчанию
+    // это `.claude/craft-gate-exempt-scope.txt` САМОГО ЧЕКАУТА: любой стартовый
+    // кейс молча уносил бы рабочий снимок Влада. Файл гитигнорится, поэтому
+    // потеря не видна ни в `git status`, ни глазами.
+    CRAFT_GATE_EXEMPT_SCOPE: s.exemptscope,
+    // Доступа к connect-API у кейсов НЕТ. Пустая строка — это «канала нет», а не
+    // «добери из личного файла»: инжекторы правил и сборщик зоны выходят на ней
+    // молча, и прогон не ходит в сеть ни с чьей машины (см. lib/env.js — «не
+    // задано» там означает отсутствие ключа).
+    CRAFT_API_BASE: '',
+    // Корень проекта — временный: иначе `.env` чекаута перекрыл бы строку выше,
+    // и доступ вернулся бы обратно.
+    CLAUDE_PROJECT_DIR: s.tmphome,
+    // Цель синка системы — временный каталог, а НЕ чекаут, из которого хук
+    // запущен. Иначе прогон кейсов делает настоящий `git fetch origin main` в
+    // рабочую копию: ходит в сеть и переписывает `.git` (FETCH_HEAD, ссылку
+    // origin/main, объекты). Выключателем `SYNC_SYSTEM=off` этого делать нельзя —
+    // он проверяется собственным кейсом и стал бы зелёным тривиально. Что синк
+    // делает С ГИТОМ, проверяет tests/sync-system-git.sh на временных
+    // репозиториях; здесь его git-путь и не нужен.
+    SYNC_SYSTEM_TARGET: s.synctarget,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
@@ -229,9 +264,10 @@ function makeState() {
 }
 
 // Файлы и каталоги, которые приём кладёт РЯДОМ с реестром под своими именами:
-// `<реестр>.parsing` (каталог меток разбора) и `<реестр>.view.<pid>-<n>` (снимок
-// вида для классификатора). Имена содержат pid, поэтому список строится чтением
-// каталога, а не перечислением.
+// `<реестр>.parsing` (каталог меток разбора), `<реестр>.view.<pid>-<n>` (снимок
+// вида для классификатора) и `<реестр>.ingest.log` (след приёма). Имена содержат
+// pid, поэтому список строится чтением каталога, а не перечислением: отдельным
+// именем след здесь не стоит — маска покрывает его целиком.
 function siblings(registry) {
   const dir = path.dirname(registry);
   const base = `${path.basename(registry)}.`;
@@ -253,10 +289,7 @@ function cleanState(s) {
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
     s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
-    // Спутники реестра: след приёма и снимки вида, которые приём кладёт рядом.
-    // Без них прогон оставлял в общем /tmp по каталогу и по файлу следа на
-    // каждый кейс приёма — а этот же каталог служит состоянием хуков.
-    `${s.registry}.ingest.log`,
+    s.decisions, s.exemptscope,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   // Спутники с ДОПИСАННЫМ именем: снимки вида реестра и каталоги меток разбора
@@ -300,6 +333,8 @@ function subst(value, s) {
   // {METRICS} — журнал метрик этого прогона: кейсы хука метрик судят по его
   // строкам.
   //
+  // {DECISIONS} — журнал решений кейса: им проверяется САМ канал между хуками.
+  //
   // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
   // не переопределён. По нему кейс доказывает, что записи не было: свой
   // {METRICS} тут не годится — хук о нём и не знал бы.
@@ -309,7 +344,8 @@ function subst(value, s) {
     .split('{CLASSTRACE}').join(s.classtrace)
     .split('{CODEXHOME}').join(s.codexhome)
     .split('{METRICS_DEFAULT}').join(s.metricsdefault)
-    .split('{METRICS}').join(s.metrics);
+    .split('{METRICS}').join(s.metrics)
+    .split('{DECISIONS}').join(s.decisions);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске.
@@ -321,6 +357,11 @@ function runPass(c) {
   const s = makeState();
   const caseEnv = { ...BASE_ENV, ...s.env };
   for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v, s);
+  // Кейс описывает событие ХАРНЕСА и сессию задаёт его переменной. Пути состояния
+  // резолвятся по своей (paths.js), и перевод — дело обёртки: в живой сессии его
+  // делает адаптер события, здесь — раннер. Без перевода хук и раннер считали бы
+  // пути от разных сессий, и предусловия ложились бы мимо.
+  if ('CLAUDE_CODE_SESSION_ID' in caseEnv) caseEnv.CRAFT_SESSION_ID = caseEnv.CLAUDE_CODE_SESSION_ID;
 
   const input = subst(JSON.stringify(c.input ?? {}), s);
 
@@ -527,6 +568,26 @@ function smokeChecks() {
     }
   }
 
+  // Каждое событие ТАБЛИЦЫ обязано быть зарегистрировано в настройках репы.
+  // Смоук установки сверяет то же самое для пользовательского контура; здесь —
+  // проектный, и по той же линейке: список событий берётся из таблицы, а не
+  // пишется рукой. Пропущенная регистрация означала бы, что событие приходит, а
+  // хуков на нём нет — молча, и как раз в этой репе, где проектный контур гасит
+  // пользовательский.
+  const table = path.join(HOOKS, 'dispatch-table.js');
+  const tableEvents = spawnSync(process.execPath, [
+    '-e', `import(${JSON.stringify(`file://${table}`)}).then((m) => console.log(m.EVENTS.join('\\n')))`,
+  ], { encoding: 'utf8' });
+  const events = (tableEvents.stdout || '').split('\n').filter(Boolean);
+  if (!events.length) smoke.push('routing table gave no events');
+  for (const ev of events) {
+    const hooks = ((settings.hooks || {})[ev] || [])
+      .flatMap((g) => (g.hooks || []).map((h) => h.command || ''));
+    if (!hooks.some((c) => c.includes('dispatch.js'))) {
+      smoke.push(`dispatcher not registered on ${ev} in .claude/settings.json`);
+    }
+  }
+
   // Маршрут спрашивается у самого диспетчера, а не вычитывается из таблицы
   // глазами: сверяется то, кого он ПОЗОВЁТ, а не то, что где-то написано.
   const routed = (event, tool) => {
@@ -654,6 +715,35 @@ function utf8GlueChecks() {
 
 // --- прогон ------------------------------------------------------------------
 
+// Хвосты прогона во временном каталоге: имена, которые раннер выдал сам, и
+// производные от них (`….armed`, `….summary.json` — их дописывают уже хуки).
+// Зовётся в конце main(), после того как отсоединённые процессы отработали.
+function sweepLeftovers() {
+  const dir = os.tmpdir();
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  // Точное имя — по карте; производные (`….armed`, `….summary.json`) — перебором,
+  // но только среди тех, в чьё имя вообще попал наш pid: за полный прогон имён
+  // тысячи, а /tmp на рабочей машине большой.
+  const tag = `.${process.pid}.`;
+  const mine = (name) => {
+    if (tmpMade.has(name)) return true;
+    if (!name.includes(tag)) return false;
+    for (const made of tmpMade) if (name.startsWith(`${made}.`)) return true;
+    return false;
+  };
+  for (const name of names) {
+    if (!mine(name)) continue;
+    try {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    } catch { /* уже убрано кем-то другим */ }
+  }
+}
+
 function main() {
   const files = caseFiles();
   if (files.length === 0) {
@@ -759,6 +849,13 @@ function main() {
     process.stdout.write('Settings smoke failures:\n');
     for (const m of smoke) process.stdout.write(`  - ${m}\n`);
   }
+  // Приём реестра ОТСОЕДИНЁН, а уборка кейса идёт сразу за хуком: изредка он
+  // дописывает свой след и снимок вида уже после неё, и в общем временном
+  // каталоге оставалось 1–3 записи вместо нуля. Подметаем ещё раз в конце
+  // прогона, когда отсоединённым уже некуда писать. Маска несёт pid ЭТОГО
+  // раннера, поэтому чужой параллельный прогон не заденется.
+  sweepLeftovers();
+
   process.stdout.write(
     `TOTAL: ${pass}/${total} passed; ${fail} failed; uncovered outcomes: ${missing.length}; settings smoke: ${smoke.length}\n`,
   );

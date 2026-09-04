@@ -24,8 +24,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  classifierPath, classify, INGEST_BUDGET_SEC, INGEST_PASSES,
+  classify, INGEST_BUDGET_SEC, INGEST_PASSES,
 } from '../.claude/hooks/lib/classifier.js';
+// Адаптер классификатора выбирает КРАЙ, а не общая часть.
+import * as CLASSIFY from '../.claude/hooks/lib/classify-bash.js';
 import {
   readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
@@ -33,6 +35,13 @@ import { currentMetricsLog } from '../.claude/hooks/lib/metrics.js';
 import { queueSummary, storeTarget } from '../.claude/hooks/lib/summary-store.js';
 // Адаптер хранения выбирает край, а не общая часть.
 import * as STORE_ADAPTER from '../.claude/hooks/lib/summary-store-git.js';
+
+// Приём — КРАЙ, и перевод сессии из переменной харнеса в свою делает он. Общая
+// часть (paths.js) читает уже переведённое значение и имени переменной харнеса не
+// знает. Своя переменная сильнее: её кладёт вызывающий, когда знает сессию точно.
+if (!process.env.CRAFT_SESSION_ID && process.env.CLAUDE_CODE_SESSION_ID) {
+  process.env.CRAFT_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID;
+}
 
 const [, , source, materialFile, registryFile, markId] = process.argv;
 
@@ -88,7 +97,7 @@ function pass(material, n, ownFrom) {
     fs.writeFileSync(view, render(current));
   } catch { /* вид не записался — модель увидит пустой реестр */ }
 
-  const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '', {
+  const verdict = classify(CLASSIFY, CLASSIFY.classifierPath(), 'ingest', [view, materialFile, source], '', {
     timeoutSec: INGEST_BUDGET_SEC,
   });
   try { fs.rmSync(view, { force: true }); } catch { /* вид переживёт приём */ }

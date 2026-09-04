@@ -31,7 +31,12 @@ jq -e --arg h "$REPO/.claude/hooks" '.hooks.PreToolUse[]?.hooks[]?.command
   || FAILS+=("dispatcher registration does not point at the checkout")
 [[ -L "$TESTHOME/.claude/hooks/universal-guard-plan-gate.sh" ]] \
   && FAILS+=("install created a symlink layer again")
-for ev in SessionStart UserPromptSubmit PreToolUse PostToolUse PostToolUseFailure Stop PreCompact; do
+# Список событий берётся ИЗ ТАБЛИЦЫ МАРШРУТОВ, а не пишется здесь рукой: пятая
+# копия списка разъезжалась бы молча, и новое событие в таблице оставалось бы без
+# регистрации до первого боевого промаха.
+EVENTS="$(node -e 'import("'"$REPO"'/.claude/hooks/dispatch-table.js").then((m) => console.log(m.EVENTS.join(" ")))')"
+[[ -n "$EVENTS" ]] || FAILS+=("event list from the routing table is empty")
+for ev in $EVENTS; do
   jq -e --arg e "$ev" --arg h "$REPO/.claude/hooks" '.hooks[$e][]?.hooks[]?.command
          | select(. == ($h + "/dispatch.js universal"))' \
     "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \

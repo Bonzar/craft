@@ -114,6 +114,7 @@ merged="$(jq --arg hooks "$HOOKS_SRC" '
   | ensure("PostToolUse"; ""; "\($hooks)/dispatch.js universal")
   | ensure("PostToolUseFailure"; ""; "\($hooks)/dispatch.js universal")
   | ensure("Stop"; ""; "\($hooks)/dispatch.js universal")
+  | ensure("SessionEnd"; ""; "\($hooks)/dispatch.js universal")
   | ensure("PreCompact"; ""; "\($hooks)/dispatch.js universal")
 ' "$SETTINGS")"
 

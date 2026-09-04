@@ -9,6 +9,7 @@ const claude = await import('../../.claude/hooks/lib/tool-flags-claude.js');
 const bash = await import('../../.claude/hooks/lib/write-targets-bash.js');
 const git = await import('../../.claude/hooks/lib/write-targets-git.js');
 const repo = await import('../../.claude/hooks/lib/repo-git.js');
+const hash = await import('../../.claude/hooks/lib/call-hash.js');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
 
 // Та же связка, что собирает обёртка (universal-metrics.js): область вызова и
@@ -69,9 +70,14 @@ test('прогресс: удавшаяся мутация через Bash или
     'правка эфемерной цели прогрессом не считается — как и запись в неё через шелл');
   assert.equal(mutates('Edit', {}), false, 'правка без цели мир не меняет');
   assert.equal(mutates('Read', {}), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), true);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: true }), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: false }, { error: false }), false);
+  // «Менял ли мир» стоит на записи СОСТОЯВШЕГОСЯ вызова: до решения этого не
+  // спрашивают вовсе — наблюдатель зовётся до решателей, и разбор целей записи
+  // стоил бы запусков git за вызов, который ещё могут запретить.
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: false, mutates: true }), true);
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: true, mutates: true }), false);
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: false, mutates: false }), false);
+  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), false,
+    'признак на записи ДО вызова прогрессом больше не считается: вызов мог не состояться');
 });
 
 // Без адаптера интерпретатора общая часть НЕ говорит «мир не менялся»: своего
@@ -111,16 +117,16 @@ test('игнорируемое репозиторием эфемерно, и в�
 
 test('служебные поля входа отсеивает адаптер харнеса, а не хеш вызова', () => {
   // Та же связка, что в обёртке: `callHash(инструмент, semanticInput(...))`.
-  const hash = (tool, input) => metrics.callHash(tool, claude.semanticInput(tool, input));
+  const callOf = (tool, input) => hash.callHash(tool, claude.semanticInput(tool, input));
   assert.equal(
-    hash('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 }),
-    hash('Bash', { command: 'git push', description: 'Push the branch to origin' }),
+    callOf('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 }),
+    callOf('Bash', { command: 'git push', description: 'Push the branch to origin' }),
     'переписанное описание не должно делать повтор другим вызовом',
   );
-  assert.notEqual(hash('Bash', { command: 'git push' }), hash('Bash', { command: 'git status' }));
+  assert.notEqual(callOf('Bash', { command: 'git push' }), callOf('Bash', { command: 'git status' }));
   assert.equal(
-    hash('KillShell', { shell_id: '1' }),
-    hash('KillShell', { shell_id: '2' }),
+    callOf('KillShell', { shell_id: '1' }),
+    callOf('KillShell', { shell_id: '2' }),
     'номер фонового запуска смыслом вызова не является',
   );
   // А чтение чужого вывода — является: у него идентификатор говорит, ЧЕЙ вывод.
@@ -128,12 +134,12 @@ test('служебные поля входа отсеивает адаптер �
   // у этого вызова `shell_id`, которого у него не бывает, и `bash_id` доходил до
   // хеша и тогда. Красным строка станет, если кто-нибудь заведёт `bash_id`
   // служебным полем.
-  assert.notEqual(hash('BashOutput', { bash_id: 'a' }), hash('BashOutput', { bash_id: 'b' }));
+  assert.notEqual(callOf('BashOutput', { bash_id: 'a' }), callOf('BashOutput', { bash_id: 'b' }));
   // Список служебных полей — ПО ИНСТРУМЕНТУ: у правки `description` нет вовсе, и
   // общий список отсеивал бы поле там, где оно могло быть смыслом.
   assert.notEqual(
-    hash('Edit', { file_path: 'a', description: 'x' }),
-    hash('Edit', { file_path: 'a', description: 'y' }),
+    callOf('Edit', { file_path: 'a', description: 'x' }),
+    callOf('Edit', { file_path: 'a', description: 'y' }),
   );
   assert.deepEqual(claude.semanticInput('Edit', { file_path: 'a' }), { file_path: 'a' });
   assert.deepEqual(claude.semanticInput('Bash', undefined), {});

@@ -1,15 +1,28 @@
 #!/usr/bin/env node
-// Хук метрик: журнал событий сессии в JSONL. Стоит ПОСЛЕДНИМ в каждой цепочке
-// диспетчера и зовётся всегда, даже когда цепочка уже дала решение: решение
-// предыдущих хуков он читает из общего состояния события (globalThis, его
-// заполняют decide.js и dispatch.js), а не из stdout.
+// Хук метрик: журнал событий сессии в JSONL. Стоит ПЕРВЫМ в каждой цепочке
+// диспетчера — первое решение цепочку обрывает, и наблюдатель, стоящий последним,
+// не звался бы ровно на отказах, которые он и считает.
+//
+// Отсюда правило: событие он записывает ДО решения, поэтому исхода вызова в его
+// записи нет вовсе. Решение по событию пишет тот, кто решил, — строкой в ЖУРНАЛ
+// РЕШЕНИЙ (lib/decision-log.js), а наблюдатель переносит новые строки этого
+// журнала в свой на СЛЕДУЮЩЕМ событии и запоминает смещение. Сшивает их обратно
+// свёртка — по номеру появления события (lib/metrics-summary.js).
+//
+// Почему переносом, а не чтением журнала решений на месте — в шапке
+// lib/decision-log.js; здесь это не пересказывается.
+//
+// Событие, чьи строки ещё не приехали, свёртка называет НЕИЗВЕСТНЫМ, а не
+// прошедшим: на хвосте сессии переносить решение уже некому, и пустота там значила
+// бы «никто не отказал» — то есть меняла бы знак. Конец сессии (SessionEnd) стоит
+// в таблице ради того же: он добирает строки последнего хода.
 //
 // События: SessionStart (старт, харнес, репо), UserPromptSubmit (номер хода),
-// PreToolUse (инструмент, исход гейта и класс причины, время хуков),
-// PostToolUse / PostToolUseFailure (длительность вызова, ошибка инструмента),
-// Stop (блокировка по имени хука, длительность хода, токены хода по usage
-// записей assistant транскрипта). Вызовы модели из хуков пишет сама обёртка
-// вызова (classifier.js) — они идут из фоновых процессов.
+// PreToolUse (инструмент и признаки вызова), PostToolUse / PostToolUseFailure
+// (длительность вызова, ошибка инструмента, правил ли вызов мир),
+// Stop (длительность хода, токены хода по usage записей assistant транскрипта).
+// Вызовы модели из хуков пишет сама обёртка вызова (classifier.js) — они идут из
+// фоновых процессов.
 //
 // На Stop, следом за строкой хода, в журнал ложится СВОДКА сессии одной строкой
 // (kind: summary) — свёртка всего журнала с начала сессии; её копия лежит в
@@ -22,10 +35,15 @@
 // в них нет.
 //
 // Контракт записи вызова (по нему судят и сводка, и кейсы): pre несёт признаки
-// `edit`, `note_write`, `plan`, `question`, `stage`, `push`, `skill` и
-// `mutates` — «этот вызов менял мир». Их ставит здесь обёртка, потому что имена
+// `edit`, `note_write`, `plan`, `question`, `stage`, `push` и `skill`; признак
+// `mutates` — «этот вызов менял мир» — стоит на записи СОСТОЯВШЕГОСЯ вызова
+// (post), потому что разбор целей записи стоит запусков git, а до решения ещё
+// неизвестно, состоится ли вызов вообще. Их ставит здесь обёртка, потому что имена
 // инструментов знает она; сводка считает по признакам и про инструменты не
 // знает ничего.
+//
+// Ключ сшивки — `occ`, номер появления события: он же стоит в строке журнала
+// решений.
 //
 // В журнал не попадает содержимое: ни правок, ни команд, ни промптов, ни
 // текста отказов. Ничего не печатает, сети и модели не зовёт, укладывается в
@@ -40,13 +58,16 @@
 // её ключ для событий без идентификатора вызова — хеш события со сроком в
 // секунды, и два одинаковых Stop подряд (заблокированный конец хода) или две
 // одинаковые короткие реплики теряли бы вторую запись.
-import { readEvent, responseIsError } from './lib/event.js';
+import { readEvent, responseIsError } from './lib/event-claude.js';
+import { EVENTS, missingFact, unsupported } from './lib/event.js';
 import {
-  append, updateState, reasonClass, turnUsage,
-  projectDispatcherAt, currentMetricsLog, transcriptSize,
-  refreshSummary, callHash,
-  promptHash, looksLikeReinstruction, isProgress, currentSessionId,
+  append, updateState, currentMetricsLog,
+  refreshSummary, promptHash, looksLikeReinstruction, isProgress,
 } from './lib/metrics.js';
+import { callHash } from './lib/call-hash.js';
+import { turnUsage, transcriptSize } from './lib/usage-claude.js';
+import { projectDispatcherAt } from './lib/registration-claude.js';
+import { readSince } from './lib/decision-log.js';
 import { mutationOf } from './lib/write-targets.js';
 import { toolFlags, callShape, toolScope, semanticInput } from './lib/tool-flags-claude.js';
 import { commandTargets } from './lib/write-targets-bash.js';
@@ -64,21 +85,21 @@ const ADAPTERS = {
   ignored: isIgnored,
 };
 
+const event = readEvent();
 const {
-  event, tool, cwd, transcript, response, input, prompt,
-} = readEvent();
-const name = event.hook_event_name || '';
+  tool, cwd, transcript, response, input, prompt,
+} = event;
+const name = event.event;
 if (!name) process.exit(0);
 
-// Формула сессии одна на слой и живёт в lib/metrics.js: своя копия здесь уже
-// расходилась бы с той, по которой резолвится путь журнала.
-const sid = currentSessionId();
+// Сессия берётся из ядра события — по ней же резолвится путь журнала.
+const sid = event.session_id;
 const log = currentMetricsLog();
 if (!log) process.exit(0);
 
 // Пользовательский контур уступает проектному, когда тот зарегистрирован в
 // чекауте сессии. Вне диспетчера контур не задан — считается проектным.
-if ((globalThis.hookScope || 'project') === 'universal' && projectDispatcherAt(cwd)) process.exit(0);
+if ((process.env.CRAFT_HOOK_SCOPE || 'project') === 'universal' && projectDispatcherAt(cwd)) process.exit(0);
 
 const now = Date.now();
 const ts = new Date(now).toISOString();
@@ -88,6 +109,14 @@ const ts = new Date(now).toISOString();
 // (ts, base, id, hooksMs, hooks, decision) и дописывает свою строку в журнал.
 // Возвращают true только там, где ход закончился (Stop): по этому и решается,
 // пересобирать ли сводку.
+
+// Непокрытое называется СЛОВОМ, а не нулём и не умолчанием (решение 8). Имён
+// бывает больше одного разом — на конце хода могут и токены не измериться, и
+// канал решений оборваться, — поэтому они копятся через запятую: потерянное
+// второе имя снова выдавало бы неизвестное за известное.
+function markUnsupported(record, capability) {
+  record.unsupported = record.unsupported ? `${record.unsupported},${capability}` : capability;
+}
 
 function onSessionStart(state, ctx) {
   // Старт бывает не только первым: компакт и возобновление дают SessionStart
@@ -102,15 +131,14 @@ function onSessionStart(state, ctx) {
   // историю в новый ход.
   state.transcript_offset = transcriptSize(transcript);
   append(log, {
-    kind: 'session', ...ctx.base, source: typeof event.source === 'string' ? event.source : '',
-    harness: process.env.CRAFT_HARNESS || 'claude', repo: state.repo, sid,
+    kind: 'session', ...ctx.base, occ: ctx.occ, source: event.source,
+    harness: event.harness, repo: state.repo, sid,
   });
 }
 
 function onPrompt(state, ctx) {
   state.turn += 1;
   state.turn_started_at = now;
-  const flags = globalThis.hookFlags && typeof globalThis.hookFlags === 'object' ? globalThis.hookFlags : {};
   const h = promptHash(prompt);
   const repeat = Boolean(h) && state.prompt_hashes.includes(h);
   if (h) state.prompt_hashes = [...state.prompt_hashes, h].slice(-50);
@@ -119,8 +147,14 @@ function onPrompt(state, ctx) {
   state.turn_stages = {};
   state.turn_tools = 0;
   state.turn_progress = false;
+  // Признак инцидента ставит другой хук той же цепочки — и ставит ПОСЛЕ
+  // наблюдателя, поэтому в записи его нет: он придёт строкой журнала решений и
+  // будет сшит по `occ`, как и решение.
   append(log, {
-    kind: 'prompt', ts: ctx.ts, turn: state.turn, incident: flags.incident === true,
+    // Общая часть — из ctx.base, как у всех записей: своя копия «ts + turn»
+    // теряла признак диспетчера, и свёртка переставала спрашивать у реплики, а
+    // доехали ли её строки. Номер хода тут свой: он только что вырос.
+    kind: 'prompt', ...ctx.base, turn: state.turn, occ: ctx.occ,
     repeat, reinstruct: looksLikeReinstruction(prompt),
   });
 }
@@ -139,17 +173,15 @@ function onPre(state, ctx) {
     state.inflight[id] = now;
     capMap(state.inflight); // полёт бывает недописанным: вызов отменён
   }
-  const kind = ctx.decision ? ctx.decision.kind : 'allow';
+  // Исхода вызова в записи НЕТ: наблюдатель зовётся до решателей, и в эту секунду
+  // решения ещё не существует. Оно придёт строкой журнала решений, а сшито будет
+  // по `occ` — номеру появления события.
   const record = {
-    kind: 'pre', ...ctx.base, tool, id, decision: kind,
-    by: ctx.decision ? ctx.decision.hook : '',
-    class: ctx.decision && (kind === 'deny' || kind === 'ask')
-      ? reasonClass(ctx.decision.hook, ctx.decision.reason) : '',
+    kind: 'pre', ...ctx.base, occ: ctx.occ, tool, id,
     // Хеш вызова: по нему сводка узнаёт «тот же вызов» для ложных отказов.
     // Служебные поля входа этого харнеса отсеиваются ЗДЕСЬ — общая часть их имён
     // не знает. Сам вход в журнал не идёт ни в каком виде.
     h: callHash(tool, semanticInput(tool, input)),
-    hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
   };
   // Признаки вызова: правка, запись в базу заметок, показ плана, вопрос, стадия,
   // пуш, имя скилла. Их ставит обёртка, потому что имена инструментов знает
@@ -165,18 +197,9 @@ function onPre(state, ctx) {
     if (state.turn_stages[tool]) record.stage_repeat = true;
     state.turn_stages[tool] = (state.turn_stages[tool] || 0) + 1;
   }
-  // Мутирующий вызов помечается ТОЛЬКО у прошедших: у отказанного не будет
-  // PostToolUse, а разбор целей записи стоит запусков git на каждую цель.
-  if (kind === 'allow') {
-    const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
-    if (mutation.status !== 'ok') record.unsupported = mutation.capability;
-    else if (mutation.mutates) record.mutates = true;
-    if (id) {
-      state.pre_flags[id] = {
-        push: record.push === true, stage: record.stage === true, mutates: record.mutates === true,
-      };
-      capMap(state.pre_flags);
-    }
+  if (id) {
+    state.pre_flags[id] = { push: record.push === true, stage: record.stage === true };
+    capMap(state.pre_flags);
   }
   append(log, record);
 }
@@ -187,25 +210,49 @@ function onPost(state, ctx) {
   const started = id ? Number(state.inflight[id]) : NaN;
   if (id) delete state.inflight[id];
   const record = {
-    kind: ctx.name === 'PostToolUse' ? 'post' : 'fail',
-    ...ctx.base, tool, id, hooks_ms: ctx.hooksMs, hooks: ctx.hooks,
+    kind: ctx.name === EVENTS.POST_TOOL ? 'post' : 'fail',
+    ...ctx.base, occ: ctx.occ, tool, id,
   };
   if (Number.isFinite(started)) record.tool_ms = now - started;
-  record.error = ctx.name === 'PostToolUseFailure' || responseIsError(response);
-  const pre = id ? state.pre_flags[id] : null;
-  if (id) delete state.pre_flags[id];
-  if (isProgress(pre, record)) state.turn_progress = true;
+  record.error = ctx.name === EVENTS.POST_TOOL_FAILURE || responseIsError(response);
+  // «Менял ли вызов мир» считается на СОСТОЯВШЕМСЯ вызове, а не до него: разбор
+  // целей записи стоит запусков git на каждую цель, и платить их за вызов, который
+  // ещё могут запретить, незачем. До решения этого и не узнать — наблюдатель
+  // зовётся первым.
+  const mutation = mutationOf(toolScope(tool, input), callShape(tool, input), ADAPTERS);
+  if (mutation.status !== 'ok') markUnsupported(record, mutation.capability);
+  else if (mutation.mutates) record.mutates = true;
+  // Прогресс хода держится на идентификаторе вызова: без него признаки события до
+  // вызова не с чем связать. Молча писать «прогресса не было» нельзя — это ложь
+  // про ход; непокрытое называется явно (решение 8).
+  if (!id) {
+    markUnsupported(record, 'call-id');
+  } else {
+    const pre = state.pre_flags[id];
+    delete state.pre_flags[id];
+    if (isProgress(pre, record)) state.turn_progress = true;
+  }
   append(log, record);
 }
 
+
+// Хуку метрик нужен ФАКТ `tokens`. Даёт его обёртка: она читает транскрипт своего
+// харнеса и отдаёт числа. Транскрипта нет — факта нет, и запись говорит об этом
+// полем `unsupported`, а не нулями: неизмеренные токены и измеренный ноль — разные
+// вещи. СВЁРТКА пока и то и другое складывает в ноль (metrics-summary.js), то есть
+// поле сегодня видно только в журнале; довести его до сводки — отдельный шаг.
 function onStop(state, ctx) {
-  const { usage, offset } = turnUsage(transcript, Number(state.transcript_offset) || 0);
-  state.transcript_offset = offset;
-  const record = {
-    kind: 'stop', ...ctx.base,
-    blocked_by: ctx.decision && ctx.decision.kind === 'block' ? ctx.decision.hook : '',
-    hooks_ms: ctx.hooksMs, hooks: ctx.hooks, usage,
-  };
+  const from = Number(state.transcript_offset) || 0;
+  const measured = transcript ? turnUsage(transcript, from) : null;
+  const fact = measured ? { tokens: measured.usage } : {};
+  const missing = missingFact(fact, ['tokens']);
+  if (measured) state.transcript_offset = measured.offset;
+  // Кто заблокировал конец хода — узнается из журнала решений: гвард решает ПОСЛЕ
+  // наблюдателя. Строка сшивается по `occ`, а блокировка не теряется — за
+  // блокированным концом хода всегда идёт следующий, и он её перенесёт.
+  const record = { kind: 'stop', ...ctx.base, occ: ctx.occ };
+  if (missing) markUnsupported(record, unsupported(missing).capability);
+  else record.usage = fact.tokens;
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
   // Ход без прогресса: инструменты звались, а ни правки, ни записи, ни плана,
   // ни вопроса, ни пуша не вышло. Ход без единого вызова — разговор, не в счёт.
@@ -226,40 +273,94 @@ function ensureShape(state) {
   if (!state.turn_stages || typeof state.turn_stages !== 'object') state.turn_stages = {};
   if (!Number.isFinite(state.turn_tools)) state.turn_tools = 0;
   if (!state.pre_flags || typeof state.pre_flags !== 'object') state.pre_flags = {};
+  if (!Number.isFinite(state.decisions_offset)) state.decisions_offset = 0;
+  if (typeof state.decisions_head !== 'string') state.decisions_head = '';
+}
+
+// Перенести в свой журнал всё, что дописали в журнал решений с прошлого раза.
+// Смещение помнится в состоянии; журнал подмели или он начался заново — читаем с
+// начала, а повторно перенесённая строка не двоится: свёртка складывает строки по
+// ключу, а не по счёту.
+//
+// Не прочитался журнал — это НЕ «решений не было»: пропуск называется словом, и
+// видно его строкой в журнале, а не пустотой в сводке.
+function drainDecisions(state) {
+  const { records, offset, head, status } = readSince(event, {
+    offset: Number(state.decisions_offset) || 0,
+    head: String(state.decisions_head || ''),
+  });
+  if (status !== 'ok') {
+    // Журнал не прочитался — это НЕ «решений не было». Непокрытое называется
+    // словом. КАКИЕ события остались без исхода, здесь не гадают: у каждой записи
+    // это спрашивает свёртка, и вторая линейка для того же вопроса давала бы
+    // ложную тревогу на параллельных вызовах — их строки приходят позже.
+    append(log, {
+      kind: 'skip', ts, what: 'decisions', capability: 'decision-log',
+    });
+    return;
+  }
+  // Перенос ОДНОРАЗОВЫЙ: журнал решений потом подметут, и строка, не легшая в
+  // журнал метрик, исчезает навсегда. Поэтому смещение двигается только за теми
+  // строками, которые ДЕЙСТВИТЕЛЬНО легли: отказ записи (кончилось место, снялась
+  // квота) посреди переноса иначе оставил бы замеры на месте, а решение потерял —
+  // и сшивка прочитала бы отказ как проход, потому что доказательство доставки
+  // есть, а решения нет. Повторный перенос с того же смещения не двоит: сшивка
+  // идёт по ключу появления.
+  let moved = 0;
+  for (const rec of records) {
+    if (!append(log, rec)) break;
+    moved += 1;
+  }
+  if (moved < records.length) return;
+  state.decisions_offset = offset;
+  state.decisions_head = head;
 }
 
 // Всё, что трогает состояние, идёт ОДНОЙ залоченной правкой. Внутри неё
 // process.exit недопустим: он не разматывает finally, и лок остался бы взятым
 // до истечения его срока, то есть следующий хук ждал бы минуты. Поэтому выходы
 // внутри — обычные return.
+// Идёт ли этот хук под диспетчером. Спрашивается один раз: по этому же признаку
+// решается, ждать ли строк канала от прошлого события.
+const dispatched = Boolean(process.env.CRAFT_HOOK_SCOPE);
+
 const stop = updateState(log, (state) => {
   ensureShape(state);
-  // Время хуков цепочки до этого: диспетчер складывает замеры в общее состояние.
-  const timings = Array.isArray(globalThis.hookTimings) ? globalThis.hookTimings : [];
+  // Перенос строк журнала решений — ПЕРВЫМ делом и внутри той же залоченной
+  // правки: смещение лежит в состоянии, и без лока два процесса перенесли бы
+  // одно и то же дважды. Строки прошлых событий (решение, признак, замеры) ложатся
+  // в журнал метрик как есть, ключом им служит номер появления события.
+  drainDecisions(state);
   const ctx = {
     name,
     ts,
-    id: typeof event.tool_use_id === 'string' ? event.tool_use_id : '',
-    hooksMs: timings.reduce((sum, t) => sum + (Number(t.ms) || 0), 0),
-    hooks: Object.fromEntries(timings.map((t) => [t.name, t.ms])),
-    decision: globalThis.hookDecision && typeof globalThis.hookDecision === 'object'
-      ? globalThis.hookDecision : null,
-    base: { ts, turn: state.turn },
+    id: event.call_id,
+    occ: event.occurrence,
+    // `disp` — «запись сделана под диспетчером». Там у события ОБЯЗАНЫ появиться
+    // строки канала (замеры диспетчер кладёт на каждом), и по их отсутствию
+    // свёртка отличает «решения не было» от «строки не доехали». Вне диспетчера
+    // такой обязанности нет, признак не ставится, и пустота значит проход.
+    base: { ts, turn: state.turn, ...(dispatched ? { disp: true } : {}) },
   };
 
-  if (name === 'SessionStart') onSessionStart(state, ctx);
-  else if (name === 'UserPromptSubmit') onPrompt(state, ctx);
-  else if (name === 'PreToolUse') onPre(state, ctx);
-  else if (name === 'PostToolUse' || name === 'PostToolUseFailure') onPost(state, ctx);
-  else if (name === 'Stop') {
+  if (name === EVENTS.SESSION_START) onSessionStart(state, ctx);
+  else if (name === EVENTS.PROMPT) onPrompt(state, ctx);
+  else if (name === EVENTS.PRE_TOOL) onPre(state, ctx);
+  else if (name === EVENTS.POST_TOOL || name === EVENTS.POST_TOOL_FAILURE) onPost(state, ctx);
+  else if (name === EVENTS.STOP) {
     onStop(state, ctx);
+    return true;
+  } else if (name === EVENTS.SESSION_END) {
+    // Конец сессии своей записи не имеет: события хода он не описывает. Он нужен
+    // ради ПЕРЕНОСА — строки последнего хода приезжают сюда, — и ради пересборки
+    // сводки по ним: заблокированный последний конец хода иначе не попал бы в ту
+    // сводку, что уезжает в хранение.
     return true;
   }
   return false;
 });
 
-// Сводка — свёртка журнала с начала сессии; пишется на каждом Stop заново.
-// Складывается ВНЕ правки состояния: у общего лока одна занятость на процесс,
-// и вложенный вызов внутри неё не залочился бы вовсе — сводку тогда могла бы
-// затереть та, что собирает параллельный фоновый вызов модели.
+// Сводка — свёртка журнала с начала сессии; пишется на каждом конце хода заново.
+// Складывается ВНЕ правки состояния: свёртка читает журнал целиком, и держать под
+// ней лок хода незачем — ход ждал бы чтения, которое его не касается.
 if (stop) refreshSummary(log, { sid, now, record: true });

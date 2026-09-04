@@ -13,8 +13,23 @@
 import os from 'node:os';
 import path from 'node:path';
 
+// Каталог состояния — ОДНА формула на весь слой, и он же поле `state_dir`
+// канонического события. Ту же формулу обязан считать и bash-веер критика: две
+// формулы означают, что отметку пишут в один каталог, а читают из другого.
+export function stateDir() {
+  return process.env.CRAFT_STATE_DIR || os.tmpdir();
+}
+
+// Идентификатор сессии кладёт ОБЁРТКА: имя переменной харнеса знает она, сюда
+// значение приходит под своим именем. Без обёртки (дочерний процесс, ручной
+// запуск) переменной нет — и это законно, путь тогда просто не строится.
+//
+// Читают его отсюда только пути БЕЗ аргумента: там, куда событие доходит, сессия
+// приходит значением (metricsLog, decisionLog, syncSystemState), и второго канала
+// у них нет — иначе один и тот же путь считался бы то по событию, то по
+// окружению, и разъехался бы ровно там, где они разошлись.
 export function sessionId() {
-  return process.env.CLAUDE_CODE_SESSION_ID || '';
+  return process.env.CRAFT_SESSION_ID || '';
 }
 
 // Путь, который существует только при непустом идентификаторе сессии: им
@@ -23,7 +38,7 @@ function perSession(envName, name) {
   const override = process.env[envName];
   if (override) return override;
   const sid = sessionId();
-  return sid ? `/tmp/${name.replace('{sid}', sid)}` : '';
+  return sid ? path.join(stateDir(), name.replace('{sid}', sid)) : '';
 }
 
 // Путь, у которого общий default законен: файл держит счётчик или метку, а не
@@ -31,7 +46,7 @@ function perSession(envName, name) {
 function perSessionOrDefault(envName, name) {
   const override = process.env[envName];
   if (override) return override;
-  return `/tmp/${name.replace('{sid}', sessionId() || 'default')}`;
+  return path.join(stateDir(), name.replace('{sid}', sessionId() || 'default'));
 }
 
 // Реестр одобренного: цели и задачи, в которые раскладывается всё, на что Влад
@@ -85,7 +100,7 @@ export function sessionAnchor() {
 
 // Прочее состояние.
 export function factGateStateDir() {
-  return process.env.FACT_GATE_STATE_DIR || '/tmp';
+  return process.env.FACT_GATE_STATE_DIR || stateDir();
 }
 export function routineFactsMarker() {
   return perSessionOrDefault('ROUTINE_FACTS_MARKER', 'routine-facts.{sid}.reminded');
@@ -95,12 +110,12 @@ export function routineFactsMarker() {
 export function syncSystemState(sid) {
   const override = process.env.SYNC_SYSTEM_STATE;
   if (override) return override;
-  return path.join(os.tmpdir(), `sync-system.${sid || sessionId() || 'default'}`);
+  return path.join(stateDir(), `sync-system.${sid || 'default'}`);
 }
 export function relativeLinkState() {
   const override = process.env.RELATIVE_LINK_STATE;
   if (override) return override;
-  return path.join(os.tmpdir(), `relative-link.${sessionId() || 'default'}.blocked`);
+  return path.join(stateDir(), `relative-link.${sessionId() || 'default'}.blocked`);
 }
 
 // Журнал метрик сессии: события JSONL, по строке на событие хука; рядом с ним
@@ -110,12 +125,24 @@ export function relativeLinkState() {
 export function metricsLog(sid) {
   const override = process.env.CRAFT_METRICS_LOG;
   if (override) return override;
-  return path.join(os.tmpdir(), `metrics.${sid || sessionId() || 'default'}.jsonl`);
+  return path.join(stateDir(), `metrics.${sid || 'default'}.jsonl`);
+}
+
+// Журнал решений: канал от решателя к наблюдателю. Решение пишет тот, кто решает
+// (decide.js), наблюдатель переносит строки в свой журнал (decision-log.js). Файл
+// один на сессию, а строки различаются НОМЕРОМ ПОЯВЛЕНИЯ события — по нему их и
+// сшивают, поэтому события не путаются между собой.
+export function decisionLog(sid, dir = '') {
+  const override = process.env.CRAFT_DECISION_LOG;
+  if (override) return override;
+  // Каталог берётся ИЗ СОБЫТИЯ, когда оно его принесло: `state_dir` — поле ядра,
+  // и канал решений резолвится по нему, а не по своей копии формулы.
+  return path.join(dir || stateDir(), `decisions.${sid || 'default'}.jsonl`);
 }
 
 // Каталог меток уступки второму вызову события.
 export function hookOnceDir() {
-  return process.env.HOOK_ONCE_DIR || os.tmpdir();
+  return process.env.HOOK_ONCE_DIR || stateDir();
 }
 
 // Кэш предодобренной зоны прямого редактирования. Место одно и каноническое —

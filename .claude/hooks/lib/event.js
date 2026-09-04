@@ -1,62 +1,85 @@
-// Событие хука: харнесс подаёт его JSON-ом на stdin.
+// Каноническое событие хука: та форма, в которой его видит ОБЩАЯ часть слоя.
+// Про харнес здесь не знают ничего — ни его переменных, ни его полей, ни имён
+// его событий. Сырое событие приводит к этой форме ОБЁРТКА (для Claude Code —
+// lib/event-claude.js), она же несёт таблицу отображения имён событий.
 //
-// Fail open на всём неожиданном — как у bash-версий, где `jq -r '… // ""'`
-// возвращал пустую строку и на битом входе: сломанный хук не должен клинить
-// работу, поэтому пустое или неразборное событие даёт пустые поля, а не падение.
-import { readFileSync } from 'node:fs';
+// ЯДРО — то, что даёт ЛЮБАЯ обёртка:
+//   harness     — чем породило событие;
+//   session_id  — сессия; пусто, если харнес её не даёт;
+//   call_id     — идентификатор вызова инструмента; пусто вне вызова;
+//   event       — имя события ИЗ ЭТОГО файла (EVENTS), а не из харнеса;
+//   tool        — имя вызванного инструмента; пусто вне вызова;
+//   input       — вход вызова простым объектом;
+//   cwd         — рабочий каталог сессии;
+//   state_dir   — каталог, в котором хуки держат состояние и разговаривают друг
+//                 с другом (журнал решений, метки, локи).
+//
+// ФАКТЫ — то, чего обёртка может не дать:
+//   journal — путь к журналу событий сессии;
+//   tokens  — токены хода данными: {input, output, cache_read, cache_create, messages}.
+//
+// Хук объявляет нужные ему факты списком и спрашивает missingFact. Факта нет —
+// ответ `unsupported` С ИМЕНЕМ ФАКТА, а не молчание и не обходной путь
+// (решение 8).
+export const EVENTS = Object.freeze({
+  SESSION_START: 'session-start',
+  PROMPT: 'prompt',
+  PRE_TOOL: 'pre-tool',
+  POST_TOOL: 'post-tool',
+  POST_TOOL_FAILURE: 'post-tool-failure',
+  STOP: 'stop',
+  SUBAGENT_STOP: 'subagent-stop',
+  PRE_COMPACT: 'pre-compact',
+  SESSION_END: 'session-end',
+  NOTIFICATION: 'notification',
+});
 
-// Прочитанный текст запоминается: под диспетчером одно событие читают несколько
-// хуков подряд, а поток входа отдаёт его лишь однажды — второй хук получил бы
-// пустоту и молча ничего не сделал.
-let cached = null;
+const EVENT_NAMES = new Set(Object.values(EVENTS));
 
-export function readEvent() {
-  if (cached === null) {
-    try {
-      cached = readFileSync(0, 'utf8');
-    } catch {
-      cached = '';
-    }
-  }
-  const raw = cached;
+export const CORE_FIELDS = Object.freeze([
+  'harness', 'session_id', 'call_id', 'event', 'tool', 'input', 'cwd', 'state_dir',
+]);
+export const FACTS = Object.freeze(['journal', 'tokens']);
 
-  let event = {};
-  try {
-    if (raw.trim() !== '') event = JSON.parse(raw);
-  } catch {
-    event = {};
-  }
-  if (event === null || typeof event !== 'object') event = {};
-  // Событие — в общее состояние процесса: библиотекам без доступа к нему
-  // (обёртка вызова модели) нужен идентификатор сессии из события, а не только
-  // из окружения, где его может не быть.
-  globalThis.hookEvent = event;
+const str = (v) => (typeof v === 'string' ? v : '');
+const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 
+// Ядро из того, что собрала обёртка. НЕИЗВЕСТНОЕ имя события даёт пустое имя, а
+// не догадку: хук, подписанный на своё событие, тогда просто не сработает, тогда
+// как догадка запустила бы его не на том событии.
+export function coreEvent(parts = {}) {
+  const name = str(parts.event);
   return {
-    // Сырой текст нужен там, где ключ считается по всему событию целиком
-    // (уступка второму вызову), — пересборка JSON дала бы другой хеш.
-    raw,
-    event,
-    tool: event.tool_name || '',
-    // Имя события приходит не всегда: у файлов с двумя ролями (гвард на показе
-    // плана и запись после одобрения) значение по умолчанию задаёт сам хук.
-    name: event.hook_event_name || '',
-    cwd: event.cwd || '',
-    mode: event.permission_mode || '',
-    prompt: event.prompt || '',
-    transcript: event.transcript_path || '',
-    input: event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {},
-    response: event.tool_response,
+    harness: str(parts.harness),
+    session_id: str(parts.session_id),
+    call_id: str(parts.call_id),
+    event: EVENT_NAMES.has(name) ? name : '',
+    tool: str(parts.tool),
+    input: obj(parts.input),
+    cwd: str(parts.cwd),
+    state_dir: str(parts.state_dir),
   };
 }
 
-// Ошибка инструмента в ответе: is_error либо непустое поле error. Признак живёт
-// рядом с самим событием и один на слой — буфер наблюдений и метрики обязаны
-// считать ошибкой одно и то же, а двумя копиями они уже разъезжались по полю
-// error.
-export function responseIsError(response) {
-  if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
-  if (response.is_error === true || response.isError === true) return true;
-  const err = response.error;
-  return err !== undefined && err !== null && err !== false && err !== '';
+// Факт ДАН, когда ключ есть и не пуст. Ноль токенов — факт; отсутствие ключа —
+// нет. Поэтому смотрится наличие значения, а не его истинность.
+export function hasFact(event, fact) {
+  if (!event || typeof event !== 'object') return false;
+  const value = event[fact];
+  if (value === undefined || value === null) return false;
+  return typeof value !== 'string' || value !== '';
+}
+
+// Первое из объявленных, чего нет. Пустая строка — все факты на месте.
+export function missingFact(event, requires = []) {
+  for (const fact of requires) {
+    if (!hasFact(event, fact)) return fact;
+  }
+  return '';
+}
+
+// Непокрытое называется явно и одинаково: имя возможности или факта, которого не
+// хватило. Это не ошибка и не молчание, а ОТВЕТ (решение 8).
+export function unsupported(capability) {
+  return { status: 'unsupported', capability: String(capability || '') };
 }
