@@ -4,7 +4,7 @@
 //
 // Расширение .mjs, а не .js: в каталоге тестов нет манифеста модулей, и .js
 // читался бы как обычный скрипт, которому импорт недоступен.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,9 +13,32 @@ import { spawn, execFileSync } from 'node:child_process';
 
 const registry = await import('../../.claude/hooks/lib/registry.js');
 
+// Песочницы кейсов сносятся одним разом в конце файла: их тут по одной на кейс,
+// а временный каталог здесь же служит каталогом состояния хуков.
+const sandboxes = [];
+after(() => {
+  for (const dir of sandboxes) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function tmpFile() {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-')), 'approvals.jsonl');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-'));
+  sandboxes.push(dir);
+  return path.join(dir, 'approvals.jsonl');
 }
+
+// Приём кончается ПОЗЖЕ хода и возвращает сводку сессии в очередь хранения.
+// Кейсу, который про хранение ничего не проверяет, это надо выключить и увести
+// во временный каталог: без этого приём пишет в журнал ЖИВОЙ сессии (журнал
+// резолвится по идентификатору сессии, а он у запускающего есть) и кладёт
+// очередь в общий git-каталог НАСТОЯЩЕГО чекаута, откуда следующий Stop увезёт
+// её в ветку metrics. Приём ПЛАНА очередь не заводит, но журнал и сводку правит
+// так же, поэтому помощник нужен и ему. Кейсы, которые хранение как раз и
+// проверяют, выставляют эти переменные сами и по-своему.
+const storeOff = (dir) => ({
+  CRAFT_METRICS_LOG: path.join(dir, 'metrics.jsonl'),
+  METRICS_STORE_QUEUE: path.join(dir, 'queue.jsonl'),
+  METRICS_STORE: 'off',
+});
 
 const goal = (over = {}) => ({
   title: '# Юнит 1. Реестр: форма и сборка',
@@ -367,6 +390,7 @@ test('приём вешает новую задачу на цель, вся ра
     stdio: 'ignore',
     env: {
       ...process.env,
+      ...storeOff(path.dirname(file)),
       PLAN_CLASSIFIER_CMD: path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh'),
       MOCK_CLASSIFIER_INGEST: JSON.stringify({
         add: [{ goal: 'Ц1', tasks: [{ title: 'работа продолжается', where: ['README.md'], anchor: '' }] }],
@@ -520,4 +544,293 @@ test('второй проход приёма находит цель, завед
   assert.equal(registry.landingGoal(after, 'Ц2', 'plan', 1), 1, 'своя цель этого же приёма');
   assert.equal(registry.landingGoal(after, 'Ц1', 'plan', 1), -1, 'цель прошлого плана по-прежнему чужая');
   assert.equal(registry.landingGoal(after, 'Ц2', 'plan'), -1, 'без границы своих целей нет');
+});
+
+// Ссылка внутри ОДНОГО ответа разбора: вторая запись адресует цель, заведённую
+// первой записью того же ответа. Раньше это дозаводил второй проход приёма;
+// проход теперь один, и реестр перечитывается на каждой записи — без этого
+// вторая запись не находила цель первой и заводила третью.
+test('приём видит цель, заведённую предыдущей записью того же ответа', () => {
+  const file = tmpFile();
+  const material = path.join(path.dirname(file), 'material.txt');
+  fs.writeFileSync(material, 'план: сперва ядро, потом кейсы под него');
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'plan', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      ...storeOff(path.dirname(file)),
+      PLAN_CLASSIFIER_CMD: path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh'),
+      MOCK_CLASSIFIER_INGEST: JSON.stringify({
+        add: [
+          { goal_new: 'Работа плана', tasks: [{ title: 'ядро', where: ['lib/registry.js'], anchor: '' }] },
+          { goal: 'Ц1', tasks: [{ title: 'кейсы под ядро', where: ['tests/'], anchor: '' }] },
+        ],
+        close: [],
+      }),
+    },
+  });
+
+  const goals = registry.readRegistry(file);
+  assert.equal(goals.length, 1, 'вторая запись ответа села на цель первой, а не завела свою');
+  assert.deepEqual(goals[0].tasks.map((t) => t.title), ['ядро', 'кейсы под ядро']);
+});
+
+// Два приёма одной сессии идут ПАРАЛЛЕЛЬНО: реплика уходит в фон, и ответ на
+// кнопку следом за ней — тоже. На общем имени вида один приём подчищал за
+// собой файл, который второй ещё не прочитал, и тот разбирал пустой реестр:
+// заводил цель заново вместо того, чтобы сесть на существующую.
+//
+// Кейс подменяет КЛАССИФИКАТОР (не команду модели): ему видно имя вида и то,
+// доживает ли файл до чтения. Медленный приём стартует первым и читает вид
+// после того, как быстрый закончил и убрался.
+test('вид реестра переживает параллельный приём', async () => {
+  const file = tmpFile();
+  registry.upsertGoal(file, goal());
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const seen = path.join(dir, 'seen.log');
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, [
+    '#!/usr/bin/env bash',
+    'view="$2"',
+    'sleep "${STUB_DELAY:-0}"',
+    'if [[ -r "$view" ]]; then state=READABLE; else state=MISSING; fi',
+    'printf "%s %s\\n" "$state" "$view" >> "$STUB_SEEN"',
+    'printf \'{"add":[],"close":[]}\\n\'',
+  ].join('\n'));
+
+  const run = (delay) => new Promise((done) => {
+    const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+    const child = spawn(process.execPath, [
+      path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, `проба-${delay}`,
+    ], {
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        ...storeOff(path.dirname(file)),
+        PLAN_CLASSIFIER_BIN: stub,
+        STUB_SEEN: seen,
+        STUB_DELAY: String(delay),
+      },
+    });
+    child.on('exit', done);
+  });
+
+  const slow = run(2);
+  await new Promise((r) => { setTimeout(r, 200); });
+  await run(0);
+  await slow;
+
+  const lines = fs.readFileSync(seen, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 2, 'оба приёма дошли до классификатора');
+  const paths = lines.map((ln) => ln.split(' ')[1]);
+  assert.notEqual(paths[0], paths[1], 'у каждого приёма своё имя вида');
+  for (const ln of lines) {
+    assert.match(ln, /^READABLE /, `вид дожил до чтения: ${ln}`);
+  }
+});
+
+// Приём кончается ПОЗЖЕ последнего Stop сессии: работник хранения к тому времени
+// увёз сводку и снял очередь, а вызов модели этого приёма попал в сводку уже
+// после. Без возврата в очередь он не доехал бы никуда — следующего Stop у
+// сессии может не быть.
+test('приём возвращает пересобранную сводку в очередь хранения', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const log = path.join(dir, 'metrics.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+      CRAFT_METRICS_LOG: log,
+      METRICS_STORE_QUEUE: queue,
+      METRICS_STORE: '',
+    },
+  });
+
+  const rows = fs.readFileSync(queue, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(rows.length, 1, 'сводка встала в очередь одной строкой');
+  assert.equal(rows[0].sid, 'm-sid');
+  assert.equal(rows[0].model_calls.count, 1, 'в очередь ушла сводка С вызовом модели этого приёма');
+});
+
+// Приём ПЛАНА идёт ВНУТРИ хода, синхронным вызовом из хука одобрения: возврат
+// сводки в очередь там означал бы подпроцесс git и ожидание лока посреди хода,
+// а следующий Stop положит сводку сам.
+test('приём плана сводку в очередь не возвращает', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, '## План\n\n- шаг\n');
+
+  const log = path.join(dir, 'metrics.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'plan', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+      CRAFT_METRICS_LOG: log,
+      METRICS_STORE_QUEUE: queue,
+      METRICS_STORE: '',
+    },
+  });
+
+  assert.equal(fs.existsSync(queue), false, 'очередь на приёме плана не заводится');
+});
+
+// Выключатель хранения читает КРАЙ и передаёт его в постановку готовым
+// значением. Без этого прогон кейсов копил бы очередь в общем git-каталоге
+// НАСТОЯЩЕГО чекаута: сводки тестовых сессий уехали бы в ветку metrics.
+test('приём с выключенным хранением очередь не заводит', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const log = path.join(dir, 'metrics.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+      CRAFT_METRICS_LOG: log,
+      METRICS_STORE_QUEUE: queue,
+      METRICS_STORE: 'off',
+    },
+  });
+
+  assert.equal(fs.existsSync(queue), false, 'при METRICS_STORE=off очередь не заводится');
+});
+
+// Материал приёма кладёт вызывающий во временный каталог и не убирает: приём
+// отсоединён, ждать его некому. Значит убирает приём — и только СВОЙ каталог:
+// временный каталог здесь же служит каталогом состояния хуков, и снести чужое
+// там дороже, чем оставить своё.
+test('приём убирает за собой каталог материала и не трогает чужой', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+
+  const run = (material) => execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      ...storeOff(dir),
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+    },
+  });
+
+  // Свой каталог — по маске вызывающего И под системным временным каталогом.
+  const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-ingest-'));
+  sandboxes.push(mine); // на случай, если приём упадёт раньше уборки
+  const material = path.join(mine, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+  run(material);
+  assert.equal(fs.existsSync(mine), false, 'свой каталог материала убран');
+
+  // Чужой по ИМЕНИ каталог остаётся: приём не сторож чужому временному файлу.
+  const alien = path.join(dir, 'material.txt');
+  fs.writeFileSync(alien, 'продолжаем ту же работу');
+  run(alien);
+  assert.equal(fs.existsSync(alien), true, 'чужой материал не тронут');
+
+  // И чужой по МЕСТУ — тоже: имя совпадает с маской вызывающего, но каталог
+  // лежит не под системным временным. Обе половины гварда проверяются, иначе
+  // снятая проверка места прошла бы молча.
+  const lookalike = path.join(dir, 'registry-ingest-подделка');
+  fs.mkdirSync(lookalike);
+  const inside = path.join(lookalike, 'material.txt');
+  fs.writeFileSync(inside, 'продолжаем ту же работу');
+  run(inside);
+  assert.equal(fs.existsSync(lookalike), true, 'каталог не под системным временным не трогается');
+});
+
+// Приём идёт СЛЕДОМ за ходом, и вставать на лок очереди, который отсоединённый
+// работник хранения держит всё время сети, ему нельзя: пять минут ожидания в
+// этом месте — это пять минут, которые ждёт Влад. Не встали — пропуск виден
+// строкой в журнале, а не тишиной.
+test('занятый лок очереди не задерживает приём', () => {
+  const file = tmpFile();
+  const dir = path.dirname(file);
+  const material = path.join(dir, 'material.txt');
+  fs.writeFileSync(material, 'продолжаем ту же работу');
+
+  const log = path.join(dir, 'metrics.jsonl');
+  const queue = path.join(dir, 'queue.jsonl');
+  fs.writeFileSync(`${log}.summary.json`, `${JSON.stringify({ sid: 'm-sid', turns: 2 })}\n`);
+  // Лок держит ЖИВОЙ чужой процесс: отобрать его нельзя, дождаться — тоже.
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  fs.mkdirSync(`${queue}.lock`);
+  fs.writeFileSync(path.join(`${queue}.lock`, 'owner'), String(holder.pid));
+
+  const stub = path.join(dir, 'stub-classifier.sh');
+  fs.writeFileSync(stub, ['#!/usr/bin/env bash', 'printf \'{"add":[],"close":[]}\\n\''].join('\n'));
+
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+  const started = Date.now();
+  execFileSync(process.execPath, [
+    path.join(repo, 'tools', 'registry-ingest.mjs'), 'reply', material, file, 'проба',
+  ], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PLAN_CLASSIFIER_BIN: stub,
+      CLAUDE_CODE_SESSION_ID: 'm-sid',
+      CRAFT_METRICS_LOG: log,
+      METRICS_STORE_QUEUE: queue,
+      METRICS_STORE: '',
+    },
+  });
+  const spent = Date.now() - started;
+  holder.kill('SIGKILL');
+
+  assert.ok(spent < 10000, `приём не встал на чужой лок: ${spent} мс`);
+  const lines = fs.readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const skip = lines.find((r) => r.kind === 'skip' && r.what === 'queue');
+  assert.ok(skip, 'пропуск постановки в очередь назван в журнале');
 });

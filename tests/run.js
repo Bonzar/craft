@@ -4,6 +4,8 @@
 //
 // Кейс (tests/hooks/*.jsonl) — один JSON-объект на строку:
 //   {"name","hook","input":{…событие…},"expect":"deny|allow|ask|block|inject|silent|contains:<строка>"}
+//   expect — строка либо СПИСОК: список значит «всё сразу», им выражается пара
+//   вроде «запись есть, а текста отказа в ней нет».
 // Раннер подаёт `input` хуку на stdin и проверяет исход:
 //   deny   — stdout с permissionDecision "deny"
 //   allow  — хук НЕ отказал и не заблокировал (гварды на проходе молчат)
@@ -11,19 +13,18 @@
 //   block  — stdout с decision "block" (стоп-хуки)
 //   inject — stdout несёт директиву инцидента
 //   silent — stdout пуст
-//   contains:<строка> / not-contains: / err-contains: / err-not-contains:
+//   contains:<строка> / not-contains: / err-contains:
+//   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
+//     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
+//     stdout запись не проверить.
+// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, file-empty,
+// file-not-contains:), засчитывается только удавшемуся хуку: код возврата 0 и ни
+// строки диспетчера о падении. Упавший хук молчит так же.
 // Exit 0 — все кейсы зелёные И каждый исход каждого хука покрыт; иначе 1.
 //
-// ДВА ЯЗЫКА. Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh.
-// Пока идёт перенос слоя на JS, обе версии лежат рядом, и один и тот же набор
-// кейсов принимает ту, что есть. Тем же правилом идут шаги подготовки кейса.
-//
-// ДИФФЕРЕНЦИАЛЬНЫЙ РЕЖИМ (--diff): кейс прогоняется ОБЕИМИ версиями хука на
-// одном входе и в раздельном состоянии, и любое расхождение — ответа, stderr
-// или оставшихся после прогона файлов состояния — считается падением. Нужен он
-// потому, что сами кейсы эталоном не являются: ожидание `deny` смотрит только
-// на вердикт и не смотрит на текст причины, а текст причины и есть продукт
-// хука. Режим живёт ровно до сноса bash-версий.
+// Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
+// bash-версий не осталось; фолбек на .sh живёт для внешних наборов
+// (EXTRA_HOOKS_DIR), где они ещё бывают. Тем же правилом идут шаги подготовки.
 //
 // Внешние наборы хуков (напр. локальный яндекс-слой в ~/.claude, вне git):
 //   EXTRA_HOOKS_DIR=~/.claude/hooks EXTRA_CASES_DIR=~/.claude/tests/hooks node tests/run.js
@@ -41,7 +42,6 @@ const CASES_DIR = path.join(REPO, 'tests', 'hooks');
 const SETTINGS = path.join(REPO, '.claude', 'settings.json');
 const EXTRA_HOOKS_DIR = process.env.EXTRA_HOOKS_DIR || '';
 const EXTRA_CASES_DIR = process.env.EXTRA_CASES_DIR || '';
-const DIFF = process.argv.includes('--diff');
 
 // UTF-8-локаль обязательна для bash-хуков: часть дефектов видна ТОЛЬКО в ней. В
 // bash подстановка `$var` вплотную к не-ASCII символу в UTF-8 читается как имя
@@ -49,6 +49,11 @@ const DIFF = process.argv.includes('--diff');
 // работает. Из-за этого сломанный guard-plan-delta прошёл ревью: CI был зелёный,
 // а на рабочей машине гвард молча падал.
 const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8' };
+// Идентификатор сессии живого окружения в кейсы не пускается: раннер задаёт его
+// сам там, где он кейсу нужен, а унаследованный молча ломал кейсы про ПУСТУЮ
+// сессию — они падали на машине разработчика и зеленели в CI, где переменной
+// нет, то есть выглядели «известными падениями среды».
+delete BASE_ENV.CLAUDE_CODE_SESSION_ID;
 
 // Ключ кейса → файл хука без расширения. Незнакомый ключ резолвится по имени
 // самого ключа, поэтому карта нужна только там, где они расходятся.
@@ -107,13 +112,13 @@ const REVERSE_WHITELIST = ['dispatch', 'dispatch-table'];
 
 // --- запуск хуков ------------------------------------------------------------
 
-// Файл хука по имени без расширения: JS предпочитается, bash — фолбек. Внешний
-// набор (EXTRA_HOOKS_DIR) идёт после репозиторного тем же правилом.
-function resolveHook(base, ext) {
+// Файл хука по имени без расширения: JS предпочитается, bash — фолбек для
+// внешних наборов. Внешний набор (EXTRA_HOOKS_DIR) идёт после репозиторного
+// тем же правилом.
+function resolveHook(base) {
   const dirs = EXTRA_HOOKS_DIR ? [HOOKS, EXTRA_HOOKS_DIR] : [HOOKS];
-  const exts = ext ? [ext] : ['.js', '.sh'];
   for (const dir of dirs) {
-    for (const e of exts) {
+    for (const e of ['.js', '.sh']) {
       const p = path.join(dir, base + e);
       if (fs.existsSync(p)) return p;
     }
@@ -149,6 +154,12 @@ function tmpName(prefix) {
 function makeState() {
   const marker = tmpName('plan-gate-test');
   const fgdir = fs.mkdtempSync(path.join(os.tmpdir(), 'fact-gate-test.'));
+  // Свой временный дом на прогон. Пути, которые хук строит САМ через os.tmpdir()
+  // (журнал метрик без сессии и без переопределения), кейс иначе проверить не
+  // может: он смотрел бы на свой файл, а хук писал бы в общий /tmp — и «записи
+  // нет» зеленело бы при живой записи. Заодно прогон не делит эти файлы с
+  // живой сессией и с соседним прогоном.
+  const tmphome = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-tmp-test.'));
   const oncedir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-once-test.'));
   const icmark = `${tmpName('incident-closure-test')}.armed`;
   const s = {
@@ -170,6 +181,9 @@ function makeState() {
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
+    metrics: tmpName('metrics-test'),
+    tmphome,
+    metricsdefault: path.join(tmphome, 'metrics.default.jsonl'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -187,6 +201,16 @@ function makeState() {
     RELATIVE_LINK_STATE: s.relstate,
     SYNC_SYSTEM_STATE: s.syncstate,
     SESSION_ANCHOR_STATE: s.anchor,
+    // Временный каталог прогона: пути, которые хук строит сам через os.tmpdir(),
+    // должны лечь сюда, а не в общий /tmp.
+    TMPDIR: s.tmphome,
+    // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
+    // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
+    CRAFT_METRICS_LOG: s.metrics,
+    // Хранение сводок выключено ВСЕГДА: иначе кейс Stop пушил бы в настоящую
+    // ветку metrics. Его git-логика проверяется отдельно
+    // (tests/metrics-store-git.sh) на временных репозиториях.
+    METRICS_STORE: 'off',
     // Дом codex — герметичный у КАЖДОГО кейса, а не только у своих. Хук входа
     // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
     // кладёт живой токен в настоящий ~/.codex рабочей машины.
@@ -204,44 +228,48 @@ function makeState() {
   return s;
 }
 
-// Файлы состояния после прогона — предмет сверки в дифференциальном режиме:
-// ответ хука бывает одинаков, а след на диске разным.
-function stateSnapshot(s) {
-  const out = {};
-  const files = [
-    ['marker', s.marker], ['marker.plans', `${s.marker}.plans`],
-    ['marker.button-plans', `${s.marker}.button-plans`],
-    ['marker.qa-window', `${s.marker}.qa-window`],
-    ['marker.classifier-degraded', `${s.marker}.classifier-degraded`],
-    ['observe-buffer', s.obsbuf], ['routine-facts', s.rfmark],
-    ['plan-file', s.planpath], ['plan-critic', s.criticmark],
-    ['incident-closure', s.icmark], ['service-turn', s.serviceturn],
-    ['plan-critic-pending', s.criticpend], ['plan-shown', s.planshown],
-    ['plan-critic-runs', s.criticruns], ['relative-link', s.relstate],
-    ['sync-system', s.syncstate], ['approval-registry', s.registry],
-    ['session-anchor', s.anchor],
-  ];
-  for (const [label, file] of files) {
-    if (fs.existsSync(file)) out[label] = fs.readFileSync(file, 'utf8');
+// Файлы и каталоги, которые приём кладёт РЯДОМ с реестром под своими именами:
+// `<реестр>.parsing` (каталог меток разбора) и `<реестр>.view.<pid>-<n>` (снимок
+// вида для классификатора). Имена содержат pid, поэтому список строится чтением
+// каталога, а не перечислением.
+function siblings(registry) {
+  const dir = path.dirname(registry);
+  const base = `${path.basename(registry)}.`;
+  try {
+    return fs.readdirSync(dir)
+      .filter((name) => name.startsWith(base))
+      .map((name) => path.join(dir, name));
+  } catch {
+    return [];
   }
-  if (fs.existsSync(s.fgdir)) {
-    for (const name of fs.readdirSync(s.fgdir).sort()) {
-      out[`fact-gate/${name}`] = fs.readFileSync(path.join(s.fgdir, name), 'utf8');
-    }
-  }
-  return out;
 }
 
 function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
-    `${s.marker}.qa-window`, `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
+    `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
     s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
+    s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
+    // Спутники реестра: след приёма и снимки вида, которые приём кладёт рядом.
+    // Без них прогон оставлял в общем /tmp по каталогу и по файлу следа на
+    // каждый кейс приёма — а этот же каталог служит состоянием хуков.
+    `${s.registry}.ingest.log`,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
+  // Спутники с ДОПИСАННЫМ именем: снимки вида реестра и каталоги меток разбора
+  // (`<реестр>.view.<pid>-<n>`, `<реестр>.parsing`), незавершённая запись
+  // критика (`.tmp`) и след классификатора по ходам (`.turn`). Имена содержат
+  // pid и номер, поэтому убираются по маске, а не перечислением.
+  for (const base of [s.registry, s.criticpend, s.classtrace]) {
+    for (const f of siblings(base)) fs.rmSync(f, { recursive: true, force: true });
+  }
+  // Каталоги локов убираются вместе с файлами, которые они защищают: лок,
+  // оставшийся от упавшего кейса, следующему кейсу стоил бы всего срока
+  // ожидания, а его состояние — пропущенной записи.
+  for (const f of files) fs.rmSync(`${f}.lock`, { recursive: true, force: true });
   fs.rmSync(s.fgdir, { recursive: true, force: true });
   fs.rmSync(s.oncedir, { recursive: true, force: true });
   // Дом codex убирается обязательно: в нём лежит вход, а хук входа зовётся и из
@@ -249,6 +277,7 @@ function cleanState(s) {
   // после каждого прогона, и на машине разработчика туда осел бы настоящий
   // CODEX_AUTH_JSON, унаследованный от окружения.
   fs.rmSync(s.codexhome, { recursive: true, force: true });
+  fs.rmSync(s.tmphome, { recursive: true, force: true });
 }
 
 // --- прогон одного кейса -----------------------------------------------------
@@ -267,19 +296,26 @@ function subst(value, s) {
   //
   // {CODEXHOME} — герметичный дом codex этого прогона: по нему кейс наводит
   // ASSERT_FILE на файл входа, который заводит хук.
+  //
+  // {METRICS} — журнал метрик этого прогона: кейсы хука метрик судят по его
+  // строкам.
+  //
+  // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
+  // не переопределён. По нему кейс доказывает, что записи не было: свой
+  // {METRICS} тут не годится — хук о нём и не знал бы.
   if (!s) return withDir;
   return withDir
     .split('{REGISTRY}').join(s.registry)
     .split('{CLASSTRACE}').join(s.classtrace)
-    .split('{CODEXHOME}').join(s.codexhome);
+    .split('{CODEXHOME}').join(s.codexhome)
+    .split('{METRICS_DEFAULT}').join(s.metricsdefault)
+    .split('{METRICS}').join(s.metrics);
 }
 
-// Один проход кейса: подготовка, повторы, ответ хука и след на диске. `ext`
-// задаёт версию хука (.js/.sh) — в дифференциальном режиме проход делается
-// дважды, в раздельном состоянии.
-function runPass(c, ext) {
+// Один проход кейса: подготовка, повторы, ответ хука и след на диске.
+function runPass(c) {
   const base = SCRIPT[c.hook] || c.hook;
-  const script = resolveHook(base, ext);
+  const script = resolveHook(base);
   if (!script) return { missing: true };
 
   const s = makeState();
@@ -314,18 +350,21 @@ function runPass(c, ext) {
   // Подготовке по умолчанию подаётся ТОТ ЖЕ вход и то же окружение, что целевому
   // хуку; кейс может задать своё событие (setup_input) и свои переменные
   // (setup_env). Список setup_input — свой элемент каждому шагу подготовки.
+  // Подстановка подготовке идёт С СОСТОЯНИЕМ прогона: без него {TESTS_DIR} ещё
+  // раскрывался, а {METRICS} и прочие пути прогона — нет, и шаг молча получал
+  // literal вместо пути.
   const setupEnv = { ...caseEnv };
-  for (const [k, v] of Object.entries(c.setup_env || {})) setupEnv[k] = subst(v);
+  for (const [k, v] of Object.entries(c.setup_env || {})) setupEnv[k] = subst(v, s);
   const setupList = Array.isArray(c.setup_input) ? c.setup_input : null;
   const setupOne = !setupList && c.setup_input !== undefined
-    ? subst(JSON.stringify(c.setup_input)) : '';
+    ? subst(JSON.stringify(c.setup_input), s) : '';
 
   (c.setup || []).forEach((name, i) => {
     const sBase = SCRIPT[name] || name;
-    const sScript = resolveHook(sBase, ext) || resolveHook(sBase);
+    const sScript = resolveHook(sBase);
     if (!sScript) return;
     let step = setupOne;
-    if (setupList) step = subst(JSON.stringify(setupList[i] ?? null));
+    if (setupList) step = subst(JSON.stringify(setupList[i] ?? null), s);
     runHook(sScript, step && step !== 'null' ? step : input, setupEnv);
   });
 
@@ -333,40 +372,34 @@ function runPass(c, ext) {
   // проверяется ответ ПОСЛЕДНЕГО вызова).
   let res = { stdout: '', stderr: '' };
   const repeat = Number(c.repeat || 1);
-  const args = Array.isArray(c.args) ? c.args.map(subst) : [];
+  const args = Array.isArray(c.args) ? c.args.map((v) => subst(v, s)) : [];
   for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
 
-  // Число записей окна разрешений снимается ДО уборки — его сверяют кейсы
-  // вытеснения и фильтра служебных сообщений.
-  let qaCount = 0;
-  const qaFile = `${s.marker}.qa-window`;
-  if (fs.existsSync(qaFile)) {
-    qaCount = fs.readFileSync(qaFile, 'utf8').split('\n').filter((l) => l.startsWith('## Запись')).length;
-  }
   const traced = fs.existsSync(s.classtrace);
   const trace = traced ? fs.readFileSync(s.classtrace, 'utf8') : '';
-  const state = stateSnapshot(s);
-  // Файл, по которому кейс судит о записи (исходы file-contains), тоже след
-  // прогона: обе версии хука пишут в один путь, и без снимка расхождение между
-  // ними прошло бы незамеченным — вторая версия просто затирает первую.
+  // Файл, по которому кейс судит о записи (исходы file-contains), читается ДО
+  // уборки: он может лежать среди файлов состояния прогона, и после уборки
+  // читать его было бы поздно.
   const assertFile = caseEnv.ASSERT_FILE || '';
+  let assertText;
   if (assertFile) {
     try {
-      state['assert-file'] = fs.readFileSync(assertFile, 'utf8');
+      assertText = fs.readFileSync(assertFile, 'utf8');
     } catch {
-      state['assert-file'] = '';
+      assertText = '';
     }
   }
   cleanState(s);
 
   return {
     script,
+    assertFile,
     out: res.stdout || '',
     err: res.stderr || '',
-    qaCount,
+    code: typeof res.status === 'number' ? res.status : 1,
     traced,
     trace,
-    state,
+    assertText,
   };
 }
 
@@ -384,40 +417,49 @@ const isAsk = (o) => jsonField(o, (j) => j.hookSpecificOutput?.permissionDecisio
 const isBlock = (o) => jsonField(o, (j) => j.decision) === 'block';
 const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 
+// Хук УПАЛ, а не смолчал. Через диспетчер падение гасится и код возврата равен
+// нулю — он не уносит цепочку, — поэтому падение видно только по его строке в
+// служебном потоке. Любой исход, который утверждает МОЛЧАНИЕ, обязан это
+// различать: иначе поломка зеленит кейс.
+const crashed = (err, env) => (env || {}).CODE !== 0 || /\[dispatch\] хук .* упал/.test(err || '');
+
 function grade(expect, out, err, env) {
   // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
   // не печатью, и по stdout проверить запись нечем. Путь берётся из переменной
   // ASSERT_FILE самого кейса — той же, что кейс отдаёт хуку. Переменной нет —
-  // незачёт; нечитаемый файл равен пустому.
-  if (expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
+  // незачёт. Текст всегда приходит снимком, снятым ДО уборки прогона: файлы
+  // состояния к моменту разбора уже убраны, и читать их с диска было бы поздно.
+  //
+  // file-not-contains требует НЕПУСТОГО файла: «в файле нет строки» на файле,
+  // которого нет, зеленеет и при сломанном хуке — то есть проверяет ровно ничто.
+  // Пара к нему — file-empty: «не написано вовсе», и это отдельное утверждение,
+  // которое кейс делает явно.
+  if (expect === 'file-empty' || expect.startsWith('file-contains:') || expect.startsWith('file-not-contains:')) {
     const file = (env || {}).ASSERT_FILE || '';
     if (!file) return false;
-    // Снимок, снятый до уборки прогона, старше чтения с диска: файлы состояния
-    // самого прогона к этому моменту уже убраны, и читать их было бы поздно.
-    let text = (env || {}).ASSERT_TEXT;
-    if (text === undefined) {
-      text = '';
-      try {
-        text = fs.readFileSync(file, 'utf8');
-      } catch { /* файла нет — считаем пустым */ }
-    }
+    const text = (env || {}).ASSERT_TEXT || '';
+    if (expect === 'file-empty') return text === '' && !crashed(err, env);
     const needle = expect.slice(expect.indexOf(':') + 1);
-    return expect.startsWith('file-contains:') ? text.includes(needle) : !text.includes(needle);
+    if (expect.startsWith('file-contains:')) return text.includes(needle);
+    // «В файле нет строки» — тоже утверждение о молчании: хук мог дописать своё
+    // и упасть до того места, которое кейс сторожит.
+    return text !== '' && !text.includes(needle) && !crashed(err, env);
   }
   if (expect === 'deny') return isDeny(out);
-  if (expect === 'allow') return !(isDeny(out) || isAsk(out) || isBlock(out));
+  // allow — тоже утверждение о молчании: «гвард не сработал». Упавший гвард
+  // молчит так же, поэтому падение здесь тоже незачёт.
+  if (expect === 'allow') return !(isDeny(out) || isAsk(out) || isBlock(out)) && !crashed(err, env);
   if (expect === 'ask') return isAsk(out);
   if (expect === 'block') return isBlock(out);
   if (expect === 'inject') return out.includes('СИГНАЛ ИНЦИДЕНТА');
-  if (expect === 'silent') return trim(out) === '';
+  if (expect === 'silent') return trim(out) === '' && !crashed(err, env);
   if (expect.startsWith('contains:')) return out.includes(expect.slice('contains:'.length));
+  if (expect.startsWith('not-contains:')) {
+    return !out.includes(expect.slice('not-contains:'.length)) && !crashed(err, env);
+  }
   // Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет улику
   // доставки правила. Без отдельной проверки эта половина вывода не покрыта.
   if (expect.startsWith('err-contains:')) return err.includes(expect.slice('err-contains:'.length));
-  // Отрицание: иногда доказательство — именно ОТСУТСТВИЕ строки (хук не пошёл по
-  // короткому пути, гвард не сработал вхолостую).
-  if (expect.startsWith('not-contains:')) return !out.includes(expect.slice('not-contains:'.length));
-  if (expect.startsWith('err-not-contains:')) return !err.includes(expect.slice('err-not-contains:'.length));
   return null; // неизвестное ожидание
 }
 
@@ -646,23 +688,37 @@ function main() {
         return;
       }
 
-      covered.add(`${c.hook}:${c.expect}`);
+      // Исходов у кейса бывает несколько: «строка есть И текста в ней нет» одним
+      // утверждением не выразить, а порознь такая пара кейсов зеленеет по
+      // отдельности и не проверяет связку.
+      const expects = Array.isArray(c.expect) ? c.expect : [c.expect];
+      const label = expects.join(' + ');
+      covered.add(`${c.hook}:${expects[0]}`);
       const r = runPass(c);
       if (r.missing) {
         fail += 1;
         fails.push(`${c.hook} / ${c.name} — unknown hook or missing script`);
-        row('FAIL', c.hook, c.expect, c.name);
+        row('FAIL', c.hook, label, c.name);
         return;
       }
 
-      let ok = grade(c.expect, r.out, r.err, {
-        ASSERT_FILE: subst((c.env || {}).ASSERT_FILE || ''),
-        ASSERT_TEXT: r.state['assert-file'],
-      });
+      // Путь и текст приходят из прогона уже подставленными: подставлять здесь
+      // заново было бы нечем — состояния прогона тут уже нет.
+      const env = { ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code };
+      let ok = true;
       let got = r.out;
-      if (ok === null) {
-        fails.push(`${c.hook} / ${c.name} — unknown expect '${c.expect}'`);
-        ok = false;
+      for (const one of expects) {
+        const verdict = grade(one, r.out, r.err, env);
+        if (verdict === null) {
+          fails.push(`${c.hook} / ${c.name} — unknown expect '${one}'`);
+          ok = false;
+          break;
+        }
+        if (!verdict) {
+          ok = false;
+          got = one.startsWith('file-') ? `по файлу: ${one}` : r.out;
+          break;
+        }
       }
 
       // Ассерты следа классификатора: ответ хука в этих исходах одинаков,
@@ -676,41 +732,13 @@ function main() {
       if (ok && c.assert_trace_contains && !r.trace.includes(c.assert_trace_contains)) {
         ok = false; got = `в промпте классификатора нет «${c.assert_trace_contains}»`;
       }
-      if (ok && c.assert_qa_records !== undefined
-          && String(r.qaCount) !== String(c.assert_qa_records)) {
-        ok = false; got = `записей в окне разрешений: ${r.qaCount}, ожидалось ${c.assert_qa_records}`;
-      }
-
-      // Дифференциальный режим: вторая версия того же хука обязана ответить тем
-      // же — и тем же следом на диске.
-      if (ok && DIFF) {
-        const base = SCRIPT[c.hook] || c.hook;
-        const other = r.script.endsWith('.js') ? '.sh' : '.js';
-        if (resolveHook(base, other)) {
-          const alt = runPass(c, other);
-          const diffs = [];
-          if (alt.out !== r.out) diffs.push('stdout');
-          if (alt.err !== r.err) diffs.push('stderr');
-          if (JSON.stringify(alt.state) !== JSON.stringify(r.state)) diffs.push('состояние');
-          // След классификатора сверяется содержимым, а не фактом наличия: обе
-          // версии могут его вызвать, но по-разному сериализовать правку — и
-          // тогда расхождение проехало бы незамеченным.
-          if (alt.traced !== r.traced) diffs.push('вызов классификатора');
-          else if (alt.trace !== r.trace) diffs.push('промпт классификатора');
-          if (diffs.length > 0) {
-            ok = false;
-            got = `версии разошлись (${diffs.join(', ')}): ${path.basename(r.script)} против ${path.basename(alt.script)}`;
-          }
-        }
-      }
-
       if (ok) {
         pass += 1;
-        row('PASS', c.hook, c.expect, c.name);
+        row('PASS', c.hook, label, c.name);
       } else {
         fail += 1;
-        fails.push(`${c.hook} / ${c.name} — expected ${c.expect}, got: ${trim(String(got).slice(0, 120))}`);
-        row('FAIL', c.hook, c.expect, c.name);
+        fails.push(`${c.hook} / ${c.name} — expected ${label}, got: ${trim(String(got).slice(0, 120))}`);
+        row('FAIL', c.hook, label, c.name);
       }
     });
   }

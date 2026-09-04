@@ -1,20 +1,36 @@
-// Решения хука. Форма ответа задана харнессом и повторяет то, что печатали
-// bash-версии через `jq -cn`: компактный JSON одной строкой плюс перевод строки.
-//
-// Совпадение до байта здесь не косметика: пока идёт переезд, дифференциальная
-// сверка гоняет обе версии хука на одном входе и валит кейс на любом различии
-// вывода. Порядок ключей в объектах ниже — тот же, в котором их собирал jq.
+// Решения хука: форма ответа, которую читает харнесс. Компактный JSON одной
+// строкой плюс перевод строки; форма и порядок ключей — как у jq.
 
-// Форм у ответа две, потому что bash-версии печатали двумя командами: компактной
-// (`jq -cn`) и развёрнутой (`jq -n`, отступ в два пробела). Харнессу разницы нет,
-// он читает JSON, но дифференциальная сверка на переезде сравнивает вывод
-// побайтно — значит форму держим ту же, что была у переносимого хука.
+// Развёрнутая форма (отступ в два пробела) осталась второй: харнессу разницы
+// нет, но кейсы сверяют вывод побайтно.
 function emit(payload, { compact = true } = {}) {
   const text = compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
   process.stdout.write(`${text}\n`);
   // Признак «решение принято» для диспетчера: под ним хуки одного события делят
   // общий вывод, и второе решение подряд легло бы в него следом за первым.
   globalThis.hookDecided = true;
+  // Само решение — в общее состояние события: хук метрик стоит после решения и
+  // читает его отсюда, а не из stdout. Имя решившего хука ставит диспетчер.
+  globalThis.hookDecision = describe(payload);
+}
+
+// Вид решения по форме ответа: deny/ask (PreToolUse), block (Stop), inject
+// (дописанный контекст). Текст причины остаётся в памяти процесса — метрики
+// вычисляют по нему класс и в журнал не пишут.
+function describe(payload) {
+  const specific = payload && payload.hookSpecificOutput;
+  let kind = '';
+  let reason = '';
+  if (specific && specific.permissionDecision) {
+    kind = specific.permissionDecision;
+    reason = specific.permissionDecisionReason || '';
+  } else if (payload && payload.decision === 'block') {
+    kind = 'block';
+    reason = payload.reason || '';
+  } else if (specific && specific.additionalContext !== undefined) {
+    kind = 'inject';
+  }
+  return { hook: globalThis.hookCurrent || '', kind, reason };
 }
 
 // PreToolUse: запрет вызова с причиной, которую прочитает модель.

@@ -22,6 +22,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
+import { childEnv } from './metrics.js';
+import { withLock, atomicWrite, pause } from './lock.js';
+import { eachJsonl } from './jsonl.js';
 
 // Лог обрезается сверху: длинный ход иначе растит реестр без предела, а он
 // целиком уходит в каждую сверку.
@@ -29,6 +32,27 @@ export const LOG_KEEP = 20;
 
 function off() {
   return process.env.CRAFT_REGISTRY === 'off';
+}
+
+// Правка реестра под локом. Лок не достался — правка НЕ СДЕЛАНА, и молчать об
+// этом нельзя: реестр решает, что гейт пропустит, и «тихо не записали» значит
+// отказ в правке, которую Влад уже одобрил. Возвращается fallback, а причина
+// уходит в stderr — его харнес показывает в логе хука.
+// Исход «ничего не сделали»: все адреса необработанными. Им отвечают операции,
+// которые вернули бы разбор по адресам, если бы лок достался.
+function unknownAll(done, addresses) {
+  return { ...done, unknown: [...done.unknown, ...addresses] };
+}
+
+// Ожидание лока реестра — умолчание модуля лока (5 с). Реестр правят и гейт на
+// PreToolUse, и приём следом за ходом, то есть эти секунды стоят в цепочке хода;
+// свой, короткий срок появится здесь вместе с переносом приёма за пределы хода
+// (фаза 4), а не раньше: сегодня пропущенная запись реестра дороже ожидания.
+function underLock(file, run, fallback) {
+  const { locked, value } = withLock(file, run);
+  if (locked) return value;
+  process.stderr.write(`[registry] лок занят дольше срока, запись пропущена: ${file}\n`);
+  return fallback;
 }
 
 // Чтение никогда не бросает: реестр читают гейт и дельта, и упавшее чтение
@@ -43,13 +67,7 @@ export function readRegistry(file) {
     return [];
   }
   const goals = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const goal = JSON.parse(line);
-      if (goal && typeof goal === 'object') goals.push(revive(goal));
-    } catch { /* битая строка — пропускаем, файл остаётся цел */ }
-  }
+  eachJsonl(text, (goal) => goals.push(revive(goal)));
   return goals;
 }
 
@@ -62,85 +80,12 @@ function revive(goal) {
   return goal.state === 'tombstone' ? { ...goal, state: 'live' } : goal;
 }
 
-// Лок на ЦИКЛ правки: сама запись атомарна переименованием, а «прочитал —
-// поправил — записал» вокруг неё нет. Два параллельных хука читали одно
-// состояние, и второй затирал правку первого: терялись строки лога и закрытие
-// задач. Каталог — атомарная примитивная блокировка на любой файловой системе:
-// mkdir либо создал, либо застал чужой.
-//
-// Занят — ЖДЁМ, а не пропускаем: пропущенная запись роняет ту работу, ради
-// которой лок и берётся. Своего потолка у ожидания нет; снимается только лок,
-// брошенный упавшим процессом, — по возрасту каталога.
-const LOCK_STALE_MS = 300000;
-
-function lockDir(file) {
-  return `${file}.lock`;
-}
-
-function takeLock(file) {
-  const dir = lockDir(file);
-  for (;;) {
-    try {
-      fs.mkdirSync(dir);
-      return dir;
-    } catch (err) {
-      if (err && err.code !== 'EEXIST') return '';
-      let age = 0;
-      try {
-        age = Date.now() - fs.statSync(dir).mtimeMs;
-      } catch {
-        continue; // лок исчез между попыткой и замером — пробуем снова
-      }
-      if (age > LOCK_STALE_MS) {
-        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* уже снят */ }
-        continue;
-      }
-      try {
-        execFileSync('sleep', ['0.05'], { stdio: 'ignore' });
-      } catch {
-        return '';
-      }
-    }
-  }
-}
-
-function freeLock(dir) {
-  if (!dir) return;
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch { /* лок не снялся — его добьёт следующий по возрасту */ }
-}
-
-// withLock(файл, действие) — единственная точка взятия лока. Вложенные вызовы
-// лок повторно НЕ берут: иначе дописывание задач, сделанное поверх общей правки,
-// клинило бы само себя.
-let held = false;
-
-function withLock(file, run) {
-  if (held) return run();
-  const dir = takeLock(file);
-  held = true;
-  try {
-    return run();
-  } finally {
-    held = false;
-    freeLock(dir);
-  }
-}
-
-// Запись атомарная: временный файл рядом и переименование. Соседняя сессия или
-// параллельный хук читают либо прежний реестр, либо новый, но не половину.
+// Лок на цикл правки и атомарная запись — общие с журналом метрик, живут в
+// lib/lock.js.
 function writeRegistry(file, goals) {
   if (!file || off()) return;
   const body = goals.map((goal) => JSON.stringify(goal)).join('\n');
-  const tmp = `${file}.tmp.${process.pid}`;
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(tmp, body ? `${body}\n` : '');
-    fs.renameSync(tmp, file);
-  } catch {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* и убрать не вышло */ }
-  }
+  atomicWrite(file, body ? `${body}\n` : '');
 }
 
 // Слепок содержания цели: по нему отличается ревизия от перепоказа. В слепок
@@ -237,7 +182,7 @@ function sameGoal(a, b) {
 // сделанным или снятым, и разбор их закрывает.
 export function upsertGoal(file, goal) {
   if (!file || off() || !goal || !goal.title) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file);
     const fresh = normalize(goal);
     const at = goals.findIndex((g) => sameGoal(g, fresh));
@@ -286,7 +231,7 @@ function patch(file, at, change) {
   if (!file || off()) return;
   const i = Number(at);
   if (!Number.isInteger(i) || i < 0) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file);
     if (!goals[i]) return;
     change(goals[i]);
@@ -313,7 +258,7 @@ export const SWITCH_TITLE = 'Проверки сняты по тапу Влад�
 
 export function switchOn(file) {
   if (!file || off()) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file);
     if (goals.some((g) => g.title === SWITCH_TITLE && g.state === 'live')) return;
     goals.push({
@@ -330,7 +275,7 @@ export function switchOn(file) {
 
 export function switchOff(file) {
   if (!file || off()) return;
-  withLock(file, () => {
+  underLock(file, () => {
     const goals = readRegistry(file).filter((g) => g.title !== SWITCH_TITLE);
     writeRegistry(file, goals);
   });
@@ -374,7 +319,7 @@ export function liftBans(file, addresses) {
     done.unknown = [...addresses];
     return done;
   }
-  return withLock(file, () => {
+  return underLock(file, () => {
     const goals = readRegistry(file);
     let touched = false;
     for (const address of addresses) {
@@ -390,7 +335,7 @@ export function liftBans(file, addresses) {
     }
     if (touched) writeRegistry(file, goals);
     return done;
-  });
+  }, unknownAll(done, addresses));
 }
 
 export function closeTasks(file, addresses) {
@@ -399,7 +344,7 @@ export function closeTasks(file, addresses) {
     done.unknown = [...addresses];
     return done;
   }
-  return withLock(file, () => closeUnderLock(file, addresses, done));
+  return underLock(file, () => closeUnderLock(file, addresses, done), unknownAll(done, addresses));
 }
 
 function closeUnderLock(file, addresses, done) {
@@ -445,7 +390,7 @@ export function reopenTasks(file, addresses) {
     done.unknown = [...addresses];
     return done;
   }
-  return withLock(file, () => {
+  return underLock(file, () => {
     const goals = readRegistry(file);
     let touched = false;
     for (const address of addresses) {
@@ -462,7 +407,7 @@ export function reopenTasks(file, addresses) {
     }
     if (touched) writeRegistry(file, goals);
     return done;
-  });
+  }, unknownAll(done, addresses));
 }
 
 // Запустить приём материала ФОНОМ: ход Влада не ждёт модель. Метка ставится
@@ -483,13 +428,17 @@ export function ingestInBackground(file, source, text) {
     // Тестам нужен детерминированный порядок: фоновый приём допишет реестр
     // когда-нибудь, а кейс проверяет файл сразу. В жизни режим не включается —
     // иначе ход Влада ждал бы модель.
+    // Журнал метрик уходит дочернему процессу явно: события у него нет, а
+    // вызовы модели из приёма должны лечь в журнал этой сессии.
+    const env = childEnv();
     if (process.env.CRAFT_REGISTRY_SYNC) {
-      execFileSync(process.execPath, [helper, source, material, file, id], { stdio: 'ignore' });
+      execFileSync(process.execPath, [helper, source, material, file, id], { stdio: 'ignore', env });
       return;
     }
     const child = spawn(process.execPath, [helper, source, material, file, id], {
       detached: true,
       stdio: 'ignore',
+      env,
     });
     child.unref();
   } catch {
@@ -538,12 +487,9 @@ export function waitForParsing(file, capMs = 3600000, stepMs = 200) {
   const until = Date.now() + capMs;
   while (parsingCount(file) > 0 && Date.now() < until) {
     // Пауза без таймеров: хук синхронный, и событийного ожидания чужого
-    // процесса здесь нет.
-    try {
-      execFileSync('sleep', [String(stepMs / 1000)], { stdio: 'ignore' });
-    } catch {
-      break;
-    }
+    // процесса здесь нет. Пауза общая на слой (lib/lock.js): своя стоила форка
+    // на каждый шаг ожидания.
+    pause(stepMs);
   }
   return parsingCount(file) === 0;
 }

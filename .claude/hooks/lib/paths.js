@@ -103,16 +103,19 @@ export function relativeLinkState() {
   return path.join(os.tmpdir(), `relative-link.${sessionId() || 'default'}.blocked`);
 }
 
+// Журнал метрик сессии: события JSONL, по строке на событие хука; рядом с ним
+// хук держит своё состояние (`<журнал>.state.json`). Идентификатор берётся из
+// СОБЫТИЯ, как у синка системы: в окружении хука переменной сессии может не
+// быть. Общий default законен — журнал держит числа и имена, а не периметр.
+export function metricsLog(sid) {
+  const override = process.env.CRAFT_METRICS_LOG;
+  if (override) return override;
+  return path.join(os.tmpdir(), `metrics.${sid || sessionId() || 'default'}.jsonl`);
+}
+
 // Каталог меток уступки второму вызову события.
 export function hookOnceDir() {
   return process.env.HOOK_ONCE_DIR || os.tmpdir();
-}
-
-// Отладочный след последнего входа: по нему проверяются факты о составе события
-// (например, наличие поля режима разрешений) без правки харнесса.
-export function lastInputTrace(kind) {
-  const sid = sessionId() || 'default';
-  return `/tmp/${kind}-last-input.${sid}.json`;
 }
 
 // Кэш предодобренной зоны прямого редактирования. Место одно и каноническое —

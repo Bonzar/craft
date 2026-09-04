@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { repoRootOf } from './paths.js';
+import { recordModelCall, verdictClass } from './metrics.js';
 
 // Корень считается от ЭТОГО модуля, а не от файла вызывающего хука: у них разная
 // глубина (хук лежит на уровень выше), и общая формула на стороне вызова давала
@@ -21,7 +22,11 @@ import { repoRootOf } from './paths.js';
 // проходе, а хук одобрения убивает его снаружи одним числом. Разъехавшись, они
 // давали молчаливую пропажу: приём успевал записать часть и погибал.
 export const INGEST_BUDGET_SEC = 1500;
-export const INGEST_PASSES = 2;
+// Проход один: второй, «дозаводящий пропущенное», удваивал вызовы модели на
+// каждой реплике и плодил переформулированные дубли вместо того, чтобы
+// сходиться. Пропуск задачи разбором — повод для отдельного разрешения, а не
+// для второго вызова.
+export const INGEST_PASSES = 1;
 
 // Потолок хода, за которым приём резать уже не нам: столько отмерено хуку в
 // settings.json (timeout у dispatch.js), и на столько же протухает метка
@@ -49,16 +54,29 @@ export function classifierAvailable(bin) {
 
 // classify(bin, mode, args, description) → строка вердикта.
 // Аварийный выключатель PLAN_CLASSIFIER=off обрабатывает сам классификатор.
+//
+// Каждый вызов — событие метрик: режим, длительность и класс ответа. Это
+// единственное место, откуда хуки зовут модель, поэтому счёт вызовов живёт
+// здесь, а не в хуке метрик, — приём реестра идёт в отдельном фоновом
+// процессе, и хуку его не видно.
 export function classify(bin, mode, args, description, { timeoutSec } = {}) {
   if (!classifierAvailable(bin)) return 'UNAVAILABLE';
   const env = { ...process.env };
   if (timeoutSec) env.PLAN_CLASSIFIER_TIMEOUT = String(timeoutSec);
+  const started = Date.now();
   const res = spawnSync('bash', [bin, mode, ...args], {
     input: description,
     env,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
-  const verdict = (res.stdout || '').trim();
-  return verdict || 'UNAVAILABLE';
+  const verdict = (res.stdout || '').trim() || 'UNAVAILABLE';
+  // С аварийным выключателем классификатор отвечает сам и модель не зовёт —
+  // такой вызов в счётчик вызовов модели не идёт. Исход `unavailable` остаётся
+  // общим для настоящего неответа и прочих ранних выходов классификатора
+  // (нечитаемый материал, нет реестра): снаружи они неразличимы.
+  if (process.env.PLAN_CLASSIFIER !== 'off') {
+    recordModelCall({ mode, ms: Date.now() - started, outcome: verdictClass(verdict) });
+  }
+  return verdict;
 }

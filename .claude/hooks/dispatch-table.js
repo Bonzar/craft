@@ -17,6 +17,12 @@
 //
 // МАТЧЕР сверяется с именем инструмента ЦЕЛИКОМ, а не подстрокой: иначе `Bash`
 // поймал бы и `BashOutput`. Пустой матчер означает «на любое событие этого типа».
+//
+// Хук метрик стоит последним среди печатающих решение и зовётся всегда (см.
+// ALWAYS): он ничего не печатает и читает решение предыдущих хуков из общего
+// состояния события — так видно и исход гейта, и блокировку конца хода. На Stop
+// за ним идёт хранение: оно забирает сводку, которую метрики только что
+// записали. В PreCompact метрик нет вовсе.
 export const TABLE = {
   SessionStart: [
     { hooks: ['craft-sync-local-main', 'craft-build-sync'], scope: 'project' },
@@ -29,6 +35,7 @@ export const TABLE = {
     // сессии доступно, и к этому моменту вход уже должен лежать на месте.
     { hooks: ['universal-cache-gate-exempt-scope', 'universal-codex-auth', 'universal-env-capabilities'], scope: 'both' },
     { hooks: ['universal-session-anchor'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   UserPromptSubmit: [
@@ -41,6 +48,7 @@ export const TABLE = {
       ],
       scope: 'both',
     },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PreToolUse: [
@@ -92,22 +100,24 @@ export const TABLE = {
     // пропускает то, про что видно, что оно только читает; матчер здесь широкий
     // намеренно — решение принимает хук, а не список имён.
     { hooks: ['universal-guard-plan-gate'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PostToolUse: [
     { matcher: 'AskUserQuestion', hooks: ['universal-session-anchor', 'universal-plan-gate-button'], scope: 'both' },
-    {
-      matcher: 'ExitPlanMode',
-      hooks: ['universal-plan-gate-approve', 'universal-guard-plan-delta'],
-      scope: 'both',
-    },
+    // Дельта стоит только ДО показа (PreToolUse): после одобрения план уже
+    // лежит в реестре, и сравнивать его с реестром значило бы отбивать
+    // собственное одобрение.
+    { matcher: 'ExitPlanMode', hooks: ['universal-plan-gate-approve'], scope: 'both' },
     { matcher: 'Task|Agent|Workflow', hooks: ['universal-mark-plan-critic'], scope: 'both' },
     { matcher: 'Write|Edit|MultiEdit', hooks: ['universal-mark-plan-file'], scope: 'both' },
     { hooks: ['universal-observe-buffer'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   PostToolUseFailure: [
     { matcher: 'ExitPlanMode', hooks: ['universal-guard-plan-exit-failure'], scope: 'both' },
+    { hooks: ['universal-metrics'], scope: 'both' },
   ],
 
   Stop: [
@@ -123,6 +133,9 @@ export const TABLE = {
       ],
       scope: 'both',
     },
+    // Хранение идёт ПОСЛЕ метрик: оно забирает сводку, которую те только что
+    // записали.
+    { hooks: ['universal-metrics', 'universal-metrics-store'], scope: 'both' },
   ],
 
   PreCompact: [
@@ -132,6 +145,9 @@ export const TABLE = {
 
 // События, на которые ставится сама регистрация диспетчера.
 export const EVENTS = Object.keys(TABLE);
+
+// Хуки, которые зовутся и ПОСЛЕ решения: они не печатают и лишь наблюдают.
+export const ALWAYS = new Set(['universal-metrics', 'universal-metrics-store']);
 
 // Совпадение матчера с именем инструмента. Пустой матчер — «всегда».
 function matches(matcher, tool) {

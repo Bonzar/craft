@@ -1,0 +1,8 @@
+{
+  "_note": "Чужой проект: свой скрипт с именем dispatch.js, нашей регистрации нет.",
+  "hooks": {
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "node scripts/dispatch.js" }] }
+    ]
+  }
+}

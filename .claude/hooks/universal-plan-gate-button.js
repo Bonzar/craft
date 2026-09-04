@@ -4,15 +4,14 @@
 // новую цель или дописать задачу к уже одобренной; окна записей как отдельного
 // файла больше нет.
 //
-// Схема входа снята с живого следа сессии (см. отладочный след ниже):
-// выбранный ответ лежит в .tool_response.answers — карта «текст вопроса →
-// лейбл выбранной опции». Ответ по вопросу не разобрался — пара не пишется:
-// вопроса без ответа в реестре не бывает. Событие рождается только настоящим
+// Схема входа снята с живого события сессии: выбранный ответ лежит в
+// .tool_response.answers — карте «текст вопроса → лейбл выбранной опции».
+// Ответ по вопросу не разобрался — пара не пишется: вопроса без ответа в
+// реестре не бывает. Событие рождается только настоящим
 // тапом: PostToolUse не срабатывает на отклонённый вопрос.
-import fs from 'node:fs';
 import { readEvent } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
-import { lastInputTrace, approvalRegistry } from './lib/paths.js';
+import { approvalRegistry } from './lib/paths.js';
 import { ingestInBackground, switchOn, switchOff } from './lib/registry.js';
 import { withAgentContext } from './lib/transcript.js';
 
@@ -20,11 +19,6 @@ if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
 const { raw, event, tool, input, response, transcript } = readEvent();
 if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
-
-// Отладочный след входа: по нему проверяются факты о схеме tool_response.
-try {
-  fs.writeFileSync(lastInputTrace('plan-gate-button'), raw);
-} catch { /* след не записался — на решение это не влияет */ }
 
 if (tool !== 'AskUserQuestion') process.exit(0);
 

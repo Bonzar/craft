@@ -27,6 +27,10 @@ export function readEvent() {
     event = {};
   }
   if (event === null || typeof event !== 'object') event = {};
+  // Событие — в общее состояние процесса: библиотекам без доступа к нему
+  // (обёртка вызова модели) нужен идентификатор сессии из события, а не только
+  // из окружения, где его может не быть.
+  globalThis.hookEvent = event;
 
   return {
     // Сырой текст нужен там, где ключ считается по всему событию целиком
@@ -44,4 +48,15 @@ export function readEvent() {
     input: event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {},
     response: event.tool_response,
   };
+}
+
+// Ошибка инструмента в ответе: is_error либо непустое поле error. Признак живёт
+// рядом с самим событием и один на слой — буфер наблюдений и метрики обязаны
+// считать ошибкой одно и то же, а двумя копиями они уже разъезжались по полю
+// error.
+export function responseIsError(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
+  if (response.is_error === true || response.isError === true) return true;
+  const err = response.error;
+  return err !== undefined && err !== null && err !== false && err !== '';
 }

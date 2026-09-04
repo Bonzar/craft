@@ -10,7 +10,7 @@
 // Уступки второму вызову здесь нет намеренно — её не было и у bash-версии:
 // буфер копит сигналы, и лишняя строка в нём безобиднее пропущенной.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
+import { readEvent, responseIsError } from './lib/event.js';
 import { observeBuffer } from './lib/paths.js';
 
 const { event, tool, response } = readEvent();
@@ -42,10 +42,14 @@ function headBytes(text, limit) {
   return cut.subarray(0, end).toString('utf8');
 }
 
-// Ошибка инструмента: is_error в tool_response либо явное поле error.
-const isError = firstSet(res.is_error, res.isError, false);
+// Ошибка инструмента опознаётся ОБЩИМ предикатом (lib/event.js): буфер и
+// метрики обязаны считать ошибкой одно и то же, а две копии этой логики уже
+// разъехались по полю error.
+if (!responseIsError(res)) process.exit(0);
+// Откуда брать текст, решает форма ответа: у помеченного is_error он лежит в
+// содержимом, у прочих — в самом поле error.
 let errText;
-if (asText(isError) === 'true') {
+if (asText(firstSet(res.is_error, res.isError, false)) === 'true') {
   errText = headBytes(asText(firstSet(res.content, res.error, '')), 300);
 } else {
   errText = headBytes(asText(firstSet(res.error, '')), 300);

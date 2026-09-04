@@ -21,6 +21,7 @@
 // реестра стоит метка, и сверка правки её дожидается: сверять по недособранному
 // реестру значит отклонять только что разрешённое.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   classifierPath, classify, INGEST_BUDGET_SEC, INGEST_PASSES,
@@ -28,6 +29,10 @@ import {
 import {
   readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
+import { currentMetricsLog } from '../.claude/hooks/lib/metrics.js';
+import { queueSummary, storeTarget } from '../.claude/hooks/lib/summary-store.js';
+// Адаптер хранения выбирает край, а не общая часть.
+import * as STORE_ADAPTER from '../.claude/hooks/lib/summary-store-git.js';
 
 const [, , source, materialFile, registryFile, markId] = process.argv;
 
@@ -37,7 +42,8 @@ const [, , source, materialFile, registryFile, markId] = process.argv;
 // поэтому пропажу целого плана из реестра заметил Влад, а не система.
 //
 // Файл лежит в общем /tmp контейнера и читаем всем, кто в него попал: в след
-// идёт только то, что уже есть в реестре и материале, ничего сверх.
+// идёт только ход приёма — номер прохода, размер реестра, исход и размер
+// ответа модели. Сам текст ответа в след не пишется.
 export function trace(line) {
   if (!registryFile) return;
   try {
@@ -69,7 +75,15 @@ function cutByAnchors(text, tasks) {
 // в отказе, — и ответ применяется к файлу.
 function pass(material, n, ownFrom) {
   const current = readRegistry(registryFile);
-  const view = path.join(path.dirname(materialFile), 'registry-view.txt');
+  // Вид кладётся рядом с РЕЕСТРОМ, а не с материалом: материалом у плана служит
+  // сам файл плана, и вид ложился бы в каталог планов (в кейсах — в фикстуры,
+  // затирая их).
+  //
+  // Имя — своё на каждый приём и проход: приёмы одной сессии идут параллельно
+  // (реплика и следом ответ на кнопку — реестр это прямо допускает), и на общем
+  // имени один процесс затирал бы снимок другого, а его уборка сносила бы уже
+  // чужой файл — классификатор читал бы не тот реестр или пустоту.
+  const view = `${registryFile}.view.${process.pid}.${n}`;
   try {
     fs.writeFileSync(view, render(current));
   } catch { /* вид не записался — модель увидит пустой реестр */ }
@@ -77,17 +91,25 @@ function pass(material, n, ownFrom) {
   const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '', {
     timeoutSec: INGEST_BUDGET_SEC,
   });
-  trace(`проход ${n}: целей в реестре ${current.length}, ответ модели: ${verdict}`);
-  if (!verdict || verdict === 'UNAVAILABLE') return 1;
+  try { fs.rmSync(view, { force: true }); } catch { /* вид переживёт приём */ }
+  if (!verdict || verdict === 'UNAVAILABLE') {
+    trace(`проход ${n}: целей в реестре ${current.length}, модель недоступна`);
+    return 1;
+  }
 
   let answer;
   try {
     answer = JSON.parse(verdict);
   } catch {
+    trace(`проход ${n}: целей в реестре ${current.length}, ответ модели неразборен (${verdict.length} символов)`);
     return 1;
   }
-  if (!answer || !Array.isArray(answer.add)) return 1;
+  if (!answer || !Array.isArray(answer.add)) {
+    trace(`проход ${n}: целей в реестре ${current.length}, ответ модели без списка добавлений`);
+    return 1;
+  }
   const additions = answer.add;
+  trace(`проход ${n}: целей в реестре ${current.length}, ответ модели: добавить ${additions.length}, закрыть ${Array.isArray(answer.close) ? answer.close.length : 0}, снять ${Array.isArray(answer.lift) ? answer.lift.length : 0}`);
 
   // Закрытия принимаются ТОЛЬКО от одобренного плана: новый план и есть граница
   // работы, а реплика ей не является — «продолжай» и «работай» значат, что
@@ -109,6 +131,10 @@ function pass(material, n, ownFrom) {
   }
 
   for (const add of additions) {
+    // Реестр перечитывается на КАЖДОЙ записи ответа: цель, заведённая
+    // предыдущей записью этого же ответа, обязана быть видна следующей —
+    // прохода, который раньше дозаводил такие ссылки, больше нет.
+    const goals = readRegistry(registryFile);
     const tasks = Array.isArray(add.tasks) ? add.tasks : [];
 
     // ЗАПРЕТ — запись без задач: работы под ним нет, он лишь очерчивает, чего
@@ -125,7 +151,7 @@ function pass(material, n, ownFrom) {
     // Куда приземлить запись, решает ядро реестра: цель адресуется НОМЕРОМ из
     // рендера, а не заголовком (формулировку модель каждый раз пишет свою), и от
     // ПЛАНА слияние не принимается вовсе — у плана всегда своя цель.
-    const index = landingGoal(current, add.goal, source, ownFrom);
+    const index = landingGoal(goals, add.goal, source, ownFrom);
 
     const bodies = cutByAnchors(material, tasks);
     const prepared = tasks.map((t, i) => ({
@@ -158,27 +184,69 @@ function main() {
     return 1;
   }
 
-  // ВТОРОЙ проход по тому же материалу — проверка полноты. Разбор нестабилен так
-  // же, как сверка: тот же вход даёт то полный набор задач, то набор без одной, и
-  // пропавший кусок молча остаётся неодобренным. Второй проход видит реестр уже с
-  // заведённым и по правилу «задача, которая уже есть, не добавляется» дозаводит
-  // ровно пропущенное.
-  //
-  // Проходов ровно два: третий ловил бы уже не пропажу, а переформулировку —
-  // и плодил бы дубли вместо того, чтобы сходиться. Их число знает и хук
-  // одобрения: свой срок он выводит из него и бюджета прохода.
+  // Число проходов задаёт классификатор (INGEST_PASSES); его же знает хук
+  // одобрения — свой срок он выводит из него и бюджета прохода.
   // Граница своих целей: всё, что лежало в реестре ДО этого приёма, для плана
-  // чужое, а заведённое его первым проходом — своё. Иначе второй проход, который
-  // дозаводит пропущенное, не нашёл бы цель первого и завёл третью.
+  // чужое; заведённое этим приёмом — своё.
   const ownFrom = readRegistry(registryFile).length;
 
+  // Проход сейчас один (INGEST_PASSES = 1), и цикл написан под несколько:
+  // сорвавшийся проход роняет приём только если он ПЕРВЫЙ — на втором и дальше
+  // в реестре уже что-то лежит, и терять это из-за неответа модели незачем.
+  let done = 0;
   for (let n = 1; n <= INGEST_PASSES; n += 1) {
     const code = pass(material, n, ownFrom);
-    // Первый проход не дал разбора — второму брать нечего: он лишь дозаводит
-    // пропущенное первым.
-    if (code !== 0) return n === 1 ? code : 0;
+    if (code !== 0) return done === 0 ? code : 0;
+    done += 1;
   }
   return 0;
+}
+
+// Приём кончается ПОЗЖЕ последнего Stop сессии, и его вызов модели попадает в
+// сводку, которую работник хранения уже увёз. Возврат в очередь делается здесь,
+// на краю: журнал про хранение не знает, а знать, что этот процесс последний,
+// может только сам процесс. Сводки нет — приём шёл до первого Stop, её сложит
+// он сам.
+//
+// Приём ПЛАНА — исключение: он идёт внутри хода, синхронным вызовом из хука
+// одобрения, и подпроцесс git с ожиданием лока там были бы платой хода за
+// работу, которую следующий Stop сделает сам.
+function requeueSummary() {
+  if (source === 'plan') return;
+  const log = currentMetricsLog();
+  if (!log) return;
+  let summary;
+  try {
+    summary = JSON.parse(fs.readFileSync(`${log}.summary.json`, 'utf8'));
+  } catch {
+    return; // сводки ещё нет — возвращать нечего
+  }
+  // Выключатель, файл очереди и цель хранения читает КРАЙ: окружение — его дело.
+  if (summary && summary.sid) {
+    queueSummary(summary, log, STORE_ADAPTER, {
+      off: process.env.METRICS_STORE === 'off',
+      queueFile: process.env.METRICS_STORE_QUEUE || '',
+      target: storeTarget(process.env.METRICS_STORE_TARGET),
+    });
+  }
+}
+
+// Материал приёма кладёт вызывающий во ВРЕМЕННЫЙ каталог и сам его не убирает:
+// приём отсоединён, и ждать его там некому. Значит убирает приём — за собой, в
+// конце. Каталог сносится только если он и правда наш: имя по маске вызывающего
+// и место под системным временным каталогом. Иначе прогон копил бы по каталогу
+// на каждую реплику Влада ровно там, где хуки держат состояние.
+function dropMaterial() {
+  try {
+    const dir = path.dirname(path.resolve(materialFile || ''));
+    if (!/^registry-ingest-/.test(path.basename(dir))) return;
+    if (path.dirname(dir) !== os.tmpdir()) return;
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    // Молчание здесь уже стоило 6590 каталогов: работу это не рвёт, но узнать о
+    // нём надо из следа, а не из `ls` во временном каталоге.
+    trace(`каталог материала не убран: ${err && err.message}`);
+  }
 }
 
 let code = 1;
@@ -186,5 +254,7 @@ try {
   code = main();
 } finally {
   if (markId) unmarkParsing(path.join(`${registryFile}.parsing`, markId));
+  requeueSummary();
+  dropMaterial();
 }
 process.exit(code);

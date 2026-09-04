@@ -37,10 +37,11 @@ import { randomBytes } from 'node:crypto';
 import { readEvent } from './lib/event.js';
 import { deny } from './lib/decide.js';
 import { hookOnce } from './lib/once.js';
-import {
-  isEphemeral, gitEphemeral, bashWriteTargets, cleanTarget,
-} from './lib/write-targets.js';
-import { lastInputTrace, exemptScopeFile, approvalRegistry } from './lib/paths.js';
+import { isEphemeral, ignoredEphemeral, touchesWorld } from './lib/write-targets.js';
+import { isIgnored } from './lib/repo-git.js';
+import { bashWriteTargets, cleanTarget } from './lib/write-targets-bash.js';
+import { toolScope } from './lib/tool-flags-claude.js';
+import { exemptScopeFile, approvalRegistry } from './lib/paths.js';
 import {
   waitForParsing, readRegistry, render, switchAt, appendLog,
 } from './lib/registry.js';
@@ -55,81 +56,20 @@ if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
 // Автономный прогон тоже не выход: его задание ложится в реестр целью, и правки
 // рутины сверяются с ним наравне со всеми.
 
-// Отладочный след последнего входа (эфемерный): по нему проверяются факты о
-// составе hook-входа (напр. поле permission_mode) без правки харнесса.
-try {
-  fs.writeFileSync(lastInputTrace('plan-gate'), raw);
-} catch { /* след не записался — на решение гейта это не влияет */ }
-
 // Craft-запись опознаётся по СУФФИКСУ имени, а не по полному: префикс MCP-сервера
 // Craft меняется на переподключении (mcp__Craft__… в одной сессии, mcp__‹uuid›__…
 // в следующей) — точное сравнение молча перестало бы гейтить на первой ротации.
 const isCraftWrite = /__craft_write$/.test(tool);
 const isFileEdit = !isCraftWrite && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool);
 const isBash = !isCraftWrite && tool === 'Bash';
-const isSubagent = ['Task', 'Agent', 'Workflow'].includes(tool);
 
 // Гейт стоит на правках МИРА: файлы, командная строка, база, внешние сервисы.
-// Всё, что мир не трогает, — не его дело. Отсюда два основания пройти, и у
-// каждого своё.
-//
-// Первое: инструмент только ЧИТАЕТ — менять ему нечего.
-const READING_TOOLS = new Set([
-  'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'BashOutput',
-  'TaskList', 'TaskGet', 'TaskOutput', 'ListAgents', 'ListSkills', 'ListPlugins',
-  'ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadNotifications',
-]);
-
-// Второе: инструмент правит ход САМОЙ СЕССИИ, а не мир. План, вопрос Владу,
-// список работы, расписание пробуждения — это состояние разговора: реестр про
-// них ничего не знает и знать не должен, а сверка спрашивала бы гейт про самого
-// себя. Тот же принцип уже записан для файлов: служебное состояние харнесса
-// эфемерно, и тудушки названы там прямым текстом.
-const SESSION_TOOLS = new Set([
-  'TaskCreate', 'TaskUpdate', 'TaskStop', 'ExitPlanMode', 'EnterPlanMode',
-  'AskUserQuestion', 'Skill', 'ScheduleWakeup', 'SendMessage', 'SendUserFile',
-  'ReportFindings', 'SuggestSkills', 'ShowOnboardingRolePicker',
-]);
-
-const READING_VERBS = 'get|list|read|search|fetch|show|describe|resolve|status|view|find|count|check';
-
-// Имя MCP-инструмента говорит само за себя, когда в нём стоит глагол чтения.
-// Это не догадка о поведении, а признак: сервер, который пишет, называет
-// операцию иначе.
-function mcpReads(name) {
-  const op = String(name).replace(/^mcp__.*?__/, '');
-  // Глагол стоит либо в начале имени (list_repos), либо на конце после
-  // подчёркивания (craft_read).
-  return new RegExp(`^(${READING_VERBS})(_|$)`, 'i').test(op)
-    || new RegExp(`_(${READING_VERBS})$`, 'i').test(op);
-}
-
-// Читающие подагенты названы поимённо: разведка и критика мира не трогают, а
-// гейт на их запуске стоил бы вызова модели на каждом плане.
-const READING_AGENTS = new Set([
-  'Explore', 'Plan', 'plan-critic', 'plan-critic-unit', 'plan-critic-seams',
-  'plan-critic-verdict', 'comment-analyzer', 'type-design-analyzer',
-  'silent-failure-hunter', 'typescript-reviewer', 'react-reviewer',
-  'pr-test-analyzer', 'claude-code-guide',
-]);
-
-// Обслуживание СОБСТВЕННОГО хода: подписаться на события своего PR, разбудить
-// себя проверкой через час, снять подписку, переименовать сессию. Мир от этого
-// не меняется — меняется то, когда и на что агент проснётся, и реестр про такие
-// вещи ничего не знает. Без этого правила гейт запирал агента ровно там, где он
-// обязан довести работу до зелёного: подписку и отложенную проверку не
-// пропускал, и красный PR оставался без присмотра.
-const SESSION_OPS = /(subscribe_pr_activity|send_later|_wakeup|set_session_(title|tags))$/;
-
-function touchesWorld() {
-  if (READING_TOOLS.has(tool) || SESSION_TOOLS.has(tool)) return false;
-  if (SESSION_OPS.test(tool)) return false;
-  if (isSubagent) return !READING_AGENTS.has(String(input.subagent_type || ''));
-  if (/^mcp__/.test(tool)) return !mcpReads(tool);
-  return true;
-}
-
-if (!isCraftWrite && !isFileEdit && !isBash && !touchesWorld()) process.exit(0);
+// Всё, что мир не трогает, — не его дело. Сам предикат живёт в write-targets.js
+// и имён инструментов не знает: область вызова ему приносит адаптер харнеса
+// (toolScope). По тому же предикату метрики решают, менял ли ход мир, и
+// разъехавшиеся копии дали бы поверхность, где одно и то же у гварда гейтится,
+// а у метрик не считается.
+if (!isCraftWrite && !isFileEdit && !isBash && !touchesWorld(toolScope(tool, input))) process.exit(0);
 
 // Предел описания правки. Раньше он был 2000 байт на заменяемый текст и 4000 на
 // новый и стоял из-за потолка в 128 КБ на один аргумент командной строки:
@@ -188,11 +128,6 @@ function nonEmptyFile(file) {
   } catch {
     return false;
   }
-}
-
-
-function relativeTo(fp) {
-  return fp.startsWith(`${PWD}/`) ? fp.slice(PWD.length + 1) : fp;
 }
 
 const classifier = classifierPath();
@@ -265,7 +200,7 @@ if (isFileEdit) {
   const fp = input.file_path || input.notebook_path || '';
   if (!fp) process.exit(0);
   if (isEphemeral(fp)) process.exit(0);
-  if (gitEphemeral(fp)) process.exit(0);
+  if (ignoredEphemeral(fp, isIgnored)) process.exit(0);
 
   // Текст правки по инструменту: Edit/Write — new_string/content, MultiEdit —
   // все edits[].new_string, NotebookEdit — new_source; без них классификатор
@@ -306,7 +241,7 @@ if (isBash) {
   const realTargets = targets.filter((rawTarget) => {
     const t = cleanTarget(rawTarget);
     if (!t) return false;
-    return !isEphemeral(t) && !gitEphemeral(t);
+    return !isEphemeral(t) && !ignoredEphemeral(t, isIgnored);
   });
   if (!realTargets.length) process.exit(0);
 
@@ -356,8 +291,6 @@ const cdesc = Buffer.concat([
   Buffer.from('инструмент: craft_write\nкоманда:\n', 'utf8'),
   headBytes(craftCmd, DESC_LIMIT),
 ]);
-const lowerIds = ids.map((id) => id.replace(/[A-F]/g, (c) => c.toLowerCase()));
-
 // Craft-запись сверяется тем же вопросом, что правки файлов и шелла: решает
 // реестр одобренного, а не совпадение идентификаторов блоков со списком целей.
 coverCheck(cdesc);
