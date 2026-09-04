@@ -42,6 +42,7 @@ side() {
       CRAFT_STATE_DIR="$st" CRAFT_SESSION_ID="$SID" CLAUDE_CODE_SESSION_ID="$SID" \
       CRAFT_METRICS_LOG="$st/metrics.jsonl" SESSION_ANCHOR_STATE="$st/anchor" \
       CRAFT_APPROVAL_REGISTRY="$st/approvals.jsonl" CRAFT_PLAN_CRITIC_MARKER="$st/critic.done" \
+      HOME="$st/home" CODEX_HOME="$st/codex" CLAUDE_PROJECT_DIR="$cwd" \
       CRAFT_PLAN_FILE="$PLAN" CRAFT_PLAN_SHOWN_MARKER="$st/plan-shown" \
       CRAFT_SERVICE_TURN_MARKER="$st/service-turn" ROUTINE_FACTS_MARKER="$st/routine-facts" \
       OBSERVE_BUFFER="$st/observe.log" FACT_GATE_STATE_DIR="$st" \
@@ -85,6 +86,8 @@ side() {
   # числом `unknown_events`.
   ev SessionEnd '"reason":"clear"'
   local sum="$st/metrics.jsonl.summary.json"
+  # Сводка, которая ЕСТЬ, но не читается, прежде давала пустую строку — и охраны,
+  # ищущие плохую примету, на ней молчали. Теперь это своя примета.
   if [ -f "$sum" ]; then
     node -e '
       const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -100,7 +103,7 @@ side() {
         incidents: s.incidents,
         unknown_events: s.unknown_events,
       }));
-    ' "$sum"
+    ' "$sum" 2>/dev/null || echo "СВОДКА НЕ ЧИТАЕТСЯ"
   else
     echo "СВОДКИ НЕТ"
   fi
@@ -115,29 +118,76 @@ runs() {
     "канал решений оборван|$(side "$1" next-stop broken)"
 }
 
+show() { printf '%s\n' "$1" | while IFS='|' read -r name json; do printf '%-28s%s\n' "$name:" "$json"; done; }
+json_of() { printf '%s\n' "$1" | sed -n "${2}p" | cut -d'|' -f2-; }
+
+# Охрана, которая ищет ПЛОХУЮ примету, молчит на пустоте: девятое ревью показало,
+# что сводка, которая есть, но не читается, проходила и самопроверку, и сверку.
+# Поэтому спрашивается НАЛИЧИЕ ожидаемого: три прогона, в каждом настоящая сводка.
+check_summary() { # check_summary <три строки> <чей чекаут>
+  local n=0 name json
+  while IFS='|' read -r name json; do
+    n=$((n + 1))
+    case "$json" in
+      *'"denies"'*) ;;
+      *) echo "фикстура: у $2 прогон «$name» не дал сводки: ${json:-пусто}"; return 1 ;;
+    esac
+  done <<EOF
+$1
+EOF
+  [ "$n" = 3 ] || { echo "фикстура: у $2 не три прогона, а $n"; return 1; }
+  return 0
+}
+
+# Событий без исхода быть не должно. Спрашивается ОТДЕЛЬНО, а не сравнением: поле
+# из сверки вынимается (у старого чекаута его нет вовсе — другая схема, а не
+# расхождение метрик), и без отдельного вопроса «числа совпали» прошло бы и на
+# сводке, где половина событий потерялась.
+check_unknown() { # check_unknown <три строки> <чей чекаут> <обязательно ли поле>
+  local name json
+  while IFS='|' read -r name json; do
+    case "$json" in
+      *'"unknown_events":0'*) ;;
+      *'"unknown_events":'*) echo "фикстура: у $2 в прогоне «$name» есть события без исхода"; return 1 ;;
+      *) [ "$3" = "нужно" ] && { echo "фикстура: у $2 в прогоне «$name» НЕТ поля unknown_events"; return 1; } ;;
+    esac
+  done <<EOF
+$1
+EOF
+  return 0
+}
+
+# Оборванный канал не должен давать НИКАКОЙ разницы: строки решения, признака и
+# замеров идут запасным путём в журнал метрик. Значит первый и третий прогоны
+# одного чекаута обязаны совпасть. Это и есть тот инвариант, ради которого
+# фикстуру писали, — и он держится на одном чекауте, то есть переживает слияние.
+check_broken() { # check_broken <три строки> <чей чекаут>
+  local a b
+  a="$(json_of "$1" 1)"
+  b="$(json_of "$1" 3)"
+  [ "$a" = "$b" ] && return 0
+  echo "фикстура: у $2 ОБОРВАННЫЙ КАНАЛ МЕНЯЕТ ЧИСЛА — запасной путь не спас"
+  echo "  ход продолжился:    $a"
+  echo "  канал оборван:      $b"
+  return 1
+}
+
 if [ -z "$OTHER" ]; then
   runs "$ROOT" | while IFS='|' read -r name json; do printf '%-28s%s\n' "$name:" "$json"; done
   exit 0
 fi
 
-# Самопроверка ОДНОГО чекаута: сравнивать не с чем, но два свойства проверяются и
-# так — сводка вообще сложилась и событий без исхода нет. Сравнение с базой живёт
-# ровно столько, сколько живёт база, а эти два держатся и после слияния, поэтому
-# в прогоне стоит именно самопроверка.
+# Самопроверка ОДНОГО чекаута: сравнивать не с чем, но три свойства проверяются и
+# так — сводка сложилась, событий без исхода нет, оборванный канал чисел не меняет.
+# Сверка с базой живёт ровно столько, сколько живёт база, а эти три держатся и
+# после слияния, поэтому в прогоне стоит именно самопроверка.
 if [ "$OTHER" = "--self" ]; then
   self="$(runs "$ROOT")"
-  if printf '%s\n' "$self" | grep -q 'СВОДКИ НЕТ'; then
-    echo "фикстура: СВОДКА НЕ СЛОЖИЛАСЬ"
-    printf '%s\n' "$self"
-    exit 1
-  fi
-  if printf '%s\n' "$self" | grep -q '"unknown_events":[1-9]'; then
-    echo "фикстура: ЕСТЬ СОБЫТИЯ БЕЗ ИСХОДА — сводка неполна"
-    printf '%s\n' "$self"
-    exit 1
-  fi
-  printf '%s\n' "$self" | while IFS='|' read -r name json; do printf '%-28s%s\n' "$name:" "$json"; done
-  echo "фикстура: сводка складывается, событий без исхода нет (три прогона)"
+  check_summary "$self" "чекаута" || { show "$self"; exit 1; }
+  check_unknown "$self" "чекаута" нужно || { show "$self"; exit 1; }
+  check_broken "$self" "чекаута" || exit 1
+  show "$self"
+  echo "фикстура: сводка складывается, событий без исхода нет, оборванный канал чисел не меняет (три прогона)"
   exit 0
 fi
 
@@ -153,26 +203,12 @@ fi
 mine="$(runs "$ROOT")"
 theirs="$(runs "$OTHER")"
 
-show() { printf '%s\n' "$1" | while IFS='|' read -r name json; do printf '%-28s%s\n' "$name:" "$json"; done; }
-
-# Прогон без сводки сравнивать нельзя. Две строки «СВОДКИ НЕТ» совпадают друг с
-# другом, и любая поломка среды — кривой путь, упавший node, сломанный диспетчер —
-# обращала бы приёмочную проверку в проход.
-if printf '%s\n%s\n' "$mine" "$theirs" | grep -q 'СВОДКИ НЕТ'; then
-  echo "фикстура: СВОДКА НЕ СЛОЖИЛАСЬ — сравнивать нечего"
-  show "$mine"; show "$theirs"
-  exit 1
-fi
-
-# События без исхода спрашиваются ОТДЕЛЬНО, а не сравнением: из сверки поле
-# вынимается (у старого чекаута его нет вовсе, и это другая схема, а не
-# расхождение метрик). Без этого утверждения «числа совпали» ничего не значило бы —
-# они совпали бы и на сводке, где половина событий потерялась.
-if printf '%s\n%s\n' "$mine" "$theirs" | grep -q '"unknown_events":[1-9]'; then
-  echo "фикстура: ЕСТЬ СОБЫТИЯ БЕЗ ИСХОДА — сводка неполна, сравнивать нечего"
-  show "$mine"; show "$theirs"
-  exit 1
-fi
+check_summary "$mine" "первого чекаута" || { show "$mine"; exit 1; }
+check_summary "$theirs" "второго чекаута" || { show "$theirs"; exit 1; }
+# Поле обязательно у ПЕРВОГО: он и есть проверяемая голова (у базы схемы нет).
+check_unknown "$mine" "первого чекаута" нужно || { show "$mine"; exit 1; }
+check_unknown "$theirs" "второго чекаута" необязательно || { show "$theirs"; exit 1; }
+check_broken "$mine" "первого чекаута" || exit 1
 
 strip() { sed 's/,"unknown_events":[0-9]*//'; }
 if [ "$(printf '%s\n' "$mine" | strip)" = "$(printf '%s\n' "$theirs" | strip)" ]; then

@@ -746,6 +746,45 @@ test('сшивка: доехавшая строка решения важнее 
   assert.equal(s.unknown_events, 1);
 });
 
+test('сшивка: доказательство доставки — ЗАМЕРЫ, а не любая строка канала', () => {
+  // Замеры диспетчер кладёт на каждом событии; признак и решение — нет. Считай
+  // доказательством любую строку, и событие, у которого доехал только признак,
+  // прочиталось бы как проход, хотя строка решения по нему потерялась.
+  const records = [
+    {
+      kind: 'pre', ts: line(1), turn: 1, occ: 'o1', disp: true, tool: 'Bash', id: 'c1', h: 'H1',
+    },
+    {
+      kind: 'flag', ts: line(1), occurrence: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool', flag: 'incident',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.unknown_events, 1, 'замеров нет — исход неизвестен, а не «проход»');
+});
+
+test('сшивка: дописанный контекст НЕ затирает отказ, в каком бы порядке ни легли строки', () => {
+  const base = {
+    kind: 'pre', ts: line(1), turn: 1, occ: 'o1', disp: true, tool: 'Bash', id: 'c1', h: 'H1',
+  };
+  const timing = {
+    kind: 'timing', ts: line(1), occurrence: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool', hooks: {},
+  };
+  const none = {
+    kind: 'decision', ts: line(1), occurrence: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+    hook: 'universal-что-нибудь-дописал', outcome: 'none', class: '',
+  };
+  const deny = {
+    kind: 'decision', ts: line(1), occurrence: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+    hook: 'universal-fact-gate', outcome: 'deny', class: 'fact-gate',
+  };
+  for (const order of [[none, deny], [deny, none]]) {
+    const s = summarize([base, timing, ...order], { sid: 's' });
+    assert.equal(s.denies.total, 1, `отказ обязан пережить порядок ${order.map((r) => r.outcome).join('→')}`);
+    assert.equal(s.denies.by_class['fact-gate'], 1);
+  }
+});
+
 test('сшивка: дописанный контекст — не решение, вызов считается прошедшим', () => {
   // Инжектор пишет исход `none`. Считать его отказом нельзя, но и «не allow» тоже:
   // тогда первый же инжектор на событии до вызова вычел бы вызов из ложных отказов

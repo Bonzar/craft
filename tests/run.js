@@ -702,8 +702,14 @@ function sweepLeftovers() {
   } catch {
     return;
   }
+  // Точное имя — по карте; производные (`….armed`, `….summary.json`) — перебором,
+  // но только среди тех, в чьё имя вообще попал наш pid: за полный прогон имён
+  // тысячи, а /tmp на рабочей машине большой.
+  const tag = `.${process.pid}.`;
   const mine = (name) => {
-    for (const made of tmpMade) if (name === made || name.startsWith(`${made}.`)) return true;
+    if (tmpMade.has(name)) return true;
+    if (!name.includes(tag)) return false;
+    for (const made of tmpMade) if (name.startsWith(`${made}.`)) return true;
     return false;
   };
   for (const name of names) {
