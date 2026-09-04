@@ -324,8 +324,31 @@ if ! day_file "$sb" 2026-09-02 | grep -q '"sid":"synth"'; then
   bad "$t" "сводка с харнесом не уехала: $out"
 elif [[ -e "$sb/queue.jsonl" ]]; then
   bad "$t" "очередь не опустела"
-elif grep -q '"reason":"no-harness"' "$sb/log.synth" 2>/dev/null; then
+elif [[ ! -s "$sb/log.synth" ]]; then
+  bad "$t" "журнала нет — по чему судить, назван ли пропуск, нечему"
+elif grep -q '"reason":"no-harness"' "$sb/log.synth"; then
   bad "$t" "сводка уехала, но пропуск всё равно назван строкой журнала"
+else ok "$t"; fi
+
+# --- P. нечитаемая сводка не выдаётся за сводку без харнеса -------------------
+# Предикат называет причину пропуска, и причина обязана быть ТОЙ, которая была.
+# Нечитаемая сводка — не «харнеса нет»: её пропуск называет своим исходом
+# `no-summary` уже store(), и предикат, записавший бы ей `no-harness`, выдал бы
+# догадку за факт. Без этого кейса такой предикат проходит оба кейса выше:
+# отличить его от верного они не могут.
+t="нечитаемая сводка называется своим исходом, а не пустым харнесом"
+sb="$(sandbox)"
+printf 'это не JSON\n' > "$sb/log.broken.summary.json"
+out="$(printf '{"hook_event_name":"Stop","session_id":"broken"}' \
+  | env CRAFT_METRICS_LOG="$sb/log.broken" METRICS_STORE_TARGET="$sb/work" \
+        METRICS_STORE_QUEUE="$sb/queue.jsonl" METRICS_STORE_INLINE=1 HOOK_ONCE=off \
+        node "$HOOK" 2>&1)"
+if [[ ! -s "$sb/log.broken" ]]; then
+  bad "$t" "исход не назван вовсе: журнал пуст: $out"
+elif grep -q '"reason":"no-harness"' "$sb/log.broken"; then
+  bad "$t" "нечитаемая сводка выдана за сводку без харнеса: $(grep '"reason":"no-harness"' "$sb/log.broken" | tail -1)"
+elif ! grep -q '"status":"no-summary"' "$sb/log.broken"; then
+  bad "$t" "исход нечитаемой сводки не назван: $(tail -1 "$sb/log.broken")"
 else ok "$t"; fi
 
 printf -- '---\n%d passed, %d failed\n' "$pass" "$fail"
