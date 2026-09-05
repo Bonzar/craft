@@ -21,9 +21,11 @@ const ADAPTERS = {
     mutates: /^git commit\b/.test(text),
     targets: text.includes('>') ? [text.split('>').pop().trim()] : [],
   }),
-  commandReads: (text) => (text.startsWith('смотрю ')
-    ? { reads: true, targets: [text.slice('смотрю '.length)] }
-    : { reads: false, targets: [] }),
+  commandReads: (text) => {
+    if (text.startsWith('смотрю ')) return { reads: true, proven: true, targets: [text.slice('смотрю '.length)] };
+    // «Разобрал и это не чтение» против «ничего не понял» — разные ответы.
+    return { reads: false, proven: text.startsWith('понятная'), targets: [] };
+  },
   ignored: () => false,
 };
 
@@ -91,8 +93,15 @@ test('команда: доказанное чтение даёт цели, не�
     factOf({}, { kind: 'command', text: 'смотрю /repo/a.js' }, ADAPTERS),
     { op: OPS.READ, targets: ['/repo/a.js'] },
   );
-  assert.equal(factOf({}, { kind: 'command', text: 'непонятная' }, ADAPTERS).op, '');
-  // Адаптера чтения нет — вопрос остался без ответа, и это имя, а не молчание.
+  // Разобрал и говорит «не чтение» — событие мира установлено, строки нет.
+  assert.equal(factOf({}, { kind: 'command', text: 'понятная команда' }, ADAPTERS).op, '');
+  // А вот «ничего не понял» молчанием быть не может: такая команда могла
+  // переписать пол-репозитория, и пустота выдала бы неизвестность за спокойствие.
+  assert.deepEqual(
+    factOf({}, { kind: 'command', text: 'непонятная' }, ADAPTERS),
+    { op: OPS.UNKNOWN, unsupported: 'command-effect' },
+  );
+  // Адаптера чтения нет вовсе — вопрос остался без ответа, и это тоже имя.
   assert.deepEqual(
     factOf({}, { kind: 'command', text: 'непонятная' }, { commandWrites: () => ({}) }),
     { op: OPS.UNKNOWN, unsupported: 'read-targets' },
@@ -213,9 +222,13 @@ test('отметка БОЛЬШЕ журнала читается как «жу�
 test('«журнала нет» — факт, «журнал не читается» — имя', () => {
   assert.deepEqual(
     readSignals('/нет-такого-каталога/journal.jsonl'),
-    { status: 'ok', records: [], size: 0 },
+    {
+      status: 'ok', records: [], size: 0, from: 0, end: 0,
+    },
   );
-  assert.deepEqual(readSignals(''), { status: 'ok', records: [], size: 0 });
+  assert.deepEqual(readSignals(''), {
+    status: 'ok', records: [], size: 0, from: 0, end: 0,
+  });
   // Каталог на месте файла: открыть его нельзя, и это не ENOENT.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'journal-unreadable-test.'));
   try {
@@ -232,5 +245,40 @@ test('битая строка журнала не роняет разбор со
     fs.appendFileSync(file, '{битое\n');
     appendFact(file, fact({ op: OPS.ERROR, tool: 'т', callId: 'c1' }, { text: 'упало' }));
     assert.deepEqual(readSignals(file).records.map((r) => r.text), ['упало']);
+  });
+});
+
+// Отметка из ПРОШЛОЙ жизни журнала (его снесли, подменили, он усох). Разбор
+// читает с начала — и обязан СКАЗАТЬ об этом, иначе держатель отметки, который
+// двигает её только вперёд, заклинит навсегда на одних и тех же строках.
+test('отметка больше журнала: читаем с начала И говорим об этом', () => {
+  withJournal([
+    fact({ op: OPS.ERROR, tool: 'т', callId: 'c1' }, { text: 'упало' }),
+  ], (file) => {
+    const answer = readSignals(file, 10 ** 6);
+    assert.equal(answer.records.length, 1);
+    assert.equal(answer.from, 0, 'фактическое начало чтения возвращается вызывающему');
+  });
+});
+
+// Конец разобранного — граница ПОСЛЕДНЕЙ ПОЛНОЙ строки, и считается она в
+// БАЙТАХ. Производитель дописывает журнал на каждом вызове, и конец хода приходит
+// сразу за одним из них: отметив недописанную строку разобранной, её сигнал
+// потеряли бы навсегда — разбор молча пропускает обрывок как битую строку.
+test('конец разобранного не встаёт посреди строки и считается в байтах', () => {
+  withJournal([
+    fact({ op: OPS.ERROR, tool: 'т', callId: 'c1' }, { text: 'первая' }),
+  ], (file) => {
+    const whole = readSignals(file);
+    assert.equal(whole.end, whole.size, 'дописанный журнал разобран целиком');
+    // Хвост без перевода строки — это недописанная строка, и в разобранное она
+    // не входит.
+    fs.appendFileSync(file, '{"op":"error","text":"недопис');
+    const torn = readSignals(file);
+    assert.equal(torn.end, whole.size, 'граница осталась на конце последней ПОЛНОЙ строки');
+    assert.ok(torn.size > torn.end, 'а размер файла уже больше');
+    // Кириллица: символьная длина здесь меньше байтовой, и смещение обязано быть
+    // байтовым — иначе горизонт уезжает назад, в середину разобранной строки.
+    assert.equal(whole.end, Buffer.byteLength(fs.readFileSync(file, 'utf8').split('\n')[0] + '\n', 'utf8'));
   });
 });

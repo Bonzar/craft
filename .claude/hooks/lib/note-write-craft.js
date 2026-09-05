@@ -5,6 +5,7 @@
 //
 // isNoteWrite(инструмент) → пишет ли этот вызов в базу заметок.
 // noteRef(вход) → адрес записи для формы вызова: блок базы, иначе пусто.
+import { commandWords } from './write-targets-bash.js';
 
 // MCP-инструмент Craft: имя сервера у каждого чекаута своё, поэтому смотрим на
 // хвост имени, а не на строку целиком.
@@ -18,6 +19,14 @@ export const isNoteWrite = (tool) => /__craft_write$/.test(String(tool || ''));
 export const noteRef = (input = {}) => {
   const direct = String(input.block_id || input.id || '');
   if (direct) return direct;
-  const found = /(?:^|\s)--id[=\s]+(["']?)([^\s"']+)\1/.exec(String(input.command || ''));
-  return found ? found[2] : '';
+  // Ключ ищется среди ТОКЕНОВ команды, а не в её тексте: `--id` внутри тела
+  // заметки (`--markdown "правил задачу --id 42"`) адресом записи не является, и
+  // по тексту — хоть сырому, хоть обезвреженному, — он им становился, потому что
+  // содержимое кавычек сохраняется. Токенизатор оставляет тело ОДНИМ словом.
+  const words = commandWords(input.command);
+  for (let i = 0; i < words.length; i += 1) {
+    if (words[i] === '--id' && words[i + 1]) return words[i + 1];
+    if (words[i].startsWith('--id=')) return words[i].slice('--id='.length);
+  }
+  return '';
 };

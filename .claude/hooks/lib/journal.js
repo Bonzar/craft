@@ -150,8 +150,13 @@ export function factOf(scope = {}, call = {}, adapters = {}) {
     if (typeof adapters.commandReads !== 'function') {
       return { op: OPS.UNKNOWN, unsupported: 'read-targets' };
     }
-    const { reads = false, targets = [] } = adapters.commandReads(String(call.text || '')) || {};
-    if (reads) return { op: OPS.READ, targets };
+    const answer = adapters.commandReads(String(call.text || '')) || {};
+    if (answer.reads) return { op: OPS.READ, targets: answer.targets || [] };
+    // Адаптер РАЗОБРАЛ команду и говорит: это не чтение. Тогда пустой `op`
+    // означает «события мира не было» — факт. А вот «не доказано» им означать
+    // нельзя: команда, про которую разбор ничего не понял, могла переписать
+    // пол-репозитория, и молчание выдало бы неизвестность за спокойствие.
+    if (answer.proven !== true) return { op: OPS.UNKNOWN, unsupported: 'command-effect' };
   }
   return { op: '' };
 }
@@ -169,12 +174,18 @@ export function factOf(scope = {}, call = {}, adapters = {}) {
 // отсутствие ответа, и оно называется именем. Без этого различения молчаливый
 // отказ чтения выглядел бы как спокойная сессия — то есть менял бы знак.
 export function readSignals(file, from = 0) {
-  if (!file) return { status: 'ok', records: [], size: 0 };
+  const empty = { status: 'ok', records: [], size: 0, from: 0, end: 0 };
+  if (!file) return empty;
   let size = 0;
+  let start = 0;
   let text = '';
   try {
     size = fs.statSync(file).size;
-    const start = Number.isFinite(from) && from > 0 && from <= size ? from : 0;
+    // Отметка больше файла — журнал начался заново; читаем с начала. Начало
+    // возвращается ВЫЗЫВАЮЩЕМУ: он держит отметку и двигает её только вперёд, и
+    // молчаливая подмена здесь оставила бы его с отметкой из прошлой жизни
+    // журнала — то есть заклинила бы его навсегда на одних и тех же строках.
+    start = Number.isFinite(from) && from > 0 && from <= size ? from : 0;
     const fd = fs.openSync(file, 'r');
     try {
       const buf = Buffer.alloc(size - start);
@@ -184,13 +195,24 @@ export function readSignals(file, from = 0) {
       fs.closeSync(fd);
     }
   } catch (error) {
-    if (error && error.code === 'ENOENT') return { status: 'ok', records: [], size: 0 };
-    return { ...unsupported('journal-read'), records: [], size: 0 };
+    if (error && error.code === 'ENOENT') return empty;
+    return { ...unsupported('journal-read'), records: [], size: 0, from: 0, end: 0 };
   }
 
   const records = [];
   eachJsonl(text, (entry) => {
     if (SIGNAL_OPS.includes(entry.op)) records.push(entry);
   });
-  return { status: 'ok', records, size };
+  // Конец ПОСЛЕДНЕЙ ПОЛНОЙ строки, а не размер файла. Производитель дописывает
+  // журнал на каждом вызове, и конец хода приходит сразу за одним из них: размер,
+  // снятый посреди строки, отметил бы её разобранной, а разбор её молча пропустил
+  // как битую — сигнал исчез бы навсегда.
+  // Длина считается в БАЙТАХ, а не в символах: смещения журнала байтовые, и на
+  // первом же не-ASCII тексте (а их тут большинство) символьная длина увела бы
+  // горизонт назад, в середину уже разобранной строки.
+  const cut = text.lastIndexOf('\n');
+  const end = cut < 0 ? start : start + Buffer.byteLength(text.slice(0, cut + 1), 'utf8');
+  return {
+    status: 'ok', records, size, from: start, end,
+  };
 }

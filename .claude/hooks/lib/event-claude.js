@@ -117,18 +117,34 @@ export function readEvent() {
   };
 }
 
-// Тело ошибки из ответа: у помеченного признаком оно лежит в содержимом, у прочих
-// — в самом поле ошибки. ФОРМА ОТВЕТА — форма харнеса, и разбирать её обязана
+// Тело ошибки из ответа. ФОРМА ОТВЕТА — форма харнеса, и разбирать её обязана
 // обёртка: хук, читающий `is_error`/`content` своими руками, привязан к Claude
 // ровно так же, как если бы это лежало в общей части, — только гвард имён туда не
-// смотрит, и привязка становится невидимой. Пустая строка значит «тела нет»;
-// «была ли ошибка» отвечает предикат ниже, а не длина этого текста.
+// смотрит, и привязка становится невидимой.
+//
+// Форма разбирается НЕЗАВИСИМО от предиката ниже, и это существенно. Предикат
+// отвечает на вопрос «есть ли в ответе ПРИЗНАК ошибки» и по построению ложен для
+// строки, массива блоков и объекта без своих полей. Но провал бывает объявлен
+// САМИМ СОБЫТИЕМ, и тогда тело лежит в ответе любой из этих форм: сцепив текст с
+// предикатом, мы выбрасывали бы его у самой частой формы провала и клали в журнал
+// «тела нет» при теле в руках.
+//
+// Пустая строка значит «тела нет»; «была ли ошибка» отвечает предикат, а не длина
+// этого текста.
 export function errorText(response) {
-  if (!responseIsError(response)) return '';
-  const marked = response.is_error === true || response.isError === true;
-  const body = marked ? (response.content ?? response.error ?? '') : (response.error ?? '');
-  if (body === undefined || body === null || body === false) return '';
-  return typeof body === 'string' ? body : JSON.stringify(body);
+  if (response === undefined || response === null || response === false) return '';
+  if (typeof response === 'string') return response;
+  // Ответ блоками: у инструмента их бывает несколько, текст лежит в каждом.
+  if (Array.isArray(response)) {
+    return response
+      .map((block) => (block && typeof block === 'object' ? errorText(block.text ?? block.content) : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (typeof response !== 'object') return String(response);
+  const body = response.content ?? response.error ?? '';
+  if (body === undefined || body === null || body === false || body === '') return '';
+  return typeof body === 'string' ? body : errorText(body) || JSON.stringify(body);
 }
 
 // Ошибка инструмента в ответе: is_error либо непустое поле error. Форма ответа —

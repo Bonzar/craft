@@ -577,6 +577,11 @@ const NEEDS_MATCHER = [
   // не писала». Поверхность обязана быть закреплена, а не подразумеваться.
   ['universal-journal', 'PostToolUse', 'Bash'],
   ['universal-journal', 'PostToolUseFailure', 'Bash'],
+  // И НЕ ТОЛЬКО на интерпретаторе: маршрут можно сузить матчером до подмножества
+  // инструментов, и тогда исчезает вся половина фактов чтения, ради которой
+  // журнал заведён, — а раннер зовёт хуки напрямую и этого не видит.
+  ['universal-journal', 'PostToolUse', 'Read'],
+  ['universal-journal', 'PostToolUse', 'mcp__Craft__craft_write'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
 

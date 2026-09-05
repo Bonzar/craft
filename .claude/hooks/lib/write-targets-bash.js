@@ -271,12 +271,6 @@ function rules() {
 
 const verdict = (readOnly, cause, offender) => ({ readOnly, cause, offender });
 
-// Обёртки запуска — из тех же правил, что судят читаемость: третий список этих
-// слов разъехался бы с ними молча.
-const GIT_LIKE_WRAPPERS = new Set([
-  'sudo', 'env', 'command', 'time', 'nice', 'ionice', 'nohup', 'stdbuf', 'builtin', 'timeout',
-]);
-
 // Операторы, по которым строка распадается на самостоятельные команды. Пайп в
 // этом же ряду: звено пайпа — такая же команда, и `cat a | tee out` пишет.
 const CHAIN_OPS = new Set(['&&', '||', ';', '|', '&', '|&']);
@@ -472,90 +466,165 @@ export function classifyCommand(command) {
 // а ложные отказы и есть то, чем гвард делают невыносимым.
 //
 // Доказательство берётся у classifyCommand выше: цели называются ТОЛЬКО у
-// команды, про которую доказано, что она ничего не пишет. Недоказанная не даёт
-// целей вовсе — не потому, что их нет, а потому что назвать их было бы догадкой.
+// команды, про которую доказано, что она ничего не пишет.
+//
+// РАЗБОР ИДЁТ ПО ТОКЕНАМ, а не по словам обезвреженного текста, и это не
+// педантизм. `stripQuoted` кавычки снимает, содержимое СОХРАНЯЯ, — многословный
+// образец распадался на слова, и `grep -rn "см. README.md" .` называл
+// прочитанным файл README.md, которого никто не открывал. Токенизатор оставляет
+// закавыченный аргумент ОДНИМ токеном; он же отделяет операторы от слов и
+// подстановку от операндов.
 //
 // ЧТО СЧИТАЕТСЯ ФАЙЛОВЫМ ОПЕРАНДОМ — знание про КАЖДУЮ команду, а не общее
-// правило «слово похоже на путь». Общее правило давало бы ЛОЖНЫЕ цели: у поиска
-// первый операнд — образец, и `foo.bar` из образца легло бы в журнал прочитанным
-// файлом. Асимметрия здесь жёсткая: пропущенная цель стоит агенту лишнего
-// чтения, а ЛОЖНАЯ разрешает править то, чего никто не читал.
-//
-// Отсюда два узких списка и умолчание «целей нет». Всё, чего в них нет (обход
-// каталогов, перечисления, подкоманды инструментов), целей чтения не даёт: их
-// операнды — каталоги и имена, а не прочитанное содержимое.
+// правило «слово похоже на путь». Асимметрия здесь жёсткая: пропущенная цель
+// стоит агенту лишнего чтения, а ЛОЖНАЯ разрешает править то, чего никто не
+// читал. Поэтому три сита подряд — список команд, таблица ключей со значением и
+// вид пути, — и умолчание «целей нет».
 
-// Все неключевые операнды суть файлы: `cat a b`, `head -20 lib/a.js`.
+// У этих команд ВСЕ неключевые операнды суть файлы: `cat a b`, `head -20 a.js`.
 const FILE_OPERANDS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'wc', 'od', 'xxd', 'hexdump',
   'strings', 'file', 'stat', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'shasum',
   'diff', 'cmp',
 ]);
 
-// Первый неключевой операнд — ОБРАЗЕЦ или ПРОГРАММА, файлы идут за ним:
+// У этих первый неключевой операнд — ОБРАЗЕЦ или ПРОГРАММА, файлы идут за ним:
 // `grep образец файл`, `sed -n 1,5p файл`.
 const PATTERN_THEN_FILES = new Set([
   'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk', 'jq', 'yq',
 ]);
 
-// Перенаправление: сам оператор и то, что за ним. Вход из файла (`< файл`) —
-// чтение, выход (`> файл`) целью чтения не является. У доказанно читающей команды
-// выход бывает только в пустоту (/dev/null), и cleanTarget его всё равно отсеет.
-const REDIRECT_WORD = /^[0-9]*(?:<<?|>>?|&>|>&|<&)$/;
+// Ключи, забирающие значение СЛЕДУЮЩИМ словом. Без этой таблицы значение занимает
+// слот образца, а сам образец уезжает в цели: у `grep -A 3 package.json src/a.js`
+// прочитанным файлом оказывался `package.json`, то есть образец.
+const SEARCH_VALUE_FLAGS = [
+  '-e', '-f', '-m', '-A', '-B', '-C', '-D', '-d', '--regexp', '--file', '--max-count',
+  '--after-context', '--before-context', '--context', '--include', '--exclude',
+  '--exclude-dir', '--exclude-from', '--label', '--color', '--colour',
+  '--binary-files', '--devices', '--directories',
+];
+const FLAG_TAKES_VALUE = new Map([
+  ['grep', SEARCH_VALUE_FLAGS], ['egrep', SEARCH_VALUE_FLAGS], ['fgrep', SEARCH_VALUE_FLAGS],
+  ['rg', SEARCH_VALUE_FLAGS], ['ag', SEARCH_VALUE_FLAGS], ['ack', SEARCH_VALUE_FLAGS],
+  ['sed', ['-l', '--line-length']],
+  ['awk', ['-v', '--assign', '-F', '--field-separator']],
+  ['jq', ['--arg', '--argjson', '--slurpfile', '--rawfile', '--indent', '--tab']],
+  ['yq', ['--arg', '--indent']],
+  ['head', ['-c', '-n', '--bytes', '--lines']],
+  ['tail', ['-c', '-n', '--bytes', '--lines', '--pid']],
+  ['nl', ['-b', '-d', '-f', '-h', '-i', '-l', '-n', '-s', '-v', '-w']],
+  ['od', ['-A', '-j', '-N', '-t', '-w']],
+  ['xxd', ['-c', '-g', '-l', '-s']],
+  ['diff', ['-U', '--unified', '-D', '--ifdef', '--label']],
+]);
 
-// Файловые операнды ОДНОГО куска команды.
-function readOperands(piece) {
-  const words = piece.trim().split(/\s+/).filter(Boolean);
-  let i = 0;
-  // Присваивания окружения и обёртки запуска впереди вызова его не отменяют — тем
-  // же правилом, что у разбора вызовов git.
-  while (i < words.length
-    && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || GIT_LIKE_WRAPPERS.has(words[i]))) i += 1;
-  const name = words[i] || '';
+// Ключи, которые САМИ несут образец: после них первый операнд — уже файл, и
+// съедать его как образец нельзя.
+const PATTERN_FLAGS = new Set(['-e', '-f', '--regexp', '--file']);
+
+// Похоже ли слово на ПУТЬ К ФАЙЛУ. Третье сито: числа (значения ключей), куски
+// образца, маркеры heredoc и прочее целями не становятся. Каталог целью чтения
+// тоже не является — рекурсивный поиск читает файлы под ним, а назвать их нечем,
+// и выдать каталог за прочитанный файл значило бы соврать.
+function looksLikePath(word) {
+  if (typeof word !== 'string' || word === '' || word.startsWith('-')) return false;
+  if (word.endsWith('/')) return false;
+  const base = word.slice(word.lastIndexOf('/') + 1);
+  if (base === '' || base === '.' || base === '..') return false;
+  return word.includes('/') || /\.[A-Za-z0-9_]{1,8}$/.test(base);
+}
+
+// Файловые операнды ОДНОЙ простой команды, разобранной в токены.
+function readOperandsOf(tokens, cfg) {
+  const inputs = [];
+  const plain = [];
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token && typeof token === 'object') {
+      if (token.op === '(') depth += 1;
+      else if (token.op === ')') depth = Math.max(0, depth - 1);
+      // Вход из файла — чтение. Выход и дескрипторы целями чтения не являются, и
+      // цель перенаправления забирается вместе с оператором.
+      else if (token.op === '<' || token.op === '>' || token.op === '>>') {
+        if (token.op === '<' && depth === 0 && typeof tokens[i + 1] === 'string') {
+          inputs.push(tokens[i + 1]);
+        }
+        i += 1;
+      }
+      continue;
+    }
+    // Содержимое подстановки — операнд ЧУЖОЙ команды, а не этой.
+    if (depth > 0 || token === '$') continue;
+    plain.push(token);
+  }
+
+  const list = dropWrappers(dropEnvPrefix(plain), cfg);
+  const name = list[0] || '';
   const all = FILE_OPERANDS.has(name);
-  if (!all && !PATTERN_THEN_FILES.has(name)) return [];
+  if (!all && !PATTERN_THEN_FILES.has(name)) return inputs;
+  const valued = new Set(FLAG_TAKES_VALUE.get(name) || []);
+  const out = [...inputs];
   let skip = !all;
-  const out = [];
-  for (i += 1; i < words.length; i += 1) {
-    const word = words[i];
-    if (REDIRECT_WORD.test(word)) {
-      const next = words[i + 1] || '';
-      i += 1;
-      if (word.includes('<') && !word.includes('&')) out.push(next);
+  for (let i = 1; i < list.length; i += 1) {
+    const word = list[i];
+    if (word.startsWith('-')) {
+      if (PATTERN_FLAGS.has(word)) skip = false;
+      if (valued.has(word)) i += 1;
       continue;
     }
-    // Приклеенное перенаправление (`<файл`, `2>файл`): у входа цель читается, у
-    // выхода слово целиком не операнд.
-    const glued = /^[0-9]*([<>])(.+)$/.exec(word);
-    if (glued) {
-      if (glued[1] === '<') out.push(glued[2]);
-      continue;
-    }
-    if (word.startsWith('-')) continue;
     if (skip) { skip = false; continue; }
-    out.push(word);
+    if (looksLikePath(word)) out.push(word);
   }
   return out;
 }
 
-// commandReads(текст) → {reads, targets}. `reads` — доказано ли, что команда
-// только читает; `targets` — что именно, насколько это разобрано.
+// Слова команды: только строки-токены, без операторов. Отдаётся наружу, потому
+// что тем же вопросом «какие тут слова на самом деле» задаётся адаптер базы
+// заметок: ключ внутри закавыченного тела заметки ключом не является, а
+// обезвреживание кавычек их содержимое СОХРАНЯЕТ и от этого не спасает.
+export function commandWords(cmd) {
+  try {
+    return parse(String(cmd || '')).filter((token) => typeof token === 'string');
+  } catch {
+    return [];
+  }
+}
+
+// commandReads(текст) → {reads, proven, targets}.
+//   reads   — доказано ли, что команда только читает;
+//   proven  — разобрана ли она вообще: «не доказано» и «доказано, что не чтение»
+//             для леджера РАЗНЫЕ ответы, и второй нельзя выдавать за первый;
+//   targets — что именно прочитано, насколько это разобрано.
 export function commandReads(cmd) {
   const text = String(cmd || '');
   // Пустая команда чтением не является: classifyCommand зовёт её читающей (ей
   // нечего запрещать), но строки журнала за ней не стоит.
-  if (text.trim() === '') return { reads: false, targets: [] };
-  if (classifyCommand(text).readOnly !== true) return { reads: false, targets: [] };
+  if (text.trim() === '') return { reads: false, proven: true, targets: [] };
+  const cfg = rules();
+  if (!cfg) return { reads: false, proven: false, targets: [] };
+  const answer = classifyCommand(text);
+  if (answer.readOnly !== true) {
+    return { reads: false, proven: answer.cause === 'mutates', targets: [] };
+  }
 
   // Разбор по КУСКАМ с тем же резолвом каталога, что у целей записи: `cd /repo &&
   // cat a.js` читает файл репозитория, а не текущего каталога.
-  const scan = stripQuoted(stripQuotedHeredocs(text));
+  let tokens;
+  try {
+    tokens = parse(text);
+  } catch {
+    return { reads: true, proven: true, targets: [] };
+  }
   const targets = [];
   let cwd = '';
-  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
-    for (const t of readOperands(piece)) targets.push(resolveTarget(cwd, t));
-    const cd = /(?:^|[ \t])cd[ \t]+(\/[^\s|&;()<>]*)/.exec(piece);
-    if (cd) cwd = cd[1].replace(/\/$/, '');
+  for (const piece of splitChain(tokens)) {
+    for (const t of readOperandsOf(piece, cfg)) targets.push(resolveTarget(cwd, t));
+    const plain = piece.filter((w) => typeof w === 'string');
+    const at = plain.indexOf('cd');
+    if (at === 0 && typeof plain[1] === 'string' && plain[1].startsWith('/')) {
+      cwd = plain[1].replace(/\/$/, '');
+    }
   }
-  return { reads: true, targets: targets.map(cleanTarget).filter(Boolean) };
+  return { reads: true, proven: true, targets: targets.map(cleanTarget).filter(Boolean) };
 }

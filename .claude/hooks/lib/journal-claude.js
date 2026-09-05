@@ -42,7 +42,10 @@ export function journalShape(tool, input = {}) {
   const field = READ_TOOL_PATH[tool];
   if (field) {
     const target = src[field];
-    return { kind: 'read', paths: target ? [String(target)] : [] };
+    // Поля нет — форма пустая: «читал, назвать нечем» скажет общая часть. Пустой
+    // список целей тут был бы неотличим от «читать нечего по природе».
+    if (target) return { kind: 'read', paths: [String(target)] };
+    return {};
   }
   if (isNoteWrite(tool)) return { kind: 'note', ref: noteRef(src) };
   const shape = callShape(tool, src);

@@ -187,3 +187,60 @@ test('цели записи чистятся тем же правилом, ка�
   assert.equal(tools.mutationOf(claude.toolScope('Bash', cmd), shape('Bash', cmd), {}).capability,
     'write-targets');
 });
+
+// Цели ЧТЕНИЯ у команды. Гоняется НАСТОЯЩИЙ адаптер интерпретатора, а не
+// заглушка: у кейсов общей части адаптер подставной, и вся эта сотня строк
+// (списки команд, ключи со значением, перенаправления, обёртки, подстановка,
+// резолв каталога) ими не трогалась вовсе.
+//
+// Порядок утверждений здесь не случаен: сперва ЛОЖНЫЕ цели, потом настоящие.
+// Асимметрия жёсткая — пропущенная цель стоит агенту лишнего чтения, а ложная
+// РАЗРЕШАЕТ гварду править то, чего никто не читал.
+test('цели чтения: ложных нет', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Закавыченный образец — ОДИН токен. По словам обезвреженного текста он
+  // рассыпался, и `README.md` из образца становился «прочитанным файлом».
+  assert.deepEqual(targets('grep -rn "см. README.md" .'), []);
+  assert.deepEqual(targets('cd /repo && grep -rn "см. README.md" .'), []);
+  // Значение ключа не занимает слот образца — иначе в цели уезжает сам образец.
+  assert.deepEqual(targets('grep -A 3 package.json src/index.js'), ['src/index.js']);
+  assert.deepEqual(targets('head -c 100 /repo/f.js'), ['/repo/f.js']);
+  // Каталог обхода прочитанным файлом не является: какие файлы под ним прочли,
+  // назвать нечем, и выдать каталог за файл значило бы соврать.
+  assert.deepEqual(targets('grep -rn образец /repo/src/'), []);
+  // Содержимое подстановки — операнды ЧУЖОЙ команды.
+  assert.deepEqual(targets('cat $(ls /repo/src)'), []);
+  // Маркер heredoc и дескрипторы целями не становятся.
+  assert.deepEqual(targets("cat <<'EOF'"), []);
+  assert.deepEqual(targets('cat /repo/f.js > /dev/null 2>&1'), ['/repo/f.js']);
+});
+
+test('цели чтения: настоящие называются', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  assert.deepEqual(targets('cat /repo/a.js /repo/b.js'), ['/repo/a.js', '/repo/b.js']);
+  assert.deepEqual(targets('sed -n 1,5p /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('grep образец /repo/a.js'), ['/repo/a.js']);
+  // Ключ, сам несущий образец: следующий операнд — уже файл, съедать его нельзя.
+  assert.deepEqual(targets('grep -e A -e B /repo/a.js'), ['/repo/a.js']);
+  // Путь с пробелом уцелел целиком — ровно потому, что разбор идёт токенами.
+  assert.deepEqual(targets('cat "мой файл.txt"'), ['мой файл.txt']);
+  assert.deepEqual(targets('wc -l < /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('LC_ALL=C cat /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('timeout 5 cat /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('cat a.js & cat b.js'), ['a.js', 'b.js']);
+  // Резолв каталогом, действующим В ЭТОМ МЕСТЕ цепочки.
+  assert.deepEqual(targets('cd /repo/lib && sed -n 1,5p a.js'), ['/repo/lib/a.js']);
+});
+
+// «Не доказано» и «доказано, что не чтение» — РАЗНЫЕ ответы: по первому журнал
+// обязан сказать имя, по второму имеет право промолчать.
+test('цели чтения: разобранность отделена от чтения', () => {
+  // Перенаправление в файл — ИЗВЕСТНАЯ запись, поэтому разбор про неё всё знает.
+  assert.deepEqual(bash.commandReads('printf x > /repo/o.txt'),
+    { reads: false, proven: true, targets: [] });
+  assert.equal(bash.commandReads('rm -rf /repo/x').proven, true, 'про удаление разбор всё знает');
+  assert.equal(bash.commandReads('node сборка.js').proven, false, 'а про чужой запуск — ничего');
+  assert.deepEqual(bash.commandReads(''), { reads: false, proven: true, targets: [] });
+  assert.equal(bash.commandReads('pwd').reads, true, 'читающая команда без файлов — всё равно чтение');
+  assert.deepEqual(bash.commandReads('pwd').targets, []);
+});

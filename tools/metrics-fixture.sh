@@ -78,6 +78,7 @@ side() {
       CRAFT_PLAN_FILE="$PLAN" CRAFT_PLAN_SHOWN_MARKER="$st/plan-shown" \
       CRAFT_SERVICE_TURN_MARKER="$st/service-turn" ROUTINE_FACTS_MARKER="$st/routine-facts" \
       CRAFT_JOURNAL_LOG="$st/journal.jsonl" INSTINCT_FLUSH_MARKER="$st/instinct-flush.done" \
+      INSTINCT_FLUSH_STATE="$st/instinct-flush.state" \
       FACT_GATE_STATE_DIR="$st" \
       PLAN_CLASSIFIER=off METRICS_STORE=off HOOK_ONCE=off SYNC_SYSTEM=off CRAFT_AUTONOMOUS="$AUTO" \
       node "$repo/.claude/hooks/dispatch.js" universal >/dev/null 2>&1
