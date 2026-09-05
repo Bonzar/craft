@@ -582,9 +582,13 @@ export function classifyCommand(command) {
 // У этих команд ВСЕ неключевые операнды суть файлы: `cat a b`, `head -20 a.js`.
 const FILE_OPERANDS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'wc', 'od', 'xxd', 'hexdump',
-  'strings', 'file', 'stat', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'shasum',
+  'strings', 'file', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'shasum',
   'diff', 'cmp',
 ]);
+// `stat` в этот список НЕ входит: он читает метаданные, а не содержимое, и по
+// смыслу гварда «не правь того, чего не читал» назвать его файл прочитанным
+// значило бы разрешить правку того, чего агент не открывал. `file` оставлен: он
+// действительно читает начало файла.
 
 // У этих первый неключевой операнд — ОБРАЗЕЦ или ПРОГРАММА, файлы идут за ним:
 // `grep образец файл`, `sed -n 1,5p файл`.

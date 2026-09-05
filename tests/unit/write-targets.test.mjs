@@ -361,3 +361,10 @@ test('цели чтения: нераскрытое и неразвёрнуто�
   // А через `&&` переход по-прежнему переносится, даже когда дальше есть пайп.
   assert.deepEqual(targets('cd /repo && cat a.js | grep x'), ['/repo/a.js']);
 });
+
+// Метаданные — не содержимое. Гвард «не правь того, чего не читал» на цели от
+// `stat` разрешил бы правку файла, который агент не открывал.
+test('чтение метаданных прочитанным файлом не делает', () => {
+  assert.deepEqual(bash.commandReads('stat /repo/a.js').targets, []);
+  assert.deepEqual(bash.commandReads('cat /repo/a.js').targets, ['/repo/a.js']);
+});
