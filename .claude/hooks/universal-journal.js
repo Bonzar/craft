@@ -53,7 +53,15 @@ import { isIgnored } from './lib/repo-git.js';
 // идёт вопрос «игнорирует ли путь репозиторий».
 const ADAPTERS = {
   commandWrites: (text) => ({ mutates: gitMutates(text), targets: commandTargets(text) }),
-  commandReads,
+  // Доказательство «команда ничего не пишет» спрашивается ПЕРВЫМ, и на правках
+  // репозитория оно ошибается: в словаре читаемости `tag` и `remote` числятся
+  // читающими подкомандами, а `git tag v2.0` и `git remote add` — записи, про
+  // которые это знает АДАПТЕР GIT. Развести их — дело обёртки, которая собирает
+  // адаптеры: она одна видит обоих. Иначе адаптер git по этим подкомандам
+  // становится мёртвым кодом, а запись ложится в журнал чтением.
+  commandReads: (text) => (gitMutates(text)
+    ? { reads: false, proven: true, targets: [] }
+    : commandReads(text)),
   ignored: isIgnored,
 };
 

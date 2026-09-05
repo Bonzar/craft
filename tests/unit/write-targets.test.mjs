@@ -272,3 +272,39 @@ test('цели чтения: каталог и нераскрытая перем
   // Литерал в одинарных кавычках переменной не является и целей не отменяет.
   assert.deepEqual(targets("grep -n 'literal $HOME' /repo/a.js"), ['/repo/a.js']);
 });
+
+// Формы, в которых разбор ВЫДУМЫВАЛ прочитанный файл. Каждая — «разрешение
+// править непрочитанное», и каждую нашли отдельным кругом ревью.
+test('цели чтения: тело heredoc, переход каталога и правка на месте', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Тело heredoc словами команды не является, а токенизатор их не разделяет:
+  // упомянутый в тексте файл становился прочитанным. Агент печатает через
+  // heredoc постоянно.
+  assert.deepEqual(targets('cat <<EOF\nсмотри README.md подробнее\nEOF'), []);
+  assert.deepEqual(targets("cat <<'MSG'\nfix lib/journal.js first\nMSG"), []);
+  assert.deepEqual(targets('grep foo <<< "text with a.js"'), []);
+  assert.deepEqual(targets('diff <(echo config.yaml) other.txt'), []);
+
+  // Неабсолютный переход: каталог сменился, а куда — неизвестно, и держаться за
+  // прежний значит приклеивать его к чужим путям.
+  assert.deepEqual(targets('cd /repo && cd sub && cat a.js'), ['a.js']);
+  // Подоболочка меняет каталог только внутри себя.
+  assert.deepEqual(targets('(cd /tmp) && cat a.js'), ['a.js']);
+  // А обычный переход по-прежнему резолвит.
+  assert.deepEqual(targets('cd /repo/lib && sed -n 1,5p a.js'), ['/repo/lib/a.js']);
+
+  // Правка на месте с суффиксом ключа — не чтение: доказательство читаемости
+  // сверяет запрещённые ключи точным равенством и эту форму пропускает.
+  assert.deepEqual(bash.commandReads('sed -i.bak s/a/b/ /repo/README.md'),
+    { reads: false, proven: false, targets: [] });
+  assert.deepEqual(bash.commandReads('sed --in-place=.bak s/a/b/ /repo/README.md'),
+    { reads: false, proven: false, targets: [] });
+  // А `sed -n` остаётся чтением.
+  assert.equal(bash.commandReads('sed -n 1,5p /repo/a.js').reads, true);
+
+  // Обход каталогов сравнением: каталог прочитанным файлом не является.
+  assert.deepEqual(targets('diff -r lib/old lib/new'), []);
+  // Ключи, у которых значение крепится только через `=`, чужого слова не едят.
+  assert.deepEqual(targets('grep --color foo a.js'), ['a.js']);
+  assert.deepEqual(targets('jq --tab . data.json'), ['data.json']);
+});

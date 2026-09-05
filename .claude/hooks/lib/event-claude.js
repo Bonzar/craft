@@ -131,13 +131,28 @@ export function readEvent() {
 //
 // Пустая строка значит «тела нет»; «была ли ошибка» отвечает предикат, а не длина
 // этого текста.
-export function errorText(response) {
-  if (response === undefined || response === null || response === false) return '';
+export function errorText(response, depth = 0) {
+  // Глубина ограничена: ответ приходит извне, и циклическая или очень вложенная
+  // ссылка иначе роняет весь хук — а зовут отсюда без перехвата.
+  if (depth > 8) return '';
+  if (response === undefined || response === null) return '';
   if (typeof response === 'string') return response;
-  // Ответ блоками: у инструмента их бывает несколько, текст лежит в каждом.
+  // Булево телом не является: `{error: true}` значит «ошибка была», и выдать за
+  // текст слово «true» — та же подделка, что JSON-дамп.
+  if (typeof response === 'boolean') return '';
+  // Ответ блоками: у инструмента их бывает несколько, текст лежит в каждом. Блок
+  // бывает и голой строкой, и вложенным списком — оба несут тело, и терять их
+  // из-за формы нельзя.
   if (Array.isArray(response)) {
     return response
-      .map((block) => (block && typeof block === 'object' ? errorText(block.text ?? block.content) : ''))
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (Array.isArray(block)) return errorText(block, depth + 1);
+        if (block && typeof block === 'object') {
+          return errorText(block.text, depth + 1) || errorText(block.content, depth + 1);
+        }
+        return '';
+      })
       .filter(Boolean)
       .join('\n');
   }
@@ -145,9 +160,9 @@ export function errorText(response) {
   // Пустое содержимое НЕ съедает непустую ошибку: `??` проваливается только на
   // null и undefined, и `{content:'', error:'…'}` терял текст, который был в
   // руках.
-  const first = errorText(response.content);
+  const first = errorText(response.content, depth + 1);
   if (first) return first;
-  const second = errorText(response.error);
+  const second = errorText(response.error, depth + 1);
   if (second) return second;
   // Тела не нашлось. Свалить сюда JSON всего ответа нельзя дважды: это выдумка на
   // месте имени недостающего, и через неё в журнал уезжало бы содержимое ответа

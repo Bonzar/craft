@@ -31,9 +31,7 @@
 // (gate-exempt-pages.txt), исключение закреплено в «Обслуживании памяти».
 // Анти-цикл: stop_hook_active в событии → молчим (не блокируем собственный
 // повторный Stop). Fail quiet.
-//
-// Уступки второму вызову здесь нет намеренно, как и у прежней версии: блок и так
-// одноразовый по признаку сигналов, а повторный Stop проходит.
+
 import fs from 'node:fs';
 import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';

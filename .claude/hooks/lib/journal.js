@@ -57,6 +57,9 @@ export const SIGNAL_OPS = Object.freeze([OPS.ERROR, OPS.INCIDENT]);
 // строки: сигнал ложится одной строкой, и длина у него ограничена.
 export function head(text, limit) {
   const all = Buffer.from(`${String(text ?? '')}\n`, 'utf8');
+  // Неположительный лимит — пусто. Иначе отрицательный конец у среза буфера
+  // отсчитывается ОТ КОНЦА, и «обрежь до нуля» отдавало бы почти весь текст.
+  if (!Number.isFinite(limit) || limit <= 0) return '';
   let end = Math.min(all.length, limit);
   // Срез мог прийтись на СЕРЕДИНУ символа: байты продолжения (10xxxxxx) в начале
   // отброшенного хвоста значат ровно это, и надо отступить к его началу. Иначе

@@ -47,3 +47,23 @@ test('«была ли ошибка» и «есть ли тело» — разн�
   assert.equal(responseIsError({ content: 'вызов не состоялся' }), false);
   assert.equal(errorText({ content: 'вызов не состоялся' }), 'вызов не состоялся');
 });
+
+// Формы ответа, на которых разбор тела ошибки терял текст или падал.
+test('тело ошибки достаётся и из списка строк, и из вложенного списка', () => {
+  assert.equal(errorText(['boom', 'again']), 'boom\nagain', 'список строк');
+  assert.equal(errorText([[{ text: 'deep' }]]), 'deep', 'список списков');
+});
+
+test('булево телом не является, а цикл не роняет разбор', () => {
+  // `{error: true}` значит «ошибка была»; выдать за текст слово «true» — та же
+  // подделка, что и JSON-дамп.
+  assert.equal(errorText({ error: true }), '');
+  // Ответ приходит извне, и звать разбор без перехвата можно только если он сам
+  // не уходит в бесконечность.
+  const looped = {};
+  looped.content = looped;
+  assert.equal(errorText(looped), '');
+  let deep = { content: 'дно' };
+  for (let i = 0; i < 5000; i += 1) deep = { content: deep };
+  assert.doesNotThrow(() => errorText(deep));
+});
