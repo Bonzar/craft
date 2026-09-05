@@ -117,6 +117,20 @@ export function readEvent() {
   };
 }
 
+// Тело ошибки из ответа: у помеченного признаком оно лежит в содержимом, у прочих
+// — в самом поле ошибки. ФОРМА ОТВЕТА — форма харнеса, и разбирать её обязана
+// обёртка: хук, читающий `is_error`/`content` своими руками, привязан к Claude
+// ровно так же, как если бы это лежало в общей части, — только гвард имён туда не
+// смотрит, и привязка становится невидимой. Пустая строка значит «тела нет»;
+// «была ли ошибка» отвечает предикат ниже, а не длина этого текста.
+export function errorText(response) {
+  if (!responseIsError(response)) return '';
+  const marked = response.is_error === true || response.isError === true;
+  const body = marked ? (response.content ?? response.error ?? '') : (response.error ?? '');
+  if (body === undefined || body === null || body === false) return '';
+  return typeof body === 'string' ? body : JSON.stringify(body);
+}
+
 // Ошибка инструмента в ответе: is_error либо непустое поле error. Форма ответа —
 // тоже форма харнеса, поэтому предикат живёт здесь, а общая часть получает от
 // обёртки готовое булево.

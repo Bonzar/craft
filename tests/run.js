@@ -178,6 +178,7 @@ function makeState() {
     icmark,
     journal: tmpName('journal-test'),
     flushmark: tmpName('instinct-flush-test'),
+    flushstate: tmpName('instinct-flush-state-test'),
     rfmark: tmpName('routine-facts-test'),
     planpath: tmpName('plan-file-test'),
     criticmark: tmpName('plan-critic-test'),
@@ -197,6 +198,7 @@ function makeState() {
     decisions: tmpName('decisions-test'),
     tmphome,
     metricsdefault: path.join(tmphome, 'metrics.default.jsonl'),
+    journaldefault: path.join(tmphome, 'journal.default.jsonl'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
@@ -207,6 +209,7 @@ function makeState() {
     // сигналы читают чужие строки.
     CRAFT_JOURNAL_LOG: s.journal,
     INSTINCT_FLUSH_MARKER: s.flushmark,
+    INSTINCT_FLUSH_STATE: s.flushstate,
     FACT_GATE_STATE_DIR: s.fgdir,
     ROUTINE_FACTS_MARKER: s.rfmark,
     CRAFT_PLAN_FILE_MARKER: s.planpath,
@@ -291,7 +294,7 @@ function siblings(registry) {
 function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
-    `${s.marker}.plans`, s.journal, s.flushmark, s.rfmark, s.planpath,
+    `${s.marker}.plans`, s.journal, s.flushmark, s.flushstate, s.rfmark, s.planpath,
     s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
@@ -347,8 +350,15 @@ function subst(value, s) {
   // производителя журнала, и им же кейс наводит ASSERT_FILE на тот файл, куда
   // пишет хук.
   //
-  // {FLUSHMARK} — отметка инстинкт-контура: ею кейс задаёт предусловие «сигналы
-  // до этого места уже разобраны».
+  // {FLUSHMARK} — метка агента «разбор сделан»; {FLUSHSTATE} — состояние самого
+  // хука (докуда разобрано и докуда выдано). Они РАЗНЫЕ намеренно: горизонт
+  // двигает только хук, и кейсы обязаны бить в те же два файла.
+  //
+  // {JOURNAL_DEFAULT} — путь, который хук построил бы САМ, если бы периметр по
+  // сессии сняли. По нему кейс доказывает, что записи НЕ БЫЛО: свой {JOURNAL}
+  // тут не годится — при пустом переопределении хук о нём и не знал бы, и
+  // «файла нет» зеленело бы тавтологией. Тем же приёмом и по той же причине
+  // устроен {METRICS_DEFAULT}.
   //
   // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
   // не переопределён. По нему кейс доказывает, что записи не было: свой
@@ -360,8 +370,10 @@ function subst(value, s) {
     .split('{CODEXHOME}').join(s.codexhome)
     .split('{METRICS_DEFAULT}').join(s.metricsdefault)
     .split('{METRICS}').join(s.metrics)
+    .split('{JOURNAL_DEFAULT}').join(s.journaldefault)
     .split('{JOURNAL}').join(s.journal)
     .split('{FLUSHMARK}').join(s.flushmark)
+    .split('{FLUSHSTATE}').join(s.flushstate)
     .split('{DECISIONS}').join(s.decisions);
 }
 
@@ -425,6 +437,20 @@ function runPass(c) {
     if (setupList) step = subst(JSON.stringify(setupList[i] ?? null), s);
     runHook(sScript, step && step !== 'null' ? step : input, setupEnv);
   });
+
+  // `seed` — файлы, которые кладутся ПОСЛЕ подготовки и ДО прогона: путь →
+  // содержимое, с теми же подстановками. Порядок именно такой, потому что этим
+  // выражается АКТ АГЕНТА между двумя ходами: подготовка гоняет настоящие хуки и
+  // оставляет их состояние, посев добавляет то, что сделал агент (пустая метка
+  // «разобрал»), и лишь потом идёт проверяемый ход. Сеять раньше подготовки
+  // значило бы менять порядок событий на обратный.
+  for (const [file, body] of Object.entries(c.seed || {})) {
+    const target = subst(file, s);
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, subst(String(body), s));
+    } catch { /* посев не лёг — кейс упадёт на своём исходе, а не молча */ }
+  }
 
   // `repeat: N` — тот же вход подаётся N раз (хуки, которые отказывают один раз:
   // проверяется ответ ПОСЛЕДНЕГО вызова).
@@ -546,6 +572,11 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
   ['universal-session-anchor', 'PreToolUse', 'Bash'],
   ['universal-session-anchor', 'PostToolUse', 'AskUserQuestion'],
+  // Производитель журнала: удали его из таблицы — прогон останется зелёным,
+  // журнал будет пуст, и все читатели фазы 2 увидят «сессия ничего не читала и
+  // не писала». Поверхность обязана быть закреплена, а не подразумеваться.
+  ['universal-journal', 'PostToolUse', 'Bash'],
+  ['universal-journal', 'PostToolUseFailure', 'Bash'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
 

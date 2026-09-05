@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// PostToolUse hook (все инструменты): ЖУРНАЛ СОБЫТИЙ СЕССИИ. Строка на каждое
-// чтение, строка на каждую запись и строка на каждую ошибку инструмента.
+// PostToolUse / PostToolUseFailure hook (все инструменты): ЖУРНАЛ СОБЫТИЙ СЕССИИ.
+// Строка на каждое чтение, строка на каждую запись и строка на каждую ошибку
+// инструмента.
 //
 // Зачем. Читатели слоя — гвард «не правь то, чего не читал» и сборка набора
 // изменений в базе заметок — обязаны брать факты из ОДНОГО места, одинакового у
@@ -9,8 +10,9 @@
 // (инструмент, вход, идентификатор вызова) плюс то, что даёт обёртка.
 //
 // Разбора «что за операция и над чем» здесь нет: область вызова и его форму
-// приносит адаптер харнеса (journal-claude.js), цели команды — адаптер
-// интерпретатора, а решает по ним общая часть (lib/journal.js). Хук — только
+// приносит адаптер харнеса (journal-claude.js), цели и доказательство чтения —
+// адаптер интерпретатора, а решает по ним общая часть (lib/journal.js). Формы
+// ОТВЕТА хук тоже не разбирает: её знает обёртка (errorText). Хук — только
 // проводка: собрать адаптеры, спросить факт, положить строку.
 //
 // Сюда же слит прежний СИГНАЛЬНЫЙ БУФЕР (universal-observe-buffer): ошибка
@@ -21,27 +23,37 @@
 // успел сделать, и записать ему `write` значило бы назвать фактом догадку.
 //
 // Стоит СРАЗУ ЗА наблюдателем и по той же причине: первое решение цепочки её
-// обрывает, и производитель, стоящий последним, не звался бы ровно там, где
-// что-то пошло не так.
+// обрывает, и производитель фактов, стоящий последним, не звался бы ровно там,
+// где что-то пошло не так.
 //
-// Уступки второму вызову здесь нет намеренно — её не было и у буфера: лишняя
-// строка безобиднее пропущенной. Fail quiet: сломанный журнал ход не трогает.
-import { readEvent, responseIsError } from './lib/event-claude.js';
+// Уступка второму вызову ОБЯЗАТЕЛЬНА, в отличие от прежнего буфера. Буфер копил
+// сигналы, и лишняя строка в нём была безобиднее пропущенной; журнал — ЛЕДЖЕР, и
+// лишняя строка в нём это ложный факт: при двойной регистрации (проектный и
+// пользовательский контуры диспетчера) один вызов лёг бы дважды, сборка изменений
+// посчитала бы файл дважды, а счёт сигналов удвоился бы. Ключ уступки — событие и
+// идентификатор вызова, и у события после вызова он есть всегда.
+//
+// Fail quiet: сломанный журнал ход не трогает. Но НЕ молча: всё, чего не хватило
+// — факта, формы, адреса, самой записи, — называется именем в служебный поток.
+import { readEvent, responseIsError, errorText } from './lib/event-claude.js';
 import { EVENTS, missingFact, unsupported } from './lib/event.js';
 import {
   OPS, fact, appendFact, factOf, head,
 } from './lib/journal.js';
 import { journalShape } from './lib/journal-claude.js';
 import { toolScope } from './lib/tool-flags-claude.js';
-import { commandTargets } from './lib/write-targets-bash.js';
+import { hookOnce } from './lib/once.js';
+import { commandTargets, commandReads } from './lib/write-targets-bash.js';
 import { gitMutates } from './lib/write-targets-git.js';
 import { isIgnored } from './lib/repo-git.js';
 
-// Адаптеры инструментов для общей части — те же, что у наблюдателя: команда
-// интерпретатора даёт цели записи, git — правку, которая целями не видна, третьим
+// Адаптеры инструментов для общей части. Команда интерпретатора разбирается
+// дважды и по-разному: `commandWrites` отвечает «что она пишет и куда»,
+// `commandReads` — «доказано ли, что она только читает, и что именно». Третьим
 // идёт вопрос «игнорирует ли путь репозиторий».
 const ADAPTERS = {
   commandWrites: (text) => ({ mutates: gitMutates(text), targets: commandTargets(text) }),
+  commandReads,
   ignored: isIgnored,
 };
 
@@ -53,7 +65,8 @@ const { tool, input, response } = ev;
 // строка про него была бы не фактом, а намерением, выданным за факт. Условие
 // стоит здесь, а не держится на одной регистрации: маршрут меняют, и тогда
 // молчаливо журналировался бы отказ.
-if (ev.event !== EVENTS.POST_TOOL) process.exit(0);
+const failed = ev.event === EVENTS.POST_TOOL_FAILURE;
+if (ev.event !== EVENTS.POST_TOOL && !failed) process.exit(0);
 
 // Факт `journal` — путь, КУДА писать. Его даёт обёртка; нет его (сессии нет
 // вовсе) — ответ `unsupported` С ИМЕНЕМ в служебный поток, а не молчаливый
@@ -67,26 +80,34 @@ if (missing) {
 const log = ev.journal;
 
 if (!tool) process.exit(0);
+if (!hookOnce(ev.raw, ev.core, import.meta.url)) process.exit(0);
+
+// Строка не легла — журнал, в который не пишется, снаружи неотличим от журнала
+// сессии, которая ничего не делала. Читатель на такой пустоте запретит правку
+// прочитанного файла, поэтому пропуск называется вслух.
+function put(record) {
+  if (!appendFact(log, record)) {
+    process.stderr.write('[journal] unsupported: journal-write\n');
+  }
+}
 
 const at = Date.now();
 const base = { tool, callId: ev.call_id, at };
 
-// Ошибка инструмента опознаётся предикатом ОБЁРТКИ: форма ответа — форма
-// харнеса, и журнал с метриками обязаны считать ошибкой одно и то же.
-// Не-объект в ответе ошибкой не является: строка или число — не тот ответ, в
-// котором ищут ошибку.
-const shaped = response !== null && typeof response === 'object' && !Array.isArray(response);
-if (shaped && responseIsError(response)) {
-  // Откуда брать текст, решает форма ответа: у помеченного признаком ошибки он
-  // лежит в содержимом, у прочих — в самом поле ошибки. Голова 300 байт — как у
-  // прежнего буфера: строки читает дистиллятор, и менять их длину на переезде
-  // незачем.
-  const marked = response.is_error === true || response.isError === true;
-  const body = marked
-    ? (response.content ?? response.error ?? '')
-    : (response.error ?? '');
-  const text = head(typeof body === 'string' ? body : JSON.stringify(body), 300);
-  if (text) appendFact(log, fact({ ...base, op: OPS.ERROR }, { text }));
+// Ошибка инструмента. Опознаёт её предикат ОБЁРТКИ, а тело достаёт оттуда же:
+// форма ответа — форма харнеса, и хук, разбирающий её сам, привязан к Claude
+// ровно так же, как если бы это лежало в общей части, — только гвард имён в хуки
+// не смотрит, и привязка стала бы невидимой. Голова 300 байт — как у прежнего
+// буфера: строки читает дистиллятор, и менять их длину на переезде незачем.
+//
+// Провал, пришедший ОТДЕЛЬНЫМ событием, — такая же ошибка: ответа у него может не
+// быть вовсе, и сам факт провала от этого фактом быть не перестаёт.
+if (failed || responseIsError(response)) {
+  const text = head(errorText(response), 300);
+  // Тела нет — строка всё равно ложится: провал СЛУЧИЛСЯ, и потерять его целиком
+  // из-за пустого текста значило бы промолчать про сигнал. Теряется только тело,
+  // и оно названо именем.
+  put(fact({ ...base, op: OPS.ERROR }, text ? { text } : { unsupported: 'error-text' }));
   process.exit(0);
 }
 
@@ -96,6 +117,7 @@ if (shaped && responseIsError(response)) {
 const what = factOf(toolScope(tool, input), journalShape(tool, input), ADAPTERS);
 if (!what.op) process.exit(0);
 
-appendFact(log, fact({ ...base, op: what.op }, what.op === OPS.UNKNOWN
-  ? { unsupported: what.unsupported }
-  : { targets: what.targets }));
+const extra = {};
+if (what.targets) extra.targets = what.targets;
+if (what.unsupported) extra.unsupported = what.unsupported;
+put(fact({ ...base, op: what.op }, extra));

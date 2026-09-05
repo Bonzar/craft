@@ -271,6 +271,12 @@ function rules() {
 
 const verdict = (readOnly, cause, offender) => ({ readOnly, cause, offender });
 
+// Обёртки запуска — из тех же правил, что судят читаемость: третий список этих
+// слов разъехался бы с ними молча.
+const GIT_LIKE_WRAPPERS = new Set([
+  'sudo', 'env', 'command', 'time', 'nice', 'ionice', 'nohup', 'stdbuf', 'builtin', 'timeout',
+]);
+
 // Операторы, по которым строка распадается на самостоятельные команды. Пайп в
 // этом же ряду: звено пайпа — такая же команда, и `cat a | tee out` пишет.
 const CHAIN_OPS = new Set(['&&', '||', ';', '|', '&', '|&']);
@@ -456,4 +462,100 @@ export function classifyCommand(command) {
   if (!cfg) return verdict(false, 'unproven', 'правила недоступны');
   if (typeof command !== 'string' || command.trim() === '') return verdict(true, null, null);
   return judgeString(command, cfg, 0);
+}
+
+// --- цели ЧТЕНИЯ ---------------------------------------------------------------
+//
+// Что команда ПРОЧИТАЛА. Спрашивает журнал событий: гвард «не правь того, чего не
+// читал» иначе даёт ЛОЖНЫЙ ОТКАЗ на файле, который агент посмотрел `cat`-ом, а не
+// читающим инструментом харнеса. Смотреть файл командой — обычный способ работы,
+// а ложные отказы и есть то, чем гвард делают невыносимым.
+//
+// Доказательство берётся у classifyCommand выше: цели называются ТОЛЬКО у
+// команды, про которую доказано, что она ничего не пишет. Недоказанная не даёт
+// целей вовсе — не потому, что их нет, а потому что назвать их было бы догадкой.
+//
+// ЧТО СЧИТАЕТСЯ ФАЙЛОВЫМ ОПЕРАНДОМ — знание про КАЖДУЮ команду, а не общее
+// правило «слово похоже на путь». Общее правило давало бы ЛОЖНЫЕ цели: у поиска
+// первый операнд — образец, и `foo.bar` из образца легло бы в журнал прочитанным
+// файлом. Асимметрия здесь жёсткая: пропущенная цель стоит агенту лишнего
+// чтения, а ЛОЖНАЯ разрешает править то, чего никто не читал.
+//
+// Отсюда два узких списка и умолчание «целей нет». Всё, чего в них нет (обход
+// каталогов, перечисления, подкоманды инструментов), целей чтения не даёт: их
+// операнды — каталоги и имена, а не прочитанное содержимое.
+
+// Все неключевые операнды суть файлы: `cat a b`, `head -20 lib/a.js`.
+const FILE_OPERANDS = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'wc', 'od', 'xxd', 'hexdump',
+  'strings', 'file', 'stat', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'shasum',
+  'diff', 'cmp',
+]);
+
+// Первый неключевой операнд — ОБРАЗЕЦ или ПРОГРАММА, файлы идут за ним:
+// `grep образец файл`, `sed -n 1,5p файл`.
+const PATTERN_THEN_FILES = new Set([
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk', 'jq', 'yq',
+]);
+
+// Перенаправление: сам оператор и то, что за ним. Вход из файла (`< файл`) —
+// чтение, выход (`> файл`) целью чтения не является. У доказанно читающей команды
+// выход бывает только в пустоту (/dev/null), и cleanTarget его всё равно отсеет.
+const REDIRECT_WORD = /^[0-9]*(?:<<?|>>?|&>|>&|<&)$/;
+
+// Файловые операнды ОДНОГО куска команды.
+function readOperands(piece) {
+  const words = piece.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  // Присваивания окружения и обёртки запуска впереди вызова его не отменяют — тем
+  // же правилом, что у разбора вызовов git.
+  while (i < words.length
+    && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || GIT_LIKE_WRAPPERS.has(words[i]))) i += 1;
+  const name = words[i] || '';
+  const all = FILE_OPERANDS.has(name);
+  if (!all && !PATTERN_THEN_FILES.has(name)) return [];
+  let skip = !all;
+  const out = [];
+  for (i += 1; i < words.length; i += 1) {
+    const word = words[i];
+    if (REDIRECT_WORD.test(word)) {
+      const next = words[i + 1] || '';
+      i += 1;
+      if (word.includes('<') && !word.includes('&')) out.push(next);
+      continue;
+    }
+    // Приклеенное перенаправление (`<файл`, `2>файл`): у входа цель читается, у
+    // выхода слово целиком не операнд.
+    const glued = /^[0-9]*([<>])(.+)$/.exec(word);
+    if (glued) {
+      if (glued[1] === '<') out.push(glued[2]);
+      continue;
+    }
+    if (word.startsWith('-')) continue;
+    if (skip) { skip = false; continue; }
+    out.push(word);
+  }
+  return out;
+}
+
+// commandReads(текст) → {reads, targets}. `reads` — доказано ли, что команда
+// только читает; `targets` — что именно, насколько это разобрано.
+export function commandReads(cmd) {
+  const text = String(cmd || '');
+  // Пустая команда чтением не является: classifyCommand зовёт её читающей (ей
+  // нечего запрещать), но строки журнала за ней не стоит.
+  if (text.trim() === '') return { reads: false, targets: [] };
+  if (classifyCommand(text).readOnly !== true) return { reads: false, targets: [] };
+
+  // Разбор по КУСКАМ с тем же резолвом каталога, что у целей записи: `cd /repo &&
+  // cat a.js` читает файл репозитория, а не текущего каталога.
+  const scan = stripQuoted(stripQuotedHeredocs(text));
+  const targets = [];
+  let cwd = '';
+  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
+    for (const t of readOperands(piece)) targets.push(resolveTarget(cwd, t));
+    const cd = /(?:^|[ \t])cd[ \t]+(\/[^\s|&;()<>]*)/.exec(piece);
+    if (cd) cwd = cd[1].replace(/\/$/, '');
+  }
+  return { reads: true, targets: targets.map(cleanTarget).filter(Boolean) };
 }

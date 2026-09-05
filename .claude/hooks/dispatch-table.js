@@ -120,7 +120,10 @@ export const TABLE = {
   ],
 
   PostToolUseFailure: [
-    { hooks: ['universal-metrics'], scope: 'both' },
+    // Журнал стоит и здесь: провал вызова — такой же сигнал, как ошибка в ответе,
+    // и приходит он ОТДЕЛЬНЫМ событием. Без этой строки половина ошибок молча не
+    // доходила бы до инстинкт-контура.
+    { hooks: ['universal-metrics', 'universal-journal'], scope: 'both' },
     { matcher: 'ExitPlanMode', hooks: ['universal-guard-plan-exit-failure'], scope: 'both' },
   ],
 

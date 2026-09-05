@@ -21,6 +21,9 @@ const ADAPTERS = {
     mutates: /^git commit\b/.test(text),
     targets: text.includes('>') ? [text.split('>').pop().trim()] : [],
   }),
+  commandReads: (text) => (text.startsWith('смотрю ')
+    ? { reads: true, targets: [text.slice('смотрю '.length)] }
+    : { reads: false, targets: [] }),
   ignored: () => false,
 };
 
@@ -49,12 +52,50 @@ test('чтение: цель названа адаптером либо пуст
     factOf({ reads: true }, { kind: 'read', paths: ['/repo/a.js'] }, ADAPTERS),
     { op: OPS.READ, targets: ['/repo/a.js'] },
   );
-  // Читающий вызов, у которого адаптер файла не назвал (поиск, сеть,
-  // перечисление): факт чтения есть, цели нет. Пустой список — честный ответ;
-  // догадка на его месте разрешила бы гварду 2.1 не то.
+  // Читать нечего ПО ПРИРОДЕ вызова (список работы, перечисление, поиск в сети):
+  // пустой список — факт, и имени недостающего рядом с ним быть не должно.
   assert.deepEqual(
-    factOf({ reads: true }, {}, ADAPTERS),
+    factOf({ reads: true }, { kind: 'read-nothing' }, ADAPTERS),
     { op: OPS.READ, targets: [] },
+  );
+});
+
+// Два случая, которые пустой список СХЛОПЫВАЕТ, если их не развести: «читать было
+// нечего» и «читал, а назвать нечем». Гвард чтения отвечает на них по-разному, и
+// читатель обязан их различать — поэтому второй несёт имя.
+test('«назвать прочитанное нечем» — это имя, а не пустой список', () => {
+  const named = factOf({ reads: true }, {}, ADAPTERS);
+  assert.deepEqual(named, { op: OPS.READ, targets: [], unsupported: 'read-targets' });
+  assert.notDeepEqual(named, factOf({ reads: true }, { kind: 'read-nothing' }, ADAPTERS));
+});
+
+// Запись в базу заметок адресуется не путём файла. Адреса нет — запись всё равно
+// ЕСТЬ: пропав, она унесла бы с собой ровно то изменение, ради сборки которого
+// журнал и заведён.
+test('запись в базу заметок: адрес либо назван, либо назван недостающим', () => {
+  assert.deepEqual(
+    factOf({}, { kind: 'note', ref: 'ABC123' }, ADAPTERS),
+    { op: OPS.WRITE, targets: ['ABC123'] },
+  );
+  assert.deepEqual(
+    factOf({}, { kind: 'note', ref: '' }, ADAPTERS),
+    { op: OPS.WRITE, targets: [], unsupported: 'note-write-target' },
+  );
+});
+
+// Доказанно читающая команда — тоже чтение, и цели у него от адаптера
+// интерпретатора. Без этого гвард «не правь того, чего не читал» давал бы ложный
+// отказ на файле, который агент посмотрел командой.
+test('команда: доказанное чтение даёт цели, недоказанная не даёт строки', () => {
+  assert.deepEqual(
+    factOf({}, { kind: 'command', text: 'смотрю /repo/a.js' }, ADAPTERS),
+    { op: OPS.READ, targets: ['/repo/a.js'] },
+  );
+  assert.equal(factOf({}, { kind: 'command', text: 'непонятная' }, ADAPTERS).op, '');
+  // Адаптера чтения нет — вопрос остался без ответа, и это имя, а не молчание.
+  assert.deepEqual(
+    factOf({}, { kind: 'command', text: 'непонятная' }, { commandWrites: () => ({}) }),
+    { op: OPS.UNKNOWN, unsupported: 'read-targets' },
   );
 });
 
@@ -80,9 +121,13 @@ test('запись: цель берётся у адаптера, эфемерн�
     factOf({}, { kind: 'command', text: 'git commit -m x' }, ADAPTERS),
     { op: OPS.WRITE, targets: [] },
   );
-  // Вызов, который мир трогает, но формы у него нет (сторонний сервер): запись
-  // есть, цель не названа.
-  assert.deepEqual(factOf({}, {}, ADAPTERS), { op: OPS.WRITE, targets: [] });
+  // Вызов, который мир трогает, а формы у него нет (сторонний сервер, подагент):
+  // «менял» тут — консервативное умолчание гейта, а не установленный факт, и
+  // журнал обязан сказать это вслух.
+  assert.deepEqual(
+    factOf({}, {}, ADAPTERS),
+    { op: OPS.WRITE, targets: [], unsupported: 'call-shape' },
+  );
 });
 
 test('нет адаптера команды — строка есть, и в ней имя недостающего', () => {
@@ -116,7 +161,8 @@ test('сигнальными считаются ошибка и сигнал и�
     fact({ op: OPS.INCIDENT }, { text: 'ты сломал' }),
     fact({ op: OPS.UNKNOWN, tool: 'т', callId: 'c4' }, { unsupported: 'write-targets' }),
   ], (file) => {
-    const { records } = readSignals(file);
+    const { status, records } = readSignals(file);
+    assert.equal(status, 'ok');
     assert.deepEqual(records.map((r) => r.op), [OPS.ERROR, OPS.INCIDENT]);
   });
 });
@@ -160,9 +206,25 @@ test('отметка БОЛЬШЕ журнала читается как «жу�
   });
 });
 
-test('журнала нет — пустой ответ, а не падение', () => {
-  assert.deepEqual(readSignals('/нет-такого-каталога/journal.jsonl'), { records: [], size: 0 });
-  assert.deepEqual(readSignals(''), { records: [], size: 0 });
+// Две разные вещи, которые молчание схлопнуло бы в одну: журнала ЕЩЁ НЕТ (сессия
+// ничего не делала — это факт) и журнал ЕСТЬ, но не читается (ответа нет вовсе).
+// Схлопнув их, отказ чтения выдали бы за спокойную сессию, то есть поменяли бы
+// знак.
+test('«журнала нет» — факт, «журнал не читается» — имя', () => {
+  assert.deepEqual(
+    readSignals('/нет-такого-каталога/journal.jsonl'),
+    { status: 'ok', records: [], size: 0 },
+  );
+  assert.deepEqual(readSignals(''), { status: 'ok', records: [], size: 0 });
+  // Каталог на месте файла: открыть его нельзя, и это не ENOENT.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'journal-unreadable-test.'));
+  try {
+    const answer = readSignals(dir);
+    assert.equal(answer.status, 'unsupported');
+    assert.equal(answer.capability, 'journal-read');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('битая строка журнала не роняет разбор соседних', () => {

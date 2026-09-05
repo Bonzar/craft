@@ -24,8 +24,17 @@
 // Содержимое правок, команд и ответов инструментов в журнал НЕ идёт: у сигнала
 // пишется голова текста, и только у него — по ней инстинкт-контур и различает
 // повторяющиеся неудачи.
+//
+// ЖУРНАЛ НЕ ПОКИДАЕТ МАШИНУ. Он живёт в каталоге состояния и не публикуется
+// никуда: ни в ветку метрик, ни в сводку, ни в донат. В ветку метрик уезжают
+// только ЧИСЛА; строка журнала туда не попадает никогда. Здесь лежат путь к
+// файлам, текст реплики Влада и вывод инструментов — то же различение, что уже
+// сделано в журнале решений, где хранится КЛАСС причины отказа, а не её текст,
+// именно потому что он переживает сессию. Читателей у журнала будет больше, чем у
+// буфера, поэтому правило записано здесь, а не подразумевается.
 import fs from 'node:fs';
 import { eachJsonl } from './jsonl.js';
+import { unsupported } from './event.js';
 import { mutationOf, durableTargets } from './write-targets.js';
 
 export const OPS = Object.freeze({
@@ -81,27 +90,70 @@ export function appendFact(file, record) {
 // Что за операция и над чем — по СОСТОЯВШЕМУСЯ вызову.
 //
 //   scope — область вызова от адаптера харнеса: {reads}|{session}|{};
-//   call  — форма вызова оттуда же: {kind:'read', paths} | {kind:'edit', path}
-//           | {kind:'command', text} | {};
-//   adapters — commandWrites(текст) → {mutates, targets}; ignored(путь).
+//   call  — форма вызова оттуда же:
+//     {kind:'read', paths}     — чтение НАЗВАННЫХ файлов;
+//     {kind:'read-nothing'}    — читающий вызов, у которого читать нечего;
+//     {kind:'edit', path}      — правка содержимого по пути;
+//     {kind:'note', ref}       — запись в базу заметок по её адресу;
+//     {kind:'command', text}   — команда интерпретатора;
+//     {}                       — форма неизвестна;
+//   adapters — commandWrites(текст) → {mutates, targets}; commandReads(текст) →
+//     {reads, targets}; ignored(путь).
 //
 // Пустой `op` значит «строки нет»: вызов, правящий ход САМОЙ сессии (план,
 // вопрос, список работы, расписание пробуждения), ни чтением, ни записью мира не
-// является, и запись про него была бы не фактом, а шумом. Тем же пустым `op`
-// отвечает и вызов, который мир потрогал, но ничего в нём не изменил.
+// является, и запись про него была бы не фактом, а шумом.
+//
+// Поле `unsupported` рядом с операцией значит: операция установлена, а что-то
+// СВЕРХ неё — нет, и это названо именем (решение 8). Пустой список целей без
+// такого имени — утверждение «называть тут нечего», а не «назвать не смогли»:
+// читателю эти два случая различать обязательно, иначе гвард чтения не отличит
+// вызов, который ничего не читал, от вызова, чьё чтение мы не разобрали.
 export function factOf(scope = {}, call = {}, adapters = {}) {
   if (scope.session === true) return { op: '' };
   if (scope.reads === true) {
-    // Цель чтения называется там, где её назвал адаптер. Не назвал — список
-    // пустой: «читал, цель не названа». Пустой список честнее выдуманного —
-    // гвард на нём не разрешит ничего, а догадка разрешила бы не то.
-    const named = call.kind === 'read' && Array.isArray(call.paths) ? call.paths : [];
-    return { op: OPS.READ, targets: named.filter(Boolean).map(String) };
+    if (call.kind === 'read') {
+      const named = Array.isArray(call.paths) ? call.paths : [];
+      return { op: OPS.READ, targets: named.filter(Boolean).map(String) };
+    }
+    // Адаптер говорит: читать этому вызову нечего по его природе (список работы,
+    // перечисление, поиск в сети). Пустой список тут — факт.
+    if (call.kind === 'read-nothing') return { op: OPS.READ, targets: [] };
+    // Формы нет: чтение было, а назвать прочитанное нечем. Это НЕ то же самое,
+    // и молчаливый пустой список читался бы гвардом как «ничего не читал».
+    return { op: OPS.READ, targets: [], unsupported: 'read-targets' };
+  }
+  // Запись в базу заметок: её адрес — не путь файла, и эфемерности у него нет.
+  // Адреса нет — запись всё равно ЕСТЬ, и молчать про неё нельзя: пропав, она
+  // унесла бы с собой ровно то изменение, ради сборки которого журнал и заведён.
+  if (call.kind === 'note') {
+    const ref = String(call.ref || '');
+    return ref
+      ? { op: OPS.WRITE, targets: [ref] }
+      : { op: OPS.WRITE, targets: [], unsupported: 'note-write-target' };
   }
   const mutation = mutationOf(scope, call, adapters);
   if (mutation.status !== 'ok') return { op: OPS.UNKNOWN, unsupported: mutation.capability };
-  if (!mutation.mutates) return { op: '' };
-  return { op: OPS.WRITE, targets: durableTargets(call, adapters) };
+  if (mutation.mutates) {
+    const fact = { op: OPS.WRITE, targets: durableTargets(call, adapters) };
+    // Формы у вызова не было вовсе (сторонний сервер, подагент): «менял мир» тут
+    // — консервативное умолчание гейта, а не установленный факт, и журнал обязан
+    // сказать это вслух. Целей он при этом не даёт, так что сборка изменений
+    // ничего лишнего не насчитает.
+    if (!call.kind) fact.unsupported = 'call-shape';
+    return fact;
+  }
+  // Не запись — но, может быть, ДОКАЗАННОЕ чтение. Про команду это знает адаптер
+  // интерпретатора; синтаксиса общая часть не разбирает. Адаптера нет — вопрос
+  // остался без ответа, и это имя, а не молчание.
+  if (call.kind === 'command') {
+    if (typeof adapters.commandReads !== 'function') {
+      return { op: OPS.UNKNOWN, unsupported: 'read-targets' };
+    }
+    const { reads = false, targets = [] } = adapters.commandReads(String(call.text || '')) || {};
+    if (reads) return { op: OPS.READ, targets };
+  }
+  return { op: '' };
 }
 
 // Сигнальные строки журнала ПОСЛЕ отметки и текущий размер журнала. Отметка —
@@ -112,10 +164,12 @@ export function factOf(scope = {}, call = {}, adapters = {}) {
 // подмели): читаем с начала. Иначе новые сигналы молча считались бы разобранными
 // — то есть контур замолчал бы ровно там, где обязан говорить.
 //
-// Журнала нет или он не читается — пустой ответ: это НЕ «сигналов не было», и
-// отличает одно от другого вызывающий, у которого есть факт `journal`.
+// Журнала ЕЩЁ НЕТ — это факт: сессия пока ничего не делала, сигналов не было.
+// Журнал ЕСТЬ, но не читается (права, полный диск) — это НЕ «сигналов не было», а
+// отсутствие ответа, и оно называется именем. Без этого различения молчаливый
+// отказ чтения выглядел бы как спокойная сессия — то есть менял бы знак.
 export function readSignals(file, from = 0) {
-  if (!file) return { records: [], size: 0 };
+  if (!file) return { status: 'ok', records: [], size: 0 };
   let size = 0;
   let text = '';
   try {
@@ -129,11 +183,14 @@ export function readSignals(file, from = 0) {
     } finally {
       fs.closeSync(fd);
     }
-  } catch { return { records: [], size: 0 }; }
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { status: 'ok', records: [], size: 0 };
+    return { ...unsupported('journal-read'), records: [], size: 0 };
+  }
 
   const records = [];
   eachJsonl(text, (entry) => {
     if (SIGNAL_OPS.includes(entry.op)) records.push(entry);
   });
-  return { records, size };
+  return { status: 'ok', records, size };
 }

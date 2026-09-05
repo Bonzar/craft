@@ -169,6 +169,18 @@ test('цели записи чистятся тем же правилом, ка�
   assert.equal(mutates('Bash', commit).mutates, true);
   assert.deepEqual(tools.durableTargets(shape('Bash', commit), ADAPTERS), []);
 
+  // Эфемерность чистится и в КОМАНДНОЙ ветке, а не только у правки: эта ветка
+  // отдельная, и без своего кейса снятый в ней фильтр проходил молча.
+  assert.deepEqual(
+    tools.durableTargets(shape('Bash', { command: 'printf x > /tmp/черновик' }), ADAPTERS), [],
+  );
+  // Смесь долговечной и эфемерной цели: остаётся только долговечная.
+  assert.deepEqual(
+    tools.durableTargets(
+      shape('Bash', { command: 'printf x > /repo/out.txt && printf y > /tmp/черновик' }), ADAPTERS,
+    ),
+    ['/repo/out.txt'],
+  );
   // Нет адаптера команды — целей нет и назвать их нечем; имя недостающего
   // называет сам вопрос «менял ли».
   assert.deepEqual(tools.durableTargets(shape('Bash', cmd), {}), []);

@@ -10,4 +10,14 @@
 // хвост имени, а не на строку целиком.
 export const isNoteWrite = (tool) => /__craft_write$/.test(String(tool || ''));
 
-export const noteRef = (input = {}) => String(input.block_id || input.id || '');
+// Адрес записи. Вход у этого инструмента — КОМАНДА строкой, и блок назван в ней
+// ключом `--id`: полей `block_id`/`id` в живом вызове не бывает вовсе. Пока ответ
+// нужен был только непустым (метрики спрашивают «менял ли мир»), разницы не было;
+// журнал повысил его до утверждения о том, ЧТО именно изменено, — и там пустая
+// строка честнее подстановки.
+export const noteRef = (input = {}) => {
+  const direct = String(input.block_id || input.id || '');
+  if (direct) return direct;
+  const found = /(?:^|\s)--id[=\s]+(["']?)([^\s"']+)\1/.exec(String(input.command || ''));
+  return found ? found[2] : '';
+};
