@@ -491,8 +491,19 @@ const FILE_OPERANDS = new Set([
 // У этих первый неключевой операнд — ОБРАЗЕЦ или ПРОГРАММА, файлы идут за ним:
 // `grep образец файл`, `sed -n 1,5p файл`.
 const PATTERN_THEN_FILES = new Set([
-  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk', 'jq', 'yq',
+  'grep', 'egrep', 'fgrep', 'sed', 'awk', 'jq', 'yq',
 ]);
+
+// Рекурсивный обход целей чтения не даёт: операнд у него — КАТАЛОГ, а какие
+// файлы под ним прочитаны, назвать нечем. Выдать каталог за прочитанный файл
+// нельзя, а хвостовой косой чертой обычная его форма себя не выдаёт. Поиск,
+// рекурсивный ПО УМОЛЧАНИЮ (rg, ag, ack), по этой же причине в список выше не
+// входит вовсе: у него операнд неотличим от каталога никаким флагом.
+// Ключ рекурсии ищется в СВЯЗКЕ коротких (`-rn`), и только у тех команд, у
+// которых он значит именно рекурсию: у потокового редактора `-r` — это
+// расширенные регулярки, и общее правило зря лишало бы его целей.
+const RECURSIVE_CAPABLE = new Set(['grep', 'egrep', 'fgrep']);
+const RECURSIVE_FLAG = /^(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive|--dereference-recursive)$/;
 
 // Ключи, забирающие значение СЛЕДУЮЩИМ словом. Без этой таблицы значение занимает
 // слот образца, а сам образец уезжает в цели: у `grep -A 3 package.json src/a.js`
@@ -522,6 +533,13 @@ const FLAG_TAKES_VALUE = new Map([
 // съедать его как образец нельзя.
 const PATTERN_FLAGS = new Set(['-e', '-f', '--regexp', '--file']);
 
+// Метка нераскрытой переменной. Токенизатор подставляет неизвестную переменную
+// ПУСТОТОЙ, и `cat $HOME/секрет.md` давал целью `/секрет.md` — путь, которого не
+// существует, вместо настоящего прочитанного файла. Это догадка на месте факта, и
+// её надо не чинить, а отбрасывать: слово с меткой целью не становится. Литерал
+// в одинарных кавычках переменной не является и метки не получает.
+const UNRESOLVED = '\u0000нераскрыто\u0000';
+
 // Похоже ли слово на ПУТЬ К ФАЙЛУ. Третье сито: числа (значения ключей), куски
 // образца, маркеры heredoc и прочее целями не становятся. Каталог целью чтения
 // тоже не является — рекурсивный поиск читает файлы под ним, а назвать их нечем,
@@ -547,7 +565,8 @@ function readOperandsOf(tokens, cfg) {
       // Вход из файла — чтение. Выход и дескрипторы целями чтения не являются, и
       // цель перенаправления забирается вместе с оператором.
       else if (token.op === '<' || token.op === '>' || token.op === '>>') {
-        if (token.op === '<' && depth === 0 && typeof tokens[i + 1] === 'string') {
+        if (token.op === '<' && depth === 0 && typeof tokens[i + 1] === 'string'
+            && !tokens[i + 1].includes(UNRESOLVED)) {
           inputs.push(tokens[i + 1]);
         }
         i += 1;
@@ -563,6 +582,7 @@ function readOperandsOf(tokens, cfg) {
   const name = list[0] || '';
   const all = FILE_OPERANDS.has(name);
   if (!all && !PATTERN_THEN_FILES.has(name)) return inputs;
+  if (RECURSIVE_CAPABLE.has(name) && list.some((word) => RECURSIVE_FLAG.test(word))) return inputs;
   const valued = new Set(FLAG_TAKES_VALUE.get(name) || []);
   const out = [...inputs];
   let skip = !all;
@@ -574,6 +594,7 @@ function readOperandsOf(tokens, cfg) {
       continue;
     }
     if (skip) { skip = false; continue; }
+    if (word.includes(UNRESOLVED)) continue;
     if (looksLikePath(word)) out.push(word);
   }
   return out;
@@ -585,7 +606,7 @@ function readOperandsOf(tokens, cfg) {
 // обезвреживание кавычек их содержимое СОХРАНЯЕТ и от этого не спасает.
 export function commandWords(cmd) {
   try {
-    return parse(String(cmd || '')).filter((token) => typeof token === 'string');
+    return parse(String(cmd || ''), () => UNRESOLVED).filter((token) => typeof token === 'string');
   } catch {
     return [];
   }
@@ -612,7 +633,7 @@ export function commandReads(cmd) {
   // cat a.js` читает файл репозитория, а не текущего каталога.
   let tokens;
   try {
-    tokens = parse(text);
+    tokens = parse(text, () => UNRESOLVED);
   } catch {
     return { reads: true, proven: true, targets: [] };
   }

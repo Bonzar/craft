@@ -87,7 +87,11 @@ const missingJournal = missingFact(ev, ['journal']);
 if (missingJournal) {
   process.stderr.write(`[detect-incident] unsupported: ${unsupported(missingJournal).capability}\n`);
 } else {
-  appendFact(ev.journal, fact({ op: OPS.INCIDENT }, { text: head(prompt, 200) }));
+  // Не легло — говорим вслух, как и производитель журнала: журнал, в который не
+  // пишется, снаружи неотличим от сессии, в которой ничего не было.
+  if (!appendFact(ev.journal, fact({ op: OPS.INCIDENT }, { text: head(prompt, 200) }))) {
+    process.stderr.write('[detect-incident] unsupported: journal-write\n');
+  }
 }
 
 // Взвод гейта закрытия разбора (universal-stop-incident-closure): маркер

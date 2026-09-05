@@ -244,3 +244,28 @@ test('цели чтения: разобранность отделена от ч
   assert.equal(bash.commandReads('pwd').reads, true, 'читающая команда без файлов — всё равно чтение');
   assert.deepEqual(bash.commandReads('pwd').targets, []);
 });
+
+// Ложные цели, найденные третьим кругом ревью. Каждая — «разрешение править
+// непрочитанное», то есть худший из возможных дефектов этого куска.
+test('цели чтения: каталог и нераскрытая переменная целями не становятся', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Каталог рекурсивного обхода. Хвостовой косой чертой обычная его форма себя
+  // не выдаёт, поэтому судить приходится по КЛЮЧУ рекурсии.
+  assert.deepEqual(targets('grep -rn TODO /repo/lib'), []);
+  assert.deepEqual(targets('grep -Rn TODO /repo/lib'), []);
+  assert.deepEqual(targets('grep --recursive TODO /repo/lib'), []);
+  // Поиск, рекурсивный ПО УМОЛЧАНИЮ: у него операнд неотличим никаким флагом.
+  assert.deepEqual(targets('rg foo /repo/lib'), []);
+  // А у потокового редактора `-r` — это расширенные регулярки, и общее правило
+  // зря лишало бы его целей.
+  assert.deepEqual(targets('sed -r s/a/b/ /repo/a.js'), ['/repo/a.js']);
+
+  // Нераскрытая переменная: токенизатор подставляет её пустотой, и путь
+  // получался ВЫДУМАННЫЙ — несуществующий вместо настоящего.
+  assert.deepEqual(targets('cat $HOME/секрет.md'), []);
+  assert.deepEqual(targets('cat ${DIR}/x.js'), []);
+  assert.deepEqual(targets('grep foo "$HOME/a.js"'), []);
+  assert.deepEqual(targets('cat < $HOME/x.js'), []);
+  // Литерал в одинарных кавычках переменной не является и целей не отменяет.
+  assert.deepEqual(targets("grep -n 'literal $HOME' /repo/a.js"), ['/repo/a.js']);
+});

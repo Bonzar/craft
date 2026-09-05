@@ -56,10 +56,15 @@ export const SIGNAL_OPS = Object.freeze([OPS.ERROR, OPS.INCIDENT]);
 // Голова текста в БАЙТАХ, без обрыва посреди символа и без хвостовых переводов
 // строки: сигнал ложится одной строкой, и длина у него ограничена.
 export function head(text, limit) {
-  const cut = Buffer.from(`${String(text ?? '')}\n`, 'utf8').subarray(0, limit);
-  let end = cut.length;
-  while (end > 0 && cut[end - 1] === 0x0a) end -= 1;
-  return cut.subarray(0, end).toString('utf8').replace(/\n/g, ' ');
+  const all = Buffer.from(`${String(text ?? '')}\n`, 'utf8');
+  let end = Math.min(all.length, limit);
+  // Срез мог прийтись на СЕРЕДИНУ символа: байты продолжения (10xxxxxx) в начале
+  // отброшенного хвоста значат ровно это, и надо отступить к его началу. Иначе
+  // хвост строки превращается в знак замены — а на границе в 300 байт русского
+  // текста это половина случаев.
+  while (end > 0 && end < all.length && (all[end] & 0xC0) === 0x80) end -= 1;
+  while (end > 0 && all[end - 1] === 0x0a) end -= 1;
+  return all.subarray(0, end).toString('utf8').replace(/\n/g, ' ');
 }
 
 // Строка журнала: общая часть у всех операций одна, остальное дописывается
@@ -132,6 +137,16 @@ export function factOf(scope = {}, call = {}, adapters = {}) {
       ? { op: OPS.WRITE, targets: [ref] }
       : { op: OPS.WRITE, targets: [], unsupported: 'note-write-target' };
   }
+  // ДОКАЗАННОЕ чтение спрашивается ПЕРВЫМ, до вопроса «менял ли мир». Тот отвечает
+  // поиском по образцам записи — разрешающим по умолчанию, — и слово-ОБРАЗЕЦ в
+  // самой команде он принимает за копирование: `grep "cp " файл` записывался
+  // правкой этого файла. Ущерб двойной: в леджер ложится ложная правка, и теряется
+  // настоящее чтение. Доказательство «команда ничего не пишет» строже поиска по
+  // образцам и потому идёт раньше.
+  if (call.kind === 'command' && typeof adapters.commandReads === 'function') {
+    const proof = adapters.commandReads(String(call.text || '')) || {};
+    if (proof.reads) return { op: OPS.READ, targets: proof.targets || [] };
+  }
   const mutation = mutationOf(scope, call, adapters);
   if (mutation.status !== 'ok') return { op: OPS.UNKNOWN, unsupported: mutation.capability };
   if (mutation.mutates) {
@@ -150,12 +165,12 @@ export function factOf(scope = {}, call = {}, adapters = {}) {
     if (typeof adapters.commandReads !== 'function') {
       return { op: OPS.UNKNOWN, unsupported: 'read-targets' };
     }
+    // Адаптер РАЗОБРАЛ команду и говорит: это не чтение (выше её уже спросили).
+    // Тогда пустой `op` означает «события мира не было» — факт. А вот «не
+    // доказано» им означать нельзя: команда, про которую разбор ничего не понял,
+    // могла переписать пол-репозитория, и молчание выдало бы неизвестность за
+    // спокойствие.
     const answer = adapters.commandReads(String(call.text || '')) || {};
-    if (answer.reads) return { op: OPS.READ, targets: answer.targets || [] };
-    // Адаптер РАЗОБРАЛ команду и говорит: это не чтение. Тогда пустой `op`
-    // означает «события мира не было» — факт. А вот «не доказано» им означать
-    // нельзя: команда, про которую разбор ничего не понял, могла переписать
-    // пол-репозитория, и молчание выдало бы неизвестность за спокойствие.
     if (answer.proven !== true) return { op: OPS.UNKNOWN, unsupported: 'command-effect' };
   }
   return { op: '' };

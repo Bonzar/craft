@@ -142,9 +142,17 @@ export function errorText(response) {
       .join('\n');
   }
   if (typeof response !== 'object') return String(response);
-  const body = response.content ?? response.error ?? '';
-  if (body === undefined || body === null || body === false || body === '') return '';
-  return typeof body === 'string' ? body : errorText(body) || JSON.stringify(body);
+  // Пустое содержимое НЕ съедает непустую ошибку: `??` проваливается только на
+  // null и undefined, и `{content:'', error:'…'}` терял текст, который был в
+  // руках.
+  const first = errorText(response.content);
+  if (first) return first;
+  const second = errorText(response.error);
+  if (second) return second;
+  // Тела не нашлось. Свалить сюда JSON всего ответа нельзя дважды: это выдумка на
+  // месте имени недостающего, и через неё в журнал уезжало бы содержимое ответа
+  // инструмента, которого там быть не должно.
+  return '';
 }
 
 // Ошибка инструмента в ответе: is_error либо непустое поле error. Форма ответа —
