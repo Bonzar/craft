@@ -290,6 +290,61 @@ function rules() {
 
 const verdict = (readOnly, cause, offender) => ({ readOnly, cause, offender });
 
+// Тела heredoc — не команды. Снимаются ОБЕ формы маркера, в отличие от
+// stripQuotedHeredocs выше: там незакавыченный маркер оставляют нарочно, потому
+// что в его теле живут подстановки, а здесь тело режется на строки и каждая
+// судилась бы отдельной командой. Текст «rm -rf …» внутри печатаемого документа
+// командой не является, и отказ на нём был бы ложным. Подстановки при этом
+// разбираются раньше, целиком по строке.
+function stripHeredocBodies(text) {
+  const out = [];
+  let mark = '';
+  let inside = false;
+  for (const line of String(text).split('\n')) {
+    if (inside) {
+      if (line.trim() === mark) inside = false;
+      continue;
+    }
+    const found = line.match(/<<-?[ \t]*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/);
+    if (found) {
+      [, , mark] = found;
+      inside = true;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+// Строки команды: перевод строки разделяет команды ровно так же, как `;`, но
+// токенизатор его НЕ ВЫДАЁТ — для него это обычный пробел. Оттого многострочная
+// команда схлопывалась в одну: имя бралось из первой строки, а слова остальных
+// становились её операндами, и `cat a.js` с `rm -rf …` на второй строке
+// доказывался читающим. На этом предикате стоит отказ гварда якоря сессии.
+//
+// Режется только по НЕЗАКАВЫЧЕННЫМ переводам строки: многострочная строка в
+// кавычках — один аргумент, и рвать её значило бы судить её обрывки командами.
+export function commandLines(text) {
+  const body = stripHeredocBodies(text);
+  const lines = [];
+  let quote = '';
+  let start = 0;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (quote) {
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === '\\') { i += 1; continue; }
+    if (ch === '\n') {
+      lines.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  lines.push(body.slice(start));
+  return lines.filter((line) => line.trim() !== '');
+}
+
 // Операторы, по которым строка распадается на самостоятельные команды. Пайп в
 // этом же ряду: звено пайпа — такая же команда, и `cat a | tee out` пишет.
 const CHAIN_OPS = new Set(['&&', '||', ';', '|', '&', '|&']);
@@ -444,8 +499,18 @@ function judgeSimple(tokens, cfg) {
 // Разбор одной строки: подстановки судятся первыми, потом сама строка.
 function judgeString(command, cfg, depth) {
   if (depth > 3) return verdict(false, 'unparsed', command.trim().split(/\s+/)[0] || 'команда');
+  // Каждая СТРОКА — самостоятельная команда, и достаточно одной непрочитанной,
+  // чтобы весь вызов перестал быть доказанно читающим.
+  const lines = commandLines(command);
+  if (lines.length > 1) {
+    for (const line of lines) {
+      const lineVerdict = judgeString(line, cfg, depth);
+      if (!lineVerdict.readOnly) return lineVerdict;
+    }
+    return verdict(true, null, null);
+  }
 
-  const unwrapped = stripShellWrapper(command);
+  const unwrapped = stripShellWrapper(lines[0] === undefined ? command : lines[0]);
 
   const { substitutions, broken } = extractSubstitutions(unwrapped);
   if (broken) return verdict(false, 'unparsed', unwrapped.trim().split(/\s+/)[0] || 'команда');
@@ -674,9 +739,14 @@ export function commandReads(cmd) {
   // так что вход этот не экзотический.
   if (/<<|<\(|>\(/.test(text)) return { reads: true, mutates: false, targets: [] };
 
+  // Строки — самостоятельные команды: без этого операнды второй строки уезжали
+  // в файловый слот ПЕРВОЙ, и правка на месте отмывалась в чтение переписанного
+  // файла. Токены собираются построчно и склеиваются как звенья одной цепочки.
   let tokens;
   try {
-    tokens = parse(text, () => UNRESOLVED);
+    tokens = commandLines(text).flatMap((line, at) => (at === 0
+      ? parse(line, () => UNRESOLVED)
+      : [{ op: ';' }, ...parse(line, () => UNRESOLVED)]));
   } catch {
     return { reads: true, mutates: false, targets: [] };
   }

@@ -309,3 +309,32 @@ test('цели чтения: тело heredoc, переход каталога �
   assert.deepEqual(targets('grep --color foo a.js'), ['a.js']);
   assert.deepEqual(targets('jq --tab . data.json'), ['data.json']);
 });
+
+// Перевод строки разделяет команды так же, как `;`, но токенизатор его НЕ
+// ВЫДАЁТ — для него это пробел. Многострочная команда оттого схлопывалась в одну:
+// имя бралось из первой строки, а слова остальных становились её операндами.
+// Ущерб тройной — правка на месте доказывалась ЧТЕНИЕМ переписанного файла,
+// гвард якоря сессии пропускал многострочный `rm -rf`, и переписанный файл
+// уезжал в журнал прочитанным, то есть открытым для правки.
+test('перевод строки разделяет команды', () => {
+  const mutating = (cmd) => bash.classifyCommand(cmd).readOnly === false;
+  assert.ok(mutating('cat a.js\nrm -rf /repo/x'), 'удаление на второй строке');
+  assert.ok(mutating('cat a.js\nsed -i s/a/b/ /repo/README.md'), 'правка на месте');
+  assert.ok(mutating('head -5 a.txt\ncp /repo/src.js /repo/dst.js'), 'копирование');
+  assert.equal(bash.classifyCommand('cat a.js\nrm -rf /repo/x').offender, 'rm', 'виновник назван');
+  assert.deepEqual(bash.commandReads('cat a.js\nsed -i s/a/b/ /repo/README.md'),
+    { reads: false, mutates: true, targets: [] });
+
+  // Операнды второй строки не уезжают в файловый слот ПЕРВОЙ: образец остаётся
+  // образцом, а не становится прочитанным файлом.
+  assert.deepEqual(bash.commandReads('cat a.js\ngrep README.md b.js').targets, ['a.js', 'b.js']);
+  // Раз строка — звено цепочки, переход каталога переносится на следующую.
+  assert.deepEqual(bash.commandReads('cd /repo\ncat a.js').targets, ['/repo/a.js']);
+
+  // И обратная сторона: ложного отказа быть не должно. Тело heredoc — печатаемый
+  // ТЕКСТ, а не команды, даже когда в нём стоят слова вроде `rm -rf`.
+  assert.equal(bash.classifyCommand('cat <<EOF\nrm -rf /x\nEOF').readOnly, true);
+  assert.equal(bash.classifyCommand("cat <<'EOF'\ngit push --force\nEOF").readOnly, true);
+  // Многострочная строка в кавычках — один аргумент, рвать её нельзя.
+  assert.equal(bash.classifyCommand("echo 'первая\nвторая'").readOnly, true);
+});
