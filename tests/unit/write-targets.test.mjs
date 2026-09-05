@@ -338,3 +338,26 @@ test('перевод строки разделяет команды', () => {
   // Многострочная строка в кавычках — один аргумент, рвать её нельзя.
   assert.equal(bash.classifyCommand("echo 'первая\nвторая'").readOnly, true);
 });
+
+// Формы, где разбор называл прочитанным путь, которого НЕ СУЩЕСТВУЕТ: раскрыть
+// их нечем, и записать как есть значило бы соврать про конкретный файл.
+test('цели чтения: нераскрытое и неразвёрнутое путями не считаются', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Метку нераскрытой переменной отсеивали у операндов, а у САМОГО каталога
+  // перехода — нет, и она уезжала внутрь пути вместе с байтами NUL.
+  assert.deepEqual(targets('cd /repo/$SUB && cat a.js'), ['a.js']);
+  // Символы подстановки и тильду токенизатор не раскрывает.
+  assert.deepEqual(targets('cat file{1,2}.txt'), []);
+  assert.deepEqual(targets('cat [ab].js'), []);
+  assert.deepEqual(targets('cat ~/notes.md'), []);
+  // Значение ключа у сравнения и просмотрщиков — не файл.
+  assert.deepEqual(targets('diff -I foo.bar a.js b.js'), ['a.js', 'b.js']);
+  assert.deepEqual(targets('less -p config.json a.js'), ['a.js']);
+  assert.deepEqual(targets('bat --file-name a.js b.js'), ['b.js']);
+  // Аргумент с плюсом — ключ в старой форме, а не файл.
+  assert.deepEqual(targets('more +/foo a.js'), ['a.js']);
+  // Переход каталога в звене ПАЙПА на соседа не влияет: это подоболочка.
+  assert.deepEqual(targets('cd /tmp | cat a.js'), ['a.js']);
+  // А через `&&` переход по-прежнему переносится, даже когда дальше есть пайп.
+  assert.deepEqual(targets('cd /repo && cat a.js | grep x'), ['/repo/a.js']);
+});

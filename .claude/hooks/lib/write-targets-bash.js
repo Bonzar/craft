@@ -57,7 +57,11 @@ export function stripQuotedHeredocs(text) {
 export function nextCwd(current, words) {
   if (words[0] !== 'cd') return current;
   const to = words[1];
-  return typeof to === 'string' && to.startsWith('/') ? to.replace(/\/$/, '') : '';
+  // Нераскрытая переменная в САМОМ каталоге перехода — такая же выдумка, как в
+  // операнде: отсев стоял только у операндов, и `cd /repo/$SUB` давал путь со
+  // служебной меткой внутри.
+  if (typeof to !== 'string' || !to.startsWith('/') || isUnresolved(to)) return '';
+  return to.replace(/\/$/, '');
 }
 
 // Все совпадения регулярки по строкам текста — как их печатал grep -oE.
@@ -620,7 +624,13 @@ const FLAG_TAKES_VALUE = new Map([
   ['nl', ['-b', '-d', '-f', '-h', '-i', '-l', '-n', '-s', '-v', '-w']],
   ['od', ['-A', '-j', '-N', '-t', '-w']],
   ['xxd', ['-c', '-g', '-l', '-s']],
-  ['diff', ['-U', '--unified', '-D', '--ifdef', '--label']],
+  ['diff', ['-U', '--unified', '-D', '--ifdef', '--label', '-I', '--ignore-matching-lines',
+    '-x', '--exclude', '-X', '--exclude-from', '-S', '--starting-file', '-F',
+    '--show-function-line', '-W', '--width']],
+  ['less', ['-p', '--pattern', '-j', '--jump-target', '-x', '--tabs', '-P', '--prompt']],
+  ['more', ['-p']],
+  ['bat', ['-l', '--language', '-r', '--line-range', '-H', '--highlight-line', '--theme',
+    '--style', '--pager', '-m', '--map-syntax', '--file-name']],
 ]);
 
 // Ключи, которые САМИ несут образец: после них первый операнд — уже файл, и
@@ -641,6 +651,9 @@ const UNRESOLVED = '\u0000нераскрыто\u0000';
 function looksLikePath(word) {
   if (typeof word !== 'string' || word === '' || word.startsWith('-')) return false;
   if (word.endsWith('/')) return false;
+  // Символы подстановки и тильду токенизатор не раскрывает, а мы раскрыть не
+  // можем: записать их прочитанным путём значило бы назвать файл, которого нет.
+  if (/[{}[\]*?~]/.test(word)) return false;
   const base = word.slice(word.lastIndexOf('/') + 1);
   if (base === '' || base === '.' || base === '..') return false;
   return word.includes('/') || /\.[A-Za-z0-9_]{1,8}$/.test(base);
@@ -687,6 +700,9 @@ function readOperandsOf(tokens, cfg) {
       if (valued.has(word)) i += 1;
       continue;
     }
+    // Аргумент с плюсом — тоже ключ, просто в старой форме: у просмотрщиков это
+    // строка поиска или номер строки (`more +/образец`, `tail +5`), а не файл.
+    if (word.startsWith('+')) continue;
     if (skip) { skip = false; continue; }
     if (word.includes(UNRESOLVED)) continue;
     if (looksLikePath(word)) out.push(word);
@@ -754,16 +770,33 @@ export function commandReads(cmd) {
   // звеньям нечем: `(cd /tmp) && cat a.js` читает `./a.js`, а не `/tmp/a.js`.
   // Скобки в команде — отслеживание каталога выключено целиком.
   const subshell = tokens.some((t) => t && typeof t === 'object' && (t.op === '(' || t.op === ')'));
+  // Звенья с РАЗДЕЛИТЕЛЕМ, которым отделено следующее: переход каталога в звене
+  // пайпа на соседа не влияет — пайп запускает звено в подоболочке, как и скобки.
+  const pieces = [];
+  let current = [];
+  let sep = '';
+  for (const token of tokens) {
+    if (token && typeof token === 'object' && CHAIN_OPS.has(token.op)) {
+      pieces.push({ sep, tokens: current });
+      sep = token.op;
+      current = [];
+      continue;
+    }
+    current.push(token);
+  }
+  pieces.push({ sep, tokens: current });
+
   const targets = [];
   let cwd = '';
-  for (const piece of splitChain(tokens)) {
-    for (const t of readOperandsOf(piece, cfg)) targets.push(resolveTarget(cwd, t));
+  for (const [at, piece] of pieces.entries()) {
+    for (const t of readOperandsOf(piece.tokens, cfg)) targets.push(resolveTarget(cwd, t));
     if (subshell) continue;
-    const plain = piece.filter((w) => typeof w === 'string');
+    const nextSep = (pieces[at + 1] || {}).sep || '';
+    if (nextSep === '|' || nextSep === '|&' || nextSep === '&') continue;
     // `cd` считается переходом только ПЕРВЫМ словом звена: словом-образцом он
     // бывает чаще (`grep -n cd файл`), и приняв его за переход, разбор резолвил
     // бы им остаток цепочки и выдал путь, которого никто не открывал.
-    cwd = nextCwd(cwd, plain);
+    cwd = nextCwd(cwd, piece.tokens.filter((w) => typeof w === 'string'));
   }
   return { reads: true, mutates: false, targets: targets.map(cleanTarget).filter(Boolean) };
 }
