@@ -23,8 +23,8 @@ const ADAPTERS = {
   }),
   commandReads: (text) => {
     if (text.startsWith('смотрю ')) return { reads: true, proven: true, targets: [text.slice('смотрю '.length)] };
-    // «Разобрал и это не чтение» против «ничего не понял» — разные ответы.
-    return { reads: false, proven: text.startsWith('понятная'), targets: [] };
+    // «Разбор ЗНАЕТ, что она меняет» против «ничего не понял» — разные ответы.
+    return { reads: false, mutates: text.startsWith('понятная'), targets: [] };
   },
   ignored: () => false,
 };
@@ -102,8 +102,12 @@ test('команда: доказанное чтение даёт цели, не�
     factOf({}, { kind: 'command', text: 'смотрю /repo/a.js' }, ADAPTERS),
     { op: OPS.READ, targets: ['/repo/a.js'] },
   );
-  // Разобрал и говорит «не чтение» — событие мира установлено, строки нет.
-  assert.equal(factOf({}, { kind: 'command', text: 'понятная команда' }, ADAPTERS).op, '');
+  // Разбор ЗНАЕТ, что команда меняет состояние, а целей не нашлось: запись
+  // установлена, не названа только цель — молчать про неё нельзя.
+  assert.deepEqual(
+    factOf({}, { kind: 'command', text: 'понятная команда' }, ADAPTERS),
+    { op: OPS.WRITE, targets: [], unsupported: 'write-targets' },
+  );
   // А вот «ничего не понял» молчанием быть не может: такая команда могла
   // переписать пол-репозитория, и пустота выдала бы неизвестность за спокойствие.
   assert.deepEqual(

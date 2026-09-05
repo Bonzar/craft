@@ -40,6 +40,26 @@ export function stripQuotedHeredocs(text) {
   return out.join('\n');
 }
 
+// Переход каталога по словам ОДНОГО звена цепочки. Правило ОДНО на обе стороны
+// файла — на цели записи и на цели чтения, — потому что синтаксис у них один, а
+// два правила в одном файле разъезжаются тем же манером, что два файла: об этом
+// прямо предупреждает шапка.
+//
+// `cd` считается переходом, только если он ПЕРВОЕ слово звена. Свободный поиск
+// слова `cd` где угодно давал обход гвардов: у `grep -n cd /tmp/a.txt && cat >
+// README.md` цель записи уезжала под `/tmp/`, объявлялась эфемерной, и правка
+// рабочего файла проходила мимо план-гейта, гварда якоря и защиты конфигов.
+//
+// Неабсолютный путь СБРАСЫВАЕТ каталог, а не оставляет прежний: переход
+// состоялся, а куда — неизвестно, и держаться за старый значит приклеивать его к
+// чужим путям. Пустой каталог оставляет цель относительной, то есть скорее
+// долговечной, — сторона осторожная.
+export function nextCwd(current, words) {
+  if (words[0] !== 'cd') return current;
+  const to = words[1];
+  return typeof to === 'string' && to.startsWith('/') ? to.replace(/\/$/, '') : '';
+}
+
 // Все совпадения регулярки по строкам текста — как их печатал grep -oE.
 function matchAll(text, re) {
   const found = [];
@@ -123,8 +143,7 @@ export function bashWriteTargets(cmd) {
   let cwd = '';
   for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
     for (const t of pieceTargets(piece)) targets.push(resolveTarget(cwd, t));
-    const cd = /(?:^|[ \t])cd[ \t]+(\/[^\s|&;()<>]*)/.exec(piece);
-    if (cd) cwd = cd[1].replace(/\/$/, '');
+    cwd = nextCwd(cwd, piece.trim().split(/\s+/).filter(Boolean));
   }
   return targets.concat(interpreterTargets(cmd));
 }
@@ -345,6 +364,19 @@ function dropWrappers(list, cfg) {
   return current;
 }
 
+// Использован ли ЗАПРЕЩЁННЫЙ ключ. Сверка по НАЧАЛУ слова, а не точным
+// равенством: `sed -i.bak` и `--in-place=.bak` — та же правка на месте, что
+// `sed -i`, и точное равенство их пропускало. На этом предикате стоит отказ
+// гварда якоря сессии, то есть пропуск здесь — правка файла репозитория без
+// якоря. Форма `--ключ=значение` уже разбиралась так у подкоманд; здесь она была
+// забыта вместе с суффиксной.
+function usesFlag(word, denied) {
+  return denied.some((flag) => word === flag
+    || word.startsWith(`${flag}=`)
+    // Короткий ключ со СЛИПШИМСЯ значением (`-i.bak`). У длинных так не бывает.
+    || (!flag.startsWith('--') && flag.length === 2 && word.startsWith(flag) && word.length > 2));
+}
+
 function flagsOf(list) {
   return list.filter((word) => typeof word === 'string' && word.startsWith('-'));
 }
@@ -380,10 +412,7 @@ function judgeSimple(tokens, cfg) {
 
   if (spec) {
     const denied = spec.denyFlags || [];
-    const used = flagsOf(list);
-    for (const flag of denied) {
-      if (used.includes(flag) || list.includes(flag)) return verdict(false, 'mutates', name);
-    }
+    if (list.some((word) => usesFlag(word, denied))) return verdict(false, 'mutates', name);
     return verdict(true, null, null);
   }
 
@@ -612,48 +641,27 @@ export function commandWords(cmd) {
   }
 }
 
-// Запрещённый спецификацией команды ключ — В ЛЮБОЙ ФОРМЕ. Доказательство
-// читаемости сверяет такие ключи точным равенством, и `sed -i.bak` (или
-// `--in-place=.bak`) проходит у него как читающая команда. Это та же правка на
-// месте: записать её ЧТЕНИЕМ переписанного файла значило бы и потерять запись, и
-// открыть файл для правки. Разбор целей чтения обязан такие формы видеть, даже
-// пока общий разбор их пропускает.
-function usesDeniedFlag(list, cfg) {
-  const name = list[0] || '';
-  const denied = ((cfg.readOnly || {})[name] || {}).denyFlags || [];
-  return list.some((word) => denied.some((flag) => word === flag
-    || word.startsWith(`${flag}=`)
-    || (!flag.startsWith('--') && flag.length === 2 && word.startsWith(flag) && word.length > 2)));
-}
-
 // Несёт ли слово метку нераскрытой переменной. Спрашивает адаптер базы заметок:
 // адресом блока такая метка не является так же, как не является путём.
 export const isUnresolved = (word) => String(word || '').includes(UNRESOLVED);
 
-// commandReads(текст) → {reads, proven, targets}.
+// commandReads(текст) → {reads, mutates, targets}.
 //   reads   — доказано ли, что команда только читает;
-//   proven  — разобрана ли она вообще: «не доказано» и «доказано, что не чтение»
-//             для леджера РАЗНЫЕ ответы, и второй нельзя выдавать за первый;
+//   mutates — доказано ли ОБРАТНОЕ: разбор знает, что она меняет состояние. Это
+//             третий ответ, а не отрицание первого: «не читает» и «не разобрали»
+//             для леджера разные вещи, и выдать второе за первое значит
+//             промолчать про запись, которую разбор установил;
 //   targets — что именно прочитано, насколько это разобрано.
 export function commandReads(cmd) {
   const text = String(cmd || '');
   // Пустая команда чтением не является: classifyCommand зовёт её читающей (ей
   // нечего запрещать), но строки журнала за ней не стоит.
-  if (text.trim() === '') return { reads: false, proven: true, targets: [] };
+  if (text.trim() === '') return { reads: false, mutates: false, targets: [] };
   const cfg = rules();
-  if (!cfg) return { reads: false, proven: false, targets: [] };
+  if (!cfg) return { reads: false, mutates: false, targets: [] };
   const answer = classifyCommand(text);
   if (answer.readOnly !== true) {
-    return { reads: false, proven: answer.cause === 'mutates', targets: [] };
-  }
-  // Доказательство читаемости пропускает запрещённый ключ в суффиксной форме —
-  // проверяем сами. Чтением такой вызов не является, а чем является, мы не знаем:
-  // «не доказано», и общая часть скажет это словом.
-  for (const piece of splitChain((() => {
-    try { return parse(text, () => UNRESOLVED); } catch { return []; }
-  })())) {
-    const list = dropWrappers(dropEnvPrefix(piece.filter((w) => typeof w === 'string')), cfg);
-    if (usesDeniedFlag(list, cfg)) return { reads: false, proven: false, targets: [] };
+    return { reads: false, mutates: answer.cause === 'mutates', targets: [] };
   }
 
   // Разбор по КУСКАМ с тем же резолвом каталога, что у целей записи: `cd /repo &&
@@ -664,13 +672,13 @@ export function commandReads(cmd) {
   // тело от операндов надёжно нечем, поэтому у такой команды целей не называем
   // вовсе — промах безопаснее лжи. Агент печатает текст через heredoc постоянно,
   // так что вход этот не экзотический.
-  if (/<<|<\(|>\(/.test(text)) return { reads: true, proven: true, targets: [] };
+  if (/<<|<\(|>\(/.test(text)) return { reads: true, mutates: false, targets: [] };
 
   let tokens;
   try {
     tokens = parse(text, () => UNRESOLVED);
   } catch {
-    return { reads: true, proven: true, targets: [] };
+    return { reads: true, mutates: false, targets: [] };
   }
   // Подоболочка меняет каталог ТОЛЬКО внутри себя, и уследить за её границами по
   // звеньям нечем: `(cd /tmp) && cat a.js` читает `./a.js`, а не `/tmp/a.js`.
@@ -685,11 +693,7 @@ export function commandReads(cmd) {
     // `cd` считается переходом только ПЕРВЫМ словом звена: словом-образцом он
     // бывает чаще (`grep -n cd файл`), и приняв его за переход, разбор резолвил
     // бы им остаток цепочки и выдал путь, которого никто не открывал.
-    if (plain[0] !== 'cd') continue;
-    // Каталог назван АБСОЛЮТНО — резолвим по нему. Иначе переход состоялся, а
-    // куда — неизвестно: прежний каталог тут уже неверен, и держаться за него
-    // значило бы приклеивать его к чужим путям.
-    cwd = typeof plain[1] === 'string' && plain[1].startsWith('/') ? plain[1].replace(/\/$/, '') : '';
+    cwd = nextCwd(cwd, plain);
   }
-  return { reads: true, proven: true, targets: targets.map(cleanTarget).filter(Boolean) };
+  return { reads: true, mutates: false, targets: targets.map(cleanTarget).filter(Boolean) };
 }

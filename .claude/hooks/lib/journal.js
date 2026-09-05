@@ -168,13 +168,17 @@ export function factOf(scope = {}, call = {}, adapters = {}) {
     if (typeof adapters.commandReads !== 'function') {
       return { op: OPS.UNKNOWN, unsupported: 'read-targets' };
     }
-    // Адаптер РАЗОБРАЛ команду и говорит: это не чтение (выше её уже спросили).
-    // Тогда пустой `op` означает «события мира не было» — факт. А вот «не
-    // доказано» им означать нельзя: команда, про которую разбор ничего не понял,
-    // могла переписать пол-репозитория, и молчание выдало бы неизвестность за
-    // спокойствие.
     const answer = adapters.commandReads(String(call.text || '')) || {};
-    if (answer.proven !== true) return { op: OPS.UNKNOWN, unsupported: 'command-effect' };
+    // Разбор ЗНАЕТ, что команда меняет состояние, а целей у неё не нашлось
+    // (`sort --output=…`: правку такой формы цели записи не разбирают). Запись
+    // установлена — молчать про неё нельзя; не названа только цель.
+    if (answer.mutates === true) {
+      return { op: OPS.WRITE, targets: [], unsupported: 'write-targets' };
+    }
+    // Разбор не понял НИЧЕГО. Пустой `op` означал бы «события мира не было» —
+    // факт, которого никто не устанавливал: такая команда могла переписать
+    // пол-репозитория, и молчание выдало бы неизвестность за спокойствие.
+    return { op: OPS.UNKNOWN, unsupported: 'command-effect' };
   }
   return { op: '' };
 }

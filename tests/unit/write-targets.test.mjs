@@ -240,10 +240,10 @@ test('цели чтения: настоящие называются', () => {
 test('цели чтения: разобранность отделена от чтения', () => {
   // Перенаправление в файл — ИЗВЕСТНАЯ запись, поэтому разбор про неё всё знает.
   assert.deepEqual(bash.commandReads('printf x > /repo/o.txt'),
-    { reads: false, proven: true, targets: [] });
-  assert.equal(bash.commandReads('rm -rf /repo/x').proven, true, 'про удаление разбор всё знает');
-  assert.equal(bash.commandReads('node сборка.js').proven, false, 'а про чужой запуск — ничего');
-  assert.deepEqual(bash.commandReads(''), { reads: false, proven: true, targets: [] });
+    { reads: false, mutates: true, targets: [] });
+  assert.equal(bash.commandReads('rm -rf /repo/x').mutates, true, 'про удаление разбор всё знает');
+  assert.equal(bash.commandReads('node сборка.js').mutates, false, 'а про чужой запуск — ничего');
+  assert.deepEqual(bash.commandReads(''), { reads: false, mutates: false, targets: [] });
   assert.equal(bash.commandReads('pwd').reads, true, 'читающая команда без файлов — всё равно чтение');
   assert.deepEqual(bash.commandReads('pwd').targets, []);
 });
@@ -293,12 +293,13 @@ test('цели чтения: тело heredoc, переход каталога �
   // А обычный переход по-прежнему резолвит.
   assert.deepEqual(targets('cd /repo/lib && sed -n 1,5p a.js'), ['/repo/lib/a.js']);
 
-  // Правка на месте с суффиксом ключа — не чтение: доказательство читаемости
-  // сверяет запрещённые ключи точным равенством и эту форму пропускает.
+  // Правка на месте с суффиксом ключа — не чтение, и разбор теперь ЗНАЕТ, что она
+  // меняет состояние: раньше он сверял запрещённые ключи точным равенством и эту
+  // форму пропускал, а на нём стоит отказ гварда якоря сессии.
   assert.deepEqual(bash.commandReads('sed -i.bak s/a/b/ /repo/README.md'),
-    { reads: false, proven: false, targets: [] });
+    { reads: false, mutates: true, targets: [] });
   assert.deepEqual(bash.commandReads('sed --in-place=.bak s/a/b/ /repo/README.md'),
-    { reads: false, proven: false, targets: [] });
+    { reads: false, mutates: true, targets: [] });
   // А `sed -n` остаётся чтением.
   assert.equal(bash.commandReads('sed -n 1,5p /repo/a.js').reads, true);
 
