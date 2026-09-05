@@ -13,13 +13,13 @@
 //   block  — stdout с decision "block" (стоп-хуки)
 //   inject — stdout несёт директиву инцидента
 //   silent — stdout пуст
-//   contains:<строка> / not-contains: / err-contains:
+//   contains:<строка> / not-contains: / err-contains: / err-not-contains:
 //   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
 //     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
 //     stdout запись не проверить.
-// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, file-empty,
-// file-not-contains:), засчитывается только удавшемуся хуку: код возврата 0 и ни
-// строки диспетчера о падении. Упавший хук молчит так же.
+// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, err-not-contains:,
+// file-empty, file-not-contains:), засчитывается только удавшемуся хуку: код
+// возврата 0 и ни строки диспетчера о падении. Упавший хук молчит так же.
 // Exit 0 — все кейсы зелёные И каждый исход каждого хука покрыт; иначе 1.
 //
 // Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
@@ -544,6 +544,14 @@ function grade(expect, out, err, env) {
   // Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет улику
   // доставки правила. Без отдельной проверки эта половина вывода не покрыта.
   if (expect.startsWith('err-contains:')) return err.includes(expect.slice('err-contains:'.length));
+  // Обратная сторона той же половины. Без неё «silent» — утверждение только про
+  // stdout, и хук, который вместо тихого прохода КРИЧИТ в служебный поток имя
+  // недостающего, проходит как молчаливый. А ровно там, где кейс различает «этого
+  // не было — факт» и «ответа нет — имя», разница и живёт в stderr. Это тоже
+  // утверждение о молчании, поэтому падение здесь — незачёт.
+  if (expect.startsWith('err-not-contains:')) {
+    return !err.includes(expect.slice('err-not-contains:'.length)) && !crashed(err, env);
+  }
   return null; // неизвестное ожидание
 }
 
@@ -582,6 +590,10 @@ const NEEDS_MATCHER = [
   // журнал заведён, — а раннер зовёт хуки напрямую и этого не видит.
   ['universal-journal', 'PostToolUse', 'Read'],
   ['universal-journal', 'PostToolUse', 'mcp__Craft__craft_write'],
+  // И правка файла — тоже: сузив маршрут до интерпретатора, чтения и базы
+  // заметок, три строки выше зеленеют все до одной, а из журнала исчезает вся
+  // ПОЛОВИНА ЗАПИСИ, ради которой его читает сборка набора изменений.
+  ['universal-journal', 'PostToolUse', 'Write'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
 

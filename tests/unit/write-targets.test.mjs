@@ -210,6 +210,9 @@ test('цели чтения: ложных нет', () => {
   assert.deepEqual(targets('grep -rn образец /repo/src/'), []);
   // Содержимое подстановки — операнды ЧУЖОЙ команды.
   assert.deepEqual(targets('cat $(ls /repo/src)'), []);
+  // `cd` СЛОВОМ команды каталогом перехода не является: приняв его за переход,
+  // разбор резолвит им ОСТАТОК цепочки и выдаёт путь, которого никто не открывал.
+  assert.deepEqual(targets('grep -n cd /repo/a.js && cat b.js'), ['/repo/a.js', 'b.js']);
   // Маркер heredoc и дескрипторы целями не становятся.
   assert.deepEqual(targets("cat <<'EOF'"), []);
   assert.deepEqual(targets('cat /repo/f.js > /dev/null 2>&1'), ['/repo/f.js']);
