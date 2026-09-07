@@ -54,9 +54,11 @@ def decide(event, data_files, state_dir):
 '''
 
 
-def make_module(root, name, kind="hook", for_value="general", body=None, code=False):
-    """Пакет на диске. `code=True` кладёт и работающую логику: без неё обёртка
-    падает на импорте, и кейс про молчание зеленел бы от поломки, а не от режима."""
+def make_module(root, name, kind="hook", for_value="general", body=None, code=True):
+    """Пакет на диске. По умолчанию с работающей логикой: без неё обёртка падает
+    на импорте, кейс про молчание зеленел бы от поломки, а не от режима, — и
+    `check` законно называет такой пакет находкой. `code=False` — когда находка и
+    проверяется."""
     directory = os.path.join(root, "modules", name)
     os.makedirs(directory, exist_ok=True)
     with open(os.path.join(directory, "SKILL.md"), "w", encoding="utf-8") as fh:
@@ -221,6 +223,15 @@ class Check(unittest.TestCase):
         self.assertTrue(any(line.startswith("плохой: манифест не разобран") for line in found), found)
         self.assertFalse(any(line.startswith("хороший") for line in found),
                          "соседний пакет от этого не страдает")
+
+    def test_хук_без_функции_решения_находка(self):
+        # Без `decide.py` пакет ставится, обёртка собирается, регистрация пишется
+        # — и на каждом событии падает на импорте. Лучше не ставить.
+        make_module(self.root, "пустой", code=False)
+        found = self.found()
+        self.assertTrue(any("decide.py нет" in line for line in found), found)
+        make_module(self.root, "пустой")
+        self.assertEqual(self.found(), [])
 
     def test_вид_не_из_списка(self):
         make_module(self.root, "x", kind="что-то")

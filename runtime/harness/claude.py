@@ -74,9 +74,18 @@ FACTS = ()
 # погасила бы предупреждение о потерянной правке.
 ACCEPTS_INPUT = ("pre-tool",)
 
+# События, на которых харнес принимает ДОПИСАННЫЙ КОНТЕКСТ. Список отдельный: он
+# шире, чем у решений, и уже, чем «любое событие» — печатать контекст туда, где
+# харнес его не читает, значит терять его молча.
+ACCEPTS_CONTEXT = ("session-start", "prompt", "post-tool", "post-tool-failure")
+
 
 def accepts_input(event_name):
     return event_name in ACCEPTS_INPUT
+
+
+def accepts_context(event_name):
+    return event_name in ACCEPTS_CONTEXT
 
 
 def events():
@@ -165,6 +174,6 @@ def render(event, decision):
     # `none` — «я не решал». Дописанный контекст при этом всё же печатается: он
     # не исключает чужого решения и не обрывает ничью цепочку.
     context = decision.get("add_context")
-    if outcome == "none" and context and name:
+    if outcome == "none" and context and name and accepts_context((event or {}).get("event") or ""):
         return json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext": context}})
     return ""

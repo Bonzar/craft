@@ -204,11 +204,10 @@ def check(root, modules, known=None, index=True):
     found = []
     names = [m.get("name", "") for m in modules]
     everywhere = set(names) | set(known or [])
-    # Словарь событий — ОБЪЕДИНЕНИЕ всех харнесов дерева: модуль под codex не
+    # Словарь событий и фактов — ОБЪЕДИНЕНИЕ всех харнесов: модуль под codex не
     # обязан укладываться в словарь claude, а вторая таблица должна добавляться
     # строкой в HARNESSES, а не правкой этой проверки.
-    supported = set()
-    facts = set()
+    supported, facts = set(), set()
     for one in HARNESSES:
         table = harness_table(one)
         supported |= set(table.events())
@@ -221,51 +220,80 @@ def check(root, modules, known=None, index=True):
         for gone in sorted(set(indexed_names(root)) - set(names)):
             found.append("%s: пакет в манифесте источника, а папки нет" % gone)
     for manifest in modules:
-        name = manifest.get("name", "")
-        directory = manifest.get("dir", "")
         if manifest.get("broken"):
-            found.append("%s: манифест не разобран: %s" % (directory, manifest["broken"]))
+            found.append("%s: манифест не разобран: %s"
+                         % (manifest.get("dir", ""), manifest["broken"]))
             continue
-        for field in MANIFEST_FIELDS:
-            if field not in manifest:
-                found.append("%s: в манифесте нет поля %s" % (directory, field))
-        if name != directory:
-            found.append("%s: имя в манифесте (%s) не совпадает с именем папки" % (directory, name))
-        if manifest.get("kind") not in KINDS:
-            found.append("%s: вид «%s» не из списка %s" % (name, manifest.get("kind"), ", ".join(KINDS)))
-        mismatch = _for_mismatch(name, manifest.get("for", ""))
-        if mismatch:
-            found.append("%s: %s" % (name, mismatch))
-        if names.count(name) > 1:
-            found.append("%s: два пакета с одним именем" % name)
-        # Имя, начинающееся с имени другого пакета, читается ДОБАВКОЙ (решение
-        # 18). Чтобы это чтение было не догадкой, добавка называет свою базу в
-        # `requires`: не назвала — имя базы оказалось началом имени пакета,
-        # который добавкой себя не объявлял, и это находка. Назвала несколько —
-        # неоднозначно, и это находка тоже.
-        bases = sorted(other for other in everywhere
-                       if other != name and name.startswith(other + "-"))
-        declared = [b for b in bases if b in (manifest.get("requires") or [])]
-        if len(declared) > 1:
-            found.append("%s: добавка объявила сразу несколько баз: %s" % (name, ", ".join(declared)))
-        elif bases and not declared:
-            found.append("%s: имя начинается с имени пакета %s, а базы в requires нет:"
-                         " добавке базу надо назвать, самостоятельному пакету — переименоваться"
-                         % (name, ", ".join(bases)))
-        for event in event_names(manifest):
-            if event not in supported:
-                found.append("%s: событие «%s» харнесу неизвестно; канонические имена: %s"
-                             % (name, event, ", ".join(sorted(supported))))
-        for need in manifest.get("requires") or []:
-            if need in FACTS:
-                # Факт события закрывает ОБЁРТКА, а не пакет. Не выдаёт его ни
-                # одна таблица — модуль встанет и будет отвечать `unsupported` на
-                # каждом событии; такое лучше не ставить вовсе (решение 6).
-                if need not in facts:
-                    found.append("%s: факт «%s» не выдаёт ни одна таблица харнеса" % (name, need))
-            elif need not in everywhere:
-                found.append("%s: жёсткая зависимость «%s» ничем не закрыта" % (name, need))
+        found.extend(_check_name(manifest, names, everywhere))
+        found.extend(_check_surface(manifest, everywhere, supported, facts))
+        found.extend(_check_code(root, manifest))
     return sorted(set(found))
+
+
+def _check_name(manifest, names, everywhere):
+    """Находки об ИМЕНИ: состав манифеста, имя против папки, вид, `for`, коллизии
+    имён (решение 18)."""
+    name = manifest.get("name", "")
+    directory = manifest.get("dir", "")
+    found = []
+    for field in MANIFEST_FIELDS:
+        if field not in manifest:
+            found.append("%s: в манифесте нет поля %s" % (directory, field))
+    if name != directory:
+        found.append("%s: имя в манифесте (%s) не совпадает с именем папки" % (directory, name))
+    if manifest.get("kind") not in KINDS:
+        found.append("%s: вид «%s» не из списка %s" % (name, manifest.get("kind"), ", ".join(KINDS)))
+    mismatch = _for_mismatch(name, manifest.get("for", ""))
+    if mismatch:
+        found.append("%s: %s" % (name, mismatch))
+    if names.count(name) > 1:
+        found.append("%s: два пакета с одним именем" % name)
+    # Имя, начинающееся с имени другого пакета, читается ДОБАВКОЙ. Чтобы чтение
+    # было не догадкой, добавка называет свою базу в `requires`: не назвала — имя
+    # базы оказалось началом имени пакета, который добавкой себя не объявлял.
+    bases = sorted(other for other in everywhere
+                   if other != name and name.startswith(other + "-"))
+    declared = [b for b in bases if b in (manifest.get("requires") or [])]
+    if len(declared) > 1:
+        found.append("%s: добавка объявила сразу несколько баз: %s" % (name, ", ".join(declared)))
+    elif bases and not declared:
+        found.append("%s: имя начинается с имени пакета %s, а базы в requires нет:"
+                     " добавке базу надо назвать, самостоятельному пакету — переименоваться"
+                     % (name, ", ".join(bases)))
+    return found
+
+
+def _check_surface(manifest, everywhere, supported, facts):
+    """Находки о ПОВЕРХНОСТИ: события, на которые модуль подписан, и жёсткие
+    зависимости, которыми он закрыт."""
+    name = manifest.get("name", "")
+    found = []
+    for event in event_names(manifest):
+        if event not in supported:
+            found.append("%s: событие «%s» харнесу неизвестно; канонические имена: %s"
+                         % (name, event, ", ".join(sorted(supported))))
+    for need in manifest.get("requires") or []:
+        if need in FACTS:
+            # Факт события закрывает ОБЁРТКА, а не пакет. Не выдаёт его ни одна
+            # таблица — модуль встанет и будет отвечать `unsupported` на каждом
+            # событии; такое лучше не ставить вовсе (решение 6).
+            if need not in facts:
+                found.append("%s: факт «%s» не выдаёт ни одна таблица харнеса" % (name, need))
+        elif need not in everywhere:
+            found.append("%s: жёсткая зависимость «%s» ничем не закрыта" % (name, need))
+    return found
+
+
+def _check_code(root, manifest):
+    """Находка о КОДЕ: у хука должна быть чистая функция решения. Без неё пакет
+    ставится, обёртка собирается, регистрация пишется — и на каждом событии
+    падает на импорте."""
+    if manifest.get("kind") != "hook":
+        return []
+    decide = os.path.join(root, "modules", manifest.get("dir", ""), "scripts", "hooks", "decide.py")
+    if os.path.isfile(decide):
+        return []
+    return ["%s: вид hook, а scripts/hooks/decide.py нет" % manifest.get("name", "")]
 
 
 # --- сборка --------------------------------------------------------------------
@@ -395,11 +423,17 @@ def read_sources():
 
 # --- регистрация в харнесе -----------------------------------------------------
 
+# Путь к рантайму правится ОДИН РАЗ: harness_table зовётся в цикле по харнесам и
+# из двух мест, и вставка на каждый вызов растила бы sys.path дублями.
+for _runtime in ("pylib", "harness"):
+    _path = os.path.join(ROOT, "runtime", _runtime)
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+
 def harness_table(harness):
     """Таблица харнеса: имена его событий, путь его настроек, форма записи в них.
     Единственное место, откуда установщик знает про харнес."""
-    sys.path.insert(0, os.path.join(ROOT, "runtime", "harness"))
-    sys.path.insert(0, os.path.join(ROOT, "runtime", "pylib"))
     return __import__(harness)
 
 

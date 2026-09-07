@@ -252,6 +252,13 @@ class ClaudeTable(unittest.TestCase):
         self.assertIn("post-tool", claude.events())
         self.assertNotIn("post_tool", claude.events())
 
+    def test_контекст_на_событии_без_его_формы_не_печатается(self):
+        # Печатать контекст туда, где харнес его не читает, значит терять его
+        # молча; обёртка про такую потерю говорит вслух.
+        self.assertEqual(claude.render({"event": "pre-tool"}, none("", add_context="вот")), "")
+        self.assertFalse(claude.accepts_context("pre-tool"))
+        self.assertTrue(claude.accepts_context("post-tool"))
+
     def test_дописанный_контекст_печатается_с_именем_своего_события(self):
         out = json.loads(claude.render({"event": "prompt"}, none("", add_context="вот")))
         self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")

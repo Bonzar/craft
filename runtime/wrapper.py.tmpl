@@ -129,6 +129,9 @@ def main():
     if decision.get("modified_input") and not table.accepts_input(event["event"]):
         sys.stderr.write("[%s] правка входа не доехала: на событии %s её формы нет\n"
                          % (NAME, event["event"]))
+    if decision.get("add_context") and not table.accepts_context(event["event"]):
+        sys.stderr.write("[%s] дописанный контекст не доехал: на событии %s его формы нет\n"
+                         % (NAME, event["event"]))
 
     # След — ВСЕГДА и ДО печати: печать может уйти в закрытый поток, а решение
     # обязано быть записано раньше. Не легло — говорим вслух, потому что молчание
