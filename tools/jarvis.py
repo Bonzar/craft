@@ -285,10 +285,11 @@ def _check_surface(manifest, everywhere, supported, facts):
 
 
 def _check_code(root, manifest):
-    """Находка о КОДЕ: у хука должна быть чистая функция решения. Без неё пакет
-    ставится, обёртка собирается, регистрация пишется — и на каждом событии
-    падает на импорте."""
-    if manifest.get("kind") != "hook":
+    """Находка о КОДЕ: у всего, что объявило СОБЫТИЯ, должна быть чистая функция
+    решения. Спрашивается по событиям, а не по виду: регистрацию и обёртку
+    получает каждый, кто объявил события, каким бы `kind` он себя ни назвал, — и
+    без `decide.py` падает на импорте на каждом из них."""
+    if not event_names(manifest):
         return []
     decide = os.path.join(root, "modules", manifest.get("dir", ""), "scripts", "hooks", "decide.py")
     if os.path.isfile(decide):
@@ -431,6 +432,9 @@ for _runtime in ("pylib", "harness"):
         sys.path.insert(0, _path)
 
 
+import state  # noqa: E402  (после правки sys.path выше)
+
+
 def harness_table(harness):
     """Таблица харнеса: имена его событий, путь его настроек, форма записи в них.
     Единственное место, откуда установщик знает про харнес."""
@@ -561,39 +565,15 @@ def _write_if_changed(path, body, backup=False):
 # --- mode ----------------------------------------------------------------------
 
 def user_modes_file():
-    config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(config, "jarvis", "modules.toml")
+    """Личный конфиг режимов. Формула общая с обёрткой (pylib/state)."""
+    return state.modes_file()
 
 
 def mode_of(root, name, manifest_mode="on"):
-    """Режим модуля и ОТКУДА он взят — те же источники и то же старшинство, что
-    читает обёртка на каждом событии; последний — сам манифест."""
-    listed = [part.strip() for part in os.environ.get("JARVIS_MODULES_OFF", "").split(",") if part.strip()]
-    if listed:
-        off = "all" in listed or "*" in listed or name in listed
-        return ("off" if off else "on", "JARVIS_MODULES_OFF")
-    try:
-        import tomllib
-    except ImportError:
-        # Файловые источники читать нечем (нужен python 3.11+). Называем вслух, а
-        # не выдаём умолчание за прочитанный ответ.
-        return ("on", "файловые источники не читаются: нужен python 3.11+")
-    for path in (user_modes_file(), os.path.join(root, "personal", "modules.toml")):
-        try:
-            with open(path, "rb") as fh:
-                table = tomllib.load(fh).get("modules") or {}
-        except OSError:
-            continue
-        except ValueError as bad:
-            # Испорченный конфиг — это не «модуль включён». Пропуск называется
-            # вслух, иначе выключенный модуль тихо работал бы.
-            sys.stderr.write("%s не читается: %s\n" % (path, bad))
-            continue
-        if name in table:
-            value = str(table[name]).lower()
-            return ("off" if value in ("off", "false", "0") else "on", path)
-    default = str(manifest_mode or "on").lower()
-    return ("off" if default in ("off", "false", "0") else "on", "манифест")
+    """Режим модуля и откуда он взят. Спрашивается у ТОГО ЖЕ кода, который читает
+    обёртка на каждом событии: `status`, отвечающий по своей копии старшинства,
+    рано или поздно начал бы врать."""
+    return state.mode(name, root, manifest_mode)
 
 
 def set_mode(name, value):

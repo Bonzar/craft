@@ -233,6 +233,22 @@ class Check(unittest.TestCase):
         make_module(self.root, "пустой")
         self.assertEqual(self.found(), [])
 
+    def test_код_требуется_по_СОБЫТИЯМ_а_не_по_виду(self):
+        # Регистрацию и обёртку получает каждый, кто объявил события, каким бы
+        # `kind` он себя ни назвал: спрашивать код только у `hook` значило бы
+        # закрыть дыру для одного вида из пяти.
+        body = ("---\nname: данные\nkind: data\nfor: general\n"
+                "events: [{ event: post-tool }]\nrequires: []\ndata: []\nmode: on\n---\n")
+        make_module(self.root, "данные", body=body, code=False)
+        found = self.found()
+        self.assertTrue(any("decide.py нет" in line for line in found), found)
+
+    def test_пакет_без_событий_кода_не_требует(self):
+        body = ("---\nname: только-данные\nkind: data\nfor: general\n"
+                "events: []\nrequires: []\ndata: []\nmode: on\n---\n")
+        make_module(self.root, "только-данные", body=body, code=False)
+        self.assertEqual(self.found(), [], "нечего запускать — код и не нужен")
+
     def test_вид_не_из_списка(self):
         make_module(self.root, "x", kind="что-то")
         self.assertTrue(any("не из списка" in line for line in self.found()), self.found())
@@ -448,8 +464,11 @@ class Install(unittest.TestCase):
         self.assertEqual(mode, "off")
         self.assertEqual(source, jarvis.user_modes_file())
         os.environ["JARVIS_MODULES_OFF"] = "какой-то-другой"
-        self.assertEqual(jarvis.mode_of(self.root, "проба"), ("on", "JARVIS_MODULES_OFF"),
-                         "переменная старше конфига и отвечает за все модули сразу")
+        self.assertEqual(jarvis.mode_of(self.root, "проба"), ("off", jarvis.user_modes_file()),
+                         "переменная, назвавшая ЧУЖОЙ модуль, про наш не сказала ничего")
+        os.environ["JARVIS_MODULES_OFF"] = "проба"
+        self.assertEqual(jarvis.mode_of(self.root, "проба"), ("off", "JARVIS_MODULES_OFF"),
+                         "назвала наш — она и решает")
         os.environ.pop("JARVIS_MODULES_OFF")
         jarvis.main(["--root", self.root, "on", "проба"])
         self.assertEqual(jarvis.mode_of(self.root, "проба")[0], "on")

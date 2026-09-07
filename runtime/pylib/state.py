@@ -1,4 +1,4 @@
-"""Состояние слоя на диске: где оно лежит и как в него писать.
+"""Состояние и настройка слоя на диске: где что лежит, как читать и как писать.
 
 ПУТИ — одна формула на всех: каталог состояния и журнал решений общие с
 JS-хуками, и повторяют .claude/hooks/lib/paths.js слово в слово. Живут здесь, а
@@ -16,6 +16,7 @@ JS-хуками, и повторяют .claude/hooks/lib/paths.js слово в 
 
 import json
 import os
+import sys
 import tempfile
 import time
 
@@ -42,6 +43,53 @@ def decision_log(session_id, directory):
     if override:
         return override
     return os.path.join(directory, "decisions.%s.jsonl" % (session_id or "default"))
+
+
+OFF = ("off", "false", "0")
+
+
+def modes_file():
+    """Личный конфиг режимов — старший из двух файловых источников."""
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(config, "jarvis", "modules.toml")
+
+
+def mode(name, source_root, manifest_mode="on"):
+    """Режим модуля и ОТКУДА он взят. Читают это двое — обёртка на каждом событии
+    и `jarvis status`, — и читать обязаны одинаково: разъедься они, `status` стал
+    бы утверждать «on» про модуль, который обёртка гасит.
+
+    Источники по старшинству: переменная окружения, личный конфиг, `personal/`
+    источника, а последним — режим из манифеста. Решает ПЕРВЫЙ, который про ЭТОТ
+    модуль что-то говорит: переменная, назвавшая чужой модуль, про наш не
+    сказала ничего и решать за него не вправе.
+
+    Нет `tomllib` (он с python 3.11) — файловые источники читать нечем, и это
+    называется вслух; но манифест при этом остаётся, и объявленный выключенным
+    модуль выключенным и остаётся."""
+    listed = [part.strip() for part in os.environ.get("JARVIS_MODULES_OFF", "").split(",") if part.strip()]
+    if "all" in listed or "*" in listed or name in listed:
+        return ("off", "JARVIS_MODULES_OFF")
+    default = ("off" if str(manifest_mode or "on").lower() in OFF else "on", "манифест")
+    try:
+        import tomllib
+    except ImportError:
+        sys.stderr.write("mode из файлов не читается: нужен python 3.11+\n")
+        return default
+    for path in (modes_file(), os.path.join(source_root or "", "personal", "modules.toml")):
+        try:
+            with open(path, "rb") as fh:
+                table = tomllib.load(fh).get("modules") or {}
+        except OSError:
+            continue
+        except ValueError as bad:
+            # Испорченный конфиг — это не «модуль включён». Пропуск называется
+            # вслух, иначе выключенный модуль тихо работал бы.
+            sys.stderr.write("%s не читается: %s\n" % (path, bad))
+            continue
+        if name in table:
+            return ("off" if str(table[name]).lower() in OFF else "on", path)
+    return default
 
 
 def read_json(path, default=None):

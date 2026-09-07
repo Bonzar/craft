@@ -5,6 +5,7 @@
 модулю и без своего шага остался бы непокрытым вовсе.
 """
 
+import io
 import json
 import os
 import shutil
@@ -278,7 +279,8 @@ class ModeParity(unittest.TestCase):
         (None, None, None, "on", "on"),
         (None, None, None, "off", "off"),
         ("проба", None, None, "on", "off"),
-        ("другой", None, None, "off", "on"),
+        ("другой", None, None, "off", "off"),
+        ("другой", "off", None, "on", "off"),
         ("all", None, None, "on", "off"),
         (None, "off", None, "on", "off"),
         (None, "on", None, "off", "on"),
@@ -327,6 +329,25 @@ class ModeParity(unittest.TestCase):
                 self.assertEqual(status, want, "status разошёлся с матрицей")
                 self.assertEqual(self._wrapper_says(manifest_mode), want,
                                  "обёртка разошлась со status")
+
+    def test_без_tomllib_манифестный_режим_остаётся(self):
+        # Файловые источники читать нечем (tomllib с python 3.11), и это
+        # называется вслух. Но манифест при этом никуда не делся: выйди отсюда
+        # «включён», и модуль, объявленный выключенным, работал бы на стоковой
+        # macOS с её python 3.9.
+        saved = sys.modules.get("tomllib", "нет")
+        sys.modules["tomllib"] = None  # делает `import tomllib` ошибкой импорта
+        err, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            self.assertEqual(state.mode("проба", self.root, "off")[0], "off")
+            self.assertEqual(state.mode("проба", self.root, "on")[0], "on")
+            self.assertIn("python 3.11+", sys.stderr.getvalue())
+        finally:
+            sys.stderr = err
+            if saved == "нет":
+                del sys.modules["tomllib"]
+            else:
+                sys.modules["tomllib"] = saved
 
     def _wrapper_says(self, manifest_mode):
         """Что отвечает СГЕНЕРИРОВАННАЯ обёртка: гасит модуль или нет."""

@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(HERE, "pylib"))
 
 import harness as table  # noqa: E402
 import once  # noqa: E402
+import state  # noqa: E402
 import trace  # noqa: E402
 from decision import FIRM, missing_fact, unsupported  # noqa: E402
 from decide import decide  # noqa: E402
@@ -55,47 +56,6 @@ MODE = {{MODE}}
 DATA_FILES = [os.path.join(PACKAGE, rel) for rel in {{DATA}}]
 
 
-def mode_off(name):
-    """Выключен ли модуль. Источники по старшинству: переменная окружения, личный
-    конфиг, `personal/` источника, а последним — режим из манифеста. Решает
-    ПЕРВЫЙ, который про этот модуль вообще что-то говорит: иначе более слабый
-    источник переспоривал бы более сильный молчанием."""
-    listed = os.environ.get("JARVIS_MODULES_OFF", "")
-    names = [part.strip() for part in listed.split(",") if part.strip()]
-    if "all" in names or "*" in names or name in names:
-        return True
-    if names:
-        # Переменная задана и модуля в ней нет — это ответ «включён», а не
-        # молчание: она старшая.
-        return False
-    try:
-        import tomllib
-    except ImportError:
-        # Файловые источники `mode` читать нечем: tomllib появился в python 3.11.
-        # Это НЕ «модуль включён по умолчанию» молча — недостающее называется
-        # вслух, а работает то, что работает: переменная окружения.
-        sys.stderr.write("[%s] mode из файлов не читается: нужен python 3.11+\n" % name)
-        return False
-    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    for path in (
-        os.path.join(config_home, "jarvis", "modules.toml"),
-        os.path.join(SOURCE_ROOT, "personal", "modules.toml"),
-    ):
-        try:
-            with open(path, "rb") as fh:
-                table_of = tomllib.load(fh).get("modules") or {}
-        except OSError:
-            continue
-        except ValueError as bad:
-            # Испорченный конфиг — это не «модуль включён». Пропуск называется
-            # вслух, иначе выключенный модуль тихо работал бы.
-            sys.stderr.write("[%s] %s не читается: %s\n" % (name, path, bad))
-            continue
-        if name in table_of:
-            return str(table_of[name]).lower() in ("off", "false", "0")
-    return str(MODE).lower() in ("off", "false", "0")
-
-
 def main():
     raw = sys.stdin.buffer.read()
     event = table.to_event(raw)
@@ -104,7 +64,9 @@ def main():
     # где его не звали.
     if not event["event"] or event["event"] not in EVENTS:
         return 0
-    if mode_off(NAME):
+    # Режим читается ОБЩИМ кодом (pylib/state.mode) — тем же, которым отвечает
+    # `jarvis status`: две копии одного старшинства разъехались бы молча.
+    if state.mode(NAME, SOURCE_ROOT, MODE)[0] == "off":
         return 0
     if os.environ.get("JARVIS_ONCE") != "off" and not once.take(NAME, event, event["state_dir"]):
         return 0
