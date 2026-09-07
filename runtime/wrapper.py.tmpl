@@ -45,14 +45,17 @@ EVENTS = {{EVENTS}}
 # зависимостью. Спрашивать имя возможности у события бессмысленно — такого поля в
 # нём нет и быть не может, и модуль отвечал бы `unsupported` на каждом событии.
 FACTS = {{FACTS}}
+# Режим из манифеста: последний источник, когда о модуле молчат и переменная, и
+# оба конфига.
+MODE = {{MODE}}
 DATA_FILES = [os.path.join(PACKAGE, rel) for rel in {{DATA}}]
 
 
 def mode_off(name):
-    """Выключен ли модуль. Три источника по старшинству: переменная окружения,
-    личный конфиг, `personal/` источника. Решает ПЕРВЫЙ, который про этот модуль
-    вообще что-то говорит, — иначе более слабый источник переспоривал бы более
-    сильный молчанием."""
+    """Выключен ли модуль. Источники по старшинству: переменная окружения, личный
+    конфиг, `personal/` источника, а последним — режим из манифеста. Решает
+    ПЕРВЫЙ, который про этот модуль вообще что-то говорит: иначе более слабый
+    источник переспоривал бы более сильный молчанием."""
     listed = os.environ.get("JARVIS_MODULES_OFF", "")
     names = [part.strip() for part in listed.split(",") if part.strip()]
     if "all" in names or "*" in names or name in names:
@@ -86,7 +89,7 @@ def mode_off(name):
             continue
         if name in table_of:
             return str(table_of[name]).lower() in ("off", "false", "0")
-    return False
+    return str(MODE).lower() in ("off", "false", "0")
 
 
 def main():

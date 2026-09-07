@@ -235,7 +235,10 @@ def build(root, manifest, harness):
             # списка закрывает установка (находка «жёсткая зависимость ничем не
             # закрыта»), а событию их задать нельзя: такого поля в нём нет.
             .replace("{{FACTS}}", repr([r for r in (manifest.get("requires") or []) if r in FACTS]))
-            .replace("{{DATA}}", repr(list(manifest.get("data") or []))))
+            .replace("{{DATA}}", repr(list(manifest.get("data") or [])))
+            # Режим из манифеста — ПОСЛЕДНИЙ источник `mode`. Без него пакет,
+            # объявленный выключенным, работал бы на каждом событии.
+            .replace("{{MODE}}", repr(str(manifest.get("mode") or "on"))))
     hook = os.path.join(dist, "hook.py")
     with open(hook, "w", encoding="utf-8") as fh:
         fh.write(body)
@@ -291,6 +294,21 @@ def add_source(root):
     return True
 
 
+def known_names(root):
+    """Имена пакетов ДРУГИХ известных корней — по манифесту источника каждого.
+
+    Зависимость закрывает пакет из любого корня, а не только из своего: командный
+    пресет и дерево коллеги — такие же источники (решение 12). Смотри только своё
+    дерево — межкорневая зависимость читалась бы незакрытой, и установка отказывала
+    бы ровно там, где всё на месте."""
+    out = []
+    for other in read_sources():
+        if os.path.abspath(other) == os.path.abspath(root):
+            continue
+        out.extend(indexed_names(other))
+    return out
+
+
 def read_sources():
     try:
         with open(sources_list(), "r", encoding="utf-8") as fh:
@@ -319,10 +337,15 @@ def register(root, modules, harness):
     try:
         with open(path, "r", encoding="utf-8") as fh:
             settings = json.load(fh)
-    except (OSError, ValueError):
+    except OSError:
+        # Файла ещё нет — законная пустота: первая установка его и заводит.
         settings = {}
+    except ValueError as bad:
+        # А вот НЕРАЗБОРНЫЙ файл пустым считать нельзя: мы его перезапишем, и с
+        # ним исчезнут чужие регистрации и разрешения. Установка встаёт.
+        raise ValueError("%s не разбирается (%s); установка остановлена, файл не тронут" % (path, bad))
     if not isinstance(settings, dict):
-        settings = {}
+        raise ValueError("%s не объект; установка остановлена, файл не тронут" % path)
 
     wanted = {}
     for manifest in modules:
@@ -385,9 +408,9 @@ def user_modes_file():
     return os.path.join(config, "jarvis", "modules.toml")
 
 
-def mode_of(root, name):
-    """Режим модуля и ОТКУДА он взят — те же три источника и то же старшинство,
-    что читает обёртка на каждом событии."""
+def mode_of(root, name, manifest_mode="on"):
+    """Режим модуля и ОТКУДА он взят — те же источники и то же старшинство, что
+    читает обёртка на каждом событии; последний — сам манифест."""
     listed = [part.strip() for part in os.environ.get("JARVIS_MODULES_OFF", "").split(",") if part.strip()]
     if listed:
         off = "all" in listed or "*" in listed or name in listed
@@ -412,7 +435,8 @@ def mode_of(root, name):
         if name in table:
             value = str(table[name]).lower()
             return ("off" if value in ("off", "false", "0") else "on", path)
-    return ("on", "манифест")
+    default = str(manifest_mode or "on").lower()
+    return ("off" if default in ("off", "false", "0") else "on", "манифест")
 
 
 def set_mode(name, value):
@@ -447,7 +471,7 @@ def set_mode(name, value):
 
 def cmd_install(args):
     modules = read_modules(args.root)
-    found = check(args.root, modules, index=False)
+    found = check(args.root, modules, known=known_names(args.root), index=False)
     if found:
         for line in found:
             sys.stderr.write("check: %s\n" % line)
@@ -470,13 +494,13 @@ def cmd_install(args):
 
 def cmd_status(args):
     for manifest in read_modules(args.root):
-        mode, source = mode_of(args.root, manifest.get("name", ""))
+        mode, source = mode_of(args.root, manifest.get("name", ""), manifest.get("mode"))
         print("%-24s %-4s %s" % (manifest.get("name", ""), mode, source))
     return 0
 
 
 def cmd_check(args):
-    found = check(args.root, read_modules(args.root))
+    found = check(args.root, read_modules(args.root), known=known_names(args.root))
     for line in found:
         print(line)
     return 1 if found else 0
