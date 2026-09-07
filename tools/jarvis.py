@@ -58,7 +58,7 @@ def parse_frontmatter(text):
         raise ValueError("фронтматтер не закрыт")
     out = {}
     for line in text[3:end].split("\n"):
-        line = line.split("#", 1)[0].strip() if not _in_brackets(line) else line.strip()
+        line = _strip_comment(line)
         if not line:
             continue
         if ":" not in line:
@@ -68,10 +68,19 @@ def parse_frontmatter(text):
     return out
 
 
-def _in_brackets(line):
-    """Комментарий обрезается только вне скобок: `for: tool:x  # ...` обрезать
-    надо, а `[{ event: post-tool }]` трогать нельзя."""
-    return "[" in line and "]" in line
+def _strip_comment(line):
+    """Хвостовой комментарий — по ГЛУБИНЕ скобок, а не по их наличию в строке:
+    `events: [{ event: post-tool }]  # проба` иначе оставался бы с хвостом, список
+    читался бы незакрытым, и ошибка называла бы не ту причину."""
+    depth = 0
+    for i, ch in enumerate(line):
+        if ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+        elif ch == "#" and depth <= 0:
+            return line[:i].strip()
+    return line.strip()
 
 
 def _scalar_or_list(key, value):
@@ -153,25 +162,6 @@ def read_modules(root):
 
 
 # --- проверка ------------------------------------------------------------------
-
-def _for_mismatch(name, for_value):
-    """Расхождение имени с `for` (решение 18), словами; пусто — сошлось.
-
-    Правило механическое: `for: tool:git` и `for: harness:codex` требуют хвоста
-    `-git` / `-codex`. У `for: general` проверяется ОДНО — что хвост не есть имя
-    ХАРНЕСА: их список известен (`HARNESSES`), и `scope-claude` с `for: general`
-    читался бы адаптером, которым не является. Имена инструментов не известны
-    никому, поэтому хвост `-git` у `for: general` тут не ловится."""
-    if for_value.startswith("tool:") or for_value.startswith("harness:"):
-        want = for_value.split(":", 1)[1]
-        if not name.endswith("-" + want):
-            return "имя не соответствует for: %s (ждали хвост «-%s»)" % (for_value, want)
-        return ""
-    tail = name.rsplit("-", 1)[-1] if "-" in name else ""
-    if tail in HARNESSES:
-        return "хвост «-%s» — имя харнеса, а for: %s" % (tail, for_value or "не задан")
-    return ""
-
 
 def _for_mismatch(name, for_value):
     """Расхождение имени с `for` (решение 18), словами; пусто — сошлось.
@@ -459,6 +449,9 @@ def register(root, modules, harness):
         groups = hooks.get(event) or []
         keep = []
         for group in groups:
+            if not isinstance(group, dict):
+                raise ValueError("%s: группа хуков на событии %s не объект;"
+                                 " установка остановлена, файл не тронут" % (path, event))
             entries = [
                 entry for entry in (group.get("hooks") or [])
                 # Сверка ПО ЭТОМУ событию, а не по объединению всех: команда,
@@ -699,7 +692,13 @@ def main(argv=None):
         one.set_defaults(run=run)
     args = parser.parse_args(argv)
     args.root = os.path.abspath(args.root)
-    return args.run(args)
+    try:
+        return args.run(args)
+    except ValueError as bad:
+        # Свой отказ печатается СЛОВАМИ: тщательно составленное «файл не тронут»
+        # трейсбеком читается как поломка установщика, а не как его решение.
+        sys.stderr.write("%s\n" % bad)
+        return 1
 
 
 if __name__ == "__main__":

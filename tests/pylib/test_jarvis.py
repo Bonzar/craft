@@ -4,6 +4,7 @@
 кейсами не трогаются.
 """
 
+import io
 import json
 import os
 import shlex
@@ -92,12 +93,18 @@ class Frontmatter(unittest.TestCase):
         with self.assertRaises(ValueError):
             jarvis.parse_frontmatter("---\nname: x\n")
 
+    def test_комментарий_после_поточного_списка_режется(self):
+        # Комментарий обрезается ПО ГЛУБИНЕ скобок. По наличию скобок в строке он
+        # не резался вовсе, значение оставалось строкой, `event_names` перебирал
+        # её посимвольно — а ошибка называла не ту причину.
+        manifest = jarvis.parse_frontmatter("---\nevents: [{ event: post-tool }]  # хвост\n---\n")
+        self.assertEqual(manifest["events"], [{"event": "post-tool"}])
+
     def test_незакрытый_список_ошибка_а_не_строка(self):
-        # Комментарий после поточного списка съедал закрывающую скобку, и значение
-        # оставалось строкой; `event_names` перебирал её ПОСИМВОЛЬНО, а модуль
-        # ставился и молчал.
         with self.assertRaises(ValueError):
-            jarvis.parse_frontmatter("---\nevents: [{ event: post-tool }]  # хвост\n---\n")
+            jarvis.parse_frontmatter("---\nevents: [{ event: post-tool }\n---\n")
+
+
 
 
 class Check(unittest.TestCase):
@@ -351,6 +358,28 @@ class Install(unittest.TestCase):
         with self.assertRaises(ValueError):
             jarvis.register(self.root, jarvis.read_modules(self.root), "claude")
         self.assertTrue(os.path.isdir(settings), "не тронут")
+
+    def test_чужая_группа_хуков_не_объект_отказ_словами(self):
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        os.makedirs(os.path.dirname(settings), exist_ok=True)
+        with open(settings, "w", encoding="utf-8") as fh:
+            fh.write('{"hooks": {"PostToolUse": ["строка вместо группы"]}}')
+        with self.assertRaises(ValueError):
+            jarvis.register(self.root, jarvis.read_modules(self.root), "claude")
+
+    def test_свой_отказ_печатается_словами_а_не_трейсбеком(self):
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        os.makedirs(os.path.dirname(settings), exist_ok=True)
+        with open(settings, "w", encoding="utf-8") as fh:
+            fh.write("{не json")
+        err = io.StringIO()
+        saved, sys.stderr = sys.stderr, err
+        try:
+            code = jarvis.main(["--root", self.root, "install"])
+        finally:
+            sys.stderr = saved
+        self.assertEqual(code, 1)
+        self.assertIn("файл не тронут", err.getvalue())
 
     def test_чужой_hooks_не_объект_отказ_словами(self):
         settings = os.path.join(self.home, ".claude", "settings.json")

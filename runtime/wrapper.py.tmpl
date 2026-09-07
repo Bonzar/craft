@@ -126,7 +126,7 @@ def main():
                          % (NAME, decision.get("outcome"), event["event"]))
     # Правка входа печатается только там, где харнес её принимает; молча терять
     # её нельзя — модуль просил, и ничего не произошло.
-    if decision.get("modified_input") and "updatedInput" not in out:
+    if decision.get("modified_input") and not table.accepts_input(event["event"]):
         sys.stderr.write("[%s] правка входа не доехала: на событии %s её формы нет\n"
                          % (NAME, event["event"]))
 

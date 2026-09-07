@@ -69,6 +69,16 @@ ACCEPTS = {
 FACTS = ()
 
 
+# События, на которых харнес принимает ПРАВКУ ВХОДА. Спрашивают это у таблицы, а
+# не ищут маркер в её выводе: причина решения со словом `updatedInput` внутри
+# погасила бы предупреждение о потерянной правке.
+ACCEPTS_INPUT = ("pre-tool",)
+
+
+def accepts_input(event_name):
+    return event_name in ACCEPTS_INPUT
+
+
 def events():
     """Канонические имена событий, которые этот харнес умеет присылать."""
     return sorted(set(EVENT_BY_HARNESS.values()))

@@ -241,6 +241,13 @@ class ClaudeTable(unittest.TestCase):
         self.assertEqual(claude.render({"event": "post-tool"}, deny("нельзя")), "")
         self.assertEqual(claude.render({"event": "prompt"}, block("почему")), "")
 
+    def test_правку_входа_принимает_только_событие_до_вызова(self):
+        # Спрашивается у таблицы, а не ищется маркер в её выводе: причина решения
+        # со словом `updatedInput` внутри погасила бы предупреждение о потере.
+        self.assertTrue(claude.accepts_input("pre-tool"))
+        self.assertFalse(claude.accepts_input("post-tool"))
+        self.assertFalse(claude.accepts_input("stop"))
+
     def test_словарь_событий_отдаётся_целиком(self):
         self.assertIn("post-tool", claude.events())
         self.assertNotIn("post_tool", claude.events())

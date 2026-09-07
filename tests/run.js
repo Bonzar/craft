@@ -173,6 +173,9 @@ function resolveHook(base) {
       if (fs.existsSync(p)) return p;
     }
   }
+  // Харнес зашит намеренно: раннер ИГРАЕТ Claude — все фикстуры набора это его
+  // события. Появится вторая таблица — сюда придётся вписать и её, вместе с
+  // фикстурами под неё.
   const built = path.join(MODULES, base, 'dist', 'claude', 'hook.py');
   return fs.existsSync(built) ? built : '';
 }
