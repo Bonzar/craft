@@ -13,13 +13,13 @@
 //   block  — stdout с decision "block" (стоп-хуки)
 //   inject — stdout несёт директиву инцидента
 //   silent — stdout пуст
-//   contains:<строка> / not-contains: / err-contains:
+//   contains:<строка> / not-contains: / err-contains: / err-not-contains:
 //   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
 //     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
 //     stdout запись не проверить.
-// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, file-empty,
-// file-not-contains:), засчитывается только удавшемуся хуку: код возврата 0 и ни
-// строки диспетчера о падении. Упавший хук молчит так же.
+// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, err-not-contains:,
+// file-empty, file-not-contains:), засчитывается только удавшемуся хуку: код
+// возврата 0 и ни строки диспетчера о падении. Упавший хук молчит так же.
 // Exit 0 — все кейсы зелёные И каждый исход каждого хука покрыт; иначе 1.
 //
 // Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
@@ -105,6 +105,8 @@ const REQUIRED = [
   'stop-incident-closure:block', 'stop-incident-closure:silent',
   'stop-relative-link:block', 'stop-relative-link:silent',
   'session-anchor:deny', 'session-anchor:allow',
+  'universal-journal:silent',
+  'universal-instinct-flush:block', 'universal-instinct-flush:silent',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
@@ -174,7 +176,9 @@ function makeState() {
     fgdir,
     oncedir,
     icmark,
-    obsbuf: tmpName('observe-buffer-test'),
+    journal: tmpName('journal-test'),
+    flushmark: tmpName('instinct-flush-test'),
+    flushstate: tmpName('instinct-flush-state-test'),
     rfmark: tmpName('routine-facts-test'),
     planpath: tmpName('plan-file-test'),
     criticmark: tmpName('plan-critic-test'),
@@ -194,11 +198,18 @@ function makeState() {
     decisions: tmpName('decisions-test'),
     tmphome,
     metricsdefault: path.join(tmphome, 'metrics.default.jsonl'),
+    journaldefault: path.join(tmphome, 'journal.default.jsonl'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
     CRAFT_APPROVAL_REGISTRY: s.registry,
-    OBSERVE_BUFFER: s.obsbuf,
+    // Журнал событий сессии и отметка инстинкт-контура — герметичные у каждого
+    // кейса: производитель журнала зовётся на КАЖДОМ состоявшемся вызове, и общий
+    // путь означал бы, что прогон дописывает журнал живой сессии, а кейсы про
+    // сигналы читают чужие строки.
+    CRAFT_JOURNAL_LOG: s.journal,
+    INSTINCT_FLUSH_MARKER: s.flushmark,
+    INSTINCT_FLUSH_STATE: s.flushstate,
     FACT_GATE_STATE_DIR: s.fgdir,
     ROUTINE_FACTS_MARKER: s.rfmark,
     CRAFT_PLAN_FILE_MARKER: s.planpath,
@@ -283,7 +294,7 @@ function siblings(registry) {
 function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
-    `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
+    `${s.marker}.plans`, s.journal, s.flushmark, s.flushstate, s.rfmark, s.planpath,
     s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
@@ -335,6 +346,20 @@ function subst(value, s) {
   //
   // {DECISIONS} — журнал решений кейса: им проверяется САМ канал между хуками.
   //
+  // {JOURNAL} — журнал событий сессии этого прогона: по его строкам судят кейсы
+  // производителя журнала, и им же кейс наводит ASSERT_FILE на тот файл, куда
+  // пишет хук.
+  //
+  // {FLUSHMARK} — метка агента «разбор сделан»; {FLUSHSTATE} — состояние самого
+  // хука (докуда разобрано и докуда выдано). Они РАЗНЫЕ намеренно: горизонт
+  // двигает только хук, и кейсы обязаны бить в те же два файла.
+  //
+  // {JOURNAL_DEFAULT} — путь, который хук построил бы САМ, если бы периметр по
+  // сессии сняли. По нему кейс доказывает, что записи НЕ БЫЛО: свой {JOURNAL}
+  // тут не годится — при пустом переопределении хук о нём и не знал бы, и
+  // «файла нет» зеленело бы тавтологией. Тем же приёмом и по той же причине
+  // устроен {METRICS_DEFAULT}.
+  //
   // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
   // не переопределён. По нему кейс доказывает, что записи не было: свой
   // {METRICS} тут не годится — хук о нём и не знал бы.
@@ -345,6 +370,10 @@ function subst(value, s) {
     .split('{CODEXHOME}').join(s.codexhome)
     .split('{METRICS_DEFAULT}').join(s.metricsdefault)
     .split('{METRICS}').join(s.metrics)
+    .split('{JOURNAL_DEFAULT}').join(s.journaldefault)
+    .split('{JOURNAL}').join(s.journal)
+    .split('{FLUSHMARK}').join(s.flushmark)
+    .split('{FLUSHSTATE}').join(s.flushstate)
     .split('{DECISIONS}').join(s.decisions);
 }
 
@@ -408,6 +437,20 @@ function runPass(c) {
     if (setupList) step = subst(JSON.stringify(setupList[i] ?? null), s);
     runHook(sScript, step && step !== 'null' ? step : input, setupEnv);
   });
+
+  // `seed` — файлы, которые кладутся ПОСЛЕ подготовки и ДО прогона: путь →
+  // содержимое, с теми же подстановками. Порядок именно такой, потому что этим
+  // выражается АКТ АГЕНТА между двумя ходами: подготовка гоняет настоящие хуки и
+  // оставляет их состояние, посев добавляет то, что сделал агент (пустая метка
+  // «разобрал»), и лишь потом идёт проверяемый ход. Сеять раньше подготовки
+  // значило бы менять порядок событий на обратный.
+  for (const [file, body] of Object.entries(c.seed || {})) {
+    const target = subst(file, s);
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, subst(String(body), s));
+    } catch { /* посев не лёг — кейс упадёт на своём исходе, а не молча */ }
+  }
 
   // `repeat: N` — тот же вход подаётся N раз (хуки, которые отказывают один раз:
   // проверяется ответ ПОСЛЕДНЕГО вызова).
@@ -501,6 +544,14 @@ function grade(expect, out, err, env) {
   // Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет улику
   // доставки правила. Без отдельной проверки эта половина вывода не покрыта.
   if (expect.startsWith('err-contains:')) return err.includes(expect.slice('err-contains:'.length));
+  // Обратная сторона той же половины. Без неё «silent» — утверждение только про
+  // stdout, и хук, который вместо тихого прохода КРИЧИТ в служебный поток имя
+  // недостающего, проходит как молчаливый. А ровно там, где кейс различает «этого
+  // не было — факт» и «ответа нет — имя», разница и живёт в stderr. Это тоже
+  // утверждение о молчании, поэтому падение здесь — незачёт.
+  if (expect.startsWith('err-not-contains:')) {
+    return !err.includes(expect.slice('err-not-contains:'.length)) && !crashed(err, env);
+  }
   return null; // неизвестное ожидание
 }
 
@@ -529,6 +580,20 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
   ['universal-session-anchor', 'PreToolUse', 'Bash'],
   ['universal-session-anchor', 'PostToolUse', 'AskUserQuestion'],
+  // Производитель журнала: удали его из таблицы — прогон останется зелёным,
+  // журнал будет пуст, и все читатели фазы 2 увидят «сессия ничего не читала и
+  // не писала». Поверхность обязана быть закреплена, а не подразумеваться.
+  ['universal-journal', 'PostToolUse', 'Bash'],
+  ['universal-journal', 'PostToolUseFailure', 'Bash'],
+  // И НЕ ТОЛЬКО на интерпретаторе: маршрут можно сузить матчером до подмножества
+  // инструментов, и тогда исчезает вся половина фактов чтения, ради которой
+  // журнал заведён, — а раннер зовёт хуки напрямую и этого не видит.
+  ['universal-journal', 'PostToolUse', 'Read'],
+  ['universal-journal', 'PostToolUse', 'mcp__Craft__craft_write'],
+  // И правка файла — тоже: сузив маршрут до интерпретатора, чтения и базы
+  // заметок, три строки выше зеленеют все до одной, а из журнала исчезает вся
+  // ПОЛОВИНА ЗАПИСИ, ради которой его читает сборка набора изменений.
+  ['universal-journal', 'PostToolUse', 'Write'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
 

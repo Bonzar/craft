@@ -83,10 +83,39 @@ export function serviceTurnMarker() {
   return perSessionOrDefault('CRAFT_SERVICE_TURN_MARKER', 'plan-service-turn.{sid}');
 }
 
-// Инцидентный контур: буфер наблюдений и взвод закрытия.
-export function observeBuffer() {
-  return perSessionOrDefault('OBSERVE_BUFFER', 'agent-observe.{sid}.log');
+// Журнал событий сессии: строка на каждое чтение и каждую запись, плюс сигналы
+// хода. Правило СТРОГОЕ, как у периметра, а не как у счётчиков: по журналу
+// читатели судят, что эта сессия читала и писала, и общий default дал бы одной
+// сессии право править по чтению другой.
+//
+// Он же — факт `journal` канонического события: путь кладёт обёртка, прочитав
+// событие, а хук, которому журнал нужен, объявляет факт списком и на его
+// отсутствие отвечает `unsupported` с именем.
+export function journalLog() {
+  return perSession('CRAFT_JOURNAL_LOG', 'journal.{sid}.jsonl');
 }
+
+// Инстинкт-контур держит ДВА РАЗНЫХ факта в двух разных файлах, и это разделение
+// принципиально.
+//
+// Метка — акт АГЕНТА: «разбор сделан». Содержимого у неё нет и оно не читается:
+// значим только сам факт существования.
+//
+// Состояние — знание ХУКА: докуда сигналы уже выданы на разбор и докуда он выдал
+// их в последней директиве. Пишет его ТОЛЬКО хук и только про себя.
+//
+// Слить их в один файл нельзя. Тогда горизонт двигал бы гейтимый: агент,
+// упёршийся в блокировку конца хода, положил бы в метку заведомо большое число и
+// заглушил бы контур до конца сессии — не злым умыслом, а «помогая». Гейтимый не
+// пишет собственное предусловие; он может только сказать «сделал».
+export function instinctFlushMarker() {
+  return perSessionOrDefault('INSTINCT_FLUSH_MARKER', 'instinct-flush.{sid}.done');
+}
+export function instinctFlushState() {
+  return perSessionOrDefault('INSTINCT_FLUSH_STATE', 'instinct-flush.{sid}.state');
+}
+
+// Инцидентный контур: взвод закрытия разбора.
 export function incidentClosureMarker() {
   return perSessionOrDefault('INCIDENT_CLOSURE_MARKER', 'incident-closure.{sid}.armed');
 }
