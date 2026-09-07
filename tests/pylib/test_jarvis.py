@@ -241,7 +241,14 @@ class Check(unittest.TestCase):
                 "events: [{ event: post-tool }]\nrequires: []\ndata: []\nmode: on\n---\n")
         make_module(self.root, "данные", body=body, code=False)
         found = self.found()
-        self.assertTrue(any("decide.py нет" in line for line in found), found)
+        self.assertTrue(any("объявил события, а scripts/hooks/decide.py нет" in line
+                            for line in found), found)
+
+    def test_форма_поля_for_сверяется(self):
+        # Опечатка не попадала ни в одну ветку, и модуль вставал самостоятельным.
+        make_module(self.root, "scope-codex", for_value="harnes:codex")
+        found = self.found()
+        self.assertTrue(any("не из форм" in line for line in found), found)
 
     def test_пакет_без_событий_кода_не_требует(self):
         body = ("---\nname: только-данные\nkind: data\nfor: general\n"

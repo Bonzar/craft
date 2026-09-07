@@ -163,6 +163,9 @@ def read_modules(root):
 
 # --- проверка ------------------------------------------------------------------
 
+FOR_KINDS = ("general", "tool", "harness")
+
+
 def _for_mismatch(name, for_value):
     """Расхождение имени с `for` (решение 18), словами; пусто — сошлось.
 
@@ -171,7 +174,12 @@ def _for_mismatch(name, for_value):
     ХАРНЕСА: их список известен (`HARNESSES`), и `scope-claude` с `for: general`
     читался бы адаптером, которым не является. Имена инструментов не известны
     никому, поэтому хвост `-git` у `for: general` тут не ловится."""
-    if for_value.startswith("tool:") or for_value.startswith("harness:"):
+    # ФОРМА сверяется, а не угадывается: опечатка `harnes:codex` иначе не
+    # попадала бы ни в одну ветку, и модуль вставал бы самостоятельным.
+    head = for_value.split(":", 1)[0]
+    if head not in FOR_KINDS or (head == "general") != (":" not in for_value):
+        return "for: %s не из форм general | tool:<x> | harness:<x>" % (for_value or "не задан")
+    if head in ("tool", "harness"):
         want = for_value.split(":", 1)[1]
         if not name.endswith("-" + want):
             return "имя не соответствует for: %s (ждали хвост «-%s»)" % (for_value, want)
@@ -294,7 +302,7 @@ def _check_code(root, manifest):
     decide = os.path.join(root, "modules", manifest.get("dir", ""), "scripts", "hooks", "decide.py")
     if os.path.isfile(decide):
         return []
-    return ["%s: вид hook, а scripts/hooks/decide.py нет" % manifest.get("name", "")]
+    return ["%s: объявил события, а scripts/hooks/decide.py нет" % manifest.get("name", "")]
 
 
 # --- сборка --------------------------------------------------------------------

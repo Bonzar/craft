@@ -42,7 +42,9 @@ def decision_log(session_id, directory):
     override = os.environ.get("CRAFT_DECISION_LOG")
     if override:
         return override
-    return os.path.join(directory, "decisions.%s.jsonl" % (session_id or "default"))
+    # Пустой каталог — тот же `state_dir()`, слово в слово как в paths.js: иначе
+    # путь вышел бы ОТНОСИТЕЛЬНЫМ, и журнал лёг бы в рабочий каталог сессии.
+    return os.path.join(directory or state_dir(), "decisions.%s.jsonl" % (session_id or "default"))
 
 
 OFF = ("off", "false", "0")
@@ -74,7 +76,7 @@ def mode(name, source_root, manifest_mode="on"):
     try:
         import tomllib
     except ImportError:
-        sys.stderr.write("mode из файлов не читается: нужен python 3.11+\n")
+        sys.stderr.write("[%s] mode из файлов не читается: нужен python 3.11+\n" % name)
         return default
     for path in (modes_file(), os.path.join(source_root or "", "personal", "modules.toml")):
         try:
@@ -85,7 +87,7 @@ def mode(name, source_root, manifest_mode="on"):
         except ValueError as bad:
             # Испорченный конфиг — это не «модуль включён». Пропуск называется
             # вслух, иначе выключенный модуль тихо работал бы.
-            sys.stderr.write("%s не читается: %s\n" % (path, bad))
+            sys.stderr.write("[%s] %s не читается: %s\n" % (name, path, bad))
             continue
         if name in table:
             return ("off" if str(table[name]).lower() in OFF else "on", path)
