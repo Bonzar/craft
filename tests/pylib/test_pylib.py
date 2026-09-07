@@ -168,6 +168,13 @@ class Trace(unittest.TestCase):
         self.assertEqual(trace.line(self.event, "guard", block("x"))["class"], "guard")
         self.assertEqual(trace.line(self.event, "probe", none("x"))["class"], "")
 
+    def test_непокрытое_видно_классом_а_не_молчанием(self):
+        # Исход `none` верен: модуль ничего не запретил. Но без имени в классе
+        # `unsupported` в журнале неотличим от молчащего модуля.
+        line = trace.line(self.event, "guard", unsupported("tokens"))
+        self.assertEqual(line["outcome"], "none")
+        self.assertEqual(line["class"], "unsupported:tokens")
+
     def test_без_пути_журнала_говорит_нет(self):
         self.assertFalse(trace.write({"key": "k"}, "guard", none("x")))
 
@@ -212,6 +219,18 @@ class ClaudeTable(unittest.TestCase):
     def test_рендер_блокировки_конца_хода(self):
         out = json.loads(claude.render({"event": "stop"}, block("почему", "агенту")))
         self.assertEqual(out, {"decision": "block", "reason": "агенту"})
+
+    def test_отказ_на_чужом_событии_формы_не_получает(self):
+        # Харнес сверяет имя события в ответе с тем, на которое подписан модуль, и
+        # чужую форму молча выбрасывает. Подставить сюда PreToolUse значило бы
+        # потерять решение, оставив след, — сводка посчитала бы отказ, которого
+        # никто не видел.
+        self.assertEqual(claude.render({"event": "post-tool"}, deny("нельзя")), "")
+        self.assertEqual(claude.render({"event": "prompt"}, block("почему")), "")
+
+    def test_словарь_событий_отдаётся_целиком(self):
+        self.assertIn("post-tool", claude.events())
+        self.assertNotIn("post_tool", claude.events())
 
     def test_дописанный_контекст_печатается_с_именем_своего_события(self):
         out = json.loads(claude.render({"event": "prompt"}, none("", add_context="вот")))

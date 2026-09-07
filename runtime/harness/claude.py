@@ -6,6 +6,11 @@
 приходит к ней данными. Таблиц харнесов будет три (claude, codex, aisuite); эта
 первая, и она единственное место, куда придётся смотреть, когда добавится вторая.
 
+Здесь же — то, КУДА и В КАКОЙ ФОРМЕ пишется регистрация этого харнеса: путь его
+настроек и вид записи в них. Без этого знание о харнесе разъезжалось бы на два
+файла, и вторая таблица потребовала бы переписывать установщик, а не добавлять
+строку.
+
 Отдаёт КАНОНИЧЕСКОЕ событие (то же ядро, что .claude/hooks/lib/event.js):
 harness, session_id, call_id, event, tool, input, cwd, state_dir — и сверх ядра
 два ФАКТА ОБЁРТКИ, которых харнес не даёт, а считает она:
@@ -44,6 +49,31 @@ EVENT_BY_HARNESS = {
     "Notification": "notification",
 }
 HARNESS_BY_EVENT = {v: k for k, v in EVENT_BY_HARNESS.items()}
+
+
+# Какой исход харнес принимает на каком событии. Подделывать имя события нельзя:
+# харнес сверяет его с тем, на которое подписан модуль, и чужую форму молча
+# выбрасывает — решение исчезло бы, а след при этом уже лёг.
+ACCEPTS = {
+    "pre-tool": ("allow", "ask", "deny"),
+    "stop": ("block",),
+    "subagent-stop": ("block",),
+}
+
+
+def events():
+    """Канонические имена событий, которые этот харнес умеет присылать."""
+    return sorted(set(EVENT_BY_HARNESS.values()))
+
+
+def settings_path():
+    """Файл настроек харнеса, куда пишется строка регистрации."""
+    return os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+
+
+def registration(command):
+    """Запись регистрации в формате настроек этого харнеса."""
+    return {"type": "command", "command": command}
 
 
 def harness_event(name):
@@ -110,11 +140,18 @@ def render(event, decision):
     name = harness_event((event or {}).get("event") or "")
 
     if outcome == "block":
+        if outcome not in ACCEPTS.get((event or {}).get("event") or "", ()):
+            return ""
         return json.dumps({"decision": "block", "reason": decision.get("message") or reason})
     if outcome in ("deny", "ask", "allow"):
+        # Формы нет — печатать нечего. Подставить сюда имя события, на котором
+        # харнес такого исхода не принимает, значило бы отдать ему ответ, который
+        # он молча выбросит, а сводка посчитала бы отказ, которого не было.
+        if outcome not in ACCEPTS.get((event or {}).get("event") or "", ()):
+            return ""
         out = {
             "hookSpecificOutput": {
-                "hookEventName": harness_event("pre-tool"),
+                "hookEventName": name,
                 "permissionDecision": outcome,
                 "permissionDecisionReason": reason,
             }

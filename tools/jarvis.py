@@ -61,7 +61,7 @@ def parse_frontmatter(text):
         if ":" not in line:
             raise ValueError("строка без ключа: %s" % line)
         key, value = line.split(":", 1)
-        out[key.strip()] = _scalar_or_list(value.strip())
+        out[key.strip()] = _scalar_or_list(key.strip(), value.strip())
     return out
 
 
@@ -71,7 +71,9 @@ def _in_brackets(line):
     return "[" in line and "]" in line
 
 
-def _scalar_or_list(value):
+def _scalar_or_list(key, value):
+    if value.startswith("[") and not value.endswith("]"):
+        raise ValueError("список не закрыт у ключа %s: %s" % (key, value))
     if value.startswith("[") and value.endswith("]"):
         inner = value[1:-1].strip()
         if not inner:
@@ -151,7 +153,7 @@ def _tail_matches_for(name, for_value):
     return True
 
 
-def check(root, modules, known=None):
+def check(root, modules, known=None, harness="claude", index=True):
     """Находки установщика. Пустой список — дерево согласовано.
 
     Две находки решения 18 читаются здесь ОПЕРАЦИОННО, и вот почему. По одному
@@ -172,6 +174,14 @@ def check(root, modules, known=None):
     found = []
     names = [m.get("name", "") for m in modules]
     everywhere = set(names) | set(known or [])
+    supported = set(harness_table(harness).events())
+    # Пакет, стоящий в манифесте ИСТОЧНИКА, но исчезнувший из дерева: манифест
+    # пишет установка, а папку сносят руками, и между двумя установками модуль
+    # значится поставленным, не существуя. УСТАНОВКЕ это не находка (index=False):
+    # она манифест источника переписывает, то есть ровно это и чинит.
+    if index:
+        for gone in sorted(set(indexed_names(root)) - set(names)):
+            found.append("%s: пакет в манифесте источника, а папки нет" % gone)
     for manifest in modules:
         name = manifest.get("name", "")
         directory = manifest.get("dir", "")
@@ -184,8 +194,6 @@ def check(root, modules, known=None):
             found.append("%s: вид «%s» не из списка %s" % (name, manifest.get("kind"), ", ".join(KINDS)))
         if not _tail_matches_for(name, manifest.get("for", "")):
             found.append("%s: имя не соответствует for: %s" % (name, manifest.get("for")))
-        if not os.path.isdir(os.path.join(root, "modules", directory)):
-            found.append("%s: пакет в манифесте, а папки нет" % name)
         if names.count(name) > 1:
             found.append("%s: два пакета с одним именем" % name)
         bases = sorted(other for other in everywhere
@@ -193,6 +201,10 @@ def check(root, modules, known=None):
         if len(bases) > 1:
             found.append("%s: имя читается как добавка сразу к нескольким базам: %s"
                          % (name, ", ".join(bases)))
+        for event in event_names(manifest):
+            if event not in supported:
+                found.append("%s: событие «%s» харнесу неизвестно; канонические имена: %s"
+                             % (name, event, ", ".join(sorted(supported))))
         for need in manifest.get("requires") or []:
             if need not in FACTS and need not in everywhere:
                 found.append("%s: жёсткая зависимость «%s» ничем не закрыта" % (name, need))
@@ -219,7 +231,10 @@ def build(root, manifest, harness):
             .replace("{{MODULE}}", manifest["name"])
             .replace("{{HARNESS}}", harness)
             .replace("{{EVENTS}}", repr(event_names(manifest)))
-            .replace("{{REQUIRES}}", repr(list(manifest.get("requires") or [])))
+            # В обёртку едут только ФАКТЫ события. Имена возможностей из того же
+            # списка закрывает установка (находка «жёсткая зависимость ничем не
+            # закрыта»), а событию их задать нельзя: такого поля в нём нет.
+            .replace("{{FACTS}}", repr([r for r in (manifest.get("requires") or []) if r in FACTS]))
             .replace("{{DATA}}", repr(list(manifest.get("data") or []))))
     hook = os.path.join(dist, "hook.py")
     with open(hook, "w", encoding="utf-8") as fh:
@@ -232,6 +247,16 @@ def build(root, manifest, harness):
 
 def index_path(root):
     return os.path.join(root, "modules.index.json")
+
+
+def indexed_names(root):
+    """Имена пакетов из манифеста источника — картина ПРОШЛОЙ установки."""
+    try:
+        with open(index_path(root), "r", encoding="utf-8") as fh:
+            index = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    return [m.get("name", "") for m in (index.get("modules") or []) if isinstance(m, dict)]
 
 
 def write_index(root, modules):
@@ -276,22 +301,20 @@ def read_sources():
 
 # --- регистрация в харнесе -----------------------------------------------------
 
-def settings_path():
-    return os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
-
-
-def _harness_event(harness, name):
+def harness_table(harness):
+    """Таблица харнеса: имена его событий, путь его настроек, форма записи в них.
+    Единственное место, откуда установщик знает про харнес."""
     sys.path.insert(0, os.path.join(ROOT, "runtime", "harness"))
     sys.path.insert(0, os.path.join(ROOT, "runtime", "pylib"))
-    table = __import__(harness)
-    return table.harness_event(name)
+    return __import__(harness)
 
 
-def register(root, modules, harness="claude"):
+def register(root, modules, harness):
     """Строка на модуль и событие в настройках харнеса. Чужие записи не
     трогаются; свои устаревшие — снимаются, иначе снятый из манифеста модуль
     продолжал бы запускаться."""
-    path = settings_path()
+    table = harness_table(harness)
+    path = table.settings_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -306,7 +329,9 @@ def register(root, modules, harness="claude"):
         command = "python3 %s" % os.path.join(
             root, "modules", manifest["dir"], "dist", harness, "hook.py")
         for name in event_names(manifest):
-            event = _harness_event(harness, name)
+            event = table.harness_event(name)
+            # Имя, которого этот харнес не знает, до сюда не доходит: его ловит
+            # `check`, и установка на находках не идёт.
             if event:
                 wanted.setdefault(event, set()).add(command)
 
@@ -326,7 +351,7 @@ def register(root, modules, harness="claude"):
         present = {entry.get("command", "") for group in keep for entry in group.get("hooks") or []}
         missing = sorted(wanted.get(event, set()) - present)
         if missing:
-            keep.append({"hooks": [{"type": "command", "command": cmd} for cmd in missing]})
+            keep.append({"hooks": [table.registration(cmd) for cmd in missing]})
         if keep:
             hooks[event] = keep
         else:
@@ -367,12 +392,22 @@ def mode_of(root, name):
     if listed:
         off = "all" in listed or "*" in listed or name in listed
         return ("off" if off else "on", "JARVIS_MODULES_OFF")
-    import tomllib
+    try:
+        import tomllib
+    except ImportError:
+        # Файловые источники читать нечем (нужен python 3.11+). Называем вслух, а
+        # не выдаём умолчание за прочитанный ответ.
+        return ("on", "файловые источники не читаются: нужен python 3.11+")
     for path in (user_modes_file(), os.path.join(root, "personal", "modules.toml")):
         try:
             with open(path, "rb") as fh:
                 table = tomllib.load(fh).get("modules") or {}
-        except (OSError, ValueError):
+        except OSError:
+            continue
+        except ValueError as bad:
+            # Испорченный конфиг — это не «модуль включён». Пропуск называется
+            # вслух, иначе выключенный модуль тихо работал бы.
+            sys.stderr.write("%s не читается: %s\n" % (path, bad))
             continue
         if name in table:
             value = str(table[name]).lower()
@@ -402,15 +437,17 @@ def set_mode(name, value):
             seen = True
     if not seen:
         lines.insert(lines.index("[modules]") + 1, entry)
+    # Пустые строки НЕ выбрасываются: у чужого файла с другими секциями они
+    # разделяют блоки, и склеенный файл — испорченный файл.
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(line for line in lines if line.strip() != "") + "\n")
+        fh.write("\n".join(lines).rstrip("\n") + "\n")
 
 
 # --- команды -------------------------------------------------------------------
 
 def cmd_install(args):
     modules = read_modules(args.root)
-    found = check(args.root, modules)
+    found = check(args.root, modules, index=False)
     if found:
         for line in found:
             sys.stderr.write("check: %s\n" % line)
@@ -420,10 +457,11 @@ def cmd_install(args):
         return 1
     write_index(args.root, modules)
     added = add_source(args.root)
-    for manifest in modules:
-        for harness in HARNESSES:
+    changed = False
+    for harness in HARNESSES:
+        for manifest in modules:
             build(args.root, manifest, harness)
-    changed = register(args.root, modules)
+        changed = register(args.root, modules, harness) or changed
     print("modules: %d" % len(modules))
     print("sources: %s" % ("корень дописан" if added else "корень уже в списке"))
     print("settings: %s" % ("регистрации обновлены" if changed else "no changes needed"))

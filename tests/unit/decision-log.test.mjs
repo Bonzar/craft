@@ -7,7 +7,7 @@
 //
 // Читатель один — наблюдатель, и читает он ОТ СМЕЩЕНИЯ: строки этого события он
 // заберёт на следующем и перенесёт в свой журнал. Сшивку строки с событием держат
-// кейсы свёртки (tests/unit/metrics.test.mjs): ключ — номер появления события.
+// кейсы свёртки (tests/unit/metrics.test.mjs): ключ — ключ события.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -54,7 +54,7 @@ test('строка видна ДРУГОМУ процессу: канал пер
     assert.equal(d.outcome, 'deny');
     assert.equal(d.hook, 'universal-guard-plan-gate');
     assert.equal(d.class, 'gate.empty');
-    assert.equal(d.key, EVENT.key, 'номер появления — ключ сшивки с событием');
+    assert.equal(d.key, EVENT.key, 'ключ события — он же ключ сшивки');
     assert.equal(d.h, undefined,
       'хеш вызова живёт на записи ВЫЗОВА: у отказанного вызова она теперь есть, и вторая копия разъезжалась бы');
     assert.ok(offset > 0, 'смещение сдвинулось: следующее чтение начнётся отсюда');

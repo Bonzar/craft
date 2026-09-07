@@ -17,10 +17,11 @@
 //   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
 //     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
 //     stdout запись не проверить.
-//   stdout-empty — ни строки на stdout, ЧТО БЫ НИ БЫЛО с кодом возврата. Не то
-//     же, что silent: silent заодно утверждает, что хук не упал, а этим исходом
-//     проверяется ровно случай «строка регистрации не отработала вовсе» — там
-//     код заведомо ненулевой, а харнесу важно только, что ответа он не получил.
+// Исход, утверждающий молчание, засчитывается только хуку, который отработал
+// ОЖИДАЕМО. Ожидаемый код возврата — ноль; кейс вправе назвать другой полем
+// `exit`, и нужно это ровно там, где проверяется строка регистрации, которая не
+// смогла запуститься (нет интерпретатора — 127). Без этого поля пришлось бы
+// заводить исход, безразличный к коду вовсе, — а он зеленел бы и на упавшем хуке.
 // Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, err-not-contains:,
 // file-empty, file-not-contains:), засчитывается только удавшемуся хуку: код
 // возврата 0 и ни строки диспетчера о падении. Упавший хук молчит так же.
@@ -181,7 +182,9 @@ function runHook(script, input, env, args = [], shell = false) {
   const isPy = script.endsWith('.py');
   const cmd = isJs ? process.execPath : (isPy ? 'python3' : 'bash');
   if (shell) {
-    return spawnSync('sh', ['-c', [cmd, script, ...args].join(' ')], {
+    // Оболочка — ПО АБСОЛЮТНОМУ ПУТИ: кейс про отсутствующий интерпретатор сам
+    // подменяет PATH, и по имени не нашлась бы уже она сама.
+    return spawnSync('/bin/sh', ['-c', [cmd, script, ...args].join(' ')], {
       input, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
     });
   }
@@ -275,6 +278,12 @@ function makeState() {
     // Временный каталог прогона: пути, которые хук строит сам через os.tmpdir(),
     // должны лечь сюда, а не в общий /tmp.
     TMPDIR: s.tmphome,
+    // Дом и каталог конфига — тоже временные. Обёртка пакета читает `mode` из
+    // ~/.config/jarvis/modules.toml, а lib/env.js — ~/.claude/craft.env: с живым
+    // домом исход кейса зависел бы от того, что лежит на машине запускающего, и
+    // выключенный у себя пакет красил бы прогон у всех.
+    HOME: s.tmphome,
+    XDG_CONFIG_HOME: path.join(s.tmphome, 'config'),
     // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
     // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
     CRAFT_METRICS_LOG: s.metrics,
@@ -562,7 +571,10 @@ const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 // нулю — он не уносит цепочку, — поэтому падение видно только по его строке в
 // служебном потоке. Любой исход, который утверждает МОЛЧАНИЕ, обязан это
 // различать: иначе поломка зеленит кейс.
-const crashed = (err, env) => (env || {}).CODE !== 0 || /\[dispatch\] хук .* упал/.test(err || '');
+const crashed = (err, env) => {
+  const want = Number.isFinite((env || {}).WANT_CODE) ? env.WANT_CODE : 0;
+  return (env || {}).CODE !== want || /\[dispatch\] хук .* упал/.test(err || '');
+};
 
 function grade(expect, out, err, env) {
   // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
@@ -594,11 +606,6 @@ function grade(expect, out, err, env) {
   if (expect === 'block') return isBlock(out);
   if (expect === 'inject') return out.includes('СИГНАЛ ИНЦИДЕНТА');
   if (expect === 'silent') return trim(out) === '' && !crashed(err, env);
-  // «Ответа харнес не получил» — и только это. Про код возврата исход НЕ
-  // утверждает ничего: им проверяется строка регистрации, которая не смогла
-  // запуститься, и требовать от неё нулевого кода значило бы требовать, чтобы
-  // отсутствующий интерпретатор отработал успешно.
-  if (expect === 'stdout-empty') return trim(out) === '';
   if (expect.startsWith('contains:')) return out.includes(expect.slice('contains:'.length));
   if (expect.startsWith('not-contains:')) {
     return !out.includes(expect.slice('not-contains:'.length)) && !crashed(err, env);
@@ -770,6 +777,14 @@ function smokeChecks() {
     smoke.push(`orphan hook (not registered in settings.json or install.sh): ${b}`);
   }
 
+  // `mode` пакета читается ещё и из `personal/modules.toml` САМОГО ДЕРЕВА, а его
+  // путь обёртка считает от своего файла — переопределить его окружением нельзя.
+  // Выключенный там пилот красил бы кейсы пакета, и выглядело бы это поломкой
+  // кода. Поэтому не молчим: называем причину заранее.
+  if (fs.existsSync(path.join(REPO, 'personal', 'modules.toml'))) {
+    smoke.push('personal/modules.toml в чекауте: кейсы пакетов негерметичны против него');
+  }
+
   smoke.push(...utf8GlueChecks());
   return smoke;
 }
@@ -922,7 +937,9 @@ function main() {
 
       // Путь и текст приходят из прогона уже подставленными: подставлять здесь
       // заново было бы нечем — состояния прогона тут уже нет.
-      const env = { ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code };
+      const env = {
+        ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code, WANT_CODE: c.exit,
+      };
       let ok = true;
       let got = r.out;
       for (const one of expects) {

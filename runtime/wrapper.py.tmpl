@@ -20,7 +20,6 @@
 
 import os
 import sys
-import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PACKAGE = os.path.dirname(os.path.dirname(HERE))
@@ -36,12 +35,16 @@ sys.path.insert(0, os.path.join(PACKAGE, "scripts", "hooks"))
 import harness as table  # noqa: E402
 import once  # noqa: E402
 import trace  # noqa: E402
-from decision import missing_fact, unsupported  # noqa: E402
+from decision import FIRM, missing_fact, unsupported  # noqa: E402
 from decide import decide  # noqa: E402
 
 NAME = "{{MODULE}}"
 EVENTS = {{EVENTS}}
-REQUIRES = {{REQUIRES}}
+# Только ФАКТЫ события из `requires`. Остальное в `requires` — имена возможностей,
+# и закрывает их установка: она отказывается ставить модуль с незакрытой жёсткой
+# зависимостью. Спрашивать имя возможности у события бессмысленно — такого поля в
+# нём нет и быть не может, и модуль отвечал бы `unsupported` на каждом событии.
+FACTS = {{FACTS}}
 DATA_FILES = [os.path.join(PACKAGE, rel) for rel in {{DATA}}]
 
 
@@ -58,6 +61,14 @@ def mode_off(name):
         # Переменная задана и модуля в ней нет — это ответ «включён», а не
         # молчание: она старшая.
         return False
+    try:
+        import tomllib
+    except ImportError:
+        # Файловые источники `mode` читать нечем: tomllib появился в python 3.11.
+        # Это НЕ «модуль включён по умолчанию» молча — недостающее называется
+        # вслух, а работает то, что работает: переменная окружения.
+        sys.stderr.write("[%s] mode из файлов не читается: нужен python 3.11+\n" % name)
+        return False
     config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     for path in (
         os.path.join(config_home, "jarvis", "modules.toml"),
@@ -66,7 +77,12 @@ def mode_off(name):
         try:
             with open(path, "rb") as fh:
                 table_of = tomllib.load(fh).get("modules") or {}
-        except (OSError, ValueError):
+        except OSError:
+            continue
+        except ValueError as bad:
+            # Испорченный конфиг — это не «модуль включён». Пропуск называется
+            # вслух, иначе выключенный модуль тихо работал бы.
+            sys.stderr.write("[%s] %s не читается: %s\n" % (name, path, bad))
             continue
         if name in table_of:
             return str(table_of[name]).lower() in ("off", "false", "0")
@@ -86,7 +102,7 @@ def main():
     if os.environ.get("JARVIS_ONCE") != "off" and not once.take(NAME, event, event["state_dir"]):
         return 0
 
-    missing = missing_fact(event, REQUIRES)
+    missing = missing_fact(event, FACTS)
     # Недостающая жёсткая зависимость даёт явное `unsupported` С ИМЕНЕМ, а не
     # молчание и не обходной путь (решение 14). Логика при этом не зовётся: ей
     # нечем работать.
@@ -99,6 +115,12 @@ def main():
         sys.stderr.write("[%s] след решения не лёг в журнал\n" % NAME)
 
     out = table.render(event, decision)
+    # Исключающее решение без формы — не молчание, а потеря: харнес такого исхода
+    # на этом событии не принимает, а след уже лёг, и сводка посчитает отказ,
+    # которого никто не видел. Говорим вслух.
+    if not out and decision.get("outcome") in FIRM:
+        sys.stderr.write("[%s] исход %s не имеет формы на событии %s\n"
+                         % (NAME, decision.get("outcome"), event["event"]))
     if out:
         sys.stdout.write(out + "\n")
     return 0

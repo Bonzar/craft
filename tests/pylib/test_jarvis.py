@@ -62,6 +62,13 @@ class Frontmatter(unittest.TestCase):
         with self.assertRaises(ValueError):
             jarvis.parse_frontmatter("---\nname: x\n")
 
+    def test_незакрытый_список_ошибка_а_не_строка(self):
+        # Комментарий после поточного списка съедал закрывающую скобку, и значение
+        # оставалось строкой; `event_names` перебирал её ПОСИМВОЛЬНО, а модуль
+        # ставился и молчал.
+        with self.assertRaises(ValueError):
+            jarvis.parse_frontmatter("---\nevents: [{ event: post-tool }]  # хвост\n---\n")
+
 
 class Check(unittest.TestCase):
     def setUp(self):
@@ -93,11 +100,16 @@ class Check(unittest.TestCase):
         make_module(self.root, "trace-probe")
         self.assertEqual(self.found(), [])
 
-    def test_пакет_в_манифесте_без_папки(self):
+    def test_пакет_в_манифесте_источника_без_папки(self):
+        # Манифест источника — картина ПРОШЛОЙ установки: по нему модули узнают,
+        # что лежит в чужом корне. Снесённая руками папка делает его враньём.
         make_module(self.root, "исчезнет")
-        modules = jarvis.read_modules(self.root)
+        jarvis.write_index(self.root, jarvis.read_modules(self.root))
         shutil.rmtree(os.path.join(self.root, "modules", "исчезнет"))
-        self.assertTrue(any("папки нет" in line for line in jarvis.check(self.root, modules)))
+        found = jarvis.check(self.root, jarvis.read_modules(self.root))
+        self.assertTrue(any("папки нет" in line for line in found), found)
+        self.assertEqual(jarvis.check(self.root, jarvis.read_modules(self.root), index=False), [],
+                         "установке это не находка: она манифест источника и переписывает")
 
     def test_два_пакета_с_одним_именем(self):
         make_module(self.root, "первый")
@@ -215,6 +227,18 @@ class Install(unittest.TestCase):
         make_module(self.root, "changeset", for_value="tool:git")
         self.assertEqual(self.install(), 1)
 
+    def test_off_не_склеивает_чужой_конфиг(self):
+        path = jarvis.user_modes_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('[other]\nkey = "value"\n\n[modules]\n')
+        jarvis.main(["--root", self.root, "off", "проба"])
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        self.assertIn("\n\n[modules]", body, "пустая строка между секциями цела")
+        self.assertIn('key = "value"', body, "чужая секция цела")
+        self.assertEqual(jarvis.mode_of(self.root, "проба")[0], "off")
+
     def test_mode_старшинство_переменная_потом_конфиг(self):
         self.install()
         self.assertEqual(jarvis.mode_of(self.root, "проба")[0], "on")
@@ -228,3 +252,58 @@ class Install(unittest.TestCase):
         os.environ.pop("JARVIS_MODULES_OFF")
         jarvis.main(["--root", self.root, "on", "проба"])
         self.assertEqual(jarvis.mode_of(self.root, "проба")[0], "on")
+
+class EventNames(unittest.TestCase):
+    """Имя события в манифесте сверяется со словарём харнеса. Без этой находки
+    модуль ставится, обёртка собирается, регистрация не пишется — и он молчит
+    навсегда."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.root, "modules"))
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def found(self):
+        return jarvis.check(self.root, jarvis.read_modules(self.root))
+
+    def test_каноническое_имя_проходит(self):
+        make_module(self.root, "x")
+        self.assertEqual(self.found(), [])
+
+    def test_подчёркивание_вместо_дефиса_находка(self):
+        body = MANIFEST % ("x", "hook", "general")
+        make_module(self.root, "x", body=body.replace("post-tool", "post_tool"))
+        found = self.found()
+        self.assertTrue(any("харнесу неизвестно" in line for line in found), found)
+
+    def test_выдуманное_событие_находка(self):
+        body = MANIFEST % ("x", "hook", "general")
+        make_module(self.root, "x", body=body.replace("post-tool", "когда-нибудь-потом"))
+        self.assertTrue(any("харнесу неизвестно" in line for line in self.found()))
+
+
+class Wrapper(unittest.TestCase):
+    """В обёртку из `requires` едут только ФАКТЫ события: имя возможности задать
+    событию нельзя, и модуль отвечал бы `unsupported` на каждом событии."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.root, "modules"))
+        for name in ("runtime",):
+            shutil.copytree(os.path.join(ROOT, name), os.path.join(self.root, name),
+                            ignore=shutil.ignore_patterns("__pycache__"))
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_возможность_из_requires_в_обёртку_не_едет(self):
+        body = ("---\nname: база-тема\nkind: hook\nfor: general\n"
+                "events: [{ event: post-tool }]\nrequires: [база, tokens]\ndata: []\nmode: on\n---\n")
+        make_module(self.root, "база-тема", body=body)
+        hook = jarvis.build(self.root, jarvis.read_modules(self.root)[0], "claude")
+        with open(hook, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("FACTS = ['tokens']", text)
+        self.assertNotIn("база", text.split("DATA_FILES")[0].split("FACTS =")[1])

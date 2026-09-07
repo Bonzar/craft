@@ -10,7 +10,8 @@
 
 Текста причины в журнале НЕТ — только КЛАСС: журнал переживает сессию, а причина
 отказа содержит куски работы Влада. Класс — короткое имя решателя, ровно как в
-lib/reason-class.js, и только у исключающих исходов.
+lib/reason-class.js, у исключающих исходов; у непокрытого — имя того, чего не
+хватило, иначе `unsupported` в журнале неотличим от молчания.
 
 Адаптером эта запись не является (решение 25): куда писать, говорит `state_dir`
 из ядра события, его подставляет обёртка, и один и тот же код пишет туда, куда
@@ -19,16 +20,20 @@ lib/reason-class.js, и только у исключающих исходов.
 
 import datetime
 
+from decision import FIRM
 from state import append_jsonl
-
-FIRM = ("deny", "ask", "block")
 
 
 def line(event, module, decision):
     """Строка следа. Отдельно от записи, чтобы её можно было проверить, не
     трогая диск."""
     event = event or {}
-    outcome = (decision or {}).get("outcome") or ""
+    decision = decision or {}
+    outcome = decision.get("outcome") or ""
+    # Класс — короткое имя решателя у исключающих исходов; у непокрытого — имя
+    # того, чего не хватило, иначе `unsupported` в журнале неотличим от молчания.
+    missing = decision.get("unsupported")
+    reason_class = module if outcome in FIRM else ("unsupported:%s" % missing if missing else "")
     return {
         "kind": "decision",
         "ts": datetime.datetime.now(datetime.timezone.utc)
@@ -40,7 +45,7 @@ def line(event, module, decision):
         "event": event.get("event") or "",
         "hook": module,
         "outcome": outcome,
-        "class": module if outcome in FIRM else "",
+        "class": reason_class,
     }
 
 

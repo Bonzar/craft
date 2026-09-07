@@ -159,8 +159,8 @@ export function metricsLog(sid) {
 
 // Журнал решений: канал от решателя к наблюдателю. Решение пишет тот, кто решает
 // (decide.js), наблюдатель переносит строки в свой журнал (decision-log.js). Файл
-// один на сессию, а строки различаются НОМЕРОМ ПОЯВЛЕНИЯ события — по нему их и
-// сшивают, поэтому события не путаются между собой.
+// один на сессию и ОБЩИЙ с пакетами; строки различаются ключом события и его
+// именем — по этой паре их и сшивают (lib/metrics-summary.js).
 export function decisionLog(sid, dir = '') {
   const override = process.env.CRAFT_DECISION_LOG;
   if (override) return override;
