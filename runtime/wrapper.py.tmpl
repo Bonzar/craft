@@ -115,19 +115,27 @@ def main():
     # нечем работать.
     decision = unsupported(missing) if missing else decide(event, DATA_FILES, event["state_dir"])
 
+    # Форма считается ДО следа: исключающее решение, которому на этом событии
+    # формы нет, харнес не увидит, и в журнал оно обязано лечь помеченным —
+    # иначе сводка посчитает отказ, которого никто не видел.
+    out = table.render(event, decision)
+    firm = decision.get("outcome") in FIRM
+    delivered = bool(out) or not firm
+    if not delivered:
+        sys.stderr.write("[%s] исход %s не имеет формы на событии %s\n"
+                         % (NAME, decision.get("outcome"), event["event"]))
+    # Правка входа печатается только там, где харнес её принимает; молча терять
+    # её нельзя — модуль просил, и ничего не произошло.
+    if decision.get("modified_input") and "updatedInput" not in out:
+        sys.stderr.write("[%s] правка входа не доехала: на событии %s её формы нет\n"
+                         % (NAME, event["event"]))
+
     # След — ВСЕГДА и ДО печати: печать может уйти в закрытый поток, а решение
     # обязано быть записано раньше. Не легло — говорим вслух, потому что молчание
     # на месте отказа читается как проход.
-    if not trace.write(event, NAME, decision):
+    if not trace.write(event, NAME, decision, delivered):
         sys.stderr.write("[%s] след решения не лёг в журнал\n" % NAME)
 
-    out = table.render(event, decision)
-    # Исключающее решение без формы — не молчание, а потеря: харнес такого исхода
-    # на этом событии не принимает, а след уже лёг, и сводка посчитает отказ,
-    # которого никто не видел. Говорим вслух.
-    if not out and decision.get("outcome") in FIRM:
-        sys.stderr.write("[%s] исход %s не имеет формы на событии %s\n"
-                         % (NAME, decision.get("outcome"), event["event"]))
     if out:
         sys.stdout.write(out + "\n")
     return 0

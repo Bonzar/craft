@@ -175,6 +175,15 @@ class Trace(unittest.TestCase):
         self.assertEqual(line["outcome"], "none")
         self.assertEqual(line["class"], "unsupported:tokens")
 
+    def test_недоставленное_решение_видно_классом(self):
+        # Отказ, которому на этом событии нет формы, харнес не показал. Встань он
+        # в счёт наравне с доехавшими — сводка считала бы отказ, которого никто
+        # не видел, а это ровно та ложь, от которой заведён весь канал.
+        line = trace.line(self.event, "guard", deny("нельзя"), delivered=False)
+        self.assertEqual(line["outcome"], "deny")
+        self.assertEqual(line["class"], "undelivered:deny")
+        self.assertEqual(trace.line(self.event, "guard", deny("нельзя"))["class"], "guard")
+
     def test_без_пути_журнала_говорит_нет(self):
         self.assertFalse(trace.write({"key": "k"}, "guard", none("x")))
 

@@ -173,24 +173,25 @@ def _for_mismatch(name, for_value):
     return ""
 
 
-def check(root, modules, known=None, harness="claude", index=True):
+def check(root, modules, known=None, index=True):
     """Находки установщика. Пустой список — дерево согласовано.
 
-    Две находки решения 18 читаются здесь ОПЕРАЦИОННО, и вот почему. По одному
-    имени база и добавка неразличимы: `changeset-review` — это и «добавка review
-    к базе changeset», и самостоятельная база с дефисом в имени. Поэтому:
+    Две находки решения 18 держатся на ОДНОМ правиле: имя, начинающееся с имени
+    другого пакета, читается ДОБАВКОЙ, и добавка обязана назвать свою базу в
+    `requires`. Отсюда обе:
 
-    «имя базы — начало имени другой базы» проверяется как НЕОДНОЗНАЧНОЕ ЧТЕНИЕ:
-    находка, когда именем пакета начинаются ДВА разных существующих имени
-    (`changeset`, `changeset-review`, `changeset-review-extra`) — тогда правило
-    чтения не может сказать, чья это добавка. Один кандидат читается однозначно и
-    находкой не является.
+    «имя базы — начало имени другой базы» — находка, когда пакет начинается с
+    имени существующего пакета, а базы в `requires` не назвал: значит он себя
+    добавкой не считает, и два имени столкнулись. Либо назови базу, либо
+    переименуйся.
 
-    «добавка без базы» проверяется по НЕЗАКРЫТОЙ ЖЁСТКОЙ ЗАВИСИМОСТИ: добавка
-    называет свою базу в `requires`, и пропавшая база видна там по имени. Имя,
-    которого нет ни среди фактов события, ни среди пакетов известных корней, —
-    находка (решение 6: установщик отказывается ставить модуль с незакрытой
-    жёсткой зависимостью)."""
+    «добавка без базы» — находка о НЕЗАКРЫТОЙ ЖЁСТКОЙ ЗАВИСИМОСТИ: база названа,
+    а её нет ни в этом дереве, ни в известных корнях (решение 6: установщик
+    отказывается ставить модуль с незакрытой жёсткой зависимостью).
+
+    Объявление и снимает неоднозначность, которой иначе не снять: по одному имени
+    `changeset-review` — это и добавка к `changeset`, и самостоятельная база с
+    дефисом, и различить их может только сам пакет."""
     found = []
     names = [m.get("name", "") for m in modules]
     everywhere = set(names) | set(known or [])
@@ -336,8 +337,19 @@ def add_source(root):
     roots = read_sources()
     if root in roots:
         return False
+    # Перевод строки ВПЕРЕДИ, если файла не кончается им: список, поправленный
+    # руками без хвостового перевода, склеил бы два корня в одну строку, и оба
+    # перестали бы читаться.
+    lead = ""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        if body and not body.endswith("\n"):
+            lead = "\n"
+    except OSError:
+        pass
     with open(path, "a", encoding="utf-8") as fh:
-        fh.write(root + "\n")
+        fh.write(lead + root + "\n")
     return True
 
 
@@ -393,6 +405,8 @@ def register(root, modules, harness):
         raise ValueError("%s не разбирается (%s); установка остановлена, файл не тронут" % (path, bad))
     if not isinstance(settings, dict):
         raise ValueError("%s не объект; установка остановлена, файл не тронут" % path)
+    if "hooks" in settings and not isinstance(settings["hooks"], dict):
+        raise ValueError("%s: поле hooks не объект; установка остановлена, файл не тронут" % path)
 
     wanted = {}
     for manifest in modules:
@@ -408,7 +422,6 @@ def register(root, modules, harness):
                 wanted.setdefault(event, set()).add(command)
 
     mine = os.path.join(root, "modules")
-    ours = {cmd for cmds in wanted.values() for cmd in cmds}
     hooks = settings.setdefault("hooks", {})
     for event in list(hooks) + list(wanted):
         groups = hooks.get(event) or []
@@ -416,8 +429,12 @@ def register(root, modules, harness):
         for group in groups:
             entries = [
                 entry for entry in (group.get("hooks") or [])
+                # Сверка ПО ЭТОМУ событию, а не по объединению всех: команда,
+                # оставшаяся нужной на другом событии, иначе переживала бы чистку
+                # везде — и модуль, убравший событие из манифеста, продолжал бы
+                # запускаться на нём до конца жизни настроек.
                 if not _is_ours(entry.get("command", ""), mine, harness)
-                or entry.get("command", "") in ours
+                or entry.get("command", "") in wanted.get(event, set())
             ]
             if entries:
                 keep.append(dict(group, hooks=entries))

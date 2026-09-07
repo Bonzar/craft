@@ -324,6 +324,42 @@ class Install(unittest.TestCase):
         self.install()
         self.assertEqual(self.commands(self.settings(), "PostToolUse"), [])
 
+    def test_убранное_из_манифеста_событие_снимается_из_регистраций(self):
+        # Сверять с объединением по ВСЕМ событиям нельзя: команда, оставшаяся
+        # нужной на одном событии, переживала бы чистку на каждом, и модуль
+        # запускался бы на снятом событии до конца жизни настроек.
+        two = ("---\nname: проба\nkind: hook\nfor: general\n"
+               "events: [{ event: post-tool }, { event: pre-tool }]\n"
+               "requires: []\ndata: []\nmode: on\n---\n")
+        make_module(self.root, "проба", body=two)
+        self.install()
+        self.assertEqual(len(self.commands(self.settings(), "PreToolUse")), 1)
+        self.assertEqual(len(self.commands(self.settings(), "PostToolUse")), 1)
+        make_module(self.root, "проба")  # снова одно событие: post-tool
+        self.install()
+        self.assertEqual(self.commands(self.settings(), "PreToolUse"), [],
+                         "снятое из манифеста событие осталось зарегистрированным")
+        self.assertEqual(len(self.commands(self.settings(), "PostToolUse")), 1,
+                         "оставшееся событие не пострадало")
+
+    def test_чужой_hooks_не_объект_отказ_словами(self):
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        os.makedirs(os.path.dirname(settings), exist_ok=True)
+        with open(settings, "w", encoding="utf-8") as fh:
+            fh.write('{"hooks": ["не объект"]}')
+        with self.assertRaises(ValueError):
+            jarvis.register(self.root, jarvis.read_modules(self.root), "claude")
+        with open(settings, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), '{"hooks": ["не объект"]}', "файл не тронут")
+
+    def test_список_корней_без_хвостового_перевода_не_склеивается(self):
+        path = jarvis.sources_list()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("/чужой/корень")  # руками, без перевода строки
+        jarvis.add_source(self.root)
+        self.assertEqual(jarvis.read_sources(), ["/чужой/корень", self.root])
+
     def test_корень_дописывается_в_список_один_раз(self):
         self.install()
         self.install()
