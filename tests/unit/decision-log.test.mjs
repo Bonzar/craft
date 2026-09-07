@@ -30,7 +30,7 @@ async function load(file) {
 }
 
 const EVENT = {
-  occurrence: 'occ-1', session_id: 'sid-1', event: 'pre-tool', call_id: 'toolu_1', tool: 'Bash',
+  key: 'occ-1', session_id: 'sid-1', event: 'pre-tool', call_id: 'toolu_1', tool: 'Bash',
 };
 
 test('строка видна ДРУГОМУ процессу: канал переживает того, кто решил', async () => {
@@ -54,7 +54,7 @@ test('строка видна ДРУГОМУ процессу: канал пер
     assert.equal(d.outcome, 'deny');
     assert.equal(d.hook, 'universal-guard-plan-gate');
     assert.equal(d.class, 'gate.empty');
-    assert.equal(d.occurrence, EVENT.occurrence, 'номер появления — ключ сшивки с событием');
+    assert.equal(d.key, EVENT.key, 'номер появления — ключ сшивки с событием');
     assert.equal(d.h, undefined,
       'хеш вызова живёт на записи ВЫЗОВА: у отказанного вызова она теперь есть, и вторая копия разъезжалась бы');
     assert.ok(offset > 0, 'смещение сдвинулось: следующее чтение начнётся отсюда');
@@ -118,11 +118,11 @@ test('каждая строка несёт свой ключ: событие, п
   try {
     const { appendDecision, appendFlag, readSince } = await load(file);
     appendDecision({ ...EVENT, call_id: 'toolu_1' }, { outcome: 'deny', hook: 'a' });
-    appendDecision({ occurrence: 'occ-2', session_id: 'sid-1', event: 'stop', call_id: '' },
+    appendDecision({ key: 'occ-2', session_id: 'sid-1', event: 'stop', call_id: '' },
       { outcome: 'block', hook: 'b' });
-    appendFlag({ occurrence: 'occ-3', session_id: 'sid-1', event: 'prompt', call_id: '' }, 'incident');
+    appendFlag({ key: 'occ-3', session_id: 'sid-1', event: 'prompt', call_id: '' }, 'incident');
     const { records } = readSince(EVENT, {});
-    assert.deepEqual(records.map((r) => [r.kind, r.occurrence, r.event, r.call_id, r.sid]), [
+    assert.deepEqual(records.map((r) => [r.kind, r.key, r.event, r.call_id, r.sid]), [
       ['decision', 'occ-1', 'pre-tool', 'toolu_1', 'sid-1'],
       ['decision', 'occ-2', 'stop', '', 'sid-1'],
       ['flag', 'occ-3', 'prompt', '', 'sid-1'],
@@ -138,7 +138,7 @@ test('каталог состояния берётся ИЗ СОБЫТИЯ, а �
     delete process.env.CRAFT_DECISION_LOG;
     const own = fs.mkdtempSync(path.join(os.tmpdir(), 'own-state.'));
     const mod = await import(`${LIB}/decision-log.js?t=${Date.now()}${Math.random()}`);
-    const ev = { occurrence: 'occ-1', session_id: 'sid-1', event: 'stop', call_id: '', state_dir: own };
+    const ev = { key: 'occ-1', session_id: 'sid-1', event: 'stop', call_id: '', state_dir: own };
     mod.appendDecision(ev, { outcome: 'block', hook: 'h' });
     assert.equal(fs.existsSync(path.join(own, 'decisions.sid-1.jsonl')), true,
       'журнал лёг в каталог, который принесло событие');
@@ -216,7 +216,7 @@ test('срок журнала — СУТКИ: пауза между событи
 
     const mod = await import(`${LIB}/decision-log.js?t=${Date.now()}${Math.random()}`);
     mod.appendDecision(
-      { occurrence: 'occ-1', session_id: 'своя', event: 'pre-tool', call_id: 'c1', state_dir: dir },
+      { key: 'occ-1', session_id: 'своя', event: 'pre-tool', call_id: 'c1', state_dir: dir },
       { outcome: 'deny', hook: 'h' },
     );
     assert.equal(fs.existsSync(pause), true, 'двухчасовая пауза журнал не хоронит');
