@@ -28,7 +28,6 @@ Fail open на всём неожиданном: пустое или неразб
 
 import json
 import os
-import tempfile
 
 from key import event_key
 
@@ -91,8 +90,20 @@ def harness_event(name):
 
 def state_dir():
     """Каталог состояния слоя. Копия формулы из lib/paths.js: журнал решений и
-    метки уступки общие с JS-хуками."""
-    return os.environ.get("CRAFT_STATE_DIR") or tempfile.gettempdir()
+    метки уступки общие с JS-хуками.
+
+    Временный каталог выводится ТЕМ ЖЕ порядком переменных, что у Node
+    (`os.tmpdir()`: TMPDIR, TMP, TEMP, затем /tmp). `tempfile.gettempdir()` спорит
+    с ним порядком TMP и TEMP, и при заданных обоих след пакета лёг бы в журнал,
+    которого никто не читает."""
+    override = os.environ.get("CRAFT_STATE_DIR")
+    if override:
+        return override
+    for name in ("TMPDIR", "TMP", "TEMP"):
+        value = os.environ.get(name)
+        if value:
+            return value.rstrip(os.sep) or os.sep
+    return "/tmp"
 
 
 def decision_log(session_id, directory):

@@ -6,6 +6,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,19 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import jarvis  # noqa: E402
+
+ADDON = """---
+name: %s
+kind: hook
+for: general
+events: [{ event: post-tool }]
+requires: [%s]
+data: []
+mode: on
+---
+
+Добавка.
+"""
 
 MANIFEST = """---
 name: %s
@@ -132,19 +146,42 @@ class Check(unittest.TestCase):
         make_module(self.root, "второй", body=MANIFEST % ("первый", "hook", "general"))
         self.assertTrue(any("два пакета с одним именем" in line for line in self.found()), self.found())
 
-    def test_добавка_к_одной_базе_читается_однозначно(self):
+    def test_добавка_называет_свою_базу_и_проходит(self):
         make_module(self.root, "changeset")
-        make_module(self.root, "changeset-review")
-        self.assertEqual(self.found(), [], "один кандидат в базы — не находка")
+        make_module(self.root, "changeset-review",
+                    body=ADDON % ("changeset-review", "changeset"))
+        self.assertEqual(self.found(), [], "база названа — чтение не догадка")
 
-    def test_добавка_сразу_к_нескольким_базам_находка(self):
-        # `changeset-review-extra` начинается и с `changeset`, и с
-        # `changeset-review`: правило чтения не может сказать, чья это добавка.
+    def test_имя_начинается_с_имени_пакета_а_базы_не_названо(self):
+        # Ровно коллизия решения 18: `changeset-review` читается добавкой к
+        # `changeset`, но сам себя добавкой не объявлял. Либо назови базу, либо
+        # переименуйся — молчать тут нельзя, иначе имя базы стало началом имени
+        # другого пакета незаметно.
         make_module(self.root, "changeset")
         make_module(self.root, "changeset-review")
-        make_module(self.root, "changeset-review-extra")
         found = self.found()
-        self.assertTrue(any("сразу к нескольким базам" in line for line in found), found)
+        self.assertTrue(any("базы в requires нет" in line for line in found), found)
+
+    def test_самостоятельный_пакет_с_дефисом_находки_не_даёт(self):
+        # Пока пакета `trace` нет, `trace-probe` — обычная база с дефисом в имени.
+        make_module(self.root, "trace-probe")
+        self.assertEqual(self.found(), [])
+
+    def test_добавка_объявила_несколько_баз(self):
+        make_module(self.root, "changeset")
+        make_module(self.root, "changeset-review",
+                    body=ADDON % ("changeset-review", "changeset"))
+        make_module(self.root, "changeset-review-extra",
+                    body=("---\nname: changeset-review-extra\nkind: hook\nfor: general\n"
+                          "events: [{ event: post-tool }]\n"
+                          "requires: [changeset, changeset-review]\ndata: []\nmode: on\n---\n"))
+        found = self.found()
+        self.assertTrue(any("сразу несколько баз" in line for line in found), found)
+
+    def test_хвост_имени_харнеса_при_general_находка(self):
+        make_module(self.root, "scope-claude")
+        found = self.found()
+        self.assertTrue(any("имя харнеса" in line for line in found), found)
 
     def test_добавка_без_базы_видна_незакрытой_зависимостью(self):
         base = "---\nname: %s\nkind: hook\nfor: general\nevents: [{ event: post-tool }]\n"
@@ -224,9 +261,54 @@ class Install(unittest.TestCase):
         self.assertEqual(self.install(), 0)
         hook = os.path.join(self.root, "modules", "проба", "dist", "claude", "hook.py")
         self.assertTrue(os.path.isfile(hook))
-        self.assertEqual(self.commands(self.settings(), "PostToolUse"), ["python3 " + hook])
+        line = "python3 " + shlex.quote(hook)
+        self.assertEqual(self.commands(self.settings(), "PostToolUse"), [line])
         self.install()
-        self.assertEqual(self.commands(self.settings(), "PostToolUse"), ["python3 " + hook])
+        self.assertEqual(self.commands(self.settings(), "PostToolUse"), [line])
+
+    def test_путь_с_пробелом_экранируется_и_снимается(self):
+        # Харнес исполняет строку регистрации оболочкой: неэкранированный путь с
+        # пробелом дал бы неработающую строку молча, а сверка по подстроке не
+        # узнала бы её обратно и оставила бы мусор в настройках.
+        spaced = os.path.join(self.root, "с пробелом")
+        os.makedirs(os.path.join(spaced, "modules"))
+        shutil.copytree(os.path.join(self.root, "modules", "проба"),
+                        os.path.join(spaced, "modules", "проба"))
+        shutil.copytree(os.path.join(self.root, "runtime"), os.path.join(spaced, "runtime"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        self.assertEqual(jarvis.main(["--root", spaced, "install"]), 0)
+        hook = os.path.join(spaced, "modules", "проба", "dist", "claude", "hook.py")
+        self.assertEqual(self.commands(self.settings(), "PostToolUse"),
+                         ["python3 " + shlex.quote(hook)])
+        shutil.rmtree(os.path.join(spaced, "modules", "проба"))
+        jarvis.main(["--root", spaced, "install"])
+        self.assertEqual(self.commands(self.settings(), "PostToolUse"), [],
+                         "своя строка узнана обратно и снята")
+
+    def test_off_не_трогает_одноимённый_ключ_чужой_секции(self):
+        path = jarvis.user_modes_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('[modules]\n"проба" = "on"\n\n[scripts]\n"проба" = "мой-путь"\n')
+        jarvis.main(["--root", self.root, "off", "проба"])
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        self.assertIn('[scripts]\n"проба" = "мой-путь"', body, "чужая секция цела")
+        self.assertEqual(jarvis.mode_of(self.root, "проба")[0], "off")
+
+    def test_заголовок_секции_с_комментарием_не_двоится(self):
+        # По точному совпадению строки заголовок не находился, и в файл ложился
+        # ВТОРОЙ `[modules]` — после чего tomllib его не разбирает вовсе, и оба
+        # источника режима замолкают.
+        path = jarvis.user_modes_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('[modules]  # мои модули\n')
+        jarvis.main(["--root", self.root, "off", "проба"])
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        self.assertEqual(body.count("[modules]"), 1, body)
+        self.assertEqual(jarvis.mode_of(self.root, "проба")[0], "off")
 
     def test_чужая_запись_не_страдает(self):
         os.makedirs(os.path.join(self.home, ".claude"))

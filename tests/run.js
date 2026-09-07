@@ -188,8 +188,11 @@ function runHook(script, input, env, args = [], shell = false) {
   const cmd = isJs ? process.execPath : (isPy ? 'python3' : 'bash');
   if (shell) {
     // Оболочка — ПО АБСОЛЮТНОМУ ПУТИ: кейс про отсутствующий интерпретатор сам
-    // подменяет PATH, и по имени не нашлась бы уже она сама.
-    return spawnSync('/bin/sh', ['-c', [cmd, script, ...args].join(' ')], {
+    // подменяет PATH, и по имени не нашлась бы уже она сама. Аргументы
+    // экранируются, как их экранирует установщик: чекаут по пути с пробелом
+    // иначе давал бы не ту команду, что стоит в настройках.
+    const quote = (v) => `'${String(v).split("'").join(`'\\''`)}'`;
+    return spawnSync('/bin/sh', ['-c', [cmd, script, ...args].map(quote).join(' ')], {
       input, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
     });
   }

@@ -25,8 +25,11 @@
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sys
+import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Таблиц харнесов будет три (claude, codex, aisuite). Пока одна: генерировать
@@ -151,13 +154,23 @@ def read_modules(root):
 
 # --- проверка ------------------------------------------------------------------
 
-def _tail_matches_for(name, for_value):
-    """Имя обязано соответствовать `for` (решение 18). Правило механическое:
-    `for: tool:git` и `for: harness:codex` требуют хвоста `-git` / `-codex`;
-    `for: general` требует, чтобы такого хвоста НЕ было."""
+def _for_mismatch(name, for_value):
+    """Расхождение имени с `for` (решение 18), словами; пусто — сошлось.
+
+    Правило механическое: `for: tool:git` и `for: harness:codex` требуют хвоста
+    `-git` / `-codex`. У `for: general` проверяется ОДНО — что хвост не есть имя
+    ХАРНЕСА: их список известен (`HARNESSES`), и `scope-claude` с `for: general`
+    читался бы адаптером, которым не является. Имена инструментов не известны
+    никому, поэтому хвост `-git` у `for: general` тут не ловится."""
     if for_value.startswith("tool:") or for_value.startswith("harness:"):
-        return name.endswith("-" + for_value.split(":", 1)[1])
-    return True
+        want = for_value.split(":", 1)[1]
+        if not name.endswith("-" + want):
+            return "имя не соответствует for: %s (ждали хвост «-%s»)" % (for_value, want)
+        return ""
+    tail = name.rsplit("-", 1)[-1] if "-" in name else ""
+    if tail in HARNESSES:
+        return "хвост «-%s» — имя харнеса, а for: %s" % (tail, for_value or "не задан")
+    return ""
 
 
 def check(root, modules, known=None, harness="claude", index=True):
@@ -210,14 +223,24 @@ def check(root, modules, known=None, harness="claude", index=True):
             found.append("%s: имя в манифесте (%s) не совпадает с именем папки" % (directory, name))
         if manifest.get("kind") not in KINDS:
             found.append("%s: вид «%s» не из списка %s" % (name, manifest.get("kind"), ", ".join(KINDS)))
-        if not _tail_matches_for(name, manifest.get("for", "")):
-            found.append("%s: имя не соответствует for: %s" % (name, manifest.get("for")))
+        mismatch = _for_mismatch(name, manifest.get("for", ""))
+        if mismatch:
+            found.append("%s: %s" % (name, mismatch))
         if names.count(name) > 1:
             found.append("%s: два пакета с одним именем" % name)
+        # Имя, начинающееся с имени другого пакета, читается ДОБАВКОЙ (решение
+        # 18). Чтобы это чтение было не догадкой, добавка называет свою базу в
+        # `requires`: не назвала — имя базы оказалось началом имени пакета,
+        # который добавкой себя не объявлял, и это находка. Назвала несколько —
+        # неоднозначно, и это находка тоже.
         bases = sorted(other for other in everywhere
                        if other != name and name.startswith(other + "-"))
-        if len(bases) > 1:
-            found.append("%s: имя читается как добавка сразу к нескольким базам: %s"
+        declared = [b for b in bases if b in (manifest.get("requires") or [])]
+        if len(declared) > 1:
+            found.append("%s: добавка объявила сразу несколько баз: %s" % (name, ", ".join(declared)))
+        elif bases and not declared:
+            found.append("%s: имя начинается с имени пакета %s, а базы в requires нет:"
+                         " добавке базу надо назвать, самостоятельному пакету — переименоваться"
                          % (name, ", ".join(bases)))
         for event in event_names(manifest):
             if event not in supported:
@@ -373,8 +396,10 @@ def register(root, modules, harness):
 
     wanted = {}
     for manifest in modules:
-        command = "python3 %s" % os.path.join(
-            root, "modules", manifest["dir"], "dist", harness, "hook.py")
+        # Путь ЭКРАНИРУЕТСЯ: харнес исполняет строку регистрации оболочкой, и
+        # чекаут по пути с пробелом дал бы неработающую строку — молча.
+        hook = os.path.join(root, "modules", manifest["dir"], "dist", harness, "hook.py")
+        command = "python3 %s" % shlex.quote(hook)
         for name in event_names(manifest):
             event = table.harness_event(name)
             # Имя, которого этот харнес не знает, до сюда не доходит: его ловит
@@ -383,6 +408,7 @@ def register(root, modules, harness):
                 wanted.setdefault(event, set()).add(command)
 
     mine = os.path.join(root, "modules")
+    ours = {cmd for cmds in wanted.values() for cmd in cmds}
     hooks = settings.setdefault("hooks", {})
     for event in list(hooks) + list(wanted):
         groups = hooks.get(event) or []
@@ -391,7 +417,7 @@ def register(root, modules, harness):
             entries = [
                 entry for entry in (group.get("hooks") or [])
                 if not _is_ours(entry.get("command", ""), mine, harness)
-                or entry.get("command", "") in wanted.get(event, set())
+                or entry.get("command", "") in ours
             ]
             if entries:
                 keep.append(dict(group, hooks=entries))
@@ -405,23 +431,46 @@ def register(root, modules, harness):
             hooks.pop(event, None)
 
     body = json.dumps(settings, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    return _write_if_changed(path, body)
+    return _write_if_changed(path, body, backup=True)
 
 
 def _is_ours(command, modules_dir, harness):
-    return command.startswith("python3 ") and modules_dir in command and (
-        os.sep.join(("dist", harness, "hook.py")) in command)
+    """Наша ли это строка регистрации. Разбирается КОМАНДА, а не подстрока: путь
+    экранирован, и чужая строка, где наш каталог упомянут аргументом, нашей не
+    является."""
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    if len(parts) != 2 or os.path.basename(parts[0]) != "python3":
+        return False
+    return parts[1].startswith(modules_dir + os.sep) and parts[1].endswith(
+        os.sep.join(("dist", harness, "hook.py")))
 
 
-def _write_if_changed(path, body):
+def _write_if_changed(path, body, backup=False):
+    """Записать, если содержимое изменилось. Возвращает, была ли запись.
+
+    Запись АТОМАРНАЯ: во временный файл рядом и переименованием поверх. В
+    настройках харнеса лежат чужие регистрации и разрешения, и сорванная запись
+    оставила бы вместо них пустой файл. `backup` кладёт рядом копию — ровно как
+    install.sh делает перед своей правкой того же файла."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            if fh.read() == body:
-                return False
+            before = fh.read()
+        if before == body:
+            return False
+        if backup:
+            stamp = time.strftime("%Y%m%d%H%M%S")
+            with open("%s.bak.%s" % (path, stamp), "w", encoding="utf-8") as fh:
+                fh.write(before)
     except OSError:
         pass
-    with open(path, "w", encoding="utf-8") as fh:
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(body)
+    os.replace(tmp, path)
     return True
 
 
@@ -464,31 +513,71 @@ def mode_of(root, name, manifest_mode="on"):
 
 
 def set_mode(name, value):
-    """Правка личного конфига: старший из двух файловых источников."""
+    """Правка личного конфига: старший из двух файловых источников.
+
+    Правится ТОЛЬКО секция `[modules]`. Файл чужой: в нём бывают другие секции, и
+    одноимённый ключ в любой из них — не про нас. Пустые строки не выбрасываются:
+    у чужого файла они разделяют блоки."""
     path = user_modes_file()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    lines, seen = [], False
     try:
         with open(path, "r", encoding="utf-8") as fh:
             lines = fh.read().split("\n")
     except OSError:
-        lines = ["[modules]"]
-    if "[modules]" not in lines:
-        lines.insert(0, "[modules]")
+        lines = []
+
     # Ключ В КАВЫЧКАХ: голым TOML берёт только ASCII, а имена пакетов бывают
     # какими угодно — незакавыченное имя молча не прочиталось бы, и `off` не
     # сработал бы вовсе.
     entry = '"%s" = "%s"' % (name, value)
-    for i, line in enumerate(lines):
-        if line.strip().startswith('"%s"' % name) or line.strip().startswith(name + " "):
-            lines[i] = entry
-            seen = True
-    if not seen:
-        lines.insert(lines.index("[modules]") + 1, entry)
-    # Пустые строки НЕ выбрасываются: у чужого файла с другими секциями они
-    # разделяют блоки, и склеенный файл — испорченный файл.
+    start = _section_start(lines, "modules")
+    if start is None:
+        if lines and lines[-1].strip() != "":
+            lines.append("")
+        lines.append("[modules]")
+        lines.append(entry)
+    else:
+        end = _section_end(lines, start)
+        for i in range(start + 1, end):
+            if _key_of(lines[i]) == name:
+                lines[i] = entry
+                break
+        else:
+            lines.insert(end, entry)
+
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines).rstrip("\n") + "\n")
+
+
+def _heading(line):
+    """Имя секции TOML в строке, иначе пустота. Хвостовой комментарий и пробелы
+    не в счёт: по точному совпадению строки заголовок `[modules] # моё` не нашёлся
+    бы, и в файл лёг бы ВТОРОЙ `[modules]` — после чего он перестаёт разбираться."""
+    text = line.split("#", 1)[0].strip()
+    return text[1:-1].strip() if text.startswith("[") and text.endswith("]") else ""
+
+
+def _section_start(lines, name):
+    for i, line in enumerate(lines):
+        if _heading(line) == name:
+            return i
+    return None
+
+
+def _section_end(lines, start):
+    """Первая строка ПОСЛЕ секции: следующий заголовок либо конец файла."""
+    for i in range(start + 1, len(lines)):
+        if _heading(lines[i]):
+            return i
+    return len(lines)
+
+
+def _key_of(line):
+    """Имя ключа в строке `ключ = значение`, с кавычками или без."""
+    text = line.split("#", 1)[0].strip()
+    if "=" not in text:
+        return ""
+    return _strip_quotes(text.split("=", 1)[0].strip())
 
 
 # --- команды -------------------------------------------------------------------
