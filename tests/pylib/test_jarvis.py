@@ -342,6 +342,16 @@ class Install(unittest.TestCase):
         self.assertEqual(len(self.commands(self.settings(), "PostToolUse")), 1,
                          "оставшееся событие не пострадало")
 
+    def test_нечитаемые_настройки_не_считаются_отсутствующими(self):
+        # `OSError` — это не только «файла нет». Существующий, но нечитаемый файл
+        # по той же ветке считался пустым, переписывался, и копию положить тоже
+        # было нечем: чужие разрешения и регистрации исчезали молча.
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        os.makedirs(settings)  # каталог вместо файла: чтение даёт OSError, не FileNotFoundError
+        with self.assertRaises(ValueError):
+            jarvis.register(self.root, jarvis.read_modules(self.root), "claude")
+        self.assertTrue(os.path.isdir(settings), "не тронут")
+
     def test_чужой_hooks_не_объект_отказ_словами(self):
         settings = os.path.join(self.home, ".claude", "settings.json")
         os.makedirs(os.path.dirname(settings), exist_ok=True)

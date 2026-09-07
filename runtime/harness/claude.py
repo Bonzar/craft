@@ -17,10 +17,8 @@ harness, session_id, call_id, event, tool, input, cwd, state_dir — и свер
   key          — ключ следа (pylib/key.py);
   decision_log — путь журнала решений, куда модуль кладёт след.
 
-Формула каталога состояния и путь журнала решений повторяют
-.claude/hooks/lib/paths.js слово в слово, и по-другому нельзя: журнал ОБЩИЙ с
-JS-хуками, а процесс у пакета свой — разойдись формулы, след пакета лёг бы в
-файл, которого не читает никто.
+Пути состояния сюда не входят: про харнес в них ничего нет, и живут они в
+pylib/state.py — иначе каждая новая таблица копировала бы их заново.
 
 Fail open на всём неожиданном: пустое или неразборное событие даёт пустые поля,
 а не падение.
@@ -30,6 +28,7 @@ import json
 import os
 
 from key import event_key
+from state import decision_log, state_dir
 
 HARNESS = "claude"
 
@@ -56,7 +55,10 @@ HARNESS_BY_EVENT = {v: k for k, v in EVENT_BY_HARNESS.items()}
 ACCEPTS = {
     "pre-tool": ("allow", "ask", "deny"),
     "stop": ("block",),
-    "subagent-stop": ("block",),
+    # `subagent-stop` харнес блокировать умеет, но записи метрик у этого события
+    # нет (universal-metrics.js пишет только STOP), и сшивать след было бы не с
+    # чем: блокировка легла бы в журнал и не досчиталась молча. Появится
+    # запись — вернуть строку сюда.
 }
 
 
@@ -86,33 +88,6 @@ def harness_event(name):
     """Каноническое имя события → имя харнеса. Пусто, если такого нет: харнес
     сверяет имя в ответе с тем событием, на которое подписан модуль."""
     return HARNESS_BY_EVENT.get(name, "")
-
-
-def state_dir():
-    """Каталог состояния слоя. Копия формулы из lib/paths.js: журнал решений и
-    метки уступки общие с JS-хуками.
-
-    Временный каталог выводится ТЕМ ЖЕ порядком переменных, что у Node
-    (`os.tmpdir()`: TMPDIR, TMP, TEMP, затем /tmp). `tempfile.gettempdir()` спорит
-    с ним порядком TMP и TEMP, и при заданных обоих след пакета лёг бы в журнал,
-    которого никто не читает."""
-    override = os.environ.get("CRAFT_STATE_DIR")
-    if override:
-        return override
-    for name in ("TMPDIR", "TMP", "TEMP"):
-        value = os.environ.get(name)
-        if value:
-            return value.rstrip(os.sep) or os.sep
-    return "/tmp"
-
-
-def decision_log(session_id, directory):
-    """Путь журнала решений. Копия формулы из lib/paths.js: переопределение
-    сильнее, иначе файл сессии в каталоге состояния."""
-    override = os.environ.get("CRAFT_DECISION_LOG")
-    if override:
-        return override
-    return os.path.join(directory, "decisions.%s.jsonl" % (session_id or "default"))
 
 
 def to_event(raw):

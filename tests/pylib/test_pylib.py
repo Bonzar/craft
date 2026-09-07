@@ -7,6 +7,8 @@
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -15,8 +17,10 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "runtime", "pylib"))
 sys.path.insert(0, os.path.join(ROOT, "runtime", "harness"))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import claude  # noqa: E402
+import jarvis  # noqa: E402
 import once  # noqa: E402
 import state  # noqa: E402
 import trace  # noqa: E402
@@ -245,3 +249,90 @@ class ClaudeTable(unittest.TestCase):
         out = json.loads(claude.render({"event": "prompt"}, none("", add_context="вот")))
         self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
         self.assertEqual(out["hookSpecificOutput"]["additionalContext"], "вот")
+
+
+class ModeParity(unittest.TestCase):
+    """`mode` читают ДВОЕ: обёртка на каждом событии и `jarvis status`. Копии
+    сегодня сходятся, и разъедутся молча — `status` начнёт утверждать «on» про
+    модуль, который обёртка гасит. Держим их одной матрицей, как парность ключа.
+
+    Одним файлом их не сделать: потолок pylib — пять файлов, и все пять названы
+    карточкой поимённо."""
+
+    MATRIX = [
+        # (переменная, личный конфиг, personal источника, mode манифеста, ждём)
+        (None, None, None, "on", "on"),
+        (None, None, None, "off", "off"),
+        ("проба", None, None, "on", "off"),
+        ("другой", None, None, "off", "on"),
+        ("all", None, None, "on", "off"),
+        (None, "off", None, "on", "off"),
+        (None, "on", None, "off", "on"),
+        (None, None, "off", "on", "off"),
+        (None, "on", "off", "on", "on"),
+    ]
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.root, "modules"))
+        self.saved = {k: os.environ.get(k) for k in
+                      ("HOME", "XDG_CONFIG_HOME", "JARVIS_MODULES_OFF")}
+        os.environ["HOME"] = self.home
+        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.home, "config")
+
+    def tearDown(self):
+        for key, value in self.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _toml(self, path, value):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('[modules]\n"проба" = "%s"\n' % value)
+
+    def test_обёртка_и_status_отвечают_одинаково(self):
+        for env, user, personal, manifest_mode, want in self.MATRIX:
+            with self.subTest(env=env, user=user, personal=personal, manifest=manifest_mode):
+                shutil.rmtree(os.path.join(self.home, "config"), ignore_errors=True)
+                shutil.rmtree(os.path.join(self.root, "personal"), ignore_errors=True)
+                if env is None:
+                    os.environ.pop("JARVIS_MODULES_OFF", None)
+                else:
+                    os.environ["JARVIS_MODULES_OFF"] = env
+                if user is not None:
+                    self._toml(jarvis.user_modes_file(), user)
+                if personal is not None:
+                    self._toml(os.path.join(self.root, "personal", "modules.toml"), personal)
+
+                status = jarvis.mode_of(self.root, "проба", manifest_mode)[0]
+                self.assertEqual(status, want, "status разошёлся с матрицей")
+                self.assertEqual(self._wrapper_says(manifest_mode), want,
+                                 "обёртка разошлась со status")
+
+    def _wrapper_says(self, manifest_mode):
+        """Что отвечает СГЕНЕРИРОВАННАЯ обёртка: гасит модуль или нет."""
+        body = ("---\nname: проба\nkind: hook\nfor: general\n"
+                "events: [{ event: post-tool }]\nrequires: []\ndata: []\nmode: %s\n---\n"
+                % manifest_mode)
+        directory = os.path.join(self.root, "modules", "проба")
+        hooks = os.path.join(directory, "scripts", "hooks")
+        os.makedirs(hooks, exist_ok=True)
+        with open(os.path.join(directory, "SKILL.md"), "w", encoding="utf-8") as fh:
+            fh.write(body)
+        with open(os.path.join(hooks, "decide.py"), "w", encoding="utf-8") as fh:
+            fh.write("from decision import none\n\n\ndef decide(e, d, s):\n    return none('проба')\n")
+        hook = jarvis.build(self.root, jarvis.read_modules(self.root)[0], "claude")
+        state = tempfile.mkdtemp()
+        event = ('{"hook_event_name":"PostToolUse","session_id":"s","tool_use_id":"t1",'
+                 '"tool_name":"Bash","tool_input":{},"tool_response":{}}')
+        done = subprocess.run([sys.executable, hook], input=event.encode(), capture_output=True,
+                              env=dict(os.environ, CRAFT_STATE_DIR=state))
+        self.assertEqual(done.returncode, 0, done.stderr.decode())
+        silent = not os.path.exists(os.path.join(state, "decisions.s.jsonl"))
+        shutil.rmtree(state, ignore_errors=True)
+        return "off" if silent else "on"

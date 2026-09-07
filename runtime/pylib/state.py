@@ -1,7 +1,12 @@
-"""Состояние модуля на диске: чтение и запись JSON, дозапись JSONL, лок файлом.
+"""Состояние слоя на диске: где оно лежит и как в него писать.
 
-Всё под каталогом, который модуль получил аргументом (`state_dir` ядра события):
-своего пути этот файл не выводит и окружения не читает.
+ПУТИ — одна формула на всех: каталог состояния и журнал решений общие с
+JS-хуками, и повторяют .claude/hooks/lib/paths.js слово в слово. Живут здесь, а
+не в таблице харнеса: про харнес в них нет ничего, а копий стало бы столько,
+сколько таблиц.
+
+ЗАПИСЬ — под каталогом, который модуль получил аргументом (`state_dir` ядра
+события): сама логика модуля путей не выводит и окружения не читает.
 
 Читать умеет всегда, писать — атомарно: сосед не должен поймать полуфайл.
 Лок — каталогом, потому что его создание атомарно на любой файловой системе;
@@ -13,6 +18,30 @@ import json
 import os
 import tempfile
 import time
+
+
+def state_dir():
+    """Каталог состояния слоя. Временный выводится ТЕМ ЖЕ порядком переменных,
+    что у Node (`os.tmpdir()`: TMPDIR, TMP, TEMP, затем /tmp): `gettempdir()`
+    спорит с ним порядком TMP и TEMP, и при заданных обоих след пакета лёг бы в
+    журнал, которого никто не читает."""
+    override = os.environ.get("CRAFT_STATE_DIR")
+    if override:
+        return override
+    for name in ("TMPDIR", "TMP", "TEMP"):
+        value = os.environ.get(name)
+        if value:
+            return value.rstrip(os.sep) or os.sep
+    return "/tmp"
+
+
+def decision_log(session_id, directory):
+    """Путь журнала решений: переопределение сильнее, иначе файл сессии в
+    каталоге состояния."""
+    override = os.environ.get("CRAFT_DECISION_LOG")
+    if override:
+        return override
+    return os.path.join(directory, "decisions.%s.jsonl" % (session_id or "default"))
 
 
 def read_json(path, default=None):

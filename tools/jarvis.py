@@ -173,6 +173,25 @@ def _for_mismatch(name, for_value):
     return ""
 
 
+def _for_mismatch(name, for_value):
+    """Расхождение имени с `for` (решение 18), словами; пусто — сошлось.
+
+    Правило механическое: `for: tool:git` и `for: harness:codex` требуют хвоста
+    `-git` / `-codex`. У `for: general` проверяется ОДНО — что хвост не есть имя
+    ХАРНЕСА: их список известен (`HARNESSES`), и `scope-claude` с `for: general`
+    читался бы адаптером, которым не является. Имена инструментов не известны
+    никому, поэтому хвост `-git` у `for: general` тут не ловится."""
+    if for_value.startswith("tool:") or for_value.startswith("harness:"):
+        want = for_value.split(":", 1)[1]
+        if not name.endswith("-" + want):
+            return "имя не соответствует for: %s (ждали хвост «-%s»)" % (for_value, want)
+        return ""
+    tail = name.rsplit("-", 1)[-1] if "-" in name else ""
+    if tail in HARNESSES:
+        return "хвост «-%s» — имя харнеса, а for: %s" % (tail, for_value or "не задан")
+    return ""
+
+
 def check(root, modules, known=None, index=True):
     """Находки установщика. Пустой список — дерево согласовано.
 
@@ -267,16 +286,19 @@ def build(root, manifest, harness):
     package = os.path.join(root, "modules", manifest["dir"])
     dist = os.path.join(package, "dist", harness)
     os.makedirs(dist, exist_ok=True)
-    shutil.copyfile(os.path.join(root, "runtime", "harness", "%s.py" % harness),
+    # Шаблон, таблицы и pylib берутся ИЗ САМОГО УСТАНОВЩИКА (ROOT), а не из
+    # ставимого дерева: в дереве пакетов их нет и быть не должно — оно несёт
+    # модули, а рантайм приезжает с тем, кто ставит.
+    shutil.copyfile(os.path.join(ROOT, "runtime", "harness", "%s.py" % harness),
                     os.path.join(dist, "harness.py"))
     pylib = os.path.join(dist, "pylib")
     shutil.rmtree(pylib, ignore_errors=True)
-    shutil.copytree(os.path.join(root, "runtime", "pylib"), pylib,
+    shutil.copytree(os.path.join(ROOT, "runtime", "pylib"), pylib,
                     ignore=shutil.ignore_patterns("__pycache__"))
-    with open(os.path.join(root, "runtime", "wrapper.py.tmpl"), "r", encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "runtime", "wrapper.py.tmpl"), "r", encoding="utf-8") as fh:
         template = fh.read()
     body = (template
-            .replace("{{MODULE}}", manifest["name"])
+            .replace("{{MODULE}}", repr(manifest["name"]))
             .replace("{{HARNESS}}", harness)
             .replace("{{EVENTS}}", repr(event_names(manifest)))
             # В обёртку едут только ФАКТЫ события. Имена возможностей из того же
@@ -305,7 +327,12 @@ def indexed_names(root):
     try:
         with open(index_path(root), "r", encoding="utf-8") as fh:
             index = json.load(fh)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as bad:
+        # Пустой список тут значил бы «в корне нет пакетов», и добавка, чью базу
+        # этот корень закрывал, встала бы с неверной причиной.
+        sys.stderr.write("манифест источника %s не читается: %s\n" % (index_path(root), bad))
         return []
     return [m.get("name", "") for m in (index.get("modules") or []) if isinstance(m, dict)]
 
@@ -396,9 +423,14 @@ def register(root, modules, harness):
     try:
         with open(path, "r", encoding="utf-8") as fh:
             settings = json.load(fh)
-    except OSError:
-        # Файла ещё нет — законная пустота: первая установка его и заводит.
+    except FileNotFoundError:
+        # Файла ЕЩЁ НЕТ — законная пустота: первая установка его и заводит.
         settings = {}
+    except OSError as bad:
+        # А вот существующий, но нечитаемый (права, чужой владелец, сбой чтения)
+        # пустым считать нельзя: мы его перезапишем, и чужие регистрации с
+        # разрешениями исчезнут — причём копию положить тоже не выйдет.
+        raise ValueError("%s не читается (%s); установка остановлена, файл не тронут" % (path, bad))
     except ValueError as bad:
         # А вот НЕРАЗБОРНЫЙ файл пустым считать нельзя: мы его перезапишем, и с
         # ним исчезнут чужие регистрации и разрешения. Установка встаёт.
@@ -472,17 +504,25 @@ def _write_if_changed(path, body, backup=False):
     настройках харнеса лежат чужие регистрации и разрешения, и сорванная запись
     оставила бы вместо них пустой файл. `backup` кладёт рядом копию — ровно как
     install.sh делает перед своей правкой того же файла."""
+    before = None
     try:
         with open(path, "r", encoding="utf-8") as fh:
             before = fh.read()
-        if before == body:
-            return False
-        if backup:
-            stamp = time.strftime("%Y%m%d%H%M%S")
+    except FileNotFoundError:
+        pass
+    except OSError as bad:
+        # Существующий файл, который не читается, не перезаписывается: под ним
+        # чужое, и копию положить тоже нечем.
+        raise ValueError("%s не читается (%s); файл не тронут" % (path, bad))
+    if before == body:
+        return False
+    if backup and before is not None:
+        stamp = time.strftime("%Y%m%d%H%M%S")
+        try:
             with open("%s.bak.%s" % (path, stamp), "w", encoding="utf-8") as fh:
                 fh.write(before)
-    except OSError:
-        pass
+        except OSError as bad:
+            raise ValueError("копия %s не легла (%s); файл не тронут" % (path, bad))
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
