@@ -17,6 +17,10 @@
 //   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
 //     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
 //     stdout запись не проверить.
+//   stdout-empty — ни строки на stdout, ЧТО БЫ НИ БЫЛО с кодом возврата. Не то
+//     же, что silent: silent заодно утверждает, что хук не упал, а этим исходом
+//     проверяется ровно случай «строка регистрации не отработала вовсе» — там
+//     код заведомо ненулевой, а харнесу важно только, что ответа он не получил.
 // Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, err-not-contains:,
 // file-empty, file-not-contains:), засчитывается только удавшемуся хуку: код
 // возврата 0 и ни строки диспетчера о падении. Упавший хук молчит так же.
@@ -25,6 +29,11 @@
 // Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
 // bash-версий не осталось; фолбек на .sh живёт для внешних наборов
 // (EXTRA_HOOKS_DIR), где они ещё бывают. Тем же правилом идут шаги подготовки.
+//
+// ПАКЕТ резолвится не по каталогу хуков, а по своей сборке:
+// modules/<имя>/dist/claude/hook.py, и зовётся так же, как его зовёт харнес, —
+// `python3` со своим stdin. Сборку раннер делает сам перед прогоном (jarvis
+// install во временный дом): в гите её нет, а без неё звать нечего.
 //
 // Внешние наборы хуков (напр. локальный яндекс-слой в ~/.claude, вне git):
 //   EXTRA_HOOKS_DIR=~/.claude/hooks EXTRA_CASES_DIR=~/.claude/tests/hooks node tests/run.js
@@ -40,6 +49,8 @@ const REPO = path.resolve(__dirname, '..');
 const HOOKS = path.join(REPO, '.claude', 'hooks');
 const CASES_DIR = path.join(REPO, 'tests', 'hooks');
 const SETTINGS = path.join(REPO, '.claude', 'settings.json');
+const MODULES = path.join(REPO, 'modules');
+const JARVIS = path.join(REPO, 'tools', 'jarvis.py');
 const EXTRA_HOOKS_DIR = process.env.EXTRA_HOOKS_DIR || '';
 const EXTRA_CASES_DIR = process.env.EXTRA_CASES_DIR || '';
 
@@ -106,12 +117,39 @@ const REQUIRED = [
   'stop-relative-link:block', 'stop-relative-link:silent',
   'session-anchor:deny', 'session-anchor:allow',
   'universal-journal:silent',
+  // Пилот упаковки: исход у него один — `none`, и харнесу он виден молчанием.
+  'trace-probe:silent',
   'universal-instinct-flush:block', 'universal-instinct-flush:silent',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
 // маршрутов — сам механизм регистрации.
 const REVERSE_WHITELIST = ['dispatch', 'dispatch-table'];
+
+// --- сборка пакетов ----------------------------------------------------------
+
+// Пакеты собираются установщиком: обёртка на модуль и харнес плюс копии таблицы
+// харнеса и pylib. Гоняется во ВРЕМЕННОМ доме — настоящие ~/.claude и список
+// корней прогон тестов не трогает.
+//
+// Не собралось — это смоук-провал с ПРИЧИНОЙ, а не тихо пропущенные кейсы: без
+// сборки кейсы пакетов упали бы «нет такого хука», и разбираться пришлось бы
+// на пустом месте.
+function buildPackages() {
+  if (!fs.existsSync(MODULES)) return '';
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-build.'));
+  tmpMade.add(path.basename(home));
+  const res = spawnSync('python3', [JARVIS, '--root', REPO, 'install'], {
+    encoding: 'utf8',
+    env: {
+      ...BASE_ENV, HOME: home, XDG_DATA_HOME: path.join(home, 'share'), XDG_CONFIG_HOME: path.join(home, 'config'),
+    },
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  if (res.error) return `jarvis install не запустился (${res.error.code}); нужен python3`;
+  if (res.status !== 0) return `jarvis install вернул ${res.status}: ${(res.stderr || '').trim()}`;
+  return '';
+}
 
 // --- запуск хуков ------------------------------------------------------------
 
@@ -126,15 +164,27 @@ function resolveHook(base) {
       if (fs.existsSync(p)) return p;
     }
   }
-  return '';
+  const built = path.join(MODULES, base, 'dist', 'claude', 'hook.py');
+  return fs.existsSync(built) ? built : '';
 }
 
 // Хук запускается своим интерпретатором: bash-файлы через bash (исполняемый бит
 // им не нужен), JS — текущим node, чтобы прогон не зависел от того, что лежит в
-// PATH у тестов.
-function runHook(script, input, env, args = []) {
+// PATH у тестов. Пакет — `python3`, как его зовёт харнес.
+//
+// `shell` гоняет ту же команду ЧЕРЕЗ ОБОЛОЧКУ, то есть ровно так, как харнес
+// исполняет строку регистрации. Нужно это одному кейсу: «нет python3». Запусти
+// его напрямую — раннер получил бы отказ спавна и свою ошибку, а вопрос стоит
+// про то, что видит ХАРНЕС, когда строка не отработала.
+function runHook(script, input, env, args = [], shell = false) {
   const isJs = script.endsWith('.js');
-  const cmd = isJs ? process.execPath : 'bash';
+  const isPy = script.endsWith('.py');
+  const cmd = isJs ? process.execPath : (isPy ? 'python3' : 'bash');
+  if (shell) {
+    return spawnSync('sh', ['-c', [cmd, script, ...args].join(' ')], {
+      input, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+    });
+  }
   return spawnSync(cmd, [script, ...args], {
     input,
     env,
@@ -345,6 +395,12 @@ function subst(value, s) {
   // строкам.
   //
   // {DECISIONS} — журнал решений кейса: им проверяется САМ канал между хуками.
+  // Его же пишет пакет: журнал у JS-хуков и у пакетов ОДИН, и кейс сшивки на
+  // этом и стоит.
+  //
+  // {TMPHOME} — временный дом прогона. Им кейс наводит конфиг (XDG_CONFIG_HOME)
+  // на свой файл: `mode` пакета читается из ~/.config/jarvis/modules.toml, и без
+  // герметичного дома кейс правил бы настоящий конфиг Влада.
   //
   // {JOURNAL} — журнал событий сессии этого прогона: по его строкам судят кейсы
   // производителя журнала, и им же кейс наводит ASSERT_FILE на тот файл, куда
@@ -374,7 +430,8 @@ function subst(value, s) {
     .split('{JOURNAL}').join(s.journal)
     .split('{FLUSHMARK}').join(s.flushmark)
     .split('{FLUSHSTATE}').join(s.flushstate)
-    .split('{DECISIONS}').join(s.decisions);
+    .split('{DECISIONS}').join(s.decisions)
+    .split('{TMPHOME}').join(s.tmphome);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске.
@@ -457,7 +514,7 @@ function runPass(c) {
   let res = { stdout: '', stderr: '' };
   const repeat = Number(c.repeat || 1);
   const args = Array.isArray(c.args) ? c.args.map((v) => subst(v, s)) : [];
-  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
+  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args, c.shell === true);
 
   const traced = fs.existsSync(s.classtrace);
   const trace = traced ? fs.readFileSync(s.classtrace, 'utf8') : '';
@@ -537,6 +594,11 @@ function grade(expect, out, err, env) {
   if (expect === 'block') return isBlock(out);
   if (expect === 'inject') return out.includes('СИГНАЛ ИНЦИДЕНТА');
   if (expect === 'silent') return trim(out) === '' && !crashed(err, env);
+  // «Ответа харнес не получил» — и только это. Про код возврата исход НЕ
+  // утверждает ничего: им проверяется строка регистрации, которая не смогла
+  // запуститься, и требовать от неё нулевого кода значило бы требовать, чтобы
+  // отсутствующий интерпретатор отработал успешно.
+  if (expect === 'stdout-empty') return trim(out) === '';
   if (expect.startsWith('contains:')) return out.includes(expect.slice('contains:'.length));
   if (expect.startsWith('not-contains:')) {
     return !out.includes(expect.slice('not-contains:'.length)) && !crashed(err, env);
@@ -810,6 +872,7 @@ function sweepLeftovers() {
 }
 
 function main() {
+  const buildFailure = buildPackages();
   const files = caseFiles();
   if (files.length === 0) {
     process.stderr.write(`ERROR: no case files in ${CASES_DIR}\n`);
@@ -900,6 +963,7 @@ function main() {
 
   const missing = REQUIRED.filter((k) => !covered.has(k));
   const smoke = smokeChecks();
+  if (buildFailure) smoke.push(`packages not built: ${buildFailure}`);
 
   process.stdout.write(`${'-'.repeat(75)}\n`);
   if (fails.length > 0) {

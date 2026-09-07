@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Обёртка модуля {{MODULE}} для харнеса {{HARNESS}}. СГЕНЕРИРОВАНА tools/jarvis.py —
+правки здесь затрёт следующая установка; правь runtime/wrapper.py.tmpl.
+
+Обёртка — императивная оболочка вокруг чистой функции решения: прочитать событие,
+привести его к каноническому виду таблицей харнеса, спросить `decide`, положить
+след, напечатать ответ. Имён полей и событий харнеса здесь нет — они все в
+таблице; логика модуля не видит ни окружения, ни диска сверх данных и каталога
+состояния.
+
+Хук равен ПРОЦЕССУ (решение 9): харнес запускает эту строку сам, параллельно с
+остальными строками события. Нет `python3` — не отработает только она; остальные
+строки события целы.
+
+Уступка второму вызову (pylib/once.py) стоит здесь, а не в логике: двойная
+регистрация — свойство установки (два источника с модулем одного имени), и знать
+о ней обязана оболочка. Выключается `JARVIS_ONCE=off` — им же кейсы гасят её,
+когда проверяют сам модуль, а не уступку.
+"""
+
+import os
+import sys
+import tomllib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PACKAGE = os.path.dirname(os.path.dirname(HERE))
+# Корень источника: `<корень>/modules/<имя>` — отсюда и берётся `personal/`.
+SOURCE_ROOT = os.path.dirname(os.path.dirname(PACKAGE))
+
+# Пути кладутся ОТ САМОГО ФАЙЛА, а не зашиваются установкой: перенесённое дерево
+# продолжает работать, а не молча зовёт исчезнувший каталог.
+sys.path.insert(0, os.path.join(HERE, "pylib"))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(PACKAGE, "scripts", "hooks"))
+
+import harness as table  # noqa: E402
+import once  # noqa: E402
+import trace  # noqa: E402
+from decision import missing_fact, unsupported  # noqa: E402
+from decide import decide  # noqa: E402
+
+NAME = "{{MODULE}}"
+EVENTS = {{EVENTS}}
+REQUIRES = {{REQUIRES}}
+DATA_FILES = [os.path.join(PACKAGE, rel) for rel in {{DATA}}]
+
+
+def mode_off(name):
+    """Выключен ли модуль. Три источника по старшинству: переменная окружения,
+    личный конфиг, `personal/` источника. Решает ПЕРВЫЙ, который про этот модуль
+    вообще что-то говорит, — иначе более слабый источник переспоривал бы более
+    сильный молчанием."""
+    listed = os.environ.get("JARVIS_MODULES_OFF", "")
+    names = [part.strip() for part in listed.split(",") if part.strip()]
+    if "all" in names or "*" in names or name in names:
+        return True
+    if names:
+        # Переменная задана и модуля в ней нет — это ответ «включён», а не
+        # молчание: она старшая.
+        return False
+    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    for path in (
+        os.path.join(config_home, "jarvis", "modules.toml"),
+        os.path.join(SOURCE_ROOT, "personal", "modules.toml"),
+    ):
+        try:
+            with open(path, "rb") as fh:
+                table_of = tomllib.load(fh).get("modules") or {}
+        except (OSError, ValueError):
+            continue
+        if name in table_of:
+            return str(table_of[name]).lower() in ("off", "false", "0")
+    return False
+
+
+def main():
+    raw = sys.stdin.buffer.read()
+    event = table.to_event(raw)
+    # Не то событие — молчим. Регистрация идёт по строке на модуль и событие, но
+    # устаревшая строка пережила бы правку манифеста, и модуль сработал бы там,
+    # где его не звали.
+    if not event["event"] or event["event"] not in EVENTS:
+        return 0
+    if mode_off(NAME):
+        return 0
+    if os.environ.get("JARVIS_ONCE") != "off" and not once.take(NAME, event, event["state_dir"]):
+        return 0
+
+    missing = missing_fact(event, REQUIRES)
+    # Недостающая жёсткая зависимость даёт явное `unsupported` С ИМЕНЕМ, а не
+    # молчание и не обходной путь (решение 14). Логика при этом не зовётся: ей
+    # нечем работать.
+    decision = unsupported(missing) if missing else decide(event, DATA_FILES, event["state_dir"])
+
+    # След — ВСЕГДА и ДО печати: печать может уйти в закрытый поток, а решение
+    # обязано быть записано раньше. Не легло — говорим вслух, потому что молчание
+    # на месте отказа читается как проход.
+    if not trace.write(event, NAME, decision):
+        sys.stderr.write("[%s] след решения не лёг в журнал\n" % NAME)
+
+    out = table.render(event, decision)
+    if out:
+        sys.stdout.write(out + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
