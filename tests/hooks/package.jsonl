@@ -4,6 +4,11 @@
 # он меряет путь, а не содержимое вызова.
 {"name": "пакет отвечает на своём событии и кладёт след", "hook": "trace-probe", "expect": ["silent", "file-contains:\"hook\":\"trace-probe\",\"outcome\":\"none\""], "env": {"ASSERT_FILE": "{DECISIONS}"}, "input": {"hook_event_name": "PostToolUse", "session_id": "pkg-sid", "tool_use_id": "toolu_pkg", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/tmp", "tool_response": {"ok": true}}}
 {"name": "ключ следа — идентификатор вызова, а не номер процесса", "hook": "trace-probe", "expect": "file-contains:\"key\":\"toolu_pkg\",\"sid\":\"pkg-sid\",\"call_id\":\"toolu_pkg\",\"event\":\"post-tool\"", "env": {"ASSERT_FILE": "{DECISIONS}"}, "input": {"hook_event_name": "PostToolUse", "session_id": "pkg-sid", "tool_use_id": "toolu_pkg", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/tmp", "tool_response": {"ok": true}}}
+# Хеш в следующем кейсе — sha256 РОВНО тех байтов, что раннер подаёт на stdin:
+# JSON.stringify его поля `input`, то есть с полями в том порядке, в каком они
+# в кейсе записаны. Переставишь поля — пересчитай:
+#   python3 -c 'import json,hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:16])'
+# Саму формулу держит tests/unit/key-parity.test.mjs на обеих реализациях.
 {"name": "ключ события БЕЗ идентификатора вызова — хеш его байтов", "hook": "trace-probe", "expect": "file-contains:\"key\":\"3e4fb11b4f8c7a6d\"", "env": {"ASSERT_FILE": "{DECISIONS}"}, "input": {"hook_event_name": "PostToolUse", "session_id": "pkg-sid", "cwd": "/tmp", "tool_name": "Bash", "tool_input": {}, "tool_response": {}}}
 {"name": "чужое событие — пакет молчит и следа не оставляет", "hook": "trace-probe", "expect": ["silent", "file-empty"], "env": {"ASSERT_FILE": "{DECISIONS}"}, "input": {"hook_event_name": "Stop", "session_id": "pkg-sid", "cwd": "/tmp"}}
 {"name": "mode через modules.toml гасит пакет", "hook": "trace-probe", "expect": ["silent", "file-empty"], "env": {"ASSERT_FILE": "{DECISIONS}", "XDG_CONFIG_HOME": "{TMPHOME}/config"}, "seed": {"{TMPHOME}/config/jarvis/modules.toml": "[modules]\ntrace-probe = \"off\"\n"}, "input": {"hook_event_name": "PostToolUse", "session_id": "pkg-sid", "tool_use_id": "toolu_pkg", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/tmp", "tool_response": {"ok": true}}}

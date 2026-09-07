@@ -28,9 +28,13 @@ SOURCE_ROOT = os.path.dirname(os.path.dirname(PACKAGE))
 
 # Пути кладутся ОТ САМОГО ФАЙЛА, а не зашиваются установкой: перенесённое дерево
 # продолжает работать, а не молча зовёт исчезнувший каталог.
-sys.path.insert(0, os.path.join(HERE, "pylib"))
-sys.path.insert(0, HERE)
+#
+# Порядок значим: код модуля идёт ПОСЛЕДНИМ. Стоя первым, он затенял бы общее —
+# файл `scripts/hooks/state.py` у любого будущего пакета молча подменил бы pylib,
+# и обёртка взяла бы чужие `FIRM` и `missing_fact`.
 sys.path.insert(0, os.path.join(PACKAGE, "scripts", "hooks"))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "pylib"))
 
 import harness as table  # noqa: E402
 import once  # noqa: E402

@@ -128,15 +128,22 @@ def event_names(manifest):
 
 def read_modules(root):
     """Манифесты пакетов дерева. Имя папки и есть имя модуля (решение 6), и
-    расхождение с полем `name` — находка `check`, а не повод его молча починить."""
+    расхождение с полем `name` — находка `check`, а не повод его молча починить.
+
+    Неразобранный манифест не роняет обход трейсбеком: он возвращается ПУСТЫМ
+    манифестом с причиной, и `check` называет пакет по имени папки — ради этого
+    он и заведён."""
     base = os.path.join(root, "modules")
     out = []
     for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
         path = os.path.join(base, name, "SKILL.md")
         if not os.path.isfile(path):
             continue
-        with open(path, "r", encoding="utf-8") as fh:
-            manifest = parse_frontmatter(fh.read())
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                manifest = parse_frontmatter(fh.read())
+        except (OSError, ValueError) as bad:
+            manifest = {"broken": str(bad)}
         manifest["dir"] = name
         out.append(manifest)
     return out
@@ -174,7 +181,15 @@ def check(root, modules, known=None, harness="claude", index=True):
     found = []
     names = [m.get("name", "") for m in modules]
     everywhere = set(names) | set(known or [])
-    supported = set(harness_table(harness).events())
+    # Словарь событий — ОБЪЕДИНЕНИЕ всех харнесов дерева: модуль под codex не
+    # обязан укладываться в словарь claude, а вторая таблица должна добавляться
+    # строкой в HARNESSES, а не правкой этой проверки.
+    supported = set()
+    facts = set()
+    for one in HARNESSES:
+        table = harness_table(one)
+        supported |= set(table.events())
+        facts |= set(table.FACTS)
     # Пакет, стоящий в манифесте ИСТОЧНИКА, но исчезнувший из дерева: манифест
     # пишет установка, а папку сносят руками, и между двумя установками модуль
     # значится поставленным, не существуя. УСТАНОВКЕ это не находка (index=False):
@@ -185,6 +200,9 @@ def check(root, modules, known=None, harness="claude", index=True):
     for manifest in modules:
         name = manifest.get("name", "")
         directory = manifest.get("dir", "")
+        if manifest.get("broken"):
+            found.append("%s: манифест не разобран: %s" % (directory, manifest["broken"]))
+            continue
         for field in MANIFEST_FIELDS:
             if field not in manifest:
                 found.append("%s: в манифесте нет поля %s" % (directory, field))
@@ -206,7 +224,13 @@ def check(root, modules, known=None, harness="claude", index=True):
                 found.append("%s: событие «%s» харнесу неизвестно; канонические имена: %s"
                              % (name, event, ", ".join(sorted(supported))))
         for need in manifest.get("requires") or []:
-            if need not in FACTS and need not in everywhere:
+            if need in FACTS:
+                # Факт события закрывает ОБЁРТКА, а не пакет. Не выдаёт его ни
+                # одна таблица — модуль встанет и будет отвечать `unsupported` на
+                # каждом событии; такое лучше не ставить вовсе (решение 6).
+                if need not in facts:
+                    found.append("%s: факт «%s» не выдаёт ни одна таблица харнеса" % (name, need))
+            elif need not in everywhere:
                 found.append("%s: жёсткая зависимость «%s» ничем не закрыта" % (name, need))
     return sorted(set(found))
 

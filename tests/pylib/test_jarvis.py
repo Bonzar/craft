@@ -157,9 +157,26 @@ class Check(unittest.TestCase):
         self.assertTrue(any("ничем не закрыта" in line for line in found), found)
 
     def test_факт_события_зависимостью_к_пакету_не_считается(self):
+        # Факт закрывает ОБЁРТКА, а не пакет: искать под него пакет — не то. Но и
+        # молчать нельзя: ни одна таблица харнеса этих фактов пока не выдаёт, и
+        # модуль встал бы, отвечая `unsupported` на каждом событии.
         base = "---\nname: x\nkind: hook\nfor: general\nevents: [{ event: stop }]\n"
         make_module(self.root, "x", body=base + "requires: [tokens]\ndata: []\nmode: on\n---\n")
-        self.assertEqual(self.found(), [])
+        found = self.found()
+        self.assertTrue(any("не выдаёт ни одна таблица харнеса" in line for line in found), found)
+        self.assertFalse(any("ничем не закрыта" in line for line in found),
+                         "факт не ищется среди пакетов")
+
+    def test_неразобранный_манифест_называет_пакет_а_не_роняет_обход(self):
+        make_module(self.root, "хороший")
+        directory = os.path.join(self.root, "modules", "плохой")
+        os.makedirs(directory)
+        with open(os.path.join(directory, "SKILL.md"), "w", encoding="utf-8") as fh:
+            fh.write("---\nсломано\n---\n")
+        found = self.found()
+        self.assertTrue(any(line.startswith("плохой: манифест не разобран") for line in found), found)
+        self.assertFalse(any(line.startswith("хороший") for line in found),
+                         "соседний пакет от этого не страдает")
 
     def test_вид_не_из_списка(self):
         make_module(self.root, "x", kind="что-то")
