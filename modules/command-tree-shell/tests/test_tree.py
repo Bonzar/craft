@@ -165,5 +165,16 @@ class ParseForms(unittest.TestCase):
         self.assertEqual(words(answer["statements"][0]), ["ssh", "host", 'pkill -x "Google Chrome"'])
 
 
+    def test_21_command_inside_parameter_expansion_is_not_lost(self):
+        """Команда внутри `${…}`, арифметики и массива — тоже утверждение.
+
+        Слово таких кусков текста не даёт, и если не спуститься внутрь, команда
+        исчезает из дерева ВОВСЕ: ни один гвард её не увидит."""
+        for command in ("echo ${x:-$(rm -rf /repo/docs)}", "arr=($(rm -rf /repo/docs))",
+                        "let n=$(rm -rf /repo/docs)", "echo $(( $(rm -rf /repo/docs) ))",
+                        "echo ${x/a/$(rm -rf /repo/docs)}"):
+            got = statements(command)
+            self.assertIn(["rm", "-rf", "/repo/docs"], [words(s) for s in got], command)
+
 if __name__ == "__main__":
     unittest.main()

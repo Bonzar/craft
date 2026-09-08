@@ -623,3 +623,23 @@ test('пусковой префикс цель записи не прячет', 
   // ослаб бы.
   assert.equal(bash.classifyCommand('sudo cat a.js').readOnly, false);
 });
+
+// Пускатель, заменяющий собой процесс, и ключи пускателей со СВОИМ значением.
+// Тело обёртки за ними становилось невидимым: `wrapperBodyOf` спрашивает первое
+// слово, а им оказывался пускатель или значение его ключа.
+test('пускатель перед обёрткой запуска цель не прячет', () => {
+  for (const cmd of ['exec bash -c "cat > /repo/README.md"',
+    'sudo -u user bash -c "cat > /repo/README.md"',
+    'env -u FOO bash -c "cat > /repo/README.md"',
+    'exec -a имя bash -c "cat > /repo/README.md"']) {
+    assert.deepEqual(bash.commandTargets(cmd), ['/repo/README.md'], cmd);
+  }
+});
+
+// Терминатор перебора приходит операндом и путём не является: назвав его целью,
+// гейт отбивал бы команду, у которой настоящая цель — устройство.
+test('терминатор перебора целью записи не становится', () => {
+  assert.deepEqual(bash.commandTargets(String.raw`find . -name '*.log' -exec tee /dev/null \;`), []);
+  // А настоящая цель за тем же перебором видна.
+  assert.deepEqual(bash.commandTargets(String.raw`find . -exec tee /repo/README.md \;`), ['/repo/README.md']);
+});

@@ -104,8 +104,16 @@ def _stmt(stmt, depth, out, seen, sep):
         out.append(record)
         return record
 
+    words = _words(cmd, depth, out, seen)
+    if kind != "CallExpr":
+        # У `let`, `[[ … ]]` и объявлений слова лежат в ВЫРАЖЕНИИ, а не в
+        # аргументах: `let n=$(…)` иначе теряет свою команду целиком. Аргументы и
+        # присваивания пропускаются — их уже разобрал `_words`.
+        for key, value in cmd.items():
+            if key not in ("Args", "Assigns", "Variant"):
+                _descend(value, depth, out, seen)
     record = _record("call" if kind == "CallExpr" else "other",
-                     depth, _line(stmt), seen, sep, _words(cmd, depth, out, seen))
+                     depth, _line(stmt), seen, sep, words)
     record["background"] = background
     record["redirects"] = _redirects(redirs, depth, out, seen)
     out.append(record)
@@ -133,6 +141,8 @@ def _own_words(cmd):
     words = list(((cmd.get("Loop") or {}).get("Items")) or [])
     if isinstance(cmd.get("Word"), dict):
         words.append(cmd["Word"])
+    for item in cmd.get("Items") or []:
+        words.extend(item.get("Patterns") or [])
     return words
 
 
@@ -166,6 +176,9 @@ def _words(cmd, depth, out, seen):
 
 def _assign(assign, depth, out, seen):
     name = (assign.get("Name") or {}).get("Value") or ""
+    # Значением бывает МАССИВ (`arr=($(…))`): слова у него свои, и команды в них
+    # теряются так же тихо, как в подстановке внутри `${…}`.
+    _descend(assign.get("Array"), depth, out, seen)
     value = _word(assign.get("Value") or {}, depth, out, seen)
     return {"text": "%s=%s" % (name, value["text"]), "quoted": value["quoted"],
             "expanded": value["expanded"], "process": value["process"]}
@@ -208,8 +221,30 @@ def _part(part, depth, out, seen):
     if kind in ("CmdSubst", "ProcSubst"):
         _stmts(part.get("Stmts") or [], depth + 1, out, seen, "")
         return ("", False, True, kind == "ProcSubst")
-    # ParamExp, ArithmExp, ExtGlob и всё незнакомое: подстановка без текста.
+    # ParamExp, ArithmExp, ExtGlob и всё незнакомое: подстановка без текста. Но
+    # КОМАНДЫ внутри неё есть и там — `${x:-$(rm …)}`, `$(( $(…) ))`, — и терять
+    # их нельзя: потерянная команда это пропущенная запись.
+    _descend(part, depth, out, seen)
     return ("", False, True, False)
+
+
+def _descend(node, depth, out, seen):
+    """Команды, спрятанные ВНУТРИ узла, куда слово не заглядывает.
+
+    Обход общий, а не перечнем полей: полей у оболочки много, перечень
+    устаревает молча, и цена ошибки односторонняя — не найденная здесь команда
+    исчезает из дерева вовсе, то есть проходит мимо всех гвардов."""
+    if isinstance(node, list):
+        for item in node:
+            _descend(item, depth, out, seen)
+        return
+    if not isinstance(node, dict):
+        return
+    if node.get("Type") in ("CmdSubst", "ProcSubst") and isinstance(node.get("Stmts"), list):
+        _stmts(node["Stmts"], depth + 1, out, seen, "")
+        return
+    for value in node.values():
+        _descend(value, depth, out, seen)
 
 
 def _redirects(redirs, depth, out, seen):

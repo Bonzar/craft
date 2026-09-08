@@ -277,7 +277,13 @@ function targetsOf(cmd, quiet = false) {
 // чтобы найти ТЕЛО обёртки запуска (`sudo bash -c "…"`). Список отдельный от
 // словаря доказательства чтения НАРОЧНО: сними там `sudo`, и `sudo cat a` станет
 // ДОКАЗАННЫМ чтением, то есть гвард якоря ослабнет.
-const LAUNCHERS = new Set(['sudo', 'doas', 'env']);
+const LAUNCHERS = new Set(['sudo', 'doas', 'env', 'exec']);
+
+// Ключи пускателей, у которых СВОЁ значение: `sudo -u имя`, `env -u ИМЯ`,
+// `exec -a имя`. Без них поиск обрывается на значении, и обёртка запуска за ними
+// остаётся невидимой.
+const LAUNCHER_VALUE_FLAG = new Set(['-u', '-g', '-a', '-C', '-p', '-t', '-U', '-r',
+  '--unset', '--chdir', '--user', '--group']);
 
 function dropLaunchers(list, cfg) {
   let current = dropWrappers(dropEnvPrefix(list), cfg);
@@ -285,7 +291,10 @@ function dropLaunchers(list, cfg) {
     let i = 1;
     // У пускателя свои ключи и свои присваивания: `env -i FOO=1 bash -c …`.
     while (i < current.length
-      && (current[i].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(current[i]))) i += 1;
+      && (current[i].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(current[i]))) {
+      if (LAUNCHER_VALUE_FLAG.has(current[i])) i += 1;
+      i += 1;
+    }
     current = dropWrappers(dropEnvPrefix(current.slice(i)), cfg);
   }
   return current;
@@ -466,6 +475,9 @@ export function cleanTarget(rawTarget) {
   if (rawTarget.startsWith('/dev/') || rawTarget.startsWith('-')) return '';
   // Дескриптор — не файл, в любом его числе: `>&3` целью записи не является.
   if (/^&?\d+$/.test(rawTarget)) return '';
+  // Терминатор перебора стоит операндом, а путём не является: цель у такой
+  // команды — та, что перед ним.
+  if (rawTarget === ';' || rawTarget === String.raw`\;`) return '';
   return rawTarget.replace(/"$/, '').replace(/^"/, '').replace(/'$/, '').replace(/^'/, '');
 }
 

@@ -84,3 +84,8 @@
 # хук смотрел ровно так, и без неё переезд терял эту форму молча.
 {"name": "подмена каталога хуков внутри тела обёртки запуска → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "hook_event_name": "PreToolUse", "tool_input": {"command": "bash -c \"git -c core.hooksPath=/dev/null commit -m x\""}}}
 {"name": "подмена каталога хуков на другой машине → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "hook_event_name": "PreToolUse", "tool_input": {"command": "ssh host 'git -c core.hooksPath=/dev/null commit -m x'"}}}
+
+# Область `raw` смотрит сырой текст, поэтому правило обязано требовать ВЫЗОВ
+# инструмента: у поиска ключ `-c` значит счётчик совпадений, и без этого
+# требования чтение получало бы отказ. Прежний хук требовал того же.
+{"name": "чтение с ключом-счётчиком обходом не является → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "hook_event_name": "PreToolUse", "tool_input": {"command": "grep -c core.hooksPath= .git/config"}}}
