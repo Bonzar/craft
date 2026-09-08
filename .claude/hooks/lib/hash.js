@@ -7,6 +7,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+// Принимает и строку, и буфер: у строки хешируются её байты в UTF-8, у буфера —
+// он сам. Ключ следа считается ИМЕННО по буферу (lib/event-key.js).
 export function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }

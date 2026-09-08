@@ -107,7 +107,10 @@ test('под диспетчером КАЖДАЯ запись события н�
     });
     s.send({ hook_event_name: 'Stop' });
 
-    const own = s.records().filter((r) => r.occ);
+    // Записи СОБЫТИЙ, а не всё подряд: строки канала (замеры, решения) тоже
+    // несут ключ, но признака диспетчера у них нет и быть не должно.
+    const EVENT_KINDS = ['session', 'prompt', 'pre', 'post', 'fail', 'stop'];
+    const own = s.records().filter((r) => EVENT_KINDS.includes(r.kind));
     assert.ok(own.length >= 5, `записей события ожидалось не меньше пяти, вышло ${own.length}`);
     const forgot = own.filter((r) => r.disp !== true).map((r) => r.kind);
     assert.deepEqual(forgot, [], 'признак диспетчера обязан быть у всех записей');

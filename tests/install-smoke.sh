@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Smoke-тест install.sh: идемпотентность и сохранность чужих настроек.
+# Smoke-тест install.sh и tools/jarvis.py: идемпотентность и сохранность чужих
+# настроек.
 # Гоняется во временном HOME — реальный ~/.claude не трогается.
 #   1. Первый прогон: регистрации в settings.json указывают в чекаут репы.
 #   2. Чужой hook-блок, существовавший до установки, не затёрт.
 #   3. Второй прогон: no-op ("no changes needed").
 #   4. Дом со СТАРЫМ слоем: симлинки на репу сняты, регистрации со старым
 #      адресом ~/.claude/hooks не остались рядом с новыми.
+#   5. jarvis install: дважды подряд без диффа, `check` пуст, `status` показывает
+#      пилота включённым, регистрация ведёт в собранную обёртку пакета.
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -129,6 +132,43 @@ out6="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$HOOKREPO/install.sh" 2>
   || FAILS+=("foreign core.hooksPath was overwritten")
 grep -q 'оставлен как есть' <<<"$out6" || FAILS+=("foreign hooksPath kept silently, no notice printed")
 rm -rf "$HOOKREPO"
+
+# --- 6. Установщик пакетов ----------------------------------------------------
+# Свой временный дом: install.sh и jarvis пишут в один и тот же settings.json, и
+# делить его между двумя проверками идемпотентности значило бы проверять их пару,
+# а не каждую.
+JHOME="$(mktemp -d)"
+jarvis() { HOME="$JHOME" XDG_DATA_HOME="$JHOME/share" XDG_CONFIG_HOME="$JHOME/config" \
+  python3 "$REPO/tools/jarvis.py" --root "$REPO" "$@"; }
+
+jout1="$(jarvis install 2>&1)" || FAILS+=("jarvis install exited non-zero: $jout1")
+jsettings="$JHOME/.claude/settings.json"
+cp "$jsettings" "$JHOME/settings.after-first" 2>/dev/null \
+  || FAILS+=("jarvis install did not write settings.json")
+
+# Регистрация — строка на модуль и событие, и ведёт она в СОБРАННУЮ обёртку.
+hookpath="$REPO/modules/trace-probe/dist/claude/hook.py"
+[[ -f "$hookpath" ]] || FAILS+=("jarvis install did not build the package wrapper")
+jq -e --arg cmd "python3 $hookpath" '.hooks.PostToolUse[]?.hooks[]?.command
+       | select(. == $cmd)' "$jsettings" >/dev/null 2>&1 \
+  || FAILS+=("package registration does not point at the built wrapper")
+
+jout2="$(jarvis install 2>&1)" || FAILS+=("second jarvis install exited non-zero: $jout2")
+grep -q 'no changes needed' <<<"$jout2" || FAILS+=("second jarvis install changed settings (not idempotent)")
+diff -q "$JHOME/settings.after-first" "$jsettings" >/dev/null 2>&1 \
+  || FAILS+=("second jarvis install produced a diff in settings.json")
+
+# Корень дописан один раз: список корней ведёт установка, и дубль в нём означал
+# бы, что дерево читается дважды.
+n_roots="$(grep -cxF "$REPO" "$JHOME/share/jarvis/sources.list" 2>/dev/null || echo 0)"
+[[ "$n_roots" == "1" ]] || FAILS+=("source root listed $n_roots times, expected once")
+
+jarvis check > "$JHOME/check.out" 2>&1 || FAILS+=("jarvis check reported findings: $(cat "$JHOME/check.out")")
+[[ -s "$JHOME/check.out" ]] && FAILS+=("jarvis check printed something: $(cat "$JHOME/check.out")")
+
+jarvis status | grep -qE '^trace-probe +on ' \
+  || FAILS+=("jarvis status does not show trace-probe on: $(jarvis status)")
+rm -rf "$JHOME"
 
 if [[ ${#FAILS[@]} -gt 0 ]]; then
   echo "install-smoke: FAIL"

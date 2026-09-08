@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Обёртка модуля {{MODULE}} для харнеса {{HARNESS}}. СГЕНЕРИРОВАНА tools/jarvis.py —
+правки здесь затрёт следующая установка; правь runtime/wrapper.py.tmpl.
+
+Обёртка — императивная оболочка вокруг чистой функции решения: прочитать событие,
+привести его к каноническому виду таблицей харнеса, спросить `decide`, положить
+след, напечатать ответ. Имён полей и событий харнеса здесь нет — они все в
+таблице; логика модуля не видит ни окружения, ни диска сверх данных и каталога
+состояния.
+
+Хук равен ПРОЦЕССУ (решение 9): харнес запускает эту строку сам, параллельно с
+остальными строками события. Нет `python3` — не отработает только она; остальные
+строки события целы.
+
+Уступка второму вызову (pylib/once.py) стоит здесь, а не в логике: двойная
+регистрация — свойство установки (два источника с модулем одного имени), и знать
+о ней обязана оболочка. Выключается `JARVIS_ONCE=off` — им же кейсы гасят её,
+когда проверяют сам модуль, а не уступку.
+"""
+
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PACKAGE = os.path.dirname(os.path.dirname(HERE))
+# Корень источника: `<корень>/modules/<имя>` — отсюда и берётся `personal/`.
+SOURCE_ROOT = os.path.dirname(os.path.dirname(PACKAGE))
+
+# Пути кладутся ОТ САМОГО ФАЙЛА, а не зашиваются установкой: перенесённое дерево
+# продолжает работать, а не молча зовёт исчезнувший каталог.
+#
+# Порядок значим: код модуля идёт ПОСЛЕДНИМ. Стоя первым, он затенял бы общее —
+# файл `scripts/hooks/state.py` у любого будущего пакета молча подменил бы pylib,
+# и обёртка взяла бы чужие `FIRM` и `missing_fact`.
+sys.path.insert(0, os.path.join(PACKAGE, "scripts", "hooks"))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "pylib"))
+
+import harness as table  # noqa: E402
+import once  # noqa: E402
+import state  # noqa: E402
+import trace  # noqa: E402
+from decision import FIRM, missing_fact, unsupported  # noqa: E402
+from decide import decide  # noqa: E402
+
+NAME = {{MODULE}}
+EVENTS = {{EVENTS}}
+# Только ФАКТЫ события из `requires`. Остальное в `requires` — имена возможностей,
+# и закрывает их установка: она отказывается ставить модуль с незакрытой жёсткой
+# зависимостью. Спрашивать имя возможности у события бессмысленно — такого поля в
+# нём нет и быть не может, и модуль отвечал бы `unsupported` на каждом событии.
+FACTS = {{FACTS}}
+# Режим из манифеста: последний источник, когда о модуле молчат и переменная, и
+# оба конфига.
+MODE = {{MODE}}
+DATA_FILES = [os.path.join(PACKAGE, rel) for rel in {{DATA}}]
+
+
+def main():
+    raw = sys.stdin.buffer.read()
+    event = table.to_event(raw)
+    # Не то событие — молчим. Регистрация идёт по строке на модуль и событие, но
+    # устаревшая строка пережила бы правку манифеста, и модуль сработал бы там,
+    # где его не звали.
+    if not event["event"] or event["event"] not in EVENTS:
+        return 0
+    # Режим читается ОБЩИМ кодом (pylib/state.mode) — тем же, которым отвечает
+    # `jarvis status`: две копии одного старшинства разъехались бы молча.
+    if state.mode(NAME, SOURCE_ROOT, MODE)[0] == "off":
+        return 0
+    if os.environ.get("JARVIS_ONCE") != "off" and not once.take(NAME, event, event["state_dir"]):
+        return 0
+
+    missing = missing_fact(event, FACTS)
+    # Недостающая жёсткая зависимость даёт явное `unsupported` С ИМЕНЕМ, а не
+    # молчание и не обходной путь (решение 14). Логика при этом не зовётся: ей
+    # нечем работать.
+    decision = unsupported(missing) if missing else decide(event, DATA_FILES, event["state_dir"])
+
+    # Форма считается ДО следа: исключающее решение, которому на этом событии
+    # формы нет, харнес не увидит, и в журнал оно обязано лечь помеченным —
+    # иначе сводка посчитает отказ, которого никто не видел.
+    out = table.render(event, decision)
+    firm = decision.get("outcome") in FIRM
+    delivered = bool(out) or not firm
+    if not delivered:
+        sys.stderr.write("[%s] исход %s не имеет формы на событии %s\n"
+                         % (NAME, decision.get("outcome"), event["event"]))
+    # Правка входа печатается только там, где харнес её принимает; молча терять
+    # её нельзя — модуль просил, и ничего не произошло.
+    if decision.get("modified_input") and not table.accepts_input(event["event"]):
+        sys.stderr.write("[%s] правка входа не доехала: на событии %s её формы нет\n"
+                         % (NAME, event["event"]))
+    if decision.get("add_context") and not table.accepts_context(event["event"]):
+        sys.stderr.write("[%s] дописанный контекст не доехал: на событии %s его формы нет\n"
+                         % (NAME, event["event"]))
+
+    # След — ВСЕГДА и ДО печати: печать может уйти в закрытый поток, а решение
+    # обязано быть записано раньше. Не легло — говорим вслух, потому что молчание
+    # на месте отказа читается как проход.
+    if not trace.write(event, NAME, decision, delivered):
+        sys.stderr.write("[%s] след решения не лёг в журнал\n" % NAME)
+
+    if out:
+        sys.stdout.write(out + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

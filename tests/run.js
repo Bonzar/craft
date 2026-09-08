@@ -17,6 +17,11 @@
 //   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
 //     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
 //     stdout запись не проверить.
+// Исход, утверждающий молчание, засчитывается только хуку, который отработал
+// ОЖИДАЕМО. Ожидаемый код возврата — ноль; кейс вправе назвать другой полем
+// `exit`, и нужно это ровно там, где проверяется строка регистрации, которая не
+// смогла запуститься (нет интерпретатора — 127). Без этого поля пришлось бы
+// заводить исход, безразличный к коду вовсе, — а он зеленел бы и на упавшем хуке.
 // Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, err-not-contains:,
 // file-empty, file-not-contains:), засчитывается только удавшемуся хуку: код
 // возврата 0 и ни строки диспетчера о падении. Упавший хук молчит так же.
@@ -25,6 +30,16 @@
 // Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
 // bash-версий не осталось; фолбек на .sh живёт для внешних наборов
 // (EXTRA_HOOKS_DIR), где они ещё бывают. Тем же правилом идут шаги подготовки.
+//
+// ПАКЕТ резолвится не по каталогу хуков, а по своей сборке:
+// modules/<имя>/dist/claude/hook.py, и зовётся так же, как его зовёт харнес, —
+// `python3` со своим stdin. Сборку раннер делает сам перед прогоном (jarvis
+// install во временный дом): в гите её нет, а без неё звать нечего.
+//
+// Из-за этого прогон ПИШЕТ В ЧЕКАУТ: заводит `modules/*/dist/` и
+// `modules.index.json`. Оба гитигнорятся, настоящие `~/.claude` и список корней
+// не трогаются (дом временный), но безобидным для рабочей копии раннер быть
+// перестал — сказано прямо, чтобы это не обнаружилось на чужой машине.
 //
 // Внешние наборы хуков (напр. локальный яндекс-слой в ~/.claude, вне git):
 //   EXTRA_HOOKS_DIR=~/.claude/hooks EXTRA_CASES_DIR=~/.claude/tests/hooks node tests/run.js
@@ -40,6 +55,8 @@ const REPO = path.resolve(__dirname, '..');
 const HOOKS = path.join(REPO, '.claude', 'hooks');
 const CASES_DIR = path.join(REPO, 'tests', 'hooks');
 const SETTINGS = path.join(REPO, '.claude', 'settings.json');
+const MODULES = path.join(REPO, 'modules');
+const JARVIS = path.join(REPO, 'tools', 'jarvis.py');
 const EXTRA_HOOKS_DIR = process.env.EXTRA_HOOKS_DIR || '';
 const EXTRA_CASES_DIR = process.env.EXTRA_CASES_DIR || '';
 
@@ -55,6 +72,9 @@ const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8' };
 // нет, то есть выглядели «известными падениями среды».
 delete BASE_ENV.CLAUDE_CODE_SESSION_ID;
 delete BASE_ENV.CRAFT_SESSION_ID;
+// Тем же правилом: выключатель модулей читает обёртка пакета, и у разработчика,
+// погасившего пилота у себя, кейсы про `mode` зеленели бы по чужой причине.
+delete BASE_ENV.JARVIS_MODULES_OFF;
 
 // Ключ кейса → файл хука без расширения. Незнакомый ключ резолвится по имени
 // самого ключа, поэтому карта нужна только там, где они расходятся.
@@ -106,12 +126,39 @@ const REQUIRED = [
   'stop-relative-link:block', 'stop-relative-link:silent',
   'session-anchor:deny', 'session-anchor:allow',
   'universal-journal:silent',
+  // Пилот упаковки: исход у него один — `none`, и харнесу он виден молчанием.
+  'trace-probe:silent',
   'universal-instinct-flush:block', 'universal-instinct-flush:silent',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
 // маршрутов — сам механизм регистрации.
 const REVERSE_WHITELIST = ['dispatch', 'dispatch-table'];
+
+// --- сборка пакетов ----------------------------------------------------------
+
+// Пакеты собираются установщиком: обёртка на модуль и харнес плюс копии таблицы
+// харнеса и pylib. Гоняется во ВРЕМЕННОМ доме — настоящие ~/.claude и список
+// корней прогон тестов не трогает.
+//
+// Не собралось — это смоук-провал с ПРИЧИНОЙ, а не тихо пропущенные кейсы: без
+// сборки кейсы пакетов упали бы «нет такого хука», и разбираться пришлось бы
+// на пустом месте.
+function buildPackages() {
+  if (!fs.existsSync(MODULES)) return '';
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-build.'));
+  tmpMade.add(path.basename(home));
+  const res = spawnSync('python3', [JARVIS, '--root', REPO, 'install'], {
+    encoding: 'utf8',
+    env: {
+      ...BASE_ENV, HOME: home, XDG_DATA_HOME: path.join(home, 'share'), XDG_CONFIG_HOME: path.join(home, 'config'),
+    },
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  if (res.error) return `jarvis install не запустился (${res.error.code}); нужен python3`;
+  if (res.status !== 0) return `jarvis install вернул ${res.status}: ${(res.stderr || '').trim()}`;
+  return '';
+}
 
 // --- запуск хуков ------------------------------------------------------------
 
@@ -126,15 +173,35 @@ function resolveHook(base) {
       if (fs.existsSync(p)) return p;
     }
   }
-  return '';
+  // Харнес зашит намеренно: раннер ИГРАЕТ Claude — все фикстуры набора это его
+  // события. Появится вторая таблица — сюда придётся вписать и её, вместе с
+  // фикстурами под неё.
+  const built = path.join(MODULES, base, 'dist', 'claude', 'hook.py');
+  return fs.existsSync(built) ? built : '';
 }
 
 // Хук запускается своим интерпретатором: bash-файлы через bash (исполняемый бит
 // им не нужен), JS — текущим node, чтобы прогон не зависел от того, что лежит в
-// PATH у тестов.
-function runHook(script, input, env, args = []) {
+// PATH у тестов. Пакет — `python3`, как его зовёт харнес.
+//
+// `shell` гоняет ту же команду ЧЕРЕЗ ОБОЛОЧКУ, то есть ровно так, как харнес
+// исполняет строку регистрации. Нужно это одному кейсу: «нет python3». Запусти
+// его напрямую — раннер получил бы отказ спавна и свою ошибку, а вопрос стоит
+// про то, что видит ХАРНЕС, когда строка не отработала.
+function runHook(script, input, env, args = [], shell = false) {
   const isJs = script.endsWith('.js');
-  const cmd = isJs ? process.execPath : 'bash';
+  const isPy = script.endsWith('.py');
+  const cmd = isJs ? process.execPath : (isPy ? 'python3' : 'bash');
+  if (shell) {
+    // Оболочка — ПО АБСОЛЮТНОМУ ПУТИ: кейс про отсутствующий интерпретатор сам
+    // подменяет PATH, и по имени не нашлась бы уже она сама. Аргументы
+    // экранируются, как их экранирует установщик: чекаут по пути с пробелом
+    // иначе давал бы не ту команду, что стоит в настройках.
+    const quote = (v) => `'${String(v).split("'").join(`'\\''`)}'`;
+    return spawnSync('/bin/sh', ['-c', [cmd, script, ...args].map(quote).join(' ')], {
+      input, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+    });
+  }
   return spawnSync(cmd, [script, ...args], {
     input,
     env,
@@ -225,6 +292,12 @@ function makeState() {
     // Временный каталог прогона: пути, которые хук строит сам через os.tmpdir(),
     // должны лечь сюда, а не в общий /tmp.
     TMPDIR: s.tmphome,
+    // Дом и каталог конфига — тоже временные. Обёртка пакета читает `mode` из
+    // ~/.config/jarvis/modules.toml, а lib/env.js — ~/.claude/craft.env: с живым
+    // домом исход кейса зависел бы от того, что лежит на машине запускающего, и
+    // выключенный у себя пакет красил бы прогон у всех.
+    HOME: s.tmphome,
+    XDG_CONFIG_HOME: path.join(s.tmphome, 'config'),
     // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
     // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
     CRAFT_METRICS_LOG: s.metrics,
@@ -345,6 +418,12 @@ function subst(value, s) {
   // строкам.
   //
   // {DECISIONS} — журнал решений кейса: им проверяется САМ канал между хуками.
+  // Его же пишет пакет: журнал у JS-хуков и у пакетов ОДИН, и кейс сшивки на
+  // этом и стоит.
+  //
+  // {TMPHOME} — временный дом прогона. Им кейс наводит конфиг (XDG_CONFIG_HOME)
+  // на свой файл: `mode` пакета читается из ~/.config/jarvis/modules.toml, и без
+  // герметичного дома кейс правил бы настоящий конфиг Влада.
   //
   // {JOURNAL} — журнал событий сессии этого прогона: по его строкам судят кейсы
   // производителя журнала, и им же кейс наводит ASSERT_FILE на тот файл, куда
@@ -374,7 +453,8 @@ function subst(value, s) {
     .split('{JOURNAL}').join(s.journal)
     .split('{FLUSHMARK}').join(s.flushmark)
     .split('{FLUSHSTATE}').join(s.flushstate)
-    .split('{DECISIONS}').join(s.decisions);
+    .split('{DECISIONS}').join(s.decisions)
+    .split('{TMPHOME}').join(s.tmphome);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске.
@@ -457,7 +537,7 @@ function runPass(c) {
   let res = { stdout: '', stderr: '' };
   const repeat = Number(c.repeat || 1);
   const args = Array.isArray(c.args) ? c.args.map((v) => subst(v, s)) : [];
-  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
+  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args, c.shell === true);
 
   const traced = fs.existsSync(s.classtrace);
   const trace = traced ? fs.readFileSync(s.classtrace, 'utf8') : '';
@@ -505,7 +585,10 @@ const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 // нулю — он не уносит цепочку, — поэтому падение видно только по его строке в
 // служебном потоке. Любой исход, который утверждает МОЛЧАНИЕ, обязан это
 // различать: иначе поломка зеленит кейс.
-const crashed = (err, env) => (env || {}).CODE !== 0 || /\[dispatch\] хук .* упал/.test(err || '');
+const crashed = (err, env) => {
+  const want = Number.isFinite((env || {}).WANT_CODE) ? env.WANT_CODE : 0;
+  return (env || {}).CODE !== want || /\[dispatch\] хук .* упал/.test(err || '');
+};
 
 function grade(expect, out, err, env) {
   // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
@@ -708,6 +791,14 @@ function smokeChecks() {
     smoke.push(`orphan hook (not registered in settings.json or install.sh): ${b}`);
   }
 
+  // `mode` пакета читается ещё и из `personal/modules.toml` САМОГО ДЕРЕВА, а его
+  // путь обёртка считает от своего файла — переопределить его окружением нельзя.
+  // Выключенный там пилот красил бы кейсы пакета, и выглядело бы это поломкой
+  // кода. Поэтому не молчим: называем причину заранее.
+  if (fs.existsSync(path.join(REPO, 'personal', 'modules.toml'))) {
+    smoke.push('personal/modules.toml в чекауте: кейсы пакетов негерметичны против него');
+  }
+
   smoke.push(...utf8GlueChecks());
   return smoke;
 }
@@ -810,6 +901,7 @@ function sweepLeftovers() {
 }
 
 function main() {
+  const buildFailure = buildPackages();
   const files = caseFiles();
   if (files.length === 0) {
     process.stderr.write(`ERROR: no case files in ${CASES_DIR}\n`);
@@ -859,7 +951,9 @@ function main() {
 
       // Путь и текст приходят из прогона уже подставленными: подставлять здесь
       // заново было бы нечем — состояния прогона тут уже нет.
-      const env = { ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code };
+      const env = {
+        ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code, WANT_CODE: c.exit,
+      };
       let ok = true;
       let got = r.out;
       for (const one of expects) {
@@ -900,6 +994,7 @@ function main() {
 
   const missing = REQUIRED.filter((k) => !covered.has(k));
   const smoke = smokeChecks();
+  if (buildFailure) smoke.push(`packages not built: ${buildFailure}`);
 
   process.stdout.write(`${'-'.repeat(75)}\n`);
   if (fails.length > 0) {

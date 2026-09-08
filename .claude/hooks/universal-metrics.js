@@ -7,7 +7,7 @@
 // записи нет вовсе. Решение по событию пишет тот, кто решил, — строкой в ЖУРНАЛ
 // РЕШЕНИЙ (lib/decision-log.js), а наблюдатель переносит новые строки этого
 // журнала в свой на СЛЕДУЮЩЕМ событии и запоминает смещение. Сшивает их обратно
-// свёртка — по номеру появления события (lib/metrics-summary.js).
+// свёртка — по паре «ключ события и его имя» (lib/metrics-summary.js).
 //
 // Почему переносом, а не чтением журнала решений на месте — в шапке
 // lib/decision-log.js; здесь это не пересказывается.
@@ -42,8 +42,10 @@
 // инструментов знает она; сводка считает по признакам и про инструменты не
 // знает ничего.
 //
-// Ключ сшивки — `occ`, номер появления события: он же стоит в строке журнала
-// решений.
+// Ключ сшивки — `key` события (lib/event-key.js): он же стоит в строке журнала
+// решений. Одного ключа мало — событие до вызова и событие после него несут один
+// идентификатор вызова, — поэтому сшивают по паре «ключ и событие», а событие
+// свёртка узнаёт по виду записи (lib/metrics-summary.js).
 //
 // В журнал не попадает содержимое: ни правок, ни команд, ни промптов, ни
 // текста отказов. Ничего не печатает, сети и модели не зовёт, укладывается в
@@ -131,7 +133,7 @@ function onSessionStart(state, ctx) {
   // историю в новый ход.
   state.transcript_offset = transcriptSize(transcript);
   append(log, {
-    kind: 'session', ...ctx.base, occ: ctx.occ, source: event.source,
+    kind: 'session', ...ctx.base, key: ctx.key, source: event.source,
     harness: event.harness, repo: state.repo, sid,
   });
 }
@@ -149,12 +151,12 @@ function onPrompt(state, ctx) {
   state.turn_progress = false;
   // Признак инцидента ставит другой хук той же цепочки — и ставит ПОСЛЕ
   // наблюдателя, поэтому в записи его нет: он придёт строкой журнала решений и
-  // будет сшит по `occ`, как и решение.
+  // будет сшит по ключу события, как и решение.
   append(log, {
     // Общая часть — из ctx.base, как у всех записей: своя копия «ts + turn»
     // теряла признак диспетчера, и свёртка переставала спрашивать у реплики, а
     // доехали ли её строки. Номер хода тут свой: он только что вырос.
-    kind: 'prompt', ...ctx.base, turn: state.turn, occ: ctx.occ,
+    kind: 'prompt', ...ctx.base, turn: state.turn, key: ctx.key,
     repeat, reinstruct: looksLikeReinstruction(prompt),
   });
 }
@@ -175,9 +177,9 @@ function onPre(state, ctx) {
   }
   // Исхода вызова в записи НЕТ: наблюдатель зовётся до решателей, и в эту секунду
   // решения ещё не существует. Оно придёт строкой журнала решений, а сшито будет
-  // по `occ` — номеру появления события.
+  // по ключу события.
   const record = {
-    kind: 'pre', ...ctx.base, occ: ctx.occ, tool, id,
+    kind: 'pre', ...ctx.base, key: ctx.key, tool, id,
     // Хеш вызова: по нему сводка узнаёт «тот же вызов» для ложных отказов.
     // Служебные поля входа этого харнеса отсеиваются ЗДЕСЬ — общая часть их имён
     // не знает. Сам вход в журнал не идёт ни в каком виде.
@@ -211,7 +213,7 @@ function onPost(state, ctx) {
   if (id) delete state.inflight[id];
   const record = {
     kind: ctx.name === EVENTS.POST_TOOL ? 'post' : 'fail',
-    ...ctx.base, occ: ctx.occ, tool, id,
+    ...ctx.base, key: ctx.key, tool, id,
   };
   if (Number.isFinite(started)) record.tool_ms = now - started;
   record.error = ctx.name === EVENTS.POST_TOOL_FAILURE || responseIsError(response);
@@ -248,9 +250,9 @@ function onStop(state, ctx) {
   const missing = missingFact(fact, ['tokens']);
   if (measured) state.transcript_offset = measured.offset;
   // Кто заблокировал конец хода — узнается из журнала решений: гвард решает ПОСЛЕ
-  // наблюдателя. Строка сшивается по `occ`, а блокировка не теряется — за
+  // наблюдателя. Строка сшивается по ключу события, а блокировка не теряется — за
   // блокированным концом хода всегда идёт следующий, и он её перенесёт.
-  const record = { kind: 'stop', ...ctx.base, occ: ctx.occ };
+  const record = { kind: 'stop', ...ctx.base, key: ctx.key };
   if (missing) markUnsupported(record, unsupported(missing).capability);
   else record.usage = fact.tokens;
   if (Number.isFinite(state.turn_started_at)) record.turn_ms = now - state.turn_started_at;
@@ -305,7 +307,7 @@ function drainDecisions(state) {
   // квота) посреди переноса иначе оставил бы замеры на месте, а решение потерял —
   // и сшивка прочитала бы отказ как проход, потому что доказательство доставки
   // есть, а решения нет. Повторный перенос с того же смещения не двоит: сшивка
-  // идёт по ключу появления.
+  // идёт по паре «ключ и событие», а считается всё по записям событий.
   let moved = 0;
   for (const rec of records) {
     if (!append(log, rec)) break;
@@ -329,13 +331,13 @@ const stop = updateState(log, (state) => {
   // Перенос строк журнала решений — ПЕРВЫМ делом и внутри той же залоченной
   // правки: смещение лежит в состоянии, и без лока два процесса перенесли бы
   // одно и то же дважды. Строки прошлых событий (решение, признак, замеры) ложатся
-  // в журнал метрик как есть, ключом им служит номер появления события.
+  // в журнал метрик как есть, ключом им служит ключ события.
   drainDecisions(state);
   const ctx = {
     name,
     ts,
     id: event.call_id,
-    occ: event.occurrence,
+    key: event.key,
     // `disp` — «запись сделана под диспетчером». Там у события ОБЯЗАНЫ появиться
     // строки канала (замеры диспетчер кладёт на каждом), и по их отсутствию
     // свёртка отличает «решения не было» от «строки не доехали». Вне диспетчера

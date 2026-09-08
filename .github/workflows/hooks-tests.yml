@@ -51,7 +51,27 @@ jobs:
       - name: Core unit tests
         run: node --test tests/unit/*.test.mjs
 
-      - name: Install.sh idempotency smoke
+      # Кейсы ПАКЕТОВ лежат в самих пакетах: они на стандартной библиотеке и
+      # ловятся обходом unittest. Обход молчит, когда ничего не нашёл, — «Ran 0
+      # tests ... OK» выглядит как зелёный прогон, поэтому пустой обход тут же
+      # объявляется провалом.
+      - name: Module tests
+        run: |
+          # pipefail обязателен: без него код возврата шага даёт `tee`, и упавший
+          # кейс модуля прошёл бы зелёным.
+          set -o pipefail
+          python3 -m unittest discover -s modules -p 'test_*.py' 2>&1 | tee /tmp/modules.out
+          if grep -q 'Ran 0 tests' /tmp/modules.out; then
+            echo "обход не нашёл ни одного кейса модулей"
+            exit 1
+          fi
+
+      # Общая часть пакетов (pylib) и установщик не принадлежат ни одному модулю
+      # и без своего шага остались бы непокрытыми вовсе.
+      - name: pylib and installer tests
+        run: python3 -m unittest discover -s tests/pylib -p 'test_*.py'
+
+      - name: Install.sh and jarvis idempotency smoke
         run: bash tests/install-smoke.sh
 
       # Раннер кейсов видит только stdout хука. Что синк системы делает С ГИТОМ —

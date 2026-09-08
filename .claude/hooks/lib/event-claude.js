@@ -11,8 +11,8 @@
 // Fail open на всём неожиданном: пустое или неразборное событие даёт пустые
 // поля, а не падение. Сломанный хук не должен клинить работу.
 import { readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import { coreEvent, EVENTS } from './event.js';
+import { eventKey } from './event-key.js';
 import { stateDir, journalLog } from './paths.js';
 
 // Таблица отображения имён событий харнеса в свои. Единственное место, где имена
@@ -38,31 +38,28 @@ export function harnessEventName(event) {
   return HARNESS_BY_EVENT.get(event) || '';
 }
 
-// Номер ПОЯВЛЕНИЯ события. Один процесс обслуживает ровно одно появление: под
-// диспетчером — всю его цепочку, поштучно — один хук. Поэтому номер годится в
-// ключ канала между хуками цепочки, и им же строки текущего появления отделяются
-// от строк прошлых ходов: у событий без идентификатора вызова (реплика, конец
-// хода) больше отличить их нечем.
-const OCCURRENCE = randomUUID();
-
-// Прочитанный текст запоминается: под диспетчером одно событие читают несколько
+// Прочитанные БАЙТЫ запоминаются: под диспетчером одно событие читают несколько
 // хуков подряд, а поток входа отдаёт его лишь однажды — второй хук получил бы
 // пустоту и молча ничего не сделал.
+//
+// Именно байты, а не текст: по ним считается ключ следа, и разбор в UTF-8 на
+// негодных байтах подставил бы U+FFFD, разведя ключ с питоновским.
 let cached = null;
 
-function readRaw() {
+function readBytes() {
   if (cached === null) {
     try {
-      cached = readFileSync(0, 'utf8');
+      cached = readFileSync(0);
     } catch {
-      cached = '';
+      cached = Buffer.alloc(0);
     }
   }
   return cached;
 }
 
 export function readEvent() {
-  const raw = readRaw();
+  const bytes = readBytes();
+  const raw = bytes.toString('utf8');
 
   let event = {};
   try {
@@ -73,6 +70,9 @@ export function readEvent() {
   if (event === null || typeof event !== 'object') event = {};
 
   const harnessName = typeof event.hook_event_name === 'string' ? event.hook_event_name : '';
+  // Ключ следа: им строка канала сшивается с записью метрик. Считается по самому
+  // событию (lib/event-key.js), а не по процессу, — иначе процесс пакета не
+  // сошёлся бы с процессом диспетчера.
   const core = coreEvent({
     harness: process.env.CRAFT_HARNESS || 'claude',
     session_id: event.session_id || process.env.CLAUDE_CODE_SESSION_ID || '',
@@ -89,6 +89,7 @@ export function readEvent() {
   // Здесь — единственный переход от события к тому, чем пользуется весь слой.
   if (core.session_id) process.env.CRAFT_SESSION_ID = core.session_id;
 
+  const key = eventKey(core.call_id, bytes);
   return {
     ...core,
     // ФАКТ `journal` — путь к журналу событий сессии. Считается ПОСЛЕ того, как
@@ -100,9 +101,7 @@ export function readEvent() {
     // второму вызову, журнал решений), — плоская россыпь там была бы россыпью
     // лишних полей.
     core,
-    // Номер появления события: им канал между хуками отделяет строки ЭТОГО
-    // появления от строк прошлых ходов.
-    occurrence: OCCURRENCE,
+    key,
     // Ниже — сторона харнеса. Её читают только обёртки.
     raw,
     harness_event: harnessName,
