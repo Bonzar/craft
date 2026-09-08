@@ -78,3 +78,9 @@
 # «Первое утверждение» — первое утверждение КОМАНДЫ, а не любой её строки: прежний
 # гвард смотрел на начало вызова, и переезд обещан с теми же ожиданиями.
 {"name": "пауза не первой строкой — не одиночная пауза → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "hook_event_name": "PreToolUse", "tool_input": {"command": "npm run build\nsleep 60\ncat /tmp/x.log"}}}
+# Подмена каталога хуков ездит и внутри кавычек — в теле обёртки запуска и на
+# другую машину через удалённую оболочку. Словом утверждения она там не
+# становится, поэтому у правила есть вторая строка по сырому тексту: прежний
+# хук смотрел ровно так, и без неё переезд терял эту форму молча.
+{"name": "подмена каталога хуков внутри тела обёртки запуска → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "hook_event_name": "PreToolUse", "tool_input": {"command": "bash -c \"git -c core.hooksPath=/dev/null commit -m x\""}}}
+{"name": "подмена каталога хуков на другой машине → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "hook_event_name": "PreToolUse", "tool_input": {"command": "ssh host 'git -c core.hooksPath=/dev/null commit -m x'"}}}

@@ -57,8 +57,13 @@ function adapterPath() {
 }
 
 // Возможность пакета — из его имени и `for`: у адаптера снимается хвост
-// инструмента, дефисы становятся подчёркиваниями. Формула одна с pylib.
-function capabilityOf(manifest) {
+// инструмента, дефисы становятся подчёркиваниями.
+//
+// Формула ОДНА с pylib (`decision.capability_of`), и держит их парный кейс:
+// разъедься они — реализация нашлась бы на одной стороне и потерялась на
+// другой, то есть план-гейт начал бы сверять каждый вызов шелла. Экспортируется
+// ради этого кейса.
+export function capabilityOf(manifest) {
   let base = String(manifest.name || '');
   const forValue = String(manifest.for || '');
   const tail = forValue.includes(':') ? forValue.slice(forValue.indexOf(':') + 1) : '';
@@ -136,9 +141,19 @@ function readManifests(dir) {
 
 // Коды перенаправлений оболочки (их отдаёт разбор числами). Запись в файл — вот
 // эти; дублирование дескрипторов (`2>&1`, `<&3`) записью не является.
-// `57` — открытие файла НА ЧТЕНИЕ И ЗАПИСЬ (`<>`): целью записи оно является так
-// же, как `>`, и прежний разбор его ловил.
-const WRITE_OPS = new Set([54, 55, 57, 60, 64, 65]);
+// Коды, которыми оболочка ОТКРЫВАЕТ ФАЙЛ на запись. `57` — на чтение и запись
+// (`<>`), `59` — `>&`: он дублирует дескриптор, когда справа число, но с именем
+// справа (`echo x >&f`) создаёт файл ровно как `>`. Голые дескрипторы отсеивает
+// `cleanTarget`, поэтому `2>&1` целью не становится.
+const WRITE_OPS = new Set([54, 55, 57, 59, 60, 64, 65]);
+
+// Дескриптор — не файл: у `>&` справа стоит либо имя (тогда файл создаётся),
+// либо число (тогда дублируется поток). Спрашивают это ОБА берега — цели записи
+// и доказательство чтения, — и второй копии правила тут быть не должно: разойдись
+// они, `2>&1` стал бы записью у одного и не стал у другого.
+const DESCRIPTOR = /^&?\d+$/;
+const opensFile = (redirect) => WRITE_OPS.has(redirect.op)
+  && !DESCRIPTOR.test(redirect.target.text);
 const READ_OP = 56;
 const HEREDOC_OPS = new Set([61, 62, 63]);
 
@@ -249,74 +264,31 @@ export function bashWriteTargets(cmd) {
 function targetsOf(cmd, quiet = false) {
   const parsed = tree(cmd, quiet);
   if (!parsed) return [];
-  const cfg = rules();
   const targets = [];
   let cwd = '';
   for (const statement of parsed.statements) {
-    for (const t of statementTargets(statement, cfg)) targets.push(resolveTarget(cwd, t));
+    for (const t of statementTargets(statement)) targets.push(resolveTarget(cwd, t));
     cwd = nextDirectory(cwd, statement);
   }
   return targets.concat(interpreterTargets(parsed.source || ''));
 }
 
-// Ключи правки на месте. Сверка по НАЧАЛУ слова: `sed -i.bak` и
-// `--in-place=.bak` — та же правка, что `sed -i`, и точное равенство их
-// пропускало.
-const IN_PLACE = ['-i', '--in-place'];
-
-// Запускающий префикс, который снимается ТОЛЬКО на стороне записи. Прежний
-// разбор искал имя команды где угодно в куске, и `sudo tee f` цель давал;
-// дерево спрашивает ПЕРВОЕ слово, поэтому префикс приходится снимать явно —
-// иначе канонический способ записи в защищённый файл проходил бы мимо гейта.
-//
-// Список отдельный от словаря доказательства чтения НАРОЧНО: сними там `sudo`,
-// и `sudo cat a` станет ДОКАЗАННЫМ чтением, то есть гвард якоря ослабнет.
-// Стороны не симметричны — на записи ищут больше, на чтении доказывают меньше.
+// Запускающий префикс, который снимается ТОЛЬКО на стороне записи: он нужен,
+// чтобы найти ТЕЛО обёртки запуска (`sudo bash -c "…"`). Список отдельный от
+// словаря доказательства чтения НАРОЧНО: сними там `sudo`, и `sudo cat a` станет
+// ДОКАЗАННЫМ чтением, то есть гвард якоря ослабнет.
 const LAUNCHERS = new Set(['sudo', 'doas', 'env']);
 
 function dropLaunchers(list, cfg) {
   let current = dropWrappers(dropEnvPrefix(list), cfg);
   for (let guard = 0; guard < 4 && LAUNCHERS.has(current[0]); guard += 1) {
     let i = 1;
-    // У пускателя свои ключи и свои присваивания: `env -i FOO=1 tee f`.
+    // У пускателя свои ключи и свои присваивания: `env -i FOO=1 bash -c …`.
     while (i < current.length
       && (current[i].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(current[i]))) i += 1;
     current = dropWrappers(dropEnvPrefix(current.slice(i)), cfg);
   }
   return current;
-}
-
-// Цели одного утверждения. Считаются по СЛОВАМ дерева, а не по их текстам:
-// слово с подстановкой обязано получить метку и здесь — `tee $LOG` иначе даёт
-// пустой список, а пустой список у гейта значит «команда ничего не пишет».
-function statementTargets(statement, cfg) {
-  const targets = [];
-  for (const redirect of statement.redirects || []) {
-    if (WRITE_OPS.has(redirect.op)) targets.push(targetText(redirect.target));
-  }
-  if (!cfg) return targets;
-  const all = statement.words || [];
-  const list = dropLaunchers(texts(statement), cfg);
-  // Те же слова, что и в списке имён, но объектами: снятие префикса убирает
-  // ровно начало, поэтому хвосты совпадают по длине.
-  const words = all.slice(all.length - list.length);
-  const name = list[0] || '';
-  const operands = words.slice(1).filter((word) => !word.text.startsWith('-'));
-  if (name === 'tee') targets.push(...operands.map(targetText));
-  if ((name === 'sed' || name === 'perl') && list.slice(1).some((w) => usesFlag(w, IN_PLACE))) {
-    // Здесь цель не отличить от программы правки: `s/a/b/` выглядит путём так
-    // же, как `README.md`. Названы обе — лишняя цель гейта не открывает, а
-    // пропущенная пропускает правку файла мимо него.
-    for (const word of words.slice(1)) {
-      if (word.expanded || /[/.]/.test(word.text)) targets.push(targetText(word));
-    }
-  }
-  if (name === 'cp' || name === 'mv') {
-    const at = list.indexOf('-t');
-    if (at > 0 && words[at + 1]) targets.push(targetText(words[at + 1]));
-    else if (operands.length) targets.push(targetText(operands[operands.length - 1]));
-  }
-  return targets;
 }
 
 // Текст цели записи. Слово с ПОДСТАНОВКОЙ несёт метку: раскрыть её нечем, и
@@ -332,6 +304,60 @@ function statementTargets(statement, cfg) {
 function targetText(word) {
   if (!word.expanded) return word.text;
   return word.text + UNRESOLVED;
+}
+
+// Команды, у которых цель записи стоит ОПЕРАНДОМ, а не за перенаправлением.
+const WRITE_COMMANDS = new Set(['tee', 'cp', 'mv', 'sed', 'perl']);
+
+// Ключи правки на месте. Сверка по НАЧАЛУ слова: `sed -i.bak` и
+// `--in-place=.bak` — та же правка, что `sed -i`, и точное равенство их
+// пропускало.
+const IN_PLACE = ['-i', '--in-place'];
+
+// Цели одного утверждения.
+//
+// Имя записи ищется среди ВСЕХ слов утверждения, а не только в первом. Прежний
+// разбор искал его по тексту куска, и `xargs tee f`, `nice -n 5 tee f`,
+// `find . -exec tee f \;`, `su -c …` цель давали; дерево, спрошенное про одно
+// первое слово, теряло их все — а потерянная цель это пропущенная правка,
+// прошедшая мимо гейта молча. Список пусковых префиксов тут не спасает: их
+// столько же, сколько способов запустить чужую программу.
+//
+// ЦЕНА НАЗВАНА: `echo tee out.txt` даёт лишнюю цель — ровно как давал и прежний
+// разбор. Стороны не равны, и это правило файла: лишняя цель гейта не
+// открывает, пропущенная пропускает правку мимо него. Дерево при этом сильнее
+// прежнего поиска по тексту: `git commit -m "cp a b"` цели НЕ даёт, потому что
+// сообщение пришло одним словом.
+//
+// Слова берутся объектами: слово с подстановкой обязано получить метку и здесь —
+// `tee $LOG` иначе даёт пустой список, то есть «команда ничего не пишет».
+function statementTargets(statement) {
+  const targets = [];
+  for (const redirect of statement.redirects || []) {
+    if (opensFile(redirect)) targets.push(targetText(redirect.target));
+  }
+  const words = statement.words || [];
+  for (let at = 0; at < words.length; at += 1) {
+    if (WRITE_COMMANDS.has(words[at].text)) targets.push(...writeTargetsAt(words, at));
+  }
+  return targets;
+}
+
+// Цели одной команды записи, найденной среди слов на месте `at`.
+function writeTargetsAt(words, at) {
+  const name = words[at].text;
+  const rest = words.slice(at + 1);
+  const operands = rest.filter((word) => !word.text.startsWith('-'));
+  if (name === 'tee') return operands.map(targetText);
+  if (name === 'sed' || name === 'perl') {
+    if (!rest.some((word) => usesFlag(word.text, IN_PLACE))) return [];
+    // Здесь цель не отличить от программы правки: `s/a/b/` выглядит путём так
+    // же, как `README.md`. Названы обе — по той же асимметрии.
+    return rest.filter((word) => word.expanded || /[/.]/.test(word.text)).map(targetText);
+  }
+  const flag = rest.findIndex((word) => word.text === '-t');
+  if (flag >= 0 && rest[flag + 1]) return [targetText(rest[flag + 1])];
+  return operands.length ? [targetText(operands[operands.length - 1])] : [];
 }
 
 // Тела обёрток запуска: `bash -c "…"`, `sh -c '…'` и остальные оболочки словаря.
@@ -438,7 +464,8 @@ function normalizePath(fp) {
 export function cleanTarget(rawTarget) {
   if (!/\S/.test(rawTarget)) return '';
   if (rawTarget.startsWith('/dev/') || rawTarget.startsWith('-')) return '';
-  if (['0', '1', '2', '&1', '&2'].includes(rawTarget)) return '';
+  // Дескриптор — не файл, в любом его числе: `>&3` целью записи не является.
+  if (/^&?\d+$/.test(rawTarget)) return '';
   return rawTarget.replace(/"$/, '').replace(/^"/, '').replace(/'$/, '').replace(/^'/, '');
 }
 
@@ -501,7 +528,7 @@ const verdict = (readOnly, cause, offender) => ({ readOnly, cause, offender });
 // Перенаправление в файл — запись; отвод в пустое устройство и дескрипторы —
 // нет, иначе половина обычных читающих вызовов получала бы отказ.
 function redirectsToFile(statement, cfg) {
-  return (statement.redirects || []).some((redirect) => WRITE_OPS.has(redirect.op)
+  return (statement.redirects || []).some((redirect) => opensFile(redirect)
     && !cfg.nullSinks.includes(redirect.target.text));
 }
 
@@ -559,7 +586,7 @@ function judgeStatement(statement, cfg, depth) {
   // выдумать.
   if (depth < 1 && cfg.shellWrappers.includes(wrapperName(name))) {
     const body = wrapperBodyOf(statement, cfg);
-    if (body) return judgeTree(body, cfg, depth + 1);
+    if (body) return judgeTree(body, cfg, depth + 1, true);
   }
 
   // Имя, заданное путём, доказательством не считается: рядом с рабочим каталогом
@@ -615,8 +642,8 @@ function judgeStatement(statement, cfg, depth) {
 // перестал быть доказанно читающим: содержимое подстановки, тело цикла и вторая
 // строка — тоже утверждения, и приписка через любое из них обходила бы гвард
 // ровно как приписка через `&&`.
-function judgeTree(cmd, cfg, depth) {
-  const parsed = tree(cmd);
+function judgeTree(cmd, cfg, depth, quiet = false) {
+  const parsed = tree(cmd, quiet);
   if (!parsed) return verdict(false, 'unparsed', firstWord(cmd));
   for (const statement of parsed.statements) {
     const answer = judgeStatement(statement, cfg, depth);

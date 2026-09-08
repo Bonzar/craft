@@ -516,10 +516,14 @@ test('подстановка между звеньями не отменяет �
   assert.deepEqual(targets('cd /repo && cat $(echo x) a.js'), ['/repo/a.js']);
 });
 
-// Перенаправление «на чтение и запись» — такая же цель записи, как `>`; прежний
-// разбор её ловил, и терять её значило бы пропустить правку мимо гейта.
-test('открытие файла на чтение и запись целью записи является', () => {
+// Оболочка открывает файл на запись не только через `>`. `<>` — на чтение и
+// запись; `>&` с ИМЕНЕМ справа создаёт файл ровно как `>`, а с числом дублирует
+// дескриптор. Прежний разбор искал стрелку по тексту и `>&f` пропускал.
+test('открытие файла на запись видно во всех формах, а дескриптор целью не является', () => {
   assert.deepEqual(bash.commandTargets('echo x <> README.md'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('echo x >&README.md'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('echo x 2>&1'), []);
+  assert.deepEqual(bash.commandTargets('cat a >&3'), []);
 });
 
 test('переход каталога на глубине не приписывает целям чужой каталог', () => {
@@ -601,9 +605,19 @@ test('пусковой префикс цель записи не прячет', 
     'echo x | sudo tee -a /repo/README.md', 'sudo env FOO=1 tee /repo/README.md']) {
     assert.deepEqual(bash.commandTargets(cmd), ['/repo/README.md'], cmd);
   }
-  // А слово `tee` НЕ в начале звена целью по-прежнему не становится: это и есть
-  // разница между деревом и поиском слова по тексту.
-  assert.deepEqual(bash.commandTargets('echo tee out.txt'), []);
+  // Имя записи ищется среди ВСЕХ слов, потому что списка пусковых префиксов не
+  // хватает: `xargs`, `find -exec`, `su -c` и соседи прячут цель так же.
+  for (const cmd of ['echo a | xargs tee /repo/README.md', 'find . -exec tee /repo/README.md ;',
+    'nice -n 5 tee /repo/README.md', 'sudo -u user tee /repo/README.md']) {
+    assert.deepEqual(bash.commandTargets(cmd), ['/repo/README.md'], cmd);
+  }
+  // ЦЕНА названа: слово `tee` не в начале звена даёт ЛИШНЮЮ цель — ровно как у
+  // прежнего разбора. Лишняя цель гейта не открывает, пропущенная пропускает
+  // правку мимо него.
+  assert.deepEqual(bash.commandTargets('echo tee out.txt'), ['out.txt']);
+  // А дерево при этом сильнее прежнего поиска по тексту: закавыченное сообщение
+  // приходит ОДНИМ словом и целей не даёт.
+  assert.deepEqual(bash.commandTargets('git commit -m "cp a b"'), []);
   // Снятие префикса живёт ТОЛЬКО на стороне записи: сними его у доказательства
   // чтения, и `sudo cat a` стало бы доказанным чтением, то есть гвард якоря
   // ослаб бы.
