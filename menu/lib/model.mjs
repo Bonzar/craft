@@ -43,11 +43,10 @@ export function buildModel(raw) {
     date: i.properties?.date ?? null,
     when: i.properties?.when ?? null,
     recipeId: relations(i.properties?.recipe)[0] ?? null,
-    yield: num(i.properties?.yield) ?? 0,
+    portions: num(i.properties?.portions) ?? 0,
     storage: i.properties?.storage ?? null,
-    left: num(i.properties?.left),
-    leftOn: i.properties?.lefton ?? null,
-    leftAfter: i.properties?.leftafter ?? null,
+    remaining: num(i.properties?.remaining),
+    remainingOn: i.properties?.remainingon ?? null,
     status: i.properties?.status ?? null,
   }));
 
@@ -61,7 +60,6 @@ export function buildModel(raw) {
     hot: relations(i.properties?.hot),
     side: relations(i.properties?.side),
     extra: relations(i.properties?.extra),
-    take: num(i.properties?.take) ?? 0,
     status: i.properties?.status ?? null,
   }));
 

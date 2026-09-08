@@ -40,27 +40,25 @@ function fixture(over = {}) {
     cooks: [
       item("c-plov", "Плов, сб", {
         date: "2026-09-05", when: "вечер", recipe: rel("r-plov"),
-        yield: 4.5, storage: "холодильник", status: "сделано",
+        portions: 4.5, storage: "холодильник", status: "сделано",
       }),
       item("c-salad", "Салат, сб", {
         date: "2026-09-05", when: "вечер", recipe: rel("r-salad"),
-        yield: 2.25, storage: "холодильник", status: "сделано",
+        portions: 2.25, storage: "холодильник", status: "сделано",
       }),
       item("c-puree", "Пюре, сб", {
         date: "2026-09-05", when: "вечер", recipe: rel("r-puree"),
-        yield: 8, storage: "холодильник", status: "сделано",
+        portions: 8, storage: "холодильник", status: "сделано",
       }),
     ],
     meals: [
       item("m-sb-d-v", "Сб · ужин · Влад", {
         date: "2026-09-05", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), side: rel("c-puree"), extra: rel("c-salad"),
-        take: 1.25, status: "съеден",
+        hot: rel("c-plov"), side: rel("c-puree"), extra: rel("c-salad"), status: "съеден",
       }),
       item("m-sb-d-o", "Сб · ужин · Оля", {
         date: "2026-09-05", slot: "ужин", eater: rel("e-olya"), where: "дома",
-        hot: rel("c-plov"), side: rel("c-puree"), extra: rel("c-salad"),
-        take: 1, status: "съеден",
+        hot: rel("c-plov"), side: rel("c-puree"), extra: rel("c-salad"), status: "съеден",
       }),
     ],
     purchases: [
@@ -87,11 +85,11 @@ test("перерасход считается от выхода готовки",
       ...meals,
       item("m-vs-o-v", "Вс · обед · Влад", {
         date: "2026-09-06", slot: "обед", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), take: 1.25, status: "план",
+        hot: rel("c-plov"), status: "план",
       }),
       item("m-vs-u-v", "Вс · ужин · Влад", {
         date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), extra: rel("c-salad"), take: 1.25, status: "план",
+        hot: rel("c-plov"), extra: rel("c-salad"), status: "план",
       }),
     ],
   });
@@ -105,7 +103,7 @@ test("факт остатка сдвигает точку отсчёта: при
     cooks: (cooks) =>
       cooks.map((c) =>
         c.id === "c-plov"
-          ? item(c.id, c.name, { ...c.properties, left: 2, lefton: "2026-09-05", leftafter: "ужин" })
+          ? item(c.id, c.name, { ...c.properties, remaining: 2, remainingon: "2026-09-05" })
           : c,
       ),
   });
@@ -117,8 +115,7 @@ test("отменённый приём расхода не создаёт", () =>
     meals: (meals) => [
       ...meals,
       item("m-vs-u-o", "Вс · ужин · Оля", {
-        date: "2026-09-06", slot: "ужин", eater: rel("e-olya"), where: "вне",
-        take: 0, status: "отменён",
+        date: "2026-09-06", slot: "ужин", eater: rel("e-olya"), where: "вне", status: "отменён",
       }),
     ],
   });
@@ -130,12 +127,11 @@ test("приём без горячего не закрыт, а ужин без �
     meals: (meals) => [
       ...meals,
       item("m-vs-z-v", "Вс · завтрак · Влад", {
-        date: "2026-09-06", slot: "завтрак", eater: rel("e-vlad"), where: "дома",
-        take: 1.25, status: "пропущен",
+        date: "2026-09-06", slot: "завтрак", eater: rel("e-vlad"), where: "дома", status: "пропущен",
       }),
       item("m-vs-u-v", "Вс · ужин · Влад", {
         date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-puree"), take: 1.25, status: "план",
+        hot: rel("c-puree"), status: "план",
       }),
     ],
   });
@@ -150,7 +146,7 @@ test("продукт с истёкшим сроком ловится по сос
       ...meals,
       item("m-vt-z-v", "Вт · завтрак · Влад", {
         date: "2026-09-08", slot: "завтрак", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-salad"), take: 1.25, status: "план",
+        hot: rel("c-salad"), status: "план",
       }),
     ],
   });
@@ -165,7 +161,7 @@ test("повтор горячего внутри дня считается по 
       ...meals,
       item("m-sb-o-v", "Сб · обед · Влад", {
         date: "2026-09-05", slot: "обед", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), take: 1.25, status: "съеден",
+        hot: rel("c-plov"), status: "съеден",
       }),
     ],
   });
@@ -180,11 +176,11 @@ test("три дня подряд одного блюда — находка на
       ...meals,
       item("m-vs-u-v", "Вс · ужин · Влад", {
         date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), extra: rel("c-salad"), take: 1.25, status: "план",
+        hot: rel("c-plov"), extra: rel("c-salad"), status: "план",
       }),
       item("m-pn-u-v", "Пн · ужин · Влад", {
         date: "2026-09-07", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), extra: rel("c-salad"), take: 1.25, status: "план",
+        hot: rel("c-plov"), extra: rel("c-salad"), status: "план",
       }),
     ],
   });
@@ -225,11 +221,11 @@ test("готовку, которую никто не ест, ловим — кр
       ...cooks,
       item("c-zapas", "Плов в морозилку", {
         date: "2026-09-05", when: "вечер", recipe: rel("r-plov"),
-        yield: 2, storage: "морозилка", status: "план",
+        portions: 2, storage: "морозилка", status: "план",
       }),
       item("c-nikto", "Пюре, вс", {
         date: "2026-09-06", when: "вечер", recipe: rel("r-puree"),
-        yield: 2, storage: "холодильник", status: "план",
+        portions: 2, storage: "холодильник", status: "план",
       }),
     ],
   });
@@ -244,7 +240,7 @@ test("срок хранения считается от даты готовки 
       ...meals,
       item("m-ct-o-v", "Ср · обед · Влад", {
         date: "2026-09-09", slot: "обед", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), take: 1.25, status: "план",
+        hot: rel("c-plov"), status: "план",
       }),
     ],
   });
@@ -288,7 +284,7 @@ test("runRules склеивает находки одной записи в од
       ...meals,
       item("m-vt-u-v", "Вт · ужин · Влад", {
         date: "2026-09-08", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-salad"), take: 1.25, status: "план",
+        hot: rel("c-salad"), status: "план",
       }),
     ],
   });
@@ -317,7 +313,7 @@ test("две несмежные серии длиннее двух дней — 
   const at = (date, slot, id) =>
     item(`m-${date}-${slot}`, `${date} · ${slot} · Влад`, {
       date, slot, eater: rel("e-vlad"), where: "дома",
-      hot: rel("c-plov"), extra: rel("c-salad"), take: 1.25, status: "план",
+      hot: rel("c-plov"), extra: rel("c-salad"), status: "план",
     });
   const model = fixture({
     meals: () => [
@@ -353,11 +349,11 @@ test("повтор горячего сравнивает обед с ужино�
     meals: () => [
       item("m-z", "Сб · завтрак · Влад", {
         date: "2026-09-05", slot: "завтрак", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), take: 1.25, status: "съеден",
+        hot: rel("c-plov"), status: "съеден",
       }),
       item("m-o", "Сб · обед · Влад", {
         date: "2026-09-05", slot: "обед", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), take: 1.25, status: "съеден",
+        hot: rel("c-plov"), status: "съеден",
       }),
     ],
   });
@@ -370,11 +366,11 @@ test("повтор горячего сравнивает обед с ужино�
     meals: () => [
       item("m-o", "Сб · обед · Влад", {
         date: "2026-09-05", slot: "обед", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), take: 1.25, status: "съеден",
+        hot: rel("c-plov"), status: "съеден",
       }),
       item("m-u", "Сб · ужин · Влад", {
         date: "2026-09-05", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), extra: rel("c-salad"), take: 1.25, status: "съеден",
+        hot: rel("c-plov"), extra: rel("c-salad"), status: "съеден",
       }),
     ],
   });
@@ -386,12 +382,11 @@ test("гарнир не повторяется за день целиком", ()
     meals: () => [
       item("m-o", "Сб · обед · Влад", {
         date: "2026-09-05", slot: "обед", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), side: rel("c-puree"), take: 1.25, status: "съеден",
+        hot: rel("c-plov"), side: rel("c-puree"), status: "съеден",
       }),
       item("m-u", "Сб · ужин · Влад", {
         date: "2026-09-05", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-salad"), side: rel("c-puree"), extra: rel("c-salad"),
-        take: 1.25, status: "съеден",
+        hot: rel("c-salad"), side: rel("c-puree"), extra: rel("c-salad"), status: "съеден",
       }),
     ],
   });

@@ -1,7 +1,7 @@
 // Правила недели из алгоритма «Собрать меню на неделю».
 // Чистые функции: на вход модель, на выход находки. Ни сети, ни записи.
 
-import { indexModel, mealPoint, slotIndex } from "./model.mjs";
+import { indexModel, slotIndex } from "./model.mjs";
 
 const WHEN_TO_SLOT = { утро: "завтрак", день: "обед", вечер: "ужин" };
 const ddmm = (iso) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : "?");
@@ -70,11 +70,11 @@ export function checkCooks(model) {
     }
 
     // Расход считается от последнего факта остатка, а до него — от выхода.
-    const hasFact = cook.left !== null;
-    const since = hasFact ? mealPoint(cook.leftOn, cook.leftAfter) : null;
-    const counted = hasFact ? all.filter((m) => mealPoint(m.date, m.slot) > since) : all;
-    const cap = hasFact ? cook.left : cook.yield;
-    const spent = counted.reduce((sum, m) => sum + m.take, 0);
+    // Сколько съедает приём — коэффициент его едока, отдельного поля для этого нет.
+    const hasFact = cook.remaining !== null;
+    const counted = hasFact ? all.filter((m) => m.date > cook.remainingOn) : all;
+    const cap = hasFact ? cook.remaining : cook.portions;
+    const spent = counted.reduce((sum, m) => sum + (ix.eaterById.get(m.eaterId)?.share ?? 0), 0);
     if (spent > cap + 1e-9) {
       const short = Math.round((spent - cap) * 100) / 100;
       out.push(
