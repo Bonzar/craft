@@ -118,3 +118,26 @@ test('без адаптера постановка в очередь назва�
   assert.equal(line.capability, 'summary-store');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('очередь НЕ заводится там, где доставка невозможна', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'queue-gate-test.'));
+  try {
+    // Адаптер живой, но цель не его рабочая копия: доставки отсюда не будет, и
+    // очередь копила бы то, что никто никогда не увезёт.
+    const dead = { available: () => false };
+    const live = { available: () => true };
+    assert.equal(store.defaultQueue(dead, dir), '', 'доставка невозможна — очереди нет');
+    assert.ok(/metrics-queue\.[0-9a-f]{12}\.jsonl$/.test(store.defaultQueue(live, dir, dir)),
+      'доставка возможна — очередь в переданном каталоге состояния');
+    assert.equal(path.dirname(store.defaultQueue(live, dir, dir)), dir,
+      'каталог состояния приходит параметром, а не считается своей формулой');
+    assert.equal(store.defaultQueue(null, dir), '', 'без адаптера очереди тоже нет');
+    // Проверка «есть ли такая функция» вместо ВЫЗОВА пропускала мёртвую цель.
+    assert.equal(store.defaultQueue({ available: 'не функция' }, dir), '');
+    // Очередь общая на все цели увозила бы в СВОЙ репозиторий сводки чужого
+    // чекаута: выгрузка забирает из файла ВСЕ строки.
+    assert.notEqual(store.defaultQueue(live, dir, dir), store.defaultQueue(live, `${dir}-другая`, dir));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

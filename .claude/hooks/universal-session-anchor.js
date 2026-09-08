@@ -21,7 +21,7 @@
 // У КОМАНД ВОПРОС ОБРАТНЫЙ ОСТАЛЬНЫМ ВЕТКАМ. Правка файла судится по цели: куда
 // пишем. Командная строка так не судится — список шаблонов записи разрешает по
 // умолчанию, и своя команда записи есть у любого стороннего инструмента. Поэтому
-// команда должна ДОКАЗАТЬ, что только читает (lib/read-only-command.js), а
+// команда должна ДОКАЗАТЬ, что только читает (lib/write-targets-bash.js), а
 // недоказанная ждёт ответа. Исключение одно: если все распознанные цели записи
 // временные, команда проходит — иначе шелл потерял бы то, что правке файла
 // разрешено.
@@ -32,14 +32,14 @@
 // сессию насмерть. Fail open во всех этих случаях сознателен: гвард якоря страхует
 // дисциплину, а не безопасность.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { EVENTS } from './lib/event.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { sessionAnchor } from './lib/paths.js';
 import { isEphemeral, ignoredEphemeral } from './lib/write-targets.js';
 import { isIgnored } from './lib/repo-git.js';
-import { commandTargets } from './lib/write-targets-bash.js';
-import { classifyCommand } from './lib/read-only-command.js';
+import { commandTargets, classifyCommand } from './lib/write-targets-bash.js';
 
 const ANCHOR_HEADER = 'Якорь сессии';
 
@@ -49,15 +49,15 @@ if (process.env.CRAFT_AUTONOMOUS || process.env.CRAFT_EVAL || process.env.CRAFT_
   process.exit(0);
 }
 
-const { raw, event, tool, name, input, response } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, event: eventName, input, response } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const state = sessionAnchor();
 
 // --- Старт сессии ------------------------------------------------------------
 // Печать голым текстом, как у остальных инжекторов старта: харнесс кладёт stdout
 // SessionStart-хука в контекст сам.
-if (name === 'SessionStart') {
+if (eventName === EVENTS.SESSION_START) {
   // Пустой идентификатор сессии: запомнить ответ негде, и гвард всё равно
   // пропустит запись — просить выбор, который ни на что не влияет, нечестно.
   if (!state) process.exit(0);
@@ -67,7 +67,7 @@ if (name === 'SessionStart') {
 }
 
 // --- Приём тапа по якорному вопросу -----------------------------------------
-if (name === 'PostToolUse' && tool === 'AskUserQuestion') {
+if (eventName === EVENTS.POST_TOOL && tool === 'AskUserQuestion') {
   if (!state) process.exit(0);
   const questions = Array.isArray(input.questions) ? input.questions : [];
   const answers = (response && typeof response === 'object' && !Array.isArray(response) && response.answers)
@@ -89,7 +89,11 @@ if (name === 'PostToolUse' && tool === 'AskUserQuestion') {
 }
 
 // --- Гвард записи ------------------------------------------------------------
-if (name && name !== 'PreToolUse') process.exit(0);
+// Не событие до вызова — не наше дело. Пустое каноническое имя сюда тоже попадает:
+// его даёт и ручной запуск без события, и незнакомое имя от харнеса. Разделять их
+// незачем — инструмент в обоих случаях пуст, то есть ни одна ветка гварда записи
+// ниже всё равно не сработала бы.
+if (eventName !== EVENTS.PRE_TOOL) process.exit(0);
 // Пустой идентификатор сессии: файла состояния не существует в принципе, и
 // отказывать по нему значило бы запереть сессию без единого способа открыться.
 if (!state) process.exit(0);

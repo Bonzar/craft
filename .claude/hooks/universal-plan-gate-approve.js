@@ -22,14 +22,14 @@ import {
 import { ingestDeadlineMs } from './lib/classifier.js';
 import { childEnv } from './lib/metrics.js';
 import { hookOnce } from './lib/once.js';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 
 if (process.env.CRAFT_AUTONOMOUS) process.exit(0);
 
 // Уступка второму вызову события: хук зарегистрирован в двух контурах, а внутри
 // теперь вызов модели — дубль стоил бы второго разбора плана.
-const { raw, event } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 function planPath() {
   if (process.env.CRAFT_PLAN_FILE) return process.env.CRAFT_PLAN_FILE;

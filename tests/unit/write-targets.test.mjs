@@ -9,6 +9,7 @@ const claude = await import('../../.claude/hooks/lib/tool-flags-claude.js');
 const bash = await import('../../.claude/hooks/lib/write-targets-bash.js');
 const git = await import('../../.claude/hooks/lib/write-targets-git.js');
 const repo = await import('../../.claude/hooks/lib/repo-git.js');
+const hash = await import('../../.claude/hooks/lib/call-hash.js');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
 
 // Та же связка, что собирает обёртка (universal-metrics.js): область вызова и
@@ -69,9 +70,14 @@ test('прогресс: удавшаяся мутация через Bash или
     'правка эфемерной цели прогрессом не считается — как и запись в неё через шелл');
   assert.equal(mutates('Edit', {}), false, 'правка без цели мир не меняет');
   assert.equal(mutates('Read', {}), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), true);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: true }), false);
-  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: false }, { error: false }), false);
+  // «Менял ли мир» стоит на записи СОСТОЯВШЕГОСЯ вызова: до решения этого не
+  // спрашивают вовсе — наблюдатель зовётся до решателей, и разбор целей записи
+  // стоил бы запусков git за вызов, который ещё могут запретить.
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: false, mutates: true }), true);
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: true, mutates: true }), false);
+  assert.equal(metrics.isProgress({ tool: 'Bash' }, { error: false, mutates: false }), false);
+  assert.equal(metrics.isProgress({ tool: 'Bash', mutates: true }, { error: false }), false,
+    'признак на записи ДО вызова прогрессом больше не считается: вызов мог не состояться');
 });
 
 // Без адаптера интерпретатора общая часть НЕ говорит «мир не менялся»: своего
@@ -111,16 +117,16 @@ test('игнорируемое репозиторием эфемерно, и в�
 
 test('служебные поля входа отсеивает адаптер харнеса, а не хеш вызова', () => {
   // Та же связка, что в обёртке: `callHash(инструмент, semanticInput(...))`.
-  const hash = (tool, input) => metrics.callHash(tool, claude.semanticInput(tool, input));
+  const callOf = (tool, input) => hash.callHash(tool, claude.semanticInput(tool, input));
   assert.equal(
-    hash('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 }),
-    hash('Bash', { command: 'git push', description: 'Push the branch to origin' }),
+    callOf('Bash', { command: 'git push', description: 'Push branch', timeout: 120000 }),
+    callOf('Bash', { command: 'git push', description: 'Push the branch to origin' }),
     'переписанное описание не должно делать повтор другим вызовом',
   );
-  assert.notEqual(hash('Bash', { command: 'git push' }), hash('Bash', { command: 'git status' }));
+  assert.notEqual(callOf('Bash', { command: 'git push' }), callOf('Bash', { command: 'git status' }));
   assert.equal(
-    hash('KillShell', { shell_id: '1' }),
-    hash('KillShell', { shell_id: '2' }),
+    callOf('KillShell', { shell_id: '1' }),
+    callOf('KillShell', { shell_id: '2' }),
     'номер фонового запуска смыслом вызова не является',
   );
   // А чтение чужого вывода — является: у него идентификатор говорит, ЧЕЙ вывод.
@@ -128,13 +134,366 @@ test('служебные поля входа отсеивает адаптер �
   // у этого вызова `shell_id`, которого у него не бывает, и `bash_id` доходил до
   // хеша и тогда. Красным строка станет, если кто-нибудь заведёт `bash_id`
   // служебным полем.
-  assert.notEqual(hash('BashOutput', { bash_id: 'a' }), hash('BashOutput', { bash_id: 'b' }));
+  assert.notEqual(callOf('BashOutput', { bash_id: 'a' }), callOf('BashOutput', { bash_id: 'b' }));
   // Список служебных полей — ПО ИНСТРУМЕНТУ: у правки `description` нет вовсе, и
   // общий список отсеивал бы поле там, где оно могло быть смыслом.
   assert.notEqual(
-    hash('Edit', { file_path: 'a', description: 'x' }),
-    hash('Edit', { file_path: 'a', description: 'y' }),
+    callOf('Edit', { file_path: 'a', description: 'x' }),
+    callOf('Edit', { file_path: 'a', description: 'y' }),
   );
   assert.deepEqual(claude.semanticInput('Edit', { file_path: 'a' }), { file_path: 'a' });
   assert.deepEqual(claude.semanticInput('Bash', undefined), {});
+});
+
+// Цели записи и признак «менял ли» обязаны идти ОТ ОДНОЙ политики эфемерности:
+// разъехавшись, они дали бы вызов, помеченный записью, с пустым списком целей —
+// и это было бы видно только на живом прогоне.
+test('цели записи чистятся тем же правилом, каким считается «менял ли вызов мир»', () => {
+  const shape = (tool, input) => claude.callShape(tool, input);
+  const mutates = (tool, input) => tools.mutationOf(claude.toolScope(tool, input), shape(tool, input), ADAPTERS);
+
+  assert.deepEqual(tools.durableTargets(shape('Write', { file_path: '/repo/README.md' }), ADAPTERS),
+    ['/repo/README.md']);
+  // Эфемерная правка: и «менял» ложно, и целей нет. Проверяются ОБА ответа
+  // разом — одна половина, зелёная в одиночку, ничего не значит.
+  assert.equal(mutates('Write', { file_path: '/tmp/x' }).mutates, false);
+  assert.deepEqual(tools.durableTargets(shape('Write', { file_path: '/tmp/x' }), ADAPTERS), []);
+
+  const cmd = { command: 'printf x > /repo/out.txt' };
+  assert.equal(mutates('Bash', cmd).mutates, true);
+  assert.deepEqual(tools.durableTargets(shape('Bash', cmd), ADAPTERS), ['/repo/out.txt']);
+
+  // Правка репозитория без перенаправления: «менял» истинно, а целей нет вовсе.
+  // Значит по длине списка про запись судить нельзя.
+  const commit = { command: 'git commit -m x' };
+  assert.equal(mutates('Bash', commit).mutates, true);
+  assert.deepEqual(tools.durableTargets(shape('Bash', commit), ADAPTERS), []);
+
+  // Эфемерность чистится и в КОМАНДНОЙ ветке, а не только у правки: эта ветка
+  // отдельная, и без своего кейса снятый в ней фильтр проходил молча.
+  assert.deepEqual(
+    tools.durableTargets(shape('Bash', { command: 'printf x > /tmp/черновик' }), ADAPTERS), [],
+  );
+  // Смесь долговечной и эфемерной цели: остаётся только долговечная.
+  assert.deepEqual(
+    tools.durableTargets(
+      shape('Bash', { command: 'printf x > /repo/out.txt && printf y > /tmp/черновик' }), ADAPTERS,
+    ),
+    ['/repo/out.txt'],
+  );
+  // Нет адаптера команды — целей нет и назвать их нечем; имя недостающего
+  // называет сам вопрос «менял ли».
+  assert.deepEqual(tools.durableTargets(shape('Bash', cmd), {}), []);
+  assert.equal(tools.mutationOf(claude.toolScope('Bash', cmd), shape('Bash', cmd), {}).capability,
+    'write-targets');
+});
+
+// Цели ЧТЕНИЯ у команды. Гоняется НАСТОЯЩИЙ адаптер интерпретатора, а не
+// заглушка: у кейсов общей части адаптер подставной, и вся эта сотня строк
+// (списки команд, ключи со значением, перенаправления, обёртки, подстановка,
+// резолв каталога) ими не трогалась вовсе.
+//
+// Порядок утверждений здесь не случаен: сперва ЛОЖНЫЕ цели, потом настоящие.
+// Асимметрия жёсткая — пропущенная цель стоит агенту лишнего чтения, а ложная
+// РАЗРЕШАЕТ гварду править то, чего никто не читал.
+test('цели чтения: ложных нет', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Закавыченный образец — ОДИН токен. По словам обезвреженного текста он
+  // рассыпался, и `README.md` из образца становился «прочитанным файлом».
+  assert.deepEqual(targets('grep -rn "см. README.md" .'), []);
+  assert.deepEqual(targets('cd /repo && grep -rn "см. README.md" .'), []);
+  // Значение ключа не занимает слот образца — иначе в цели уезжает сам образец.
+  assert.deepEqual(targets('grep -A 3 package.json src/index.js'), ['src/index.js']);
+  assert.deepEqual(targets('head -c 100 /repo/f.js'), ['/repo/f.js']);
+  // Каталог обхода прочитанным файлом не является: какие файлы под ним прочли,
+  // назвать нечем, и выдать каталог за файл значило бы соврать.
+  assert.deepEqual(targets('grep -rn образец /repo/src/'), []);
+  // Содержимое подстановки — операнды ЧУЖОЙ команды.
+  assert.deepEqual(targets('cat $(ls /repo/src)'), []);
+  // `cd` СЛОВОМ команды каталогом перехода не является: приняв его за переход,
+  // разбор резолвит им ОСТАТОК цепочки и выдаёт путь, которого никто не открывал.
+  assert.deepEqual(targets('grep -n cd /repo/a.js && cat b.js'), ['/repo/a.js', 'b.js']);
+  // Маркер heredoc и дескрипторы целями не становятся.
+  assert.deepEqual(targets("cat <<'EOF'"), []);
+  assert.deepEqual(targets('cat /repo/f.js > /dev/null 2>&1'), ['/repo/f.js']);
+});
+
+test('цели чтения: настоящие называются', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  assert.deepEqual(targets('cat /repo/a.js /repo/b.js'), ['/repo/a.js', '/repo/b.js']);
+  assert.deepEqual(targets('sed -n 1,5p /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('grep образец /repo/a.js'), ['/repo/a.js']);
+  // Ключ, сам несущий образец: следующий операнд — уже файл, съедать его нельзя.
+  assert.deepEqual(targets('grep -e A -e B /repo/a.js'), ['/repo/a.js']);
+  // Путь с пробелом уцелел целиком — ровно потому, что разбор идёт токенами.
+  assert.deepEqual(targets('cat "мой файл.txt"'), ['мой файл.txt']);
+  assert.deepEqual(targets('wc -l < /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('LC_ALL=C cat /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('timeout 5 cat /repo/a.js'), ['/repo/a.js']);
+  assert.deepEqual(targets('cat a.js & cat b.js'), ['a.js', 'b.js']);
+  // Резолв каталогом, действующим В ЭТОМ МЕСТЕ цепочки.
+  assert.deepEqual(targets('cd /repo/lib && sed -n 1,5p a.js'), ['/repo/lib/a.js']);
+});
+
+// «Не доказано» и «доказано, что не чтение» — РАЗНЫЕ ответы: по первому журнал
+// обязан сказать имя, по второму имеет право промолчать.
+test('цели чтения: разобранность отделена от чтения', () => {
+  // Перенаправление в файл — ИЗВЕСТНАЯ запись, поэтому разбор про неё всё знает.
+  assert.deepEqual(bash.commandReads('printf x > /repo/o.txt'),
+    { reads: false, mutates: true, targets: [] });
+  assert.equal(bash.commandReads('rm -rf /repo/x').mutates, true, 'про удаление разбор всё знает');
+  assert.equal(bash.commandReads('node сборка.js').mutates, false, 'а про чужой запуск — ничего');
+  assert.deepEqual(bash.commandReads(''), { reads: false, mutates: false, targets: [] });
+  assert.equal(bash.commandReads('pwd').reads, true, 'читающая команда без файлов — всё равно чтение');
+  assert.deepEqual(bash.commandReads('pwd').targets, []);
+});
+
+// Ложные цели, найденные третьим кругом ревью. Каждая — «разрешение править
+// непрочитанное», то есть худший из возможных дефектов этого куска.
+test('цели чтения: каталог и нераскрытая переменная целями не становятся', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Каталог рекурсивного обхода. Хвостовой косой чертой обычная его форма себя
+  // не выдаёт, поэтому судить приходится по КЛЮЧУ рекурсии.
+  assert.deepEqual(targets('grep -rn TODO /repo/lib'), []);
+  assert.deepEqual(targets('grep -Rn TODO /repo/lib'), []);
+  assert.deepEqual(targets('grep --recursive TODO /repo/lib'), []);
+  // Поиск, рекурсивный ПО УМОЛЧАНИЮ: у него операнд неотличим никаким флагом.
+  assert.deepEqual(targets('rg foo /repo/lib'), []);
+  // А у потокового редактора `-r` — это расширенные регулярки, и общее правило
+  // зря лишало бы его целей.
+  assert.deepEqual(targets('sed -r s/a/b/ /repo/a.js'), ['/repo/a.js']);
+
+  // Нераскрытая переменная: токенизатор подставляет её пустотой, и путь
+  // получался ВЫДУМАННЫЙ — несуществующий вместо настоящего.
+  assert.deepEqual(targets('cat $HOME/секрет.md'), []);
+  assert.deepEqual(targets('cat ${DIR}/x.js'), []);
+  assert.deepEqual(targets('grep foo "$HOME/a.js"'), []);
+  assert.deepEqual(targets('cat < $HOME/x.js'), []);
+  // Литерал в одинарных кавычках переменной не является и целей не отменяет.
+  assert.deepEqual(targets("grep -n 'literal $HOME' /repo/a.js"), ['/repo/a.js']);
+});
+
+// Формы, в которых разбор ВЫДУМЫВАЛ прочитанный файл. Каждая — «разрешение
+// править непрочитанное», и каждую нашли отдельным кругом ревью.
+test('цели чтения: тело heredoc, переход каталога и правка на месте', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Тело heredoc словами команды не является, а токенизатор их не разделяет:
+  // упомянутый в тексте файл становился прочитанным. Агент печатает через
+  // heredoc постоянно.
+  assert.deepEqual(targets('cat <<EOF\nсмотри README.md подробнее\nEOF'), []);
+  assert.deepEqual(targets("cat <<'MSG'\nfix lib/journal.js first\nMSG"), []);
+  assert.deepEqual(targets('grep foo <<< "text with a.js"'), []);
+  assert.deepEqual(targets('diff <(echo config.yaml) other.txt'), []);
+
+  // Неабсолютный переход: каталог сменился, а куда — неизвестно, и держаться за
+  // прежний значит приклеивать его к чужим путям.
+  assert.deepEqual(targets('cd /repo && cd sub && cat a.js'), ['a.js']);
+  // Подоболочка меняет каталог только внутри себя.
+  assert.deepEqual(targets('(cd /tmp) && cat a.js'), ['a.js']);
+  // А обычный переход по-прежнему резолвит.
+  assert.deepEqual(targets('cd /repo/lib && sed -n 1,5p a.js'), ['/repo/lib/a.js']);
+
+  // Правка на месте с суффиксом ключа — не чтение, и разбор теперь ЗНАЕТ, что она
+  // меняет состояние: раньше он сверял запрещённые ключи точным равенством и эту
+  // форму пропускал, а на нём стоит отказ гварда якоря сессии.
+  assert.deepEqual(bash.commandReads('sed -i.bak s/a/b/ /repo/README.md'),
+    { reads: false, mutates: true, targets: [] });
+  assert.deepEqual(bash.commandReads('sed --in-place=.bak s/a/b/ /repo/README.md'),
+    { reads: false, mutates: true, targets: [] });
+  // А `sed -n` остаётся чтением.
+  assert.equal(bash.commandReads('sed -n 1,5p /repo/a.js').reads, true);
+
+  // Обход каталогов сравнением: каталог прочитанным файлом не является.
+  assert.deepEqual(targets('diff -r lib/old lib/new'), []);
+  // Ключи, у которых значение крепится только через `=`, чужого слова не едят.
+  assert.deepEqual(targets('grep --color foo a.js'), ['a.js']);
+  assert.deepEqual(targets('jq --tab . data.json'), ['data.json']);
+});
+
+// Перевод строки разделяет команды так же, как `;`, но токенизатор его НЕ
+// ВЫДАЁТ — для него это пробел. Многострочная команда оттого схлопывалась в одну:
+// имя бралось из первой строки, а слова остальных становились её операндами.
+// Ущерб тройной — правка на месте доказывалась ЧТЕНИЕМ переписанного файла,
+// гвард якоря сессии пропускал многострочный `rm -rf`, и переписанный файл
+// уезжал в журнал прочитанным, то есть открытым для правки.
+test('перевод строки разделяет команды', () => {
+  const mutating = (cmd) => bash.classifyCommand(cmd).readOnly === false;
+  assert.ok(mutating('cat a.js\nrm -rf /repo/x'), 'удаление на второй строке');
+  assert.ok(mutating('cat a.js\nsed -i s/a/b/ /repo/README.md'), 'правка на месте');
+  assert.ok(mutating('head -5 a.txt\ncp /repo/src.js /repo/dst.js'), 'копирование');
+  assert.equal(bash.classifyCommand('cat a.js\nrm -rf /repo/x').offender, 'rm', 'виновник назван');
+  assert.deepEqual(bash.commandReads('cat a.js\nsed -i s/a/b/ /repo/README.md'),
+    { reads: false, mutates: true, targets: [] });
+
+  // Операнды второй строки не уезжают в файловый слот ПЕРВОЙ: образец остаётся
+  // образцом, а не становится прочитанным файлом.
+  assert.deepEqual(bash.commandReads('cat a.js\ngrep README.md b.js').targets, ['a.js', 'b.js']);
+  // Раз строка — звено цепочки, переход каталога переносится на следующую.
+  assert.deepEqual(bash.commandReads('cd /repo\ncat a.js').targets, ['/repo/a.js']);
+
+  // И обратная сторона: ложного отказа быть не должно. Тело heredoc — печатаемый
+  // ТЕКСТ, а не команды, даже когда в нём стоят слова вроде `rm -rf`.
+  assert.equal(bash.classifyCommand('cat <<EOF\nrm -rf /x\nEOF').readOnly, true);
+  assert.equal(bash.classifyCommand("cat <<'EOF'\ngit push --force\nEOF").readOnly, true);
+  // Многострочная строка в кавычках — один аргумент, рвать её нельзя.
+  assert.equal(bash.classifyCommand("echo 'первая\nвторая'").readOnly, true);
+});
+
+// Формы, где разбор называл прочитанным путь, которого НЕ СУЩЕСТВУЕТ: раскрыть
+// их нечем, и записать как есть значило бы соврать про конкретный файл.
+test('цели чтения: нераскрытое и неразвёрнутое путями не считаются', () => {
+  const targets = (cmd) => bash.commandReads(cmd).targets;
+  // Метку нераскрытой переменной отсеивали у операндов, а у САМОГО каталога
+  // перехода — нет, и она уезжала внутрь пути вместе с байтами NUL.
+  assert.deepEqual(targets('cd /repo/$SUB && cat a.js'), ['a.js']);
+  // Символы подстановки и тильду токенизатор не раскрывает.
+  assert.deepEqual(targets('cat file{1,2}.txt'), []);
+  assert.deepEqual(targets('cat [ab].js'), []);
+  assert.deepEqual(targets('cat ~/notes.md'), []);
+  // Значение ключа у сравнения и просмотрщиков — не файл.
+  assert.deepEqual(targets('diff -I foo.bar a.js b.js'), ['a.js', 'b.js']);
+  assert.deepEqual(targets('less -p config.json a.js'), ['a.js']);
+  assert.deepEqual(targets('bat --file-name a.js b.js'), ['b.js']);
+  // Аргумент с плюсом — ключ в старой форме, а не файл.
+  assert.deepEqual(targets('more +/foo a.js'), ['a.js']);
+  // Переход каталога в звене ПАЙПА на соседа не влияет: это подоболочка.
+  assert.deepEqual(targets('cd /tmp | cat a.js'), ['a.js']);
+  // А через `&&` переход по-прежнему переносится, даже когда дальше есть пайп.
+  assert.deepEqual(targets('cd /repo && cat a.js | grep x'), ['/repo/a.js']);
+});
+
+// Метаданные — не содержимое. Гвард «не правь того, чего не читал» на цели от
+// `stat` разрешил бы правку файла, который агент не открывал.
+test('чтение метаданных прочитанным файлом не делает', () => {
+  assert.deepEqual(bash.commandReads('stat /repo/a.js').targets, []);
+  assert.deepEqual(bash.commandReads('cat /repo/a.js').targets, ['/repo/a.js']);
+});
+
+// Обёртка запуска на стороне ЗАПИСИ. Тело обёртки — один закавыченный аргумент,
+// а разбор целей кавычки вычёркивает: запись внутри неё выходила ПУСТЫМ списком,
+// то есть «мутации нет» — проход мимо план-гейта и защиты конфигов. Скобки,
+// группировку и запись из питона разбор держал; шелл через `-c` — нет, и это
+// была не граница возможного, а несогласованность.
+test('запись ВНУТРИ обёртки запуска цель даёт', () => {
+  assert.deepEqual(bash.commandTargets('bash -c "cat > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('sh -c "echo x > .claude/settings.json"'), ['.claude/settings.json']);
+  assert.deepEqual(bash.commandTargets('zsh -c "echo x > a.txt"'), ['a.txt']);
+  // Слипшийся кластер ключей — та же форма, что уже разбиралась у запрещённых
+  // ключей: точное равенство пропускало `-lc` ровно так же, как `sed -i.bak`.
+  assert.deepEqual(bash.commandTargets('bash -lc "cat > w.txt"'), ['w.txt']);
+  // У ключа `-o` есть значение, и командой оно не является.
+  assert.deepEqual(bash.commandTargets('bash -euo pipefail -c "cat > e.txt"'), ['e.txt']);
+  // Цепочка внутри тела разбирается как обычная цепочка, с переходом каталога.
+  assert.deepEqual(bash.commandTargets('bash -c "grep -n foo a.js && echo x > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('bash -c "cd /tmp && cat > inner.txt"'), ['/tmp/inner.txt']);
+});
+
+// Спуск РОВНО на один уровень, и ни на шаг дальше: разобрать вложенную обёртку
+// нечем, и назвать её цель значило бы выдумать. Пусто здесь — честный ответ, а
+// разбор при этом молчанием не отделывается: команда остаётся неустановленной.
+test('обёртка за обёрткой целей не даёт, и это не выдаётся за отсутствие правки', () => {
+  assert.deepEqual(bash.commandTargets('bash -c \'bash -c "cat > deep.md"\''), []);
+  assert.equal(bash.classifyCommand('bash -c \'bash -c "cat > deep.md"\'').readOnly, false);
+});
+
+// Обёрткой имя считается только ПЕРВЫМ словом звена — то же правило, что у `cd`,
+// и по той же причине. Ложная цель на стороне записи это ложный отказ гварда.
+test('слово обёртки не в начале звена целью записи не становится', () => {
+  assert.deepEqual(bash.commandTargets('echo bash -c "x > y"'), []);
+  // Ключ принадлежит СКРИПТУ, а не обёртке: до `-c` стоит неключевое слово. Тело
+  // взято с настоящей записью — иначе проверка зеленела бы от того, что в
+  // аргументе нет перенаправления, а не от правила о ведущих ключах.
+  assert.deepEqual(bash.commandTargets('bash deploy.sh -c "echo x > README.md"'), []);
+  // Нераскрытая переменная отбрасывает ОДНУ цель, а не всё тело: у
+  // `bash -c "$CMD > README.md"` цель перенаправления буквальная, и выброшенное
+  // целиком тело теряло настоящую запись. Проверка нагружена с обеих сторон —
+  // на теле с настоящей целью и на теле, где нераскрыта сама цель.
+  assert.deepEqual(bash.commandTargets('bash -c "$CMD > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('bash -c "cat > $OUT"'), []);
+});
+
+// Стороны не симметричны: потерянная цель ЧТЕНИЯ — лишний отказ гварда,
+// потерянная цель ЗАПИСИ — пропущенная правка. Поэтому обёртка разбирается
+// только на стороне записи, а на стороне чтения пусто — и это намеренно.
+test('на стороне ЧТЕНИЯ обёртка целей по-прежнему не даёт', () => {
+  assert.deepEqual(bash.commandReads('bash -c "cat a.js"'), { reads: true, mutates: false, targets: [] });
+});
+
+// Одна цель, увиденная двумя разборами (снаружи по слову `tee`, внутри обёртки
+// по нему же), для гвардов безразлична, а для ЛЕДЖЕРА это двойной счёт файла.
+test('повтор цели в списке не остаётся', () => {
+  assert.deepEqual(bash.commandTargets('cat a.js | bash -c "tee /repo/out.txt"'), ['/repo/out.txt']);
+});
+
+// Список файловых операндов обещает ровно то, что делает: цели спрашиваются
+// только у команды, доказанно читающей, и имя, которого нет в словаре
+// читаемости, не дало бы цели ни разу. Такими стояли `hexdump`, `shasum` и
+// `sha1sum` — список врал своему читателю.
+test('каждое имя в списке файловых операндов ДОСТИЖИМО', () => {
+  // Список берётся ИЗ САМОГО РАЗБОРА, а не переписывается сюда: своя копия
+  // зеленела бы и с вернувшимся мёртвым именем — проверка стояла бы не там,
+  // куда смотрит.
+  const pair = new Set(['diff', 'cmp']);
+  assert.ok(bash.FILE_OPERANDS.size > 10);
+  for (const name of bash.FILE_OPERANDS) {
+    const cmd = pair.has(name) ? `${name} /repo/a.js /repo/b.js` : `${name} /repo/a.js`;
+    const expected = pair.has(name) ? ['/repo/a.js', '/repo/b.js'] : ['/repo/a.js'];
+    assert.deepEqual(bash.commandReads(cmd).targets, expected, name);
+  }
+});
+
+// Что считать обёрткой, знают ДВА разбора: доказательство читаемости снимает её
+// вендоренным `stripShellWrapper`, цели записи берут имена из вендоренного же
+// словаря. Разъедься эти списки — и форма, которую один считает обёрткой, у
+// другого останется неразобранной; шапка файла предупреждает ровно об этом.
+test('список обёрток у доказательства и у целей записи ОДИН', async () => {
+  const rulesPath = new URL('../../.claude/hooks/lib/vendor/read-only-rules.json', import.meta.url);
+  const { readFileSync } = await import('node:fs');
+  const cfg = JSON.parse(readFileSync(rulesPath, 'utf8'));
+  const { stripShellWrapper } = await import('../../.claude/hooks/lib/vendor/gemini-shell-guards.js');
+  for (const name of cfg.shellWrappers) {
+    assert.equal(stripShellWrapper(`${name} -c "cat a.js"`), 'cat a.js', name);
+    // И то же имя ОБЯЗАНО дать цель на стороне записи. Без этой половины список
+    // можно было вынуть из разбора записи, подставив свой, и обе проверки
+    // остались бы зелёными: `dash`, `ksh` и `fish` не держал никто.
+    assert.deepEqual(bash.commandTargets(`${name} -c "cat > README.md"`), ['README.md'], name);
+  }
+  // Имя, заданное путём и в другом регистре, вендоренное снятие считает
+  // обёрткой (`\S+/` и флаг `i`) — значит и цели записи обязаны считать так же.
+  assert.deepEqual(bash.commandTargets('/bin/bash -c "cat > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('BASH -c "cat > README.md"'), ['README.md']);
+  // И наоборот: имя не из списка обёрткой не считает ни один из двух.
+  assert.equal(stripShellWrapper('perl -c "cat a.js"'), 'perl -c "cat a.js"');
+  assert.deepEqual(bash.commandTargets('perl -c "cat > README.md"'), []);
+});
+
+// Звенья и строки у разбора обёртки — те же, что у доказательства читаемости.
+// Свой проход по токенам ошибался дважды, и оба раза это был тихий пропуск
+// правки: перевод строки токенизатор оператором не выдаёт, а `do`, `then` и `{`
+// занимают слот начала звена.
+test('обёртка видна в любом месте, где начинается команда', () => {
+  const t = (cmd) => bash.commandTargets(cmd);
+  assert.deepEqual(t('cat a.js\nbash -c "cat > README.md"'), ['README.md']);
+  assert.deepEqual(t('for f in a b; do bash -c "cat > README.md"; done'), ['README.md']);
+  assert.deepEqual(t('if true; then bash -c "cat > README.md"; fi'), ['README.md']);
+  assert.deepEqual(t('{ bash -c "cat > README.md"; }'), ['README.md']);
+  assert.deepEqual(t('(bash -c "cat > README.md")'), ['README.md']);
+  assert.deepEqual(t('grep -n foo a.js && bash -c "cat > README.md"'), ['README.md']);
+});
+
+// Запускающая обёртка снимается ТЕМ ЖЕ словарём, что у доказательства
+// читаемости (`dropWrappers`): иначе разбор записи знал бы про неё меньше, чем
+// разбор чтения, — та самая несогласованность, ради которой всё это делается.
+test('запускающая обёртка перед оболочкой цель не прячет', () => {
+  assert.deepEqual(bash.commandTargets('timeout 5 bash -c "cat > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('nohup bash -c "cat > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('OUT=1 bash -c "cat > README.md"'), ['README.md']);
+});
+
+// Ключ обёртки со СВОИМ значением обрывал поиск `-c`, и запись проходила молча.
+// Формы названы поимённо по грамматике самой оболочки.
+test('ключ обёртки со значением поиск -c не обрывает', () => {
+  assert.deepEqual(bash.commandTargets('bash -O extglob -c "cat > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('bash --rcfile /tmp/rc -c "cat > README.md"'), ['README.md']);
+  assert.deepEqual(bash.commandTargets('bash -euo pipefail -c "cat > README.md"'), ['README.md']);
 });

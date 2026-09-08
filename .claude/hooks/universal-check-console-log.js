@@ -12,12 +12,12 @@
 // Нашёл → предупреждение со списком файл:строка. Ничего не нашёл или нет
 // транскрипта → тихий выход. Fail open на всём неожиданном.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
 import { hookOnce } from './lib/once.js';
-import { editedFiles, sourceFiles } from './lib/transcript.js';
+import { editedFiles, sourceFiles } from './lib/transcript-claude.js';
 
-const { raw, event, transcript } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, transcript } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 if (!transcript || !fs.existsSync(transcript)) process.exit(0);
 
 const files = sourceFiles(editedFiles(transcript));

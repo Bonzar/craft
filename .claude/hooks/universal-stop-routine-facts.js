@@ -10,8 +10,8 @@
 // ломал бы детерминизм каждого евал-кейса лишним ходом.
 // Анти-цикл: stop_hook_active → молчим. Fail quiet.
 import fs from 'node:fs';
-import { readEvent } from './lib/event.js';
-import { block } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { block } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { routineFactsMarker } from './lib/paths.js';
 
@@ -20,9 +20,9 @@ if (!process.env.CRAFT_AUTONOMOUS) process.exit(0);
 // чьи «Факты завершения» можно сверить, а лишний ход ломает сам вызов.
 if (process.env.CRAFT_EVAL || process.env.CRAFT_NESTED_CALL) process.exit(0);
 
-const { raw, event } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
-if (event.stop_hook_active === true || process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') {
+const { raw, core, stop_active } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
+if (stop_active || process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') {
   process.exit(0);
 }
 

@@ -22,7 +22,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { fetchText } from './lib/net.js';
+// Запасной канал сети выбирает КРАЙ, а не общая часть.
+import { viaExternal } from './lib/fetch-curl.js';
 import { utcStamp } from './lib/system.js';
 
 // Корни, заданные при запуске сессии: аргументы --add-dir у процесса-предка.
@@ -152,12 +157,12 @@ if (process.env.CODE_RULES_TEST_MD) {
   process.exit(0);
 }
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
 if (!base) fallback('CRAFT_API_BASE не задан');
 
-let md = await fetchText(`${base}/blocks?id=${codeRulesId}&maxDepth=1`);
+let md = await fetchText(`${base}/blocks?id=${codeRulesId}&maxDepth=1`, { viaExternal });
 if (!md) fallback('сеть/API недоступны');
 md = md.replace(/\n+$/, '');
 
@@ -165,7 +170,7 @@ md = md.replace(/\n+$/, '');
 // абзац, пункт списка и callout там неразличимы. Отдельного сетевого вызова не
 // добавляется — тот же адрес, другой формат ответа; сбой счёта молчит, это
 // сигнал гигиены, а не условие доставки.
-const json = await fetchText(`${base}/blocks?id=${codeRulesId}&maxDepth=1`, { accept: 'application/json' });
+const json = await fetchText(`${base}/blocks?id=${codeRulesId}&maxDepth=1`, { accept: 'application/json', viaExternal });
 if (json) {
   try {
     const parsed = JSON.parse(json);

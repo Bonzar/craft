@@ -24,15 +24,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  classifierPath, classify, INGEST_BUDGET_SEC, INGEST_PASSES,
+  classify, INGEST_BUDGET_SEC, INGEST_PASSES,
 } from '../.claude/hooks/lib/classifier.js';
+// Адаптер классификатора выбирает КРАЙ, а не общая часть.
+import * as CLASSIFY from '../.claude/hooks/lib/classify-bash.js';
 import {
   readRegistry, upsertGoal, addTasks, render, unmarkParsing, closeTasks, liftBans, landingGoal,
 } from '../.claude/hooks/lib/registry.js';
-import { currentMetricsLog } from '../.claude/hooks/lib/metrics.js';
+import { currentMetricsLog, append } from '../.claude/hooks/lib/metrics.js';
 import { queueSummary, storeTarget } from '../.claude/hooks/lib/summary-store.js';
 // Адаптер хранения выбирает край, а не общая часть.
 import * as STORE_ADAPTER from '../.claude/hooks/lib/summary-store-git.js';
+
+// Приём — КРАЙ, и перевод сессии из переменной харнеса в свою делает он. Общая
+// часть (paths.js) читает уже переведённое значение и имени переменной харнеса не
+// знает. Своя переменная сильнее: её кладёт вызывающий, когда знает сессию точно.
+if (!process.env.CRAFT_SESSION_ID && process.env.CLAUDE_CODE_SESSION_ID) {
+  process.env.CRAFT_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID;
+}
 
 const [, , source, materialFile, registryFile, markId] = process.argv;
 
@@ -88,7 +97,7 @@ function pass(material, n, ownFrom) {
     fs.writeFileSync(view, render(current));
   } catch { /* вид не записался — модель увидит пустой реестр */ }
 
-  const verdict = classify(classifierPath(), 'ingest', [view, materialFile, source], '', {
+  const verdict = classify(CLASSIFY, CLASSIFY.classifierPath(), 'ingest', [view, materialFile, source], '', {
     timeoutSec: INGEST_BUDGET_SEC,
   });
   try { fs.rmSync(view, { force: true }); } catch { /* вид переживёт приём */ }
@@ -221,14 +230,31 @@ function requeueSummary() {
   } catch {
     return; // сводки ещё нет — возвращать нечего
   }
-  // Выключатель, файл очереди и цель хранения читает КРАЙ: окружение — его дело.
-  if (summary && summary.sid) {
-    queueSummary(summary, log, STORE_ADAPTER, {
-      off: process.env.METRICS_STORE === 'off',
-      queueFile: process.env.METRICS_STORE_QUEUE || '',
-      target: storeTarget(process.env.METRICS_STORE_TARGET),
+  if (!summary || !summary.sid) return;
+  // ТОТ ЖЕ предикат, что у хука хранения (universal-metrics-store.js): в очередь
+  // идёт только сводка НАСТОЯЩЕЙ сессии, а признак её — непустой `harness`.
+  //
+  // Дверей в общую очередь две, и эта — вторая. Предикат у одной из них цели не
+  // достигает: очередь общая, выгрузка везёт её КАК ЕСТЬ, и чужую строку увозит
+  // на боевую ветку следующая настоящая сессия. Именно так 4 сентября туда
+  // попали две синтетические сводки. В саму выгрузку предикат не ставится: она
+  // возит очередь, а не судит сводки, и фильтр там был бы вторым местом для
+  // одного решения.
+  //
+  // Пропуск НАЗЫВАЕТСЯ той же строкой журнала, что и в хуке: тихий возврат
+  // здесь читался бы как сводка, вставшая в очередь.
+  if (!summary.harness) {
+    append(log, {
+      kind: 'skip', ts: new Date().toISOString(), what: 'summary', reason: 'no-harness',
     });
+    return;
   }
+  // Выключатель, файл очереди и цель хранения читает КРАЙ: окружение — его дело.
+  queueSummary(summary, log, STORE_ADAPTER, {
+    off: process.env.METRICS_STORE === 'off',
+    queueFile: process.env.METRICS_STORE_QUEUE || '',
+    target: storeTarget(process.env.METRICS_STORE_TARGET),
+  });
 }
 
 // Материал приёма кладёт вызывающий во ВРЕМЕННЫЙ каталог и сам его не убирает:

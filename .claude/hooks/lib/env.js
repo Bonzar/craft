@@ -14,9 +14,7 @@
 // оболочкой: в этих файлах живут присваивания, и запускать их кодом ради
 // подстановок значило бы исполнять произвольный текст на каждом старте сессии.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { commonDir } from './repo-git.js';
 
 function parse(text) {
   const out = {};
@@ -43,7 +41,11 @@ function apply(file, { onlyIfUnset = false } = {}) {
     return false;
   }
   for (const [key, value] of Object.entries(parse(text))) {
-    if (onlyIfUnset && process.env[key]) continue;
+    // «Задано» — это НАЛИЧИЕ ключа, а не его непустота. Пустая строка ставится
+    // намеренно («этого канала у меня нет»), и перебивать её файлом значит
+    // отменять решение вызывающего: так фикстура, погасившая доступ к connect-API,
+    // получала его обратно из личного файла и шла в сеть.
+    if (onlyIfUnset && key in process.env) continue;
     process.env[key] = value;
   }
   return true;
@@ -53,18 +55,29 @@ function apply(file, { onlyIfUnset = false } = {}) {
 // них разная глубина (хук лежит на уровень выше), и общая формула на стороне
 // вызова уводила бы поиск `.env` мимо чекаута — доступ к connect-API молча
 // оставался бы незаданным.
-export function loadEnv() {
+//
+// `commonDir` — АДАПТЕР рабочей копии: он приходит параметром с края, потому что
+// «общий каталог рабочей копии» знает инструмент, а не общая часть. Адаптера нет
+// — второго захода из воркри просто не будет, и это не тихий обход, а отсутствие
+// возможности: файл ищется только по первому пути.
+// `root` и `personalEnv` приходят от края (адаптер env-claude.js): корень проекта
+// харнес задаёт своей переменной, а личный файл доступа лежит в его каталоге
+// настроек — имён того и другого общая часть не знает. Не дали — считаем корень от
+// самого модуля, а личный файл не читаем вовсе.
+export function loadEnv({ commonDir, root: given = '', personalEnv = '' } = {}) {
   const self = new URL(import.meta.url).pathname;
-  const root = process.env.CLAUDE_PROJECT_DIR || path.resolve(path.dirname(self), '..', '..', '..');
+  const root = given || path.resolve(path.dirname(self), '..', '..', '..');
 
   let envFile = path.join(root, '.env');
-  if (!fs.existsSync(envFile)) {
+  if (!fs.existsSync(envFile) && typeof commonDir === 'function') {
     const common = commonDir(root);
     if (common) envFile = path.join(path.dirname(common), '.env');
   }
   apply(envFile);
 
-  if (!process.env.CRAFT_API_BASE) {
-    apply(path.join(os.homedir(), '.claude', 'craft.env'), { onlyIfUnset: true });
+  // Личный файл доступа читается, только когда доступа НЕТ ВОВСЕ. Пустая строка —
+  // это тоже ответ («не ходи в сеть»), поэтому спрашивается наличие ключа.
+  if (!('CRAFT_API_BASE' in process.env) && personalEnv) {
+    apply(personalEnv, { onlyIfUnset: true });
   }
 }

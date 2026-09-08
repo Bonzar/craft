@@ -15,12 +15,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { fetchText } from './lib/net.js';
+// Запасной канал сети выбирает КРАЙ, а не общая часть.
+import { viaExternal } from './lib/fetch-curl.js';
 import { utcStamp } from './lib/system.js';
 
 const log = (message) => process.stderr.write(`[craft-inject-incident] ${message}\n`);
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 const incidentId = process.env.CRAFT_INCIDENT_ID || 'cbb1ba47-c05b-60b5-f86e-16c05b77bb4f';
 // Адрес снимка — своей переменной, тем же приёмом, что у инжектора роутера:
@@ -59,7 +64,7 @@ if (!base) {
   process.exit(0);
 }
 
-const md = await fetchText(`${base}/blocks?id=${incidentId}&maxDepth=-1`, { timeoutMs: 60000 });
+const md = await fetchText(`${base}/blocks?id=${incidentId}&maxDepth=-1`, { timeoutMs: 60000, viaExternal });
 if (!md) {
   log('incident fetch failed; no snapshot left (detector falls back to live read)');
   process.exit(0);

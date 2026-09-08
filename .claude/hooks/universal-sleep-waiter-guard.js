@@ -12,12 +12,12 @@
 // Пропускается (НЕ блок): пауза не первым звеном цепочки или внутри цикла — это
 // законный сторож; короткая пауза меньше трёх секунд; осознанный таймер с
 // маркером в комментарии, когда надо дать поработать и снять метрику.
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 
-const { raw, event, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const command = input.command || '';
 

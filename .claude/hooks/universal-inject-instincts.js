@@ -11,7 +11,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { fetchText } from './lib/net.js';
+// Запасной канал сети выбирает КРАЙ, а не общая часть.
+import { viaExternal } from './lib/fetch-curl.js';
 import { hasCommand } from './lib/system.js';
 
 // Признак craft-репо — его собственный инжектор роутера, любой из двух версий:
@@ -24,7 +29,7 @@ function isCraftRepo(dir) {
 }
 if (isCraftRepo(process.env.CLAUDE_PROJECT_DIR)) process.exit(0);
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 const pageId = process.env.CRAFT_INSTINCTS_PAGE_ID || 'b2b08ac0-b42e-382c-b1ee-8de5fb339fc6';
 const max = Number(process.env.CRAFT_MAX_INSTINCTS || 6);
@@ -32,7 +37,7 @@ const max = Number(process.env.CRAFT_MAX_INSTINCTS || 6);
 const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
 if (!base) process.exit(0);
 
-const md = await fetchText(`${base}/blocks?id=${pageId}&maxDepth=1`);
+const md = await fetchText(`${base}/blocks?id=${pageId}&maxDepth=1`, { viaExternal });
 if (!md) process.exit(0);
 
 // Скоуп текущего проекта: слаг git-remote → arc-проект → global.

@@ -14,14 +14,14 @@
 // сегменту, где встретились и git, и коммит с отправкой, и сам флаг.
 //
 // Fail open на всём неожиданном.
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 
 const HAS_GIT = /(^|[^\w-])git(\s|$)/m;
 
-const { raw, event, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 const command = input.command || '';
 if (!command) process.exit(0);

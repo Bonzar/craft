@@ -34,21 +34,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { readEvent } from './lib/event.js';
-import { deny } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { isEphemeral, ignoredEphemeral, touchesWorld } from './lib/write-targets.js';
 import { isIgnored } from './lib/repo-git.js';
 import { bashWriteTargets, cleanTarget } from './lib/write-targets-bash.js';
 import { toolScope } from './lib/tool-flags-claude.js';
-import { exemptScopeFile, approvalRegistry } from './lib/paths.js';
+import { exemptScopeFile, approvalRegistry, stateDir } from './lib/paths.js';
 import {
   waitForParsing, readRegistry, render, switchAt, appendLog,
 } from './lib/registry.js';
-import { classify, classifierPath } from './lib/classifier.js';
+import { classify } from './lib/classifier.js';
+// Адаптер классификатора выбирает КРАЙ, а не общая часть.
+import * as CLASSIFY from './lib/classify-bash.js';
 
-const { raw, event, tool, input } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool, input } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 
 // Режимов харнесса гейт больше не слушает — ни bypassPermissions, ни acceptEdits.
 // Снять проверки можно, но только тапом Влада, и след этого живёт записью в
@@ -105,21 +107,23 @@ const ALLOWING = /^(OVERRIDE|COVERED|DRAFT)/;
 // тратятся только там, где иначе Влад теряет минуты. Отказ возвращается ПЕРВЫЙ
 // из полученных — его причина уже написана про эту правку.
 function steadyVerdict(view, desc) {
-  const first = classify(classifier, 'cover', [view], desc);
+  const first = classify(CLASSIFY, classifier, 'cover', [view], desc);
   if (ALLOWING.test(first)) return first;
 
-  const second = classify(classifier, 'cover', [view], desc);
+  const second = classify(CLASSIFY, classifier, 'cover', [view], desc);
   const agree = ALLOWING.test(first) === ALLOWING.test(second);
   if (agree) return first;
 
-  const third = classify(classifier, 'cover', [view], desc);
+  const third = classify(CLASSIFY, classifier, 'cover', [view], desc);
   if (ALLOWING.test(third)) return ALLOWING.test(second) ? second : third;
   return ALLOWING.test(first) ? second : first;
 }
 
+// Материал классификатора кладётся в КАТАЛОГ СОСТОЯНИЯ — по той же формуле, что и
+// всё остальное состояние слоя (lib/paths.js). Своя копия формулы тут уже
+// расходилась с общей: переопределение видел один, а писал другой.
 function tempFile(prefix) {
-  const dir = process.env.TMPDIR || '/tmp';
-  return path.join(dir, `${prefix}.${randomBytes(3).toString('hex')}`);
+  return path.join(stateDir(), `${prefix}.${randomBytes(3).toString('hex')}`);
 }
 
 function nonEmptyFile(file) {
@@ -130,7 +134,7 @@ function nonEmptyFile(file) {
   }
 }
 
-const classifier = classifierPath();
+const classifier = CLASSIFY.classifierPath();
 
 // --- Сверка по реестру одобренного -------------------------------------------
 // Одна сверка вместо трёх веток. Прежние спрашивали каждая про своё — план,

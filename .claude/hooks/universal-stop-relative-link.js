@@ -39,8 +39,8 @@
 // сработать раньше. Fail open на всём неожиданном.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readEvent } from './lib/event.js';
-import { block } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { block } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { cksum } from './lib/hash.js';
 import { relativeLinkState } from './lib/paths.js';
@@ -49,8 +49,8 @@ import { relativeLinkState } from './lib/paths.js';
 // показывается, ссылок в нём нет, а лишний ход от блокировки роняет сам вызов.
 if (process.env.CRAFT_NESTED_CALL) process.exit(0);
 
-const { raw, event, cwd, transcript } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, cwd, transcript } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 if (!transcript || !fs.existsSync(transcript)) process.exit(0);
 
 // Корень ровно один и тот же, что у приложения: рабочая директория сессии.

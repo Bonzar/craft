@@ -16,12 +16,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { fetchText } from './lib/net.js';
+// Запасной канал сети выбирает КРАЙ, а не общая часть.
+import { viaExternal } from './lib/fetch-curl.js';
 import { utcStamp } from './lib/system.js';
 
 const log = (message) => process.stderr.write(`[inject-craft-router] ${message}\n`);
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 function size(file) {
   try {
@@ -88,7 +93,7 @@ if (!base) {
   process.exit(0);
 }
 
-let md = await fetchText(`${base}/blocks?id=${routerId}&maxDepth=-1`, { timeoutMs: 60000 });
+let md = await fetchText(`${base}/blocks?id=${routerId}&maxDepth=-1`, { timeoutMs: 60000, viaExternal });
 if (!md) {
   log('router fetch failed; no snapshot left (read router live from Craft)');
   process.exit(0);

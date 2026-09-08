@@ -19,13 +19,13 @@
 // буквально и признака «кто из двух» не остаётся. Тогда решает занятие события:
 // первый вызов ставит метку, второй видит занятое и выходит.
 //
-// Ключ метки — имя файла хука, ИМЯ СОБЫТИЯ и ИДЕНТИФИКАТОР ВЫЗОВА инструмента
-// (tool_use_id), который несёт каждое инструментальное событие.
+// Ключ метки — имя файла хука, ИМЯ СОБЫТИЯ и ИДЕНТИФИКАТОР ВЫЗОВА (`call_id`
+// ядра), который несёт каждое инструментальное событие.
 //
 // Имя события в ключе обязательно: у одного вызова инструмента идентификатор
-// общий на PreToolUse и PostToolUse, и хук, стоящий на обоих, по ключу из
-// одного идентификатора гасил бы свой же PostToolUse меткой, оставленной на
-// PreToolUse, — то есть молча терял бы половину событий.
+// общий на событии до вызова и после него, и хук, стоящий на обоих, по ключу из
+// одного идентификатора гасил бы своё же событие после вызова меткой,
+// оставленной до, — то есть молча терял бы половину событий.
 //
 // Идентификатор вызова точнее хеша содержимого: он не зависит от того, byte-in-
 // byte ли совпали два вызова одной регистрации, и не требует срока — другого
@@ -44,6 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sha256 } from './hash.js';
 import { hookOnceDir } from './paths.js';
+import { sweepOld } from './sweep.js';
 
 // true — в чекауте сессии лежит файл ЭТОГО же хука, а исполняется другой:
 // значит вызов посторонний и уступает.
@@ -63,14 +64,18 @@ function yieldsToSessionCheckout(event, selfPath) {
   // чекаута и есть код этой сессии независимо от того, чем он написан.
   const base = path.basename(selfPath).replace(/\.[^.]+$/, '');
   const selfDir = path.dirname(selfPath);
-  // Чекаут — ближайший каталог вверх от рабочего, у которого есть свой
-  // .claude/hooks с файлом этого имени. Именно файл, а не сам факт репозитория:
-  // воркри может быть старее основного чекаута и нужного хука ещё не содержать.
+  // Раскладка каталога хуков берётся ИЗ ПУТИ САМОГО ХУКА, а не зашивается: где
+  // харнес держит хуки — его дело, а искать надо ту же раскладку в соседнем
+  // чекауте. Два последних сегмента и есть она (у Claude Code это `.claude/hooks`).
+  const layout = selfDir.split(path.sep).slice(-2);
+  // Чекаут — ближайший каталог вверх от рабочего, у которого есть свой каталог
+  // хуков с файлом этого имени. Именно файл, а не сам факт репозитория: воркри
+  // может быть старее основного чекаута и нужного хука ещё не содержать.
   // Сравниваются КАТАЛОГИ, а не пути файлов: у одноимённых файлов это одно и то
   // же, а при разных расширениях сравнение путей объявило бы посторонним свой же
   // экземпляр из того же каталога.
   while (probe && probe !== '/') {
-    const hooks = path.join(probe, '.claude', 'hooks');
+    const hooks = path.join(probe, ...layout);
     let names = [];
     try {
       names = fs.readdirSync(hooks);
@@ -102,30 +107,13 @@ function markExpired(mark) {
   }
 }
 
+// Уборка — общим уборщиком (lib/sweep.js): тот же приём (возраст, отметка, скан
+// не чаще срока) держит и журналы решений, и две копии этого тела уже разъезжались
+// бы по сроку и по исключению самой отметки.
 function sweep(dir) {
-  const stamp = path.join(dir, SWEEP_STAMP);
-  try {
-    if (Date.now() - fs.statSync(stamp).mtimeMs < SWEEP_EVERY_MS) return;
-  } catch { /* отметки ещё нет — убираем и заводим её */ }
-  try {
-    fs.writeFileSync(stamp, '');
-  } catch {
-    return; // каталог не пишется — уборка не наше дело
-  }
-  let names = [];
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return;
-  }
-  const now = Date.now();
-  for (const name of names) {
-    if (!name.startsWith('hook-once.') || name === SWEEP_STAMP) continue;
-    const mark = path.join(dir, name);
-    try {
-      if (now - fs.statSync(mark).mtimeMs > MARK_TTL_MS) fs.rmSync(mark, { recursive: true, force: true });
-    } catch { /* метка пропала сама */ }
-  }
+  sweepOld(dir, {
+    prefix: 'hook-once.', stamp: SWEEP_STAMP, ttlMs: MARK_TTL_MS, everyMs: SWEEP_EVERY_MS,
+  });
 }
 
 // true — работай; false — уступи (посторонний экземпляр либо занятое событие).
@@ -141,10 +129,10 @@ export function hookOnce(raw, event, moduleUrl) {
   const dir = hookOnceDir();
 
   // Инструментальное событие: ключ — событие и идентификатор вызова, срока нет.
-  const id = event && typeof event.tool_use_id === 'string' ? event.tool_use_id.trim() : '';
+  const id = event && typeof event.call_id === 'string' ? event.call_id.trim() : '';
   if (id) {
     const safe = (text) => String(text).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
-    const idMark = path.join(dir, `hook-once.${name}.id.${safe(event.hook_event_name || 'event')}.${safe(id)}`);
+    const idMark = path.join(dir, `hook-once.${name}.id.${safe(event.event || 'event')}.${safe(id)}`);
     try {
       fs.mkdirSync(idMark);
       sweep(dir);

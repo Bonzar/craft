@@ -20,17 +20,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { readEvent } from './lib/event.js';
-import { block } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { block } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
-import { editedFiles, sourceFiles } from './lib/transcript.js';
+import { editedFiles, sourceFiles } from './lib/transcript-claude.js';
 
 // Анти-зацикливание: этот Stop уже вызван из-под стоп-хука → пропуск.
 if (process.env.CLAUDE_STOP_HOOK_ACTIVE === 'true') process.exit(0);
 
-const { raw, event, transcript } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
-if (event.stop_hook_active === true) process.exit(0);
+const { raw, core, transcript, stop_active } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
+if (stop_active) process.exit(0);
 
 const proj = process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd();
 if (!fs.existsSync(path.join(proj, 'tsconfig.json'))

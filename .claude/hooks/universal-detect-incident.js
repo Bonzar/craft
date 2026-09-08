@@ -18,9 +18,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readEvent } from './lib/event.js';
+import { readEvent } from './lib/event-claude.js';
+import { missingFact, unsupported } from './lib/event.js';
+import { OPS, fact, appendFact, head } from './lib/journal.js';
 import { hookOnce } from './lib/once.js';
-import { observeBuffer, incidentClosureMarker, sessionId } from './lib/paths.js';
+import { appendFlag } from './lib/decision-log.js';
+import { keepChannelLine } from './lib/metrics.js';
+import { incidentClosureMarker, sessionId } from './lib/paths.js';
 
 // Резолв через симлинки: установленный симлинком в ~/.claude хук обязан найти
 // incident-markers.txt рядом с НАСТОЯЩИМ файлом в репозитории.
@@ -34,8 +38,9 @@ const anchorsFile = process.env.CRAFT_SERVICE_ANCHORS || path.join(dir, 'service
 const projectDir = process.env.CLAUDE_PROJECT_DIR || path.resolve(dir, '..', '..');
 const cacheFile = path.join(projectDir, '.claude', 'craft-incident-context.md');
 
-const { raw, event, prompt } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const ev = readEvent();
+const { raw, core, prompt } = ev;
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 if (!prompt) process.exit(0);
 
 // Строки файла-словаря: пустые и начатые решёткой не в счёт.
@@ -70,17 +75,24 @@ const matched = entries(markersFile).some((pattern) => {
 });
 if (!matched) process.exit(0);
 
-function headBytes(text, limit) {
-  const cut = Buffer.from(`${text}\n`, 'utf8').subarray(0, limit);
-  let end = cut.length;
-  while (end > 0 && cut[end - 1] === 0x0a) end -= 1;
-  return cut.subarray(0, end).toString('utf8');
+// Сигнал — строкой в ЖУРНАЛ СОБЫТИЙ СЕССИИ: им кормится дистилляция кандидатов в
+// конце хода. Прежде для этого был отдельный эфемерный буфер; теперь сигнал
+// инцидента — такой же факт журнала, как ошибка инструмента, и инстинкт-контур
+// читает оба из одного места. Голова 200 байт — как у прежнего буфера.
+//
+// Журнал — объявленный ФАКТ события: нет его (сессии нет вовсе) — сигнал не
+// записывается, и это говорится вслух, а не проглатывается. Сам разбор инцидента
+// при этом идёт: директива ниже от журнала не зависит.
+const missingJournal = missingFact(ev, ['journal']);
+if (missingJournal) {
+  process.stderr.write(`[detect-incident] unsupported: ${unsupported(missingJournal).capability}\n`);
+} else {
+  // Не легло — говорим вслух, как и производитель журнала: журнал, в который не
+  // пишется, снаружи неотличим от сессии, в которой ничего не было.
+  if (!appendFact(ev.journal, fact({ op: OPS.INCIDENT }, { text: head(prompt, 200) }))) {
+    process.stderr.write('[detect-incident] unsupported: journal-write\n');
+  }
 }
-
-// Сигнал — в буфер инстинкт-контура (кормит дистилляцию кандидатов в конце хода).
-try {
-  fs.appendFileSync(observeBuffer(), `incident-signal: ${headBytes(prompt, 200).replace(/\n/g, ' ')} \n`);
-} catch { /* буфер не пополнился — расходник */ }
 
 // Взвод гейта закрытия разбора (universal-stop-incident-closure): маркер
 // «в сессии есть неразобранный сигнал». Отметка «уже напоминали» снимается —
@@ -105,7 +117,10 @@ if (cache !== null) {
 } else {
   out += '(кэш тела отсутствует. Доступен Craft MCP → прочитай скилл живьём: blocks get cbb1ba47-c05b-60b5-f86e-16c05b77bb4f --depth -1. Craft недоступен → веди разбор по каркасу: 1) причина — какое действие/допущение привело к дефекту; 2) как было надо; 3) исправить результат; 4) записать переносимый урок «при [сигнале] → [действие]» с РЫЧАГОМ соблюдения (гейт, хук, чек-лист, перестановка правила в точку решения) — для кода см. скилл code-incident. Без рычага инцидент не закрыт.)\n';
 }
-// Сигнал — в общее состояние события: хук метрик считает срабатывания детектора
-// по нему, а не по stdout.
-globalThis.hookFlags = { ...(globalThis.hookFlags || {}), incident: true };
+// Сигнал — в журнал решений: хук метрик считает срабатывания детектора по нему, а
+// не по stdout. Тот же канал, что и у решения, и живёт он дольше процесса.
+// Признак идёт тем же каналом, что и решение, — и запасной путь у него тот же:
+// не легла строка в журнал решений, кладём её в журнал метрик. Иначе неписучий
+// диск ронял бы долю разборов молча, тогда как отказ в тех же условиях уцелел бы.
+keepChannelLine(appendFlag(readEvent(), 'incident'));
 process.stdout.write(out);

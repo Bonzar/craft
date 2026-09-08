@@ -13,18 +13,33 @@
 //   block  — stdout с decision "block" (стоп-хуки)
 //   inject — stdout несёт директиву инцидента
 //   silent — stdout пуст
-//   contains:<строка> / not-contains: / err-contains:
+//   contains:<строка> / not-contains: / err-contains: / err-not-contains:
 //   file-contains:<строка> / file-not-contains:<строка> / file-empty — по файлу
 //     из ASSERT_FILE самого кейса: хуки инжекта доставляют тело снимком, и по
 //     stdout запись не проверить.
-// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, file-empty,
-// file-not-contains:), засчитывается только удавшемуся хуку: код возврата 0 и ни
-// строки диспетчера о падении. Упавший хук молчит так же.
+// Исход, утверждающий молчание, засчитывается только хуку, который отработал
+// ОЖИДАЕМО. Ожидаемый код возврата — ноль; кейс вправе назвать другой полем
+// `exit`, и нужно это ровно там, где проверяется строка регистрации, которая не
+// смогла запуститься (нет интерпретатора — 127). Без этого поля пришлось бы
+// заводить исход, безразличный к коду вовсе, — а он зеленел бы и на упавшем хуке.
+// Исход, утверждающий МОЛЧАНИЕ (allow, silent, not-contains:, err-not-contains:,
+// file-empty, file-not-contains:), засчитывается только удавшемуся хуку: код
+// возврата 0 и ни строки диспетчера о падении. Упавший хук молчит так же.
 // Exit 0 — все кейсы зелёные И каждый исход каждого хука покрыт; иначе 1.
 //
 // Хук резолвится по имени БЕЗ расширения: сначала .js, затем .sh. В самой репе
 // bash-версий не осталось; фолбек на .sh живёт для внешних наборов
 // (EXTRA_HOOKS_DIR), где они ещё бывают. Тем же правилом идут шаги подготовки.
+//
+// ПАКЕТ резолвится не по каталогу хуков, а по своей сборке:
+// modules/<имя>/dist/claude/hook.py, и зовётся так же, как его зовёт харнес, —
+// `python3` со своим stdin. Сборку раннер делает сам перед прогоном (jarvis
+// install во временный дом): в гите её нет, а без неё звать нечего.
+//
+// Из-за этого прогон ПИШЕТ В ЧЕКАУТ: заводит `modules/*/dist/` и
+// `modules.index.json`. Оба гитигнорятся, настоящие `~/.claude` и список корней
+// не трогаются (дом временный), но безобидным для рабочей копии раннер быть
+// перестал — сказано прямо, чтобы это не обнаружилось на чужой машине.
 //
 // Внешние наборы хуков (напр. локальный яндекс-слой в ~/.claude, вне git):
 //   EXTRA_HOOKS_DIR=~/.claude/hooks EXTRA_CASES_DIR=~/.claude/tests/hooks node tests/run.js
@@ -40,6 +55,8 @@ const REPO = path.resolve(__dirname, '..');
 const HOOKS = path.join(REPO, '.claude', 'hooks');
 const CASES_DIR = path.join(REPO, 'tests', 'hooks');
 const SETTINGS = path.join(REPO, '.claude', 'settings.json');
+const MODULES = path.join(REPO, 'modules');
+const JARVIS = path.join(REPO, 'tools', 'jarvis.py');
 const EXTRA_HOOKS_DIR = process.env.EXTRA_HOOKS_DIR || '';
 const EXTRA_CASES_DIR = process.env.EXTRA_CASES_DIR || '';
 
@@ -54,6 +71,10 @@ const BASE_ENV = { ...process.env, LC_ALL: 'C.UTF-8' };
 // сессию — они падали на машине разработчика и зеленели в CI, где переменной
 // нет, то есть выглядели «известными падениями среды».
 delete BASE_ENV.CLAUDE_CODE_SESSION_ID;
+delete BASE_ENV.CRAFT_SESSION_ID;
+// Тем же правилом: выключатель модулей читает обёртка пакета, и у разработчика,
+// погасившего пилота у себя, кейсы про `mode` зеленели бы по чужой причине.
+delete BASE_ENV.JARVIS_MODULES_OFF;
 
 // Ключ кейса → файл хука без расширения. Незнакомый ключ резолвится по имени
 // самого ключа, поэтому карта нужна только там, где они расходятся.
@@ -104,11 +125,40 @@ const REQUIRED = [
   'stop-incident-closure:block', 'stop-incident-closure:silent',
   'stop-relative-link:block', 'stop-relative-link:silent',
   'session-anchor:deny', 'session-anchor:allow',
+  'universal-journal:silent',
+  // Пилот упаковки: исход у него один — `none`, и харнесу он виден молчанием.
+  'trace-probe:silent',
+  'universal-instinct-flush:block', 'universal-instinct-flush:silent',
 ];
 
 // Файлы каталога, которые хуками не являются: диспетчер с его таблицей
 // маршрутов — сам механизм регистрации.
 const REVERSE_WHITELIST = ['dispatch', 'dispatch-table'];
+
+// --- сборка пакетов ----------------------------------------------------------
+
+// Пакеты собираются установщиком: обёртка на модуль и харнес плюс копии таблицы
+// харнеса и pylib. Гоняется во ВРЕМЕННОМ доме — настоящие ~/.claude и список
+// корней прогон тестов не трогает.
+//
+// Не собралось — это смоук-провал с ПРИЧИНОЙ, а не тихо пропущенные кейсы: без
+// сборки кейсы пакетов упали бы «нет такого хука», и разбираться пришлось бы
+// на пустом месте.
+function buildPackages() {
+  if (!fs.existsSync(MODULES)) return '';
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-build.'));
+  tmpMade.add(path.basename(home));
+  const res = spawnSync('python3', [JARVIS, '--root', REPO, 'install'], {
+    encoding: 'utf8',
+    env: {
+      ...BASE_ENV, HOME: home, XDG_DATA_HOME: path.join(home, 'share'), XDG_CONFIG_HOME: path.join(home, 'config'),
+    },
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  if (res.error) return `jarvis install не запустился (${res.error.code}); нужен python3`;
+  if (res.status !== 0) return `jarvis install вернул ${res.status}: ${(res.stderr || '').trim()}`;
+  return '';
+}
 
 // --- запуск хуков ------------------------------------------------------------
 
@@ -123,15 +173,35 @@ function resolveHook(base) {
       if (fs.existsSync(p)) return p;
     }
   }
-  return '';
+  // Харнес зашит намеренно: раннер ИГРАЕТ Claude — все фикстуры набора это его
+  // события. Появится вторая таблица — сюда придётся вписать и её, вместе с
+  // фикстурами под неё.
+  const built = path.join(MODULES, base, 'dist', 'claude', 'hook.py');
+  return fs.existsSync(built) ? built : '';
 }
 
 // Хук запускается своим интерпретатором: bash-файлы через bash (исполняемый бит
 // им не нужен), JS — текущим node, чтобы прогон не зависел от того, что лежит в
-// PATH у тестов.
-function runHook(script, input, env, args = []) {
+// PATH у тестов. Пакет — `python3`, как его зовёт харнес.
+//
+// `shell` гоняет ту же команду ЧЕРЕЗ ОБОЛОЧКУ, то есть ровно так, как харнес
+// исполняет строку регистрации. Нужно это одному кейсу: «нет python3». Запусти
+// его напрямую — раннер получил бы отказ спавна и свою ошибку, а вопрос стоит
+// про то, что видит ХАРНЕС, когда строка не отработала.
+function runHook(script, input, env, args = [], shell = false) {
   const isJs = script.endsWith('.js');
-  const cmd = isJs ? process.execPath : 'bash';
+  const isPy = script.endsWith('.py');
+  const cmd = isJs ? process.execPath : (isPy ? 'python3' : 'bash');
+  if (shell) {
+    // Оболочка — ПО АБСОЛЮТНОМУ ПУТИ: кейс про отсутствующий интерпретатор сам
+    // подменяет PATH, и по имени не нашлась бы уже она сама. Аргументы
+    // экранируются, как их экранирует установщик: чекаут по пути с пробелом
+    // иначе давал бы не ту команду, что стоит в настройках.
+    const quote = (v) => `'${String(v).split("'").join(`'\\''`)}'`;
+    return spawnSync('/bin/sh', ['-c', [cmd, script, ...args].map(quote).join(' ')], {
+      input, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+    });
+  }
   return spawnSync(cmd, [script, ...args], {
     input,
     env,
@@ -143,9 +213,15 @@ function runHook(script, input, env, args = []) {
 // --- состояние кейса ---------------------------------------------------------
 
 let tmpSeq = 0;
+// Имена, выданные раннером. Уборка в конце прогона ходит ПО НИМ, а не по всему,
+// в чьё имя попал наш pid: во временном каталоге лежат и чужие файлы, и совпасть
+// с числом pid они могут запросто.
+const tmpMade = new Set();
 function tmpName(prefix) {
   tmpSeq += 1;
-  return path.join(os.tmpdir(), `${prefix}.${process.pid}.${tmpSeq}`);
+  const name = `${prefix}.${process.pid}.${tmpSeq}`;
+  tmpMade.add(name);
+  return path.join(os.tmpdir(), name);
 }
 
 // Герметичное состояние на один прогон: хуки с побочными эффектами (буфер
@@ -167,7 +243,9 @@ function makeState() {
     fgdir,
     oncedir,
     icmark,
-    obsbuf: tmpName('observe-buffer-test'),
+    journal: tmpName('journal-test'),
+    flushmark: tmpName('instinct-flush-test'),
+    flushstate: tmpName('instinct-flush-state-test'),
     rfmark: tmpName('routine-facts-test'),
     planpath: tmpName('plan-file-test'),
     criticmark: tmpName('plan-critic-test'),
@@ -181,14 +259,24 @@ function makeState() {
     registry: tmpName('approval-registry-test'),
     anchor: tmpName('session-anchor-test'),
     codexhome: tmpName('codex-home-test'),
+    exemptscope: tmpName('gate-exempt-scope-test'),
+    synctarget: tmpName('sync-system-target-test'),
     metrics: tmpName('metrics-test'),
+    decisions: tmpName('decisions-test'),
     tmphome,
     metricsdefault: path.join(tmphome, 'metrics.default.jsonl'),
+    journaldefault: path.join(tmphome, 'journal.default.jsonl'),
   };
   s.env = {
     CRAFT_PLAN_GATE_MARKER: s.marker,
     CRAFT_APPROVAL_REGISTRY: s.registry,
-    OBSERVE_BUFFER: s.obsbuf,
+    // Журнал событий сессии и отметка инстинкт-контура — герметичные у каждого
+    // кейса: производитель журнала зовётся на КАЖДОМ состоявшемся вызове, и общий
+    // путь означал бы, что прогон дописывает журнал живой сессии, а кейсы про
+    // сигналы читают чужие строки.
+    CRAFT_JOURNAL_LOG: s.journal,
+    INSTINCT_FLUSH_MARKER: s.flushmark,
+    INSTINCT_FLUSH_STATE: s.flushstate,
     FACT_GATE_STATE_DIR: s.fgdir,
     ROUTINE_FACTS_MARKER: s.rfmark,
     CRAFT_PLAN_FILE_MARKER: s.planpath,
@@ -204,9 +292,18 @@ function makeState() {
     // Временный каталог прогона: пути, которые хук строит сам через os.tmpdir(),
     // должны лечь сюда, а не в общий /tmp.
     TMPDIR: s.tmphome,
+    // Дом и каталог конфига — тоже временные. Обёртка пакета читает `mode` из
+    // ~/.config/jarvis/modules.toml, а lib/env.js — ~/.claude/craft.env: с живым
+    // домом исход кейса зависел бы от того, что лежит на машине запускающего, и
+    // выключенный у себя пакет красил бы прогон у всех.
+    HOME: s.tmphome,
+    XDG_CONFIG_HOME: path.join(s.tmphome, 'config'),
     // Журнал метрик герметичен у каждого кейса: иначе прогон писал бы в общий
     // журнал /tmp, а кейсы про содержимое журнала читали бы чужие строки.
     CRAFT_METRICS_LOG: s.metrics,
+    // Журнал решений — канал между хуками одного события; у каждого кейса свой,
+    // иначе решение соседнего кейса читалось бы как своё.
+    CRAFT_DECISION_LOG: s.decisions,
     // Хранение сводок выключено ВСЕГДА: иначе кейс Stop пушил бы в настоящую
     // ветку metrics. Его git-логика проверяется отдельно
     // (tests/metrics-store-git.sh) на временных репозиториях.
@@ -215,6 +312,28 @@ function makeState() {
     // пишет туда файл, и общий дефолт означал бы, что любой стартовый кейс
     // кладёт живой токен в настоящий ~/.codex рабочей машины.
     CODEX_HOME: s.codexhome,
+    // Снимок предодобренной зоны — тоже герметичный у КАЖДОГО кейса. Сборщик
+    // зоны стоит в цепочке SessionStart и сносит прежний снимок, а по умолчанию
+    // это `.claude/craft-gate-exempt-scope.txt` САМОГО ЧЕКАУТА: любой стартовый
+    // кейс молча уносил бы рабочий снимок Влада. Файл гитигнорится, поэтому
+    // потеря не видна ни в `git status`, ни глазами.
+    CRAFT_GATE_EXEMPT_SCOPE: s.exemptscope,
+    // Доступа к connect-API у кейсов НЕТ. Пустая строка — это «канала нет», а не
+    // «добери из личного файла»: инжекторы правил и сборщик зоны выходят на ней
+    // молча, и прогон не ходит в сеть ни с чьей машины (см. lib/env.js — «не
+    // задано» там означает отсутствие ключа).
+    CRAFT_API_BASE: '',
+    // Корень проекта — временный: иначе `.env` чекаута перекрыл бы строку выше,
+    // и доступ вернулся бы обратно.
+    CLAUDE_PROJECT_DIR: s.tmphome,
+    // Цель синка системы — временный каталог, а НЕ чекаут, из которого хук
+    // запущен. Иначе прогон кейсов делает настоящий `git fetch origin main` в
+    // рабочую копию: ходит в сеть и переписывает `.git` (FETCH_HEAD, ссылку
+    // origin/main, объекты). Выключателем `SYNC_SYSTEM=off` этого делать нельзя —
+    // он проверяется собственным кейсом и стал бы зелёным тривиально. Что синк
+    // делает С ГИТОМ, проверяет tests/sync-system-git.sh на временных
+    // репозиториях; здесь его git-путь и не нужен.
+    SYNC_SYSTEM_TARGET: s.synctarget,
     HOOK_ONCE: 'off',
     HOOK_ONCE_DIR: s.oncedir,
     CRAFT_PLAN_CRITIC_ROUND: tmpName('plan-critic-round-test'),
@@ -229,9 +348,10 @@ function makeState() {
 }
 
 // Файлы и каталоги, которые приём кладёт РЯДОМ с реестром под своими именами:
-// `<реестр>.parsing` (каталог меток разбора) и `<реестр>.view.<pid>-<n>` (снимок
-// вида для классификатора). Имена содержат pid, поэтому список строится чтением
-// каталога, а не перечислением.
+// `<реестр>.parsing` (каталог меток разбора), `<реестр>.view.<pid>-<n>` (снимок
+// вида для классификатора) и `<реестр>.ingest.log` (след приёма). Имена содержат
+// pid, поэтому список строится чтением каталога, а не перечислением: отдельным
+// именем след здесь не стоит — маска покрывает его целиком.
 function siblings(registry) {
   const dir = path.dirname(registry);
   const base = `${path.basename(registry)}.`;
@@ -247,16 +367,13 @@ function siblings(registry) {
 function cleanState(s) {
   const files = [
     s.marker, `${s.marker}.button-plans`, `${s.marker}.classifier-degraded`,
-    `${s.marker}.plans`, s.obsbuf, s.rfmark, s.planpath,
+    `${s.marker}.plans`, s.journal, s.flushmark, s.flushstate, s.rfmark, s.planpath,
     s.criticmark, s.icmark,
     s.icmark.replace(/\.armed$/, '.reminded'), s.serviceturn, s.criticpend,
     s.planshown, s.criticruns, s.env.CRAFT_PLAN_CRITIC_ROUND, s.relstate,
     s.syncstate, s.classtrace, s.registry, s.anchor,
     s.metrics, `${s.metrics}.state.json`, `${s.metrics}.summary.json`,
-    // Спутники реестра: след приёма и снимки вида, которые приём кладёт рядом.
-    // Без них прогон оставлял в общем /tmp по каталогу и по файлу следа на
-    // каждый кейс приёма — а этот же каталог служит состоянием хуков.
-    `${s.registry}.ingest.log`,
+    s.decisions, s.exemptscope,
   ];
   for (const f of files) fs.rmSync(f, { force: true });
   // Спутники с ДОПИСАННЫМ именем: снимки вида реестра и каталоги меток разбора
@@ -300,6 +417,28 @@ function subst(value, s) {
   // {METRICS} — журнал метрик этого прогона: кейсы хука метрик судят по его
   // строкам.
   //
+  // {DECISIONS} — журнал решений кейса: им проверяется САМ канал между хуками.
+  // Его же пишет пакет: журнал у JS-хуков и у пакетов ОДИН, и кейс сшивки на
+  // этом и стоит.
+  //
+  // {TMPHOME} — временный дом прогона. Им кейс наводит конфиг (XDG_CONFIG_HOME)
+  // на свой файл: `mode` пакета читается из ~/.config/jarvis/modules.toml, и без
+  // герметичного дома кейс правил бы настоящий конфиг Влада.
+  //
+  // {JOURNAL} — журнал событий сессии этого прогона: по его строкам судят кейсы
+  // производителя журнала, и им же кейс наводит ASSERT_FILE на тот файл, куда
+  // пишет хук.
+  //
+  // {FLUSHMARK} — метка агента «разбор сделан»; {FLUSHSTATE} — состояние самого
+  // хука (докуда разобрано и докуда выдано). Они РАЗНЫЕ намеренно: горизонт
+  // двигает только хук, и кейсы обязаны бить в те же два файла.
+  //
+  // {JOURNAL_DEFAULT} — путь, который хук построил бы САМ, если бы периметр по
+  // сессии сняли. По нему кейс доказывает, что записи НЕ БЫЛО: свой {JOURNAL}
+  // тут не годится — при пустом переопределении хук о нём и не знал бы, и
+  // «файла нет» зеленело бы тавтологией. Тем же приёмом и по той же причине
+  // устроен {METRICS_DEFAULT}.
+  //
   // {METRICS_DEFAULT} — путь, который хук строит САМ, когда сессии нет и журнал
   // не переопределён. По нему кейс доказывает, что записи не было: свой
   // {METRICS} тут не годится — хук о нём и не знал бы.
@@ -309,7 +448,13 @@ function subst(value, s) {
     .split('{CLASSTRACE}').join(s.classtrace)
     .split('{CODEXHOME}').join(s.codexhome)
     .split('{METRICS_DEFAULT}').join(s.metricsdefault)
-    .split('{METRICS}').join(s.metrics);
+    .split('{METRICS}').join(s.metrics)
+    .split('{JOURNAL_DEFAULT}').join(s.journaldefault)
+    .split('{JOURNAL}').join(s.journal)
+    .split('{FLUSHMARK}').join(s.flushmark)
+    .split('{FLUSHSTATE}').join(s.flushstate)
+    .split('{DECISIONS}').join(s.decisions)
+    .split('{TMPHOME}').join(s.tmphome);
 }
 
 // Один проход кейса: подготовка, повторы, ответ хука и след на диске.
@@ -321,6 +466,11 @@ function runPass(c) {
   const s = makeState();
   const caseEnv = { ...BASE_ENV, ...s.env };
   for (const [k, v] of Object.entries(c.env || {})) caseEnv[k] = subst(v, s);
+  // Кейс описывает событие ХАРНЕСА и сессию задаёт его переменной. Пути состояния
+  // резолвятся по своей (paths.js), и перевод — дело обёртки: в живой сессии его
+  // делает адаптер события, здесь — раннер. Без перевода хук и раннер считали бы
+  // пути от разных сессий, и предусловия ложились бы мимо.
+  if ('CLAUDE_CODE_SESSION_ID' in caseEnv) caseEnv.CRAFT_SESSION_ID = caseEnv.CLAUDE_CODE_SESSION_ID;
 
   const input = subst(JSON.stringify(c.input ?? {}), s);
 
@@ -368,12 +518,26 @@ function runPass(c) {
     runHook(sScript, step && step !== 'null' ? step : input, setupEnv);
   });
 
+  // `seed` — файлы, которые кладутся ПОСЛЕ подготовки и ДО прогона: путь →
+  // содержимое, с теми же подстановками. Порядок именно такой, потому что этим
+  // выражается АКТ АГЕНТА между двумя ходами: подготовка гоняет настоящие хуки и
+  // оставляет их состояние, посев добавляет то, что сделал агент (пустая метка
+  // «разобрал»), и лишь потом идёт проверяемый ход. Сеять раньше подготовки
+  // значило бы менять порядок событий на обратный.
+  for (const [file, body] of Object.entries(c.seed || {})) {
+    const target = subst(file, s);
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, subst(String(body), s));
+    } catch { /* посев не лёг — кейс упадёт на своём исходе, а не молча */ }
+  }
+
   // `repeat: N` — тот же вход подаётся N раз (хуки, которые отказывают один раз:
   // проверяется ответ ПОСЛЕДНЕГО вызова).
   let res = { stdout: '', stderr: '' };
   const repeat = Number(c.repeat || 1);
   const args = Array.isArray(c.args) ? c.args.map((v) => subst(v, s)) : [];
-  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args);
+  for (let i = 0; i < repeat; i += 1) res = runHook(script, input, caseEnv, args, c.shell === true);
 
   const traced = fs.existsSync(s.classtrace);
   const trace = traced ? fs.readFileSync(s.classtrace, 'utf8') : '';
@@ -421,7 +585,10 @@ const trim = (s) => s.replace(/[ \t\n\r]/g, '');
 // нулю — он не уносит цепочку, — поэтому падение видно только по его строке в
 // служебном потоке. Любой исход, который утверждает МОЛЧАНИЕ, обязан это
 // различать: иначе поломка зеленит кейс.
-const crashed = (err, env) => (env || {}).CODE !== 0 || /\[dispatch\] хук .* упал/.test(err || '');
+const crashed = (err, env) => {
+  const want = Number.isFinite((env || {}).WANT_CODE) ? env.WANT_CODE : 0;
+  return (env || {}).CODE !== want || /\[dispatch\] хук .* упал/.test(err || '');
+};
 
 function grade(expect, out, err, env) {
   // Исход по СОДЕРЖИМОМУ ФАЙЛА: хуки инжекта доставляют тело правил снимком, а
@@ -460,6 +627,14 @@ function grade(expect, out, err, env) {
   // Часть хуков сообщает служебное в stderr — там же грейдер евалов ищет улику
   // доставки правила. Без отдельной проверки эта половина вывода не покрыта.
   if (expect.startsWith('err-contains:')) return err.includes(expect.slice('err-contains:'.length));
+  // Обратная сторона той же половины. Без неё «silent» — утверждение только про
+  // stdout, и хук, который вместо тихого прохода КРИЧИТ в служебный поток имя
+  // недостающего, проходит как молчаливый. А ровно там, где кейс различает «этого
+  // не было — факт» и «ответа нет — имя», разница и живёт в stderr. Это тоже
+  // утверждение о молчании, поэтому падение здесь — незачёт.
+  if (expect.startsWith('err-not-contains:')) {
+    return !err.includes(expect.slice('err-not-contains:'.length)) && !crashed(err, env);
+  }
   return null; // неизвестное ожидание
 }
 
@@ -488,6 +663,20 @@ const NEEDS_MATCHER = [
   ['universal-guard-plan-service-turn', 'PreToolUse', 'ExitPlanMode'],
   ['universal-session-anchor', 'PreToolUse', 'Bash'],
   ['universal-session-anchor', 'PostToolUse', 'AskUserQuestion'],
+  // Производитель журнала: удали его из таблицы — прогон останется зелёным,
+  // журнал будет пуст, и все читатели фазы 2 увидят «сессия ничего не читала и
+  // не писала». Поверхность обязана быть закреплена, а не подразумеваться.
+  ['universal-journal', 'PostToolUse', 'Bash'],
+  ['universal-journal', 'PostToolUseFailure', 'Bash'],
+  // И НЕ ТОЛЬКО на интерпретаторе: маршрут можно сузить матчером до подмножества
+  // инструментов, и тогда исчезает вся половина фактов чтения, ради которой
+  // журнал заведён, — а раннер зовёт хуки напрямую и этого не видит.
+  ['universal-journal', 'PostToolUse', 'Read'],
+  ['universal-journal', 'PostToolUse', 'mcp__Craft__craft_write'],
+  // И правка файла — тоже: сузив маршрут до интерпретатора, чтения и базы
+  // заметок, три строки выше зеленеют все до одной, а из журнала исчезает вся
+  // ПОЛОВИНА ЗАПИСИ, ради которой его читает сборка набора изменений.
+  ['universal-journal', 'PostToolUse', 'Write'],
 ];
 const DISPATCH = path.join(HOOKS, 'dispatch.js');
 
@@ -524,6 +713,26 @@ function smokeChecks() {
       } catch {
         smoke.push(`hook not executable: ${p}`);
       }
+    }
+  }
+
+  // Каждое событие ТАБЛИЦЫ обязано быть зарегистрировано в настройках репы.
+  // Смоук установки сверяет то же самое для пользовательского контура; здесь —
+  // проектный, и по той же линейке: список событий берётся из таблицы, а не
+  // пишется рукой. Пропущенная регистрация означала бы, что событие приходит, а
+  // хуков на нём нет — молча, и как раз в этой репе, где проектный контур гасит
+  // пользовательский.
+  const table = path.join(HOOKS, 'dispatch-table.js');
+  const tableEvents = spawnSync(process.execPath, [
+    '-e', `import(${JSON.stringify(`file://${table}`)}).then((m) => console.log(m.EVENTS.join('\\n')))`,
+  ], { encoding: 'utf8' });
+  const events = (tableEvents.stdout || '').split('\n').filter(Boolean);
+  if (!events.length) smoke.push('routing table gave no events');
+  for (const ev of events) {
+    const hooks = ((settings.hooks || {})[ev] || [])
+      .flatMap((g) => (g.hooks || []).map((h) => h.command || ''));
+    if (!hooks.some((c) => c.includes('dispatch.js'))) {
+      smoke.push(`dispatcher not registered on ${ev} in .claude/settings.json`);
     }
   }
 
@@ -580,6 +789,14 @@ function smokeChecks() {
     .map((f) => path.join(HOOKS, f));
   for (const b of orphans(hookFiles)) {
     smoke.push(`orphan hook (not registered in settings.json or install.sh): ${b}`);
+  }
+
+  // `mode` пакета читается ещё и из `personal/modules.toml` САМОГО ДЕРЕВА, а его
+  // путь обёртка считает от своего файла — переопределить его окружением нельзя.
+  // Выключенный там пилот красил бы кейсы пакета, и выглядело бы это поломкой
+  // кода. Поэтому не молчим: называем причину заранее.
+  if (fs.existsSync(path.join(REPO, 'personal', 'modules.toml'))) {
+    smoke.push('personal/modules.toml в чекауте: кейсы пакетов негерметичны против него');
   }
 
   smoke.push(...utf8GlueChecks());
@@ -654,7 +871,37 @@ function utf8GlueChecks() {
 
 // --- прогон ------------------------------------------------------------------
 
+// Хвосты прогона во временном каталоге: имена, которые раннер выдал сам, и
+// производные от них (`….armed`, `….summary.json` — их дописывают уже хуки).
+// Зовётся в конце main(), после того как отсоединённые процессы отработали.
+function sweepLeftovers() {
+  const dir = os.tmpdir();
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  // Точное имя — по карте; производные (`….armed`, `….summary.json`) — перебором,
+  // но только среди тех, в чьё имя вообще попал наш pid: за полный прогон имён
+  // тысячи, а /tmp на рабочей машине большой.
+  const tag = `.${process.pid}.`;
+  const mine = (name) => {
+    if (tmpMade.has(name)) return true;
+    if (!name.includes(tag)) return false;
+    for (const made of tmpMade) if (name.startsWith(`${made}.`)) return true;
+    return false;
+  };
+  for (const name of names) {
+    if (!mine(name)) continue;
+    try {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    } catch { /* уже убрано кем-то другим */ }
+  }
+}
+
 function main() {
+  const buildFailure = buildPackages();
   const files = caseFiles();
   if (files.length === 0) {
     process.stderr.write(`ERROR: no case files in ${CASES_DIR}\n`);
@@ -704,7 +951,9 @@ function main() {
 
       // Путь и текст приходят из прогона уже подставленными: подставлять здесь
       // заново было бы нечем — состояния прогона тут уже нет.
-      const env = { ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code };
+      const env = {
+        ASSERT_FILE: r.assertFile, ASSERT_TEXT: r.assertText, CODE: r.code, WANT_CODE: c.exit,
+      };
       let ok = true;
       let got = r.out;
       for (const one of expects) {
@@ -745,6 +994,7 @@ function main() {
 
   const missing = REQUIRED.filter((k) => !covered.has(k));
   const smoke = smokeChecks();
+  if (buildFailure) smoke.push(`packages not built: ${buildFailure}`);
 
   process.stdout.write(`${'-'.repeat(75)}\n`);
   if (fails.length > 0) {
@@ -759,6 +1009,13 @@ function main() {
     process.stdout.write('Settings smoke failures:\n');
     for (const m of smoke) process.stdout.write(`  - ${m}\n`);
   }
+  // Приём реестра ОТСОЕДИНЁН, а уборка кейса идёт сразу за хуком: изредка он
+  // дописывает свой след и снимок вида уже после неё, и в общем временном
+  // каталоге оставалось 1–3 записи вместо нуля. Подметаем ещё раз в конце
+  // прогона, когда отсоединённым уже некуда писать. Маска несёт pid ЭТОГО
+  // раннера, поэтому чужой параллельный прогон не заденется.
+  sweepLeftovers();
+
   process.stdout.write(
     `TOTAL: ${pass}/${total} passed; ${fail} failed; uncovered outcomes: ${missing.length}; settings smoke: ${smoke.length}\n`,
   );

@@ -19,10 +19,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 
 const log = (message) => process.stderr.write(`[sync-local-main] ${message}\n`);
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 if (process.env.CRAFT_LOCAL !== '1') {
   log('CRAFT_LOCAL != 1 (not a local session); skipping main sync');

@@ -28,7 +28,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadEnv } from './lib/env.js';
+// Адаптеры рабочей копии и харнеса выбирает КРАЙ, а не общая часть.
+import { commonDir } from './lib/repo-git.js';
+import { harnessEnvPaths } from './lib/env-claude.js';
 import { fetchText } from './lib/net.js';
+// Запасной канал сети выбирает КРАЙ, а не общая часть.
+import { viaExternal } from './lib/fetch-curl.js';
 import { utcStamp } from './lib/system.js';
 
 // В craft-репо (там есть свой инжектор роутера) — не дублируем. Снимок при этом
@@ -42,7 +47,7 @@ function isCraftRepo(dir) {
 }
 if (isCraftRepo(process.env.CLAUDE_PROJECT_DIR)) process.exit(0);
 
-loadEnv();
+loadEnv({ commonDir, ...harnessEnvPaths() });
 
 const communicationId = process.env.CRAFT_COMMUNICATION_ID || '7485dec3-f1c2-4f17-e88a-72994f772b84';
 const claudeMd = process.env.CRAFT_USER_CLAUDE_MD || path.join(os.homedir(), '.claude', 'CLAUDE.md');
@@ -81,7 +86,7 @@ if (process.env.BEHAVIOR_RULES_TEST_MD) {
 } else {
   const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
   if (!base) fallback('CRAFT_API_BASE не задан');
-  md = await fetchText(`${base}/blocks?id=${communicationId}&maxDepth=-1`);
+  md = await fetchText(`${base}/blocks?id=${communicationId}&maxDepth=-1`, { viaExternal });
   if (!md) fallback('сеть/API недоступны');
   md = md.replace(/\n+$/, '');
   stamp = utcStamp();
@@ -98,7 +103,7 @@ let anchorMd = '';
 if (anchorId && !process.env.BEHAVIOR_RULES_TEST_MD) {
   const base = (process.env.CRAFT_API_BASE || '').replace(/\/$/, '');
   if (base) {
-    const fetched = await fetchText(`${base}/blocks?id=${anchorId}&maxDepth=-1`);
+    const fetched = await fetchText(`${base}/blocks?id=${anchorId}&maxDepth=-1`, { viaExternal });
     if (fetched) anchorMd = fetched.replace(/\n+$/, '');
   }
 }

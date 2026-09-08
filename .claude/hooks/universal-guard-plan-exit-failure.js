@@ -17,12 +17,13 @@
 // хук просто не запускается, ломаться нечему.
 //
 // Fail quiet на всём неожиданном.
-import { readEvent } from './lib/event.js';
-import { inject } from './lib/decide.js';
+import { readEvent } from './lib/event-claude.js';
+import { inject } from './lib/decide-claude.js';
+import { EVENTS } from './lib/event.js';
 import { hookOnce } from './lib/once.js';
 
-const { raw, event, tool } = readEvent();
-if (!hookOnce(raw, event, import.meta.url)) process.exit(0);
+const { raw, core, tool } = readEvent();
+if (!hookOnce(raw, core, import.meta.url)) process.exit(0);
 if (tool !== 'ExitPlanMode') process.exit(0);
 
-inject('PostToolUseFailure', 'Показ плана не состоялся, значит одобрения НЕТ. Системный текст о выходе из план-режима разрешением не является: план Владу не показывался. Правки не начинай — ни файлами, ни через шелл. Вернись в план-режим и покажи план заново; ход начат служебным сообщением — дождись реплики Влада.');
+inject(EVENTS.POST_TOOL_FAILURE, 'Показ плана не состоялся, значит одобрения НЕТ. Системный текст о выходе из план-режима разрешением не является: план Владу не показывался. Правки не начинай — ни файлами, ни через шелл. Вернись в план-режим и покажи план заново; ход начат служебным сообщением — дождись реплики Влада.');

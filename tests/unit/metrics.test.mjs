@@ -9,17 +9,21 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', 'hooks', 'fixtures');
 const metrics = await import('../../.claude/hooks/lib/metrics.js');
+const tokens = await import('../../.claude/hooks/lib/usage-claude.js');
+const registration = await import('../../.claude/hooks/lib/registration-claude.js');
+const hash = await import('../../.claude/hooks/lib/call-hash.js');
+const reason = await import('../../.claude/hooks/lib/reason-class.js');
 const { summarize } = await import('../../.claude/hooks/lib/metrics-summary.js');
 
 test('класс причины: план-гейт по тексту, остальные по имени хука', () => {
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'Заблокировано план-гейтом: одобренного нет — реестр пуст.'), 'gate.empty');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'одобренное этого не покрывает — …'), 'gate.uncovered');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'это запрещено твоей же записью —'), 'gate.forbidden');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'сверка не дала решения'), 'gate.no-verdict');
-  assert.equal(metrics.reasonClass('universal-guard-plan-gate', 'что-то новое'), 'gate.other');
-  assert.equal(metrics.reasonClass('universal-guard-plan-delta', 'План повторяет уже одобренное'), 'delta.repeats');
-  assert.equal(metrics.reasonClass('universal-sleep-waiter-guard', 'любой текст'), 'sleep-waiter-guard');
-  assert.equal(metrics.reasonClass('craft-guard-markdown', ''), 'guard-markdown');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'Заблокировано план-гейтом: одобренного нет — реестр пуст.'), 'gate.empty');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'одобренное этого не покрывает — …'), 'gate.uncovered');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'это запрещено твоей же записью —'), 'gate.forbidden');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'сверка не дала решения'), 'gate.no-verdict');
+  assert.equal(reason.reasonClass('universal-guard-plan-gate', 'что-то новое'), 'gate.other');
+  assert.equal(reason.reasonClass('universal-guard-plan-delta', 'План повторяет уже одобренное'), 'delta.repeats');
+  assert.equal(reason.reasonClass('universal-sleep-waiter-guard', 'любой текст'), 'sleep-waiter-guard');
+  assert.equal(reason.reasonClass('craft-guard-markdown', ''), 'guard-markdown');
 });
 
 test('класс ответа модели: токен вердикта, json у разбора, unavailable у неответа', () => {
@@ -32,12 +36,12 @@ test('класс ответа модели: токен вердикта, json у
 
 test('токены хода: дубли одного message.id считаются однажды, смещение за последней полной строкой', () => {
   const file = path.join(FIXTURES, 'transcript-usage.jsonl');
-  const first = metrics.turnUsage(file, 0);
+  const first = tokens.turnUsage(file, 0);
   assert.deepEqual(first.usage, {
     input: 5, output: 140, cache_read: 2200, cache_create: 50, messages: 2,
   });
   assert.equal(first.offset, fs.statSync(file).size);
-  const second = metrics.turnUsage(file, first.offset);
+  const second = tokens.turnUsage(file, first.offset);
   assert.equal(second.usage.messages, 0, 'посчитанное второй раз не считается');
 });
 
@@ -46,7 +50,7 @@ test('токены хода: недописанный хвост без пере
   const file = path.join(dir, 't.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 7 } } });
   fs.writeFileSync(file, `${line}\n${line.slice(0, 20)}`);
-  const r = metrics.turnUsage(file, 0);
+  const r = tokens.turnUsage(file, 0);
   assert.equal(r.usage.output, 7);
   assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
   fs.rmSync(dir, { recursive: true, force: true });
@@ -212,27 +216,27 @@ test('сводка: ход без прогресса считается по х�
 
 // --- журнал по событию -----------------------------------------------------------
 
-test('вызов модели ложится в журнал сессии из события, когда переменной сессии нет', () => {
+test('вызов модели ложится в журнал сессии, которую положила обёртка', () => {
   delete process.env.CRAFT_METRICS_LOG;
-  delete process.env.CLAUDE_CODE_SESSION_ID;
+  // Сессию в окружение кладёт АДАПТЕР события, прочитав её из самого события;
+  // общая часть берёт её уже под своим именем и имени переменной харнеса не знает.
   const sid = `unit-${process.pid}-${Date.now()}`;
-  globalThis.hookEvent = { session_id: sid };
+  process.env.CRAFT_SESSION_ID = sid;
   const log = path.join(os.tmpdir(), `metrics.${sid}.jsonl`);
   try {
     metrics.recordModelCall({ mode: 'cover', ms: 3, outcome: 'COVERED' });
     assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model","ts":".*","mode":"cover","ms":3/);
     assert.equal(metrics.childEnv({}).CRAFT_METRICS_LOG, log, 'дочерний процесс получает журнал явно');
   } finally {
-    delete globalThis.hookEvent;
+    delete process.env.CRAFT_SESSION_ID;
     fs.rmSync(log, { force: true });
   }
 });
 
 test('фоновый приём пишет вызов модели в журнал сессии события', async () => {
   delete process.env.CRAFT_METRICS_LOG;
-  delete process.env.CLAUDE_CODE_SESSION_ID;
   const sid = `unit-ingest-${process.pid}-${Date.now()}`;
-  globalThis.hookEvent = { session_id: sid };
+  process.env.CRAFT_SESSION_ID = sid;
   const log = path.join(os.tmpdir(), `metrics.${sid}.jsonl`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
   const repo = path.resolve(HERE, '..', '..');
@@ -249,7 +253,7 @@ test('фоновый приём пишет вызов модели в журна
     registry.ingestInBackground(path.join(dir, 'registry.jsonl'), 'reply', 'поправь README');
     assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model".*"mode":"ingest"/);
   } finally {
-    delete globalThis.hookEvent;
+    delete process.env.CRAFT_SESSION_ID;
     delete process.env.PLAN_CLASSIFIER_CMD;
     delete process.env.CRAFT_REGISTRY_SYNC;
     if (savedStore === undefined) delete process.env.METRICS_STORE;
@@ -261,10 +265,10 @@ test('фоновый приём пишет вызов модели в журна
 
 test('проектная регистрация диспетчера находится вверх от рабочего каталога', () => {
   const repo = path.resolve(HERE, '..', '..');
-  assert.equal(metrics.projectDispatcherAt(path.join(repo, 'tests', 'hooks')), true);
+  assert.equal(registration.projectDispatcherAt(path.join(repo, 'tests', 'hooks')), true);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
-  assert.equal(metrics.projectDispatcherAt(dir), false);
-  assert.equal(metrics.projectDispatcherAt(''), false);
+  assert.equal(registration.projectDispatcherAt(dir), false);
+  assert.equal(registration.projectDispatcherAt(''), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -338,8 +342,8 @@ test('смещение транскрипта засевается длиной 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'metrics-test.'));
   const transcript = path.join(dir, 't.jsonl');
   fs.copyFileSync(path.join(FIXTURES, 'transcript-usage.jsonl'), transcript);
-  assert.equal(metrics.transcriptSize(transcript), fs.statSync(transcript).size);
-  const { usage } = metrics.turnUsage(transcript, metrics.transcriptSize(transcript));
+  assert.equal(tokens.transcriptSize(transcript), fs.statSync(transcript).size);
+  const { usage } = tokens.turnUsage(transcript, tokens.transcriptSize(transcript));
   assert.equal(usage.messages, 0, 'засеянное смещение не даёт засчитать историю в первый ход');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -349,7 +353,7 @@ test('укоротившийся транскрипт читается зано�
   const file = path.join(dir, 't.jsonl');
   const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { output_tokens: 9 } } });
   fs.writeFileSync(file, `${line}\n`);
-  const r = metrics.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
+  const r = tokens.turnUsage(file, 10_000); // смещение больше файла: транскрипт подменён
   assert.equal(r.usage.output, 9, 'после подмены транскрипт читается с начала');
   assert.equal(r.offset, Buffer.byteLength(`${line}\n`));
   fs.rmSync(dir, { recursive: true, force: true });
@@ -362,13 +366,18 @@ test('вызов с аварийным выключателем в счётчи�
   const repo = path.resolve(HERE, '..', '..');
   const bin = path.join(repo, 'tests', 'hooks', 'fixtures', 'mock-classifier.sh');
   const classifier = await import(`../../.claude/hooks/lib/classifier.js?t=${Date.now()}`);
+  // Адаптер запуска приходит ПАРАМЕТРОМ: сам классификатор его не выбирает.
+  const adapter = await import(`../../.claude/hooks/lib/classify-bash.js?t=${Date.now()}`);
   try {
     process.env.PLAN_CLASSIFIER = 'off';
-    classifier.classify(bin, 'cover', [], 'проба');
+    classifier.classify(adapter, bin, 'cover', [], 'проба');
     assert.equal(fs.existsSync(log), false, 'выключенный классификатор модель не звал — записи нет');
     delete process.env.PLAN_CLASSIFIER;
-    classifier.classify(bin, 'cover', [], 'проба');
+    classifier.classify(adapter, bin, 'cover', [], 'проба');
     assert.match(fs.readFileSync(log, 'utf8'), /"kind":"model"/, 'обычный вызов пишется');
+    // Без адаптера возможности нет вовсе, и это НАЗВАНО, а не сведено к «модель
+    // промолчала»: молчание тут неотличимо от настоящего неответа модели.
+    assert.equal(classifier.classify(null, bin, 'cover', [], 'проба'), 'UNSUPPORTED');
   } finally {
     delete process.env.PLAN_CLASSIFIER;
     delete process.env.CRAFT_METRICS_LOG;
@@ -379,16 +388,16 @@ test('вызов с аварийным выключателем в счётчи�
 // --- узнавание вызова и пуша -----------------------------------------------------
 
 test('хеш вызова считает ВЕСЬ данный ему вход и не зависит от порядка полей', () => {
-  const a = metrics.callHash('Bash', { command: 'git push' });
-  assert.notEqual(a, metrics.callHash('Bash', { command: 'git status' }));
+  const a = hash.callHash('Bash', { command: 'git push' });
+  assert.notEqual(a, hash.callHash('Bash', { command: 'git status' }));
   assert.equal(
-    metrics.callHash('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }),
-    metrics.callHash('Edit', { new_string: 'y', old_string: 'x', file_path: 'a' }),
+    hash.callHash('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }),
+    hash.callHash('Edit', { new_string: 'y', old_string: 'x', file_path: 'a' }),
     'порядок полей во входе не обещан — хеш от него не зависит',
   );
   // Отсев служебных полей — дело адаптера харнеса, а не этой функции: что
   // подали, то и сосчитано (кейс на отсев — в write-targets.test.mjs).
-  assert.notEqual(a, metrics.callHash('Bash', { command: 'git push', description: 'Push branch' }));
+  assert.notEqual(a, hash.callHash('Bash', { command: 'git push', description: 'Push branch' }));
 });
 
 test('журнал: нет файла — пусто, не прочитался — null', () => {
@@ -444,10 +453,10 @@ test('сводка: серия ошибок не переходит через �
 test('хеш вызова: вложенные поля сортируются, порядок массива значим', () => {
   const a = { file_path: '/a', edits: [{ old_string: 'x', new_string: 'y' }] };
   const b = { edits: [{ new_string: 'y', old_string: 'x' }], file_path: '/a' };
-  assert.equal(metrics.callHash('MultiEdit', a), metrics.callHash('MultiEdit', b));
+  assert.equal(hash.callHash('MultiEdit', a), hash.callHash('MultiEdit', b));
   assert.notEqual(
-    metrics.callHash('MultiEdit', { edits: [{ t: 1 }, { t: 2 }] }),
-    metrics.callHash('MultiEdit', { edits: [{ t: 2 }, { t: 1 }] }),
+    hash.callHash('MultiEdit', { edits: [{ t: 1 }, { t: 2 }] }),
+    hash.callHash('MultiEdit', { edits: [{ t: 2 }, { t: 1 }] }),
   );
 });
 
@@ -561,4 +570,441 @@ test('нулевой ход не считается ни ходом, ни ход
     { kind: 'stop', ts: T(9), turn: 8, blocked_by: '', usage: {}, no_progress: false },
   ];
   assert.equal(summarize(resumed).turns, 2, 'ходы — число различных номеров, а не максимум');
+});
+
+// --- сшивка события с его решением ---------------------------------------------
+//
+// Наблюдатель зовётся ПЕРВЫМ в цепочке (иначе отказ обрывал бы её до него), поэтому
+// исхода в записи события нет: решение приходит отдельной строкой от того, кто
+// решил, и переносится в журнал метрик следующим событием. Кейсы держат то, ради
+// чего это затевалось: четыре метрики, которые считаются по исходу, считаются
+// по-прежнему.
+const line = (n) => `2026-01-01T00:0${n}:00.000Z`;
+
+test('сшивка: отказ приходит СТРОКОЙ и считается отказом', () => {
+  const records = [
+    { kind: 'session', ts: line(0), turn: 0, key: 'o0', harness: 'claude', sid: 's' },
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, key: 'o2', tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-guard-plan-gate', outcome: 'deny', class: 'gate.empty', h: 'H1', tool: 'Bash',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 1);
+  assert.deepEqual(s.denies.by_class, { 'gate.empty': 1 });
+});
+
+test('сшивка: строки решения нет — это проход, а не пропуск', () => {
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, key: 'o2', tool: 'Bash', id: 'c1', h: 'H1', plan: true },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.plan.shown, 1, 'показ плана без отказа — показ');
+});
+
+test('сшивка: ПОВТОРНО перенесённая строка счёт не двоит', () => {
+  const decision = {
+    kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+    hook: 'universal-guard-plan-gate', outcome: 'deny', class: 'gate.empty', h: 'H1', tool: 'Bash',
+  };
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, key: 'o2', tool: 'Bash', id: 'c1', h: 'H1' },
+    decision, { ...decision },
+  ];
+  // Журнал решений могли перечитать сначала (его подмели, сессия вернулась) —
+  // строка легла дважды. Считается ЗАПИСЬ СОБЫТИЯ, а их по одной на событие.
+  assert.equal(summarize(records, { sid: 's' }).denies.total, 1);
+});
+
+test('сшивка: решение принадлежит СВОЕМУ появлению события, а не следующему', () => {
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'stop', ts: line(2), turn: 1, key: 'o2' },
+    {
+      kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: '', event: 'stop',
+      hook: 'universal-stop-quality-gate', outcome: 'block', class: '',
+    },
+    { kind: 'stop', ts: line(3), turn: 1, key: 'o3' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.deepEqual(s.stop_blocks, { 'universal-stop-quality-gate': 1 },
+    'второй конец хода блокировку первого не наследует');
+});
+
+test('сшивка: признак инцидента приходит той же строкой канала', () => {
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'flag', ts: line(1), key: 'o1', sid: 's', call_id: '', event: 'prompt', flag: 'incident' },
+    { kind: 'prompt', ts: line(2), turn: 2, key: 'o2' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.incidents.detected, 1, 'признак принадлежит своей реплике, а не всем следующим');
+});
+
+test('сшивка: ложный отказ виден и когда исход пришёл строкой', () => {
+  const records = [
+    { kind: 'prompt', ts: line(0), turn: 1, key: 'o0' },
+    { kind: 'pre', ts: line(1), turn: 1, key: 'o1', tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(1), key: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-guard-plan-gate', outcome: 'deny', class: 'gate.uncovered', h: 'H1', tool: 'Bash',
+    },
+    // Влад вмешался репликой — и ТОТ ЖЕ вызов прошёл.
+    { kind: 'prompt', ts: line(2), turn: 2, key: 'o2' },
+    { kind: 'pre', ts: line(3), turn: 2, key: 'o3', tool: 'Bash', id: 'c2', h: 'H1' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.false_denies, 1);
+  assert.equal(s.denies.total, 1);
+});
+
+test('сшивка: решение ПОСЛЕ вызова не ложится на запись ДО него', () => {
+  // Идентификатор вызова у обоих событий один — он и есть ключ. Сшивай по голому
+  // ключу, и строка, записанная на событии после вызова, стала бы исходом самого
+  // вызова: тут отказ появился бы у прошедшего вызова из ниоткуда.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, key: 'c1', tool: 'Bash', id: 'c1', h: 'H1' },
+    { kind: 'post', ts: line(3), turn: 1, key: 'c1', tool: 'Bash', id: 'c1' },
+    {
+      kind: 'decision', ts: line(3), key: 'c1', sid: 's', call_id: 'c1', event: 'post-tool',
+      hook: 'universal-что-нибудь-после-вызова', outcome: 'deny', class: 'после-вызова',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 0, 'вызов ПРОШЁЛ: отказа на событии до него не было');
+  assert.deepEqual(s.denies.by_class, {});
+});
+
+test('сшивка: замеры ПОСЛЕ вызова не доказывают доставку строк ДО него', () => {
+  // Обратная сторона той же пары. Замеры события после вызова несут тот же ключ;
+  // считай их доказательством — и потерянный отказ события до вызова прочитался
+  // бы как проход, ради чего весь этот счёт и заведён.
+  //
+  // Спрашивается ИМЕННО про запись до вызова, а не суммарное число неизвестных:
+  // по голому ключу неизвестной становится запись ПОСЛЕ вызова, и сумма остаётся
+  // той же единицей — кейс зеленел бы на сломанной паре.
+  const records = [
+    { kind: 'pre', ts: line(1), turn: 1, key: 'c1', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
+    { kind: 'post', ts: line(2), turn: 1, key: 'c1', disp: true, tool: 'Bash', id: 'c1' },
+    {
+      kind: 'timing', ts: line(2), key: 'c1', sid: 's', call_id: 'c1', event: 'post-tool', hooks: {},
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.unknown_events, 1);
+  // Исход вызова неизвестен — значит он не посчитан ни проходом, ни отказом.
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.false_denies, 0);
+  // А вот ЗАПИСЬ ПОСЛЕ вызова свои строки дождалась: ошибок инструмента нет.
+  assert.equal(s.tool_errors, 0);
+});
+
+test('сшивка: неизвестен именно вызов, а не его завершение', () => {
+  // То же событие, но показанным планом: `plan.shown` считается ровно по записи
+  // ДО вызова, поэтому по нему видно, КАКАЯ из двух записей осталась без строк.
+  const records = [
+    {
+      kind: 'pre', ts: line(1), turn: 1, key: 'c1', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+    { kind: 'post', ts: line(2), turn: 1, key: 'c1', disp: true, tool: 'ExitPlanMode', id: 'c1' },
+    {
+      kind: 'timing', ts: line(2), key: 'c1', sid: 's', call_id: 'c1', event: 'post-tool', hooks: {},
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 0, 'показ не засчитан: исход вызова неизвестен');
+  assert.equal(s.plan.bounced, 0);
+});
+
+test('сшивка: одна блокировка не достаётся двум одинаковым концам хода', () => {
+  // У событий без идентификатора вызова ключ — хеш их байтов, и у двух
+  // байт-в-байт одинаковых концов хода он ОДИН. Раздавай решение всем записям
+  // пары — одна блокировка посчиталась бы дважды.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'stop', ts: line(2), turn: 1, key: 'k' },
+    {
+      kind: 'decision', ts: line(2), key: 'k', sid: 's', call_id: '', event: 'stop',
+      hook: 'universal-instinct-flush', outcome: 'block', class: '',
+    },
+    { kind: 'stop', ts: line(3), turn: 1, key: 'k' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.deepEqual(s.stop_blocks, { 'universal-instinct-flush': 1 });
+});
+
+test('сшивка: две блокировки двух одинаковых концов хода считаются обе', () => {
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'stop', ts: line(2), turn: 1, key: 'k' },
+    { kind: 'stop', ts: line(3), turn: 1, key: 'k' },
+    {
+      kind: 'decision', ts: line(2), key: 'k', sid: 's', call_id: '', event: 'stop',
+      hook: 'universal-instinct-flush', outcome: 'block', class: '',
+    },
+    {
+      kind: 'decision', ts: line(3), key: 'k', sid: 's', call_id: '', event: 'stop',
+      hook: 'universal-instinct-flush', outcome: 'block', class: '',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.deepEqual(s.stop_blocks, { 'universal-instinct-flush': 2 });
+});
+
+test('сшивка: журнал ПРЕЖНЕГО слоя не теряет отказ после обновления', () => {
+  // Записи и строки, написанные до смены ключа, несут номер появления процесса
+  // (`occ` у записи, `occurrence` у строки). Сводка пересобирается по ВСЕМУ
+  // журналу сессии на каждом конце хода, а слой обновляют из живой сессии:
+  // читай тут только новое поле — отказ пропал бы совсем, даже не оставшись
+  // неизвестным.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, occ: 'старый-1', disp: true },
+    { kind: 'pre', ts: line(2), turn: 1, occ: 'старый-2', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(2), occurrence: 'старый-2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-fact-gate', outcome: 'deny', class: 'fact-gate',
+    },
+    // Тот же ход уже на новом слое: ключ считается по событию.
+    { kind: 'pre', ts: line(3), turn: 1, key: 'c2', disp: true, tool: 'Bash', id: 'c2', h: 'H2' },
+    {
+      kind: 'decision', ts: line(3), key: 'c2', sid: 's', call_id: 'c2', event: 'pre-tool',
+      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 2, 'отказы обеих эпох считаются');
+  assert.deepEqual(s.denies.by_class, { 'fact-gate': 1, 'sleep-waiter-guard': 1 });
+});
+
+test('сшивка: своё поле записи сильнее строки — журнал переживает обновление слоя', () => {
+  // Записи, сделанные прежним слоем, несут исход прямо в себе; строки решения к
+  // ним нет вовсе, и «нет строки» для них не значит «прошёл».
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    {
+      kind: 'pre', ts: line(2), turn: 1, tool: 'Bash', id: 'c1', h: 'H1', decision: 'deny', class: 'gate.empty', by: 'x',
+    },
+  ];
+  assert.equal(summarize(records, { sid: 's' }).denies.total, 1);
+});
+
+test('сшивка: строки события не доехали — исход НЕИЗВЕСТЕН, а не «прошёл»', () => {
+  // Под диспетчером у события обязаны появиться строки канала: замеры он кладёт на
+  // каждом. Ни одной строки с этой парой — значит канал не доехал
+  // (сорвался, подмели, сессия кончилась на этом событии). Считать такую пустоту
+  // проходом значило бы поменять ЗНАК: отбитый показ плана уехал бы показанным.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1', disp: true },
+    {
+      kind: 'timing', ts: line(1), key: 'o1', sid: 's', call_id: '', event: 'prompt', hooks: {},
+    },
+    {
+      kind: 'pre', ts: line(2), turn: 1, key: 'o2', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 0, 'неизвестный исход показом не считается');
+  assert.equal(s.plan.bounced, 0, 'и отказом тоже: мы не знаем');
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.unknown_events, 1, 'зато видно, сколько событий осталось без исхода');
+});
+
+test('сшивка: строки доехали, решения нет — это проход', () => {
+  // Ровно та же запись, но замеры её события переехали: канал отработал, и
+  // молчание гварда значит именно проход.
+  const records = [
+    {
+      kind: 'pre', ts: line(2), turn: 1, key: 'o2', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+    {
+      kind: 'timing', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool', hooks: {},
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 1);
+  assert.equal(s.unknown_events, 0);
+});
+
+test('сшивка: потерянный признак реплики тоже виден числом, а не тихим false', () => {
+  // Инцидент приходит тем же каналом. `incident: false` на потерянной строке
+  // ронял бы долю разборов так же тихо, как пустота роняла отказ.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1', disp: true },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.incidents.detected, 0);
+  assert.equal(s.unknown_events, 1);
+});
+
+test('сшивка: доехавшая строка решения важнее того, что канал сорвался ПОЗЖЕ', () => {
+  // Строки этого события приехали, а на следующем канал упал. Первое событие от
+  // этого неизвестным не становится: доказательство доставки у него своё.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1', disp: true },
+    {
+      kind: 'timing', ts: line(1), key: 'o1', sid: 's', call_id: '', event: 'prompt', hooks: {},
+    },
+    { kind: 'pre', ts: line(2), turn: 1, key: 'o2', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+    },
+    // Следующее событие своих строк не дождалось — оно и только оно неизвестно.
+    { kind: 'stop', ts: line(3), turn: 1, key: 'o3', disp: true },
+    { kind: 'skip', ts: line(3), what: 'decisions', capability: 'decision-log' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 1, 'отказ, чья строка доехала, посчитан');
+  assert.deepEqual(s.stop_blocks, {}, 'а про конец хода мы ничего не знаем');
+  assert.equal(s.unknown_events, 1);
+});
+
+test('сшивка: доказательство доставки — ЗАМЕРЫ, а не любая строка канала', () => {
+  // Замеры диспетчер кладёт на каждом событии; признак и решение — нет. Считай
+  // доказательством любую строку, и событие, у которого доехал только признак,
+  // прочиталось бы как проход, хотя строка решения по нему потерялась.
+  const records = [
+    {
+      kind: 'pre', ts: line(1), turn: 1, key: 'o1', disp: true, tool: 'Bash', id: 'c1', h: 'H1',
+    },
+    {
+      kind: 'flag', ts: line(1), key: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool', flag: 'incident',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.unknown_events, 1, 'замеров нет — исход неизвестен, а не «проход»');
+});
+
+test('сшивка: дописанный контекст НЕ затирает отказ, в каком бы порядке ни легли строки', () => {
+  const base = {
+    kind: 'pre', ts: line(1), turn: 1, key: 'o1', disp: true, tool: 'Bash', id: 'c1', h: 'H1',
+  };
+  const timing = {
+    kind: 'timing', ts: line(1), key: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool', hooks: {},
+  };
+  const none = {
+    kind: 'decision', ts: line(1), key: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+    hook: 'universal-что-нибудь-дописал', outcome: 'none', class: '',
+  };
+  const deny = {
+    kind: 'decision', ts: line(1), key: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+    hook: 'universal-fact-gate', outcome: 'deny', class: 'fact-gate',
+  };
+  for (const order of [[none, deny], [deny, none]]) {
+    const s = summarize([base, timing, ...order], { sid: 's' });
+    assert.equal(s.denies.total, 1, `отказ обязан пережить порядок ${order.map((r) => r.outcome).join('→')}`);
+    assert.equal(s.denies.by_class['fact-gate'], 1);
+  }
+});
+
+test('сшивка: дописанный контекст — не решение, вызов считается прошедшим', () => {
+  // Инжектор пишет исход `none`. Считать его отказом нельзя, но и «не allow» тоже:
+  // тогда первый же инжектор на событии до вызова вычел бы вызов из ложных отказов
+  // и из показов плана — они сравнивают ровно с `allow`.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1', disp: true },
+    {
+      kind: 'timing', ts: line(1), key: 'o1', sid: 's', call_id: '', event: 'prompt', hooks: {},
+    },
+    {
+      kind: 'pre', ts: line(2), turn: 1, key: 'o2', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+    {
+      kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-inject-что-нибудь', outcome: 'none', class: '',
+    },
+    // Замеры цепочки диспетчер кладёт на КАЖДОМ событии — без них форма записей
+    // была бы не той, что бывает на живом пути, и кейс проверял бы небылицу.
+    {
+      kind: 'timing', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool', hooks: {},
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.plan.shown, 1, 'план показан: инжектор его не отбивал');
+  assert.equal(s.denies.total, 0);
+  assert.equal(s.unknown_events, 0);
+});
+
+test('сшивка: дописанный контекст НЕ доказывает доставку — без замеров исход неизвестен', () => {
+  // Строка `none` говорит «я не решал». Считай её ответом на вопрос «а доехали ли
+  // строки этого события», и потерянный на том же появлении отказ прочитался бы
+  // как проход: показ плана превратился бы в состоявшийся, а отказ — в тишину.
+  const records = [
+    {
+      kind: 'pre', ts: line(1), turn: 1, key: 'o1', disp: true, tool: 'ExitPlanMode', id: 'c1', h: 'H1', plan: true,
+    },
+    {
+      kind: 'decision', ts: line(1), key: 'o1', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-inject-что-нибудь', outcome: 'none', class: '',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.unknown_events, 1, 'замеров нет — канал по этому событию не доказан');
+  assert.equal(s.plan.shown, 0, 'показ плана не засчитывается по неизвестному исходу');
+});
+
+test('сшивка: найденная строка сильнее отметки о пропаже', () => {
+  // Канал сорвался позже, а решение этого события уже доехало — оно и есть факт.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1' },
+    { kind: 'pre', ts: line(2), turn: 1, key: 'o2', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
+    {
+      kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
+      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+    },
+    { kind: 'skip', ts: line(3), what: 'decisions', capability: 'decision-log', key: 'o2' },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.denies.total, 1);
+  assert.equal(s.unknown_events, 0);
+});
+
+// Признак потери строки канала. Его спрашивают ЗАМЕРЫ: они служат свёртке
+// доказательством, что канал по событию отработал, и класть их после того, как
+// решение исчезло совсем, значило бы выдать отказ за проход.
+//
+// Признак — на процесс и не сбрасывается, поэтому кейс сравнивает его С ПРЕЖНИМ
+// значением, а не с нулём: от места в файле он не зависит.
+test('сшивка: ДОЕХАВШИЙ признак инцидента не выбрасывается вместе с «не знаю»', () => {
+  // Реплика осталась без полного канала — исход её неизвестен, и это честно.
+  // Но признак инцидента по ней УЖЕ доехал, и терять его вместе с пометкой значит
+  // ронять долю разборов ровно так же тихо, как терялся бы сам признак.
+  const records = [
+    { kind: 'prompt', ts: line(1), turn: 1, key: 'o1', disp: true },
+    {
+      kind: 'flag', ts: line(1), key: 'o1', sid: 's', call_id: '', event: 'prompt', flag: 'incident',
+    },
+  ];
+  const s = summarize(records, { sid: 's' });
+  assert.equal(s.unknown_events, 1, 'замеров нет — исход реплики неизвестен');
+  assert.equal(s.incidents.detected, 1, 'но инцидент замечен, и это уже известно');
+});
+
+test('канал: потерянная строка снимает ПРИЗНАК доставки', () => {
+  const prev = process.env.CRAFT_METRICS_LOG;
+  const prevSid = process.env.CRAFT_SESSION_ID;
+  try {
+    delete process.env.CRAFT_METRICS_LOG;
+    delete process.env.CRAFT_SESSION_ID;
+    // Признак — на процесс и не сбрасывается, поэтому кейс не спрашивает «сейчас
+    // ноль», а СРАВНИВАЕТ с тем, что было: иначе он ломался бы у любого, кто
+    // допишет тест после него, и чинить пришлось бы порядок строк в файле.
+    const before = metrics.channelLost();
+    // Строка легла в журнал решений — терять нечего.
+    assert.equal(metrics.keepChannelLine({ ok: true, line: { kind: 'decision' } }), true);
+    assert.equal(metrics.channelLost(), before, 'легшая строка признака не поднимает');
+    // Не легла, и запасного журнала тоже нет: строка исчезла совсем.
+    assert.equal(metrics.keepChannelLine({ ok: false, line: { kind: 'decision' } }), false);
+    assert.equal(metrics.channelLost(), true, 'потеря обязана быть видна тому, кто кладёт доказательство');
+  } finally {
+    if (prev === undefined) delete process.env.CRAFT_METRICS_LOG; else process.env.CRAFT_METRICS_LOG = prev;
+    if (prevSid === undefined) delete process.env.CRAFT_SESSION_ID; else process.env.CRAFT_SESSION_ID = prevSid;
+  }
 });
