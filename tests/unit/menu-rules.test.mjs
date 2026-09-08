@@ -19,7 +19,21 @@ import {
 import { isAfter, parseArgs, parseFrom } from "../../menu/recheck.mjs";
 
 const rel = (...ids) => ({ relations: ids.map((blockId) => ({ blockId })) });
-const item = (id, name, properties) => ({ id, name, properties });
+const item = (id, name, properties, content) => ({ id, name, properties, content });
+
+/** Состав рецепта лежит в его теле — таблицей за заголовком «Ингредиенты». */
+const composition = (...products) => [
+  { type: "text", markdown: "### Ингредиенты" },
+  {
+    type: "table",
+    markdown: [
+      "| Кол-во порций: | 2 | 2 |",
+      "| --- | --- | --- |",
+      ...products.map(([title, id, unit, qty]) =>
+        `| [${title}](block://${id}) (${unit}) | ${qty} | =x |`),
+    ].join("\n"),
+  },
+];
 
 /** Минимальная неделя: двое едоков, три рецепта, по одной готовке на блюдо. */
 function fixture(over = {}) {
@@ -29,8 +43,10 @@ function fixture(over = {}) {
       item("e-olya", "Оля", { share: 1, cooks: false }),
     ],
     recipes: [
-      item("r-plov", "Плов", { kind: "горячее", keepdays: 3, products: rel("p-rice") }),
-      item("r-salad", "Салат", { kind: "салат", keepdays: 0, products: rel("p-lavash") }),
+      item("r-plov", "Плов", { kind: "горячее", keepdays: 3 },
+        composition(["Рис", "p-rice", "г", 200])),
+      item("r-salad", "Салат", { kind: "салат", keepdays: 0 },
+        composition(["Лаваш", "p-lavash", "уп", 1])),
       item("r-puree", "Пюре", { kind: "гарнир", keepdays: 3 }),
     ],
     products: [

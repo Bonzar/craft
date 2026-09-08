@@ -1,7 +1,21 @@
 // Нормализация ответов connect-API в плоскую модель недели.
 // Дальше правила работают только с ней и ничего не знают про HTTP.
 
+import { parseIngredients } from "./cards.mjs";
+
 const relations = (prop) => (prop?.relations ?? []).map((r) => r.blockId);
+
+/**
+ * Таблица ингредиентов в теле рецепта — первая таблица за заголовком
+ * «Ингредиенты». Заголовок ищется явно: ниже по телу бывают другие таблицы,
+ * и без него состав однажды соберётся из чужой.
+ */
+function ingredientTable(content = []) {
+  const blocks = content ?? [];
+  const start = blocks.findIndex((b) => /^#+\s*Ингредиенты/i.test(b.markdown ?? ""));
+  const table = blocks.slice(start === -1 ? 0 : start + 1).find((b) => b.type === "table");
+  return table?.markdown ?? "";
+}
 const title = (item) => item.name ?? item.product ?? "";
 const num = (v) => (typeof v === "number" ? v : null);
 
@@ -19,15 +33,23 @@ export function buildModel(raw) {
     cooks: i.properties?.cooks === true,
   }));
 
-  const recipes = (raw.recipes ?? []).map((i) => ({
-    id: i.id,
-    name: title(i),
-    kind: i.properties?.kind ?? null,
-    keepDays: num(i.properties?.keepdays),
-    freezable: i.properties?.freezable === true,
-    needsSide: i.properties?.needsside === true,
-    productIds: relations(i.properties?.products),
-  }));
+  const recipes = (raw.recipes ?? []).map((i) => {
+    // Состав живёт в теле рецепта — таблицей за заголовком «Ингредиенты», как
+    // Влад его и ведёт. Отдельного поля-связи под него нет: оно дублировало бы
+    // ту же таблицу и разъезжалось бы с ней.
+    const { basePortions, rows } = parseIngredients(ingredientTable(i.content));
+    return {
+      id: i.id,
+      name: title(i),
+      kind: i.properties?.kind ?? null,
+      keepDays: num(i.properties?.keepdays),
+      freezable: i.properties?.freezable === true,
+      needsSide: i.properties?.needsside === true,
+      basePortions,
+      ingredients: rows,
+      productIds: rows.flatMap((r) => r.products.map((p) => p.id)),
+    };
+  });
 
   const products = (raw.products ?? []).map((i) => ({
     id: i.id,
