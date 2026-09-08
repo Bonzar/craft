@@ -515,3 +515,41 @@ test('переход каталога на глубине не приписыв�
   assert.deepEqual(bash.commandTargets('cd /tmp && echo x > f'), ['/tmp/f']);
   assert.deepEqual(bash.commandReads('cd /repo/lib && sed -n 1,5p a.js').targets, ['/repo/lib/a.js']);
 });
+
+// Непокрытое НАЗЫВАЕТСЯ. Разбора нет — пустой список целей и «команда ничего не
+// пишет» с виду одно и то же, и выдать второе за первое значит промолчать про
+// запись, которой никто не видел (решение 14). Проверяется на живом слое: адаптер
+// уводится в несуществующий путь, как это выглядит на машине без разбора.
+test('нет реализации разбора — ответ непокрытый С ИМЕНЕМ, а не «не менял»', async () => {
+  const bare = await import(`../../.claude/hooks/lib/write-targets-bash.js?t=${Date.now()}`);
+  const было = process.env.COMMAND_TREE_ADAPTER;
+  process.env.COMMAND_TREE_ADAPTER = '/нет-такого-разбора';
+  try {
+    assert.equal(bare.commandTreeGap('cat > README.md'), 'command_tree');
+    // И общая часть превращает это в непокрытое, а не в «мутации нет».
+    const adapters = { commandWrites: (text) => ({ unsupported: bare.commandTreeGap(text) }) };
+    const answer = tools.mutationOf({}, { kind: 'command', text: 'cat > README.md' }, adapters);
+    assert.deepEqual(answer, { status: 'unsupported', capability: 'command_tree' });
+  } finally {
+    if (было === undefined) delete process.env.COMMAND_TREE_ADAPTER;
+    else process.env.COMMAND_TREE_ADAPTER = было;
+  }
+  // А с разбором на месте ответ обычный: проверка ловит не «всё сломано».
+  assert.equal(bash.commandTreeGap('cat > README.md'), '');
+});
+
+// Цель записи с ПОДСТАНОВКОЙ. Раскрыть её нечем: `$HOME` знает только оболочка.
+// Обе крайности неверны — выдумать путь (`/notes.md`) значит соврать про
+// конкретный файл, а выбросить цель значит сказать «команда ничего не пишет» и
+// пропустить настоящую запись мимо гейта. Цель остаётся, но помечена.
+test('цель записи с подстановкой помечена, а не выдумана и не потеряна', () => {
+  const [target] = bash.commandTargets('cat > $HOME/notes.md');
+  assert.ok(bash.isUnresolved(target), `цель не помечена: ${target}`);
+  assert.notEqual(target, '/notes.md', 'путь, которого не существует, целью не является');
+  // И она НЕ эфемерна: значит гейт её увидит.
+  assert.equal(tools.isEphemeral(target), false);
+  // Пустой остаток метки не получает: называть там нечего.
+  assert.deepEqual(bash.commandTargets('bash -c "cat > $OUT"'), []);
+  // Буквальная цель рядом остаётся буквальной.
+  assert.deepEqual(bash.commandTargets('cat > README.md'), ['README.md']);
+});

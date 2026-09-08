@@ -100,30 +100,33 @@ def main():
     # Недостающая жёсткая зависимость даёт явное `unsupported` С ИМЕНЕМ, а не
     # молчание и не обходной путь (решение 14). Логика при этом не зовётся: ей
     # нечем работать.
-    decision = unsupported(missing) if missing else decide(event, DATA_FILES, event["state_dir"])
+    # Имя НЕ `decision`: так зовётся модуль общей части, который читает `_fill`
+    # выше, и затенить его локальной значило бы уронить первый же вызов, который
+    # окажется ниже по коду.
+    answer = unsupported(missing) if missing else decide(event, DATA_FILES, event["state_dir"])
 
     # Форма считается ДО следа: исключающее решение, которому на этом событии
     # формы нет, харнес не увидит, и в журнал оно обязано лечь помеченным —
     # иначе сводка посчитает отказ, которого никто не видел.
-    out = table.render(event, decision)
-    firm = decision.get("outcome") in FIRM
+    out = table.render(event, answer)
+    firm = answer.get("outcome") in FIRM
     delivered = bool(out) or not firm
     if not delivered:
         sys.stderr.write("[%s] исход %s не имеет формы на событии %s\n"
-                         % (NAME, decision.get("outcome"), event["event"]))
+                         % (NAME, answer.get("outcome"), event["event"]))
     # Правка входа печатается только там, где харнес её принимает; молча терять
     # её нельзя — модуль просил, и ничего не произошло.
-    if decision.get("modified_input") and not table.accepts_input(event["event"]):
+    if answer.get("modified_input") and not table.accepts_input(event["event"]):
         sys.stderr.write("[%s] правка входа не доехала: на событии %s её формы нет\n"
                          % (NAME, event["event"]))
-    if decision.get("add_context") and not table.accepts_context(event["event"]):
+    if answer.get("add_context") and not table.accepts_context(event["event"]):
         sys.stderr.write("[%s] дописанный контекст не доехал: на событии %s его формы нет\n"
                          % (NAME, event["event"]))
 
     # След — ВСЕГДА и ДО печати: печать может уйти в закрытый поток, а решение
     # обязано быть записано раньше. Не легло — говорим вслух, потому что молчание
     # на месте отказа читается как проход.
-    if not trace.write(event, NAME, decision, delivered):
+    if not trace.write(event, NAME, answer, delivered):
         sys.stderr.write("[%s] след решения не лёг в журнал\n" % NAME)
 
     if out:

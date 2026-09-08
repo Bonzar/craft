@@ -265,15 +265,18 @@ def _check_owners(root, modules, mine):
     двоих не будет услышан. Владельца нет — реализация сама себе контракт
     (решение 18), и говорить тут не о чем."""
     found = []
-    for capability, owners in sorted(mine.items()):
-        if len(owners) < 2:
+    names = [m.get("name", "") for m in modules]
+    for capability, packages in sorted(mine.items()):
+        owner = capability.replace("_", "-")
+        if owner not in names or not _answers_one(root, owner):
             continue
-        name = capability.replace("_", "-")
-        if name not in [m.get("name", "") for m in modules]:
-            continue
-        if _answers_one(root, name):
+        # САМ владелец реализацией не является: он держит контракт, а отвечают
+        # адаптеры. Сосчитай его в их числе — и одна-единственная реализация
+        # прочиталась бы второй.
+        others = sorted(name for name in packages if name != owner)
+        if len(others) > 1:
             found.append("%s: у возможности две реализации (%s), а владелец объявил «%s»"
-                         % (capability, ", ".join(sorted(owners)), ANSWER_ONE))
+                         % (capability, ", ".join(others), ANSWER_ONE))
     return found
 
 

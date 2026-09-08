@@ -23,12 +23,114 @@ import { fileURLToPath } from 'node:url';
 
 // --- дерево команды ------------------------------------------------------------
 //
-// Адаптер берётся ОТ САМОГО ФАЙЛА: JS-слой и дерево пакетов лежат в одном
-// чекауте, и перенесённый чекаут продолжает работать. Переопределяется
-// переменной — ею кейсы показывают слою пустое окружение.
+// Возможность, которой этот файл закрыт. Имя ВОЗМОЖНОСТИ, а не пакета: какой
+// пакет её закрывает, решает установка, а не этот файл.
+const CAPABILITY = 'command_tree';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ADAPTER = process.env.COMMAND_TREE_ADAPTER
-  || path.join(HERE, '..', '..', '..', 'modules', 'command-tree-shell', 'scripts', 'adapters', 'adapter.py');
+
+// Разбор не должен вешать событие: команда бывает длинной, но не бесконечной.
+// Срок стоит и снаружи, и внутри питона — снаружи он ловит зависший процесс,
+// внутри тот ловит зависший разбор.
+const PARSE_TIMEOUT_MS = 10000;
+
+// Реализация возможности ищется по ИЗВЕСТНЫМ КОРНЯМ, ровно как её ищет обёртка
+// пакета (runtime/pylib/decision.py): список корней от установки, манифест
+// источника в каждом корне, возможность из имени и `for`. Свой корень — первым:
+// перенесённый чекаут продолжает работать и без списка.
+//
+// Жёсткий путь к пакету здесь стоять не может: адаптер, положенный позже в
+// известный корень, обязан работать со следующего события, а имя пакета — не
+// наше дело. Переопределяется переменной — ею кейсы показывают слою пустое
+// окружение.
+function adapterPath() {
+  if (process.env.COMMAND_TREE_ADAPTER) return process.env.COMMAND_TREE_ADAPTER;
+  for (const root of sourceRoots()) {
+    for (const manifest of sourceIndex(root)) {
+      if (capabilityOf(manifest) !== CAPABILITY) continue;
+      const file = path.join(root, 'modules', String(manifest.name || ''),
+        'scripts', 'adapters', 'adapter.py');
+      if (fs.existsSync(file)) return file;
+    }
+  }
+  return '';
+}
+
+// Возможность пакета — из его имени и `for`: у адаптера снимается хвост
+// инструмента, дефисы становятся подчёркиваниями. Формула одна с pylib.
+function capabilityOf(manifest) {
+  let base = String(manifest.name || '');
+  const forValue = String(manifest.for || '');
+  const tail = forValue.includes(':') ? forValue.slice(forValue.indexOf(':') + 1) : '';
+  if (tail && base.endsWith(`-${tail}`)) base = base.slice(0, -tail.length - 1);
+  return base.split('-').join('_');
+}
+
+function sourceRoots() {
+  const own = path.join(HERE, '..', '..', '..');
+  const roots = [own];
+  const share = process.env.XDG_DATA_HOME
+    || path.join(process.env.HOME || '', '.local', 'share');
+  try {
+    for (const line of fs.readFileSync(path.join(share, 'jarvis', 'sources.list'), 'utf8').split('\n')) {
+      const root = line.trim();
+      if (root && !roots.includes(root)) roots.push(root);
+    }
+  } catch {
+    // Списка нет — законная пустота: свой корень уже в списке, а чужих у этой
+    // машины просто не заведено.
+  }
+  return roots;
+}
+
+// Что лежит в корне. Спрашивается ДВАЖДЫ и в этом порядке: сперва манифест
+// источника, который кладёт установка, потом сами манифесты пакетов.
+//
+// Второй источник не запасной путь и не догадка: это тот же вопрос «какие тут
+// пакеты», заданный дереву напрямую. Он нужен потому, что манифест источника
+// пишет установка, а слой обязан работать и в свежем чекауте — иначе разбор
+// команд пропадал бы ровно там, где систему и разрабатывают.
+function sourceIndex(root) {
+  const listed = readIndex(path.join(root, 'modules.index.json'));
+  return listed.length ? listed : readManifests(path.join(root, 'modules'));
+}
+
+function readIndex(file) {
+  try {
+    const index = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(index.modules) ? index.modules : [];
+  } catch {
+    // Манифеста источника нет или он испорчен: спросим сами пакеты.
+    return [];
+  }
+}
+
+// Имя и `for` из фронтматтера каждого пакета — ровно те два поля, по которым
+// выводится возможность. Остальной манифест читает установщик; здесь его разбор
+// был бы второй копией того, что уже есть в tools/jarvis.py.
+function readManifests(dir) {
+  const out = [];
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(dir, name, 'SKILL.md'), 'utf8');
+    } catch {
+      continue;
+    }
+    if (!text.startsWith('---')) continue;
+    const end = text.indexOf('\n---', 3);
+    const front = end < 0 ? '' : text.slice(3, end);
+    const field = (key) => (front.match(new RegExp(`^${key}:\\s*(\\S+)\\s*$`, 'm')) || [])[1] || '';
+    out.push({ name: field('name'), for: field('for') });
+  }
+  return out;
+}
 
 // Коды перенаправлений оболочки (их отдаёт разбор числами). Запись в файл — вот
 // эти; дублирование дескрипторов (`2>&1`, `<&3`) записью не является.
@@ -53,10 +155,13 @@ function tree(command) {
 // Дерево или null. Null значит «разбора нет», и это ОТВЕТ: молчаливое «команда
 // ничего не пишет» соврало бы про каждый ход, где работали шеллом.
 function ask(text) {
-  const done = spawnSync('python3', [ADAPTER], {
+  const adapter = adapterPath();
+  if (!adapter) return complain(`реализации возможности ${CAPABILITY} нет ни в одном известном корне`);
+  const done = spawnSync('python3', [adapter], {
     input: JSON.stringify({ event: {}, args: { command: text } }),
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
+    timeout: PARSE_TIMEOUT_MS,
   });
   if (done.error || done.status !== 0) return complain(`разбор не запустился: ${done.error || done.status}`);
   let answer;
@@ -75,7 +180,7 @@ function ask(text) {
 function complain(why) {
   if (!complained) {
     complained = true;
-    process.stderr.write(`[write-targets-bash] дерева команды нет (${why}) — цели не названы, чтение не доказано\n`);
+  process.stderr.write(`[write-targets-bash] unsupported: ${CAPABILITY} (${why})\n`);
   }
   return null;
 }
@@ -163,7 +268,7 @@ const IN_PLACE = ['-i', '--in-place'];
 function statementTargets(statement, cfg) {
   const targets = [];
   for (const redirect of statement.redirects || []) {
-    if (WRITE_OPS.has(redirect.op)) targets.push(redirect.target.text);
+    if (WRITE_OPS.has(redirect.op)) targets.push(targetText(redirect.target));
   }
   if (!cfg) return targets;
   const list = dropWrappers(dropEnvPrefix(texts(statement)), cfg);
@@ -182,6 +287,18 @@ function statementTargets(statement, cfg) {
     else if (operands.length) targets.push(operands[operands.length - 1]);
   }
   return targets;
+}
+
+// Текст цели записи. Слово с ПОДСТАНОВКОЙ несёт метку: раскрыть её нечем, и
+// `cat > $HOME/notes.md` дал бы целью `/notes.md` — путь, которого не
+// существует. Отбросить такую цель тоже нельзя: пустой список целей у гейта
+// значит «команда ничего не пишет», и настоящая запись прошла бы мимо. Метка
+// держит оба конца: цель остаётся в списке и под гейтом, а прочитать её как
+// настоящий путь уже невозможно. Пустой остаток метки не получает — там и
+// литерала нет, называть нечего.
+function targetText(word) {
+  if (!word.expanded || word.text === '') return word.text;
+  return word.text + UNRESOLVED;
 }
 
 // Тела обёрток запуска: `bash -c "…"`, `sh -c '…'` и остальные оболочки словаря.
@@ -639,6 +756,16 @@ export function commandWords(cmd) {
     for (const word of statement.words || []) out.push(word.expanded ? word.text + UNRESOLVED : word.text);
   }
   return out;
+}
+
+// Чего не хватило, чтобы ответить про эту команду: имя ВОЗМОЖНОСТИ либо пустота.
+//
+// Спрашивают это гварды, которые зовут цели напрямую. Пустой список целей и
+// «команда ничего не пишет» — с виду одно и то же, и без этого вопроса пропавший
+// разбор читался бы как разрешение на любую запись шеллом. Неизвестность
+// разрешением не является, и называется она ИМЕНЕМ (решение 14).
+export function commandTreeGap(cmd) {
+  return tree(cmd) === null ? CAPABILITY : '';
 }
 
 // Слова КАЖДОГО утверждения по отдельности. Спрашивает адаптер git: вызов

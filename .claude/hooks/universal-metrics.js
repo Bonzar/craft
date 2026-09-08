@@ -72,7 +72,7 @@ import { projectDispatcherAt } from './lib/registration-claude.js';
 import { readSince } from './lib/decision-log.js';
 import { mutationOf } from './lib/write-targets.js';
 import { toolFlags, callShape, toolScope, semanticInput } from './lib/tool-flags-claude.js';
-import { commandTargets } from './lib/write-targets-bash.js';
+import { commandTargets, commandTreeGap } from './lib/write-targets-bash.js';
 import { gitMutates } from './lib/write-targets-git.js';
 import { repoOf, isIgnored } from './lib/repo-git.js';
 
@@ -83,7 +83,11 @@ import { repoOf, isIgnored } from './lib/repo-git.js';
 // целями не видна («git commit» ничего не перенаправляет); третьим приходит
 // вопрос «игнорирует ли путь репозиторий».
 const ADAPTERS = {
-  commandWrites: (text) => ({ mutates: gitMutates(text), targets: commandTargets(text) }),
+  // Разбора нет — ответа нет, и это непокрытое С ИМЕНЕМ: пустой список целей
+  // здесь читался бы как «команда ничего не пишет».
+  commandWrites: (text) => (commandTreeGap(text)
+    ? { unsupported: commandTreeGap(text) }
+    : { mutates: gitMutates(text), targets: commandTargets(text) }),
   ignored: isIgnored,
 };
 

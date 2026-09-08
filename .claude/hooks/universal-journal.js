@@ -43,7 +43,7 @@ import {
 import { journalShape } from './lib/journal-claude.js';
 import { toolScope } from './lib/tool-flags-claude.js';
 import { hookOnce } from './lib/once.js';
-import { commandTargets, commandReads } from './lib/write-targets-bash.js';
+import { commandTargets, commandReads, commandTreeGap } from './lib/write-targets-bash.js';
 import { gitMutates } from './lib/write-targets-git.js';
 import { isIgnored } from './lib/repo-git.js';
 
@@ -52,7 +52,11 @@ import { isIgnored } from './lib/repo-git.js';
 // `commandReads` — «доказано ли, что она только читает, и что именно». Третьим
 // идёт вопрос «игнорирует ли путь репозиторий».
 const ADAPTERS = {
-  commandWrites: (text) => ({ mutates: gitMutates(text), targets: commandTargets(text) }),
+  // Разбора нет — ответа нет, и это непокрытое С ИМЕНЕМ: пустой список целей
+  // здесь читался бы как «команда ничего не пишет».
+  commandWrites: (text) => (commandTreeGap(text)
+    ? { unsupported: commandTreeGap(text) }
+    : { mutates: gitMutates(text), targets: commandTargets(text) }),
   // Доказательство «команда ничего не пишет» спрашивается ПЕРВЫМ, и на правках
   // репозитория оно ошибается: в словаре читаемости `tag` и `remote` числятся
   // читающими подкомандами, а `git tag v2.0` и `git remote add` — записи, про

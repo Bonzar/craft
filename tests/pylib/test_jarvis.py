@@ -708,6 +708,16 @@ class Capabilities(unittest.TestCase):
         found = self.found()
         self.assertTrue(any("две реализации" in line for line in found), found)
 
+    def test_владелец_своей_же_реализацией_не_считается(self):
+        # Владелец держит КОНТРАКТ, а отвечают адаптеры. Сосчитай его среди них —
+        # и одна-единственная реализация прочиталась бы второй, то есть находка
+        # вставала бы на исправном дереве.
+        make_module(self.root, "command-tree", body=OWNER % ("command-tree", jarvis.ANSWER_ONE),
+                    code=False)
+        make_module(self.root, "command-tree-shell",
+                    body=ADAPTER % ("command-tree-shell", "tool:shell"), code=False)
+        self.assertEqual([l for l in self.found() if "две реализации" in l], [])
+
     def test_владелец_разрешивший_много_ответов_находки_не_даёт(self):
         make_module(self.root, "command-tree", body=OWNER % ("command-tree", "Ответ: много"),
                     code=False)

@@ -71,7 +71,8 @@ export function touchesWorld(scope = {}) {
 //   ничего                  — всё прочее, что трогает мир.
 //
 // Команду разбирает АДАПТЕР интерпретатора: commandWrites(текст) → {mutates,
-// targets}; вопрос «игнорирует ли путь репозиторий» — адаптер репозитория
+// targets} либо {unsupported: имя} — второе, когда адаптер есть, а ответить он
+// не смог; вопрос «игнорирует ли путь репозиторий» — адаптер репозитория
 // (ignored). Своего разбора у общей части нет, и адаптера ей никто не зашивает —
 // нет адаптера, нет и ответа: {status: 'unsupported', capability:
 // 'write-targets'}. Молчаливое «не мутирует» тут соврало бы про каждый ход, где
@@ -85,7 +86,13 @@ export function mutationOf(scope = {}, call = {}, adapters = {}) {
     if (!cmd) return { status: 'ok', mutates: false };
     const writes = adapters.commandWrites;
     if (!writes) return { status: 'unsupported', capability: 'write-targets' };
-    const { mutates = false, targets = [] } = writes(cmd) || {};
+    const answer = writes(cmd) || {};
+    // Адаптер есть, но ОТВЕТИТЬ не смог (нет разбора, разбор сломался): это
+    // непокрытое, а не «не менял». Пустой список целей и «команда ничего не
+    // пишет» с виду одно и то же, и выдать второе за первое значит промолчать
+    // про запись, которой никто не видел.
+    if (answer.unsupported) return { status: 'unsupported', capability: String(answer.unsupported) };
+    const { mutates = false, targets = [] } = answer;
     if (mutates) return { status: 'ok', mutates: true };
     return { status: 'ok', mutates: targets.some(durable) };
   }

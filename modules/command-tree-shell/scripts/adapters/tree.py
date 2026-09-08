@@ -91,7 +91,11 @@ def _stmt(stmt, depth, out, seen, sep):
             _word(word, depth, out, seen)   # `for f in $(ls)`, `case $x in`
         last = _stmts(_nested(cmd, kind), depth + 1, out, seen, "")
         if not redirs:
-            return last
+            # Тело пусто — возвращать НЕЧЕГО, но и терять место в цепочке нельзя:
+            # сосед считает свой разделитель по предыдущей строке, и пустота
+            # отдала бы ему разделитель первого утверждения.
+            return last if last is not None else _record(
+                kind, depth, _line(stmt), seen, sep, [])
         # Перенаправление стоит на составной команде целиком (`{ …; } > f`), а не
         # на её последнем звене: своя строка, иначе цель приписалась бы чужому.
         record = _record(kind, depth, _line(stmt), seen, sep, [])

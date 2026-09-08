@@ -117,3 +117,8 @@
 {"name": "приём делает один проход", "hook": "plan-gate-reset", "expect": "file-not-contains:проход 2", "env": {"ASSERT_FILE": "{REGISTRY}.ingest.log", "CRAFT_REGISTRY_SYNC": "1"}, "input": {"prompt": "в ядре реестра поправь дописывание задач", "hook_event_name": "UserPromptSubmit"}}
 {"name": "уступка: второй вызов реплики в приём не уходит", "hook": "plan-gate-reset", "expect": "file-not-contains:целей в реестре 1", "env": {"HOOK_ONCE": "on", "ASSERT_FILE": "{REGISTRY}.ingest.log", "CRAFT_REGISTRY_SYNC": "1"}, "repeat": 2, "input": {"prompt": "в ядре реестра поправь дописывание задач", "hook_event_name": "UserPromptSubmit"}}
 {"name": "контроль уступки: без неё повтор реплики принимается дважды", "hook": "plan-gate-reset", "expect": "file-contains:целей в реестре 1", "env": {"ASSERT_FILE": "{REGISTRY}.ingest.log", "CRAFT_REGISTRY_SYNC": "1"}, "repeat": 2, "input": {"prompt": "в ядре реестра поправь дописывание задач", "hook_event_name": "UserPromptSubmit"}}
+# Нет разбора команды — целей не видно, и «целей нет» здесь означало бы «команда
+# ничего не пишет»: ЛЮБАЯ запись шеллом прошла бы мимо гейта МОЛЧА. Неизвестность
+# разрешением не является (решение 14): непокрытое называется именем возможности,
+# а вызов идёт на сверку наравне с командой, у которой цель видна.
+{"name": "нет разбора команды — гейт не пропускает молча, а называет непокрытое", "hook": "guard-plan-gate", "expect": ["deny", "err-contains:unsupported: command_tree"], "env": {"COMMAND_TREE_ADAPTER": "{TMPHOME}/нет-такого-разбора"}, "input": {"tool_name": "Bash", "tool_input": {"command": "cat > README.md"}}}

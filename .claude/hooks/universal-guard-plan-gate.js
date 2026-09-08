@@ -39,7 +39,7 @@ import { deny } from './lib/decide-claude.js';
 import { hookOnce } from './lib/once.js';
 import { isEphemeral, ignoredEphemeral, touchesWorld } from './lib/write-targets.js';
 import { isIgnored } from './lib/repo-git.js';
-import { bashWriteTargets, cleanTarget } from './lib/write-targets-bash.js';
+import { bashWriteTargets, cleanTarget, commandTreeGap } from './lib/write-targets-bash.js';
 import { toolScope } from './lib/tool-flags-claude.js';
 import { exemptScopeFile, approvalRegistry, stateDir } from './lib/paths.js';
 import {
@@ -237,8 +237,14 @@ if (isBash) {
   const cmd = input.command || '';
   if (!cmd) process.exit(0);
 
-  const targets = bashWriteTargets(cmd);
-  if (!targets.some((t) => /\S/.test(t))) process.exit(0);
+  // Разбора нет — целей не видно, и «целей нет» тут означало бы «команда ничего
+  // не пишет»: любая запись шеллом прошла бы мимо гейта МОЛЧА. Неизвестность
+  // разрешением не является (решение 14), поэтому непокрытое называется именем и
+  // вызов идёт на сверку наравне с командой, у которой цели видны.
+  const gap = commandTreeGap(cmd);
+  const targets = gap ? [] : bashWriteTargets(cmd);
+  if (gap) process.stderr.write(`[guard-plan-gate] unsupported: ${gap}\n`);
+  else if (!targets.some((t) => /\S/.test(t))) process.exit(0);
 
   // Эфемерные цели отсеиваются здесь же: временный файл, вывод сборки и
   // игнорируемый гитом путь гейта не касаются, и звать на них модель незачем.
@@ -247,7 +253,7 @@ if (isBash) {
     if (!t) return false;
     return !isEphemeral(t) && !ignoredEphemeral(t, isIgnored);
   });
-  if (!realTargets.length) process.exit(0);
+  if (!gap && !realTargets.length) process.exit(0);
 
   const bdesc = Buffer.concat([
     Buffer.from('инструмент: Bash\nкоманда:\n', 'utf8'),
