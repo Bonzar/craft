@@ -9,7 +9,7 @@
 //   node menu/recheck.mjs ... --dry-run         # только отчёт, без записи
 
 import { createClient } from "./lib/craft-api.mjs";
-import { buildModel, mealPoint } from "./lib/model.mjs";
+import { SLOTS, buildModel, mealPoint, slotIndex } from "./lib/model.mjs";
 import { runRules } from "./lib/rules.mjs";
 
 const KINDS = ["cooks", "meals", "purchases", "recipes", "products", "eaters"];
@@ -36,6 +36,11 @@ export function parseFrom(from) {
   if (!from) return null;
   const [date, slot] = from.split("/");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`--from: нужна дата вида 2026-09-08`);
+  // Опечатка в слоте дала бы точку «дата#-1», через которую проходит весь день:
+  // защита от правки прошлого молча перестала бы работать.
+  if (slot !== undefined && slotIndex(slot) === -1) {
+    throw new Error(`--from: неизвестный слот «${slot}», нужен один из: ${SLOTS.join(", ")}`);
+  }
   return slot ? mealPoint(date, slot) : mealPoint(date, "завтрак");
 }
 

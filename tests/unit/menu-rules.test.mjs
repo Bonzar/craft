@@ -9,7 +9,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildModel, mealPoint } from "../../menu/lib/model.mjs";
-import { checkCooks, checkMeals, checkPurchases, runRules } from "../../menu/lib/rules.mjs";
+import {
+  checkCooks,
+  checkMeals,
+  checkPurchases,
+  consecutiveRuns,
+  runRules,
+} from "../../menu/lib/rules.mjs";
 import { isAfter, parseArgs, parseFrom } from "../../menu/recheck.mjs";
 
 const rel = (...ids) => ({ relations: ids.map((blockId) => ({ blockId })) });
@@ -305,6 +311,97 @@ test("--from без слота берёт день целиком", () => {
   const since = parseFrom("2026-09-08");
   assert.equal(isAfter({ date: "2026-09-08", slot: "завтрак" }, "meals", since), true);
   assert.equal(isAfter({ date: "2026-09-07", slot: "ужин" }, "meals", since), false);
+});
+
+test("две несмежные серии длиннее двух дней — находки у обеих", () => {
+  const at = (date, slot, id) =>
+    item(`m-${date}-${slot}`, `${date} · ${slot} · Влад`, {
+      date, slot, eater: rel("e-vlad"), where: "дома",
+      hot: rel("c-plov"), extra: rel("c-salad"), take: 1.25, status: "план",
+    });
+  const model = fixture({
+    meals: () => [
+      at("2026-09-05", "ужин"), at("2026-09-06", "ужин"), at("2026-09-07", "ужин"),
+      at("2026-09-09", "ужин"), at("2026-09-10", "ужин"),
+      at("2026-09-11", "ужин"), at("2026-09-12", "ужин"),
+    ],
+  });
+  const spans = new Set(
+    checkMeals(model)
+      .filter((f) => f.message.includes("подряд"))
+      .map((f) => f.message),
+  );
+  assert.deepEqual([...spans].sort(), [
+    "Плов подряд 3 дня: 05.09—07.09",
+    "Плов подряд 4 дня: 09.09—12.09",
+  ]);
+});
+
+test("серии считаются по календарным дням, дубли дат не удлиняют", () => {
+  assert.deepEqual(consecutiveRuns([]), []);
+  assert.deepEqual(consecutiveRuns(["2026-09-05", "2026-09-05", "2026-09-06"]), [
+    ["2026-09-05", "2026-09-06"],
+  ]);
+  assert.deepEqual(consecutiveRuns(["2026-09-07", "2026-09-05"]), [
+    ["2026-09-05"],
+    ["2026-09-07"],
+  ]);
+});
+
+test("повтор горячего сравнивает обед с ужином, завтрак не в счёт", () => {
+  const zavtrakILunch = fixture({
+    meals: () => [
+      item("m-z", "Сб · завтрак · Влад", {
+        date: "2026-09-05", slot: "завтрак", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-plov"), take: 1.25, status: "съеден",
+      }),
+      item("m-o", "Сб · обед · Влад", {
+        date: "2026-09-05", slot: "обед", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-plov"), take: 1.25, status: "съеден",
+      }),
+    ],
+  });
+  assert.deepEqual(
+    checkMeals(zavtrakILunch).filter((f) => f.message.includes("повтор")),
+    [],
+  );
+
+  const obedIUzhin = fixture({
+    meals: () => [
+      item("m-o", "Сб · обед · Влад", {
+        date: "2026-09-05", slot: "обед", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-plov"), take: 1.25, status: "съеден",
+      }),
+      item("m-u", "Сб · ужин · Влад", {
+        date: "2026-09-05", slot: "ужин", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-plov"), extra: rel("c-salad"), take: 1.25, status: "съеден",
+      }),
+    ],
+  });
+  assert.deepEqual(messages(checkMeals(obedIUzhin), "m-o"), ["повтор горячего у Влад: Плов"]);
+});
+
+test("гарнир не повторяется за день целиком", () => {
+  const model = fixture({
+    meals: () => [
+      item("m-o", "Сб · обед · Влад", {
+        date: "2026-09-05", slot: "обед", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-plov"), side: rel("c-puree"), take: 1.25, status: "съеден",
+      }),
+      item("m-u", "Сб · ужин · Влад", {
+        date: "2026-09-05", slot: "ужин", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-salad"), side: rel("c-puree"), extra: rel("c-salad"),
+        take: 1.25, status: "съеден",
+      }),
+    ],
+  });
+  assert.ok(messages(checkMeals(model), "m-o").includes("повтор гарнира у Влад: Пюре"));
+});
+
+test("--from с неизвестным слотом отвергается, а не проходит молча", () => {
+  assert.throws(() => parseFrom("2026-09-08/обде"), /неизвестный слот/);
+  assert.throws(() => parseFrom("2026-09-08/"), /неизвестный слот/);
+  assert.equal(parseFrom("2026-09-08/ужин"), mealPoint("2026-09-08", "ужин"));
 });
 
 test("разбор аргументов", () => {

@@ -15,6 +15,22 @@ const dayGap = (a, b) =>
 
 const finding = (collection, id, message) => ({ collection, id, message });
 
+/** Правило про повтор горячего сравнивает обед с ужином, завтрак не в счёт. */
+const HOT_SLOTS = new Set(["обед", "ужин"]);
+
+/** Даты разбиваются на серии идущих подряд дней; каждая серия — отдельно. */
+export function consecutiveRuns(dates) {
+  const sorted = [...new Set(dates)].sort();
+  if (sorted.length === 0) return [];
+  const runs = [[sorted[0]]];
+  for (const date of sorted.slice(1)) {
+    const current = runs[runs.length - 1];
+    if (dayGap(current[current.length - 1], date) === 1) current.push(date);
+    else runs.push([date]);
+  }
+  return runs;
+}
+
 /** Приёмы, которые действительно едят: отменённые расход не создают. */
 const eaten = (model) => model.meals.filter((m) => m.status !== "отменён");
 
@@ -123,7 +139,9 @@ export function checkMeals(model) {
   }
 
   // Повтор блюда внутри дня у одного едока — обязательство перед Олей,
-  // у повара то же самое допустимо только с его согласия.
+  // у повара то же самое допустимо только с его согласия. Горячее правило
+  // сравнивает обед с ужином: завтрак идёт своей ротацией и в счёт не идёт.
+  // Гарнир не повторяется за день целиком — на завтрак его и не бывает.
   const perDay = new Map();
   for (const meal of eaten(model)) {
     const key = `${meal.date}|${meal.eaterId}`;
@@ -132,12 +150,13 @@ export function checkMeals(model) {
   }
   for (const meals of perDay.values()) {
     const eater = ix.eaterById.get(meals[0].eaterId)?.name ?? "?";
-    for (const [role, label] of [
-      ["hot", "горячего"],
-      ["side", "гарнира"],
+    for (const [role, label, slots] of [
+      ["hot", "горячего", HOT_SLOTS],
+      ["side", "гарнира", null],
     ]) {
       const seen = new Map();
       for (const meal of meals) {
+        if (slots && !slots.has(meal.slot)) continue;
         for (const id of meal[role]) {
           const recipe = recipeOf(id);
           if (!recipe) continue;
@@ -166,20 +185,17 @@ export function checkMeals(model) {
     }
   }
   for (const [recipeId, dates] of daysOf) {
-    const sorted = [...dates].sort();
-    let run = [sorted[0]];
-    let best = [sorted[0]];
-    for (const date of sorted.slice(1)) {
-      run = dayGap(run[run.length - 1], date) === 1 ? [...run, date] : [date];
-      if (run.length > best.length) best = [...run];
-    }
-    if (best.length <= 2) continue;
     const name = ix.recipeById.get(recipeId).name;
-    const span = `${ddmm(best[0])}—${ddmm(best[best.length - 1])}`;
-    for (const meal of eaten(model)) {
-      const hit = meal.hot.some((id) => recipeOf(id)?.id === recipeId);
-      if (hit && best.includes(meal.date)) {
-        out.push(finding("meals", meal.id, `${name} подряд ${best.length} дня: ${span}`));
+    // Серий может быть несколько: 5—7 и 9—11 нарушают правило обе, и молчать
+    // про вторую только потому, что первая длиннее, — потерять находку.
+    for (const run of consecutiveRuns([...dates])) {
+      if (run.length <= 2) continue;
+      const span = `${ddmm(run[0])}—${ddmm(run[run.length - 1])}`;
+      for (const meal of eaten(model)) {
+        const hit = meal.hot.some((id) => recipeOf(id)?.id === recipeId);
+        if (hit && run.includes(meal.date)) {
+          out.push(finding("meals", meal.id, `${name} подряд ${run.length} дня: ${span}`));
+        }
       }
     }
   }
