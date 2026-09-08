@@ -22,7 +22,7 @@ test('класс причины: план-гейт по тексту, остал
   assert.equal(reason.reasonClass('universal-guard-plan-gate', 'сверка не дала решения'), 'gate.no-verdict');
   assert.equal(reason.reasonClass('universal-guard-plan-gate', 'что-то новое'), 'gate.other');
   assert.equal(reason.reasonClass('universal-guard-plan-delta', 'План повторяет уже одобренное'), 'delta.repeats');
-  assert.equal(reason.reasonClass('universal-sleep-waiter-guard', 'любой текст'), 'sleep-waiter-guard');
+  assert.equal(reason.reasonClass('universal-fact-gate', 'любой текст'), 'fact-gate');
   assert.equal(reason.reasonClass('craft-guard-markdown', ''), 'guard-markdown');
 });
 
@@ -768,18 +768,18 @@ test('сшивка: журнал ПРЕЖНЕГО слоя не теряет о�
     { kind: 'pre', ts: line(2), turn: 1, occ: 'старый-2', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
     {
       kind: 'decision', ts: line(2), occurrence: 'старый-2', sid: 's', call_id: 'c1', event: 'pre-tool',
-      hook: 'universal-fact-gate', outcome: 'deny', class: 'fact-gate',
+      hook: 'universal-session-anchor', outcome: 'deny', class: 'session-anchor',
     },
     // Тот же ход уже на новом слое: ключ считается по событию.
     { kind: 'pre', ts: line(3), turn: 1, key: 'c2', disp: true, tool: 'Bash', id: 'c2', h: 'H2' },
     {
       kind: 'decision', ts: line(3), key: 'c2', sid: 's', call_id: 'c2', event: 'pre-tool',
-      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+      hook: 'universal-fact-gate', outcome: 'deny', class: 'fact-gate',
     },
   ];
   const s = summarize(records, { sid: 's' });
   assert.equal(s.denies.total, 2, 'отказы обеих эпох считаются');
-  assert.deepEqual(s.denies.by_class, { 'fact-gate': 1, 'sleep-waiter-guard': 1 });
+  assert.deepEqual(s.denies.by_class, { 'session-anchor': 1, 'fact-gate': 1 });
 });
 
 test('сшивка: своё поле записи сильнее строки — журнал переживает обновление слоя', () => {
@@ -853,7 +853,7 @@ test('сшивка: доехавшая строка решения важнее 
     { kind: 'pre', ts: line(2), turn: 1, key: 'o2', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
     {
       kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
-      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+      hook: 'universal-fact-gate', outcome: 'deny', class: 'fact-gate',
     },
     // Следующее событие своих строк не дождалось — оно и только оно неизвестно.
     { kind: 'stop', ts: line(3), turn: 1, key: 'o3', disp: true },
@@ -957,7 +957,7 @@ test('сшивка: найденная строка сильнее отметк�
     { kind: 'pre', ts: line(2), turn: 1, key: 'o2', disp: true, tool: 'Bash', id: 'c1', h: 'H1' },
     {
       kind: 'decision', ts: line(2), key: 'o2', sid: 's', call_id: 'c1', event: 'pre-tool',
-      hook: 'universal-sleep-waiter-guard', outcome: 'deny', class: 'sleep-waiter-guard',
+      hook: 'universal-fact-gate', outcome: 'deny', class: 'fact-gate',
     },
     { kind: 'skip', ts: line(3), what: 'decisions', capability: 'decision-log', key: 'o2' },
   ];

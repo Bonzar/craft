@@ -18,14 +18,25 @@ call(событие, аргументы) -> дерево команды либо
 аргументов на stdin, JSON ответа на stdout.
 """
 
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Соседний файл грузится ОТ ПУТИ, а не через `sys.path`: адаптера зовёт обёртка
+# пакета, и встань его каталог первым на путь импорта — он затенил бы общее (об
+# этом прямо предупреждает шапка runtime/wrapper.py.tmpl), а `tree` второго
+# адаптера подменил бы этот.
+def _sibling(name):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "%s.py" % name)
+    spec = importlib.util.spec_from_file_location("command_tree_shell_%s" % name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-from tree import normalize  # noqa: E402
+
+normalize = _sibling("tree").normalize
 
 # Разбор не должен вешать событие: команда бывает длинной, но не бесконечной.
 TIMEOUT_SEC = 5

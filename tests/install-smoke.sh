@@ -119,6 +119,10 @@ rm -rf "$OLDHOME"
 HOOKREPO="$(mktemp -d)"
 mkdir -p "$HOOKREPO/.claude/hooks"
 cp "$REPO/install.sh" "$HOOKREPO/install.sh"
+# Чекаут делается ПОЛНЫМ, а не одним install.sh: установка ставит и пакеты слоя,
+# и без их дерева она встанет на своём же шаге — а проверять здесь надо ветку
+# git-хуков, а не полноту фикстуры.
+cp -R "$REPO/tools" "$REPO/runtime" "$REPO/modules" "$HOOKREPO/"
 git -C "$HOOKREPO" init -q
 out5="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$HOOKREPO/install.sh" 2>&1)" \
   || FAILS+=("hooks run (fresh checkout) exited non-zero: $out5")

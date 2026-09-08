@@ -39,7 +39,7 @@ import { hookOnce } from './lib/once.js';
 import { sessionAnchor } from './lib/paths.js';
 import { isEphemeral, ignoredEphemeral } from './lib/write-targets.js';
 import { isIgnored } from './lib/repo-git.js';
-import { commandTargets, classifyCommand } from './lib/write-targets-bash.js';
+import { commandTargets, classifyCommand, commandTreeGap } from './lib/write-targets-bash.js';
 
 const ANCHOR_HEADER = 'Якорь сессии';
 
@@ -117,6 +117,16 @@ if (isFileEdit) {
 if (isBash) {
   const cmd = input.command || '';
   if (!cmd) process.exit(0);
+
+  // Разбора команды нет — про КОМАНДУ не видно ничего, и говорить «про команду
+  // «ls» не видно, что она только читает» значило бы свалить на неё чужую
+  // причину. Непокрытое называется ИМЕНЕМ (решение 14), и отказ остаётся: ждать
+  // разбор бессмысленно, а пропускать запись без него — тем более.
+  const gap = commandTreeGap(cmd);
+  if (gap) {
+    process.stderr.write(`[session-anchor] unsupported: ${gap}\n`);
+    refuse(`разбор команды недоступен (${gap}), и что она делает — не видно`);
+  }
 
   const { readOnly, cause, offender } = classifyCommand(cmd);
   if (readOnly) process.exit(0);

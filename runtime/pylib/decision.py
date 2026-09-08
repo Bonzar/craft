@@ -110,9 +110,15 @@ def capability_of(name, for_value=""):
 def implementations(capability, roots):
     """Пакеты известных корней, закрывающие возможность: пары (корень, манифест).
 
-    Читается МАНИФЕСТ ИСТОЧНИКА каждого корня — тот, что кладёт установка.
-    Центрального индекса нет (решение 12), поэтому адаптер, положенный в
-    известный корень, виден со следующего события без пересборки обёрток."""
+    Читается МАНИФЕСТ ИСТОЧНИКА каждого корня. Центрального индекса пакетов нет
+    (решение 12), а манифест источника есть у КАЖДОГО известного корня по
+    построению: установка пишет его ПЕРВЫМ шагом — раньше, чем соберёт обёртки и
+    впишет корень в список. Значит корень, откуда пакет запустился, и корень,
+    попавший в список, свой манифест уже имеют, и второго вопроса тут не нужно.
+
+    Отсюда же граница обещания «адаптер, положенный позже в известный корень,
+    работает со следующего события»: без ПЕРЕСБОРКИ ОБЁРТОК — да, без установки
+    в тот корень — нет, потому что манифест источника пишет она."""
     found = []
     for root in roots:
         index = state.read_json(os.path.join(root, "modules.index.json"), {}) or {}
@@ -135,9 +141,14 @@ def call(capability, event, roots, args=None):
     found = implementations(capability, roots)
     if not found:
         return (None, capability)
+    broken = ""
     for root, manifest in found:
         path = os.path.join(root, "modules", manifest.get("name", ""), ADAPTER)
         if not os.path.isfile(path):
+            # Объявил себя адаптером, а кода нет — сломанная установка, а не
+            # «возможность закрыта самим пакетом»: пустота вместо значения это
+            # пропуск без имени.
+            broken = broken or (manifest.get("kind") == "adapter" and "%s: кода нет" % manifest.get("name", ""))
             continue
         try:
             answer = _load(path).call(event, args or {})
@@ -148,7 +159,7 @@ def call(capability, event, roots, args=None):
         if answer.get("unsupported"):
             return (None, str(answer["unsupported"]))
         return (answer, "")
-    return (None, "")
+    return (None, broken or "")
 
 
 def _load(path):

@@ -468,6 +468,15 @@ class Capabilities(unittest.TestCase):
         self.assertIsNone(answer)
         self.assertEqual(gap, "")
 
+    def test_адаптер_объявлен_а_кода_нет_называется(self):
+        # Пакет объявил себя АДАПТЕРОМ, а кода у него нет: это сломанная
+        # установка, а не «возможность закрыта самим пакетом». Промолчать значило
+        # бы отдать модулю пустоту вместо значения — то есть пропуск без имени.
+        self.package("проба-проба", code=None)
+        answer, gap = decision.call("проба", {}, [self.root])
+        self.assertIsNone(answer)
+        self.assertIn("проба-проба", gap)
+
     def test_свой_корень_первым_и_без_повторов(self):
         share = os.path.join(self.root, "share")
         os.makedirs(os.path.join(share, "jarvis"))

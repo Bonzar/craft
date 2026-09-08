@@ -29,3 +29,7 @@
 {"name": "отказ называет команду-виновника", "hook": "session-anchor", "expect": "contains:craft-sync", "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "craft-sync --write"}}}
 {"name": "отказ различает меняющую состояние команду", "hook": "session-anchor", "expect": "contains:меняет состояние", "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm README.md"}}}
 {"name": "отказ различает недоказуемую команду", "hook": "session-anchor", "expect": "contains:не видно", "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "craft-sync --backlinks abc"}}}
+# Нет разбора команды — про КОМАНДУ не видно ничего, и говорить «про команду ls не
+# видно, что она только читает» значило бы свалить на неё чужую причину. Отказ
+# остаётся (ждать разбор бессмысленно), но непокрытое названо ИМЕНЕМ (решение 14).
+{"name":"без якоря и без разбора команды: отказ называет недостающую возможность","hook":"session-anchor","expect":["deny","contains:command_tree","err-contains:unsupported: command_tree"],"env":{"COMMAND_TREE_ADAPTER":"{TMPHOME}/нет-такого-разбора"},"input":{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}}
