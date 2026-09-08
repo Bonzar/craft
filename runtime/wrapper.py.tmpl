@@ -40,6 +40,7 @@ import harness as table  # noqa: E402
 import once  # noqa: E402
 import state  # noqa: E402
 import trace  # noqa: E402
+import decision  # noqa: E402
 from decision import FIRM, missing_fact, unsupported  # noqa: E402
 from decide import decide  # noqa: E402
 
@@ -50,10 +51,34 @@ EVENTS = {{EVENTS}}
 # зависимостью. Спрашивать имя возможности у события бессмысленно — такого поля в
 # нём нет и быть не может, и модуль отвечал бы `unsupported` на каждом событии.
 FACTS = {{FACTS}}
+# Остальное из `requires` — имена ВОЗМОЖНОСТЕЙ. Их закрывает не событие, а другой
+# пакет: обёртка находит реализацию среди известных корней, зовёт её и кладёт
+# ответ в событие полем с этим же именем. Логика после этого работает с готовыми
+# данными и про адаптеры не знает вовсе (решение 25).
+CAPABILITIES = {{CAPABILITIES}}
 # Режим из манифеста: последний источник, когда о модуле молчат и переменная, и
 # оба конфига.
 MODE = {{MODE}}
 DATA_FILES = [os.path.join(PACKAGE, rel) for rel in {{DATA}}]
+
+
+def _fill(event):
+    """Ответы реализаций — в событие. Возвращает имя возможности, которой не
+    хватило, иначе пустоту.
+
+    Причина отказа уходит в stderr С ИМЕНЕМ: без разбора оболочки гвард обязан
+    честно пропустить вызов, а не промолчать так, будто ему нечего было сказать.
+    Само решение при этом называет ВОЗМОЖНОСТЬ, а не инструмент под ней: модуль
+    про инструмент не знает и знать не должен."""
+    roots = state.source_roots(SOURCE_ROOT)
+    for name in CAPABILITIES:
+        value, gap = decision.call(name, event, roots)
+        if gap:
+            sys.stderr.write("[%s] %s недоступна: %s\n" % (NAME, name, gap))
+            return name
+        if value is not None:
+            event[name] = value
+    return ""
 
 
 def main():
@@ -71,7 +96,7 @@ def main():
     if os.environ.get("JARVIS_ONCE") != "off" and not once.take(NAME, event, event["state_dir"]):
         return 0
 
-    missing = missing_fact(event, FACTS)
+    missing = missing_fact(event, FACTS) or _fill(event)
     # Недостающая жёсткая зависимость даёт явное `unsupported` С ИМЕНЕМ, а не
     # молчание и не обходной путь (решение 14). Логика при этом не зовётся: ей
     # нечем работать.

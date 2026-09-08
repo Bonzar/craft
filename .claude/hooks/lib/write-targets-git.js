@@ -7,9 +7,10 @@
 // looksLikePush(команда) → есть ли отправка (пробный прогон отправкой не
 //   является).
 //
-// Разбор идёт по КУСКАМ между разделителями и по тексту БЕЗ КАВЫЧЕК: слово в
-// кавычках командой не является, а в цепочке правка стоит не только первой.
-import { stripQuoted, stripQuotedHeredocs } from './write-targets-bash.js';
+// Разбор идёт по УТВЕРЖДЕНИЯМ дерева команды, которое приносит адаптер
+// оболочки: слово в кавычках командой не является, а в цепочке правка стоит не
+// только первой. Своего разбора синтаксиса здесь нет — он один на слой.
+import { commandStatements } from './write-targets-bash.js';
 
 // Что стоит ПЕРЕД git и вызова не отменяет: присваивания окружения и обёртки
 // запуска. Всё прочее впереди значит, что слово git — аргумент чужой команды
@@ -22,15 +23,14 @@ const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '
 
 // Все вызовы git в команде: {sub, rest, flags} на каждый.
 //
-// Разбор идёт по КУСКАМ между разделителями и по тексту БЕЗ КАВЫЧЕК. Иначе
-// «printf 'git push'» считался бы пушем (слово в кавычках — не команда), а в
-// «git status && git commit -m x» виден был бы только первый вызов, и правка
-// цепочкой выглядела бы как ход без единого изменения.
+// Разбор идёт по УТВЕРЖДЕНИЯМ дерева. Иначе «printf 'git push'» считался бы
+// пушем (слово в кавычках — не команда), а в «git status && git commit -m x»
+// виден был бы только первый вызов, и правка цепочкой выглядела бы как ход без
+// единого изменения.
 function gitInvocations(command) {
-  const scan = stripQuoted(stripQuotedHeredocs(String(command || '')));
   const out = [];
-  for (const piece of scan.split(/(?:\|\||&&|[;|\n])/)) {
-    const parsed = gitParts(piece);
+  for (const words of commandStatements(command)) {
+    const parsed = gitParts(words);
     if (parsed.sub) out.push(parsed);
   }
   return out;
@@ -38,8 +38,7 @@ function gitInvocations(command) {
 
 // Подкоманда, слова за ней и её ключи. Ключи нужны отдельно: у части подкоманд
 // именно ключ отличает перечисление от правки (`git tag --list 'v*'`).
-function gitParts(piece) {
-  const words = piece.trim().split(/\s+/).filter(Boolean);
+function gitParts(words) {
   let i = 0;
   // Голова куска: присваивания и обёртки пропускаются, на всём остальном разбор
   // прекращается — git дальше уже не вызов, а аргумент.

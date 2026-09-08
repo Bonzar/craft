@@ -31,6 +31,14 @@ jobs:
       - name: Ensure jq
         run: jq --version || { sudo apt-get update && sudo apt-get install -y jq; }
 
+      # Разбор оболочки, на котором стоит адаптер `command-tree-shell`: через него
+      # считают цели записи, доказанное чтение и цели чтения — то есть план-гейт,
+      # гвард якоря сессии и гвард необратимого. Без него слой не гадает, а
+      # отвечает `unsupported`, и половина кейсов честно покраснеет; ставится
+      # бинарник С ПРОВЕРКОЙ СУММЫ (tools/install-shfmt.sh).
+      - name: Ensure shfmt
+        run: shfmt --version || sudo bash tools/install-shfmt.sh
+
       - name: Make hooks executable
         run: chmod +x .claude/hooks/*.js
 

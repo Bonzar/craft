@@ -60,8 +60,15 @@ def line(event, module, decision, delivered=True):
 
 def write(event, module, decision, delivered=True):
     """Дописать след. Возвращает, легла ли строка: потерянное решение читается
-    как «решения не было», то есть как проход, и молчать об этом нельзя."""
-    path = (event or {}).get("decision_log") or ""
-    if not path:
-        return False
-    return append_jsonl(path, line(event, module, decision, delivered))
+    как «решения не было», то есть как проход, и молчать об этом нельзя.
+
+    Не легло в журнал решений — строка идёт в журнал МЕТРИК, туда же, откуда её
+    возьмёт свёртка (запасной путь у JS-хуков тот же, lib/metrics.js). Без него
+    неписучий журнал решений тихо вычитал бы отказ пакета из сводки, тогда как
+    отказ соседнего JS-хука уцелел бы, — и числа разошлись бы ровно там, где
+    канал и без того сорван."""
+    record = line(event, module, decision, delivered)
+    for path in ((event or {}).get("decision_log"), (event or {}).get("metrics_log")):
+        if path and append_jsonl(path, record):
+            return True
+    return False

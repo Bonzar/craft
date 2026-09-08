@@ -25,6 +25,7 @@ import jarvis  # noqa: E402
 import once  # noqa: E402
 import state  # noqa: E402
 import trace  # noqa: E402
+import decision  # noqa: E402
 from decision import allow, block, deny, missing_fact, none, unsupported  # noqa: E402
 from key import event_key  # noqa: E402
 
@@ -371,3 +372,164 @@ class ModeParity(unittest.TestCase):
         silent = not os.path.exists(os.path.join(state, "decisions.s.jsonl"))
         shutil.rmtree(state, ignore_errors=True)
         return "off" if silent else "on"
+
+
+class Capabilities(unittest.TestCase):
+    """Возможности и их реализации: чем закрыта жёсткая зависимость (решения 6, 25).
+
+    Все — на ВРЕМЕННОМ дереве корней: настоящий список источников не трогается.
+    """
+
+    ADAPTER = '''def call(event, args):
+    return {"эхо": (args or {}).get("что") or (event or {}).get("что")}
+'''
+    BROKEN = '''def call(event, args):
+    raise RuntimeError("адаптер сломался")
+'''
+    REFUSES = '''def call(event, args):
+    return {"unsupported": "нечем разбирать"}
+'''
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def package(self, name, kind="adapter", for_value="tool:проба", code=ADAPTER):
+        directory = os.path.join(self.root, "modules", name)
+        if code is not None:
+            adapters = os.path.join(directory, "scripts", "adapters")
+            os.makedirs(adapters, exist_ok=True)
+            with open(os.path.join(adapters, "adapter.py"), "w", encoding="utf-8") as fh:
+                fh.write(code)
+        else:
+            os.makedirs(directory, exist_ok=True)
+        index = os.path.join(self.root, "modules.index.json")
+        try:
+            with open(index, "r", encoding="utf-8") as fh:
+                have = json.load(fh)
+        except OSError:
+            have = {"root": self.root, "modules": []}
+        have["modules"].append({"name": name, "kind": kind, "for": for_value})
+        with open(index, "w", encoding="utf-8") as fh:
+            json.dump(have, fh, ensure_ascii=False)
+
+    def test_возможность_выводится_из_имени_и_for(self):
+        # У адаптера хвост имени повторяет инструмент из `for` и снимается;
+        # дефисы становятся подчёркиваниями, потому что имя едет в событие полем.
+        self.assertEqual(decision.capability_of("command-tree-shell", "tool:shell"), "command_tree")
+        self.assertEqual(decision.capability_of("scope-codex", "harness:codex"), "scope")
+        # У самостоятельного пакета возможность — он сам.
+        self.assertEqual(decision.capability_of("trace-probe", "general"), "trace_probe")
+        # Хвост, не совпавший с инструментом, НЕ снимается: снимать по дефису
+        # значило бы обкорнать имя, которое адаптером не является.
+        self.assertEqual(decision.capability_of("changeset-review", "general"), "changeset_review")
+
+    def test_реализация_находится_в_известном_корне(self):
+        self.package("проба-проба")
+        found = decision.implementations("проба", [self.root])
+        self.assertEqual([m.get("name") for _, m in found], ["проба-проба"])
+        self.assertEqual(decision.implementations("чего-нет", [self.root]), [])
+
+    def test_адаптер_зовётся_и_отвечает(self):
+        self.package("проба-проба")
+        answer, gap = decision.call("проба", {"что": "из события"}, [self.root])
+        self.assertEqual(gap, "")
+        self.assertEqual(answer, {"эхо": "из события"})
+        answer, gap = decision.call("проба", {}, [self.root], {"что": "из аргументов"})
+        self.assertEqual(answer, {"эхо": "из аргументов"})
+
+    def test_реализации_нет_вовсе_имя_называется(self):
+        # Непокрытое называется ИМЕНЕМ ВОЗМОЖНОСТИ (решение 14), а не молчанием.
+        answer, gap = decision.call("command_tree", {}, [self.root])
+        self.assertIsNone(answer)
+        self.assertEqual(gap, "command_tree")
+
+    def test_отказ_адаптера_едет_с_текстом(self):
+        self.package("проба-проба", code=self.REFUSES)
+        answer, gap = decision.call("проба", {}, [self.root])
+        self.assertIsNone(answer)
+        self.assertEqual(gap, "нечем разбирать")
+
+    def test_падение_адаптера_называется_словами(self):
+        # Падение адаптера ответа модуля не меняет (решение 25), но и выдумывать
+        # значение вместо него нельзя: причина едет наверх текстом.
+        self.package("проба-проба", code=self.BROKEN)
+        answer, gap = decision.call("проба", {}, [self.root])
+        self.assertIsNone(answer)
+        self.assertIn("адаптер сломался", gap)
+
+    def test_возможность_закрытая_НЕ_адаптером_звать_нечего(self):
+        # Пакет закрывает возможность собой, адаптера у него нет: звать некого, и
+        # это НЕ `unsupported` — зависимость закрыта установкой.
+        self.package("проба", kind="hook", for_value="general", code=None)
+        answer, gap = decision.call("проба", {}, [self.root])
+        self.assertIsNone(answer)
+        self.assertEqual(gap, "")
+
+    def test_свой_корень_первым_и_без_повторов(self):
+        share = os.path.join(self.root, "share")
+        os.makedirs(os.path.join(share, "jarvis"))
+        with open(os.path.join(share, "jarvis", "sources.list"), "w", encoding="utf-8") as fh:
+            fh.write("/чужой/корень\n%s\n" % self.root)
+        было = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = share
+        try:
+            roots = state.source_roots(self.root)
+        finally:
+            os.environ.pop("XDG_DATA_HOME") if было is None else os.environ.update(XDG_DATA_HOME=было)
+        self.assertEqual(roots, [self.root, "/чужой/корень"],
+                         "свой корень первый, и списком он не удваивается")
+
+    def test_без_списка_корней_свой_всё_равно_виден(self):
+        # Прогон под чужим домом (кейсы, фикстура) списка не находит — а сосед,
+        # лежащий рядом, обязан находиться, иначе зависимость читалась бы
+        # незакрытой там, где всё на месте.
+        было = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = os.path.join(self.root, "нет-такого")
+        try:
+            self.assertEqual(state.source_roots(self.root), [self.root])
+        finally:
+            os.environ.pop("XDG_DATA_HOME") if было is None else os.environ.update(XDG_DATA_HOME=было)
+
+
+class SpareChannel(unittest.TestCase):
+    """Запасной путь строки следа: журнал решений не пишется — строка идёт в
+    журнал метрик, туда же, откуда её возьмёт свёртка."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def event(self, decisions):
+        return {
+            "session_id": "s", "call_id": "c", "event": "pre-tool",
+            "decision_log": decisions,
+            "metrics_log": os.path.join(self.dir, "metrics.s.jsonl"),
+        }
+
+    def test_журнал_решений_пишется_запасной_не_трогается(self):
+        ok = trace.write(self.event(os.path.join(self.dir, "decisions.s.jsonl")), "проба", deny("причина"))
+        self.assertTrue(ok)
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "decisions.s.jsonl")))
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "metrics.s.jsonl")),
+                         "пока основной путь работает, запасной молчит")
+
+    def test_неписучий_журнал_решений_НЕ_теряет_отказ(self):
+        # Молчание на месте отказа читается как проход, и сводка недосчиталась бы
+        # отказа пакета, тогда как отказ соседнего JS-хука уцелел бы: у него
+        # запасной путь есть с самого начала.
+        ok = trace.write(self.event("/proc/нет-такого-каталога/decisions.jsonl"), "проба", deny("причина"))
+        self.assertTrue(ok)
+        with open(os.path.join(self.dir, "metrics.s.jsonl"), "r", encoding="utf-8") as fh:
+            record = json.loads(fh.read().strip())
+        self.assertEqual(record["outcome"], "deny")
+        self.assertEqual(record["hook"], "проба")
+
+    def test_оба_журнала_недоступны_ответ_честный(self):
+        event = self.event("/proc/нет-такого/decisions.jsonl")
+        event["metrics_log"] = "/proc/нет-такого/metrics.jsonl"
+        self.assertFalse(trace.write(event, "проба", deny("причина")))

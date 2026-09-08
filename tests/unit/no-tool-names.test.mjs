@@ -24,7 +24,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const LIB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.claude', 'hooks', 'lib');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LIB = path.join(ROOT, '.claude', 'hooks', 'lib');
+const MODULES = path.join(ROOT, 'modules');
 
 // Адаптер узнаётся по имени: `<возможность>-<инструмент>.js`. Инструменты, под
 // которые адаптеры уже есть, названы поимённо — иначе в список попадал бы любой
@@ -114,24 +116,79 @@ const HARNESS_DEBT = new Map([
   ['write-targets.js', 4], // политика «каталог настроек — системная зона»
 ]);
 
-// Код строки без комментария. Внутри строковых литералов `//` МАСКИРУЕТСЯ, а
-// само содержимое литерала остаётся кодом: `spawnSync('git', …)` — это вызов
-// инструмента, а не комментарий. Без маскировки `//` в 'https://…' обрубал
-// строку, и имя инструмента за ним пропадало.
-function codeOf(line) {
-  const bare = line.replace(/'[^']*'|"[^"]*"|`[^`]*`/g, (lit) => lit.replace(/\/\//g, '~~'));
-  const cut = bare.indexOf('//');
-  return (cut < 0 ? bare : bare.slice(0, cut)).replace(/~~/g, '//');
+// Код строки без комментария. Внутри строковых литералов знак комментария
+// МАСКИРУЕТСЯ, а само содержимое литерала остаётся кодом: `spawnSync('git', …)`
+// — это вызов инструмента, а не комментарий. Без маскировки `//` в 'https://…'
+// обрубал строку, и имя инструмента за ним пропадало.
+//
+// Знак приходит параметром: у питона он свой, и счёт по `//` пропускал бы в
+// коде пакетов ровно то, ради чего гвард и стоит.
+// Метка маскировки — символ, которого в исходнике не бывает. Возьми обычный
+// (пробел, тильду), и обратная замена превратила бы в знак комментария КАЖДОЕ
+// его вхождение в строке, а не только замаскированное.
+const MASK = '\u0000';
+function codeOf(line, marker = '//') {
+  const mask = new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+  const bare = line.replace(/'[^']*'|"[^"]*"|`[^`]*`/g, (lit) => lit.replace(mask, MASK));
+  const cut = bare.indexOf(marker);
+  return (cut < 0 ? bare : bare.slice(0, cut)).split(MASK).join(marker);
 }
 
-function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TOOL_NAMES) {
+// Код питоновского файла: строки документации выброшены целиком. Это то же
+// правило, по которому комментарий имеет право назвать инструмент — шапка
+// модуля объясняет, ПОЧЕМУ имени нет в коде, и адаптеру оболочки без слова
+// «оболочка» своего контракта не описать.
+const FENCE = /"""|'''/;
+function pythonCode(text) {
+  const out = [];
+  let inside = '';
+  for (const line of text.split('\n')) {
+    let rest = line;
+    let code = '';
+    for (;;) {
+      if (inside) {
+        const at = rest.indexOf(inside);
+        if (at < 0) { rest = ''; break; }
+        rest = rest.slice(at + 3);
+        inside = '';
+        continue;
+      }
+      const open = rest.match(FENCE);
+      if (!open) { code += rest; break; }
+      code += rest.slice(0, open.index);
+      inside = open[0];
+      rest = rest.slice(open.index + 3);
+    }
+    out.push(code);
+  }
+  return out.join('\n');
+}
+
+function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TOOL_NAMES, marker = '//') {
   const found = [];
-  for (const [n, line] of text.split('\n').entries()) {
+  const body = marker === '#' ? pythonCode(text) : text;
+  for (const [n, line] of body.split('\n').entries()) {
     // Комментарий имеет право назвать инструмент: он объясняет, ПОЧЕМУ имени
     // нет в коде. Гвард смотрит на код.
-    if (names.test(codeOf(line))) found.push(`${path.basename(file)}:${n + 1}: ${line.trim()}`);
+    if (names.test(codeOf(line, marker))) found.push(`${path.basename(file)}:${n + 1}: ${line.trim()}`);
   }
   return found;
+}
+
+// Файлы кода пакетов: `modules/*/scripts/**/*.py`. Данные пакетов (`data/`) и их
+// кейсы (`tests/`) сюда не входят — имена инструментов в данных законны, ровно
+// как в `lib/vendor/read-only-rules.json`, и вынос имён в данные ЕСТЬ способ
+// убрать их из кода.
+function moduleSources(dir = MODULES, out = []) {
+  for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    const full = path.join(dir, name);
+    if (fs.statSync(full).isDirectory()) {
+      if (name !== '__pycache__' && name !== 'dist' && name !== 'tests' && name !== 'data') {
+        moduleSources(full, out);
+      }
+    } else if (name.endsWith('.py')) out.push(full);
+  }
+  return out;
 }
 
 // Сколько ВХОЖДЕНИЙ имени в файле (см. шапку про счёт у DEBT).
@@ -287,4 +344,60 @@ test('гвард читает файл с диска так же, как стр�
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- код ПАКЕТОВ ---------------------------------------------------------------
+//
+// Правило 16 действует и на пакеты: функция решения описывает поведение в
+// терминах возможностей, а имена инструментов живут в ДАННЫХ пакета. Гвард
+// раньше читал только `lib/*.js`, и `decide.py`, назвавший инструмент, прошёл бы
+// молча — притом что ради выноса имён в данные пакет и заводился.
+//
+// Имя разбора оболочки считается именем инструмента: его знает ровно один пакет
+// — адаптер `command-tree-shell`, — и знать его больше некому.
+const SHFMT = ['\\bshfmt\\b'];
+const ADAPTER_PACKAGE = 'command-tree-shell';
+
+const packageOf = (file) => path.relative(MODULES, file).split(path.sep)[0];
+
+test('в коде пакетов нет имён инструментов', () => {
+  const found = [];
+  for (const file of moduleSources()) {
+    // Адаптеру оболочки имя его разбора разрешено — оно и есть тот инструмент,
+    // под который он написан. Всё остальное запрещено и ему.
+    const names = new RegExp((packageOf(file) === ADAPTER_PACKAGE
+      ? TOOL_SOURCE : TOOL_SOURCE.concat(SHFMT)).join('|'));
+    found.push(...offenders(file, undefined, names, '#'));
+  }
+  assert.deepEqual(found, [],
+    'имя инструмента в коде пакета — это данные, которых нет: вынеси его в data/ пакета');
+});
+
+test('в коде пакетов нет привязок к харнесу', () => {
+  const found = [];
+  for (const file of moduleSources()) found.push(...offenders(file, undefined, HARNESS_NAMES, '#'));
+  assert.deepEqual(found, [],
+    'поля и события харнеса живут в его таблице (runtime/harness/), а не в коде пакета');
+});
+
+// Гвард пакетов ОБЯЗАН ловить: без пробы «список пуст» ничего не значит. Пробы —
+// ровно те формы, на которых счёт по `//` молчал бы.
+test('гвард пакетов ловит имя в питоновском коде и не ловит его в комментарии и шапке', () => {
+  const all = new RegExp(TOOL_SOURCE.concat(SHFMT).join('|'));
+  const py = (code, names = all) => offenders('probe.py', code, names, '#').length;
+  assert.equal(py('subprocess.run(["git", "commit"])'), 1);
+  assert.equal(py('if word == "sleep":\n    return deny(REASON)'), 1);
+  assert.equal(py('BINARY = "shfmt"'), 1, 'имя разбора считается именем инструмента');
+  assert.equal(py('# имя git знает только адаптер\nreturn none()'), 0,
+    'в комментарии имя инструмента законно: он объясняет, почему имени нет в коде');
+  assert.equal(py('return none()  # раньше тут звали git'), 0, 'хвостовой комментарий тоже');
+  assert.equal(offenders('probe.py', 'os.environ.get("CLAUDE_CODE_SESSION_ID")', HARNESS_NAMES, '#').length, 1);
+});
+
+test('шапка модуля именем инструмента не считается, а код под ней — считается', () => {
+  const all = new RegExp(TOOL_SOURCE.concat(SHFMT).join('|'));
+  const doc = ['"""Шапка про git и bash.', '', 'Вторая строка тоже про sleep."""', 'return none()'].join('\n');
+  assert.equal(offenders('probe.py', doc, all, '#').length, 0, 'шапка — тот же комментарий');
+  assert.equal(offenders('probe.py', `${doc}\nrun(["git"])`, all, '#').length, 1,
+    'а код после шапки гвард по-прежнему видит');
 });

@@ -442,28 +442,27 @@ test('каждое имя в списке файловых операндов Д
   }
 });
 
-// Что считать обёрткой, знают ДВА разбора: доказательство читаемости снимает её
-// вендоренным `stripShellWrapper`, цели записи берут имена из вендоренного же
-// словаря. Разъедься эти списки — и форма, которую один считает обёрткой, у
-// другого останется неразобранной; шапка файла предупреждает ровно об этом.
+// Что считать обёрткой, спрашивают ДВОЕ: доказательство читаемости (ему надо
+// судить тело) и цели записи (им надо в тело спуститься). Снятие теперь одно на
+// обоих, но словарь имён общий, и разъедься ответы — форма, которую один считает
+// обёрткой, у другого осталась бы неразобранной. Проверяется поэтому КАЖДОЕ имя
+// словаря с обеих сторон: без этой пары список можно было вынуть из одной
+// стороны, подставив свой, и обе проверки остались бы зелёными — `dash`, `ksh` и
+// `fish` не держал никто.
 test('список обёрток у доказательства и у целей записи ОДИН', async () => {
   const rulesPath = new URL('../../.claude/hooks/lib/vendor/read-only-rules.json', import.meta.url);
   const { readFileSync } = await import('node:fs');
   const cfg = JSON.parse(readFileSync(rulesPath, 'utf8'));
-  const { stripShellWrapper } = await import('../../.claude/hooks/lib/vendor/gemini-shell-guards.js');
   for (const name of cfg.shellWrappers) {
-    assert.equal(stripShellWrapper(`${name} -c "cat a.js"`), 'cat a.js', name);
-    // И то же имя ОБЯЗАНО дать цель на стороне записи. Без этой половины список
-    // можно было вынуть из разбора записи, подставив свой, и обе проверки
-    // остались бы зелёными: `dash`, `ksh` и `fish` не держал никто.
+    assert.equal(bash.classifyCommand(`${name} -c "cat a.js"`).readOnly, true, name);
+    assert.equal(bash.classifyCommand(`${name} -c "rm a.js"`).readOnly, false, name);
     assert.deepEqual(bash.commandTargets(`${name} -c "cat > README.md"`), ['README.md'], name);
   }
-  // Имя, заданное путём и в другом регистре, вендоренное снятие считает
-  // обёрткой (`\S+/` и флаг `i`) — значит и цели записи обязаны считать так же.
+  // Имя, заданное путём и в другом регистре, обёрткой считают обе стороны.
+  assert.equal(bash.classifyCommand('/bin/bash -c "rm a.js"').readOnly, false);
   assert.deepEqual(bash.commandTargets('/bin/bash -c "cat > README.md"'), ['README.md']);
   assert.deepEqual(bash.commandTargets('BASH -c "cat > README.md"'), ['README.md']);
-  // И наоборот: имя не из списка обёрткой не считает ни один из двух.
-  assert.equal(stripShellWrapper('perl -c "cat a.js"'), 'perl -c "cat a.js"');
+  // И наоборот: имя не из списка обёрткой не считает ни одна.
   assert.deepEqual(bash.commandTargets('perl -c "cat > README.md"'), []);
 });
 

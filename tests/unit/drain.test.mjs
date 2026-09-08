@@ -49,8 +49,14 @@ function session() {
   };
 }
 
+// Отбивает здесь ФАКТ-ГЕЙТ: он остался под диспетчером и играет роль «гварда на
+// Bash», которую прежде играл сторож ожидания, — тот уехал в пакет
+// guard-irreversible, и диспетчер его больше не зовёт.
 const DENIED = {
-  hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'd1', tool_input: { command: 'sleep 30' },
+  hook_event_name: 'PreToolUse',
+  tool_name: 'Bash',
+  tool_use_id: 'd1',
+  tool_input: { command: 'rm -rf /tmp/проба-канала' },
 };
 
 test('решение прошлого события приезжает к наблюдателю следующим событием', () => {
@@ -61,15 +67,15 @@ test('решение прошлого события приезжает к на�
     s.send({ hook_event_name: 'Stop' });
     const decision = s.records().find((r) => r.kind === 'decision');
     assert.equal(decision.outcome, 'deny');
-    assert.equal(decision.hook, 'universal-sleep-waiter-guard');
-    assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'sleep-waiter-guard': 1 } });
+    assert.equal(decision.hook, 'universal-fact-gate');
+    assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'fact-gate': 1 } });
     // В сводке САМОГО конца хода он же и неизвестен: блокировать его могут хуки,
     // которые ещё не отработали. Это «пока не знаем», а не «потеряли».
     assert.equal(s.summary().unknown_events, 1);
     // Конец сессии добирает строки последнего хода — и неизвестного не остаётся.
     s.send({ hook_event_name: 'SessionEnd', reason: 'clear' });
     assert.equal(s.summary().unknown_events, 0);
-    assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'sleep-waiter-guard': 1 } });
+    assert.deepEqual(s.summary().denies, { total: 1, by_class: { 'fact-gate': 1 } });
   } finally {
     fs.rmSync(s.dir, { recursive: true, force: true });
   }

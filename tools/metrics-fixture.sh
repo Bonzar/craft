@@ -54,6 +54,21 @@
 #                              и `.env` чекаута не находятся вовсе.
 # Всё остальное состояние — во временном каталоге, который снимается за собой.
 set -u
+
+# Пакеты собираются установщиком во ВРЕМЕННЫЙ дом: их обёрток в гите нет, а без
+# них фикстура не увидела бы ни одного решения пакета — и отказ, переехавший из
+# JS-хука в пакет, пропал бы из чисел молча, то есть ровно тем способом, ради
+# ловли которого фикстура и написана.
+build_packages() {
+  local repo="$1" home
+  home=$(mktemp -d)
+  env HOME="$home" XDG_DATA_HOME="$home/share" XDG_CONFIG_HOME="$home/config" \
+    python3 "$repo/tools/jarvis.py" --root "$repo" install >/dev/null 2>&1
+  local code=$?
+  rm -rf "$home"
+  return $code
+}
+
 side() {
   local repo="$1" tail_mode="$2" broken="${3:-}"
   local st cwd; st=$(mktemp -d); cwd=$(mktemp -d)
@@ -66,8 +81,20 @@ side() {
   # голова говорит «не знаю» числом, а не выдаёт отказ за проход.
   local journal=""
   [ -n "$broken" ] && journal="/proc/нет-такого-каталога/decisions.jsonl"
+  # Событие уходит ДВУМ адресатам, как его раздаёт харнес: цепочке JS-хуков через
+  # диспетчера и КАЖДОМУ пакету своей строкой регистрации. Обёртка пакета сама
+  # сверяет событие со своим манифестом, поэтому звать можно все — не своё они
+  # пропустят. Без этой половины отказ пакета в числа не попал бы вовсе.
   send() {
-    echo "$1" | env \
+    local hook
+    for hook in "$repo"/modules/*/dist/claude/hook.py; do
+      [ -f "$hook" ] || continue
+      echo "$1" | run_hook python3 "$hook"
+    done
+    echo "$1" | run_hook node "$repo/.claude/hooks/dispatch.js" universal
+  }
+  run_hook() {
+    env \
       ${journal:+CRAFT_DECISION_LOG="$journal"} \
       CRAFT_STATE_DIR="$st" CRAFT_SESSION_ID="$SID" CLAUDE_CODE_SESSION_ID="$SID" \
       CRAFT_METRICS_LOG="$st/metrics.jsonl" SESSION_ANCHOR_STATE="$st/anchor" \
@@ -80,8 +107,9 @@ side() {
       CRAFT_JOURNAL_LOG="$st/journal.jsonl" INSTINCT_FLUSH_MARKER="$st/instinct-flush.done" \
       INSTINCT_FLUSH_STATE="$st/instinct-flush.state" \
       FACT_GATE_STATE_DIR="$st" \
-      PLAN_CLASSIFIER=off METRICS_STORE=off HOOK_ONCE=off SYNC_SYSTEM=off CRAFT_AUTONOMOUS="$AUTO" \
-      node "$repo/.claude/hooks/dispatch.js" universal >/dev/null 2>&1
+      PLAN_CLASSIFIER=off METRICS_STORE=off HOOK_ONCE=off JARVIS_ONCE=off SYNC_SYSTEM=off \
+      CRAFT_AUTONOMOUS="$AUTO" \
+      "$@" >/dev/null 2>&1
   }
   ev() { # ev <имя события> <хвост json>
     send "{\"hook_event_name\":\"$1\",\"session_id\":\"$SID\",\"cwd\":\"$cwd\"${2:+,$2}}"
@@ -154,6 +182,7 @@ ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OTHER="${2:-}"
 
 runs() {
+  build_packages "$1" || { echo "фикстура: пакеты не собрались, отказ пакета в числа не попадёт"; exit 1; }
   printf '%s\n' "ход продолжился|$(side "$1" next-stop)" \
     "сессия кончилась на блоке|$(side "$1" session-end)" \
     "канал решений оборван|$(side "$1" next-stop broken)"
@@ -227,7 +256,10 @@ check_denies() { # check_denies <три строки> <чей чекаут>
       echo "фикстура: у $2 в прогоне «$name» состав отказов не разобрался"
       return 1
     fi
-    for class in session-anchor fact-gate sleep-waiter-guard guard-plan-critic; do
+    # Класс отказа ПАКЕТА — имя модуля: у пакетов классом строки следа служит
+    # именно оно, и прежний `sleep-waiter-guard` после переезда зовётся
+    # `guard-irreversible`. Список меняется СОЗНАТЕЛЬНО, а не усыхает молча.
+    for class in session-anchor fact-gate guard-irreversible guard-plan-critic; do
       case "$classes" in
         *"\"$class\":"*) ;;
         *) echo "фикстура: у $2 в прогоне «$name» ПРОПАЛ класс отказа $class"; return 1 ;;

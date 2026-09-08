@@ -87,10 +87,10 @@ export const TABLE = {
     },
     {
       matcher: 'Bash',
+      // Обход git-хуков, гашение по имени и одиночная пауза уехали в ПАКЕТ
+      // guard-irreversible: харнес запускает его своей строкой регистрации, и
+      // диспетчеру о нём знать нечего.
       hooks: [
-        'universal-sleep-waiter-guard',
-        'universal-kill-by-name-guard',
-        'universal-block-no-verify',
         'universal-fact-gate',
         'universal-session-anchor',
       ],

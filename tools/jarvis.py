@@ -190,7 +190,7 @@ def _for_mismatch(name, for_value):
     return ""
 
 
-def check(root, modules, known=None, index=True):
+def check(root, modules, known=None, known_caps=None, index=True):
     """Находки установщика. Пустой список — дерево согласовано.
 
     Две находки решения 18 держатся на ОДНОМ правиле: имя, начинающееся с имени
@@ -211,7 +211,19 @@ def check(root, modules, known=None, index=True):
     дефисом, и различить их может только сам пакет."""
     found = []
     names = [m.get("name", "") for m in modules]
+    # Жёсткая зависимость называет ВОЗМОЖНОСТЬ, а не папку: `requires:
+    # [command_tree]` закрывает `command-tree-shell`.
+    mine = {}
+    for manifest in modules:
+        cap = decision.capability_of(manifest.get("name", ""), manifest.get("for", ""))
+        mine.setdefault(cap, []).append(manifest.get("name", ""))
+    # Два разных множества, и смешивать их нельзя. ИМЕНАМИ пакетов добавка
+    # называет свою базу; ВОЗМОЖНОСТЯМИ закрывается жёсткая зависимость. Сложи их
+    # в одно — и `changeset-git`, чья возможность зовётся `changeset`, прочитался
+    # бы добавкой к самому себе.
     everywhere = set(names) | set(known or [])
+    closed = everywhere | set(mine) | set(known_caps or [])
+    found.extend(_check_owners(root, modules, mine))
     # Словарь событий и фактов — ОБЪЕДИНЕНИЕ всех харнесов: модуль под codex не
     # обязан укладываться в словарь claude, а вторая таблица должна добавляться
     # строкой в HARNESSES, а не правкой этой проверки.
@@ -233,9 +245,45 @@ def check(root, modules, known=None, index=True):
                          % (manifest.get("dir", ""), manifest["broken"]))
             continue
         found.extend(_check_name(manifest, names, everywhere))
-        found.extend(_check_surface(manifest, everywhere, supported, facts))
+        found.extend(_check_surface(manifest, closed, supported, facts))
         found.extend(_check_code(root, manifest))
     return sorted(set(found))
+
+
+# Как владелец возможности объявляет, сколько ответов она принимает. Строкой в
+# теле своего `SKILL.md`, а не полем манифеста: полей `provides` и `only` в нём
+# нет и по решению 6 не будет, а контракт возможности — это проза владельца.
+ANSWER_ONE = "Ответ: один"
+
+
+def _check_owners(root, modules, mine):
+    """Находка о ВТОРОЙ реализации одной возможности.
+
+    Две реализации сами по себе законны: харнесы сводят ответы по-разному, и у
+    возможности «ответов много» вторая реализация — норма. Находкой это делает
+    ВЛАДЕЛЕЦ, объявивший «ответ один»: там второй ответ означает, что кто-то из
+    двоих не будет услышан. Владельца нет — реализация сама себе контракт
+    (решение 18), и говорить тут не о чем."""
+    found = []
+    for capability, owners in sorted(mine.items()):
+        if len(owners) < 2:
+            continue
+        name = capability.replace("_", "-")
+        if name not in [m.get("name", "") for m in modules]:
+            continue
+        if _answers_one(root, name):
+            found.append("%s: у возможности две реализации (%s), а владелец объявил «%s»"
+                         % (capability, ", ".join(sorted(owners)), ANSWER_ONE))
+    return found
+
+
+def _answers_one(root, owner):
+    """Объявил ли владелец, что ответ у возможности один."""
+    try:
+        with open(os.path.join(root, "modules", owner, "SKILL.md"), "r", encoding="utf-8") as fh:
+            return ANSWER_ONE in fh.read()
+    except OSError:
+        return False
 
 
 def _check_name(manifest, names, everywhere):
@@ -332,6 +380,11 @@ def build(root, manifest, harness):
             # списка закрывает установка (находка «жёсткая зависимость ничем не
             # закрыта»), а событию их задать нельзя: такого поля в нём нет.
             .replace("{{FACTS}}", repr([r for r in (manifest.get("requires") or []) if r in FACTS]))
+            # Остальное из `requires` — имена ВОЗМОЖНОСТЕЙ: их обёртка спрашивает
+            # у реализаций известных корней на каждом событии. Список едет в
+            # обёртку, а не выводится ею: `requires` живёт в манифесте.
+            .replace("{{CAPABILITIES}}",
+                     repr([r for r in (manifest.get("requires") or []) if r not in FACTS]))
             .replace("{{DATA}}", repr(list(manifest.get("data") or [])))
             # Режим из манифеста — ПОСЛЕДНИЙ источник `mode`. Без него пакет,
             # объявленный выключенным, работал бы на каждом событии.
@@ -349,8 +402,8 @@ def index_path(root):
     return os.path.join(root, "modules.index.json")
 
 
-def indexed_names(root):
-    """Имена пакетов из манифеста источника — картина ПРОШЛОЙ установки."""
+def indexed(root):
+    """Манифесты пакетов из манифеста источника — картина ПРОШЛОЙ установки."""
     try:
         with open(index_path(root), "r", encoding="utf-8") as fh:
             index = json.load(fh)
@@ -361,7 +414,12 @@ def indexed_names(root):
         # этот корень закрывал, встала бы с неверной причиной.
         sys.stderr.write("манифест источника %s не читается: %s\n" % (index_path(root), bad))
         return []
-    return [m.get("name", "") for m in (index.get("modules") or []) if isinstance(m, dict)]
+    return [m for m in (index.get("modules") or []) if isinstance(m, dict)]
+
+
+def indexed_names(root):
+    """Имена пакетов из манифеста источника."""
+    return [m.get("name", "") for m in indexed(root)]
 
 
 def write_index(root, modules):
@@ -414,11 +472,21 @@ def known_names(root):
     пресет и дерево коллеги — такие же источники (решение 12). Смотри только своё
     дерево — межкорневая зависимость читалась бы незакрытой, и установка отказывала
     бы ровно там, где всё на месте."""
+    return [m.get("name", "") for m in _elsewhere(root)]
+
+
+def known_capabilities(root):
+    """Возможности пакетов ДРУГИХ известных корней: ими тоже закрывается жёсткая
+    зависимость — адаптер командного пресета такой же источник, как свой."""
+    return [decision.capability_of(m.get("name", ""), m.get("for", "")) for m in _elsewhere(root)]
+
+
+def _elsewhere(root):
     out = []
     for other in read_sources():
         if os.path.abspath(other) == os.path.abspath(root):
             continue
-        out.extend(indexed_names(other))
+        out.extend(indexed(other))
     return out
 
 
@@ -440,7 +508,8 @@ for _runtime in ("pylib", "harness"):
         sys.path.insert(0, _path)
 
 
-import state  # noqa: E402  (после правки sys.path выше)
+import decision  # noqa: E402  (после правки sys.path выше)
+import state  # noqa: E402
 
 
 def harness_table(harness):
@@ -656,7 +725,8 @@ def _key_of(line):
 
 def cmd_install(args):
     modules = read_modules(args.root)
-    found = check(args.root, modules, known=known_names(args.root), index=False)
+    found = check(args.root, modules, known=known_names(args.root),
+                  known_caps=known_capabilities(args.root), index=False)
     if found:
         for line in found:
             sys.stderr.write("check: %s\n" % line)
@@ -669,7 +739,10 @@ def cmd_install(args):
     changed = False
     for harness in HARNESSES:
         for manifest in modules:
-            build(args.root, manifest, harness)
+            # Обёртка нужна тому, кого ЗАПУСКАЕТ харнес. Адаптер он не запускает
+            # (решение 25) — его зовёт модуль, и `dist/` ему только мусор.
+            if event_names(manifest):
+                build(args.root, manifest, harness)
         changed = register(args.root, modules, harness) or changed
     print("modules: %d" % len(modules))
     print("sources: %s" % ("корень дописан" if added else "корень уже в списке"))
@@ -685,7 +758,8 @@ def cmd_status(args):
 
 
 def cmd_check(args):
-    found = check(args.root, read_modules(args.root), known=known_names(args.root))
+    found = check(args.root, read_modules(args.root), known=known_names(args.root),
+                  known_caps=known_capabilities(args.root))
     for line in found:
         print(line)
     return 1 if found else 0

@@ -1,0 +1,68 @@
+# Гвард необратимого: три формы вызова, каждая из которых уносит что-то, чего не
+# вернуть. Кейсы переехали из трёх JS-хуков (block-no-verify, kill-by-name-guard,
+# sleep-waiter-guard) в ПАКЕТ вместе с их ожиданиями: тот же вход, тот же исход.
+# Ни одно ожидание при переезде не правилось — иначе переезд доказывал бы себя
+# сам.
+#
+# Гоняется настоящий разбор оболочки: он и есть предмет проверки. Формы, где
+# гвард обязан ПРОПУСТИТЬ, стоят рядом с формами, где обязан отбить, — половина
+# набора без второй половины доказывает только то, что хук что-то делает.
+
+
+# --- обход git-хуков репозитория ---
+{"name": "git commit --no-verify → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "git commit --no-verify -m \"wip\""}, "hook_event_name": "PreToolUse"}}
+{"name": "git push --no-verify → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "git push --no-verify origin main"}, "hook_event_name": "PreToolUse"}}
+{"name": "chained: build && git commit --no-verify → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "npm run build && git commit -a --no-verify"}, "hook_event_name": "PreToolUse"}}
+{"name": "git -c core.hooksPath=/dev/null → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "git -c core.hooksPath=/dev/null commit -m \"x\""}, "hook_event_name": "PreToolUse"}}
+{"name": "git -c core.hooksPath в кавычках → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "git -c \"core.hooksPath=/tmp/empty\" push"}, "hook_event_name": "PreToolUse"}}
+{"name": "обычный git commit → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "git commit -m \"fix: normal commit\""}, "hook_event_name": "PreToolUse"}}
+{"name": "--no-verify внутри сообщения коммита → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'docs: never use --no-verify'"}, "hook_event_name": "PreToolUse"}}
+{"name": "grep про --no-verify без git → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "grep -rn -- --no-verify docs/"}, "hook_event_name": "PreToolUse"}}
+{"name": "git push обычный → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "git push origin HEAD"}, "hook_event_name": "PreToolUse"}}
+{"name": "не-git команда → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "npm test"}, "hook_event_name": "PreToolUse"}}
+
+# --- гашение процесса по имени ---
+{"name": "pkill по маске → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "pkill -f chrome"}, "hook_event_name": "PreToolUse"}}
+{"name": "pkill по точному имени → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "pkill -x \"Google Chrome\""}, "hook_event_name": "PreToolUse"}}
+{"name": "killall → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "killall node"}, "hook_event_name": "PreToolUse"}}
+{"name": "kill $(pgrep …) → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "kill -9 $(pgrep -f capgate)"}, "hook_event_name": "PreToolUse"}}
+{"name": "гашение на другой машине через ssh → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "ssh agent@host 'pkill -x \"Google Chrome\"'"}, "hook_event_name": "PreToolUse"}}
+{"name": "давление срочностью не отменяет запрет → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "pkill -f chrome # быстро, не мелочись"}, "hook_event_name": "PreToolUse"}}
+{"name": "гашение по номеру процесса → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "kill -9 \"$(cat /tmp/my.pid)\""}, "hook_event_name": "PreToolUse"}}
+{"name": "гашение по своему порту → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "kill $(lsof -ti tcp:9333 -sTCP:LISTEN)"}, "hook_event_name": "PreToolUse"}}
+{"name": "не про гашение → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "git status --short"}, "hook_event_name": "PreToolUse"}}
+
+# --- одиночная длинная пауза ---
+{"name": "lone long sleep 30 → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 30"}, "hook_event_name": "PreToolUse"}}
+{"name": "lone sleep with minutes unit → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 5m"}, "hook_event_name": "PreToolUse"}}
+{"name": "short settle sleep 2 → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 2"}, "hook_event_name": "PreToolUse"}}
+{"name": "sleep inside a watch loop → allow (not a lone sleep)", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "while ! curl -sf http://localhost:3000; do sleep 5; done"}, "hook_event_name": "PreToolUse"}}
+{"name": "conscious timer with timed-wait marker → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 60 # timed-wait"}, "hook_event_name": "PreToolUse"}}
+{"name": "non-sleep command → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "npm run build"}, "hook_event_name": "PreToolUse"}}
+{"name": "wait-then-check with ; → deny (the canonical anti-pattern)", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 420; cat /tmp/eval.log"}, "hook_event_name": "PreToolUse"}}
+{"name": "wait-then-check with && → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 150 && tail -20 /tmp/run.log"}, "hook_event_name": "PreToolUse"}}
+{"name": "wait-then-check with minutes unit → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 5m; git status"}, "hook_event_name": "PreToolUse"}}
+{"name": "short settle then command → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 2; echo ready"}, "hook_event_name": "PreToolUse"}}
+{"name": "conscious timer marker in a chain → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 60; curl -s localhost:9090/metrics # timed-wait"}, "hook_event_name": "PreToolUse"}}
+{"name": "sleep inside a for loop → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "for i in 1 2 3; do sleep 10; curl -sf localhost:3000 && break; done"}, "hook_event_name": "PreToolUse"}}
+{"name": "blocking watcher on an event → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "tail -n +1 -F /tmp/run.log | grep -q -m1 DONE"}, "hook_event_name": "PreToolUse"}}
+{"name": "short-looking minutes in a chain → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "sleep 2m; cat /tmp/x.log"}, "hook_event_name": "PreToolUse"}}
+{"name": "уступка по tool_use_id: два одинаковых вызова подряд — второй тоже гейтится", "hook": "guard-irreversible", "expect": "deny", "env": {"JARVIS_ONCE": "on"}, "setup": ["guard-irreversible"], "setup_input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_first", "tool_input": {"command": "sleep 30"}}, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_second", "tool_input": {"command": "sleep 30"}}}
+{"name": "уступка по tool_use_id: тот же идентификатор второй раз — хук уступает", "hook": "guard-irreversible", "expect": "allow", "env": {"JARVIS_ONCE": "on"}, "repeat": 2, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_same", "tool_input": {"command": "sleep 30"}}}
+{"name": "уступка по идентификатору вызова держится и на ТРЕТЬЕМ повторе: метка вызова не съедается первым же обращением", "hook": "guard-irreversible", "expect": "allow", "env": {"JARVIS_ONCE": "on"}, "repeat": 3, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_once_ttl", "tool_input": {"command": "sleep 30"}}}
+
+# --- нет разбора: честный пропуск с именем, а не молчание ---
+# Разбор подменяется несуществующим путём: PATH тут не тронуть — по нему ищется
+# и сам `python3`, которым харнес запускает пакет.
+{"name": "нет разбора оболочки — вызов проходит, а недостающее названо в служебном выводе", "hook": "guard-irreversible", "expect": ["silent", "err-contains:command_tree недоступна", "err-contains:shfmt"], "env": {"SHFMT": "{TMPHOME}/нет-такого-разбора"}, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_no_shfmt", "tool_input": {"command": "git commit --no-verify -m x"}}}
+{"name": "нет разбора оболочки — в журнал ложится unsupported С ИМЕНЕМ возможности, а не пустой класс", "hook": "guard-irreversible", "expect": "file-contains:\"outcome\":\"none\",\"class\":\"unsupported:command_tree\"", "env": {"SHFMT": "{TMPHOME}/нет-такого-разбора", "ASSERT_FILE": "{DECISIONS}"}, "input": {"hook_event_name": "PreToolUse", "session_id": "gi-sid", "tool_name": "Bash", "tool_use_id": "toolu_no_shfmt2", "tool_input": {"command": "git commit --no-verify -m x"}}}
+
+# --- выключатель ---
+{"name": "jarvis off гасит гвард: ни ответа, ни следа", "hook": "guard-irreversible", "expect": ["silent", "file-empty"], "env": {"JARVIS_MODULES_OFF": "guard-irreversible", "ASSERT_FILE": "{DECISIONS}"}, "input": {"hook_event_name": "PreToolUse", "session_id": "gi-sid", "tool_name": "Bash", "tool_use_id": "toolu_off", "tool_input": {"command": "sleep 30"}}}
+{"name": "выключатель с чужим именем гвард не гасит", "hook": "guard-irreversible", "expect": "deny", "env": {"JARVIS_MODULES_OFF": "какой-то-другой-модуль"}, "input": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "toolu_off_other", "tool_input": {"command": "sleep 30"}}}
+
+# --- отказ ПАКЕТА виден в сводке метрик ---
+# Главная проверка карточки: отказ, переехавший из JS-хука в пакет, обязан
+# считаться сводкой так же. Считает её код слоя в самой сессии — по журналу,
+# общему у пакета и у JS-хуков.
+{"name": "отказ пакета доезжает до сводки метрик и считается наравне с отказом JS-хука", "hook": "dispatch", "setup": ["dispatch", "guard-irreversible", "dispatch"], "setup_input": [{"hook_event_name": "PreToolUse", "session_id": "gi-sum", "tool_use_id": "toolu_gi_sleep", "tool_name": "Bash", "tool_input": {"command": "sleep 30"}, "cwd": "/tmp"}, {"hook_event_name": "PreToolUse", "session_id": "gi-sum", "tool_use_id": "toolu_gi_sleep", "tool_name": "Bash", "tool_input": {"command": "sleep 30"}, "cwd": "/tmp"}, {"hook_event_name": "Stop", "session_id": "gi-sum", "cwd": "/tmp"}], "expect": ["file-contains:\"denies\":{\"total\":1,\"by_class\":{\"guard-irreversible\":1}}", "file-contains:\"unknown_events\":0"], "env": {"ASSERT_FILE": "{METRICS}", "CLAUDE_CODE_SESSION_ID": "gi-sum"}, "input": {"hook_event_name": "SessionEnd", "session_id": "gi-sum", "cwd": "/tmp", "reason": "clear"}}

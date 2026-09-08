@@ -525,7 +525,13 @@ class Wrapper(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
 
-    def test_возможность_из_requires_в_обёртку_не_едет(self):
+    def test_факт_и_возможность_едут_в_обёртку_ПОРОЗНЬ(self):
+        """`requires` несёт две разные вещи, и обёртка спрашивает их у разных мест.
+
+        Факт события ждут ОТ СОБЫТИЯ (`missing_fact`), возможность — от
+        реализации в известных корнях. Съедься эти списки в один, обёртка либо
+        искала бы поле возможности в событии (его там нет и быть не может), либо
+        звала бы адаптер за фактом, который выдаёт таблица харнеса."""
         body = ("---\nname: база-тема\nkind: hook\nfor: general\n"
                 "events: [{ event: post-tool }]\nrequires: [база, tokens]\ndata: []\nmode: on\n---\n")
         make_module(self.root, "база-тема", body=body)
@@ -533,7 +539,7 @@ class Wrapper(unittest.TestCase):
         with open(hook, "r", encoding="utf-8") as fh:
             text = fh.read()
         self.assertIn("FACTS = ['tokens']", text)
-        self.assertNotIn("база", text.split("DATA_FILES")[0].split("FACTS =")[1])
+        self.assertIn("CAPABILITIES = ['база']", text)
 
 
 class CodexFindings(unittest.TestCase):
@@ -612,3 +618,101 @@ class CodexFindings(unittest.TestCase):
             jarvis.register(self.root, jarvis.read_modules(self.root), "claude")
         with open(settings, "r", encoding="utf-8") as fh:
             self.assertEqual(fh.read(), '{"hooks": {"PreToolUse": [', "файл не тронут")
+
+
+NEEDS = """---
+name: %s
+kind: hook
+for: general
+events: [{ event: post-tool }]
+requires: [%s]
+data: []
+mode: on
+---
+
+Пакет, объявивший жёсткую зависимость.
+"""
+
+ADAPTER = """---
+name: %s
+kind: adapter
+for: %s
+events: []
+requires: []
+data: []
+mode: on
+---
+
+Адаптер: харнес его не запускает, событий у него нет.
+"""
+
+OWNER = """---
+name: %s
+kind: hook
+for: general
+events: []
+requires: []
+data: []
+mode: on
+---
+
+Владелец возможности. %s
+"""
+
+
+class Capabilities(unittest.TestCase):
+    """Находки `check` о ВОЗМОЖНОСТЯХ: чем закрыта жёсткая зависимость и когда
+    вторая реализация — находка (решения 6, 18)."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.root, "modules"))
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def found(self):
+        return jarvis.check(self.root, jarvis.read_modules(self.root))
+
+    def test_requires_без_реализации_называется(self):
+        make_module(self.root, "гвард", body=NEEDS % ("гвард", "command_tree"))
+        self.assertTrue(any("command_tree" in line and "ничем не закрыта" in line
+                            for line in self.found()), self.found())
+
+    def test_адаптер_закрывает_возможность_а_не_своё_имя(self):
+        # Ровно то, ради чего возможность выводится из имени и `for`: `requires`
+        # называет `command_tree`, а в дереве лежит `command-tree-shell`.
+        make_module(self.root, "гвард", body=NEEDS % ("гвард", "command_tree"))
+        make_module(self.root, "command-tree-shell",
+                    body=ADAPTER % ("command-tree-shell", "tool:shell"), code=False)
+        self.assertEqual(self.found(), [])
+
+    def test_вторая_реализация_без_владельца_находкой_не_является(self):
+        # Пока владельца нет, реализация сама себе контракт (решение 18), и
+        # сколько их — не наше дело: харнесы сводят ответы по-разному.
+        make_module(self.root, "command-tree-shell",
+                    body=ADAPTER % ("command-tree-shell", "tool:shell"), code=False)
+        make_module(self.root, "command-tree-fish",
+                    body=ADAPTER % ("command-tree-fish", "tool:fish"), code=False)
+        self.assertEqual(self.found(), [])
+
+    def test_вторая_реализация_у_владельца_с_одним_ответом_находка(self):
+        # А объявил владелец «ответ один» — второй ответ значит, что кого-то из
+        # двоих не услышат, и это находка.
+        make_module(self.root, "command-tree", body=OWNER % ("command-tree", jarvis.ANSWER_ONE),
+                    code=False)
+        make_module(self.root, "command-tree-shell",
+                    body=ADAPTER % ("command-tree-shell", "tool:shell"), code=False)
+        make_module(self.root, "command-tree-fish",
+                    body=ADAPTER % ("command-tree-fish", "tool:fish"), code=False)
+        found = self.found()
+        self.assertTrue(any("две реализации" in line for line in found), found)
+
+    def test_владелец_разрешивший_много_ответов_находки_не_даёт(self):
+        make_module(self.root, "command-tree", body=OWNER % ("command-tree", "Ответ: много"),
+                    code=False)
+        make_module(self.root, "command-tree-shell",
+                    body=ADAPTER % ("command-tree-shell", "tool:shell"), code=False)
+        make_module(self.root, "command-tree-fish",
+                    body=ADAPTER % ("command-tree-fish", "tool:fish"), code=False)
+        self.assertEqual([l for l in self.found() if "две реализации" in l], [])

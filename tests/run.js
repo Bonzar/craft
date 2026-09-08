@@ -85,9 +85,7 @@ const SCRIPT = {
   'guard-plan-gate': 'universal-guard-plan-gate',
   'plan-gate-approve': 'universal-plan-gate-approve',
   'plan-gate-reset': 'universal-plan-gate-reset',
-  'sleep-waiter-guard': 'universal-sleep-waiter-guard',
   'config-protection': 'universal-config-protection',
-  'block-no-verify': 'universal-block-no-verify',
   'fact-gate': 'universal-fact-gate',
   'stop-routine-facts': 'universal-stop-routine-facts',
   'session-anchor': 'universal-session-anchor',
@@ -112,9 +110,7 @@ const REQUIRED = [
   'guard-plan-hygiene:deny', 'guard-plan-hygiene:allow',
   'detect-incident:inject', 'detect-incident:silent',
   'guard-plan-gate:deny', 'guard-plan-gate:allow',
-  'sleep-waiter-guard:deny', 'sleep-waiter-guard:allow',
   'config-protection:deny', 'config-protection:allow',
-  'block-no-verify:deny', 'block-no-verify:allow',
   'fact-gate:deny', 'fact-gate:allow',
   'stop-routine-facts:block', 'stop-routine-facts:silent',
   'guard-plan-critic:deny', 'guard-plan-critic:allow',
@@ -128,6 +124,9 @@ const REQUIRED = [
   'universal-journal:silent',
   // Пилот упаковки: исход у него один — `none`, и харнесу он виден молчанием.
   'trace-probe:silent',
+  // Первый настоящий отказ ПАКЕТА: три формы необратимого переехали сюда из
+  // JS-хуков, и обе стороны — отказ и пропуск — обязаны быть показаны.
+  'guard-irreversible:deny', 'guard-irreversible:allow',
   'universal-instinct-flush:block', 'universal-instinct-flush:silent',
 ];
 

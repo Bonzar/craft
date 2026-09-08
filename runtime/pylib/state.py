@@ -47,6 +47,39 @@ def decision_log(session_id, directory):
     return os.path.join(directory or state_dir(), "decisions.%s.jsonl" % (session_id or "default"))
 
 
+def sources_list():
+    """Файл со списком корней источников. Его ведёт установка: каждая дописывает
+    свой корень, и ничего кроме путей в нём нет (решение 12)."""
+    share = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(share, "jarvis", "sources.list")
+
+
+def source_roots(own_root=""):
+    """Известные корни, СВОЙ первым. Свой берётся от самого пакета, а не из
+    списка: перенесённое дерево и прогон под чужим HOME иначе не нашли бы соседа,
+    лежащего рядом, — и жёсткая зависимость читалась бы незакрытой там, где всё
+    на месте."""
+    roots = [own_root] if own_root else []
+    try:
+        with open(sources_list(), "r", encoding="utf-8") as fh:
+            listed = [line.strip() for line in fh if line.strip()]
+    except OSError:
+        listed = []
+    for root in listed:
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def metrics_log(session_id, directory):
+    """Путь журнала метрик — ЗАПАСНОГО канала для строки решения. Формула та же,
+    что у paths.js: журнал общий с JS-хуками, и разойтись им нельзя."""
+    override = os.environ.get("CRAFT_METRICS_LOG")
+    if override:
+        return override
+    return os.path.join(directory or state_dir(), "metrics.%s.jsonl" % (session_id or "default"))
+
+
 OFF = ("off", "false", "0")
 
 

@@ -15,7 +15,8 @@
 harness, session_id, call_id, event, tool, input, cwd, state_dir — и сверх ядра
 два ФАКТА ОБЁРТКИ, которых харнес не даёт, а считает она:
   key          — ключ следа (pylib/key.py);
-  decision_log — путь журнала решений, куда модуль кладёт след.
+  decision_log — путь журнала решений, куда модуль кладёт след;
+  metrics_log  — запасной путь для той же строки, когда журнал решений не пишется.
 
 Пути состояния сюда не входят: про харнес в них ничего нет, и живут они в
 pylib/state.py — иначе каждая новая таблица копировала бы их заново.
@@ -28,7 +29,7 @@ import json
 import os
 
 from key import event_key
-from state import decision_log, state_dir
+from state import decision_log, metrics_log, state_dir
 
 HARNESS = "claude"
 
@@ -140,6 +141,7 @@ def to_event(raw):
         "state_dir": directory,
         "key": event_key(call_id, raw or b""),
         "decision_log": decision_log(session_id, directory),
+        "metrics_log": metrics_log(session_id, directory),
     }
 
 
