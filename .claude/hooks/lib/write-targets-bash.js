@@ -81,7 +81,6 @@ function complain(why) {
 }
 
 const texts = (statement) => (statement.words || []).map((w) => w.text);
-const topLevel = (parsed) => parsed.statements.filter((s) => s.depth === 0);
 
 // --- переход каталога ----------------------------------------------------------
 
@@ -112,6 +111,21 @@ function cwdAfter(current, statement) {
   return to.text.replace(/\/$/, '');
 }
 
+// Каталог ПОСЛЕ утверждения — одно правило на обе стороны файла.
+//
+// Переход НА ГЛУБИНЕ каталог не уточняет, а ОБЕСЦЕНИВАЕТ. Фигурные скобки и
+// ветка условия исполняются в ТЕКУЩЕЙ оболочке, и переход из них действует
+// дальше; подоболочка и подстановка — нет. Отличить одно от другого по дереву
+// нечем, а ошибки этих двух сторон не равны: удержанный чужой каталог даёт
+// АБСОЛЮТНЫЙ путь, который легко оказывается временным, и правка репозитория
+// прошла бы мимо гейта. Поэтому вложенный переход означает «каталог
+// неизвестен»: цель остаётся относительной, то есть скорее долговечной, и под
+// гейт попадает.
+function nextDirectory(cwd, statement) {
+  if (texts(statement)[0] !== 'cd') return cwd;
+  return statement.depth === 0 ? cwdAfter(cwd, statement) : '';
+}
+
 // --- цели записи ---------------------------------------------------------------
 
 // Цели записи: перенаправление, tee, правка на месте (-i), cp/mv (последний
@@ -133,9 +147,7 @@ function targetsOf(cmd) {
   let cwd = '';
   for (const statement of parsed.statements) {
     for (const t of statementTargets(statement, cfg)) targets.push(resolveTarget(cwd, t));
-    // Каталог ведут только утверждения ВЕРХНЕГО уровня: подоболочка меняет его
-    // внутри себя, и `(cd /tmp) && cat > f` пишет в текущий каталог.
-    if (statement.depth === 0) cwd = cwdAfter(cwd, statement);
+    cwd = nextDirectory(cwd, statement);
   }
   return targets.concat(interpreterTargets(parsed.source || ''));
 }
@@ -671,18 +683,23 @@ export function commandReads(cmd) {
     || (s.words || []).some((w) => w.process));
   if (piped) return { reads: true, mutates: false, targets: [] };
 
-  // Цели берутся у утверждений ВЕРХНЕГО уровня: содержимое подстановки —
-  // операнды ЧУЖОЙ команды, а тело подоболочки идёт со своим каталогом.
-  const top = topLevel(parsed);
+  // ЦЕЛИ берутся у утверждений верхнего уровня: содержимое подстановки —
+  // операнды ЧУЖОЙ команды. А вот КАТАЛОГ ведут все, тем же правилом, что у
+  // целей записи: переход внутри фигурных скобок действует и дальше, и держать
+  // на нём прежний каталог значило бы назвать прочитанным файл, которого никто
+  // не открывал.
+  const all = parsed.statements;
   const targets = [];
   let cwd = '';
-  for (const [at, statement] of top.entries()) {
-    for (const t of readOperandsOf(statement, cfg)) targets.push(resolveTarget(cwd, t));
+  for (const [at, statement] of all.entries()) {
+    if (statement.depth === 0) {
+      for (const t of readOperandsOf(statement, cfg)) targets.push(resolveTarget(cwd, t));
+    }
     // Переход каталога в звене пайпа на соседа не влияет: пайп запускает звено в
     // подоболочке, как и скобки.
-    const nextSep = (top[at + 1] || {}).sep || '';
-    if (nextSep === '|' || nextSep === '|&' || nextSep === '&') continue;
-    cwd = cwdAfter(cwd, statement);
+    const nextSep = (all[at + 1] || {}).sep || '';
+    if (statement.depth === 0 && (nextSep === '|' || nextSep === '|&' || nextSep === '&')) continue;
+    cwd = nextDirectory(cwd, statement);
   }
   return { reads: true, mutates: false, targets: targets.map(cleanTarget).filter(Boolean) };
 }

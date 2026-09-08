@@ -15,6 +15,9 @@
 {"name": "chained: build && git commit --no-verify → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "npm run build && git commit -a --no-verify"}, "hook_event_name": "PreToolUse"}}
 {"name": "git -c core.hooksPath=/dev/null → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "git -c core.hooksPath=/dev/null commit -m \"x\""}, "hook_event_name": "PreToolUse"}}
 {"name": "git -c core.hooksPath в кавычках → deny", "hook": "guard-irreversible", "expect": "deny", "input": {"tool_name": "Bash", "tool_input": {"command": "git -c \"core.hooksPath=/tmp/empty\" push"}, "hook_event_name": "PreToolUse"}}
+# Ключ и его значение требуются ПОДРЯД: без ключа правило отбивало бы
+# сообщение коммита, где та же строка — просто текст.
+{"name": "имя конфига в тексте сообщения коммита обходом не является → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "git commit -m core.hooksPath=/tmp"}, "hook_event_name": "PreToolUse"}}
 {"name": "обычный git commit → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "git commit -m \"fix: normal commit\""}, "hook_event_name": "PreToolUse"}}
 {"name": "--no-verify внутри сообщения коммита → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'docs: never use --no-verify'"}, "hook_event_name": "PreToolUse"}}
 {"name": "grep про --no-verify без git → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "tool_input": {"command": "grep -rn -- --no-verify docs/"}, "hook_event_name": "PreToolUse"}}

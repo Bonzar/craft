@@ -133,7 +133,17 @@ out6="$(HOME="$TESTHOME" INSTALL_ALLOW_WORKTREE=1 bash "$HOOKREPO/install.sh" 2>
 grep -q 'оставлен как есть' <<<"$out6" || FAILS+=("foreign hooksPath kept silently, no notice printed")
 rm -rf "$HOOKREPO"
 
-# --- 6. Установщик пакетов ----------------------------------------------------
+# --- 6. install.sh ставит и ПАКЕТЫ --------------------------------------------
+# Гварды, живущие пакетами, харнес запускает своей строкой регистрации, мимо
+# диспетчера. Поставь install.sh только диспетчера — и слой встанет БЕЗ этих
+# гвардов, причём молча: ни одна проверка выше этого не увидит, потому что все
+# они смотрят на строку диспетчера.
+pkg_hook="$REPO/modules/guard-irreversible/dist/claude/hook.py"
+jq -e --arg cmd "python3 $pkg_hook" '.hooks.PreToolUse[]?.hooks[]?.command
+       | select(. == $cmd)' "$TESTHOME/.claude/settings.json" >/dev/null 2>&1 \
+  || FAILS+=("install.sh did not register the package guard: слой встал бы без него")
+
+# --- 7. Установщик пакетов ----------------------------------------------------
 # Свой временный дом: install.sh и jarvis пишут в один и тот же settings.json, и
 # делить его между двумя проверками идемпотентности значило бы проверять их пару,
 # а не каждую.
