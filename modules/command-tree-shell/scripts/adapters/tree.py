@@ -17,6 +17,8 @@ normalize(разбор) -> {"statements": [...]}. Ни диска, ни подп
 
 # Коды операторов у shfmt (mvdan/sh): числами, потому что числами их и отдаёт
 # разбор. Имена нужны только здесь — потребитель сверяет коды.
+BACKSLASH = chr(92)
+
 BINARY_OPS = {10: "&&", 11: "||", 12: "|", 13: "|&"}
 HEREDOC_OPS = (61, 62, 63)
 
@@ -217,7 +219,7 @@ def _part(part, depth, out, seen):
         return (part.get("Value") or "", True, False, False)
     if kind == "DblQuoted":
         inner = _word(part, depth, out, seen)
-        return (inner["text"], True, inner["expanded"], inner["process"])
+        return (_unescaped(inner["text"]), True, inner["expanded"], inner["process"])
     if kind in ("CmdSubst", "ProcSubst"):
         _stmts(part.get("Stmts") or [], depth + 1, out, seen, "")
         return ("", False, True, kind == "ProcSubst")
@@ -226,6 +228,33 @@ def _part(part, depth, out, seen):
     # их нельзя: потерянная команда это пропущенная запись.
     _descend(part, depth, out, seen)
     return ("", False, True, False)
+
+
+DQ_ESCAPED = '"`$' + BACKSLASH + "\n"
+
+
+def _unescaped(text):
+    """Снятое экранирование двойных кавычек.
+
+    Обещание формы — «закавыченная строка это ОДНО слово», и слово это то, что
+    получит запускаемая программа. Разбор отдаёт литерал как написано, вместе с
+    косыми, и тело вложенной обёртки (`bash -c "bash -c \\"…\\""`) от этого
+    переставало быть командой: потребитель видел слово, начинающееся с кавычки, и
+    цели внутри терял молча.
+
+    Экранируются в двойных кавычках ровно пятеро; перед остальными косая — это
+    сама косая, и снимать её нельзя."""
+    out = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == BACKSLASH and i + 1 < len(text) and text[i + 1] in DQ_ESCAPED:
+            out.append(text[i + 1])
+            i += 2
+            continue
+        out.append(char)
+        i += 1
+    return "".join(out)
 
 
 def _descend(node, depth, out, seen):

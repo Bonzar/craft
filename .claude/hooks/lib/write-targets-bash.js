@@ -258,9 +258,8 @@ export function bashWriteTargets(cmd) {
   return targetsOf(cmd).concat(wrapperTargets(cmd));
 }
 
-// Цели БЕЗ спуска в обёртку запуска. Отдельной функцией она стоит ровно затем,
-// чтобы спуск был РОВНО ОДИН уровень: тело обёртки разбирается этим же разбором,
-// а он внутрь второй обёртки уже не идёт.
+// Цели БЕЗ спуска в обёртку запуска: спуск делает wrapperTargets, и разделение
+// нужно затем, чтобы у спуска был СЧЁТЧИК глубины, а не молчаливый обрыв.
 function targetsOf(cmd, quiet = false) {
   const parsed = tree(cmd, quiet);
   if (!parsed) return [];
@@ -323,6 +322,12 @@ const WRITE_COMMANDS = new Set(['tee', 'cp', 'mv', 'sed', 'perl']);
 // пропускало.
 const IN_PLACE = ['-i', '--in-place'];
 
+// Служебные слова перебора: у `find … -exec cp {} цель \;` цель стоит ПЕРЕД
+// терминатором. Взяв последний операнд как написано, разбор получал терминатор,
+// чистил его в пустую строку и терял цель целиком — то есть отвечал «команда
+// ничего не пишет» про команду, которая пишет.
+const TERMINATOR = new Set([';', '\\;', '+', '{}']);
+
 // Цели одного утверждения.
 //
 // Имя записи ищется среди ВСЕХ слов утверждения, а не только в первом. Прежний
@@ -347,16 +352,17 @@ function statementTargets(statement) {
   }
   const words = statement.words || [];
   for (let at = 0; at < words.length; at += 1) {
-    if (WRITE_COMMANDS.has(words[at].text)) targets.push(...writeTargetsAt(words, at));
+    if (WRITE_COMMANDS.has(bareName(words[at].text))) targets.push(...writeTargetsAt(words, at));
   }
   return targets;
 }
 
 // Цели одной команды записи, найденной среди слов на месте `at`.
 function writeTargetsAt(words, at) {
-  const name = words[at].text;
+  const name = bareName(words[at].text);
   const rest = words.slice(at + 1);
-  const operands = rest.filter((word) => !word.text.startsWith('-'));
+  const operands = rest.filter((word) => !word.text.startsWith('-')
+    && !TERMINATOR.has(word.text));
   if (name === 'tee') return operands.map(targetText);
   if (name === 'sed' || name === 'perl') {
     if (!rest.some((word) => usesFlag(word.text, IN_PLACE))) return [];
@@ -376,14 +382,19 @@ function writeTargetsAt(words, at) {
 // На стороне ЧТЕНИЯ обёртки целей по-прежнему не дают, и это не забывчивость:
 // потерянная цель чтения — лишний отказ гварда, потерянная цель записи —
 // пропущенная правка. Стороны не симметричны, и строгость нужна только на одной.
-function wrapperTargets(cmd) {
-  const parsed = tree(cmd);
+function wrapperTargets(cmd, depth = 0) {
+  const parsed = tree(cmd, depth > 0);
   const cfg = rules();
-  if (!parsed || !cfg) return [];
+  if (!parsed || !cfg || depth >= WRAPPER_DEPTH) return [];
   const out = [];
   for (const statement of parsed.statements) {
     const body = wrapperBodyOf(statement, cfg);
     if (!body) continue;
+    // Обёртка внутри обёртки — обычная форма, а не экзотика: `bash -c "bash -c
+    // …"` так и приезжает от агента. Прежний разбор искал признаки записи по
+    // ТЕКСТУ и потому видел её на любой глубине; спуск ровно на один уровень
+    // терял её молча, то есть отвечал «ничего не пишет».
+    out.push(...wrapperTargets(body, depth + 1));
     // Нераскрытая переменная отбрасывает ОДНУ цель, а не всё тело: у
     // `bash -c "$CMD > README.md"` цель перенаправления буквальная, и выбросив
     // тело целиком, разбор терял настоящую запись. Внутри тела нераскрытая цель
@@ -398,9 +409,20 @@ function wrapperTargets(cmd) {
 // `--rcfile файл`. Без них поиск ключа `-c` обрывался на значении, и
 // `bash -O extglob -c "…"` проходил молча. Короткий ключ сверяется КЛАСТЕРОМ:
 // `bash -euo pipefail` — обычная форма, и точное равенство её пропускало.
+// Докуда идёт спуск в тело обёртки. Потолок, а не «сколько получится»: каждый
+// уровень — отдельный запуск разбора, и текст, вложенный сам в себя, иначе
+// съел бы событие целиком.
+const WRAPPER_DEPTH = 4;
 const WRAPPER_VALUE_FLAG = /^[-+][A-Za-z]*[oO]$/;
 const WRAPPER_VALUE_LONG = new Set(['--rcfile', '--init-file']);
-const wrapperName = (word) => String(word || '').replace(/^.*\//, '').toLowerCase();
+const SWITCH_USER = new Set(['su', 'runuser']);
+// Имя команды без пути. Спрашивают это трое: обёртка запуска, команда записи и
+// доказательство чтения, — и смысл ответа у них РАЗНЫЙ. На стороне записи имя
+// узнаётся по хвосту: `/usr/bin/tee` пишет ровно так же, как `tee`. На стороне
+// чтения путь доказательством не считается вовсе — рядом можно положить свой
+// бинарник с известным именем. Одна ошибка стоит лишней цели, другая — правки
+// мимо гварда, поэтому здесь только имя, а решение принимает спрашивающий.
+const bareName = (word) => String(word || '').replace(/^.*\//, '').toLowerCase();
 
 // Тело обёртки одного утверждения, если это утверждение — обёртка.
 //
@@ -410,7 +432,16 @@ const wrapperName = (word) => String(word || '').replace(/^.*\//, '').toLowerCas
 // ложный отказ на обычной форме запуска.
 function wrapperBodyOf(statement, cfg) {
   const list = dropLaunchers(texts(statement), cfg);
-  if (!list.length || !cfg.shellWrappers.includes(wrapperName(list[0]))) return '';
+  if (!list.length) return '';
+  // Смена пользователя — тоже обёртка, но со своим порядком слов: между именем
+  // и ключом стоит ОПЕРАНД (`su deploy -c …`), на котором общий перебор ключей
+  // обязан обрываться. У этих двоих `-c` значит команду всегда, поэтому ключ
+  // ищется прямо.
+  if (SWITCH_USER.has(bareName(list[0]))) {
+    const at = list.indexOf('-c');
+    return at >= 0 ? list[at + 1] || '' : '';
+  }
+  if (!cfg.shellWrappers.includes(bareName(list[0]))) return '';
   for (let i = 1; i < list.length; i += 1) {
     const flag = list[i];
     if (!flag.startsWith('-') && !flag.startsWith('+')) return '';
@@ -596,7 +627,7 @@ function judgeStatement(statement, cfg, depth) {
   // Обёртка запуска: судится ТЕЛО, и ровно один уровень вглубь. Разобрать
   // вложенную обёртку нечем, и назвать её содержимое доказанным значило бы
   // выдумать.
-  if (depth < 1 && cfg.shellWrappers.includes(wrapperName(name))) {
+  if (depth < 1 && cfg.shellWrappers.includes(bareName(name))) {
     const body = wrapperBodyOf(statement, cfg);
     if (body) return judgeTree(body, cfg, depth + 1, true);
   }

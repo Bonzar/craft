@@ -34,6 +34,10 @@ def words(statement):
     return [w["text"] for w in statement["words"]]
 
 
+# Косая — ДАННЫЕ разбираемой команды. Литералом она в исходнике кейса
+# читается как экранирование самого кейса, поэтому заводится константой.
+BS = chr(92)
+
 class ParseForms(unittest.TestCase):
 
     def test_01_quoted_heredoc_body_is_not_a_command(self):
@@ -175,6 +179,21 @@ class ParseForms(unittest.TestCase):
                         "echo ${x/a/$(rm -rf /repo/docs)}"):
             got = statements(command)
             self.assertIn(["rm", "-rf", "/repo/docs"], [words(s) for s in got], command)
+
+    def test_22_double_quoted_escapes_are_resolved(self):
+        """Слово это то, что получит программа: экранирование кавычек снято.
+
+        Обещание формы — «закавыченная строка это ОДНО слово». Пока косые
+        оставались в тексте, тело вложенной обёртки словом-командой не было, и
+        цели внутри неё терялись молча."""
+        inner = 'bash -c ' + BS + '"tee /repo/out.txt' + BS + '"'
+        self.assertEqual(words(statements('bash -c "%s"' % inner)[0]),
+                         ["bash", "-c", 'bash -c "tee /repo/out.txt"'])
+        # Косая перед НЕ спецсимволом остаётся косой, а одинарные кавычки
+        # экранирования не знают вовсе.
+        self.assertEqual(words(statements('echo "a' + BS + BS + 'nb"')[0]), ["echo", "a" + BS + "nb"])
+        self.assertEqual(words(statements("echo 'a" + BS + BS + 'b' + "'")[0]),
+                         ["echo", "a" + BS + BS + "b"])
 
 if __name__ == "__main__":
     unittest.main()

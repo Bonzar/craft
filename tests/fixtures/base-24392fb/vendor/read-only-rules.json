@@ -1,0 +1,546 @@
+{
+  "_": "Что считается ЧТЕНИЕМ. Производный файл, а не копия: правила VS Code и списки safecmd отвечают на вопрос «безопасно ли выполнить без спроса», и в них живут команды, меняющие состояние (npm ci, git add, docker build, unzip). Здесь оставлено только то, что проходит наш предикат — команда ничего не меняет. Обновление источника — пересборка отбором, а не замена файла. Происхождение и версии — .claude/VENDORED-SKILLS.md.",
+  "readOnly": {
+    "cat": {},
+    "head": {},
+    "tail": {},
+    "less": {},
+    "more": {},
+    "bat": {},
+    "ls": {},
+    "dir": {},
+    "eza": {},
+    "exa": {},
+    "tree": {
+      "denyFlags": [
+        "-o"
+      ]
+    },
+    "pwd": {},
+    "cd": {},
+    "echo": {},
+    "printf": {},
+    "yes": {},
+    "seq": {},
+    "grep": {},
+    "egrep": {},
+    "fgrep": {},
+    "ack": {},
+    "ag": {},
+    "fd": {},
+    "rg": {
+      "denyFlags": [
+        "--pre",
+        "--hostname-bin"
+      ]
+    },
+    "find": {
+      "denyFlags": [
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-fprint",
+        "-fprintf",
+        "-fls",
+        "-ok",
+        "-okdir"
+      ]
+    },
+    "sed": {
+      "denyFlags": [
+        "-i",
+        "-I",
+        "--in-place",
+        "-e",
+        "-f",
+        "--expression",
+        "--file"
+      ]
+    },
+    "awk": {
+      "denyFlags": [
+        "-f",
+        "--file"
+      ]
+    },
+    "cut": {},
+    "sort": {
+      "denyFlags": [
+        "-o",
+        "--output"
+      ]
+    },
+    "uniq": {},
+    "wc": {},
+    "tr": {},
+    "nl": {},
+    "column": {},
+    "fold": {},
+    "join": {},
+    "paste": {},
+    "rev": {},
+    "expand": {},
+    "unexpand": {},
+    "diff": {},
+    "cmp": {},
+    "comm": {},
+    "findstr": {},
+    "file": {},
+    "stat": {},
+    "du": {},
+    "df": {},
+    "which": {},
+    "whereis": {},
+    "type": {},
+    "basename": {},
+    "dirname": {},
+    "realpath": {},
+    "readlink": {},
+    "od": {},
+    "xxd": {},
+    "strings": {},
+    "sha256sum": {},
+    "md5sum": {},
+    "cksum": {},
+    "date": {
+      "denyFlags": [
+        "-s",
+        "--set"
+      ]
+    },
+    "cal": {},
+    "uptime": {},
+    "whoami": {},
+    "id": {},
+    "hostname": {},
+    "uname": {},
+    "printenv": {},
+    "locale": {},
+    "sleep": {},
+    "ps": {},
+    "top": {},
+    "free": {},
+    "lsof": {},
+    "netstat": {},
+    "ss": {},
+    "jq": {
+      "denyFlags": [
+        "-f",
+        "--from-file"
+      ]
+    },
+    "yq": {
+      "denyFlags": [
+        "-i",
+        "--inplace"
+      ]
+    },
+    "ping": {},
+    "dig": {},
+    "nslookup": {},
+    "host": {},
+    "tldr": {}
+  },
+  "readOnlySubcommands": {
+    "git": [
+      "status",
+      "log",
+      "show",
+      "diff",
+      "blame",
+      "cat-file",
+      "describe",
+      "grep",
+      "ls-files",
+      "ls-tree",
+      "merge-base",
+      "remote",
+      "rev-parse",
+      "shortlog",
+      "tag"
+    ],
+    "docker": [
+      "ps",
+      "images",
+      "info",
+      "version",
+      "inspect",
+      "logs",
+      "top",
+      "stats",
+      "port",
+      "diff",
+      "search",
+      "events",
+      "history"
+    ],
+    "npm": [
+      "ls",
+      "list",
+      "outdated",
+      "view",
+      "info",
+      "show",
+      "explain",
+      "why",
+      "root",
+      "prefix",
+      "bin",
+      "search",
+      "doctor",
+      "fund",
+      "repo",
+      "bugs",
+      "docs",
+      "audit"
+    ],
+    "yarn": [
+      "list",
+      "outdated",
+      "info",
+      "why",
+      "bin",
+      "versions",
+      "licenses"
+    ],
+    "pnpm": [
+      "ls",
+      "list",
+      "outdated",
+      "why",
+      "root",
+      "bin",
+      "doctor",
+      "licenses"
+    ],
+    "cargo": [
+      "tree",
+      "metadata",
+      "search"
+    ],
+    "kubectl": [
+      "get",
+      "describe",
+      "logs",
+      "version",
+      "explain"
+    ],
+    "systemctl": [
+      "status",
+      "list-units",
+      "show",
+      "is-active",
+      "is-enabled"
+    ]
+  },
+  "readOnlyNested": {
+    "git": {
+      "config": [
+        "--get",
+        "--list",
+        "-l"
+      ],
+      "stash": [
+        "list",
+        "show"
+      ],
+      "branch": [
+        "--list",
+        "-a",
+        "-r",
+        "-v",
+        "-vv",
+        "--all",
+        "--remotes",
+        "--show-current"
+      ]
+    },
+    "gh": {
+      "repo": [
+        "view",
+        "list"
+      ],
+      "issue": [
+        "view",
+        "list"
+      ],
+      "pr": [
+        "view",
+        "list",
+        "status",
+        "checks",
+        "diff"
+      ],
+      "release": [
+        "view",
+        "list"
+      ],
+      "run": [
+        "view",
+        "list"
+      ],
+      "workflow": [
+        "view",
+        "list"
+      ],
+      "auth": [
+        "status"
+      ],
+      "gist": [
+        "view",
+        "list"
+      ],
+      "search": [
+        "repos",
+        "issues",
+        "prs",
+        "code"
+      ]
+    },
+    "npm": {
+      "config": [
+        "list",
+        "get"
+      ],
+      "pkg": [
+        "get"
+      ],
+      "cache": [
+        "verify"
+      ]
+    },
+    "yarn": {
+      "config": [
+        "list",
+        "get"
+      ],
+      "cache": [
+        "dir"
+      ]
+    },
+    "pnpm": {
+      "config": [
+        "list",
+        "get"
+      ]
+    },
+    "bun": {
+      "pm": [
+        "ls",
+        "hash"
+      ]
+    },
+    "docker": {
+      "container": [
+        "ls",
+        "ps",
+        "inspect"
+      ],
+      "image": [
+        "ls",
+        "inspect",
+        "history"
+      ],
+      "network": [
+        "ls",
+        "inspect"
+      ],
+      "volume": [
+        "ls",
+        "inspect"
+      ],
+      "context": [
+        "ls",
+        "inspect",
+        "show"
+      ],
+      "system": [
+        "df",
+        "info"
+      ],
+      "compose": [
+        "ps",
+        "ls",
+        "top",
+        "logs",
+        "images",
+        "config",
+        "version",
+        "port",
+        "events"
+      ]
+    },
+    "aws": {
+      "sts": [
+        "get-caller-identity"
+      ],
+      "configure": [
+        "list",
+        "get"
+      ]
+    }
+  },
+  "denySubcommandFlags": {
+    "git": {
+      "log": [
+        "--output"
+      ],
+      "show": [
+        "--output"
+      ],
+      "grep": [
+        "-O",
+        "--open-files-in-pager"
+      ]
+    }
+  },
+  "wrappers": [
+    "timeout",
+    "nohup",
+    "time",
+    "stdbuf",
+    "nice",
+    "ionice",
+    "command",
+    "builtin"
+  ],
+  "shellWrappers": [
+    "bash",
+    "sh",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish"
+  ],
+  "nullSinks": [
+    "/dev/null",
+    "/dev/stderr",
+    "/dev/stdout"
+  ],
+  "mutating": [
+    "rm",
+    "rmdir",
+    "mv",
+    "cp",
+    "touch",
+    "mkdir",
+    "chmod",
+    "chown",
+    "chgrp",
+    "ln",
+    "dd",
+    "truncate",
+    "install",
+    "tee",
+    "shred",
+    "mkfifo",
+    "mknod",
+    "kill",
+    "killall",
+    "pkill",
+    "curl",
+    "wget",
+    "tar",
+    "unzip",
+    "gunzip",
+    "zip"
+  ],
+  "mutatingSubcommands": {
+    "git": [
+      "push",
+      "checkout",
+      "clean",
+      "add",
+      "commit",
+      "reset",
+      "rebase",
+      "merge",
+      "switch",
+      "restore",
+      "apply",
+      "am",
+      "cherry-pick",
+      "revert",
+      "rm",
+      "mv",
+      "gc",
+      "prune",
+      "fetch",
+      "pull",
+      "init",
+      "clone",
+      "worktree",
+      "submodule"
+    ],
+    "npm": [
+      "install",
+      "i",
+      "ci",
+      "publish",
+      "update",
+      "uninstall",
+      "link",
+      "pack",
+      "run",
+      "exec",
+      "init"
+    ],
+    "yarn": [
+      "install",
+      "add",
+      "remove",
+      "publish",
+      "upgrade",
+      "run"
+    ],
+    "pnpm": [
+      "install",
+      "add",
+      "remove",
+      "publish",
+      "update",
+      "run"
+    ],
+    "docker": [
+      "run",
+      "build",
+      "pull",
+      "push",
+      "rm",
+      "rmi",
+      "exec",
+      "start",
+      "stop",
+      "kill",
+      "commit",
+      "create"
+    ],
+    "kubectl": [
+      "apply",
+      "delete",
+      "create",
+      "edit",
+      "patch",
+      "exec",
+      "scale",
+      "rollout"
+    ],
+    "systemctl": [
+      "start",
+      "stop",
+      "restart",
+      "enable",
+      "disable",
+      "mask",
+      "daemon-reload"
+    ],
+    "cargo": [
+      "build",
+      "run",
+      "install",
+      "publish",
+      "test",
+      "clean"
+    ]
+  }
+}
