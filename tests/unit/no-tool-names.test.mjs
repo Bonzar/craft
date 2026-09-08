@@ -175,10 +175,13 @@ function offenders(file, text = fs.readFileSync(file, 'utf8'), names = TOOL_NAME
   return found;
 }
 
-// Файлы кода пакетов: `modules/*/scripts/**/*.py`. Данные пакетов (`data/`) и их
-// кейсы (`tests/`) сюда не входят — имена инструментов в данных законны, ровно
-// как в `lib/vendor/read-only-rules.json`, и вынос имён в данные ЕСТЬ способ
-// убрать их из кода.
+// Код пакетов: ВСЕ `.py` в дереве пакета, кроме сборки (`dist/`), кейсов
+// (`tests/`) и данных (`data/`). Шире, чем `modules/*/scripts/**`, и намеренно:
+// файл, положенный мимо `scripts/`, кодом быть не перестаёт.
+//
+// Данные не входят: имена инструментов в них законны, ровно как в
+// `lib/vendor/read-only-rules.json`, и вынос имён в данные ЕСТЬ способ убрать
+// их из кода.
 function moduleSources(dir = MODULES, out = []) {
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     const full = path.join(dir, name);

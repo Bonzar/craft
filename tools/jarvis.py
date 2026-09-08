@@ -440,8 +440,10 @@ def write_index(root, modules):
 
 
 def sources_list():
-    share = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
-    return os.path.join(share, "jarvis", "sources.list")
+    """Файл со списком корней. Формула ОДНА с обёрткой (pylib/state): две копии
+    одного пути разъехались бы, и установка вела бы список, которого модуль на
+    событии не читает."""
+    return state.sources_list()
 
 
 def add_source(root):

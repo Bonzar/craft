@@ -74,3 +74,7 @@
 # считаться сводкой так же. Считает её код слоя в самой сессии — по журналу,
 # общему у пакета и у JS-хуков.
 {"name": "отказ пакета доезжает до сводки метрик и считается наравне с отказом JS-хука", "hook": "dispatch", "setup": ["dispatch", "guard-irreversible", "dispatch"], "setup_input": [{"hook_event_name": "PreToolUse", "session_id": "gi-sum", "tool_use_id": "toolu_gi_sleep", "tool_name": "Bash", "tool_input": {"command": "sleep 30"}, "cwd": "/tmp"}, {"hook_event_name": "PreToolUse", "session_id": "gi-sum", "tool_use_id": "toolu_gi_sleep", "tool_name": "Bash", "tool_input": {"command": "sleep 30"}, "cwd": "/tmp"}, {"hook_event_name": "Stop", "session_id": "gi-sum", "cwd": "/tmp"}], "expect": ["file-contains:\"denies\":{\"total\":1,\"by_class\":{\"guard-irreversible\":1}}", "file-contains:\"unknown_events\":0"], "env": {"ASSERT_FILE": "{METRICS}", "CLAUDE_CODE_SESSION_ID": "gi-sum"}, "input": {"hook_event_name": "SessionEnd", "session_id": "gi-sum", "cwd": "/tmp", "reason": "clear"}}
+
+# «Первое утверждение» — первое утверждение КОМАНДЫ, а не любой её строки: прежний
+# гвард смотрел на начало вызова, и переезд обещан с теми же ожиданиями.
+{"name": "пауза не первой строкой — не одиночная пауза → allow", "hook": "guard-irreversible", "expect": "allow", "input": {"tool_name": "Bash", "hook_event_name": "PreToolUse", "tool_input": {"command": "npm run build\nsleep 60\ncat /tmp/x.log"}}}

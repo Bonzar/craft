@@ -579,3 +579,33 @@ test('цель записи с подстановкой помечена, а н�
   // Буквальная цель рядом остаётся буквальной.
   assert.deepEqual(bash.commandTargets('cat > README.md'), ['README.md']);
 });
+
+// Цель записи, названная не перенаправлением, а ОПЕРАНДОМ. Подстановка в ней
+// прячется так же, а пустой список у гейта означает «команда ничего не пишет»:
+// `cat x | tee "$LOG"` уходил бы мимо гейта молча.
+test('операнд-цель с подстановкой помечен, а не потерян', () => {
+  for (const cmd of ['tee $OUT', 'mv a.txt $DEST', 'cp a.txt $DEST/b.txt', 'sed -i s/a/b/ $F']) {
+    const targets = bash.commandTargets(cmd);
+    assert.ok(targets.some(bash.isUnresolved), `${cmd} → ${JSON.stringify(targets)}`);
+  }
+  // Буквальные операнды рядом остаются буквальными.
+  assert.deepEqual(bash.commandTargets('tee out.txt'), ['out.txt']);
+  assert.deepEqual(bash.commandTargets('cp a b'), ['b']);
+});
+
+// Пусковой префикс перед записью. Прежний разбор искал имя команды где угодно в
+// куске и `sudo tee f` цель давал; дерево спрашивает ПЕРВОЕ слово. `sudo tee` —
+// канонический способ записи в защищённый файл, и терять его нельзя.
+test('пусковой префикс цель записи не прячет', () => {
+  for (const cmd of ['sudo tee /repo/README.md', 'env FOO=1 tee /repo/README.md',
+    'echo x | sudo tee -a /repo/README.md', 'sudo env FOO=1 tee /repo/README.md']) {
+    assert.deepEqual(bash.commandTargets(cmd), ['/repo/README.md'], cmd);
+  }
+  // А слово `tee` НЕ в начале звена целью по-прежнему не становится: это и есть
+  // разница между деревом и поиском слова по тексту.
+  assert.deepEqual(bash.commandTargets('echo tee out.txt'), []);
+  // Снятие префикса живёт ТОЛЬКО на стороне записи: сними его у доказательства
+  // чтения, и `sudo cat a` стало бы доказанным чтением, то есть гвард якоря
+  // ослаб бы.
+  assert.equal(bash.classifyCommand('sudo cat a.js').readOnly, false);
+});

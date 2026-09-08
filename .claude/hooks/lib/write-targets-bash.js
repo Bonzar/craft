@@ -148,17 +148,23 @@ const trees = new Map();
 
 let complained = false;
 
-function tree(command) {
+function tree(command, quiet = false) {
   const text = String(command ?? '');
   if (trees.has(text)) return trees.get(text);
-  const answer = ask(text);
+  const answer = ask(text, quiet);
   trees.set(text, answer);
   return answer;
 }
 
 // Дерево или null. Null значит «разбора нет», и это ОТВЕТ: молчаливое «команда
 // ничего не пишет» соврало бы про каждый ход, где работали шеллом.
-function ask(text) {
+function ask(text, quiet) {
+  // Тело обёртки запуска приходит СЛОВОМ, из которого подстановка уже стёрта:
+  // у `bash -c "cat > $OUT"` тело выходит `cat > `, и разбор честно отвечает
+  // синтаксической ошибкой. Жаловаться на это от имени внешней команды нельзя —
+  // она-то разобралась, — а защёлка «сказать один раз» съела бы после такой
+  // жалобы настоящую пропажу разбора.
+  const complain = quiet ? () => null : shout;
   const adapter = adapterPath();
   if (!adapter) return complain(`реализации возможности ${CAPABILITY} нет ни в одном известном корне`);
   const done = spawnSync('python3', [adapter], {
@@ -181,7 +187,7 @@ function ask(text) {
 // Причина называется вслух ОДИН раз на процесс: без строки в служебном выводе
 // пропавший разбор выглядит как «гвард придирается», а сто строк подряд на
 // каждую команду хода прячут её сами.
-function complain(why) {
+function shout(why) {
   if (!complained) {
     complained = true;
     process.stderr.write(`[write-targets-bash] unsupported: ${CAPABILITY} (${why})\n`);
@@ -193,8 +199,8 @@ const texts = (statement) => (statement.words || []).map((w) => w.text);
 
 // --- переход каталога ----------------------------------------------------------
 
-// Переход каталога по словам ОДНОГО утверждения. Правило одно на обе стороны
-// файла — на цели записи и на цели чтения, — потому что синтаксис у них один.
+// Переход каталога по ОДНОМУ утверждению. Правило одно на обе стороны файла — на
+// цели записи и на цели чтения, — потому что синтаксис у них один.
 //
 // `cd` считается переходом, только если он ПЕРВОЕ слово утверждения. Свободный
 // поиск слова `cd` где угодно давал обход гвардов: у `grep -n cd /tmp/a.txt &&
@@ -203,16 +209,8 @@ const texts = (statement) => (statement.words || []).map((w) => w.text);
 //
 // Неабсолютный путь СБРАСЫВАЕТ каталог, а не оставляет прежний: переход
 // состоялся, а куда — неизвестно, и держаться за старый значит приклеивать его к
-// чужим путям. Нераскрытая переменная в самом каталоге — такая же выдумка.
-export function nextCwd(current, words) {
-  if (words[0] !== 'cd') return current;
-  const to = words[1];
-  if (typeof to !== 'string' || !to.startsWith('/') || isUnresolved(to)) return '';
-  return to.replace(/\/$/, '');
-}
-
-// Переход по САМОМУ утверждению: нераскрытость видна по слову дерева, а не по
-// метке внутри его текста.
+// чужим путям. Нераскрытая переменная в самом каталоге — такая же выдумка, и
+// видна она по слову дерева, а не по метке внутри его текста.
 function cwdAfter(current, statement) {
   if (texts(statement)[0] !== 'cd') return current;
   const to = (statement.words || [])[1];
@@ -248,8 +246,8 @@ export function bashWriteTargets(cmd) {
 // Цели БЕЗ спуска в обёртку запуска. Отдельной функцией она стоит ровно затем,
 // чтобы спуск был РОВНО ОДИН уровень: тело обёртки разбирается этим же разбором,
 // а он внутрь второй обёртки уже не идёт.
-function targetsOf(cmd) {
-  const parsed = tree(cmd);
+function targetsOf(cmd, quiet = false) {
+  const parsed = tree(cmd, quiet);
   if (!parsed) return [];
   const cfg = rules();
   const targets = [];
@@ -266,29 +264,57 @@ function targetsOf(cmd) {
 // пропускало.
 const IN_PLACE = ['-i', '--in-place'];
 
-// Цели одного утверждения. Имя команды берётся после снятия присваиваний
-// окружения и запускающих обёрток — тем же способом, что у доказательства
-// чтения: два разных ответа на вопрос «какая это команда» разъехались бы.
+// Запускающий префикс, который снимается ТОЛЬКО на стороне записи. Прежний
+// разбор искал имя команды где угодно в куске, и `sudo tee f` цель давал;
+// дерево спрашивает ПЕРВОЕ слово, поэтому префикс приходится снимать явно —
+// иначе канонический способ записи в защищённый файл проходил бы мимо гейта.
+//
+// Список отдельный от словаря доказательства чтения НАРОЧНО: сними там `sudo`,
+// и `sudo cat a` станет ДОКАЗАННЫМ чтением, то есть гвард якоря ослабнет.
+// Стороны не симметричны — на записи ищут больше, на чтении доказывают меньше.
+const LAUNCHERS = new Set(['sudo', 'doas', 'env']);
+
+function dropLaunchers(list, cfg) {
+  let current = dropWrappers(dropEnvPrefix(list), cfg);
+  for (let guard = 0; guard < 4 && LAUNCHERS.has(current[0]); guard += 1) {
+    let i = 1;
+    // У пускателя свои ключи и свои присваивания: `env -i FOO=1 tee f`.
+    while (i < current.length
+      && (current[i].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(current[i]))) i += 1;
+    current = dropWrappers(dropEnvPrefix(current.slice(i)), cfg);
+  }
+  return current;
+}
+
+// Цели одного утверждения. Считаются по СЛОВАМ дерева, а не по их текстам:
+// слово с подстановкой обязано получить метку и здесь — `tee $LOG` иначе даёт
+// пустой список, а пустой список у гейта значит «команда ничего не пишет».
 function statementTargets(statement, cfg) {
   const targets = [];
   for (const redirect of statement.redirects || []) {
     if (WRITE_OPS.has(redirect.op)) targets.push(targetText(redirect.target));
   }
   if (!cfg) return targets;
-  const list = dropWrappers(dropEnvPrefix(texts(statement)), cfg);
+  const all = statement.words || [];
+  const list = dropLaunchers(texts(statement), cfg);
+  // Те же слова, что и в списке имён, но объектами: снятие префикса убирает
+  // ровно начало, поэтому хвосты совпадают по длине.
+  const words = all.slice(all.length - list.length);
   const name = list[0] || '';
-  const operands = list.slice(1).filter((w) => !w.startsWith('-'));
-  if (name === 'tee') targets.push(...operands);
+  const operands = words.slice(1).filter((word) => !word.text.startsWith('-'));
+  if (name === 'tee') targets.push(...operands.map(targetText));
   if ((name === 'sed' || name === 'perl') && list.slice(1).some((w) => usesFlag(w, IN_PLACE))) {
     // Здесь цель не отличить от программы правки: `s/a/b/` выглядит путём так
     // же, как `README.md`. Названы обе — лишняя цель гейта не открывает, а
     // пропущенная пропускает правку файла мимо него.
-    for (const word of list.slice(1)) if (/[/.]/.test(word)) targets.push(word);
+    for (const word of words.slice(1)) {
+      if (word.expanded || /[/.]/.test(word.text)) targets.push(targetText(word));
+    }
   }
   if (name === 'cp' || name === 'mv') {
     const at = list.indexOf('-t');
-    if (at > 0 && list[at + 1]) targets.push(list[at + 1]);
-    else if (operands.length) targets.push(operands[operands.length - 1]);
+    if (at > 0 && words[at + 1]) targets.push(targetText(words[at + 1]));
+    else if (operands.length) targets.push(targetText(operands[operands.length - 1]));
   }
   return targets;
 }
@@ -328,7 +354,7 @@ function wrapperTargets(cmd) {
     // тело целиком, разбор терял настоящую запись. Внутри тела нераскрытая цель
     // именно ОТБРАСЫВАЕТСЯ, а не помечается: спуск сюда и так один уровень, а
     // снаружи та же цель остаётся под гейтом помеченной.
-    for (const t of targetsOf(body)) if (t && !isUnresolved(t)) out.push(t);
+    for (const t of targetsOf(body, true)) if (t && !isUnresolved(t)) out.push(t);
   }
   return out;
 }
@@ -348,7 +374,7 @@ const wrapperName = (word) => String(word || '').replace(/^.*\//, '').toLowerCas
 // ключ принадлежит скрипту, и назвать конфиг целью записи значило бы завести
 // ложный отказ на обычной форме запуска.
 function wrapperBodyOf(statement, cfg) {
-  const list = dropWrappers(dropEnvPrefix(texts(statement)), cfg);
+  const list = dropLaunchers(texts(statement), cfg);
   if (!list.length || !cfg.shellWrappers.includes(wrapperName(list[0]))) return '';
   for (let i = 1; i < list.length; i += 1) {
     const flag = list[i];

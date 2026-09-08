@@ -40,12 +40,20 @@ def _fires(row, statements, source):
     if row["scope"] == "raw":
         return bool(row["pattern"].search(source))
     for statement in statements:
-        if row["first"] and not (statement.get("depth") == 0 and statement.get("line_first")):
+        if row["first"] and not _leads(statement):
             continue
         words = "\n".join(word.get("text") or "" for word in statement.get("words") or [])
         if words and row["pattern"].search(words):
             return True
     return False
+
+
+def _leads(statement):
+    """Первое ли это утверждение КОМАНДЫ: верхний уровень, первая строка, начало
+    строки. Не «первое любой строки»: прежний гвард смотрел на начало вызова, и
+    переезд обещан с теми же ожиданиями — расширять охват молча нельзя."""
+    return (statement.get("depth") == 0 and statement.get("line") == 1
+            and statement.get("line_first") is True)
 
 
 def _rows(paths):
