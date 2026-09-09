@@ -29,5 +29,7 @@ export function createClient({ base, fetchImpl = fetch } = {}) {
       itemsToUpdate.length === 0
         ? { items: [] }
         : request("PUT", `/collections/${id}/items`, { itemsToUpdate }),
+    updateBlocks: async (blocks) =>
+      blocks.length === 0 ? { items: [] } : request("PUT", "/blocks", { blocks }),
   };
 }

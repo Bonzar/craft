@@ -118,6 +118,34 @@ export function convertible(measure, product, measures) {
 }
 
 /**
+ * Колонка «нужно» в таблице состава — четвёртая, под порции ближайшей готовки.
+ * Пересчёт делает сам Craft формулой, поэтому цифры в карточке живые: правишь
+ * порции готовки, прогоняешь команду — граммовки едут следом.
+ *
+ * Ячейка, где количество словами («по вкусу»), переносится как есть: формула
+ * по ней дала бы ошибку, а смысл строки от числа порций не зависит.
+ */
+export function setPortionsColumn(markdown, portions) {
+  const lines = String(markdown ?? "").split("\n");
+  const isRow = (l) => l.trim().startsWith("|");
+  const isRule = (l) => /^\|[\s|:-]+\|$/.test(l.trim());
+
+  let index = 0;
+  return lines
+    .map((line) => {
+      if (!isRow(line)) return line;
+      const parts = cells(line);
+      if (isRule(line)) return `| ${parts.slice(0, 3).map(() => "---").join(" | ")} | --- |`;
+      index += 1;
+      const [first, second, third] = parts;
+      const value =
+        index === 1 ? String(portions) : number(second) === null ? second : `=B${index}*(D1/B1)`;
+      return `| ${[first, second, third, value].map((c) => c ?? "").join(" | ")} |`;
+    })
+    .join("\n");
+}
+
+/**
  * Вариант ингредиента: сначала тот, что есть дома, иначе первый по порядку.
  * Общая для списка покупок и для списания: разойдись они — покупали бы одно,
  * а тратили другое, и в минус ушёл бы продукт, которого дома нет вовсе.
