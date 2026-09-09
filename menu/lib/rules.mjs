@@ -242,7 +242,7 @@ export function checkPurchases(model) {
         finding(
           "purchases",
           purchase.id,
-          `закупка в ${purchase.unit}, ${product.name} в ${product.unit} — в Мерах нет строки «${purchase.unit} → ${product.unit}»`,
+          `закупка в ${purchase.unit}, ${product.name} в ${product.unit} — в «Мерах» нет заполненной строки «${purchase.unit} → ${product.unit}»`,
         ),
       );
     }

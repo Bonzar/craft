@@ -96,6 +96,19 @@ test("без записи в мосте перевода нет, и мера н�
   assert.equal(got.unknown, "ст. л.");
 });
 
+test("мост с незаполненной половиной равенства не считается", () => {
+  const { rows } = parseIngredients(table(`| ${link("Мёд", "m")} (ст. л.) | 1 | =x |`));
+  const product = { id: "m", unit: "г" };
+  for (const half of [
+    { productId: "m", measure: "ст. л.", measureQty: 1, productQty: null },
+    { productId: "m", measure: "ст. л.", measureQty: null, productQty: 20 },
+  ]) {
+    const got = convert(rows[0], product, [half]);
+    assert.equal(got.qty, null);
+    assert.equal(got.unknown, "ст. л.");
+  }
+});
+
 test("мост чужого продукта не применяется", () => {
   const { rows } = parseIngredients(table(`| ${link("Мёд", "m")} (ст. л.) | 1 | =x |`));
   const measures = [{ productId: "другой", measure: "ст. л.", measureQty: 1, productQty: 15 }];

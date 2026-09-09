@@ -96,10 +96,15 @@ export function convert(row, product, measures) {
   const measure = row.measure ?? product.unit;
   if (startsWithMeasure(measure, product.unit)) return { qty: row.qty, unit: product.unit };
 
+  // Обе стороны равенства обязательны: строка с одной заполненной половиной —
+  // это заготовка под ответ, а не ответ. Считать по ней значило бы выдать ноль
+  // за перевод и потерять продукт из списка покупок молча.
   const bridge = measures.find(
     (m) => m.productId === product.id && startsWithMeasure(measure, m.measure),
   );
-  if (!bridge || !bridge.measureQty) return { qty: null, unit: product.unit, unknown: measure };
+  if (!bridge || !bridge.measureQty || !bridge.productQty) {
+    return { qty: null, unit: product.unit, unknown: measure };
+  }
 
   return { qty: (row.qty * bridge.productQty) / bridge.measureQty, unit: product.unit };
 }
