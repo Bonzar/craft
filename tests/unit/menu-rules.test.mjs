@@ -330,6 +330,29 @@ test("готовку, которую никто не ест, ловим — кр
   assert.ok(messages(found, "c-nikto").includes("никто не ест"));
 });
 
+test("списали, а потом передумали — это видно", () => {
+  const model = fixture({
+    cooks: (cooks) =>
+      cooks.map((c) =>
+        c.id === "c-puree"
+          ? item(c.id, c.name, { ...c.properties, status: "отменено", sys_counted: true })
+          : c,
+      ),
+    purchases: (purchases) =>
+      purchases.map((b) =>
+        item(b.id, b.name, { ...b.properties, status: "отменено", sys_counted: true }),
+      ),
+  });
+  assert.ok(
+    messages(checkCooks(model), "c-puree").includes(
+      "продукты списаны, а готовка уже не «сделано» — проверь наличие",
+    ),
+  );
+  assert.deepEqual(messages(checkPurchases(model), "b-rice"), [
+    "приход учтён, а закупка уже не «куплено» — проверь наличие",
+  ]);
+});
+
 test("отменённая готовка молчит, пока её кто-нибудь не съест", () => {
   const cancel = (cooks) =>
     cooks.map((c) =>

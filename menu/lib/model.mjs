@@ -68,6 +68,7 @@ export function buildModel(raw) {
     recipeId: relations(i.properties?.recipe)[0] ?? null,
     portions: num(i.properties?.portions) ?? 0,
     storage: i.properties?.storage ?? null,
+    counted: i.properties?.sys_counted === true,
     remaining: num(i.properties?.remaining),
     remainingOn: i.properties?.remainingon ?? null,
     status: i.properties?.status ?? null,
@@ -105,6 +106,7 @@ export function buildModel(raw) {
     qty: num(i.properties?.qty),
     unit: i.properties?.unit ?? null,
     forIds: relations(i.properties?.for),
+    counted: i.properties?.sys_counted === true,
     status: i.properties?.status ?? null,
   }));
 

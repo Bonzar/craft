@@ -60,6 +60,13 @@ export function checkCooks(model) {
   for (const cook of model.cooks) {
     const all = byCook.get(cook.id) ?? [];
 
+    // Списали продукты, а потом готовку отменили или вернули в план. Галочку
+    // код не снимает — вернуть точно то, что списал, он уже не сможет; значит
+    // сказать вслух, чтобы наличие поправил тот, кто видит холодильник.
+    if (cook.counted && cook.status !== "сделано") {
+      out.push(finding("cooks", cook.id, "продукты списаны, а готовка уже не «сделано» — проверь наличие"));
+    }
+
     // Отменённая готовка не состоялась: ни сроков, ни расхода, ни «никто не
     // ест». Спросить с неё можно одно — что её никто уже не ждёт в тарелке.
     if (cook.status === "отменено") {
@@ -244,6 +251,10 @@ export function checkPurchases(model) {
   const ix = indexModel(model);
   const out = [];
   for (const purchase of model.purchases) {
+    if (purchase.counted && purchase.status !== "куплено") {
+      out.push(finding("purchases", purchase.id, "приход учтён, а закупка уже не «куплено» — проверь наличие"));
+    }
+
     // Отменённая закупка не состоится: ни единицы у неё спрашивать, ни срока.
     if (purchase.status === "отменено") continue;
 

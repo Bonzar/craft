@@ -3,13 +3,11 @@
 // вычитает. Обычный путь другой — количество меняется вместе со статусом, в тот
 // же момент; это догонялка для случая, когда статусы проставлены, а цифры нет.
 //
-//   node menu/stock.mjs                       # показать, ничего не писать
-//   node menu/stock.mjs --apply               # записать Qty и QtyOn
-//   node menu/stock.mjs --through 2026-09-08  # остановиться раньше
+//   node menu/stock.mjs           # показать, ничего не писать
+//   node menu/stock.mjs --apply   # записать Qty и отметить движения
 //
-// Случилось или нет — решает статус, а не дата: «план» не считается, каким бы
-// числом ни стоял. Отсечка `QtyOn` у каждого продукта своя и нужна ровно затем,
-// чтобы догонялка не посчитала одно и то же дважды.
+// Что уже проведено, помнит галочка `sys_Counted` на самой записи, поэтому
+// прогон можно повторять: одно движение учтётся ровно один раз.
 
 import { createClient } from "./lib/craft-api.mjs";
 import { buildModel, indexModel } from "./lib/model.mjs";
@@ -17,17 +15,11 @@ import { ledger } from "./lib/stock.mjs";
 
 const KINDS = ["cooks", "meals", "purchases", "recipes", "products", "eaters", "measures"];
 
-export const today = (now = new Date()) => now.toISOString().slice(0, 10);
-
-export function parseArgs(argv, now = new Date()) {
-  const args = { through: today(now), apply: false };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--apply") args.apply = true;
-    else if (argv[i] === "--through") args.through = argv[++i];
-    else throw new Error(`лишний аргумент ${argv[i]}`);
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(args.through)) {
-    throw new Error("--through: нужна дата вида 2026-09-09");
+export function parseArgs(argv) {
+  const args = { apply: false };
+  for (const arg of argv) {
+    if (arg === "--apply") args.apply = true;
+    else throw new Error(`лишний аргумент ${arg}`);
   }
   return args;
 }
@@ -42,7 +34,12 @@ async function main() {
   const raw = {};
   for (const kind of KINDS) raw[kind] = await client.getItems(collections[kind]);
   const ix = indexModel(buildModel(raw));
-  const { changed, unknown } = ledger(ix, args.through);
+  const { changed, records, unknown } = ledger(ix);
+
+  if (changed.length === 0 && unknown.length === 0) {
+    console.log("наличие сходится с записями: непроведённых движений нет");
+    return;
+  }
 
   const width = Math.max(0, ...changed.map((r) => r.product.name.length));
   for (const row of changed) {
@@ -50,22 +47,29 @@ async function main() {
       .filter(Boolean)
       .join(" ");
     console.log(
-      `${row.product.name.padEnd(width)}  c ${row.from ?? "начала"}  было ${String(row.was).padStart(6)}  ${delta.padEnd(16)} стало ${row.now} ${row.product.unit}`,
+      `${row.product.name.padEnd(width)}  было ${String(row.was).padStart(6)}  ${delta.padEnd(16)} стало ${row.now} ${row.product.unit}   ${row.from.join(", ")}`,
     );
   }
   for (const miss of unknown) {
     console.log(`\n[мера] ${miss.product.name}: «${miss.measure}» не свести к ${miss.product.unit} — ${miss.what}`);
   }
 
+  const count = `${records.cooks.length} готовок, ${records.purchases.length} закупок`;
   if (!args.apply) {
-    console.log(`\nпо ${args.through} включительно, продуктов затронуто ${changed.length}; чтобы записать — --apply`);
+    console.log(`\nнепроведённого: ${count}, продуктов затронуто ${changed.length}; чтобы записать — --apply`);
     return;
   }
   await client.updateItems(
     collections.products,
-    changed.map((r) => ({ id: r.product.id, properties: { qty: r.now, qtyon: args.through } })),
+    changed.map((r) => ({ id: r.product.id, properties: { qty: r.now } })),
   );
-  console.log(`\nзаписано: ${changed.length} продуктов, учтено по ${args.through}`);
+  for (const kind of ["cooks", "purchases"]) {
+    await client.updateItems(
+      collections[kind],
+      records[kind].map((id) => ({ id, properties: { sys_counted: true } })),
+    );
+  }
+  console.log(`\nзаписано: ${changed.length} продуктов; проведено ${count}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import { buildModel, indexModel } from "../../menu/lib/model.mjs";
 import { ledger } from "../../menu/lib/stock.mjs";
-import { parseArgs, today } from "../../menu/stock.mjs";
+import { parseArgs } from "../../menu/stock.mjs";
 
 const rel = (...ids) => ({ relations: ids.map((blockId) => ({ blockId })) });
 const item = (id, name, properties, content) => ({ id, name, properties, content });
@@ -51,36 +51,27 @@ function fixture(over = {}) {
   return indexModel(buildModel(raw));
 }
 
-const one = (ix, through) => ledger(ix, through).changed[0];
-const markedOn = (day) => (products) =>
-  products.map((p) => item(p.id, p.name, { ...p.properties, qtyon: day }));
+const one = (ix) => ledger(ix).changed[0];
+const counted = (over) => (rows) =>
+  rows.map((r) => (over.includes(r.id) ? item(r.id, r.name, { ...r.properties, sys_counted: true }) : r));
 
 test("куплено прибавляет, сделано вычитает", () => {
-  const r = one(fixture(), "2026-09-08");
+  const r = one(fixture());
   assert.deepEqual([r.was, r.plus, r.minus, r.now], [175, 800, 400, 575]);
 });
 
-test("отсечка продукта отбрасывает уже учтённое, включая свой день", () => {
-  // Закупка субботняя, готовка воскресная. Отметка за субботу оставляет расход.
-  const sb = one(fixture({ products: markedOn("2026-09-05") }), "2026-09-08");
-  assert.deepEqual([sb.plus, sb.minus, sb.now], [0, 400, -225]);
+test("проведённое движение второй раз не считается", () => {
+  const bezPrihoda = one(fixture({ purchases: counted(["b-sb"]) }));
+  assert.deepEqual([bezPrihoda.plus, bezPrihoda.minus, bezPrihoda.now], [0, 400, -225]);
 
-  // Отметка за воскресенье: учтено всё, считать нечего.
-  assert.equal(one(fixture({ products: markedOn("2026-09-06") }), "2026-09-08"), undefined);
+  // Отмечено всё — считать нечего, и прогон можно повторять сколько угодно.
+  const ix = fixture({ purchases: counted(["b-sb"]), cooks: counted(["c-vs"]) });
+  assert.deepEqual(ledger(ix).changed, []);
 });
 
-test("догонялку можно остановить раньше указанной датой", () => {
-  const ix = fixture({
-    cooks: (cooks) => [
-      ...cooks,
-      item("c-sr", "Сырники, ср", {
-        date: "2026-09-09", recipe: rel("r-syr"), portions: 2, status: "сделано",
-      }),
-    ],
-  });
-  // По вторник среда ещё не в счёт; по среду — уже.
-  assert.equal(one(ix, "2026-09-08").minus, 400);
-  assert.equal(one(ix, "2026-09-09").minus, 800);
+test("движения возвращаются вместе с записями, которые их породили", () => {
+  const { records } = ledger(fixture());
+  assert.deepEqual(records, { cooks: ["c-vs"], purchases: ["b-sb"] });
 });
 
 test("план и отменённое в счёт не идут", () => {
@@ -104,7 +95,7 @@ test("план и отменённое в счёт не идут", () => {
       }),
     ],
   });
-  const r = one(ix, "2026-09-10");
+  const r = one(ix);
   assert.deepEqual([r.plus, r.minus, r.now], [800, 400, 575]);
 });
 
@@ -112,7 +103,7 @@ test("продукт, которого ничего не касалось, в о
   const ix = fixture({
     products: (products) => [...products, item("p-sol", "Соль", { unit: "г", qty: 500 })],
   });
-  assert.deepEqual(ledger(ix, "2026-09-08").changed.map((r) => r.product.name), ["Творог"]);
+  assert.deepEqual(ledger(ix).changed.map((r) => r.product.name), ["Творог"]);
 });
 
 test("непереводимая мера в сумму не идёт и называется отдельно", () => {
@@ -122,18 +113,13 @@ test("непереводимая мера в сумму не идёт и наз�
         composition(2, ["Творог", "p-tvorog", "ст. л.", 4])),
     ],
   });
-  const { changed, unknown } = ledger(ix, "2026-09-08");
+  const { changed, unknown } = ledger(ix);
   assert.equal(changed[0].minus, 0);
   assert.deepEqual(unknown.map((u) => [u.product.name, u.measure]), [["Творог", "ст. л."]]);
 });
 
-test("по умолчанию догоняет по сегодня: случилось или нет, решает статус", () => {
-  const now = new Date("2026-09-09T08:00:00Z");
-  assert.equal(today(now), "2026-09-09");
-  assert.deepEqual(parseArgs([], now), { through: "2026-09-09", apply: false });
-  assert.deepEqual(parseArgs(["--through", "2026-09-08", "--apply"], now), {
-    through: "2026-09-08",
-    apply: true,
-  });
-  assert.throws(() => parseArgs(["--through", "вчера"], now), /нужна дата/);
+test("дат у догонялки больше нет: что учтено, помнит сама запись", () => {
+  assert.deepEqual(parseArgs([]), { apply: false });
+  assert.deepEqual(parseArgs(["--apply"]), { apply: true });
+  assert.throws(() => parseArgs(["--through", "2026-09-08"]), /лишний аргумент/);
 });
