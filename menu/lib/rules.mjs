@@ -250,6 +250,12 @@ export function checkPurchases(model) {
       );
     }
 
+    // Ноль в количестве — не «купил ноль», а «не пересчитал»: магазинное число
+    // осталось в заметке, а в единице продукта его никто не мерил.
+    if (!purchase.qty) {
+      out.push(finding("purchases", purchase.id, `не проставлено количество в ${purchase.unit ?? "единице продукта"}`));
+    }
+
     const dates = purchase.forIds
       .map((id) => ix.cookById.get(id)?.date)
       .filter(Boolean)

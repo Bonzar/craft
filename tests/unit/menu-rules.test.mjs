@@ -367,6 +367,21 @@ test("закупка в упаковках сходится с продукто�
   assert.deepEqual(messages(checkPurchases(model), "b-rice-up"), []);
 });
 
+test("закупка без количества — такая же дыра, как без единицы", () => {
+  const model = fixture({
+    purchases: (purchases) => [
+      ...purchases,
+      item("b-nol", "Морковь", {
+        date: "2026-09-05", product: rel("p-rice"), qty: 0, unit: "г",
+        for: rel("c-plov"), status: "куплено",
+      }),
+    ],
+  });
+  assert.deepEqual(messages(checkPurchases(model), "b-nol"), [
+    "не проставлено количество в г",
+  ]);
+});
+
 test("отменённая закупка не спрашивается ни о чём", () => {
   const model = fixture({
     purchases: (purchases) => [
