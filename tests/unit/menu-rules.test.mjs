@@ -223,6 +223,19 @@ test("гарнир к блюду, которое его не просит, — �
   ]);
 });
 
+test("горячее, которое просит гарнира, без гарнира — тоже находка", () => {
+  const model = fixture({
+    meals: (meals) => [
+      ...meals,
+      item("m-vs-o-v", "Вс · обед · Влад", {
+        date: "2026-09-06", slot: "обед", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-plov"), status: "план",
+      }),
+    ],
+  });
+  assert.deepEqual(messages(checkMeals(model), "m-vs-o-v"), ["Плов без гарнира"]);
+});
+
 test("продукт с истёкшим сроком ловится по составу рецепта", () => {
   const model = fixture({
     meals: (meals) => [
@@ -248,7 +261,7 @@ test("повтор горячего внутри дня считается по 
       }),
     ],
   });
-  const found = checkMeals(model);
+  const found = checkMeals(model).filter((f) => f.message.includes("повтор"));
   assert.deepEqual(messages(found, "m-sb-o-v"), ["повтор горячего у Влад: Плов"]);
   assert.deepEqual(messages(found, "m-sb-d-o"), []);
 });
@@ -545,7 +558,10 @@ test("повтор горячего сравнивает обед с ужино�
       }),
     ],
   });
-  assert.deepEqual(messages(checkMeals(obedIUzhin), "m-o"), ["повтор горячего у Влад: Плов"]);
+  assert.deepEqual(
+    messages(checkMeals(obedIUzhin).filter((f) => f.message.includes("повтор")), "m-o"),
+    ["повтор горячего у Влад: Плов"],
+  );
 });
 
 test("гарнир не повторяется за день целиком", () => {

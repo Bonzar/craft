@@ -147,6 +147,9 @@ export function checkMeals(model) {
     if (hots.length > 0 && wants.length === 0 && meal.side.length > 0) {
       out.push(finding("meals", meal.id, `гарнир лишний: ${hots[0].name} его не просит`));
     }
+    if (wants.length > 0 && meal.side.length === 0) {
+      out.push(finding("meals", meal.id, `${wants[0].name} без гарнира`));
+    }
 
     if (meal.where === "с собой") {
       for (const id of [...meal.hot, ...meal.side, ...meal.extra]) {
