@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import { buildModel, indexModel } from "../../menu/lib/model.mjs";
 import { ledger } from "../../menu/lib/stock.mjs";
-import { parseArgs, yesterday } from "../../menu/stock.mjs";
+import { parseArgs, today } from "../../menu/stock.mjs";
 
 const rel = (...ids) => ({ relations: ids.map((blockId) => ({ blockId })) });
 const item = (id, name, properties, content) => ({ id, name, properties, content });
@@ -69,7 +69,7 @@ test("отсечка продукта отбрасывает уже учтённ
   assert.equal(one(fixture({ products: markedOn("2026-09-06") }), "2026-09-08"), undefined);
 });
 
-test("день считается целиком и только когда закончился", () => {
+test("догонялку можно остановить раньше указанной датой", () => {
   const ix = fixture({
     cooks: (cooks) => [
       ...cooks,
@@ -127,12 +127,12 @@ test("непереводимая мера в сумму не идёт и наз�
   assert.deepEqual(unknown.map((u) => [u.product.name, u.measure]), [["Творог", "ст. л."]]);
 });
 
-test("по умолчанию считается по вчера", () => {
+test("по умолчанию догоняет по сегодня: случилось или нет, решает статус", () => {
   const now = new Date("2026-09-09T08:00:00Z");
-  assert.equal(yesterday(now), "2026-09-08");
-  assert.deepEqual(parseArgs([], now), { through: "2026-09-08", apply: false });
-  assert.deepEqual(parseArgs(["--through", "2026-09-09", "--apply"], now), {
-    through: "2026-09-09",
+  assert.equal(today(now), "2026-09-09");
+  assert.deepEqual(parseArgs([], now), { through: "2026-09-09", apply: false });
+  assert.deepEqual(parseArgs(["--through", "2026-09-08", "--apply"], now), {
+    through: "2026-09-08",
     apply: true,
   });
   assert.throws(() => parseArgs(["--through", "вчера"], now), /нужна дата/);

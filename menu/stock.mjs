@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Пересчёт наличия: закупка «куплено» прибавляет, готовка «сделано» вычитает.
+// Догнать наличие по записям: закупка «куплено» прибавляет, готовка «сделано»
+// вычитает. Обычный путь другой — количество меняется вместе со статусом, в тот
+// же момент; это догонялка для случая, когда статусы проставлены, а цифры нет.
 //
 //   node menu/stock.mjs                       # показать, ничего не писать
 //   node menu/stock.mjs --apply               # записать Qty и QtyOn
-//   node menu/stock.mjs --through 2026-09-09  # включить и сегодняшний день
+//   node menu/stock.mjs --through 2026-09-08  # остановиться раньше
 //
-// Отсечка у каждого продукта своя — колонка `QtyOn`, последний целиком учтённый
-// день. День применяется целиком и только когда закончился, поэтому по
-// умолчанию считается по вчера: сегодня ещё могут сварить и купить.
+// Случилось или нет — решает статус, а не дата: «план» не считается, каким бы
+// числом ни стоял. Отсечка `QtyOn` у каждого продукта своя и нужна ровно затем,
+// чтобы догонялка не посчитала одно и то же дважды.
 
 import { createClient } from "./lib/craft-api.mjs";
 import { buildModel, indexModel } from "./lib/model.mjs";
@@ -15,12 +17,10 @@ import { ledger } from "./lib/stock.mjs";
 
 const KINDS = ["cooks", "meals", "purchases", "recipes", "products", "eaters", "measures"];
 
-const DAY = 86400000;
-export const yesterday = (now = new Date()) =>
-  new Date(now.getTime() - DAY).toISOString().slice(0, 10);
+export const today = (now = new Date()) => now.toISOString().slice(0, 10);
 
 export function parseArgs(argv, now = new Date()) {
-  const args = { through: yesterday(now), apply: false };
+  const args = { through: today(now), apply: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--apply") args.apply = true;
     else if (argv[i] === "--through") args.through = argv[++i];

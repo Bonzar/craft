@@ -28,6 +28,9 @@ export function need(ix, cooks) {
       // Из вариантов берётся тот, что есть дома, и только если дома нет ни
       // одного — первый, самый предпочтительный. Иначе список покупок требовал
       // бы ракушек при полке, забитой спиральками.
+      // «По вкусу» и «щепотка» — строка живая, но не считаемая: это не дыра
+      // в мерах, а сознательный отказ от цифры, и молчать про неё правильно.
+      if (!row.countable) continue;
       const product = pick(row, ix);
       if (!product) continue;
       const got = needFor(row, product, ix.measures, cook.portions, recipe.basePortions);

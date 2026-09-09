@@ -181,6 +181,36 @@ test("из вариантов берётся тот, что есть дома", 
   assert.equal(need(netNichego, netNichego.cooks).rows[0].product.name, "Ракушки");
 });
 
+test("количество словами в сумму не идёт и дырой в мерах не считается", () => {
+  const ix = indexModel(
+    buildModel({
+      eaters: [], meals: [], purchases: [], measures: [],
+      recipes: [
+        item("r-kotlety", "Котлеты", { kind: "горячее" }, [
+          { type: "text", markdown: "### Ингредиенты" },
+          {
+            type: "table",
+            markdown: [
+              "| Кол-во порций: | 2 | 2 |",
+              "| --- | --- | --- |",
+              "| [Зелень](block://p-zelen) | по вкусу | по вкусу |",
+            ].join("\n"),
+          },
+        ]),
+      ],
+      products: [item("p-zelen", "Зелень", { unit: "пучок" })],
+      cooks: [
+        item("c-kotlety", "Котлеты, ср", {
+          date: "2026-09-09", recipe: rel("r-kotlety"), portions: 2, status: "план",
+        }),
+      ],
+    }),
+  );
+  const got = need(ix, ix.cooks);
+  assert.deepEqual(got.rows, []);
+  assert.deepEqual(got.unknown, []);
+});
+
 test("разбор аргументов", () => {
   assert.deepEqual(parseArgs(["--from", "2026-09-09", "--all"]), {
     from: "2026-09-09",
