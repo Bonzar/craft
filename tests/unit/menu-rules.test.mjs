@@ -339,6 +339,20 @@ test("готовку, которую никто не ест, ловим — кр
   assert.ok(messages(found, "c-nikto").includes("никто не ест"));
 });
 
+test("заготовку никто не ест, и это нормально", () => {
+  const model = fixture({
+    recipes: (recipes) => [...recipes, item("r-razmorozka", "Разморозка", { kind: "заготовка" })],
+    cooks: (cooks) => [
+      ...cooks,
+      item("c-razmorozka", "Разморозка минтая, сб", {
+        date: "2026-09-05", when: "вечер", recipe: rel("r-razmorozka"),
+        portions: 0, storage: "холодильник", status: "план",
+      }),
+    ],
+  });
+  assert.deepEqual(messages(checkCooks(model), "c-razmorozka"), []);
+});
+
 test("списали, а потом передумали — это видно", () => {
   const model = fixture({
     cooks: (cooks) =>

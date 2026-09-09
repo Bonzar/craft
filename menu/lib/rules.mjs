@@ -105,11 +105,15 @@ export function checkCooks(model) {
       );
     }
 
-    if (all.length === 0 && cook.storage !== "морозилка") {
+    // Заготовка кормит не тарелку, а следующую готовку: разморозка, нарезка
+    // лука впрок. Спрашивать с неё «кто ест» бессмысленно — её и не едят.
+    const recipe = ix.recipeById.get(cook.recipeId);
+    const feedsPlate = recipe?.kind !== "заготовка";
+    if (all.length === 0 && cook.storage !== "морозилка" && feedsPlate) {
       out.push(finding("cooks", cook.id, "никто не ест"));
     }
 
-    const keepDays = ix.recipeById.get(cook.recipeId)?.keepDays;
+    const keepDays = recipe?.keepDays;
     if (cook.date && cook.storage === "холодильник" && typeof keepDays === "number") {
       const last = plusDays(cook.date, keepDays);
       const late = all.find((m) => m.date > last);
