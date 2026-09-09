@@ -43,7 +43,8 @@ function fixture(over = {}) {
       item("e-olya", "Оля", { share: 1, cooks: false }),
     ],
     recipes: [
-      item("r-plov", "Плов", { kind: "горячее", keepdays: 3 },
+      // Плов просит гарнира — в чистой неделе к нему и стоит пюре.
+      item("r-plov", "Плов", { kind: "горячее", keepdays: 3, needsside: true },
         composition(["Рис", "p-rice", "г", 200])),
       item("r-salad", "Салат", { kind: "салат", keepdays: 0 },
         composition(["Лаваш", "p-lavash", "уп", 1])),
@@ -204,6 +205,22 @@ test("приём без горячего не закрыт, а ужин без �
   const found = checkMeals(model);
   assert.deepEqual(messages(found, "m-vs-z-v"), ["приём не закрыт: горячего нет"]);
   assert.deepEqual(messages(found, "m-vs-u-v"), ["на ужин нет салата"]);
+});
+
+test("гарнир к блюду, которое его не просит, — двойной счёт", () => {
+  // Салат гарнира не просит: у его рецепта needsSide не стоит.
+  const model = fixture({
+    meals: (meals) => [
+      ...meals,
+      item("m-vs-o-v", "Вс · обед · Влад", {
+        date: "2026-09-06", slot: "обед", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-salad"), side: rel("c-puree"), status: "план",
+      }),
+    ],
+  });
+  assert.deepEqual(messages(checkMeals(model), "m-vs-o-v"), [
+    "гарнир лишний: Салат его не просит",
+  ]);
 });
 
 test("продукт с истёкшим сроком ловится по составу рецепта", () => {

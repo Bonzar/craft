@@ -143,6 +143,44 @@ test("не хватает — это надо минус дома минус з�
   );
 });
 
+test("из вариантов берётся тот, что есть дома", () => {
+  const withPasta = (over) =>
+    indexModel(
+      buildModel({
+        eaters: [], meals: [], purchases: [], measures: [],
+        recipes: [
+          item("r-garnir", "Гарнир", { kind: "гарнир" },
+            composition(2, ["Ракушки", "p-rakushki", "г", 200])),
+        ],
+        products: [
+          item("p-rakushki", "Ракушки", { unit: "г", qty: over.rakushki }),
+          item("p-babochki", "Бабочки", { unit: "г", qty: over.babochki }),
+        ],
+        cooks: [
+          item("c-garnir", "Гарнир, ср", {
+            date: "2026-09-09", recipe: rel("r-garnir"), portions: 2, status: "план",
+          }),
+        ],
+      }),
+    );
+
+  // Две ссылки в одной ячейке — варианты одного ингредиента.
+  const two = (ix) => {
+    const recipe = ix.recipes[0];
+    recipe.ingredients[0].products = [
+      { id: "p-rakushki", title: "Ракушки" },
+      { id: "p-babochki", title: "Бабочки" },
+    ];
+    return ix;
+  };
+
+  const est = two(withPasta({ rakushki: 0, babochki: 450 }));
+  assert.equal(need(est, est.cooks).rows[0].product.name, "Бабочки");
+
+  const netNichego = two(withPasta({ rakushki: 0, babochki: 0 }));
+  assert.equal(need(netNichego, netNichego.cooks).rows[0].product.name, "Ракушки");
+});
+
 test("разбор аргументов", () => {
   assert.deepEqual(parseArgs(["--from", "2026-09-09", "--all"]), {
     from: "2026-09-09",

@@ -5,6 +5,12 @@ import { needFor, convert } from "./cards.mjs";
 
 const round = (x) => Math.round(x * 100) / 100;
 
+/** Вариант ингредиента: сначала тот, что есть дома, иначе первый по порядку. */
+function pick(row, ix) {
+  const options = row.products.map((p) => ix.productById.get(p.id)).filter(Boolean);
+  return options.find((p) => (p.qty ?? 0) > 0) ?? options[0];
+}
+
 /**
  * Потребность по продуктам: составы готовок, каждый пересчитанный на её порции.
  * Строка, чья мера не сводится к единице продукта, в сумму не идёт — она
@@ -19,9 +25,10 @@ export function need(ix, cooks) {
     const recipe = ix.recipeById.get(cook.recipeId);
     if (!recipe) continue;
     for (const row of recipe.ingredients) {
-      // Из вариантов берётся первый: он же предпочтительный, и он же попадёт
-      // в список покупок, пока Влад не переставит их в карточке местами.
-      const product = ix.productById.get(row.products[0]?.id);
+      // Из вариантов берётся тот, что есть дома, и только если дома нет ни
+      // одного — первый, самый предпочтительный. Иначе список покупок требовал
+      // бы ракушек при полке, забитой спиральками.
+      const product = pick(row, ix);
       if (!product) continue;
       const got = needFor(row, product, ix.measures, cook.portions, recipe.basePortions);
       if (got.qty === null) {

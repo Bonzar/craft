@@ -140,6 +140,14 @@ export function checkMeals(model) {
       if (!hasSalad) out.push(finding("meals", meal.id, "на ужин нет салата"));
     }
 
+    // Гарнир спрашивает само блюдо: болоньезе несёт макароны в составе, и
+    // отдельная паста к нему — не сытнее, а тот же продукт, посчитанный дважды.
+    const hots = meal.hot.map(recipeOf).filter(Boolean);
+    const wants = hots.filter((r) => r.needsSide);
+    if (hots.length > 0 && wants.length === 0 && meal.side.length > 0) {
+      out.push(finding("meals", meal.id, `гарнир лишний: ${hots[0].name} его не просит`));
+    }
+
     if (meal.where === "с собой") {
       for (const id of [...meal.hot, ...meal.side, ...meal.extra]) {
         const cook = ix.cookById.get(id);
