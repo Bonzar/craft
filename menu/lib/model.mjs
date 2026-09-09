@@ -96,17 +96,6 @@ export function buildModel(raw) {
     productQty: num(i.properties?.productqty),
   }));
 
-  // Связь «закупка — готовка» умеет разъезжаться: половина, что живёт у закупки,
-  // однажды перестала читаться, а половина у готовки осталась цела. Поэтому
-  // берутся обе и складываются — потерять привязку дороже, чем прочитать дважды.
-  const cooksOfPurchase = new Map();
-  for (const cook of raw.cooks ?? []) {
-    for (const id of relations(cook.properties?.purchases)) {
-      if (!cooksOfPurchase.has(id)) cooksOfPurchase.set(id, []);
-      cooksOfPurchase.get(id).push(cook.id);
-    }
-  }
-
   const purchases = (raw.purchases ?? []).map((i) => ({
     id: i.id,
     name: title(i),
@@ -114,7 +103,7 @@ export function buildModel(raw) {
     productId: relations(i.properties?.product)[0] ?? null,
     qty: num(i.properties?.qty),
     unit: i.properties?.unit ?? null,
-    forIds: [...new Set([...relations(i.properties?.for), ...(cooksOfPurchase.get(i.id) ?? [])])],
+    forIds: relations(i.properties?.for),
     status: i.properties?.status ?? null,
   }));
 

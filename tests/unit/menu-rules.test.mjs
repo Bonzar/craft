@@ -414,25 +414,6 @@ test("закупка без количества — такая же дыра, �
   ]);
 });
 
-test("привязка к готовке читается и со стороны готовки", () => {
-  // У закупки поле пустое, а у готовки обратная колонка помнит — этого хватает.
-  const model = fixture({
-    cooks: (cooks) =>
-      cooks.map((c) =>
-        c.id === "c-plov"
-          ? item(c.id, c.name, { ...c.properties, purchases: rel("b-odnoboko") })
-          : c,
-      ),
-    purchases: (purchases) => [
-      ...purchases,
-      item("b-odnoboko", "Рис", {
-        date: "2026-09-05", product: rel("p-rice"), qty: 500, unit: "г", status: "план",
-      }),
-    ],
-  });
-  assert.deepEqual(messages(checkPurchases(model), "b-odnoboko"), []);
-});
-
 test("закупка без готовки — тоже находка", () => {
   const model = fixture({
     purchases: (purchases) => [
