@@ -63,10 +63,15 @@ async function main() {
     if (!cook) continue;
     const table = ingredientBlock(item.content);
     if (!table) continue;
+    const name = ix.recipeById.get(item.id)?.name;
     const markdown = setPortionsColumn(table.markdown, cook.portions);
+    if (markdown === null) {
+      console.log(`${name}: пропущено — в составе нет колонки пересчёта, заведи её сам`);
+      continue;
+    }
     if (markdown === table.markdown) continue;
     blocks.push({ id: table.id, markdown });
-    console.log(`${ix.recipeById.get(item.id)?.name}: ${cook.portions} порций — ${cook.name}`);
+    console.log(`${name}: ${cook.portions} порций — ${cook.name}`);
   }
 
   if (blocks.length === 0) console.log("нечего проставлять");

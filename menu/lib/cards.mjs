@@ -136,6 +136,10 @@ const columnLetter = (index) => String.fromCharCode(65 + index);
  * Столбцы правее не трогаются и не обрезаются: заведённое руками переживает
  * прогон, даже если стоит за колонкой «нужно».
  *
+ * Таблица уже трёх столбцов — не наш случай: колонка встала бы четвёртой, а
+ * третья осталась дырой посреди состава. Возвращаем null, и команда скажет об
+ * этом вслух, вместо того чтобы молча испортить карточку.
+ *
  * Ячейка, где количество словами («по вкусу»), переносится как есть: формула
  * по ней дала бы ошибку, а смысл строки от числа порций не зависит.
  */
@@ -145,7 +149,8 @@ export function setPortionsColumn(markdown, portions) {
   const isRule = (l) => /^\|[\s|:-]+\|$/.test(l.trim());
 
   const rows = lines.filter((l) => isRow(l) && !isRule(l));
-  if (rows.length === 0) return markdown;
+  if (rows.length === 0) return null;
+  if (Math.max(...rows.map((r) => cells(r).length)) < NEED_COLUMN) return null;
 
   const at = NEED_COLUMN;
   const width = Math.max(...rows.map((r) => cells(r).length), at + 1);
