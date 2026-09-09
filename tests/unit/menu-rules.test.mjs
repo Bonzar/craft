@@ -16,7 +16,7 @@ import {
   consecutiveRuns,
   runRules,
 } from "../../menu/lib/rules.mjs";
-import { isAfter, parseArgs, parseFrom } from "../../menu/recheck.mjs";
+import { horizons, isAfter, parseArgs, parseFrom } from "../../menu/recheck.mjs";
 
 const rel = (...ids) => ({ relations: ids.map((blockId) => ({ blockId })) });
 const item = (id, name, properties, content) => ({ id, name, properties, content });
@@ -52,6 +52,11 @@ function fixture(over = {}) {
     products: [
       item("p-rice", "Рис", { unit: "г", qty: 500 }),
       item("p-lavash", "Лаваш", { unit: "уп", bestbefore: "2026-09-07" }),
+    ],
+    measures: [
+      item("u-rice", "Рис · уп", {
+        product: rel("p-rice"), measure: "уп", measureqty: 1, productqty: 900,
+      }),
     ],
     cooks: [
       item("c-plov", "Плов, сб", {
@@ -138,12 +143,57 @@ test("отменённый приём расхода не создаёт", () =>
   assert.deepEqual(runRules(model).size, 0);
 });
 
+test("пропущенный приём расхода не создаёт и закрывать его нечем", () => {
+  const model = fixture({
+    meals: (meals) => [
+      ...meals,
+      item("m-vs-u-v", "Вс · ужин · Влад", {
+        date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-plov"), status: "пропущен",
+      }),
+    ],
+  });
+  // Ни перерасхода у плова, ни «на ужин нет салата» у самого приёма.
+  assert.deepEqual(runRules(model).size, 0);
+});
+
+test("факт остатка снят посреди дня: съеденное до него в расход не идёт", () => {
+  const withFact = (over) =>
+    fixture({
+      cooks: (cooks) =>
+        cooks.map((c) =>
+          c.id === "c-plov"
+            ? item(c.id, c.name, { ...c.properties, remaining: 0, remainingon: "2026-09-06" })
+            : c,
+        ),
+      meals: (meals) => [...meals, over],
+    });
+
+  const dojeli = withFact(
+    item("m-vs-o-v", "Вс · обед · Влад", {
+      date: "2026-09-06", slot: "обед", eater: rel("e-vlad"), where: "дома",
+      hot: rel("c-plov"), status: "съеден",
+    }),
+  );
+  assert.deepEqual(messages(checkCooks(dojeli), "c-plov"), []);
+
+  const jeschoSobiraemsya = withFact(
+    item("m-vs-u-v", "Вс · ужин · Влад", {
+      date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
+      hot: rel("c-plov"), extra: rel("c-salad"), status: "план",
+    }),
+  );
+  assert.deepEqual(messages(checkCooks(jeschoSobiraemsya), "c-plov"), [
+    "расход 1.25 из 0 порций — не хватает 1.25",
+  ]);
+});
+
 test("приём без горячего не закрыт, а ужин без салата подсвечивается отдельно", () => {
   const model = fixture({
     meals: (meals) => [
       ...meals,
       item("m-vs-z-v", "Вс · завтрак · Влад", {
-        date: "2026-09-06", slot: "завтрак", eater: rel("e-vlad"), where: "дома", status: "пропущен",
+        date: "2026-09-06", slot: "завтрак", eater: rel("e-vlad"), where: "дома", status: "план",
       }),
       item("m-vs-u-v", "Вс · ужин · Влад", {
         date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
@@ -250,6 +300,26 @@ test("готовку, которую никто не ест, ловим — кр
   assert.ok(messages(found, "c-nikto").includes("никто не ест"));
 });
 
+test("отменённая готовка молчит, пока её кто-нибудь не съест", () => {
+  const cancel = (cooks) =>
+    cooks.map((c) =>
+      c.id === "c-salad" ? item(c.id, c.name, { ...c.properties, status: "отменено" }) : c,
+    );
+
+  const nikto = fixture({
+    cooks: cancel,
+    meals: (meals) =>
+      meals.map((m) => item(m.id, m.name, { ...m.properties, extra: undefined, slot: "обед" })),
+  });
+  assert.deepEqual(messages(checkCooks(nikto), "c-salad"), []);
+
+  const jedyat = fixture({ cooks: cancel });
+  assert.deepEqual(messages(checkCooks(jedyat), "c-salad"), [
+    "готовка отменена, а её ест Сб · ужин · Влад",
+    "готовка отменена, а её ест Сб · ужин · Оля",
+  ]);
+});
+
 test("срок хранения считается от даты готовки плюс keepDays рецепта", () => {
   const model = fixture({
     meals: (meals) => [
@@ -278,10 +348,23 @@ test("закупка: единица, срок захода и привязка 
   });
   const found = checkPurchases(model);
   assert.deepEqual(messages(found, "b-lavash"), [
-    "единица не та же, что у продукта: закупка в шт, Лаваш в уп",
+    "закупка в шт, Лаваш в уп — в Мерах нет строки «шт → уп»",
     "нужен к 05.09, заход 06.09",
   ]);
   assert.deepEqual(messages(found, "b-sirota"), ["не привязан ни к одной готовке"]);
+});
+
+test("закупка в упаковках сходится с продуктом в граммах через «Меры»", () => {
+  const model = fixture({
+    purchases: (purchases) => [
+      ...purchases,
+      item("b-rice-up", "Рис", {
+        date: "2026-09-05", product: rel("p-rice"), qty: 1, unit: "уп",
+        for: rel("c-plov"), status: "куплено",
+      }),
+    ],
+  });
+  assert.deepEqual(messages(checkPurchases(model), "b-rice-up"), []);
 });
 
 test("отменённая закупка без привязки — не находка", () => {
@@ -317,6 +400,43 @@ test("--from отсекает прошлое, но пропускает гото
   assert.equal(isAfter({ date: "2026-09-09" }, "cooks", since), true);
   assert.equal(isAfter({ date: null }, "cooks", since), true);
   assert.equal(isAfter({ date: "2026-09-05" }, "cooks", null), true);
+});
+
+test("--from не отсекает то, что ещё в плане", () => {
+  const since = parseFrom("2026-09-09");
+  assert.equal(isAfter({ date: "2026-09-08", status: "план" }, "purchases", since), true);
+  assert.equal(isAfter({ date: "2026-09-08", status: "куплено" }, "purchases", since), false);
+  assert.equal(
+    isAfter({ date: "2026-09-08", slot: "ужин", status: "план" }, "meals", since),
+    true,
+  );
+});
+
+test("готовка прошлым не становится, пока её едят впереди", () => {
+  const model = fixture({
+    meals: (meals) => [
+      ...meals,
+      item("m-cht-o-v", "Чт · обед · Влад", {
+        date: "2026-09-10", slot: "обед", eater: rel("e-vlad"), where: "дома",
+        side: rel("c-puree"), hot: rel("c-plov"), status: "план",
+      }),
+    ],
+  });
+  const reach = horizons(model);
+  const since = parseFrom("2026-09-09");
+
+  // Пюре сварено в субботу, а гарниром идёт в четверг — отсекать его рано.
+  assert.equal(reach.cooks.get("c-puree"), mealPoint("2026-09-10", "обед"));
+  assert.equal(isAfter({ date: "2026-09-05", status: "сделано" }, "cooks",
+    since, reach.cooks.get("c-puree")), true);
+
+  // Салат съеден в субботу и больше нигде — это прошлое.
+  assert.equal(reach.cooks.get("c-salad"), mealPoint("2026-09-05", "ужин"));
+  assert.equal(isAfter({ date: "2026-09-05", status: "сделано" }, "cooks",
+    since, reach.cooks.get("c-salad")), false);
+
+  // Закупка дотягивается до готовки, под которую взята.
+  assert.equal(reach.purchases.get("b-rice"), mealPoint("2026-09-10", "обед"));
 });
 
 test("--from без слота берёт день целиком", () => {

@@ -85,6 +85,17 @@ export function buildModel(raw) {
     status: i.properties?.status ?? null,
   }));
 
+  // Мост кухонной меры к единице продукта: строка читается как равенство
+  // MeasureQty мер = ProductQty единиц. Единицу берёт у продукта по связи.
+  const measures = (raw.measures ?? []).map((i) => ({
+    id: i.id,
+    name: title(i),
+    productId: relations(i.properties?.product)[0] ?? null,
+    measure: i.properties?.measure ?? null,
+    measureQty: num(i.properties?.measureqty),
+    productQty: num(i.properties?.productqty),
+  }));
+
   const purchases = (raw.purchases ?? []).map((i) => ({
     id: i.id,
     name: title(i),
@@ -95,7 +106,7 @@ export function buildModel(raw) {
     status: i.properties?.status ?? null,
   }));
 
-  return { eaters, recipes, products, cooks, meals, purchases };
+  return { eaters, recipes, products, cooks, meals, purchases, measures };
 }
 
 export function indexModel(model) {

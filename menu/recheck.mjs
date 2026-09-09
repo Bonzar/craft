@@ -3,7 +3,7 @@
 // в поле problem. Что и в какой день — решает человек, код только проверяет.
 //
 //   node menu/recheck.mjs --cooks <id> --meals <id> --purchases <id> \
-//                        --recipes <id> --products <id> --eaters <id>
+//                        --recipes <id> --products <id> --eaters <id> --measures <id>
 //   node menu/recheck.mjs --discover            # показать коллекции и их id
 //   node menu/recheck.mjs ... --from 2026-09-08/обед   # не трогать прошлое
 //   node menu/recheck.mjs ... --dry-run         # только отчёт, без записи
@@ -12,7 +12,7 @@ import { createClient } from "./lib/craft-api.mjs";
 import { SLOTS, buildModel, mealPoint, slotIndex } from "./lib/model.mjs";
 import { runRules } from "./lib/rules.mjs";
 
-const KINDS = ["cooks", "meals", "purchases", "recipes", "products", "eaters"];
+const KINDS = ["cooks", "meals", "purchases", "recipes", "products", "eaters", "measures"];
 
 export function parseArgs(argv) {
   const args = { collections: {}, from: null, dryRun: false, discover: false, quiet: false };
@@ -44,11 +44,48 @@ export function parseFrom(from) {
   return slot ? mealPoint(date, slot) : mealPoint(date, "завтрак");
 }
 
-/** Записи раньше точки пересчёта не трогаем: прошлое уже случилось. */
-export function isAfter(record, kind, since) {
+/**
+ * Горизонт записи — самая поздняя точка, до которой она дотягивается.
+ * Приём отвечает сам за себя, поэтому его тут нет. Готовка живёт, пока её едят:
+ * пюре сварено в понедельник, а не хватит его в четверг. Закупка живёт, пока
+ * жива готовка, под которую взята.
+ */
+export function horizons(model) {
+  const cooks = new Map(
+    model.cooks.map((c) => [c.id, c.date ? mealPoint(c.date, "завтрак") : null]),
+  );
+  for (const meal of model.meals) {
+    if (!meal.date) continue;
+    const point = mealPoint(meal.date, meal.slot);
+    for (const id of [...meal.hot, ...meal.side, ...meal.extra]) {
+      if (!cooks.has(id)) continue;
+      const known = cooks.get(id);
+      if (known === null || known < point) cooks.set(id, point);
+    }
+  }
+
+  const purchases = new Map(
+    model.purchases.map((p) => {
+      const own = p.date ? mealPoint(p.date, "завтрак") : null;
+      const reach = p.forIds.map((id) => cooks.get(id)).filter(Boolean);
+      return [p.id, [own, ...reach].filter(Boolean).sort().pop() ?? null];
+    }),
+  );
+
+  return { cooks, purchases };
+}
+
+/**
+ * Записи раньше точки пересчёта не трогаем: прошлое уже случилось. Прошлым
+ * запись становится, только когда прошло всё, чего она касается, — и то, что
+ * всё ещё в плане, не прошло вовсе: дозакупка на среду стоит датой понедельника.
+ */
+export function isAfter(record, kind, since, until = null) {
   if (!since) return true;
+  if (record.status === "план") return true;
   if (kind === "meals") return mealPoint(record.date, record.slot) >= since;
-  return !record.date || mealPoint(record.date, "завтрак") >= since;
+  if (!record.date) return true;
+  return (until ?? mealPoint(record.date, "завтрак")) >= since;
 }
 
 function envCollections() {
@@ -66,13 +103,14 @@ export async function recheck({ client, collections, since, dryRun }) {
   for (const kind of KINDS) raw[kind] = await client.getItems(collections[kind]);
   const model = buildModel(raw);
   const found = runRules(model);
+  const reach = horizons(model);
 
   const report = [];
   const writes = new Map();
   for (const kind of ["cooks", "meals", "purchases"]) {
     const updates = [];
     for (const record of model[kind]) {
-      if (!isAfter(record, kind, since)) continue;
+      if (!isAfter(record, kind, since, reach[kind]?.get(record.id) ?? null)) continue;
       const problem = found.get(`${kind}:${record.id}`) ?? "";
       updates.push({ id: record.id, properties: { problem } });
       if (problem) report.push({ kind, name: record.name, problem });

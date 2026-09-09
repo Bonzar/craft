@@ -104,6 +104,14 @@ export function convert(row, product, measures) {
   return { qty: (row.qty * bridge.productQty) / bridge.measureQty, unit: product.unit };
 }
 
+/**
+ * Сводится ли мера к единице продукта — сама единица или запись в «Мерах».
+ * Закупка спрашивает про свою единицу, состав — про меру строки.
+ */
+export function convertible(measure, product, measures) {
+  return convert({ measure, qty: 1 }, product, measures).qty !== null;
+}
+
 /** Сколько продукта нужно на заданное число порций. */
 export function needFor(row, product, measures, portions, basePortions) {
   const { qty, unit, unknown } = convert(row, product, measures);

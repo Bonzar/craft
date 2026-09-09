@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseIngredients, convert, needFor } from "../../menu/lib/cards.mjs";
+import { parseIngredients, convert, convertible, needFor } from "../../menu/lib/cards.mjs";
 
 const table = (...rows) => ["| Кол-во порций: | 2 | 6 |", "| --- | --- | --- |", ...rows].join("\n");
 const link = (title, id) => `[${title}](block://${id})`;
@@ -100,6 +100,14 @@ test("мост чужого продукта не применяется", () =>
   const { rows } = parseIngredients(table(`| ${link("Мёд", "m")} (ст. л.) | 1 | =x |`));
   const measures = [{ productId: "другой", measure: "ст. л.", measureQty: 1, productQty: 15 }];
   assert.equal(convert(rows[0], { id: "m", unit: "г" }, measures).qty, null);
+});
+
+test("сводимость меры отвечает да только когда есть чем перевести", () => {
+  const product = { id: "s", unit: "г" };
+  const measures = [{ productId: "s", measure: "уп", measureQty: 1, productQty: 300 }];
+  assert.equal(convertible("г", product, measures), true);
+  assert.equal(convertible("уп", product, measures), true);
+  assert.equal(convertible("шт", product, measures), false);
 });
 
 test("нужное количество считается от базовых порций", () => {

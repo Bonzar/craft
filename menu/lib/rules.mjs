@@ -1,6 +1,7 @@
 // Правила недели из алгоритма «Собрать меню на неделю».
 // Чистые функции: на вход модель, на выход находки. Ни сети, ни записи.
 
+import { convertible } from "./cards.mjs";
 import { indexModel, slotIndex } from "./model.mjs";
 
 const WHEN_TO_SLOT = { утро: "завтрак", день: "обед", вечер: "ужин" };
@@ -31,8 +32,13 @@ export function consecutiveRuns(dates) {
   return runs;
 }
 
-/** Приёмы, которые действительно едят: отменённые расход не создают. */
-const eaten = (model) => model.meals.filter((m) => m.status !== "отменён");
+/**
+ * Приёмы, которые действительно едят. Отменённый не состоялся, пропущенный
+ * состоялся без еды — расхода не создаёт ни тот, ни другой, и закрывать их
+ * горячим и салатом уже незачем.
+ */
+const happened = (meal) => meal.status !== "отменён" && meal.status !== "пропущен";
+const eaten = (model) => model.meals.filter(happened);
 
 /** Готовка -> приёмы, в которых она съедается, в любой роли. */
 function mealsByCook(model) {
@@ -54,6 +60,15 @@ export function checkCooks(model) {
   for (const cook of model.cooks) {
     const all = byCook.get(cook.id) ?? [];
 
+    // Отменённая готовка не состоялась: ни сроков, ни расхода, ни «никто не
+    // ест». Спросить с неё можно одно — что её никто уже не ждёт в тарелке.
+    if (cook.status === "отменено") {
+      for (const meal of all) {
+        out.push(finding("cooks", cook.id, `готовка отменена, а её ест ${meal.name}`));
+      }
+      continue;
+    }
+
     if (!cook.date) {
       out.push(finding("cooks", cook.id, "готовка вне этой недели, даты нет"));
     } else if (cook.when) {
@@ -71,8 +86,20 @@ export function checkCooks(model) {
 
     // Расход считается от последнего факта остатка, а до него — от выхода.
     // Сколько съедает приём — коэффициент его едока, отдельного поля для этого нет.
+    //
+    // Факт снимается посреди дня, а `RemainingOn` — только дата, и в какой из
+    // приёмов того дня заглянули в холодильник, она не скажет. Поэтому в расход
+    // после факта идут дни за ним и те приёмы того же дня, что ещё не
+    // случились: у них статус «план». Иначе остаток «0 сырников» на день, когда
+    // их и доели, обвинил бы завтрак в перерасходе.
     const hasFact = cook.remaining !== null;
-    const counted = hasFact ? all.filter((m) => m.date > cook.remainingOn) : all;
+    const counted = hasFact
+      ? all.filter(
+          (m) =>
+            m.date > cook.remainingOn ||
+            (m.date === cook.remainingOn && m.status === "план"),
+        )
+      : all;
     const cap = hasFact ? cook.remaining : cook.portions;
     const spent = counted.reduce((sum, m) => sum + (ix.eaterById.get(m.eaterId)?.share ?? 0), 0);
     if (spent > cap + 1e-9) {
@@ -104,7 +131,7 @@ export function checkMeals(model) {
   const recipeOf = (cookId) => ix.recipeById.get(ix.cookById.get(cookId)?.recipeId);
 
   for (const meal of model.meals) {
-    if (meal.where === "вне") continue;
+    if (meal.where === "вне" || !happened(meal)) continue;
 
     if (meal.hot.length === 0) {
       out.push(finding("meals", meal.id, "приём не закрыт: горячего нет"));
@@ -206,13 +233,16 @@ export function checkPurchases(model) {
   const ix = indexModel(model);
   const out = [];
   for (const purchase of model.purchases) {
+    // Магазин меряет упаковками и штуками, продукт — своей единицей. Сводит их
+    // коллекция «Меры», а не одинаковая надпись: требовать совпадения значило бы
+    // либо врать в закупке, либо переписывать единицу продукта под каждый чек.
     const product = ix.productById.get(purchase.productId);
-    if (product?.unit && purchase.unit && purchase.unit !== product.unit) {
+    if (product?.unit && purchase.unit && !convertible(purchase.unit, product, model.measures ?? [])) {
       out.push(
         finding(
           "purchases",
           purchase.id,
-          `единица не та же, что у продукта: закупка в ${purchase.unit}, ${product.name} в ${product.unit}`,
+          `закупка в ${purchase.unit}, ${product.name} в ${product.unit} — в Мерах нет строки «${purchase.unit} → ${product.unit}»`,
         ),
       );
     }
