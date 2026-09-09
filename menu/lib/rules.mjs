@@ -233,6 +233,9 @@ export function checkPurchases(model) {
   const ix = indexModel(model);
   const out = [];
   for (const purchase of model.purchases) {
+    // Отменённая закупка не состоится: ни единицы у неё спрашивать, ни срока.
+    if (purchase.status === "отменено") continue;
+
     // Магазин меряет упаковками и штуками, продукт — своей единицей. Сводит их
     // коллекция «Меры», а не одинаковая надпись: требовать совпадения значило бы
     // либо врать в закупке, либо переписывать единицу продукта под каждый чек.
@@ -252,9 +255,7 @@ export function checkPurchases(model) {
       .filter(Boolean)
       .sort();
     if (purchase.forIds.length === 0) {
-      if (purchase.status !== "отменено") {
-        out.push(finding("purchases", purchase.id, "не привязан ни к одной готовке"));
-      }
+      out.push(finding("purchases", purchase.id, "не привязан ни к одной готовке"));
     } else if (dates.length > 0 && purchase.date > dates[0]) {
       out.push(
         finding(

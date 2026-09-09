@@ -367,11 +367,14 @@ test("закупка в упаковках сходится с продукто�
   assert.deepEqual(messages(checkPurchases(model), "b-rice-up"), []);
 });
 
-test("отменённая закупка без привязки — не находка", () => {
+test("отменённая закупка не спрашивается ни о чём", () => {
   const model = fixture({
     purchases: (purchases) => [
       ...purchases,
-      item("b-snyato", "Творог", { date: "2026-09-08", qty: 720, unit: "г", status: "отменено" }),
+      // Ни привязки к готовке, ни сводимой единицы, ни срока — и всё равно молчок.
+      item("b-snyato", "Лаваш", {
+        date: "2026-09-08", product: rel("p-lavash"), qty: 1, unit: "шт", status: "отменено",
+      }),
     ],
   });
   assert.deepEqual(messages(checkPurchases(model), "b-snyato"), []);
