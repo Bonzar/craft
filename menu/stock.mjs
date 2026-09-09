@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Догнать наличие по записям: закупка «куплено» прибавляет, готовка «сделано»
-// вычитает. Обычный путь другой — количество меняется вместе со статусом, в тот
+// Догнать наличие по записям: закупка «куплено» приносит продукты, готовка
+// «сделано» их тратит, приём «съеден» съедает порции готовки. Обычный путь другой — количество меняется вместе со статусом, в тот
 // же момент; это догонялка для случая, когда статусы проставлены, а цифры нет.
 //
 //   node menu/stock.mjs           # показать, ничего не писать
@@ -34,9 +34,9 @@ async function main() {
   const raw = {};
   for (const kind of KINDS) raw[kind] = await client.getItems(collections[kind]);
   const ix = indexModel(buildModel(raw));
-  const { changed, records, unknown } = ledger(ix);
+  const { changed, portions, records, unknown } = ledger(ix);
 
-  if (changed.length === 0 && unknown.length === 0) {
+  if (changed.length === 0 && portions.length === 0 && unknown.length === 0) {
     console.log("наличие сходится с записями: непроведённых движений нет");
     return;
   }
@@ -50,26 +50,36 @@ async function main() {
       `${row.product.name.padEnd(width)}  было ${String(row.was).padStart(6)}  ${delta.padEnd(16)} стало ${row.now} ${row.product.unit}   ${row.from.join(", ")}`,
     );
   }
+  const pw = Math.max(0, ...portions.map((r) => r.cook.name.length));
+  for (const row of portions) {
+    console.log(
+      `${row.cook.name.padEnd(pw)}  было ${String(row.was).padStart(6)}  −${String(row.minus).padEnd(15)} стало ${row.now} порций   ${row.from.join(", ")}`,
+    );
+  }
   for (const miss of unknown) {
     console.log(`\n[мера] ${miss.product.name}: «${miss.measure}» не свести к ${miss.product.unit} — ${miss.what}`);
   }
 
-  const count = `${records.cooks.length} готовок, ${records.purchases.length} закупок`;
+  const count = `${records.cooks.length} готовок, ${records.purchases.length} закупок, ${records.meals.length} приёмов`;
   if (!args.apply) {
-    console.log(`\nнепроведённого: ${count}, продуктов затронуто ${changed.length}; чтобы записать — --apply`);
+    console.log(`\nнепроведённого: ${count}; затронуто продуктов ${changed.length}, готовок ${portions.length}; чтобы записать — --apply`);
     return;
   }
   await client.updateItems(
     collections.products,
     changed.map((r) => ({ id: r.product.id, properties: { qty: r.now } })),
   );
-  for (const kind of ["cooks", "purchases"]) {
+  await client.updateItems(
+    collections.cooks,
+    portions.map((r) => ({ id: r.cook.id, properties: { remaining: r.now } })),
+  );
+  for (const kind of ["cooks", "purchases", "meals"]) {
     await client.updateItems(
       collections[kind],
       records[kind].map((id) => ({ id, properties: { sys_counted: true } })),
     );
   }
-  console.log(`\nзаписано: ${changed.length} продуктов; проведено ${count}`);
+  console.log(`\nзаписано: ${changed.length} продуктов, ${portions.length} готовок; проведено ${count}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

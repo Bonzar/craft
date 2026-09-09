@@ -71,7 +71,39 @@ test("проведённое движение второй раз не счит�
 
 test("движения возвращаются вместе с записями, которые их породили", () => {
   const { records } = ledger(fixture());
-  assert.deepEqual(records, { cooks: ["c-vs"], purchases: ["b-sb"] });
+  assert.deepEqual(records, { cooks: ["c-vs"], purchases: ["b-sb"], meals: [] });
+});
+
+test("съеденный приём подъедает порции каждого блюда на тарелке", () => {
+  const ix = fixture({
+    eaters: () => [item("e-vlad", "Влад", { share: 1.25, cooks: true })],
+    cooks: (cooks) =>
+      cooks.map((c) => item(c.id, c.name, { ...c.properties, portions: 4, remaining: 4 })),
+    meals: () => [
+      item("m-zavtrak", "Вс · завтрак · Влад", {
+        date: "2026-09-06", slot: "завтрак", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-vs"), status: "съеден",
+      }),
+    ],
+  });
+  const { portions, records } = ledger(ix);
+  assert.deepEqual(
+    portions.map((p) => [p.cook.name, p.was, p.minus, p.now]),
+    [["Сырники, вс", 4, 1.25, 2.75]],
+  );
+  assert.deepEqual(records.meals, ["m-zavtrak"]);
+
+  // Отмеченный приём второй раз не подъедает.
+  const done = fixture({
+    eaters: () => [item("e-vlad", "Влад", { share: 1.25, cooks: true })],
+    meals: () => [
+      item("m-zavtrak", "Вс · завтрак · Влад", {
+        date: "2026-09-06", slot: "завтрак", eater: rel("e-vlad"), where: "дома",
+        hot: rel("c-vs"), status: "съеден", sys_counted: true,
+      }),
+    ],
+  });
+  assert.deepEqual(ledger(done).portions, []);
 });
 
 test("план и отменённое в счёт не идут", () => {

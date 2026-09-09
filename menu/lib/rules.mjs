@@ -91,28 +91,17 @@ export function checkCooks(model) {
       if (!atHome) out.push(finding("cooks", cook.id, "в этот слот я не дома"));
     }
 
-    // Расход считается от последнего факта остатка, а до него — от выхода.
-    // Сколько съедает приём — коэффициент его едока, отдельного поля для этого нет.
-    //
-    // Факт снимается посреди дня, а `RemainingOn` — только дата, и в какой из
-    // приёмов того дня заглянули в холодильник, она не скажет. Поэтому в расход
-    // после факта идут дни за ним и те приёмы того же дня, что ещё не
-    // случились: у них статус «план». Иначе остаток «0 сырников» на день, когда
-    // их и доели, обвинил бы завтрак в перерасходе.
-    const hasFact = cook.remaining !== null;
-    const counted = hasFact
-      ? all.filter(
-          (m) =>
-            m.date > cook.remainingOn ||
-            (m.date === cook.remainingOn && m.status === "план"),
-        )
-      : all;
-    const cap = hasFact ? cook.remaining : cook.portions;
-    const spent = counted.reduce((sum, m) => sum + (ix.eaterById.get(m.eaterId)?.share ?? 0), 0);
-    if (spent > cap + 1e-9) {
-      const short = Math.round((spent - cap) * 100) / 100;
+    // Съеденное из остатка уже вычтено, поэтому спрашивать надо только про
+    // будущее: хватит ли того, что осталось, на приёмы, которые ещё в плане.
+    // Сколько съедает приём — коэффициент его едока, отдельного поля нет.
+    const left = cook.remaining ?? cook.portions;
+    const ahead = all
+      .filter((m) => m.status === "план")
+      .reduce((sum, m) => sum + (ix.eaterById.get(m.eaterId)?.share ?? 0), 0);
+    if (ahead > left + 1e-9) {
+      const short = Math.round((ahead - left) * 100) / 100;
       out.push(
-        finding("cooks", cook.id, `расход ${spent} из ${cap} порций — не хватает ${short}`),
+        finding("cooks", cook.id, `впереди ${ahead} порций из ${left} — не хватает ${short}`),
       );
     }
 

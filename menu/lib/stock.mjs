@@ -1,5 +1,6 @@
-// Наличие продуктов как арифметика: закупка «куплено» прибавляет, готовка
-// «сделано» вычитает по составу рецепта.
+// Наличие как арифметика — и продуктов, и порций. Закупка «куплено» приносит
+// продукты, готовка «сделано» их тратит и рождает порции, приём «съеден»
+// порции съедает. Долю приёма задаёт коэффициент едока.
 //
 // Обычно количество меняется вместе со статусом, одной операцией, и считать
 // нечего. Это догонялка для случая, когда статусы проставлены, а цифры отстали.
@@ -49,11 +50,25 @@ export function movements(ix) {
   return { moves, unknown };
 }
 
+/** Порции: приём «съеден» вычитает долю едока из каждой готовки на тарелке. */
+export function portionMoves(ix) {
+  const moves = [];
+  for (const meal of ix.meals) {
+    if (meal.status !== "съеден" || meal.counted) continue;
+    const share = ix.eaterById.get(meal.eaterId)?.share ?? 0;
+    for (const id of new Set([...meal.hot, ...meal.side, ...meal.extra])) {
+      const cook = ix.cookById.get(id);
+      if (cook) moves.push({ record: meal, cook, qty: -share });
+    }
+  }
+  return moves;
+}
+
 /** Что станет с наличием, если провести все непроведённые движения. */
 export function ledger(ix) {
   const { moves, unknown } = movements(ix);
   const by = new Map();
-  const records = { cooks: new Set(), purchases: new Set() };
+  const records = { cooks: new Set(), purchases: new Set(), meals: new Set() };
 
   for (const m of moves) {
     records[m.kind].add(m.record.id);
@@ -74,9 +89,30 @@ export function ledger(ix) {
     from: r.from,
   }));
 
+  const eaten = new Map();
+  for (const m of portionMoves(ix)) {
+    records.meals.add(m.record.id);
+    const acc = eaten.get(m.cook.id) ?? { cook: m.cook, minus: 0, from: [] };
+    acc.minus -= m.qty;
+    if (!acc.from.includes(m.record.name)) acc.from.push(m.record.name);
+    eaten.set(m.cook.id, acc);
+  }
+  const portions = [...eaten.values()].map((r) => ({
+    cook: r.cook,
+    was: r.cook.remaining ?? r.cook.portions,
+    minus: round(r.minus),
+    now: round((r.cook.remaining ?? r.cook.portions) - r.minus),
+    from: r.from,
+  }));
+
   return {
     changed: changed.sort((a, b) => a.product.name.localeCompare(b.product.name, "ru")),
-    records: { cooks: [...records.cooks], purchases: [...records.purchases] },
+    portions: portions.sort((a, b) => a.cook.name.localeCompare(b.cook.name, "ru")),
+    records: {
+      cooks: [...records.cooks],
+      purchases: [...records.purchases],
+      meals: [...records.meals],
+    },
     unknown,
   };
 }

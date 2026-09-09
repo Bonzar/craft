@@ -101,32 +101,41 @@ test("чистая неделя не даёт находок", () => {
   assert.deepEqual(runRules(model).size, 0);
 });
 
-test("перерасход считается от выхода готовки", () => {
-  const model = fixture({
-    meals: (meals) => [
-      ...meals,
-      item("m-vs-o-v", "Вс · обед · Влад", {
-        date: "2026-09-06", slot: "обед", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), status: "план",
-      }),
-      item("m-vs-u-v", "Вс · ужин · Влад", {
-        date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-        hot: rel("c-plov"), extra: rel("c-salad"), status: "план",
-      }),
-    ],
-  });
-  assert.deepEqual(messages(checkCooks(model), "c-plov"), [
-    "расход 4.75 из 4.5 порций — не хватает 0.25",
+test("не хватит на то, что впереди, — находка; съеденное уже вычтено из остатка", () => {
+  const ahead = (over) =>
+    fixture({
+      cooks: (cooks) =>
+        cooks.map((c) =>
+          c.id === "c-plov" ? item(c.id, c.name, { ...c.properties, ...over }) : c,
+        ),
+      meals: (meals) => [
+        ...meals,
+        item("m-vs-o-v", "Вс · обед · Влад", {
+          date: "2026-09-06", slot: "обед", eater: rel("e-vlad"), where: "дома",
+          hot: rel("c-plov"), side: rel("c-puree"), status: "план",
+        }),
+        item("m-vs-u-v", "Вс · ужин · Влад", {
+          date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
+          hot: rel("c-plov"), side: rel("c-puree"), extra: rel("c-salad"), status: "план",
+        }),
+      ],
+    });
+
+  // Остатка нет — считаем от выхода: 4.5 порции, впереди две твоих по 1.25.
+  assert.deepEqual(messages(checkCooks(ahead({})), "c-plov"), []);
+
+  // Осталось две порции, а впереди 2.5 — вот теперь не хватает.
+  assert.deepEqual(messages(checkCooks(ahead({ remaining: 2 })), "c-plov"), [
+    "впереди 2.5 порций из 2 — не хватает 0.5",
   ]);
 });
 
-test("факт остатка сдвигает точку отсчёта: приёмы до неё не считаются", () => {
+test("уже съеденное впереди не числится и находки не даёт", () => {
+  // Остаток нулевой, но все приёмы с пловом — «съеден»: спрашивать не о чем.
   const model = fixture({
     cooks: (cooks) =>
       cooks.map((c) =>
-        c.id === "c-plov"
-          ? item(c.id, c.name, { ...c.properties, remaining: 2, remainingon: "2026-09-05" })
-          : c,
+        c.id === "c-plov" ? item(c.id, c.name, { ...c.properties, remaining: 0 }) : c,
       ),
   });
   assert.deepEqual(messages(checkCooks(model), "c-plov"), []);
@@ -158,34 +167,34 @@ test("пропущенный приём расхода не создаёт и з
   assert.deepEqual(runRules(model).size, 0);
 });
 
-test("факт остатка снят посреди дня: съеденное до него в расход не идёт", () => {
-  const withFact = (over) =>
+test("статус решает, а не дата: съеденное вычтено, плановое спрашивается", () => {
+  const withLeft = (over) =>
     fixture({
       cooks: (cooks) =>
         cooks.map((c) =>
-          c.id === "c-plov"
-            ? item(c.id, c.name, { ...c.properties, remaining: 0, remainingon: "2026-09-06" })
-            : c,
+          c.id === "c-plov" ? item(c.id, c.name, { ...c.properties, remaining: 0 }) : c,
         ),
       meals: (meals) => [...meals, over],
     });
 
-  const dojeli = withFact(
+  // Съеденный приём из остатка уже вычтен — какого бы числа он ни был.
+  const dojeli = withLeft(
     item("m-vs-o-v", "Вс · обед · Влад", {
       date: "2026-09-06", slot: "обед", eater: rel("e-vlad"), where: "дома",
-      hot: rel("c-plov"), status: "съеден",
+      hot: rel("c-plov"), side: rel("c-puree"), status: "съеден",
     }),
   );
   assert.deepEqual(messages(checkCooks(dojeli), "c-plov"), []);
 
-  const jeschoSobiraemsya = withFact(
+  // А плановый — впереди, и на него ничего не осталось.
+  const jeschoSobiraemsya = withLeft(
     item("m-vs-u-v", "Вс · ужин · Влад", {
       date: "2026-09-06", slot: "ужин", eater: rel("e-vlad"), where: "дома",
-      hot: rel("c-plov"), extra: rel("c-salad"), status: "план",
+      hot: rel("c-plov"), side: rel("c-puree"), extra: rel("c-salad"), status: "план",
     }),
   );
   assert.deepEqual(messages(checkCooks(jeschoSobiraemsya), "c-plov"), [
-    "расход 1.25 из 0 порций — не хватает 1.25",
+    "впереди 1.25 порций из 0 — не хватает 1.25",
   ]);
 });
 

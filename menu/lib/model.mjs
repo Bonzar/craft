@@ -70,7 +70,6 @@ export function buildModel(raw) {
     storage: i.properties?.storage ?? null,
     counted: i.properties?.sys_counted === true,
     remaining: num(i.properties?.remaining),
-    remainingOn: i.properties?.remainingon ?? null,
     status: i.properties?.status ?? null,
   }));
 
@@ -84,6 +83,7 @@ export function buildModel(raw) {
     hot: relations(i.properties?.hot),
     side: relations(i.properties?.side),
     extra: relations(i.properties?.extra),
+    counted: i.properties?.sys_counted === true,
     status: i.properties?.status ?? null,
   }));
 

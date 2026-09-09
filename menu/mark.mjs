@@ -8,13 +8,13 @@
 //   node menu/mark.mjs --meal "Ср 9.09 · ужин · Влад" --eaten
 //   node menu/mark.mjs --meal "Ср 9.09 · ужин · Оля" --skipped
 //
-// Приём наличия не трогает: продукты списывает готовка, а приём только говорит,
-// съели её или нет. Закупку без плана заводить не обязательно — можно просто
-// поправить Qty руками, догонялка потом покажет, как это сказалось.
+// Готовка тратит продукты и рождает порции, приём эти порции съедает — долю
+// своего едока из каждого блюда на тарелке. Закупку без плана заводить не
+// обязательно: можно поправить Qty руками, догонялка покажет, как это сказалось.
 
 import { createClient } from "./lib/craft-api.mjs";
 import { buildModel, indexModel } from "./lib/model.mjs";
-import { movements } from "./lib/stock.mjs";
+import { movements, portionMoves } from "./lib/stock.mjs";
 
 const KINDS = ["cooks", "meals", "purchases", "recipes", "products", "eaters", "measures"];
 
@@ -80,10 +80,10 @@ async function main() {
   // расходятся не могут — они уезжают в Craft одним заходом.
   record.status = status;
   if (args.qty !== null) record.qty = args.qty;
-  if (args.remaining !== null) {
-    record.remaining = args.remaining;
-    record.remainingOn = new Date().toISOString().slice(0, 10);
-  }
+  if (args.remaining !== null) record.remaining = args.remaining;
+  // Сваренное блюдо выходит из плиты целым: остаток равен выходу, дальше его
+  // подъедают приёмы.
+  if (args.deed === "done" && args.remaining === null) record.remaining = record.portions;
 
   const { moves, unknown } = movements(ix);
   const mine = moves.filter((m) => m.record.id === record.id);
@@ -91,9 +91,19 @@ async function main() {
   for (const m of mine) {
     byProduct.set(m.productId, (byProduct.get(m.productId) ?? 0) + m.qty);
   }
+  const byCook = new Map();
+  for (const m of portionMoves(ix).filter((m) => m.record.id === record.id)) {
+    byCook.set(m.cook, (byCook.get(m.cook) ?? 0) + m.qty);
+  }
 
   console.log(`${record.name}: ${was ?? "—"} → ${status}`);
-  if (args.remaining !== null) console.log(`  остаток ${args.remaining} на ${record.remainingOn}`);
+  if (record.remaining !== undefined && args.kind === "cooks" && record.remaining !== null) {
+    console.log(`  остаток ${record.remaining} порций`);
+  }
+  for (const [cook, delta] of byCook) {
+    const now = Math.round(((cook.remaining ?? cook.portions) + delta) * 100) / 100;
+    console.log(`  ${cook.name.padEnd(34)} −${Math.round(-delta * 100) / 100} → ${now} порций`);
+  }
   for (const [id, delta] of byProduct) {
     const product = ix.productById.get(id);
     const now = Math.round(((product.qty ?? 0) + delta) * 100) / 100;
@@ -110,12 +120,21 @@ async function main() {
 
   const props = { status };
   if (args.qty !== null) props.qty = args.qty;
-  if (args.remaining !== null) {
-    props.remaining = args.remaining;
-    props.remainingon = record.remainingOn;
-  }
-  if (mine.length > 0) props.sys_counted = true;
+  if (args.kind === "cooks" && record.remaining !== null) props.remaining = record.remaining;
+  if (mine.length > 0 || byCook.size > 0) props.sys_counted = true;
   await client.updateItems(collections[args.kind], [{ id: record.id, properties: props }]);
+
+  if (byCook.size > 0) {
+    await client.updateItems(
+      collections.cooks,
+      [...byCook].map(([cook, delta]) => ({
+        id: cook.id,
+        properties: {
+          remaining: Math.round(((cook.remaining ?? cook.portions) + delta) * 100) / 100,
+        },
+      })),
+    );
+  }
 
   if (byProduct.size > 0) {
     await client.updateItems(
@@ -129,7 +148,11 @@ async function main() {
       }),
     );
   }
-  console.log(`\nзаписано${byProduct.size > 0 ? `, наличие поправлено у ${byProduct.size}` : ""}`);
+  const touched = [
+    byProduct.size > 0 ? `продуктов ${byProduct.size}` : "",
+    byCook.size > 0 ? `готовок ${byCook.size}` : "",
+  ].filter(Boolean).join(", ");
+  console.log(`\nзаписано${touched ? `, поправлено: ${touched}` : ""}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
