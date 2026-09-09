@@ -56,6 +56,7 @@ export function buildModel(raw) {
     name: title(i),
     unit: i.properties?.unit ?? null,
     qty: num(i.properties?.qty),
+    qtyOn: i.properties?.qtyon ?? null,
     bestBefore: i.properties?.bestbefore ?? null,
   }));
 
