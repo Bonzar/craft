@@ -32,7 +32,12 @@ export function need(ix, cooks) {
       if (!product) continue;
       const got = needFor(row, product, ix.measures, cook.portions, recipe.basePortions);
       if (got.qty === null) {
-        unknown.push({ cook, product, measure: got.unknown ?? row.measure, raw: row.raw });
+        unknown.push({
+          cook,
+          product,
+          measure: got.unknown ?? row.measure ?? "без меры",
+          raw: row.raw,
+        });
         continue;
       }
       const known = rows.get(product.id) ?? { product, qty: 0, cooks: [] };
