@@ -101,6 +101,7 @@ export function buildModel(raw) {
     name: title(i),
     date: i.properties?.date ?? null,
     productId: relations(i.properties?.product)[0] ?? null,
+    qty: num(i.properties?.qty),
     unit: i.properties?.unit ?? null,
     forIds: relations(i.properties?.for),
     status: i.properties?.status ?? null,
