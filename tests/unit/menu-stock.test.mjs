@@ -69,6 +69,40 @@ test("проведённое движение второй раз не счит�
   assert.deepEqual(ledger(ix).changed, []);
 });
 
+test("списывается тот вариант, что есть дома, а не первый в строке", () => {
+  // Список покупок берёт вариант по наличию. Разойдись с ним списание — ушли бы
+  // в минус ракушки, которых дома нет, а бабочки, которые сварили, остались бы целы.
+  const ix = fixture({
+    recipes: () => [
+      item("r-mak", "Макароны", { kind: "гарнир" }, [
+        { type: "text", markdown: "### Ингредиенты" },
+        {
+          type: "table",
+          markdown: [
+            "| Кол-во порций: | 2 | 2 |",
+            "| --- | --- | --- |",
+            "| [Ракушки](block://p-rak) / [Бабочки](block://p-bab) (г) | 200 | =x |",
+          ].join("\n"),
+        },
+      ]),
+    ],
+    products: () => [
+      item("p-rak", "Макароны Ракушки", { unit: "г", qty: 0 }),
+      item("p-bab", "Макароны Бабочки", { unit: "г", qty: 450 }),
+    ],
+    cooks: () => [
+      item("c-mak", "Макароны, ср", {
+        date: "2026-09-09", recipe: rel("r-mak"), portions: 2, status: "сделано",
+      }),
+    ],
+    purchases: () => [],
+  });
+  const { changed } = ledger(ix);
+  assert.deepEqual(changed.map((r) => [r.product.name, r.minus, r.now]), [
+    ["Макароны Бабочки", 200, 250],
+  ]);
+});
+
 test("движения возвращаются вместе с записями, которые их породили", () => {
   const { records } = ledger(fixture());
   assert.deepEqual(records, { cooks: ["c-vs"], purchases: ["b-sb"], meals: [] });

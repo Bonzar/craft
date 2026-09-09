@@ -11,7 +11,7 @@
 // её значило бы сказать «не проводили», и второе списание пошло бы теми
 // числами, что в записи стоят сейчас, а не теми, какими списывали.
 
-import { convert } from "./cards.mjs";
+import { convert, pickProduct } from "./cards.mjs";
 
 const round = (x) => Math.round(x * 100) / 100;
 
@@ -35,7 +35,7 @@ export function movements(ix) {
     if (!recipe || !recipe.basePortions) continue;
     for (const row of recipe.ingredients) {
       if (!row.countable) continue;
-      const product = ix.productById.get(row.products[0]?.id);
+      const product = pickProduct(row, ix.productById);
       if (!product) continue;
       const got = convert(row, product, ix.measures);
       if (got.qty === null) {

@@ -117,6 +117,16 @@ export function convertible(measure, product, measures) {
   return convert({ measure, qty: 1 }, product, measures).qty !== null;
 }
 
+/**
+ * Вариант ингредиента: сначала тот, что есть дома, иначе первый по порядку.
+ * Общая для списка покупок и для списания: разойдись они — покупали бы одно,
+ * а тратили другое, и в минус ушёл бы продукт, которого дома нет вовсе.
+ */
+export function pickProduct(row, productById) {
+  const options = row.products.map((p) => productById.get(p.id)).filter(Boolean);
+  return options.find((p) => (p.qty ?? 0) > 0) ?? options[0];
+}
+
 /** Сколько продукта нужно на заданное число порций. */
 export function needFor(row, product, measures, portions, basePortions) {
   const { qty, unit, unknown } = convert(row, product, measures);

@@ -1,15 +1,9 @@
 // Сколько продуктов нужно на готовки и чего для них не хватает.
 // Считает по составам рецептов; что купить — решает человек, код только складывает.
 
-import { needFor, convert } from "./cards.mjs";
+import { needFor, convert, pickProduct } from "./cards.mjs";
 
 const round = (x) => Math.round(x * 100) / 100;
-
-/** Вариант ингредиента: сначала тот, что есть дома, иначе первый по порядку. */
-function pick(row, ix) {
-  const options = row.products.map((p) => ix.productById.get(p.id)).filter(Boolean);
-  return options.find((p) => (p.qty ?? 0) > 0) ?? options[0];
-}
 
 /**
  * Потребность по продуктам: составы готовок, каждый пересчитанный на её порции.
@@ -31,7 +25,7 @@ export function need(ix, cooks) {
       // «По вкусу» и «щепотка» — строка живая, но не считаемая: это не дыра
       // в мерах, а сознательный отказ от цифры, и молчать про неё правильно.
       if (!row.countable) continue;
-      const product = pick(row, ix);
+      const product = pickProduct(row, ix.productById);
       if (!product) continue;
       const got = needFor(row, product, ix.measures, cook.portions, recipe.basePortions);
       if (got.qty === null) {
