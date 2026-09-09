@@ -6,8 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { setPortionsColumn } from "../../menu/lib/cards.mjs";
-import { parseIngredients } from "../../menu/lib/cards.mjs";
+import { setPortionsColumn, parseIngredients } from "../../menu/lib/cards.mjs";
 import { parseArgs, nextCooks, ingredientBlock } from "../../menu/portions.mjs";
 
 const table = [
@@ -17,11 +16,30 @@ const table = [
   "| [Изюм](block://p-i) (горсть) | по вкусу | по вкусу |",
 ].join("\n");
 
-test("столбец встаёт четвёртым, шапка несёт число порций", () => {
+test("столбец встаёт последним и помечен в шапке", () => {
   const out = setPortionsColumn(table, 1.8).split("\n");
-  assert.equal(out[0], "| Кол-во порций: | 2 | 4 | 1.8 |");
+  assert.equal(out[0], "| Кол-во порций: | 2 | 4 | нужно 1.8 |");
   assert.equal(out[1], "| --- | --- | --- | --- |");
   assert.equal(out[2], "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =B2*(D1/B1) |");
+});
+
+test("колонка ищется по метке и переписывается на месте — чужие столбцы целы", () => {
+  const wide = [
+    "| Кол-во порций: | 2 | 4 | нужно 3.5 | 10 |",
+    "| --- | --- | --- | --- | --- |",
+    "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =B2*(D1/B1) | своё |",
+  ].join("\n");
+  const out = setPortionsColumn(wide, 1.8).split("\n");
+  assert.equal(out[0], "| Кол-во порций: | 2 | 4 | нужно 1.8 | 10 |");
+  assert.equal(out[2], "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =B2*(D1/B1) | своё |");
+});
+
+test("разделитель не отстаёт от строк, даже если столбцов было меньше", () => {
+  const narrow = ["| Кол-во порций: | 2 |", "| --- | --- |", "| [Творог](block://p-t) (г) | 400 |"];
+  const out = setPortionsColumn(narrow.join("\n"), 1.8).split("\n");
+  assert.equal(out[0], "| Кол-во порций: | 2 | нужно 1.8 |");
+  assert.equal(out[1], "| --- | --- | --- |");
+  assert.equal(out[2], "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) |");
 });
 
 test("количество словами переносится как есть — формула по нему не считается", () => {

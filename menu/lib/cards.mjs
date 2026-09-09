@@ -117,10 +117,20 @@ export function convertible(measure, product, measures) {
   return convert({ measure, qty: 1 }, product, measures).qty !== null;
 }
 
+/** Метка колонки «нужно» в шапке: по ней она и находится при следующем прогоне. */
+export const NEED_LABEL = "нужно";
+
+/** Буква столбца для формулы: первый — A, второй — B и так далее. */
+const columnLetter = (index) => String.fromCharCode(65 + index);
+
 /**
- * Колонка «нужно» в таблице состава — четвёртая, под порции ближайшей готовки.
- * Пересчёт делает сам Craft формулой, поэтому цифры в карточке живые: правишь
- * порции готовки, прогоняешь команду — граммовки едут следом.
+ * Колонка «нужно» в таблице состава — под порции ближайшей готовки. Пересчёт
+ * делает сам Craft формулой, поэтому цифры в карточке живые: правишь порции
+ * готовки, прогоняешь команду — граммовки едут следом.
+ *
+ * Колонка ищется по метке в шапке и переписывается на месте, а не встаёт всегда
+ * последней: иначе каждый прогон добавлял бы ещё одну. Своё место у неё в конце,
+ * но столбцы, заведённые руками, остаются целы, где бы ни стояли.
  *
  * Ячейка, где количество словами («по вкусу»), переносится как есть: формула
  * по ней дала бы ошибку, а смысл строки от числа порций не зависит.
@@ -130,17 +140,31 @@ export function setPortionsColumn(markdown, portions) {
   const isRow = (l) => l.trim().startsWith("|");
   const isRule = (l) => /^\|[\s|:-]+\|$/.test(l.trim());
 
+  const rows = lines.filter((l) => isRow(l) && !isRule(l));
+  if (rows.length === 0) return markdown;
+
+  const head = cells(rows[0]);
+  const found = head.findIndex((c) => String(c ?? "").trim().startsWith(NEED_LABEL));
+  const width = Math.max(...rows.map((r) => cells(r).length), found + 1);
+  const at = found === -1 ? width : found;
+  const letter = columnLetter(at);
+
   let index = 0;
   return lines
     .map((line) => {
       if (!isRow(line)) return line;
-      const parts = cells(line);
-      if (isRule(line)) return `| ${parts.slice(0, 3).map(() => "---").join(" | ")} | --- |`;
+      if (isRule(line)) return `| ${Array.from({ length: at + 1 }, () => "---").join(" | ")} |`;
       index += 1;
-      const [first, second, third] = parts;
-      const value =
-        index === 1 ? String(portions) : number(second) === null ? second : `=B${index}*(D1/B1)`;
-      return `| ${[first, second, third, value].map((c) => c ?? "").join(" | ")} |`;
+      const parts = cells(line);
+      while (parts.length <= at) parts.push("");
+      const base = parts[1];
+      parts[at] =
+        index === 1
+          ? `${NEED_LABEL} ${portions}`
+          : number(base) === null
+            ? base
+            : `=B${index}*(${letter}1/B1)`;
+      return `| ${parts.join(" | ")} |`;
     })
     .join("\n");
 }
