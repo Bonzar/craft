@@ -251,6 +251,9 @@ export function checkPurchases(model) {
     // коллекция «Меры», а не одинаковая надпись: требовать совпадения значило бы
     // либо врать в закупке, либо переписывать единицу продукта под каждый чек.
     const product = ix.productById.get(purchase.productId);
+    // Без продукта закупка не складывается с наличием и молча выпадает
+    // из списка покупок — сойдя при этом за проверенную.
+    if (!product) out.push(finding("purchases", purchase.id, "не указан продукт"));
     if (product?.unit && purchase.unit && !convertible(purchase.unit, product, model.measures ?? [])) {
       out.push(
         finding(

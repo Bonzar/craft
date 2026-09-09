@@ -373,7 +373,9 @@ test("закупка: единица, срок захода и привязка 
         date: "2026-09-06", product: rel("p-lavash"), qty: 1, unit: "шт",
         for: rel("c-salad"), status: "план",
       }),
-      item("b-sirota", "Сахар", { date: "2026-09-05", qty: 1, unit: "уп", status: "план" }),
+      item("b-sirota", "Сахар", {
+        date: "2026-09-05", qty: 1, unit: "уп", for: rel("c-plov"), status: "план",
+      }),
     ],
   });
   const found = checkPurchases(model);
@@ -381,7 +383,7 @@ test("закупка: единица, срок захода и привязка 
     "закупка в шт, Лаваш в уп — в «Мерах» нет заполненной строки «шт → уп»",
     "нужен к 05.09, заход 06.09",
   ]);
-  assert.deepEqual(messages(found, "b-sirota"), ["не привязан ни к одной готовке"]);
+  assert.deepEqual(messages(found, "b-sirota"), ["не указан продукт"]);
 });
 
 test("закупка в упаковках сходится с продуктом в граммах через «Меры»", () => {
@@ -410,6 +412,18 @@ test("закупка без количества — такая же дыра, �
   assert.deepEqual(messages(checkPurchases(model), "b-nol"), [
     "не проставлено количество в г",
   ]);
+});
+
+test("закупка без готовки — тоже находка", () => {
+  const model = fixture({
+    purchases: (purchases) => [
+      ...purchases,
+      item("b-sam", "Рис", {
+        date: "2026-09-05", product: rel("p-rice"), qty: 500, unit: "г", status: "план",
+      }),
+    ],
+  });
+  assert.deepEqual(messages(checkPurchases(model), "b-sam"), ["не привязан ни к одной готовке"]);
 });
 
 test("отменённая закупка не спрашивается ни о чём", () => {
