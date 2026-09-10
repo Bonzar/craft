@@ -17,10 +17,34 @@ const table = [
 ].join("\n");
 
 test("столбец четвёртый, в шапке голое число — иначе формулы его не прочтут", () => {
-  const out = setPortionsColumn(table, 1.8).split("\n");
-  assert.equal(out[0], "| Кол-во порций: | 2 | 4 | 1.8 |");
+  const out = setPortionsColumn(table, 3).split("\n");
+  assert.equal(out[0], "| Кол-во порций: | 2 | 4 | 3 |");
   assert.equal(out[1], "| --- | --- | --- | --- |");
-  assert.equal(out[2], "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =B2*(D1/B1) |");
+  assert.equal(out[2], "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =ROUND(B2*(D1/B1)*4,0)/4 |");
+});
+
+test("меньше минимального замеса в шапку не встаёт — рецепт дальше не делится", () => {
+  // База 2, готовка на 1.8: в карточке всё равно 2, иначе множитель уходит
+  // ниже единицы и округление обнуляет строки в штуках.
+  assert.equal(setPortionsColumn(table, 1.8).split("\n")[0], "| Кол-во порций: | 2 | 4 | 2 |");
+});
+
+test("формула, написанная руками, прогон переживает", () => {
+  const hand = [
+    "| Кол-во порций: | 2 | 4 | 2 |",
+    "| --- | --- | --- | --- |",
+    "| [Яйца](block://p-y) (шт) | 1 | =B2*(C1/B1) | =MAX(ROUND(B2*(D1/B1),0),1) |",
+  ].join("\n");
+  assert.equal(setPortionsColumn(hand, 3).split("\n")[2], hand.split("\n")[2]);
+});
+
+test("прошлая форма формулы переписывается на нынешнюю", () => {
+  const old = [
+    "| Кол-во порций: | 2 | 4 | 2 |",
+    "| --- | --- | --- | --- |",
+    "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =B2*(D1/B1) |",
+  ].join("\n");
+  assert.match(setPortionsColumn(old, 3).split("\n")[2], /=ROUND\(B2\*\(D1\/B1\)\*4,0\)\/4/);
 });
 
 test("столбцы правее переживают прогон — заведённое руками не срезается", () => {
@@ -29,9 +53,12 @@ test("столбцы правее переживают прогон — заве
     "| --- | --- | --- | --- | --- |",
     "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =B2*(D1/B1) | своё |",
   ].join("\n");
-  const out = setPortionsColumn(wide, 1.8).split("\n");
-  assert.equal(out[0], "| Кол-во порций: | 2 | 4 | 1.8 | моё |");
-  assert.equal(out[2], "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =B2*(D1/B1) | своё |");
+  const out = setPortionsColumn(wide, 3).split("\n");
+  assert.equal(out[0], "| Кол-во порций: | 2 | 4 | 3 | моё |");
+  assert.equal(
+    out[2],
+    "| [Творог](block://p-t) (г) | 400 | =B2*(C1/B1) | =ROUND(B2*(D1/B1)*4,0)/4 | своё |",
+  );
 });
 
 test("таблица без колонки пересчёта пропускается, а не дырявится", () => {
@@ -42,17 +69,17 @@ test("таблица без колонки пересчёта пропускае
 });
 
 test("количество словами переносится как есть — формула по нему не считается", () => {
-  const out = setPortionsColumn(table, 1.8).split("\n");
+  const out = setPortionsColumn(table, 3).split("\n");
   assert.equal(out[3], "| [Изюм](block://p-i) (горсть) | по вкусу | по вкусу | по вкусу |");
 });
 
 test("прогон второй раз ничего не сдвигает", () => {
-  const once = setPortionsColumn(table, 1.8);
-  assert.equal(setPortionsColumn(once, 1.8), once);
+  const once = setPortionsColumn(table, 3);
+  assert.equal(setPortionsColumn(once, 3), once);
 });
 
 test("состав читается тем же разбором и после правки", () => {
-  const { basePortions, rows } = parseIngredients(setPortionsColumn(table, 1.8));
+  const { basePortions, rows } = parseIngredients(setPortionsColumn(table, 3));
   assert.equal(basePortions, 2);
   assert.deepEqual(rows.map((r) => [r.products[0].title, r.qty, r.countable]), [
     ["Творог", 400, true],

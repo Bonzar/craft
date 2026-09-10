@@ -8,7 +8,7 @@
 
 import { createClient } from "./lib/craft-api.mjs";
 import { buildModel, indexModel, mealPoint } from "./lib/model.mjs";
-import { setPortionsColumn } from "./lib/cards.mjs";
+import { setPortionsColumn, parseIngredients } from "./lib/cards.mjs";
 
 const KINDS = ["cooks", "meals", "purchases", "recipes", "products", "eaters", "measures"];
 const WHEN_ORDER = { утро: "завтрак", день: "обед", вечер: "ужин" };
@@ -71,7 +71,16 @@ async function main() {
     }
     if (markdown === table.markdown) continue;
     blocks.push({ id: table.id, markdown });
-    console.log(`${name}: ${cook.portions} порций — ${cook.name}`);
+
+    // Минимальный замес виден только вслух: в карточке встанет база, а в плане
+    // так и останутся те порции, что съедят. Разницу доедают или морозят.
+    const base = parseIngredients(table.markdown).basePortions;
+    const min = base !== null && cook.portions < base;
+    console.log(
+      min
+        ? `${name}: ${base} порций — ${cook.name} на ${cook.portions}, меньше замеса не выходит`
+        : `${name}: ${cook.portions} порций — ${cook.name}`,
+    );
   }
 
   if (blocks.length === 0) console.log("нечего проставлять");

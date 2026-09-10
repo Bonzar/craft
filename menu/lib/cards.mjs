@@ -129,9 +129,29 @@ export const NEED_COLUMN = 3;
 const columnLetter = (index) => String.fromCharCode(65 + index);
 
 /**
+ * Пересчёт строки под колонку «нужно», с округлением до четверти. Четверть —
+ * нижний предел доли из правила на странице «Меню»: четверть луковицы и
+ * четверть ложки отмерить можно, восьмую — уже нет. На граммах и миллилитрах
+ * округление не видно, на штуках и ложках оно и нужно.
+ */
+const formula = (index, letter) => `=ROUND(B${index}*(${letter}1/B1)*4,0)/4`;
+
+/** Прошлые формы той же формулы — их команда переписывает как свои. */
+const generated = (index, letter) => [formula(index, letter), `=B${index}*(${letter}1/B1)`];
+
+/**
  * Колонка «нужно» в таблице состава — под порции ближайшей готовки. Пересчёт
  * делает сам Craft формулой, поэтому цифры в карточке живые: правишь порции
  * готовки, прогоняешь команду — граммовки едут следом.
+ *
+ * Первый столбец — минимальный замес: меньше этого числа порций блюдо не
+ * готовят, рецепт дальше не делится. Поэтому в шапку «нужно» встаёт хотя бы
+ * база, даже если готовка запланирована мельче. Заодно это убирает ноль:
+ * множитель не бывает меньше единицы, и округление не съедает строку.
+ *
+ * Формула в ячейке, написанная руками, прогон переживает: округление в свою
+ * сторону — решение по блюду, кода оно не касается. Переписываются только те
+ * ячейки, что команда ставила сама.
  *
  * Столбцы правее не трогаются и не обрезаются: заведённое руками переживает
  * прогон, даже если стоит за колонкой «нужно».
@@ -155,6 +175,7 @@ export function setPortionsColumn(markdown, portions) {
   const at = NEED_COLUMN;
   const width = Math.max(...rows.map((r) => cells(r).length), at + 1);
   const letter = columnLetter(at);
+  const need = Math.max(portions, number(cells(rows[0])[1]) ?? portions);
 
   let index = 0;
   return lines
@@ -165,8 +186,12 @@ export function setPortionsColumn(markdown, portions) {
       const parts = cells(line);
       while (parts.length < width) parts.push("");
       const base = parts[1];
+      const own = parts[at] === "" || generated(index, letter).includes(parts[at]);
       parts[at] =
-        index === 1 ? String(portions) : number(base) === null ? base : `=B${index}*(${letter}1/B1)`;
+        index === 1 ? String(need)
+        : number(base) === null ? base
+        : own ? formula(index, letter)
+        : parts[at];
       return `| ${parts.join(" | ")} |`;
     })
     .join("\n");
