@@ -1,2 +1,0 @@
-{"type":"user","message":{"role":"user","content":"поправь"}}
-{"type":"assistant","message":{"id":"msg_A","role":"assistant","content":[{"type":"text","text":"ок"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":50,"cache_read_input_tokens":1000,"output_tokens":100}}}

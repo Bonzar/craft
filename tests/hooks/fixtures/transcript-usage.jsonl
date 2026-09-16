@@ -1,5 +1,0 @@
-{"type":"user","message":{"role":"user","content":"поправь"}}
-{"type":"assistant","message":{"id":"msg_A","role":"assistant","content":[{"type":"text","text":"ок"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":50,"cache_read_input_tokens":1000,"output_tokens":100}}}
-{"type":"assistant","message":{"id":"msg_A","role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"README.md"}}],"usage":{"input_tokens":2,"cache_creation_input_tokens":50,"cache_read_input_tokens":1000,"output_tokens":100}}}
-{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"..."}]}}
-{"type":"assistant","message":{"id":"msg_B","role":"assistant","content":[{"type":"text","text":"готово"}],"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":1200,"output_tokens":40}}}
