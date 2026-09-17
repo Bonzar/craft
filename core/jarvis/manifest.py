@@ -26,10 +26,12 @@ from typing import Iterable, Mapping
 from .events import ALL as ALL_EVENTS
 
 MANIFEST_NAME = 'module.toml'
-# Slug становится именем папки в каталоге модулей, поэтому он ограничен
-# буквами, цифрами и дефисом. Списка запрещённых имён нет и не нужно: папка
-# ядра называется с подчёркивания, а его в slug быть не может.
-SLUG_PATTERN = re.compile(r'^[A-Za-z0-9-]+$')
+# Slug становится именем папки, поэтому он ограничен строчными латинскими
+# буквами, цифрами и дефисом. Строчными — потому что на macOS файловая
+# система регистронезависима и «Foo» столкнулось бы с «foo». Списка
+# запрещённых имён нет и не нужно: папка ядра внутри модуля называется с
+# подчёркивания, а его в slug быть не может.
+SLUG_PATTERN = re.compile(r'^[a-z0-9-]+$')
 FIELDS = ('slug', 'for', 'events', 'requires')
 FAMILY_SUFFIX = '-*'
 
@@ -69,7 +71,8 @@ def parse(text: str, where: str = MANIFEST_NAME, path: Path | None = None) -> Ma
     slug = slug.strip()
     if not SLUG_PATTERN.match(slug):
         raise ValueError(
-            f'{where}: slug {slug!r} — только буквы, цифры и дефис: он становится именем папки'
+            f'{where}: slug {slug!r} — только строчные латинские буквы, цифры и дефис: '
+            'он становится именем папки'
         )
 
     events = _string_list(raw, 'events', where)

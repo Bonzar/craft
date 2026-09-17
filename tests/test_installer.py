@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from . import CORE_DIR, INSTALLER
+from . import CORE_SOURCE, INSTALLER
 
 
 def load_installer():
@@ -36,7 +36,6 @@ class InstallerTest(unittest.TestCase):
         self.source = self.root / 'source'
         self.state_dir = self.root / 'state'
         self.source.mkdir()
-        shutil.copytree(CORE_DIR, self.source / '_core', ignore=shutil.ignore_patterns('__pycache__'))
 
     def add_module(self, slug: str, header: str, parts: dict[str, dict[str, str]] | None = None) -> Path:
         folder = self.source / slug
@@ -53,6 +52,7 @@ class InstallerTest(unittest.TestCase):
         argv = [
             '--settings-dir', str(self.settings_root),
             '--modules', str(self.source),
+            '--core', str(CORE_SOURCE),
             '--state-dir', str(self.state_dir),
             '--python', '/usr/bin/python3',
             *extra,
@@ -130,16 +130,27 @@ class InstallerTest(unittest.TestCase):
 
     # --- раскладка ---
 
-    def test_core_lands_next_to_the_module_folders(self) -> None:
+    def test_core_lands_inside_every_module(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
+        self.add_module('other', 'slug = "other"\n')
         self.run_installer()
-        self.assertTrue((self.modules_root() / '_core' / 'jarvis' / 'storage.py').is_file())
+        for slug in ('probe', 'other'):
+            self.assertTrue((self.modules_root() / slug / '_core' / 'jarvis' / 'storage.py').is_file(), slug)
         self.assertTrue((self.modules_root() / 'probe' / 'module.toml').is_file())
 
-    def test_core_is_not_taken_for_a_module(self) -> None:
+    def test_the_set_of_modules_holds_only_modules(self) -> None:
+        # Ядро рядом с модулями больше не лежит: набор для шеринга однороден.
         self.add_module('probe', 'slug = "probe"\n')
-        report = self.run_installer()
-        self.assertEqual(report.installed, ['probe'])
+        self.run_installer()
+        self.assertEqual(sorted(p.name for p in self.modules_root().iterdir() if p.is_dir()), ['probe'])
+
+    def test_core_copies_are_independent_per_module(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n')
+        self.add_module('other', 'slug = "other"\n')
+        self.run_installer()
+        marker = self.modules_root() / 'probe' / '_core' / 'jarvis' / 'marker.py'
+        marker.write_text('V = 1\n', encoding='utf-8')
+        self.assertFalse((self.modules_root() / 'other' / '_core' / 'jarvis' / 'marker.py').exists())
 
     def test_library_part_stays_inside_its_own_module(self) -> None:
         self.add_module('shell-tree', 'slug = "shell-tree"\n', {'lib': {'__init__.py': 'VALUE = 1\n'}})
@@ -189,7 +200,7 @@ class InstallerTest(unittest.TestCase):
         )
         self.run_installer()
         text = (self.settings_root / 'skills' / 'probe' / 'SKILL.md').read_text(encoding='utf-8')
-        self.assertIn(str(self.modules_root() / '_core'), text)
+        self.assertIn(str(self.modules_root() / 'probe' / '_core'), text)
         self.assertIn(str(self.state_dir), text)
         self.assertIn('${CLAUDE_PROJECT_DIR}', text)
         self.assertNotIn('{{', text)
@@ -262,6 +273,12 @@ class InstallerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_installer()
         self.assertFalse(self.settings_root.exists())
+
+    def test_an_uppercase_slug_is_rejected(self) -> None:
+        # На macOS файловая система регистронезависима: «Foo» столкнётся с «foo».
+        self.add_module('upper', 'slug = "Probe"\n')
+        with self.assertRaises(ValueError):
+            self.run_installer()
 
     def test_dry_run_changes_nothing(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')

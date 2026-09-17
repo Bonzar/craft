@@ -10,8 +10,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULES_DIR = REPO_ROOT / 'modules'
-CORE_DIR = MODULES_DIR / '_core'
+CORE_SOURCE = REPO_ROOT / 'core'
 INSTALLER = REPO_ROOT / 'tools' / 'jarvis-install'
 
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+if str(CORE_SOURCE) not in sys.path:
+    sys.path.insert(0, str(CORE_SOURCE))

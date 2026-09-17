@@ -6,15 +6,17 @@
 - читает шапки модулей и проверяет requires по slug и маскам семейств;
 - раскладывает части модуля по закреплённым именам папок — каждую туда, где её
   читает тот, кому она нужна;
+- кладёт копию ядра внутрь папки каждого модуля;
 - подставляет абсолютные пути вместо плейсхолдеров;
 - пишет по строке на модуль и событие в настройки харнеса, атомарно и с копией;
 - убирает то, чего в источнике больше нет: исчезнувшие части и снятые модули;
 - предупреждает о требовании без модуля и о событии, которого у харнеса нет.
 
-Чего он НЕ делает: библиотеку никуда не собирает и путей модулю не сообщает.
-Ядро едет папкой `_core` в тот же каталог модулей, а модуль находит и его, и
-соседей от собственного файла. Поэтому установка не обязательна: у коллеги в
-aisuite установщика нет, а раскладка та же.
+Чего он НЕ делает: библиотеку никуда не собирает, путей модулю не сообщает и
+ничего не чинит — только раскладывает и регистрирует. Ядро едет внутри каждого
+модуля, поэтому набор для шеринга состоит только из модулей, все одного вида, и
+модуль самодостаточен. У коллег модули приходят уже разложенными, установщика у
+них нет; у нас ту же раскладку делает установщик.
 
 Запуск:
 
@@ -31,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / 'modules' / '_core'))
+sys.path.insert(0, str(REPO_ROOT / 'core'))
 
 from jarvis import manifest as manifest_reader  # noqa: E402
 from jarvis import mode as mode_reader  # noqa: E402
@@ -93,7 +95,7 @@ def modules_root(settings_root: Path) -> Path:
 def placeholders(settings_root: Path, module_dir: Path, state_dir: Path) -> dict:
     """Плейсхолдеры путей харнеса, которые модуль пишет вместо абсолютных."""
     return {
-        '{{JARVIS_CORE}}': str(modules_root(settings_root) / CORE_DIR),
+        '{{JARVIS_CORE}}': str(module_dir / CORE_DIR),
         '{{JARVIS_MODULES}}': str(modules_root(settings_root)),
         '{{JARVIS_MODULE}}': str(module_dir),
         '{{JARVIS_STATE}}': str(state_dir),
@@ -220,11 +222,12 @@ def check_events(manifests: list, report: Report) -> None:
                 )
 
 
-def install_module(target, settings_root: Path, state_dir: Path, report: Report) -> dict:
+def install_module(target, source_core: Path, settings_root: Path, state_dir: Path, report: Report) -> dict:
     """Поставить все части одного модуля и вернуть его запись для журнала установки."""
     module_dir = modules_root(settings_root) / target.slug
     module_dir.mkdir(parents=True, exist_ok=True)
     substitutions = placeholders(settings_root, module_dir, state_dir)
+    install_core(source_core, module_dir)
 
     shutil.copy2(
         target.path / manifest_reader.MANIFEST_NAME,
@@ -243,14 +246,12 @@ def install_module(target, settings_root: Path, state_dir: Path, report: Report)
     return {'dir': str(module_dir), 'events': list(target.events), 'parts': places}
 
 
-def install_core(source_core: Path, settings_root: Path, report: Report) -> None:
-    """Ядро едет папкой в тот же каталог модулей, рядом с папками модулей."""
-    target = modules_root(settings_root) / CORE_DIR
+def install_core(source_core: Path, module_dir: Path) -> None:
+    """Копия ядра ложится внутрь папки модуля: модуль самодостаточен."""
+    target = module_dir / CORE_DIR
     if target.exists():
         shutil.rmtree(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_core, target, ignore=IGNORED)
-    report.parts.append((CORE_DIR, 'ядро', str(target)))
 
 
 def drop_vanished(previous: dict, records: dict, settings_root: Path, report: Report) -> None:
@@ -294,6 +295,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Установщик модулей Джарвиса')
     parser.add_argument('--settings-dir', default='~/.claude', help='каталог настроек харнеса')
     parser.add_argument('--modules', default=str(REPO_ROOT / 'modules'), help='каталог модулей-источника')
+    parser.add_argument('--core', default=str(REPO_ROOT / 'core'), help='исходник ядра')
     parser.add_argument('--state-dir', default=None, help='каталог состояния (для плейсхолдера)')
     parser.add_argument('--python', default=sys.executable, help='интерпретатор для строк хуков')
     parser.add_argument('--dry-run', action='store_true', help='только проверить и показать отчёт')
@@ -315,8 +317,10 @@ def install(args: argparse.Namespace) -> Report:
         report.installed.extend(m.slug for m in manifests)
         return report
 
-    install_core(source_modules / CORE_DIR, settings_root, report)
-    records = {m.slug: install_module(m, settings_root, state_dir, report) for m in manifests}
+    source_core = Path(args.core).expanduser()
+    records = {
+        m.slug: install_module(m, source_core, settings_root, state_dir, report) for m in manifests
+    }
 
     ledger = modules_root(settings_root).parent / LEDGER_FILE
     drop_vanished(read_json(ledger, {}), records, settings_root, report)

@@ -14,7 +14,7 @@ from unittest import mock
 from jarvis.storage import Storage
 from jarvis.trace import Trace
 
-from . import CORE_DIR, INSTALLER, MODULES_DIR
+from . import CORE_SOURCE, INSTALLER, MODULES_DIR
 
 PROBE_ENTRY = ('probe', 'hooks', 'module.py')
 
@@ -100,6 +100,10 @@ class InstalledProbeTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('разошлись с установкой', result.stderr)
 
+    def test_the_core_lands_inside_the_module_folder(self) -> None:
+        core = self.entry.parents[1] / '_core' / 'jarvis'
+        self.assertTrue((core / 'storage.py').is_file())
+
     def test_the_registered_line_points_at_the_module_own_file(self) -> None:
         settings = json.loads((self.settings_root / 'settings.json').read_text(encoding='utf-8'))
         args = settings['hooks']['UserPromptSubmit'][0]['hooks'][0]['args']
@@ -107,18 +111,21 @@ class InstalledProbeTest(unittest.TestCase):
         self.assertEqual(args[1:], ['--event', 'prompt'])
 
 
-class RepositoryProbeTest(unittest.TestCase):
-    """Тот же модуль работает и без установщика — прямо из каталога модулей."""
+class SharedModuleTest(unittest.TestCase):
+    """Модуль самодостаточен: голая папка с ядром внутри работает без установщика.
 
-    def test_module_runs_from_a_plain_modules_directory(self) -> None:
+    Так модули и приезжают к коллегам — набором папок, без нашего установщика.
+    """
+
+    def test_a_bare_module_folder_with_the_core_inside_runs_on_its_own(self) -> None:
+        ignore = shutil.ignore_patterns('__pycache__')
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            modules = root / 'modules'
-            modules.mkdir()
-            shutil.copytree(CORE_DIR, modules / '_core', ignore=shutil.ignore_patterns('__pycache__'))
-            shutil.copytree(MODULES_DIR / 'probe', modules / 'probe', ignore=shutil.ignore_patterns('__pycache__'))
+            module_dir = root / 'modules' / 'probe'
+            shutil.copytree(MODULES_DIR / 'probe', module_dir, ignore=ignore)
+            shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
             result = subprocess.run(
-                [sys.executable, str(modules / 'probe' / 'hooks' / 'module.py'), '--event', 'prompt'],
+                [sys.executable, str(module_dir / 'hooks' / 'module.py'), '--event', 'prompt'],
                 input=prompt_event('sess-plain'),
                 text=True,
                 capture_output=True,
@@ -127,6 +134,34 @@ class RepositoryProbeTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             state = root / '.local' / 'state' / 'jarvis'
             self.assertEqual(Trace(Storage(state, 'sess-plain')).read()[0]['module'], 'probe')
+
+    def test_two_modules_may_carry_different_core_copies(self) -> None:
+        # Разные версии ядра в одном наборе допустимы: модуль самодостаточен.
+        ignore = shutil.ignore_patterns('__pycache__')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for slug in ('probe', 'probe-two'):
+                module_dir = root / 'modules' / slug
+                shutil.copytree(MODULES_DIR / 'probe', module_dir, ignore=ignore)
+                (module_dir / 'module.toml').write_text(
+                    f'slug = "{slug}"\nevents = ["prompt"]\n', encoding='utf-8'
+                )
+                shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
+            marker = root / 'modules' / 'probe-two' / '_core' / 'jarvis' / 'marker.py'
+            marker.write_text('VALUE = "своя копия ядра"\n', encoding='utf-8')
+            for slug in ('probe', 'probe-two'):
+                result = subprocess.run(
+                    [sys.executable, str(root / 'modules' / slug / 'hooks' / 'module.py'), '--event', 'prompt'],
+                    input=prompt_event(f'sess-{slug}'),
+                    text=True,
+                    capture_output=True,
+                    env={'PATH': '/usr/bin:/bin', 'HOME': str(root)},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            state = root / '.local' / 'state' / 'jarvis'
+            self.assertEqual(Trace(Storage(state, 'sess-probe')).read()[0]['module'], 'probe')
+            self.assertEqual(Trace(Storage(state, 'sess-probe-two')).read()[0]['module'], 'probe-two')
+            self.assertTrue(marker.is_file(), 'копии ядра независимы')
 
 
 class RunHookTest(unittest.TestCase):

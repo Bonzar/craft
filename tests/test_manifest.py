@@ -47,12 +47,19 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.parse('slug = "probe"\nfor = ""\n')
 
-    def test_slug_is_limited_to_letters_digits_and_hyphen(self) -> None:
-        for slug in ('probe', 'shell-tree', 'probe2', 'A-1'):
+    def test_slug_is_limited_to_lowercase_letters_digits_and_hyphen(self) -> None:
+        for slug in ('probe', 'shell-tree', 'probe2', 'a-1'):
             self.assertEqual(m.parse(f'slug = "{slug}"').slug, slug)
 
     def test_slug_that_is_not_a_safe_path_segment_is_rejected(self) -> None:
         for slug in ('../../outside', '/etc/jarvis', 'a/b', 'a b', 'ядро', 'under_score', '.'):
+            with self.assertRaises(ValueError, msg=slug):
+                m.parse(f'slug = "{slug}"')
+
+    def test_an_uppercase_slug_is_rejected(self) -> None:
+        # Slug — имя папки, а на macOS файловая система регистронезависима:
+        # «Probe» и «probe» столкнулись бы.
+        for slug in ('Probe', 'A-1', 'shellTree'):
             with self.assertRaises(ValueError, msg=slug):
                 m.parse(f'slug = "{slug}"')
 
