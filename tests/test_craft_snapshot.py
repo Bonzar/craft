@@ -59,6 +59,7 @@ class ProviderTest(unittest.TestCase):
     def stub(self, body: str) -> Path:
         """Заглушка craft-sync плюс журнал её вызовов."""
         self.calls = self.root / 'calls.log'
+        self.calls.unlink(missing_ok=True)  # заглушка ставится не раз за тест
         path = self.root / 'craft-sync'
         path.write_text(f'#!/bin/sh\necho "$@" >> {self.calls}\n{body}\n', encoding='utf-8')
         path.chmod(0o755)
@@ -74,13 +75,13 @@ class ProviderTest(unittest.TestCase):
     # --- повторы ---
 
     def test_a_failing_call_is_retried_three_times_with_growing_pauses(self) -> None:
-        self.stub('echo "не достучались" >&2\nexit 1')
+        self.stub('echo "HTTP 503: шлюз лёг" >&2\nexit 1')
         journal = Journal()
         self.provide(journal)
         # Три попытки на первом же чтении, дальше поставщик не идёт.
         self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
         self.assertEqual(self.slept, list(provider.BACKOFF_SECONDS[:provider.ATTEMPTS - 1]))
-        self.assertIn('craft-sync вернул 1', journal.lines[0])
+        self.assertIn('HTTP 503', journal.lines[0])
 
     def test_a_call_that_succeeds_is_not_retried(self) -> None:
         self.stub('echo "прочитано $2"')
@@ -115,6 +116,32 @@ class ProviderTest(unittest.TestCase):
         self.assertNotIn('правила базы целиком', text)
         self.assertIn('Память агента', text)  # названа причина: что именно не прочиталось
         self.assertIn('alert', journal.lines[0])
+
+    def test_a_permanent_error_is_not_retried(self) -> None:
+        # 404 не станет найденным со второго раза, 401 — авторизованным:
+        # повтор здесь только тратит время старта сессии.
+        for stderr in ('! markdown: X: not found (HTTP 404)', 'HTTP 401: кто ты',
+                       'HTTP 400: так нельзя', 'HTTP 403: нет доступа'):
+            with self.subTest(stderr=stderr):
+                self.slept.clear()
+                self.stub(f'echo "{stderr}" >&2\nexit 1')
+                text = self.provide()
+                self.assertEqual(len(self.call_lines()), 1, 'постоянную ошибку повторили')
+                self.assertEqual(self.slept, [])
+                self.assertTrue(text.startswith('стартовый контекст: снимок Craft не собран:'))
+
+    def test_a_budget_error_is_retried(self) -> None:
+        # 429 — окно бюджета блоков: оно пополняется, повтор имеет смысл.
+        self.stub('echo "HTTP 429: Block budget exceeded" >&2\nexit 1')
+        self.provide()
+        self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
+
+    def test_a_timeout_is_retried(self) -> None:
+        self.stub('sleep 5')
+        with unittest.mock.patch.object(provider, 'CALL_TIMEOUT', 0.2):
+            text = self.provide()
+        self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
+        self.assertIn('не уложился', text)
 
     def test_the_alert_is_short_and_names_the_reason(self) -> None:
         self.stub('echo "сервер лёг" >&2\nexit 1')

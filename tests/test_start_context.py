@@ -247,11 +247,29 @@ if __name__ == '__main__':
     unittest.main()
 
 
+def shrink_bootstrap(settings_root: Path, seconds: float) -> None:
+    """Укоротить единственный срок модуля в разложенных копиях.
+
+    Он покрывает только появление маркера «жива», то есть ошибку раскладки.
+    Сжав его до секунды, тест отличает «ждём загрузку без потолка» от «ждём по
+    таймеру»: с потолком на загрузку такой прогон развалился бы.
+    """
+    for entry in (settings_root / 'jarvis' / 'modules').glob('*/hooks/module.py'):
+        text = entry.read_text(encoding='utf-8')
+        entry.write_text(
+            text.replace('BOOTSTRAP_SECONDS = 60.0', f'BOOTSTRAP_SECONDS = {seconds}'),
+            encoding='utf-8',
+        )
+
+
 class SlowGatherTest(unittest.TestCase):
     """Сбор идёт долго: копии ждут его, а не сдаются по таймеру."""
 
     copies = 3
-    gather_seconds = 3
+    # Сбор заведомо дольше срока, оставшегося в модуле: если бы потолок на
+    # загрузку существовал, копии сдались бы.
+    gather_seconds = 5
+    bootstrap = 1.0
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -286,6 +304,7 @@ class SlowGatherTest(unittest.TestCase):
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
         )
+        shrink_bootstrap(cls.settings_root, cls.bootstrap)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -294,22 +313,33 @@ class SlowGatherTest(unittest.TestCase):
     def entry(self, number: int) -> Path:
         return self.settings_root / 'jarvis' / 'modules' / f'{BASE}-{number}' / 'hooks' / 'module.py'
 
-    def test_every_copy_waits_out_a_slow_gather(self) -> None:
-        payload = session_event('slow')
-        with ThreadPoolExecutor(max_workers=self.copies) as pool:
+    def run_copies(self, session: str, numbers) -> dict:
+        payload = session_event(session)
+        numbers = list(numbers)
+        with ThreadPoolExecutor(max_workers=len(numbers)) as pool:
             results = list(pool.map(
                 lambda number: subprocess.run(
                     [sys.executable, str(self.entry(number)), '--event', 'session-start'],
                     input=payload, text=True, capture_output=True,
                     env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
                 ),
-                range(1, self.copies + 1),
+                numbers,
             ))
-        printed = []
-        for number, result in enumerate(results, start=1):
+        printed = {}
+        for number, result in zip(numbers, results):
             self.assertEqual(result.returncode, 0, f'копия {number}: {result.stderr}')
             if result.stdout.strip():
-                printed.append(json.loads(result.stdout)['hookSpecificOutput']['additionalContext'])
+                printed[number] = json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
+        return printed
+
+    def test_a_dead_neighbour_does_not_stall_the_chain(self) -> None:
+        # Копию 2 не запускаем вовсе: копия 3 обязана напечатать свой кусок, а
+        # не ждать соседа, которого нет. Теряется только его кусок.
+        printed = self.run_copies('skip-two', [1, 3])
+        self.assertEqual(sorted(printed), [1, 3])
+
+    def test_every_copy_waits_out_a_slow_gather(self) -> None:
+        printed = self.run_copies('slow', range(1, self.copies + 1))
         self.assertEqual(len(printed), self.copies, 'кто-то сдался, не дождавшись сбора')
 
 
@@ -337,6 +367,7 @@ class DeadLeaderTest(unittest.TestCase):
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
         )
+        shrink_bootstrap(cls.settings_root, 1.0)
 
     @classmethod
     def tearDownClass(cls) -> None:

@@ -12,16 +12,20 @@
 обрывок.
 
 Повторы живут здесь, а не в craft-sync (`--retries 0 --rl-retries 0`): у хука
-одна политика на весь сбор, и она должна быть видна в одном месте. Три попытки
-с растущей паузой закрывают сетевую икоту и пятисотки; после них — алерт.
+одна политика на весь сбор, и она должна быть видна в одном месте. Повторяем
+только то, что может пройти со второго раза: сетевую ошибку, свой таймаут,
+пятисотки и 429 «бюджет блоков исчерпан». Остальные 4xx постоянны — 404 не
+станет найденным, а 401 авторизованным, — и повтор на них только тратит время
+старта сессии, поэтому на них сразу отказ.
 
 Худший случай по времени: два чтения × три попытки × таймаут вызова плюс паузы,
 то есть около 386 с. Он обязан помещаться в `timeout` строки хука, который
-пишет установщик (600 с), — иначе харнес убьёт сбор на полпути.
+пишет установщик, — иначе харнес убьёт сбор на полпути.
 """
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -42,6 +46,10 @@ JOURNAL_FILE = 'craft-snapshot.jsonl'
 # обходом; память — один блок, ~1,1 с.
 ATTEMPTS = 3
 BACKOFF_SECONDS = (1, 3, 9)
+# Коды, которые повтор может исправить: 429 — окно бюджета блоков, 5xx — беда
+# на той стороне. Прочие 4xx постоянны.
+RETRIED_CODES = frozenset({429})
+HTTP_CODE = re.compile(r'HTTP (\d{3})')
 # Сколько ждём одну попытку целиком и один запрос внутри неё.
 CALL_TIMEOUT = 60
 REQUEST_TIMEOUT = 30
@@ -86,6 +94,20 @@ def attempt(tool: str, block_id: str, follow: bool) -> tuple[str, str | None]:
     return text, None
 
 
+def permanent(reason: str) -> bool:
+    """Повтор этого не исправит: 4xx кроме 429 постоянны.
+
+    Код берётся из текста ошибки craft-sync — своих повторов у него нет, и он
+    называет код как есть. Кода в тексте не видно (сеть, таймаут, битый JSON) —
+    считаем, что повтор имеет смысл.
+    """
+    found = HTTP_CODE.search(reason or '')
+    if not found:
+        return False
+    code = int(found.group(1))
+    return 400 <= code < 500 and code not in RETRIED_CODES
+
+
 def read(tool: str, block_id: str, follow: bool, sleep=time.sleep) -> tuple[str, str | None]:
     """Чтение с повторами. Все попытки впустую — последняя причина наружу."""
     problem = None
@@ -95,6 +117,8 @@ def read(tool: str, block_id: str, follow: bool, sleep=time.sleep) -> tuple[str,
         text, problem = attempt(tool, block_id, follow)
         if text:
             return text, None
+        if permanent(problem):
+            return '', problem
     return '', problem
 
 
