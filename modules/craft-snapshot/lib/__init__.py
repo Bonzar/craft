@@ -3,21 +3,21 @@
 Отдаёт базе стартового контекста два куска markdown: правила базы — разделы
 «Сущность базы #раздел», прочитанные по «Связям», — и память агента. Читает их
 через `craft-sync --markdown`: connect-API Craft умеет отдавать markdown любого
-блока деревом, а инструмент уже знает и базовый URL, и повторы, и таймауты.
+блока деревом, а инструмент уже знает и базовый URL, и обход по «Связям».
 
-Хуку нельзя висеть: он держит старт сессии. Поэтому повторов здесь нет
-(`--retries 0 --rl-retries 0`), а ошибка API — это пустой текст и строка в
-журнале сессии, а не падение. Пустой стартовый контекст хуже полного, но лучше,
-чем сессия, которая не стартует.
+Снимок либо собирается целиком, либо не отдаётся вовсе. Половина снимка —
+память без правил базы — хуже пустоты: агент считал бы, что правила прочитаны,
+и работал бы по памяти без них. Поэтому отказ любого из двух чтений превращает
+ответ поставщика в один короткий алерт, и база печатает в контекст его, а не
+обрывок.
 
-Бюджет один на весь сбор, а не на вызов: вызовов два, и два независимых
-таймаута сложились бы в сумму, которой не хватает ни у харнеса (у Claude хук
-живёт минуту), ни у остальных копий базы — они ждут первую тоже минуту. Поэтому
-`TOTAL_BUDGET` заведомо меньше этой минуты: что не успело за него, не успело
-совсем, и это видно по журналу.
+Повторы живут здесь, а не в craft-sync (`--retries 0 --rl-retries 0`): у хука
+одна политика на весь сбор, и она должна быть видна в одном месте. Три попытки
+с растущей паузой закрывают сетевую икоту и пятисотки; после них — алерт.
 
-В репозитории снимка не лежит и лежать не может: это живая память о жизни
-Влада, и гвард `tools/no-snapshot-files.js` следит за этим отдельно.
+Худший случай по времени: два чтения × три попытки × таймаут вызова плюс паузы,
+то есть около 386 с. Он обязан помещаться в `timeout` строки хука, который
+пишет установщик (600 с), — иначе харнес убьёт сбор на полпути.
 """
 
 import json
@@ -38,15 +38,17 @@ BINARY_NAME = 'craft-sync'
 DEFAULT_BINARY = '~/.local/bin/craft-sync'
 JOURNAL_FILE = 'craft-snapshot.jsonl'
 
-# Замер 17.09.2026: правила по «Связям» читаются ~13 с, память ~1,3 с. Бюджет
-# на весь сбор — 35 с: вдвое с лишним больше замера и заметно меньше минуты,
-# которую держат и хук Claude, и ожидание остальных копий базы.
-TOTAL_BUDGET = 35.0
-# Столько ждёт один запрос внутри craft-sync; общий бюджет всё равно главнее.
-CALL_TIMEOUT = 20
+# Замер 17.09.2026: правила по «Связям» — 23 блока, ~4,6 с параллельным
+# обходом; память — один блок, ~1,1 с.
+ATTEMPTS = 3
+BACKOFF_SECONDS = (1, 3, 9)
+# Сколько ждём одну попытку целиком и один запрос внутри неё.
+CALL_TIMEOUT = 60
+REQUEST_TIMEOUT = 30
 
 RULES_TITLE = '# Правила базы Craft'
 MEMORY_TITLE = '# Память агента'
+ALERT = 'стартовый контекст: снимок Craft не собран: {reason}'
 
 
 def binary() -> str | None:
@@ -60,30 +62,40 @@ def binary() -> str | None:
     return shutil.which(BINARY_NAME)
 
 
-def read(tool: str, block_id: str, follow: bool, left: float) -> tuple[str, str | None]:
-    """Один вызов инструмента в рамках оставшегося бюджета.
-
-    Вернёт текст либо причину, по которой его нет. Бюджет кончился — вызова не
-    делаем вовсе: висеть хуку нельзя, а полупрочитанный снимок нам не нужен.
-    """
-    if left <= 0:
-        return '', f'бюджет сбора в {TOTAL_BUDGET:.0f} с исчерпан до этого вызова'
+def attempt(tool: str, block_id: str, follow: bool) -> tuple[str, str | None]:
+    """Одна попытка чтения. Текст либо причина, по которой его нет."""
     command = [
         tool, '--markdown', block_id,
-        '--retries', '0', '--rl-retries', '0',
-        '--timeout', str(min(CALL_TIMEOUT, max(1, int(left)))),
+        '--retries', '0', '--rl-retries', '0', '--timeout', str(REQUEST_TIMEOUT),
     ]
     if follow:
         command.append('--follow-links')
     try:
         done = subprocess.run(
-            command, capture_output=True, text=True, timeout=left, check=False
+            command, capture_output=True, text=True, timeout=CALL_TIMEOUT, check=False
         )
-    except (OSError, subprocess.TimeoutExpired) as failure:
+    except subprocess.TimeoutExpired:
+        return '', f'вызов не уложился в {CALL_TIMEOUT} с'
+    except OSError as failure:
         return '', f'{type(failure).__name__}: {failure}'
     if done.returncode != 0:
         return '', f'craft-sync вернул {done.returncode}: {done.stderr.strip()[:300]}'
-    return done.stdout.strip(), (done.stderr.strip()[:300] or None)
+    text = done.stdout.strip()
+    if not text:
+        return '', 'craft-sync ничего не прочитал'
+    return text, None
+
+
+def read(tool: str, block_id: str, follow: bool, sleep=time.sleep) -> tuple[str, str | None]:
+    """Чтение с повторами. Все попытки впустую — последняя причина наружу."""
+    problem = None
+    for number in range(ATTEMPTS):
+        if number:
+            sleep(BACKOFF_SECONDS[min(number - 1, len(BACKOFF_SECONDS) - 1)])
+        text, problem = attempt(tool, block_id, follow)
+        if text:
+            return text, None
+    return '', problem
 
 
 def note(storage, entry: dict) -> None:
@@ -93,31 +105,37 @@ def note(storage, entry: dict) -> None:
     storage.append_line(JOURNAL_FILE, json.dumps({'at': time.time(), **entry}, ensure_ascii=False))
 
 
-def provide(event, storage) -> str:
-    """Что база кладёт в стартовый контекст от этого поставщика."""
+def provide(event, storage, sleep=time.sleep) -> str:
+    """Что база кладёт в стартовый контекст от этого поставщика.
+
+    Либо снимок целиком, либо алерт. Третьего нет: частичный снимок молча
+    подменил бы правила базы их половиной.
+    """
+    where = getattr(event, 'event', None)
     tool = binary()
     if tool is None:
-        note(storage, {'event': getattr(event, 'event', None), 'chars': 0,
-                       'error': f'{BINARY_NAME} не найден: ни в {BINARY_ENV}, ни в {DEFAULT_BINARY}, ни в PATH'})
-        return ''
+        return failed(storage, where,
+                      f'{BINARY_NAME} не найден: ни в {BINARY_ENV}, ни в {DEFAULT_BINARY}, ни в PATH')
     if not os.environ.get(BASE_ENV):
-        note(storage, {'event': getattr(event, 'event', None), 'chars': 0,
-                       'error': f'в окружении нет {BASE_ENV}: читать нечем'})
-        return ''
+        return failed(storage, where, f'в окружении нет {BASE_ENV}')
 
     pieces = []
-    problems = {}
-    deadline = time.monotonic() + TOTAL_BUDGET
     for title, block_id, follow in (
         (RULES_TITLE, RULES_ROOT, True),
         (MEMORY_TITLE, MEMORY_ROOT, False),
     ):
-        text, problem = read(tool, block_id, follow, deadline - time.monotonic())
+        text, problem = read(tool, block_id, follow, sleep=sleep)
         if problem:
-            problems[block_id] = problem
-        if text:
-            pieces.append(f'{title}\n\n{text}')
+            return failed(storage, where, f'{title.lstrip("# ")}: {problem}')
+        pieces.append(f'{title}\n\n{text}')
+
     snapshot = '\n\n'.join(pieces)
-    note(storage, {'event': getattr(event, 'event', None), 'chars': len(snapshot),
-                   'problems': problems or None})
+    note(storage, {'event': where, 'chars': len(snapshot), 'alert': None})
     return snapshot
+
+
+def failed(storage, where, reason: str) -> str:
+    """Алерт вместо снимка: коротко, с причиной, и та же причина в журнал."""
+    alert = ALERT.format(reason=reason)
+    note(storage, {'event': where, 'chars': 0, 'alert': alert})
+    return alert

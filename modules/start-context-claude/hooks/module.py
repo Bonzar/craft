@@ -16,10 +16,15 @@
 - файл с импортом на старте не годится: импорты читаются вместе с запуском
   хуков, и хук записать файл не успевает.
 
-Копия 1 ставит маркер готовности, собирает, пишет состояние прогона и печатает
-первый кусок. Копии 2..N ждут маркер готовности, состояние своего поколения и
-маркер «кусок i−1 напечатан», печатают свой и ставят свой маркер. Кому куска не
-досталось — молчат. Текст больше ёмкости цепочки обрезается с пометкой в конце.
+Копия 1 ставит маркер готовности со своим pid, собирает, пишет состояние
+прогона и печатает первый кусок. Копии 2..N ждут маркер готовности, состояние
+своего поколения и маркер «кусок i−1 напечатан», печатают свой и ставят свой
+маркер. Кому куска не досталось — молчат. Текст больше ёмкости цепочки
+обрезается с пометкой в конце.
+
+Сбор не ограничен временем: копии ждут его столько, сколько он идёт, а сдаются
+только если копия 1 умерла, не оставив состояния. Потолок на весь ход один и
+задан снаружи — полем `timeout` строки хука.
 
 Зона сессии переживает событие, поэтому маркеры прошлых прогонов в ней лежат.
 Прогоны разных событий разведены именами файлов, прогоны одного события —
@@ -49,13 +54,21 @@ STATE_FILE = 'start-context-{event}.json'
 READY_FILE = 'start-context-ready-{event}.json'
 PRINTED_FILE = 'start-context-printed-{event}-{number}.json'
 JOURNAL_FILE = 'start-context.jsonl'
-# Ждём ровно столько: дольше держать старт сессии смысла нет, а не дождавшись,
-# копия молчит — это законный ответ. Число не свободное: оно обязано покрывать
-# худшее время сбора у копии 1, иначе поздний, но успешный сбор доехал бы одним
-# первым куском. Поставщик снимка Craft держит на весь сбор 35 с; поставщик,
-# который заведомо не укладывается в эту минуту, не годится в стартовый
-# контекст — его ответа харнес всё равно не дождётся.
-WAIT_SECONDS = 60.0
+# Сколько ждать сбор — не наше дело: сколько надо, столько и ждём. Потолка на
+# сбор нет вовсе, признак живости — процесс копии 1: пока он жив, она собирает;
+# умер, не оставив состояния, — ждать больше нечего. Так медленный Craft не
+# превращает длинный контекст в один первый кусок. Общий предел один и тот же
+# для всех копий — `timeout` строки хука, который пишет установщик.
+#
+# Единственный потолок — на появление самого маркера готовности: его копия 1
+# ставит первым же действием, ещё до сбора, поэтому эта минута покрывает только
+# запуск интерпретатора, а не чтение Craft. Без неё копия, у которой копии 1 не
+# существует вовсе, висела бы до таймаута харнеса.
+READY_WAIT_SECONDS = 60.0
+# Своей очереди копия ждёт уже после того, как состояние собрано: остаётся
+# только печать, и она быстрая. Потолок тут щедрый и нужен лишь на случай, если
+# соседняя копия умерла молча.
+CHAIN_WAIT_SECONDS = 300.0
 POLL_SECONDS = 0.05
 # Запас на разницу в старте процессов одного прогона: харнес запускает копии
 # разом, но интерпретатор поднимается не мгновенно.
@@ -144,10 +157,13 @@ class Module(jarvis.Module):
 
     def _first(self, event, runtime, storage, number, total, started):
         generation = uuid.uuid4().hex
-        # Маркер готовности ставится до сборки: остальные копии уже ждут, и им
-        # нужно как можно раньше узнать поколение этого прогона. Состояние они
-        # дожидаются отдельно и по тому же поколению.
-        storage.write_json(name(READY_FILE, event), {'generation': generation, 'at': time.time()})
+        # Маркер готовности ставится до сборки, первым же действием: остальные
+        # копии ждут его, и им нужно как можно раньше узнать и поколение этого
+        # прогона, и мой pid — по нему они поймут, что я ещё собираю.
+        storage.write_json(
+            name(READY_FILE, event),
+            {'generation': generation, 'pid': os.getpid(), 'at': time.time()},
+        )
         text, accounted = gather(runtime, event)
         pieces, truncated = cut(text, CHUNK, total)
         storage.write_json(name(STATE_FILE, event), {
@@ -174,20 +190,22 @@ class Module(jarvis.Module):
         ready = wait_for(
             lambda: storage.read_json(name(READY_FILE, event), default=None),
             lambda mark: mark.get('at', 0) >= started - FRESH_SLACK,
-            started,
+            deadline=started + READY_WAIT_SECONDS,
         )
         if ready is None:
             note(storage, number, 'silence', 'маркер готовности не появился за отведённое время')
             return jarvis.Silence()
         generation = ready['generation']
 
+        # Состояние ждём без потолка: копия 1 собирает столько, сколько нужно
+        # Craft'у. Ограничитель один — её жизнь.
         state = wait_for(
             lambda: storage.read_json(name(STATE_FILE, event), default=None),
             lambda mark: mark.get('generation') == generation,
-            started,
+            alive=lambda: still_running(ready.get('pid')),
         )
         if state is None:
-            note(storage, number, 'silence', 'состояние прогона не появилось за отведённое время')
+            note(storage, number, 'silence', 'копия 1 умерла, не оставив состояния прогона')
             return jarvis.Silence()
 
         pieces = state.get('chunks') or []
@@ -198,7 +216,7 @@ class Module(jarvis.Module):
         previous = wait_for(
             lambda: storage.read_json(name(PRINTED_FILE, event, number - 1), default=None),
             lambda mark: mark.get('generation') == generation,
-            started,
+            deadline=time.time() + CHAIN_WAIT_SECONDS,
         )
         if previous is None:
             note(storage, number, 'silence', 'предыдущая копия не отметилась за отведённое время')
@@ -231,15 +249,26 @@ def name(template: str, event, number: int | None = None) -> str:
     return template.format(event=event.event, number=number)
 
 
-def wait_for(read, good, started):
-    """Дождаться записи, которая подходит. Не дождались — None, и копия молчит."""
-    deadline = started + WAIT_SECONDS
-    while time.time() < deadline:
+def wait_for(read, good, deadline=None, alive=None):
+    """Дождаться записи, которая подходит. Не дождались — None, и копия молчит.
+
+    Ждём либо до срока, либо пока жив тот, кто эту запись пишет. Признак
+    живости сильнее срока: сбор может идти сколько угодно, и обрывать его
+    таймером — значит отдать в контекст огрызок вместо текста. Живость
+    проверяется ПОСЛЕ чтения: процесс мог успеть и записать, и выйти.
+    """
+    while True:
         mark = read()
         if isinstance(mark, dict) and good(mark):
             return mark
+        if deadline is not None and time.time() >= deadline:
+            return None
+        if alive is not None and not alive():
+            # Процесс мог записать и выйти между чтением и проверкой живости —
+            # смотрим ещё раз, прежде чем считать, что он умер молча.
+            final = read()
+            return final if isinstance(final, dict) and good(final) else None
         time.sleep(POLL_SECONDS)
-    return None
 
 
 def wait_exit(pid) -> None:

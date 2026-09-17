@@ -1,11 +1,42 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// collectMarkdown прогоняет режим --markdown и возвращает то, что он напечатал:
+// runMarkdown пишет прямо в stdout, поэтому тест его подменяет.
+func collectMarkdown(t *testing.T, client *Client, ids string, follow bool, exclude map[string]bool) string {
+	t.Helper()
+	old := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("не завести трубу: %v", err)
+	}
+	os.Stdout = write
+	done := make(chan string, 1)
+	go func() {
+		text, _ := io.ReadAll(read)
+		done <- string(text)
+	}()
+	func() {
+		defer func() {
+			os.Stdout = old
+			write.Close()
+		}()
+		runMarkdown(client, ids, follow, exclude)
+	}()
+	return <-done
+}
 
 func tm(s string) time.Time {
 	t, err := parseTime(s)
@@ -454,5 +485,155 @@ func TestBackoffSchedules(t *testing.T) {
 		if got := rateLimitBackoff(n); got != time.Duration(w)*time.Second {
 			t.Errorf("rateLimitBackoff(%d)=%v, want %ds", n, got, w)
 		}
+	}
+}
+
+// ---- markdown mode ----
+
+// markdownServer answers GET /blocks?id=… from a fixed map, counts the calls
+// per id and holds each answer long enough that a sequential walk would show
+// up as a sum of the delays.
+func markdownServer(t *testing.T, blocks map[string]Block, delay time.Duration) (*Client, func(string) int) {
+	t.Helper()
+	var mu sync.Mutex
+	calls := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.ToLower(r.URL.Query().Get("id"))
+		mu.Lock()
+		calls[id]++
+		mu.Unlock()
+		time.Sleep(delay)
+		block, ok := blocks[id]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(block)
+	}))
+	t.Cleanup(server.Close)
+	client := &Client{http: &http.Client{Timeout: 5 * time.Second}, base: server.URL}
+	return client, func(id string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls[strings.ToLower(id)]
+	}
+}
+
+// uid makes a UUID-shaped id from a short name: Craft links carry UUIDs and
+// extractLinks matches nothing else, so tests speak the same shape.
+func uid(n int) string {
+	return fmt.Sprintf("%08d-0000-0000-0000-000000000000", n)
+}
+
+// link builds the «Связи» section that --follow-links walks.
+func linksSection(ids ...string) []Block {
+	out := []Block{blk("h", "text", "### Связи", "")}
+	for i, id := range ids {
+		out = append(out, blk(fmt.Sprintf("l%d", i), "text", fmt.Sprintf("[дальше](block://%s)", id), ""))
+	}
+	return out
+}
+
+func TestMarkdownFollowsOnlyTheLinksSection(t *testing.T) {
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "",
+			append([]Block{blk("body", "text", "в теле [ссылка](block://body-target)", "")},
+				linksSection(uid(2))...)...),
+		uid(2): blk(uid(2), "page", "# Ребёнок", ""),
+		uid(3): blk(uid(3), "page", "# Не должен читаться", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	if !strings.Contains(out, "# Ребёнок") {
+		t.Fatalf("ссылка из «Связей» не прочитана: %q", out)
+	}
+	if strings.Contains(out, "Не должен читаться") || calls(uid(3)) != 0 {
+		t.Fatalf("прочитана ссылка из тела страницы, а не из «Связей»")
+	}
+}
+
+func TestMarkdownReadsEveryIDAtMostOnce(t *testing.T) {
+	// Ромб: два ребёнка ведут на одного внука.
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "", linksSection(uid(4), uid(5))...),
+		uid(4): blk(uid(4), "page", "# А", "", linksSection(uid(6))...),
+		uid(5): blk(uid(5), "page", "# Б", "", linksSection(uid(6), uid(4))...),
+		uid(6): blk(uid(6), "page", "# Внук", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	for _, id := range []string{uid(1), uid(4), uid(5), uid(6)} {
+		if got := calls(id); got != 1 {
+			t.Fatalf("%s прочитан %d раз, а должен один", id, got)
+		}
+	}
+	if strings.Count(out, "# Внук") != 1 {
+		t.Fatalf("внук напечатан не один раз: %q", out)
+	}
+}
+
+func TestMarkdownOrderDoesNotDependOnWhoAnsweredFirst(t *testing.T) {
+	// Уровень заведомо шире пула воркеров: порядок печати обязан остаться
+	// порядком обнаружения, а не порядком ответов.
+	var ids []string
+	blocks := map[string]Block{}
+	for i := 0; i < 24; i++ {
+		id := uid(100 + i)
+		ids = append(ids, id)
+		blocks[id] = blk(id, "page", "# "+id, "")
+	}
+	blocks[uid(1)] = blk(uid(1), "page", "# Корень", "", linksSection(ids...)...)
+	client, _ := markdownServer(t, blocks, 0)
+
+	first := collectMarkdown(t, client, uid(1), true, nil)
+	for run := 0; run < 5; run++ {
+		if again := collectMarkdown(t, client, uid(1), true, nil); again != first {
+			t.Fatalf("порядок разъехался между прогонами")
+		}
+	}
+	var want []string
+	for _, id := range ids {
+		want = append(want, "# "+id)
+	}
+	if !strings.Contains(first, strings.Join(want, "\n\n")) {
+		t.Fatalf("порядок не совпал с порядком обнаружения:\n%s", first)
+	}
+}
+
+func TestMarkdownFetchesALevelInParallel(t *testing.T) {
+	// Ширина уровня задана здесь, а не константой пула: иначе тест мерил бы сам
+	// себя и на пуле в одного воркера всё равно проходил бы.
+	const delay = 120 * time.Millisecond
+	const width = 6
+	var ids []string
+	blocks := map[string]Block{}
+	for i := 0; i < width; i++ {
+		id := uid(200 + i)
+		ids = append(ids, id)
+		blocks[id] = blk(id, "page", "# "+id, "")
+	}
+	blocks[uid(1)] = blk(uid(1), "page", "# Корень", "", linksSection(ids...)...)
+	client, _ := markdownServer(t, blocks, delay)
+
+	started := time.Now()
+	collectMarkdown(t, client, uid(1), true, nil)
+	spent := time.Since(started)
+	// Порог — заметно меньше последовательного обхода, который стоил бы
+	// (width+1)*delay: тест проверяет, что уровень читается разом, а не
+	// конкретный размер пула.
+	if limit := 4 * delay; spent > limit {
+		t.Fatalf("уровень читался последовательно: %v, ждали меньше %v", spent, limit)
+	}
+}
+
+func TestMarkdownExcludeIsHonoured(t *testing.T) {
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "", linksSection(uid(7))...),
+		uid(7): blk(uid(7), "page", "# Пропустить", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, map[string]bool{uid(7): true})
+	if strings.Contains(out, "Пропустить") || calls(uid(7)) != 0 {
+		t.Fatalf("--exclude не сработал в режиме markdown")
 	}
 }

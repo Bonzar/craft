@@ -92,7 +92,14 @@ CODEX_STATE_TABLE = re.compile(
 )
 # дока: `null` — потолок 2 500 токенов, `0` — без потолка.
 CODEX_CONTEXT_LIMIT = 0
-CODEX_TIMEOUT_SEC = 60
+# Сколько харнесу ждать строку хука. Стартовый контекст ходит в Craft, и худший
+# случай поставщика — около 386 с (два чтения по три попытки), поэтому минуты
+# по умолчанию мало: убитый на полпути сбор отдал бы в контекст огрызок.
+# дока (страница hooks на code.claude.com, снята 17.09.2026): поле `timeout` у
+# command-хука задаётся в секундах; у Codex поле называется так же (замер
+# 17.09.2026: `timeout = 60` в config.toml приезжает в hooks/list как
+# timeoutSec 60).
+HOOK_TIMEOUT_SEC = 600
 
 
 @dataclass
@@ -300,7 +307,7 @@ class ClaudeBackend(Backend):
         args = [str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY)]
         for name in unified:
             args += ['--event', name]
-        return {'type': 'command', 'command': python, 'args': args}
+        return {'type': 'command', 'command': python, 'args': args, 'timeout': HOOK_TIMEOUT_SEC}
 
     def register(self, records, settings_root, python, report) -> None:
         hooks: dict[str, list] = {}
@@ -389,7 +396,7 @@ class CodexBackend(Backend):
                 body_lines.append(f'[[hooks.{harness_event}.hooks]]')
                 body_lines.append('type = "command"')
                 body_lines.append(f'command = {toml_string(command)}')
-                body_lines.append(f'timeout = {CODEX_TIMEOUT_SEC}')
+                body_lines.append(f'timeout = {HOOK_TIMEOUT_SEC}')
                 # Без этого ключа Codex режет ответ хука потолком в 2 500
                 # токенов, и снимок Craft приезжает обрезанным (дока). Там, где
                 # событие текста не принимает вовсе, ключ не пишется: Codex на

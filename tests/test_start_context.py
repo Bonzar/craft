@@ -245,3 +245,124 @@ class NoProvidersTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SlowGatherTest(unittest.TestCase):
+    """Сбор идёт долго: копии ждут его, а не сдаются по таймеру."""
+
+    copies = 3
+    gather_seconds = 3
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.tmp.name)
+        cls.home = cls.root / 'home'
+        cls.home.mkdir()
+        cls.settings_root = cls.root / 'settings'
+        source = cls.root / 'source'
+        source.mkdir()
+        shutil.copytree(MODULES_DIR / BASE, source / BASE)
+        (source / BASE / 'module.toml').write_text(
+            f'slug = "{BASE}"\nevents = ["session-start"]\nharness = "claude"\ncopies = {cls.copies}\n',
+            encoding='utf-8',
+        )
+        lib = source / 'slow-provider' / 'lib'
+        lib.mkdir(parents=True)
+        (source / 'slow-provider' / 'module.toml').write_text(
+            'slug = "slow-provider"\nfor = ["start-context-*"]\n', encoding='utf-8'
+        )
+        (lib / '__init__.py').write_text(
+            'import time\n\n\n'
+            'def provide(event, storage):\n'
+            f'    time.sleep({cls.gather_seconds})\n'
+            f'    return "медленно собранный текст " * {CHUNK // 10}\n',
+            encoding='utf-8',
+        )
+        subprocess.run(
+            [sys.executable, str(INSTALLER),
+             '--settings-dir', str(cls.settings_root),
+             '--modules', str(source),
+             '--core', str(CORE_SOURCE)],
+            check=True, capture_output=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def entry(self, number: int) -> Path:
+        return self.settings_root / 'jarvis' / 'modules' / f'{BASE}-{number}' / 'hooks' / 'module.py'
+
+    def test_every_copy_waits_out_a_slow_gather(self) -> None:
+        payload = session_event('slow')
+        with ThreadPoolExecutor(max_workers=self.copies) as pool:
+            results = list(pool.map(
+                lambda number: subprocess.run(
+                    [sys.executable, str(self.entry(number)), '--event', 'session-start'],
+                    input=payload, text=True, capture_output=True,
+                    env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
+                ),
+                range(1, self.copies + 1),
+            ))
+        printed = []
+        for number, result in enumerate(results, start=1):
+            self.assertEqual(result.returncode, 0, f'копия {number}: {result.stderr}')
+            if result.stdout.strip():
+                printed.append(json.loads(result.stdout)['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(len(printed), self.copies, 'кто-то сдался, не дождавшись сбора')
+
+
+class DeadLeaderTest(unittest.TestCase):
+    """Копия 1 умерла, не оставив состояния: остальные молчат и не висят."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.tmp.name)
+        cls.home = cls.root / 'home'
+        cls.home.mkdir()
+        cls.settings_root = cls.root / 'settings'
+        source = cls.root / 'source'
+        source.mkdir()
+        shutil.copytree(MODULES_DIR / BASE, source / BASE)
+        (source / BASE / 'module.toml').write_text(
+            f'slug = "{BASE}"\nevents = ["session-start"]\nharness = "claude"\ncopies = 2\n',
+            encoding='utf-8',
+        )
+        subprocess.run(
+            [sys.executable, str(INSTALLER),
+             '--settings-dir', str(cls.settings_root),
+             '--modules', str(source),
+             '--core', str(CORE_SOURCE)],
+            check=True, capture_output=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def test_a_follower_gives_up_when_the_leader_is_gone(self) -> None:
+        session = 'dead-leader'
+        storage = Storage(self.home / '.local' / 'state' / 'jarvis', session)
+        # Маркер готовности от процесса, которого уже нет: ровно то состояние,
+        # в котором копия 1 умерла, не успев записать состояние прогона.
+        dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+        dead.wait()
+        storage.write_json(
+            'start-context-ready-session-start.json',
+            {'generation': 'g', 'pid': dead.pid, 'at': time.time()},
+        )
+        entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-2' / 'hooks' / 'module.py'
+        started = time.time()
+        result = subprocess.run(
+            [sys.executable, str(entry), '--event', 'session-start'],
+            input=session_event(session), text=True, capture_output=True,
+            env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
+        )
+        spent = time.time() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertLess(spent, 15, 'копия висела вместо того, чтобы заметить смерть копии 1')
+        journal = storage.read_lines('start-context.jsonl')
+        self.assertTrue(any('умерла' in line for line in journal), journal)

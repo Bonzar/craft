@@ -1,13 +1,13 @@
-"""Поставщик снимка Craft: бюджет сбора и поведение при отказе.
+"""Поставщик снимка Craft: повторы, алерт вместо половины снимка, склейка.
 
 Живой Craft тут не нужен и не годится — проверяется то, что решено кодом:
-сколько поставщик готов ждать и что он отдаёт, когда не дождался.
+сколько раз поставщик пробует, что отдаёт при отказе и что никогда не отдаёт
+половину.
 """
 
 import importlib.util
 import os
 import tempfile
-import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -41,68 +41,135 @@ class Journal:
         self.lines.append(line)
 
 
-class BudgetTest(unittest.TestCase):
+class ProviderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.slept: list[float] = []
         for name, value in (('CRAFT_SYNC_BIN', None), ('CRAFT_API_BASE', 'https://example/api')):
             previous = os.environ.get(name)
             self.addCleanup(
-                lambda n=name, v=previous: os.environ.pop(n, None) if v is None else os.environ.__setitem__(n, v)
+                lambda n=name, v=previous: os.environ.pop(n, None) if v is None
+                else os.environ.__setitem__(n, v)
             )
             if value is not None:
                 os.environ[name] = value
 
     def stub(self, body: str) -> Path:
+        """Заглушка craft-sync плюс журнал её вызовов."""
+        self.calls = self.root / 'calls.log'
         path = self.root / 'craft-sync'
-        path.write_text(body, encoding='utf-8')
+        path.write_text(f'#!/bin/sh\necho "$@" >> {self.calls}\n{body}\n', encoding='utf-8')
         path.chmod(0o755)
         os.environ['CRAFT_SYNC_BIN'] = str(path)
         return path
 
-    def test_the_whole_collection_fits_the_budget(self) -> None:
-        # Вызовов два, и два независимых таймаута сложились бы в сумму, которой
-        # не хватает ни харнесу, ни остальным копиям базы.
-        self.stub('#!/bin/sh\nsleep 30\n')
-        journal = Journal()
-        started = time.monotonic()
-        with unittest.mock.patch.object(provider, 'TOTAL_BUDGET', 1.0):
-            text = provider.provide(Event(), journal)
-        spent = time.monotonic() - started
-        self.assertEqual(text, '')
-        self.assertLess(spent, 3.0, 'сбор вышел за общий бюджет')
-        self.assertTrue(any('Timeout' in line or 'бюджет' in line for line in journal.lines), journal.lines)
+    def call_lines(self) -> list[str]:
+        return self.calls.read_text(encoding='utf-8').splitlines() if self.calls.exists() else []
 
-    def test_a_failing_call_gives_empty_text_and_a_reason(self) -> None:
-        self.stub('#!/bin/sh\necho "не достучались" >&2\nexit 1\n')
+    def provide(self, journal=None) -> str:
+        return provider.provide(Event(), journal or Journal(), sleep=self.slept.append)
+
+    # --- повторы ---
+
+    def test_a_failing_call_is_retried_three_times_with_growing_pauses(self) -> None:
+        self.stub('echo "не достучались" >&2\nexit 1')
         journal = Journal()
-        self.assertEqual(provider.provide(Event(), journal), '')
+        self.provide(journal)
+        # Три попытки на первом же чтении, дальше поставщик не идёт.
+        self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
+        self.assertEqual(self.slept, list(provider.BACKOFF_SECONDS[:provider.ATTEMPTS - 1]))
         self.assertIn('craft-sync вернул 1', journal.lines[0])
 
-    def test_no_binary_is_a_reason_and_not_a_crash(self) -> None:
-        # Ни переменной, ни пути по умолчанию, ни PATH: бинарника нет нигде.
-        os.environ['CRAFT_SYNC_BIN'] = str(self.root / 'нет-такого')
-        journal = Journal()
-        with unittest.mock.patch.object(provider, 'DEFAULT_BINARY', str(self.root / 'нет-и-тут')), \
-                unittest.mock.patch.dict(os.environ, {'PATH': str(self.root)}):
-            self.assertEqual(provider.provide(Event(), journal), '')
-        self.assertIn('не найден', journal.lines[0])
+    def test_a_call_that_succeeds_is_not_retried(self) -> None:
+        self.stub('echo "прочитано $2"')
+        self.provide()
+        self.assertEqual(len(self.call_lines()), 2)  # два чтения, по одной попытке
+        self.assertEqual(self.slept, [])
 
-    def test_without_the_api_base_it_does_not_call_anything(self) -> None:
-        self.stub('#!/bin/sh\necho был-вызов\n')
-        os.environ.pop('CRAFT_API_BASE')
-        journal = Journal()
-        self.assertEqual(provider.provide(Event(), journal), '')
-        self.assertIn('CRAFT_API_BASE', journal.lines[0])
-
-    def test_what_both_calls_read_is_glued_under_its_own_title(self) -> None:
-        self.stub('#!/bin/sh\necho "прочитано $2"\n')  # $1 — --markdown, $2 — id блока
-        text = provider.provide(Event(), Journal())
+    def test_a_late_success_is_taken(self) -> None:
+        # Первая попытка падает, вторая отвечает: снимок собирается.
+        self.stub(f'''
+            n=$(wc -l < {self.root / 'calls.log'})
+            if [ "$n" -le 1 ]; then echo сеть >&2; exit 1; fi
+            echo "прочитано $2"
+        ''')
+        text = self.provide()
         self.assertIn(provider.RULES_TITLE, text)
         self.assertIn(provider.MEMORY_TITLE, text)
-        self.assertIn(provider.RULES_ROOT, text)
-        self.assertIn(provider.MEMORY_ROOT, text)
+        self.assertNotIn('не собран', text)
+
+    # --- алерт вместо половины снимка ---
+
+    def test_a_snapshot_is_never_delivered_in_half(self) -> None:
+        # Правила читаются, память падает — отдать первую половину нельзя:
+        # агент решил бы, что правила базы у него полные.
+        self.stub(f'''
+            if [ "$2" = "{provider.MEMORY_ROOT}" ]; then echo нет >&2; exit 1; fi
+            echo "правила базы целиком"
+        ''')
+        journal = Journal()
+        text = self.provide(journal)
+        self.assertTrue(text.startswith('стартовый контекст: снимок Craft не собран:'), text)
+        self.assertNotIn('правила базы целиком', text)
+        self.assertIn('Память агента', text)  # названа причина: что именно не прочиталось
+        self.assertIn('alert', journal.lines[0])
+
+    def test_the_alert_is_short_and_names_the_reason(self) -> None:
+        self.stub('echo "сервер лёг" >&2\nexit 1')
+        text = self.provide()
+        self.assertLess(len(text), 400, text)
+        self.assertIn('сервер лёг', text)
+
+    def test_no_binary_is_an_alert_and_not_a_crash(self) -> None:
+        os.environ['CRAFT_SYNC_BIN'] = str(self.root / 'нет-такого')
+        with unittest.mock.patch.object(provider, 'DEFAULT_BINARY', str(self.root / 'нет-и-тут')), \
+                unittest.mock.patch.dict(os.environ, {'PATH': str(self.root)}):
+            text = provider.provide(Event(), Journal(), sleep=self.slept.append)
+        self.assertIn('не найден', text)
+        self.assertTrue(text.startswith('стартовый контекст: снимок Craft не собран:'))
+
+    def test_without_the_api_base_nothing_is_called_at_all(self) -> None:
+        self.stub('echo был-вызов')
+        os.environ.pop('CRAFT_API_BASE')
+        text = self.provide()
+        self.assertIn('CRAFT_API_BASE', text)
+        self.assertEqual(self.call_lines(), [])
+
+    # --- склейка и аргументы ---
+
+    def test_both_roots_are_read_under_their_own_titles(self) -> None:
+        self.stub('echo "прочитано $2"')
+        text = self.provide()
+        self.assertIn(f'{provider.RULES_TITLE}\n\nпрочитано {provider.RULES_ROOT}', text)
+        self.assertIn(f'{provider.MEMORY_TITLE}\n\nпрочитано {provider.MEMORY_ROOT}', text)
+
+    def test_retries_of_craft_sync_itself_are_switched_off(self) -> None:
+        # Политика повторов одна и живёт здесь, а не в инструменте.
+        self.stub('echo "прочитано $2"')
+        self.provide()
+        for line in self.call_lines():
+            self.assertIn('--retries 0', line)
+            self.assertIn('--rl-retries 0', line)
+            self.assertIn(f'--timeout {provider.REQUEST_TIMEOUT}', line)
+        self.assertIn('--follow-links', self.call_lines()[0])
+        self.assertNotIn('--follow-links', self.call_lines()[1])
+
+    def test_the_worst_case_fits_the_hook_timeout(self) -> None:
+        # Худший случай обязан помещаться в timeout строки хука, иначе харнес
+        # убьёт сбор на полпути; число берём из установщика, а не на глаз.
+        import importlib.machinery
+        import importlib.util as iu
+        from . import INSTALLER
+        spec = iu.spec_from_loader(
+            'jarvis_install_for_timeout',
+            importlib.machinery.SourceFileLoader('jarvis_install_for_timeout', str(INSTALLER)),
+        )
+        installer = iu.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        worst = 2 * (provider.ATTEMPTS * provider.CALL_TIMEOUT + sum(provider.BACKOFF_SECONDS))
+        self.assertLess(worst, installer.HOOK_TIMEOUT_SEC, f'худший случай {worst} с')
 
 
 if __name__ == '__main__':

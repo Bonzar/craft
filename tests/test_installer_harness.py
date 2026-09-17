@@ -152,6 +152,15 @@ class HarnessAndCopiesTest(unittest.TestCase):
         self.add_module('base', 'slug = "base"\nevents = ["session-start"]\n')
         self.assertEqual(self.run_installer().installed, ['base'])
 
+    def test_the_hook_line_carries_a_timeout_long_enough_for_the_collection(self) -> None:
+        # Без своего timeout харнес убивает хук через минуту, а стартовый
+        # контекст ходит в Craft и в минуту не обязан укладываться.
+        self.add_module('base', 'slug = "base"\nevents = ["session-start"]\n')
+        self.run_installer()
+        self.assertEqual(self.jarvis_handlers('SessionStart')[0]['timeout'],
+                         installer.HOOK_TIMEOUT_SEC)
+        self.assertGreaterEqual(installer.HOOK_TIMEOUT_SEC, 600)
+
     def test_one_line_per_copy(self) -> None:
         self.add_module('base', 'slug = "base"\nevents = ["session-start"]\ncopies = 4\n')
         self.run_installer()
@@ -197,7 +206,7 @@ class HarnessAndCopiesTest(unittest.TestCase):
         self.assertIn('[[hooks.SessionStart.hooks]]', text)
         self.assertIn('type = "command"', text)
         self.assertIn('additionalContextLimit = 0', text)
-        self.assertIn(f'timeout = {installer.CODEX_TIMEOUT_SEC}', text)
+        self.assertIn(f'timeout = {installer.HOOK_TIMEOUT_SEC}', text)
         self.assertIn(str(self.modules_root() / 'base' / 'hooks' / 'module.py'), text)
         self.assertIn('--event session-start', text)
 

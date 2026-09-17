@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -142,9 +143,9 @@ type BacklinksResult struct {
 	Target      string       `json:"target"`
 	Count       int          `json:"count"`
 	Backlinks   []LinkRecord `json:"backlinks"`
-	TotalLinks  int          `json:"totalLinks"`  // size of the whole index
-	ScannedDocs int          `json:"scannedDocs"` // deep-fetched this run
-	SkippedDocs int          `json:"skippedDocs"` // date unchanged -> carried from index
+	TotalLinks  int          `json:"totalLinks"`      // size of the whole index
+	ScannedDocs int          `json:"scannedDocs"`     // deep-fetched this run
+	SkippedDocs int          `json:"skippedDocs"`     // date unchanged -> carried from index
 	Stale       bool         `json:"stale,omitempty"` // answered from index without refresh
 	IndexedAt   string       `json:"indexedAt,omitempty"`
 	Errors      []string     `json:"errors,omitempty"`
@@ -553,36 +554,83 @@ func linksUnder(b Block, section string, heading *string, out *[]string) {
 	}
 }
 
+// markdownWorkers bounds how many block trees are fetched at once. The walk is
+// latency-bound, not CPU-bound: one GET /blocks costs ~0.5 s and the API takes
+// one id per call (comma-separated ids answer 404, a repeated id parameter 400
+// — checked 17.09.2026), so the only way to shorten the walk is to overlap the
+// requests. Six is a compromise: it collapses a wide level into one round trip
+// without pushing the connect-link's block budget into HTTP 429.
+const markdownWorkers = 6
+
+// fetched is one block tree of a level, kept with its position so that the
+// output order stays the discovery order and not the order of completion.
+type fetched struct {
+	id    string
+	block Block
+	err   error
+}
+
 // runMarkdown prints the markdown of each requested block tree, optionally
 // following the links listed in its «Связи» section. Every ID is fetched at
 // most once; a failed fetch is reported on stderr and does not stop the rest —
 // a partial start context beats no start context.
+//
+// The walk goes level by level and fetches each level in parallel: «Связи»
+// fans out wide and shallow (23 blocks over 2 levels on the base rules,
+// 17.09.2026), so a sequential walk pays the API's latency once per block for
+// no reason. Rendering stays sequential over the level in its discovery order,
+// so the output does not depend on which request finished first.
 func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]bool) {
-	queue := splitCSV(idsArg)
 	seen := map[string]bool{}
-	var out strings.Builder
-	var failures []string
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		key := strings.ToLower(id)
-		if seen[key] || exclude[key] {
-			continue
-		}
-		seen[key] = true
-		block, err := client.getBlocks(id)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", id, err))
-			continue
-		}
-		renderMarkdown(block, &out)
-		if follow {
-			heading := ""
-			var found []string
-			linksUnder(block, linkSection, &heading, &found)
-			queue = append(queue, found...)
+	var level []string
+	for _, id := range splitCSV(idsArg) {
+		if key := strings.ToLower(id); !seen[key] && !exclude[key] {
+			seen[key] = true
+			level = append(level, id)
 		}
 	}
+
+	var out strings.Builder
+	var failures []string
+	for len(level) > 0 {
+		results := make([]fetched, len(level))
+		var wg sync.WaitGroup
+		gate := make(chan struct{}, markdownWorkers)
+		for i, id := range level {
+			wg.Add(1)
+			go func(i int, id string) {
+				defer wg.Done()
+				gate <- struct{}{}
+				defer func() { <-gate }()
+				block, err := client.getBlocks(id)
+				results[i] = fetched{id: id, block: block, err: err}
+			}(i, id)
+		}
+		wg.Wait()
+
+		var next []string
+		for _, result := range results {
+			if result.err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", result.id, result.err))
+				continue
+			}
+			renderMarkdown(result.block, &out)
+			if !follow {
+				continue
+			}
+			heading := ""
+			var found []string
+			linksUnder(result.block, linkSection, &heading, &found)
+			for _, id := range found {
+				if key := strings.ToLower(id); !seen[key] && !exclude[key] {
+					seen[key] = true
+					next = append(next, id)
+				}
+			}
+		}
+		level = next
+	}
+
 	fmt.Print(strings.TrimRight(out.String(), "\n") + "\n")
 	for _, f := range failures {
 		fmt.Fprintf(os.Stderr, "! markdown: %s\n", f)
