@@ -2,9 +2,7 @@
 
 Скиллы из чужих наборов, скопированные в репо файлами. Приезжают чекаутом — ни
 утилиты, ни локфайла не требуют. Файлы лежат в `.claude/skills/` вперемешку со
-своими, и глобальная видимость на маке даётся тем же `install.sh`, что и своим:
-новая папка появляется в `~/.claude/skills` только после переустановки
-универсального слоя.
+своими.
 
 **Префикс источника обязателен.** Папка называется `‹владелец›-‹скилл›` по
 владельцу репозитория, и то же имя ставится в поле `name` — иначе в списке
@@ -37,22 +35,4 @@
 лицензию источника, посмотреть дифф, обновить коммит и дату. Наберётся
 три-четыре скилла — перейти на утилиту `skills` с выборочной установкой.
 
-# Вендоренный код и данные
-
-Тот же порядок применён к коду и спискам в `.claude/hooks/lib/vendor/`: копия
-лицензии рядом, снимок по коммиту или версии, отклонения названы. Разница одна —
-списки команд не копируются дословно: чужие наборы отвечают на вопрос «безопасно
-ли выполнить без спроса», а нам нужно «только ли читает», и в них живут команды,
-меняющие состояние. Поэтому `read-only-rules.json` — производный файл, собранный
-отбором, и обновление источника означает пересборку, а не замену.
-
-| Кусок | Источник | Upstream-путь | Коммит или версия | Дата | Лицензия | Отклонения |
-|---|---|---|---|---|---|---|
-| `shell-quote/` | npmjs.com/package/shell-quote | пакет целиком | `1.8.3` | 2026-08-26 | MIT | взяты `index.js`, `parse.js`, `quote.js`, `package.json`, `LICENSE`; тесты и служебные файлы не копировались |
-| `read-only-rules.json` (основа) | github.com/microsoft/vscode | `src/vs/workbench/contrib/terminalContrib/chatAgentTools/common/terminalChatAgentToolsConfiguration.ts`, `src/vs/platform/terminal/common/autoApprove/gitAutoApproveRules.ts` | `79ee223375d9e150b2b84cd59815ada7c5871c21` | 2026-08-26 | MIT | не копия: строки прошли отбор под предикат «только читает», выброшены `npm ci`, `yarn install --frozen-lockfile`, `pnpm install --frozen-lockfile`; PowerShell-часть не взята; формат свой |
-| `read-only-rules.json` (подкоманды) | github.com/AnswerDotAI/safecmd | `safecmd/core.py`, строка `default_cfg` | `6ae261916a2559fcab7001058bdbd3024cd59aef` | 2026-08-26 | Apache-2.0 | не копия: из `ok_cmds` выброшено всё, что меняет состояние — `git add`, `git commit`, `git checkout`, `git switch`, `git fetch`, `npm install`, `npm pack`, `docker pull`, `docker build`, `aws s3 cp`, `unzip`, `gunzip`, `bunzip2`, `unrar`, `nbdev_export`, `nbdev_clean` |
-| `gemini-shell-guards.js` | github.com/google-gemini/gemini-cli | `packages/core/src/utils/shell-utils.ts` | `64b5b79a6dd89ea96e65cb761c23aae6c0b33ce4` | 2026-08-26 | Apache-2.0 | портировано в JS без типов; ветки PowerShell и `cmd.exe` убраны; разбор кавычек в снятии обёртки упрощён; добавлена своя `extractSubstitutions`, которой в оригинале нет |
-
-Обновление кода — замена файлов по новому коммиту с проверкой диффа. Обновление
-списков — заново пройти отбором по источнику: заменой файла это сделать нельзя,
-иначе в наш предикат протечёт чужое «безопасно» вместо нашего «читает».
+Порядок для вендоренных ДАННЫХ — там, где они лежат: `data/shell/README.md`.

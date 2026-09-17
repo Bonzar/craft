@@ -1,0 +1,22 @@
+name: snapshot-guard
+
+# В git не должно быть снимков живого Craft: роутер памяти, SKILL-док инцидента,
+# кэши. Это регенерируемая память о жизни Влада — однажды роутер на тысячу строк
+# уехал в публичную историю. Гвард смотрит дерево проверяемого коммита по маске
+# имени и по содержимому, не по списку путей. См. tools/no-snapshot-files.js.
+on:
+  push:
+  pull_request:
+
+jobs:
+  snapshot-guard:
+    runs-on: ubuntu-latest
+    # Часть дефектов видна только в UTF-8: подстановка `$var` вплотную к
+    # не-ASCII символу в ней читается как имя вместе с символом.
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No Craft snapshots in the tree
+        run: node tools/no-snapshot-files.js --tree HEAD

@@ -2,8 +2,7 @@
 # Подключается (не запускается) шелл-инструментами, чтобы подтянуть репозиторный
 # `.env` в их окружение: сам он туда не попадает, и без этого CRAFT_API_BASE и
 # соседние переменные остаются незаданными, а инструмент молча ничего не делает.
-# Слой хуков переехал на node и читает `.env` своим модулем (lib/env.js) — этот
-# помощник остался для шелл-инструментов в tools/.
+# Помощник — для шелл-инструментов в tools/.
 #
 # `.env` is gitignored (holds the connect-link token) and lives in the main
 # checkout root. This resolves it both there and from any git worktree (where
@@ -26,9 +25,9 @@ if [[ -f "$_le_env" ]]; then
   . "$_le_env"
   set +a
 fi
-# Outside the craft repo there is no `.env`: universal hooks installed into
-# ~/.claude run in arbitrary sessions and take the Craft connect credentials
-# from ~/.claude/craft.env instead (created by install.sh, chmod 600).
+# Outside the craft repo there is no `.env`: a tool run from an arbitrary
+# session takes the Craft connect credentials from ~/.claude/craft.env instead
+# (a machine-local file, chmod 600).
 if [[ -z "${CRAFT_API_BASE:-}" && -f "$HOME/.claude/craft.env" ]]; then
   set -a
   # shellcheck disable=SC1090

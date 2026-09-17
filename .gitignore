@@ -1,40 +1,3 @@
-# Generated at session start by .claude/hooks/craft-inject-router.sh;
-# imported into context via @-reference in CLAUDE.md. Never commit — it's
-# a per-session snapshot of a live Craft document.
-.claude/craft-router-context.md
-
-# Same: per-session snapshot of the live "Разбор инцидента" SKILL doc, fetched by
-# .claude/hooks/craft-inject-incident.sh for the incident detector. Never commit.
-.claude/craft-incident-context.md
-
-# Те же снимки, когда хук пишет их в другой каталог чекаута (ветки с ядром в
-# core/ и адаптерами: .craft/, .codex/). Закрыто маской, а не точным путём:
-# однажды роутер на тысячу строк уехал в публичную историю именно из .craft/.
-# Второй рубеж — tools/no-snapshot-files.js (pre-commit и CI).
-.craft/
-.codex/
-**/router-context.md
-**/incident-context.md
-**/craft-router-context.md
-**/craft-incident-context.md
-**/craft-gate-exempt-scope.txt
-!tests/hooks/fixtures/warm-cache/.claude/craft-router-context.md
-!tests/hooks/fixtures/warm-cache/.claude/craft-incident-context.md
-!tests/hooks/fixtures/warm-cache/.craft/
-!tests/hooks/fixtures/warm-cache/.craft/router-context.md
-
-# Per-session cache of block-IDs under the pre-authorised «direct-edit» pages
-# (gate-exempt-pages.txt), built by .claude/hooks/universal-cache-gate-exempt-scope.sh
-# for the plan-gate scope exemption. Ephemeral snapshot of live Craft — never commit.
-.claude/craft-gate-exempt-scope.txt
-
-# Снимки, которые кейсы инжект-хуков пишут рядом с фикстурами во время прогона:
-# артефакт, а не входные данные. Сами фикстуры лежат в гите обычными файлами.
-tests/hooks/fixtures/tmp-*-snapshot.md
-tests/hooks/fixtures/tmp-session-anchor.txt
-tests/hooks/fixtures/tmp-anchor-dispatch.txt
-tests/hooks/fixtures/tmp-anchor-carry.md
-
 # Session worktrees and machine-local permission overrides — per-machine state,
 # not part of the system.
 .claude/worktrees/
@@ -45,15 +8,3 @@ tests/hooks/fixtures/tmp-anchor-carry.md
 
 # macOS Finder metadata.
 .DS_Store
-
-# Сборка пакетов: обёртка на модуль и харнес плюс копии таблицы харнеса и pylib.
-# Её кладёт `tools/jarvis.py install` — в гите ей делать нечего.
-modules/*/dist/
-
-# Манифест источника: что в этом корне лежит. Тоже пишет установка, и пишет по
-# манифестам пакетов — держать в гите значило бы держать вторую копию правды.
-modules.index.json
-
-# Байткод Python: артефакт запуска, а не исходник.
-__pycache__/
-*.pyc

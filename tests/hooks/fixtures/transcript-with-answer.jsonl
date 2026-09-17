@@ -1,3 +1,0 @@
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"README.md"}}]}}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Осталось три хвоста: README про надгробия, мёртвая ссылка в кейсах и неиспользуемый импорт."}]}}
-{"type":"user","message":{"role":"user","content":"убирай хвосты"}}
