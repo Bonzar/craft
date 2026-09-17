@@ -6,6 +6,7 @@
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -397,3 +398,103 @@ class DeadLeaderTest(unittest.TestCase):
         self.assertLess(spent, 15, 'копия висела вместо того, чтобы заметить смерть копии 1')
         journal = storage.read_lines('start-context.jsonl')
         self.assertTrue(any('умерла' in line for line in journal), journal)
+
+
+class SweepTest(unittest.TestCase):
+    """Копия 1 убирает мусор прошлых прогонов своего события — и только его."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.tmp.name)
+        cls.home = cls.root / 'home'
+        cls.home.mkdir()
+        cls.settings_root = cls.root / 'settings'
+        source = cls.root / 'source'
+        source.mkdir()
+        shutil.copytree(MODULES_DIR / BASE, source / BASE)
+        (source / BASE / 'module.toml').write_text(
+            f'slug = "{BASE}"\nevents = ["session-start", "after-compact"]\n'
+            f'harness = "claude"\ncopies = 2\n',
+            encoding='utf-8',
+        )
+        data = source / 'tiny' / 'data'
+        data.mkdir(parents=True)
+        (source / 'tiny' / 'module.toml').write_text(
+            'slug = "tiny"\nfor = ["start-context-*"]\n', encoding='utf-8'
+        )
+        (data / 'hello.md').write_text('маленький текст', encoding='utf-8')
+        subprocess.run(
+            [sys.executable, str(INSTALLER),
+             '--settings-dir', str(cls.settings_root),
+             '--modules', str(source),
+             '--core', str(CORE_SOURCE)],
+            check=True, capture_output=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def storage(self, session: str) -> Storage:
+        return Storage(self.home / '.local' / 'state' / 'jarvis', session)
+
+    def test_old_generations_go_and_the_neighbours_stay(self) -> None:
+        session = 'sweep-me'
+        storage = self.storage(session)
+        old = time.time() - 3600
+        stale = {
+            'start-context-session-start.json': {'generation': 'старое', 'at': old},
+            'start-context-ready-session-start.json': {'generation': 'старое', 'at': old},
+            'start-context-alive-session-start-7.json': {'generation': 'старое', 'at': old},
+            'start-context-printed-session-start-7.json': {'generation': 'старое', 'at': old},
+        }
+        # Чужое событие и чужой файл в той же зоне трогать нельзя.
+        keep = {
+            'start-context-alive-after-compact-3.json': {'generation': 'старое', 'at': old},
+            'start-context-after-compact.json': {'generation': 'старое', 'at': old},
+        }
+        for name, body in {**stale, **keep}.items():
+            storage.write_json(name, body)
+        storage.append_line('trace.jsonl', '{}')
+
+        entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-1' / 'hooks' / 'module.py'
+        result = subprocess.run(
+            [sys.executable, str(entry), '--event', 'session-start', '--event', 'after-compact'],
+            input=session_event(session), text=True, capture_output=True,
+            env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        for name in ('start-context-alive-session-start-7.json',
+                     'start-context-printed-session-start-7.json'):
+            self.assertFalse(storage.path(name).exists(), f'{name} остался')
+        for name in keep:
+            self.assertTrue(storage.path(name).exists(), f'{name} убрали, а он чужого события')
+        self.assertTrue(storage.path('trace.jsonl').exists(), 'уборка задела не свои файлы')
+
+        # Состояние и готовность этого прогона на месте и нового поколения.
+        state = storage.read_json('start-context-session-start.json')
+        ready = storage.read_json('start-context-ready-session-start.json')
+        self.assertNotEqual(state['generation'], 'старое')
+        self.assertEqual(state['generation'], ready['generation'])
+        # Четыре: состояние, готовность и пара маркеров копии, которой больше нет.
+        self.assertTrue(any('убрано файлов прошлых прогонов: 4' in line
+                            for line in storage.read_lines('start-context.jsonl')),
+                        storage.read_lines('start-context.jsonl'))
+
+    def test_what_this_run_writes_survives_the_sweep(self) -> None:
+        # Маркер соседа этого прогона ещё без поколения: уборка обязана его
+        # пощадить, иначе снесёт то, что сосед как раз собирается переписать.
+        session = 'sweep-now'
+        storage = self.storage(session)
+        storage.write_json('start-context-alive-session-start-2.json',
+                           {'generation': None, 'pid': os.getpid(), 'at': time.time()})
+        entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-1' / 'hooks' / 'module.py'
+        subprocess.run(
+            [sys.executable, str(entry), '--event', 'session-start'],
+            input=session_event(session), text=True, capture_output=True,
+            env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
+        )
+        self.assertTrue(storage.path('start-context-alive-session-start-2.json').exists(),
+                        'уборка снесла маркер живого соседа этого прогона')

@@ -32,6 +32,11 @@
 временем и поколением: копия берёт только маркер не старше собственного старта
 и перед самой печатью сверяет поколение ещё раз. Не сошлось — копия молчит, а
 не печатает чужой кусок.
+
+Мусор прошлых прогонов копия 1 убирает сама, в начале своего: файлы своего
+события, чьё поколение не наше и чьё время старше нашего старта. Чужие события
+и всё, что пишут копии этого прогона, остаются на месте — иначе уборка снесла
+бы маркер соседа, который как раз собирается его переписать.
 """
 
 import json
@@ -151,6 +156,7 @@ class Module(jarvis.Module):
 
     def _first(self, event, runtime, storage, number, total, started):
         generation = uuid.uuid4().hex
+        swept = sweep(storage, event, generation, started)
         # Первым действием — «я жива»: на этот маркер смотрят остальные, и
         # смотреть им надо ещё до того, как начнётся сбор.
         alive(storage, event, number, generation)
@@ -171,10 +177,12 @@ class Module(jarvis.Module):
             'providers': accounted,
         })
         if not pieces:
-            note(storage, number, 'silence', 'поставщики не дали текста')
+            note(storage, number, 'silence',
+                 f'поставщики не дали текста; убрано файлов прошлых прогонов: {swept}')
             return jarvis.Silence()
         note(storage, number, 'context',
-             f'собрано {len(text)} знаков, кусков {len(pieces)}, обрезано: {truncated}')
+             f'собрано {len(text)} знаков, кусков {len(pieces)}, обрезано: {truncated}, '
+             f'убрано файлов прошлых прогонов: {swept}')
         type(self)._printed = (storage, event.event, number, generation)
         return jarvis.Context(pieces[0])
 
@@ -264,6 +272,33 @@ class Module(jarvis.Module):
 def name(template: str, event, number: int | None = None) -> str:
     """Имя в зоне сессии: прогоны разных событий не путаются между собой."""
     return template.format(event=event.event, number=number)
+
+
+def sweep(storage, event, generation: str, started: float) -> int:
+    """Убрать файлы прошлых прогонов этого события. Вернёт, сколько убрано.
+
+    Наше — это файлы нашего поколения. Чужих событий не касаемся вовсе, а из
+    своих щадим те, что моложе нашего старта: их пишут копии этого же прогона,
+    и маркер соседа, который он вот-вот перепишет с поколением, сносить нельзя.
+    """
+    removed = 0
+    for path in sorted(storage.dir().glob(f'start-context-*{event.event}*.json')):
+        try:
+            mark = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            mark = None
+        if isinstance(mark, dict):
+            if mark.get('generation') == generation:
+                continue
+            at = mark.get('at')
+            if isinstance(at, (int, float)) and at >= started - FRESH_SLACK:
+                continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed += 1
+    return removed
 
 
 def alive(storage, event, number: int, generation: str | None) -> None:

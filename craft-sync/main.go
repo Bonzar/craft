@@ -561,7 +561,7 @@ func linksUnder(b Block, section string, heading *string, out *[]string) {
 // — checked 17.09.2026), so the only way to shorten the walk is to overlap the
 // requests. Six is a compromise: it collapses a wide level into one round trip
 // without pushing the connect-link's block budget into HTTP 429.
-const markdownWorkers = 6
+const markdownWorkers = 12
 
 // fetched is one block tree of a level, kept with its position so that the
 // output order stays the discovery order and not the order of completion.
