@@ -8,3 +8,7 @@
 
 # macOS Finder metadata.
 .DS_Store
+
+# Байткод Python: след запуска, а не часть системы.
+__pycache__/
+*.pyc

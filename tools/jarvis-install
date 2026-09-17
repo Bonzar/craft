@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Установщик модулей Джарвиса.
+
+Что он делает:
+
+- читает шапки модулей и проверяет requires по slug и маскам семейств;
+- собирает библиотеку один раз: ядро плюс `lib`-части установленных модулей,
+  копий нет;
+- раскладывает части модуля по закреплённым именам папок — каждую туда, где её
+  читает харнес;
+- подставляет абсолютные пути вместо плейсхолдеров;
+- пишет по строке на модуль и событие в настройки харнеса, атомарно и с копией;
+- предупреждает о том, чего не нашлось: требование без модуля и событие,
+  которого у харнеса нет.
+
+Запуск:
+
+    tools/jarvis-install --settings-dir ~/.claude
+    tools/jarvis-install --settings-dir /tmp/settings --modules modules --dry-run
+"""
+
+import argparse
+import json
+import os
+import shutil
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / 'lib'))
+
+from jarvis import install as install_reader  # noqa: E402
+from jarvis import manifest as manifest_reader  # noqa: E402
+from jarvis.storage import DEFAULT_STATE_DIR  # noqa: E402
+from jarvis.wrappers import claude  # noqa: E402
+
+HOOK_ENTRY = 'jarvis_claude_hook.py'
+SETTINGS_FILE = 'settings.json'
+BACKUP_SUFFIX = '.jarvis-bak'
+SOURCE_CONFIG_NAME = 'modules.json'
+PERSONAL_CONFIG = '~/.config/jarvis/modules.json'
+
+# Части модуля отличаются по закреплённым именам папок. Ставится каждая туда,
+# где её читает харнес; `lib` и `data` харнес не читает — их читают модули.
+PART_HOOKS = 'hooks'
+PART_SKILL = 'skill'
+PART_AGENTS = 'agents'
+PART_RULES = 'rules'
+PART_DATA = 'data'
+PART_LIB = 'lib'
+PARTS = (PART_HOOKS, PART_SKILL, PART_AGENTS, PART_RULES, PART_DATA, PART_LIB)
+
+TEXT_SUFFIXES = {'.md', '.py', '.json', '.toml', '.txt', '.sh', '.yaml', '.yml', '.js'}
+# Байткод — след запуска из источника, а не часть модуля: в установку он не едет.
+IGNORED = shutil.ignore_patterns('__pycache__', '*.pyc')
+PLACEHOLDER_OPEN = '{{'
+
+
+@dataclass
+class Report:
+    """Что установщик сделал и о чём предупредил."""
+
+    installed: list[str] = field(default_factory=list)
+    lines: list[tuple[str, str]] = field(default_factory=list)
+    parts: list[tuple[str, str, str]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def render(self) -> str:
+        out = [f'Модулей поставлено: {len(self.installed)}']
+        for slug, part, where in self.parts:
+            out.append(f'  {slug}: часть {part} → {where}')
+        for slug, event in self.lines:
+            out.append(f'  {slug}: строка на событие {event}')
+        for warning in self.warnings:
+            out.append(f'  ВНИМАНИЕ: {warning}')
+        return '\n'.join(out)
+
+
+def placeholders(settings_root: Path, lib_dir: Path, module_dir: Path, state_dir: Path) -> dict:
+    """Плейсхолдеры путей харнеса, которые модуль пишет вместо абсолютных."""
+    return {
+        '{{JARVIS_LIB}}': str(lib_dir),
+        '{{JARVIS_MODULE}}': str(module_dir),
+        '{{JARVIS_STATE}}': str(state_dir),
+        '{{HARNESS_SETTINGS}}': str(settings_root),
+        '{{HARNESS_PROJECT_DIR}}': '${CLAUDE_PROJECT_DIR}',
+    }
+
+
+def copy_tree(source: Path, target: Path, substitutions: dict) -> None:
+    """Скопировать часть, подставив пути в текстовых файлах."""
+    if target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, target, ignore=IGNORED)
+    if not substitutions:
+        return
+    for path in target.rglob('*'):
+        if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        try:
+            text = path.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            continue
+        if PLACEHOLDER_OPEN not in text:
+            continue
+        for token, value in substitutions.items():
+            text = text.replace(token, value)
+        path.write_text(text, encoding='utf-8')
+
+
+def assemble_library(lib_source: Path, lib_dir: Path) -> None:
+    """Собрать библиотеку один раз: ядро и вход обёртки, копий нет."""
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    core_target = lib_dir / 'jarvis'
+    if core_target.exists():
+        shutil.rmtree(core_target)
+    shutil.copytree(lib_source / 'jarvis', core_target, ignore=IGNORED)
+    shutil.copy2(lib_source / HOOK_ENTRY, lib_dir / HOOK_ENTRY)
+
+
+def part_target(part: str, slug: str, settings_root: Path, jarvis_root: Path) -> Path:
+    """Куда ставится часть: туда, где её читает тот, кому она нужна."""
+    if part == PART_HOOKS:
+        return jarvis_root / 'modules' / slug / PART_HOOKS
+    if part == PART_DATA:
+        return jarvis_root / 'modules' / slug / PART_DATA
+    if part == PART_LIB:
+        return jarvis_root / 'lib' / slug
+    if part == PART_SKILL:
+        return settings_root / 'skills' / slug
+    if part == PART_AGENTS:
+        return settings_root / 'agents' / slug
+    if part == PART_RULES:
+        return settings_root / 'rules' / slug
+    raise ValueError(f'часть {part!r} не заведена; есть {list(PARTS)}')
+
+
+def hook_line(python: str, lib_dir: Path, settings_root: Path, slug: str, unified_event: str) -> dict:
+    """Строка на модуль и событие — exec-форма, путь уже подставлен."""
+    return {
+        'type': 'command',
+        'command': python,
+        'args': [
+            str(lib_dir / HOOK_ENTRY),
+            '--module',
+            slug,
+            '--event',
+            unified_event,
+            '--install-root',
+            str(settings_root),
+        ],
+    }
+
+
+def is_jarvis_line(handler: dict) -> bool:
+    args = handler.get('args') or []
+    return bool(args) and str(args[0]).endswith(HOOK_ENTRY)
+
+
+def strip_jarvis_lines(hooks: dict) -> dict:
+    """Убрать прошлые строки Джарвиса: два пути к одному модулю — дефект установки."""
+    cleaned = {}
+    for event, groups in hooks.items():
+        kept_groups = []
+        for group in groups:
+            handlers = [h for h in group.get('hooks', []) if not is_jarvis_line(h)]
+            if handlers:
+                kept_groups.append({**group, 'hooks': handlers})
+            elif not group.get('hooks'):
+                kept_groups.append(group)
+        if kept_groups:
+            cleaned[event] = kept_groups
+    return cleaned
+
+
+def write_settings(path: Path, settings: dict) -> None:
+    """Запись атомарная и с копией прежнего файла рядом."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        shutil.copy2(path, path.with_name(path.name + BACKUP_SUFFIX))
+    tmp = path.with_name(path.name + f'.tmp-{os.getpid()}')
+    tmp.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    os.replace(tmp, path)
+
+
+def read_settings(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding='utf-8')
+    return json.loads(text) if text.strip() else {}
+
+
+def discover(modules_dir: Path) -> list:
+    """Шапки всех модулей источника, по одной на папку."""
+    found = []
+    for child in sorted(modules_dir.iterdir()):
+        if child.is_dir() and (child / manifest_reader.MANIFEST_NAME).exists():
+            found.append(manifest_reader.load(child))
+    slugs = [m.slug for m in found]
+    duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if duplicates:
+        raise ValueError(f'slug должен быть уникален, а повторяется: {duplicates}')
+    return found
+
+
+def check_requires(manifests: list, report: Report) -> None:
+    """Предупредить о том, чего модулю не хватает, ещё при установке."""
+    for target in manifests:
+        _, missing = manifest_reader.resolve(target.requires, manifests)
+        for requirement in missing:
+            report.warnings.append(
+                f'модулю «{target.slug}» нужен «{requirement}», такого модуля в установке нет: '
+                'модуль встанет, но пользы от него не будет и он скажет об этом на событии'
+            )
+
+
+def check_events(manifests: list, report: Report) -> None:
+    """Предупредить, в каком харнесе модуль не сработает."""
+    for target in manifests:
+        for event in target.events:
+            if event not in claude.CLAUDE_BY_EVENT:
+                report.warnings.append(
+                    f'модуль «{target.slug}» стоит на событии «{event}», которого нет у харнеса '
+                    'claude: в нём модуль не сработает'
+                )
+
+
+def install_module(target, settings_root: Path, jarvis_root: Path, state_dir: Path, report: Report) -> dict:
+    """Поставить все части одного модуля и вернуть его запись для install.json."""
+    module_dir = jarvis_root / 'modules' / target.slug
+    module_dir.mkdir(parents=True, exist_ok=True)
+    substitutions = placeholders(settings_root, jarvis_root / 'lib', module_dir, state_dir)
+
+    shutil.copy2(target.path / manifest_reader.MANIFEST_NAME, module_dir / manifest_reader.MANIFEST_NAME)
+    installed_parts, lib_part = [], None
+    for part in PARTS:
+        source = target.path / part
+        if not source.is_dir():
+            continue
+        where = part_target(part, target.slug, settings_root, jarvis_root)
+        copy_tree(source, where, substitutions)
+        installed_parts.append(part)
+        report.parts.append((target.slug, part, str(where)))
+        if part == PART_LIB:
+            lib_part = target.slug
+    report.installed.append(target.slug)
+    return {
+        'dir': str(module_dir),
+        'events': list(target.events),
+        'requires': list(target.requires),
+        'for': target.serves,
+        'parts': installed_parts,
+        'lib_part': lib_part,
+    }
+
+
+def register_lines(records: dict, settings_root: Path, jarvis_root: Path, python: str, report: Report) -> dict:
+    """Собрать блок hooks: по строке на модуль и событие."""
+    hooks: dict[str, list] = {}
+    for slug, record in sorted(records.items()):
+        for event in record['events']:
+            claude_event = claude.CLAUDE_BY_EVENT.get(event)
+            if claude_event is None:
+                continue
+            line = hook_line(python, jarvis_root / 'lib', settings_root, slug, event)
+            hooks.setdefault(claude_event, []).append({'hooks': [line]})
+            report.lines.append((slug, event))
+    return hooks
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Установщик модулей Джарвиса')
+    parser.add_argument('--settings-dir', default='~/.claude', help='каталог настроек харнеса')
+    parser.add_argument('--modules', default=str(REPO_ROOT / 'modules'), help='каталог модулей-источника')
+    parser.add_argument('--lib', default=str(REPO_ROOT / 'lib'), help='каталог ядра библиотеки')
+    parser.add_argument('--state-dir', default=DEFAULT_STATE_DIR, help='каталог состояния')
+    parser.add_argument('--personal-config', default=PERSONAL_CONFIG, help='личный конфиг режимов')
+    parser.add_argument('--source-config', default=None, help='конфиг режимов источника')
+    parser.add_argument('--python', default=sys.executable, help='интерпретатор для строк хуков')
+    parser.add_argument('--dry-run', action='store_true', help='только проверить и показать отчёт')
+    return parser.parse_args(argv)
+
+
+def install(args: argparse.Namespace) -> Report:
+    settings_root = Path(args.settings_dir).expanduser()
+    modules_dir = Path(args.modules).expanduser()
+    state_dir = Path(args.state_dir).expanduser()
+    source_config = Path(args.source_config).expanduser() if args.source_config else modules_dir / SOURCE_CONFIG_NAME
+    jarvis_root = install_reader.jarvis_root(settings_root)
+
+    report = Report()
+    manifests = discover(modules_dir)
+    check_requires(manifests, report)
+    check_events(manifests, report)
+    if args.dry_run:
+        report.installed.extend(m.slug for m in manifests)
+        return report
+
+    assemble_library(Path(args.lib).expanduser(), jarvis_root / 'lib')
+    records = {m.slug: install_module(m, settings_root, jarvis_root, state_dir, report) for m in manifests}
+
+    settings_path = settings_root / SETTINGS_FILE
+    settings = read_settings(settings_path)
+    hooks = strip_jarvis_lines(settings.get('hooks', {}))
+    for claude_event, groups in register_lines(records, settings_root, jarvis_root, args.python, report).items():
+        hooks.setdefault(claude_event, []).extend(groups)
+    write_settings(settings_path, {**settings, 'hooks': hooks})
+
+    install_reader.manifest_path(settings_root).write_text(
+        json.dumps(
+            {
+                'state_dir': str(state_dir),
+                'personal_config': str(Path(args.personal_config).expanduser()),
+                'source_config': str(source_config),
+                'lib_parts': {slug: slug for slug, r in records.items() if r['lib_part']},
+                'modules': records,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    report = install(parse_args(sys.argv[1:] if argv is None else argv))
+    print(report.render())
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
