@@ -543,7 +543,8 @@ func linksUnder(b Block, section string, heading *string, out *[]string) {
 		*heading = md
 	} else if strings.Contains(*heading, section) {
 		for _, ref := range extractLinks(md) {
-			*out = append(*out, ref.Target)
+			// Именно Raw: спрашивать блок надо тем регистром, каким он записан.
+			*out = append(*out, ref.Raw)
 		}
 	}
 	for _, child := range b.Content {
@@ -581,10 +582,15 @@ type fetched struct {
 // no reason. Rendering stays sequential over the level in its discovery order,
 // so the output does not depend on which request finished first.
 func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]bool) {
+	// Сравниваем id без учёта регистра, спрашиваем — в исходном.
+	skip := map[string]bool{}
+	for id := range exclude {
+		skip[strings.ToLower(id)] = true
+	}
 	seen := map[string]bool{}
 	var level []string
 	for _, id := range splitCSV(idsArg) {
-		if key := strings.ToLower(id); !seen[key] && !exclude[key] {
+		if key := strings.ToLower(id); !seen[key] && !skip[key] {
 			seen[key] = true
 			level = append(level, id)
 		}
@@ -622,7 +628,7 @@ func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]
 			var found []string
 			linksUnder(result.block, linkSection, &heading, &found)
 			for _, id := range found {
-				if key := strings.ToLower(id); !seen[key] && !exclude[key] {
+				if key := strings.ToLower(id); !seen[key] && !skip[key] {
 					seen[key] = true
 					next = append(next, id)
 				}
@@ -653,9 +659,17 @@ var (
 )
 
 // LinkRef is one parsed outgoing reference inside a single markdown string.
+//
+// Target is lowercased because the backlinks index matches ids, and Craft
+// writes the same id in different cases. Raw keeps the id exactly as the link
+// spells it, because the connect-API is case-sensitive when ASKED for a block:
+// an id lowercased on the way to GET /blocks answers 404 even though the page
+// exists (checked 17.09.2026 on 3430452A-8643-4ECD-B414-A5E8BF8AC3F4). So:
+// compare by Target, request by Raw.
 type LinkRef struct {
 	Text   string
-	Target string // lowercased
+	Target string // lowercased, for matching
+	Raw    string // as written, for asking the API
 }
 
 // extractLinks parses every block reference out of one block's markdown:
@@ -667,11 +681,11 @@ func extractLinks(md string) []LinkRef {
 	}
 	var out []LinkRef
 	for _, m := range mdBlockLinkRe.FindAllStringSubmatch(md, -1) {
-		out = append(out, LinkRef{Text: m[1], Target: strings.ToLower(m[2])})
+		out = append(out, LinkRef{Text: m[1], Target: strings.ToLower(m[2]), Raw: m[2]})
 	}
 	rest := mdBlockLinkRe.ReplaceAllString(md, "")
 	for _, m := range rawBlockIDRe.FindAllStringSubmatch(rest, -1) {
-		out = append(out, LinkRef{Target: strings.ToLower(m[1])})
+		out = append(out, LinkRef{Target: strings.ToLower(m[1]), Raw: m[1]})
 	}
 	return out
 }

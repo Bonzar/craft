@@ -519,10 +519,12 @@ func markdownServer(t *testing.T, blocks map[string]Block, delay time.Duration) 
 	}
 }
 
-// uid makes a UUID-shaped id from a short name: Craft links carry UUIDs and
-// extractLinks matches nothing else, so tests speak the same shape.
+// uid makes a UUID-shaped id: Craft links carry UUIDs and extractLinks matches
+// nothing else, so tests speak the same shape. Буквы в нём обязательны — на
+// id из одних цифр верхний и нижний регистр неразличимы, и тест на регистр
+// проверял бы сам себя.
 func uid(n int) string {
-	return fmt.Sprintf("%08d-0000-0000-0000-000000000000", n)
+	return fmt.Sprintf("%08x-abcd-4ef0-b123-def%09d", n, n)
 }
 
 // link builds the «Связи» section that --follow-links walks.
@@ -635,5 +637,73 @@ func TestMarkdownExcludeIsHonoured(t *testing.T) {
 	out := collectMarkdown(t, client, uid(1), true, map[string]bool{uid(7): true})
 	if strings.Contains(out, "Пропустить") || calls(uid(7)) != 0 {
 		t.Fatalf("--exclude не сработал в режиме markdown")
+	}
+}
+
+func TestMarkdownAsksForIDsInTheCaseTheLinkSpellsThem(t *testing.T) {
+	// connect-API чувствителен к регистру id: страница с идентификатором в
+	// верхнем регистре на строчный id отвечает 404 (замер 17.09.2026). Ссылка
+	// пишет id так, как он есть, — обход обязан спросить ровно так же.
+	upper := strings.ToUpper(uid(42))
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "", linksSection(upper)...),
+		upper:  blk(upper, "page", "# Старая страница", ""),
+	}
+	var asked []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		mu.Lock()
+		asked = append(asked, id)
+		mu.Unlock()
+		// Ровно как живой API: строчный вариант того же id — не найден.
+		block, ok := blocks[id]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(block)
+	}))
+	t.Cleanup(server.Close)
+	client := &Client{http: &http.Client{Timeout: 5 * time.Second}, base: server.URL}
+
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	if !strings.Contains(out, "# Старая страница") {
+		t.Fatalf("страница с id в верхнем регистре потерялась: спросили %v", asked)
+	}
+	for _, id := range asked {
+		if id == strings.ToLower(upper) {
+			t.Fatalf("id ушёл в запрос в нижнем регистре: %v", asked)
+		}
+	}
+}
+
+func TestMarkdownDedupesIgnoringCase(t *testing.T) {
+	// Тот же блок, названный в двух регистрах, читается один раз.
+	upper := strings.ToUpper(uid(43))
+	blocks := map[string]Block{
+		uid(1):                 blk(uid(1), "page", "# Корень", "", linksSection(upper, strings.ToLower(upper))...),
+		strings.ToLower(upper): blk(upper, "page", "# Один раз", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	if got := strings.Count(out, "# Один раз"); got != 1 {
+		t.Fatalf("блок напечатан %d раз вместо одного", got)
+	}
+	if got := calls(upper); got != 1 {
+		t.Fatalf("блок прочитан %d раз вместо одного", got)
+	}
+}
+
+func TestMarkdownExcludeIgnoresCase(t *testing.T) {
+	upper := strings.ToUpper(uid(44))
+	blocks := map[string]Block{
+		uid(1):                 blk(uid(1), "page", "# Корень", "", linksSection(upper)...),
+		strings.ToLower(upper): blk(upper, "page", "# Пропустить", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, map[string]bool{strings.ToLower(upper): true})
+	if strings.Contains(out, "Пропустить") || calls(upper) != 0 {
+		t.Fatalf("--exclude не сработал на id в другом регистре")
 	}
 }
