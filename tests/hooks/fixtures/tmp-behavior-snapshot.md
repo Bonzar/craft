@@ -1,4 +1,0 @@
-=== Craft: «Общение с Владом», живой инжект (тестовый инжект) ===
-tool-error Bash: npm run build exited 1: EACCES dist/main.js
-incident-signal: ты сломал сборку
-=== конец правил общения — действуют в этой сессии ===
