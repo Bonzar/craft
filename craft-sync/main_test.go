@@ -16,6 +16,11 @@ import (
 // collectMarkdown прогоняет режим --markdown и возвращает то, что он напечатал:
 // runMarkdown пишет прямо в stdout, поэтому тест его подменяет.
 func collectMarkdown(t *testing.T, client *Client, ids string, follow bool, exclude map[string]bool) string {
+	return collectMarkdownFrom(t, client, ids, follow, exclude, "")
+}
+
+// collectMarkdownFrom is the same with a --container page.
+func collectMarkdownFrom(t *testing.T, client *Client, ids string, follow bool, exclude map[string]bool, container string) string {
 	t.Helper()
 	old := os.Stdout
 	read, write, err := os.Pipe()
@@ -33,7 +38,7 @@ func collectMarkdown(t *testing.T, client *Client, ids string, follow bool, excl
 			os.Stdout = old
 			write.Close()
 		}()
-		runMarkdown(client, ids, follow, exclude)
+		runMarkdown(client, ids, follow, exclude, container)
 	}()
 	return <-done
 }
@@ -705,5 +710,116 @@ func TestMarkdownExcludeIgnoresCase(t *testing.T) {
 	out := collectMarkdown(t, client, uid(1), true, map[string]bool{strings.ToLower(upper): true})
 	if strings.Contains(out, "Пропустить") || calls(upper) != 0 {
 		t.Fatalf("--exclude не сработал на id в другом регистре")
+	}
+}
+
+// contained wraps pages into one container page, the way Craft nests a page
+// inside a page: GET /blocks?maxDepth=-1 returns that whole tree, nested pages
+// with their content.
+func contained(id string, pages ...Block) Block {
+	return blk(id, "page", "# Контейнер", "", pages...)
+}
+
+func TestMarkdownContainerGivesTheSameTextForFewerRequests(t *testing.T) {
+	// Тот же обход по «Связям», но уровень берётся из дерева контейнера.
+	// Проверяется главное: текст побайтово тот же, а запросов — один.
+	root := blk(uid(1), "page", "# Корень", "", linksSection(uid(2), uid(3))...)
+	two := blk(uid(2), "page", "# Второй", "", blk("t2", "text", "тело второго", ""))
+	three := blk(uid(3), "page", "# Третий", "", blk("t3", "text", "тело третьего", ""))
+	box := uid(9)
+	blocks := map[string]Block{
+		uid(1): root, uid(2): two, uid(3): three,
+		box: contained(box, root, two, three),
+	}
+
+	plain, plainCalls := markdownServer(t, blocks, 0)
+	want := collectMarkdown(t, plain, uid(1), true, nil)
+
+	boxed, boxCalls := markdownServer(t, blocks, 0)
+	got := collectMarkdownFrom(t, boxed, uid(1), true, nil, box)
+
+	if got != want {
+		t.Fatalf("текст разошёлся:\n-- обходом --\n%q\n-- контейнером --\n%q", want, got)
+	}
+	if plainCalls(uid(1))+plainCalls(uid(2))+plainCalls(uid(3)) != 3 {
+		t.Fatalf("обход почему-то прочитал не три страницы")
+	}
+	if boxCalls(box) != 1 {
+		t.Fatalf("контейнер прочитан %d раз вместо одного", boxCalls(box))
+	}
+	for _, id := range []string{uid(1), uid(2), uid(3)} {
+		if boxCalls(id) != 0 {
+			t.Fatalf("%s спросили отдельно, хотя он лежит в контейнере", id)
+		}
+	}
+}
+
+func TestMarkdownContainerStillFetchesWhatItDoesNotHold(t *testing.T) {
+	// Страница, вынесенная из контейнера, стоит один запрос, а не ошибку:
+	// иначе переезд раздела молча урезал бы стартовый контекст.
+	root := blk(uid(1), "page", "# Корень", "", linksSection(uid(2), uid(4))...)
+	two := blk(uid(2), "page", "# Внутри", "")
+	four := blk(uid(4), "page", "# Снаружи", "")
+	box := uid(9)
+	blocks := map[string]Block{
+		uid(1): root, uid(2): two, uid(4): four,
+		box: contained(box, root, two),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdownFrom(t, client, uid(1), true, nil, box)
+
+	if !strings.Contains(out, "# Снаружи") || !strings.Contains(out, "# Внутри") {
+		t.Fatalf("потерялась страница: %q", out)
+	}
+	if calls(uid(4)) != 1 {
+		t.Fatalf("страницу вне контейнера прочитали %d раз вместо одного", calls(uid(4)))
+	}
+	if calls(uid(2)) != 0 {
+		t.Fatalf("страницу из контейнера всё равно спросили отдельно")
+	}
+}
+
+func TestMarkdownAFailingContainerFallsBackToTheWalk(t *testing.T) {
+	// Контейнер не прочитался — это не отказ: текст собирается обходом, как
+	// будто флага не было, а про контейнер сказано в stderr.
+	root := blk(uid(1), "page", "# Корень", "", linksSection(uid(2))...)
+	two := blk(uid(2), "page", "# Второй", "")
+	blocks := map[string]Block{uid(1): root, uid(2): two}
+
+	plain, _ := markdownServer(t, blocks, 0)
+	want := collectMarkdown(t, plain, uid(1), true, nil)
+
+	client, calls := markdownServer(t, blocks, 0)
+	got := collectMarkdownFrom(t, client, uid(1), true, nil, uid(9)) // такого блока нет
+	if got != want {
+		t.Fatalf("без контейнера текст обязан быть прежним:\n%q\n%q", want, got)
+	}
+	for _, id := range []string{uid(1), uid(2)} {
+		if calls(id) != 1 {
+			t.Fatalf("%s не прочитан обходом: %d запросов", id, calls(id))
+		}
+	}
+}
+
+func TestMarkdownContainerMatchesIgnoringCase(t *testing.T) {
+	// Ссылка пишет id в одном регистре, дерево контейнера отдаёт в другом.
+	// Спрашивать API мы обязаны регистром ссылки, а вот узнавать своё в
+	// контейнере — без учёта регистра, иначе лишний запрос на пустом месте.
+	upper := strings.ToUpper(uid(45))
+	root := blk(uid(1), "page", "# Корень", "", linksSection(upper)...)
+	inner := blk(strings.ToLower(upper), "page", "# Та самая", "")
+	box := uid(9)
+	blocks := map[string]Block{
+		uid(1): root, strings.ToLower(upper): inner,
+		box: contained(box, root, inner),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdownFrom(t, client, uid(1), true, nil, box)
+
+	if !strings.Contains(out, "# Та самая") {
+		t.Fatalf("страница из контейнера не напечатана: %q", out)
+	}
+	if calls(upper) != 0 {
+		t.Fatalf("страницу спросили отдельно, хотя она в контейнере (регистр)")
 	}
 }

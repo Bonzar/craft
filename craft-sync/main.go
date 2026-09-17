@@ -173,6 +173,7 @@ func main() {
 
 		markdownArg = flag.String("markdown", "", "Markdown mode: deep-fetch these comma-separated block IDs and print their markdown, then exit. Feeds the start-context provider.")
 		followLinks = flag.Bool("follow-links", false, "With --markdown: also read every block linked from a «Связи» section, recursively, each ID at most once.")
+		container   = flag.String("container", "", "With --markdown: deep-read this page once and serve the walk from its tree, fetching one by one only what it does not hold. Same output, far fewer requests when the walked pages live under one page.")
 	)
 	flag.Parse()
 
@@ -232,7 +233,7 @@ func main() {
 	}
 
 	if *markdownArg != "" {
-		runMarkdown(client, *markdownArg, *followLinks, exclude)
+		runMarkdown(client, *markdownArg, *followLinks, exclude, *container)
 		return
 	}
 
@@ -574,6 +575,22 @@ type fetched struct {
 	err   error
 }
 
+// indexTree maps every block of a tree by its lowercased id, so that a page
+// the walk asks for can be served from a tree already in hand.
+func indexTree(b Block, into map[string]Block) {
+	if b.ID != "" {
+		if _, seen := into[strings.ToLower(b.ID)]; !seen {
+			into[strings.ToLower(b.ID)] = b
+		}
+	}
+	for _, child := range b.Content {
+		indexTree(child, into)
+	}
+	for _, item := range b.Items {
+		indexTree(item, into)
+	}
+}
+
 // runMarkdown prints the markdown of each requested block tree, optionally
 // following the links listed in its «Связи» section. Every ID is fetched at
 // most once; a failed fetch is reported on stderr and does not stop the rest —
@@ -584,7 +601,17 @@ type fetched struct {
 // 17.09.2026), so a sequential walk pays the API's latency once per block for
 // no reason. Rendering stays sequential over the level in its discovery order,
 // so the output does not depend on which request finished first.
-func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]bool) {
+//
+// With --container the walk first reads one page whole and then serves itself
+// from that tree. GET /blocks?maxDepth=-1 crosses page boundaries — a nested
+// page comes back with its own content, not as a stub (checked 17.09.2026) —
+// so when the walked pages live under one page, that single read replaces all
+// of them. The walk itself is unchanged: the same «Связи» decide what is read
+// and in what order, the container only answers instead of the API. Whatever
+// the container does not hold is still fetched by id, so a page moved out of
+// it costs one request, not a wrong answer. A container that fails to read is
+// a note on stderr and a plain walk, not a failure: the text is the point.
+func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]bool, container string) {
 	// Сравниваем id без учёта регистра, спрашиваем — в исходном.
 	skip := map[string]bool{}
 	for id := range exclude {
@@ -599,6 +626,17 @@ func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]
 		}
 	}
 
+	// Дерево контейнера, если его попросили: отсюда уровень берётся даром.
+	have := map[string]Block{}
+	if container != "" {
+		block, err := client.getBlocks(container)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "! markdown: контейнер %s: %v (читаем обходом)\n", container, err)
+		} else {
+			indexTree(block, have)
+		}
+	}
+
 	var out strings.Builder
 	var failures []string
 	for len(level) > 0 {
@@ -606,6 +644,10 @@ func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]
 		var wg sync.WaitGroup
 		gate := make(chan struct{}, markdownWorkers)
 		for i, id := range level {
+			if block, ok := have[strings.ToLower(id)]; ok {
+				results[i] = fetched{id: id, block: block}
+				continue
+			}
 			wg.Add(1)
 			go func(i int, id string) {
 				defer wg.Done()

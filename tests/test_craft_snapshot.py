@@ -211,6 +211,14 @@ class ProviderTest(unittest.TestCase):
         self.assertIn('--follow-links', self.call_lines()[0])
         self.assertNotIn('--follow-links', self.call_lines()[1])
 
+    def test_the_rules_are_read_through_their_container(self) -> None:
+        # Почти все разделы правил лежат в одной странице: её глубокое чтение
+        # заменяет два десятка запросов. Память — один блок, ей контейнер незачем.
+        self.stub('echo "прочитано $2"')
+        self.provide()
+        self.assertIn(f'--container {provider.RULES_CONTAINER}', self.call_lines()[0])
+        self.assertNotIn('--container', self.call_lines()[1])
+
     def test_the_worst_case_fits_the_hook_timeout(self) -> None:
         # Худший случай обязан помещаться в timeout строки хука, иначе харнес
         # убьёт сбор на полпути; число берём из установщика, а не на глаз.

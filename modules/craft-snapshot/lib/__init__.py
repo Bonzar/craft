@@ -5,6 +5,12 @@
 через `craft-sync --markdown`: connect-API Craft умеет отдавать markdown любого
 блока деревом, а инструмент уже знает и базовый URL, и обход по «Связям».
 
+Правила читаются с `--container`: почти все разделы лежат в одной странице, и
+её единственное глубокое чтение отвечает за них всех. Замер 17.09.2026 на живом
+пространстве: 3 запроса вместо 23 при побайтово том же тексте. Обход от этого не
+меняется — что не нашлось в контейнере, дочитывается по id, — так что переезд
+раздела стоит запроса, а не куска снимка.
+
 Снимок либо собирается целиком, либо не отдаётся вовсе. Половина снимка —
 память без правил базы — хуже пустоты: агент считал бы, что правила прочитаны,
 и работал бы по памяти без них. Поэтому отказ любого из двух чтений превращает
@@ -46,6 +52,13 @@ from pathlib import Path
 # инструмент идёт по «Связям»; второй — память агента, читается целиком.
 RULES_ROOT = 'a6784801-9d92-875c-f146-50159368745b'
 MEMORY_ROOT = 'e8132891-81f4-2d63-36f1-d3623d0147b6'
+# Страница «Архив» сферы «Личное 💭»: в ней лежит 21 раздел правил из 23.
+# Её одно глубокое чтение заменяет 21 запрос, а два раздела снаружи («Строить
+# управляемый поток работы #алгоритм» и «Записать день #задача/15м») обход
+# дочитывает сам. Регистр id — как в Craft: connect-API к нему чувствителен.
+# Уедет раздел из «Архива» — обход дочитает его отдельным запросом, и снимок
+# не изменится: контейнер ускоряет обход, а не задаёт его.
+RULES_CONTAINER = 'B19D996C-6329-483A-A29D-F16CFB8F765B'
 
 BINARY_ENV = 'CRAFT_SYNC_BIN'
 BASE_ENV = 'CRAFT_API_BASE'
@@ -90,7 +103,7 @@ def binary() -> str | None:
     return shutil.which(BINARY_NAME)
 
 
-def attempt(tool: str, block_id: str, follow: bool) -> tuple[str, str | None]:
+def attempt(tool: str, block_id: str, follow: bool, container: str = '') -> tuple[str, str | None]:
     """Одна попытка чтения. Текст либо причина, по которой его нет."""
     command = [
         tool, '--markdown', block_id,
@@ -98,6 +111,8 @@ def attempt(tool: str, block_id: str, follow: bool) -> tuple[str, str | None]:
     ]
     if follow:
         command.append('--follow-links')
+    if container:
+        command += ['--container', container]
     try:
         done = subprocess.run(
             command, capture_output=True, text=True, timeout=CALL_TIMEOUT, check=False
@@ -134,7 +149,8 @@ def ladder(reason: str) -> tuple[int, tuple[int, ...]]:
     return ATTEMPTS, BACKOFF_SECONDS
 
 
-def read(tool: str, block_id: str, follow: bool, sleep=time.sleep) -> tuple[str, str | None]:
+def read(tool: str, block_id: str, follow: bool, container: str = '',
+         sleep=time.sleep) -> tuple[str, str | None]:
     """Чтение с повторами. Все попытки впустую — последняя причина наружу.
 
     Лестница выбирается по последней беде: пока отвечает 429, ждём по длинной,
@@ -148,7 +164,7 @@ def read(tool: str, block_id: str, follow: bool, sleep=time.sleep) -> tuple[str,
             if number >= attempts:
                 return '', problem
             sleep(pauses[number - 1])
-        text, problem = attempt(tool, block_id, follow)
+        text, problem = attempt(tool, block_id, follow, container)
         if text:
             return text, None
         if permanent(problem):
@@ -178,11 +194,11 @@ def provide(event, storage, sleep=time.sleep) -> str:
         return failed(storage, where, f'в окружении нет {BASE_ENV}')
 
     pieces = []
-    for title, block_id, follow in (
-        (RULES_TITLE, RULES_ROOT, True),
-        (MEMORY_TITLE, MEMORY_ROOT, False),
+    for title, block_id, follow, container in (
+        (RULES_TITLE, RULES_ROOT, True, RULES_CONTAINER),
+        (MEMORY_TITLE, MEMORY_ROOT, False, ''),
     ):
-        text, problem = read(tool, block_id, follow, sleep=sleep)
+        text, problem = read(tool, block_id, follow, container, sleep=sleep)
         if problem:
             return failed(storage, where, f'{title.lstrip("# ")}: {problem}')
         pieces.append(f'{title}\n\n{text}')
