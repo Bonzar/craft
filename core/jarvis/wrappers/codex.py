@@ -40,41 +40,37 @@ from ..storage import Storage, default_state_dir
 
 HARNESS = 'codex'
 
-# дока: у Codex своё событие после сжатия, а не оттенок старта сессии.
+# замер: после сжатия Codex перезапускает тот же хук SessionStart и ставит во
+# вход `"source": "compact"` — ровно как Claude. События `PostCompact` у него
+# тоже есть, и хук на нём исполняется, но его stdout отбрасывается, так что
+# нести туда стартовый контекст нечем и незачем.
 CODEX_EVENTS: dict[str, tuple[str, ...]] = {
     'SessionStart': (ev.SESSION_START, ev.AFTER_COMPACT),
-    'PostCompact': (ev.AFTER_COMPACT,),
 }
 CODEX_BY_EVENT = {
     ev.SESSION_START: 'SessionStart',
-    ev.AFTER_COMPACT: 'PostCompact',
+    ev.AFTER_COMPACT: 'SessionStart',
 }
-# Какие события Codex вообще принимают текст в ход. Замер 17.09.2026: на
-# PostCompact app-server отвечает «ignoring additionalContextLimit for
-# PostCompact hook: this event cannot emit additionalContext» — то есть после
-# сжатия Codex 0.154.0 текста хука не берёт вовсе. Хук там исполняется, но
-# сказать ему нечего, и обёртка это называет, а не подменяет соседней формой.
+# Какие события Codex принимают текст в ход. Пока одно — и оно же несёт оба
+# наших: и старт сессии, и «после сжатия».
 CONTEXT_EVENTS = frozenset({'SessionStart'})
 
 # Личный конфиг режимов общий для харнесов.
 PERSONAL_CONFIG = mode_reader.PERSONAL_CONFIG
 
-# замер: у SessionStart есть `source`; Codex сжатие отдаёт отдельным событием,
-# но поле читается так же, как у Claude, — если source окажется «compact»,
-# событие всё равно назовётся «после сжатия».
+# замер: `source` у SessionStart — startup, resume или compact. После сжатия
+# Codex перезапускает хук с source=compact, и его stdout доходит до модели
+# свежим, а не из кэша старта.
 COMPACT_SOURCE = 'compact'
 
 SUPPORTED: dict[str, frozenset[str]] = {
     ev.SESSION_START: frozenset({forms.CONTEXT}),
-    ev.AFTER_COMPACT: frozenset(),
+    ev.AFTER_COMPACT: frozenset({forms.CONTEXT}),
 }
 
 UNSUPPORTED_NOTE = {
     ev.SESSION_START: 'обёртка Codex этапа 3 несёт только контекст на старте сессии',
-    ev.AFTER_COMPACT: (
-        'Codex 0.154.0 после сжатия текста хука не принимает вовсе: его app-server '
-        'отвечает «this event cannot emit additionalContext» (замер 17.09.2026)'
-    ),
+    ev.AFTER_COMPACT: 'обёртка Codex этапа 3 несёт только контекст после сжатия',
 }
 
 
@@ -87,8 +83,8 @@ def unified_of(raw: Mapping[str, Any]) -> str:
             f'событие Codex {codex_name!r} обёртке этапа 3 неизвестно; '
             f'есть {sorted(CODEX_EVENTS)}'
         )
-    if codex_name == 'SessionStart' and raw.get('source') == COMPACT_SOURCE:
-        return ev.AFTER_COMPACT
+    if codex_name == 'SessionStart':
+        return ev.AFTER_COMPACT if raw.get('source') == COMPACT_SOURCE else ev.SESSION_START
     return group[0]
 
 

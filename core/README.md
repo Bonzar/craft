@@ -257,8 +257,18 @@ code.claude.com, снятая 17.09.2026; «замер» — проверено 
   что аргументы едут в ней кавычками;
 - поле таймаута в TOML называется `timeout`, а в ответе `hooks/list` —
   `timeoutSec`;
-- после сжатия Codex текста хука не принимает вовсе: на `[[hooks.PostCompact]]`
-  app-server отвечает «ignoring additionalContextLimit … this event cannot emit
-  additionalContext». Строка там всё равно ставится, но ответ модуля обёртка
-  помечает недоставленным и называет причину в следе — подменять форму она не
-  умеет по устройству.
+- после сжатия Codex **перезапускает тот же хук SessionStart** и ставит во вход
+  `"source": "compact"` — ровно как Claude; его stdout доходит до модели свежим
+  после сжатия, а не из кэша старта. Поэтому «после сжатия» у Codex — тот же
+  SessionStart, строка хука одна на копию и называет оба единых имени;
+- события `PreCompact` и `PostCompact` у Codex есть, хуки на них исполняются,
+  но их stdout отбрасывается: на `[[hooks.PostCompact]]` app-server прямо
+  отвечает «ignoring additionalContextLimit … this event cannot emit
+  additionalContext». Нести туда стартовый контекст нечем, и установщик строки
+  там не пишет;
+- глобальный `AGENTS.md` после сжатия переотправляется из кэша старта и с диска
+  не перечитывается — в отличие от вывода хука;
+- сжатие вызывается программно: `thread/compact/start` с `threadId` к
+  app-server, конец виден как `item/started` с `item.type: contextCompaction` и
+  `turn/completed`. Два сжатия подряд в одной сессии: хук перезапускается оба
+  раза, снимок в контексте свежий после каждого (замер 17.09.2026).

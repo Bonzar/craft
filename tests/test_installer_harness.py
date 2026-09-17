@@ -210,10 +210,28 @@ class HarnessAndCopiesTest(unittest.TestCase):
         self.assertIn(str(self.modules_root() / 'base' / 'hooks' / 'module.py'), text)
         self.assertIn('--event session-start', text)
 
-    def test_codex_after_compact_gets_its_own_event(self) -> None:
-        self.add_module('base', 'slug = "base"\nevents = ["after-compact"]\nharness = "codex"\n')
+    def test_codex_carries_both_our_events_on_one_line(self) -> None:
+        # После сжатия Codex перезапускает тот же SessionStart с source=compact,
+        # поэтому строка одна и называет оба наших имени, как у Claude.
+        self.add_module('base',
+                        'slug = "base"\nevents = ["session-start", "after-compact"]\nharness = "codex"\n')
+        report = self.run_installer('--harness', 'codex', '--no-trust')
+        text = self.config_toml()
+        self.assertEqual(text.count('[[hooks.SessionStart.hooks]]'), 1)
+        self.assertNotIn('PostCompact', text)
+        self.assertIn('--event session-start --event after-compact', text)
+        self.assertIn('additionalContextLimit = 0', text)
+        self.assertEqual(report.warnings, [])
+
+    def test_codex_writes_one_line_per_copy(self) -> None:
+        self.add_module('base',
+                        'slug = "base"\nevents = ["session-start", "after-compact"]\n'
+                        'harness = "codex"\ncopies = 3\n')
         self.run_installer('--harness', 'codex', '--no-trust')
-        self.assertIn('[[hooks.PostCompact]]', self.config_toml())
+        text = self.config_toml()
+        self.assertEqual(text.count('[[hooks.SessionStart]]'), 3)
+        self.assertEqual(text.count('[[hooks.SessionStart.hooks]]'), 3)
+        self.assertNotIn('PostCompact', text)
 
     def test_codex_keeps_what_is_not_ours_in_the_config(self) -> None:
         self.settings_root.mkdir(parents=True)
