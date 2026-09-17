@@ -560,8 +560,11 @@ func linksUnder(b Block, section string, heading *string, out *[]string) {
 // one id per call (comma-separated ids answer 404, a repeated id parameter 400
 // — checked 17.09.2026), so the only way to shorten the walk is to overlap the
 // requests. Six is a compromise: it collapses a wide level into one round trip
-// without pushing the connect-link's block budget into HTTP 429.
-const markdownWorkers = 12
+// without pushing the connect-link's block budget into HTTP 429. Twelve was
+// measured against it on the live space (17.09.2026): 3.3-4.1 s against 3.7 s,
+// i.e. inside the spread of the runs themselves, so the narrower pool keeps the
+// win and leaves the rate limit alone.
+const markdownWorkers = 6
 
 // fetched is one block tree of a level, kept with its position so that the
 // output order stays the discovery order and not the order of completion.

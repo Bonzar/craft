@@ -74,14 +74,20 @@ class ProviderTest(unittest.TestCase):
 
     # --- повторы ---
 
-    def test_a_failing_call_is_retried_three_times_with_growing_pauses(self) -> None:
+    def test_a_network_error_walks_the_short_ladder(self) -> None:
         self.stub('echo "HTTP 503: шлюз лёг" >&2\nexit 1')
         journal = Journal()
         self.provide(journal)
-        # Три попытки на первом же чтении, дальше поставщик не идёт.
+        # Пауза стоит между попытками, поэтому попыток на одну больше, чем пауз,
+        # и все паузы лестницы отрабатывают. Дальше первого чтения не идём.
         self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
-        self.assertEqual(self.slept, list(provider.BACKOFF_SECONDS[:provider.ATTEMPTS - 1]))
+        self.assertEqual(self.slept, list(provider.BACKOFF_SECONDS))
         self.assertIn('HTTP 503', journal.lines[0])
+
+    def test_the_short_ladder_is_the_one_from_the_readme(self) -> None:
+        # Числа названы решением, а не выведены кодом: 1, 3, 9 с.
+        self.assertEqual(provider.BACKOFF_SECONDS, (1, 3, 9))
+        self.assertEqual(provider.ATTEMPTS, 4)
 
     def test_a_call_that_succeeds_is_not_retried(self) -> None:
         self.stub('echo "прочитано $2"')
@@ -130,11 +136,33 @@ class ProviderTest(unittest.TestCase):
                 self.assertEqual(self.slept, [])
                 self.assertTrue(text.startswith('стартовый контекст: снимок Craft не собран:'))
 
-    def test_a_budget_error_is_retried(self) -> None:
-        # 429 — окно бюджета блоков: оно пополняется, повтор имеет смысл.
-        self.stub('echo "HTTP 429: Block budget exceeded" >&2\nexit 1')
+    def test_a_budget_error_walks_the_long_ladder(self) -> None:
+        # 429 — окно лимита у connect-ссылки: оно живёт десятками секунд, и
+        # короткой лестницей его не пересидеть. Ждём по длинной.
+        self.stub('echo "HTTP 429: Rate limit exceeded" >&2\nexit 1')
         self.provide()
+        self.assertEqual(len(self.call_lines()), provider.ATTEMPTS_429)
+        self.assertEqual(self.slept, list(provider.BACKOFF_429_SECONDS))
+        self.assertGreater(provider.ATTEMPTS_429, provider.ATTEMPTS)
+
+    def test_the_long_ladder_is_the_one_from_craft_sync(self) -> None:
+        # Те же числа, что у `--rl-retries` в самом инструменте: 5, 10, 20, 40, 60 с.
+        self.assertEqual(provider.BACKOFF_429_SECONDS, (5, 10, 20, 40, 60))
+        self.assertEqual(provider.ATTEMPTS_429, 6)
+
+    def test_the_ladder_follows_the_last_problem_and_not_the_first(self) -> None:
+        # Первый ответ — 429, дальше сеть: длинная пауза отрабатывает один раз,
+        # а считаются попытки уже по короткой лестнице.
+        self.stub(f'''
+            n=$(wc -l < {self.root / 'calls.log'})
+            if [ "$n" -le 1 ]; then echo "HTTP 429: Rate limit exceeded" >&2
+            else echo "сеть отвалилась" >&2; fi
+            exit 1
+        ''')
+        text = self.provide()
+        self.assertEqual(self.slept, [provider.BACKOFF_429_SECONDS[0], *provider.BACKOFF_SECONDS[1:]])
         self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
+        self.assertIn('сеть отвалилась', text)  # наружу идёт последняя беда
 
     def test_a_timeout_is_retried(self) -> None:
         self.stub('sleep 5')
@@ -195,7 +223,10 @@ class ProviderTest(unittest.TestCase):
         )
         installer = iu.module_from_spec(spec)
         spec.loader.exec_module(installer)
-        worst = 2 * (provider.ATTEMPTS * provider.CALL_TIMEOUT + sum(provider.BACKOFF_SECONDS))
+        # Худший случай — оба чтения целиком по длинной лестнице: каждая попытка
+        # упирается в свой таймаут, и между ними отстаиваются все паузы.
+        worst = 2 * (provider.ATTEMPTS_429 * provider.CALL_TIMEOUT
+                     + sum(provider.BACKOFF_429_SECONDS))
         self.assertLess(worst, installer.HOOK_TIMEOUT_SEC, f'худший случай {worst} с')
 
 

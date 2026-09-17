@@ -449,7 +449,7 @@ class SweepTest(unittest.TestCase):
             'start-context-alive-session-start-7.json': {'generation': 'старое', 'at': old},
             'start-context-printed-session-start-7.json': {'generation': 'старое', 'at': old},
         }
-        # Чужое событие и чужой файл в той же зоне трогать нельзя.
+        # Чужое событие час назад — это, возможно, живой прогон: не трогаем.
         keep = {
             'start-context-alive-after-compact-3.json': {'generation': 'старое', 'at': old},
             'start-context-after-compact.json': {'generation': 'старое', 'at': old},
@@ -470,7 +470,8 @@ class SweepTest(unittest.TestCase):
                      'start-context-printed-session-start-7.json'):
             self.assertFalse(storage.path(name).exists(), f'{name} остался')
         for name in keep:
-            self.assertTrue(storage.path(name).exists(), f'{name} убрали, а он чужого события')
+            self.assertTrue(storage.path(name).exists(),
+                             f'{name} убрали, а он чужого события и свежий')
         self.assertTrue(storage.path('trace.jsonl').exists(), 'уборка задела не свои файлы')
 
         # Состояние и готовность этого прогона на месте и нового поколения.
@@ -482,6 +483,41 @@ class SweepTest(unittest.TestCase):
         self.assertTrue(any('убрано файлов прошлых прогонов: 4' in line
                             for line in storage.read_lines('start-context.jsonl')),
                         storage.read_lines('start-context.jsonl'))
+
+    def test_traces_of_other_events_go_after_a_day(self) -> None:
+        # В одной сессии session-start бывает раз, а after-compact — сколько
+        # угодно раз после него. Без этого следы старта пролежали бы в зоне до
+        # конца сессии: поколение чужого события нам ничего не говорит, и
+        # единственный признак, что прогон давно кончился, — возраст.
+        session = 'sweep-day'
+        storage = self.storage(session)
+        long_ago = time.time() - 2 * 24 * 3600
+        yesterday = {
+            'start-context-session-start.json': {'generation': 'позавчерашнее', 'at': long_ago},
+            'start-context-alive-session-start-4.json':
+                {'generation': 'позавчерашнее', 'at': long_ago},
+        }
+        fresh = {
+            'start-context-printed-session-start-1.json':
+                {'generation': 'сегодняшнее', 'at': time.time() - 3600},
+        }
+        for name, body in {**yesterday, **fresh}.items():
+            storage.write_json(name, body)
+
+        entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-1' / 'hooks' / 'module.py'
+        result = subprocess.run(
+            [sys.executable, str(entry), '--event', 'after-compact'],
+            input=session_event(session, source='compact'), text=True, capture_output=True,
+            env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        for name in yesterday:
+            self.assertFalse(storage.path(name).exists(),
+                             f'{name} чужого события и старше суток, а остался')
+        for name in fresh:
+            self.assertTrue(storage.path(name).exists(),
+                            f'{name} моложе суток, трогать его было нельзя')
 
     def test_what_this_run_writes_survives_the_sweep(self) -> None:
         # Маркер соседа этого прогона ещё без поколения: уборка обязана его
