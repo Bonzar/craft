@@ -20,3 +20,14 @@ jobs:
 
       - name: No Craft snapshots in the tree
         run: node tools/no-snapshot-files.js --tree HEAD
+
+      # Тесты библиотеки, обёртки и установщика. Стандартный unittest, без
+      # зависимостей: ставить нечего, поэтому шаг живёт рядом с гвардом, а не
+      # отдельным workflow со своей установкой. Версия пришпилена: шапку модуля
+      # читает tomllib, он с 3.11.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Jarvis tests
+        run: python3 -m unittest discover -s tests -t .
