@@ -20,8 +20,33 @@ class EventTranslationTest(unittest.TestCase):
         self.assertEqual(sorted(claude.CLAUDE_BY_EVENT), sorted(ev.ALL))
 
     def test_the_two_tables_are_inverses(self) -> None:
-        for claude_name, unified in claude.EVENT_BY_CLAUDE.items():
-            self.assertEqual(claude.CLAUDE_BY_EVENT[unified], claude_name)
+        for claude_name, group in claude.CLAUDE_EVENTS.items():
+            for unified in group:
+                self.assertEqual(claude.CLAUDE_BY_EVENT[unified], claude_name)
+
+    def test_session_start_is_split_by_its_source(self) -> None:
+        # Одно имя события харнеса, два единых: старт сессии и «после сжатия».
+        for source in ('startup', 'resume', 'clear'):
+            self.assertEqual(claude.to_event(raw('SessionStart', source=source)).event,
+                             ev.SESSION_START, source)
+        self.assertEqual(claude.to_event(raw('SessionStart', source='compact')).event,
+                         ev.AFTER_COMPACT)
+
+    def test_session_start_without_a_source_is_the_start(self) -> None:
+        self.assertEqual(claude.to_event(raw('SessionStart')).event, ev.SESSION_START)
+
+    def test_after_compact_takes_context(self) -> None:
+        delivery = claude.translate(ev.AFTER_COMPACT, Context('вот что я помню'))
+        self.assertEqual(
+            delivery.payload,
+            {'hookSpecificOutput': {'hookEventName': 'SessionStart',
+                                    'additionalContext': 'вот что я помню'}},
+        )
+
+    def test_an_event_outside_the_catalog_is_named(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            claude.to_event(raw('WorktreeCreate'))
+        self.assertIn('WorktreeCreate', str(caught.exception))
 
     def test_common_fields_reach_the_unified_event(self) -> None:
         event = claude.to_event(raw('UserPromptSubmit', prompt='привет'))

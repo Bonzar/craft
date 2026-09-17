@@ -27,20 +27,43 @@ from ..storage import Storage, default_state_dir
 
 HARNESS = 'claude'
 
-# дока: имена событий Claude и их место в едином каталоге.
-EVENT_BY_CLAUDE = {
-    'SessionStart': ev.SESSION_START,
-    'UserPromptSubmit': ev.PROMPT,
-    'PreToolUse': ev.PRE_TOOL,
-    'PostToolUse': ev.POST_TOOL,
-    'PostToolUseFailure': ev.TOOL_ERROR,
-    'Stop': ev.STOP,
-    'SubagentStop': ev.SUBAGENT_STOP,
-    'PreCompact': ev.PRE_COMPACT,
-    'SessionEnd': ev.SESSION_END,
-    'Notification': ev.NOTIFICATION,
+# дока: имена событий Claude и их место в едином каталоге. У одного имени
+# харнеса может стоять несколько единых событий: Claude зовёт SessionStart и на
+# старте сессии, и после сжатия, а различает их полем `source` (дока).
+CLAUDE_EVENTS: dict[str, tuple[str, ...]] = {
+    'SessionStart': (ev.SESSION_START, ev.AFTER_COMPACT),
+    'UserPromptSubmit': (ev.PROMPT,),
+    'PreToolUse': (ev.PRE_TOOL,),
+    'PostToolUse': (ev.POST_TOOL,),
+    'PostToolUseFailure': (ev.TOOL_ERROR,),
+    'Stop': (ev.STOP,),
+    'SubagentStop': (ev.SUBAGENT_STOP,),
+    'PreCompact': (ev.PRE_COMPACT,),
+    'SessionEnd': (ev.SESSION_END,),
+    'Notification': (ev.NOTIFICATION,),
 }
-CLAUDE_BY_EVENT = {unified: claude for claude, unified in EVENT_BY_CLAUDE.items()}
+CLAUDE_BY_EVENT = {
+    unified: claude for claude, group in CLAUDE_EVENTS.items() for unified in group
+}
+
+# дока: `source` у SessionStart — startup, resume, clear или compact. Замер
+# 17.09.2026: после /compact приходит SessionStart с source=compact.
+COMPACT_SOURCE = 'compact'
+
+
+def unified_of(raw: Mapping[str, Any]) -> str:
+    """Какое единое событие пришло. Одно имя харнеса — по полю `source`."""
+    claude_name = raw.get('hook_event_name')
+    group = CLAUDE_EVENTS.get(claude_name)
+    if group is None:
+        raise ValueError(
+            f'событие Claude {claude_name!r} не заведено в едином каталоге; '
+            f'есть {sorted(CLAUDE_EVENTS)}'
+        )
+    if claude_name == 'SessionStart':
+        return ev.AFTER_COMPACT if raw.get('source') == COMPACT_SOURCE else ev.SESSION_START
+    return group[0]
+
 
 # дока: инструмент вопроса с кнопками у Claude Code есть, поэтому форма
 # «вопрос человеку» переводится в поручение вызвать именно его.
@@ -50,6 +73,7 @@ QUESTION_TOOL = 'AskUserQuestion'
 # Молчание принимает любое событие и в таблице не перечисляется.
 SUPPORTED: dict[str, frozenset[str]] = {
     ev.SESSION_START: frozenset({forms.CONTEXT, forms.QUESTION}),
+    ev.AFTER_COMPACT: frozenset({forms.CONTEXT, forms.QUESTION}),
     ev.PROMPT: frozenset({forms.CONTEXT, forms.QUESTION, forms.BLOCK}),
     ev.PRE_TOOL: frozenset(
         {forms.CONTEXT, forms.QUESTION, forms.ALLOW, forms.ASK, forms.DENY, forms.UPDATED_INPUT}
@@ -66,6 +90,7 @@ SUPPORTED: dict[str, frozenset[str]] = {
 # Чего харнес не умеет — список самой обёртки, дословно для отчёта в чат.
 UNSUPPORTED_NOTE = {
     ev.SESSION_START: 'Claude на старте сессии принимает только контекст: решения там нет (дока)',
+    ev.AFTER_COMPACT: 'Claude после сжатия принимает только контекст: это тот же SessionStart (дока)',
     ev.PROMPT: 'Claude на реплике принимает контекст и блок; изменённой реплики у него нет (дока)',
     ev.PRE_TOOL: 'Claude перед вызовом блок не принимает — запрет выражается формой «запретить» (дока)',
     ev.POST_TOOL: 'Claude после вызова принимает контекст и блок: вызов уже прошёл (дока)',
@@ -105,15 +130,8 @@ def human_answer(raw: Mapping[str, Any]) -> Any:
 
 def to_event(raw: Mapping[str, Any]) -> Event:
     """Событие Claude — в единый формат."""
-    claude_name = raw.get('hook_event_name')
-    unified = EVENT_BY_CLAUDE.get(claude_name)
-    if unified is None:
-        raise ValueError(
-            f'событие Claude {claude_name!r} не заведено в едином каталоге; '
-            f'есть {sorted(EVENT_BY_CLAUDE)}'
-        )
     return Event(
-        event=unified,
+        event=unified_of(raw),
         session_id=str(raw.get('session_id') or ''),
         cwd=str(raw.get('cwd') or ''),
         harness=HARNESS,
@@ -127,8 +145,9 @@ def to_event(raw: Mapping[str, Any]) -> Event:
     )
 
 
-# дока: личный конфиг режимов лежит в каталоге пользователя.
-PERSONAL_CONFIG = '~/.config/jarvis/modules.json'
+# дока: личный конфиг режимов лежит в каталоге пользователя. Путь общий для
+# всех харнесов и потому задан в `jarvis.mode`.
+PERSONAL_CONFIG = mode_reader.PERSONAL_CONFIG
 
 
 def _hook_specific(unified: str, fields: dict) -> dict:
@@ -205,17 +224,32 @@ def run_hook(entry_file: str, module_class: type[Module], argv: list[str] | None
     него, без аргумента «корень установки» и без записи установщика.
     """
     parser = argparse.ArgumentParser(description='Обёртка Claude вокруг одного модуля Джарвиса')
-    parser.add_argument('--event', required=True, help='единое имя события, на которое стоит строка')
+    parser.add_argument(
+        '--event',
+        required=True,
+        action='append',
+        dest='events',
+        help='единое имя события, на которое стоит строка; повторяется, '
+             'когда харнес приносит их одним своим событием',
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     stdin = sys.stdin if stdin is None else stdin
     raw = json.loads(stdin.read())
     event = to_event(raw)
-    if event.event != args.event:
-        raise ValueError(
-            f'строка зарегистрирована на «{args.event}», а пришло «{event.event}»: '
-            'настройки харнеса разошлись с установкой'
-        )
+    if event.event not in args.events:
+        claude_name = raw.get('hook_event_name')
+        siblings = CLAUDE_EVENTS.get(claude_name, ())
+        unknown = [name for name in args.events if name not in siblings]
+        if unknown:
+            raise ValueError(
+                f'строка зарегистрирована на «{", ".join(args.events)}», а пришло '
+                f'«{event.event}»: настройки харнеса разошлись с установкой'
+            )
+        # Одно событие харнеса приносит несколько единых: строка соседнего
+        # события молчит, а не падает. Следа нет — модуль на этом событии не
+        # стоит, и его ход не начинался.
+        return 0
 
     module_dir = Path(entry_file).resolve().parents[1]
     manifest = manifest_reader.load(module_dir)

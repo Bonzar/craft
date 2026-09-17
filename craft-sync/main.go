@@ -169,6 +169,9 @@ func main() {
 		linksStore   = flag.String("links-store", os.Getenv("CRAFT_LINKS_STORE"), "Craft page block ID holding the persistent link index (gzip+base64 dump in code blocks plus an 'Обновлён:' cutoff line); defaults to env CRAFT_LINKS_STORE. Cross-session alternative to --links-file; the store doc itself is excluded from indexing. Pass an empty value to force --links-file/local mode when the env var is set.")
 		linksRefresh = flag.Bool("links-refresh", false, "Refresh the link index (see --links-file/--links-store) without querying a target. Lets a routine keep the index warm.")
 		offline      = flag.Bool("offline", false, "With --backlinks: answer from --links-file/--links-store as-is, no refresh of the space.")
+
+		markdownArg = flag.String("markdown", "", "Markdown mode: deep-fetch these comma-separated block IDs and print their markdown, then exit. Feeds the start-context provider.")
+		followLinks = flag.Bool("follow-links", false, "With --markdown: also read every block linked from a «Связи» section, recursively, each ID at most once.")
 	)
 	flag.Parse()
 
@@ -225,6 +228,11 @@ func main() {
 		base:      *base,
 		retries:   *retries,
 		rlRetries: *rlRetries,
+	}
+
+	if *markdownArg != "" {
+		runMarkdown(client, *markdownArg, *followLinks, exclude)
+		return
 	}
 
 	if *backlinksTo != "" || *linksRefresh {
@@ -487,6 +495,100 @@ func printTree(res Result, pages map[string]*Page) {
 	}
 	for _, e := range res.Errors {
 		fmt.Printf("! error: %s\n", e)
+	}
+}
+
+// ---- markdown mode: read a block subtree for the agent's start context ----
+//
+// The start-context provider needs the TEXT of a few known sections, not a
+// change list: the base rules live under «Сущность базы #раздел» and are
+// reached by following the links its «Связи» section lists, and the agent's
+// memory is one page read whole. Every block already carries its own markdown
+// in the same GET /blocks tree the change detector walks, so this mode is a
+// render of that tree plus an optional walk over the links under a named
+// section. Output is markdown on stdout — the hook feeds it to the model as is.
+
+// linkSection is the section heading whose links --follow-links walks.
+const linkSection = "Связи"
+
+var headingRe = regexp.MustCompile(`^\s{0,3}#{1,6}\s+`)
+
+// renderMarkdown appends the markdown of every block in the tree, in document
+// order. Code blocks carry their body in rawCode rather than markdown.
+func renderMarkdown(b Block, out *strings.Builder) {
+	if md := strings.TrimRight(b.Markdown, " \t"); md != "" {
+		out.WriteString(md)
+		out.WriteString("\n\n")
+	} else if b.RawCode != "" {
+		out.WriteString("```\n")
+		out.WriteString(strings.TrimRight(b.RawCode, "\n"))
+		out.WriteString("\n```\n\n")
+	}
+	for _, child := range b.Content {
+		renderMarkdown(child, out)
+	}
+	for _, item := range b.Items {
+		renderMarkdown(item, out)
+	}
+}
+
+// linksUnder collects every block link that sits under a heading whose text
+// contains `section`. The heading in force is the nearest preceding heading in
+// document order, so a «Связи» list is picked up while links in the body of the
+// page are not.
+func linksUnder(b Block, section string, heading *string, out *[]string) {
+	md := b.Markdown
+	if headingRe.MatchString(md) {
+		*heading = md
+	} else if strings.Contains(*heading, section) {
+		for _, ref := range extractLinks(md) {
+			*out = append(*out, ref.Target)
+		}
+	}
+	for _, child := range b.Content {
+		linksUnder(child, section, heading, out)
+	}
+	for _, item := range b.Items {
+		linksUnder(item, section, heading, out)
+	}
+}
+
+// runMarkdown prints the markdown of each requested block tree, optionally
+// following the links listed in its «Связи» section. Every ID is fetched at
+// most once; a failed fetch is reported on stderr and does not stop the rest —
+// a partial start context beats no start context.
+func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]bool) {
+	queue := splitCSV(idsArg)
+	seen := map[string]bool{}
+	var out strings.Builder
+	var failures []string
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		key := strings.ToLower(id)
+		if seen[key] || exclude[key] {
+			continue
+		}
+		seen[key] = true
+		block, err := client.getBlocks(id)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", id, err))
+			continue
+		}
+		renderMarkdown(block, &out)
+		if follow {
+			heading := ""
+			var found []string
+			linksUnder(block, linkSection, &heading, &found)
+			queue = append(queue, found...)
+		}
+	}
+	fmt.Print(strings.TrimRight(out.String(), "\n") + "\n")
+	for _, f := range failures {
+		fmt.Fprintf(os.Stderr, "! markdown: %s\n", f)
+	}
+	if len(failures) == len(seen) && len(seen) > 0 {
+		os.Exit(1) // nothing was read at all: the caller must not mistake it for an empty space
 	}
 }
 

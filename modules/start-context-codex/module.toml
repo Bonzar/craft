@@ -1,0 +1,5 @@
+# База стартового контекста для Codex. Копия одна: потолок ответа у Codex
+# снимается ключом в строке хука, поэтому резать текст не нужно.
+slug = "start-context-codex"
+events = ["session-start", "after-compact"]
+harness = "codex"

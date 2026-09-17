@@ -4,31 +4,41 @@
 Что он делает:
 
 - читает шапки модулей и проверяет requires по slug и маскам семейств;
+- берёт из набора те модули, что существуют для выбранного харнеса;
+- ставит столько копий модуля, сколько сказано в шапке полем `copies`;
 - раскладывает части модуля по закреплённым именам папок — каждую туда, где её
   читает тот, кому она нужна;
 - кладёт копию ядра внутрь папки каждого модуля;
 - подставляет абсолютные пути вместо плейсхолдеров;
-- пишет по строке на модуль и событие в настройки харнеса, атомарно и с копией;
-- убирает то, чего в источнике больше нет: исчезнувшие части и снятые модули;
+- пишет по строке хука на копию и событие харнеса, атомарно и с копией;
+- у Codex вдобавок отмечает свои строки доверенными через его app-server;
+- убирает то, чего в источнике больше нет: исчезнувшие части, снятые модули и
+  лишние копии;
 - предупреждает о требовании без модуля и о событии, которого у харнеса нет.
 
-Чего он НЕ делает: библиотеку никуда не собирает, путей модулю не сообщает и
-ничего не чинит — только раскладывает и регистрирует. Ядро едет внутри каждого
-модуля, поэтому набор для шеринга состоит только из модулей, все одного вида, и
-модуль самодостаточен. У коллег модули приходят уже разложенными, установщика у
-них нет; у нас ту же раскладку делает установщик.
+Чего он НЕ делает: библиотеку никуда не собирает, путей модулю не сообщает,
+про стартовый контекст не знает ничего и ничего не чинит — только раскладывает
+и регистрирует. Ядро едет внутри каждого модуля, поэтому набор для шеринга
+состоит только из модулей, все одного вида, и модуль самодостаточен. У коллег
+модули приходят уже разложенными, установщика у них нет; у нас ту же раскладку
+делает установщик.
 
 Запуск:
 
-    tools/jarvis-install --settings-dir ~/.claude
+    tools/jarvis-install --harness claude
+    tools/jarvis-install --harness codex --settings-dir ~/.codex
     tools/jarvis-install --settings-dir /tmp/settings --modules modules --dry-run
 """
 
 import argparse
 import json
 import os
+import re
+import shlex
 import shutil
+import subprocess
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,13 +48,15 @@ sys.path.insert(0, str(REPO_ROOT / 'core'))
 from jarvis import manifest as manifest_reader  # noqa: E402
 from jarvis import mode as mode_reader  # noqa: E402
 from jarvis.registry import CORE_DIR  # noqa: E402
-from jarvis.wrappers import claude  # noqa: E402
+from jarvis.wrappers import claude, codex  # noqa: E402
 
 SETTINGS_FILE = 'settings.json'
+CODEX_CONFIG_FILE = 'config.toml'
+CODEX_AGENTS_FILE = 'AGENTS.md'
 BACKUP_SUFFIX = '.jarvis-bak'
 LEDGER_FILE = 'installed.json'
 HOOK_ENTRY = 'module.py'
-PERSONAL_CONFIG = claude.PERSONAL_CONFIG
+PERSONAL_CONFIG = mode_reader.PERSONAL_CONFIG
 
 # Части модуля отличаются по закреплённым именам папок. `hooks`, `lib` и `data`
 # остаются внутри папки модуля: их читают сам модуль и его соседи. Остальные три
@@ -56,12 +68,31 @@ PART_SKILL = 'skill'
 PART_AGENTS = 'agents'
 PART_RULES = 'rules'
 PARTS = (PART_HOOKS, PART_LIB, PART_DATA, PART_SKILL, PART_AGENTS, PART_RULES)
+INSIDE_MODULE = (PART_HOOKS, PART_LIB, PART_DATA)
 HARNESS_PARTS = {PART_SKILL: 'skills', PART_AGENTS: 'agents', PART_RULES: 'rules'}
 
 TEXT_SUFFIXES = {'.md', '.py', '.json', '.toml', '.txt', '.sh', '.yaml', '.yml', '.js'}
 # Байткод — след запуска из источника, а не часть модуля: в установку он не едет.
 IGNORED = shutil.ignore_patterns('__pycache__', '*.pyc')
 PLACEHOLDER_OPEN = '{{'
+
+# Метка раздела модуля в общем AGENTS.md Codex: у него нет каталога правил, и
+# части rules склеиваются в один файл между метками.
+AGENTS_OPEN = '<!-- jarvis:{slug} -->'
+AGENTS_CLOSE = '<!-- /jarvis:{slug} -->'
+# Метки нашего куска в config.toml Codex: снаружи файл не наш.
+CODEX_OPEN = '# jarvis:begin — строки хуков, которые пишет установщик Джарвиса'
+CODEX_CLOSE = '# jarvis:end'
+# Доверие хукам пишет сам Codex — таблицами `[hooks.state."‹ключ›"]`, и кладёт
+# он их внутрь области hooks, то есть внутрь нашего куска. Переписывая кусок,
+# мы переносим их как есть: свои мы всё равно проставим заново, а чужие иначе
+# молча потеряли бы доверие вместе с нашей перезаписью.
+CODEX_STATE_TABLE = re.compile(
+    r'^\[hooks\.state\.[^\]]*\]\n(?:(?!\[)[^\n]*\n?)*', re.M
+)
+# дока: `null` — потолок 2 500 токенов, `0` — без потолка.
+CODEX_CONTEXT_LIMIT = 0
+CODEX_TIMEOUT_SEC = 60
 
 
 @dataclass
@@ -92,7 +123,7 @@ def modules_root(settings_root: Path) -> Path:
     return settings_root / 'jarvis' / 'modules'
 
 
-def placeholders(settings_root: Path, module_dir: Path, state_dir: Path) -> dict:
+def placeholders(settings_root: Path, module_dir: Path, state_dir: Path, project_dir: str) -> dict:
     """Плейсхолдеры путей харнеса, которые модуль пишет вместо абсолютных."""
     return {
         '{{JARVIS_CORE}}': str(module_dir / CORE_DIR),
@@ -100,8 +131,16 @@ def placeholders(settings_root: Path, module_dir: Path, state_dir: Path) -> dict
         '{{JARVIS_MODULE}}': str(module_dir),
         '{{JARVIS_STATE}}': str(state_dir),
         '{{HARNESS_SETTINGS}}': str(settings_root),
-        '{{HARNESS_PROJECT_DIR}}': '${CLAUDE_PROJECT_DIR}',
+        '{{HARNESS_PROJECT_DIR}}': project_dir,
     }
+
+
+def substitute(text: str, substitutions: dict) -> str:
+    if PLACEHOLDER_OPEN not in text:
+        return text
+    for token, value in substitutions.items():
+        text = text.replace(token, value)
+    return text
 
 
 def copy_tree(source: Path, target: Path, substitutions: dict) -> None:
@@ -119,38 +158,373 @@ def copy_tree(source: Path, target: Path, substitutions: dict) -> None:
             text = path.read_text(encoding='utf-8')
         except UnicodeDecodeError:
             continue
-        if PLACEHOLDER_OPEN not in text:
+        replaced = substitute(text, substitutions)
+        if replaced != text:
+            path.write_text(replaced, encoding='utf-8')
+
+
+def read_json(path: Path, default):
+    if not path.exists():
+        return default
+    text = path.read_text(encoding='utf-8')
+    return json.loads(text) if text.strip() else default
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Запись атомарная и с копией прежнего файла рядом."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        shutil.copy2(path, path.with_name(path.name + BACKUP_SUFFIX))
+    tmp = path.with_name(path.name + f'.tmp-{os.getpid()}')
+    tmp.write_text(text, encoding='utf-8')
+    os.replace(tmp, path)
+
+
+def write_settings(path: Path, settings: dict) -> None:
+    write_atomic(path, json.dumps(settings, ensure_ascii=False, indent=2) + '\n')
+
+
+# --- разделы в общем файле: части rules Codex и наш кусок его config.toml ---
+
+
+def section_replace(text: str, open_mark: str, close_mark: str, body: str | None) -> str:
+    """Заменить размеченный кусок файла. `body` — None, значит убрать кусок.
+
+    Снаружи меток файл чужой и не трогается: это единственный способ жить в
+    общем AGENTS.md и общем config.toml, не переписывая их целиком.
+    """
+    start = text.find(open_mark)
+    if start != -1:
+        finish = text.find(close_mark, start)
+        if finish == -1:
+            raise ValueError(f'в файле есть метка {open_mark}, а закрывающей {close_mark} нет')
+        finish += len(close_mark)
+        while finish < len(text) and text[finish] == '\n':
+            finish += 1
+        head, tail = text[:start], text[finish:]
+    elif body is None:
+        return text
+    else:
+        head, tail = (text if text.endswith('\n') or not text else text + '\n'), ''
+        if head and not head.endswith('\n\n'):
+            head += '\n'
+    if body is None:
+        return head + tail
+    block = f'{open_mark}\n{body.rstrip()}\n{close_mark}\n'
+    return head + block + ('\n' + tail.lstrip('\n') if tail.strip() else '')
+
+
+def section_body(text: str, open_mark: str, close_mark: str) -> str:
+    """Что лежит внутри размеченного куска. Куска нет — пусто."""
+    start = text.find(open_mark)
+    if start == -1:
+        return ''
+    finish = text.find(close_mark, start)
+    return '' if finish == -1 else text[start + len(open_mark):finish]
+
+
+# --- харнесы ---
+
+
+class Backend:
+    """Что у харнеса своё: куда ложатся правила и как пишется строка хука."""
+
+    name = ''
+    wrapper = None
+    settings_default = ''
+    project_dir = ''
+
+    def known_event(self, unified: str) -> bool:
+        raise NotImplementedError
+
+    def harness_event(self, unified: str) -> str:
+        raise NotImplementedError
+
+    def install_rules(self, slug, source, settings_root, substitutions) -> str:
+        raise NotImplementedError
+
+    def remove_place(self, place: str) -> bool:
+        path = Path(place)
+        if path.is_dir():
+            shutil.rmtree(path)
+            return True
+        return False
+
+    def register(self, records, settings_root, python, report) -> None:
+        raise NotImplementedError
+
+
+def rules_body(source: Path, substitutions: dict) -> str:
+    """Части rules одного модуля одним текстом: файлы по порядку имени."""
+    pieces = []
+    for path in sorted(source.rglob('*')):
+        if path.is_file() and path.suffix.lower() == '.md':
+            pieces.append(substitute(path.read_text(encoding='utf-8'), substitutions).strip())
+    return '\n\n'.join(pieces)
+
+
+def hook_events(manifest, backend) -> list[tuple[str, tuple[str, ...]]]:
+    """События модуля, сгруппированные по имени события харнеса.
+
+    Одно имя харнеса может нести несколько единых событий — у Claude это старт
+    сессии и «после сжатия». Тогда строка хука одна, а единых имён в ней
+    несколько: какое пришло, разбирает обёртка.
+    """
+    grouped: dict[str, list[str]] = {}
+    for unified in manifest.events:
+        if not backend.known_event(unified):
             continue
-        for token, value in substitutions.items():
-            text = text.replace(token, value)
-        path.write_text(text, encoding='utf-8')
+        grouped.setdefault(backend.harness_event(unified), []).append(unified)
+    return [(name, tuple(group)) for name, group in grouped.items()]
 
 
-def part_target(part: str, slug: str, settings_root: Path) -> Path:
-    """Куда ставится часть: туда, где её читает тот, кому она нужна."""
-    if part in (PART_HOOKS, PART_LIB, PART_DATA):
-        return modules_root(settings_root) / slug / part
-    if part in HARNESS_PARTS:
-        return settings_root / HARNESS_PARTS[part] / slug
-    raise ValueError(f'часть {part!r} не заведена; есть {list(PARTS)}')
+class ClaudeBackend(Backend):
+    name = 'claude'
+    wrapper = claude
+    settings_default = '~/.claude'
+    project_dir = '${CLAUDE_PROJECT_DIR}'
+
+    def known_event(self, unified: str) -> bool:
+        return unified in claude.CLAUDE_BY_EVENT
+
+    def harness_event(self, unified: str) -> str:
+        return claude.CLAUDE_BY_EVENT[unified]
+
+    def install_rules(self, slug, source, settings_root, substitutions) -> str:
+        where = settings_root / HARNESS_PARTS[PART_RULES] / slug
+        copy_tree(source, where, substitutions)
+        return str(where)
+
+    def line(self, python: str, settings_root: Path, slug: str, unified: tuple[str, ...]) -> dict:
+        """Строка на копию и событие: харнес запускает файл самого модуля."""
+        args = [str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY)]
+        for name in unified:
+            args += ['--event', name]
+        return {'type': 'command', 'command': python, 'args': args}
+
+    def register(self, records, settings_root, python, report) -> None:
+        hooks: dict[str, list] = {}
+        for slug, record in sorted(records.items()):
+            for harness_event, unified in record['lines']:
+                hooks.setdefault(harness_event, []).append(
+                    {'hooks': [self.line(python, settings_root, slug, tuple(unified))]}
+                )
+                report.lines.append((slug, ','.join(unified)))
+        settings_path = settings_root / SETTINGS_FILE
+        settings = read_json(settings_path, {})
+        kept = strip_jarvis_lines(settings.get('hooks', {}))
+        for harness_event, groups in hooks.items():
+            kept.setdefault(harness_event, []).extend(groups)
+        write_settings(settings_path, {**settings, 'hooks': kept})
 
 
-def hook_line(python: str, settings_root: Path, slug: str, unified_event: str) -> dict:
-    """Строка на модуль и событие: харнес запускает файл самого модуля."""
-    return {
-        'type': 'command',
-        'command': python,
-        'args': [
-            str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY),
-            '--event',
-            unified_event,
-        ],
-    }
+class CodexBackend(Backend):
+    name = 'codex'
+    wrapper = codex
+    settings_default = '~/.codex'
+    # У Codex своей переменной каталога проекта нет: хук получает `cwd` в
+    # событии, а в текстах частей подставляется рабочий каталог установки.
+    project_dir = '${PWD}'
+
+    def __init__(self, cli: str = 'codex', trust: bool = True) -> None:
+        self.cli = cli
+        self.trust = trust
+
+    def known_event(self, unified: str) -> bool:
+        return unified in codex.CODEX_BY_EVENT
+
+    def harness_event(self, unified: str) -> str:
+        return codex.CODEX_BY_EVENT[unified]
+
+    def agents_path(self, settings_root: Path) -> Path:
+        return settings_root / CODEX_AGENTS_FILE
+
+    def install_rules(self, slug, source, settings_root, substitutions) -> str:
+        path = self.agents_path(settings_root)
+        text = path.read_text(encoding='utf-8') if path.is_file() else ''
+        body = rules_body(source, substitutions)
+        write_atomic(
+            path,
+            section_replace(text, AGENTS_OPEN.format(slug=slug), AGENTS_CLOSE.format(slug=slug), body),
+        )
+        return f'{path}#{slug}'
+
+    def remove_place(self, place: str) -> bool:
+        if '#' not in place:
+            return super().remove_place(place)
+        where, slug = place.rsplit('#', 1)
+        path = Path(where)
+        if not path.is_file():
+            return False
+        text = path.read_text(encoding='utf-8')
+        stripped = section_replace(
+            text, AGENTS_OPEN.format(slug=slug), AGENTS_CLOSE.format(slug=slug), None
+        )
+        if stripped == text:
+            return False
+        write_atomic(path, stripped)
+        return True
+
+    def command(self, python: str, settings_root: Path, slug: str, unified: tuple[str, ...]) -> str:
+        parts = [python, str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY)]
+        for name in unified:
+            parts += ['--event', name]
+        return shlex.join(parts)
+
+    def register(self, records, settings_root, python, report) -> None:
+        blocks: dict[str, list[str]] = {}
+        ours: set[str] = set()
+        for slug, record in sorted(records.items()):
+            for harness_event, unified in record['lines']:
+                command = self.command(python, settings_root, slug, tuple(unified))
+                ours.add(command)
+                blocks.setdefault(harness_event, []).append(command)
+                report.lines.append((slug, ','.join(unified)))
+
+        body_lines = []
+        for harness_event, commands in sorted(blocks.items()):
+            for command in commands:
+                body_lines.append(f'[[hooks.{harness_event}]]')
+                body_lines.append('')
+                body_lines.append(f'[[hooks.{harness_event}.hooks]]')
+                body_lines.append('type = "command"')
+                body_lines.append(f'command = {toml_string(command)}')
+                body_lines.append(f'timeout = {CODEX_TIMEOUT_SEC}')
+                # Без этого ключа Codex режет ответ хука потолком в 2 500
+                # токенов, и снимок Craft приезжает обрезанным (дока). Там, где
+                # событие текста не принимает вовсе, ключ не пишется: Codex на
+                # него ругается предупреждением (замер 17.09.2026).
+                if harness_event in codex.CONTEXT_EVENTS:
+                    body_lines.append(f'additionalContextLimit = {CODEX_CONTEXT_LIMIT}')
+                body_lines.append('')
+
+        config_path = settings_root / CODEX_CONFIG_FILE
+        text = config_path.read_text(encoding='utf-8') if config_path.is_file() else ''
+        body = '\n'.join(body_lines).strip() or None
+        kept = ''.join(CODEX_STATE_TABLE.findall(section_body(text, CODEX_OPEN, CODEX_CLOSE)))
+        if kept:
+            body = ((body + '\n\n') if body else '') + kept.strip()
+        write_atomic(config_path, section_replace(text, CODEX_OPEN, CODEX_CLOSE, body or None))
+
+        if ours and self.trust:
+            trust_hooks(self.cli, config_path, settings_root, ours, report)
+
+
+def toml_string(value: str) -> str:
+    """Строка TOML в базовой форме. Кириллицу не экранируем: файл читают люди."""
+    escaped = value.replace('\\', '\\\\').replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+# --- доверие хукам Codex ---
+
+
+def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: float = 60.0) -> dict:
+    """Позвать `codex app-server` по JSON-RPC и собрать ответы по id.
+
+    Доверие хукам живёт не в конфиге, а в состоянии Codex, и пишется только его
+    же app-server: он считает хеш определения. Поэтому установщик разговаривает
+    с ним, а не подставляет хеш сам.
+    """
+    env = {**os.environ, 'CODEX_HOME': str(codex_home)}
+    process = subprocess.Popen(
+        [cli, 'app-server'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    answers: dict[int, dict] = {}
+    wanted = {request['id'] for request in requests if 'id' in request}
+
+    def read() -> None:
+        for line in process.stdout:
+            try:
+                message = json.loads(line.decode('utf-8', 'replace'))
+            except ValueError:
+                continue
+            if message.get('id') in wanted:
+                answers[message['id']] = message
+                if wanted <= set(answers):
+                    return
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    try:
+        for request in requests:
+            process.stdin.write((json.dumps({'jsonrpc': '2.0', **request}) + '\n').encode())
+            process.stdin.flush()
+        reader.join(timeout)
+    finally:
+        process.kill()
+        process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+    return answers
+
+
+def trust_hooks(cli: str, config_path: Path, codex_home: Path, ours: set[str], report: Report) -> None:
+    """Отметить свои строки хуков доверенными: хеш определения → hooks.state."""
+    handshake = [
+        {'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'jarvis-install', 'version': '3'}}},
+        {'method': 'initialized'},
+    ]
+    try:
+        listed = app_server_call(cli, codex_home, handshake + [{'id': 2, 'method': 'hooks/list', 'params': {}}])
+    except OSError as error:
+        report.warnings.append(
+            f'доверие строкам хуков Codex не проставлено: {cli} не запустился ({error}); '
+            'без доверия Codex такой хук молча не исполняет'
+        )
+        return
+    answer = listed.get(2, {}).get('result')
+    if answer is None:
+        report.warnings.append(
+            'доверие строкам хуков Codex не проставлено: app-server не ответил на hooks/list; '
+            'без доверия Codex такой хук молча не исполняет'
+        )
+        return
+
+    writes = []
+    trusted = []
+    for entry in answer.get('data', []):
+        for hook in entry.get('hooks', []):
+            if hook.get('command') not in ours or str(hook.get('sourcePath')) != str(config_path):
+                continue
+            key = hook['key']
+            if key in trusted:
+                continue
+            trusted.append(key)
+            for field_name, value in (('trusted_hash', hook['currentHash']), ('enabled', True)):
+                writes.append({
+                    'id': 100 + len(writes),
+                    'method': 'config/value/write',
+                    'params': {
+                        'keyPath': f'hooks.state."{key}".{field_name}',
+                        'mergeStrategy': 'upsert',
+                        'value': value,
+                    },
+                })
+    if not writes:
+        report.warnings.append(
+            'доверие строкам хуков Codex не проставлено: app-server не показал наших строк'
+        )
+        return
+    written = app_server_call(cli, codex_home, handshake + writes)
+    failed = [w['params']['keyPath'] for w in writes if 'result' not in written.get(w['id'], {})]
+    if failed:
+        report.warnings.append(f'доверие не записалось для ключей: {failed}')
+    for key in trusted:
+        report.parts.append(('codex', 'доверие', key))
+
+
+# --- строки хуков Claude в settings.json ---
 
 
 def is_jarvis_line(handler: dict) -> bool:
     args = handler.get('args') or []
-    return len(args) >= 2 and args[-2] == '--event' and str(args[0]).endswith(HOOK_ENTRY)
+    return len(args) >= 2 and '--event' in args and str(args[0]).endswith(HOOK_ENTRY)
 
 
 def strip_jarvis_lines(hooks: dict) -> dict:
@@ -169,21 +543,7 @@ def strip_jarvis_lines(hooks: dict) -> dict:
     return cleaned
 
 
-def write_settings(path: Path, settings: dict) -> None:
-    """Запись атомарная и с копией прежнего файла рядом."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        shutil.copy2(path, path.with_name(path.name + BACKUP_SUFFIX))
-    tmp = path.with_name(path.name + f'.tmp-{os.getpid()}')
-    tmp.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    os.replace(tmp, path)
-
-
-def read_json(path: Path, default):
-    if not path.exists():
-        return default
-    text = path.read_text(encoding='utf-8')
-    return json.loads(text) if text.strip() else default
+# --- набор модулей ---
 
 
 def discover(modules_dir: Path) -> list:
@@ -200,6 +560,18 @@ def discover(modules_dir: Path) -> list:
     return found
 
 
+def for_harness(manifests: list, harness: str) -> list:
+    """Модуль с полем harness существует только для него; без поля — для всех."""
+    return [m for m in manifests if m.harness in (None, harness)]
+
+
+def copies_of(manifest) -> list[str]:
+    """Slug'и копий модуля. Копия одна — slug тот же, без номера."""
+    if manifest.copies == 1:
+        return [manifest.slug]
+    return [manifest_reader.copy_slug(manifest.slug, number) for number in range(1, manifest.copies + 1)]
+
+
 def check_requires(manifests: list, report: Report) -> None:
     """Предупредить о том, чего модулю не хватает, ещё при установке."""
     for target in manifests:
@@ -211,39 +583,21 @@ def check_requires(manifests: list, report: Report) -> None:
             )
 
 
-def check_events(manifests: list, report: Report) -> None:
+def check_events(manifests: list, report: Report, backend: Backend | None = None) -> None:
     """Предупредить, в каком харнесе модуль не сработает."""
+    backend = backend or ClaudeBackend()
     for target in manifests:
         for event in target.events:
-            if event not in claude.CLAUDE_BY_EVENT:
+            if not backend.known_event(event):
                 report.warnings.append(
                     f'модуль «{target.slug}» стоит на событии «{event}», которого нет у харнеса '
-                    'claude: в нём модуль не сработает'
+                    f'{backend.name}: в нём модуль не сработает'
                 )
-
-
-def install_module(target, source_core: Path, settings_root: Path, state_dir: Path, report: Report) -> dict:
-    """Поставить все части одного модуля и вернуть его запись для журнала установки."""
-    module_dir = modules_root(settings_root) / target.slug
-    module_dir.mkdir(parents=True, exist_ok=True)
-    substitutions = placeholders(settings_root, module_dir, state_dir)
-    install_core(source_core, module_dir)
-
-    shutil.copy2(
-        target.path / manifest_reader.MANIFEST_NAME,
-        module_dir / manifest_reader.MANIFEST_NAME,
-    )
-    places = {}
-    for part in PARTS:
-        source = target.path / part
-        if not source.is_dir():
-            continue
-        where = part_target(part, target.slug, settings_root)
-        copy_tree(source, where, substitutions)
-        places[part] = str(where)
-        report.parts.append((target.slug, part, str(where)))
-    report.installed.append(target.slug)
-    return {'dir': str(module_dir), 'events': list(target.events), 'parts': places}
+            elif not backend.wrapper.SUPPORTED.get(event):
+                report.warnings.append(
+                    f'модуль «{target.slug}» стоит на событии «{event}», но харнес {backend.name} '
+                    f'на нём ответа не принимает: {backend.wrapper.UNSUPPORTED_NOTE[event]}'
+                )
 
 
 def install_core(source_core: Path, module_dir: Path) -> None:
@@ -254,11 +608,58 @@ def install_core(source_core: Path, module_dir: Path) -> None:
     shutil.copytree(source_core, target, ignore=IGNORED)
 
 
-def drop_vanished(previous: dict, records: dict, settings_root: Path, report: Report) -> None:
+def copy_manifest(target, slug: str, module_dir: Path) -> None:
+    """Шапка копии: переписывается только slug, остальное как в источнике."""
+    text = (target.path / manifest_reader.MANIFEST_NAME).read_text(encoding='utf-8')
+    if slug != target.slug:
+        text = text.replace(f'"{target.slug}"', f'"{slug}"', 1)
+        if manifest_reader.parse(text, where='копия шапки').slug != slug:
+            raise ValueError(f'шапку модуля «{target.slug}» не удалось переписать под копию {slug}')
+    (module_dir / manifest_reader.MANIFEST_NAME).write_text(text, encoding='utf-8')
+
+
+def install_module(target, slug, source_core, settings_root, state_dir, backend, report) -> dict:
+    """Поставить все части одной копии и вернуть её запись для журнала установки."""
+    module_dir = modules_root(settings_root) / slug
+    module_dir.mkdir(parents=True, exist_ok=True)
+    substitutions = placeholders(settings_root, module_dir, state_dir, backend.project_dir)
+    install_core(source_core, module_dir)
+    copy_manifest(target, slug, module_dir)
+
+    places = {}
+    for part in PARTS:
+        source = target.path / part
+        if not source.is_dir():
+            continue
+        if part in INSIDE_MODULE:
+            where = module_dir / part
+            copy_tree(source, where, substitutions)
+            place = str(where)
+        elif part == PART_RULES:
+            place = backend.install_rules(slug, source, settings_root, substitutions)
+        else:
+            where = settings_root / HARNESS_PARTS[part] / slug
+            copy_tree(source, where, substitutions)
+            place = str(where)
+        places[part] = place
+        report.parts.append((slug, part, place))
+    report.installed.append(slug)
+    return {
+        'dir': str(module_dir),
+        'events': list(target.events),
+        'lines': [[name, list(group)] for name, group in hook_events(target, backend)],
+        'parts': places,
+        'copies': target.copies,
+    }
+
+
+def drop_vanished(previous: dict, records: dict, backend: Backend, report: Report) -> None:
     """Убрать то, чего в источнике больше нет.
 
     Журнал прошлой установки — единственный способ отличить наши каталоги от
-    чужих: рядом в `skills` и `rules` лежит и то, что Влад положил сам.
+    чужих: рядом в `skills` и `rules` лежит и то, что Влад положил сам. Лишние
+    копии уходят тем же путём: копия — это обычная запись журнала, и когда
+    `copies` уменьшили, её в новом наборе просто нет.
     """
     for slug, record in previous.items():
         gone_module = slug not in records
@@ -266,9 +667,7 @@ def drop_vanished(previous: dict, records: dict, settings_root: Path, report: Re
             still_there = (not gone_module) and part in records[slug]['parts']
             if still_there and records[slug]['parts'][part] == where:
                 continue
-            path = Path(where)
-            if path.is_dir():
-                shutil.rmtree(path)
+            if backend.remove_place(where):
                 report.removed.append(where)
         if gone_module:
             module_dir = Path(record.get('dir', ''))
@@ -277,27 +676,25 @@ def drop_vanished(previous: dict, records: dict, settings_root: Path, report: Re
                 report.removed.append(str(module_dir))
 
 
-def register_lines(records: dict, settings_root: Path, python: str, report: Report) -> dict:
-    """Собрать блок hooks: по строке на модуль и событие."""
-    hooks: dict[str, list] = {}
-    for slug, record in sorted(records.items()):
-        for event in record['events']:
-            claude_event = claude.CLAUDE_BY_EVENT.get(event)
-            if claude_event is None:
-                continue
-            line = hook_line(python, settings_root, slug, event)
-            hooks.setdefault(claude_event, []).append({'hooks': [line]})
-            report.lines.append((slug, event))
-    return hooks
+def backend_for(args) -> Backend:
+    if args.harness == CodexBackend.name:
+        return CodexBackend(cli=args.codex_cli, trust=not args.no_trust)
+    return ClaudeBackend()
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Установщик модулей Джарвиса')
-    parser.add_argument('--settings-dir', default='~/.claude', help='каталог настроек харнеса')
+    parser.add_argument('--harness', default=ClaudeBackend.name,
+                        choices=[ClaudeBackend.name, CodexBackend.name],
+                        help='харнес, в который ставим')
+    parser.add_argument('--settings-dir', default=None, help='каталог настроек харнеса')
     parser.add_argument('--modules', default=str(REPO_ROOT / 'modules'), help='каталог модулей-источника')
     parser.add_argument('--core', default=str(REPO_ROOT / 'core'), help='исходник ядра')
     parser.add_argument('--state-dir', default=None, help='каталог состояния (для плейсхолдера)')
     parser.add_argument('--python', default=sys.executable, help='интерпретатор для строк хуков')
+    parser.add_argument('--codex-cli', default='codex', help='команда Codex для доверия хукам')
+    parser.add_argument('--no-trust', action='store_true',
+                        help='не ходить к app-server Codex за доверием строкам хуков')
     parser.add_argument('--dry-run', action='store_true', help='только проверить и показать отчёт')
     return parser.parse_args(argv)
 
@@ -305,25 +702,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def install(args: argparse.Namespace) -> Report:
     from jarvis.storage import default_state_dir
 
-    settings_root = Path(args.settings_dir).expanduser()
+    backend = backend_for(args)
+    settings_root = Path(args.settings_dir or backend.settings_default).expanduser()
     source_modules = Path(args.modules).expanduser()
     state_dir = Path(args.state_dir).expanduser() if args.state_dir else default_state_dir()
 
     report = Report()
-    manifests = discover(source_modules)
+    manifests = for_harness(discover(source_modules), backend.name)
     check_requires(manifests, report)
-    check_events(manifests, report)
+    check_events(manifests, report, backend)
     if args.dry_run:
-        report.installed.extend(m.slug for m in manifests)
+        for target in manifests:
+            report.installed.extend(copies_of(target))
         return report
 
     source_core = Path(args.core).expanduser()
-    records = {
-        m.slug: install_module(m, source_core, settings_root, state_dir, report) for m in manifests
-    }
+    records = {}
+    for target in manifests:
+        for slug in copies_of(target):
+            records[slug] = install_module(
+                target, slug, source_core, settings_root, state_dir, backend, report
+            )
 
     ledger = modules_root(settings_root).parent / LEDGER_FILE
-    drop_vanished(read_json(ledger, {}), records, settings_root, report)
+    drop_vanished(read_json(ledger, {}), records, backend, report)
 
     # Конфиг режимов источника переезжает вместе с модулями: коллега выключает
     # модуль в нём, и у всей команды тот молчит.
@@ -331,12 +733,7 @@ def install(args: argparse.Namespace) -> Report:
     if source_config.is_file():
         shutil.copy2(source_config, modules_root(settings_root) / mode_reader.SOURCE_CONFIG_NAME)
 
-    settings_path = settings_root / SETTINGS_FILE
-    settings = read_json(settings_path, {})
-    hooks = strip_jarvis_lines(settings.get('hooks', {}))
-    for claude_event, groups in register_lines(records, settings_root, args.python, report).items():
-        hooks.setdefault(claude_event, []).extend(groups)
-    write_settings(settings_path, {**settings, 'hooks': hooks})
+    backend.register(records, settings_root, args.python, report)
 
     ledger.write_text(json.dumps(records, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     return report
