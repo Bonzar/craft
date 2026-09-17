@@ -8,7 +8,12 @@
 внутри хода не перечитывается.
 
 Файлы всех трёх источников — плоский JSON «slug → включён»:
-`{"lock-irreversible-shell": false}`.
+`{"lock-irreversible-shell": false}`. Значение — настоящий булев JSON, и только
+он: строка «false» и ноль отклоняются с ошибкой, а не приводятся к логическому.
+Иначе написанное рукой «false» молча оставило бы замок включённым.
+
+Конфиг источника лежит в каталоге модулей, рядом с папками самих модулей, и
+переезжает вместе с ними: у коллеги без нашего установщика это тот же файл.
 """
 
 import json
@@ -23,6 +28,7 @@ SOURCE_CONFIG = 'source'
 SOURCE_DEFAULT = 'default'
 
 SESSION_MODES_FILE = 'modes.json'
+SOURCE_CONFIG_NAME = 'modules.json'
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,19 @@ def _read_flat(path: Path | None) -> dict:
     return value
 
 
+def _decide(slug: str, table: dict, source: str, where) -> ModeDecision | None:
+    """Решение источника про этот slug. Источник молчит — None."""
+    if slug not in table:
+        return None
+    value = table[slug]
+    if not isinstance(value, bool):
+        raise ValueError(
+            f'{where}: режим модуля «{slug}» задан значением {value!r}; '
+            'здесь должен быть настоящий true или false'
+        )
+    return ModeDecision(enabled=value, source=source)
+
+
 def read(
     slug: str,
     storage: Storage,
@@ -56,13 +75,14 @@ def read(
 ) -> ModeDecision:
     """Первый источник, который говорит про этот slug, и решает."""
     session_modes = storage.read_json(SESSION_MODES_FILE, zone=SESSION, default={}) or {}
-    for source, table in (
-        (SOURCE_SESSION, session_modes),
-        (SOURCE_PERSONAL, _read_flat(personal_config)),
-        (SOURCE_CONFIG, _read_flat(source_config)),
+    for source, table, where in (
+        (SOURCE_SESSION, session_modes, storage.path(SESSION_MODES_FILE, zone=SESSION)),
+        (SOURCE_PERSONAL, _read_flat(personal_config), personal_config),
+        (SOURCE_CONFIG, _read_flat(source_config), source_config),
     ):
-        if slug in table:
-            return ModeDecision(enabled=bool(table[slug]), source=source)
+        decision = _decide(slug, table, source, where)
+        if decision is not None:
+            return decision
     return ModeDecision(enabled=True, source=SOURCE_DEFAULT)
 
 

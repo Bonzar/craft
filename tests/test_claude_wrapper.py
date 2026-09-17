@@ -41,6 +41,18 @@ class EventTranslationTest(unittest.TestCase):
         self.assertEqual(event.tool_name, 'Bash')
         self.assertEqual(event.tool_input, {'command': 'ls'})
 
+    def test_tool_error_carries_the_error_text(self) -> None:
+        event = claude.to_event(
+            raw('PostToolUseFailure', tool_name='Bash', tool_input={'command': 'npm test'},
+                error='Exit code 1\nCannot find module')
+        )
+        self.assertEqual(event.event, ev.TOOL_ERROR)
+        self.assertEqual(event.tool_name, 'Bash')
+        self.assertIn('Exit code 1', event.error)
+
+    def test_events_without_an_error_leave_the_field_empty(self) -> None:
+        self.assertIsNone(claude.to_event(raw('UserPromptSubmit', prompt='привет')).error)
+
     def test_post_tool_carries_the_call_result(self) -> None:
         event = claude.to_event(raw('PostToolUse', tool_name='Write', tool_response={'type': 'create'}))
         self.assertEqual(event.tool_result, {'type': 'create'})

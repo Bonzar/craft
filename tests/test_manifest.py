@@ -47,6 +47,20 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.parse('slug = "probe"\nfor = ""\n')
 
+    def test_slug_is_limited_to_letters_digits_and_hyphen(self) -> None:
+        for slug in ('probe', 'shell-tree', 'probe2', 'A-1'):
+            self.assertEqual(m.parse(f'slug = "{slug}"').slug, slug)
+
+    def test_slug_that_is_not_a_safe_path_segment_is_rejected(self) -> None:
+        for slug in ('../../outside', '/etc/jarvis', 'a/b', 'a b', 'ядро', 'under_score', '.'):
+            with self.assertRaises(ValueError, msg=slug):
+                m.parse(f'slug = "{slug}"')
+
+    def test_core_folder_name_can_never_be_a_slug(self) -> None:
+        # Поэтому списка запрещённых имён и не нужно: `_core` не проходит разбор.
+        with self.assertRaises(ValueError):
+            m.parse('slug = "_core"')
+
     def test_load_reads_the_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp) / 'probe'

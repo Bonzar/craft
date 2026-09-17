@@ -2,21 +2,35 @@
 
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from jarvis.storage import Storage
 from jarvis.trace import Trace
 
-from . import INSTALLER, REPO_ROOT
+from . import CORE_DIR, INSTALLER, MODULES_DIR
 
-HOOK_ENTRY = 'jarvis_claude_hook.py'
+PROBE_ENTRY = ('probe', 'hooks', 'module.py')
 
 
-class HookEntryTest(unittest.TestCase):
+def prompt_event(session_id: str, text: str = 'привет') -> str:
+    return json.dumps(
+        {
+            'hook_event_name': 'UserPromptSubmit',
+            'session_id': session_id,
+            'cwd': '/work',
+            'prompt': text,
+        }
+    )
+
+
+class InstalledProbeTest(unittest.TestCase):
     """Проба ставится установщиком и проходит путь целиком."""
 
     @classmethod
@@ -24,52 +38,43 @@ class HookEntryTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmp.name)
         cls.settings_root = cls.root / 'settings'
-        cls.state_dir = cls.root / 'state'
+        cls.home = cls.root / 'home'
+        cls.home.mkdir()
         subprocess.run(
             [
                 sys.executable, str(INSTALLER),
                 '--settings-dir', str(cls.settings_root),
-                '--modules', str(REPO_ROOT / 'modules'),
-                '--lib', str(REPO_ROOT / 'lib'),
-                '--state-dir', str(cls.state_dir),
-                '--personal-config', str(cls.root / 'personal.json'),
+                '--modules', str(MODULES_DIR),
             ],
             check=True,
             capture_output=True,
         )
+        cls.entry = cls.settings_root.joinpath('jarvis', 'modules', *PROBE_ENTRY)
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
-    def fire(self, session_id: str, raw: dict, env: dict | None = None) -> subprocess.CompletedProcess:
-        hook = self.settings_root / 'jarvis' / 'lib' / HOOK_ENTRY
+    def fire(self, session_id: str, event: str = 'prompt', extra_env: dict | None = None):
         return subprocess.run(
-            [
-                sys.executable, str(hook),
-                '--module', 'probe',
-                '--event', 'prompt',
-                '--install-root', str(self.settings_root),
-            ],
-            input=json.dumps({'session_id': session_id, **raw}),
+            [sys.executable, str(self.entry), '--event', event],
+            input=prompt_event(session_id),
             text=True,
             capture_output=True,
-            env={'PATH': '/usr/bin:/bin', **(env or {})},
+            env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home), **(extra_env or {})},
         )
 
     def trace(self, session_id: str) -> list[dict]:
-        return Trace(Storage(self.state_dir, session_id)).read()
-
-    def prompt_event(self, text: str = 'привет') -> dict:
-        return {'hook_event_name': 'UserPromptSubmit', 'cwd': '/work', 'prompt': text}
+        state = self.home / '.local' / 'state' / 'jarvis'
+        return Trace(Storage(state, session_id)).read()
 
     def test_probe_answers_with_silence_and_prints_nothing(self) -> None:
-        result = self.fire('sess-silence', self.prompt_event())
+        result = self.fire('sess-silence')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '')
 
     def test_trace_lands_in_the_storage(self) -> None:
-        self.fire('sess-trace', self.prompt_event())
+        self.fire('sess-trace')
         lines = self.trace('sess-trace')
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[0]['module'], 'probe')
@@ -77,73 +82,86 @@ class HookEntryTest(unittest.TestCase):
         self.assertEqual(lines[0]['response'], 'silence')
 
     def test_autonomy_flag_reaches_the_trace(self) -> None:
-        self.fire('sess-auto', self.prompt_event(), env={'JARVIS_AUTONOMOUS': '1'})
+        self.fire('sess-auto', extra_env={'JARVIS_AUTONOMOUS': '1'})
         self.assertTrue(self.trace('sess-auto')[0]['autonomous'])
-        self.fire('sess-human', self.prompt_event())
+        self.fire('sess-human')
         self.assertFalse(self.trace('sess-human')[0]['autonomous'])
 
     def test_mode_source_reaches_the_trace(self) -> None:
-        storage = Storage(self.state_dir, 'sess-off')
-        storage.write_json('modes.json', {'probe': False})
-        self.fire('sess-off', self.prompt_event())
+        state = self.home / '.local' / 'state' / 'jarvis'
+        Storage(state, 'sess-off').write_json('modes.json', {'probe': False})
+        self.fire('sess-off')
         line = self.trace('sess-off')[0]
         self.assertFalse(line['mode_enabled'])
         self.assertEqual(line['mode_source'], 'session')
 
     def test_line_registered_on_another_event_is_a_defect_not_a_silent_pass(self) -> None:
-        hook = self.settings_root / 'jarvis' / 'lib' / HOOK_ENTRY
-        result = subprocess.run(
-            [
-                sys.executable, str(hook),
-                '--module', 'probe',
-                '--event', 'pre-tool',
-                '--install-root', str(self.settings_root),
-            ],
-            input=json.dumps({'session_id': 'sess-mismatch', **self.prompt_event()}),
-            text=True,
-            capture_output=True,
-        )
+        result = self.fire('sess-mismatch', event='pre-tool')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('разошлись с установкой', result.stderr)
 
+    def test_the_registered_line_points_at_the_module_own_file(self) -> None:
+        settings = json.loads((self.settings_root / 'settings.json').read_text(encoding='utf-8'))
+        args = settings['hooks']['UserPromptSubmit'][0]['hooks'][0]['args']
+        self.assertEqual(args[0], str(self.entry))
+        self.assertEqual(args[1:], ['--event', 'prompt'])
 
-class HookEntryInProcessTest(unittest.TestCase):
-    """Тот же вход, вызванный напрямую: проверяем печать ответа в форме Claude."""
 
-    def test_answer_is_printed_in_the_claude_form(self) -> None:
-        sys.path.insert(0, str(REPO_ROOT / 'lib'))
-        import jarvis_claude_hook as entry
+class RepositoryProbeTest(unittest.TestCase):
+    """Тот же модуль работает и без установщика — прямо из каталога модулей."""
 
+    def test_module_runs_from_a_plain_modules_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            settings_root, state_dir = root / 'settings', root / 'state'
-            modules = root / 'modules' / 'talker'
-            (modules / 'hooks').mkdir(parents=True)
-            (modules / 'module.toml').write_text('slug = "talker"\nevents = ["stop"]\n', encoding='utf-8')
-            (modules / 'hooks' / 'module.py').write_text(
-                'import jarvis\n\n\nclass Module(jarvis.Module):\n'
-                '    def handle(self, event, runtime):\n'
-                '        return jarvis.Block("доделай")\n',
-                encoding='utf-8',
-            )
-            subprocess.run(
-                [
-                    sys.executable, str(INSTALLER),
-                    '--settings-dir', str(settings_root),
-                    '--modules', str(root / 'modules'),
-                    '--lib', str(REPO_ROOT / 'lib'),
-                    '--state-dir', str(state_dir),
-                ],
-                check=True,
+            modules = root / 'modules'
+            modules.mkdir()
+            shutil.copytree(CORE_DIR, modules / '_core', ignore=shutil.ignore_patterns('__pycache__'))
+            shutil.copytree(MODULES_DIR / 'probe', modules / 'probe', ignore=shutil.ignore_patterns('__pycache__'))
+            result = subprocess.run(
+                [sys.executable, str(modules / 'probe' / 'hooks' / 'module.py'), '--event', 'prompt'],
+                input=prompt_event('sess-plain'),
+                text=True,
                 capture_output=True,
+                env={'PATH': '/usr/bin:/bin', 'HOME': str(root)},
             )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            state = root / '.local' / 'state' / 'jarvis'
+            self.assertEqual(Trace(Storage(state, 'sess-plain')).read()[0]['module'], 'probe')
+
+
+class RunHookTest(unittest.TestCase):
+    """Обёртка вызывается напрямую: проверяем печать ответа в форме Claude."""
+
+    def test_answer_is_printed_in_the_claude_form(self) -> None:
+        import jarvis
+        from jarvis.wrappers import claude
+
+        with tempfile.TemporaryDirectory() as tmp:
+            module_dir = Path(tmp) / 'modules' / 'talker'
+            (module_dir / 'hooks').mkdir(parents=True)
+            (module_dir / 'module.toml').write_text('slug = "talker"\nevents = ["stop"]\n', encoding='utf-8')
+            entry = module_dir / 'hooks' / 'module.py'
+            entry.write_text('', encoding='utf-8')
+
+            class Talker(jarvis.Module):
+                def handle(self, event, runtime):
+                    return jarvis.Block('доделай')
+
             out, err = io.StringIO(), io.StringIO()
-            code = entry.main(
-                ['--module', 'talker', '--event', 'stop', '--install-root', str(settings_root)],
-                stdin=io.StringIO(json.dumps({'hook_event_name': 'Stop', 'session_id': 'sess-1', 'cwd': '/w'})),
-                stdout=out,
-                stderr=err,
-            )
+            # Каталог состояния один и берётся от домашнего: уводим домашний в
+            # временный, чтобы тест не писал след в настоящее хранилище.
+            with mock.patch.dict(os.environ, {'HOME': tmp}):
+                code = claude.run_hook(
+                    str(entry),
+                    Talker,
+                    argv=['--event', 'stop'],
+                    stdin=io.StringIO(
+                        json.dumps({'hook_event_name': 'Stop', 'session_id': 'sess-1', 'cwd': '/w'})
+                    ),
+                    stdout=out,
+                    stderr=err,
+                    env={},
+                )
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(out.getvalue()), {'decision': 'block', 'reason': 'доделай'})
 

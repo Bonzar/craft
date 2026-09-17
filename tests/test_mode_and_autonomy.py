@@ -60,6 +60,28 @@ class ModeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.read()
 
+    def test_only_a_real_boolean_decides(self) -> None:
+        for value in (True, False):
+            self.write(self.personal, {'probe': value})
+            self.assertEqual(self.read().enabled, value)
+
+    def test_the_string_false_is_an_error_not_an_enabled_module(self) -> None:
+        # Раньше bool("false") давало True и молча оставляло замок включённым.
+        self.write(self.personal, {'probe': 'false'})
+        with self.assertRaises(ValueError) as caught:
+            self.read()
+        self.assertIn('probe', str(caught.exception))
+
+    def test_zero_and_null_are_errors_not_a_disabled_module(self) -> None:
+        for value in (0, None, '', 1, 'true'):
+            self.write(self.personal, {'probe': value})
+            with self.assertRaises(ValueError, msg=repr(value)):
+                self.read()
+
+    def test_a_bad_value_for_another_module_does_not_break_this_one(self) -> None:
+        self.write(self.personal, {'other': 'false', 'probe': True})
+        self.assertTrue(self.read('probe').enabled)
+
 
 class AutonomyTest(unittest.TestCase):
     def test_flag_set_to_one_means_no_human(self) -> None:

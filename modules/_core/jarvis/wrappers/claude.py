@@ -9,15 +9,21 @@ Claude. Логики решений тут нет: обёртка только �
 полем `note`, а не подменяется соседней формой ответа.
 """
 
+import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any, Mapping
 
 from .. import events as ev
+from .. import manifest as manifest_reader
+from .. import mode as mode_reader
 from .. import response as forms
 from ..event import Event
-from ..module import Delivery
+from ..module import Delivery, Module, run
+from ..registry import modules_dir
 from ..response import Response
+from ..storage import Storage, default_state_dir
 
 HARNESS = 'claude'
 
@@ -115,9 +121,14 @@ def to_event(raw: Mapping[str, Any]) -> Event:
         tool_name=raw.get('tool_name'),
         tool_input=raw.get('tool_input'),
         tool_result=raw.get('tool_response'),
+        error=raw.get('error'),
         prompt_text=raw.get('prompt'),
         human_answer=human_answer(raw),
     )
+
+
+# дока: личный конфиг режимов лежит в каталоге пользователя.
+PERSONAL_CONFIG = '~/.config/jarvis/modules.json'
 
 
 def _hook_specific(unified: str, fields: dict) -> dict:
@@ -183,3 +194,40 @@ def emit(delivery: Delivery, stdout=None, stderr=None) -> int:
     if delivery.payload is not None:
         stdout.write(json.dumps(delivery.payload, ensure_ascii=False))
     return delivery.exit_code
+
+
+def run_hook(entry_file: str, module_class: type[Module], argv: list[str] | None = None,
+             stdin=None, stdout=None, stderr=None, env: Mapping[str, str] | None = None) -> int:
+    """Провести модуль по одному событию Claude и напечатать ответ.
+
+    Это и есть обёртка: харнес запускает файл модуля, файл зовёт сюда. Путь к
+    себе файл знает, поэтому каталог модулей, ядро, шапка и соседи находятся от
+    него, без аргумента «корень установки» и без записи установщика.
+    """
+    parser = argparse.ArgumentParser(description='Обёртка Claude вокруг одного модуля Джарвиса')
+    parser.add_argument('--event', required=True, help='единое имя события, на которое стоит строка')
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+    stdin = sys.stdin if stdin is None else stdin
+    raw = json.loads(stdin.read())
+    event = to_event(raw)
+    if event.event != args.event:
+        raise ValueError(
+            f'строка зарегистрирована на «{args.event}», а пришло «{event.event}»: '
+            'настройки харнеса разошлись с установкой'
+        )
+
+    module_dir = Path(entry_file).resolve().parents[1]
+    manifest = manifest_reader.load(module_dir)
+    outcome = run(
+        module_class(),
+        manifest,
+        event,
+        Storage(default_state_dir(), event.session_id),
+        translate=lambda unified, response: translate(unified, response, slug=manifest.slug),
+        module_dir=module_dir,
+        personal_config=Path(PERSONAL_CONFIG).expanduser(),
+        source_config=modules_dir(module_dir) / mode_reader.SOURCE_CONFIG_NAME,
+        env=env,
+    )
+    return emit(outcome.delivery, stdout=stdout, stderr=stderr)

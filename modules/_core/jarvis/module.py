@@ -13,7 +13,6 @@ from . import confirm, mode, registry
 from .autonomy import is_autonomous
 from .event import Event
 from .events import PROMPT
-from .install import Install
 from .manifest import Manifest, resolve
 from .response import Context, Response, Silence
 from .storage import Storage
@@ -38,15 +37,13 @@ class Runtime:
 
     storage: Storage
     manifest: Manifest
+    module_dir: Path
     autonomous: bool
     requires: Mapping[str, list[Manifest]]
-    install: Install | None = None
 
-    def library(self, slug: str):
-        """Библиотечный модуль по slug. Не поставлен — None."""
-        if self.install is None:
-            return None
-        return registry.find(slug, self.install)
+    def library(self, requirement: str):
+        """Библиотечный модуль по требованию из requires. Нет такого — None."""
+        return registry.find(requirement, self.module_dir)
 
     def ask_confirmation(self, action: str, phrase: str) -> None:
         confirm.request(self.storage, self.manifest.slug, action, phrase)
@@ -79,28 +76,13 @@ def _reason_of(response: Response) -> str | None:
     return None
 
 
-def _installed_manifests(install: Install | None) -> list[Manifest]:
-    if install is None:
-        return []
-    return [
-        Manifest(
-            slug=slug,
-            events=tuple(record.get('events', ())),
-            requires=tuple(record.get('requires', ())),
-            serves=record.get('for'),
-            path=Path(record['dir']) if record.get('dir') else None,
-        )
-        for slug, record in install.modules.items()
-    ]
-
-
-def _requires_gap(manifest: Manifest, event: Event, install: Install | None):
+def _requires_gap(manifest: Manifest, event: Event, module_dir: Path):
     """Чего модулю не хватает из requires. Хватает всего — None.
 
     Модуль, у которого на событии не нашлось ничего из requires, говорит об
     этом в чате и молчит: называет, чего нет, и своего хода не делает.
     """
-    found, missing = resolve(manifest.requires, _installed_manifests(install))
+    found, missing = resolve(manifest.requires, registry.neighbours(module_dir))
     if not missing:
         return None, found
     listed = ', '.join(missing)
@@ -156,7 +138,7 @@ def run(
     event: Event,
     storage: Storage,
     translate: Callable[[str, Response], Delivery],
-    install: Install | None = None,
+    module_dir: Path,
     personal_config: Path | None = None,
     source_config: Path | None = None,
     env: Mapping[str, str] | None = None,
@@ -169,7 +151,7 @@ def run(
     if not decision.enabled:
         return recorder.finish(Silence(), MODE_OFF_REASON)
 
-    gap, found = _requires_gap(manifest, event, install)
+    gap, found = _requires_gap(manifest, event, module_dir)
     if gap is not None:
         return recorder.finish(*gap)
 
@@ -179,18 +161,22 @@ def run(
     runtime = Runtime(
         storage=storage,
         manifest=manifest,
+        module_dir=Path(module_dir),
         autonomous=autonomous,
         requires=found,
-        install=install,
     )
     try:
         response = module.handle(event, runtime)
+        if not isinstance(response, Response):
+            raise TypeError(
+                f'модуль {manifest.slug} вернул {type(response).__name__}, '
+                'а не форму единого ответа'
+            )
     except Exception as error:
+        # И падение внутри handle, и ответ не той формы — одинаково событие без
+        # ответа: строка следа пишется до проброса, иначе по следу это
+        # неотличимо от хука, который вовсе не запускался.
         recorder.crashed(error)
         raise
 
-    if not isinstance(response, Response):
-        raise TypeError(
-            f'модуль {manifest.slug} вернул {type(response).__name__}, а не форму единого ответа'
-        )
     return recorder.finish(response, _reason_of(response))

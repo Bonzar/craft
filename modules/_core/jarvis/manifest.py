@@ -17,6 +17,7 @@
 """
 
 import fnmatch
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,10 @@ from typing import Iterable, Mapping
 from .events import ALL as ALL_EVENTS
 
 MANIFEST_NAME = 'module.toml'
+# Slug становится именем папки в каталоге модулей, поэтому он ограничен
+# буквами, цифрами и дефисом. Списка запрещённых имён нет и не нужно: папка
+# ядра называется с подчёркивания, а его в slug быть не может.
+SLUG_PATTERN = re.compile(r'^[A-Za-z0-9-]+$')
 FIELDS = ('slug', 'for', 'events', 'requires')
 FAMILY_SUFFIX = '-*'
 
@@ -61,6 +66,11 @@ def parse(text: str, where: str = MANIFEST_NAME, path: Path | None = None) -> Ma
     slug = raw.get('slug')
     if not isinstance(slug, str) or not slug.strip():
         raise ValueError(f'{where}: обязательное поле slug пусто или не строка')
+    slug = slug.strip()
+    if not SLUG_PATTERN.match(slug):
+        raise ValueError(
+            f'{where}: slug {slug!r} — только буквы, цифры и дефис: он становится именем папки'
+        )
 
     events = _string_list(raw, 'events', where)
     unknown_events = [event for event in events if event not in ALL_EVENTS]
@@ -74,7 +84,7 @@ def parse(text: str, where: str = MANIFEST_NAME, path: Path | None = None) -> Ma
         raise ValueError(f'{where}: поле for либо непустая строка, либо его нет')
 
     return Manifest(
-        slug=slug.strip(),
+        slug=slug,
         events=events,
         requires=_string_list(raw, 'requires', where),
         serves=serves.strip() if isinstance(serves, str) else None,

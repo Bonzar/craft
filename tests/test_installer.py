@@ -3,14 +3,13 @@
 import importlib.machinery
 import importlib.util
 import json
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from jarvis import install as install_reader
-
-from . import INSTALLER, REPO_ROOT
+from . import CORE_DIR, INSTALLER
 
 
 def load_installer():
@@ -34,12 +33,13 @@ class InstallerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.settings_root = self.root / 'settings'
-        self.modules_dir = self.root / 'modules'
+        self.source = self.root / 'source'
         self.state_dir = self.root / 'state'
-        self.modules_dir.mkdir()
+        self.source.mkdir()
+        shutil.copytree(CORE_DIR, self.source / '_core', ignore=shutil.ignore_patterns('__pycache__'))
 
     def add_module(self, slug: str, header: str, parts: dict[str, dict[str, str]] | None = None) -> Path:
-        folder = self.modules_dir / slug
+        folder = self.source / slug
         folder.mkdir()
         (folder / 'module.toml').write_text(header, encoding='utf-8')
         for part, files in (parts or {}).items():
@@ -52,14 +52,15 @@ class InstallerTest(unittest.TestCase):
     def run_installer(self, *extra: str):
         argv = [
             '--settings-dir', str(self.settings_root),
-            '--modules', str(self.modules_dir),
-            '--lib', str(REPO_ROOT / 'lib'),
+            '--modules', str(self.source),
             '--state-dir', str(self.state_dir),
-            '--personal-config', str(self.root / 'personal.json'),
             '--python', '/usr/bin/python3',
             *extra,
         ]
         return installer.install(installer.parse_args(argv))
+
+    def modules_root(self) -> Path:
+        return installer.modules_root(self.settings_root)
 
     def settings(self) -> dict:
         return json.loads((self.settings_root / 'settings.json').read_text(encoding='utf-8'))
@@ -77,15 +78,18 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(len(self.jarvis_handlers('UserPromptSubmit')), 1)
         self.assertEqual(len(self.jarvis_handlers('PreToolUse')), 1)
 
-    def test_line_names_the_module_the_event_and_the_install_root(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
+    def test_line_runs_the_module_own_file_and_names_the_event(self) -> None:
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n', {'hooks': {'module.py': ''}})
         self.run_installer()
         args = self.jarvis_handlers('UserPromptSubmit')[0]['args']
-        self.assertIn('--module', args)
-        self.assertEqual(args[args.index('--module') + 1], 'probe')
-        self.assertEqual(args[args.index('--event') + 1], 'prompt')
-        self.assertEqual(args[args.index('--install-root') + 1], str(self.settings_root))
-        self.assertTrue(args[0].endswith(installer.HOOK_ENTRY))
+        self.assertEqual(args[0], str(self.modules_root() / 'probe' / 'hooks' / 'module.py'))
+        self.assertEqual(args[1:], ['--event', 'prompt'])
+
+    def test_line_carries_no_install_root(self) -> None:
+        # Модуль находит ядро и соседей от своего файла, аргумент ему не нужен.
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
+        self.run_installer()
+        self.assertNotIn('--install-root', self.jarvis_handlers('UserPromptSubmit')[0]['args'])
 
     def test_reinstall_does_not_leave_two_paths_to_one_module(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
@@ -122,37 +126,25 @@ class InstallerTest(unittest.TestCase):
     def test_write_leaves_no_temporary_file(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
         self.run_installer()
-        leftovers = [p.name for p in self.settings_root.iterdir() if '.tmp-' in p.name]
-        self.assertEqual(leftovers, [])
+        self.assertEqual([p.name for p in self.settings_root.iterdir() if '.tmp-' in p.name], [])
 
-    # --- сборка библиотеки ---
+    # --- раскладка ---
 
-    def test_library_is_assembled_once(self) -> None:
+    def test_core_lands_next_to_the_module_folders(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
         self.run_installer()
-        lib_dir = install_reader.jarvis_root(self.settings_root) / 'lib'
-        self.assertTrue((lib_dir / 'jarvis' / '__init__.py').exists())
-        self.assertTrue((lib_dir / installer.HOOK_ENTRY).exists())
-        cores = list(install_reader.jarvis_root(self.settings_root).rglob('jarvis/storage.py'))
-        self.assertEqual(len(cores), 1, 'копий ядра быть не должно')
+        self.assertTrue((self.modules_root() / '_core' / 'jarvis' / 'storage.py').is_file())
+        self.assertTrue((self.modules_root() / 'probe' / 'module.toml').is_file())
 
-    def test_lib_part_of_a_module_joins_the_assembled_library(self) -> None:
-        self.add_module(
-            'shell-tree',
-            'slug = "shell-tree"\n',
-            {'lib': {'__init__.py': 'VALUE = 1\n'}},
-        )
+    def test_core_is_not_taken_for_a_module(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n')
+        report = self.run_installer()
+        self.assertEqual(report.installed, ['probe'])
+
+    def test_library_part_stays_inside_its_own_module(self) -> None:
+        self.add_module('shell-tree', 'slug = "shell-tree"\n', {'lib': {'__init__.py': 'VALUE = 1\n'}})
         self.run_installer()
-        installed = install_reader.load(self.settings_root)
-        self.assertEqual(installed.lib_parts, {'shell-tree': 'shell-tree'})
-        self.assertTrue((installed.lib_dir / 'shell-tree' / '__init__.py').exists())
-
-    def test_bytecode_is_not_carried_into_the_install(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
-        self.run_installer()
-        self.assertEqual(list(self.settings_root.rglob('__pycache__')), [])
-
-    # --- части модуля ---
+        self.assertTrue((self.modules_root() / 'shell-tree' / 'lib' / '__init__.py').is_file())
 
     def test_each_part_goes_where_it_is_read(self) -> None:
         self.add_module(
@@ -168,38 +160,84 @@ class InstallerTest(unittest.TestCase):
             },
         )
         self.run_installer()
-        jarvis_root = install_reader.jarvis_root(self.settings_root)
-        self.assertTrue((jarvis_root / 'modules' / 'probe' / 'hooks' / 'module.py').exists())
-        self.assertTrue((jarvis_root / 'modules' / 'probe' / 'data' / 'list.json').exists())
-        self.assertTrue((jarvis_root / 'lib' / 'probe' / '__init__.py').exists())
-        self.assertTrue((self.settings_root / 'skills' / 'probe' / 'SKILL.md').exists())
-        self.assertTrue((self.settings_root / 'agents' / 'probe' / 'reviewer.md').exists())
-        self.assertTrue((self.settings_root / 'rules' / 'probe' / 'rule.md').exists())
-
-    def test_header_travels_with_the_module(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
-        self.run_installer()
-        module_dir = install_reader.load(self.settings_root).module_dir('probe')
-        self.assertTrue((module_dir / 'module.toml').exists())
+        for path in (
+            self.modules_root() / 'probe' / 'hooks' / 'module.py',
+            self.modules_root() / 'probe' / 'data' / 'list.json',
+            self.modules_root() / 'probe' / 'lib' / '__init__.py',
+            self.settings_root / 'skills' / 'probe' / 'SKILL.md',
+            self.settings_root / 'agents' / 'probe' / 'reviewer.md',
+            self.settings_root / 'rules' / 'probe' / 'rule.md',
+        ):
+            self.assertTrue(path.is_file(), path)
 
     def test_parts_are_installed_independently(self) -> None:
         self.add_module('only-skill', 'slug = "only-skill"\n', {'skill': {'SKILL.md': '# один скилл\n'}})
         report = self.run_installer()
-        self.assertEqual([part for _, part, _ in report.parts], ['skill'])
+        self.assertEqual([part for slug, part, _ in report.parts if slug == 'only-skill'], ['skill'])
         self.assertEqual(report.lines, [])
+
+    def test_bytecode_is_not_carried_into_the_install(self) -> None:
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
+        self.run_installer()
+        self.assertEqual(list(self.settings_root.rglob('__pycache__')), [])
 
     def test_harness_paths_are_substituted_for_placeholders(self) -> None:
         self.add_module(
             'probe',
             'slug = "probe"\nevents = ["prompt"]\n',
-            {'skill': {'SKILL.md': 'Библиотека: {{JARVIS_LIB}}\nСостояние: {{JARVIS_STATE}}\nПроект: {{HARNESS_PROJECT_DIR}}\n'}},
+            {'skill': {'SKILL.md': 'Ядро: {{JARVIS_CORE}}\nСостояние: {{JARVIS_STATE}}\nПроект: {{HARNESS_PROJECT_DIR}}\n'}},
         )
         self.run_installer()
         text = (self.settings_root / 'skills' / 'probe' / 'SKILL.md').read_text(encoding='utf-8')
-        self.assertIn(str(install_reader.jarvis_root(self.settings_root) / 'lib'), text)
+        self.assertIn(str(self.modules_root() / '_core'), text)
         self.assertIn(str(self.state_dir), text)
         self.assertIn('${CLAUDE_PROJECT_DIR}', text)
         self.assertNotIn('{{', text)
+
+    def test_source_mode_config_travels_with_the_modules(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n')
+        (self.source / 'modules.json').write_text('{"probe": false}', encoding='utf-8')
+        self.run_installer()
+        installed = self.modules_root() / 'modules.json'
+        self.assertEqual(json.loads(installed.read_text(encoding='utf-8')), {'probe': False})
+
+    # --- уборка того, чего в источнике больше нет ---
+
+    def test_a_part_removed_from_the_source_is_removed_from_the_install(self) -> None:
+        folder = self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n', {'skill': {'SKILL.md': '# старый\n'}})
+        self.run_installer()
+        skill = self.settings_root / 'skills' / 'probe'
+        self.assertTrue(skill.is_dir())
+        shutil.rmtree(folder / 'skill')
+        report = self.run_installer()
+        self.assertFalse(skill.exists())
+        self.assertIn(str(skill), report.removed)
+
+    def test_a_module_removed_from_the_source_leaves_nothing_behind(self) -> None:
+        folder = self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n', {'skill': {'SKILL.md': '# старый\n'}})
+        self.run_installer()
+        shutil.rmtree(folder)
+        self.add_module('other', 'slug = "other"\n')
+        self.run_installer()
+        self.assertFalse((self.settings_root / 'skills' / 'probe').exists())
+        self.assertFalse((self.modules_root() / 'probe').exists())
+        self.assertEqual(self.jarvis_handlers('UserPromptSubmit'), [])
+
+    def test_the_users_own_skills_are_not_touched(self) -> None:
+        own = self.settings_root / 'skills' / 'my-own'
+        own.mkdir(parents=True)
+        (own / 'SKILL.md').write_text('# моё\n', encoding='utf-8')
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '# модульный\n'}})
+        self.run_installer()
+        self.run_installer()
+        self.assertTrue((own / 'SKILL.md').is_file())
+
+    def test_a_part_that_stayed_is_not_removed(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '# на месте\n'}})
+        self.run_installer()
+        report = self.run_installer()
+        self.assertEqual(report.removed, [])
+        self.assertTrue((self.settings_root / 'skills' / 'probe' / 'SKILL.md').is_file())
 
     # --- предупреждения ---
 
@@ -219,22 +257,29 @@ class InstallerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_installer()
 
+    def test_unsafe_slug_is_rejected_before_any_filesystem_work(self) -> None:
+        self.add_module('evil', 'slug = "../../outside"\n')
+        with self.assertRaises(ValueError):
+            self.run_installer()
+        self.assertFalse(self.settings_root.exists())
+
     def test_dry_run_changes_nothing(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
         self.run_installer('--dry-run')
-        self.assertFalse((self.settings_root / 'settings.json').exists())
+        self.assertFalse(self.settings_root.exists())
 
-    def test_install_manifest_records_what_the_library_needs(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\nrequires = []\n')
+    def test_ledger_records_what_was_installed(self) -> None:
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n', {'skill': {'SKILL.md': '#\n'}})
         self.run_installer()
-        installed = install_reader.load(self.settings_root)
-        self.assertEqual(installed.state_dir, self.state_dir)
-        self.assertEqual(installed.source_config, self.modules_dir / installer.SOURCE_CONFIG_NAME)
-        self.assertEqual(installed.modules['probe']['events'], ['prompt'])
+        ledger = json.loads(
+            (self.modules_root().parent / installer.LEDGER_FILE).read_text(encoding='utf-8')
+        )
+        self.assertEqual(ledger['probe']['events'], ['prompt'])
+        self.assertIn('skill', ledger['probe']['parts'])
 
 
 class UnknownEventWarningTest(unittest.TestCase):
-    """Событие вне каталога харнеса режется ещё разбором шапки, а поверх —
+    """Событие вне каталога харнеса режется разбором шапки, а поверх —
     предупреждением установщика для события, которое в каталог войдёт позже."""
 
     def test_event_unknown_to_the_harness_is_reported(self) -> None:

@@ -22,5 +22,6 @@ class Event:
     tool_name: str | None = None
     tool_input: Mapping[str, Any] | None = None
     tool_result: Any = None
+    error: str | None = None
     prompt_text: str | None = None
     human_answer: Any = None

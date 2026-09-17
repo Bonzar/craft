@@ -1,10 +1,11 @@
 """Ядро общего кода, которое есть у каждого модуля.
 
 Хранилище, режим, признак автономии, след, сверка подтверждения, поиск модуля
-по slug. Установщик собирает библиотеку один раз, копий нет.
+по slug. Ядро лежит папкой `_core` в каталоге модулей, рядом с самими модулями:
+модуль находит его от собственного файла, установщик для этого не нужен.
 """
 
-from . import confirm, events, install, manifest, mode, registry, response, storage, trace
+from . import confirm, events, manifest, mode, registry, response, storage, trace
 from .autonomy import ENV_AUTONOMOUS, is_autonomous
 from .event import Event
 from .module import Delivery, Module, Outcome, Runtime, run
@@ -42,7 +43,6 @@ __all__ = [
     'UpdatedInput',
     'confirm',
     'events',
-    'install',
     'is_autonomous',
     'manifest',
     'mode',
