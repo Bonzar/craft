@@ -110,7 +110,7 @@ class HarnessAndCopiesTest(unittest.TestCase):
 
     def jarvis_handlers(self, claude_event: str) -> list[dict]:
         groups = self.settings()['hooks'].get(claude_event, [])
-        return [h for group in groups for h in group['hooks'] if installer.is_jarvis_line(h)]
+        return [h for group in groups for h in group['hooks'] if installer.is_jarvis_line(h, self.modules_root())]
 
     def config_toml(self) -> str:
         return (self.settings_root / 'config.toml').read_text(encoding='utf-8')
@@ -269,3 +269,69 @@ class HarnessAndCopiesTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ForeignHooksTest(unittest.TestCase):
+    """Чужое в настройках харнеса установщик не трогает."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.settings_root = self.root / 'settings'
+        self.source = self.root / 'source'
+        self.source.mkdir()
+
+    def run_installer(self, *extra: str):
+        return installer.install(installer.parse_args([
+            '--settings-dir', str(self.settings_root),
+            '--modules', str(self.source),
+            '--core', str(CORE_SOURCE),
+            '--python', '/usr/bin/python3',
+            *extra,
+        ]))
+
+    def add_module(self, slug: str, header: str) -> None:
+        folder = self.source / slug
+        folder.mkdir()
+        (folder / 'module.toml').write_text(header, encoding='utf-8')
+
+    def test_a_foreign_module_py_hook_is_not_ours_and_survives(self) -> None:
+        # Чужой хук может называться module.py и брать --event: признак нашего —
+        # путь в наш каталог модулей, а не имя файла.
+        foreign = {'type': 'command', 'command': '/usr/bin/python3',
+                   'args': ['/home/vlad/scripts/module.py', '--event', 'custom', '--verbose']}
+        self.settings_root.mkdir(parents=True)
+        (self.settings_root / 'settings.json').write_text(
+            json.dumps({'hooks': {'UserPromptSubmit': [{'hooks': [foreign]}]}}), encoding='utf-8'
+        )
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
+        self.run_installer()
+        self.run_installer()
+        settings = json.loads((self.settings_root / 'settings.json').read_text(encoding='utf-8'))
+        handlers = [h for g in settings['hooks']['UserPromptSubmit'] for h in g['hooks']]
+        self.assertIn(foreign, handlers)
+        self.assertEqual(len(handlers), 2)  # чужой плюс наш, и ни одного лишнего
+
+    def test_our_own_line_is_recognised_as_ours(self) -> None:
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
+        self.run_installer()
+        settings = json.loads((self.settings_root / 'settings.json').read_text(encoding='utf-8'))
+        ours = [h for g in settings['hooks']['UserPromptSubmit'] for h in g['hooks']]
+        modules_dir = installer.modules_root(self.settings_root)
+        self.assertTrue(all(installer.is_jarvis_line(h, modules_dir) for h in ours))
+
+    def test_a_copy_slug_that_collides_with_a_module_stops_the_install(self) -> None:
+        # `base` с copies = 2 порождает `base-1`: модуль с таким slug'ом занял бы
+        # ту же папку и ту же запись журнала, и половина набора пропала бы молча.
+        self.add_module('base', 'slug = "base"\nevents = ["prompt"]\ncopies = 2\n')
+        self.add_module('base-1', 'slug = "base-1"\nevents = ["prompt"]\n')
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        self.assertIn('base-1', str(caught.exception))
+        self.assertFalse(self.settings_root.exists())
+
+    def test_copies_that_do_not_collide_install(self) -> None:
+        self.add_module('base', 'slug = "base"\nevents = ["prompt"]\ncopies = 2\n')
+        self.add_module('other', 'slug = "other"\nevents = ["prompt"]\n')
+        self.assertEqual(sorted(self.run_installer().installed), ['base-1', 'base-2', 'other'])

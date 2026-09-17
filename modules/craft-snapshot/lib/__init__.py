@@ -6,9 +6,15 @@
 блока деревом, а инструмент уже знает и базовый URL, и повторы, и таймауты.
 
 Хуку нельзя висеть: он держит старт сессии. Поэтому повторов здесь нет
-(`--retries 0 --rl-retries 0`), таймаут короткий, а ошибка API — это пустой
-текст и строка в журнале сессии, а не падение. Пустой стартовый контекст хуже
-полного, но лучше, чем сессия, которая не стартует.
+(`--retries 0 --rl-retries 0`), а ошибка API — это пустой текст и строка в
+журнале сессии, а не падение. Пустой стартовый контекст хуже полного, но лучше,
+чем сессия, которая не стартует.
+
+Бюджет один на весь сбор, а не на вызов: вызовов два, и два независимых
+таймаута сложились бы в сумму, которой не хватает ни у харнеса (у Claude хук
+живёт минуту), ни у остальных копий базы — они ждут первую тоже минуту. Поэтому
+`TOTAL_BUDGET` заведомо меньше этой минуты: что не успело за него, не успело
+совсем, и это видно по журналу.
 
 В репозитории снимка не лежит и лежать не может: это живая память о жизни
 Влада, и гвард `tools/no-snapshot-files.js` следит за этим отдельно.
@@ -32,9 +38,12 @@ BINARY_NAME = 'craft-sync'
 DEFAULT_BINARY = '~/.local/bin/craft-sync'
 JOURNAL_FILE = 'craft-snapshot.jsonl'
 
-# Замер 17.09.2026: правила по «Связям» читаются ~13 с, память ~1,3 с.
+# Замер 17.09.2026: правила по «Связям» читаются ~13 с, память ~1,3 с. Бюджет
+# на весь сбор — 35 с: вдвое с лишним больше замера и заметно меньше минуты,
+# которую держат и хук Claude, и ожидание остальных копий базы.
+TOTAL_BUDGET = 35.0
+# Столько ждёт один запрос внутри craft-sync; общий бюджет всё равно главнее.
 CALL_TIMEOUT = 20
-PROCESS_TIMEOUT = 45
 
 RULES_TITLE = '# Правила базы Craft'
 MEMORY_TITLE = '# Память агента'
@@ -51,17 +60,24 @@ def binary() -> str | None:
     return shutil.which(BINARY_NAME)
 
 
-def read(tool: str, block_id: str, follow: bool) -> tuple[str, str | None]:
-    """Один вызов инструмента. Вернёт текст либо причину, по которой его нет."""
+def read(tool: str, block_id: str, follow: bool, left: float) -> tuple[str, str | None]:
+    """Один вызов инструмента в рамках оставшегося бюджета.
+
+    Вернёт текст либо причину, по которой его нет. Бюджет кончился — вызова не
+    делаем вовсе: висеть хуку нельзя, а полупрочитанный снимок нам не нужен.
+    """
+    if left <= 0:
+        return '', f'бюджет сбора в {TOTAL_BUDGET:.0f} с исчерпан до этого вызова'
     command = [
         tool, '--markdown', block_id,
-        '--retries', '0', '--rl-retries', '0', '--timeout', str(CALL_TIMEOUT),
+        '--retries', '0', '--rl-retries', '0',
+        '--timeout', str(min(CALL_TIMEOUT, max(1, int(left)))),
     ]
     if follow:
         command.append('--follow-links')
     try:
         done = subprocess.run(
-            command, capture_output=True, text=True, timeout=PROCESS_TIMEOUT, check=False
+            command, capture_output=True, text=True, timeout=left, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as failure:
         return '', f'{type(failure).__name__}: {failure}'
@@ -91,11 +107,12 @@ def provide(event, storage) -> str:
 
     pieces = []
     problems = {}
+    deadline = time.monotonic() + TOTAL_BUDGET
     for title, block_id, follow in (
         (RULES_TITLE, RULES_ROOT, True),
         (MEMORY_TITLE, MEMORY_ROOT, False),
     ):
-        text, problem = read(tool, block_id, follow)
+        text, problem = read(tool, block_id, follow, deadline - time.monotonic())
         if problem:
             problems[block_id] = problem
         if text:

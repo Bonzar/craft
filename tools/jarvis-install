@@ -312,7 +312,7 @@ class ClaudeBackend(Backend):
                 report.lines.append((slug, ','.join(unified)))
         settings_path = settings_root / SETTINGS_FILE
         settings = read_json(settings_path, {})
-        kept = strip_jarvis_lines(settings.get('hooks', {}))
+        kept = strip_jarvis_lines(settings.get('hooks', {}), modules_root(settings_root))
         for harness_event, groups in hooks.items():
             kept.setdefault(harness_event, []).extend(groups)
         write_settings(settings_path, {**settings, 'hooks': kept})
@@ -522,18 +522,27 @@ def trust_hooks(cli: str, config_path: Path, codex_home: Path, ours: set[str], r
 # --- строки хуков Claude в settings.json ---
 
 
-def is_jarvis_line(handler: dict) -> bool:
+def is_jarvis_line(handler: dict, modules_dir: Path | str) -> bool:
+    """Наша ли это строка хука.
+
+    Признак — путь внутрь нашего каталога модулей, а не имя файла: `module.py`
+    с аргументом `--event` может оказаться и чужим хуком, а чужое из настроек
+    убирать нельзя.
+    """
     args = handler.get('args') or []
-    return len(args) >= 2 and '--event' in args and str(args[0]).endswith(HOOK_ENTRY)
+    if len(args) < 2 or '--event' not in args:
+        return False
+    entry = Path(str(args[0]))
+    return entry.name == HOOK_ENTRY and entry.is_relative_to(Path(modules_dir))
 
 
-def strip_jarvis_lines(hooks: dict) -> dict:
+def strip_jarvis_lines(hooks: dict, modules_dir: Path | str) -> dict:
     """Убрать прошлые строки Джарвиса: два пути к одному модулю — дефект установки."""
     cleaned = {}
     for event, groups in hooks.items():
         kept_groups = []
         for group in groups:
-            handlers = [h for h in group.get('hooks', []) if not is_jarvis_line(h)]
+            handlers = [h for h in group.get('hooks', []) if not is_jarvis_line(h, modules_dir)]
             if handlers:
                 kept_groups.append({**group, 'hooks': handlers})
             elif not group.get('hooks'):
@@ -570,6 +579,25 @@ def copies_of(manifest) -> list[str]:
     if manifest.copies == 1:
         return [manifest.slug]
     return [manifest_reader.copy_slug(manifest.slug, number) for number in range(1, manifest.copies + 1)]
+
+
+def expand(manifests: list) -> list[tuple]:
+    """Развернуть набор в копии и проверить, что slug'и не столкнулись.
+
+    Уникальности исходных slug'ов мало: `base` с `copies = 2` порождает
+    `base-1`, и модуль с таким slug'ом в наборе занял бы ту же папку и ту же
+    запись журнала. Ставить в этом случае нельзя ничего: половина набора молча
+    переписала бы другую половину.
+    """
+    plan = [(manifest, slug) for manifest in manifests for slug in copies_of(manifest)]
+    slugs = [slug for _, slug in plan]
+    clashes = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if clashes:
+        raise ValueError(
+            'Slug копий столкнулись с другими модулями набора: '
+            f'{clashes}; переименуй модуль или измени copies'
+        )
+    return plan
 
 
 def check_requires(manifests: list, report: Report) -> None:
@@ -711,18 +739,16 @@ def install(args: argparse.Namespace) -> Report:
     manifests = for_harness(discover(source_modules), backend.name)
     check_requires(manifests, report)
     check_events(manifests, report, backend)
+    plan = expand(manifests)
     if args.dry_run:
-        for target in manifests:
-            report.installed.extend(copies_of(target))
+        report.installed.extend(slug for _, slug in plan)
         return report
 
     source_core = Path(args.core).expanduser()
-    records = {}
-    for target in manifests:
-        for slug in copies_of(target):
-            records[slug] = install_module(
-                target, slug, source_core, settings_root, state_dir, backend, report
-            )
+    records = {
+        slug: install_module(target, slug, source_core, settings_root, state_dir, backend, report)
+        for target, slug in plan
+    }
 
     ledger = modules_root(settings_root).parent / LEDGER_FILE
     drop_vanished(read_json(ledger, {}), records, backend, report)
