@@ -6,6 +6,7 @@
 до следа.
 """
 
+import importlib.util
 import json
 import os
 import stat
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 from jarvis.storage import Storage
@@ -67,10 +69,12 @@ class CodexLoginTest(unittest.TestCase):
         self.auth = self.home / '.codex' / 'auth.json'
 
     def fire(self, session_id: str, auth: str | None = FAKE_AUTH, source: str = 'startup',
-             home: Path | None = None):
+             home: Path | None = None, codex_home: str | None = None):
         environment = {'PATH': '/usr/bin:/bin', 'HOME': str(home or self.home)}
         if auth is not None:
             environment['CODEX_AUTH_JSON'] = auth
+        if codex_home is not None:
+            environment['CODEX_HOME'] = codex_home
         return subprocess.run(
             [sys.executable, str(self.entry), '--harness', 'claude', '--event', 'session-start'],
             input=session_event(session_id, source),
@@ -100,8 +104,10 @@ class CodexLoginTest(unittest.TestCase):
         self.assertEqual(self.reason('sess-lay'), 'разложен')
 
     def test_b_the_same_content_is_left_where_it_lies(self) -> None:
-        self.auth.parent.mkdir(parents=True)
+        # Права сразу узкие: этот тест про содержимое, права проверяют соседи.
+        self.auth.parent.mkdir(parents=True, mode=0o700)
         self.auth.write_text(FAKE_AUTH, encoding='utf-8')
+        self.auth.chmod(0o600)
         before = self.auth.stat().st_ino
 
         self.fire('sess-same')
@@ -165,6 +171,69 @@ class CodexLoginTest(unittest.TestCase):
         self.assertNotIn(MARKER, written)
         self.assertNotIn(FAKE_AUTH, written)
 
+    # --- CODEX_HOME ---
+
+    def test_k_codex_home_wins_over_home(self) -> None:
+        elsewhere = self.home / 'другой-дом'
+
+        self.fire('sess-codex-home', codex_home=str(elsewhere))
+
+        self.assertEqual((elsewhere / 'auth.json').read_text(encoding='utf-8'), FAKE_AUTH)
+        self.assertFalse(self.auth.exists(), 'в HOME/.codex писать было незачем')
+        self.assertEqual(self.reason('sess-codex-home'), 'разложен')
+        self.assertEqual(stat.S_IMODE(elsewhere.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((elsewhere / 'auth.json').stat().st_mode), 0o600)
+
+    def test_l_an_empty_codex_home_falls_back_to_home(self) -> None:
+        self.fire('sess-codex-home-empty', codex_home='')
+
+        self.assertEqual(self.auth.read_text(encoding='utf-8'), FAKE_AUTH)
+        self.assertEqual(self.reason('sess-codex-home-empty'), 'разложен')
+
+    # --- сравнение байтами ---
+
+    def test_m_a_file_that_is_not_utf8_counts_as_different(self) -> None:
+        self.auth.parent.mkdir(parents=True)
+        self.auth.write_bytes(b'\xff\xfe\x00 broken bytes')
+
+        self.fire('sess-broken')
+
+        self.assertEqual(self.reason('sess-broken'), 'разложен')
+        self.assertEqual(self.auth.read_text(encoding='utf-8'), FAKE_AUTH)
+
+    # --- права при совпавшем содержимом ---
+
+    def test_n_wide_file_permissions_are_narrowed(self) -> None:
+        self.auth.parent.mkdir(parents=True, mode=0o700)
+        self.auth.write_text(FAKE_AUTH, encoding='utf-8')
+        self.auth.chmod(0o644)
+
+        self.fire('sess-wide-file')
+
+        self.assertEqual(self.reason('sess-wide-file'), 'уже на месте, права поправлены')
+        self.assertEqual(stat.S_IMODE(self.auth.stat().st_mode), 0o600)
+
+    def test_o_a_wide_directory_is_narrowed_too(self) -> None:
+        self.auth.parent.mkdir(parents=True, mode=0o755)
+        self.auth.write_text(FAKE_AUTH, encoding='utf-8')
+        self.auth.chmod(0o600)
+
+        self.fire('sess-wide-dir')
+
+        self.assertEqual(self.reason('sess-wide-dir'), 'уже на месте, права поправлены')
+        self.assertEqual(stat.S_IMODE(self.auth.parent.stat().st_mode), 0o700)
+
+    def test_p_narrow_permissions_are_left_alone(self) -> None:
+        self.auth.parent.mkdir(parents=True, mode=0o700)
+        self.auth.write_text(FAKE_AUTH, encoding='utf-8')
+        self.auth.chmod(0o400)
+
+        self.fire('sess-narrow-file')
+
+        self.assertEqual(self.reason('sess-narrow-file'), 'уже на месте')
+        self.assertEqual(stat.S_IMODE(self.auth.stat().st_mode), 0o400,
+                         'уже узкие права не расширяются до 600')
+
     # --- события, на которых модуль не работает ---
 
     def test_i_after_compact_is_silent_and_lays_nothing_out(self) -> None:
@@ -188,6 +257,55 @@ class CodexLoginTest(unittest.TestCase):
         event, args = lines[0]
         self.assertEqual(event, 'SessionStart')
         self.assertEqual(args[1:], ['--harness', 'claude', '--event', 'session-start'])
+
+
+def load_module():
+    """Функции модуля без запуска: точка входа под `if __name__`, ядро в пути."""
+    loader = SourceFileLoader('codex_login', str(MODULES_DIR / SLUG / 'hooks' / 'module.py'))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+class NarrowTest(unittest.TestCase):
+    """Сужение прав отдельно: исход «не удалось» держится на этом OSError.
+
+    Заставить chmod упасть целым прогоном не выходит — тесты идут под root, а
+    ему файловая система не отказывает. Поэтому проверяется само звено: что
+    беда уходит наверх OSError'ом, а его ловит тот же except, что и остальные
+    ошибки раскладки (прогон этого исхода — в тесте про занятый каталог).
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = load_module()
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def test_wider_permissions_are_narrowed(self) -> None:
+        path = self.root / 'wide'
+        path.write_text('x', encoding='utf-8')
+        path.chmod(0o644)
+
+        self.assertTrue(self.module.narrow(path, 0o600))
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_equal_and_narrower_permissions_are_left_alone(self) -> None:
+        for mode in (0o600, 0o400):
+            with self.subTest(oct(mode)):
+                path = self.root / f'mode-{mode:o}'
+                path.write_text('x', encoding='utf-8')
+                path.chmod(mode)
+
+                self.assertFalse(self.module.narrow(path, 0o600))
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), mode)
+
+    def test_a_failure_goes_up_as_oserror(self) -> None:
+        with self.assertRaises(OSError):
+            self.module.narrow(self.root / 'нет такого', 0o600)
 
 
 if __name__ == '__main__':

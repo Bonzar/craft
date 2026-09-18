@@ -28,6 +28,7 @@ setup-скрипт не приезжают (дамп имён переменны
 """
 
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -39,6 +40,9 @@ from jarvis import wrappers  # noqa: E402
 # Настройка окружения с содержимым auth.json целиком.
 ENV_AUTH = 'CODEX_AUTH_JSON'
 ENV_HOME = 'HOME'
+# Штатный способ показать codex другой каталог входа. Задан — читать и писать
+# нужно именно там.
+ENV_CODEX_HOME = 'CODEX_HOME'
 
 CODEX_DIR = '.codex'
 AUTH_FILE = 'auth.json'
@@ -49,24 +53,52 @@ FILE_MODE = 0o600
 
 LAID = 'разложен'
 ALREADY = 'уже на месте'
+ALREADY_NARROWED = 'уже на месте, права поправлены'
 NO_ENV = 'переменной нет'
 FAILED = 'не удалось: {reason}'
 NO_HOME = f'в окружении нет {ENV_HOME}'
 
 
-def auth_path(home: str | None) -> Path:
-    """Куда ложится вход. Дом берём из HOME процесса, как его видит сам codex."""
+def auth_path(env) -> Path:
+    """Куда ложится вход: CODEX_HOME, если задана, иначе HOME/.codex.
+
+    Порядок тот же, что у самого codex. Писать в HOME при заданной CODEX_HOME
+    значило бы разложить вход мимо того места, откуда codex его читает, — и
+    отчитаться «разложен», то есть признаком, не различающим исходы.
+    """
+    codex_home = env.get(ENV_CODEX_HOME)
+    if codex_home:
+        return Path(codex_home) / AUTH_FILE
+    home = env.get(ENV_HOME)
     if not home:
         raise ValueError(NO_HOME)
     return Path(home) / CODEX_DIR / AUTH_FILE
 
 
-def current(path: Path) -> str | None:
-    """Что лежит по пути сейчас. Файла нет — None; прочие беды идут наверх."""
+def current(path: Path) -> bytes | None:
+    """Что лежит по пути сейчас, байтами. Файла нет — None.
+
+    Байтами, а не текстом: файл с не-UTF-8 байтами — это файл, который от
+    переменной отличается, а текстовое чтение бросало бы на нём
+    UnicodeDecodeError и уводило такой файл в исход «не удалось» вместо
+    перезаписи.
+    """
     try:
-        return path.read_text(encoding='utf-8')
+        return path.read_bytes()
     except FileNotFoundError:
         return None
+
+
+def narrow(path: Path, mode: int) -> bool:
+    """Сузить права до нужных, если они шире. Вернёт, менялось ли что-то.
+
+    Шире — значит есть биты сверх нужных. Уже более узкие права не трогаем:
+    сузить их до наших было бы расширением.
+    """
+    if not stat.S_IMODE(path.stat().st_mode) & ~mode:
+        return False
+    path.chmod(mode)
+    return True
 
 
 def lay_out(path: Path, value: str) -> None:
@@ -79,8 +111,8 @@ def lay_out(path: Path, value: str) -> None:
     tmp = path.with_name(f'{path.name}.tmp-{os.getpid()}')
     descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
     try:
-        with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
-            handle.write(value)
+        with os.fdopen(descriptor, 'wb') as handle:
+            handle.write(value.encode('utf-8'))
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -95,9 +127,14 @@ class Module(jarvis.Module):
         if not value:
             return jarvis.Silence(reason=NO_ENV)
         try:
-            path = auth_path(os.environ.get(ENV_HOME))
-            if current(path) == value:
-                return jarvis.Silence(reason=ALREADY)
+            path = auth_path(os.environ)
+            if current(path) == value.encode('utf-8'):
+                # Содержимое то, а права могли положить чужие руки: файл с
+                # живым токеном обязан остаться закрытым, и «уже на месте»
+                # без этой проверки означало бы «не смотрел».
+                narrowed = narrow(path, FILE_MODE)
+                narrowed = narrow(path.parent, DIR_MODE) or narrowed
+                return jarvis.Silence(reason=ALREADY_NARROWED if narrowed else ALREADY)
             lay_out(path, value)
         except (OSError, ValueError) as failure:
             # Ошибка не глотается: причина уходит в след с контекстом. Наружу
