@@ -1,0 +1,286 @@
+"""Часть skill на обоих харнесах: соседние файлы и таблица возможностей.
+
+Раскладка части skill проверяется отдельно от остальных частей, потому что у
+неё есть две вещи, которых нет ни у кого: список соседних файлов модуля и
+подстановка единых slug возможностей харнеса.
+"""
+
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+from . import CORE_SOURCE, MODULES_DIR
+from .test_installer import installer
+
+
+class SkillInstallCase(unittest.TestCase):
+    """Общая подготовка: пустой каталог настроек и набор модулей из временной папки."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.settings_root = self.root / 'settings'
+        self.source = self.root / 'source'
+        self.state_dir = self.root / 'state'
+        self.source.mkdir()
+
+    def add_module(self, slug: str, header: str, parts: dict[str, dict[str, str]] | None = None) -> Path:
+        folder = self.source / slug
+        folder.mkdir()
+        (folder / 'module.toml').write_text(header, encoding='utf-8')
+        for part, files in (parts or {}).items():
+            part_dir = folder / part
+            part_dir.mkdir(parents=True, exist_ok=True)
+            for name, text in files.items():
+                (part_dir / name).write_text(text, encoding='utf-8')
+        return folder
+
+    def run_installer(self, *extra: str):
+        argv = [
+            '--settings-dir', str(self.settings_root),
+            '--modules', str(self.source),
+            '--core', str(CORE_SOURCE),
+            '--state-dir', str(self.state_dir),
+            '--python', '/usr/bin/python3',
+            *extra,
+        ]
+        return installer.install(installer.parse_args(argv))
+
+    def run_codex(self):
+        return self.run_installer('--harness', 'codex', '--no-trust')
+
+    def skill_dir(self, slug: str) -> Path:
+        return self.settings_root / 'skills' / slug
+
+    def agents_md(self) -> str:
+        return (self.settings_root / 'AGENTS.md').read_text(encoding='utf-8')
+
+
+class SkillPartTest(SkillInstallCase):
+    """Раскладка части skill и список соседних файлов модуля."""
+
+    def test_claude_reads_skills_from_its_settings_dir(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '# скилл\n'}})
+        self.run_installer()
+        self.assertTrue((self.skill_dir('probe') / 'SKILL.md').is_file())
+
+    def test_codex_reads_skills_from_its_home(self) -> None:
+        # Замер 18.09.2026, строки codex-cli 0.155.0: «Installs into
+        # $CODEX_HOME/skills/<skill-name> (defaults to ~/.codex/skills)».
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '# скилл\n'}})
+        self.run_codex()
+        self.assertTrue((self.skill_dir('probe') / 'SKILL.md').is_file())
+
+    def test_neighbouring_files_of_the_part_travel_with_skill_md(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n',
+                        {'skill': {'SKILL.md': '# скилл\n', 'reference.md': '# справка\n'}})
+        self.run_installer()
+        self.assertTrue((self.skill_dir('probe') / 'reference.md').is_file())
+
+    # --- список соседних файлов модуля ---
+
+    def test_a_declared_file_lands_beside_skill_md(self) -> None:
+        self.add_module('craft-call', 'slug = "craft-call"\n',
+                        {'rules': {'craft-tool.md': '# механика\n'},
+                         'skill': {'SKILL.md': '# скилл\n', 'files': 'rules/craft-tool.md\n'}})
+        self.run_installer()
+        self.assertTrue((self.skill_dir('craft-call') / 'craft-tool.md').is_file())
+
+    def test_a_declared_file_has_one_source(self) -> None:
+        # Правка руками в двух местах исключена: копию кладёт установщик, и она
+        # совпадает с единственным источником побайтно.
+        text = '# механика\n\nдлинный текст правил\n'
+        self.add_module('craft-call', 'slug = "craft-call"\n',
+                        {'rules': {'craft-tool.md': text},
+                         'skill': {'SKILL.md': '# скилл\n', 'files': 'rules/craft-tool.md\n'}})
+        self.run_installer()
+        beside = self.skill_dir('craft-call') / 'craft-tool.md'
+        self.assertEqual(beside.read_bytes(), (self.source / 'craft-call' / 'rules' / 'craft-tool.md').read_bytes())
+
+    def test_the_list_itself_is_not_installed(self) -> None:
+        self.add_module('craft-call', 'slug = "craft-call"\n',
+                        {'rules': {'craft-tool.md': '# механика\n'},
+                         'skill': {'SKILL.md': '# скилл\n', 'files': 'rules/craft-tool.md\n'}})
+        self.run_installer()
+        self.assertFalse((self.skill_dir('craft-call') / 'files').exists())
+
+    def test_comments_and_blank_lines_in_the_list_are_skipped(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n',
+                        {'rules': {'rule.md': '# правило\n'},
+                         'skill': {'SKILL.md': '#\n', 'files': '# зачем\n\nrules/rule.md\n\n'}})
+        self.run_installer()
+        self.assertTrue((self.skill_dir('probe') / 'rule.md').is_file())
+
+    def test_a_declared_file_that_does_not_exist_stops_the_install(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n',
+                        {'skill': {'SKILL.md': '#\n', 'files': 'rules/missing.md\n'}})
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        self.assertIn('rules/missing.md', str(caught.exception))
+
+    def test_a_declared_path_outside_the_module_stops_the_install(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n',
+                        {'skill': {'SKILL.md': '#\n', 'files': '../other/secret.md\n'}})
+        self.add_module('other', 'slug = "other"\n', {'skill': {'SKILL.md': '#\n'}})
+        (self.source / 'other' / 'secret.md').write_text('чужое\n', encoding='utf-8')
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        self.assertIn('за папку модуля', str(caught.exception))
+
+    def test_two_declared_files_with_one_name_stop_the_install(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n',
+                        {'rules': {'rule.md': 'один\n'},
+                         'data': {'rule.md': 'другой\n'},
+                         'skill': {'SKILL.md': '#\n', 'files': 'rules/rule.md\ndata/rule.md\n'}})
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        self.assertIn('rule.md', str(caught.exception))
+
+    def test_a_declared_file_may_not_overwrite_a_file_of_the_part(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n',
+                        {'rules': {'note.md': 'из правил\n'},
+                         'skill': {'SKILL.md': '#\n', 'note.md': 'своё\n', 'files': 'rules/note.md\n'}})
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        self.assertIn('note.md', str(caught.exception))
+
+    def test_reinstall_with_declared_files_changes_nothing(self) -> None:
+        self.add_module('craft-call', 'slug = "craft-call"\n',
+                        {'rules': {'craft-tool.md': '# механика\n'},
+                         'skill': {'SKILL.md': '# скилл\n', 'files': 'rules/craft-tool.md\n'}})
+        self.run_installer()
+        before = {p.relative_to(self.settings_root): p.read_bytes()
+                  for p in sorted(self.skill_dir('craft-call').rglob('*')) if p.is_file()}
+        report = self.run_installer()
+        after = {p.relative_to(self.settings_root): p.read_bytes()
+                 for p in sorted(self.skill_dir('craft-call').rglob('*')) if p.is_file()}
+        self.assertEqual(before, after)
+        self.assertEqual(report.removed, [])
+
+    def test_a_declared_file_is_dropped_when_the_list_drops_it(self) -> None:
+        folder = self.add_module('craft-call', 'slug = "craft-call"\n',
+                                 {'rules': {'craft-tool.md': '# механика\n'},
+                                  'skill': {'SKILL.md': '#\n', 'files': 'rules/craft-tool.md\n'}})
+        self.run_installer()
+        (folder / 'skill' / 'files').write_text('', encoding='utf-8')
+        self.run_installer()
+        self.assertFalse((self.skill_dir('craft-call') / 'craft-tool.md').exists())
+
+    def test_only_the_skill_part_reads_the_list(self) -> None:
+        # У части agents файл `files` — обычный файл, а не объявление.
+        self.add_module('probe', 'slug = "probe"\n',
+                        {'rules': {'rule.md': '# правило\n'},
+                         'agents': {'reviewer.md': '#\n', 'files': 'rules/rule.md\n'}})
+        self.run_installer()
+        agents = self.settings_root / 'agents' / 'probe'
+        self.assertTrue((agents / 'files').is_file())
+        self.assertFalse((agents / 'rule.md').exists())
+
+
+class HarnessSlugTest(SkillInstallCase):
+    """Единый slug возможности в текстовых частях: форма своя у каждого харнеса."""
+
+    def test_ask_becomes_the_claude_form_in_a_skill(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': 'Спросить {{ASK}}.\n'}})
+        self.run_installer()
+        text = (self.skill_dir('probe') / 'SKILL.md').read_text(encoding='utf-8')
+        self.assertEqual(text, 'Спросить инструментом AskUserQuestion.\n')
+
+    def test_ask_becomes_the_codex_form_in_a_skill(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': 'Спросить {{ASK}}.\n'}})
+        self.run_codex()
+        text = (self.skill_dir('probe') / 'SKILL.md').read_text(encoding='utf-8')
+        self.assertEqual(text, 'Спросить текстом в ответе, варианты строками.\n')
+
+    def test_ask_becomes_the_claude_form_in_rules(self) -> None:
+        self.add_module('behavior', 'slug = "behavior"\n',
+                        {'rules': {'behavior.md': 'Вопрос задаётся {{ASK}}.\n'}})
+        self.run_installer()
+        text = (self.settings_root / 'rules' / 'behavior' / 'behavior.md').read_text(encoding='utf-8')
+        self.assertEqual(text, 'Вопрос задаётся инструментом AskUserQuestion.\n')
+
+    def test_ask_becomes_the_codex_form_in_agents_md(self) -> None:
+        self.add_module('behavior', 'slug = "behavior"\n',
+                        {'rules': {'behavior.md': 'Вопрос задаётся {{ASK}}.\n'}})
+        self.run_codex()
+        self.assertIn('Вопрос задаётся текстом в ответе, варианты строками.', self.agents_md())
+        self.assertNotIn('{{ASK}}', self.agents_md())
+
+    def test_ask_is_substituted_in_a_declared_file_too(self) -> None:
+        self.add_module('craft-call', 'slug = "craft-call"\n',
+                        {'rules': {'craft-tool.md': 'Спросить {{ASK}}.\n'},
+                         'skill': {'SKILL.md': '#\n', 'files': 'rules/craft-tool.md\n'}})
+        self.run_installer()
+        beside = (self.skill_dir('craft-call') / 'craft-tool.md').read_text(encoding='utf-8')
+        self.assertEqual(beside, 'Спросить инструментом AskUserQuestion.\n')
+
+    def test_an_unknown_slug_in_a_text_part_stops_the_install(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': 'Позвать {{SHOUT}}.\n'}})
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        message = str(caught.exception)
+        self.assertIn('probe', message)
+        self.assertIn('{{SHOUT}}', message)
+
+    def test_an_unknown_slug_in_rules_stops_the_install_on_both_harnesses(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'rules': {'rule.md': 'Позвать {{SHOUT}}.\n'}})
+        for extra in ((), ('--harness', 'codex', '--no-trust')):
+            with self.assertRaises(ValueError) as caught:
+                self.run_installer(*extra)
+            self.assertIn('{{SHOUT}}', str(caught.exception))
+
+    def test_an_unknown_slug_in_agents_stops_the_install(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'agents': {'reviewer.md': '{{SHOUT}}\n'}})
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        self.assertIn('{{SHOUT}}', str(caught.exception))
+
+    def test_code_of_a_module_is_left_alone(self) -> None:
+        # В коде имена харнеса переводит обёртка, поэтому фигурные скобки в
+        # хуках и данных — не наше дело: шаблон чужого формата остаётся как был.
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n',
+                        {'hooks': {'module.py': 'TEMPLATE = "{{NAME}}"\n'},
+                         'data': {'case.json': '{"text": "{{NAME}}"}\n'}})
+        self.run_installer()
+        modules = installer.modules_root(self.settings_root) / 'probe'
+        self.assertIn('{{NAME}}', (modules / 'hooks' / 'module.py').read_text(encoding='utf-8'))
+        self.assertIn('{{NAME}}', (modules / 'data' / 'case.json').read_text(encoding='utf-8'))
+
+
+class RepositoryModulesTest(unittest.TestCase):
+    """Набор самого репозитория: один источник у механики Craft."""
+
+    def test_craft_call_keeps_the_mechanics_in_one_file(self) -> None:
+        skill = MODULES_DIR / 'craft-call' / 'skill'
+        listed = [line.strip() for line in (skill / 'files').read_text(encoding='utf-8').splitlines()
+                  if line.strip() and not line.startswith('#')]
+        self.assertEqual(listed, ['rules/craft-tool.md'])
+        self.assertFalse((skill / 'craft-tool.md').exists(),
+                         'копия механики внутри части skill — это вторая правка руками')
+
+    def test_every_module_of_the_repository_installs(self) -> None:
+        # Неизвестный slug и битый список соседних файлов ловятся здесь, на
+        # настоящем наборе, а не в живой сессии.
+        for harness in ('claude', 'codex'):
+            with tempfile.TemporaryDirectory() as tmp:
+                argv = [
+                    '--harness', harness,
+                    '--settings-dir', str(Path(tmp) / 'settings'),
+                    '--modules', str(MODULES_DIR),
+                    '--core', str(CORE_SOURCE),
+                    '--state-dir', str(Path(tmp) / 'state'),
+                    '--python', '/usr/bin/python3',
+                ]
+                if harness == 'codex':
+                    argv.append('--no-trust')
+                report = installer.install(installer.parse_args(argv))
+                self.assertIn('craft-call', report.installed)
+                beside = Path(tmp) / 'settings' / 'skills' / 'craft-call' / 'craft-tool.md'
+                self.assertEqual(beside.read_bytes(),
+                                 (MODULES_DIR / 'craft-call' / 'rules' / 'craft-tool.md').read_bytes())
+
+
+if __name__ == '__main__':
+    unittest.main()
