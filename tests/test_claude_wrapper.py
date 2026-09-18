@@ -5,7 +5,17 @@ import unittest
 
 from jarvis import events as ev
 from jarvis import response as forms
-from jarvis.response import Allow, Ask, Block, Context, Deny, Question, Silence, UpdatedInput
+from jarvis.response import (
+    Allow,
+    Ask,
+    Block,
+    Context,
+    Deny,
+    Question,
+    Silence,
+    UpdatedDisplay,
+    UpdatedInput,
+)
 from jarvis.wrappers import claude
 
 
@@ -187,10 +197,29 @@ class ThreeLaidInEventsTest(unittest.TestCase):
             self.assertFalse(delivery.supported, event)
             self.assertIsNone(delivery.payload)
 
-    def test_model_message_takes_no_answer_at_all(self) -> None:
+    def test_model_message_takes_only_the_replaced_display(self) -> None:
         for response in (Context('текст'), Allow(''), Deny('нет'), Block('нет')):
             delivery = claude.translate(ev.MODEL_MESSAGE, response)
             self.assertFalse(delivery.supported, response.kind)
+
+    def test_the_replaced_display_becomes_display_content(self) -> None:
+        delivery = claude.translate(ev.MODEL_MESSAGE, UpdatedDisplay('ПОДМЕНА'))
+        self.assertTrue(delivery.supported)
+        self.assertEqual(
+            delivery.payload,
+            {'hookSpecificOutput': {'hookEventName': 'MessageDisplay',
+                                    'displayContent': 'ПОДМЕНА'}},
+        )
+
+    def test_the_replaced_display_lives_only_on_the_model_message(self) -> None:
+        # Подменять показ больше негде: на остальных событиях харнес поля
+        # показа не даёт, и обёртка это называет, а не подменяет контекстом.
+        for event in (ev.SESSION_START, ev.PROMPT, ev.PRE_TOOL, ev.POST_TOOL,
+                      ev.STOP, ev.PERMISSION_REQUEST, ev.SUBAGENT_START):
+            delivery = claude.translate(event, UpdatedDisplay('ПОДМЕНА'))
+            self.assertFalse(delivery.supported, event)
+            self.assertIsNone(delivery.payload)
+            self.assertTrue(delivery.note)
 
     def test_silence_stays_silence_on_all_three(self) -> None:
         for event in (ev.PERMISSION_REQUEST, ev.SUBAGENT_START, ev.MODEL_MESSAGE):

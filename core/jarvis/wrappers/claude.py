@@ -94,7 +94,10 @@ SUPPORTED: dict[str, frozenset[str]] = {
     # него ответа не ждёт.
     ev.PERMISSION_REQUEST: frozenset({forms.ALLOW, forms.DENY}),
     ev.SUBAGENT_START: frozenset({forms.CONTEXT}),
-    ev.MODEL_MESSAGE: frozenset(),
+    # замер 18.09.2026: единственное, что Claude принимает на ответе и мысли
+    # модели, — `displayContent`, подмена показанного человеку куска. Стоящее
+    # сообщение и то, что видит модель, она не трогает.
+    ev.MODEL_MESSAGE: frozenset({forms.UPDATED_DISPLAY}),
 }
 
 # Чего харнес не умеет — список самой обёртки, дословно для отчёта в чат.
@@ -115,7 +118,7 @@ UNSUPPORTED_NOTE = {
     ev.SUBAGENT_START: 'Claude на старте подагента принимает только контекст — он уезжает '
                        'подагенту (замер)',
     ev.MODEL_MESSAGE: 'Claude на ответе и мысли модели принимает только подмену показанного '
-                      'куска (displayContent), а формы «текст человеку» у нас нет (замер)',
+                      'человеку куска: ни контекста, ни решения там нет (замер)',
 }
 
 
@@ -206,6 +209,10 @@ def translate(unified: str, response: Response, slug: str = '') -> Delivery:
 
     if unified == ev.PERMISSION_REQUEST:
         return Delivery(payload=_permission_request_payload(response))
+    if response.kind == forms.UPDATED_DISPLAY:
+        # дока: поле показа, а не сообщения — стоящее сообщение остаётся как
+        # было, и модель его видит прежним.
+        return Delivery(payload=_hook_specific(unified, {'displayContent': response.text}))
     if response.kind == forms.CONTEXT:
         return Delivery(payload=_context_payload(unified, response.text))
     if response.kind == forms.QUESTION:

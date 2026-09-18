@@ -9,7 +9,7 @@ import io
 import unittest
 
 from jarvis import events as ev
-from jarvis.response import Allow, Block, Context, Deny, Question, Silence
+from jarvis.response import Allow, Block, Context, Deny, Question, Silence, UpdatedDisplay
 from jarvis.wrappers import codex
 
 
@@ -113,6 +113,15 @@ class ThreeLaidInEventsTest(unittest.TestCase):
             delivery = codex.translate(event, Question('так ли?'))
             self.assertFalse(delivery.supported, event)
             self.assertIsNone(delivery.payload)
+
+    def test_the_replaced_display_is_named_as_something_codex_has_not(self) -> None:
+        # У Codex нет ни события «ответ и мысль модели», ни поля показа: форму
+        # обёртка называет своим списком, а не переводит в соседнюю.
+        for event in (ev.SESSION_START, ev.PERMISSION_REQUEST, ev.SUBAGENT_START):
+            delivery = codex.translate(event, UpdatedDisplay('ПОДМЕНА'))
+            self.assertFalse(delivery.supported, event)
+            self.assertIsNone(delivery.payload)
+            self.assertIn('подмены показанного', delivery.note)
 
     def test_silence_stays_silence(self) -> None:
         out, err = io.StringIO(), io.StringIO()

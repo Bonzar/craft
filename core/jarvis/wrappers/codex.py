@@ -92,6 +92,14 @@ SUPPORTED: dict[str, frozenset[str]] = {
     ev.SUBAGENT_START: frozenset({forms.CONTEXT}),
 }
 
+# Чего у Codex нет вовсе, каким бы событием ни пришло. Подменять показанный
+# человеку текст ему нечем: события «ответ и мысль модели» у него нет, а поля
+# показа нет ни у одного его события (замер 18.09.2026, дока хуков).
+UNSUPPORTED_FORMS = {
+    forms.UPDATED_DISPLAY: 'у Codex нет ни события «ответ и мысль модели», ни поля подмены '
+                           'показанного человеку текста: переводить форму некуда',
+}
+
 UNSUPPORTED_NOTE = {
     ev.SESSION_START: 'обёртка Codex этапа 3 несёт только контекст на старте сессии',
     ev.AFTER_COMPACT: 'обёртка Codex этапа 3 несёт только контекст после сжатия',
@@ -149,6 +157,8 @@ def translate(unified: str, response: Response, slug: str = '') -> Delivery:
         raise ValueError(f'события {unified!r} обёртка Codex этапа 3 не несёт')
     if response.kind == forms.SILENCE:
         return Delivery()
+    if response.kind in UNSUPPORTED_FORMS:
+        return Delivery(supported=False, note=UNSUPPORTED_FORMS[response.kind])
     if response.kind not in SUPPORTED[unified]:
         return Delivery(supported=False, note=UNSUPPORTED_NOTE[unified])
 
