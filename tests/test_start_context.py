@@ -5,6 +5,7 @@
 именно так его берёт и сам Claude (замер 16.09.2026).
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -14,6 +15,7 @@ import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 from jarvis.storage import Storage
@@ -31,6 +33,89 @@ def session_event(session_id: str, source: str = 'startup') -> str:
         'cwd': '/work',
         'source': source,
     })
+
+
+def load_base():
+    """Функции базы без запуска: точка входа под `if __name__`, ядро уже в пути."""
+    loader = SourceFileLoader('start_context_claude', str(MODULES_DIR / BASE / 'hooks' / 'module.py'))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+class SeamTest(unittest.TestCase):
+    """Шов между кусками: не внутри слова и не внутри ссылки.
+
+    Харнес склеивает выводы хуков переносом строки, и шов виден в контексте:
+    на потолке ровно по счёту он рвал слова и ссылки `block://…` (замер
+    18.09.2026 — 13 разрывов на живом снимке).
+    """
+
+    size = 900
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.base = load_base()
+
+    def pieces(self, text: str, size: int | None = None) -> list[str]:
+        cut, truncated = self.base.cut(text, size or self.size, 10_000)
+        self.assertFalse(truncated)
+        return cut
+
+    def test_a_snapshot_like_text_keeps_every_link_whole(self) -> None:
+        # Текст живого снимка: markdown строками, в каждой ссылка block://.
+        text = '\n'.join(
+            f'- [Раздел {n}](block://aaaaaaaa-{n:04d}-bbbb-cccc-dddddddddddd) — и хвост строки'
+            for n in range(400)
+        )
+        pieces = self.pieces(text)
+        self.assertGreater(len(pieces), 10)
+        for piece in pieces:
+            self.assertLessEqual(len(piece), self.size)
+        # Шов не внутри ссылки: у каждого куска, кроме последнего, столько же
+        # закрывающих скобок, сколько открытий block://.
+        for piece in pieces:
+            self.assertEqual(piece.count('block://'), piece.count('dddddddddddd)'))
+
+    def test_the_pieces_glue_back_into_the_very_same_text(self) -> None:
+        # Разделитель остаётся в куске, поэтому склейка посимвольно исходная.
+        text = '\n'.join(f'строка {n} и ещё немного слов в ней' for n in range(300))
+        self.assertEqual(''.join(self.pieces(text)), text)
+
+    def test_a_line_longer_than_the_cap_is_cut_by_a_space(self) -> None:
+        text = '## шапка\n\n' + ' '.join('слово' for _ in range(500))
+        pieces = self.pieces(text)
+        for piece in pieces[:-1]:
+            self.assertTrue(piece.endswith(' '), repr(piece[-20:]))
+            self.assertLessEqual(len(piece), self.size)
+        self.assertEqual(''.join(pieces), text)
+
+    def test_a_word_longer_than_the_cap_is_cut_by_the_cap(self) -> None:
+        # Рвать больше нечего: кусок ровно по потолку, и это не дефект.
+        text = '## шапка\n\n' + 'я' * (self.size * 3)
+        pieces = self.pieces(text)
+        self.assertEqual([len(piece) for piece in pieces[:-1]], [self.size] * (len(pieces) - 1))
+        self.assertEqual(''.join(pieces), text)
+
+    def test_an_early_line_break_does_not_leave_an_almost_empty_piece(self) -> None:
+        # Граница строки годится, только если следующая строка вообще влезает:
+        # иначе шов уехал бы к десятому знаку и кусок ушёл бы почти пустым.
+        text = '## шапка\n\n' + 'я' * (self.size * 2)
+        self.assertEqual(len(self.pieces(text)[0]), self.size)
+
+    def test_no_piece_is_ever_longer_than_the_cap(self) -> None:
+        for text in ('', 'коротко', 'а' * self.size, 'а' * (self.size + 1),
+                     '\n'.join('строка' for _ in range(5000))):
+            for piece in self.pieces(text):
+                self.assertLessEqual(len(piece), self.size)
+
+    def test_the_cut_tail_still_fits_the_cap(self) -> None:
+        text = '\n'.join(f'строка {n} и ещё немного слов' for n in range(3000))
+        pieces, truncated = self.base.cut(text, self.size, 3)
+        self.assertTrue(truncated)
+        self.assertEqual(len(pieces), 3)
+        for piece in pieces:
+            self.assertLessEqual(len(piece), self.size)
 
 
 class Chain:
@@ -141,7 +226,8 @@ class ChainTest(Chain, unittest.TestCase):
         self.assertEqual(len(chunks), self.copies)
         self.assertEqual(''.join(chunks), self.expected('session-start'))
         for piece in chunks[:-1]:
-            self.assertEqual(len(piece), CHUNK)
+            # Кусок только короче потолка: шов ищется по границе строки.
+            self.assertLessEqual(len(piece), CHUNK)
 
     def test_providers_are_glued_by_slug_with_a_heading(self) -> None:
         self.fire_all('chain-heading')
