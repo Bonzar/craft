@@ -1,0 +1,5 @@
+# Разбор инцидента в работе с базой Craft. Часть skill, без хука. Инциденты
+# код-сессий разбирает отдельный скилл, code-incident.
+slug = "craft-incident"
+# Ссылается на правила всех трёх: craft-call, behavior, code.
+requires = ["craft-call", "behavior", "code"]

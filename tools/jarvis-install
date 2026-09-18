@@ -75,11 +75,22 @@ PART_RULES = 'rules'
 PARTS = (PART_HOOKS, PART_LIB, PART_DATA, PART_SRC, PART_SKILL, PART_AGENTS, PART_RULES)
 INSIDE_MODULE = (PART_HOOKS, PART_LIB, PART_DATA, PART_SRC)
 HARNESS_PARTS = {PART_SKILL: 'skills', PART_AGENTS: 'agents', PART_RULES: 'rules'}
+# Файл-список внутри части skill: относительные пути к файлам модуля, которые
+# едут рядом с SKILL.md. Так у файла остаётся один источник — та часть, где он
+# живёт, — а скилл получает его копию, не заводя вторую правку руками.
+DECLARED_FILES = 'files'
 
 TEXT_SUFFIXES = {'.md', '.py', '.json', '.toml', '.txt', '.sh', '.yaml', '.yml', '.js'}
 # Байткод — след запуска из источника, а не часть модуля: в установку он не едет.
 IGNORED = shutil.ignore_patterns('__pycache__', '*.pyc')
 PLACEHOLDER_OPEN = '{{'
+# Единый slug возможности харнеса в тексте части. Пишется в том же синтаксисе,
+# что пути: установщик знает, в какой харнес ставит, а модуль про харнесы не
+# знает вовсе.
+ASK = '{{ASK}}'
+# Что осталось после подстановки, установщик заменить не умеет: молча оставить
+# его в тексте нельзя — модель прочитает скобки как есть.
+PLACEHOLDER = re.compile(r'\{\{[A-Za-z0-9_]+\}\}')
 
 # Метка раздела модуля в общем AGENTS.md Codex: у него нет каталога правил, и
 # части rules склеиваются в один файл между метками.
@@ -160,17 +171,32 @@ def substitute(text: str, substitutions: dict) -> str:
     return text
 
 
-def copy_tree(source: Path, target: Path, substitutions: dict) -> None:
-    """Скопировать часть, подставив пути в текстовых файлах."""
-    if target.exists():
-        shutil.rmtree(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, target, ignore=IGNORED)
-    if not substitutions:
-        return
-    for path in target.rglob('*'):
-        if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
-            continue
+def check_placeholders(text: str, where: str) -> None:
+    """Неизвестный slug в тексте — ошибка установки, а не строка в отчёте.
+
+    Модуль называет возможность харнеса единым slug, а форму подставляет
+    установщик. Slug, которого нет в его таблицах, заменить нечем: оставить
+    скобки в тексте значит отдать их модели как есть.
+    """
+    unknown = sorted(set(PLACEHOLDER.findall(text)))
+    if unknown:
+        raise ValueError(
+            f'{where}: установщик не знает slug {unknown} — ни путь, ни возможность харнеса; '
+            'добавь его в таблицу установщика или убери из текста'
+        )
+
+
+def text_files(where: Path) -> list[Path]:
+    """Файлы дерева, в которых идёт подстановка: по расширению, по порядку имени."""
+    return sorted(
+        path for path in where.rglob('*')
+        if path.is_file() and path.suffix.lower() in TEXT_SUFFIXES
+    )
+
+
+def substitute_tree(target: Path, substitutions: dict) -> None:
+    """Подставить пути и возможности харнеса в текстовых файлах дерева."""
+    for path in text_files(target):
         try:
             text = path.read_text(encoding='utf-8')
         except UnicodeDecodeError:
@@ -178,6 +204,51 @@ def copy_tree(source: Path, target: Path, substitutions: dict) -> None:
         replaced = substitute(text, substitutions)
         if replaced != text:
             path.write_text(replaced, encoding='utf-8')
+
+
+def copy_tree(source: Path, target: Path, substitutions: dict) -> None:
+    """Скопировать часть, подставив пути и возможности харнеса в текстовых файлах."""
+    if target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, target, ignore=IGNORED)
+    if substitutions:
+        substitute_tree(target, substitutions)
+
+
+def declared_files(part_dir: Path, module_dir: Path, where: str) -> list[Path]:
+    """Соседние файлы модуля, которые часть назвала списком в файле `files`.
+
+    Путь в списке относительный от папки модуля, по одному на строку; пустые
+    строки и строки с решётки — комментарии. Проверка на границе: файла нет,
+    путь уводит из модуля, два пути дают одно имя рядом с SKILL.md — отказ
+    сразу, а не полусобранная часть.
+    """
+    listing = part_dir / DECLARED_FILES
+    if not listing.is_file():
+        return []
+    module_dir = module_dir.resolve()
+    found: dict[str, Path] = {}
+    for line in listing.read_text(encoding='utf-8').splitlines():
+        entry = line.split('#', 1)[0].strip()
+        if not entry:
+            continue
+        source = (module_dir / entry).resolve()
+        if not source.is_relative_to(module_dir):
+            raise ValueError(f'{where}: путь «{entry}» из списка {DECLARED_FILES} уводит за папку модуля')
+        if not source.is_file():
+            raise ValueError(f'{where}: в списке {DECLARED_FILES} назван «{entry}», а такого файла у модуля нет')
+        if source.name in found:
+            raise ValueError(
+                f'{where}: «{entry}» и «{found[source.name]}» легли бы рядом с SKILL.md под одним именем '
+                f'«{source.name}»'
+            )
+        if (part_dir / source.name).exists():
+            raise ValueError(
+                f'{where}: «{entry}» затёр бы собственный файл части «{source.name}»'
+            )
+        found[source.name] = entry
+    return [module_dir / entry for entry in found.values()]
 
 
 def read_json(path: Path, default):
@@ -244,12 +315,16 @@ def section_body(text: str, open_mark: str, close_mark: str) -> str:
 
 
 class Backend:
-    """Что у харнеса своё: куда ложатся правила и как пишется строка хука."""
+    """Что у харнеса своё: куда ложатся правила, чем он спрашивает, как пишется строка хука."""
 
     name = ''
     wrapper = None
     settings_default = ''
     project_dir = ''
+    # Таблица «единый slug возможности → форма у этого харнеса». Возможности
+    # у харнеса нет — в таблице стоит форма замены, а не пустота: замена это
+    # такое же сопоставление, а не запасной путь.
+    slugs: dict[str, str] = {}
 
     def known_event(self, unified: str) -> bool:
         raise NotImplementedError
@@ -300,6 +375,9 @@ class ClaudeBackend(Backend):
     wrapper = claude
     settings_default = '~/.claude'
     project_dir = '${CLAUDE_PROJECT_DIR}'
+    # У Claude вопрос с вариантами задаёт инструмент AskUserQuestion (живой
+    # факт 15.09.2026).
+    slugs = {ASK: 'инструментом AskUserQuestion'}
 
     def known_event(self, unified: str) -> bool:
         return unified in claude.CLAUDE_BY_EVENT
@@ -320,6 +398,41 @@ class ClaudeBackend(Backend):
             args += ['--event', name]
         return {'type': 'command', 'command': python, 'args': args, 'timeout': HOOK_TIMEOUT_SEC}
 
+    def skills_rule(self, settings_root: Path) -> str:
+        """Правило на чтение каталога скиллов. Одно на все скиллы, не на модуль.
+
+        Каталог настроек лежит вне рабочего каталога сессии, а чтение оттуда
+        Claude спрашивает у человека. В неинтерактивном прогоне спросить
+        некого, и скилл, называющий свой соседний файл, упирается в запрос
+        разрешения (замер 18.09.2026).
+
+        Форма `//путь` — абсолютный путь от корня файловой системы; одинарный
+        слэш означал бы путь от источника настроек (дока прав Claude Code,
+        снята 18.09.2026: «A pattern like `/Users/alice/file` isn\'t an
+        absolute path… Use `//Users/alice/file` for absolute paths»).
+        """
+        return f'Read(/{settings_root}/skills/**)'
+
+    def with_skills_rule(self, settings: dict, settings_root: Path, needed: bool) -> dict:
+        """Настройки с нашим правом на чтение скиллов: добавить или убрать.
+
+        Правится только наша строка: остальное в `permissions.allow` чужое.
+        """
+        rule = self.skills_rule(settings_root)
+        permissions = dict(settings.get('permissions') or {})
+        allow = [entry for entry in permissions.get('allow', []) if entry != rule]
+        if needed:
+            allow.append(rule)
+        if allow:
+            permissions['allow'] = allow
+        else:
+            permissions.pop('allow', None)
+        if permissions:
+            return {**settings, 'permissions': permissions}
+        # Пустой раздел прав не значит ничего и после снятия последнего скилла
+        # оставлял бы за собой мусор, которого не было до установки.
+        return {key: value for key, value in settings.items() if key != 'permissions'}
+
     def register(self, records, settings_root, python, report) -> None:
         hooks: dict[str, list] = {}
         for slug, record in sorted(records.items()):
@@ -333,7 +446,12 @@ class ClaudeBackend(Backend):
         kept = strip_jarvis_lines(settings.get('hooks', {}), modules_root(settings_root))
         for harness_event, groups in hooks.items():
             kept.setdefault(harness_event, []).extend(groups)
-        write_settings(settings_path, {**settings, 'hooks': kept})
+
+        skills = any(PART_SKILL in record['parts'] for record in records.values())
+        settings = self.with_skills_rule({**settings, 'hooks': kept}, settings_root, skills)
+        if skills:
+            report.parts.append((self.name, 'право на чтение скиллов', self.skills_rule(settings_root)))
+        write_settings(settings_path, settings)
 
 
 class CodexBackend(Backend):
@@ -343,6 +461,12 @@ class CodexBackend(Backend):
     # У Codex своей переменной каталога проекта нет: хук получает `cwd` в
     # событии, а в текстах частей подставляется рабочий каталог установки.
     project_dir = '${PWD}'
+    # Инструмент вопроса с вариантами у Codex есть — request_user_input, — но
+    # по умолчанию выключен (ToolsToml.experimental_request_user_input, флаг
+    # default_mode_request_user_input «under development») и в `codex exec` не
+    # работает вовсе (строки codex-cli 0.155.0, замер 18.09.2026). Поэтому
+    # форма замены — обычный текст.
+    slugs = {ASK: 'текстом в ответе, варианты строками'}
 
     def __init__(self, cli: str = 'codex', trust: bool = True) -> None:
         self.cli = cli
@@ -647,6 +771,40 @@ def check_events(manifests: list, report: Report, backend: Backend | None = None
                 )
 
 
+def text_where(slug: str, part: str, backend: Backend) -> str:
+    """Адрес текстовой части в сообщении об ошибке: что чинить и где."""
+    return f'модуль «{slug}», часть {part}, харнес {backend.name}'
+
+
+def check_text_parts(target, slug, settings_root, state_dir, backend) -> None:
+    """Проверить тексты частей модуля ДО того, как установка что-то тронет.
+
+    Подстановка идёт в памяти: неизвестный slug обязан уронить установку, пока
+    прежняя раскладка ещё цела. Проверять после копирования нельзя — стирание
+    цели идёт раньше, и упавшая установка оставила бы харнесу полусобранную
+    часть вместо прежней рабочей.
+    """
+    module_dir = modules_root(settings_root) / slug
+    substitutions = {
+        **placeholders(settings_root, module_dir, state_dir, backend.project_dir),
+        **backend.slugs,
+    }
+    for part in HARNESS_PARTS:
+        source = target.path / part
+        if not source.is_dir():
+            continue
+        where = text_where(slug, part, backend)
+        files = text_files(source)
+        if part == PART_SKILL:
+            files += declared_files(source, target.path, where)
+        for path in files:
+            try:
+                text = path.read_text(encoding='utf-8')
+            except UnicodeDecodeError:
+                continue
+            check_placeholders(substitute(text, substitutions), f'{where}, файл {path.name}')
+
+
 def install_core(source_core: Path, module_dir: Path) -> None:
     """Копия ядра ложится внутрь папки модуля: модуль самодостаточен."""
     target = module_dir / CORE_DIR
@@ -673,6 +831,10 @@ def install_module(target, slug, source_core, settings_root, state_dir, backend,
     install_core(source_core, module_dir)
     copy_manifest(target, slug, module_dir)
 
+    # Возможности харнеса подставляются только в текстовые части: их читает
+    # модель. В коде модуля имена харнеса переводит обёртка, не установщик.
+    text_substitutions = {**substitutions, **backend.slugs}
+
     places = {}
     for part in PARTS:
         source = target.path / part
@@ -683,10 +845,20 @@ def install_module(target, slug, source_core, settings_root, state_dir, backend,
             copy_tree(source, where, substitutions)
             place = str(where)
         elif part == PART_RULES:
-            place = backend.install_rules(slug, source, settings_root, substitutions)
+            place = backend.install_rules(slug, source, settings_root, text_substitutions)
         else:
             where = settings_root / HARNESS_PARTS[part] / slug
-            copy_tree(source, where, substitutions)
+            # Список соседних файлов читает только часть skill: у остальных
+            # частей файл с таким именем — обычный файл, а не объявление.
+            beside = declared_files(source, target.path, text_where(slug, part, backend)) \
+                if part == PART_SKILL else []
+            copy_tree(source, where, text_substitutions)
+            if part == PART_SKILL:
+                (where / DECLARED_FILES).unlink(missing_ok=True)
+            for file in beside:
+                shutil.copy2(file, where / file.name)
+            if beside:
+                substitute_tree(where, text_substitutions)
             place = str(where)
         places[part] = place
         report.parts.append((slug, part, place))
@@ -759,6 +931,8 @@ def install(args: argparse.Namespace) -> Report:
     check_requires(manifests, report)
     check_events(manifests, report, backend)
     plan = expand(manifests)
+    for target, slug in plan:
+        check_text_parts(target, slug, settings_root, state_dir, backend)
     if args.dry_run:
         report.installed.extend(slug for _, slug in plan)
         return report
