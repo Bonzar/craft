@@ -1,0 +1,25 @@
+# $schema: ../../../schemas/command.schema.json
+command: apt
+description: "Debian package management tool"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  list:
+    classification: READONLY
+  show:
+    classification: READONLY
+  search:
+    classification: READONLY
+  install:
+    classification: DANGEROUS
+  remove:
+    classification: DANGEROUS
+  purge:
+    classification: DANGEROUS
+  update:
+    classification: EXTERNAL_EFFECTS
+  upgrade:
+    classification: DANGEROUS
+  autoremove:
+    classification: DANGEROUS

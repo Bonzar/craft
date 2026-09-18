@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: ps
+description: "Report a snapshot of current processes"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}

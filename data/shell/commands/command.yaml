@@ -1,0 +1,12 @@
+# $schema: ../../../schemas/command.schema.json
+command: command
+description: "Execute a command or display command info"
+classification: READONLY
+global_options:
+  --help: {overrides: READONLY}
+delegates_to:
+  mode: rest_are_argv
+options:
+  -v: {}
+  -V: {}
+  -p: {}

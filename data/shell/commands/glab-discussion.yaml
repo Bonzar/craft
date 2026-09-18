@@ -1,0 +1,21 @@
+# $schema: ../../../schemas/command.schema.json
+command: glab-discussion
+description: "CLI wrapper around GitLab Discussions REST API for managing MR discussions"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+  -h: {overrides: READONLY}
+subcommands:
+  read:
+    # Technically writes to temp files, but the operation is read-only in intent
+    classification: READONLY
+    strict: false
+  write:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+  diff:
+    classification: READONLY
+    strict: false
+  resolve:
+    classification: EXTERNAL_EFFECTS
+    strict: false

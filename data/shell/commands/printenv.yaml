@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: printenv
+description: "Print all or part of environment variables"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}

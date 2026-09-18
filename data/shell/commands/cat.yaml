@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: cat
+description: "Concatenate and print files"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}

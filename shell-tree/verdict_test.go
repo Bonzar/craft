@@ -62,12 +62,19 @@ func TestTheNetworkIsAKindOfTarget(t *testing.T) {
 	}
 }
 
-func TestAFlagCanTakeACommandOutOfTheReadingList(t *testing.T) {
+func TestAFlagDecidesTheAnswer(t *testing.T) {
 	if got := judged(t, "find . -name '*.js'", "/repo").Writes; got != writesNo {
 		t.Errorf("writes = «%s», ждали «нет»", got)
 	}
-	if got := judged(t, "find . -name '*.js' -delete", "/repo").Writes; got != writesUnknown {
-		t.Errorf("writes = «%s», ждали «%s»: ключ -delete выводит find из списка читающих", got, writesUnknown)
+	// `-delete` база команд знает как DANGEROUS — этого в наших списках нет,
+	// там он лишь выводит find из читающих.
+	if got := judged(t, "find . -name '*.js' -delete", "/repo").Writes; got != writesYes {
+		t.Errorf("writes = «%s», ждали «да»: ключ -delete доказывает запись", got)
+	}
+	// `-exec` база знает как передачу другой команде, но саму команду мы не
+	// разворачиваем; наши списки держат его в запрещённых, и ответ строже базы.
+	if got := judged(t, "find . -exec rm {} ;", "/repo").Writes; got != writesUnknown {
+		t.Errorf("writes = «%s», ждали «%s»", got, writesUnknown)
 	}
 }
 

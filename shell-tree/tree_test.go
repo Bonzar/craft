@@ -110,7 +110,7 @@ func TestADirectoryChangeMovesTheLinksAfterIt(t *testing.T) {
 	if got := tree.Links[1].Cwd; got != "/repo/a" {
 		t.Errorf("каталог второго звена «%s», ждали /repo/a", got)
 	}
-	verdict := Judge(tree, testRules(t))
+	verdict := Judge(tree, testRules(t), loadedBase)
 	if len(verdict.Targets) != 1 || verdict.Targets[0].Path != "/repo/a/b" {
 		t.Errorf("цели %v, ждали одну — /repo/a/b: относительный путь читается от каталога звена", verdict.Targets)
 	}
@@ -133,7 +133,7 @@ func TestADirectoryChangeItCannotReadMakesTheDirectoryUnknown(t *testing.T) {
 	if last.Cwd != "" {
 		t.Errorf("каталог «%s», а он неизвестен: `cd` с подстановкой читать нечем", last.Cwd)
 	}
-	verdict := Judge(tree, testRules(t))
+	verdict := Judge(tree, testRules(t), loadedBase)
 	if len(verdict.Targets) != 1 || verdict.Targets[0].Path != "b" {
 		t.Errorf("цели %v, ждали «b» как есть: корень выдумывать нельзя", verdict.Targets)
 	}
@@ -182,7 +182,7 @@ func TestACommandSubstitutionIsATreeOfItsOwn(t *testing.T) {
 	if got := textsOf(subs[0].Links[0].Commands[0].Words); !equal(got, []string{"rm", "-f", "x"}) {
 		t.Errorf("слова подстановки %q, ждали «rm -f x»", got)
 	}
-	verdict := Judge(tree, testRules(t))
+	verdict := Judge(tree, testRules(t), loadedBase)
 	if verdict.Writes != writesYes {
 		t.Errorf("writes = «%s», ждали «да»: запись внутри подстановки — это запись", verdict.Writes)
 	}
@@ -228,8 +228,8 @@ func TestParseModeSaysNothingOnABrokenCommand(t *testing.T) {
 
 func TestVerdictModeAnswersUnknownOnABrokenCommand(t *testing.T) {
 	var out bytes.Buffer
-	err := run([]string{"verdict", "--rules", "../data/shell/read-only-rules.json"},
-		strings.NewReader(`cat "не закрытая`), &out)
+	err := run([]string{"verdict", "--rules", "../data/shell/read-only-rules.json",
+		"--commands", "../data/shell/commands"}, strings.NewReader(`cat "не закрытая`), &out)
 	if err != nil {
 		t.Fatalf("вердикт обязан ответить, а не упасть: %v", err)
 	}
@@ -240,7 +240,8 @@ func TestVerdictModeAnswersUnknownOnABrokenCommand(t *testing.T) {
 
 func TestVerdictModeNamesTheMissingRules(t *testing.T) {
 	var out bytes.Buffer
-	err := run([]string{"verdict", "--rules", "нет-такого-файла.json"}, strings.NewReader("ls"), &out)
+	err := run([]string{"verdict", "--rules", "нет-такого-файла.json",
+		"--commands", "../data/shell/commands"}, strings.NewReader("ls"), &out)
 	if err == nil {
 		t.Fatal("без списков вердикта быть не может")
 	}

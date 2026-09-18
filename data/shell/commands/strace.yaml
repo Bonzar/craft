@@ -1,0 +1,20 @@
+# $schema: ../../../schemas/command.schema.json
+command: strace
+description: "Trace system calls and signals"
+classification: LOCAL_EFFECTS
+global_options:
+  --help: {overrides: READONLY}
+delegates_to:
+  mode: rest_are_argv
+options:
+  -e: {takes_value: true}
+  -p: {takes_value: true}
+  -o: {takes_value: true}
+  -f: {}
+  -ff: {}
+  -t: {}
+  -tt: {}
+  -T: {}
+  -v: {}
+  -s: {takes_value: true}
+  -c: {}

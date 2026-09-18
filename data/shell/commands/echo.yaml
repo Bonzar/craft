@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: echo
+description: "Display a line of text"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}

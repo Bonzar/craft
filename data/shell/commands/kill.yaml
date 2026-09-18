@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: kill
+description: "Send signals to processes"
+classification: DANGEROUS
+strict: false
+global_options:
+  --help: {overrides: READONLY}

@@ -49,25 +49,29 @@ def binary() -> str:
     )
 
 
-def parse(command: str, cwd: str = '', rules: str = '') -> dict:
+def parse(command: str, cwd: str = '', rules: str = '', commands: str = '') -> dict:
     """Дерево команды: звенья, слова, перенаправления, подстановки, каталоги.
 
     cwd — каталог вызова: от него считаются относительные пути и cd. Команда с
     синтаксической ошибкой — исключение: дерева у неё нет.
     """
-    return call('parse', command, cwd, rules)
+    return call('parse', command, cwd, rules, commands)
 
 
-def verdict(command: str, cwd: str = '', rules: str = '') -> dict:
+def verdict(command: str, cwd: str = '', rules: str = '', commands: str = '') -> dict:
     """Пишет ли команда: writes (да, нет, неизвестно), цели записи, причина.
+
+    Предикат собран из двух источников данных: вендоренной базы команд
+    (`commands`, по умолчанию рядом с бинарником) и списков «только читает»
+    (`rules`, там же).
 
     Синтаксическая ошибка сюда не роняет: неразобранная команда — это
     «неизвестно», и замок спросит человека.
     """
-    return call('verdict', command, cwd, rules)
+    return call('verdict', command, cwd, rules, commands)
 
 
-def call(mode: str, command: str, cwd: str, rules: str) -> dict:
+def call(mode: str, command: str, cwd: str, rules: str, commands: str = '') -> dict:
     """Один вызов бинарника. Ответ — JSON на stdout, команда — на stdin."""
     tool = binary()
     argv = [tool, mode]
@@ -75,6 +79,8 @@ def call(mode: str, command: str, cwd: str, rules: str) -> dict:
         argv += ['--cwd', cwd]
     if rules:
         argv += ['--rules', rules]
+    if commands:
+        argv += ['--commands', commands]
     try:
         done = subprocess.run(
             argv, input=command, capture_output=True, text=True,

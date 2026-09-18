@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: rev
+description: "Reverse lines character-wise"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}

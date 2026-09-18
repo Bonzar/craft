@@ -1,0 +1,58 @@
+# $schema: ../../../schemas/command.schema.json
+command: systemctl
+description: "Control the systemd system and service manager"
+classification: DANGEROUS
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  status:
+    classification: READONLY
+  is-active:
+    classification: READONLY
+  is-enabled:
+    classification: READONLY
+  is-failed:
+    classification: READONLY
+  list-units:
+    classification: READONLY
+  list-unit-files:
+    classification: READONLY
+  show:
+    classification: READONLY
+  start:
+    classification: DANGEROUS
+  stop:
+    classification: DANGEROUS
+  restart:
+    classification: DANGEROUS
+  reload:
+    classification: DANGEROUS
+  enable:
+    classification: LOCAL_EFFECTS
+  disable:
+    classification: LOCAL_EFFECTS
+  mask:
+    classification: DANGEROUS
+  unmask:
+    classification: LOCAL_EFFECTS
+  daemon-reload:
+    classification: DANGEROUS
+  cat:
+    classification: READONLY
+  list-dependencies:
+    classification: READONLY
+  list-timers:
+    classification: READONLY
+  list-sockets:
+    classification: READONLY
+  kill:
+    classification: DANGEROUS
+  edit:
+    classification: DANGEROUS
+  poweroff:
+    classification: DANGEROUS
+  reboot:
+    classification: DANGEROUS
+  halt:
+    classification: DANGEROUS

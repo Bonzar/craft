@@ -1,0 +1,129 @@
+# $schema: ../../../schemas/command.schema.json
+command: helm
+description: "Kubernetes package manager"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  list:
+    classification: READONLY
+    strict: false
+  status:
+    classification: READONLY
+    strict: false
+  get:
+    classification: READONLY
+    strict: false
+    subcommands:
+      all:
+        classification: READONLY
+        strict: false
+      values:
+        classification: READONLY
+        strict: false
+      manifest:
+        classification: READONLY
+        strict: false
+      hooks:
+        classification: READONLY
+        strict: false
+      notes:
+        classification: READONLY
+        strict: false
+  history:
+    classification: READONLY
+    strict: false
+  show:
+    classification: READONLY
+    strict: false
+    subcommands:
+      chart:
+        classification: READONLY
+        strict: false
+      readme:
+        classification: READONLY
+        strict: false
+      values:
+        classification: READONLY
+        strict: false
+      all:
+        classification: READONLY
+        strict: false
+  search:
+    classification: READONLY
+    strict: false
+  install:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+  upgrade:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+  rollback:
+    classification: DANGEROUS
+    strict: false
+  uninstall:
+    classification: DANGEROUS
+    strict: false
+  repo:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        strict: false
+  template:
+    classification: READONLY
+    strict: false
+  lint:
+    classification: READONLY
+    strict: false
+  diff:
+    classification: READONLY
+    strict: false
+  env:
+    classification: READONLY
+  verify:
+    classification: READONLY
+    strict: false
+  version:
+    classification: READONLY
+    strict: false
+  completion:
+    classification: READONLY
+    strict: false
+  plugin:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        strict: false
+  package:
+    classification: LOCAL_EFFECTS
+    strict: false
+  pull:
+    classification: LOCAL_EFFECTS
+    strict: false
+  create:
+    classification: LOCAL_EFFECTS
+    strict: false
+  dependency:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        strict: false
+  push:
+    classification: DANGEROUS
+    strict: false
+  registry:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      login:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+      logout:
+        classification: EXTERNAL_EFFECTS
+        strict: false

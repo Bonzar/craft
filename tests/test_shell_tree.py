@@ -81,6 +81,12 @@ class LibraryTest(unittest.TestCase):
         self.assertIn('--rules /где/то/read-only-rules.json',
                       self.calls.read_text(encoding='utf-8'))
 
+    def test_the_commands_base_path_is_passed_on_when_given(self) -> None:
+        self.stub('echo \'{"writes":"нет","targets":[],"reason":""}\'')
+        library.verdict('ls', commands='/где/то/commands')
+        self.assertIn('--commands /где/то/commands',
+                      self.calls.read_text(encoding='utf-8'))
+
     def test_no_binary_is_an_error_that_says_where_it_was_looked_for(self) -> None:
         with self.assertRaises(library.ShellTreeError) as raised:
             library.verdict('rm -rf /')

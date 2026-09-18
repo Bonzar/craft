@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fprochazka/bash-classify/schemas/command.schema.json",
+  "title": "bash-classify command definition",
+  "description": "Schema for YAML command database files used by bash-classify",
+  "type": "object",
+  "required": ["command"],
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "description": "Alias file: points at another command, mutually exclusive with classification-bearing fields",
+      "required": ["alias_of"],
+      "not": {
+        "anyOf": [
+          {"required": ["classification"]},
+          {"required": ["risk"]},
+          {"required": ["subcommands"]},
+          {"required": ["options"]},
+          {"required": ["global_options"]},
+          {"required": ["subcommand_mode"]},
+          {"required": ["delegates_to"]},
+          {"required": ["strict"]}
+        ]
+      }
+    },
+    {
+      "description": "Regular command definition",
+      "not": {"required": ["alias_of"]}
+    }
+  ],
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "Binary name"
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of the tool"
+    },
+    "alias_of": {
+      "type": "string",
+      "description": "Name of another command in the database whose definition should be used verbatim. Mutually exclusive with classification/risk/subcommands/options/global_options/subcommand_mode/delegates_to/strict."
+    },
+    "classification": {
+      "$ref": "#/$defs/Classification"
+    },
+    "risk": {
+      "$ref": "#/$defs/Risk",
+      "description": "Explicit risk level override for this command (default derived from classification)"
+    },
+    "strict": {
+      "type": "boolean",
+      "description": "If true (default), unrecognized options yield UNKNOWN"
+    },
+    "global_options": {
+      "$ref": "#/$defs/OptionsMap",
+      "description": "Options that appear before subcommands and are stripped before matching"
+    },
+    "options": {
+      "$ref": "#/$defs/OptionsMap",
+      "description": "Options that affect classification of this command"
+    },
+    "subcommands": {
+      "$ref": "#/$defs/SubcommandsMap",
+      "description": "Nested subcommand definitions"
+    },
+    "subcommand_mode": {
+      "$ref": "#/$defs/SubcommandMode"
+    },
+    "delegates_to": {
+      "$ref": "#/$defs/DelegationConfig"
+    }
+  },
+  "$defs": {
+    "Classification": {
+      "type": "string",
+      "enum": ["READONLY", "LOCAL_EFFECTS", "EXTERNAL_EFFECTS", "DANGEROUS", "UNKNOWN"],
+      "description": "Classification level for a command or option override"
+    },
+    "Risk": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH"],
+      "description": "Risk level for a command or option override"
+    },
+    "SubcommandMode": {
+      "type": "string",
+      "enum": ["hierarchical", "match_all"],
+      "description": "How subcommands are matched: hierarchical (chained tree walk, default) or match_all (each positional arg matched independently)"
+    },
+    "DelegationConfig": {
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "rest_are_argv",
+            "after_separator",
+            "terminated_argv",
+            "flag_value_is_expression",
+            "args_are_expression"
+          ],
+          "description": "Delegation mode"
+        },
+        "separator": {
+          "type": "string",
+          "description": "For after_separator mode: the token that separates wrapper args from inner args"
+        },
+        "terminator": {
+          "type": "string",
+          "description": "For terminated_argv mode: the token that ends the inner argv"
+        },
+        "flag": {
+          "type": "string",
+          "description": "For flag_value_is_expression mode: which flag's value to parse"
+        },
+        "strip_assignments": {
+          "type": "boolean",
+          "description": "For rest_are_argv mode: strip leading KEY=VALUE tokens before the inner command"
+        },
+        "skip_leading_positionals": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "For rest_are_argv mode: number of positional tokens that belong to the wrapper itself before the inner command starts. Used by commands like `timeout` whose syntax is `timeout DURATION COMMAND...`."
+        },
+        "min_classification": {
+          "$ref": "#/$defs/Classification",
+          "description": "Floor classification for the inner command"
+        }
+      }
+    },
+    "OptionDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "takes_value": {
+          "type": "boolean",
+          "description": "Whether the option consumes the next token as its value"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Alternative names for this option"
+        },
+        "overrides": {
+          "$ref": "#/$defs/Classification",
+          "description": "When this option is present, override the classification to this level"
+        },
+        "risk": {
+          "$ref": "#/$defs/Risk",
+          "description": "When this option is present, override the risk level"
+        },
+        "captures_directory": {
+          "type": "boolean",
+          "description": "The value of this option is a working directory"
+        },
+        "delegates_to": {
+          "$ref": "#/$defs/DelegationConfig"
+        }
+      }
+    },
+    "OptionsMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/OptionDef"
+      },
+      "description": "Map of option name to option definition"
+    },
+    "SubcommandDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Alternative names for this subcommand (e.g. `pipe` and `pipeline` for `glab ci`). A match through an alias resolves to this definition and reports the canonical name in the command path. An alias must not collide with a sibling subcommand or with another sibling's alias."
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "risk": {
+          "$ref": "#/$defs/Risk",
+          "description": "Explicit risk level override for this subcommand (default derived from classification)"
+        },
+        "strict": {
+          "type": "boolean",
+          "description": "If true (default), unrecognized options yield UNKNOWN"
+        },
+        "subcommand_mode": {
+          "$ref": "#/$defs/SubcommandMode"
+        },
+        "options": {
+          "$ref": "#/$defs/OptionsMap"
+        },
+        "subcommands": {
+          "$ref": "#/$defs/SubcommandsMap"
+        },
+        "delegates_to": {
+          "$ref": "#/$defs/DelegationConfig"
+        }
+      }
+    },
+    "SubcommandsMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/SubcommandDef"
+      },
+      "description": "Map of subcommand name to subcommand definition"
+    }
+  }
+}

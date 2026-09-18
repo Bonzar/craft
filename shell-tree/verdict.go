@@ -44,8 +44,8 @@ type Verdict struct {
 // what the data proves to read answers «нет», what it proves to change answers
 // «да», and everything else answers «неизвестно». An unknown command is never
 // read-only — that is the whole point of the third answer.
-func Judge(tree *Tree, rules *Rules) Verdict {
-	j := &judge{rules: rules, seen: map[string]bool{}}
+func Judge(tree *Tree, rules *Rules, base *Base) Verdict {
+	j := &judge{rules: rules, base: base, seen: map[string]bool{}}
 	j.tree(tree)
 	return j.verdict()
 }
@@ -58,6 +58,7 @@ func Unjudged(err error) Verdict {
 
 type judge struct {
 	rules   *Rules
+	base    *Base
 	targets []Target
 	seen    map[string]bool
 	yes     string // причина первого «пишет»
@@ -217,6 +218,61 @@ func (j *judge) classify(command Command, cwd string) (string, string, []Target)
 	if j.rules.isWrapper(name) {
 		return writesUnknown, fmt.Sprintf("«%s» запускает команду, которой в строке нет", name), nil
 	}
+	// Два источника предиката. Вендоренная база команд знает подкоманды с
+	// оглядкой на аргументы (`git tag v1` против `git tag -l`) и ключи,
+	// доказывающие запись (`sed -i`) — за ней слово о командах, которые она
+	// знает. Наши списки знают команды, которых в базе нет, и держат свои
+	// запрещённые ключи; строже базы они сделать ответ могут, слабее — нет.
+	if effect := j.base.Effect(name, args); effect.Known {
+		state, reason := effect.State, effect.Reason
+		if j.rules.isMutating(name) && strength(writesYes) > strength(state) {
+			state, reason = writesYes, fmt.Sprintf("«%s» из списка меняющих мир", name)
+		}
+		if flag, denied := j.deniedFlag(name, args); denied && strength(writesUnknown) > strength(state) {
+			state, reason = writesUnknown,
+				fmt.Sprintf("«%s» читает, но ключ «%s» выводит её из списка читающих", name, flag)
+		}
+		if state == writesYes {
+			return state, reason, j.namedTargets(name, args, cwd)
+		}
+		return state, reason, nil
+	}
+	return j.byLists(name, args, cwd)
+}
+
+// deniedFlag — наши запрещённые ключи для этой команды: сама команда и её
+// подкоманда. Они делают ответ строже базы, но никогда слабее.
+func (j *judge) deniedFlag(name string, args []Word) (string, bool) {
+	if rule, ok := j.rules.ReadOnly[name]; ok {
+		if flag, denied := deniedFlag(args, rule.DenyFlags); denied {
+			return flag, true
+		}
+	}
+	if subs, ok := j.rules.DenySubcommandFlags[name]; ok {
+		if sub, rest := subcommandOf(name, args); sub != "" {
+			if flag, denied := deniedFlag(rest, subs[sub]); denied {
+				return flag, true
+			}
+		}
+	}
+	return "", false
+}
+
+// strength orders the answers: silence about a write is the weakest thing we can
+// say, a proven write the strongest.
+func strength(state string) int {
+	switch state {
+	case writesYes:
+		return 2
+	case writesUnknown:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// byLists — ответ по спискам data/shell/read-only-rules.json.
+func (j *judge) byLists(name string, args []Word, cwd string) (string, string, []Target) {
 	if j.rules.isMutating(name) {
 		return writesYes, fmt.Sprintf("«%s» из списка меняющих мир", name), j.targetsOf(name, args, cwd)
 	}
@@ -230,6 +286,20 @@ func (j *judge) classify(command Command, cwd string) (string, string, []Target)
 		return writesNo, "", nil
 	}
 	return writesUnknown, fmt.Sprintf("«%s» нет ни в списке читающих, ни в списке меняющих мир", name), nil
+}
+
+// namedTargets собирает цели записи по нашим спискам: база команд их не знает,
+// вида цели у неё нет.
+func (j *judge) namedTargets(name string, args []Word, cwd string) []Target {
+	if j.rules.isMutating(name) {
+		return j.targetsOf(name, args, cwd)
+	}
+	if j.hasSubcommands(name) {
+		if sub, rest := subcommandOf(name, args); sub != "" {
+			return j.subTargets(name, sub, args, rest, cwd)
+		}
+	}
+	return nil
 }
 
 func (j *judge) hasSubcommands(name string) bool {

@@ -1,0 +1,8 @@
+# $schema: ../../../schemas/command.schema.json
+command: gunzip
+description: "Decompress gzip compressed files"
+classification: LOCAL_EFFECTS
+risk: LOW
+strict: false
+global_options:
+  --help: {overrides: READONLY}

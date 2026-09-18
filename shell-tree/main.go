@@ -15,9 +15,12 @@
 // Синтаксическая ошибка — код возврата 1, причина на stderr, на stdout ничего.
 //
 // verdict отвечает, пишет ли строка (да, нет, неизвестно), куда и почему.
-// Предикат «только читает» лежит в data/shell/read-only-rules.json: путь к нему
-// задаёт --rules, без ключа берётся файл рядом с бинарником. В бинарник данные
-// не вшиты. Неразобранная команда — это «неизвестно», а не «читает».
+// Предикат «только читает» собран из двух источников, и оба лежат данными на
+// диске, а не в бинарнике: вендоренная база команд bash-classify
+// (data/shell/commands, ключ --commands) знает подкоманды с оглядкой на
+// аргументы и ключи, доказывающие запись, а списки data/shell/read-only-rules.json
+// (ключ --rules) держат то, чего в базе нет. Без ключей и то и другое берётся
+// рядом с бинарником. Неразобранная команда — это «неизвестно», а не «читает».
 package main
 
 import (
@@ -30,11 +33,12 @@ import (
 const usage = `shell-tree — разбор команды оболочки в дерево.
 
   shell-tree parse   [--cwd КАТАЛОГ]
-  shell-tree verdict [--cwd КАТАЛОГ] [--rules ПУТЬ]
+  shell-tree verdict [--cwd КАТАЛОГ] [--rules ПУТЬ] [--commands КАТАЛОГ]
 
 Команда читается со stdin, ответ печатается JSON на stdout.
-  --cwd    каталог вызова: от него считаются относительные пути и cd
-  --rules  файл списков «только читает»; без ключа — рядом с бинарником
+  --cwd       каталог вызова: от него считаются относительные пути и cd
+  --rules     файл списков «только читает»; без ключа — рядом с бинарником
+  --commands  каталог вендоренной базы команд; без ключа — рядом с бинарником
 `
 
 func main() {
@@ -49,7 +53,7 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("%s", usage)
 	}
 	mode, flags := args[0], args[1:]
-	cwd, rules, err := options(flags)
+	cwd, rules, commands, err := options(flags)
 	if err != nil {
 		return err
 	}
@@ -69,11 +73,15 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		base, err := LoadBase(commands)
+		if err != nil {
+			return err
+		}
 		tree, err := Parse(string(source), cwd)
 		if err != nil {
 			return print(out, Unjudged(err))
 		}
-		return print(out, Judge(tree, loaded))
+		return print(out, Judge(tree, loaded, base))
 	default:
 		return fmt.Errorf("неизвестная команда «%s»\n\n%s", mode, usage)
 	}
@@ -81,24 +89,26 @@ func run(args []string, in io.Reader, out io.Writer) error {
 
 // options reads the flags by hand: the flag package would need a set per mode,
 // and there are two of them.
-func options(args []string) (string, string, error) {
-	var cwd, rules string
+func options(args []string) (string, string, string, error) {
+	var cwd, rules, commands string
 	for i := 0; i < len(args); i++ {
 		name := args[i]
 		if i+1 >= len(args) {
-			return "", "", fmt.Errorf("у ключа «%s» нет значения\n\n%s", name, usage)
+			return "", "", "", fmt.Errorf("у ключа «%s» нет значения\n\n%s", name, usage)
 		}
 		switch name {
 		case "--cwd":
 			cwd = args[i+1]
 		case "--rules":
 			rules = args[i+1]
+		case "--commands":
+			commands = args[i+1]
 		default:
-			return "", "", fmt.Errorf("неизвестный ключ «%s»\n\n%s", name, usage)
+			return "", "", "", fmt.Errorf("неизвестный ключ «%s»\n\n%s", name, usage)
 		}
 		i++
 	}
-	return cwd, rules, nil
+	return cwd, rules, commands, nil
 }
 
 func print(out io.Writer, value any) error {

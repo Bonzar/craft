@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: more
+description: "View file contents one screen at a time"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}

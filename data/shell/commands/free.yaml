@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: free
+description: "Display amount of free and used memory"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}
