@@ -133,7 +133,11 @@ class BuildTest(unittest.TestCase):
         self.assertEqual([line['action'] for line in self.journal('вторая')], ['собран'])
 
     def test_without_go_the_hook_says_why_and_stays_silent(self) -> None:
-        done = self.fire('без-go', path='/usr/bin:/bin')
+        # PATH ведёт в пустой каталог, а не в /usr/bin: на машине сборки Go
+        # лежит именно там, и «PATH без Go» надо делать, а не предполагать.
+        empty = self.root / 'пусто'
+        empty.mkdir()
+        done = self.fire('без-go', path=str(empty))
         self.assertEqual(done.stdout.strip(), '')
         self.assertFalse(self.binary.exists())
         entries = self.journal('без-go')
