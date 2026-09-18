@@ -18,6 +18,7 @@ from .response import (
     Question,
     Response,
     Silence,
+    UpdatedDisplay,
     UpdatedInput,
 )
 from .storage import Storage
@@ -40,6 +41,7 @@ __all__ = [
     'Silence',
     'Storage',
     'Trace',
+    'UpdatedDisplay',
     'UpdatedInput',
     'confirm',
     'events',

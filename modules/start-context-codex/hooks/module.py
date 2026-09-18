@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 
 import jarvis  # noqa: E402
 from jarvis import registry  # noqa: E402
-from jarvis.wrappers import codex  # noqa: E402
+from jarvis import wrappers  # noqa: E402
 
 STATE_FILE = 'start-context.json'
 JOURNAL_FILE = 'start-context.jsonl'
@@ -77,4 +77,4 @@ class Module(jarvis.Module):
 
 
 if __name__ == '__main__':
-    sys.exit(codex.run_hook(__file__, Module))
+    sys.exit(wrappers.run_hook(__file__, Module))

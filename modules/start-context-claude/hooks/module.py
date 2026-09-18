@@ -55,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 import jarvis  # noqa: E402
 from jarvis import registry  # noqa: E402
 from jarvis.manifest import copy_index  # noqa: E402
-from jarvis.wrappers import claude  # noqa: E402
+from jarvis import wrappers  # noqa: E402
 
 # замер: потолок вывода хука — 10 000 знаков на процесс. Берём 9 900: сотня
 # знаков запаса на случай, если потолок считается не ровно тем же способом.
@@ -126,9 +126,52 @@ def gather(runtime, event) -> tuple[str, list[dict]]:
     return '\n\n'.join(pieces), accounted
 
 
+# По чему ищем шов, от лучшего к худшему: граница строки, потом пробел. Не
+# нашлось ни того ни другого — режем ровно по потолку.
+SEAMS = ('\n', ' ')
+
+
+def seam(text: str, start: int, size: int) -> int:
+    """Где кончается кусок, начатый с `start`.
+
+    Харнес склеивает выводы хуков переносом строки, поэтому шов виден в
+    контексте. Внутри слова он рвёт слово, внутри `block://…` — ссылку
+    (замер 18.09.2026: 13 разрывов на снимке, ссылка на шве не кликалась).
+    Значит, режем по последней границе строки в пределах потолка.
+
+    Граница строки годится не всегда: если строка, которая на ней начинается,
+    сама длиннее потолка, в следующий кусок она всё равно не влезет, и шов
+    только уехал бы в начало окна, оставив почти пустой кусок. Тогда пробуем
+    последний пробел — с той же оговоркой про длину слова, — а если и слово
+    длиннее потолка, режем ровно по потолку: рвать больше нечего.
+
+    Разделитель остаётся в куске, поэтому куски склеиваются в исходный текст
+    ровно, без потерянного символа. Кусок только короче потолка, никогда не
+    длиннее.
+    """
+    stop = start + size
+    if stop >= len(text):
+        return len(text)
+    for separator in SEAMS:
+        found = text.rfind(separator, start, stop)
+        if found == -1:
+            continue
+        end = text.find(separator, found + 1)
+        if end == -1:
+            end = len(text)
+        if end - found - 1 <= size:
+            return found + 1
+    return stop
+
+
 def cut(text: str, size: int, count: int) -> tuple[list[str], bool]:
     """Резка на куски по ёмкости копии. Лишнее — обрезается с пометкой."""
-    pieces = [text[start:start + size] for start in range(0, len(text), size)]
+    pieces = []
+    start = 0
+    while start < len(text):
+        stop = seam(text, start, size)
+        pieces.append(text[start:stop])
+        start = stop
     if len(pieces) <= count:
         return pieces, False
     pieces = pieces[:count]
@@ -389,7 +432,7 @@ def note(storage, number, answer, why) -> None:
 
 
 if __name__ == '__main__':
-    code = claude.run_hook(__file__, Module)
+    code = wrappers.run_hook(__file__, Module)
     sys.stdout.flush()
     Module.mark_printed()
     sys.exit(code)
