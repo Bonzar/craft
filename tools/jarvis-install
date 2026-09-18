@@ -186,30 +186,34 @@ def check_placeholders(text: str, where: str) -> None:
         )
 
 
-def substitute_tree(target: Path, substitutions: dict, strict_where: str | None = None) -> None:
-    """Подставить в текстовых файлах дерева; у текстовых частей — со сверкой."""
-    for path in sorted(target.rglob('*')):
-        if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
-            continue
+def text_files(where: Path) -> list[Path]:
+    """Файлы дерева, в которых идёт подстановка: по расширению, по порядку имени."""
+    return sorted(
+        path for path in where.rglob('*')
+        if path.is_file() and path.suffix.lower() in TEXT_SUFFIXES
+    )
+
+
+def substitute_tree(target: Path, substitutions: dict) -> None:
+    """Подставить пути и возможности харнеса в текстовых файлах дерева."""
+    for path in text_files(target):
         try:
             text = path.read_text(encoding='utf-8')
         except UnicodeDecodeError:
             continue
         replaced = substitute(text, substitutions)
-        if strict_where is not None:
-            check_placeholders(replaced, f'{strict_where}, файл {path.name}')
         if replaced != text:
             path.write_text(replaced, encoding='utf-8')
 
 
-def copy_tree(source: Path, target: Path, substitutions: dict, strict_where: str | None = None) -> None:
+def copy_tree(source: Path, target: Path, substitutions: dict) -> None:
     """Скопировать часть, подставив пути и возможности харнеса в текстовых файлах."""
     if target.exists():
         shutil.rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, target, ignore=IGNORED)
-    if substitutions or strict_where is not None:
-        substitute_tree(target, substitutions, strict_where)
+    if substitutions:
+        substitute_tree(target, substitutions)
 
 
 def declared_files(part_dir: Path, module_dir: Path, where: str) -> list[Path]:
@@ -328,7 +332,7 @@ class Backend:
     def harness_event(self, unified: str) -> str:
         raise NotImplementedError
 
-    def install_rules(self, slug, source, settings_root, substitutions, strict_where) -> str:
+    def install_rules(self, slug, source, settings_root, substitutions) -> str:
         raise NotImplementedError
 
     def remove_place(self, place: str) -> bool:
@@ -342,15 +346,12 @@ class Backend:
         raise NotImplementedError
 
 
-def rules_body(source: Path, substitutions: dict, strict_where: str | None = None) -> str:
+def rules_body(source: Path, substitutions: dict) -> str:
     """Части rules одного модуля одним текстом: файлы по порядку имени."""
     pieces = []
     for path in sorted(source.rglob('*')):
         if path.is_file() and path.suffix.lower() == '.md':
-            text = substitute(path.read_text(encoding='utf-8'), substitutions).strip()
-            if strict_where is not None:
-                check_placeholders(text, f'{strict_where}, файл {path.name}')
-            pieces.append(text)
+            pieces.append(substitute(path.read_text(encoding='utf-8'), substitutions).strip())
     return '\n\n'.join(pieces)
 
 
@@ -384,9 +385,9 @@ class ClaudeBackend(Backend):
     def harness_event(self, unified: str) -> str:
         return claude.CLAUDE_BY_EVENT[unified]
 
-    def install_rules(self, slug, source, settings_root, substitutions, strict_where) -> str:
+    def install_rules(self, slug, source, settings_root, substitutions) -> str:
         where = settings_root / HARNESS_PARTS[PART_RULES] / slug
-        copy_tree(source, where, substitutions, strict_where)
+        copy_tree(source, where, substitutions)
         return str(where)
 
     def line(self, python: str, settings_root: Path, slug: str, unified: tuple[str, ...]) -> dict:
@@ -440,10 +441,10 @@ class CodexBackend(Backend):
     def agents_path(self, settings_root: Path) -> Path:
         return settings_root / CODEX_AGENTS_FILE
 
-    def install_rules(self, slug, source, settings_root, substitutions, strict_where) -> str:
+    def install_rules(self, slug, source, settings_root, substitutions) -> str:
         path = self.agents_path(settings_root)
         text = path.read_text(encoding='utf-8') if path.is_file() else ''
-        body = rules_body(source, substitutions, strict_where)
+        body = rules_body(source, substitutions)
         write_atomic(
             path,
             section_replace(text, AGENTS_OPEN.format(slug=slug), AGENTS_CLOSE.format(slug=slug), body),
@@ -730,6 +731,40 @@ def check_events(manifests: list, report: Report, backend: Backend | None = None
                 )
 
 
+def text_where(slug: str, part: str, backend: Backend) -> str:
+    """Адрес текстовой части в сообщении об ошибке: что чинить и где."""
+    return f'модуль «{slug}», часть {part}, харнес {backend.name}'
+
+
+def check_text_parts(target, slug, settings_root, state_dir, backend) -> None:
+    """Проверить тексты частей модуля ДО того, как установка что-то тронет.
+
+    Подстановка идёт в памяти: неизвестный slug обязан уронить установку, пока
+    прежняя раскладка ещё цела. Проверять после копирования нельзя — стирание
+    цели идёт раньше, и упавшая установка оставила бы харнесу полусобранную
+    часть вместо прежней рабочей.
+    """
+    module_dir = modules_root(settings_root) / slug
+    substitutions = {
+        **placeholders(settings_root, module_dir, state_dir, backend.project_dir),
+        **backend.slugs,
+    }
+    for part in HARNESS_PARTS:
+        source = target.path / part
+        if not source.is_dir():
+            continue
+        where = text_where(slug, part, backend)
+        files = text_files(source)
+        if part == PART_SKILL:
+            files += declared_files(source, target.path, where)
+        for path in files:
+            try:
+                text = path.read_text(encoding='utf-8')
+            except UnicodeDecodeError:
+                continue
+            check_placeholders(substitute(text, substitutions), f'{where}, файл {path.name}')
+
+
 def install_core(source_core: Path, module_dir: Path) -> None:
     """Копия ядра ложится внутрь папки модуля: модуль самодостаточен."""
     target = module_dir / CORE_DIR
@@ -765,27 +800,25 @@ def install_module(target, slug, source_core, settings_root, state_dir, backend,
         source = target.path / part
         if not source.is_dir():
             continue
-        strict_where = f'модуль «{slug}», часть {part}, харнес {backend.name}'
         if part in INSIDE_MODULE:
             where = module_dir / part
             copy_tree(source, where, substitutions)
             place = str(where)
         elif part == PART_RULES:
-            place = backend.install_rules(
-                slug, source, settings_root, text_substitutions, strict_where
-            )
+            place = backend.install_rules(slug, source, settings_root, text_substitutions)
         else:
             where = settings_root / HARNESS_PARTS[part] / slug
             # Список соседних файлов читает только часть skill: у остальных
             # частей файл с таким именем — обычный файл, а не объявление.
-            beside = declared_files(source, target.path, strict_where) if part == PART_SKILL else []
-            copy_tree(source, where, text_substitutions, strict_where)
+            beside = declared_files(source, target.path, text_where(slug, part, backend)) \
+                if part == PART_SKILL else []
+            copy_tree(source, where, text_substitutions)
             if part == PART_SKILL:
                 (where / DECLARED_FILES).unlink(missing_ok=True)
             for file in beside:
                 shutil.copy2(file, where / file.name)
             if beside:
-                substitute_tree(where, text_substitutions, strict_where)
+                substitute_tree(where, text_substitutions)
             place = str(where)
         places[part] = place
         report.parts.append((slug, part, place))
@@ -858,6 +891,8 @@ def install(args: argparse.Namespace) -> Report:
     check_requires(manifests, report)
     check_events(manifests, report, backend)
     plan = expand(manifests)
+    for target, slug in plan:
+        check_text_parts(target, slug, settings_root, state_dir, backend)
     if args.dry_run:
         report.installed.extend(slug for _, slug in plan)
         return report

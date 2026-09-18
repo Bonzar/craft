@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from jarvis import manifest as manifest_reader
+
 from . import CORE_SOURCE, MODULES_DIR
 from .test_installer import installer
 
@@ -224,6 +226,43 @@ class HarnessSlugTest(SkillInstallCase):
         self.assertIn('probe', message)
         self.assertIn('{{SHOUT}}', message)
 
+    def test_an_unknown_slug_leaves_the_previous_part_untouched(self) -> None:
+        # Проверка идёт до первой стирающей операции: упавшая установка не
+        # имеет права оставить харнесу полусобранный скилл вместо рабочего.
+        folder = self.add_module('probe', 'slug = "probe"\n',
+                                 {'skill': {'SKILL.md': '# рабочий\n', 'note.md': 'цел\n'}})
+        self.run_installer()
+        (folder / 'skill' / 'SKILL.md').write_text('# новый\n', encoding='utf-8')
+        (folder / 'skill' / 'note.md').write_text('позвать {{SHOUT}}\n', encoding='utf-8')
+        with self.assertRaises(ValueError):
+            self.run_installer()
+        installed = self.skill_dir('probe')
+        self.assertEqual((installed / 'SKILL.md').read_text(encoding='utf-8'), '# рабочий\n')
+        self.assertEqual((installed / 'note.md').read_text(encoding='utf-8'), 'цел\n')
+
+    def test_an_unknown_slug_leaves_no_directory_on_a_first_install(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': 'Позвать {{SHOUT}}.\n'}})
+        with self.assertRaises(ValueError):
+            self.run_installer()
+        self.assertFalse(self.skill_dir('probe').exists())
+        self.assertFalse(self.settings_root.exists())
+
+    def test_a_broken_list_of_files_stops_the_install_before_it_touches_anything(self) -> None:
+        folder = self.add_module('probe', 'slug = "probe"\n',
+                                 {'rules': {'rule.md': '# правило\n'},
+                                  'skill': {'SKILL.md': '# рабочий\n', 'files': 'rules/rule.md\n'}})
+        self.run_installer()
+        (folder / 'skill' / 'files').write_text('rules/missing.md\n', encoding='utf-8')
+        with self.assertRaises(ValueError):
+            self.run_installer()
+        self.assertEqual((self.skill_dir('probe') / 'SKILL.md').read_text(encoding='utf-8'), '# рабочий\n')
+        self.assertTrue((self.skill_dir('probe') / 'rule.md').is_file())
+
+    def test_a_dry_run_catches_an_unknown_slug(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': 'Позвать {{SHOUT}}.\n'}})
+        with self.assertRaises(ValueError):
+            self.run_installer('--dry-run')
+
     def test_an_unknown_slug_in_rules_stops_the_install_on_both_harnesses(self) -> None:
         self.add_module('probe', 'slug = "probe"\n', {'rules': {'rule.md': 'Позвать {{SHOUT}}.\n'}})
         for extra in ((), ('--harness', 'codex', '--no-trust')):
@@ -252,6 +291,25 @@ class HarnessSlugTest(SkillInstallCase):
 class RepositoryModulesTest(unittest.TestCase):
     """Набор самого репозитория: один источник у механики Craft."""
 
+    def test_the_new_skill_modules_declare_what_they_lean_on(self) -> None:
+        # Тело скилла ссылается на файлы соседних модулей: отданный отдельно,
+        # без requires он встал бы молча и сослался на то, чего нет.
+        expected = {
+            'craft-groceries': {'craft-call'},
+            'craft-inbox': {'craft-call', 'behavior'},
+            'craft-project-review': {'craft-call', 'behavior'},
+            'craft-incident': {'craft-call', 'behavior', 'code'},
+        }
+        for slug, needed in expected.items():
+            manifest = manifest_reader.load(MODULES_DIR / slug)
+            self.assertEqual(set(manifest.requires), needed, slug)
+
+    def test_craft_call_names_the_installed_copy_by_an_absolute_path(self) -> None:
+        # В репозитории craft лежит файл с тем же именем: по относительному
+        # пути модель читает его, а не установленную копию.
+        source = (MODULES_DIR / 'craft-call' / 'skill' / 'SKILL.md').read_text(encoding='utf-8')
+        self.assertIn('{{HARNESS_SETTINGS}}/skills/craft-call/craft-tool.md', source)
+
     def test_craft_call_keeps_the_mechanics_in_one_file(self) -> None:
         skill = MODULES_DIR / 'craft-call' / 'skill'
         listed = [line.strip() for line in (skill / 'files').read_text(encoding='utf-8').splitlines()
@@ -277,9 +335,15 @@ class RepositoryModulesTest(unittest.TestCase):
                     argv.append('--no-trust')
                 report = installer.install(installer.parse_args(argv))
                 self.assertIn('craft-call', report.installed)
-                beside = Path(tmp) / 'settings' / 'skills' / 'craft-call' / 'craft-tool.md'
+                skill_dir = Path(tmp) / 'settings' / 'skills' / 'craft-call'
+                beside = skill_dir / 'craft-tool.md'
                 self.assertEqual(beside.read_bytes(),
                                  (MODULES_DIR / 'craft-call' / 'rules' / 'craft-tool.md').read_bytes())
+                installed = (skill_dir / 'SKILL.md').read_text(encoding='utf-8')
+                self.assertIn(str(beside), installed)
+                self.assertNotIn('{{', installed)
+                # Требования новых модулей должны сходиться с самим набором.
+                self.assertEqual([w for w in report.warnings if 'нужен' in w], [], harness)
 
 
 if __name__ == '__main__':
