@@ -1,11 +1,47 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// collectMarkdown прогоняет режим --markdown и возвращает то, что он напечатал:
+// runMarkdown пишет прямо в stdout, поэтому тест его подменяет.
+func collectMarkdown(t *testing.T, client *Client, ids string, follow bool, exclude map[string]bool) string {
+	return collectMarkdownFrom(t, client, ids, follow, exclude, "")
+}
+
+// collectMarkdownFrom is the same with a --container page.
+func collectMarkdownFrom(t *testing.T, client *Client, ids string, follow bool, exclude map[string]bool, container string) string {
+	t.Helper()
+	old := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("не завести трубу: %v", err)
+	}
+	os.Stdout = write
+	done := make(chan string, 1)
+	go func() {
+		text, _ := io.ReadAll(read)
+		done <- string(text)
+	}()
+	func() {
+		defer func() {
+			os.Stdout = old
+			write.Close()
+		}()
+		runMarkdown(client, ids, follow, exclude, container)
+	}()
+	return <-done
+}
 
 func tm(s string) time.Time {
 	t, err := parseTime(s)
@@ -454,5 +490,336 @@ func TestBackoffSchedules(t *testing.T) {
 		if got := rateLimitBackoff(n); got != time.Duration(w)*time.Second {
 			t.Errorf("rateLimitBackoff(%d)=%v, want %ds", n, got, w)
 		}
+	}
+}
+
+// ---- markdown mode ----
+
+// markdownServer answers GET /blocks?id=… from a fixed map, counts the calls
+// per id and holds each answer long enough that a sequential walk would show
+// up as a sum of the delays.
+func markdownServer(t *testing.T, blocks map[string]Block, delay time.Duration) (*Client, func(string) int) {
+	t.Helper()
+	var mu sync.Mutex
+	calls := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.ToLower(r.URL.Query().Get("id"))
+		mu.Lock()
+		calls[id]++
+		mu.Unlock()
+		time.Sleep(delay)
+		block, ok := blocks[id]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(block)
+	}))
+	t.Cleanup(server.Close)
+	client := &Client{http: &http.Client{Timeout: 5 * time.Second}, base: server.URL}
+	return client, func(id string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls[strings.ToLower(id)]
+	}
+}
+
+// uid makes a UUID-shaped id: Craft links carry UUIDs and extractLinks matches
+// nothing else, so tests speak the same shape. Буквы в нём обязательны — на
+// id из одних цифр верхний и нижний регистр неразличимы, и тест на регистр
+// проверял бы сам себя.
+func uid(n int) string {
+	return fmt.Sprintf("%08x-abcd-4ef0-b123-def%09d", n, n)
+}
+
+// link builds the «Связи» section that --follow-links walks.
+func linksSection(ids ...string) []Block {
+	out := []Block{blk("h", "text", "### Связи", "")}
+	for i, id := range ids {
+		out = append(out, blk(fmt.Sprintf("l%d", i), "text", fmt.Sprintf("[дальше](block://%s)", id), ""))
+	}
+	return out
+}
+
+func TestMarkdownFollowsOnlyTheLinksSection(t *testing.T) {
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "",
+			append([]Block{blk("body", "text", "в теле [ссылка](block://body-target)", "")},
+				linksSection(uid(2))...)...),
+		uid(2): blk(uid(2), "page", "# Ребёнок", ""),
+		uid(3): blk(uid(3), "page", "# Не должен читаться", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	if !strings.Contains(out, "# Ребёнок") {
+		t.Fatalf("ссылка из «Связей» не прочитана: %q", out)
+	}
+	if strings.Contains(out, "Не должен читаться") || calls(uid(3)) != 0 {
+		t.Fatalf("прочитана ссылка из тела страницы, а не из «Связей»")
+	}
+}
+
+func TestMarkdownReadsEveryIDAtMostOnce(t *testing.T) {
+	// Ромб: два ребёнка ведут на одного внука.
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "", linksSection(uid(4), uid(5))...),
+		uid(4): blk(uid(4), "page", "# А", "", linksSection(uid(6))...),
+		uid(5): blk(uid(5), "page", "# Б", "", linksSection(uid(6), uid(4))...),
+		uid(6): blk(uid(6), "page", "# Внук", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	for _, id := range []string{uid(1), uid(4), uid(5), uid(6)} {
+		if got := calls(id); got != 1 {
+			t.Fatalf("%s прочитан %d раз, а должен один", id, got)
+		}
+	}
+	if strings.Count(out, "# Внук") != 1 {
+		t.Fatalf("внук напечатан не один раз: %q", out)
+	}
+}
+
+func TestMarkdownOrderDoesNotDependOnWhoAnsweredFirst(t *testing.T) {
+	// Уровень заведомо шире пула воркеров: порядок печати обязан остаться
+	// порядком обнаружения, а не порядком ответов.
+	var ids []string
+	blocks := map[string]Block{}
+	for i := 0; i < 24; i++ {
+		id := uid(100 + i)
+		ids = append(ids, id)
+		blocks[id] = blk(id, "page", "# "+id, "")
+	}
+	blocks[uid(1)] = blk(uid(1), "page", "# Корень", "", linksSection(ids...)...)
+	client, _ := markdownServer(t, blocks, 0)
+
+	first := collectMarkdown(t, client, uid(1), true, nil)
+	for run := 0; run < 5; run++ {
+		if again := collectMarkdown(t, client, uid(1), true, nil); again != first {
+			t.Fatalf("порядок разъехался между прогонами")
+		}
+	}
+	var want []string
+	for _, id := range ids {
+		want = append(want, "# "+id)
+	}
+	if !strings.Contains(first, strings.Join(want, "\n\n")) {
+		t.Fatalf("порядок не совпал с порядком обнаружения:\n%s", first)
+	}
+}
+
+func TestMarkdownFetchesALevelInParallel(t *testing.T) {
+	// Ширина уровня задана здесь, а не константой пула: иначе тест мерил бы сам
+	// себя и на пуле в одного воркера всё равно проходил бы.
+	const delay = 120 * time.Millisecond
+	const width = 6
+	var ids []string
+	blocks := map[string]Block{}
+	for i := 0; i < width; i++ {
+		id := uid(200 + i)
+		ids = append(ids, id)
+		blocks[id] = blk(id, "page", "# "+id, "")
+	}
+	blocks[uid(1)] = blk(uid(1), "page", "# Корень", "", linksSection(ids...)...)
+	client, _ := markdownServer(t, blocks, delay)
+
+	started := time.Now()
+	collectMarkdown(t, client, uid(1), true, nil)
+	spent := time.Since(started)
+	// Порог — заметно меньше последовательного обхода, который стоил бы
+	// (width+1)*delay: тест проверяет, что уровень читается разом, а не
+	// конкретный размер пула.
+	if limit := 4 * delay; spent > limit {
+		t.Fatalf("уровень читался последовательно: %v, ждали меньше %v", spent, limit)
+	}
+}
+
+func TestMarkdownExcludeIsHonoured(t *testing.T) {
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "", linksSection(uid(7))...),
+		uid(7): blk(uid(7), "page", "# Пропустить", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, map[string]bool{uid(7): true})
+	if strings.Contains(out, "Пропустить") || calls(uid(7)) != 0 {
+		t.Fatalf("--exclude не сработал в режиме markdown")
+	}
+}
+
+func TestMarkdownAsksForIDsInTheCaseTheLinkSpellsThem(t *testing.T) {
+	// connect-API чувствителен к регистру id: страница с идентификатором в
+	// верхнем регистре на строчный id отвечает 404 (замер 17.09.2026). Ссылка
+	// пишет id так, как он есть, — обход обязан спросить ровно так же.
+	upper := strings.ToUpper(uid(42))
+	blocks := map[string]Block{
+		uid(1): blk(uid(1), "page", "# Корень", "", linksSection(upper)...),
+		upper:  blk(upper, "page", "# Старая страница", ""),
+	}
+	var asked []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		mu.Lock()
+		asked = append(asked, id)
+		mu.Unlock()
+		// Ровно как живой API: строчный вариант того же id — не найден.
+		block, ok := blocks[id]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(block)
+	}))
+	t.Cleanup(server.Close)
+	client := &Client{http: &http.Client{Timeout: 5 * time.Second}, base: server.URL}
+
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	if !strings.Contains(out, "# Старая страница") {
+		t.Fatalf("страница с id в верхнем регистре потерялась: спросили %v", asked)
+	}
+	for _, id := range asked {
+		if id == strings.ToLower(upper) {
+			t.Fatalf("id ушёл в запрос в нижнем регистре: %v", asked)
+		}
+	}
+}
+
+func TestMarkdownDedupesIgnoringCase(t *testing.T) {
+	// Тот же блок, названный в двух регистрах, читается один раз.
+	upper := strings.ToUpper(uid(43))
+	blocks := map[string]Block{
+		uid(1):                 blk(uid(1), "page", "# Корень", "", linksSection(upper, strings.ToLower(upper))...),
+		strings.ToLower(upper): blk(upper, "page", "# Один раз", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, nil)
+	if got := strings.Count(out, "# Один раз"); got != 1 {
+		t.Fatalf("блок напечатан %d раз вместо одного", got)
+	}
+	if got := calls(upper); got != 1 {
+		t.Fatalf("блок прочитан %d раз вместо одного", got)
+	}
+}
+
+func TestMarkdownExcludeIgnoresCase(t *testing.T) {
+	upper := strings.ToUpper(uid(44))
+	blocks := map[string]Block{
+		uid(1):                 blk(uid(1), "page", "# Корень", "", linksSection(upper)...),
+		strings.ToLower(upper): blk(upper, "page", "# Пропустить", ""),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdown(t, client, uid(1), true, map[string]bool{strings.ToLower(upper): true})
+	if strings.Contains(out, "Пропустить") || calls(upper) != 0 {
+		t.Fatalf("--exclude не сработал на id в другом регистре")
+	}
+}
+
+// contained wraps pages into one container page, the way Craft nests a page
+// inside a page: GET /blocks?maxDepth=-1 returns that whole tree, nested pages
+// with their content.
+func contained(id string, pages ...Block) Block {
+	return blk(id, "page", "# Контейнер", "", pages...)
+}
+
+func TestMarkdownContainerGivesTheSameTextForFewerRequests(t *testing.T) {
+	// Тот же обход по «Связям», но уровень берётся из дерева контейнера.
+	// Проверяется главное: текст побайтово тот же, а запросов — один.
+	root := blk(uid(1), "page", "# Корень", "", linksSection(uid(2), uid(3))...)
+	two := blk(uid(2), "page", "# Второй", "", blk("t2", "text", "тело второго", ""))
+	three := blk(uid(3), "page", "# Третий", "", blk("t3", "text", "тело третьего", ""))
+	box := uid(9)
+	blocks := map[string]Block{
+		uid(1): root, uid(2): two, uid(3): three,
+		box: contained(box, root, two, three),
+	}
+
+	plain, plainCalls := markdownServer(t, blocks, 0)
+	want := collectMarkdown(t, plain, uid(1), true, nil)
+
+	boxed, boxCalls := markdownServer(t, blocks, 0)
+	got := collectMarkdownFrom(t, boxed, uid(1), true, nil, box)
+
+	if got != want {
+		t.Fatalf("текст разошёлся:\n-- обходом --\n%q\n-- контейнером --\n%q", want, got)
+	}
+	if plainCalls(uid(1))+plainCalls(uid(2))+plainCalls(uid(3)) != 3 {
+		t.Fatalf("обход почему-то прочитал не три страницы")
+	}
+	if boxCalls(box) != 1 {
+		t.Fatalf("контейнер прочитан %d раз вместо одного", boxCalls(box))
+	}
+	for _, id := range []string{uid(1), uid(2), uid(3)} {
+		if boxCalls(id) != 0 {
+			t.Fatalf("%s спросили отдельно, хотя он лежит в контейнере", id)
+		}
+	}
+}
+
+func TestMarkdownContainerStillFetchesWhatItDoesNotHold(t *testing.T) {
+	// Страница, вынесенная из контейнера, стоит один запрос, а не ошибку:
+	// иначе переезд раздела молча урезал бы стартовый контекст.
+	root := blk(uid(1), "page", "# Корень", "", linksSection(uid(2), uid(4))...)
+	two := blk(uid(2), "page", "# Внутри", "")
+	four := blk(uid(4), "page", "# Снаружи", "")
+	box := uid(9)
+	blocks := map[string]Block{
+		uid(1): root, uid(2): two, uid(4): four,
+		box: contained(box, root, two),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdownFrom(t, client, uid(1), true, nil, box)
+
+	if !strings.Contains(out, "# Снаружи") || !strings.Contains(out, "# Внутри") {
+		t.Fatalf("потерялась страница: %q", out)
+	}
+	if calls(uid(4)) != 1 {
+		t.Fatalf("страницу вне контейнера прочитали %d раз вместо одного", calls(uid(4)))
+	}
+	if calls(uid(2)) != 0 {
+		t.Fatalf("страницу из контейнера всё равно спросили отдельно")
+	}
+}
+
+func TestMarkdownAFailingContainerFallsBackToTheWalk(t *testing.T) {
+	// Контейнер не прочитался — это не отказ: текст собирается обходом, как
+	// будто флага не было, а про контейнер сказано в stderr.
+	root := blk(uid(1), "page", "# Корень", "", linksSection(uid(2))...)
+	two := blk(uid(2), "page", "# Второй", "")
+	blocks := map[string]Block{uid(1): root, uid(2): two}
+
+	plain, _ := markdownServer(t, blocks, 0)
+	want := collectMarkdown(t, plain, uid(1), true, nil)
+
+	client, calls := markdownServer(t, blocks, 0)
+	got := collectMarkdownFrom(t, client, uid(1), true, nil, uid(9)) // такого блока нет
+	if got != want {
+		t.Fatalf("без контейнера текст обязан быть прежним:\n%q\n%q", want, got)
+	}
+	for _, id := range []string{uid(1), uid(2)} {
+		if calls(id) != 1 {
+			t.Fatalf("%s не прочитан обходом: %d запросов", id, calls(id))
+		}
+	}
+}
+
+func TestMarkdownContainerMatchesIgnoringCase(t *testing.T) {
+	// Ссылка пишет id в одном регистре, дерево контейнера отдаёт в другом.
+	// Спрашивать API мы обязаны регистром ссылки, а вот узнавать своё в
+	// контейнере — без учёта регистра, иначе лишний запрос на пустом месте.
+	upper := strings.ToUpper(uid(45))
+	root := blk(uid(1), "page", "# Корень", "", linksSection(upper)...)
+	inner := blk(strings.ToLower(upper), "page", "# Та самая", "")
+	box := uid(9)
+	blocks := map[string]Block{
+		uid(1): root, strings.ToLower(upper): inner,
+		box: contained(box, root, inner),
+	}
+	client, calls := markdownServer(t, blocks, 0)
+	out := collectMarkdownFrom(t, client, uid(1), true, nil, box)
+
+	if !strings.Contains(out, "# Та самая") {
+		t.Fatalf("страница из контейнера не напечатана: %q", out)
+	}
+	if calls(upper) != 0 {
+		t.Fatalf("страницу спросили отдельно, хотя она в контейнере (регистр)")
 	}
 }

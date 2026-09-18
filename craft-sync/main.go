@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -142,9 +143,9 @@ type BacklinksResult struct {
 	Target      string       `json:"target"`
 	Count       int          `json:"count"`
 	Backlinks   []LinkRecord `json:"backlinks"`
-	TotalLinks  int          `json:"totalLinks"`  // size of the whole index
-	ScannedDocs int          `json:"scannedDocs"` // deep-fetched this run
-	SkippedDocs int          `json:"skippedDocs"` // date unchanged -> carried from index
+	TotalLinks  int          `json:"totalLinks"`      // size of the whole index
+	ScannedDocs int          `json:"scannedDocs"`     // deep-fetched this run
+	SkippedDocs int          `json:"skippedDocs"`     // date unchanged -> carried from index
 	Stale       bool         `json:"stale,omitempty"` // answered from index without refresh
 	IndexedAt   string       `json:"indexedAt,omitempty"`
 	Errors      []string     `json:"errors,omitempty"`
@@ -169,6 +170,10 @@ func main() {
 		linksStore   = flag.String("links-store", os.Getenv("CRAFT_LINKS_STORE"), "Craft page block ID holding the persistent link index (gzip+base64 dump in code blocks plus an 'Обновлён:' cutoff line); defaults to env CRAFT_LINKS_STORE. Cross-session alternative to --links-file; the store doc itself is excluded from indexing. Pass an empty value to force --links-file/local mode when the env var is set.")
 		linksRefresh = flag.Bool("links-refresh", false, "Refresh the link index (see --links-file/--links-store) without querying a target. Lets a routine keep the index warm.")
 		offline      = flag.Bool("offline", false, "With --backlinks: answer from --links-file/--links-store as-is, no refresh of the space.")
+
+		markdownArg = flag.String("markdown", "", "Markdown mode: deep-fetch these comma-separated block IDs and print their markdown, then exit. Feeds the start-context provider.")
+		followLinks = flag.Bool("follow-links", false, "With --markdown: also read every block linked from a «Связи» section, recursively, each ID at most once.")
+		container   = flag.String("container", "", "With --markdown: deep-read this page once and serve the walk from its tree, fetching one by one only what it does not hold. Same output, far fewer requests when the walked pages live under one page.")
 	)
 	flag.Parse()
 
@@ -225,6 +230,11 @@ func main() {
 		base:      *base,
 		retries:   *retries,
 		rlRetries: *rlRetries,
+	}
+
+	if *markdownArg != "" {
+		runMarkdown(client, *markdownArg, *followLinks, exclude, *container)
+		return
 	}
 
 	if *backlinksTo != "" || *linksRefresh {
@@ -490,6 +500,197 @@ func printTree(res Result, pages map[string]*Page) {
 	}
 }
 
+// ---- markdown mode: read a block subtree for the agent's start context ----
+//
+// The start-context provider needs the TEXT of a few known sections, not a
+// change list: the base rules live under «Сущность базы #раздел» and are
+// reached by following the links its «Связи» section lists, and the agent's
+// memory is one page read whole. Every block already carries its own markdown
+// in the same GET /blocks tree the change detector walks, so this mode is a
+// render of that tree plus an optional walk over the links under a named
+// section. Output is markdown on stdout — the hook feeds it to the model as is.
+
+// linkSection is the section heading whose links --follow-links walks.
+const linkSection = "Связи"
+
+var headingRe = regexp.MustCompile(`^\s{0,3}#{1,6}\s+`)
+
+// renderMarkdown appends the markdown of every block in the tree, in document
+// order. Code blocks carry their body in rawCode rather than markdown.
+func renderMarkdown(b Block, out *strings.Builder) {
+	if md := strings.TrimRight(b.Markdown, " \t"); md != "" {
+		out.WriteString(md)
+		out.WriteString("\n\n")
+	} else if b.RawCode != "" {
+		out.WriteString("```\n")
+		out.WriteString(strings.TrimRight(b.RawCode, "\n"))
+		out.WriteString("\n```\n\n")
+	}
+	for _, child := range b.Content {
+		renderMarkdown(child, out)
+	}
+	for _, item := range b.Items {
+		renderMarkdown(item, out)
+	}
+}
+
+// linksUnder collects every block link that sits under a heading whose text
+// contains `section`. The heading in force is the nearest preceding heading in
+// document order, so a «Связи» list is picked up while links in the body of the
+// page are not.
+func linksUnder(b Block, section string, heading *string, out *[]string) {
+	md := b.Markdown
+	if headingRe.MatchString(md) {
+		*heading = md
+	} else if strings.Contains(*heading, section) {
+		for _, ref := range extractLinks(md) {
+			// Именно Raw: спрашивать блок надо тем регистром, каким он записан.
+			*out = append(*out, ref.Raw)
+		}
+	}
+	for _, child := range b.Content {
+		linksUnder(child, section, heading, out)
+	}
+	for _, item := range b.Items {
+		linksUnder(item, section, heading, out)
+	}
+}
+
+// markdownWorkers bounds how many block trees are fetched at once. The walk is
+// latency-bound, not CPU-bound: one GET /blocks costs ~0.5 s and the API takes
+// one id per call (comma-separated ids answer 404, a repeated id parameter 400
+// — checked 17.09.2026), so the only way to shorten the walk is to overlap the
+// requests. Six is a compromise: it collapses a wide level into one round trip
+// without pushing the connect-link's block budget into HTTP 429. Twelve was
+// measured against it on the live space (17.09.2026): 3.3-4.1 s against 3.7 s,
+// i.e. inside the spread of the runs themselves, so the narrower pool keeps the
+// win and leaves the rate limit alone.
+const markdownWorkers = 6
+
+// fetched is one block tree of a level, kept with its position so that the
+// output order stays the discovery order and not the order of completion.
+type fetched struct {
+	id    string
+	block Block
+	err   error
+}
+
+// indexTree maps every block of a tree by its lowercased id, so that a page
+// the walk asks for can be served from a tree already in hand.
+func indexTree(b Block, into map[string]Block) {
+	if b.ID != "" {
+		if _, seen := into[strings.ToLower(b.ID)]; !seen {
+			into[strings.ToLower(b.ID)] = b
+		}
+	}
+	for _, child := range b.Content {
+		indexTree(child, into)
+	}
+	for _, item := range b.Items {
+		indexTree(item, into)
+	}
+}
+
+// runMarkdown prints the markdown of each requested block tree, optionally
+// following the links listed in its «Связи» section. Every ID is fetched at
+// most once; a failed fetch is reported on stderr and does not stop the rest —
+// a partial start context beats no start context.
+//
+// The walk goes level by level and fetches each level in parallel: «Связи»
+// fans out wide and shallow (23 blocks over 2 levels on the base rules,
+// 17.09.2026), so a sequential walk pays the API's latency once per block for
+// no reason. Rendering stays sequential over the level in its discovery order,
+// so the output does not depend on which request finished first.
+//
+// With --container the walk first reads one page whole and then serves itself
+// from that tree. GET /blocks?maxDepth=-1 crosses page boundaries — a nested
+// page comes back with its own content, not as a stub (checked 17.09.2026) —
+// so when the walked pages live under one page, that single read replaces all
+// of them. The walk itself is unchanged: the same «Связи» decide what is read
+// and in what order, the container only answers instead of the API. Whatever
+// the container does not hold is still fetched by id, so a page moved out of
+// it costs one request, not a wrong answer. A container that fails to read is
+// a note on stderr and a plain walk, not a failure: the text is the point.
+func runMarkdown(client *Client, idsArg string, follow bool, exclude map[string]bool, container string) {
+	// Сравниваем id без учёта регистра, спрашиваем — в исходном.
+	skip := map[string]bool{}
+	for id := range exclude {
+		skip[strings.ToLower(id)] = true
+	}
+	seen := map[string]bool{}
+	var level []string
+	for _, id := range splitCSV(idsArg) {
+		if key := strings.ToLower(id); !seen[key] && !skip[key] {
+			seen[key] = true
+			level = append(level, id)
+		}
+	}
+
+	// Дерево контейнера, если его попросили: отсюда уровень берётся даром.
+	have := map[string]Block{}
+	if container != "" {
+		block, err := client.getBlocks(container)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "! markdown: контейнер %s: %v (читаем обходом)\n", container, err)
+		} else {
+			indexTree(block, have)
+		}
+	}
+
+	var out strings.Builder
+	var failures []string
+	for len(level) > 0 {
+		results := make([]fetched, len(level))
+		var wg sync.WaitGroup
+		gate := make(chan struct{}, markdownWorkers)
+		for i, id := range level {
+			if block, ok := have[strings.ToLower(id)]; ok {
+				results[i] = fetched{id: id, block: block}
+				continue
+			}
+			wg.Add(1)
+			go func(i int, id string) {
+				defer wg.Done()
+				gate <- struct{}{}
+				defer func() { <-gate }()
+				block, err := client.getBlocks(id)
+				results[i] = fetched{id: id, block: block, err: err}
+			}(i, id)
+		}
+		wg.Wait()
+
+		var next []string
+		for _, result := range results {
+			if result.err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", result.id, result.err))
+				continue
+			}
+			renderMarkdown(result.block, &out)
+			if !follow {
+				continue
+			}
+			heading := ""
+			var found []string
+			linksUnder(result.block, linkSection, &heading, &found)
+			for _, id := range found {
+				if key := strings.ToLower(id); !seen[key] && !skip[key] {
+					seen[key] = true
+					next = append(next, id)
+				}
+			}
+		}
+		level = next
+	}
+
+	fmt.Print(strings.TrimRight(out.String(), "\n") + "\n")
+	for _, f := range failures {
+		fmt.Fprintf(os.Stderr, "! markdown: %s\n", f)
+	}
+	if len(failures) == len(seen) && len(seen) > 0 {
+		os.Exit(1) // nothing was read at all: the caller must not mistake it for an empty space
+	}
+}
+
 // ---- backlinks mode ----
 
 // Block IDs are UUIDs; Craft serializes block links into markdown two ways:
@@ -503,9 +704,17 @@ var (
 )
 
 // LinkRef is one parsed outgoing reference inside a single markdown string.
+//
+// Target is lowercased because the backlinks index matches ids, and Craft
+// writes the same id in different cases. Raw keeps the id exactly as the link
+// spells it, because the connect-API is case-sensitive when ASKED for a block:
+// an id lowercased on the way to GET /blocks answers 404 even though the page
+// exists (checked 17.09.2026 on 3430452A-8643-4ECD-B414-A5E8BF8AC3F4). So:
+// compare by Target, request by Raw.
 type LinkRef struct {
 	Text   string
-	Target string // lowercased
+	Target string // lowercased, for matching
+	Raw    string // as written, for asking the API
 }
 
 // extractLinks parses every block reference out of one block's markdown:
@@ -517,11 +726,11 @@ func extractLinks(md string) []LinkRef {
 	}
 	var out []LinkRef
 	for _, m := range mdBlockLinkRe.FindAllStringSubmatch(md, -1) {
-		out = append(out, LinkRef{Text: m[1], Target: strings.ToLower(m[2])})
+		out = append(out, LinkRef{Text: m[1], Target: strings.ToLower(m[2]), Raw: m[2]})
 	}
 	rest := mdBlockLinkRe.ReplaceAllString(md, "")
 	for _, m := range rawBlockIDRe.FindAllStringSubmatch(rest, -1) {
-		out = append(out, LinkRef{Target: strings.ToLower(m[1])})
+		out = append(out, LinkRef{Target: strings.ToLower(m[1]), Raw: m[1]})
 	}
 	return out
 }

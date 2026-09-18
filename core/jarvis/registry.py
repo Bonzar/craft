@@ -21,11 +21,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
-from .manifest import MANIFEST_NAME, Manifest, load, matches
+from .manifest import MANIFEST_NAME, Manifest, adapters_of, load, matches
 
 # Папка ядра внутри папки модуля.
 CORE_DIR = '_core'
 LIB_PART = 'lib'
+DATA_PART = 'data'
 
 # Родительский пакет для библиотечных частей. Регистрируется до загрузки части,
 # иначе обычная форма пакета `from . import helper` внутри неё не разрешается.
@@ -104,3 +105,29 @@ def find(requirement: str, module_dir: Path | str) -> LibraryModule | None:
         if part.is_dir():
             return LibraryModule(slug=manifest.slug, path=part)
     return None
+
+
+def library_of(manifest: Manifest) -> LibraryModule | None:
+    """Библиотечная часть этого модуля. Части нет — None."""
+    if manifest.path is None:
+        return None
+    part = manifest.path / LIB_PART
+    return LibraryModule(slug=manifest.slug, path=part) if part.is_dir() else None
+
+
+def data_of(manifest: Manifest) -> Path | None:
+    """Часть данных этого модуля. Части нет — None."""
+    if manifest.path is None:
+        return None
+    part = manifest.path / DATA_PART
+    return part if part.is_dir() else None
+
+
+def adapters(module_dir: Path | str, slug: str) -> list[Manifest]:
+    """Адаптеры базы: соседи, чей `for` накрывает её slug.
+
+    Это единственное, что у баз общее, — и потому лежит в ядре, а не в модуле:
+    как искать своих адаптеров, знают все базы одинаково, а что делать с
+    найденным — каждая своё.
+    """
+    return adapters_of(slug, neighbours(module_dir))

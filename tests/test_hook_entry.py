@@ -203,3 +203,74 @@ class RunHookTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SiblingEventTest(unittest.TestCase):
+    """Одно имя события харнеса — несколько единых: чужая строка молчит."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.tmp.name)
+        cls.home = cls.root / 'home'
+        cls.home.mkdir()
+        cls.settings_root = cls.root / 'settings'
+        source = cls.root / 'source'
+        (source / 'watcher').mkdir(parents=True)
+        (source / 'watcher' / 'module.toml').write_text(
+            'slug = "watcher"\nevents = ["session-start", "after-compact"]\n', encoding='utf-8'
+        )
+        hooks = source / 'watcher' / 'hooks'
+        hooks.mkdir()
+        (hooks / 'module.py').write_text(
+            'import sys\n'
+            'from pathlib import Path\n'
+            "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))\n"
+            'import jarvis\n'
+            'from jarvis.wrappers import claude\n'
+            'class Module(jarvis.Module):\n'
+            '    def handle(self, event, runtime):\n'
+            "        return jarvis.Context(f'пришло {event.event}')\n"
+            "if __name__ == '__main__':\n"
+            '    sys.exit(claude.run_hook(__file__, Module))\n',
+            encoding='utf-8',
+        )
+        subprocess.run(
+            [sys.executable, str(INSTALLER),
+             '--settings-dir', str(cls.settings_root),
+             '--modules', str(source),
+             '--core', str(CORE_SOURCE)],
+            check=True, capture_output=True,
+        )
+        cls.entry = cls.settings_root / 'jarvis' / 'modules' / 'watcher' / 'hooks' / 'module.py'
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def fire(self, source: str, *events: str):
+        payload = json.dumps({
+            'hook_event_name': 'SessionStart', 'session_id': 'sess-sibling',
+            'cwd': '/work', 'source': source,
+        })
+        argv = [sys.executable, str(self.entry)]
+        for name in events:
+            argv += ['--event', name]
+        return subprocess.run(argv, input=payload, text=True, capture_output=True,
+                              env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)})
+
+    def test_a_line_of_the_sibling_event_stays_silent(self) -> None:
+        result = self.fire('startup', 'after-compact')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '')
+
+    def test_a_line_that_names_both_answers_either(self) -> None:
+        for source, expected in (('startup', 'session-start'), ('compact', 'after-compact')):
+            result = self.fire(source, 'session-start', 'after-compact')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'пришло {expected}', result.stdout)
+
+    def test_a_line_of_a_different_harness_event_is_a_defect_and_says_so(self) -> None:
+        result = self.fire('startup', 'prompt')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('разошлись с установкой', result.stderr)

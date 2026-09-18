@@ -67,7 +67,7 @@ class InstallerTest(unittest.TestCase):
 
     def jarvis_handlers(self, claude_event: str) -> list[dict]:
         groups = self.settings()['hooks'].get(claude_event, [])
-        return [h for group in groups for h in group['hooks'] if installer.is_jarvis_line(h)]
+        return [h for group in groups for h in group['hooks'] if installer.is_jarvis_line(h, self.modules_root())]
 
     # --- строка на модуль и событие ---
 
@@ -259,7 +259,7 @@ class InstallerTest(unittest.TestCase):
 
     def test_a_satisfied_requirement_is_not_reported(self) -> None:
         self.add_module('probe', 'slug = "probe"\nrequires = ["shell-tree-*"]\n')
-        self.add_module('bash', 'slug = "bash"\nfor = "shell-tree"\n')
+        self.add_module('bash', 'slug = "bash"\nfor = "shell-tree-*"\n')
         self.assertEqual(self.run_installer().warnings, [])
 
     def test_duplicate_slug_is_rejected(self) -> None:

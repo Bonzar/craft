@@ -29,6 +29,9 @@ SOURCE_DEFAULT = 'default'
 
 SESSION_MODES_FILE = 'modes.json'
 SOURCE_CONFIG_NAME = 'modules.json'
+# Личный конфиг один на человека, а не на харнес: путь живёт здесь, а не в
+# обёртке, иначе у второго харнеса он разъехался бы копипастом.
+PERSONAL_CONFIG = '~/.config/jarvis/modules.json'
 
 
 @dataclass(frozen=True)

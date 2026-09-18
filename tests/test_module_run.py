@@ -223,7 +223,7 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(found.load().VALUE, 42)
 
     def test_library_part_is_found_by_a_family_mask(self) -> None:
-        make_module_dir(self.modules, 'bash', 'slug = "bash"\nfor = "shell-tree"\n', lib={'__init__.py': 'V = 1\n'})
+        make_module_dir(self.modules, 'bash', 'slug = "bash"\nfor = "shell-tree-*"\n', lib={'__init__.py': 'V = 1\n'})
         self.assertEqual(registry.find('shell-tree-*', self.caller).slug, 'bash')
 
     def test_a_module_that_is_not_there_is_not_found(self) -> None:
