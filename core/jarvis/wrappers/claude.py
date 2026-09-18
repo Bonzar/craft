@@ -41,6 +41,9 @@ CLAUDE_EVENTS: dict[str, tuple[str, ...]] = {
     'PreCompact': (ev.PRE_COMPACT,),
     'SessionEnd': (ev.SESSION_END,),
     'Notification': (ev.NOTIFICATION,),
+    'PermissionRequest': (ev.PERMISSION_REQUEST,),
+    'SubagentStart': (ev.SUBAGENT_START,),
+    'MessageDisplay': (ev.MODEL_MESSAGE,),
 }
 CLAUDE_BY_EVENT = {
     unified: claude for claude, group in CLAUDE_EVENTS.items() for unified in group
@@ -85,6 +88,13 @@ SUPPORTED: dict[str, frozenset[str]] = {
     ev.PRE_COMPACT: frozenset({forms.BLOCK}),
     ev.SESSION_END: frozenset(),
     ev.NOTIFICATION: frozenset(),
+    # замер 18.09.2026: решение приходит полем `decision` со своей формой, не
+    # `permissionDecision`, как на «перед вызовом». «Вопрос человеку» сюда не
+    # кладётся: запрос разрешения — это уже вопрос человеку, и второй поверх
+    # него ответа не ждёт.
+    ev.PERMISSION_REQUEST: frozenset({forms.ALLOW, forms.DENY}),
+    ev.SUBAGENT_START: frozenset({forms.CONTEXT}),
+    ev.MODEL_MESSAGE: frozenset(),
 }
 
 # Чего харнес не умеет — список самой обёртки, дословно для отчёта в чат.
@@ -100,6 +110,12 @@ UNSUPPORTED_NOTE = {
     ev.PRE_COMPACT: 'Claude перед сжатием принимает только блок: контекста туда не положить (дока)',
     ev.SESSION_END: 'Claude на конце сессии вывод хука выбрасывает целиком (дока)',
     ev.NOTIFICATION: 'Claude на уведомлении вывод хука выбрасывает целиком (дока)',
+    ev.PERMISSION_REQUEST: 'Claude на запросе разрешения принимает только «разрешить» и '
+                           '«запретить»: вопроса человеку и контекста там нет (замер)',
+    ev.SUBAGENT_START: 'Claude на старте подагента принимает только контекст — он уезжает '
+                       'подагенту (замер)',
+    ev.MODEL_MESSAGE: 'Claude на ответе и мысли модели принимает только подмену показанного '
+                      'куска (displayContent), а формы «текст человеку» у нас нет (замер)',
 }
 
 
@@ -142,6 +158,13 @@ def to_event(raw: Mapping[str, Any]) -> Event:
         error=raw.get('error'),
         prompt_text=raw.get('prompt'),
         human_answer=human_answer(raw),
+        # замер 18.09.2026: варианты для человека Claude даёт списком
+        # `permission_suggestions` (бывает пустым), подагента — парой
+        # `agent_id`/`agent_type` без поручения, ответ модели — куском `delta`.
+        permission_options=tuple(raw.get('permission_suggestions') or ()),
+        agent_id=raw.get('agent_id'),
+        agent_type=raw.get('agent_type'),
+        message_text=raw.get('delta'),
     )
 
 
@@ -158,6 +181,20 @@ def _context_payload(unified: str, text: str) -> dict:
     return _hook_specific(unified, {'additionalContext': text})
 
 
+def _permission_request_payload(response: Response) -> dict:
+    """Ответ на запрос разрешения: у него своя форма решения.
+
+    замер 18.09.2026 (Claude Code 2.1.276): решение лежит в `decision` парой
+    `behavior` и `message`, а не в `permissionDecision`, как на «перед
+    вызовом». Поля причины у «разрешить» в схеме нет — она остаётся в следе.
+    """
+    if response.kind == forms.ALLOW:
+        decision: dict[str, Any] = {'behavior': 'allow'}
+    else:
+        decision = {'behavior': 'deny', 'message': response.reason}
+    return _hook_specific(ev.PERMISSION_REQUEST, {'decision': decision})
+
+
 def translate(unified: str, response: Response, slug: str = '') -> Delivery:
     """Единый ответ — в форму Claude."""
     if unified not in SUPPORTED:
@@ -167,6 +204,8 @@ def translate(unified: str, response: Response, slug: str = '') -> Delivery:
     if response.kind not in SUPPORTED[unified]:
         return Delivery(supported=False, note=UNSUPPORTED_NOTE[unified])
 
+    if unified == ev.PERMISSION_REQUEST:
+        return Delivery(payload=_permission_request_payload(response))
     if response.kind == forms.CONTEXT:
         return Delivery(payload=_context_payload(unified, response.text))
     if response.kind == forms.QUESTION:

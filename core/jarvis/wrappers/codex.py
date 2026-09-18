@@ -1,14 +1,19 @@
-"""Минимальная обёртка Codex: только старт сессии и «после сжатия».
+"""Минимальная обёртка Codex: старт сессии, «после сжатия» и три заложенных события.
 
 Этап 3 везёт стартовый контекст в оба харнеса, поэтому здесь ровно столько
-Codex, сколько нужно базе стартового контекста: событие со stdin переводится в
-единый формат, единый ответ — в stdout. Полная обёртка со всеми событиями и
-всеми формами ответа — этап 7; чего тут нет, названо в `UNSUPPORTED_NOTE`, а не
-подменено соседней формой.
+Codex, сколько нужно базе стартового контекста, плюс те из трёх заложенных
+заранее событий, что у Codex есть: запрос разрешения и старт подагента. Полная
+обёртка со всеми событиями и всеми формами ответа — этап 7; чего тут нет,
+названо в `UNSUPPORTED_NOTE`, а не подменено соседней формой.
+
+«Ответа и мысли модели» у Codex нет вовсе: в списке его хуков такого события
+не значится (замер 18.09.2026), поэтому в карте его нет и установщик
+предупреждает, что модуль на нём в Codex не сработает.
 
 Факты о харнесе помечены источником: «дока» — схема протокола app-server,
-снятая `codex app-server generate-json-schema` (codex-cli 0.154.0); «замер» —
-проверено прогоном в этом окружении 17.09.2026.
+снятая `codex app-server generate-json-schema` (codex-cli 0.154.0), и страница
+хуков https://learn.chatgpt.com/docs/hooks (снята 18.09.2026); «замер» —
+проверено прогоном в этом окружении 17 и 18.09.2026.
 
 Замеры 17.09.2026 (codex-cli 0.154.0, контейнер облачной сессии):
 
@@ -46,10 +51,14 @@ HARNESS = 'codex'
 # нести туда стартовый контекст нечем и незачем.
 CODEX_EVENTS: dict[str, tuple[str, ...]] = {
     'SessionStart': (ev.SESSION_START, ev.AFTER_COMPACT),
+    'PermissionRequest': (ev.PERMISSION_REQUEST,),
+    'SubagentStart': (ev.SUBAGENT_START,),
 }
 CODEX_BY_EVENT = {
     ev.SESSION_START: 'SessionStart',
     ev.AFTER_COMPACT: 'SessionStart',
+    ev.PERMISSION_REQUEST: 'PermissionRequest',
+    ev.SUBAGENT_START: 'SubagentStart',
 }
 # Какие события Codex принимают текст в ход. Пока одно — и оно же несёт оба
 # наших: и старт сессии, и «после сжатия».
@@ -66,11 +75,21 @@ COMPACT_SOURCE = 'compact'
 SUPPORTED: dict[str, frozenset[str]] = {
     ev.SESSION_START: frozenset({forms.CONTEXT}),
     ev.AFTER_COMPACT: frozenset({forms.CONTEXT}),
+    # замер 18.09.2026: схемы ответов у Codex один в один как у Claude —
+    # `decision` с `behavior` allow или deny на запросе разрешения и
+    # `additionalContext` на старте подагента. Поля `updatedInput`,
+    # `updatedPermissions` и `interrupt` схема принимает, но помечает
+    # зарезервированными: с ними хук «падает закрыто», поэтому их тут нет.
+    ev.PERMISSION_REQUEST: frozenset({forms.ALLOW, forms.DENY}),
+    ev.SUBAGENT_START: frozenset({forms.CONTEXT}),
 }
 
 UNSUPPORTED_NOTE = {
     ev.SESSION_START: 'обёртка Codex этапа 3 несёт только контекст на старте сессии',
     ev.AFTER_COMPACT: 'обёртка Codex этапа 3 несёт только контекст после сжатия',
+    ev.PERMISSION_REQUEST: 'Codex на запросе разрешения принимает только «разрешить» и '
+                           '«запретить»: вопроса человеку и контекста там нет (замер)',
+    ev.SUBAGENT_START: 'Codex на старте подагента принимает только контекст (замер)',
 }
 
 
@@ -96,18 +115,47 @@ def to_event(raw: Mapping[str, Any]) -> Event:
         cwd=str(raw.get('cwd') or ''),
         harness=HARNESS,
         raw=raw,
+        tool_name=raw.get('tool_name'),
+        tool_input=raw.get('tool_input'),
+        # замер 18.09.2026: вариантов для человека Codex на запросе разрешения
+        # не даёт вовсе — вопрос человеку лежит текстом внутри `tool_input`.
+        # Подагента он называет той же парой полей, что и Claude.
+        agent_id=raw.get('agent_id'),
+        agent_type=raw.get('agent_type'),
     )
 
 
+# Ключ, которым обёртка помечает ответ голым текстом: на старте сессии весь
+# stdout хука уезжает в контекст как есть (замер 17.09.2026), структура там не
+# нужна. Остальные события отвечают структурой `hookSpecificOutput`.
+TEXT_KEY = 'text'
+
+
+def _hook_specific(unified: str, fields: dict) -> dict:
+    return {'hookSpecificOutput': {'hookEventName': CODEX_BY_EVENT[unified], **fields}}
+
+
 def translate(unified: str, response: Response, slug: str = '') -> Delivery:
-    """Единый ответ — в форму Codex: текстом на stdout."""
+    """Единый ответ — в форму Codex."""
     if unified not in SUPPORTED:
         raise ValueError(f'события {unified!r} обёртка Codex этапа 3 не несёт')
     if response.kind == forms.SILENCE:
         return Delivery()
     if response.kind not in SUPPORTED[unified]:
         return Delivery(supported=False, note=UNSUPPORTED_NOTE[unified])
-    return Delivery(payload={'text': response.text})
+
+    if unified == ev.PERMISSION_REQUEST:
+        # Поля причины у «разрешить» в схеме Codex нет, как и у Claude: она
+        # остаётся в следе.
+        decision = (
+            {'behavior': 'allow'}
+            if response.kind == forms.ALLOW
+            else {'behavior': 'deny', 'message': response.reason}
+        )
+        return Delivery(payload=_hook_specific(unified, {'decision': decision}))
+    if unified == ev.SUBAGENT_START:
+        return Delivery(payload=_hook_specific(unified, {'additionalContext': response.text}))
+    return Delivery(payload={TEXT_KEY: response.text})
 
 
 def emit(delivery: Delivery, stdout=None, stderr=None) -> int:
@@ -117,7 +165,10 @@ def emit(delivery: Delivery, stdout=None, stderr=None) -> int:
     if delivery.note:
         stderr.write(delivery.note + '\n')
     if delivery.payload is not None:
-        stdout.write(delivery.payload['text'])
+        if TEXT_KEY in delivery.payload:
+            stdout.write(delivery.payload[TEXT_KEY])
+        else:
+            stdout.write(json.dumps(delivery.payload, ensure_ascii=False))
     return delivery.exit_code
 
 

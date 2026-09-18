@@ -25,17 +25,29 @@ Claude читает `~/.claude/rules/‹slug›/`, а Codex — свой `~/.cod
 на первой сессии не встанут. В облачном окружении (Claude Code on the web) это
 делает setup-скрипт окружения, в его настройках:
 
+Скрипт выполняется в `$HOME`, а не в корне клона, и клон лежит в
+`$HOME/craft` — поэтому первым делом в него надо перейти:
+
 ```bash
-# репозиторий уже склонирован окружением
-cd "$REPO"                                   # каталог клона craft
-python3 tools/jarvis-install --harness claude    # или --harness codex
-CGO_ENABLED=0 go build -ldflags="-s -w" -o "$HOME/.local/bin/craft-sync" ./craft-sync
+# репозиторий уже склонирован окружением, скрипт стартует в $HOME
+if [ -f "$HOME/craft/tools/jarvis-install" ]; then
+  cd "$HOME/craft"
+  python3 tools/jarvis-install --harness claude    # или --harness codex
+  mkdir -p "$HOME/.local/bin"
+  CGO_ENABLED=0 go build -ldflags="-s -w" -o "$HOME/.local/bin/craft-sync" ./craft-sync
+fi
 ```
 
-Второй строкой ставится сам набор модулей, третьей — `craft-sync`: бинарник в
+Внутри условия ставится сам набор модулей и `craft-sync`: бинарник в
 контейнере не предустановлен и пересоздание контейнера не переживает, а
 поставщик `craft-snapshot` без него отдаёт пустой текст и пишет причину в
-журнал сессии. Установщик идемпотентен: повторный запуск ничего не меняет.
+журнал сессии. Каталог `$HOME/.local/bin` в свежем контейнере может не
+существовать — `go build` его сам не создаёт. Установщик идемпотентен:
+повторный запуск ничего не меняет.
+
+Условие на файл — не украшение: без него скрипт с запуском
+`python3 tools/jarvis-install` из `$HOME` падает молча и сессия стартует
+вообще без модулей (замер 18.09.2026).
 
 Из окружения нужны `CRAFT_API_BASE` (connect-API Craft) и — для Codex — свой
 `CODEX_HOME` с `auth.json`. Для Codex установщик после записи строк хуков
