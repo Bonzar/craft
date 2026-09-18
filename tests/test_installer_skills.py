@@ -5,6 +5,7 @@
 подстановка единых slug возможностей харнеса.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -286,6 +287,84 @@ class HarnessSlugTest(SkillInstallCase):
         modules = installer.modules_root(self.settings_root) / 'probe'
         self.assertIn('{{NAME}}', (modules / 'hooks' / 'module.py').read_text(encoding='utf-8'))
         self.assertIn('{{NAME}}', (modules / 'data' / 'case.json').read_text(encoding='utf-8'))
+
+
+class SkillsReadPermissionTest(SkillInstallCase):
+    """Право на чтение каталога скиллов: Claude без него скилл читать не даёт."""
+
+    def settings(self) -> dict:
+        return json.loads((self.settings_root / 'settings.json').read_text(encoding='utf-8'))
+
+    def rule(self) -> str:
+        return f'Read(/{self.settings_root}/skills/**)'
+
+    def test_a_skill_part_brings_the_right_to_read_it(self) -> None:
+        # Форма `//путь` — абсолютный путь от корня файловой системы (дока прав
+        # Claude Code, 18.09.2026): одинарный слэш анкерит на источник настроек.
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '#\n'}})
+        self.run_installer()
+        self.assertEqual(self.settings()['permissions']['allow'], [self.rule()])
+        self.assertTrue(self.rule().startswith('Read(//'))
+
+    def test_without_a_skill_part_nothing_is_written(self) -> None:
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n', {'rules': {'rule.md': '#\n'}})
+        self.run_installer()
+        self.assertNotIn('permissions', self.settings())
+
+    def test_the_right_does_not_pile_up_on_reinstall(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '#\n'}})
+        self.run_installer()
+        before = (self.settings_root / 'settings.json').read_text(encoding='utf-8')
+        self.run_installer()
+        self.assertEqual((self.settings_root / 'settings.json').read_text(encoding='utf-8'), before)
+        self.assertEqual(self.settings()['permissions']['allow'], [self.rule()])
+
+    def test_the_last_skill_part_gone_takes_the_right_with_it(self) -> None:
+        folder = self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '#\n'}})
+        self.run_installer()
+        shutil.rmtree(folder / 'skill')
+        (folder / 'rules').mkdir()
+        (folder / 'rules' / 'rule.md').write_text('# правило\n', encoding='utf-8')
+        self.run_installer()
+        self.assertNotIn('permissions', self.settings())
+
+    def test_one_skill_left_keeps_the_right(self) -> None:
+        folder = self.add_module('one', 'slug = "one"\n', {'skill': {'SKILL.md': '#\n'}})
+        self.add_module('two', 'slug = "two"\n', {'skill': {'SKILL.md': '#\n'}})
+        self.run_installer()
+        shutil.rmtree(folder / 'skill')
+        self.run_installer()
+        self.assertEqual(self.settings()['permissions']['allow'], [self.rule()])
+
+    def test_what_a_person_wrote_in_permissions_survives(self) -> None:
+        self.settings_root.mkdir(parents=True)
+        (self.settings_root / 'settings.json').write_text(
+            json.dumps({'permissions': {'allow': ['Bash(ls:*)'], 'deny': ['Read(./.env)'],
+                                        'defaultMode': 'acceptEdits'}}),
+            encoding='utf-8',
+        )
+        folder = self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '#\n'}})
+        self.run_installer()
+        permissions = self.settings()['permissions']
+        self.assertEqual(permissions['allow'], ['Bash(ls:*)', self.rule()])
+        self.assertEqual(permissions['deny'], ['Read(./.env)'])
+        self.assertEqual(permissions['defaultMode'], 'acceptEdits')
+
+        shutil.rmtree(folder / 'skill')
+        (folder / 'rules').mkdir()
+        (folder / 'rules' / 'rule.md').write_text('#\n', encoding='utf-8')
+        self.run_installer()
+        permissions = self.settings()['permissions']
+        self.assertEqual(permissions['allow'], ['Bash(ls:*)'])
+        self.assertEqual(permissions['deny'], ['Read(./.env)'])
+
+    def test_codex_needs_no_such_right(self) -> None:
+        # Живой `codex exec` читает соседний файл скилла без разрешений
+        # (замер 18.09.2026), поэтому у Codex ничего не пишется.
+        self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': '#\n'}})
+        self.run_codex()
+        self.assertFalse((self.settings_root / 'settings.json').exists())
+        self.assertNotIn('permissions', (self.settings_root / 'config.toml').read_text(encoding='utf-8'))
 
 
 class RepositoryModulesTest(unittest.TestCase):

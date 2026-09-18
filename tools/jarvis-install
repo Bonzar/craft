@@ -398,6 +398,41 @@ class ClaudeBackend(Backend):
             args += ['--event', name]
         return {'type': 'command', 'command': python, 'args': args, 'timeout': HOOK_TIMEOUT_SEC}
 
+    def skills_rule(self, settings_root: Path) -> str:
+        """Правило на чтение каталога скиллов. Одно на все скиллы, не на модуль.
+
+        Каталог настроек лежит вне рабочего каталога сессии, а чтение оттуда
+        Claude спрашивает у человека. В неинтерактивном прогоне спросить
+        некого, и скилл, называющий свой соседний файл, упирается в запрос
+        разрешения (замер 18.09.2026).
+
+        Форма `//путь` — абсолютный путь от корня файловой системы; одинарный
+        слэш означал бы путь от источника настроек (дока прав Claude Code,
+        снята 18.09.2026: «A pattern like `/Users/alice/file` isn\'t an
+        absolute path… Use `//Users/alice/file` for absolute paths»).
+        """
+        return f'Read(/{settings_root}/skills/**)'
+
+    def with_skills_rule(self, settings: dict, settings_root: Path, needed: bool) -> dict:
+        """Настройки с нашим правом на чтение скиллов: добавить или убрать.
+
+        Правится только наша строка: остальное в `permissions.allow` чужое.
+        """
+        rule = self.skills_rule(settings_root)
+        permissions = dict(settings.get('permissions') or {})
+        allow = [entry for entry in permissions.get('allow', []) if entry != rule]
+        if needed:
+            allow.append(rule)
+        if allow:
+            permissions['allow'] = allow
+        else:
+            permissions.pop('allow', None)
+        if permissions:
+            return {**settings, 'permissions': permissions}
+        # Пустой раздел прав не значит ничего и после снятия последнего скилла
+        # оставлял бы за собой мусор, которого не было до установки.
+        return {key: value for key, value in settings.items() if key != 'permissions'}
+
     def register(self, records, settings_root, python, report) -> None:
         hooks: dict[str, list] = {}
         for slug, record in sorted(records.items()):
@@ -411,7 +446,12 @@ class ClaudeBackend(Backend):
         kept = strip_jarvis_lines(settings.get('hooks', {}), modules_root(settings_root))
         for harness_event, groups in hooks.items():
             kept.setdefault(harness_event, []).extend(groups)
-        write_settings(settings_path, {**settings, 'hooks': kept})
+
+        skills = any(PART_SKILL in record['parts'] for record in records.values())
+        settings = self.with_skills_rule({**settings, 'hooks': kept}, settings_root, skills)
+        if skills:
+            report.parts.append((self.name, 'право на чтение скиллов', self.skills_rule(settings_root)))
+        write_settings(settings_path, settings)
 
 
 class CodexBackend(Backend):
