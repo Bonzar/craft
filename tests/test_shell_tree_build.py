@@ -78,10 +78,24 @@ class BuildTest(unittest.TestCase):
         )
         tool.chmod(0o755)
 
+    def installed_line(self, harness_event: str) -> dict:
+        """Строка хука ровно в том виде, в каком её записал установщик."""
+        settings = json.loads((self.settings / 'settings.json').read_text(encoding='utf-8'))
+        lines = [
+            hook for group in settings['hooks'].get(harness_event, [])
+            for hook in group.get('hooks', [])
+            if SLUG in ' '.join(hook.get('args', []))
+        ]
+        self.assertEqual(len(lines), 1, settings['hooks'].get(harness_event))
+        return lines[0]
+
     def fire(self, session_id: str, path: str | None = None) -> subprocess.CompletedProcess:
+        # Хук запускается строкой из settings.json, а не собранной здесь: иначе
+        # тест проверяет свою строку, а живая сессия — установщикову, и разрыв
+        # между ними (например, незнакомый хуку ключ) остаётся невидимым.
+        line = self.installed_line('SessionStart')
         done = subprocess.run(
-            [sys.executable, str(self.module / 'hooks' / 'module.py'),
-             '--event', 'session-start'],
+            [line['command'], *line['args']],
             input=session_event(session_id), text=True, capture_output=True,
             env={'PATH': path if path is not None else f'{self.stubs}:/usr/bin:/bin',
                  'HOME': str(self.home)},
@@ -162,15 +176,10 @@ class BuildTest(unittest.TestCase):
         self.assertFalse((self.module / 'bin').exists(), 'bin/ делает хук, а не установщик')
 
     def test_the_installer_writes_a_session_start_line(self) -> None:
-        settings = json.loads((self.settings / 'settings.json').read_text(encoding='utf-8'))
-        lines = [
-            hook for group in settings['hooks'].get('SessionStart', [])
-            for hook in group.get('hooks', [])
-            if SLUG in ' '.join(hook.get('args', []))
-        ]
-        self.assertEqual(len(lines), 1, settings['hooks'].get('SessionStart'))
-        self.assertIn('--event', lines[0]['args'])
-        self.assertIn('session-start', lines[0]['args'])
+        line = self.installed_line('SessionStart')
+        self.assertIn('--event', line['args'])
+        self.assertIn('session-start', line['args'])
+        self.assertIn('--harness', line['args'], 'строка хука не называет харнес')
 
 
 if __name__ == '__main__':

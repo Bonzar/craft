@@ -28,8 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 
 import jarvis
-from jarvis import registry
-from jarvis.wrappers import claude
+from jarvis import registry, wrappers
 
 GO = 'go'
 BUILD_FLAGS = ['build', '-ldflags=-s -w']
@@ -132,4 +131,4 @@ def note(runtime, event, action: str, reason: str = '', seconds=None) -> None:
 
 
 if __name__ == '__main__':
-    sys.exit(claude.run_hook(__file__, Module))
+    sys.exit(wrappers.run_hook(__file__, Module))
