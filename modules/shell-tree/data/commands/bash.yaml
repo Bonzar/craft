@@ -1,0 +1,20 @@
+# $schema: ../../../schemas/command.schema.json
+command: bash
+description: "GNU Bourne-Again SHell"
+classification: DANGEROUS
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+delegates_to:
+  mode: flag_value_is_expression
+  flag: -c
+options:
+  -c: {takes_value: true}
+  -e: {}
+  -x: {}
+  -i: {}
+  --norc: {}
+  --noprofile: {}
+  -l: {}
+  --login: {aliases: [-l]}
+  -n: {}

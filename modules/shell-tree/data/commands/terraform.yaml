@@ -1,0 +1,70 @@
+# $schema: ../../../schemas/command.schema.json
+command: terraform
+description: "Infrastructure as code tool by HashiCorp"
+classification: DANGEROUS
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  init:
+    classification: LOCAL_EFFECTS
+  plan:
+    classification: READONLY
+  apply:
+    classification: DANGEROUS
+  destroy:
+    classification: DANGEROUS
+  show:
+    classification: READONLY
+  output:
+    classification: READONLY
+  state:
+    classification: READONLY
+    subcommands:
+      list:
+        classification: READONLY
+      show:
+        classification: READONLY
+      mv:
+        classification: DANGEROUS
+      rm:
+        classification: DANGEROUS
+      pull:
+        classification: EXTERNAL_EFFECTS
+      push:
+        classification: EXTERNAL_EFFECTS
+  validate:
+    classification: READONLY
+  fmt:
+    classification: LOCAL_EFFECTS
+  workspace:
+    classification: READONLY
+    subcommands:
+      list:
+        classification: READONLY
+      show:
+        classification: READONLY
+      new:
+        classification: EXTERNAL_EFFECTS
+      select:
+        classification: EXTERNAL_EFFECTS
+      delete:
+        classification: DANGEROUS
+  import:
+    classification: DANGEROUS
+  refresh:
+    classification: EXTERNAL_EFFECTS
+  providers:
+    classification: READONLY
+  console:
+    classification: DANGEROUS
+  taint:
+    classification: DANGEROUS
+  untaint:
+    classification: DANGEROUS
+  force-unlock:
+    classification: DANGEROUS
+  graph:
+    classification: READONLY
+  test:
+    classification: READONLY

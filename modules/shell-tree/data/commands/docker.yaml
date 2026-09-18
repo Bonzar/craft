@@ -1,0 +1,177 @@
+# $schema: ../../../schemas/command.schema.json
+command: docker
+description: "Container application platform"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+  --host: {takes_value: true, aliases: [-H]}
+  --config: {takes_value: true}
+  --context: {takes_value: true}
+  --log-level: {takes_value: true, aliases: [-l]}
+  --tls: {}
+  --tlscacert: {takes_value: true}
+  --tlscert: {takes_value: true}
+  --tlskey: {takes_value: true}
+  --tlsverify: {}
+  -D: {}
+  --debug: {}
+
+subcommands:
+  ps:
+    classification: READONLY
+    strict: false
+  images:
+    classification: READONLY
+    strict: false
+  inspect:
+    classification: READONLY
+    strict: false
+  logs:
+    classification: READONLY
+    strict: false
+  info:
+    classification: READONLY
+  version:
+    classification: READONLY
+  stats:
+    classification: READONLY
+    strict: false
+  top:
+    classification: READONLY
+    strict: false
+  port:
+    classification: READONLY
+    strict: false
+  diff:
+    classification: READONLY
+    strict: false
+  history:
+    classification: READONLY
+    strict: false
+  events:
+    classification: READONLY
+    strict: false
+
+  run:
+    classification: DANGEROUS
+    strict: false
+  exec:
+    classification: DANGEROUS
+    strict: false
+  build:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  pull:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  push:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+  tag:
+    classification: EXTERNAL_EFFECTS
+  start:
+    classification: EXTERNAL_EFFECTS
+  stop:
+    classification: EXTERNAL_EFFECTS
+  restart:
+    classification: EXTERNAL_EFFECTS
+  create:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+  cp:
+    classification: EXTERNAL_EFFECTS
+  compose:
+    subcommands:
+      ps:
+        classification: READONLY
+        strict: false
+      logs:
+        classification: READONLY
+        strict: false
+      top:
+        classification: READONLY
+        strict: false
+      config:
+        classification: READONLY
+        strict: false
+      images:
+        classification: READONLY
+        strict: false
+      up:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+      down:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+      start:
+        classification: EXTERNAL_EFFECTS
+      stop:
+        classification: EXTERNAL_EFFECTS
+      restart:
+        classification: EXTERNAL_EFFECTS
+      create:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+      build:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+        strict: false
+      pull:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+      push:
+        classification: EXTERNAL_EFFECTS
+      exec:
+        classification: DANGEROUS
+        strict: false
+      run:
+        classification: DANGEROUS
+        strict: false
+      rm:
+        classification: DANGEROUS
+        strict: false
+      kill:
+        classification: DANGEROUS
+        strict: false
+
+  rm:
+    classification: DANGEROUS
+    strict: false
+  rmi:
+    classification: DANGEROUS
+    strict: false
+  system:
+    subcommands:
+      prune:
+        classification: DANGEROUS
+        strict: false
+      df:
+        classification: READONLY
+      info:
+        classification: READONLY
+  volume:
+    subcommands:
+      ls:
+        classification: READONLY
+      inspect:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+      rm:
+        classification: DANGEROUS
+      prune:
+        classification: DANGEROUS
+  network:
+    subcommands:
+      ls:
+        classification: READONLY
+      inspect:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+      rm:
+        classification: DANGEROUS
+      prune:
+        classification: DANGEROUS

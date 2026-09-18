@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: wget
+description: "Non-interactive network file downloader"
+classification: EXTERNAL_EFFECTS
+strict: false
+global_options:
+  --help: {overrides: READONLY}

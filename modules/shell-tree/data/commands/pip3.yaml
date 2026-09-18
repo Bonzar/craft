@@ -1,0 +1,33 @@
+# $schema: ../../../schemas/command.schema.json
+command: pip3
+description: "Python package installer"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  list:
+    classification: READONLY
+    strict: false
+  show:
+    classification: READONLY
+    strict: false
+  freeze:
+    classification: READONLY
+  search:
+    classification: READONLY
+  check:
+    classification: READONLY
+  install:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  uninstall:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  download:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+  wheel:
+    classification: EXTERNAL_EFFECTS
+    strict: false

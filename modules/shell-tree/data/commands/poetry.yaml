@@ -1,0 +1,97 @@
+# $schema: ../../../schemas/command.schema.json
+command: poetry
+description: "Python dependency management and packaging"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  show:
+    classification: READONLY
+    strict: false
+  version:
+    classification: READONLY
+    strict: false
+  search:
+    classification: READONLY
+    strict: false
+  check:
+    classification: READONLY
+    strict: false
+  env:
+    strict: false
+    subcommands:
+      info:
+        classification: READONLY
+      list:
+        classification: READONLY
+      use:
+        classification: LOCAL_EFFECTS
+        strict: false
+      remove:
+        classification: LOCAL_EFFECTS
+        strict: false
+  config:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+  install:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  update:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  add:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  remove:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  lock:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  build:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  init:
+    classification: LOCAL_EFFECTS
+    strict: false
+  new:
+    classification: LOCAL_EFFECTS
+    strict: false
+  shell:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  publish:
+    classification: DANGEROUS
+    strict: false
+  run:
+    classification: DANGEROUS
+    strict: false
+    delegates_to:
+      mode: rest_are_argv
+    subcommands:
+      pytest:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+        strict: false
+      ruff:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+        strict: false
+      mypy:
+        classification: READONLY
+        strict: false
+  self:
+    strict: false
+    subcommands:
+      update:
+        classification: LOCAL_EFFECTS
+        strict: false

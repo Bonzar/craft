@@ -1,0 +1,69 @@
+# $schema: ../../../schemas/command.schema.json
+command: cargo
+description: "Rust package manager and build tool"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  build:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  test:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  run:
+    classification: DANGEROUS
+  check:
+    classification: READONLY
+  clippy:
+    classification: READONLY
+    options:
+      --fix: {overrides: LOCAL_EFFECTS}
+  fmt:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  doc:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  publish:
+    classification: DANGEROUS
+  install:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    options:
+      --list: {overrides: READONLY}
+  clean:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  update:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  search:
+    classification: READONLY
+  tree:
+    classification: READONLY
+  metadata:
+    classification: READONLY
+  verify-project:
+    classification: READONLY
+  bench:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  init:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  new:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  fix:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  add:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  remove:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  generate-lockfile:
+    classification: LOCAL_EFFECTS
+    risk: LOW

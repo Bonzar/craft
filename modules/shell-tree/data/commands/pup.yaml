@@ -1,0 +1,882 @@
+# $schema: ../../../schemas/command.schema.json
+command: pup
+description: "Datadog CLI"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+  --org: {takes_value: true}
+  --output: {takes_value: true}
+  --yes: {}
+
+subcommands:
+
+  apm:
+    classification: READONLY
+    strict: false
+  audit-logs:
+    classification: READONLY
+    strict: false
+  auth:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      status:
+        classification: READONLY
+        options:
+          --site: {takes_value: true}
+      test:
+        classification: READONLY
+      login:
+        classification: LOCAL_EFFECTS
+        options:
+          --read-only: {}
+          --scopes: {takes_value: true}
+          --site: {takes_value: true}
+          --subdomain: {takes_value: true}
+      logout:
+        classification: LOCAL_EFFECTS
+      refresh:
+        classification: LOCAL_EFFECTS
+  cloud:
+    classification: READONLY
+    strict: false
+  containers:
+    classification: READONLY
+    strict: false
+  cost:
+    classification: READONLY
+    strict: false
+  dbm:
+    classification: READONLY
+    strict: false
+  ddsql:
+    classification: READONLY
+    strict: false
+  error-tracking:
+    classification: READONLY
+    strict: false
+  events:
+    classification: READONLY
+    strict: false
+  fleet:
+    classification: READONLY
+    strict: false
+  infrastructure:
+    classification: READONLY
+    strict: false
+  llm-obs:
+    classification: READONLY
+    strict: false
+  logs:
+    classification: READONLY
+    strict: false
+  on-call:
+    classification: READONLY
+    strict: false
+  organizations:
+    classification: READONLY
+    strict: false
+  rum:
+    classification: READONLY
+    strict: false
+  scorecards:
+    classification: READONLY
+    strict: false
+  service-catalog:
+    classification: READONLY
+    strict: false
+  static-analysis:
+    classification: READONLY
+    strict: false
+  status-pages:
+    classification: READONLY
+    strict: false
+  symdb:
+    classification: READONLY
+    strict: false
+  synthetics:
+    classification: READONLY
+    strict: false
+  traces:
+    classification: READONLY
+    strict: false
+  usage:
+    classification: READONLY
+    strict: false
+  users:
+    classification: READONLY
+    strict: false
+  version:
+    classification: READONLY
+    strict: false
+  status:
+    classification: READONLY
+    strict: false
+  completions:
+    classification: READONLY
+    strict: false
+  test-optimization:
+    classification: READONLY
+    strict: false
+  code-coverage:
+    classification: READONLY
+    strict: false
+  cicd:
+    classification: READONLY
+    strict: false
+  product-analytics:
+    classification: READONLY
+    strict: false
+  data-governance:
+    classification: READONLY
+    strict: false
+  feature-flags:
+    classification: READONLY
+    strict: false
+  bits:
+    classification: READONLY
+    strict: false
+  hamr:
+    classification: READONLY
+    strict: false
+  misc:
+    classification: READONLY
+    strict: false
+  agent:
+    classification: READONLY
+    strict: false
+
+
+  monitors:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --limit: {takes_value: true}
+          --name: {takes_value: true}
+          --tags: {takes_value: true}
+      search:
+        classification: READONLY
+        options:
+          --page: {takes_value: true}
+          --per-page: {takes_value: true}
+          --query: {takes_value: true}
+          --sort: {takes_value: true}
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+
+  dashboards:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+      widgets:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+            options:
+              --filter-creator-handle: {takes_value: true}
+              --filter-is-favorited: {takes_value: true}
+              --filter-tags: {takes_value: true}
+              --filter-title: {takes_value: true}
+              --filter-widget-type: {takes_value: true}
+              --page-number: {takes_value: true}
+              --page-size: {takes_value: true}
+              --sort: {takes_value: true}
+          get:
+            classification: READONLY
+          create:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          delete:
+            classification: DANGEROUS
+
+  notebooks:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+
+  slos:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --limit: {takes_value: true}
+          --metrics-query: {takes_value: true}
+          --offset: {takes_value: true}
+          --query: {takes_value: true}
+          --tags-query: {takes_value: true}
+      get:
+        classification: READONLY
+      status:
+        classification: READONLY
+        options:
+          --from: {takes_value: true}
+          --to: {takes_value: true}
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+
+  workflows:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+      run:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --payload: {takes_value: true}
+          --payload-file: {takes_value: true}
+          --timeout: {takes_value: true}
+          --wait: {}
+      instances:
+        classification: READONLY
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+            options:
+              --limit: {takes_value: true}
+              --page: {takes_value: true}
+          get:
+            classification: READONLY
+          cancel:
+            classification: EXTERNAL_EFFECTS
+
+  api-keys:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --name: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+
+  app-keys:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --all: {}
+          --filter: {takes_value: true}
+          --page-number: {takes_value: true}
+          --page-size: {takes_value: true}
+          --sort: {takes_value: true}
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --name: {takes_value: true}
+          --scopes: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --name: {takes_value: true}
+          --scopes: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+
+  app-builder:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --query: {takes_value: true}
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+      delete-batch:
+        classification: DANGEROUS
+        options:
+          --app-ids: {takes_value: true}
+      publish:
+        classification: EXTERNAL_EFFECTS
+      unpublish:
+        classification: EXTERNAL_EFFECTS
+
+  obs-pipelines:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --limit: {takes_value: true}
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      delete:
+        classification: DANGEROUS
+      validate:
+        classification: READONLY
+        options:
+          --file: {takes_value: true}
+
+
+  metrics:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --filter: {takes_value: true}
+          --from: {takes_value: true}
+          --tag-filter: {takes_value: true}
+      query:
+        classification: READONLY
+        options:
+          --query: {takes_value: true}
+          --from: {takes_value: true}
+          --to: {takes_value: true}
+      search:
+        classification: READONLY
+        options:
+          --query: {takes_value: true}
+          --from: {takes_value: true}
+          --to: {takes_value: true}
+      submit:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+          --host: {takes_value: true}
+          --interval: {takes_value: true}
+          --name: {takes_value: true}
+          --tags: {takes_value: true}
+          --type: {takes_value: true}
+          --value: {takes_value: true}
+      metadata:
+        classification: READONLY
+        strict: false
+        subcommands:
+          get:
+            classification: READONLY
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --description: {takes_value: true}
+              --file: {takes_value: true}
+              --per-unit: {takes_value: true}
+              --short-name: {takes_value: true}
+              --type: {takes_value: true}
+              --unit: {takes_value: true}
+      tags:
+        classification: READONLY
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+            options:
+              --from: {takes_value: true}
+              --to: {takes_value: true}
+
+  downtime:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      cancel:
+        classification: DANGEROUS
+
+  incidents:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --limit: {takes_value: true}
+      get:
+        classification: READONLY
+      import:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      settings:
+        strict: false
+        subcommands:
+          get:
+            classification: READONLY
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+      handles:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+          create:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          delete:
+            classification: DANGEROUS
+      attachments:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+          delete:
+            classification: DANGEROUS
+      postmortem-templates:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+          get:
+            classification: READONLY
+          create:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          delete:
+            classification: DANGEROUS
+
+  cases:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      search:
+        classification: READONLY
+        options:
+          --page-number: {takes_value: true}
+          --page-size: {takes_value: true}
+          --query: {takes_value: true}
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --description: {takes_value: true}
+          --file: {takes_value: true}
+          --priority: {takes_value: true}
+          --title: {takes_value: true}
+          --type-id: {takes_value: true}
+      archive:
+        classification: DANGEROUS
+      unarchive:
+        classification: EXTERNAL_EFFECTS
+      assign:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --user-id: {takes_value: true}
+      move:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --project-id: {takes_value: true}
+      update-priority:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --priority: {takes_value: true}
+      update-status:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --status: {takes_value: true}
+      update-title:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --title: {takes_value: true}
+      projects:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+          get:
+            classification: READONLY
+          create:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --key: {takes_value: true}
+              --name: {takes_value: true}
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          delete:
+            classification: DANGEROUS
+          notification-rules:
+            classification: EXTERNAL_EFFECTS
+            strict: false
+            subcommands:
+              list:
+                classification: READONLY
+              create:
+                classification: EXTERNAL_EFFECTS
+                options:
+                  --file: {takes_value: true}
+              update:
+                classification: EXTERNAL_EFFECTS
+                options:
+                  --file: {takes_value: true}
+              delete:
+                classification: DANGEROUS
+      jira:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          create-issue:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          link:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          unlink:
+            classification: EXTERNAL_EFFECTS
+      servicenow:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          create-ticket:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+
+  tags:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      get:
+        classification: READONLY
+      add:
+        classification: EXTERNAL_EFFECTS
+      update:
+        classification: EXTERNAL_EFFECTS
+      delete:
+        classification: DANGEROUS
+
+  runbooks:
+    classification: READONLY
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --tag: {takes_value: true}
+      describe:
+        classification: READONLY
+      validate:
+        classification: READONLY
+      run:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --arg: {takes_value: true}
+      import:
+        classification: EXTERNAL_EFFECTS
+
+  debugger:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  deployment-gates:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      evaluations:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          get:
+            classification: READONLY
+          trigger:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+      gates:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+            options:
+              --page-cursor: {takes_value: true}
+              --page-size: {takes_value: true}
+          get:
+            classification: READONLY
+          create:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          delete:
+            classification: DANGEROUS
+      rules:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          list:
+            classification: READONLY
+          get:
+            classification: READONLY
+          create:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          delete:
+            classification: DANGEROUS
+
+  change-requests:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      get:
+        classification: READONLY
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      create-branch:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      update:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+      decisions:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+        subcommands:
+          update:
+            classification: EXTERNAL_EFFECTS
+            options:
+              --file: {takes_value: true}
+          delete:
+            classification: DANGEROUS
+
+  idp:
+    classification: READONLY
+    strict: false
+    subcommands:
+      assist:
+        classification: READONLY
+      deps:
+        classification: READONLY
+      find:
+        classification: READONLY
+      owner:
+        classification: READONLY
+      register:
+        classification: EXTERNAL_EFFECTS
+
+  investigations:
+    classification: READONLY
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --monitor-id: {takes_value: true}
+          --page-limit: {takes_value: true}
+          --page-offset: {takes_value: true}
+      get:
+        classification: READONLY
+      trigger:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --event-id: {takes_value: true}
+          --event-ts: {takes_value: true}
+          --file: {takes_value: true}
+          --monitor-id: {takes_value: true}
+          --type: {takes_value: true}
+
+  reference-tables:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --limit: {takes_value: true}
+      get:
+        classification: READONLY
+      batch-query:
+        classification: READONLY
+        options:
+          --file: {takes_value: true}
+      create:
+        classification: EXTERNAL_EFFECTS
+        options:
+          --file: {takes_value: true}
+
+  skills:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        options:
+          --type: {takes_value: true}
+      path:
+        classification: READONLY
+        options:
+          --target-agent: {takes_value: true}
+      install:
+        classification: LOCAL_EFFECTS
+        options:
+          --dir: {takes_value: true, captures_directory: true}
+          --target-agent: {takes_value: true}
+          --type: {takes_value: true}
+
+  extension:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      install:
+        classification: LOCAL_EFFECTS
+        options:
+          --description: {takes_value: true}
+          --force: {}
+          --link: {}
+          --local: {}
+          --name: {takes_value: true}
+          --tag: {takes_value: true}
+      upgrade:
+        classification: LOCAL_EFFECTS
+        options:
+          --all: {}
+      remove:
+        classification: LOCAL_EFFECTS
+
+  alias:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      set:
+        classification: LOCAL_EFFECTS
+      import:
+        classification: LOCAL_EFFECTS
+      delete:
+        classification: LOCAL_EFFECTS

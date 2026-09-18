@@ -1,0 +1,44 @@
+# $schema: ../../../schemas/command.schema.json
+command: go
+description: "Tool for managing Go source code"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  build:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  test:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  run:
+    classification: DANGEROUS
+  install:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  get:
+    classification: LOCAL_EFFECTS
+  mod:
+    classification: LOCAL_EFFECTS
+    subcommands:
+      tidy:
+        classification: LOCAL_EFFECTS
+      download:
+        classification: LOCAL_EFFECTS
+      verify:
+        classification: READONLY
+      graph:
+        classification: READONLY
+  fmt:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+  vet:
+    classification: READONLY
+  doc:
+    classification: READONLY
+  version:
+    classification: READONLY
+  env:
+    classification: READONLY
+  list:
+    classification: READONLY

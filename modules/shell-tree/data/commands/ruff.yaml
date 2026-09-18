@@ -1,0 +1,29 @@
+# $schema: ../../../schemas/command.schema.json
+command: ruff
+description: "Fast Python linter and formatter"
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+subcommands:
+  check:
+    classification: READONLY
+    strict: false
+    options:
+      --fix: {overrides: LOCAL_EFFECTS, risk: LOW}
+      --fix-only: {overrides: LOCAL_EFFECTS, risk: LOW}
+  format:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+    options:
+      --check: {overrides: READONLY}
+      --diff: {overrides: READONLY}
+  version:
+    classification: READONLY
+  rule:
+    classification: READONLY
+  linter:
+    classification: READONLY
+  clean:
+    classification: LOCAL_EFFECTS
+    risk: LOW

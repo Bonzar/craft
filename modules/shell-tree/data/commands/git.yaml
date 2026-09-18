@@ -1,0 +1,504 @@
+# $schema: ../../../schemas/command.schema.json
+command: git
+description: "Distributed version control system"
+global_options:
+  --help: {overrides: READONLY}
+  -h: {overrides: READONLY}
+  -C: {takes_value: true, captures_directory: true}
+  --git-dir: {takes_value: true}
+  --work-tree: {takes_value: true}
+  --bare: {}
+  --no-pager: {}
+  --no-replace-objects: {}
+  -c: {takes_value: true}
+  --exec-path: {takes_value: true}
+
+subcommands:
+  # --- Readonly commands ---
+  status:
+    classification: READONLY
+    strict: false
+  log:
+    classification: READONLY
+    strict: false
+  show:
+    classification: READONLY
+    strict: false
+  diff:
+    classification: READONLY
+    strict: false
+  diff-tree:
+    classification: READONLY
+    strict: false
+  blame:
+    classification: READONLY
+    strict: false
+  shortlog:
+    classification: READONLY
+    strict: false
+  reflog:
+    classification: READONLY
+    strict: false
+  rev-parse:
+    classification: READONLY
+    strict: false
+  ls-files:
+    classification: READONLY
+    strict: false
+  ls-remote:
+    classification: READONLY
+    strict: false
+  ls-tree:
+    classification: READONLY
+    strict: false
+  cat-file:
+    classification: READONLY
+    strict: false
+  for-each-ref:
+    classification: READONLY
+    strict: false
+  describe:
+    classification: READONLY
+    strict: false
+  rev-list:
+    classification: READONLY
+    strict: false
+  name-rev:
+    classification: READONLY
+    strict: false
+  grep:
+    classification: READONLY
+    strict: false
+  range-diff:
+    classification: READONLY
+    strict: false
+  show-branch:
+    classification: READONLY
+    strict: false
+  verify-commit:
+    classification: READONLY
+    strict: false
+  verify-tag:
+    classification: READONLY
+    strict: false
+  whatchanged:
+    classification: READONLY
+    strict: false
+  help:
+    classification: READONLY
+    strict: false
+  version:
+    classification: READONLY
+    strict: false
+
+  # --- Branch / tag / remote management ---
+  branch:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    options:
+      # --- Listing / query flags (READONLY) ---
+      -a: {overrides: READONLY}
+      --all: {overrides: READONLY, aliases: [-a]}
+      -r: {overrides: READONLY}
+      --remotes: {overrides: READONLY, aliases: [-r]}
+      -v: {overrides: READONLY}
+      --verbose: {overrides: READONLY, aliases: [-v]}
+      -l: {overrides: READONLY}
+      --list: {overrides: READONLY, aliases: [-l]}
+      --show-current: {overrides: READONLY}
+      --contains: {overrides: READONLY, takes_value: true}
+      --no-contains: {overrides: READONLY, takes_value: true}
+      --merged: {overrides: READONLY, takes_value: true}
+      --no-merged: {overrides: READONLY, takes_value: true}
+      --points-at: {overrides: READONLY, takes_value: true}
+      --sort: {overrides: READONLY, takes_value: true}
+      --format: {overrides: READONLY, takes_value: true}
+      --column: {overrides: READONLY}
+      --no-column: {overrides: READONLY}
+      -i: {overrides: READONLY}
+      --ignore-case: {overrides: READONLY, aliases: [-i]}
+      --abbrev: {overrides: READONLY}
+      --no-abbrev: {overrides: READONLY}
+      --color: {overrides: READONLY}
+      --no-color: {overrides: READONLY}
+      --omit-empty: {overrides: READONLY}
+      -q: {}
+      --quiet: {aliases: [-q]}
+      # --- Mutating actions ---
+      -d: {overrides: LOCAL_EFFECTS, risk: MEDIUM}
+      -D: {overrides: DANGEROUS}
+      --delete: {overrides: LOCAL_EFFECTS, risk: MEDIUM}
+      -m: {overrides: LOCAL_EFFECTS, risk: MEDIUM}
+      --move: {overrides: LOCAL_EFFECTS, risk: MEDIUM, aliases: [-m]}
+      -M: {overrides: DANGEROUS}
+      -c: {overrides: LOCAL_EFFECTS, risk: LOW}
+      --copy: {overrides: LOCAL_EFFECTS, risk: LOW, aliases: [-c]}
+      -C: {overrides: DANGEROUS}
+      --edit-description: {overrides: LOCAL_EFFECTS, risk: LOW}
+      --set-upstream-to: {overrides: LOCAL_EFFECTS, risk: LOW, takes_value: true}
+      -u: {overrides: LOCAL_EFFECTS, risk: LOW, takes_value: true, aliases: [--set-upstream-to]}
+      --unset-upstream: {overrides: LOCAL_EFFECTS, risk: LOW}
+      -t: {overrides: LOCAL_EFFECTS, risk: LOW}
+      --track: {overrides: LOCAL_EFFECTS, risk: LOW, aliases: [-t]}
+      --no-track: {}
+      --create-reflog: {overrides: LOCAL_EFFECTS, risk: LOW}
+      -f: {}
+      --force: {aliases: [-f]}
+      --recurse-submodules: {}
+  remote:
+    classification: READONLY
+    strict: false
+    subcommands:
+      add:
+        classification: EXTERNAL_EFFECTS
+      remove:
+        classification: EXTERNAL_EFFECTS
+      rename:
+        classification: EXTERNAL_EFFECTS
+      set-url:
+        classification: EXTERNAL_EFFECTS
+      prune:
+        classification: EXTERNAL_EFFECTS
+      show:
+        classification: READONLY
+      get-url:
+        classification: READONLY
+  tag:
+    classification: LOCAL_EFFECTS
+    options:
+      -l: {overrides: READONLY}
+      --list: {overrides: READONLY, aliases: [-l]}
+      -v: {overrides: READONLY}
+      --verify: {overrides: READONLY, aliases: [-v]}
+      -d: {overrides: LOCAL_EFFECTS}
+      --delete: {overrides: LOCAL_EFFECTS}
+      -a: {overrides: LOCAL_EFFECTS}
+      -s: {overrides: LOCAL_EFFECTS}
+
+  # --- Staging and committing ---
+  add:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    options:
+      -A: {}
+      --all: {aliases: [-A]}
+      -p: {}
+      --patch: {aliases: [-p]}
+      -u: {}
+      --update: {aliases: [-u]}
+      -f: {}
+      --force: {aliases: [-f]}
+      -n: {}
+      --dry-run: {aliases: [-n]}
+  commit:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+    options:
+      -m: {takes_value: true}
+      --message: {takes_value: true, aliases: [-m]}
+      -a: {}
+      --all: {aliases: [-a]}
+      --amend: {risk: MEDIUM}
+      --no-edit: {}
+      --allow-empty: {}
+      --fixup: {takes_value: true}
+      --squash: {takes_value: true}
+      -s: {}
+      --signoff: {aliases: [-s]}
+  rm:
+    classification: LOCAL_EFFECTS
+    strict: false
+    options:
+      -r: {}
+      --cached: {}
+      -f: {}
+      --force: {aliases: [-f]}
+  mv:
+    classification: LOCAL_EFFECTS
+    strict: false
+  notes:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+      show:
+        classification: READONLY
+      add:
+        classification: LOCAL_EFFECTS
+      append:
+        classification: LOCAL_EFFECTS
+      edit:
+        classification: LOCAL_EFFECTS
+      remove:
+        classification: LOCAL_EFFECTS
+      prune:
+        classification: LOCAL_EFFECTS
+
+  # --- Merging and rebasing ---
+  merge:
+    classification: LOCAL_EFFECTS
+    strict: false
+    options:
+      --abort: {overrides: DANGEROUS}
+      --continue: {}
+      --quit: {}
+      --no-commit: {}
+      --squash: {}
+      --no-ff: {}
+      --ff-only: {}
+  rebase:
+    classification: LOCAL_EFFECTS
+    strict: false
+    options:
+      --abort: {overrides: DANGEROUS}
+      --continue: {}
+      --skip: {}
+      --interactive: {}
+      -i: {aliases: [--interactive]}
+      --autosquash: {}
+      --no-autosquash: {}
+      --onto: {takes_value: true}
+  cherry-pick:
+    classification: LOCAL_EFFECTS
+    strict: false
+    options:
+      --abort: {overrides: DANGEROUS}
+      --continue: {}
+      --skip: {}
+  revert:
+    classification: LOCAL_EFFECTS
+    strict: false
+    options:
+      --abort: {overrides: DANGEROUS}
+      --continue: {}
+
+  # --- Network commands ---
+  push:
+    classification: EXTERNAL_EFFECTS
+    options:
+      --force: {overrides: DANGEROUS}
+      -f: {overrides: DANGEROUS}
+      --force-with-lease: {overrides: EXTERNAL_EFFECTS}
+      --delete: {overrides: DANGEROUS}
+      -u: {}
+      --set-upstream: {aliases: [-u]}
+  pull:
+    classification: LOCAL_EFFECTS
+    strict: false
+  fetch:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+    options:
+      --prune: {overrides: LOCAL_EFFECTS}
+  clone:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  init:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+
+  # --- Working tree ---
+  checkout:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  switch:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+  restore:
+    classification: LOCAL_EFFECTS
+    strict: false
+  stash:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+    subcommands:
+      push:
+        classification: LOCAL_EFFECTS
+      pop:
+        classification: LOCAL_EFFECTS
+      apply:
+        classification: LOCAL_EFFECTS
+      list:
+        classification: READONLY
+      show:
+        classification: READONLY
+      drop:
+        classification: DANGEROUS
+      clear:
+        classification: DANGEROUS
+  reset:
+    classification: LOCAL_EFFECTS
+    strict: false
+    options:
+      --hard: {overrides: DANGEROUS}
+      --soft: {}
+      --mixed: {}
+  clean:
+    classification: DANGEROUS
+    strict: false
+  worktree:
+    classification: LOCAL_EFFECTS
+    subcommands:
+      list:
+        classification: READONLY
+        strict: false
+      add:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+        strict: false
+      remove:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+      prune:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+      move:
+        classification: LOCAL_EFFECTS
+      lock:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+      unlock:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+      repair:
+        classification: LOCAL_EFFECTS
+  bisect:
+    classification: LOCAL_EFFECTS
+    subcommands:
+      start:
+        classification: LOCAL_EFFECTS
+        strict: false
+      bad:
+        classification: LOCAL_EFFECTS
+      new:
+        classification: LOCAL_EFFECTS
+      good:
+        classification: LOCAL_EFFECTS
+      old:
+        classification: LOCAL_EFFECTS
+      skip:
+        classification: LOCAL_EFFECTS
+      next:
+        classification: LOCAL_EFFECTS
+      reset:
+        classification: LOCAL_EFFECTS
+      run:
+        classification: DANGEROUS
+        strict: false
+      visualize:
+        classification: READONLY
+      view:
+        classification: READONLY
+      log:
+        classification: READONLY
+      replay:
+        classification: LOCAL_EFFECTS
+      terms:
+        classification: READONLY
+      help:
+        classification: READONLY
+
+  # --- Submodules ---
+  submodule:
+    classification: READONLY
+    subcommands:
+      status:
+        classification: READONLY
+        strict: false
+      summary:
+        classification: READONLY
+        strict: false
+      foreach:
+        classification: READONLY
+        strict: false
+      init:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+      update:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+        strict: false
+      add:
+        classification: LOCAL_EFFECTS
+        strict: false
+      deinit:
+        classification: LOCAL_EFFECTS
+        strict: false
+      set-branch:
+        classification: LOCAL_EFFECTS
+      set-url:
+        classification: LOCAL_EFFECTS
+      sync:
+        classification: LOCAL_EFFECTS
+        risk: LOW
+        strict: false
+      absorbgitdirs:
+        classification: LOCAL_EFFECTS
+
+  # --- Config ---
+  config:
+    classification: LOCAL_EFFECTS
+    strict: false
+    subcommands:
+      list:
+        classification: READONLY
+        strict: false
+      get:
+        classification: READONLY
+        strict: false
+      set:
+        classification: LOCAL_EFFECTS
+        strict: false
+      unset:
+        classification: LOCAL_EFFECTS
+        strict: false
+      rename-section:
+        classification: LOCAL_EFFECTS
+      remove-section:
+        classification: LOCAL_EFFECTS
+      edit:
+        classification: LOCAL_EFFECTS
+
+  # --- Patches and archives ---
+  apply:
+    classification: LOCAL_EFFECTS
+    strict: false
+  am:
+    classification: LOCAL_EFFECTS
+    strict: false
+    options:
+      --abort: {overrides: DANGEROUS}
+      --continue: {}
+      --skip: {}
+  format-patch:
+    classification: LOCAL_EFFECTS
+    risk: LOW
+    strict: false
+    options:
+      --stdout: {overrides: READONLY}
+  archive:
+    classification: READONLY
+    strict: false
+    options:
+      -o: {overrides: LOCAL_EFFECTS, takes_value: true}
+      --output: {overrides: LOCAL_EFFECTS, takes_value: true, aliases: [-o]}
+
+  # --- Maintenance ---
+  gc:
+    classification: LOCAL_EFFECTS
+    strict: false
+  maintenance:
+    classification: LOCAL_EFFECTS
+    strict: false
+  fsck:
+    classification: READONLY
+    strict: false
+
+  # --- Misc ---

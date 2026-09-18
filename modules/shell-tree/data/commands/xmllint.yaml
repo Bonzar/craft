@@ -1,0 +1,7 @@
+# $schema: ../../../schemas/command.schema.json
+command: xmllint
+description: "XML parser and linter tool"
+classification: READONLY
+strict: false
+global_options:
+  --help: {overrides: READONLY}

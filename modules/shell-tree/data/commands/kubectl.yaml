@@ -1,0 +1,211 @@
+# $schema: ../../../schemas/command.schema.json
+command: kubectl
+description: "Kubernetes command-line tool"
+classification: EXTERNAL_EFFECTS
+strict: false
+global_options:
+  --help: {overrides: READONLY}
+  --context: {takes_value: true}
+  --kubeconfig: {takes_value: true}
+  --namespace: {takes_value: true, aliases: [-n]}
+  --cluster: {takes_value: true}
+  --server: {takes_value: true, aliases: [-s]}
+  --token: {takes_value: true}
+  --as: {takes_value: true}
+  --as-group: {takes_value: true}
+  --certificate-authority: {takes_value: true}
+  --client-certificate: {takes_value: true}
+  --client-key: {takes_value: true}
+  --insecure-skip-tls-verify: {}
+  --tls-server-name: {takes_value: true}
+  --v: {takes_value: true}
+  --request-timeout: {takes_value: true}
+
+subcommands:
+  get:
+    classification: READONLY
+    strict: false
+    options:
+      -o: {takes_value: true}
+      --output: {takes_value: true, aliases: [-o]}
+
+  describe:
+    classification: READONLY
+    strict: false
+    options:
+      -o: {takes_value: true}
+      --output: {takes_value: true, aliases: [-o]}
+
+  logs:
+    classification: READONLY
+    strict: false
+
+  top:
+    classification: READONLY
+
+  api-resources:
+    classification: READONLY
+
+  api-versions:
+    classification: READONLY
+
+  explain:
+    classification: READONLY
+
+  version:
+    classification: READONLY
+
+  cluster-info:
+    classification: READONLY
+
+  auth:
+    subcommands:
+      can-i:
+        classification: READONLY
+      reconcile:
+        classification: EXTERNAL_EFFECTS
+
+  apply:
+    classification: EXTERNAL_EFFECTS
+    options:
+      --dry-run: {takes_value: true, overrides: READONLY}
+      -f: {takes_value: true}
+      --filename: {takes_value: true, aliases: [-f]}
+
+  create:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+    options:
+      --dry-run: {takes_value: true, overrides: READONLY}
+      -f: {takes_value: true}
+      --filename: {takes_value: true, aliases: [-f]}
+
+  delete:
+    classification: DANGEROUS
+    options:
+      --dry-run: {takes_value: true, overrides: READONLY}
+      -f: {takes_value: true}
+      --filename: {takes_value: true, aliases: [-f]}
+
+  edit:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  patch:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  scale:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  rollout:
+    subcommands:
+      status:
+        classification: READONLY
+      history:
+        classification: READONLY
+      restart:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+      undo:
+        classification: DANGEROUS
+        strict: false
+      pause:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+      resume:
+        classification: EXTERNAL_EFFECTS
+        strict: false
+
+  exec:
+    classification: DANGEROUS
+    strict: false
+    delegates_to:
+      mode: after_separator
+      separator: "--"
+      min_classification: EXTERNAL_EFFECTS
+    options:
+      -it: {}
+      -i: {}
+      --stdin: {aliases: [-i]}
+      -t: {}
+      --tty: {aliases: [-t]}
+      -c: {takes_value: true}
+      --container: {takes_value: true, aliases: [-c]}
+      -n: {takes_value: true}
+      --namespace: {takes_value: true, aliases: [-n]}
+
+  port-forward:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  cp:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  drain:
+    classification: DANGEROUS
+    strict: false
+
+  cordon:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  uncordon:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  taint:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  label:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  annotate:
+    classification: EXTERNAL_EFFECTS
+    strict: false
+
+  config:
+    subcommands:
+      view:
+        classification: READONLY
+        strict: false
+      get-contexts:
+        classification: READONLY
+        strict: false
+      current-context:
+        classification: READONLY
+        strict: false
+      use-context:
+        classification: EXTERNAL_EFFECTS
+      set:
+        classification: EXTERNAL_EFFECTS
+      set-context:
+        classification: EXTERNAL_EFFECTS
+      set-cluster:
+        classification: EXTERNAL_EFFECTS
+      set-credentials:
+        classification: EXTERNAL_EFFECTS
+      delete-context:
+        classification: DANGEROUS
+      delete-cluster:
+        classification: DANGEROUS
+
+  diff:
+    classification: READONLY
+    strict: false
+
+  kustomize:
+    classification: READONLY
+    strict: false
+
+  events:
+    classification: READONLY
+    strict: false
+
+  wait:
+    classification: READONLY
+    strict: false
