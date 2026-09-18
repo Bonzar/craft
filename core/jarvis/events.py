@@ -1,9 +1,10 @@
 """Каталог единых имён событий.
 
 Имена событий в коде единые и английские: русские названия живут в Craft.
-Событие попадает в каталог, когда на нём встаёт первый модуль, — здесь те
-десять, которые этап 2 закрыл обёрткой Claude, и «после сжатия», на котором
-стоит база стартового контекста.
+Событие попадает в каталог, когда на нём встаёт первый модуль, — кроме трёх,
+заложенных заранее решением раздела «Обёртка и события»: запрос разрешения,
+старт подагента, ответ и мысль модели. Их хуки есть в большинстве харнесов, и
+заложить их сразу дешевле, чем догонять.
 
 «После сжатия» — отдельное имя, а не оттенок старта сессии: у Claude оно
 приезжает тем же событием харнеса с другим полем `source`, у Codex — своим
@@ -22,6 +23,9 @@ SUBAGENT_STOP = 'subagent-stop'
 PRE_COMPACT = 'pre-compact'
 SESSION_END = 'session-end'
 NOTIFICATION = 'notification'
+PERMISSION_REQUEST = 'permission-request'
+SUBAGENT_START = 'subagent-start'
+MODEL_MESSAGE = 'model-message'
 
 ALL = (
     SESSION_START,
@@ -35,4 +39,7 @@ ALL = (
     PRE_COMPACT,
     SESSION_END,
     NOTIFICATION,
+    PERMISSION_REQUEST,
+    SUBAGENT_START,
+    MODEL_MESSAGE,
 )

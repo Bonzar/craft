@@ -83,7 +83,7 @@ class InstallerTest(unittest.TestCase):
         self.run_installer()
         args = self.jarvis_handlers('UserPromptSubmit')[0]['args']
         self.assertEqual(args[0], str(self.modules_root() / 'probe' / 'hooks' / 'module.py'))
-        self.assertEqual(args[1:], ['--event', 'prompt'])
+        self.assertEqual(args[1:], ['--harness', 'claude', '--event', 'prompt'])
 
     def test_line_carries_no_install_root(self) -> None:
         # Модуль находит ядро и соседей от своего файла, аргумент ему не нужен.

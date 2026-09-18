@@ -1,6 +1,6 @@
 """Единый ответ модуля.
 
-Восемь форм из раздела «Обёртка и события». Обёртка переводит форму в то, что
+Девять форм из раздела «Обёртка и события». Обёртка переводит форму в то, что
 умеет её харнес; чего харнес не умеет — она называет, а не подменяет соседней
 формой.
 
@@ -19,8 +19,10 @@ DENY = 'deny'
 UPDATED_INPUT = 'updated-input'
 BLOCK = 'block'
 QUESTION = 'question'
+UPDATED_DISPLAY = 'updated-display'
 
-ALL_KINDS = (SILENCE, CONTEXT, ALLOW, ASK, DENY, UPDATED_INPUT, BLOCK, QUESTION)
+ALL_KINDS = (SILENCE, CONTEXT, ALLOW, ASK, DENY, UPDATED_INPUT, BLOCK, QUESTION,
+             UPDATED_DISPLAY)
 
 
 @dataclass(frozen=True)
@@ -32,7 +34,14 @@ class Response:
 
 @dataclass(frozen=True)
 class Silence(Response):
-    """Молчание. Тоже ответ: в след оно пишется наравне с остальными."""
+    """Молчание. Тоже ответ: в след оно пишется наравне с остальными.
+
+    Причина необязательна и наружу не уходит — молчание харнесу ничего не
+    печатает. Она нужна следу: без неё по журналу не отличить «правило не
+    сработало» от «модуль просто ничего не сказал».
+    """
+
+    reason: str = ''
 
     kind: ClassVar[str] = SILENCE
 
@@ -108,3 +117,17 @@ class Question(Response):
     options: tuple[str, ...] = ()
 
     kind: ClassVar[str] = QUESTION
+
+
+@dataclass(frozen=True)
+class UpdatedDisplay(Response):
+    """Подменить текст, показанный человеку.
+
+    Меняется только показ: сообщение модели остаётся как было, и то, что видит
+    сама модель, тоже. Поэтому форма не заменяет «контекст» — тот говорит
+    модели, а эта говорит человеку.
+    """
+
+    text: str
+
+    kind: ClassVar[str] = UPDATED_DISPLAY

@@ -115,6 +115,13 @@ class HarnessAndCopiesTest(unittest.TestCase):
     def config_toml(self) -> str:
         return (self.settings_root / 'config.toml').read_text(encoding='utf-8')
 
+    def codex_stanza(self, harness_event: str) -> str:
+        """Тело строки хука одного события Codex: от его заголовка до следующего."""
+        chunks = self.config_toml().split('[[hooks.')
+        bodies = [chunk for chunk in chunks if chunk.startswith(f'{harness_event}.hooks]]')]
+        self.assertEqual(len(bodies), 1, f'{harness_event}: строк не одна — {len(bodies)}')
+        return bodies[0]
+
     def agents_md(self) -> str:
         path = self.settings_root / 'AGENTS.md'
         return path.read_text(encoding='utf-8') if path.is_file() else ''
@@ -173,7 +180,66 @@ class HarnessAndCopiesTest(unittest.TestCase):
         self.run_installer()
         handlers = self.jarvis_handlers('SessionStart')
         self.assertEqual(len(handlers), 2)
-        self.assertEqual(handlers[0]['args'][1:], ['--event', 'session-start', '--event', 'after-compact'])
+        self.assertEqual(handlers[0]['args'][1:],
+                         ['--harness', 'claude', '--event', 'session-start',
+                          '--event', 'after-compact'])
+
+    def test_a_laid_in_event_gets_its_own_harness_line_without_copies(self) -> None:
+        # Три заложенных заранее события идут общим правилом установщика:
+        # строка на модуль и событие харнеса, ничего особенного. Копии тут не
+        # нужны — копия нужна там, где параллельно собирают данные, а замок и
+        # проба на событии по одной.
+        self.add_module('lock', 'slug = "lock"\nevents = ["permission-request"]\n')
+        self.run_installer()
+        handlers = self.jarvis_handlers('PermissionRequest')
+        self.assertEqual(len(handlers), 1)
+        self.assertEqual(handlers[0]['args'][1:],
+                         ['--harness', 'claude', '--event', 'permission-request'])
+
+    def test_all_three_laid_in_events_get_their_claude_lines(self) -> None:
+        self.add_module(
+            'watcher',
+            'slug = "watcher"\nevents = ["permission-request", "subagent-start", "model-message"]\n',
+        )
+        self.run_installer()
+        for claude_event, unified in (('PermissionRequest', 'permission-request'),
+                                      ('SubagentStart', 'subagent-start'),
+                                      ('MessageDisplay', 'model-message')):
+            handlers = self.jarvis_handlers(claude_event)
+            self.assertEqual(len(handlers), 1, claude_event)
+            self.assertEqual(handlers[0]['args'][1:],
+                             ['--harness', 'claude', '--event', unified])
+
+    def test_codex_warns_about_the_event_it_does_not_have(self) -> None:
+        # «Ответа и мысли модели» у Codex нет — установщик говорит, в каком
+        # харнесе модуль не сработает, и ставит его всё равно.
+        self.add_module('watcher', 'slug = "watcher"\nevents = ["model-message"]\n')
+        report = self.run_installer('--harness', 'codex', '--no-trust')
+        self.assertIn('watcher', report.installed)
+        self.assertTrue(
+            any('model-message' in warning and 'codex' in warning for warning in report.warnings),
+            report.warnings,
+        )
+        self.assertNotIn('MessageDisplay', self.config_toml())
+
+    def test_codex_writes_lines_for_the_two_events_it_does_have(self) -> None:
+        self.add_module(
+            'watcher',
+            'slug = "watcher"\nevents = ["permission-request", "subagent-start"]\n',
+        )
+        self.run_installer('--harness', 'codex', '--no-trust')
+        config = self.config_toml()
+        self.assertIn('[[hooks.PermissionRequest]]', config)
+        self.assertIn('[[hooks.SubagentStart]]', config)
+
+    def test_codex_lifts_the_cap_where_the_event_takes_context(self) -> None:
+        # Ключ потолка пишется только там, где событие принимает текст в ход:
+        # на старте подагента Codex его берёт, на запросе разрешения ругается.
+        self.add_module('teller', 'slug = "teller"\nevents = ["subagent-start"]\n')
+        self.add_module('lock', 'slug = "lock"\nevents = ["permission-request"]\n')
+        self.run_installer('--harness', 'codex', '--no-trust')
+        self.assertIn('additionalContextLimit = 0', self.codex_stanza('SubagentStart'))
+        self.assertNotIn('additionalContextLimit', self.codex_stanza('PermissionRequest'))
 
     def test_fewer_copies_take_away_the_extra_folders_and_lines(self) -> None:
         self.add_module('base', 'slug = "base"\nevents = ["session-start"]\ncopies = 5\n')
@@ -208,7 +274,7 @@ class HarnessAndCopiesTest(unittest.TestCase):
         self.assertIn('additionalContextLimit = 0', text)
         self.assertIn(f'timeout = {installer.HOOK_TIMEOUT_SEC}', text)
         self.assertIn(str(self.modules_root() / 'base' / 'hooks' / 'module.py'), text)
-        self.assertIn('--event session-start', text)
+        self.assertIn('--harness codex --event session-start', text)
 
     def test_codex_carries_both_our_events_on_one_line(self) -> None:
         # После сжатия Codex перезапускает тот же SessionStart с source=compact,
@@ -219,7 +285,7 @@ class HarnessAndCopiesTest(unittest.TestCase):
         text = self.config_toml()
         self.assertEqual(text.count('[[hooks.SessionStart.hooks]]'), 1)
         self.assertNotIn('PostCompact', text)
-        self.assertIn('--event session-start --event after-compact', text)
+        self.assertIn('--harness codex --event session-start --event after-compact', text)
         self.assertIn('additionalContextLimit = 0', text)
         self.assertEqual(report.warnings, [])
 
