@@ -54,7 +54,9 @@ func (b *builder) stmt(st *syntax.Stmt, op, inside string) {
 				joint = "||"
 			}
 			b.stmt(bin.X, op, inside)
+			before := b.dirs
 			b.stmt(bin.Y, joint, inside)
+			b.afterBranch(before)
 			return
 		case syntax.Pipe, syntax.PipeAll:
 			b.pipeline(st, op, inside)
@@ -70,6 +72,15 @@ func (b *builder) stmt(st *syntax.Stmt, op, inside string) {
 // compound walks the constructs that hold statements of their own and says
 // whether it took the statement.
 func (b *builder) compound(st *syntax.Stmt, op, inside string) bool {
+	switch st.Cmd.(type) {
+	case *syntax.Subshell, *syntax.Block, *syntax.IfClause, *syntax.ForClause,
+		*syntax.WhileClause, *syntax.CaseClause, *syntax.FuncDecl:
+		// Перенаправление стоит у самой конструкции: `{ … } > result`,
+		// `for … done > result`. Оболочка открывает файл до того, как тело
+		// пойдёт, и обрезает его, даже если тело не выполнится ни разу, —
+		// поэтому звено с ним идёт первым и своим.
+		b.redirected(st, op, inside)
+	}
 	switch cmd := st.Cmd.(type) {
 	case *syntax.Subshell:
 		// Подоболочка получает свою копию каталогов: её `cd` наружу не выходит.
@@ -104,12 +115,39 @@ func (b *builder) compound(st *syntax.Stmt, op, inside string) bool {
 	return true
 }
 
+// redirected emits a link carrying only the redirections of a compound
+// construct: команды у него нет, а запись есть.
+func (b *builder) redirected(st *syntax.Stmt, op, inside string) {
+	if len(st.Redirs) == 0 {
+		return
+	}
+	b.links = append(b.links, Link{
+		Index:      len(b.links),
+		Op:         op,
+		Background: st.Background,
+		Cwd:        b.dirs.cwd,
+		Inside:     inside,
+		Commands:   []Command{{Redirects: b.redirects(st.Redirs)}},
+	})
+}
+
 func (b *builder) clause(cmd *syntax.IfClause, op, inside string) {
 	b.stmts(cmd.Cond, op, inside)
 	b.stmts(cmd.Then, op, inside)
 	if cmd.Else != nil {
 		b.clause(cmd.Else, op, inside)
 	}
+}
+
+// afterBranch closes a conditional branch. A `cd` inside the right side of
+// `&&` or `||` runs only when the left side decided so: the real shell may well
+// have stayed where it was. Naming a directory taken from such a branch would
+// name somebody else's file, so after it the directory is unknown.
+func (b *builder) afterBranch(before dirs) {
+	if b.dirs.cwd == before.cwd && len(b.dirs.stack) == len(before.stack) {
+		return
+	}
+	b.dirs = dirs{cwd: "", stack: before.stack}
 }
 
 // pipeline lays a pipeline out. When every stage is a simple command, the whole
@@ -281,6 +319,12 @@ func (b *builder) substitutions(call *syntax.CallExpr, redirs []*syntax.Redirect
 	for _, r := range redirs {
 		if r.Word != nil {
 			collect(r.Word)
+		}
+		// Тело незакавыченного heredoc оболочка разворачивает, и подстановка в
+		// нём выполняется. У закавыченного разделителя (`<<'EOF'`) тело
+		// остаётся одним куском текста, и собирать там нечего.
+		if r.Hdoc != nil {
+			collect(r.Hdoc)
 		}
 	}
 	return out

@@ -191,3 +191,82 @@ func repoDir(args []Word, cwd string) string {
 	}
 	return cwd
 }
+
+// Редакторы, которые правят файл на месте: цель у них стоит позиционным
+// аргументом, и её видно только вместе с ключом «на месте». Без такого ключа
+// эти команды только читают, и целей у них нет.
+type inPlaceEditor struct {
+	// Короткие ключи, берущие значение следующим словом, и те из них, что несут
+	// сам сценарий: `sed -e s/a/b/ f` — сценарий в ключе, файл один.
+	valueLetters  string
+	scriptLetters string
+	// Длинные ключи сценария.
+	scriptFlags map[string]bool
+	// Сценарий стоит первым позиционным, когда ключа сценария нет: так у sed.
+	scriptFirstPositional bool
+}
+
+var inPlaceEditors = map[string]inPlaceEditor{
+	"sed": {valueLetters: "ef", scriptLetters: "ef",
+		scriptFlags: set("--expression", "--file"), scriptFirstPositional: true},
+	"perl": {valueLetters: "eEIMm", scriptLetters: "eE"},
+}
+
+// targets — файлы, которые редактор перепишет. nil, если ключа «на месте» нет.
+func (editor inPlaceEditor) targets(name string, args []Word, cwd string) []Target {
+	if !editor.inPlace(args) {
+		return nil
+	}
+	var files []Word
+	script := false
+	for i := 0; i < len(args); i++ {
+		text := args[i].Text
+		if !strings.HasPrefix(text, "-") || text == "-" {
+			files = append(files, args[i])
+			continue
+		}
+		if strings.HasPrefix(text, "--") {
+			flag, value, attached := strings.Cut(text, "=")
+			if editor.scriptFlags[flag] {
+				script = true
+			}
+			if !attached && value == "" && editor.scriptFlags[flag] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		cluster := text[1:]
+		last := rune(cluster[len(cluster)-1])
+		if strings.ContainsRune(editor.scriptLetters, last) {
+			script = true
+		}
+		if strings.ContainsRune(editor.valueLetters, last) && i+1 < len(args) {
+			i++ // значение ключа — не файл
+		}
+	}
+	if editor.scriptFirstPositional && !script && len(files) > 0 {
+		files = files[1:] // первым позиционным стоит сам сценарий
+	}
+	return pathTargets(files, kindFile, name, cwd)
+}
+
+// inPlace — стоит ли у команды ключ правки на месте. Он бывает слитым со
+// значением (`-i.bak`, `--in-place=.bak`) и внутри кластера (`perl -pi -e`).
+func (editor inPlaceEditor) inPlace(args []Word) bool {
+	for _, arg := range args {
+		text := arg.Text
+		if !strings.HasPrefix(text, "-") || text == "-" {
+			continue
+		}
+		if strings.HasPrefix(text, "--") {
+			if flag, _, _ := strings.Cut(text, "="); flag == "--in-place" {
+				return true
+			}
+			continue
+		}
+		if strings.ContainsRune(text[1:], 'i') {
+			return true
+		}
+	}
+	return false
+}

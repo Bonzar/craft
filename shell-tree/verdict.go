@@ -31,6 +31,11 @@ type Target struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
 	Via  string `json:"via"`
+	// Relative говорит, что путь дан относительно каталога вызова: каталог
+	// звена неизвестен. Так бывает, когда каталог вызова не задан вовсе и когда
+	// переход каталога стоял там, откуда наружу не выходит, — в подоболочке, в
+	// конвейере или в условной ветке `&&`.
+	Relative bool `json:"relative,omitempty"`
 }
 
 // Verdict answers whether the command line writes, where, and why we say so.
@@ -103,6 +108,12 @@ func (j *judge) writes(reason string, targets ...Target) {
 		j.yes = reason
 	}
 	for _, target := range targets {
+		// Путь, оставшийся относительным, помечается здесь, в одном месте: он
+		// относителен каталогу вызова, потому что каталог звена неизвестен.
+		if target.Path != "" && !strings.HasPrefix(target.Path, "/") &&
+			target.Kind != kindProcess && target.Kind != kindNetwork {
+			target.Relative = true
+		}
 		key := target.Kind + "\x00" + target.Path
 		if j.seen[key] {
 			continue
@@ -217,6 +228,12 @@ func (j *judge) classify(command Command, cwd string) (string, string, []Target)
 	}
 	if j.rules.isWrapper(name) {
 		return writesUnknown, fmt.Sprintf("«%s» запускает команду, которой в строке нет", name), nil
+	}
+	// Редактор на месте доказывает запись сам, ключом: `perl -i` ни в базе, ни
+	// в списках нет, а файл он перепишет.
+	if editor, ok := inPlaceEditors[name]; ok && editor.inPlace(args) {
+		return writesYes, fmt.Sprintf("«%s» правит файл на месте: ключ «-i»", name),
+			editor.targets(name, args, cwd)
 	}
 	// Два источника предиката. Вендоренная база команд знает подкоманды с
 	// оглядкой на аргументы (`git tag v1` против `git tag -l`) и ключи,
