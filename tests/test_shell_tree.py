@@ -148,7 +148,7 @@ class LibraryTest(unittest.TestCase):
     # --- отпечаток исходников ---
 
     def test_the_fingerprint_changes_with_the_sources(self) -> None:
-        source = self.root / 'go'
+        source = self.root / 'src'
         source.mkdir()
         (source / 'main.go').write_text('package main\n', encoding='utf-8')
         first = library.fingerprint(source)
@@ -157,7 +157,7 @@ class LibraryTest(unittest.TestCase):
         self.assertNotEqual(first, library.fingerprint(source))
 
     def test_the_fingerprint_ignores_what_is_not_a_source(self) -> None:
-        source = self.root / 'go'
+        source = self.root / 'src'
         source.mkdir()
         (source / 'main.go').write_text('package main\n', encoding='utf-8')
         first = library.fingerprint(source)

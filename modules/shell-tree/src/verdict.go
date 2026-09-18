@@ -45,7 +45,7 @@ type Verdict struct {
 	Reason  string   `json:"reason"`
 }
 
-// Judge answers for a parsed line. The predicate is data/shell/read-only-rules.json:
+// Judge answers for a parsed line. The predicate is modules/shell-tree/data/read-only-rules.json:
 // what the data proves to read answers «нет», what it proves to change answers
 // «да», and everything else answers «неизвестно». An unknown command is never
 // read-only — that is the whole point of the third answer.
@@ -288,7 +288,7 @@ func strength(state string) int {
 	}
 }
 
-// byLists — ответ по спискам data/shell/read-only-rules.json.
+// byLists — ответ по спискам modules/shell-tree/data/read-only-rules.json.
 func (j *judge) byLists(name string, args []Word, cwd string) (string, string, []Target) {
 	if j.rules.isMutating(name) {
 		return writesYes, fmt.Sprintf("«%s» из списка меняющих мир", name), j.targetsOf(name, args, cwd)

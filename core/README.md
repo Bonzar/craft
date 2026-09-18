@@ -21,6 +21,7 @@ modules/‹slug›/module.toml       шапка модуля
 modules/‹slug›/hooks/module.py   точка входа: её и запускает харнес
 modules/‹slug›/lib/              библиотечная часть, её зовут соседи по slug
 modules/‹slug›/data/             данные модуля
+modules/‹slug›/src/              исходники, которые модуль собирает себе сам
 modules/‹slug›/skill/ agents/ rules/   части, которые читает харнес
 modules/modules.json             конфиг режимов источника (необязательный)
 ```
@@ -184,9 +185,13 @@ slug, всё остальное едет как в источнике, поэт�
 | `hooks` | `‹настройки›/jarvis/modules/‹slug›/hooks/` | харнес запускает файл |
 | `lib` | `‹настройки›/jarvis/modules/‹slug›/lib/` | соседи по slug |
 | `data` | `‹настройки›/jarvis/modules/‹slug›/data/` | сам модуль |
+| `src` | `‹настройки›/jarvis/modules/‹slug›/src/` | сам модуль (собирает своим хуком) |
 | `skill` | `‹настройки›/skills/‹slug›/` | харнес |
 | `agents` | `‹настройки›/agents/‹slug›/` | харнес |
 | `rules` | Claude: `~/.claude/rules/‹slug›/`; Codex: `~/.codex/AGENTS.md` между метками `<!-- jarvis:‹slug› -->` | харнес |
+
+Собранное из `src` частью не является: модуль кладёт его в свой `bin/` сам, и
+переустановка эту папку не трогает.
 
 Каталога правил у Codex нет, поэтому части `rules` склеиваются в его общий
 `AGENTS.md` между метками модуля. Снаружи меток файл чужой и не трогается, а

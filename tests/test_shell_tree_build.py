@@ -49,11 +49,11 @@ class BuildTest(unittest.TestCase):
         source = self.root / 'источник'
         source.mkdir()
         shutil.copytree(MODULES_DIR / SLUG, source / SLUG,
-                        ignore=shutil.ignore_patterns('go', 'bin', '__pycache__'))
-        self.go_source = source / SLUG / 'go'
-        self.go_source.mkdir()
-        (self.go_source / SOURCE_FILE).write_text('package main\n', encoding='utf-8')
-        (self.go_source / 'go.mod').write_text('module shell-tree\n', encoding='utf-8')
+                        ignore=shutil.ignore_patterns('src', 'bin', '__pycache__'))
+        self.source = source / SLUG / 'src'
+        self.source.mkdir()
+        (self.source / SOURCE_FILE).write_text('package main\n', encoding='utf-8')
+        (self.source / 'go.mod').write_text('module shell-tree\n', encoding='utf-8')
         subprocess.run(
             [sys.executable, str(INSTALLER), '--settings-dir', str(self.settings),
              '--modules', str(source), '--core', str(CORE_SOURCE)],
@@ -140,7 +140,7 @@ class BuildTest(unittest.TestCase):
     def test_changed_sources_build_again(self) -> None:
         self.stub_go()
         self.fire('первая')
-        (self.module / 'go' / SOURCE_FILE).write_text(
+        (self.module / 'src' / SOURCE_FILE).write_text(
             'package main\n\nfunc main() {}\n', encoding='utf-8')
         self.fire('вторая')
         self.assertEqual(len(self.go_calls()), 2, 'исходники изменились, а сборки не было')
@@ -169,7 +169,7 @@ class BuildTest(unittest.TestCase):
     # --- раскладка ---
 
     def test_the_installer_puts_the_sources_and_the_data_in_place(self) -> None:
-        for part in ('go', 'data', 'lib', 'hooks'):
+        for part in ('src', 'data', 'lib', 'hooks'):
             self.assertTrue((self.module / part).is_dir(), f'части {part} нет в установленном модуле')
         self.assertTrue((self.module / 'data' / 'read-only-rules.json').is_file())
         self.assertTrue((self.module / 'data' / 'commands').is_dir())

@@ -1,6 +1,6 @@
 """Разбор команды оболочки: дерево и ответ «пишет ли она и куда».
 
-Модуль самодостаточен. Исходники разбора лежат в нём самом (`go/`), данные
+Модуль самодостаточен. Исходники разбора лежат в нём самом (`src/`), данные
 предиката тоже (`data/`), а бинарник он собирает сам на старте сессии — своим
 хуком, в свой `bin/`. В setup-скрипте окружения о модуле нет ни строки: нужен
 только Go на PATH.
@@ -23,7 +23,7 @@ from pathlib import Path
 
 BINARY_NAME = 'shell-tree'
 MODULE_DIR = Path(__file__).resolve().parents[1]
-SOURCE_DIR = MODULE_DIR / 'go'
+SOURCE_DIR = MODULE_DIR / 'src'
 BINARY = MODULE_DIR / 'bin' / BINARY_NAME
 FINGERPRINT = MODULE_DIR / 'bin' / 'fingerprint.json'
 RULES = MODULE_DIR / 'data' / 'read-only-rules.json'

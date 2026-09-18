@@ -60,20 +60,20 @@ HOOK_ENTRY = 'module.py'
 PERSONAL_CONFIG = mode_reader.PERSONAL_CONFIG
 
 # Части модуля отличаются по закреплённым именам папок. `hooks`, `lib`, `data` и
-# `go` остаются внутри папки модуля: их читают сам модуль и его соседи.
+# `src` остаются внутри папки модуля: их читают сам модуль и его соседи.
 # Остальные три едут туда, где их читает харнес.
 PART_HOOKS = 'hooks'
 PART_LIB = 'lib'
 PART_DATA = 'data'
-# Исходники, которые модуль собирает себе сам: у shell-tree это разбор команд на
-# Go. Собранное он кладёт в свой `bin/`, и эта папка частью не является —
-# переустановка её не трогает, потому что собирает не установщик, а сам модуль.
-PART_GO = 'go'
+# Исходники, которые модуль собирает себе сам; язык внутри любой — установщик их
+# только копирует, собирает хук самого модуля. Собранное модуль кладёт в свой
+# `bin/`, и эта папка частью не является: переустановка её не трогает.
+PART_SRC = 'src'
 PART_SKILL = 'skill'
 PART_AGENTS = 'agents'
 PART_RULES = 'rules'
-PARTS = (PART_HOOKS, PART_LIB, PART_DATA, PART_GO, PART_SKILL, PART_AGENTS, PART_RULES)
-INSIDE_MODULE = (PART_HOOKS, PART_LIB, PART_DATA, PART_GO)
+PARTS = (PART_HOOKS, PART_LIB, PART_DATA, PART_SRC, PART_SKILL, PART_AGENTS, PART_RULES)
+INSIDE_MODULE = (PART_HOOKS, PART_LIB, PART_DATA, PART_SRC)
 HARNESS_PARTS = {PART_SKILL: 'skills', PART_AGENTS: 'agents', PART_RULES: 'rules'}
 
 TEXT_SUFFIXES = {'.md', '.py', '.json', '.toml', '.txt', '.sh', '.yaml', '.yml', '.js'}
