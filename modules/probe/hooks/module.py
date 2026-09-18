@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 
 import jarvis  # noqa: E402
-from jarvis.wrappers import claude  # noqa: E402
+from jarvis import wrappers  # noqa: E402
 
 # Поля единого события, которые наполняет харнес. Общие для всех событий
 # (имя, сессия, каталог, харнес, сырое событие) в состав не считаются: они
@@ -57,4 +57,4 @@ class Module(jarvis.Module):
 
 
 if __name__ == '__main__':
-    sys.exit(claude.run_hook(__file__, Module))
+    sys.exit(wrappers.run_hook(__file__, Module))

@@ -101,7 +101,7 @@ class Chain:
         def one(number: int):
             result = subprocess.run(
                 [sys.executable, str(self.entry(number)),
-                 '--event', 'session-start', '--event', 'after-compact'],
+                 '--harness', 'claude', '--event', 'session-start', '--event', 'after-compact'],
                 input=payload, text=True, capture_output=True,
                 env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
             )
@@ -233,7 +233,7 @@ class NoProvidersTest(unittest.TestCase):
                 entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-{number}' / 'hooks' / 'module.py'
                 results.append(pool.submit(
                     subprocess.run,
-                    [sys.executable, str(entry), '--event', 'session-start'],
+                    [sys.executable, str(entry), '--harness', 'claude', '--event', 'session-start'],
                     input=session_event('empty'), text=True, capture_output=True,
                     env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
                 ))
@@ -320,7 +320,8 @@ class SlowGatherTest(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=len(numbers)) as pool:
             results = list(pool.map(
                 lambda number: subprocess.run(
-                    [sys.executable, str(self.entry(number)), '--event', 'session-start'],
+                    [sys.executable, str(self.entry(number)), '--harness', 'claude',
+                     '--event', 'session-start'],
                     input=payload, text=True, capture_output=True,
                     env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
                 ),
@@ -388,7 +389,7 @@ class DeadLeaderTest(unittest.TestCase):
         entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-2' / 'hooks' / 'module.py'
         started = time.time()
         result = subprocess.run(
-            [sys.executable, str(entry), '--event', 'session-start'],
+            [sys.executable, str(entry), '--harness', 'claude', '--event', 'session-start'],
             input=session_event(session), text=True, capture_output=True,
             env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
         )
@@ -460,7 +461,7 @@ class SweepTest(unittest.TestCase):
 
         entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-1' / 'hooks' / 'module.py'
         result = subprocess.run(
-            [sys.executable, str(entry), '--event', 'session-start', '--event', 'after-compact'],
+            [sys.executable, str(entry), '--harness', 'claude', '--event', 'session-start', '--event', 'after-compact'],
             input=session_event(session), text=True, capture_output=True,
             env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
         )
@@ -506,7 +507,7 @@ class SweepTest(unittest.TestCase):
 
         entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-1' / 'hooks' / 'module.py'
         result = subprocess.run(
-            [sys.executable, str(entry), '--event', 'after-compact'],
+            [sys.executable, str(entry), '--harness', 'claude', '--event', 'after-compact'],
             input=session_event(session, source='compact'), text=True, capture_output=True,
             env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
         )
@@ -528,7 +529,7 @@ class SweepTest(unittest.TestCase):
                            {'generation': None, 'pid': os.getpid(), 'at': time.time()})
         entry = self.settings_root / 'jarvis' / 'modules' / f'{BASE}-1' / 'hooks' / 'module.py'
         subprocess.run(
-            [sys.executable, str(entry), '--event', 'session-start'],
+            [sys.executable, str(entry), '--harness', 'claude', '--event', 'session-start'],
             input=session_event(session), text=True, capture_output=True,
             env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
         )

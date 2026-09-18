@@ -55,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 import jarvis  # noqa: E402
 from jarvis import registry  # noqa: E402
 from jarvis.manifest import copy_index  # noqa: E402
-from jarvis.wrappers import claude  # noqa: E402
+from jarvis import wrappers  # noqa: E402
 
 # замер: потолок вывода хука — 10 000 знаков на процесс. Берём 9 900: сотня
 # знаков запаса на случай, если потолок считается не ровно тем же способом.
@@ -389,7 +389,7 @@ def note(storage, number, answer, why) -> None:
 
 
 if __name__ == '__main__':
-    code = claude.run_hook(__file__, Module)
+    code = wrappers.run_hook(__file__, Module)
     sys.stdout.flush()
     Module.mark_printed()
     sys.exit(code)

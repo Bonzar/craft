@@ -47,6 +47,7 @@ sys.path.insert(0, str(REPO_ROOT / 'core'))
 
 from jarvis import manifest as manifest_reader  # noqa: E402
 from jarvis import mode as mode_reader  # noqa: E402
+from jarvis import wrappers  # noqa: E402
 from jarvis.registry import CORE_DIR  # noqa: E402
 from jarvis.wrappers import claude, codex  # noqa: E402
 
@@ -101,6 +102,10 @@ CODEX_CONTEXT_LIMIT = 0
 # 17.09.2026: `timeout = 60` в config.toml приезжает в hooks/list как
 # timeoutSec 60).
 HOOK_TIMEOUT_SEC = 1800
+
+# Обёртку называет строка хука: установщик знает, в какой харнес ставит, а
+# модуль про харнесы не знает вовсе. Флаг тот же, что читает `jarvis.wrappers`.
+HARNESS_FLAG = wrappers.HARNESS_FLAG
 
 
 @dataclass
@@ -305,7 +310,8 @@ class ClaudeBackend(Backend):
 
     def line(self, python: str, settings_root: Path, slug: str, unified: tuple[str, ...]) -> dict:
         """Строка на копию и событие: харнес запускает файл самого модуля."""
-        args = [str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY)]
+        args = [str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY),
+                HARNESS_FLAG, self.name]
         for name in unified:
             args += ['--event', name]
         return {'type': 'command', 'command': python, 'args': args, 'timeout': HOOK_TIMEOUT_SEC}
@@ -374,7 +380,8 @@ class CodexBackend(Backend):
         return True
 
     def command(self, python: str, settings_root: Path, slug: str, unified: tuple[str, ...]) -> str:
-        parts = [python, str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY)]
+        parts = [python, str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY),
+                 HARNESS_FLAG, self.name]
         for name in unified:
             parts += ['--event', name]
         return shlex.join(parts)

@@ -60,9 +60,17 @@ CODEX_BY_EVENT = {
     ev.PERMISSION_REQUEST: 'PermissionRequest',
     ev.SUBAGENT_START: 'SubagentStart',
 }
-# Какие события Codex принимают текст в ход. Пока одно — и оно же несёт оба
-# наших: и старт сессии, и «после сжатия».
-CONTEXT_EVENTS = frozenset({'SessionStart'})
+# Какие события Codex принимают текст в ход. По ним установщик решает, писать
+# ли в строку хука ключ снятия потолка: где текста не ждут, Codex на ключ
+# ругается предупреждением. `SessionStart` несёт оба наших события — и старт
+# сессии, и «после сжатия».
+#
+# замер 18.09.2026 (codex-cli 0.155.0): дописанный руками
+# `additionalContextLimit = 0` на `SubagentStart` Codex принимает молча и
+# показывает в `hooks/list` как 0, а на `PermissionRequest` отвечает
+# «ignoring additionalContextLimit … this event cannot emit additionalContext»
+# — ровно как на `PostCompact`.
+CONTEXT_EVENTS = frozenset({'SessionStart', 'SubagentStart'})
 
 # Личный конфиг режимов общий для харнесов.
 PERSONAL_CONFIG = mode_reader.PERSONAL_CONFIG
