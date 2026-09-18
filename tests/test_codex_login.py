@@ -223,6 +223,18 @@ class CodexLoginTest(unittest.TestCase):
         self.assertEqual(self.reason('sess-wide-dir'), 'уже на месте, права поправлены')
         self.assertEqual(stat.S_IMODE(self.auth.parent.stat().st_mode), 0o700)
 
+    def test_o2_a_wide_directory_is_narrowed_on_the_writing_path_too(self) -> None:
+        # Каталог входа уже есть и открыт всем, файла в нём нет: правило
+        # «каталог 700» держится и тогда, когда каталог создавали не мы.
+        self.auth.parent.mkdir(parents=True)
+        self.auth.parent.chmod(0o755)
+
+        self.fire('sess-wide-dir-write')
+
+        self.assertEqual(self.reason('sess-wide-dir-write'), 'разложен')
+        self.assertEqual(stat.S_IMODE(self.auth.parent.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(self.auth.stat().st_mode), 0o600)
+
     def test_p_narrow_permissions_are_left_alone(self) -> None:
         self.auth.parent.mkdir(parents=True, mode=0o700)
         self.auth.write_text(FAKE_AUTH, encoding='utf-8')

@@ -108,6 +108,10 @@ def lay_out(path: Path, value: str) -> None:
     записи: между созданием и `chmod` секрет полежал бы открытым.
     """
     path.parent.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+    # Каталог мог существовать до нас и быть открыт всем: mkdir на таком
+    # молчит, а класть туда живой токен нельзя. Правило «каталог 700»
+    # держится независимо от того, кто его создал.
+    narrow(path.parent, DIR_MODE)
     tmp = path.with_name(f'{path.name}.tmp-{os.getpid()}')
     descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
     try:
