@@ -228,8 +228,8 @@ func TestParseModeSaysNothingOnABrokenCommand(t *testing.T) {
 
 func TestVerdictModeAnswersUnknownOnABrokenCommand(t *testing.T) {
 	var out bytes.Buffer
-	err := run([]string{"verdict", "--rules", "../data/shell/read-only-rules.json",
-		"--commands", "../data/shell/commands"}, strings.NewReader(`cat "не закрытая`), &out)
+	err := run([]string{"verdict", "--rules", "../data/read-only-rules.json",
+		"--commands", "../data/commands"}, strings.NewReader(`cat "не закрытая`), &out)
 	if err != nil {
 		t.Fatalf("вердикт обязан ответить, а не упасть: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestVerdictModeAnswersUnknownOnABrokenCommand(t *testing.T) {
 func TestVerdictModeNamesTheMissingRules(t *testing.T) {
 	var out bytes.Buffer
 	err := run([]string{"verdict", "--rules", "нет-такого-файла.json",
-		"--commands", "../data/shell/commands"}, strings.NewReader("ls"), &out)
+		"--commands", "../data/commands"}, strings.NewReader("ls"), &out)
 	if err == nil {
 		t.Fatal("без списков вердикта быть не может")
 	}

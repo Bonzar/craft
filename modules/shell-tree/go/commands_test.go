@@ -94,7 +94,7 @@ func TestTheBaseNamesWhereItLookedWhenItIsMissing(t *testing.T) {
 
 func TestTheWholeBaseLoads(t *testing.T) {
 	// Файл базы, который не разобрался, — это молча потерянная команда.
-	base, err := LoadBase("../data/shell/commands")
+	base, err := LoadBase("../data/commands")
 	if err != nil {
 		t.Fatalf("база не прочитана: %v", err)
 	}

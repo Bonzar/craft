@@ -9,8 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The vendored bash-classify base: one YAML file per command, a snapshot of
-// data/shell/commands. It answers what kind of effect a command has, and that
+// The vendored bash-classify base: one YAML file per command, a snapshot in the
+// module's data. It answers what kind of effect a command has, and that
 // is our question read backwards: READONLY means «only reads», everything else
 // means «changes something», UNKNOWN means the base does not know.
 const (
@@ -27,10 +27,6 @@ const (
 var severity = map[string]int{
 	classReadOnly: 0, classLocal: 1, classExternal: 2, classUnknown: 3, classDangerous: 4,
 }
-
-// commandsDir is where the base lives when --commands is not given: next to the
-// binary, like the rules file. Data is never built into the binary.
-const commandsDir = "commands"
 
 // Base is the loaded command base.
 type Base struct {
@@ -57,17 +53,12 @@ type option struct {
 	CapturesDirectory bool     `yaml:"captures_directory"`
 }
 
-// LoadBase reads the base. An empty path means the directory next to the binary;
-// the error names where it looked, so nobody has to guess.
+// LoadBase reads the base from the directory named by --commands.
 func LoadBase(dir string) (*Base, error) {
-	looked := dir
 	if dir == "" {
-		beside, err := besideBinaryDir()
-		if err != nil {
-			return nil, err
-		}
-		dir, looked = beside, fmt.Sprintf("%s (ключ --commands не задан)", beside)
+		return nil, fmt.Errorf("путь к базе команд не задан: нужен ключ --commands")
 	}
+	looked := dir
 	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("база команд из %s не прочитана: %w", looked, err)
@@ -92,17 +83,6 @@ func LoadBase(dir string) (*Base, error) {
 		base.byName[name] = &loaded
 	}
 	return base, nil
-}
-
-func besideBinaryDir() (string, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("не найден путь к своему бинарнику: %w", err)
-	}
-	if resolved, err := filepath.EvalSymlinks(self); err == nil {
-		self = resolved
-	}
-	return filepath.Join(filepath.Dir(self), commandsDir), nil
 }
 
 func (b *Base) knows(name string) bool {

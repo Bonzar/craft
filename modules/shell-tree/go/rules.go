@@ -4,17 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
-// rulesFile is where the data lives when --rules is not given: next to the
-// binary. The data is never built into the binary — the lists are a shared
-// repository file (data/shell/read-only-rules.json), and a binary carrying its
-// own copy would answer by a snapshot of them.
-const rulesFile = "read-only-rules.json"
-
-// Rules is data/shell/read-only-rules.json: what counts as READING.
+// Rules is the module's read-only-rules.json: what counts as READING. The data
+// is never built into the binary and never looked for next to it: the lists
+// live in the module's data, and the caller says where that is.
 type Rules struct {
 	ReadOnly            map[string]readOnly            `json:"readOnly"`
 	ReadOnlySubcommands map[string][]string            `json:"readOnlySubcommands"`
@@ -31,17 +26,12 @@ type readOnly struct {
 	DenyFlags []string `json:"denyFlags"`
 }
 
-// LoadRules reads the data file. An empty path means the file next to the
-// binary; the error names both, so nobody has to guess where it was looked for.
+// LoadRules reads the data file named by --rules.
 func LoadRules(path string) (*Rules, error) {
-	looked := path
 	if path == "" {
-		beside, err := besideBinary()
-		if err != nil {
-			return nil, err
-		}
-		path, looked = beside, fmt.Sprintf("%s (ключ --rules не задан)", beside)
+		return nil, fmt.Errorf("путь к спискам «только читает» не задан: нужен ключ --rules")
 	}
+	looked := path
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("список «только читает» не прочитан из %s: %w", looked, err)
@@ -54,17 +44,6 @@ func LoadRules(path string) (*Rules, error) {
 		return nil, fmt.Errorf("список «только читает» из %s пуст", looked)
 	}
 	return &rules, nil
-}
-
-func besideBinary() (string, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("не найден путь к своему бинарнику: %w", err)
-	}
-	if resolved, err := filepath.EvalSymlinks(self); err == nil {
-		self = resolved
-	}
-	return filepath.Join(filepath.Dir(self), rulesFile), nil
 }
 
 func (r *Rules) isNullSink(target string) bool {

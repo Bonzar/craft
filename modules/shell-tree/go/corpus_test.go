@@ -35,7 +35,7 @@ import (
 //
 // Фразы про прочитанные файлы — это ожидания другого гварда (чтение до записи),
 // и про запись они говорят лишь косвенно: читающая команда не пишет.
-const casesPath = "../data/shell/write-targets-cases.json"
+const casesPath = "../data/write-targets-cases.json"
 
 type corpusCase struct {
 	Command  string `json:"command"`
@@ -265,7 +265,7 @@ func verdictOf(command, cwd string, rules *Rules) Verdict {
 var loadedBase = mustLoadBase()
 
 func mustLoadBase() *Base {
-	base, err := LoadBase("../data/shell/commands")
+	base, err := LoadBase("../data/commands")
 	if err != nil {
 		panic(err)
 	}
@@ -274,7 +274,7 @@ func mustLoadBase() *Base {
 
 func testRules(t *testing.T) *Rules {
 	t.Helper()
-	rules, err := LoadRules("../data/shell/read-only-rules.json")
+	rules, err := LoadRules("../data/read-only-rules.json")
 	if err != nil {
 		t.Fatalf("списки не прочитаны: %v", err)
 	}
