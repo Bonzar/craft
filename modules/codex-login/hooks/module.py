@@ -123,29 +123,36 @@ def lay_out(path: Path, value: str) -> None:
         raise
 
 
+def prepare(env) -> str:
+    """Положить вход до старта Codex и вернуть безопасную причину результата.
+
+    Хук Claude и локальная обёртка Codex используют одну и ту же операцию. У
+    обёртки она идёт *до* процесса Codex, у хука — в облачной сессии, где
+    переменные недоступны setup-скрипту. Секрет остаётся только в файле:
+    наружу возвращается одна из безопасных причин для следа или сообщения.
+    """
+    value = env.get(ENV_AUTH) or ''
+    if not value:
+        return NO_ENV
+    try:
+        path = auth_path(env)
+        if current(path) == value.encode('utf-8'):
+            # Содержимое то, а права могли положить чужие руки: файл с живым
+            # токеном обязан остаться закрытым.
+            narrowed = narrow(path, FILE_MODE)
+            narrowed = narrow(path.parent, DIR_MODE) or narrowed
+            return ALREADY_NARROWED if narrowed else ALREADY
+        lay_out(path, value)
+    except (OSError, ValueError) as failure:
+        return FAILED.format(reason=f'{type(failure).__name__}: {failure}')
+    return LAID
+
+
 class Module(jarvis.Module):
     """Молчание на любом исходе: разница между исходами живёт в следе."""
 
     def handle(self, event: jarvis.Event, runtime: jarvis.Runtime) -> jarvis.Response:
-        value = os.environ.get(ENV_AUTH) or ''
-        if not value:
-            return jarvis.Silence(reason=NO_ENV)
-        try:
-            path = auth_path(os.environ)
-            if current(path) == value.encode('utf-8'):
-                # Содержимое то, а права могли положить чужие руки: файл с
-                # живым токеном обязан остаться закрытым, и «уже на месте»
-                # без этой проверки означало бы «не смотрел».
-                narrowed = narrow(path, FILE_MODE)
-                narrowed = narrow(path.parent, DIR_MODE) or narrowed
-                return jarvis.Silence(reason=ALREADY_NARROWED if narrowed else ALREADY)
-            lay_out(path, value)
-        except (OSError, ValueError) as failure:
-            # Ошибка не глотается: причина уходит в след с контекстом. Наружу
-            # она не летит — упавшая раскладка входа второго агента не повод
-            # ронять старт сессии, а ответ харнесу тут в любом исходе молчание.
-            return jarvis.Silence(reason=FAILED.format(reason=f'{type(failure).__name__}: {failure}'))
-        return jarvis.Silence(reason=LAID)
+        return jarvis.Silence(reason=prepare(os.environ))
 
 
 if __name__ == '__main__':

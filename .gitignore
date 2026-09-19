@@ -6,6 +6,9 @@
 # Local secrets (CRAFT_API_BASE token, CRAFT_LINKS_STORE, …). Never commit.
 .env
 
+# Полный профиль Codex, который tools/jarvis-codex создаёт для одного worktree.
+.codex/
+
 # macOS Finder metadata.
 .DS_Store
 

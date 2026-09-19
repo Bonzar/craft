@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Локальный вход Codex из worktree.
+
+Запускается вместо ``codex`` из корня worktree. Предзапусковый скрипт машины
+до него читает единственный личный .env и экспортирует CODEX_AUTH_JSON. Эта
+обёртка кладёт вход и весь набор Джарвиса в .codex worktree, а потом заменяет
+себя процессом Codex. Глобальный ~/.codex в этой цепочке не участвует.
+"""
+
+import importlib.util
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CODEX_HOME_NAME = '.codex'
+
+
+def login_module(repository: Path):
+    """Загрузить владельца раскладки auth.json, не дублируя код с модулем."""
+    core = str(repository / 'core')
+    if core not in sys.path:
+        # В установленной копии хук находит ядро рядом в _core. Здесь мы ещё
+        # до установки, поэтому у владельца auth нужен исходник ядра ветки.
+        sys.path.insert(0, core)
+    entry = repository / 'modules' / 'codex-login' / 'hooks' / 'module.py'
+    spec = importlib.util.spec_from_file_location('jarvis_codex_login', entry)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f'не удалось загрузить {entry}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def bootstrap(worktree: Path, repository: Path, environment: dict[str, str], runner=subprocess.run) -> dict[str, str]:
+    """Подготовить изолированный CODEX_HOME и поставить модули до запуска CLI."""
+    worktree = worktree.resolve()
+    repository = repository.resolve()
+    env = dict(environment)
+    codex_home = worktree / CODEX_HOME_NAME
+    codex_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    env['CODEX_HOME'] = str(codex_home)
+
+    login = login_module(repository)
+    result = login.prepare(env)
+    auth = codex_home / login.AUTH_FILE
+    if result.startswith(login.FAILED.format(reason='').split('{', 1)[0]) or not auth.is_file():
+        raise RuntimeError(
+            f'не подготовлен {auth}: {result}. Экспортируй CODEX_AUTH_JSON до запуска обёртки'
+        )
+
+    runner([
+        sys.executable, str(repository / 'tools' / 'jarvis-install'),
+        '--harness', 'codex',
+        '--settings-dir', str(codex_home),
+        '--state-dir', str(codex_home / 'state'),
+    ], env=env, check=True)
+    return env
+
+
+def main(argv: list[str] | None = None) -> int:
+    env = bootstrap(REPO_ROOT, REPO_ROOT, dict(os.environ))
+    command = ['codex', *(argv if argv is not None else sys.argv[1:])]
+    os.execvpe(command[0], command, env)
+    return 127  # os.execvpe либо заменяет процесс, либо бросает OSError.
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
