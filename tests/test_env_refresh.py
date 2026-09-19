@@ -101,12 +101,13 @@ class EnvRefreshTest(unittest.TestCase):
             capture_output=True, text=True, check=True,
         )
 
-    def run_hook(self, cloud: bool = True, session: str = 'сессия-1'):
+    def run_hook(self, cloud: bool = True, session: str = 'сессия-1', **extra: str):
         """Хук ровно той строкой, что стоит в бутстрапе, и со stdin от харнеса."""
         env = {
             'PATH': os.environ.get('PATH', ''),
             'HOME': str(self.home),
             'CLAUDE_CONFIG_DIR': str(self.settings),
+            **extra,
         }
         if cloud:
             env['CLAUDE_CODE_REMOTE'] = 'true'
@@ -136,6 +137,15 @@ class EnvRefreshTest(unittest.TestCase):
         """Коммит в origin: новый файл в части skill модуля-пробы."""
         (self.origin / 'modules' / PROBE / 'skill' / name).write_text('#\n', encoding='utf-8')
         return commit(self.origin, 'правка модуля')
+
+    def put_in_main(self, path: str, text: str | None, message: str) -> str:
+        """Коммит в main: подменить или снять файл. Так меняется то, что в распаковке."""
+        target = self.origin / path
+        if text is None:
+            target.unlink()
+        else:
+            target.write_text(text, encoding='utf-8')
+        return commit(self.origin, message)
 
     # --- сами проверки ---
 
@@ -254,6 +264,86 @@ class EnvRefreshTest(unittest.TestCase):
         self.assertIn('СТОП', self.context(self.run_hook()))
 
         self.assertEqual((built / BUILT_FILE).read_text(encoding='utf-8'), 'бинарник\n')
+
+    def test_the_work_goes_to_the_copy_from_the_unpacked_main(self) -> None:
+        """Ставит набор копия модуля из распаковки, своим установщиком из того же коммита."""
+        self.install()
+        self.put_in_main(
+            f'modules/{SLUG}/hooks/module.py',
+            'import sys\n'
+            f'print("ПЕРЕДАНО", " ".join(sys.argv[1:]))\n',
+            'работник-заглушка в main',
+        )
+
+        text = self.context(self.run_hook())
+
+        self.assertIn('ПЕРЕДАНО', text)
+        self.assertIn('--install', text)
+        self.assertIn(str(self.checkout), text)
+
+    def test_main_without_the_module_leaves_everything_alone(self) -> None:
+        """Передавать работу некому — одна строка в контекст, набор не тронут."""
+        self.install()
+        before = self.ledger()
+        self.put_in_main(f'modules/{SLUG}/hooks/module.py', None, 'модуль снят с main')
+
+        text = self.context(self.run_hook())
+
+        self.assertIn('в main нет модуля свежести', text)
+        self.assertEqual(self.ledger(), before)
+        self.assertTrue((self.skill_dir() / MAIN_FILE).is_file())
+
+    def test_a_set_installed_from_a_branch_is_left_alone(self) -> None:
+        """Набор из ветки — осознанный выбор человека: не откатываем и молчим."""
+        git(self.checkout, 'checkout', '-q', '-b', 'работа')
+        (self.checkout / 'modules' / PROBE / 'skill' / 'ВЕТКА.md').write_text('#\n', encoding='utf-8')
+        branch_head = commit(self.checkout, 'коммит ветки')
+        self.install()
+        self.assertEqual(self.ledger()['source']['head'], branch_head)
+        self.add_to_origin()
+
+        self.assertEqual(self.context(self.run_hook()), '')
+
+        self.assertEqual(self.ledger()['source']['head'], branch_head)
+        self.assertFalse((self.skill_dir() / NEW_FILE).exists())
+        self.assertTrue((self.skill_dir() / 'ВЕТКА.md').is_file())
+
+    def test_without_a_ledger_nothing_is_installed(self) -> None:
+        """Журнала нет — окружение не наше: набор туда не приносим."""
+        self.add_to_origin()
+
+        self.assertEqual(self.context(self.run_hook()), '')
+
+        self.assertFalse((self.settings / 'jarvis').exists())
+        self.assertFalse(self.skill_dir().exists())
+
+    def test_an_autonomous_run_touches_nothing(self) -> None:
+        """Остановку старта в рутине некому исполнить — набор не трогаем."""
+        self.install()
+        self.add_to_origin()
+
+        self.assertEqual(self.context(self.run_hook(JARVIS_AUTONOMOUS='1')), '')
+
+        self.assertFalse((self.skill_dir() / NEW_FILE).exists())
+
+    def test_the_reason_reaches_the_human_whole(self) -> None:
+        """Причина отказа читается целиком, а не обрывается посреди слова."""
+        self.install()
+        self.add_to_origin()
+        self.put_in_main(
+            'tools/jarvis-install',
+            'import sys\n'
+            'print("usage: jarvis-install [-h] [--harness {claude,codex}]", file=sys.stderr)\n'
+            'print(" " * 200, file=sys.stderr)\n'
+            'print("jarvis-install: error: неизвестный флаг --source-head", file=sys.stderr)\n'
+            'sys.exit(2)\n',
+            'установщик в main отказывает',
+        )
+
+        text = self.context(self.run_hook())
+
+        self.assertIn('неизвестный флаг --source-head', text)
+        self.assertNotIn('usage:', text)
 
     def test_the_installed_copy_stays_out_of_the_way(self) -> None:
         """Копия в каталоге настроек молчит: набор обновляет копия из чекаута."""
