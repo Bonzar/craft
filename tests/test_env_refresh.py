@@ -168,12 +168,12 @@ class EnvRefreshTest(unittest.TestCase):
         done = self.run_hook()
         self.assertEqual(self.context(done), '')
 
-    def test_a_newer_main_is_installed_and_the_start_is_stopped(self) -> None:
+    def test_a_newer_main_is_installed_and_the_start_says_so(self) -> None:
         self.install()
         head = self.add_to_origin()
         done = self.run_hook()
         text = self.context(done)
-        self.assertIn('СТОП', text)
+        self.assertIn('обновлён', text)
         self.assertIn(head[:12], text)
         self.assertIn(PROBE, text)
         self.assertTrue((self.skill_dir() / NEW_FILE).is_file())
@@ -194,7 +194,7 @@ class EnvRefreshTest(unittest.TestCase):
 
         done = self.run_hook()
 
-        self.assertIn('СТОП', self.context(done))
+        self.assertIn('обновлён', self.context(done))
         self.assertTrue((self.skill_dir() / NEW_FILE).is_file())
         self.assertFalse((self.skill_dir() / 'ВЕТКА.md').exists())
         self.assertEqual(self.ledger()['source']['head'], head)
@@ -261,7 +261,7 @@ class EnvRefreshTest(unittest.TestCase):
         (built / BUILT_FILE).write_text('бинарник\n', encoding='utf-8')
         self.add_to_origin()
 
-        self.assertIn('СТОП', self.context(self.run_hook()))
+        self.assertIn('обновлён', self.context(self.run_hook()))
 
         self.assertEqual((built / BUILT_FILE).read_text(encoding='utf-8'), 'бинарник\n')
 
