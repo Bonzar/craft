@@ -13,7 +13,6 @@
 #        для важных кейсов и кейсов инцидентов — от трёх).
 set -u
 cd "$(dirname "$0")/.." || exit 1
-export CRAFT_AUTONOMOUS=1   # bypass the plan-gate hook — the eval is pre-authorised and headless (no interactive plan to approve)
 export CRAFT_EVAL=1            # headless-евал: Stop-энфорсер фактов рутин молчит
 base="${CRAFT_API_BASE%/}"
 PAGE="395450FC-468E-4EF6-8267-BC158A4E2EBC"

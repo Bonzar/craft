@@ -32,11 +32,9 @@ if [[ $# -gt 0 ]]; then MODELS=("$@"); else MODELS=("claude-haiku-4-5-20251001")
 # Serve reads from the local fixtures instead of the live curl (see the mock's
 # curlBlocks). Inherited by `claude` and by the mock it spawns.
 export CRAFT_FIXTURE_DIR="$FIX_DIR"
-# Kept for parity / forward-compat only — there is no plan-gate hook, so this
-# bypasses nothing (harmless). The live PreToolUse guard is guard-craft-markdown:
-# it allows --json writes and denies a bare --markdown flag, so date changes must
-# go through `blocks update --json {…taskInfo:{scheduleDate|deadlineDate}}`.
-export CRAFT_AUTONOMOUS=1
+# Даты меняются только через --json: это записанное правило записи в Craft, а не
+# хук — гвардов прежнего слоя в наборе нет. Кейсы ждут
+# `blocks update --json {…taskInfo:{scheduleDate|deadlineDate}}`.
 export CRAFT_EVAL=1            # headless-евал: Stop-энфорсер фактов рутин молчит
 
 # Resolve a task id from the fixture json by markdown substring — same shape as
