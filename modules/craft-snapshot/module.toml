@@ -3,3 +3,4 @@
 # параллельно, и база обгоняла бы поставщика. Часть lib: базе нужна функция.
 slug = "craft-snapshot"
 for = ["start-context-*"]
+requires = ["craft-sync"]

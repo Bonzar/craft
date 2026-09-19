@@ -416,8 +416,17 @@ class RepositoryModulesTest(unittest.TestCase):
                 self.assertIn('craft-call', report.installed)
                 skill_dir = Path(tmp) / 'settings' / 'skills' / 'craft-call'
                 beside = skill_dir / 'craft-tool.md'
-                self.assertEqual(beside.read_bytes(),
-                                 (MODULES_DIR / 'craft-call' / 'rules' / 'craft-tool.md').read_bytes())
+                # Rules travel beside the skill from their one source; their
+                # harness-path placeholders are resolved during installation.
+                expected = installer.substitute(
+                    (MODULES_DIR / 'craft-call' / 'rules' / 'craft-tool.md').read_text(encoding='utf-8'),
+                    installer.placeholders(Path(tmp) / 'settings',
+                                           Path(tmp) / 'settings' / 'jarvis' / 'modules' / 'craft-call',
+                                           Path(tmp) / 'state',
+                                           (installer.CodexBackend() if harness == 'codex'
+                                            else installer.ClaudeBackend()).project_dir),
+                )
+                self.assertEqual(beside.read_text(encoding='utf-8'), expected)
                 installed = (skill_dir / 'SKILL.md').read_text(encoding='utf-8')
                 self.assertIn(str(beside), installed)
                 self.assertNotIn('{{', installed)

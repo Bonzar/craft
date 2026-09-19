@@ -55,6 +55,11 @@ class ProviderTest(unittest.TestCase):
             )
             if value is not None:
                 os.environ[name] = value
+        # Тесты не должны зависеть от настоящего секретного `.env` владельца
+        # репозитория: конкретный путь подставляет только тест dotenv.
+        self.env_lookup = unittest.mock.patch.object(provider, 'repository_env', return_value=None)
+        self.env_lookup.start()
+        self.addCleanup(self.env_lookup.stop)
 
     def stub(self, body: str) -> Path:
         """Заглушка craft-sync плюс журнал её вызовов."""
@@ -165,10 +170,17 @@ class ProviderTest(unittest.TestCase):
         self.assertIn('сеть отвалилась', text)  # наружу идёт последняя беда
 
     def test_a_timeout_is_retried(self) -> None:
-        self.stub('sleep 5')
-        with unittest.mock.patch.object(provider, 'CALL_TIMEOUT', 0.2):
+        # Бесконечный shell-цикл не оставляет дочерний `sleep` с теми же
+        # pipe-дескрипторами: запись вызова успевает попасть в журнал до
+        # таймаута, и счётчик попыток не зависит от планировщика процессов.
+        self.stub('while :; do :; done')
+        # При 0,2 с финальный дочерний процесс иногда не успевает исполнить
+        # файл-заглушку — но это не значит, что provider не начал попытку.
+        # Проверяем его границу, а не гонку стартов операционной системы.
+        with unittest.mock.patch.object(provider, 'CALL_TIMEOUT', 0.2), \
+                unittest.mock.patch.object(provider, 'attempt', wraps=provider.attempt) as attempted:
             text = self.provide()
-        self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
+        self.assertEqual(attempted.call_count, provider.ATTEMPTS)
         self.assertIn('не уложился', text)
 
     def test_the_alert_is_short_and_names_the_reason(self) -> None:
@@ -178,11 +190,12 @@ class ProviderTest(unittest.TestCase):
         self.assertIn('сервер лёг', text)
 
     def test_no_binary_is_an_alert_and_not_a_crash(self) -> None:
-        os.environ['CRAFT_SYNC_BIN'] = str(self.root / 'нет-такого')
-        with unittest.mock.patch.object(provider, 'DEFAULT_BINARY', str(self.root / 'нет-и-тут')), \
-                unittest.mock.patch.dict(os.environ, {'PATH': str(self.root)}):
+        missing = unittest.mock.Mock()
+        missing.load.return_value.binary.side_effect = RuntimeError('не собран')
+        with unittest.mock.patch.object(provider.registry, 'find', return_value=missing):
             text = provider.provide(Event(), Journal(), sleep=self.slept.append)
-        self.assertIn('не найден', text)
+        self.assertIn('недоступен', text)
+        self.assertIn('не собран', text)
         self.assertTrue(text.startswith('стартовый контекст: снимок Craft не собран:'))
 
     def test_without_the_api_base_nothing_is_called_at_all(self) -> None:
@@ -191,6 +204,27 @@ class ProviderTest(unittest.TestCase):
         text = self.provide()
         self.assertIn('CRAFT_API_BASE', text)
         self.assertEqual(self.call_lines(), [])
+
+    def test_api_base_is_loaded_from_the_main_checkout_dotenv(self) -> None:
+        os.environ.pop('CRAFT_API_BASE')
+        dotenv = self.root / '.env'
+        dotenv.write_text('export CRAFT_API_BASE="https://example/connect-secret"\n', encoding='utf-8')
+        self.env_lookup.stop()
+        with unittest.mock.patch.object(provider, 'repository_env', return_value=dotenv):
+            self.stub('test "$CRAFT_API_BASE" = "https://example/connect-secret" || exit 9\necho "прочитано $2"')
+            text = self.provide()
+        self.assertIn(provider.RULES_TITLE, text)
+        self.assertIn(provider.MEMORY_TITLE, text)
+        self.assertEqual(len(self.call_lines()), 2)
+
+    def test_dotenv_is_not_interpreted_as_shell_code(self) -> None:
+        dotenv = self.root / '.env'
+        marker = self.root / 'must-not-exist'
+        dotenv.write_text(
+            f'CRAFT_API_BASE=$(touch {marker})\n', encoding='utf-8'
+        )
+        self.assertIsNone(provider.dotenv_base(dotenv))
+        self.assertFalse(marker.exists())
 
     # --- склейка и аргументы ---
 

@@ -43,10 +43,11 @@ connect-ссылки, и оно живёт десятками секунд: за
 import json
 import os
 import re
-import shutil
 import subprocess
 import time
 from pathlib import Path
+
+from jarvis import registry
 
 # Корни, которые читает поставщик. Первый — вход в правила базы, дальше
 # инструмент идёт по «Связям»; второй — память агента, читается целиком.
@@ -60,11 +61,18 @@ MEMORY_ROOT = 'e8132891-81f4-2d63-36f1-d3623d0147b6'
 # не изменится: контейнер ускоряет обход, а не задаёт его.
 RULES_CONTAINER = 'B19D996C-6329-483A-A29D-F16CFB8F765B'
 
-BINARY_ENV = 'CRAFT_SYNC_BIN'
 BASE_ENV = 'CRAFT_API_BASE'
 BINARY_NAME = 'craft-sync'
-DEFAULT_BINARY = '~/.local/bin/craft-sync'
 JOURNAL_FILE = 'craft-snapshot.jsonl'
+MODULE_DIR = Path(__file__).resolve().parents[1]
+
+# `.env` — машинный, gitignored источник connect-ссылки Craft. В worktree его
+# нет: общий git-dir живёт в главном checkout, рядом с которым и лежит файл.
+# Читаем только нужную переменную, а не исполняем пользовательский `.env` как
+# shell-код из хука.
+DOTENV_BASE = re.compile(
+    r'''^\s*(?:export\s+)?CRAFT_API_BASE\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<plain>[^\s#]*))(?:\s*#.*)?\s*$'''
+)
 
 # Замер 17.09.2026: правила по «Связям» — 23 блока, ~4,6 с параллельным
 # обходом; память — один блок, ~1,1 с.
@@ -92,18 +100,72 @@ MEMORY_TITLE = '# Память агента'
 ALERT = 'стартовый контекст: снимок Craft не собран: {reason}'
 
 
-def binary() -> str | None:
-    """Где `craft-sync`. Контейнер эфемерный, поэтому путь не зашит намертво."""
-    named = os.environ.get(BINARY_ENV)
-    if named and Path(named).expanduser().is_file():
-        return str(Path(named).expanduser())
-    default = Path(DEFAULT_BINARY).expanduser()
-    if default.is_file():
-        return str(default)
-    return shutil.which(BINARY_NAME)
+def binary(storage=None) -> str:
+    """Взять исполняемый файл у явно требуемого модуля `craft-sync`.
+
+    Глобальный PATH и домашний каталог тут не являются контрактом: они могли
+    остаться от другого снимка окружения. Соседний модуль либо уже собрал свой
+    бинарник, либо дождётся собственного живого SessionStart-хука.
+    """
+    found = registry.find('craft-sync', MODULE_DIR)
+    if found is None:
+        raise RuntimeError('не найден требуемый модуль craft-sync')
+    return found.load().binary(storage)
 
 
-def attempt(tool: str, block_id: str, follow: bool, container: str = '') -> tuple[str, str | None]:
+def repository_env() -> Path | None:
+    """Найти `.env` главного checkout и не вывести ни его путь, ни содержимое.
+
+    `git-common-dir` одинаково работает в основном checkout и в отдельном
+    worktree. Вне git-репозитория это штатно `None`: облако передаёт значение
+    через окружение, а поставщик тогда ничего локального не ищет.
+    """
+    try:
+        done = subprocess.run(
+            ['git', '-C', str(Path.cwd()), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except OSError:
+        return None
+    if done.returncode != 0:
+        return None
+    candidate = Path(done.stdout.strip()).parent / '.env'
+    return candidate if candidate.is_file() else None
+
+
+def dotenv_base(path: Path) -> str | None:
+    """Извлечь прямое значение `CRAFT_API_BASE` из обычного dotenv-файла.
+
+    Поддерживаются `KEY=value`, `export KEY=value` и одинарные/двойные
+    кавычки. Сложные shell-выражения намеренно не исполняем: `.env` — секрет,
+    а не программа, которую SessionStart должен запускать.
+    """
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        found = DOTENV_BASE.match(line)
+        if found is not None:
+            return next(value for value in found.group('double', 'single', 'plain') if value is not None) or None
+    return None
+
+
+def craft_environment() -> dict[str, str] | None:
+    """Среда только для `craft-sync`, не изменение среды процесса Codex."""
+    base = os.environ.get(BASE_ENV)
+    if not base:
+        env_file = repository_env()
+        base = dotenv_base(env_file) if env_file is not None else None
+    if not base:
+        return None
+    environment = os.environ.copy()
+    environment[BASE_ENV] = base
+    return environment
+
+
+def attempt(tool: str, block_id: str, follow: bool, container: str = '',
+            environment: dict[str, str] | None = None) -> tuple[str, str | None]:
     """Одна попытка чтения. Текст либо причина, по которой его нет."""
     command = [
         tool, '--markdown', block_id,
@@ -115,7 +177,8 @@ def attempt(tool: str, block_id: str, follow: bool, container: str = '') -> tupl
         command += ['--container', container]
     try:
         done = subprocess.run(
-            command, capture_output=True, text=True, timeout=CALL_TIMEOUT, check=False
+            command, capture_output=True, text=True, timeout=CALL_TIMEOUT, check=False,
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return '', f'вызов не уложился в {CALL_TIMEOUT} с'
@@ -150,7 +213,7 @@ def ladder(reason: str) -> tuple[int, tuple[int, ...]]:
 
 
 def read(tool: str, block_id: str, follow: bool, container: str = '',
-         sleep=time.sleep) -> tuple[str, str | None]:
+         sleep=time.sleep, environment: dict[str, str] | None = None) -> tuple[str, str | None]:
     """Чтение с повторами. Все попытки впустую — последняя причина наружу.
 
     Лестница выбирается по последней беде: пока отвечает 429, ждём по длинной,
@@ -164,7 +227,7 @@ def read(tool: str, block_id: str, follow: bool, container: str = '',
             if number >= attempts:
                 return '', problem
             sleep(pauses[number - 1])
-        text, problem = attempt(tool, block_id, follow, container)
+        text, problem = attempt(tool, block_id, follow, container, environment)
         if text:
             return text, None
         if permanent(problem):
@@ -186,19 +249,20 @@ def provide(event, storage, sleep=time.sleep) -> str:
     подменил бы правила базы их половиной.
     """
     where = getattr(event, 'event', None)
-    tool = binary()
-    if tool is None:
-        return failed(storage, where,
-                      f'{BINARY_NAME} не найден: ни в {BINARY_ENV}, ни в {DEFAULT_BINARY}, ни в PATH')
-    if not os.environ.get(BASE_ENV):
-        return failed(storage, where, f'в окружении нет {BASE_ENV}')
+    try:
+        tool = binary(storage)
+    except Exception as failure:
+        return failed(storage, where, f'{BINARY_NAME} недоступен: {failure}')
+    environment = craft_environment()
+    if environment is None:
+        return failed(storage, where, f'не задан {BASE_ENV}: ни в окружении, ни в .env главного checkout')
 
     pieces = []
     for title, block_id, follow, container in (
         (RULES_TITLE, RULES_ROOT, True, RULES_CONTAINER),
         (MEMORY_TITLE, MEMORY_ROOT, False, ''),
     ):
-        text, problem = read(tool, block_id, follow, container, sleep=sleep)
+        text, problem = read(tool, block_id, follow, container, sleep=sleep, environment=environment)
         if problem:
             return failed(storage, where, f'{title.lstrip("# ")}: {problem}')
         pieces.append(f'{title}\n\n{text}')
