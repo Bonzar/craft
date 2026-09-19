@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/modules/env-refresh/hooks/module.py\" --harness claude --event session-start",
+            "timeout": 1800
+          }
+        ]
+      }
+    ]
+  }
+}
