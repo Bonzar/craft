@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -55,7 +56,7 @@ class EnvRefreshTest(unittest.TestCase):
     """Каждому тесту свои репозитории, свой дом и свой каталог настроек."""
 
     def setUp(self) -> None:
-        self.root = Path(self.enterContext(__import__('tempfile').TemporaryDirectory()))
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.home = self.root / 'дом'
         self.home.mkdir()
         self.settings = self.home / '.claude'
