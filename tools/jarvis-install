@@ -56,6 +56,13 @@ CODEX_CONFIG_FILE = 'config.toml'
 CODEX_AGENTS_FILE = 'AGENTS.md'
 BACKUP_SUFFIX = '.jarvis-bak'
 LEDGER_FILE = 'installed.json'
+# Журнал установки состоит из двух частей: чем поставлено и что поставлено.
+# Источник нужен тем, кто сверяет свежесть набора: по самим папкам модулей не
+# видно, из какого состояния репозитория они приехали.
+LEDGER_SOURCE = 'source'
+LEDGER_MODULES = 'modules'
+GIT = 'git'
+GIT_TIMEOUT_SEC = 30
 HOOK_ENTRY = 'module.py'
 PERSONAL_CONFIG = mode_reader.PERSONAL_CONFIG
 
@@ -132,9 +139,12 @@ class Report:
     parts: list[tuple[str, str, str]] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    source: dict = field(default_factory=dict)
 
     def render(self) -> str:
         out = [f'Модулей поставлено: {len(self.installed)}']
+        if self.source:
+            out.append(f'  источник: {self.source["path"]} @ {self.source["head"] or "не git"}')
         for slug, part, where in self.parts:
             out.append(f'  {slug}: часть {part} → {where}')
         for slug, event in self.lines:
@@ -256,6 +266,39 @@ def read_json(path: Path, default):
         return default
     text = path.read_text(encoding='utf-8')
     return json.loads(text) if text.strip() else default
+
+
+def git_head(where: Path) -> str | None:
+    """Коммит, на котором стоит репозиторий источника. Не репозиторий — None.
+
+    Спрашивается у git, а не выводится из файлов: имя ветки и рабочее дерево
+    ничего не говорят о том, какой набор поставлен, а коммит говорит.
+    """
+    try:
+        done = subprocess.run(
+            [GIT, '-C', str(where), 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, check=False, timeout=GIT_TIMEOUT_SEC,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() or None if done.returncode == 0 else None
+
+
+def read_ledger(path: Path) -> dict:
+    """Журнал прошлой установки: источник и записи модулей.
+
+    Журнал прежней формы — плоский список записей модулей без источника —
+    читается как набор с неизвестным источником. Иначе снятые из репозитория
+    модули остались бы в местах харнеса: их убирают по записям прошлого
+    журнала, а не по осмотру каталогов.
+    """
+    data = read_json(path, {})
+    modules = data.get(LEDGER_MODULES)
+    # Запись модуля всегда несёт свой каталог, поэтому модуль по имени
+    # «modules» от новой формы журнала отличим.
+    if isinstance(modules, dict) and 'dir' not in modules:
+        return data
+    return {LEDGER_SOURCE: {}, LEDGER_MODULES: data}
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -912,6 +955,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument('--state-dir', default=None, help='каталог состояния (для плейсхолдера)')
     parser.add_argument('--python', default=sys.executable, help='интерпретатор для строк хуков')
     parser.add_argument('--codex-cli', default='codex', help='команда Codex для доверия хукам')
+    parser.add_argument('--source-path', default=None,
+                        help='что записать в журнал источником набора; '
+                             'по умолчанию каталог модулей')
+    parser.add_argument('--source-head', default=None,
+                        help='коммит источника для журнала; по умолчанию '
+                             'git rev-parse HEAD в каталоге модулей')
     parser.add_argument('--no-trust', action='store_true',
                         help='не ходить к app-server Codex за доверием строкам хуков')
     parser.add_argument('--dry-run', action='store_true', help='только проверить и показать отчёт')
@@ -944,7 +993,7 @@ def install(args: argparse.Namespace) -> Report:
     }
 
     ledger = modules_root(settings_root).parent / LEDGER_FILE
-    drop_vanished(read_json(ledger, {}), records, backend, report)
+    drop_vanished(read_ledger(ledger)[LEDGER_MODULES], records, backend, report)
 
     # Конфиг режимов источника переезжает вместе с модулями: коллега выключает
     # модуль в нём, и у всей команды тот молчит.
@@ -954,7 +1003,24 @@ def install(args: argparse.Namespace) -> Report:
 
     backend.register(records, settings_root, args.python, report)
 
-    ledger.write_text(json.dumps(records, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    # Источник набора: чем поставлено. Путь и коммит по умолчанию берутся из
+    # каталога модулей, но называются и флагами — модуль свежести ставит из
+    # распаковки main рядом, а источником набора остаётся сам репозиторий.
+    # Харнес, каталог состояния и интерпретатор записаны затем, что повторная
+    # установка обязана повторить эту, а из каталога настроек их не видно.
+    source = {
+        'path': str(Path(args.source_path).expanduser() if args.source_path else source_modules),
+        'head': args.source_head or git_head(source_modules),
+        'harness': backend.name,
+        'state_dir': str(state_dir),
+        'python': args.python,
+    }
+    report.source = source
+    ledger.write_text(
+        json.dumps({LEDGER_SOURCE: source, LEDGER_MODULES: records}, ensure_ascii=False, indent=2)
+        + '\n',
+        encoding='utf-8',
+    )
     return report
 
 

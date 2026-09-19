@@ -291,8 +291,8 @@ class InstallerTest(unittest.TestCase):
         ledger = json.loads(
             (self.modules_root().parent / installer.LEDGER_FILE).read_text(encoding='utf-8')
         )
-        self.assertEqual(ledger['probe']['events'], ['prompt'])
-        self.assertIn('skill', ledger['probe']['parts'])
+        self.assertEqual(ledger[installer.LEDGER_MODULES]['probe']['events'], ['prompt'])
+        self.assertIn('skill', ledger[installer.LEDGER_MODULES]['probe']['parts'])
 
 
 class UnknownEventWarningTest(unittest.TestCase):
