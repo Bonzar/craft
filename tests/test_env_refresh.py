@@ -10,6 +10,7 @@
 модулей тут ничего не проверяет, а стоит секунд.
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -18,11 +19,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from . import CORE_SOURCE, INSTALLER, MODULES_DIR
 
 SLUG = 'env-refresh'
 ENTRY = ('modules', SLUG, 'hooks', 'module.py')
+BUILT_FILE = 'собранное'
 PROBE = 'probe-skill'
 PROBE_HEADER = f'slug = "{PROBE}"\n'
 MAIN_FILE = 'SKILL.md'
@@ -240,6 +243,18 @@ class EnvRefreshTest(unittest.TestCase):
         self.assertFalse((self.settings / 'skills' / 'обломок').exists())
         self.assertFalse((self.settings / 'jarvis' / 'modules' / 'обломок').exists())
 
+    def test_what_a_module_built_itself_survives_the_refresh(self) -> None:
+        """`bin` — не часть модуля, и переустановка его не трогает."""
+        self.install()
+        built = self.settings / 'jarvis' / 'modules' / PROBE / 'bin'
+        built.mkdir(parents=True)
+        (built / BUILT_FILE).write_text('бинарник\n', encoding='utf-8')
+        self.add_to_origin()
+
+        self.assertIn('СТОП', self.context(self.run_hook()))
+
+        self.assertEqual((built / BUILT_FILE).read_text(encoding='utf-8'), 'бинарник\n')
+
     def test_the_installed_copy_stays_out_of_the_way(self) -> None:
         """Копия в каталоге настроек молчит: набор обновляет копия из чекаута."""
         self.install()
@@ -259,6 +274,48 @@ class EnvRefreshTest(unittest.TestCase):
 
         self.assertEqual(self.context(done), '')
         self.assertFalse((self.skill_dir() / NEW_FILE).exists())
+
+
+def load_module():
+    """Хук модуля — обычный файл, грузим его по пути, как установщик в тестах."""
+    entry = MODULES_DIR / SLUG / 'hooks' / 'module.py'
+    spec = importlib.util.spec_from_file_location('env_refresh_hook', entry)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+hook = load_module()
+
+
+class AsideTest(unittest.TestCase):
+    """Отставленный набор: что бы ни упало, настройки харнеса остаются на месте."""
+
+    def setUp(self) -> None:
+        self.settings = Path(self.enterContext(tempfile.TemporaryDirectory())) / 'настройки'
+        (self.settings / 'jarvis').mkdir(parents=True)
+        (self.settings / 'jarvis' / 'installed.json').write_text('{}', encoding='utf-8')
+        self.settings_file = self.settings / 'settings.json'
+        self.settings_file.write_text('{"hooks": {"своё": []}}', encoding='utf-8')
+
+    def test_settings_survive_a_take_that_fails_halfway(self) -> None:
+        aside = hook.Aside(self.settings, {})
+        with mock.patch.object(hook.os, 'replace', side_effect=OSError('диск')):
+            with self.assertRaises(OSError):
+                aside.take()
+            aside.restore()
+
+        self.assertEqual(self.settings_file.read_text(encoding='utf-8'),
+                         '{"hooks": {"своё": []}}')
+
+    def test_settings_that_were_not_there_do_not_appear(self) -> None:
+        self.settings_file.unlink()
+        aside = hook.Aside(self.settings, {})
+        aside.take()
+        (self.settings / 'settings.json').write_text('{"новое": 1}', encoding='utf-8')
+        aside.restore()
+
+        self.assertFalse(self.settings_file.exists())
 
 
 if __name__ == '__main__':

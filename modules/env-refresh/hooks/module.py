@@ -77,6 +77,9 @@ LEDGER_MODULES = 'modules'
 JARVIS_DIR = 'jarvis'
 HARNESS_PARTS = ('skills', 'agents', 'rules')
 SETTINGS_FILE = 'settings.json'
+# Склад самого модуля: собранное им лежит тут, частью модуля не является, и
+# переустановка его не трогает.
+BUILT_DIR = 'bin'
 INSTALLER = ('tools', 'jarvis-install')
 HARNESS_DEFAULT = 'claude'
 
@@ -227,6 +230,11 @@ class Aside:
         self.settings = settings
         self.store = settings / f'.jarvis-aside-{os.getpid()}'
         self.moved: list[tuple[Path, Path]] = []
+        self.settings_file = settings / SETTINGS_FILE
+        # Был ли файл настроек до нас, помнится отдельно от того, успели ли мы
+        # снять копию: иначе отставление, упавшее до копии, на возврате
+        # прочиталось бы как «файла и не было» и снесло бы живые настройки.
+        self.had_settings = self.settings_file.is_file()
         self.settings_copy: Path | None = None
         self.places = self._places(previous)
         # Что лежало в местах харнеса до нас: по этому списку убирается то, что
@@ -249,18 +257,22 @@ class Aside:
         return {child.name for child in where.iterdir()} if where.is_dir() else set()
 
     def take(self) -> None:
-        """Отставить набор в сторону. Настройки харнеса — копией: файл не наш."""
+        """Отставить набор в сторону. Настройки харнеса — копией: файл не наш.
+
+        Копия настроек снимается первой, до единого переноса: между первым
+        переносом и копией набор уже разобран, а запасного экземпляра настроек
+        ещё нет.
+        """
         self.store.mkdir(parents=True)
+        if self.had_settings:
+            self.settings_copy = self.store / SETTINGS_FILE
+            shutil.copy2(self.settings_file, self.settings_copy)
         for number, place in enumerate(self.places):
             if not place.exists():
                 continue
             backup = self.store / f'{number}-{place.name}'
             os.replace(place, backup)
             self.moved.append((place, backup))
-        settings_file = self.settings / SETTINGS_FILE
-        if settings_file.is_file():
-            self.settings_copy = self.store / SETTINGS_FILE
-            shutil.copy2(settings_file, self.settings_copy)
 
     def restore(self) -> None:
         """Вернуть прежний набор на место и убрать следы неудачной установки."""
@@ -268,16 +280,35 @@ class Aside:
             _remove(place)
             place.parent.mkdir(parents=True, exist_ok=True)
             os.replace(backup, place)
-        settings_file = self.settings / SETTINGS_FILE
         if self.settings_copy is not None:
-            shutil.copy2(self.settings_copy, settings_file)
-        else:
-            settings_file.unlink(missing_ok=True)
+            shutil.copy2(self.settings_copy, self.settings_file)
+        elif not self.had_settings:
+            # Файла не было до нас — значит, его написала неудачная установка.
+            # Был, но копию снять не успели: трогать нечего, он не переезжал.
+            self.settings_file.unlink(missing_ok=True)
         for part, names in self.before.items():
             where = self.settings / part
             for name in self._names(where) - names:
                 _remove(where / name)
         self.drop()
+
+    def return_built(self) -> None:
+        """Вернуть собранное самими модулями: их `bin` установщик не трогает.
+
+        `bin` — не часть модуля, а его собственный склад: там лежит бинарник,
+        который модуль собрал себе сам, и отпечаток исходников рядом с ним.
+        Отставление уносит его вместе с папкой модуля, и без возврата модуль
+        остался бы без инструмента до следующего старта сессии: своим хуком он
+        собирается на старте, а после сжатия хуки старта на него не выходят.
+        """
+        for place, backup in self.moved:
+            for built in sorted(backup.glob(f'modules/*/{BUILT_DIR}')):
+                target = place / built.relative_to(backup)
+                # Модуля в новом наборе нет — возвращать некуда; новый `bin`
+                # уже на месте — он свежее нашего.
+                if target.exists() or not target.parent.is_dir():
+                    continue
+                os.replace(built, target)
 
     def drop(self) -> None:
         shutil.rmtree(self.store, ignore_errors=True)
@@ -367,6 +398,7 @@ class Module(jarvis.Module):
                 # после нас не остаётся.
                 aside.restore()
                 raise
+            aside.return_built()
             aside.drop()
         finally:
             shutil.rmtree(unpacked, ignore_errors=True)
