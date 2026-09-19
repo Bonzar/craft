@@ -1,0 +1,3 @@
+# `craft-sync` owns both its Go sources and the binary built from them.
+slug = "craft-sync"
+events = ["session-start"]
