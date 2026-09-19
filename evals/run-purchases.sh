@@ -9,7 +9,6 @@
 #   defaults: haiku · "Закончилось молоко" · Молоко id · todo
 set -u
 cd "$(dirname "$0")/.." || exit 1
-export CRAFT_AUTONOMOUS=1   # bypass the plan-gate hook — the eval is pre-authorised and headless (no interactive plan to approve)
 export CRAFT_EVAL=1            # headless-евал: Stop-энфорсер фактов рутин молчит
 
 MODEL="${1:-claude-haiku-4-5-20251001}"

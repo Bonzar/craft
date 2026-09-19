@@ -248,15 +248,14 @@ and phrasings that tempt the wrong field (an urgent event date that must stay
 | `CRAFT_API_BASE` | mock (live reads) | Connect-link REST base w/ token. From env settings. |
 | `CRAFT_FIXTURE_DIR` | mock (fixture reads) | Dir of `<id>.json` / `<id>.md` fixtures. Set only by `run-dates.sh`. |
 | `CRAFT_MOCK_WRITE_LOG` | mock (writes) | Where intercepted writes are logged. Set to `/tmp/craft-eval-write.log` in `mcp-config.json`; the runners truncate it before each case. |
-| `CRAFT_AUTONOMOUS` | plan-gate bypass | Exported by `run-dates.sh`: the plan-gate hook (`universal-guard-plan-gate.js`) blocks Craft writes and file edits without an approved plan; autonomous runs (rutinas, evals) have no interactive Влад, so this flag bypasses the gate. The write-shape guard is `craft-guard-markdown.js` (below). |
 
 Both runners isolate each case with `env -u CLAUDE_CODE_*` (fresh session, no shared
 warm-spare/permission state) and `--disallowedTools Bash Read` (force writes through
 the Craft MCP instead of a shell `craft …`).
 
-The only PreToolUse hook that touches `craft_write` is `guard-craft-markdown`: it
-allows `--json` writes and denies a bare `--markdown` flag. So every write in these
-evals goes through `--json` — the dates cases set the date via
+Every write in these evals goes through `--json`: это записанное правило записи в
+Craft, а не хук — гвардов прежнего слоя в наборе больше нет. The dates cases set the
+date via
 `blocks update --json {…taskInfo:{scheduleDate|deadlineDate}}` (or `tasks update`
 without a bare `--markdown`), and the runners assert `--json` was used.
 

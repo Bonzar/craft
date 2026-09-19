@@ -10,7 +10,6 @@
 #   source ./.env && bash evals/run-triggers.sh [model]
 # Требует: claude CLI, jq. Скиллы должны быть видны сессии (запуск из корня
 # репо: project-скиллы; яндекс-скиллы — из ~/.claude при локальном запуске).
-# CRAFT_AUTONOMOUS=1 — байпас план-гейта, сетевые SessionStart-хуки не мешают.
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,7 +30,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   total=$((total+1))
 
   # --max-turns 2: хватает, чтобы модель вызвала Skill; дальше ход обрывается.
-  out="$(cd "$REPO" && CRAFT_AUTONOMOUS=1 CRAFT_EVAL=1 timeout 180 claude -p "$prompt" \
+  out="$(cd "$REPO" && CRAFT_EVAL=1 timeout 180 claude -p "$prompt" \
         --model "$MODEL" --max-turns 2 --output-format json \
         --permission-mode plan 2>/dev/null)" || out=""
 
