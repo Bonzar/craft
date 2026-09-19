@@ -24,6 +24,11 @@ READY = 'готов'
 # Only a test seam. Production has exactly one location for the executable.
 BINARY_ENV = 'CRAFT_SYNC_BIN'
 WAIT_STEP = 0.05
+# Hooks одного SessionStart стартуют параллельно. У build-hook есть короткое
+# окно, чтобы вообще войти в Python и объявить себя маркером; без этого окна
+# потребитель, запущенный первым, принял бы отсутствие маркера за отказ сборки.
+# Это не срок самой сборки: после маркера ждём живой процесс без потолка.
+MARKER_GRACE_SECONDS = 1.0
 
 
 class CraftSyncError(RuntimeError):
@@ -54,16 +59,30 @@ def still_running(pid) -> bool:
     return True
 
 
-def wait_for_build(storage) -> None:
+def wait_for_build(storage, sleep=None, clock=None) -> None:
+    """Дождаться build-hook или его первой публикации на холодном старте.
+
+    Без маркера ждём только короткое стартовое окно. Маркер BUILDING переводит
+    ожидание в режим «пока жив pid», а READY без бинарника означает, что сборка
+    уже закончилась неуспехом и ждать дальше незачем.
+    """
     if storage is None:
         return
+    sleep = time.sleep if sleep is None else sleep
+    clock = time.monotonic if clock is None else clock
+    deadline = clock() + MARKER_GRACE_SECONDS
     while True:
         if BINARY.is_file():
             return
         mark = storage.read_json(MARKER_FILE, default=None) or {}
-        if mark.get('state') != BUILDING or not still_running(mark.get('pid')):
+        if mark.get('state') == BUILDING:
+            if still_running(mark.get('pid')):
+                sleep(WAIT_STEP)
+                continue
             return
-        time.sleep(WAIT_STEP)
+        if mark.get('state') == READY or clock() >= deadline:
+            return
+        sleep(WAIT_STEP)
 
 
 def binary(storage=None) -> str:

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from . import CORE_SOURCE, INSTALLER, MODULES_DIR
@@ -16,6 +17,27 @@ SLUG = 'craft-sync'
 def session_event(session_id: str) -> str:
     return json.dumps({'hook_event_name': 'SessionStart', 'session_id': session_id,
                        'cwd': '/work', 'source': 'startup'})
+
+
+def load_library():
+    """Библиотека в исходном модуле: именно её зовёт craft-snapshot."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'craft_sync_library_for_test', MODULES_DIR / SLUG / 'lib' / '__init__.py'
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Storage:
+    """Минимальная зона сессии для проверки публикации build-маркера."""
+
+    def __init__(self) -> None:
+        self.marker = None
+
+    def read_json(self, name, default=None):
+        return self.marker if name == 'craft-sync-build.json' else default
 
 
 class CraftSyncBuildTest(unittest.TestCase):
@@ -86,6 +108,38 @@ class CraftSyncBuildTest(unittest.TestCase):
     def test_snapshot_declares_craft_sync_as_an_explicit_requirement(self) -> None:
         text = (MODULES_DIR / 'craft-snapshot' / 'module.toml').read_text(encoding='utf-8')
         self.assertIn('requires = ["craft-sync"]', text)
+
+    def test_consumer_waits_for_a_marker_published_after_it_starts(self) -> None:
+        # Это порядок из P1 review: start-context уже спросил craft-sync, а
+        # build-hook ещё не успел записать BUILDING. Первый wait публикует
+        # маркер и бинарник как завершившийся builder; без grace библиотека
+        # упала бы до этого wait.
+        library = load_library()
+        storage = Storage()
+        binary = self.root / 'craft-sync'
+
+        def publish(_seconds):
+            storage.marker = {'state': library.BUILDING, 'pid': 1}
+            binary.write_text('binary', encoding='utf-8')
+
+        with unittest.mock.patch.object(library, 'BINARY', binary), \
+                unittest.mock.patch.object(library, 'still_running', return_value=True), \
+                unittest.mock.patch.object(library.time, 'sleep', side_effect=publish) as slept:
+            self.assertEqual(library.binary(storage), str(binary))
+        slept.assert_called_once_with(library.WAIT_STEP)
+
+    def test_absent_builder_waits_only_for_the_bounded_marker_grace(self) -> None:
+        library = load_library()
+        storage = Storage()
+        missing = self.root / 'missing'
+        # deadline=0.1; first observation is 0, second is already past it.
+        with unittest.mock.patch.object(library, 'BINARY', missing), \
+                unittest.mock.patch.object(library, 'MARKER_GRACE_SECONDS', 0.1), \
+                unittest.mock.patch.object(library.time, 'monotonic', side_effect=(0, 0, 1)), \
+                unittest.mock.patch.object(library.time, 'sleep') as slept:
+            with self.assertRaises(library.CraftSyncError):
+                library.binary(storage)
+        slept.assert_called_once_with(library.WAIT_STEP)
 
 
 if __name__ == '__main__':
