@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Ранняя точка входа хуков Codex Desktop из исходников worktree.
+
+Этот файл существует в Git вместе с `.codex/config.toml`, поэтому Desktop
+видит его до Local Environment setup. Он не использует установленную копию
+модулей: на старте всегда исполняется код именно того worktree, из которого
+создана сессия. Состояние принудительно остаётся в `.codex/state` worktree.
+"""
+
+import argparse
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+
+REPOSITORY = Path(__file__).resolve().parents[1]
+MODULES = REPOSITORY / 'modules'
+CORE = REPOSITORY / 'core'
+STATE = REPOSITORY / '.codex' / 'state'
+
+
+def module_entry(slug: str) -> Path:
+    """Вернуть проверенную точку входа исходного модуля."""
+    if '/' in slug or '\\' in slug or slug in ('.', '..'):
+        raise ValueError(f'некорректный slug модуля: {slug!r}')
+    entry = MODULES / slug / 'hooks' / 'module.py'
+    if not entry.is_file():
+        raise ValueError(f'у модуля «{slug}» нет hook entry: {entry}')
+    return entry
+
+
+def load_module(slug: str):
+    """Загрузить исходный hook-модуль, не меняя его контракт пути к себе."""
+    entry = module_entry(slug)
+    name = f'jarvis_project_hook_{slug.replace("-", "_")}'
+    spec = importlib.util.spec_from_file_location(name, entry)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f'не удалось подготовить импорт {entry}')
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return entry, loaded
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--module', required=True, dest='slug')
+    known, rest = parser.parse_known_args(argv)
+    if str(CORE) not in sys.path:
+        sys.path.insert(0, str(CORE))
+    os.environ['JARVIS_STATE_DIR'] = str(STATE)
+    # В установленном наборе эти правила складывает сам установщик в AGENTS.
+    # Desktop читает project config раньше setup, поэтому его ранняя точка
+    # входа берёт тот же единственный источник прямо из worktree.
+    os.environ['JARVIS_SOURCE_RULES_DIR'] = str(MODULES)
+    entry, loaded = load_module(known.slug)
+    return loaded.wrappers.run_hook(str(entry), loaded.Module, argv=rest)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

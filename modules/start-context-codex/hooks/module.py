@@ -12,6 +12,7 @@
 """
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -26,6 +27,32 @@ STATE_FILE = 'start-context.json'
 JOURNAL_FILE = 'start-context.jsonl'
 PROVIDE = 'provide'
 DATA_GLOB = '*.md'
+SOURCE_RULES_ENV = 'JARVIS_SOURCE_RULES_DIR'
+
+
+def source_rules() -> tuple[str, list[dict]]:
+    """Правила модулей из исходного worktree для раннего Desktop bootstrap.
+
+    В обычной установленной раскладке этот текст живёт в AGENTS.md, а
+    переменной нет. Ранняя project-точка входа исполняет исходники до setup и
+    выставляет корень модулей: так модель получает ровно те же rules в первом
+    ходе без второй копии или сгенерированного `dist` в Git.
+    """
+    root = os.environ.get(SOURCE_RULES_ENV)
+    if not root:
+        return '', []
+    modules = Path(root)
+    pieces, accounted = [], []
+    for module in sorted(modules.iterdir()) if modules.is_dir() else []:
+        rules = module / 'rules'
+        text = '\n\n'.join(
+            path.read_text(encoding='utf-8').strip()
+            for path in sorted(rules.rglob('*.md')) if path.is_file()
+        ).strip() if rules.is_dir() else ''
+        if text:
+            pieces.append(f'## Правила модуля {module.name}\n\n{text}')
+            accounted.append({'slug': f'{module.name}:rules', 'chars': len(text), 'error': None})
+    return '\n\n'.join(pieces), accounted
 
 
 def provider_text(adapter, event, storage) -> str:
@@ -46,6 +73,10 @@ def gather(runtime, event) -> tuple[str, list[dict]]:
     """Склейка по slug поставщика, с заголовком-разделителем."""
     pieces = []
     accounted = []
+    rules, rule_accounted = source_rules()
+    if rules:
+        pieces.append(rules)
+    accounted.extend(rule_accounted)
     for adapter in registry.adapters(runtime.module_dir, runtime.manifest.slug):
         try:
             text = (provider_text(adapter, event, runtime.storage) or '').strip()
