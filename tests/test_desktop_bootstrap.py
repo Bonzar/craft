@@ -41,8 +41,10 @@ class DesktopSetupTrustTest(unittest.TestCase):
         report.warnings = []
         report.parts = [('codex', 'доверие', str(i)) for i in range(count)]
         with mock.patch.object(self.setup, 'project_config', return_value=self.config), \
-                mock.patch.object(self.setup, 'installer_module', return_value=installer):
+                mock.patch.object(self.setup, 'installer_module', return_value=installer), \
+                mock.patch.object(self.setup, 'codex_cli', return_value='/desktop/codex'):
             self.setup.trust_project_hooks()
+        self.assertEqual(installer.trust_hooks.call_args.args[0], '/desktop/codex')
 
     def test_partial_hook_registration_is_not_success(self) -> None:
         with self.assertRaisesRegex(RuntimeError, '1 из 3'):
@@ -50,6 +52,43 @@ class DesktopSetupTrustTest(unittest.TestCase):
 
     def test_all_three_early_hooks_are_required(self) -> None:
         self.run_trust(3)
+
+    def test_desktop_cli_is_found_without_codex_in_path(self) -> None:
+        binary = self.config.parent / 'Desktop.app' / 'codex'
+        binary.parent.mkdir()
+        binary.touch(mode=0o700)
+        with mock.patch.dict(os.environ, {'PATH': ''}, clear=True), \
+                mock.patch.object(self.setup, 'DESKTOP_CLI_PATHS', (binary,)):
+            self.assertEqual(self.setup.codex_cli(), str(binary))
+
+    def test_path_cli_is_used_if_desktop_is_absent(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(self.setup, 'DESKTOP_CLI_PATHS', ()), \
+                mock.patch.object(self.setup.shutil, 'which', return_value='/bin/codex'):
+            self.assertEqual(self.setup.codex_cli(), '/bin/codex')
+
+    def test_missing_cli_has_actionable_error(self) -> None:
+        with mock.patch.dict(os.environ, {'PATH': ''}, clear=True), \
+                mock.patch.object(self.setup, 'DESKTOP_CLI_PATHS', ()):
+            with self.assertRaisesRegex(RuntimeError, 'не найден Codex'):
+                self.setup.codex_cli()
+
+    def test_explicit_cli_does_not_silently_fall_back(self) -> None:
+        with mock.patch.dict(os.environ, {'JARVIS_CODEX_CLI': '/no-such-codex'}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, 'JARVIS_CODEX_CLI'):
+                self.setup.codex_cli()
+
+    def test_same_cli_is_passed_to_both_trust_and_worktree_install(self) -> None:
+        with mock.patch.object(self.setup, 'dotenv_value', return_value='fake-auth'), \
+                mock.patch.object(self.setup, 'codex_cli', return_value='/desktop/codex'), \
+                mock.patch.object(self.setup, 'trust_project_hooks') as trust, \
+                mock.patch.object(self.setup, 'login_module') as login, \
+                mock.patch.object(self.setup.subprocess, 'run') as run:
+            login.return_value.prepare.return_value = 'готово'
+            self.assertEqual(self.setup.main(), 0)
+            trust.assert_called_once_with('/desktop/codex')
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index('--codex-cli') + 1], '/desktop/codex')
 
 
 class DesktopBootstrapTest(unittest.TestCase):

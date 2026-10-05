@@ -9,6 +9,7 @@
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,14 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 DOTENV = REPOSITORY / '.env'
 CODEX_HOME = REPOSITORY / '.codex'
 AUTH_NAME = 'CODEX_AUTH_JSON'
+DESKTOP_CLI_PATHS = tuple(
+    root / app / relative
+    for root in (Path('/Applications'), Path.home() / 'Applications')
+    for app, relative in (
+        ('ChatGPT.app', 'Contents/Resources/codex-cli/bin/codex'),
+        ('Codex.app', 'Contents/Resources/codex'),
+    )
+)
 DOTENV_VALUE = re.compile(
     r'''^\s*(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<plain>[^\s#]*))(?:\s*#.*)?\s*$'''
 )
@@ -83,7 +92,27 @@ def project_config() -> Path:
     return REPOSITORY / '.codex' / 'config.toml'
 
 
-def trust_project_hooks() -> None:
+def codex_cli() -> str:
+    """Desktop не обязан добавлять свой встроенный CLI в PATH setup-скрипта."""
+    explicit = os.environ.get('JARVIS_CODEX_CLI')
+    if explicit:
+        resolved = shutil.which(explicit)
+        if resolved:
+            return resolved
+        raise RuntimeError('JARVIS_CODEX_CLI не указывает на исполняемый Codex')
+    for candidate in DESKTOP_CLI_PATHS:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    resolved = shutil.which('codex')
+    if resolved:
+        return resolved
+    raise RuntimeError(
+        'не найден Codex: ни встроенный CLI Desktop, ни команда в PATH; '
+        'для нестандартного расположения приложения укажи JARVIS_CODEX_CLI'
+    )
+
+
+def trust_project_hooks(cli: str | None = None) -> None:
     """Провести явный trust-gate ранних project-хуков через Desktop state.
 
     Само доверие — машинное решение Codex и по его протоколу живёт в текущем
@@ -108,7 +137,7 @@ def trust_project_hooks() -> None:
         '--event session-start --event after-compact',
     }
     report = installer.Report()
-    installer.trust_hooks('codex', config, desktop_home, commands, report)
+    installer.trust_hooks(cli or codex_cli(), config, desktop_home, commands, report)
     if report.warnings:
         raise RuntimeError('; '.join(report.warnings))
     if len(report.parts) != len(commands):
@@ -124,7 +153,8 @@ def main() -> int:
         raise RuntimeError(f'в {DOTENV.name} нет {AUTH_NAME}; добавь {DOTENV.name} в .worktreeinclude')
     # Project config уже существует из Git. Trust ставится до запуска первого
     # хука, пока Local Environment ещё готовит новый worktree.
-    trust_project_hooks()
+    cli = codex_cli()
+    trust_project_hooks(cli)
     environment = {**os.environ, 'CODEX_HOME': str(CODEX_HOME), AUTH_NAME: value}
     result = login_module().prepare(environment)
     if result.startswith('не удалось:'):
@@ -133,6 +163,7 @@ def main() -> int:
         sys.executable, str(REPOSITORY / 'tools' / 'jarvis-install'),
         '--harness', 'codex', '--settings-dir', str(CODEX_HOME),
         '--state-dir', str(CODEX_HOME / 'state'),
+        '--codex-cli', cli,
     ], check=True, env=environment)
     return 0
 
