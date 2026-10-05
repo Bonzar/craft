@@ -1,6 +1,6 @@
 # Ранние хуки Desktop. Этот файл versioned, поэтому Codex читает его до Local
-# Environment setup и до первого хода. Команды не ссылаются на сгенерированную
-# установку: они исполняют исходники ровно текущего worktree.
+# Environment setup и до первого хода. Setup ставит набор в worktree,
+# затем команды запускают его через versioned точку входа.
 
 [[hooks.SessionStart]]
 

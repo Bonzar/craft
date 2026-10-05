@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Ранняя точка входа хуков Codex Desktop из исходников worktree.
 
-Этот файл существует в Git вместе с `.codex/config.toml`, поэтому Desktop
-видит его до Local Environment setup. Он не использует установленную копию
-модулей: на старте всегда исполняется код именно того worktree, из которого
-создана сессия. Состояние принудительно остаётся в `.codex/state` worktree.
+Этот файл существует в Git вместе с `.codex/config.toml`. Local Environment
+сначала ставит набор в `.codex` worktree, затем Desktop запускает эту точку
+входа. Она использует установленный локальный набор; состояние остаётся
+в `.codex/state` worktree. Глобального фолбека нет.
 """
 
 import argparse
@@ -15,23 +15,26 @@ from pathlib import Path
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
-MODULES = REPOSITORY / 'modules'
+MODULES = REPOSITORY / '.codex' / 'jarvis' / 'modules'
 CORE = REPOSITORY / 'core'
 STATE = REPOSITORY / '.codex' / 'state'
 
 
 def module_entry(slug: str) -> Path:
-    """Вернуть проверенную точку входа исходного модуля."""
+    """Вернуть проверенную точку входа установленного модуля."""
     if '/' in slug or '\\' in slug or slug in ('.', '..'):
         raise ValueError(f'некорректный slug модуля: {slug!r}')
     entry = MODULES / slug / 'hooks' / 'module.py'
     if not entry.is_file():
-        raise ValueError(f'у модуля «{slug}» нет hook entry: {entry}')
+        raise ValueError(
+            f'модуль «{slug}» не установлен в worktree: {entry}; '
+            'выполни python3 tools/jarvis-desktop-setup'
+        )
     return entry
 
 
 def load_module(slug: str):
-    """Загрузить исходный hook-модуль, не меняя его контракт пути к себе."""
+    """Загрузить установленный hook-модуль, сохранив его путь к себе."""
     entry = module_entry(slug)
     name = f'jarvis_project_hook_{slug.replace("-", "_")}'
     spec = importlib.util.spec_from_file_location(name, entry)
@@ -49,10 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     if str(CORE) not in sys.path:
         sys.path.insert(0, str(CORE))
     os.environ['JARVIS_STATE_DIR'] = str(STATE)
-    # В установленном наборе эти правила складывает сам установщик в AGENTS.
-    # Desktop читает project config раньше setup, поэтому его ранняя точка
-    # входа берёт тот же единственный источник прямо из worktree.
-    os.environ['JARVIS_SOURCE_RULES_DIR'] = str(MODULES)
+    # Desktop использует свой общий профиль, поэтому не читает AGENTS из
+    # альтернативного CODEX_HOME. Доставляем уже отрендеренные установщиком
+    # правила выводом SessionStart, а не исходники с плейсхолдерами.
+    os.environ['JARVIS_RULES_FILE'] = str(REPOSITORY / '.codex' / 'AGENTS.md')
     entry, loaded = load_module(known.slug)
     return loaded.wrappers.run_hook(str(entry), loaded.Module, argv=rest)
 

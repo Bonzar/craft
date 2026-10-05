@@ -27,32 +27,21 @@ STATE_FILE = 'start-context.json'
 JOURNAL_FILE = 'start-context.jsonl'
 PROVIDE = 'provide'
 DATA_GLOB = '*.md'
-SOURCE_RULES_ENV = 'JARVIS_SOURCE_RULES_DIR'
+RULES_FILE_ENV = 'JARVIS_RULES_FILE'
 
 
-def source_rules() -> tuple[str, list[dict]]:
-    """Правила модулей из исходного worktree для раннего Desktop bootstrap.
+def installed_rules() -> tuple[str, list[dict]]:
+    """Отрендеренные правила worktree для Desktop bootstrap.
 
     В обычной установленной раскладке этот текст живёт в AGENTS.md, а
-    переменной нет. Ранняя project-точка входа исполняет исходники до setup и
-    выставляет корень модулей: так модель получает ровно те же rules в первом
-    ходе без второй копии или сгенерированного `dist` в Git.
+    переменной нет. Project-точка входа указывает файл внутри worktree:
+    пути и возможности харнеса в нём уже подставлены установщиком.
     """
-    root = os.environ.get(SOURCE_RULES_ENV)
-    if not root:
+    filename = os.environ.get(RULES_FILE_ENV)
+    if not filename:
         return '', []
-    modules = Path(root)
-    pieces, accounted = [], []
-    for module in sorted(modules.iterdir()) if modules.is_dir() else []:
-        rules = module / 'rules'
-        text = '\n\n'.join(
-            path.read_text(encoding='utf-8').strip()
-            for path in sorted(rules.rglob('*.md')) if path.is_file()
-        ).strip() if rules.is_dir() else ''
-        if text:
-            pieces.append(f'## Правила модуля {module.name}\n\n{text}')
-            accounted.append({'slug': f'{module.name}:rules', 'chars': len(text), 'error': None})
-    return '\n\n'.join(pieces), accounted
+    text = Path(filename).read_text(encoding='utf-8').strip()
+    return text, [{'slug': 'installed-rules', 'chars': len(text), 'error': None}]
 
 
 def provider_text(adapter, event, storage) -> str:
@@ -73,7 +62,7 @@ def gather(runtime, event) -> tuple[str, list[dict]]:
     """Склейка по slug поставщика, с заголовком-разделителем."""
     pieces = []
     accounted = []
-    rules, rule_accounted = source_rules()
+    rules, rule_accounted = installed_rules()
     if rules:
         pieces.append(rules)
     accounted.extend(rule_accounted)

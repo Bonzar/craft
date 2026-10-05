@@ -93,6 +93,11 @@ def trust_project_hooks() -> None:
     """
     installer = installer_module()
     config = project_config()
+    if not config.is_file():
+        raise RuntimeError(
+            f'ранний конфиг проекта отсутствует: {config}; '
+            'основной checkout проекта должен содержать версию bootstrap из Git'
+        )
     # Не передаём сюда CODEX_HOME worktree: это профиль, который читает
     # Desktop, а не профиль, который setup собрал для runtime-артефактов.
     desktop_home = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex').expanduser()
@@ -106,6 +111,11 @@ def trust_project_hooks() -> None:
     installer.trust_hooks('codex', config, desktop_home, commands, report)
     if report.warnings:
         raise RuntimeError('; '.join(report.warnings))
+    if len(report.parts) != len(commands):
+        raise RuntimeError(
+            f'Codex увидел не все ранние хуки проекта: {len(report.parts)} из {len(commands)}; '
+            f'проверь версию {config} и доверие проекту в Codex'
+        )
 
 
 def main() -> int:
