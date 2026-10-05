@@ -12,6 +12,7 @@
 """
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -26,6 +27,21 @@ STATE_FILE = 'start-context.json'
 JOURNAL_FILE = 'start-context.jsonl'
 PROVIDE = 'provide'
 DATA_GLOB = '*.md'
+RULES_FILE_ENV = 'JARVIS_RULES_FILE'
+
+
+def installed_rules() -> tuple[str, list[dict]]:
+    """Отрендеренные правила worktree для Desktop bootstrap.
+
+    В обычной установленной раскладке этот текст живёт в AGENTS.md, а
+    переменной нет. Project-точка входа указывает файл внутри worktree:
+    пути и возможности харнеса в нём уже подставлены установщиком.
+    """
+    filename = os.environ.get(RULES_FILE_ENV)
+    if not filename:
+        return '', []
+    text = Path(filename).read_text(encoding='utf-8').strip()
+    return text, [{'slug': 'installed-rules', 'chars': len(text), 'error': None}]
 
 
 def provider_text(adapter, event, storage) -> str:
@@ -46,6 +62,10 @@ def gather(runtime, event) -> tuple[str, list[dict]]:
     """Склейка по slug поставщика, с заголовком-разделителем."""
     pieces = []
     accounted = []
+    rules, rule_accounted = installed_rules()
+    if rules:
+        pieces.append(rules)
+    accounted.extend(rule_accounted)
     for adapter in registry.adapters(runtime.module_dir, runtime.manifest.slug):
         try:
             text = (provider_text(adapter, event, runtime.storage) or '').strip()

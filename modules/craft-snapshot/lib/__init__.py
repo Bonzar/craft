@@ -66,8 +66,8 @@ BINARY_NAME = 'craft-sync'
 JOURNAL_FILE = 'craft-snapshot.jsonl'
 MODULE_DIR = Path(__file__).resolve().parents[1]
 
-# `.env` — машинный, gitignored источник connect-ссылки Craft. В worktree его
-# нет: общий git-dir живёт в главном checkout, рядом с которым и лежит файл.
+# `.env` — gitignored источник connect-ссылки внутри текущего worktree.
+# Desktop копирует его при создании worktree через `.worktreeinclude`.
 # Читаем только нужную переменную, а не исполняем пользовательский `.env` как
 # shell-код из хука.
 DOTENV_BASE = re.compile(
@@ -114,22 +114,22 @@ def binary(storage=None) -> str:
 
 
 def repository_env() -> Path | None:
-    """Найти `.env` главного checkout и не вывести ни его путь, ни содержимое.
+    """Найти `.env` текущего worktree, не обращаясь к основному checkout.
 
-    `git-common-dir` одинаково работает в основном checkout и в отдельном
-    worktree. Вне git-репозитория это штатно `None`: облако передаёт значение
+    `show-toplevel` возвращает именно рабочее дерево, даже из его подкаталога.
+    Вне git-репозитория это штатно `None`: облако передаёт значение
     через окружение, а поставщик тогда ничего локального не ищет.
     """
     try:
         done = subprocess.run(
-            ['git', '-C', str(Path.cwd()), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+            ['git', '-C', str(Path.cwd()), 'rev-parse', '--show-toplevel'],
             capture_output=True, text=True, timeout=5, check=False,
         )
     except OSError:
         return None
     if done.returncode != 0:
         return None
-    candidate = Path(done.stdout.strip()).parent / '.env'
+    candidate = Path(done.stdout.strip()) / '.env'
     return candidate if candidate.is_file() else None
 
 
@@ -255,7 +255,7 @@ def provide(event, storage, sleep=time.sleep) -> str:
         return failed(storage, where, f'{BINARY_NAME} недоступен: {failure}')
     environment = craft_environment()
     if environment is None:
-        return failed(storage, where, f'не задан {BASE_ENV}: ни в окружении, ни в .env главного checkout')
+        return failed(storage, where, f'не задан {BASE_ENV}: ни в окружении, ни в .env текущего worktree')
 
     pieces = []
     for title, block_id, follow, container in (

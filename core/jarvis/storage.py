@@ -1,8 +1,9 @@
 """Хранилище: место, куда модуль пишет и откуда читает состояние.
 
 Даёт его обёртка, реализация у неё. У наших обёрток это каталог состояния
-`~/.local/state/jarvis`. Харнес про хранилище не знает, модуль сам файл не
-выбирает — он называет имя и зону.
+`~/.local/state/jarvis`. Проектная точка входа Desktop задаёт
+``JARVIS_STATE_DIR`` и тем самым оставляет следы внутри worktree; харнес про
+хранилище не знает, модуль сам файл не выбирает — он называет имя и зону.
 
 Зоны две: постоянная — сам каталог, сессии — подкаталог по идентификатору
 сессии из события.
@@ -17,11 +18,17 @@ PERSISTENT = 'persistent'
 ZONES = (SESSION, PERSISTENT)
 
 DEFAULT_STATE_DIR = '~/.local/state/jarvis'
+STATE_DIR_ENV = 'JARVIS_STATE_DIR'
 
 
 def default_state_dir() -> Path:
-    """Каталог состояния один, без переменной окружения с запасным путём."""
-    return Path(DEFAULT_STATE_DIR).expanduser()
+    """Каталог состояния, с явным изолированным путём для project bootstrap.
+
+    Переменная не является скрытым запасным путём: её выставляет только
+    versioned entrypoint проекта перед запуском хука. Вне него контракт и
+    прежнее место остаются теми же.
+    """
+    return Path(os.environ.get(STATE_DIR_ENV) or DEFAULT_STATE_DIR).expanduser()
 
 
 class Storage:

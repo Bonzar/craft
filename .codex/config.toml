@@ -1,0 +1,25 @@
+# Ранние хуки Desktop. Этот файл versioned, поэтому Codex читает его до Local
+# Environment setup и до первого хода. Setup ставит набор в worktree,
+# затем команды запускают его через versioned точку входа.
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "python3 tools/jarvis-project-hook --module craft-sync --harness codex --event session-start"
+timeout = 1800
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "python3 tools/jarvis-project-hook --module shell-tree --harness codex --event session-start"
+timeout = 1800
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "python3 tools/jarvis-project-hook --module start-context-codex --harness codex --event session-start --event after-compact"
+timeout = 1800
+additionalContextLimit = 0

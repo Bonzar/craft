@@ -7,6 +7,7 @@
 
 import importlib.util
 import os
+import subprocess
 import tempfile
 import unittest
 import unittest.mock
@@ -205,7 +206,7 @@ class ProviderTest(unittest.TestCase):
         self.assertIn('CRAFT_API_BASE', text)
         self.assertEqual(self.call_lines(), [])
 
-    def test_api_base_is_loaded_from_the_main_checkout_dotenv(self) -> None:
+    def test_api_base_is_loaded_from_the_worktree_dotenv(self) -> None:
         os.environ.pop('CRAFT_API_BASE')
         dotenv = self.root / '.env'
         dotenv.write_text('export CRAFT_API_BASE="https://example/connect-secret"\n', encoding='utf-8')
@@ -270,6 +271,41 @@ class ProviderTest(unittest.TestCase):
         worst = 2 * (provider.ATTEMPTS_429 * provider.CALL_TIMEOUT
                      + sum(provider.BACKOFF_429_SECONDS))
         self.assertLess(worst, installer.HOOK_TIMEOUT_SEC, f'худший случай {worst} с')
+
+
+class WorktreeEnvTest(unittest.TestCase):
+    """Настоящий Git-worktree: секрет соседа не становится фолбеком."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.source = self.root / 'source'
+        self.worktree = self.root / 'worktree'
+        self.source.mkdir()
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'Snapshot test')
+        self.git('config', 'user.email', 'test@example.invalid')
+        self.git('commit', '--allow-empty', '-qm', 'fixture')
+        self.git('worktree', 'add', '--detach', str(self.worktree), 'HEAD')
+        (self.source / '.env').write_text('CRAFT_API_BASE=https://source.invalid\n')
+
+    def git(self, *args) -> None:
+        subprocess.run(['git', '-C', str(self.source), *args], check=True, capture_output=True)
+
+    def test_the_current_worktree_wins_over_the_main_checkout(self) -> None:
+        local = self.worktree / '.env'
+        local.write_text('CRAFT_API_BASE=https://worktree.invalid\n')
+        nested = self.worktree / 'nested'
+        nested.mkdir()
+        with unittest.mock.patch.object(provider.Path, 'cwd', return_value=nested):
+            found = provider.repository_env()
+        self.assertEqual(found.resolve(), local.resolve())
+        self.assertEqual(provider.dotenv_base(found), 'https://worktree.invalid')
+
+    def test_missing_worktree_dotenv_never_reads_the_main_checkout(self) -> None:
+        with unittest.mock.patch.object(provider.Path, 'cwd', return_value=self.worktree):
+            self.assertIsNone(provider.repository_env())
 
 
 if __name__ == '__main__':

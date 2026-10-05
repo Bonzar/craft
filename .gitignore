@@ -7,7 +7,10 @@
 .env
 
 # Полный профиль Codex, который tools/jarvis-codex создаёт для одного worktree.
-.codex/
+# В Git живёт лишь ранняя точка входа Desktop (`config.toml`): её Codex читает
+# ещё до Local Environment setup. Всё созданное рантаймом остаётся локальным.
+.codex/*
+!.codex/config.toml
 
 # macOS Finder metadata.
 .DS_Store
