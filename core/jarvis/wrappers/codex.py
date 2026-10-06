@@ -221,7 +221,7 @@ def run_hook(entry_file: str, module_class: type[Module], argv: list[str] | None
         module_class(),
         manifest,
         event,
-        Storage(default_state_dir(), event.session_id),
+        Storage(default_state_dir(module_dir), event.session_id),
         translate=lambda unified, response: translate(unified, response, slug=manifest.slug),
         module_dir=module_dir,
         personal_config=Path(PERSONAL_CONFIG).expanduser(),

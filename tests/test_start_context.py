@@ -165,6 +165,7 @@ class Chain:
         subprocess.run(
             [sys.executable, str(INSTALLER),
              '--settings-dir', str(cls.settings_root),
+             '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source),
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
@@ -302,6 +303,7 @@ class NoProvidersTest(unittest.TestCase):
         subprocess.run(
             [sys.executable, str(INSTALLER),
              '--settings-dir', str(cls.settings_root),
+             '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source),
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
@@ -387,6 +389,7 @@ class SlowGatherTest(unittest.TestCase):
         subprocess.run(
             [sys.executable, str(INSTALLER),
              '--settings-dir', str(cls.settings_root),
+             '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source),
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
@@ -451,6 +454,7 @@ class DeadLeaderTest(unittest.TestCase):
         subprocess.run(
             [sys.executable, str(INSTALLER),
              '--settings-dir', str(cls.settings_root),
+             '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source),
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
@@ -514,6 +518,7 @@ class SweepTest(unittest.TestCase):
         subprocess.run(
             [sys.executable, str(INSTALLER),
              '--settings-dir', str(cls.settings_root),
+             '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source),
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,

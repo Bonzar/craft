@@ -60,16 +60,18 @@ class CraftSyncBuildTest(unittest.TestCase):
         (source / 'main.go').write_text('package main\n', encoding='utf-8')
         (source / 'go.mod').write_text('module craft-sync\n', encoding='utf-8')
         subprocess.run([sys.executable, str(INSTALLER), '--settings-dir', str(self.settings),
+                        '--state-dir', str(self.home / '.local' / 'state' / 'jarvis'),
                         '--modules', str(source_root), '--core', str(CORE_SOURCE)],
                        check=True, capture_output=True)
         self.module = self.settings / 'jarvis' / 'modules' / SLUG
         self.binary = self.module / 'bin' / SLUG
 
-    def stub_go(self) -> None:
+    def stub_go(self, body: str = '') -> None:
         tool = self.stubs / 'go'
         tool.write_text(
             '#!/bin/sh\n'
             f'echo "$@" >> {self.calls}\n'
+            f'{body}\n'
             'while [ $# -gt 0 ]; do\n'
             '  if [ "$1" = "-o" ]; then shift; printf binary > "$1"; chmod +x "$1"; fi\n'
             '  shift\n'
@@ -108,6 +110,11 @@ class CraftSyncBuildTest(unittest.TestCase):
     def test_snapshot_declares_craft_sync_as_an_explicit_requirement(self) -> None:
         text = (MODULES_DIR / 'craft-snapshot' / 'module.toml').read_text(encoding='utf-8')
         self.assertIn('requires = ["craft-sync"]', text)
+
+    def test_build_does_not_need_git_metadata_in_the_installed_profile(self) -> None:
+        self.stub_go('case " $* " in *" -buildvcs=false "*) ;; *) exit 1 ;; esac')
+        self.fire('without-git')
+        self.assertTrue(self.binary.is_file())
 
     def test_consumer_waits_for_a_marker_published_after_it_starts(self) -> None:
         # Это порядок из P1 review: start-context уже спросил craft-sync, а

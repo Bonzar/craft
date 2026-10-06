@@ -31,7 +31,8 @@ import jarvis
 from jarvis import registry, wrappers
 
 GO = 'go'
-BUILD_FLAGS = ['build', '-ldflags=-s -w']
+# Установленная копия не обязана лежать в доступном Git-репозитории.
+BUILD_FLAGS = ['build', '-buildvcs=false', '-ldflags=-s -w']
 
 
 class Module(jarvis.Module):

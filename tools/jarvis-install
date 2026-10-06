@@ -617,7 +617,9 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
         [cli, 'app-server'],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        # Диагностика не часть JSON-RPC. Непрочитанный PIPE заполняется и
+        # блокирует app-server до того, как он ответит на запросы доверия.
+        stderr=subprocess.DEVNULL,
         env=env,
     )
     answers: dict[int, dict] = {}
@@ -644,6 +646,7 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
     finally:
         process.kill()
         process.wait()
+        reader.join(timeout=1)
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 stream.close()
@@ -971,9 +974,11 @@ def install(args: argparse.Namespace) -> Report:
     from jarvis.storage import default_state_dir
 
     backend = backend_for(args)
-    settings_root = Path(args.settings_dir or backend.settings_default).expanduser()
+    active_profile = os.environ.get('CODEX_HOME') if backend.name == CodexBackend.name else None
+    settings_root = Path(args.settings_dir or active_profile or backend.settings_default).expanduser()
     source_modules = Path(args.modules).expanduser()
-    state_dir = Path(args.state_dir).expanduser() if args.state_dir else default_state_dir()
+    state_dir = Path(args.state_dir or os.environ.get('JARVIS_STATE_DIR')
+                     or default_state_dir()).expanduser()
 
     report = Report()
     manifests = for_harness(discover(source_modules), backend.name)

@@ -1,7 +1,8 @@
 """Хранилище: место, куда модуль пишет и откуда читает состояние.
 
-Даёт его обёртка, реализация у неё. У наших обёрток это каталог состояния
-`~/.local/state/jarvis`. Харнес про хранилище не знает, модуль сам файл не
+Даёт его обёртка, реализация у неё. У наших обёрток установленный набор берёт
+каталог состояния из журнала установки, переносимый — `~/.local/state/jarvis`.
+Харнес про хранилище не знает, модуль сам файл не
 выбирает — он называет имя и зону.
 
 Зоны две: постоянная — сам каталог, сессии — подкаталог по идентификатору
@@ -19,8 +20,24 @@ ZONES = (SESSION, PERSISTENT)
 DEFAULT_STATE_DIR = '~/.local/state/jarvis'
 
 
-def default_state_dir() -> Path:
-    """Каталог состояния один, без переменной окружения с запасным путём."""
+def default_state_dir(module_dir: Path | None = None) -> Path:
+    """Установленный набор использует единственный путь из журнала установки.
+
+    У переносимого модуля без установщика остаётся штатный домашний путь.
+    Среда хука не переопределяет выбранный при установке каталог.
+    """
+    if module_dir is not None:
+        ledger = Path(module_dir).resolve().parent.parent / 'installed.json'
+        try:
+            record = json.loads(ledger.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            record = None
+        if record is not None:
+            source = record.get('source') if isinstance(record, dict) else None
+            state_dir = source.get('state_dir') if isinstance(source, dict) else None
+            if not isinstance(state_dir, str) or not state_dir.strip():
+                raise ValueError(f'{ledger}: не задан каталог состояния source.state_dir')
+            return Path(state_dir).expanduser()
     return Path(DEFAULT_STATE_DIR).expanduser()
 
 
