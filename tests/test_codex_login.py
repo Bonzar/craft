@@ -67,6 +67,12 @@ class CodexLoginTest(unittest.TestCase):
         self.addCleanup(home.cleanup)
         self.home = Path(home.name)
         self.auth = self.home / '.codex' / 'auth.json'
+        subprocess.run(
+            [sys.executable, str(INSTALLER), '--settings-dir', str(self.settings_root),
+             '--modules', str(MODULES_DIR),
+             '--state-dir', str(self.home / '.local' / 'state' / 'jarvis')],
+            check=True, capture_output=True,
+        )
 
     def fire(self, session_id: str, auth: str | None = FAKE_AUTH, source: str = 'startup',
              home: Path | None = None, codex_home: str | None = None):
@@ -215,6 +221,8 @@ class CodexLoginTest(unittest.TestCase):
 
     def test_o_a_wide_directory_is_narrowed_too(self) -> None:
         self.auth.parent.mkdir(parents=True, mode=0o755)
+        # mkdir учитывает umask среды; тесту нужен именно открытый каталог.
+        self.auth.parent.chmod(0o755)
         self.auth.write_text(FAKE_AUTH, encoding='utf-8')
         self.auth.chmod(0o600)
 
