@@ -339,7 +339,11 @@ while [ $# -gt 0 ]; do
   shift
 done
 mkdir -p "$prefix/bin"
-printf '#!/bin/sh\\necho codex-cli 0.0.0\\n' > "$prefix/bin/codex"
+if [ -n "$FAKE_NPM_BROKEN" ]; then
+  printf '#!/bin/sh\\nexit 1\\n' > "$prefix/bin/codex"
+else
+  printf '#!/bin/sh\\necho codex-cli 0.0.0\\n' > "$prefix/bin/codex"
+fi
 chmod +x "$prefix/bin/codex"
 """
 
@@ -373,12 +377,14 @@ class CodexBinaryTest(unittest.TestCase):
         npm.chmod(0o755)
         self.npm_log = self.root / 'npm.log'
 
-    def fire(self, session_id: str, fail: bool = False, with_npm: bool = True):
+    def fire(self, session_id: str, fail: bool = False, with_npm: bool = True, broken: bool = False):
         path = f'{self.npm_dir}:/usr/bin:/bin' if with_npm else '/usr/bin:/bin'
         environment = {'PATH': path, 'HOME': str(self.home), 'CODEX_AUTH_JSON': FAKE_AUTH,
                        'FAKE_NPM_LOG': str(self.npm_log)}
         if fail:
             environment['FAKE_NPM_FAIL'] = '1'
+        if broken:
+            environment['FAKE_NPM_BROKEN'] = '1'
         return subprocess.run(
             [sys.executable, str(self.module_dir / 'hooks' / 'module.py'),
              '--harness', 'claude', '--event', 'session-start'],
@@ -427,6 +433,26 @@ class CodexBinaryTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.journal('sess-bin-no-npm')[-1]['codex'].startswith('не поставлен: '))
+
+    def test_a_codex_that_does_not_run_is_installed_again(self) -> None:
+        self.binary.parent.mkdir(parents=True)
+        self.binary.write_text('#!/bin/sh\nexit 1\n', encoding='utf-8')
+        self.binary.chmod(0o755)
+
+        result = self.fire('sess-bin-broken-cached')
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.npm_calls()), 1, 'сломанный codex ставится заново')
+        self.assertEqual(self.journal('sess-bin-broken-cached')[-1]['codex'], 'поставлен заново')
+        version = subprocess.run([str(self.binary), '--version'], capture_output=True, text=True)
+        self.assertEqual(version.returncode, 0)
+
+    def test_an_install_that_does_not_run_is_not_kept(self) -> None:
+        result = self.fire('sess-bin-broken-install', broken=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.binary.exists(), 'неработающая установка удалена')
+        self.assertTrue(self.journal('sess-bin-broken-install')[-1]['codex'].startswith('не поставлен: '))
 
     def test_the_library_gives_the_path_only_when_codex_is_there(self) -> None:
         spec = importlib.util.spec_from_file_location(

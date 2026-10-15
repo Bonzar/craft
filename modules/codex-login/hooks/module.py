@@ -157,7 +157,11 @@ def prepare(env) -> str:
 # Установка codex: npm качает пакет из сети, на холодном старте это секунды,
 # на медленной сети дольше. Потолок нужен, чтобы зависший npm не держал старт.
 NPM_TIMEOUT_SECONDS = 300
+# Проверка запуска: `codex --version` отвечает за доли секунды, потолок
+# только на случай зависания.
+RUN_TIMEOUT_SECONDS = 30
 INSTALLED = 'поставлен'
+REINSTALLED = 'поставлен заново'
 PRESENT = 'уже на месте'
 NOT_INSTALLED = 'не поставлен: {reason}'
 
@@ -171,14 +175,35 @@ def load_library():
     return library
 
 
+def runs(binary: Path) -> bool:
+    """Запускается ли codex: файл на месте ещё не значит, что программа цела.
+
+    Сама программа у пакета @openai/codex приезжает необязательной зависимостью
+    под платформу. Не скачалась она — npm выходит с кодом 0, а `bin/codex`
+    лежит и не запускается.
+    """
+    try:
+        done = subprocess.run([str(binary), '--version'], capture_output=True,
+                              timeout=RUN_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0
+
+
 def ensure_codex(library) -> str:
-    """Поставить codex в папку модуля, если его там нет. Вернёт исход словами.
+    """Поставить codex в папку модуля, если там нет рабочего. Вернёт исход словами.
 
     Ставим, даже когда codex есть на PATH: чужой codex мог остаться от другого
-    снимка окружения, а модуль отвечает только за свой.
+    снимка окружения, а модуль отвечает только за свой. Неработающую установку
+    не держим: папка удаляется целиком, иначе следующий старт счёл бы её
+    поставленной.
     """
+    again = False
     if library.BINARY.is_file():
-        return PRESENT
+        if runs(library.BINARY):
+            return PRESENT
+        shutil.rmtree(library.PREFIX, ignore_errors=True)
+        again = True
     npm = shutil.which('npm')
     if npm is None:
         return NOT_INSTALLED.format(reason='npm нет на PATH')
@@ -188,11 +213,16 @@ def ensure_codex(library) -> str:
             capture_output=True, text=True, timeout=NPM_TIMEOUT_SECONDS, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as failure:
+        shutil.rmtree(library.PREFIX, ignore_errors=True)
         return NOT_INSTALLED.format(reason=f'{type(failure).__name__}: {failure}')
     if done.returncode != 0 or not library.BINARY.is_file():
+        shutil.rmtree(library.PREFIX, ignore_errors=True)
         tail = (done.stderr or done.stdout).strip().splitlines()[-1:] or ['без вывода']
         return NOT_INSTALLED.format(reason=f'npm вернул {done.returncode}: {tail[0]}')
-    return INSTALLED
+    if not runs(library.BINARY):
+        shutil.rmtree(library.PREFIX, ignore_errors=True)
+        return NOT_INSTALLED.format(reason='codex после установки не запускается')
+    return REINSTALLED if again else INSTALLED
 
 
 class Module(jarvis.Module):
