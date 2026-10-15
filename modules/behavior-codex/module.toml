@@ -1,2 +1,5 @@
+# Адаптер правил поведения под Codex: только то, что в Codex делается иначе,
+# чем в общем модуле behavior. Общее правило адаптер не повторяет.
 slug = "behavior-codex"
+for = ["behavior"]
 harness = "codex"

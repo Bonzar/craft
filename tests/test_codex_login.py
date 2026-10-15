@@ -328,5 +328,117 @@ class NarrowTest(unittest.TestCase):
             self.module.narrow(self.root / 'нет такого', 0o600)
 
 
+# Подделка npm: пишет вызов в журнал и кладёт исполняемый codex туда, куда
+# указал --prefix. Настоящий npm в тестах не зовётся никогда: он ходит в сеть.
+FAKE_NPM = """#!/bin/sh
+echo "$@" >> "$FAKE_NPM_LOG"
+[ -n "$FAKE_NPM_FAIL" ] && exit 1
+prefix=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--prefix" ] && prefix="$2"
+  shift
+done
+mkdir -p "$prefix/bin"
+printf '#!/bin/sh\\necho codex-cli 0.0.0\\n' > "$prefix/bin/codex"
+chmod +x "$prefix/bin/codex"
+"""
+
+
+class CodexBinaryTest(unittest.TestCase):
+    """Бинарник codex: модуль сам ставит его в свою папку на старте сессии.
+
+    Каждому тесту свой набор: бинарник живёт в папке установленного модуля, и
+    поставленный одним тестом исказил бы исход другого.
+    """
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        self.settings_root = self.root / 'settings'
+        self.state = self.home / '.local' / 'state' / 'jarvis'
+        subprocess.run(
+            [sys.executable, str(INSTALLER), '--settings-dir', str(self.settings_root),
+             '--modules', str(MODULES_DIR), '--state-dir', str(self.state)],
+            check=True, capture_output=True,
+        )
+        self.module_dir = self.settings_root / 'jarvis' / 'modules' / SLUG
+        self.binary = self.module_dir / 'bin' / 'npm' / 'bin' / 'codex'
+        self.npm_dir = self.root / 'npm'
+        self.npm_dir.mkdir()
+        npm = self.npm_dir / 'npm'
+        npm.write_text(FAKE_NPM, encoding='utf-8')
+        npm.chmod(0o755)
+        self.npm_log = self.root / 'npm.log'
+
+    def fire(self, session_id: str, fail: bool = False, with_npm: bool = True):
+        path = f'{self.npm_dir}:/usr/bin:/bin' if with_npm else '/usr/bin:/bin'
+        environment = {'PATH': path, 'HOME': str(self.home), 'CODEX_AUTH_JSON': FAKE_AUTH,
+                       'FAKE_NPM_LOG': str(self.npm_log)}
+        if fail:
+            environment['FAKE_NPM_FAIL'] = '1'
+        return subprocess.run(
+            [sys.executable, str(self.module_dir / 'hooks' / 'module.py'),
+             '--harness', 'claude', '--event', 'session-start'],
+            input=session_event(session_id), text=True, capture_output=True, env=environment,
+        )
+
+    def journal(self, session_id: str) -> list[dict]:
+        path = Storage(self.state, session_id).path('codex-login.jsonl')
+        return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+
+    def npm_calls(self) -> list[str]:
+        if not self.npm_log.exists():
+            return []
+        return self.npm_log.read_text(encoding='utf-8').splitlines()
+
+    def test_codex_is_installed_into_the_module_folder(self) -> None:
+        result = self.fire('sess-bin-new')
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '', 'ответ харнесу — молчание')
+        self.assertTrue(os.access(self.binary, os.X_OK), 'codex лежит в папке модуля и исполняется')
+        calls = self.npm_calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn('@openai/codex', calls[0])
+        self.assertIn(str(self.module_dir / 'bin' / 'npm'), calls[0])
+        self.assertEqual(self.journal('sess-bin-new')[-1]['codex'], 'поставлен')
+
+    def test_a_present_codex_is_not_installed_again(self) -> None:
+        self.fire('sess-bin-first')
+        result = self.fire('sess-bin-second')
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.npm_calls()), 1, 'второй старт npm не зовёт')
+        self.assertEqual(self.journal('sess-bin-second')[-1]['codex'], 'уже на месте')
+
+    def test_a_failed_install_leaves_the_session_and_the_login_intact(self) -> None:
+        result = self.fire('sess-bin-fail', fail=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.binary.exists())
+        self.assertTrue((self.home / '.codex' / 'auth.json').exists(), 'вход раскладывается всё равно')
+        self.assertTrue(self.journal('sess-bin-fail')[-1]['codex'].startswith('не поставлен: '))
+
+    def test_without_npm_the_reason_is_named(self) -> None:
+        result = self.fire('sess-bin-no-npm', with_npm=False)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.journal('sess-bin-no-npm')[-1]['codex'].startswith('не поставлен: '))
+
+    def test_the_library_gives_the_path_only_when_codex_is_there(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            'codex_login_lib', self.module_dir / 'lib' / '__init__.py')
+        library = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(library)
+
+        with self.assertRaises(library.CodexError):
+            library.binary()
+        self.fire('sess-bin-lib')
+        self.assertEqual(library.binary(), self.binary)
+
+
 if __name__ == '__main__':
     unittest.main()
