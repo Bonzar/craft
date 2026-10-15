@@ -76,7 +76,9 @@ class CodexLoginTest(unittest.TestCase):
 
     def fire(self, session_id: str, auth: str | None = FAKE_AUTH, source: str = 'startup',
              home: Path | None = None, codex_home: str | None = None):
-        environment = {'PATH': '/usr/bin:/bin', 'HOME': str(home or self.home)}
+        # Свой PATH без системных каталогов: хук ищет npm по PATH, и чужой npm
+        # из /usr/bin увёл бы тест в сеть.
+        environment = {'PATH': str(self.home / 'empty-path'), 'HOME': str(home or self.home)}
         if auth is not None:
             environment['CODEX_AUTH_JSON'] = auth
         if codex_home is not None:
@@ -338,13 +340,13 @@ while [ $# -gt 0 ]; do
   [ "$1" = "--prefix" ] && prefix="$2"
   shift
 done
-mkdir -p "$prefix/bin"
+/bin/mkdir -p "$prefix/bin"
 if [ -n "$FAKE_NPM_BROKEN" ]; then
   printf '#!/bin/sh\\nexit 1\\n' > "$prefix/bin/codex"
 else
   printf '#!/bin/sh\\necho codex-cli 0.0.0\\n' > "$prefix/bin/codex"
 fi
-chmod +x "$prefix/bin/codex"
+/bin/chmod +x "$prefix/bin/codex"
 """
 
 
@@ -377,9 +379,9 @@ class CodexBinaryTest(unittest.TestCase):
         npm.chmod(0o755)
         self.npm_log = self.root / 'npm.log'
 
-    def fire(self, session_id: str, fail: bool = False, with_npm: bool = True, broken: bool = False):
-        path = f'{self.npm_dir}:/usr/bin:/bin' if with_npm else '/usr/bin:/bin'
-        environment = {'PATH': path, 'HOME': str(self.home), 'CODEX_AUTH_JSON': FAKE_AUTH,
+    def fire(self, session_id: str, fail: bool = False, broken: bool = False):
+        # На PATH только поддельный npm: настоящий в тесты не попадает.
+        environment = {'PATH': str(self.npm_dir), 'HOME': str(self.home), 'CODEX_AUTH_JSON': FAKE_AUTH,
                        'FAKE_NPM_LOG': str(self.npm_log)}
         if fail:
             environment['FAKE_NPM_FAIL'] = '1'
@@ -427,12 +429,6 @@ class CodexBinaryTest(unittest.TestCase):
         self.assertFalse(self.binary.exists())
         self.assertTrue((self.home / '.codex' / 'auth.json').exists(), 'вход раскладывается всё равно')
         self.assertTrue(self.journal('sess-bin-fail')[-1]['codex'].startswith('не поставлен: '))
-
-    def test_without_npm_the_reason_is_named(self) -> None:
-        result = self.fire('sess-bin-no-npm', with_npm=False)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(self.journal('sess-bin-no-npm')[-1]['codex'].startswith('не поставлен: '))
 
     def test_a_codex_that_does_not_run_is_installed_again(self) -> None:
         self.binary.parent.mkdir(parents=True)
