@@ -38,6 +38,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,6 +140,7 @@ class Report:
     parts: list[tuple[str, str, str]] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     source: dict = field(default_factory=dict)
 
     def render(self) -> str:
@@ -153,6 +155,8 @@ class Report:
             out.append(f'  убрано, в источнике больше нет: {where}')
         for warning in self.warnings:
             out.append(f'  ВНИМАНИЕ: {warning}')
+        for error in self.errors:
+            out.append(f'  ОШИБКА: {error}')
         return '\n'.join(out)
 
 
@@ -559,11 +563,11 @@ class CodexBackend(Backend):
 
     def register(self, records, settings_root, python, report) -> None:
         blocks: dict[str, list[str]] = {}
-        ours: set[str] = set()
+        ours: set[tuple[str, str]] = set()
         for slug, record in sorted(records.items()):
             for harness_event, unified in record['lines']:
                 command = self.command(python, settings_root, slug, tuple(unified))
-                ours.add(command)
+                ours.add((harness_event.lower(), command))
                 blocks.setdefault(harness_event, []).append(command)
                 report.lines.append((slug, ','.join(unified)))
 
@@ -653,59 +657,67 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
     return answers
 
 
-def trust_hooks(cli: str, config_path: Path, codex_home: Path, ours: set[str], report: Report) -> None:
-    """Отметить свои строки хуков доверенными: хеш определения → hooks.state."""
+def listed_hooks(cli: str, codex_home: Path, config_path: Path, handshake: list[dict]) -> list[dict]:
+    answers = app_server_call(cli, codex_home, handshake + [
+        {'id': 2, 'method': 'hooks/list', 'params': {}},
+    ])
+    result = answers.get(2, {}).get('result')
+    if not isinstance(result, dict) or not isinstance(result.get('data'), list):
+        raise ValueError('app-server не ответил на hooks/list')
+    hooks = []
+    for entry in result['data']:
+        if entry.get('errors'):
+            raise ValueError(f'hooks/list сообщил ошибки: {entry["errors"]}')
+        hooks.extend(hook for hook in entry.get('hooks', [])
+                     if str(hook.get('sourcePath')) == str(config_path))
+    return hooks
+
+
+def hook_identity(hook: dict) -> tuple[str, str]:
+    return str(hook.get('eventName', '')).lower(), hook.get('command', '')
+
+
+def trust_hooks(cli: str, config_path: Path, codex_home: Path,
+                ours: set[tuple[str, str]], report: Report) -> None:
+    """Сверить все события и команды, записать доверие и перечитать его у Codex."""
     handshake = [
         {'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'jarvis-install', 'version': '3'}}},
         {'method': 'initialized'},
     ]
     try:
-        listed = app_server_call(cli, codex_home, handshake + [{'id': 2, 'method': 'hooks/list', 'params': {}}])
-    except OSError as error:
-        report.warnings.append(
-            f'доверие строкам хуков Codex не проставлено: {cli} не запустился ({error}); '
-            'без доверия Codex такой хук молча не исполняет'
-        )
+        hooks = listed_hooks(cli, codex_home, config_path, handshake)
+        missing = ours - {hook_identity(hook) for hook in hooks}
+        if missing:
+            raise ValueError(f'Codex не видит все зарегистрированные хуки: {sorted(missing)}')
+        selected = {hook['key']: hook for hook in hooks if hook_identity(hook) in ours}
+        writes = trust_writes(selected)
+        written = app_server_call(cli, codex_home, handshake + writes)
+        failed = [w['params']['keyPath'] for w in writes if 'result' not in written.get(w['id'], {})]
+        if failed:
+            raise ValueError(f'доверие не записалось для ключей: {failed}')
+        refreshed = listed_hooks(cli, codex_home, config_path, handshake)
+        ready = {hook_identity(hook) for hook in refreshed
+                 if hook.get('enabled') is True and hook.get('trustStatus') == 'trusted'
+                 and hook.get('currentHash') == selected.get(hook.get('key'), {}).get('currentHash')}
+        if ours - ready:
+            raise ValueError(f'Codex не подтвердил включение и доверие: {sorted(ours - ready)}')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        report.errors.append(f'доверие хукам Codex не подтверждено: {error}')
         return
-    answer = listed.get(2, {}).get('result')
-    if answer is None:
-        report.warnings.append(
-            'доверие строкам хуков Codex не проставлено: app-server не ответил на hooks/list; '
-            'без доверия Codex такой хук молча не исполняет'
-        )
-        return
-
-    writes = []
-    trusted = []
-    for entry in answer.get('data', []):
-        for hook in entry.get('hooks', []):
-            if hook.get('command') not in ours or str(hook.get('sourcePath')) != str(config_path):
-                continue
-            key = hook['key']
-            if key in trusted:
-                continue
-            trusted.append(key)
-            for field_name, value in (('trusted_hash', hook['currentHash']), ('enabled', True)):
-                writes.append({
-                    'id': 100 + len(writes),
-                    'method': 'config/value/write',
-                    'params': {
-                        'keyPath': f'hooks.state."{key}".{field_name}',
-                        'mergeStrategy': 'upsert',
-                        'value': value,
-                    },
-                })
-    if not writes:
-        report.warnings.append(
-            'доверие строкам хуков Codex не проставлено: app-server не показал наших строк'
-        )
-        return
-    written = app_server_call(cli, codex_home, handshake + writes)
-    failed = [w['params']['keyPath'] for w in writes if 'result' not in written.get(w['id'], {})]
-    if failed:
-        report.warnings.append(f'доверие не записалось для ключей: {failed}')
-    for key in trusted:
+    for key in selected:
         report.parts.append(('codex', 'доверие', key))
+
+
+def trust_writes(selected: dict[str, dict]) -> list[dict]:
+    writes = []
+    for key, hook in selected.items():
+        for field_name, value in (('trusted_hash', hook['currentHash']), ('enabled', True)):
+            writes.append({
+                'id': 100 + len(writes), 'method': 'config/value/write',
+                'params': {'keyPath': f'hooks.state."{key}".{field_name}',
+                           'mergeStrategy': 'upsert', 'value': value},
+            })
+    return writes
 
 
 # --- строки хуков Claude в settings.json ---
@@ -991,6 +1003,16 @@ def install(args: argparse.Namespace) -> Report:
         report.installed.extend(slug for _, slug in plan)
         return report
 
+    if backend.name == CodexBackend.name:
+        for directory in (state_dir, settings_root):
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix='.jarvis-check-', dir=directory):
+                    pass
+            except OSError as error:
+                report.errors.append(f'каталог Codex недоступен для записи: {directory}: {error}')
+                return report
+
     source_core = Path(args.core).expanduser()
     records = {
         slug: install_module(target, slug, source_core, settings_root, state_dir, backend, report)
@@ -1030,9 +1052,13 @@ def install(args: argparse.Namespace) -> Report:
 
 
 def main(argv: list[str] | None = None) -> int:
-    report = install(parse_args(sys.argv[1:] if argv is None else argv))
-    print(report.render())
-    return 0
+    try:
+        report = install(parse_args(sys.argv[1:] if argv is None else argv))
+    except (OSError, ValueError) as error:
+        print(f'ОШИБКА установки: {error}', file=sys.stderr)
+        return 1
+    print(report.render(), file=sys.stderr if report.errors else sys.stdout)
+    return 1 if report.errors else 0
 
 
 if __name__ == '__main__':

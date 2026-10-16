@@ -4,6 +4,7 @@ import importlib.machinery
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -70,6 +71,21 @@ class InstallerTest(unittest.TestCase):
         return [h for group in groups for h in group['hooks'] if installer.is_jarvis_line(h, self.modules_root())]
 
     # --- строка на модуль и событие ---
+
+    def test_both_harnesses_report_installation_failure_without_a_traceback(self) -> None:
+        self.add_module('example', 'slug = "example"\n')
+        self.settings_root.write_text('not a directory', encoding='utf-8')
+        for harness in ('claude', 'codex'):
+            with self.subTest(harness=harness):
+                done = subprocess.run([
+                    sys.executable, str(INSTALLER), '--harness', harness, '--no-trust',
+                    '--settings-dir', str(self.settings_root), '--state-dir', str(self.state_dir),
+                    '--modules', str(self.source), '--core', str(CORE_SOURCE),
+                ], capture_output=True, text=True)
+                self.assertEqual(done.returncode, 1)
+                self.assertIn('ОШИБКА', done.stderr)
+                self.assertIn(str(self.settings_root), done.stderr)
+                self.assertNotIn('Traceback', done.stderr)
 
     def test_one_line_per_module_and_event(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt", "pre-tool"]\n')
