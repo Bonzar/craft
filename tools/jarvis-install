@@ -1052,8 +1052,12 @@ def install(args: argparse.Namespace) -> Report:
 
 
 def main(argv: list[str] | None = None) -> int:
-    report = install(parse_args(sys.argv[1:] if argv is None else argv))
-    print(report.render())
+    try:
+        report = install(parse_args(sys.argv[1:] if argv is None else argv))
+    except (OSError, ValueError) as error:
+        print(f'ОШИБКА установки: {error}', file=sys.stderr)
+        return 1
+    print(report.render(), file=sys.stderr if report.errors else sys.stdout)
     return 1 if report.errors else 0
 
 
