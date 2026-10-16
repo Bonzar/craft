@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Собрать контрольную раскладку Cloud из коммита для отдельной dist-ветки.
+
+Читает только явно перечисленные исходники из Git. Не устанавливает профиль,
+не запускает хуки и не обращается к Codex. Публикация dist — отдельный шаг.
+"""
+
+import argparse
+import hashlib
+import json
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = 'cloud-dist.json'
+CALLBACK = '.codex/jarvis/cloud-repo-probe.py'
+SKILL = '.agents/skills/probe/SKILL.md'
+RULES_MARKER = '<!-- jarvis:cloud-repo-probe -->'
+RULES = '''
+<!-- jarvis:cloud-repo-probe -->
+## Проба чтения репозиторных инструкций в Cloud
+
+Контрольная метка этого файла: `JARVIS_CLOUD_RULES_V1`.
+Она подтверждает только присутствие этих инструкций в контексте.
+Модульная установка и автоматические хуки проверяются отдельно по их следам.
+<!-- /jarvis:cloud-repo-probe -->
+'''
+ARTIFACTS = frozenset({'AGENTS.md', SKILL, CALLBACK, '.codex/hooks.json'})
+
+
+def git(source: Path, *args: str) -> bytes:
+    done = subprocess.run(['git', '-C', str(source), *args], capture_output=True, check=False)
+    if done.returncode:
+        raise ValueError(done.stderr.decode(errors='replace').strip())
+    return done.stdout
+
+
+def hooks(runtime_root: Path) -> bytes:
+    command = shlex.join(['python3', str(runtime_root / CALLBACK)])
+    groups = {}
+    for event in ('SessionStart', 'PermissionRequest', 'SubagentStart'):
+        handler = {'type': 'command', 'command': command, 'timeout': 30}
+        group = {'hooks': [handler]}
+        if event == 'SessionStart':
+            group['matcher'] = 'startup|resume|clear|compact|fork'
+            handler['additionalContextLimit'] = 0
+        groups[event] = [group]
+    return encode({'description': 'Диагностическая проба Cloud из dist. Решения не меняет.',
+                   'hooks': groups})
+
+
+def encode(value: dict) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode()
+
+
+def assemble(source: Path, revision: str, runtime_root: Path) -> dict[str, bytes]:
+    if not runtime_root.is_absolute():
+        raise ValueError('--runtime-root должен быть абсолютным путём')
+    commit = git(source, 'rev-parse', '--verify', '--end-of-options',
+                 revision + '^{commit}').decode().strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('не удалось определить source commit')
+    guidance = git(source, 'show', commit + ':AGENTS.md').decode()
+    if RULES_MARKER in guidance:
+        raise ValueError('исходники уже содержат dist: собирай из source-ветки')
+    files = {
+        'AGENTS.md': (guidance.rstrip() + '\n' + RULES).encode(),
+        SKILL: git(source, 'show', commit + ':modules/probe/skill/SKILL.md'),
+        CALLBACK: git(source, 'show', commit + ':tests/cloud_repo_probe.py'),
+        '.codex/hooks.json': hooks(runtime_root),
+    }
+    files[MANIFEST] = encode({
+        'schema_version': 1, 'kind': 'codex-cloud-probe',
+        'source_commit': commit, 'runtime_root': str(runtime_root),
+        'files': {name: hashlib.sha256(content).hexdigest() for name, content in files.items()},
+    })
+    return files
+
+
+def build(source: Path, revision: str, output: Path, runtime_root: Path) -> None:
+    # Собираем в памяти до записи: неудачный git show не оставляет полураскладку.
+    files = assemble(source, revision, runtime_root)
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        raise ValueError(f'каталог dist должен быть пустым: {output}')
+    output.mkdir(parents=True, exist_ok=True)
+    for name, content in files.items():
+        path = output / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    verify(output)
+
+
+def verify(root: Path) -> dict:
+    root = root.resolve()
+    manifest = json.loads((root / MANIFEST).read_text())
+    if (not isinstance(manifest, dict) or manifest.get('schema_version') != 1
+            or manifest.get('kind') != 'codex-cloud-probe'):
+        raise ValueError('неизвестный формат dist manifest')
+    files = manifest.get('files')
+    if not isinstance(files, dict) or set(files) != ARTIFACTS:
+        raise ValueError('manifest должен перечислять все четыре артефакта dist')
+    if not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('source_commit', ''))):
+        raise ValueError('manifest не содержит source commit')
+    runtime_root = manifest.get('runtime_root')
+    if not isinstance(runtime_root, str) or not Path(runtime_root).is_absolute():
+        raise ValueError('manifest не содержит абсолютный runtime_root')
+    for name, digest in files.items():
+        path = (root / name).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError(f'артефакт вне dist: {name}')
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ValueError(f'контрольная сумма dist не совпала: {name}')
+    return manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--output', type=Path, help='пустой каталог для готового dist')
+    mode.add_argument('--check', type=Path, help='проверить manifest собранного dist')
+    parser.add_argument('--source', type=Path, default=REPO_ROOT)
+    parser.add_argument('--ref', default='HEAD', help='коммит исходников')
+    parser.add_argument('--runtime-root', type=Path, default=Path('/workspace/craft'))
+    args = parser.parse_args(argv)
+    try:
+        if args.check is None:
+            build(args.source, args.ref, args.output, args.runtime_root)
+        manifest = verify(args.check if args.check is not None else args.output)
+    except (OSError, ValueError) as error:
+        print(f'ОШИБКА сборки dist: {error}', file=sys.stderr)
+        return 1
+    print(f"Dist проверен: source={manifest['source_commit']}, файлов={len(manifest['files'])}")
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
