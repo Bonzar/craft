@@ -387,11 +387,11 @@ class HarnessAndCopiesTest(unittest.TestCase):
                 self.assertFalse(any(part == 'доверие' for _, part, _ in report.parts))
 
     def test_cli_returns_failure_when_hook_trust_cannot_be_verified(self) -> None:
-        from contextlib import redirect_stdout
+        from contextlib import redirect_stderr
         from io import StringIO
 
         self.add_module('base', 'slug = "base"\nevents = ["session-start"]\n')
-        with redirect_stdout(StringIO()) as output:
+        with redirect_stderr(StringIO()) as output:
             code = installer.main([
                 '--harness', 'codex', '--settings-dir', str(self.settings_root),
                 '--state-dir', str(self.state_dir), '--modules', str(self.source),
