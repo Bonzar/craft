@@ -6,8 +6,10 @@
 # Local secrets (CRAFT_API_BASE token, CRAFT_LINKS_STORE, …). Never commit.
 .env
 
-# Полный профиль Codex, который tools/jarvis-codex создаёт для одного worktree.
-.codex/
+# Полный профиль Codex остаётся локальным. Единственное исключение —
+# проектная проба чтения hooks.json самим Cloud, без доверия и состояния.
+.codex/*
+!.codex/hooks.json
 
 # macOS Finder metadata.
 .DS_Store
