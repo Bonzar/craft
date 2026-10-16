@@ -8,5 +8,5 @@
   "kind": "codex-cloud-probe",
   "runtime_root": "/workspace/craft",
   "schema_version": 1,
-  "source_commit": "4b0f793f277ba7bd7725d720caee25b328c3074a"
+  "source_commit": "8b5ae81e4e954a63fba48b226b72224d46d6cb8f"
 }
