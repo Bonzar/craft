@@ -3,7 +3,8 @@
 
 The installer only copies and registers modules.  This hook owns rebuilding,
 the source fingerprint, and the session marker which lets dependants wait for
-an in-progress build.
+an in-progress build. Codex build adapters supply the compiler and local caches
+through lib.prepare_build(runtime).
 """
 
 import json
