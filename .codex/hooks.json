@@ -1,0 +1,40 @@
+{
+  "description": "Диагностическая проба Cloud из dist. Решения не меняет.",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "command": "python3 /workspace/craft/.codex/jarvis/cloud-repo-probe.py",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "additionalContextLimit": 0,
+            "command": "python3 /workspace/craft/.codex/jarvis/cloud-repo-probe.py",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume|clear|compact|fork"
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "command": "python3 /workspace/craft/.codex/jarvis/cloud-repo-probe.py",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

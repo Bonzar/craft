@@ -1,0 +1,12 @@
+{
+  "files": {
+    ".agents/skills/probe/SKILL.md": "7a774d5fb1e30953b4e93c6c087b81346923b80595c42c6804cba585e25153a0",
+    ".codex/hooks.json": "4a3b017d7c00f50344eb8d358cb7a472c320db9cf121ed1f49fd53b4954efff1",
+    ".codex/jarvis/cloud-repo-probe.py": "6c8d89d9a1a3341e84e885829620b88df9e9bbbbe9e7be887795ad809dfba356",
+    "AGENTS.md": "80c88f4600eecb63a1a43f5f1dea389f2f1002825fb0972bda48eb69663d2018"
+  },
+  "kind": "codex-cloud-probe",
+  "runtime_root": "/workspace/craft",
+  "schema_version": 1,
+  "source_commit": "4b0f793f277ba7bd7725d720caee25b328c3074a"
+}
