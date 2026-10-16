@@ -33,6 +33,7 @@ class Module(jarvis.Module):
         try:
             build(library, runtime, event)
         except Exception as failure:
+            mark(library, runtime, library.READY)
             note(runtime, event, 'сборка не вышла', f'{type(failure).__name__}: {failure}')
         return jarvis.Silence()
 
@@ -50,8 +51,14 @@ def build(library, runtime, event) -> None:
     if library.BINARY.is_file() and recorded(library) == want:
         note(runtime, event, 'сборка не нужна', 'отпечаток исходников сошёлся')
         return
-    go = shutil.which(GO)
+    mark(library, runtime, library.BUILDING)
+    go, environment = shutil.which(GO), dict(os.environ)
+    for adapter in registry.adapters(runtime.module_dir, runtime.manifest.slug):
+        part = registry.library_of(adapter)
+        if part is not None:
+            go, environment = part.load().prepare_build(runtime)
     if go is None:
+        mark(library, runtime, library.READY)
         note(runtime, event, 'нет go', 'go на PATH не найден: craft-sync не собран')
         return
     library.BINARY.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +67,7 @@ def build(library, runtime, event) -> None:
     started = time.monotonic()
     done = subprocess.run(
         [go, *BUILD_FLAGS, '-o', str(temporary), '.'], cwd=str(library.SOURCE_DIR),
-        env={**os.environ, 'CGO_ENABLED': '0'}, capture_output=True, text=True, check=False,
+        env={**environment, 'CGO_ENABLED': '0'}, capture_output=True, text=True, check=False,
     )
     seconds = round(time.monotonic() - started, 3)
     if done.returncode:

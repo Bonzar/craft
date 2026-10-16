@@ -19,7 +19,7 @@ FAKE_CODEX = textwrap.dedent('''
     ним проверить надо: ключ доверия, хеш и то, что пишется ровно две записи на
     строку хука.
     """
-    import json, os, re, sys
+    import json, os, re, sys, tomllib
 
     config = os.environ['FAKE_CONFIG']
     journal = os.environ['FAKE_JOURNAL']
@@ -28,11 +28,13 @@ FAKE_CODEX = textwrap.dedent('''
         state = {item['keyPath']: item['value'] for item in json.load(open(journal))}
     except FileNotFoundError:
         state = {}
-    commands = re.findall(r'^command = "(.*)"$', open(config, encoding='utf-8').read(), re.M)
+    definitions = [(event, hook['command'])
+                   for event, groups in tomllib.loads(open(config, encoding='utf-8').read()).get('hooks', {}).items()
+                   if isinstance(groups, list) for group in groups for hook in group.get('hooks', [])]
     hooks = [
         {
-            'key': f'{config}:session_start:{i}:0',
-            'eventName': 'sessionStart',
+            'key': f'{config}:{re.sub("(?<!^)(?=[A-Z])", "_", event).lower()}:{i}:0',
+            'eventName': event[0].lower() + event[1:],
             'handlerType': 'command',
             'command': command.replace('\\\\"', '"').replace('\\\\\\\\', '\\\\'),
             'sourcePath': config,
@@ -40,7 +42,7 @@ FAKE_CODEX = textwrap.dedent('''
             'trustStatus': 'untrusted',
             'enabled': True,
         }
-        for i, command in enumerate(commands)
+        for i, (event, command) in enumerate(definitions)
     ]
     for hook in hooks:
         prefix = f'hooks.state."{hook["key"]}".'

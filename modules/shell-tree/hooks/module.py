@@ -49,6 +49,7 @@ class Module(jarvis.Module):
             # Сессию сборка не роняет: причина с контекстом уходит в журнал, а
             # харнес получает молчание. Инструмента не будет — об этом скажет
             # библиотечная часть тому, кто её позовёт.
+            mark(library, runtime, library.READY)
             note(runtime, event, action='сборка не вышла',
                  reason=f'{type(failure).__name__}: {failure}')
         return jarvis.Silence()
@@ -73,8 +74,14 @@ def build(library, runtime, event) -> None:
         note(runtime, event, action='сборка не нужна', reason='отпечаток исходников сошёлся')
         return
 
-    tool = shutil.which(GO)
+    mark(library, runtime, library.BUILDING)
+    tool, environment = shutil.which(GO), dict(os.environ)
+    for adapter in registry.adapters(runtime.module_dir, runtime.manifest.slug):
+        part = registry.library_of(adapter)
+        if part is not None:
+            tool, environment = part.load().prepare_build(runtime)
     if tool is None:
+        mark(library, runtime, library.READY)
         note(runtime, event, action='нет go',
              reason='go на PATH не найден: бинарник не собран, разбор будет недоступен')
         return
@@ -86,7 +93,7 @@ def build(library, runtime, event) -> None:
     # а общий предел на ход хука ставит харнес строкой установщика.
     done = subprocess.run(
         [tool, *BUILD_FLAGS, '-o', str(binary), '.'],
-        cwd=str(source), env={**os.environ, 'CGO_ENABLED': '0'},
+        cwd=str(source), env={**environment, 'CGO_ENABLED': '0'},
         capture_output=True, text=True, check=False,
     )
     seconds = round(time.monotonic() - started, 3)
