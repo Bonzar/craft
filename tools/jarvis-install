@@ -38,6 +38,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1001,6 +1002,16 @@ def install(args: argparse.Namespace) -> Report:
     if args.dry_run:
         report.installed.extend(slug for _, slug in plan)
         return report
+
+    if backend.name == CodexBackend.name:
+        for directory in (state_dir, settings_root):
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix='.jarvis-check-', dir=directory):
+                    pass
+            except OSError as error:
+                report.errors.append(f'каталог Codex недоступен для записи: {directory}: {error}')
+                return report
 
     source_core = Path(args.core).expanduser()
     records = {
