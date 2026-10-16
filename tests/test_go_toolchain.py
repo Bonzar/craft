@@ -135,4 +135,3 @@ class CodexBuildEnvironmentTest(unittest.TestCase):
                 self.assertTrue(Path(cache).is_relative_to(profile))
                 self.assertTrue(Path(gopath).is_relative_to(profile))
                 self.assertEqual(policy, 'local')
-

@@ -89,4 +89,3 @@ def download(archive: Path) -> str:
                 raise
             time.sleep(RETRY_DELAYS[attempt])
     raise RuntimeError('исчерпаны попытки загрузки Go')
-

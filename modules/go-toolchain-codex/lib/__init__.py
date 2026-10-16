@@ -16,4 +16,3 @@ def prepare_build(runtime) -> tuple[str, dict]:
         'gocache': environment['GOCACHE'], 'gopath': environment['GOPATH'],
     }, ensure_ascii=False))
     return tool, environment
-
