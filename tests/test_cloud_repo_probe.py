@@ -93,4 +93,3 @@ class CloudRepositoryProbeTest(unittest.TestCase):
         text = (self.state / JOURNAL).read_text()
         for value in ('private prompt', '/private/chat', 'private-token'):
             self.assertNotIn(value, text)
-
