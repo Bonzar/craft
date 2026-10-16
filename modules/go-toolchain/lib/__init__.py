@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -19,6 +21,7 @@ SHA256 = 'da18191ddb7db8a9339816f3e2b54bdded8047cdc2a5d67059478f8d1595c43f'
 URL = f'https://go.dev/dl/go{VERSION}.linux-amd64.tar.gz'
 DOWNLOAD_TIMEOUT = 60
 VERSION_TIMEOUT = 15
+RETRY_DELAYS = (1, 2, 4)
 
 
 def compatible(tool: str, environment: dict) -> bool:
@@ -61,12 +64,7 @@ def install(root: Path, environment: dict) -> None:
     with tempfile.TemporaryDirectory(prefix='.go-install-', dir=root) as temporary:
         stage = Path(temporary)
         archive = stage / 'go.tar.gz'
-        digest = hashlib.sha256()
-        with urllib.request.urlopen(URL, timeout=DOWNLOAD_TIMEOUT) as response, archive.open('wb') as output:
-            while chunk := response.read(1024 * 1024):
-                digest.update(chunk)
-                output.write(chunk)
-        if digest.hexdigest() != SHA256:
+        if download(archive) != SHA256:
             raise ValueError('SHA256 архива Go не совпал, программа не установлена')
         with tarfile.open(archive, mode='r:gz') as bundle:
             bundle.extractall(stage, filter='data')
@@ -74,4 +72,21 @@ def install(root: Path, environment: dict) -> None:
         if not compatible(str(tool), environment):
             raise ValueError('скачанный Go не прошёл проверку версии')
         os.replace(stage / 'go', root / 'go')
+
+
+def download(archive: Path) -> str:
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        digest = hashlib.sha256()
+        try:
+            with urllib.request.urlopen(URL, timeout=DOWNLOAD_TIMEOUT) as response, archive.open('wb') as output:
+                while chunk := response.read(1024 * 1024):
+                    digest.update(chunk)
+                    output.write(chunk)
+            return digest.hexdigest()
+        except (urllib.error.URLError, TimeoutError) as error:
+            permanent = isinstance(error, urllib.error.HTTPError) and error.code not in (408, 429) and error.code < 500
+            if permanent or attempt == len(RETRY_DELAYS):
+                raise
+            time.sleep(RETRY_DELAYS[attempt])
+    raise RuntimeError('исчерпаны попытки загрузки Go')
 
