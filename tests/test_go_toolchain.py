@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -69,6 +70,17 @@ class GoToolchainTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'SHA256'):
                 self.library.prepare()
         self.assertFalse((self.module / 'bin/go/bin/go').exists())
+
+    def test_a_transient_download_failure_is_retried(self):
+        archive = self.archive()
+        with patch.object(self.library.shutil, 'which', return_value=None), \
+             patch.object(self.library.urllib.request, 'urlopen', side_effect=[
+                 urllib.error.URLError('temporary failure'), io.BytesIO(archive),
+             ]) as fetch, patch('time.sleep'), \
+             patch.object(self.library, 'SHA256', hashlib.sha256(archive).hexdigest()):
+            tool, _ = self.library.prepare()
+        self.assertTrue(Path(tool).is_file())
+        self.assertEqual(fetch.call_count, 2)
 
     def test_a_compatible_path_tool_uses_local_caches_without_changing_process_env(self):
         tool = self.root / 'go'
