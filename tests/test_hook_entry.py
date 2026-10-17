@@ -74,6 +74,7 @@ class InstalledProbeTest(unittest.TestCase):
             [
                 sys.executable, str(INSTALLER),
                 '--settings-dir', str(cls.settings_root),
+                '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
                 '--modules', str(MODULES_DIR),
             ],
             check=True,
@@ -310,6 +311,7 @@ class HarnessFromTheLineTest(unittest.TestCase):
         subprocess.run(
             [sys.executable, str(INSTALLER),
              '--settings-dir', str(cls.settings_root),
+             '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source),
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
@@ -408,6 +410,7 @@ class SiblingEventTest(unittest.TestCase):
         subprocess.run(
             [sys.executable, str(INSTALLER),
              '--settings-dir', str(cls.settings_root),
+             '--state-dir', str(cls.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source),
              '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,

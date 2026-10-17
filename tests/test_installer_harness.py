@@ -19,15 +19,22 @@ FAKE_CODEX = textwrap.dedent('''
     ним проверить надо: ключ доверия, хеш и то, что пишется ровно две записи на
     строку хука.
     """
-    import json, os, re, sys
+    import json, os, re, sys, tomllib
 
     config = os.environ['FAKE_CONFIG']
     journal = os.environ['FAKE_JOURNAL']
-    commands = re.findall(r'^command = "(.*)"$', open(config, encoding='utf-8').read(), re.M)
+    mode = os.environ.get('FAKE_HOOK_MODE', '')
+    try:
+        state = {item['keyPath']: item['value'] for item in json.load(open(journal))}
+    except FileNotFoundError:
+        state = {}
+    definitions = [(event, hook['command'])
+                   for event, groups in tomllib.loads(open(config, encoding='utf-8').read()).get('hooks', {}).items()
+                   if isinstance(groups, list) for group in groups for hook in group.get('hooks', [])]
     hooks = [
         {
-            'key': f'{config}:session_start:{i}:0',
-            'eventName': 'sessionStart',
+            'key': f'{config}:{re.sub("(?<!^)(?=[A-Z])", "_", event).lower()}:{i}:0',
+            'eventName': event[0].lower() + event[1:],
             'handlerType': 'command',
             'command': command.replace('\\\\"', '"').replace('\\\\\\\\', '\\\\'),
             'sourcePath': config,
@@ -35,8 +42,18 @@ FAKE_CODEX = textwrap.dedent('''
             'trustStatus': 'untrusted',
             'enabled': True,
         }
-        for i, command in enumerate(commands)
+        for i, (event, command) in enumerate(definitions)
     ]
+    for hook in hooks:
+        prefix = f'hooks.state."{hook["key"]}".'
+        if state.get(prefix + 'trusted_hash') == hook['currentHash'] and mode != 'untrusted':
+            hook['trustStatus'] = 'trusted'
+        if mode == 'disabled':
+            hook['enabled'] = False
+        if mode == 'wrong-event':
+            hook['eventName'] = 'stop'
+    if mode == 'missing':
+        hooks = hooks[:-1]
     written = []
     for line in sys.stdin:
         line = line.strip()
@@ -47,7 +64,7 @@ FAKE_CODEX = textwrap.dedent('''
             print(json.dumps({'id': message['id'], 'result': {'codexHome': config}}), flush=True)
         elif message.get('method') == 'hooks/list':
             print(json.dumps({'id': message['id'], 'result': {'data': [{'cwd': '.', 'hooks': hooks,
-                                                                        'warnings': [], 'errors': []}]}}), flush=True)
+                'warnings': [], 'errors': ['invalid hook'] if mode == 'errors' else []}]}}), flush=True)
         elif message.get('method') == 'config/value/write':
             written.append(message['params'])
             # Журнал пишется ДО ответа и атомарно: установщик убивает
@@ -353,11 +370,35 @@ class HarnessAndCopiesTest(unittest.TestCase):
         self.assertIn('sha256:hash-0', [entry['value'] for entry in written])
         self.assertEqual(report.warnings, [])
 
-    def test_a_missing_codex_is_a_warning_and_not_a_crash(self) -> None:
+    def test_a_missing_codex_is_an_installation_error(self) -> None:
         self.add_module('base', 'slug = "base"\nevents = ["session-start"]\nharness = "codex"\n')
         report = self.run_installer('--harness', 'codex', '--codex-cli', str(self.root / 'no-such-codex'))
-        self.assertTrue(any('доверие' in warning for warning in report.warnings), report.warnings)
+        self.assertTrue(any('доверие' in error for error in report.errors), report.errors)
         self.assertIn('[[hooks.SessionStart]]', self.config_toml())
+
+    def test_incomplete_discovery_or_unapplied_trust_is_not_success(self) -> None:
+        from unittest.mock import patch
+
+        self.add_module('base', 'slug = "base"\nevents = ["session-start"]\ncopies = 2\n')
+        for mode in ('missing', 'wrong-event', 'untrusted', 'disabled', 'errors'):
+            with self.subTest(mode=mode), patch.dict(os.environ, {'FAKE_HOOK_MODE': mode}):
+                report = self.run_installer('--harness', 'codex', '--codex-cli', str(self.fake_cli))
+                self.assertTrue(report.errors, mode)
+                self.assertFalse(any(part == 'доверие' for _, part, _ in report.parts))
+
+    def test_cli_returns_failure_when_hook_trust_cannot_be_verified(self) -> None:
+        from contextlib import redirect_stderr
+        from io import StringIO
+
+        self.add_module('base', 'slug = "base"\nevents = ["session-start"]\n')
+        with redirect_stderr(StringIO()) as output:
+            code = installer.main([
+                '--harness', 'codex', '--settings-dir', str(self.settings_root),
+                '--state-dir', str(self.state_dir), '--modules', str(self.source),
+                '--codex-cli', str(self.root / 'missing-codex'),
+            ])
+        self.assertNotEqual(code, 0)
+        self.assertIn('ОШИБКА', output.getvalue())
 
 
 if __name__ == '__main__':

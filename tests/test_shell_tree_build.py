@@ -56,6 +56,7 @@ class BuildTest(unittest.TestCase):
         (self.source / 'go.mod').write_text('module shell-tree\n', encoding='utf-8')
         subprocess.run(
             [sys.executable, str(INSTALLER), '--settings-dir', str(self.settings),
+             '--state-dir', str(self.home / '.local' / 'state' / 'jarvis'),
              '--modules', str(source), '--core', str(CORE_SOURCE)],
             check=True, capture_output=True,
         )
@@ -136,6 +137,11 @@ class BuildTest(unittest.TestCase):
         self.fire('вторая')
         self.assertEqual(len(self.go_calls()), 1, 'вторая сессия собрала заново')
         self.assertEqual([line['action'] for line in self.journal('вторая')], ['сборка не нужна'])
+
+    def test_build_does_not_need_git_metadata_in_the_installed_profile(self) -> None:
+        self.stub_go('case " $* " in *" -buildvcs=false "*) ;; *) exit 1 ;; esac')
+        self.fire('без-git')
+        self.assertTrue(self.binary.is_file(), self.journal('без-git'))
 
     def test_changed_sources_build_again(self) -> None:
         self.stub_go()

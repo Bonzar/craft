@@ -1,0 +1,5 @@
+# Адаптер правил поведения под Claude: только то, что в Claude делается иначе,
+# чем в общем модуле behavior. Общее правило адаптер не повторяет.
+slug = "behavior-claude"
+for = ["behavior"]
+harness = "claude"

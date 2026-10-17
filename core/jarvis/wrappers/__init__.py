@@ -75,7 +75,7 @@ def _record_refusal(entry_file: str, raw: Mapping[str, Any], module_class: type[
     """Строка следа об отказе, с тем же составом полей, что у обычного хода."""
     module_dir = Path(entry_file).resolve().parents[1]
     manifest = manifest_reader.load(module_dir)
-    storage = Storage(default_state_dir(), str(raw.get('session_id') or ''))
+    storage = Storage(default_state_dir(module_dir), str(raw.get('session_id') or ''))
     decision = mode_reader.read(
         manifest.slug,
         storage,

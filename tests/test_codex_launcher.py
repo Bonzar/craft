@@ -11,6 +11,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 from . import REPO_ROOT
+from .test_installer_harness import FAKE_CODEX
 
 
 def load_launcher():
@@ -75,22 +76,15 @@ class CodexLauncherTest(unittest.TestCase):
         bin_dir = self.worktree / 'bin'
         bin_dir.mkdir()
         fake_codex = bin_dir / 'codex'
-        fake_codex.write_text(
-            '#!/usr/bin/env python3\n'
-            'import json, sys\n'
-            'for line in sys.stdin:\n'
-            '    message = json.loads(line)\n'
-            "    if message.get('id') is not None:\n"
-            "        result = {'data': []} if message.get('method') == 'hooks/list' else {}\n"
-            "        print(json.dumps({'id': message['id'], 'result': result}), flush=True)\n",
-            encoding='utf-8',
-        )
+        fake_codex.write_text(FAKE_CODEX, encoding='utf-8')
         fake_codex.chmod(0o755)
         auth = json.dumps({'tokens': {'access_token': 'not-a-real-token'}})
         environment = {
             **os.environ,
             'PATH': str(bin_dir) + os.pathsep + os.environ['PATH'],
             'CODEX_AUTH_JSON': auth,
+            'FAKE_CONFIG': str(self.worktree / '.codex/cli/config.toml'),
+            'FAKE_JOURNAL': str(self.worktree / 'fake-trust.json'),
         }
 
         self.launcher.bootstrap(self.worktree, REPO_ROOT, environment, runner=subprocess.run)

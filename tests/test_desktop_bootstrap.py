@@ -108,6 +108,7 @@ class DesktopBootstrapTest(unittest.TestCase):
             home = root / '.codex'
             installer.install(installer.parse_args([
                 '--harness', 'codex', '--project', '--no-trust', '--settings-dir', str(home),
+                '--state-dir', str(home / 'state'),
             ]))
             rules = home / 'jarvis/modules/codex-rules/lib/__init__.py'
             spec = importlib.util.spec_from_file_location('desktop_rules_test', rules)
@@ -132,10 +133,11 @@ class DesktopBootstrapTest(unittest.TestCase):
             home = Path(directory)
             reply = {2: {'result': {'data': []}}}
             with patch.object(installer, 'app_server_call', return_value=reply):
-                with self.assertRaisesRegex(RuntimeError, 'не показал'):
+                with self.assertRaisesRegex(RuntimeError, 'не видит'):
                     installer.install(installer.parse_args([
                         '--harness', 'codex', '--project', '--require-trust',
                         '--settings-dir', str(home), '--trust-home', str(home / 'active'),
+                        '--state-dir', str(home / 'state'),
                     ]))
 
     def test_only_hook_trust_is_written_to_the_external_profile_and_verified(self):
@@ -144,7 +146,7 @@ class DesktopBootstrapTest(unittest.TestCase):
             config = root / 'worktree/.codex/config.toml'
             active = root / 'desktop-profile'
             hook = {'key': 'project-hook-key', 'sourcePath': str(config),
-                    'command': 'local-worktree-command', 'currentHash': 'sha256:test',
+                    'command': 'local-worktree-command', 'eventName': 'sessionStart', 'currentHash': 'sha256:test',
                     'enabled': True, 'trustStatus': 'untrusted'}
             calls = []
 
@@ -157,9 +159,9 @@ class DesktopBootstrapTest(unittest.TestCase):
 
             report = installer.Report()
             with patch.object(installer, 'app_server_call', side_effect=rpc):
-                installer.trust_hooks('codex', config, active, {hook['command']}, report,
-                                      cwd=config.parent.parent, verify=True)
-            self.assertEqual(report.warnings, [])
+                installer.trust_hooks('codex', config, active, {('sessionstart', hook['command'])}, report,
+                                      cwd=config.parent.parent)
+            self.assertEqual(report.errors, [])
             self.assertTrue(all(home == active for home, _ in calls))
             writes = [request for _, requests in calls for request in requests
                       if request['method'] == 'config/value/write']
