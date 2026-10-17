@@ -120,7 +120,7 @@ class CloudProbeDistTest(unittest.TestCase):
         self.assertEqual(self.build().returncode, 0)
         files = self.tree(self.output)
         self.assertEqual(set(files), {'AGENTS.md', SKILL, CALLBACK,
-                                    '.codex/hooks.json', MANIFEST})
+                                    '.codex/hooks.json', '.codex/config.toml', MANIFEST})
         self.assertIn(b'Project instructions', files['AGENTS.md'])
         for value in files.values():
             for private in (b'UNCOMMITTED', b'DO-NOT-SHIP', b'PRIVATE STATE'):
