@@ -1,6 +1,7 @@
 """Публикация точного dist в отдельный main, без сетевых учётных данных."""
 
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -25,13 +26,13 @@ class CloudDistPublishTest(unittest.TestCase):
         done = self.build(runtime_root='/workspace/craft-codex-dist')
         self.assertEqual(done.returncode, 0, done.stderr)
 
-    def publish(self, *extra):
+    def publish(self, *extra, **kwargs):
         self.assertTrue(PUBLISHER.is_file(), 'Нет публикации dist в отдельный репозиторий')
         return subprocess.run([
             sys.executable, str(PUBLISHER), '--dist', str(self.output),
             '--source', str(self.source), '--ref', self.commit,
             '--remote', str(self.remote), *extra,
-        ], capture_output=True, text=True, check=False)
+        ], capture_output=True, text=True, check=False, **kwargs)
 
     def target(self, *args):
         return subprocess.check_output(['git', '--git-dir', str(self.remote), *args],
@@ -98,6 +99,22 @@ class CloudDistPublishTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn('main', done.stderr)
         self.assertEqual(self.target('for-each-ref', '--format=%(refname)', 'refs/heads'), '')
+
+    def test_rejected_push_preserves_main_and_reports_server_reason(self):
+        hook = self.remote / 'hooks/pre-receive'
+        hook.write_text('#!/bin/sh\necho "rejected for test" >&2\nexit 1\n')
+        hook.chmod(0o755)
+        done = self.publish()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('rejected for test', done.stderr)
+        self.assertEqual(self.target('for-each-ref', '--format=%(refname)', 'refs/heads'), '')
+
+    def test_missing_cross_repo_token_is_an_explicit_error_before_network(self):
+        env = dict(os.environ)
+        env.pop('CRAFT_DIST_TOKEN', None)
+        done = self.publish('--remote', 'https://github.com/Bonzar/craft-codex-dist.git', env=env)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('CRAFT_DIST_TOKEN', done.stderr)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Собрать контрольную раскладку Cloud из коммита для отдельной dist-ветки.
+"""Собрать контрольную раскладку Cloud из коммита для отдельного dist-репозитория.
 
 Читает только явно перечисленные исходники из Git. Не устанавливает профиль,
 не запускает хуки и не обращается к Codex. Публикация dist — отдельный шаг.
@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument('--check', type=Path, help='проверить manifest собранного dist')
     parser.add_argument('--source', type=Path, default=REPO_ROOT)
     parser.add_argument('--ref', default='HEAD', help='коммит исходников')
-    parser.add_argument('--runtime-root', type=Path, default=Path('/workspace/craft'))
+    parser.add_argument('--runtime-root', type=Path, default=Path('/workspace/craft-codex-dist'))
     args = parser.parse_args(argv)
     try:
         if args.check is None:

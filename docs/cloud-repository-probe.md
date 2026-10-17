@@ -1,7 +1,7 @@
 # Проверка Codex Cloud через отдельный dist
 
-Готовая раскладка живёт только в ветке **`dist/codex-cloud`**. Это собранный
-dist, его не редактируют руками и не вливают обратно в `main`.
+Готовая раскладка живёт в **`Bonzar/craft-codex-dist`, ветка `main`**.
+Это собранный dist, его не редактируют руками и не вливают обратно в `craft`.
 В source-ветке находятся сборщик `tools/build-cloud-probe`, наблюдатель
 `tests/cloud_repo_probe.py`, исходный модуль `probe` и тесты сборки.
 
@@ -12,12 +12,45 @@ dist, его не редактируют руками и не вливают о�
 репозиторные скиллы доступны облачным задачам. Поддержку проектных command
 hooks проверяет сам Cloud, локальный CLI этого не доказывает.
 
-## Сборка
+## Автоматическая публикация
+
+После push в `Bonzar/craft/main`, в том числе после слияния PR, GitHub Actions
+запускает `.github/workflows/publish-codex-dist.yml`. Он проверяет отсутствие
+снимков Craft, запускает все тесты, собирает точный `$GITHUB_SHA`, проверяет
+manifest и коммитит результат в `Bonzar/craft-codex-dist/main`. Для первого
+запуска и повтора есть `workflow_dispatch`, выбирать нужно `main`.
+
+Однократная настройка владельцем GitHub:
+
+1. Создать `Bonzar/craft-codex-dist`. Пустой репозиторий поддерживается,
+   первый push создаст `main`. Если репозиторий инициализирован заранее,
+   его default branch должна быть `main`.
+2. Создать fine-grained PAT только для `Bonzar/craft-codex-dist` с разрешением
+   **Contents: Read and write**. Сохранить его в **исходном** `Bonzar/craft`:
+   Settings → Secrets and variables → Actions → New repository secret,
+   имя **`CRAFT_DIST_TOKEN`**. Значение не передавать в чат и не коммитить.
+   После истечения срока токена его нужно обновить в этом же secret.
+3. Включить Actions в `craft`. Защита `craft-codex-dist/main`, если задана,
+   должна разрешать этой учётной записи обычный push публикации.
+
+Штатный `GITHUB_TOKEN` исходного репозитория не даёт запись в соседний.
+См. [аутентификацию GitHub Actions](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token).
+Публикация не запускается на PR. Токен передаётся только шагу публикации,
+не сохраняется в remote URL или Git config и не нужен тестам или сборщику.
+Без secret, при отказе GitHub или ошибке сборки шаг завершается ненулевым
+кодом и печатает причину. Предыдущий `main` остаётся доступным.
+
+Публикации сериализованы, поздний запуск для устаревшего `craft/main`
+отклоняется. Новый коммит продолжает историю целевого `main` обычным
+fast-forward push. Принудительной перезаписи нет. Повтор идентичной сборки
+не создаёт коммит. Из целевого дерева удаляются устаревшие артефакты.
+
+## Сборка локально
 
 Из source-ветки, где изменения уже закоммичены:
 
 ```bash
-python3 tools/build-cloud-probe --ref HEAD --output /tmp/craft-cloud-dist --runtime-root /workspace/craft
+python3 tools/build-cloud-probe --ref HEAD --output /tmp/craft-cloud-dist --runtime-root /workspace/craft-codex-dist
 python3 tools/build-cloud-probe --check /tmp/craft-cloud-dist
 ```
 
@@ -37,16 +70,17 @@ python3 tools/build-cloud-probe --check /tmp/craft-cloud-dist
 - `cloud-dist.json`: тип сборки, source commit, runtime root и SHA256 всех
   четырёх артефактов. Manifest не содержит даты сборки и данных среды.
 
-Для публикации дерево source-коммита дополняется **только этими пятью
-файлами** и сохраняется коммитом в `dist/codex-cloud`. Исходники остаются
-доступны в dist checkout для работы и существующего install script.
+В целевой репозиторий публикуются **только эти пять файлов**. Дерево
+исходников, тесты и установщик туда не копируются. Git-история dist содержит
+только публикации с SHA исходника в сообщении коммита.
 Обновление dist — новая сборка из нового source-коммита. Его источник
-фиксируется в manifest. Собирать из уже готовой dist-ветки запрещено.
+фиксируется в manifest. Собирать из готового dist запрещено.
 Проверка `--check` подтверждает целостность артефактов, а не запуск Cloud.
 
 Команда хука использует выбранный `--runtime-root` и `python3`. Значение
-`/workspace/craft` соответствует наблюдаемому checkout этой среды. Для иной
-раскладки нужно пересобрать dist с другим параметром.
+`/workspace/craft-codex-dist` рассчитано на checkout нового репозитория с его
+именем. Фактический путь проверяется в новой среде, для иной раскладки
+нужно пересобрать dist с другим параметром.
 
 ## Поведение наблюдателя
 
@@ -63,11 +97,12 @@ ID сессии, cwd, PID и время в `$JARVIS_STATE_DIR/cloud-repo-probe.j
 
 ## Реальный замер
 
-1. В подготовленном checkout среды выбрать `dist/codex-cloud` и проверить
-   `cloud-dist.json`. Эта ветка должна быть выбрана **до создания нового
-   Cloud-чата**. Смена ветки инструментом уже идущего чата не проверяет
-   загрузку до первого хода. Слияние dist в `main` для замера не требуется.
-2. Сохранить `JARVIS_STATE_DIR=/workspace/craft/.codex/state`.
+1. В настройках новой Cloud-среды выбрать репозиторий
+   `Bonzar/craft-codex-dist`. Его `main` уже содержит готовые файлы.
+   Убрать старый install script с вызовом `/workspace/craft/tools/jarvis-install`,
+   в dist этого исходного пути нет. Опубликовать среду и создать **новый чат**.
+   Переключать ветку скриптом или инструментом текущего чата не требуется.
+2. Сохранить `JARVIS_STATE_DIR=/workspace/craft-codex-dist/.codex/state`.
 3. Первым сообщением отправить запрос без ожидаемых значений меток:
 
    ```text
@@ -79,7 +114,7 @@ ID сессии, cwd, PID и время в `$JARVIS_STATE_DIR/cloud-repo-probe.j
    Затем только чтением проверь git HEAD, текущую ветку и cloud-dist.json.
    Проверь наличие в git ls-files: AGENTS.md, .agents/skills/probe/SKILL.md,
    .codex/hooks.json, .codex/jarvis/cloud-repo-probe.py, cloud-dist.json.
-   Прочитай /workspace/craft/.codex/state/cloud-repo-probe.jsonl,
+   Прочитай /workspace/craft-codex-dist/.codex/state/cloud-repo-probe.jsonl,
    если он существует. Сообщи CODEX_HOME, JARVIS_STATE_DIR и cwd.
    Не запускай установщик, хуки, тесты или другой Codex. Файлы не меняй.
    ```
@@ -104,8 +139,11 @@ ID сессии, cwd, PID и время в `$JARVIS_STATE_DIR/cloud-repo-probe.j
 
 ## Локальные проверки
 
-`python3 -m unittest tests.test_cloud_probe_dist tests.test_cloud_repo_probe -v`
+`python3 -m unittest tests.test_cloud_probe_dist tests.test_cloud_repo_probe tests.test_cloud_dist_publish -v`
 проверяет воспроизводимость, source commit, контрольные суммы, сохранность
 исходников, исключение локального состояния, протокол наблюдателя и ошибки.
+Публикация проверяется настоящими commit/push в отдельный временный bare
+Git-репозиторий: первый `main`, точное дерево, история, повтор, отказ при
+повреждении и устаревшем исходнике. Это не сетевой запуск GitHub Actions.
 Синтетические события используют временные каталоги. Этот прогон не вызывает
 существующие модульные хуки и не доказывает автоматический запуск Cloud.

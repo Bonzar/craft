@@ -1,0 +1,48 @@
+name: publish-codex-dist
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-codex-dist
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check source tree
+        run: node tools/no-snapshot-files.js --tree HEAD
+
+      - name: Test before publication
+        run: python3 -m unittest discover -s tests -t .
+
+      - name: Build committed source
+        env:
+          DIST_PATH: ${{ runner.temp }}/craft-codex-dist
+        run: |
+          python3 tools/build-cloud-probe --ref "$GITHUB_SHA" --output "$DIST_PATH" --runtime-root /workspace/craft-codex-dist
+          python3 tools/build-cloud-probe --check "$DIST_PATH"
+
+      - name: Publish exact build to Bonzar/craft-codex-dist main
+        env:
+          DIST_PATH: ${{ runner.temp }}/craft-codex-dist
+          CRAFT_DIST_TOKEN: ${{ secrets.CRAFT_DIST_TOKEN }}
+        run: python3 tools/publish-cloud-dist --dist "$DIST_PATH" --ref "$GITHUB_SHA" --require-current-main
