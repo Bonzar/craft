@@ -43,7 +43,7 @@ class CodexLauncherTest(unittest.TestCase):
             self.worktree, REPO_ROOT, {'CODEX_AUTH_JSON': auth}, runner=self.runner
         )
 
-        home = (self.worktree / '.codex').resolve()
+        home = (self.worktree / '.codex' / 'cli').resolve()
         self.assertEqual(environment['CODEX_HOME'], str(home))
         self.assertEqual((home / 'auth.json').read_text(encoding='utf-8'), auth)
         self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o700)
@@ -83,19 +83,29 @@ class CodexLauncherTest(unittest.TestCase):
             **os.environ,
             'PATH': str(bin_dir) + os.pathsep + os.environ['PATH'],
             'CODEX_AUTH_JSON': auth,
-            'FAKE_CONFIG': str(self.worktree / '.codex/config.toml'),
+            'FAKE_CONFIG': str(self.worktree / '.codex/cli/config.toml'),
             'FAKE_JOURNAL': str(self.worktree / 'fake-trust.json'),
         }
 
         self.launcher.bootstrap(self.worktree, REPO_ROOT, environment, runner=subprocess.run)
 
-        home = (self.worktree / '.codex').resolve()
+        home = (self.worktree / '.codex' / 'cli').resolve()
         self.assertTrue((home / 'jarvis' / 'modules' / 'start-context-codex').is_dir())
         self.assertIn('jarvis:behavior', (home / 'AGENTS.md').read_text(encoding='utf-8'))
         config = (home / 'config.toml').read_text(encoding='utf-8')
         self.assertIn('[[hooks.SessionStart]]', config)
         ledger = json.loads((home / 'jarvis' / 'installed.json').read_text(encoding='utf-8'))
         self.assertEqual(ledger['source']['state_dir'], str(home / 'state'))
+
+    def test_cli_does_not_replace_desktop_hook_configuration(self) -> None:
+        project_config = self.worktree / '.codex' / 'config.toml'
+        project_config.parent.mkdir()
+        desktop = (REPO_ROOT / '.codex' / 'config.toml').read_bytes()
+        project_config.write_bytes(desktop)
+        auth = json.dumps({'tokens': {'access_token': 'not-a-real-token'}})
+        self.launcher.bootstrap(self.worktree, REPO_ROOT, {'CODEX_AUTH_JSON': auth}, runner=self.runner)
+        self.assertEqual(project_config.read_bytes(), desktop)
+        self.assertNotEqual(Path(self.calls[0][1]['env']['CODEX_HOME']), project_config.parent)
 
 
 if __name__ == '__main__':

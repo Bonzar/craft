@@ -515,9 +515,15 @@ class CodexBackend(Backend):
     # форма замены — обычный текст.
     slugs = {ASK: 'текстом в ответе, варианты строками'}
 
-    def __init__(self, cli: str = 'codex', trust: bool = True) -> None:
+    def __init__(self, cli: str = 'codex', trust: bool = True,
+                 project: bool = False, trust_home: Path | None = None,
+                 require_trust: bool = False, hook_settings_dir: Path | None = None) -> None:
         self.cli = cli
         self.trust = trust
+        self.project = project
+        self.trust_home = trust_home
+        self.require_trust = require_trust
+        self.hook_settings_dir = hook_settings_dir
 
     def known_event(self, unified: str) -> bool:
         return unified in codex.CODEX_BY_EVENT
@@ -555,6 +561,16 @@ class CodexBackend(Backend):
         return True
 
     def command(self, python: str, settings_root: Path, slug: str, unified: tuple[str, ...]) -> str:
+        if self.project:
+            # Команда одинакова в новых worktree: Desktop читает её ещё до setup.
+            command = (
+                'jarvis_root="$(git rev-parse --show-toplevel 2>/dev/null)"; '
+                'if [ -f "$jarvis_root/.git" ] '
+                '&& [ -f "$jarvis_root/.codex/jarvis/desktop.json" ] '
+                '&& [ -f "$jarvis_root/tools/jarvis-hook" ]; then '
+                'python3 "$jarvis_root/tools/jarvis-hook" ' + shlex.quote(slug)
+            )
+            return command + ''.join(' --event ' + shlex.quote(name) for name in unified) + '; fi'
         parts = [python, str(modules_root(settings_root) / slug / PART_HOOKS / HOOK_ENTRY),
                  HARNESS_FLAG, self.name]
         for name in unified:
@@ -588,16 +604,23 @@ class CodexBackend(Backend):
                     body_lines.append(f'additionalContextLimit = {CODEX_CONTEXT_LIMIT}')
                 body_lines.append('')
 
-        config_path = settings_root / CODEX_CONFIG_FILE
-        text = config_path.read_text(encoding='utf-8') if config_path.is_file() else ''
-        body = '\n'.join(body_lines).strip() or None
-        kept = ''.join(CODEX_STATE_TABLE.findall(section_body(text, CODEX_OPEN, CODEX_CLOSE)))
-        if kept:
-            body = ((body + '\n\n') if body else '') + kept.strip()
-        write_atomic(config_path, section_replace(text, CODEX_OPEN, CODEX_CLOSE, body or None))
+        config_path = (self.hook_settings_dir or settings_root) / CODEX_CONFIG_FILE
+        # В linked worktree Desktop ищет определения в основном checkout.
+        # Там только одинаковые охраняемые команды, никаких модулей и правил.
+        for destination in dict.fromkeys((settings_root / CODEX_CONFIG_FILE, config_path)):
+            text = destination.read_text(encoding='utf-8') if destination.is_file() else ''
+            body = '\n'.join(body_lines).strip() or None
+            kept = ''.join(CODEX_STATE_TABLE.findall(section_body(text, CODEX_OPEN, CODEX_CLOSE)))
+            if kept:
+                body = ((body + '\n\n') if body else '') + kept.strip()
+            write_atomic(destination, section_replace(text, CODEX_OPEN, CODEX_CLOSE, body or None))
 
         if ours and self.trust:
-            trust_hooks(self.cli, config_path, settings_root, ours, report)
+            before = len(report.errors)
+            trust_hooks(self.cli, config_path, self.trust_home or settings_root, ours, report,
+                        cwd=settings_root.parent if self.project else None)
+            if self.require_trust and len(report.errors) != before:
+                raise RuntimeError('; '.join(report.errors[before:]))
 
 
 def toml_string(value: str) -> str:
@@ -648,18 +671,24 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
             process.stdin.flush()
         reader.join(timeout)
     finally:
-        process.kill()
+        if process.poll() is None:
+            process.kill()
         process.wait()
         reader.join(timeout=1)
+        returncode = process.returncode
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 stream.close()
+    if not wanted <= set(answers):
+        raise RuntimeError(f'app-server не вернул ответы {sorted(wanted - set(answers))} '
+                           f'(код завершения {returncode})')
     return answers
 
 
-def listed_hooks(cli: str, codex_home: Path, config_path: Path, handshake: list[dict]) -> list[dict]:
+def listed_hooks(cli: str, codex_home: Path, config_path: Path, handshake: list[dict],
+                 cwd: Path | None = None) -> list[dict]:
     answers = app_server_call(cli, codex_home, handshake + [
-        {'id': 2, 'method': 'hooks/list', 'params': {}},
+        {'id': 2, 'method': 'hooks/list', 'params': {'cwds': [str(cwd)]} if cwd else {}},
     ])
     result = answers.get(2, {}).get('result')
     if not isinstance(result, dict) or not isinstance(result.get('data'), list):
@@ -669,7 +698,7 @@ def listed_hooks(cli: str, codex_home: Path, config_path: Path, handshake: list[
         if entry.get('errors'):
             raise ValueError(f'hooks/list сообщил ошибки: {entry["errors"]}')
         hooks.extend(hook for hook in entry.get('hooks', [])
-                     if str(hook.get('sourcePath')) == str(config_path))
+                     if Path(hook.get('sourcePath') or '').resolve() == config_path.resolve())
     return hooks
 
 
@@ -678,14 +707,14 @@ def hook_identity(hook: dict) -> tuple[str, str]:
 
 
 def trust_hooks(cli: str, config_path: Path, codex_home: Path,
-                ours: set[tuple[str, str]], report: Report) -> None:
+                ours: set[tuple[str, str]], report: Report, cwd: Path | None = None) -> None:
     """Сверить все события и команды, записать доверие и перечитать его у Codex."""
     handshake = [
         {'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'jarvis-install', 'version': '3'}}},
         {'method': 'initialized'},
     ]
     try:
-        hooks = listed_hooks(cli, codex_home, config_path, handshake)
+        hooks = listed_hooks(cli, codex_home, config_path, handshake, cwd)
         missing = ours - {hook_identity(hook) for hook in hooks}
         if missing:
             raise ValueError(f'Codex не видит все зарегистрированные хуки: {sorted(missing)}')
@@ -695,13 +724,13 @@ def trust_hooks(cli: str, config_path: Path, codex_home: Path,
         failed = [w['params']['keyPath'] for w in writes if 'result' not in written.get(w['id'], {})]
         if failed:
             raise ValueError(f'доверие не записалось для ключей: {failed}')
-        refreshed = listed_hooks(cli, codex_home, config_path, handshake)
+        refreshed = listed_hooks(cli, codex_home, config_path, handshake, cwd)
         ready = {hook_identity(hook) for hook in refreshed
                  if hook.get('enabled') is True and hook.get('trustStatus') == 'trusted'
                  and hook.get('currentHash') == selected.get(hook.get('key'), {}).get('currentHash')}
         if ours - ready:
             raise ValueError(f'Codex не подтвердил включение и доверие: {sorted(ours - ready)}')
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         report.errors.append(f'доверие хукам Codex не подтверждено: {error}')
         return
     for key in selected:
@@ -955,7 +984,11 @@ def drop_vanished(previous: dict, records: dict, backend: Backend, report: Repor
 
 def backend_for(args) -> Backend:
     if args.harness == CodexBackend.name:
-        return CodexBackend(cli=args.codex_cli, trust=not args.no_trust)
+        return CodexBackend(cli=args.codex_cli, trust=not args.no_trust,
+                            project=args.project,
+                            trust_home=Path(args.trust_home).expanduser() if args.trust_home else None,
+                            require_trust=args.require_trust,
+                            hook_settings_dir=Path(args.hook_settings_dir).expanduser() if args.hook_settings_dir else None)
     return ClaudeBackend()
 
 
@@ -970,6 +1003,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument('--state-dir', default=None, help='каталог состояния (для плейсхолдера)')
     parser.add_argument('--python', default=sys.executable, help='интерпретатор для строк хуков')
     parser.add_argument('--codex-cli', default='codex', help='команда Codex для доверия хукам')
+    parser.add_argument('--project', action='store_true', help='стабильные проектные хуки для Desktop')
+    parser.add_argument('--trust-home', help='активный профиль Desktop: только штатное доверие хукам')
+    parser.add_argument('--require-trust', action='store_true', help='проверить доверие, отказать при сбое')
+    parser.add_argument('--hook-settings-dir', help='каталог только определений хуков (Desktop в linked worktree)')
     parser.add_argument('--source-path', default=None,
                         help='что записать в журнал источником набора; '
                              'по умолчанию каталог модулей')
@@ -979,7 +1016,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument('--no-trust', action='store_true',
                         help='не ходить к app-server Codex за доверием строкам хуков')
     parser.add_argument('--dry-run', action='store_true', help='только проверить и показать отчёт')
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.no_trust and args.require_trust:
+        parser.error('--require-trust несовместим с --no-trust')
+    return args
 
 
 def install(args: argparse.Namespace) -> Report:
@@ -1028,8 +1068,6 @@ def install(args: argparse.Namespace) -> Report:
     if source_config.is_file():
         shutil.copy2(source_config, modules_root(settings_root) / mode_reader.SOURCE_CONFIG_NAME)
 
-    backend.register(records, settings_root, args.python, report)
-
     # Источник набора: чем поставлено. Путь и коммит по умолчанию берутся из
     # каталога модулей, но называются и флагами — модуль свежести ставит из
     # распаковки main рядом, а источником набора остаётся сам репозиторий.
@@ -1048,13 +1086,16 @@ def install(args: argparse.Namespace) -> Report:
         + '\n',
         encoding='utf-8',
     )
+    # Журнал описывает уже разложенные файлы, даже когда строгая проверка
+    # нативного доверия затем остановит setup. Не оставляем старый состав.
+    backend.register(records, settings_root, args.python, report)
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
     try:
         report = install(parse_args(sys.argv[1:] if argv is None else argv))
-    except (OSError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError) as error:
         print(f'ОШИБКА установки: {error}', file=sys.stderr)
         return 1
     print(report.render(), file=sys.stderr if report.errors else sys.stdout)
