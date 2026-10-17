@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -60,6 +61,25 @@ class CloudProbeDistTest(unittest.TestCase):
 
     def tree(self, root) -> dict:
         return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+    def test_dist_has_an_explicit_toml_hook_to_compare_with_json_discovery(self) -> None:
+        done = self.build()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        config_path = self.output / '.codex/config.toml'
+        self.assertTrue(config_path.is_file(), 'Нет явного project config для пробы Cloud')
+        config = tomllib.loads(config_path.read_text())
+        self.assertIs(config['features']['hooks'], True)
+        self.assertEqual(set(config), {'features', 'hooks'})
+        group = config['hooks']['SessionStart'][0]
+        self.assertEqual(group['matcher'], 'startup|resume|clear|compact|fork')
+        handler = group['hooks'][0]
+        self.assertEqual(handler['type'], 'command')
+        self.assertEqual(shlex.split(handler['command']),
+                         ['python3', '/workspace/craft/' + CALLBACK,
+                          '--registration', 'inline-toml'])
+        self.assertNotIn('state', config['hooks'])
+        manifest = json.loads((self.output / MANIFEST).read_text())
+        self.assertIn('.codex/config.toml', manifest['files'])
 
     def test_dist_has_native_paths_and_all_event_kinds(self) -> None:
         done = self.build()
@@ -140,3 +160,21 @@ class CloudProbeDistTest(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn('source=compact', run.stdout)
         self.assertTrue((state / 'cloud-repo-probe.jsonl').is_file())
+
+    def test_inline_toml_hook_records_its_registration_in_isolated_state(self) -> None:
+        self.assertEqual(self.build(runtime_root=str(self.output)).returncode, 0)
+        config_path = self.output / '.codex/config.toml'
+        self.assertTrue(config_path.is_file(), 'Нет inline TOML пробы')
+        config = tomllib.loads(config_path.read_text())
+        handler = config['hooks']['SessionStart'][0]['hooks'][0]
+        state = self.root / 'toml-isolated-test-state'
+        run = subprocess.run(shlex.split(handler['command']),
+            input=json.dumps({'hook_event_name': 'SessionStart', 'source': 'startup',
+                              'session_id': 'synthetic-toml-test', 'cwd': '/workspace'}),
+            env={**os.environ, 'JARVIS_STATE_DIR': str(state)},
+            text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        entries = [json.loads(line) for line in (state / 'cloud-repo-probe.jsonl').read_text().splitlines()]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['registration'], 'inline-toml')
+        self.assertIn('registration=inline-toml', run.stdout)
