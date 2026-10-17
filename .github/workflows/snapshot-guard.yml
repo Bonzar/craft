@@ -31,3 +31,6 @@ jobs:
 
       - name: Jarvis tests
         run: python3 -m unittest discover -s tests -t .
+
+      - name: Desktop bootstrap is committed
+        run: python3 tools/check-desktop-release HEAD --check-only
