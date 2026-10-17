@@ -3,7 +3,7 @@
 
 Запускается вместо ``codex`` из корня worktree. Предзапусковый скрипт машины
 до него читает единственный личный .env и экспортирует CODEX_AUTH_JSON. Эта
-обёртка кладёт вход и весь набор Джарвиса в .codex worktree, а потом заменяет
+обёртка кладёт вход и весь набор Джарвиса в .codex/cli worktree, а потом заменяет
 себя процессом Codex. Глобальный ~/.codex в этой цепочке не участвует.
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CODEX_HOME_NAME = '.codex'
+CODEX_HOME_NAME = Path('.codex') / 'cli'
 
 
 def login_module(repository: Path):
