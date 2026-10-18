@@ -9,6 +9,11 @@ CARD_PATH = '/my/transactions-history/operation'
 STATUSES = {'выполнено': ('completed', True), 'в обработке': ('pending', False),
             'отмена': ('canceled', None), 'не выполнено': ('canceled', None),
             'не выполнено / отмена': ('canceled', None)}
+SERVICE_ROWS = {'чат с поддержкой', 'получить справку', 'получить квитанцию'}
+CASHBACK_SOURCES = {'по карте пэй', 'от сервиса', 'яндекс плюс'}
+DETAIL_LABELS = {'способ оплаты', 'статус', 'категория', 'mcc', 'назначение',
+                 'округление', 'куда', 'перевод', 'автопополнение', 'пополнение',
+                 'получатель', 'банк получателя', 'банк отправителя', 'счёт'}
 
 
 def operation_id(url: str) -> str:
@@ -68,6 +73,8 @@ def validate_snapshot(raw: dict) -> dict:
 
 
 def parse_card(raw: dict, index: int) -> dict:
+    if isinstance(raw, dict) and 'rows' in raw:
+        raw = prepare_dom_snapshot(raw)
     details = validate_snapshot(raw)
     source_id = operation_id(raw['url'])
     captured = datetime.fromisoformat(raw['captured_at'])
@@ -120,3 +127,50 @@ def cashback_hint(details: dict) -> str | None:
     if value < 0:
         raise ValueError('Отрицательный кешбэк требует отдельного разбора')
     return str(value)
+
+
+def prepare_dom_snapshot(raw: dict) -> dict:
+    rows = raw['rows']
+    if not isinstance(rows, list):
+        raise ValueError('DOM-реквизиты должны быть массивом строк карточки')
+    details, cashback_total, components = parse_dom_rows(rows)
+    if components:
+        summed = sum(components)
+        if cashback_total is not None and cashback_total != summed:
+            raise ValueError('Итог кешбэка не совпадает с его составляющими')
+        cashback_total = summed
+    if cashback_total is not None:
+        details.append(['Кешбэк', str(cashback_total)])
+    return {**raw, 'is_points': raw.get('pointsAmount'),
+            'transfer_accounts': raw.get('transferTitles'), 'details': details}
+
+
+def parse_dom_rows(rows: list) -> tuple:
+    details, components, cashback_total = [], [], None
+    in_cashback, has_cashback, cashback_sources = False, False, set()
+    for raw_row in rows:
+        if (not isinstance(raw_row, list) or not raw_row
+                or any(not isinstance(value, str) or not value.strip() for value in raw_row)):
+            raise ValueError('Строка DOM содержит пустой или некорректный реквизит')
+        row = [normalize_space(value) for value in raw_row]
+        label = row[0].lower()
+        if label == 'кешбэк':
+            if has_cashback or len(row) > 2:
+                raise ValueError('Неоднозначный заголовок кешбэка')
+            has_cashback, in_cashback = True, True
+            cashback_total = amount_decimal(row[1]) if len(row) == 2 else None
+        elif label in CASHBACK_SOURCES:
+            if not in_cashback or len(row) != 2 or label in cashback_sources:
+                raise ValueError('Неоднозначная составляющая кешбэка')
+            cashback_sources.add(label)
+            components.append(amount_decimal(row[1]))
+        elif label in SERVICE_ROWS and len(row) == 1:
+            in_cashback = False
+        else:
+            if len(row) < 2 or (in_cashback and label not in DETAIL_LABELS):
+                raise ValueError('Не распознана строка DOM карточки')
+            in_cashback = False
+            details.append([row[0], ' '.join(row[1:])])
+    if has_cashback and cashback_total is None and not components:
+        raise ValueError('В карточке есть кешбэк, но сумма не прочитана')
+    return details, cashback_total, components

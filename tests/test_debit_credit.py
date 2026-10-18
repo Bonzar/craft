@@ -1,6 +1,7 @@
 """Модуль финансовых адаптеров доступен через реестр и выполняется отдельно."""
 
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -25,6 +26,16 @@ class DebitCreditModuleTest(unittest.TestCase):
         result = subprocess.run(
             [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v'],
             cwd=MODULE, env={**os.environ, 'PYTHONPATH': str(MODULE / 'lib')},
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_browser_dom_reader_suite_passes_when_node_is_available(self):
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('Node.js нужен только для теста DOM-считывателя браузера')
+        result = subprocess.run(
+            [node, '--test', str(MODULE / 'tests' / 'test_capture.js')],
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
