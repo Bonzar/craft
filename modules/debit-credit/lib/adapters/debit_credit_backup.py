@@ -227,5 +227,6 @@ def read_backup(path: Path | str, timezone: str, from_date: str | None = None,
         'local_locators_are_snapshot_only': True,
     }
     result['coverage'] = 'backup_snapshot'
+    result['date_filter'] = {'from_date': from_date, 'to_date': to_date} if start or end else None
     result['limitations'] = ['backup_freshness_requires_verification', 'schema_specific_read_only_adapter']
     return result

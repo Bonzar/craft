@@ -53,12 +53,13 @@ def parser() -> argparse.ArgumentParser:
 
 def normalize(args: argparse.Namespace) -> dict:
     if args.adapter == 'verify-restore':
+        inputs = backup_hashes(args.input, args.after)
         expected = read_backup(args.input, args.timezone)
         actual = read_backup(args.after, args.timezone)
+        if inputs != backup_hashes(args.input, args.after):
+            raise ValueError('Резервные копии изменились во время сверки')
         result = verify_restoration(expected, actual)
-        return {**result, 'inputs_sha256': {
-            'expected': hashlib.sha256(args.input.read_bytes()).hexdigest(),
-            'actual': hashlib.sha256(args.after.read_bytes()).hexdigest()}}
+        return {**result, 'inputs_sha256': inputs}
     if args.adapter == 'verify-import':
         expected_bytes = args.expected.read_bytes()
         expected = json.loads(expected_bytes.decode('utf-8-sig'))
@@ -82,6 +83,15 @@ def normalize(args: argparse.Namespace) -> dict:
     else:
         result = read_cards(json.loads(text))
     return {**result, 'input_sha256': hashlib.sha256(content).hexdigest()}
+
+
+def backup_hashes(expected: Path, actual: Path) -> dict:
+    result = {}
+    for label, path in (('expected', expected), ('actual', actual)):
+        result[label] = hashlib.sha256(path.read_bytes()).hexdigest()
+        wal = Path(str(path) + '-wal')
+        result[label + '_wal'] = hashlib.sha256(wal.read_bytes()).hexdigest() if wal.exists() else None
+    return result
 
 
 def read_snapshot(path: Path) -> tuple[dict, str]:
