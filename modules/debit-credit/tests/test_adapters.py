@@ -146,6 +146,10 @@ class YandexBankTest(unittest.TestCase):
         result = read_cards([card(url='https://bank.yandex.ru/my/transactions-history/operation')])
         self.assertEqual(len(result['rejected']), 1)
 
+    def test_duplicate_id_parameter_is_rejected_even_when_one_value_is_empty(self):
+        result = read_cards([card(url=card()['url'] + '&id=')])
+        self.assertEqual(len(result['rejected']), 1)
+
     def test_missing_sign_or_unknown_status_blocks_automatic_use(self):
         for change in ({'amount': '306 ₽'}, {'details': [['Статус', 'Новый статус']]}):
             with self.subTest(change=change):
