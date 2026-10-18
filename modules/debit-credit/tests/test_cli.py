@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from test_adapters import card, export_csv
@@ -129,6 +130,30 @@ class CommandTest(unittest.TestCase):
         report = json.loads(target.read_text())
         self.assertEqual(report['records'][0]['source_id'], 'feed-a')
         self.assertEqual(len(report['input_sha256']), 64)
+
+    def test_import_verification_command_reads_full_backup_pair(self):
+        before, after = self.directory / 'before.dcbackup', self.directory / 'after.dcbackup'
+        expected, target = self.directory / 'expected.json', self.directory / 'verified.json'
+        stamp = '2026-07-08T09:08:18+03:00'
+        epoch = (datetime.fromisoformat(stamp) - datetime(2001, 1, 1, tzinfo=timezone.utc)).total_seconds()
+        note = '[dc-sync:v1 source=yabank id=new]'
+        for path, balance in ((before, 0), (after, 10)):
+            with sqlite3.connect(path) as db:
+                db.executescript(SCHEMA)
+                db.execute('INSERT INTO ZCURRENCY VALUES (1,?)', ('RUB',))
+                db.execute('INSERT INTO ZACCOUNT VALUES (1,?,?,1,?,?,0,0,NULL)',
+                           ('Карта', 'account-id', balance, balance))
+                if path == after:
+                    db.execute('INSERT INTO ZTRANSACTION VALUES (1,?,1,1,10,?,?,0,0,0,NULL,NULL,NULL,NULL,NULL,NULL)',
+                               ('tx-new', epoch, note))
+        expected.write_text(json.dumps([{'timestamp': stamp, 'timestamp_precision': 'second',
+            'amount': '10', 'currency': 'RUB', 'account': 'Карта', 'other_account': None,
+            'kind': 'income', 'cleared': True, 'description': '', 'category': None, 'tag': None,
+            'payee': '', 'notes': note, 'markers': [{'source': 'yabank', 'id': 'new', 'role': None}]}]))
+        result = self.run_cli('verify-import', before, after, '--expected', expected,
+                              '--timezone', 'Europe/Moscow', '--output', target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(target.read_text())['ready'])
 
 
 if __name__ == '__main__':
