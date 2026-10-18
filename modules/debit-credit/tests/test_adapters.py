@@ -26,6 +26,7 @@ def card(operation_id='a', **changes):
     result = {
         'url': 'https://bank.yandex.ru/my/transactions-history/operation?id=' + operation_id,
         'captured_at': '2026-10-18T12:00:00+03:00',
+        'timezone': 'Europe/Moscow',
         'title': 'Такси', 'amount': '−306 ₽',
         'date': '5 июля 2026, 16:15', 'is_points': False,
         'details': [['Статус', 'Выполнено'], ['Способ оплаты', 'Карта Пэй'],
@@ -154,6 +155,12 @@ class YandexBankTest(unittest.TestCase):
     def test_amount_with_space_after_sign_is_preserved(self):
         row = read_cards([card(amount='− 1\u202f234,57 ₽')])['records'][0]
         self.assertEqual(row['amount'], '-1234.57')
+
+    def test_display_timezone_is_explicit_and_not_taken_from_the_laptop(self):
+        row = read_cards([card(timezone='Europe/Istanbul')])['records'][0]
+        self.assertEqual(row['timestamp'], '2026-07-05T16:15:00+03:00')
+        result = read_cards([card(timezone='')])
+        self.assertEqual(len(result['rejected']), 1)
 
 
 class MarkerTest(unittest.TestCase):
