@@ -119,6 +119,22 @@ class BackupAdditionsTest(unittest.TestCase):
             prepare_backup(self.source, self.target, self.plan([addition()]), 'Europe/Moscow')
         self.assertFalse(self.target.exists())
 
+    def test_marker_introduced_by_an_update_cannot_also_create_a_new_operation(self):
+        plan = self.plan([addition()])
+        plan['updates'] = [{'locator': 1, 'set': {'notes': addition()['notes']}}]
+        with self.assertRaises(ValueError):
+            prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+        self.assertFalse(self.target.exists())
+
+    def test_foreign_currency_transfer_keeps_explicit_amounts_without_currency_guessing(self):
+        rows = [addition('out', kind='transfer_leg', peer_key='in', amount='-100', category_path=[], tag=None),
+                addition('in', kind='transfer_leg', peer_key='out', amount='1.25', account='Наличные',
+                         currency='EUR', category_path=[], tag=None)]
+        prepare_backup(self.source, self.target, self.plan(rows), 'Europe/Moscow')
+        result = read_backup(self.target, 'Europe/Moscow')
+        self.assertEqual(self.balances(result, 'Карта'), ('-110.25', '-110.25'))
+        self.assertEqual(self.balances(result, 'Наличные'), ('1.25', '1.25'))
+
 
 if __name__ == '__main__':
     unittest.main()
