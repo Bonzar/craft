@@ -16,7 +16,7 @@ def operation_id(url: str) -> str:
     if (parsed.scheme != 'https' or parsed.netloc != 'bank.yandex.ru'
             or parsed.path != CARD_PATH or parsed.fragment):
         raise ValueError('Разрешена только карточка операции в истории Яндекс Банка')
-    ids = parse_qs(parsed.query).get('id', [])
+    ids = parse_qs(parsed.query, keep_blank_values=True).get('id', [])
     if len(ids) != 1 or not ids[0].strip():
         raise ValueError('Карточка не содержит единственного идентификатора операции')
     return ids[0]
