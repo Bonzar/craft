@@ -70,6 +70,10 @@ class DebitCreditTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_csv('Date,Amount\n2026-01-01,-1\n', 'Europe/Moscow')
 
+    def test_empty_list_is_not_accepted_as_account_currency_mapping(self):
+        with self.assertRaises(ValueError):
+            read_csv(export_csv({}), 'Europe/Moscow', [])
+
     def test_iso_date_and_split_category_are_preserved(self):
         category = 'Продукты (-15,00), Кофейни (-5,00)'
         result = read_csv(export_csv({'Дата': '2026-04-27 12:00:00',
@@ -146,6 +150,10 @@ class YandexBankTest(unittest.TestCase):
             with self.subTest(change=change):
                 result = read_cards([card(**change)])
                 self.assertFalse(result['ready'])
+
+    def test_amount_with_space_after_sign_is_preserved(self):
+        row = read_cards([card(amount='− 1\u202f234,57 ₽')])['records'][0]
+        self.assertEqual(row['amount'], '-1234.57')
 
 
 class MarkerTest(unittest.TestCase):
