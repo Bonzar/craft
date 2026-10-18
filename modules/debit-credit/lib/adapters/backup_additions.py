@@ -37,7 +37,7 @@ def validate_additions(rows: list, existing: list) -> dict:
             raise ValueError('Не заполнены явные поля новой операции')
         if not isinstance(row['key'], str) or not row['key'] or row['key'] in found:
             raise ValueError('Ключ новой операции должен быть уникальным')
-        if row['kind'] not in KIND_CODES or type(row['cleared']) is not bool:
+        if not isinstance(row['kind'], str) or row['kind'] not in KIND_CODES or type(row['cleared']) is not bool:
             raise ValueError('Нужны тип и завершённость новой операции')
         for field in ('account', 'currency', 'timestamp', 'description'):
             if not isinstance(row[field], str) or not row[field].strip():
@@ -76,7 +76,7 @@ def validate_peers(rows: dict) -> None:
             raise ValueError('Не найдена вторая сторона перевода')
         peer = rows[key]
         if (peer['kind'] != 'transfer_leg' or peer['peer_key'] != row['key']
-                or peer['account'] == row['account']
+                or (peer['account'], peer['currency']) == (row['account'], row['currency'])
                 or amount_decimal(peer['amount']) * amount_decimal(row['amount']) >= 0):
             raise ValueError('Некорректная пара сторон перевода')
         if row['currency'] == peer['currency'] and amount_decimal(row['amount']) + amount_decimal(peer['amount']):

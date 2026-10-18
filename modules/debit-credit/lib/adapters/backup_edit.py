@@ -191,7 +191,8 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
     zone = ZoneInfo(timezone)
     before_normalized = read_backup(source, timezone)
     additions = plan.get('additions', [])
-    validate_additions(additions, before_normalized['records'])
+    updated_notes = [{'notes': r['set']['notes']} for r in updates if 'notes' in r['set']]
+    validate_additions(additions, [*before_normalized['records'], *updated_notes])
     with tempfile.TemporaryDirectory(prefix='.dc-prepare-', dir=target.parent) as directory:
         stage = Path(directory) / 'candidate.dcbackup'
         descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
