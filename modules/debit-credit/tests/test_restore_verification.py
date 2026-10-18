@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 from adapters.restore_verification import verify_restoration
@@ -113,11 +114,14 @@ class RestoreVerificationTest(unittest.TestCase):
             verify_restoration(first, last)
 
     def test_cli_reads_full_backups_and_keeps_private_notes_out_of_stdout(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, ExitStack() as databases:
             root = Path(temp)
             paths = [root / 'expected.dcbackup', root / 'actual.dcbackup']
             for i, path in enumerate(paths):
-                with sqlite3.connect(path) as db:
+                db = databases.enter_context(closing(sqlite3.connect(path)))
+                db.execute('PRAGMA journal_mode=WAL')
+                db.execute('PRAGMA wal_autocheckpoint=0')
+                with db:
                     db.executescript(SCHEMA)
                     db.execute('INSERT INTO ZCURRENCY VALUES (1,?)', ('RUB',))
                     db.execute('INSERT INTO ZACCOUNT VALUES (1,?,?,?,?,?,?,?,?)',
@@ -134,6 +138,8 @@ class RestoreVerificationTest(unittest.TestCase):
             report = json.loads(target.read_text())
             self.assertTrue(report['ready'])
             self.assertEqual(len(report['inputs_sha256']['expected']), 64)
+            self.assertEqual(len(report['inputs_sha256']['expected_wal']), 64)
+            self.assertEqual(len(report['inputs_sha256']['actual_wal']), 64)
             self.assertNotIn('private restoration note', result.stdout + result.stderr)
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 

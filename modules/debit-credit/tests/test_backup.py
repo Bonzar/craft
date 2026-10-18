@@ -99,6 +99,7 @@ class BackupTest(unittest.TestCase):
         result = read_backup(self.path, 'Europe/Moscow', '2026-07-04', '2026-07-05')
 
         self.assertEqual(len(result['records']), 2)
+        self.assertEqual(result['date_filter'], {'from_date': '2026-07-04', 'to_date': '2026-07-05'})
 
     def test_wal_is_included_without_changing_original_database_or_wal(self):
         self.db.execute('PRAGMA journal_mode=WAL')
