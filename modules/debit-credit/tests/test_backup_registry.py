@@ -1,6 +1,9 @@
 """Регистрация подготовленной копии без изменения остальных настроек приложения."""
 
 import copy
+import importlib.util
+import io
+import json
 import plistlib
 import shutil
 import subprocess
@@ -9,6 +12,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
+from contextlib import redirect_stdout, redirect_stderr
 
 from adapters.backup_edit import backup_fingerprint, prepare_backup
 from adapters.backup_registry import register_backup
@@ -119,6 +123,30 @@ class BackupRegistryTest(unittest.TestCase):
         self.assertEqual(self.read(), self.original)
         self.assertNotIn('private error', str(report))
         self.assertIn('registry_write_not_confirmed', {i['code'] for i in report['issues']})
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Requires the macOS preferences service')
+    def test_cli_registers_only_with_a_new_report_destination(self):
+        spec = importlib.util.spec_from_file_location('registry_test_cli',
+                    Path(__file__).resolve().parents[1] / 'lib/cli.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        prepared_report = self.candidate.parent / 'preparation.json'
+        prepared_report.write_text(json.dumps(self.report))
+        output = self.candidate.parent / 'registration.json'
+        output.write_text('keep')
+        args = ['register-backup', str(self.candidate), '--report', str(prepared_report),
+                '--preferences', str(self.preferences), '--source-filename', self.source.name,
+                '--timestamp', self.stamp.isoformat(), '--registry-archive', str(self.archive),
+                '--output', str(output)]
+        captured = io.StringIO()
+        with redirect_stdout(captured), redirect_stderr(captured):
+            self.assertEqual(cli.main(args), 2)
+            self.assertEqual(self.read(), self.original)
+            output.unlink()
+            self.assertEqual(cli.main(args), 0)
+        self.assertTrue(json.loads(output.read_text())['ready'])
+        self.assertNotIn('corrected', captured.getvalue())
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == '__main__':
