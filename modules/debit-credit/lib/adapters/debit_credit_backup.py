@@ -40,7 +40,7 @@ SELECT t.Z_PK AS pk,t.ZRECORDNAME AS id,t.ZTYPE AS type,t.ZACCOUNT AS account_pk
  t.ZNOTES AS notes,t.ZPENDING AS pending,t.ZRECONCILED AS reconciled,
  t.ZUPCOMING AS upcoming,t.ZDELETEAFTERDATE AS deleted,t.ZCATEGORY AS category_pk,
  d.ZNAME AS description,tag.ZNAME AS tag,p.ZNAME AS payee,
- other.ZRECORDNAME AS linked_id,other.ZACCOUNT AS other_account_pk
+ other.ZRECORDNAME AS linked_id,other.Z_PK AS linked_locator,other.ZACCOUNT AS other_account_pk
 FROM ZTRANSACTION t
 LEFT JOIN ZTRANSACTION_DESCRIPTION d ON d.Z_PK=t.ZTRANSACTION_DESCRIPTION
 LEFT JOIN ZTRANSACTION_TAG tag ON tag.Z_PK=t.ZTRANSACTION_TAG
@@ -98,8 +98,10 @@ def read_accounts(connection: sqlite3.Connection) -> list[dict]:
       FROM ZACCOUNT a LEFT JOIN ZCURRENCY c ON c.Z_PK=a.ZCURRENCY ORDER BY a.Z_PK'''
     accounts = [dict(row) for row in connection.execute(query)]
     for account in accounts:
-        if not account['name'] or not account['id'] or not account['currency']:
-            raise ValueError('У счёта отсутствует имя, ID или валюта')
+        if not account['name'] or not account['currency']:
+            raise ValueError('У счёта отсутствует имя или валюта')
+        if account['id'] is not None and (not isinstance(account['id'], str) or not account['id']):
+            raise ValueError('Некорректный iCloud-ID счёта')
     return accounts
 
 
@@ -154,13 +156,13 @@ def normalize_splits(values: list, currency: str) -> tuple[list, list]:
 
 
 def parse_transaction(raw: dict, accounts: dict, categories: dict, splits: dict, zone: ZoneInfo) -> dict:
-    if not isinstance(raw['id'], str) or not raw['id']:
-        raise ValueError('Отсутствует ID операции')
+    if raw['id'] is not None and (not isinstance(raw['id'], str) or not raw['id']):
+        raise ValueError('Некорректный iCloud-ID операции')
     if raw['type'] not in TRANSACTION_TYPES or raw['account_pk'] not in accounts:
         raise ValueError('Неизвестен тип или счёт операции')
     account = accounts[raw['account_pk']]
     other = accounts.get(raw['other_account_pk'])
-    if raw['type'] == 2 and (not other or not raw['linked_id']):
+    if raw['type'] == 2 and (not other or raw['linked_locator'] is None):
         raise ValueError('У перевода отсутствует связанная сторона')
     amount, issues = normalize_money(raw['amount'], account['currency'])
     if (raw['type'] == 0 and amount >= 0) or (raw['type'] == 1 and amount <= 0):
@@ -179,7 +181,8 @@ def parse_transaction(raw: dict, accounts: dict, categories: dict, splits: dict,
             'timestamp_precision': 'microsecond' if timestamp.microsecond else 'second',
             'amount': format(amount.normalize(), 'f'), 'currency': account['currency'], 'account': account['name'],
             'account_id': account['id'], 'other_account': other['name'] if other else None,
-            'linked_id': raw['linked_id'], 'kind': TRANSACTION_TYPES[raw['type']],
+            'linked_id': raw['linked_id'], 'linked_locator': raw['linked_locator'],
+            'kind': TRANSACTION_TYPES[raw['type']],
             'status': {True: 'completed', False: 'pending'}.get(cleared, 'unknown'),
             'cleared': cleared, 'reconciled': raw['reconciled'], 'upcoming': upcoming,
             'eligible_for_matching': not upcoming and raw['deleted'] is None and not issues,
@@ -211,13 +214,18 @@ def read_backup(path: Path | str, timezone: str, from_date: str | None = None,
                 and (not end or apple_date(row['date'], zone).date() <= end)]
     result = report('debit-credit-backup', rows,
                     lambda row, _: parse_transaction(row, accounts, categories, splits, zone))
-    ids = [row['source_id'] for row in result['records']]
+    ids = [row['source_id'] for row in result['records'] if row['source_id'] is not None]
     if len(ids) != len(set(ids)):
         result['issues'].append({'code': 'duplicate_source_id'})
     for row in result['records']:
         result['issues'].extend({'locator': row['locator'], 'code': code} for code in row['issues'])
     result['ready'] = not result['rejected'] and not result['issues']
     result['accounts'] = account_list
+    result['cloud_identity'] = {
+        'transactions_without_id': sum(row['source_id'] is None for row in result['records']),
+        'accounts_without_id': sum(row['id'] is None for row in account_list),
+        'local_locators_are_snapshot_only': True,
+    }
     result['coverage'] = 'backup_snapshot'
     result['limitations'] = ['backup_freshness_requires_verification', 'schema_specific_read_only_adapter']
     return result
