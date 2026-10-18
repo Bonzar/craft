@@ -18,6 +18,12 @@ DESCRIPTION_COLUMNS = {'Z_PK', 'Z_ENT', 'Z_OPT', 'ZPENDING_UPDATE', 'ZTYPE',
                        'ZUSAGERATING', 'ZNAME', 'ZRECORDNAME'}
 
 
+def validate_target(source: Path, target: Path) -> None:
+    related = [Path(str(target) + suffix) for suffix in ('', '-wal', '-shm', '-journal')]
+    if any(path.exists() or path.is_symlink() for path in related) or target.resolve() == source.resolve():
+        raise FileExistsError('Выход должен быть новым отдельным файлом без SQLite-файлов рядом')
+
+
 def backup_fingerprint(path: Path | str) -> dict:
     source = Path(path)
     wal = Path(str(source) + '-wal')
@@ -162,8 +168,7 @@ def check_result(before: dict, after: dict, updates: list) -> None:
 
 def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone: str) -> dict:
     source, target = Path(source), Path(target)
-    if target.exists() or target.is_symlink() or target.resolve() == source.resolve():
-        raise FileExistsError('Выход должен быть новым отдельным файлом')
+    validate_target(source, target)
     fingerprint = backup_fingerprint(source)
     updates = validate_plan(plan, fingerprint)
     zone = ZoneInfo(timezone)
@@ -186,12 +191,15 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
             if connection.execute('PRAGMA foreign_key_check').fetchall():
                 raise ValueError('Нарушены внешние ключи SQLite')
             table_diff = verify_sql_changes(connection, before, allowed, created)
+        except sqlite3.Error as error:
+            raise ValueError('Изменённая копия не прошла обработку SQLite') from error
         finally:
             connection.close()
         after = read_backup(stage, timezone)
         check_result(before_normalized, after, updates)
         if fingerprint != backup_fingerprint(source):
             raise ValueError('Исходная копия изменилась во время подготовки')
+        validate_target(source, target)
         os.link(stage, target)
     return {'schema_version': 1, 'adapter': 'backup-preparation', 'input_count': len(updates),
             'records': updates, 'rejected': [], 'issues': [], 'ready': True,

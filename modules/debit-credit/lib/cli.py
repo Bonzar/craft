@@ -14,10 +14,11 @@ from adapters.matching import compare_records
 from adapters.yandex_bank_api import read_history
 from adapters.import_verification import verify_additions
 from adapters.restore_verification import verify_restoration
+from adapters.backup_edit import prepare_backup
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description='Читающие адаптеры учёта расходов')
+    result = argparse.ArgumentParser(description='Адаптеры учёта и подготовка отдельных резервных копий')
     commands = result.add_subparsers(dest='adapter', required=True)
     debit = commands.add_parser('debit-credit', help='Чтение русского CSV приложения')
     debit.add_argument('input', type=Path)
@@ -46,12 +47,22 @@ def parser() -> argparse.ArgumentParser:
     restore.add_argument('input', type=Path, help='Подготовленная резервная копия')
     restore.add_argument('after', type=Path, help='Копия, созданная приложением после восстановления')
     restore.add_argument('--timezone', required=True)
-    for command in (debit, bank, api, backup, compare, verify, restore):
+    prepare = commands.add_parser('prepare-backup', help='Явные правки в отдельной копии без записи в приложение')
+    prepare.add_argument('input', type=Path)
+    prepare.add_argument('--plan', type=Path, required=True)
+    prepare.add_argument('--target', type=Path, required=True)
+    prepare.add_argument('--timezone', required=True)
+    for command in (debit, bank, api, backup, compare, verify, restore, prepare):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'prepare-backup':
+        if args.output and (args.output.exists() or args.output.resolve() == args.target.resolve()):
+            raise FileExistsError('Отчёт должен быть новым отдельным файлом')
+        plan = json.loads(args.plan.read_text(encoding='utf-8-sig'))
+        return prepare_backup(args.input, args.target, plan, args.timezone)
     if args.adapter == 'verify-restore':
         inputs = backup_hashes(args.input, args.after)
         expected = read_backup(args.input, args.timezone)
