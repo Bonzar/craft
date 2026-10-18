@@ -122,6 +122,7 @@ test('only the fixed bank origin and history endpoint receive the request', asyn
   let captured;
   const environment = {
     origin: 'https://bank.yandex.ru',
+    timezone: 'Europe/Moscow',
     fetch: async (url, options) => {
       captured = { url, options };
       return { ok: true, json: async () => ({ data: page([]) }) };
@@ -131,6 +132,7 @@ test('only the fixed bank origin and history endpoint receive the request', asyn
   assert.match(captured.url, /^https:\/\/bank\.yandex\.ru\/transactions\/api\/graphql\?operationId=[a-f0-9]+$/);
   assert.equal(captured.options.credentials, 'same-origin');
   assert.equal(captured.options.method, 'POST');
+  assert.equal(captured.options.headers['x-yabank-time-zone'], 'Europe/Moscow');
   assert.equal(JSON.parse(captured.options.body).operationName, 'TransactionsFeedPfm');
   await assert.rejects(requestHistory('TransactionsFeedPfm', {}, {
     origin: 'https://evil.example', fetch: environment.fetch,
