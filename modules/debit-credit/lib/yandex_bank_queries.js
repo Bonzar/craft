@@ -128,7 +128,9 @@ async function readHistoryDetails(result, config) {
         config.onProgress({ phase: 'details', read: result.details.length, total: result.records.length });
       } catch (error) {
         stop = true;
-        result.detailErrors.push({ id: record.id, message: error instanceof Error ? error.message : 'Ошибка чтения' });
+        result.detailErrors.push({ id: record.id,
+          message: error instanceof Error ? error.message : 'Ошибка чтения',
+          payload: error?.payload ?? null });
       }
     }
   }
