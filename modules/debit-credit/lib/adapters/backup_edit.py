@@ -4,19 +4,19 @@ import hashlib
 import os
 import sqlite3
 import tempfile
-import uuid
 from collections import Counter
-from datetime import datetime, time
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .debit_credit_backup import APPLE_EPOCH, read_backup, snapshot_connection
+from .debit_credit_backup import read_backup, snapshot_connection
+from .backup_metadata import date_values, description_key
+from .backup_additions import apply_additions, validate_additions
+from .common import amount_decimal
+from .debit_credit_backup import normalize_money
 
 EDITABLE_FIELDS = {'timestamp', 'description', 'notes'}
-EDIT_TABLES = {'ZTRANSACTION', 'ZTRANSACTION_DESCRIPTION', 'Z_PRIMARYKEY'}
-DESCRIPTION_COLUMNS = {'Z_PK', 'Z_ENT', 'Z_OPT', 'ZPENDING_UPDATE', 'ZTYPE',
-                       'ZUSAGERATING', 'ZNAME', 'ZRECORDNAME'}
-
+EDIT_TABLES = {'ZTRANSACTION', 'ZTRANSACTION_DESCRIPTION', 'Z_PRIMARYKEY', 'ZACCOUNT'}
 
 def validate_target(source: Path, target: Path) -> None:
     related = [Path(str(target) + suffix) for suffix in ('', '-wal', '-shm', '-journal')]
@@ -32,12 +32,13 @@ def backup_fingerprint(path: Path | str) -> dict:
 
 
 def validate_plan(plan: dict, current: dict) -> list:
-    if (not isinstance(plan, dict) or set(plan) != {'schema_version', 'source_sha256', 'updates'}
+    if (not isinstance(plan, dict) or not {'schema_version', 'source_sha256', 'updates'} <= set(plan)
+            or set(plan) - {'schema_version', 'source_sha256', 'updates', 'additions'}
             or plan['schema_version'] != 1 or plan['source_sha256'] != current):
         raise ValueError('План не соответствует исходной резервной копии')
     updates = plan['updates']
-    if not isinstance(updates, list) or not updates:
-        raise ValueError('Нужен непустой список правок')
+    if not isinstance(updates, list) or (not updates and not plan.get('additions')):
+        raise ValueError('Нужен непустой список правок или новых операций')
     seen = set()
     for row in updates:
         if not isinstance(row, dict) or set(row) != {'locator', 'set'}:
@@ -63,39 +64,6 @@ def indexed_table(connection: sqlite3.Connection, table: str, state: dict) -> di
     return {row[0]: dict(zip(columns, row)) for row in state[table]}
 
 
-def description_key(connection: sqlite3.Connection, name: str, kind: int, created: dict) -> int | None:
-    if not name:
-        return None
-    columns = {r[1] for r in connection.execute('PRAGMA table_info(ZTRANSACTION_DESCRIPTION)')}
-    if not DESCRIPTION_COLUMNS <= columns:
-        raise ValueError('Неподдерживаемая схема описаний')
-    matches = connection.execute('SELECT Z_PK FROM ZTRANSACTION_DESCRIPTION WHERE ZNAME=? AND ZTYPE=?',
-                                 (name, kind)).fetchall()
-    if len(matches) > 1:
-        raise ValueError('Неоднозначное описание')
-    if matches:
-        return matches[0][0]
-    entity = connection.execute("SELECT * FROM Z_PRIMARYKEY WHERE Z_NAME='Transaction_description'").fetchone()
-    if entity is None:
-        raise ValueError('Отсутствует счётчик описаний Core Data')
-    maximum = connection.execute('SELECT MAX(Z_PK) FROM ZTRANSACTION_DESCRIPTION').fetchone()[0] or 0
-    key = max(entity['Z_MAX'], maximum) + 1
-    connection.execute('''INSERT INTO ZTRANSACTION_DESCRIPTION
-      (Z_PK,Z_ENT,Z_OPT,ZPENDING_UPDATE,ZTYPE,ZUSAGERATING,ZNAME,ZRECORDNAME)
-      VALUES (?,?,1,0,?,0,?,?)''', (key, entity['Z_ENT'], kind, name, str(uuid.uuid4()).upper()))
-    connection.execute('UPDATE Z_PRIMARYKEY SET Z_MAX=? WHERE Z_ENT=?', (key, entity['Z_ENT']))
-    created[key] = dict(connection.execute('SELECT * FROM ZTRANSACTION_DESCRIPTION WHERE Z_PK=?', (key,)).fetchone())
-    return key
-
-
-def date_values(value: str, zone: ZoneInfo) -> tuple:
-    stamp = datetime.fromisoformat(value)
-    if stamp.tzinfo is None or stamp.utcoffset() is None:
-        raise ValueError('Для правки даты нужен часовой пояс')
-    day = datetime.combine(stamp.astimezone(zone).date(), time(), zone)
-    return (stamp - APPLE_EPOCH).total_seconds(), (day - APPLE_EPOCH).total_seconds()
-
-
 def apply_updates(connection: sqlite3.Connection, updates: list, zone: ZoneInfo) -> tuple:
     allowed, created = {}, {}
     for item in updates:
@@ -116,7 +84,8 @@ def apply_updates(connection: sqlite3.Connection, updates: list, zone: ZoneInfo)
     return allowed, created
 
 
-def verify_sql_changes(connection: sqlite3.Connection, before: dict, allowed: dict, created: dict) -> dict:
+def verify_sql_changes(connection: sqlite3.Connection, before: dict, allowed: dict, created: dict,
+                       transactions: dict, accounts: dict) -> dict:
     after = table_state(connection)
     if before.keys() != after.keys():
         raise ValueError('Изменился состав таблиц')
@@ -124,12 +93,14 @@ def verify_sql_changes(connection: sqlite3.Connection, before: dict, allowed: di
         if before[table] != after[table]:
             raise ValueError('Изменена несогласованная таблица')
     old, new = [indexed_table(connection, 'ZTRANSACTION', data) for data in (before, after)]
-    if old.keys() != new.keys():
+    if old.keys() | transactions.keys() != new.keys() or old.keys() & transactions.keys():
         raise ValueError('Изменился состав операций')
     for key, row in old.items():
         wanted = {**row, **allowed.get(key, {})}
         if new[key] != wanted:
             raise ValueError('Изменено несогласованное поле операции')
+    if any(new[key] != row for key, row in transactions.items()):
+        raise ValueError('Новая операция не соответствует плану SQL')
     old, new = [indexed_table(connection, 'ZTRANSACTION_DESCRIPTION', data) for data in (before, after)]
     if new != {**old, **created}:
         raise ValueError('Несогласованная правка справочника описаний')
@@ -138,20 +109,25 @@ def verify_sql_changes(connection: sqlite3.Connection, before: dict, allowed: di
     for row in wanted.values():
         if row['Z_NAME'] == 'Transaction_description' and created:
             row['Z_MAX'] = max(row['Z_MAX'], max(created))
+        if row['Z_NAME'] == 'Transaction' and transactions:
+            row['Z_MAX'] = max(row['Z_MAX'], max(transactions))
     if new != wanted:
         raise ValueError('Несогласованная правка счётчиков Core Data')
+    old, new = [indexed_table(connection, 'ZACCOUNT', data) for data in (before, after)]
+    if new != {**old, **accounts}:
+        raise ValueError('Несогласованная правка счетов')
     return {table: {'removed': sum((before[table] - after[table]).values()),
                     'added': sum((after[table] - before[table]).values())}
             for table in before if before[table] != after[table]}
 
 
-def check_result(before: dict, after: dict, updates: list) -> None:
-    if not before['ready'] or not after['ready'] or before['accounts'] != after['accounts']:
-        raise ValueError('Снимки содержат ошибки или изменились счета')
+def check_result(before: dict, after: dict, updates: list, additions: list, key_map: dict) -> None:
+    if not before['ready'] or not after['ready']:
+        raise ValueError('Снимки содержат ошибки')
     old = {r['locator']: r for r in before['records']}
     new = {r['locator']: r for r in after['records']}
     changes = {r['locator']: r['set'] for r in updates}
-    if old.keys() != new.keys():
+    if old.keys() | set(key_map.values()) != new.keys():
         raise ValueError('Изменилось количество операций')
     for key, row in old.items():
         if key not in changes and row != new[key]:
@@ -164,6 +140,47 @@ def check_result(before: dict, after: dict, updates: list) -> None:
                     raise ValueError('Дата записана с недопустимой погрешностью')
             elif actual != wanted:
                 raise ValueError('Поле не соответствует плану')
+    check_additions(after, additions, key_map)
+    check_balances(before, after, additions)
+
+
+def check_additions(after: dict, rows: list, key_map: dict) -> None:
+    index = {r['locator']: r for r in after['records']}
+    planned = {r['key']: r for r in rows}
+    for wanted in rows:
+        actual = index[key_map[wanted['key']]]
+        for field in ('kind', 'account', 'currency', 'cleared', 'description', 'notes', 'category_path', 'tag'):
+            if actual[field] != wanted[field]:
+                raise ValueError('Новая операция не соответствует плану')
+        if actual['payee'] != (wanted['payee'] or '') or actual['splits']:
+            raise ValueError('Неверные поля новой операции')
+        if amount_decimal(actual['amount']) != amount_decimal(wanted['amount']):
+            raise ValueError('Неверная сумма новой операции')
+        if abs((datetime.fromisoformat(actual['timestamp']) - datetime.fromisoformat(wanted['timestamp'])).total_seconds()) > 0.000002:
+            raise ValueError('Неверное время новой операции')
+        peer = wanted['peer_key']
+        if actual['linked_locator'] != (key_map[peer] if peer else None):
+            raise ValueError('Неверная связь сторон перевода')
+        if actual['other_account'] != (planned[peer]['account'] if peer else None):
+            raise ValueError('Неверный счёт второй стороны перевода')
+
+
+def check_balances(before: dict, after: dict, additions: list) -> None:
+    last = {a['pk']: a for a in after['accounts']}
+    if {a['pk'] for a in before['accounts']} != last.keys():
+        raise ValueError('Изменился состав счетов')
+    for old in before['accounts']:
+        actual = last[old['pk']]
+        if {k: v for k, v in old.items() if k not in {'balance', 'uncleared_balance'}} != {
+                k: v for k, v in actual.items() if k not in {'balance', 'uncleared_balance'}}:
+            raise ValueError('Изменены несогласованные поля счёта')
+        rows = [r for r in additions if (r['account'], r['currency']) == (old['name'], old['currency'])]
+        for field in ('balance', 'uncleared_balance'):
+            first, first_issues = normalize_money(old[field], old['currency'])
+            end, end_issues = normalize_money(actual[field], old['currency'])
+            delta = sum((amount_decimal(r['amount']) for r in rows if field == 'uncleared_balance' or r['cleared']), amount_decimal('0'))
+            if first_issues or end_issues or end != first + delta:
+                raise ValueError('Остаток счёта не соответствует новым операциям')
 
 
 def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone: str) -> dict:
@@ -173,6 +190,8 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
     updates = validate_plan(plan, fingerprint)
     zone = ZoneInfo(timezone)
     before_normalized = read_backup(source, timezone)
+    additions = plan.get('additions', [])
+    validate_additions(additions, before_normalized['records'])
     with tempfile.TemporaryDirectory(prefix='.dc-prepare-', dir=target.parent) as directory:
         stage = Path(directory) / 'candidate.dcbackup'
         descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -185,27 +204,28 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
             connection.execute('PRAGMA journal_mode=DELETE')
             before = table_state(connection)
             allowed, created = apply_updates(connection, updates, zone)
+            transactions, accounts, key_map = apply_additions(connection, additions, zone, created)
             connection.commit()
             if connection.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise ValueError('Нарушена целостность SQLite')
             if connection.execute('PRAGMA foreign_key_check').fetchall():
                 raise ValueError('Нарушены внешние ключи SQLite')
-            table_diff = verify_sql_changes(connection, before, allowed, created)
+            table_diff = verify_sql_changes(connection, before, allowed, created, transactions, accounts)
         except sqlite3.Error as error:
             raise ValueError('Изменённая копия не прошла обработку SQLite') from error
         finally:
             connection.close()
         after = read_backup(stage, timezone)
-        check_result(before_normalized, after, updates)
+        check_result(before_normalized, after, updates, additions, key_map)
         if fingerprint != backup_fingerprint(source):
             raise ValueError('Исходная копия изменилась во время подготовки')
         validate_target(source, target)
         os.link(stage, target)
-    return {'schema_version': 1, 'adapter': 'backup-preparation', 'input_count': len(updates),
-            'records': updates, 'rejected': [], 'issues': [], 'ready': True,
-            'coverage': 'explicit_existing_record_edits', 'source_sha256': fingerprint,
+    return {'schema_version': 1, 'adapter': 'backup-preparation', 'input_count': len(updates) + len(additions),
+            'records': [*updates, *additions], 'rejected': [], 'issues': [], 'ready': True,
+            'coverage': 'explicit_edits_and_additions', 'source_sha256': fingerprint, 'new_record_locators': key_map,
             'candidate_sha256': backup_fingerprint(target), 'table_diff': table_diff,
             'source_records': before_normalized['input_count'], 'candidate_records': after['input_count'],
             'source_files_unchanged': True, 'app_restore_verified': False,
-            'limitations': ['edits_timestamp_description_notes_only', 'no_account_or_balance_changes',
+            'limitations': ['existing_edits_timestamp_description_notes_only', 'no_new_accounts_or_split_categories',
                             'does_not_register_or_restore_backup', 'restore_requires_app_verification']}
