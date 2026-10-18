@@ -81,6 +81,10 @@ class DebitCreditTest(unittest.TestCase):
                                      'Категория': category}), 'Europe/Moscow')
         self.assertEqual(result['records'][0]['category'], category)
 
+    def test_iso_seconds_are_not_downgraded_to_minute_precision(self):
+        result = read_csv(export_csv({'Дата': '2026-07-08 09:08:12'}), 'Europe/Moscow')
+        self.assertEqual(result['records'][0]['timestamp_precision'], 'second')
+
     def test_service_marker_does_not_replace_user_notes(self):
         notes = 'Ужин\n[dc-sync:v1 source=yabank id=abc role=cashback]'
         row = read_csv(export_csv({'Заметки': notes}), 'Europe/Moscow')['records'][0]
