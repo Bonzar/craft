@@ -94,6 +94,29 @@ test('bank GraphQL error payload survives in the partial detail result', async (
   });
 });
 
+test('native detail ID is retained together with the requested feed ID', async () => {
+  const request = async operation => operation === 'TransactionsFeedPfm'
+    ? page([item('feed-one'), item('feed-two')])
+    : { getTransactionOperationDetails: item('native-id') };
+
+  const result = await collectHistory({ ...scope, request });
+
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.details.map(row => row.requestedId).sort(), ['feed-one', 'feed-two']);
+  assert.deepEqual(result.details.map(row => row.id), ['native-id', 'native-id']);
+  assert.deepEqual(result.unreadIds, []);
+});
+
+test('detail without an identifier stays unread with its raw response preserved', async () => {
+  const request = async operation => operation === 'TransactionsFeedPfm'
+    ? page([item('feed')]) : { getTransactionOperationDetails: { date: item('a').date } };
+  await assert.rejects(collectHistory({ ...scope, request }), error => {
+    assert.deepEqual(error.partial.unreadIds, ['feed']);
+    assert.equal(error.partial.detailObservations.length, 1);
+    return true;
+  });
+});
+
 test('detail concurrency is bounded', async () => {
   let active = 0, maxActive = 0;
   const request = async (operation, variables) => {
