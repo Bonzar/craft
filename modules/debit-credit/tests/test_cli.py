@@ -10,6 +10,7 @@ from pathlib import Path
 
 from test_adapters import card, export_csv
 from test_backup import SCHEMA
+from test_matching import MAPPING, entry, operation
 
 CLI = Path(__file__).resolve().parents[1] / 'lib' / 'cli.py'
 
@@ -88,6 +89,36 @@ class CommandTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(target.read_text())['adapter'], 'debit-credit-backup')
+
+    def test_comparison_keeps_parser_rejections_and_requires_review(self):
+        source, ledger = self.directory / 'source.json', self.directory / 'ledger.json'
+        mapping, target = self.directory / 'map.json', self.directory / 'comparison.json'
+        rejected = [{'locator': 2, 'reason': 'bad amount', 'raw': {'amount': 'private'}}]
+        source.write_text(json.dumps({'records': [operation()], 'rejected': rejected,
+                                     'input_count': 2, 'issues': [], 'coverage': 'unverified'}))
+        ledger.write_text(json.dumps({'records': [entry()], 'rejected': [], 'input_count': 1,
+                                     'issues': [], 'coverage': 'backup_snapshot'}))
+        mapping.write_text(json.dumps(MAPPING))
+
+        result = self.run_cli('compare', source, ledger, '--accounts', mapping,
+                              '--window-seconds', '120', '--output', target)
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['input_count'], 2)
+        self.assertEqual(report['rejected'], rejected)
+        self.assertEqual(report['records'][0]['match'], 'candidate')
+        self.assertFalse(report['ready'])
+        self.assertNotIn('private', result.stdout + result.stderr)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+    def test_comparison_rejects_snapshot_with_unaccounted_input_rows(self):
+        source, mapping = self.directory / 'bad.json', self.directory / 'map.json'
+        source.write_text(json.dumps({'records': [], 'rejected': [], 'input_count': 1}))
+        mapping.write_text(json.dumps(MAPPING))
+        result = self.run_cli('compare', source, source, '--accounts', mapping,
+                              '--window-seconds', '120')
+        self.assertEqual(result.returncode, 2)
 
 
 if __name__ == '__main__':

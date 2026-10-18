@@ -3,7 +3,7 @@
 import copy
 import unittest
 
-from matching import compare_records
+from adapters.matching import compare_records
 
 
 MAPPING = {'yabank': {'Карта': {
@@ -122,6 +122,29 @@ class MatchingTest(unittest.TestCase):
         for changes in ({'timestamp': '2026-07-04T10:00:00'}, {'amount': 'NaN'}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.compare([operation(**changes)], [])
+
+    def test_error_is_returned_for_empty_source_id(self):
+        with self.assertRaises(ValueError):
+            self.compare([operation('')], [])
+
+    def test_no_id_rows_are_preserved_with_multiplicity(self):
+        result = self.compare([operation(None), operation(None)], [entry(), entry('two')])
+        self.assertEqual(len(result['records']), 2)
+        self.assertEqual([r['ledger_indices'] for r in result['records']], [[0, 1], [0, 1]])
+
+    def test_candidate_search_respects_window_boundary(self):
+        sources = [operation()]
+        inside = entry(timestamp='2026-07-04T10:02:59+03:00', timestamp_precision='second')
+        outside = entry('two', timestamp='2026-07-04T10:03:01+03:00',
+                        timestamp_precision='second')
+        row = self.compare(sources, [inside, outside])['records'][0]
+        self.assertEqual(row['ledger_indices'], [0])
+
+    def test_marker_link_reports_wrong_account_even_outside_search_window(self):
+        row = self.compare([operation()], [entry(account='Другая карта',
+            timestamp='2026-07-08T10:00:00+03:00', markers=[marker()])])['records'][0]
+        self.assertEqual(row['match'], 'marker')
+        self.assertEqual(set(row['differences'][0]), {'account', 'timestamp'})
 
 
 if __name__ == '__main__':
