@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectHistory, requestHistory } = require('../lib/yandex_bank_queries.js');
+const { collectHistory, requestHistory, resumeHistory } = require('../lib/yandex_bank_queries.js');
 
 const scope = {
   fromInclusive: '2026-07-04T00:00:00+03:00',
@@ -115,6 +115,69 @@ test('detail without an identifier stays unread with its raw response preserved'
     assert.equal(error.partial.detailObservations.length, 1);
     return true;
   });
+});
+
+test('transient HTTP failure is retried before a detail is marked unread', async () => {
+  let attempts = 0;
+  const pauses = [];
+  const request = async (operation, variables) => {
+    if (operation === 'TransactionsFeedPfm') return page([item('a')]);
+    attempts += 1;
+    if (attempts < 3) throw Object.assign(new Error('HTTP 500'), { httpStatus: 500 });
+    return { getTransactionOperationDetails: item(variables.id) };
+  };
+  const result = await collectHistory({ ...scope, request, pause: async delay => pauses.push(delay) });
+  assert.equal(result.complete, true);
+  assert.equal(attempts, 3);
+  assert.deepEqual(pauses, [1000, 3000]);
+});
+
+test('one permanently failing card does not prevent reading later cards', async () => {
+  const request = async (operation, variables) => {
+    if (operation === 'TransactionsFeedPfm') return page([item('bad'), item('good')]);
+    if (variables.id === 'bad') throw new Error('Unusable detail');
+    return { getTransactionOperationDetails: item('native') };
+  };
+  await assert.rejects(collectHistory({ ...scope, request, concurrency: 1 }), error => {
+    assert.deepEqual(error.partial.unreadIds, ['bad']);
+    assert.equal(error.partial.details[0].requestedId, 'good');
+    return true;
+  });
+});
+
+test('resume reads only missing cards and keeps the original snapshot unchanged', async () => {
+  let partial;
+  const request = async (operation, variables) => {
+    if (operation === 'TransactionsFeedPfm') return page([item('a'), item('b')]);
+    if (variables.id === 'b') throw new Error('offline');
+    return { getTransactionOperationDetails: item('native-a') };
+  };
+  try { await collectHistory({ ...scope, request }); } catch (error) { partial = error.partial; }
+  const before = JSON.stringify(partial), calls = [];
+
+  const result = await resumeHistory(partial, { request: async (operation, variables) => {
+    calls.push({ operation, variables });
+    assert.equal(operation, 'TransactionOperationDetails');
+    return { getTransactionOperationDetails: item('native-b') };
+  } });
+
+  assert.equal(result.complete, true);
+  assert.deepEqual(calls.map(call => call.variables.id), ['b']);
+  assert.equal(result.details.length, 2);
+  assert.equal(result.detailObservations.length, 2);
+  assert.equal(result.previousDetailErrors.length, 1);
+  assert.equal(result.detailErrors.length, 0);
+  assert.equal(JSON.stringify(partial), before);
+});
+
+test('resume rejects missing feed records instead of claiming a complete collection', async () => {
+  const snapshot = await collectHistory({ ...scope, includeDetails: false,
+    request: async () => page([item('a')]) });
+  snapshot.records = [];
+  let calls = 0;
+  await assert.rejects(resumeHistory(snapshot, { request: async () => { calls += 1; } }),
+    /список/);
+  assert.equal(calls, 0);
 });
 
 test('detail concurrency is bounded', async () => {
