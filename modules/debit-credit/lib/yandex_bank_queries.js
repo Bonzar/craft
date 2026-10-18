@@ -18,9 +18,11 @@ async function requestHistory(operation, variables, environment) {
   if (env.origin !== 'https://bank.yandex.ru' || typeof env.fetch !== 'function') {
     throw new Error('Запуск нужен в авторизованной сессии банка');
   }
+  // Штатный TransactionsApolloProvider добавляет этот заголовок ко всем запросам.
+  const timezone = env.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const response = await env.fetch(`${HISTORY_ENDPOINT}?operationId=${hash}`, {
     method: 'POST', credentials: 'same-origin',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-yabank-time-zone': timezone },
     body: JSON.stringify({ operationName: operation, variables,
       extensions: { persistedQuery: { version: 1, sha256Hash: hash } } }),
   });
