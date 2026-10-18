@@ -11,6 +11,7 @@ from adapters.debit_credit import read_csv
 from adapters.debit_credit_backup import read_backup
 from adapters.yandex_bank import read_cards
 from adapters.matching import compare_records
+from adapters.yandex_bank_api import read_history
 
 
 def parser() -> argparse.ArgumentParser:
@@ -22,6 +23,8 @@ def parser() -> argparse.ArgumentParser:
     debit.add_argument('--currencies', type=Path, help='JSON account: currency, без догадок по имени')
     bank = commands.add_parser('yandex-bank', help='Чтение JSON со снимками открытых карточек')
     bank.add_argument('input', type=Path)
+    api = commands.add_parser('yandex-bank-api', help='Чтение JSON сборщика запросов банка')
+    api.add_argument('input', type=Path)
     backup = commands.add_parser('debit-credit-backup', help='Чтение отдельной копии backup + WAL')
     backup.add_argument('input', type=Path)
     backup.add_argument('--timezone', required=True)
@@ -32,7 +35,7 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument('ledger', type=Path, help='JSON результата адаптера приложения')
     compare.add_argument('--accounts', type=Path, required=True)
     compare.add_argument('--window-seconds', type=int, required=True)
-    for command in (debit, bank, backup, compare):
+    for command in (debit, bank, api, backup, compare):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
@@ -49,6 +52,8 @@ def normalize(args: argparse.Namespace) -> dict:
         if args.currencies:
             currencies = json.loads(args.currencies.read_text(encoding='utf-8'))
         result = read_csv(text, args.timezone, currencies)
+    elif args.adapter == 'yandex-bank-api':
+        result = read_history(json.loads(text))
     else:
         result = read_cards(json.loads(text))
     return {**result, 'input_sha256': hashlib.sha256(content).hexdigest()}

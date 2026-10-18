@@ -8,6 +8,7 @@ from .common import amount_decimal
 from .markers import Marker
 
 PRECISIONS = {'minute': timedelta(minutes=1), 'second': timedelta(seconds=1),
+              'millisecond': timedelta(milliseconds=1),
               'microsecond': timedelta(microseconds=1)}
 MAPPING_FIELDS = ('account', 'source_currency', 'currency')
 
@@ -143,7 +144,7 @@ def compare_one(row: dict, ledger: list, mapping: dict, marker_index: dict,
     issues = [*row.get('issues', []), *map_issues]
     if key and repeated[key] > 1:
         issues.append('repeated_source_identity')
-    if row.get('status') in ('unknown', 'canceled') or row.get('eligible_for_matching') is False:
+    if row.get('status') in ('unknown', 'canceled', 'failed') or row.get('eligible_for_matching') is False:
         issues.append('source_requires_review')
     if any(ledger[i].get('eligible_for_matching') is False for i in indices):
         issues.append('ledger_requires_review')
