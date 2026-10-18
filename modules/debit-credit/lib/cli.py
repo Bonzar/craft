@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from adapters.debit_credit import read_csv
@@ -15,6 +16,7 @@ from adapters.yandex_bank_api import read_history
 from adapters.import_verification import verify_additions
 from adapters.restore_verification import verify_restoration
 from adapters.backup_edit import prepare_backup
+from adapters.backup_registry import register_backup
 
 
 def parser() -> argparse.ArgumentParser:
@@ -52,12 +54,25 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument('--plan', type=Path, required=True)
     prepare.add_argument('--target', type=Path, required=True)
     prepare.add_argument('--timezone', required=True)
-    for command in (debit, bank, api, backup, compare, verify, restore, prepare):
+    register = commands.add_parser('register-backup', help='Добавление копии в BackupList закрытого Mac-приложения')
+    register.add_argument('input', type=Path)
+    register.add_argument('--report', type=Path, required=True)
+    register.add_argument('--preferences', type=Path, required=True)
+    register.add_argument('--source-filename', required=True)
+    register.add_argument('--timestamp', required=True)
+    register.add_argument('--registry-archive', type=Path, required=True)
+    for command in (debit, bank, api, backup, compare, verify, restore, prepare, register):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'register-backup':
+        if args.output and (args.output.exists() or args.output.is_symlink()):
+            raise FileExistsError('Отчёт должен быть новым отдельным файлом')
+        report = json.loads(args.report.read_text(encoding='utf-8-sig'))
+        return register_backup(args.input, report, args.preferences, args.source_filename,
+                               datetime.fromisoformat(args.timestamp), args.registry_archive)
     if args.adapter == 'prepare-backup':
         if args.output and (args.output.exists() or args.output.resolve() == args.target.resolve()):
             raise FileExistsError('Отчёт должен быть новым отдельным файлом')
