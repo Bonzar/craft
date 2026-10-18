@@ -130,6 +130,31 @@ class BackupTest(unittest.TestCase):
         self.assertTrue(row['upcoming'])
         self.assertFalse(row['eligible_for_matching'])
 
+    def test_sqlite_binary_noise_is_removed_but_original_amount_is_preserved(self):
+        self.insert(amount='-936.81000000000006')
+
+        row = read_backup(self.path, 'Europe/Moscow')['records'][0]
+
+        self.assertEqual(row['amount'], '-936.81')
+        self.assertNotEqual(row['raw']['amount'], row['amount'])
+
+    def test_real_subcent_amount_is_preserved_and_requires_review(self):
+        self.insert(amount='-1.005')
+
+        result = read_backup(self.path, 'Europe/Moscow')
+
+        self.assertEqual(result['records'][0]['amount'], '-1.005')
+        self.assertFalse(result['ready'])
+        self.assertIn('amount_precision_requires_review', {i['code'] for i in result['issues']})
+
+    def test_unknown_pending_flag_remains_unknown_and_blocks_matching(self):
+        self.insert(pending=None)
+
+        result = read_backup(self.path, 'Europe/Moscow')
+
+        self.assertIsNone(result['records'][0]['cleared'])
+        self.assertFalse(result['ready'])
+
 
 if __name__ == '__main__':
     unittest.main()
