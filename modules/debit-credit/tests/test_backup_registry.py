@@ -4,6 +4,7 @@ import copy
 import plistlib
 import shutil
 import subprocess
+import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,7 @@ class BackupRegistryTest(unittest.TestCase):
     def read(self):
         return plistlib.loads(self.preferences.read_bytes())
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'Requires the macOS preferences service')
     def test_only_one_registry_entry_is_appended_with_correct_date_count_and_attachments(self):
         source_hash = backup_fingerprint(self.source)
         report = self.register()
