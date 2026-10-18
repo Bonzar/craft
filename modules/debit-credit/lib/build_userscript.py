@@ -6,7 +6,7 @@ from pathlib import Path
 
 HEADER = '''// ==UserScript==
 // @name         Debit & Credit — сбор истории Яндекс Банка
-// @version      0.1.2
+// @version      0.2.0
 // @match        https://bank.yandex.ru/my/transactions-history*
 // @run-at       document-idle
 // @grant        none
@@ -24,10 +24,13 @@ panel.id = 'debit-credit-history-reader';
 panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:white;color:black;padding:14px;border:1px solid #888;border-radius:12px;font:14px system-ui;max-width:340px;box-shadow:0 3px 16px #0003';
 const button = document.createElement('button');
 button.textContent = 'Собрать историю в JSON';
+const resumeButton = document.createElement('button');
+resumeButton.textContent = 'Продолжить из JSON';
+resumeButton.style.cssText = 'display:block;margin-top:8px';
 const status = document.createElement('div');
 status.style.cssText = 'margin-top:8px;white-space:pre-wrap';
 status.textContent = 'Только чтение истории. Платежи не выполняются.';
-panel.append(button, status);
+panel.append(button, resumeButton, status);
 document.body.append(panel);
 
 function inputDay(value) {
@@ -45,12 +48,50 @@ function saveResult(data, from, to, partial) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `yandex-bank-history-${from}_${to}${partial ? '-partial' : ''}.json`;
+  const period = from && to ? `${from}_${to}` : 'resumed';
+  link.download = `yandex-bank-history-${period}${partial ? '-partial' : ''}.json`;
   link.textContent = partial ? 'Скачать неполный результат' : 'Скачать результат';
   link.style.cssText = 'display:block;margin-top:8px';
   panel.append(link);
   link.click();
 }
+
+function showProgress(progress) {
+  if (progress.phase === 'retry') {
+    status.textContent = `Временная ошибка. Повтор ${progress.attempt} через ${progress.delayMs / 1000} с…`;
+  } else {
+    status.textContent = progress.phase === 'list'
+      ? `Страниц: ${progress.pages}. Операций: ${progress.records}.`
+      : `Карточки: ${progress.read} из ${progress.total}.`;
+  }
+}
+
+resumeButton.addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    try {
+      button.disabled = true;
+      resumeButton.disabled = true;
+      status.textContent = 'Проверяю сохранённые страницы и карточки…';
+      const snapshot = JSON.parse(await file.text());
+      const result = await resumeHistory(snapshot, { onProgress: showProgress });
+      result.displayTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      status.textContent = `Собрано ${result.records.length} операций и ${result.details.length} карточек.\nНужно сверить результат.`;
+      saveResult(result, null, null, false);
+    } catch (error) {
+      status.textContent = `Продолжение остановлено: ${error instanceof Error ? error.message : 'ошибка чтения'}`;
+      if (error && error.partial) saveResult(error.partial, null, null, true);
+    } finally {
+      button.disabled = false;
+      resumeButton.disabled = false;
+    }
+  }, { once: true });
+  input.click();
+});
 
 button.addEventListener('click', async () => {
   let from, to;
@@ -63,14 +104,11 @@ button.addEventListener('click', async () => {
     const start = inputDay(from), end = inputDay(to);
     end.setDate(end.getDate() + 1);
     button.disabled = true;
+    resumeButton.disabled = true;
     status.textContent = 'Читаю список операций…';
     const result = await collectHistory({
       fromInclusive: start.toISOString(), toExclusive: end.toISOString(), concurrency: 4,
-      onProgress(progress) {
-        status.textContent = progress.phase === 'list'
-          ? `Страниц: ${progress.pages}. Операций: ${progress.records}.`
-          : `Карточки: ${progress.read} из ${progress.total}.`;
-      },
+      onProgress: showProgress,
     });
     result.displayTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     status.textContent = `Собрано ${result.records.length} операций и ${result.details.length} карточек.\nНужно сверить с историей банка.`;
@@ -80,6 +118,7 @@ button.addEventListener('click', async () => {
     if (error && error.partial) saveResult(error.partial, from, to, true);
   } finally {
     button.disabled = false;
+    resumeButton.disabled = false;
   }
 });
 '''
