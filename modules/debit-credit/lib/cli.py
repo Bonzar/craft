@@ -13,6 +13,7 @@ from adapters.yandex_bank import read_cards
 from adapters.matching import compare_records
 from adapters.yandex_bank_api import read_history
 from adapters.import_verification import verify_additions
+from adapters.restore_verification import verify_restoration
 
 
 def parser() -> argparse.ArgumentParser:
@@ -41,12 +42,23 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument('after', type=Path, help='Резервная копия после импорта')
     verify.add_argument('--expected', type=Path, required=True)
     verify.add_argument('--timezone', required=True)
-    for command in (debit, bank, api, backup, compare, verify):
+    restore = commands.add_parser('verify-restore', help='Полная сверка операций и счетов после восстановления')
+    restore.add_argument('input', type=Path, help='Подготовленная резервная копия')
+    restore.add_argument('after', type=Path, help='Копия, созданная приложением после восстановления')
+    restore.add_argument('--timezone', required=True)
+    for command in (debit, bank, api, backup, compare, verify, restore):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'verify-restore':
+        expected = read_backup(args.input, args.timezone)
+        actual = read_backup(args.after, args.timezone)
+        result = verify_restoration(expected, actual)
+        return {**result, 'inputs_sha256': {
+            'expected': hashlib.sha256(args.input.read_bytes()).hexdigest(),
+            'actual': hashlib.sha256(args.after.read_bytes()).hexdigest()}}
     if args.adapter == 'verify-import':
         expected_bytes = args.expected.read_bytes()
         expected = json.loads(expected_bytes.decode('utf-8-sig'))
