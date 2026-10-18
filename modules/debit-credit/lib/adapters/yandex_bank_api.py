@@ -57,6 +57,17 @@ def read_fields(detail: dict) -> list:
     return fields
 
 
+def read_direction(detail: dict, fields: list) -> tuple:
+    direction = detail.get('direction')
+    amount = detail['amount']
+    if direction is None and amount.get('money') is None and amount.get('plus') is not None:
+        purposes = [value for name, value in fields if name == 'Назначение']
+        if len(purposes) == 1 and re.fullmatch(r'Списание баллов(?: от .+)?',
+                                             normalize_space(purposes[0]), re.I):
+            return 'DEBIT', {'field': 'Назначение', 'value': purposes[0]}
+    return direction, None
+
+
 def account_phrase(value: str) -> str:
     value = normalize_space(value)
     if value.lower() in ACCOUNT_PHRASES:
@@ -160,8 +171,9 @@ def parse_record(raw: dict, index: int) -> dict:
     timestamp = datetime.fromisoformat(text(detail['date']))
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
         raise ValueError('В дате API отсутствует часовой пояс')
-    amount, currency = read_amount(detail['amount'], detail['direction'])
     fields = read_fields(detail)
+    direction, direction_evidence = read_direction(detail, fields)
+    amount, currency = read_amount(detail['amount'], direction)
     title = detail['title']
     compound = title.get('compound')
     description = (text(compound['firstPart']) + ' → ' + text(compound['secondPart'])
@@ -173,7 +185,10 @@ def parse_record(raw: dict, index: int) -> dict:
         issues.append('unknown_account')
     if status == 'unknown':
         issues.append('unknown_status')
-    if read_amount(feed['amount'], feed['direction']) != (amount, currency):
+    feed_direction = feed['direction']
+    if feed_direction is None and direction_evidence and feed['amount'].get('money') is None:
+        feed_direction = direction
+    if read_amount(feed['amount'], feed_direction) != (amount, currency):
         issues.append('feed_detail_amount_differs')
     if datetime.fromisoformat(text(feed['date'])) != timestamp:
         issues.append('feed_detail_date_differs')
@@ -183,6 +198,7 @@ def parse_record(raw: dict, index: int) -> dict:
     precision = ('millisecond' if len(fraction[1]) <= 3 else 'microsecond') if fraction else 'second'
     return {**record_base('yabank', index + 1), 'source_id': source_id, 'native_id': native_id,
             'bank_account_ids': bank_account_ids(detail),
+            'direction_evidence': direction_evidence,
             'timestamp': timestamp.isoformat(), 'timestamp_precision': precision,
             'amount': str(amount), 'currency': currency, 'account': account, 'other_account': other,
             'kind': kind, 'status': status, 'cleared': cleared, 'description': description,
