@@ -119,7 +119,8 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual(values, original)
 
     def test_error_is_returned_for_naive_dates_or_nonfinite_amounts(self):
-        for changes in ({'timestamp': '2026-07-04T10:00:00'}, {'amount': 'NaN'}):
+        for changes in ({'timestamp': '2026-07-04T10:00:00'}, {'amount': 'NaN'},
+                        {'amount': None}, {'timestamp': None}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.compare([operation(**changes)], [])
 
