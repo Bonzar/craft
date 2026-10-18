@@ -10,6 +10,7 @@ from pathlib import Path
 from adapters.debit_credit import read_csv
 from adapters.debit_credit_backup import read_backup
 from adapters.yandex_bank import read_cards
+from adapters.matching import compare_records
 
 
 def parser() -> argparse.ArgumentParser:
@@ -26,12 +27,19 @@ def parser() -> argparse.ArgumentParser:
     backup.add_argument('--timezone', required=True)
     backup.add_argument('--from-date')
     backup.add_argument('--to-date')
-    for command in (debit, bank, backup):
+    compare = commands.add_parser('compare', help='Связи по меткам и кандидаты старых записей')
+    compare.add_argument('input', type=Path, help='JSON результата адаптера источника')
+    compare.add_argument('ledger', type=Path, help='JSON результата адаптера приложения')
+    compare.add_argument('--accounts', type=Path, required=True)
+    compare.add_argument('--window-seconds', type=int, required=True)
+    for command in (debit, bank, backup, compare):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'compare':
+        return compare_snapshots(args)
     if args.adapter == 'debit-credit-backup':
         return read_backup(args.input, args.timezone, args.from_date, args.to_date)
     content = args.input.read_bytes()
@@ -44,6 +52,32 @@ def normalize(args: argparse.Namespace) -> dict:
     else:
         result = read_cards(json.loads(text))
     return {**result, 'input_sha256': hashlib.sha256(content).hexdigest()}
+
+
+def read_snapshot(path: Path) -> tuple[dict, str]:
+    content = path.read_bytes()
+    value = json.loads(content.decode('utf-8-sig'))
+    if not isinstance(value, dict):
+        raise ValueError('Ожидается результат адаптера')
+    if (not isinstance(value.get('records'), list) or not isinstance(value.get('rejected'), list)
+            or type(value.get('input_count')) is not int
+            or value['input_count'] != len(value['records']) + len(value['rejected'])):
+        raise ValueError('Не сошёлся счёт входных записей адаптера')
+    return value, hashlib.sha256(content).hexdigest()
+
+
+def compare_snapshots(args: argparse.Namespace) -> dict:
+    source, source_hash = read_snapshot(args.input)
+    ledger, ledger_hash = read_snapshot(args.ledger)
+    map_bytes = args.accounts.read_bytes()
+    mapping = json.loads(map_bytes.decode('utf-8-sig'))
+    result = compare_records(source['records'], ledger['records'], mapping,
+                             window_seconds=args.window_seconds)
+    return {**result, 'input_count': source['input_count'], 'rejected': source['rejected'],
+            'source_input': {key: value for key, value in source.items() if key != 'records'},
+            'ledger_input': {key: value for key, value in ledger.items() if key != 'records'},
+            'inputs_sha256': {'source': source_hash, 'ledger': ledger_hash,
+                              'accounts': hashlib.sha256(map_bytes).hexdigest()}}
 
 
 def main(argv: list[str] | None = None) -> int:
