@@ -3,10 +3,12 @@
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
 from adapters.debit_credit import read_csv
+from adapters.debit_credit_backup import read_backup
 from adapters.yandex_bank import read_cards
 
 
@@ -19,12 +21,19 @@ def parser() -> argparse.ArgumentParser:
     debit.add_argument('--currencies', type=Path, help='JSON account: currency, без догадок по имени')
     bank = commands.add_parser('yandex-bank', help='Чтение JSON со снимками открытых карточек')
     bank.add_argument('input', type=Path)
-    for command in (debit, bank):
+    backup = commands.add_parser('debit-credit-backup', help='Чтение отдельной копии backup + WAL')
+    backup.add_argument('input', type=Path)
+    backup.add_argument('--timezone', required=True)
+    backup.add_argument('--from-date')
+    backup.add_argument('--to-date')
+    for command in (debit, bank, backup):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'debit-credit-backup':
+        return read_backup(args.input, args.timezone, args.from_date, args.to_date)
     content = args.input.read_bytes()
     text = content.decode('utf-8-sig')
     if args.adapter == 'debit-credit':
@@ -42,7 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = normalize(args)
         if args.output:
-            with args.output.open('x', encoding='utf-8') as target:
+            descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as target:
                 json.dump(result, target, ensure_ascii=False, indent=2)
                 target.write('\n')
     except (ValueError, OSError, KeyError) as error:

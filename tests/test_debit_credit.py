@@ -20,6 +20,7 @@ class DebitCreditModuleTest(unittest.TestCase):
         self.assertEqual(manifest.events, ())
         library = library_of(manifest).load()
         self.assertTrue(callable(library.read_csv))
+        self.assertTrue(callable(library.read_backup))
         self.assertTrue(callable(library.read_cards))
 
     def test_isolated_adapter_suite_passes_without_external_dependencies(self):
@@ -35,7 +36,8 @@ class DebitCreditModuleTest(unittest.TestCase):
         if node is None:
             self.skipTest('Node.js нужен только для теста DOM-считывателя браузера')
         result = subprocess.run(
-            [node, '--test', str(MODULE / 'tests' / 'test_capture.js')],
+            [node, '--test', str(MODULE / 'tests' / 'test_capture.js'),
+             str(MODULE / 'tests' / 'test_queries.js')],
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
