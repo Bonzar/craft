@@ -76,6 +76,24 @@ test('failed detail request preserves feed data and identifies the unread ID', a
     error => error.partial.records.length === 1 && error.partial.detailErrors[0].id === 'a');
 });
 
+test('bank GraphQL error payload survives in the partial detail result', async () => {
+  const payload = { errors: [{ message: 'PersistedQueryNotFound',
+    extensions: { code: 'PERSISTED_QUERY_NOT_FOUND' } }] };
+  const request = async (operation, variables) => {
+    if (operation === 'TransactionsFeedPfm') return page([item('a')]);
+    return requestHistory(operation, variables, {
+      origin: 'https://bank.yandex.ru',
+      fetch: async () => ({ ok: true, json: async () => payload }),
+    });
+  };
+  await assert.rejects(collectHistory({ ...scope, request }), error => {
+    assert.deepEqual(error.partial.detailErrors[0].payload, payload);
+    assert.equal(error.partial.cursorExhausted, true);
+    assert.equal(error.partial.records.length, 1);
+    return true;
+  });
+});
+
 test('detail concurrency is bounded', async () => {
   let active = 0, maxActive = 0;
   const request = async (operation, variables) => {
