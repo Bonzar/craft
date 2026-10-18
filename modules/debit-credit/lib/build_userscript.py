@@ -6,7 +6,7 @@ from pathlib import Path
 
 HEADER = '''// ==UserScript==
 // @name         Debit & Credit — сбор истории Яндекс Банка
-// @version      0.1.1
+// @version      0.1.2
 // @match        https://bank.yandex.ru/my/transactions-history*
 // @run-at       document-idle
 // @grant        none

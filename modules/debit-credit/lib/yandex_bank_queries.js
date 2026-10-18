@@ -125,8 +125,11 @@ async function readHistoryDetails(result, config) {
         const response = await config.request('TransactionOperationDetails', { id: record.id });
         result.detailObservations.push({ requestedId: record.id, response });
         const detail = response.getTransactionOperationDetails;
-        if (!detail || detail.id !== record.id) throw new Error('ID карточки не совпал с запрошенным');
-        result.details.push(detail);
+        if (!detail || typeof detail.id !== 'string' || !detail.id) {
+          throw new Error('У карточки отсутствует собственный ID');
+        }
+        // Денежная карточка возвращает native ID, а список — непрозрачный FEED_VIEW ID.
+        result.details.push({ ...detail, requestedId: record.id });
         config.onProgress({ phase: 'details', read: result.details.length, total: result.records.length });
       } catch (error) {
         stop = true;
@@ -137,7 +140,7 @@ async function readHistoryDetails(result, config) {
     }
   }
   await Promise.all(Array.from({ length: config.concurrency }, worker));
-  const readIds = new Set(result.details.map(row => row.id));
+  const readIds = new Set(result.details.map(row => row.requestedId));
   result.unreadIds = result.records.filter(row => !readIds.has(row.id)).map(row => row.id);
   if (result.unreadIds.length || result.detailErrors.length) throw new Error('Не все карточки прочитаны');
 }
