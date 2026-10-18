@@ -138,6 +138,23 @@ class BankApiTest(unittest.TestCase):
         self.assertIsNone(row['account'])
         self.assertIn('ambiguous_bank_account_identity', row['issues'])
 
+    def test_unsigned_points_use_explicit_spending_purpose(self):
+        value = detail(direction=None, amount={'money': None, 'plus': '389.0'},
+                       additionalFieldsList=[{'additionalFields': [
+                           {'name': 'Назначение', 'value': 'Списание баллов от Магазин'}]}])
+        result = read_history(snapshot(value))
+        self.assertEqual(result['records'][0]['amount'], '-389.0')
+        self.assertEqual(result['records'][0]['direction_evidence']['value'],
+                         'Списание баллов от Магазин')
+        self.assertTrue(result['ready'])
+
+    def test_unsigned_points_without_explicit_purpose_remain_rejected(self):
+        value = detail(direction=None, amount={'money': None, 'plus': '389.0'},
+                       additionalFieldsList=[])
+        result = read_history(snapshot(value))
+        self.assertEqual(len(result['rejected']), 1)
+        self.assertEqual(len(result['records']), 0)
+
 
 if __name__ == '__main__':
     unittest.main()
