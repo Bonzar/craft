@@ -12,6 +12,7 @@ from adapters.debit_credit_backup import read_backup
 from adapters.yandex_bank import read_cards
 from adapters.matching import compare_records
 from adapters.yandex_bank_api import read_history
+from adapters.import_verification import verify_additions
 
 
 def parser() -> argparse.ArgumentParser:
@@ -35,12 +36,24 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument('ledger', type=Path, help='JSON результата адаптера приложения')
     compare.add_argument('--accounts', type=Path, required=True)
     compare.add_argument('--window-seconds', type=int, required=True)
-    for command in (debit, bank, api, backup, compare):
+    verify = commands.add_parser('verify-import', help='Проверка добавлений по полным backup до и после')
+    verify.add_argument('input', type=Path, help='Резервная копия до импорта')
+    verify.add_argument('after', type=Path, help='Резервная копия после импорта')
+    verify.add_argument('--expected', type=Path, required=True)
+    verify.add_argument('--timezone', required=True)
+    for command in (debit, bank, api, backup, compare, verify):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'verify-import':
+        expected_bytes = args.expected.read_bytes()
+        expected = json.loads(expected_bytes.decode('utf-8-sig'))
+        before = read_backup(args.input, args.timezone)
+        after = read_backup(args.after, args.timezone)
+        result = verify_additions(before, after, expected)
+        return {**result, 'expected_sha256': hashlib.sha256(expected_bytes).hexdigest()}
     if args.adapter == 'compare':
         return compare_snapshots(args)
     if args.adapter == 'debit-credit-backup':

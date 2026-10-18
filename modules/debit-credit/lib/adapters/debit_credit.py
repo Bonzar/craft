@@ -50,8 +50,12 @@ def parse_row(row: dict, index: int, timezone: str, currencies: dict) -> dict:
         raise ValueError('Не указан счёт операции')
     amount = amount_decimal(row['Сумма'])
     timestamp, _ = parse_date(row['Дата'], timezone)
+    clock = re.search(r'[T ]\d{2}:\d{2}:\d{2}(?:[.,](\d+))?', row['Дата'])
+    precision = 'second' if clock else 'minute'
+    if clock and clock[1]:
+        precision = 'millisecond' if len(clock[1]) <= 3 else 'microsecond'
     return {**record_base('debit-credit', index + 2),
-            'timestamp': timestamp, 'amount': str(amount),
+            'timestamp': timestamp, 'timestamp_precision': precision, 'amount': str(amount),
             'currency': currencies.get(account), 'account': account,
             'other_account': other or None,
             'kind': 'transfer_leg' if other else ('expense' if amount < 0 else 'income'),

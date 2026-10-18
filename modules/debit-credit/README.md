@@ -17,6 +17,7 @@ python3 lib/cli.py debit-credit-backup /путь/копия.dcbackup --timezone 
 python3 lib/cli.py yandex-bank /tmp/opened-cards.json --output /tmp/bank-operations.json
 python3 lib/cli.py yandex-bank-api /tmp/yandex-bank-history-resumed.json --output /tmp/bank-api-normalized.json
 python3 lib/cli.py compare /tmp/bank-operations.json /tmp/dc-snapshot.json --accounts /tmp/accounts.json --window-seconds 120 --output /tmp/comparison.json
+python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
 PYTHONPATH=lib python3 -m unittest discover -s tests -v
 node --test tests/test_capture.js tests/test_queries.js
 python3 lib/build_userscript.py /tmp/yandex-bank-history-reader.user.js
@@ -169,6 +170,29 @@ JSON-файл с правами 0600. Существующий файл не п�
 Источники проверки от 18 октября 2026:
 - [Шаги импорта и выбор повторов](https://debitandcredit.app/help/import-export-importing.html).
 - [Преобразование в переводы](https://debitandcredit.app/help/import-export-converting-transactions.html).
+
+### Контроль результата добавления
+
+`verify-import` читает полные резервные копии до и после через тот же читающий
+адаптер и сравнивает их с ожидаемыми записями. Список ожиданий содержит поля
+общей записи, явную валюту, завершённость и служебные метки. Для стороны перевода
+нужна `transfer_peer_marker` — метка ожидаемой второй стороны.
+
+Проверяются все поля импорта, точность времени и единственность совпадения
+по меткам. У перевода проверяются взаимные ID приложения и правильные метки
+обеих сторон. Это обнаруживает и перепутанные связи двух одинаковых переводов.
+Изменение остатков каждого счёта сравнивается с суммами ожидаемых записей,
+отдельно с учётом и без учёта незавершённых операций.
+
+Изменения и удаления прежних записей, неожиданные новые записи, смена состава
+счетов и ошибки чтения снимков не дают успешной проверки. `ready=true` здесь
+означает совпадение только ожидаемых добавлений. Это не сверка с банком и не
+проверка механизма исправления или удаления старых операций.
+
+CSV сохраняет заявленную точность ISO-даты: секунды не понижаются до минут.
+При проверке файла с двумя сторонами перевода исходные счета, даты, суммы
+и метки читаются обратно перед пробой. Импорт самого файла пока требует
+отдельной проверки в приложении и нового снимка после неё.
 
 ## Яндекс Банк
 

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from contextlib import closing
 from pathlib import Path
 
 from test_adapters import card, export_csv
@@ -83,7 +84,7 @@ class CommandTest(unittest.TestCase):
 
     def test_backup_command_dispatches_to_sqlite_reader(self):
         source, target = self.directory / 'copy.dcbackup', self.directory / 'copy.json'
-        with sqlite3.connect(source) as db:
+        with closing(sqlite3.connect(source)) as db, db:
             db.executescript(SCHEMA)
 
         result = self.run_cli('debit-credit-backup', source, '--timezone', 'Europe/Moscow',
@@ -138,7 +139,7 @@ class CommandTest(unittest.TestCase):
         epoch = (datetime.fromisoformat(stamp) - datetime(2001, 1, 1, tzinfo=timezone.utc)).total_seconds()
         note = '[dc-sync:v1 source=yabank id=new]'
         for path, balance in ((before, 0), (after, 10)):
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 db.executescript(SCHEMA)
                 db.execute('INSERT INTO ZCURRENCY VALUES (1,?)', ('RUB',))
                 db.execute('INSERT INTO ZACCOUNT VALUES (1,?,?,1,?,?,0,0,NULL)',
