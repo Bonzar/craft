@@ -116,6 +116,28 @@ class BankApiTest(unittest.TestCase):
         read_history(value)
         self.assertEqual(value, before)
 
+    def test_missing_account_is_resolved_by_shared_receipt_agreement(self):
+        action = {'action': 'yandexbank://screen.open/pdf_load?agreement_id=wallet-a&product_type=WALLET'}
+        known = detail('known', actions=[action], title={'plain': None, 'compound': {
+            'firstPart': 'Карта Пэй', 'secondPart': 'Округление'}})
+        unknown = detail('unknown', actions=[action], additionalFieldsList=[])
+        result = read_history(snapshot(known, unknown))
+        row = result['records'][1]
+        self.assertEqual(row['account'], 'Карта Пэй')
+        self.assertNotIn('unknown_account', row['issues'])
+        self.assertEqual(row['account_evidence']['witness_ids'], ['known'])
+
+    def test_conflicting_names_for_agreement_require_review(self):
+        action = {'action': 'yandexbank://screen.open/pdf_load?agreement_id=saver-a'}
+        first = detail('one', actions=[action], title={'plain': None, 'compound': {
+            'firstPart': 'Сейв один', 'secondPart': 'Карта Пэй'}})
+        second = detail('two', actions=[action], title={'plain': None, 'compound': {
+            'firstPart': 'Сейв два', 'secondPart': 'Карта Пэй'}})
+        unknown = detail('three', actions=[action], additionalFieldsList=[])
+        row = read_history(snapshot(first, second, unknown))['records'][2]
+        self.assertIsNone(row['account'])
+        self.assertIn('ambiguous_bank_account_identity', row['issues'])
+
 
 if __name__ == '__main__':
     unittest.main()
