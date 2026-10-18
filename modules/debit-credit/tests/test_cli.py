@@ -2,12 +2,14 @@
 
 import json
 import subprocess
+import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from test_adapters import card, export_csv
+from test_backup import SCHEMA
 
 CLI = Path(__file__).resolve().parents[1] / 'lib' / 'cli.py'
 
@@ -66,6 +68,26 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(report['input_count'], 2)
         self.assertEqual(len(report['records']), 1)
         self.assertEqual(report['rejected'][0]['raw']['amount'], 'bad')
+
+    def test_output_with_personal_data_is_only_readable_by_its_owner(self):
+        source, target = self.directory / 'cards.json', self.directory / 'private.json'
+        source.write_text(json.dumps([card()]), encoding='utf-8')
+
+        result = self.run_cli('yandex-bank', source, '--output', target)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+    def test_backup_command_dispatches_to_sqlite_reader(self):
+        source, target = self.directory / 'copy.dcbackup', self.directory / 'copy.json'
+        with sqlite3.connect(source) as db:
+            db.executescript(SCHEMA)
+
+        result = self.run_cli('debit-credit-backup', source, '--timezone', 'Europe/Moscow',
+                              '--from-date', '2026-07-04', '--to-date', '2026-07-05', '--output', target)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(target.read_text())['adapter'], 'debit-credit-backup')
 
 
 if __name__ == '__main__':
