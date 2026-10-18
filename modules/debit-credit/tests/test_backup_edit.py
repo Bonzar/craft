@@ -1,7 +1,10 @@
 """Изолированная правка копии: исходник и несогласованные поля сохраняются."""
 
 import copy
+import json
 import sqlite3
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -123,6 +126,34 @@ class BackupEditTest(unittest.TestCase):
         prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
         self.assertEqual(read_backup(self.target, 'Europe/Moscow')['records'][0]['notes'], 'from WAL')
         self.assertEqual(backup_fingerprint(self.source), before)
+
+    def test_old_sqlite_sidecars_at_destination_prevent_publication(self):
+        sidecar = Path(str(self.target) + '-wal')
+        sidecar.write_bytes(b'old WAL must not be mixed with candidate')
+        with self.assertRaises((ValueError, FileExistsError)):
+            prepare_backup(self.source, self.target, self.plan(), 'Europe/Moscow')
+        self.assertFalse(self.target.exists())
+        self.assertEqual(sidecar.read_bytes(), b'old WAL must not be mixed with candidate')
+
+    def test_cli_writes_candidate_and_private_report_and_refuses_existing_report(self):
+        plan_path = self.source.parent / 'plan.json'
+        report_path = self.source.parent / 'report.json'
+        plan_path.write_text(json.dumps(self.plan(notes='private source note')))
+        cli = Path(__file__).resolve().parents[1] / 'lib/cli.py'
+        args = [sys.executable, str(cli), 'prepare-backup', str(self.source),
+                '--plan', str(plan_path), '--target', str(self.target),
+                '--timezone', 'Europe/Moscow', '--output', str(report_path)]
+        report_path.write_text('keep')
+        denied = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        self.assertEqual(denied.returncode, 2)
+        self.assertFalse(self.target.exists())
+        report_path.unlink()
+        result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(report_path.read_text())['ready'])
+        self.assertTrue(self.target.exists())
+        self.assertEqual(report_path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('private source note', result.stdout + result.stderr)
 
 
 if __name__ == '__main__':
