@@ -147,6 +147,15 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual(row['match'], 'marker')
         self.assertEqual(set(row['differences'][0]), {'account', 'timestamp'})
 
+    def test_millisecond_api_timestamp_can_be_compared_with_app(self):
+        source = operation(timestamp='2026-07-04T10:00:00.388+03:00',
+                           timestamp_precision='millisecond')
+        self.assertEqual(self.compare([source], [entry()])['records'][0]['match'], 'candidate')
+
+    def test_failed_source_operation_requires_review(self):
+        row = self.compare([operation(status='failed', cleared=None)], [entry()])['records'][0]
+        self.assertIn('source_requires_review', row['issues'])
+
 
 if __name__ == '__main__':
     unittest.main()

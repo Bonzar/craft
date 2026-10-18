@@ -11,6 +11,7 @@ from pathlib import Path
 from test_adapters import card, export_csv
 from test_backup import SCHEMA
 from test_matching import MAPPING, entry, operation
+from test_bank_api import snapshot, detail
 
 CLI = Path(__file__).resolve().parents[1] / 'lib' / 'cli.py'
 
@@ -119,6 +120,15 @@ class CommandTest(unittest.TestCase):
         result = self.run_cli('compare', source, source, '--accounts', mapping,
                               '--window-seconds', '120')
         self.assertEqual(result.returncode, 2)
+
+    def test_bank_api_command_reads_completed_collector_file(self):
+        source, target = self.directory / 'api.json', self.directory / 'parsed.json'
+        source.write_text(json.dumps(snapshot(detail())))
+        result = self.run_cli('yandex-bank-api', source, '--output', target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['records'][0]['source_id'], 'feed-a')
+        self.assertEqual(len(report['input_sha256']), 64)
 
 
 if __name__ == '__main__':
