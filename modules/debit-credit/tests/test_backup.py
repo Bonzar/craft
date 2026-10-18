@@ -155,6 +155,50 @@ class BackupTest(unittest.TestCase):
         self.assertIsNone(result['records'][0]['cleared'])
         self.assertFalse(result['ready'])
 
+    def test_restored_records_without_cloud_ids_are_preserved_without_inventing_ids(self):
+        self.insert()
+        self.insert(2)
+        self.db.execute('UPDATE ZACCOUNT SET ZRECORDNAME=NULL')
+        self.db.execute('UPDATE ZTRANSACTION SET ZRECORDNAME=NULL')
+        self.db.commit()
+
+        result = read_backup(self.path, 'Europe/Moscow')
+
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['input_count'], 2)
+        self.assertEqual(len(result['records']), 2)
+        self.assertTrue(all(r['source_id'] is None for r in result['records']))
+        self.assertTrue(all(a['id'] is None for a in result['accounts']))
+        self.assertEqual({r['locator'] for r in result['records']}, {1, 2})
+        self.assertEqual(result['cloud_identity'], {
+            'transactions_without_id': 2, 'accounts_without_id': 2,
+            'local_locators_are_snapshot_only': True})
+
+    def test_restored_transfer_links_use_local_locators_when_cloud_ids_are_empty(self):
+        self.insert(kind=2, amount='-1000', linked=2, category=None)
+        self.insert(2, kind=2, amount='10', account=2, linked=1, category=None)
+        self.db.execute('UPDATE ZTRANSACTION SET ZRECORDNAME=NULL')
+        self.db.commit()
+
+        result = read_backup(self.path, 'Europe/Moscow')
+
+        self.assertTrue(result['ready'])
+        self.assertEqual([r['linked_locator'] for r in result['records']], [2, 1])
+        self.assertEqual([r['linked_id'] for r in result['records']], [None, None])
+        self.assertEqual([r['other_account'] for r in result['records']], ['Наличные', 'Карта'])
+
+    def test_duplicate_present_cloud_ids_still_require_review(self):
+        self.insert()
+        self.insert(2)
+        self.db.execute('UPDATE ZTRANSACTION SET ZRECORDNAME=?', ('same-id',))
+        self.db.commit()
+
+        result = read_backup(self.path, 'Europe/Moscow')
+
+        self.assertFalse(result['ready'])
+        self.assertEqual(len(result['records']), 2)
+        self.assertIn('duplicate_source_id', {i['code'] for i in result['issues']})
+
 
 if __name__ == '__main__':
     unittest.main()
