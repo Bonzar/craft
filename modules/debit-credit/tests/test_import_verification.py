@@ -13,6 +13,7 @@ def leg(identifier, account, other, amount, source_id, linked_id):
             'cleared': True, 'description': '', 'category': None, 'tag': None, 'payee': '',
             'notes': '[dc-sync:v1 source=yabank id=' + source_id + ']',
             'markers': [{'source': 'yabank', 'id': source_id, 'role': None}],
+            'transfer_peer_marker': {'source': 'yabank', 'id': 'in' if source_id == 'out' else 'out', 'role': None},
             'linked_id': linked_id}
 
 
@@ -85,6 +86,25 @@ class ImportVerificationTest(unittest.TestCase):
         report = verify_additions(*values)
         self.assertFalse(report['ready'])
         self.assertEqual(values, before)
+
+    def test_cross_linked_identical_transfers_fail_the_source_pair_check(self):
+        before, after, expected = data()
+        second = copy.deepcopy(expected)
+        for row in second:
+            row['source_id'] += '-two'
+            row['linked_id'] += '-two'
+            row['markers'][0]['id'] += '-two'
+            row['transfer_peer_marker']['id'] += '-two'
+            row['notes'] = row['notes'].replace('id=out]', 'id=out-two]').replace('id=in]', 'id=in-two]')
+        expected.extend(second)
+        after['records'] = copy.deepcopy(expected)
+        after['records'][0]['linked_id'] = 'b-two'
+        after['records'][3]['linked_id'] = 'a'
+        after['records'][1]['linked_id'] = 'a-two'
+        after['records'][2]['linked_id'] = 'b'
+        after['accounts'] = [account('Баллы', '80'), account('Карта', '40')]
+        issues = verify_additions(before, after, expected)['issues']
+        self.assertIn('transfer_peer_marker_differs', {i['code'] for i in issues})
 
 
 if __name__ == '__main__':
