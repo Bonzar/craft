@@ -43,6 +43,21 @@ class CommandTest(unittest.TestCase):
         self.assertNotIn('private merchant', result.stdout + result.stderr)
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
+    def test_resolution_command_scopes_confirmation_and_keeps_hashes(self):
+        from test_source_resolutions import snapshot, resolution
+        source, specs = self.directory / 'source.json', self.directory / 'specs.json'
+        target = self.directory / 'resolved.json'
+        row = operation(account=None, issues=['unknown_account'])
+        source.write_text(json.dumps(snapshot(row)))
+        specs.write_text(json.dumps([resolution(row, set={'account': 'Private Card'})]))
+        result = self.run_cli('resolve-source', source, '--resolutions', specs, '--output', target)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['records'][0]['account'], 'Private Card')
+        self.assertEqual(len(report['resolution_inputs_sha256']['source']), 64)
+        self.assertEqual(len(report['resolution_inputs_sha256']['resolutions']), 64)
+        self.assertNotIn('Private Card', result.stdout + result.stderr)
+
     def test_private_csv_rows_are_written_only_to_explicit_output(self):
         source, target = self.directory / 'source.csv', self.directory / 'result.json'
         source.write_text(export_csv({'Заметки': 'private note'}), encoding='utf-8-sig')
