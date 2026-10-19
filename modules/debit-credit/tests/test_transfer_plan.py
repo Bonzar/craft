@@ -47,13 +47,15 @@ class TransferPlanTest(unittest.TestCase):
         self.assertEqual([x['state'] for x in result['records']], ['ambiguous_pair'] * 4)
 
     def test_existing_markers_prevent_reimport_even_outside_time_window(self):
-        existing = entry(markers=[marker('out')], timestamp='2026-01-01T00:00:00+03:00')
+        existing = entry(markers=[marker('out')], notes='[dc-sync:v1 source=yabank id=out]',
+                         timestamp='2026-01-01T00:00:00+03:00')
         result = plan([leg('out'), leg('in', False)], [existing])
         self.assertEqual(result['selected_pair_count'], 0)
         self.assertIn('already_marked', {x['state'] for x in result['records']})
 
     def test_nearby_expense_with_same_amount_defers_transfer_for_review(self):
-        existing = entry(account='Card', kind='expense', timestamp='2026-07-04T20:00:00+03:00')
+        existing = entry(account='Card', kind='expense', notes='',
+                         timestamp='2026-07-04T20:00:00+03:00')
         result = plan([leg('out'), leg('in', False)], [existing])
         self.assertEqual(result['selected_pair_count'], 0)
         self.assertTrue(all(x['state'] == 'existing_candidate' for x in result['records']))
