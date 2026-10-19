@@ -26,6 +26,7 @@ class DebitCreditModuleTest(unittest.TestCase):
         self.assertTrue(callable(library.apply_resolutions))
         self.assertTrue(callable(library.expand_accounting))
         self.assertTrue(callable(library.add_classification_evidence))
+        self.assertTrue(callable(library.compare_movements))
 
     def test_isolated_adapter_suite_passes_without_external_dependencies(self):
         result = subprocess.run(

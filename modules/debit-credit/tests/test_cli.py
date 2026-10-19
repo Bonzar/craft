@@ -86,6 +86,23 @@ class CommandTest(unittest.TestCase):
         self.assertFalse(report['records'][0]['classification']['approved'])
         self.assertEqual(len(report['classification_input_sha256']), 64)
 
+    def test_movement_command_uses_explicit_period_and_does_not_confirm_balances(self):
+        from test_source_resolutions import snapshot
+        source, ledger = self.directory / 'source.json', self.directory / 'ledger.json'
+        mapping, target = self.directory / 'map.json', self.directory / 'movement.json'
+        source.write_text(json.dumps(snapshot(operation())))
+        ledger.write_text(json.dumps(snapshot(entry())))
+        mapping.write_text(json.dumps(MAPPING))
+        result = self.run_cli('movement-control', source, '--ledger', ledger, '--accounts', mapping,
+                              '--from-date', '2026-07-01', '--to-date', '2026-07-31',
+                              '--timezone', 'Europe/Moscow', '--output', target)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['period']['end'], '2026-08-01T00:00:00+03:00')
+        self.assertEqual(report['records'][0]['completed_difference'], '0')
+        self.assertFalse(report['ready'])
+        self.assertEqual(len(report['movement_inputs_sha256']['source']), 64)
+
     def test_private_csv_rows_are_written_only_to_explicit_output(self):
         source, target = self.directory / 'source.csv', self.directory / 'result.json'
         source.write_text(export_csv({'Заметки': 'private note'}), encoding='utf-8-sig')
