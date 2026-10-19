@@ -27,4 +27,19 @@ function captureBankDom() {
   return { title, date, amount, rows, transferTitles, pointsAmount };
 }
 
-if (typeof module !== 'undefined') module.exports = { captureBankDom };
+/** Read only the visible main-page card tile, never storage or application state.
+ * @returns {{account:string,amount:string,currency:string,balance_type:string,
+ *   blocked_amount:null,raw_text:string}} */
+function captureCardBalanceDom() {
+  const tiles = Array.from(document.querySelectorAll('a[role="button"][href="/my/new-debit"]'))
+    .filter(element => element.getClientRects().length > 0);
+  if (tiles.length !== 1) throw new Error('Однозначный видимый остаток карты не найден');
+  const rawText = tiles[0].innerText.trim();
+  const normalized = rawText.replace(/\s+/g, ' ');
+  const match = /^Карта (-?(?:\d{1,3}(?: \d{3})+|\d+))(?:,(\d{1,2}))? ₽$/.exec(normalized);
+  if (!match) throw new Error('Показанный остаток карты не распознан');
+  return { account: 'Карта Пэй', amount: `${match[1].replace(/ /g, '')}.${(match[2] || '').padEnd(2, '0')}`,
+    currency: 'RUB', balance_type: 'displayed_unspecified', blocked_amount: null, raw_text: rawText };
+}
+
+if (typeof module !== 'undefined') module.exports = { captureBankDom, captureCardBalanceDom };

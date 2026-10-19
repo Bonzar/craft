@@ -259,4 +259,47 @@ async function collectHistory(options) {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { collectHistory, requestHistory, resumeHistory };
+/** @param {object} options @param {string} phase @returns {Promise<object>} */
+async function observeCardBalance(options, phase) {
+  const observedAt = new Date().toISOString();
+  try {
+    const balance = await options.readBalance();
+    if (balance?.account !== 'Карта Пэй' || balance.currency !== 'RUB'
+        || typeof balance.amount !== 'string' || !/^-?\d+\.\d{2}$/.test(balance.amount)
+        || balance.balance_type !== 'displayed_unspecified' || balance.blocked_amount !== null) {
+      throw new Error('Некорректное наблюдение остатка карты');
+    }
+    return { phase, observed_at: observedAt, source_url: options.balanceSourceUrl, balance, error: null };
+  } catch (error) {
+    return { phase, observed_at: observedAt, source_url: options.balanceSourceUrl, balance: null,
+      error: error instanceof Error ? error.message : 'Не удалось прочитать остаток' };
+  }
+}
+
+/** Collect history and retain separate DOM balance observations, including on partial failure.
+ * Equal displayed values do not establish server freshness or an atomic snapshot.
+ * @param {object} options @returns {Promise<object>} */
+async function collectHistoryWithBalance(options) {
+  if (typeof options.readBalance !== 'function'
+      || options.balanceSourceUrl !== 'https://bank.yandex.ru/my') {
+    throw new Error('Остаток читается только с главной страницы банка');
+  }
+  const before = await observeCardBalance(options, 'before');
+  let result, failure;
+  try { result = await collectHistory(options); } catch (error) {
+    if (!error?.partial) throw error;
+    result = error.partial;
+    failure = error;
+  }
+  const after = await observeCardBalance(options, 'after');
+  const output = { ...result, balanceObservations: [before, after], balanceControl: {
+    changed: before.balance && after.balance ? before.balance.amount !== after.balance.amount : null,
+    atomic: false, freshness: 'unknown', reconciled: false,
+  } };
+  if (failure) { failure.partial = output; throw failure; }
+  return output;
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance };
+}

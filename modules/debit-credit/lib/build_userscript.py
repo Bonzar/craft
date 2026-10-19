@@ -6,30 +6,34 @@ from pathlib import Path
 
 HEADER = '''// ==UserScript==
 // @name         Debit & Credit — сбор истории Яндекс Банка
-// @version      0.2.0
+// @version      0.3.0
 // @match        https://bank.yandex.ru/my/transactions-history*
+// @match        https://bank.yandex.ru/my
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 '''
 
 INTERFACE = r'''
+const isBalancePage = window.location.pathname === '/my';
 if (window.location.origin !== 'https://bank.yandex.ru'
-    || !window.location.pathname.startsWith('/my/transactions-history')) {
-  throw new Error('Скрипт работает только в истории банка');
+    || !(isBalancePage || window.location.pathname === '/my/transactions-history')) {
+  throw new Error('Скрипт работает только на главной странице или в истории банка');
 }
 if (document.getElementById('debit-credit-history-reader')) return;
 const panel = document.createElement('div');
 panel.id = 'debit-credit-history-reader';
 panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:white;color:black;padding:14px;border:1px solid #888;border-radius:12px;font:14px system-ui;max-width:340px;box-shadow:0 3px 16px #0003';
 const button = document.createElement('button');
-button.textContent = 'Собрать историю в JSON';
+button.textContent = isBalancePage ? 'Собрать историю и остаток в JSON' : 'Собрать историю в JSON';
 const resumeButton = document.createElement('button');
 resumeButton.textContent = 'Продолжить из JSON';
 resumeButton.style.cssText = 'display:block;margin-top:8px';
 const status = document.createElement('div');
 status.style.cssText = 'margin-top:8px;white-space:pre-wrap';
-status.textContent = 'Только чтение истории. Платежи не выполняются.';
+status.textContent = isBalancePage
+  ? 'История и показанный остаток карты. Платежи не выполняются.'
+  : 'Только история. Для чтения остатка запусти скрипт на главной странице.';
 panel.append(button, resumeButton, status);
 document.body.append(panel);
 
@@ -64,6 +68,19 @@ function showProgress(progress) {
       ? `Страниц: ${progress.pages}. Операций: ${progress.records}.`
       : `Карточки: ${progress.read} из ${progress.total}.`;
   }
+}
+
+function readDisplayedCardBalance() {
+  if (window.location.pathname !== '/my') throw new Error('Главная страница банка больше не открыта');
+  return captureCardBalanceDom();
+}
+
+function describeBalance(result) {
+  if (!result.balanceObservations) return '';
+  const [before, after] = result.balanceObservations;
+  if (before.error || after.error) return '\nОстаток прочитан не полностью. Причины сохранены в JSON.';
+  return `\nОстаток карты: ${before.balance.amount} → ${after.balance.amount} ₽.`
+    + '\nВремя чтения сохранено. Свежесть остатка и учёт блокировок пока не подтверждены.';
 }
 
 resumeButton.addEventListener('click', () => {
@@ -106,12 +123,15 @@ button.addEventListener('click', async () => {
     button.disabled = true;
     resumeButton.disabled = true;
     status.textContent = 'Читаю список операций…';
-    const result = await collectHistory({
+    const collect = isBalancePage ? collectHistoryWithBalance : collectHistory;
+    const result = await collect({
       fromInclusive: start.toISOString(), toExclusive: end.toISOString(), concurrency: 4,
       onProgress: showProgress,
+      readBalance: readDisplayedCardBalance, balanceSourceUrl: 'https://bank.yandex.ru/my',
     });
     result.displayTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     status.textContent = `Собрано ${result.records.length} операций и ${result.details.length} карточек.\nНужно сверить с историей банка.`;
+    status.textContent += describeBalance(result);
     saveResult(result, from, to, false);
   } catch (error) {
     status.textContent = `Сбор остановлен: ${error instanceof Error ? error.message : 'ошибка чтения'}`;
@@ -127,7 +147,9 @@ button.addEventListener('click', async () => {
 def build(output: Path) -> None:
     reader = Path(__file__).with_name('yandex_bank_queries.js').read_text(encoding='utf-8')
     reader = reader.split("\nif (typeof module !== 'undefined')")[0]
-    text = HEADER + '\n(async () => {\n"use strict";\n' + reader + '\n' + INTERFACE + '\n})();\n'
+    capture = Path(__file__).with_name('yandex_bank_capture.js').read_text(encoding='utf-8')
+    capture = capture.split("\nif (typeof module !== 'undefined')")[0]
+    text = HEADER + '\n(async () => {\n"use strict";\n' + reader + '\n' + capture + '\n' + INTERFACE + '\n})();\n'
     descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
         stream.write(text)
