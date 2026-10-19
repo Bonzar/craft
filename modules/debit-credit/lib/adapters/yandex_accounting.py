@@ -84,7 +84,10 @@ def expected_cashback(row: dict) -> dict | None:
     if not row['source_id']:
         raise ValueError('У покупки с кешбэком нужен ID')
     result = deepcopy(row)
-    completed = row['status'] == 'completed'
+    # Старые DOM-снимки не содержат отдельного статуса кешбэка.
+    completed = row.get('cashback_cleared', True if row['status'] == 'completed' else None)
+    if completed is not None and type(completed) is not bool:
+        raise ValueError('Статус завершённости кешбэка должен быть логическим')
     result.update(role='cashback', locator=str(row['locator']) + ':cashback', native_id=None,
                   account=POINTS_ACCOUNT, other_account=None, kind='income',
                   amount=str(amount), currency='YPLUS_POINTS', category='Баллы',
@@ -92,9 +95,9 @@ def expected_cashback(row: dict) -> dict | None:
                   description='Кешбэк — ' + (row.get('description') or 'Покупка'), notes='',
                   timestamp=(datetime.fromisoformat(row['timestamp'])
                              + timedelta(seconds=CASHBACK_DELAY_SECONDS)).isoformat(),
-                  status='completed' if completed else 'unknown',
-                  cleared=True if completed else None,
-                  issues=[] if completed else ['cashback_completion_requires_review'])
+                  status='completed' if completed else 'pending' if completed is False else 'unknown',
+                  cleared=completed,
+                  issues=[] if completed is not None else ['cashback_completion_requires_review'])
     result['accounting'] = {'rule': 'cashback', 'derived': True,
                             'purchase_id': row['source_id'], 'purchase_timestamp': row['timestamp'],
                             'unresolved_fields': ['tag']}

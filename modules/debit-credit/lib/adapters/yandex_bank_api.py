@@ -93,25 +93,27 @@ def read_accounts(title: dict, fields: list, amount: Decimal, currency: str) -> 
 def cashback_hint(detail: dict) -> tuple:
     cashback = detail.get('cashback')
     if cashback is None:
-        return None, []
+        return None, None, []
     try:
         services = cashback['servicesCashback']
         if cashback.get('summary') is not None or not isinstance(services, list) or not services:
-            return None, ['cashback_structure_requires_review']
-        amounts, issues = [], []
+            return None, None, ['cashback_structure_requires_review']
+        amounts, statuses, issues = [], [], []
         for service in services:
             info = service['cashbackInfo']
             if info['partialValue'] is not None or info['totalValue']['money'] is not None:
-                return None, ['cashback_structure_requires_review']
+                return None, None, ['cashback_structure_requires_review']
             amount, unit = read_amount(info['totalValue'], info['direction'])
             if unit != 'YPLUS_POINTS' or amount < 0:
-                return None, ['cashback_structure_requires_review']
+                return None, None, ['cashback_structure_requires_review']
             amounts.append(amount)
-            if info['cashbackStatus'] != 'FULLY':
+            statuses.append(info['cashbackStatus'])
+            if info['cashbackStatus'] not in {'FULLY', 'NONE'}:
                 issues.append('cashback_status_requires_review')
-        return str(sum(amounts, Decimal(0))), issues
+        completed = None if issues else all(status == 'FULLY' for status in statuses)
+        return str(sum(amounts, Decimal(0))), completed, issues
     except (KeyError, TypeError, ValueError):
-        return None, ['cashback_structure_requires_review']
+        return None, None, ['cashback_structure_requires_review']
 
 
 def bank_account_ids(detail: dict) -> list:
@@ -180,7 +182,7 @@ def parse_record(raw: dict, index: int) -> dict:
                    if compound else text(title['plain']))
     account, other, kind = read_accounts(title, fields, amount, currency)
     status, cleared = STATUSES.get(detail['statusCode'], ('unknown', None))
-    hint, issues = cashback_hint(detail)
+    hint, cashback_cleared, issues = cashback_hint(detail)
     if not account:
         issues.append('unknown_account')
     if status == 'unknown':
@@ -203,7 +205,8 @@ def parse_record(raw: dict, index: int) -> dict:
             'amount': str(amount), 'currency': currency, 'account': account, 'other_account': other,
             'kind': kind, 'status': status, 'cleared': cleared, 'description': description,
             'bank_fields': fields, 'bank_category': dict(fields).get('Категория'),
-            'mcc': dict(fields).get('MCC'), 'cashback_hint': hint, 'issues': issues,
+            'mcc': dict(fields).get('MCC'), 'cashback_hint': hint,
+            'cashback_cleared': cashback_cleared, 'issues': issues,
             'raw': {'feed': feed, 'detail': detail}}
 
 
