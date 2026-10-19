@@ -21,6 +21,7 @@ python3 lib/cli.py yandex-bank /tmp/opened-cards.json --output /tmp/bank-operati
 python3 lib/cli.py yandex-bank-api /tmp/yandex-bank-history-resumed.json --output /tmp/bank-api-normalized.json
 python3 lib/cli.py compare /tmp/bank-operations.json /tmp/dc-snapshot.json --accounts /tmp/accounts.json --window-seconds 120 --output /tmp/comparison.json
 python3 lib/cli.py review /tmp/comparison.json --output /tmp/review.json
+python3 lib/cli.py resolve-source /tmp/bank-api-normalized.json --resolutions /tmp/confirmations.json --output /tmp/resolved-source.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
 PYTHONPATH=lib python3 -m unittest discover -s tests -v
 node --test tests/test_capture.js tests/test_queries.js
@@ -76,7 +77,33 @@ JSON-файл с правами 0600. Существующий файл не п�
 к полноте учёта или верности категории и тега. `no_candidate` не доказывает
 пропуск. Неподтверждённая полнота источника и ограничения сопоставления сохраняются.
 Отчёт не разворачивает правила округления и кешбэка, не применяет отдельные
-подтверждения из диалога и не пишет в приложение. `ready` всегда `false`.
+подтверждения из диалога автоматически и не пишет в приложение. `ready` всегда `false`.
+
+### Подтверждения к конкретным операциям
+
+`resolve-source` применяется к исходному результату адаптера до `compare`.
+Вход подтверждений — JSON-массив объектов `source`, `id`, `expect`, `set`, `reason`.
+В `expect` обязательны точные исходные `timestamp`, `amount`, `currency`, `account`,
+`status`, `cleared`, включая `null`. Изменение любого значения, отсутствие или
+повтор ID останавливают применение. `set` допускает только непустые `account`,
+`other_account` и `kind` (`expense`, `income`, `transfer`, `transfer_leg`).
+Подтверждение одной операции не меняет одноимённые счета остальных операций.
+
+Необязательное `same_operation_as: {"source": "yabank", "id": "other-id"}`
+указывает второе отображение основной операции. Обе исходные строки остаются,
+их суммы и валюты не заменяются. Цель должна существовать ровно один раз,
+цепочки связей запрещены. `review` показывает `confirmed_source_alias` со ссылкой
+на основной случай и сохраняет прежнюю оценку совпадений в `source_match_assessment`.
+Это связь представлений, она не создаёт перевод между счетами.
+
+Применённые поля и прежние значения сохраняются в `resolution` каждой строки,
+весь исходный JSON и файл подтверждений связаны хешами. Общие замечания источника
+остаются в результате, снимается только `unknown_account` у явно указанной строки.
+`reason` хранит основание, но сам текст не доказывает согласие: вызывающий агент
+должен использовать только действительно подтверждённые человеком случаи.
+Файл — воспроизводимый вход текущего разбора, не обязательный локальный журнал.
+После записи устойчивую связь обеспечивают метки в приложении. Файлы с реальными
+операциями не входят в Git. Сам `resolve-source` не меняет приложение.
 
 ## Debit & Credit
 

@@ -15,7 +15,8 @@ def snapshot(*records):
 
 def resolution(record, **changes):
     return {'source': record['source'], 'id': record['source_id'],
-            'expect': {key: record[key] for key in ('timestamp', 'amount', 'currency', 'account')},
+            'expect': {key: record[key] for key in
+                       ('timestamp', 'amount', 'currency', 'account', 'status', 'cleared')},
             'set': {}, 'reason': 'Подтверждено человеком для этого платежа', **changes}
 
 

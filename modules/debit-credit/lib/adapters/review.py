@@ -80,11 +80,32 @@ def build_groups(cases: list) -> list:
     return list(grouped.values())
 
 
+def link_confirmed_aliases(cases: list) -> None:
+    positions = {}
+    for case in cases:
+        source = case['source']
+        positions.setdefault((source['source'], source['source_id']), []).append(case['case_index'])
+    for case in cases:
+        alias = case['source'].get('resolution', {}).get('same_operation_as')
+        if not alias:
+            continue
+        targets = positions.get((alias['source'], alias['id']), [])
+        if len(targets) != 1 or targets[0] == case['case_index']:
+            raise ValueError('Неоднозначная цель подтверждённого отображения')
+        target = cases[targets[0]]
+        if target['source'].get('resolution', {}).get('same_operation_as'):
+            raise ValueError('Цель связи должна быть основной операцией')
+        # Локально дополняем только что созданные случаи, вход не меняется.
+        case.update(same_operation_case_index=targets[0],
+                    source_match_assessment=case['assessment'], assessment='confirmed_source_alias')
+
+
 def build_review(comparison: dict) -> dict:
     """Группы помогают разбору, их число не равно числу вопросов человеку."""
     validate_comparison(comparison)
     ledger = comparison['ledger_records']
     cases = [make_case(i, row, ledger) for i, row in enumerate(comparison['records'])]
+    link_confirmed_aliases(cases)
     groups = build_groups(cases)
     if sorted(i for group in groups for i in group['case_indices']) != list(range(len(cases))):
         raise RuntimeError('Не все операции попали в разбор ровно один раз')

@@ -5,7 +5,7 @@ from copy import deepcopy
 
 from .matching import validate_records
 
-EXPECTED_FIELDS = {'timestamp', 'amount', 'currency', 'account'}
+EXPECTED_FIELDS = {'timestamp', 'amount', 'currency', 'account', 'status', 'cleared'}
 EDITABLE_FIELDS = {'account', 'other_account', 'kind'}
 KINDS = {'expense', 'income', 'transfer', 'transfer_leg'}
 
@@ -94,6 +94,12 @@ def apply_resolutions(snapshot: dict, specs: list) -> dict:
     validate_records(result['records'])
     result['resolution_count'] = len(selected)
     result['ready'] = False
-    result['issues'] = [{'locator': row['locator'], 'code': code}
-                        for row in result['records'] for code in row.get('issues', [])]
+    old_record_issues = {(row['locator'], code) for row in snapshot['records']
+                         for code in row.get('issues', [])}
+    global_issues = [issue for issue in snapshot.get('issues', [])
+                     if set(issue) != {'locator', 'code'}
+                     or (issue['locator'], issue['code']) not in old_record_issues]
+    result['issues'] = deepcopy(global_issues) + [
+        {'locator': row['locator'], 'code': code}
+        for row in result['records'] for code in row.get('issues', [])]
     return result

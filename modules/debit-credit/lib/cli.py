@@ -18,6 +18,7 @@ from adapters.restore_verification import verify_restoration
 from adapters.backup_edit import prepare_backup
 from adapters.backup_registry import register_backup
 from adapters.review import build_review
+from adapters.source_resolutions import apply_resolutions
 
 
 def parser() -> argparse.ArgumentParser:
@@ -43,6 +44,9 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument('--window-seconds', type=int, required=True)
     review = commands.add_parser('review', help='Полный разбор сопоставления с контекстом и группами')
     review.add_argument('input', type=Path, help='JSON результата compare')
+    resolve = commands.add_parser('resolve-source', help='Подтверждения для точных операций источника')
+    resolve.add_argument('input', type=Path)
+    resolve.add_argument('--resolutions', type=Path, required=True)
     verify = commands.add_parser('verify-import', help='Проверка добавлений по полным backup до и после')
     verify.add_argument('input', type=Path, help='Резервная копия до импорта')
     verify.add_argument('after', type=Path, help='Резервная копия после импорта')
@@ -64,12 +68,19 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--source-filename', required=True)
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
-    for command in (debit, bank, api, backup, compare, review, verify, restore, prepare, register):
+    for command in (debit, bank, api, backup, compare, review, resolve, verify, restore, prepare, register):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'resolve-source':
+        content, specs = args.input.read_bytes(), args.resolutions.read_bytes()
+        result = apply_resolutions(json.loads(content.decode('utf-8-sig')),
+                                   json.loads(specs.decode('utf-8-sig')))
+        return {**result, 'resolution_inputs_sha256': {
+            'source': hashlib.sha256(content).hexdigest(),
+            'resolutions': hashlib.sha256(specs).hexdigest()}}
     if args.adapter == 'review':
         content = args.input.read_bytes()
         result = build_review(json.loads(content.decode('utf-8-sig')))
