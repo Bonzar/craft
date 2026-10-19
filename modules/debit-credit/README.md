@@ -20,6 +20,7 @@ python3 lib/cli.py debit-credit-backup /путь/копия.dcbackup --timezone 
 python3 lib/cli.py yandex-bank /tmp/opened-cards.json --output /tmp/bank-operations.json
 python3 lib/cli.py yandex-bank-api /tmp/yandex-bank-history-resumed.json --output /tmp/bank-api-normalized.json
 python3 lib/cli.py compare /tmp/bank-operations.json /tmp/dc-snapshot.json --accounts /tmp/accounts.json --window-seconds 120 --output /tmp/comparison.json
+python3 lib/cli.py review /tmp/comparison.json --output /tmp/review.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
 PYTHONPATH=lib python3 -m unittest discover -s tests -v
 node --test tests/test_capture.js tests/test_queries.js
@@ -56,6 +57,26 @@ JSON-файл с правами 0600. Существующий файл не п�
 Ни пустой список, ни успешный разбор не доказывают полноту банковской истории.
 Локальный JSON — переносимый промежуточный результат запуска, не обязательный
 журнал. Повторный запуск строит его заново из источников.
+
+## Разбор перед уточнениями
+
+`review` читает результат `compare` и сохраняет все исходные случаи, отклонённые
+строки, кандидатов с их полями и отличиями, а также записи приложения без
+сопоставления. Вопросу доступны даты, суммы, счета, описание, заметки, категории
+и теги кандидатов. Сырые ответы остаются во входном файле, который связан хешем.
+
+Группы собираются по источнику, счёту, валюте, направлению суммы, названию,
+статусу и результату сопоставления. Все случаи входят ровно в одну группу,
+одинаковые операции сохраняются по отдельности. Группа содержит полный список
+случаев, их число и границы дат. Это заготовка разбора, не правило классификации
+и не утверждённый пакет для записи. `human_question_count` остаётся `null`:
+число групп не означает число вопросов человеку.
+
+`marked_fields_match` относится только к полям, проверенным `compare`, а не
+к полноте учёта или верности категории и тега. `no_candidate` не доказывает
+пропуск. Неподтверждённая полнота источника и ограничения сопоставления сохраняются.
+Отчёт не разворачивает правила округления и кешбэка, не применяет отдельные
+подтверждения из диалога и не пишет в приложение. `ready` всегда `false`.
 
 ## Debit & Credit
 

@@ -17,6 +17,7 @@ from adapters.import_verification import verify_additions
 from adapters.restore_verification import verify_restoration
 from adapters.backup_edit import prepare_backup
 from adapters.backup_registry import register_backup
+from adapters.review import build_review
 
 
 def parser() -> argparse.ArgumentParser:
@@ -40,6 +41,8 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument('ledger', type=Path, help='JSON результата адаптера приложения')
     compare.add_argument('--accounts', type=Path, required=True)
     compare.add_argument('--window-seconds', type=int, required=True)
+    review = commands.add_parser('review', help='Полный разбор сопоставления с контекстом и группами')
+    review.add_argument('input', type=Path, help='JSON результата compare')
     verify = commands.add_parser('verify-import', help='Проверка добавлений по полным backup до и после')
     verify.add_argument('input', type=Path, help='Резервная копия до импорта')
     verify.add_argument('after', type=Path, help='Резервная копия после импорта')
@@ -61,12 +64,16 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--source-filename', required=True)
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
-    for command in (debit, bank, api, backup, compare, verify, restore, prepare, register):
+    for command in (debit, bank, api, backup, compare, review, verify, restore, prepare, register):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'review':
+        content = args.input.read_bytes()
+        result = build_review(json.loads(content.decode('utf-8-sig')))
+        return {**result, 'comparison_sha256': hashlib.sha256(content).hexdigest()}
     if args.adapter == 'register-backup':
         if args.output and (args.output.exists() or args.output.is_symlink()):
             raise FileExistsError('Отчёт должен быть новым отдельным файлом')
