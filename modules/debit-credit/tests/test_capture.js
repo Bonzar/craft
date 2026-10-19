@@ -56,3 +56,30 @@ test('closed operation dialog is rejected', () => {
 test('loading skeleton is rejected before fields are read', () => {
   assert.throws(captureWithDom({ loaded: false }), /ещё не загружена/);
 });
+
+function captureBalanceWithDom(texts) {
+  const sandbox = { document: { querySelectorAll() {
+    return texts.map(innerText => ({ innerText, getClientRects: () => [1] }));
+  } }, module: { exports: {} } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,
+    '../lib/yandex_bank_capture.js'), 'utf8'), sandbox);
+  return () => sandbox.module.exports.captureCardBalanceDom();
+}
+
+test('Displayed zero card balance is retained without claiming blocked funds are zero', () => {
+  const result = captureBalanceWithDom(['Карта\n0 ₽'])();
+  assert.equal(result.amount, '0.00');
+  assert.equal(result.currency, 'RUB');
+  assert.equal(result.blocked_amount, null);
+  assert.equal(result.balance_type, 'displayed_unspecified');
+});
+
+test('Displayed card balance is read with kopecks and grouped digits', () => {
+  assert.equal(captureBalanceWithDom(['Карта\n12 345,67 ₽'])().amount, '12345.67');
+});
+
+test('Missing, masked or ambiguous card balances are rejected instead of becoming zero', () => {
+  for (const texts of [[], ['Карта ••• ₽'], ['Карта 1 ₽', 'Карта 2 ₽']]) {
+    assert.throws(captureBalanceWithDom(texts), /остаток/);
+  }
+});

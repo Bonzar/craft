@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectHistory, requestHistory, resumeHistory } = require('../lib/yandex_bank_queries.js');
+const { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance } = require('../lib/yandex_bank_queries.js');
 
 const scope = {
   fromInclusive: '2026-07-04T00:00:00+03:00',
@@ -9,6 +9,45 @@ const scope = {
 const item = (id, extra = {}) => ({ id, date: '2026-07-04T10:00:00+03:00', ...extra });
 const page = (items, cursor = null, pendingItems = []) => ({
   getTransactionsFeedPfm: { items, pendingItems, cursor, analytics: [] },
+});
+
+const balance = amount => ({ account: 'Карта Пэй', amount, currency: 'RUB',
+  balance_type: 'displayed_unspecified', blocked_amount: null });
+
+test('Balance observations bracket history collection without claiming an atomic checkpoint', async () => {
+  let reads = 0;
+  const result = await collectHistoryWithBalance({ ...scope, includeDetails: false,
+    request: async () => page([]), readBalance: () => balance(reads++ ? '2.00' : '1.00'),
+    balanceSourceUrl: 'https://bank.yandex.ru/my',
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.balanceObservations.length, 2);
+  assert.equal(result.balanceObservations[0].phase, 'before');
+  assert.equal(result.balanceObservations[1].phase, 'after');
+  assert.match(result.balanceObservations[0].observed_at, /Z$/);
+  assert.equal(result.balanceControl.changed, true);
+  assert.equal(result.balanceControl.atomic, false);
+  assert.equal(result.balanceControl.freshness, 'unknown');
+});
+
+test('Missing balance preserves a complete history with explicit observation errors', async () => {
+  const result = await collectHistoryWithBalance({ ...scope, includeDetails: false,
+    request: async () => page([]), readBalance: () => { throw new Error('hidden'); },
+    balanceSourceUrl: 'https://bank.yandex.ru/my',
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.balanceObservations.length, 2);
+  assert.equal(result.balanceObservations[0].balance, null);
+  assert.equal(result.balanceControl.changed, null);
+  assert.equal(result.balanceObservations[0].error, 'hidden');
+});
+
+test('Partial history retains balance observations when a history request fails', async () => {
+  await assert.rejects(collectHistoryWithBalance({ ...scope,
+    request: async () => { throw new Error('offline'); }, readBalance: () => balance('0.00'),
+    balanceSourceUrl: 'https://bank.yandex.ru/my',
+  }), error => error.partial.complete === false
+    && error.partial.balanceObservations.length === 2);
 });
 
 test('all cursor pages and distinct IDs are retained', async () => {

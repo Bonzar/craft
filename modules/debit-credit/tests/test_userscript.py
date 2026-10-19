@@ -16,6 +16,9 @@ class UserscriptBuildTest(unittest.TestCase):
         self.assertNotIn('module.exports', text)
         self.assertNotIn('document.cookie', text)
         self.assertIn('@match        https://bank.yandex.ru/my/transactions-history*', text)
+        self.assertIn('@match        https://bank.yandex.ru/my', text)
+        self.assertIn('collectHistoryWithBalance', text)
+        self.assertIn('function captureCardBalanceDom', text)
 
     def test_existing_script_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:
