@@ -21,6 +21,7 @@ python3 lib/cli.py yandex-bank /tmp/opened-cards.json --output /tmp/bank-operati
 python3 lib/cli.py yandex-bank-api /tmp/yandex-bank-history-resumed.json --output /tmp/bank-api-normalized.json
 python3 lib/cli.py compare /tmp/bank-operations.json /tmp/dc-snapshot.json --accounts /tmp/accounts.json --window-seconds 120 --output /tmp/comparison.json
 python3 lib/cli.py review /tmp/comparison.json --output /tmp/review.json
+python3 lib/cli.py classification-evidence /tmp/review.json --output /tmp/classification.json
 python3 lib/cli.py resolve-source /tmp/bank-api-normalized.json --resolutions /tmp/confirmations.json --output /tmp/resolved-source.json
 python3 lib/cli.py yandex-accounting /tmp/resolved-source.json --parent-window-seconds 120 --output /tmp/expected-source.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
@@ -139,6 +140,31 @@ ID. Обратные переводы и обычные переводы без 
 ожидаемыми строками, полнота этой связи проверяется. `coverage` остаётся оценкой
 чтения источника, а не правильности учёта. Повторный разворот правил запрещён.
 Это ожидаемые записи для проверки, не утверждённый план изменения приложения.
+
+### Предложения категорий по прежним записям
+
+`classification-evidence` дополняет `review` профилями с вариантами категорий,
+типов операции, примерами описаний и тегов. Профиль ограничен источником, счётом,
+валютой, направлением, названием операции, ролью и MCC. Для каждого примера
+сохранены точные индексы случая и строки приложения. Исходные случаи не меняются.
+
+Основанием служат только завершённые операции без замечаний с единственным
+кандидатом или меткой. Кандидат с отличиями финансовых полей, общей ссылкой из
+нескольких исходных записей, составной категорией или переводом не становится
+основанием. Временное отличие допустимо как пример для проверки человеком,
+а не как доказательство идентичности. Производные записи и округления не обучают
+классификацию по своей категории.
+
+Одна категория в примерах означает `single_category_evidence`, несколько —
+`conflicting_category_evidence`, отсутствие — `no_category_evidence`. Это сведения
+для предложения, не автоматическое одобрение. Категории, заданные правилом кешбэка
+и дохода округления, показываются отдельно. Для расхода округления нужен контекст
+покупки. Теги примеров не присваиваются новым операциям по продавцу.
+
+`classification.approved` и общий `ready` остаются `false`. Число профилей не
+считается числом вопросов или числом пропусков. Команда не пишет в приложение
+или Craft. Полные сведения лежат только в указанном приватном JSON, stdout
+содержит сводку. Вход связан `classification_input_sha256`.
 
 ## Debit & Credit
 

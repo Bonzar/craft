@@ -12,7 +12,9 @@ from .adapters.backup_registry import register_backup
 from .adapters.review import build_review
 from .adapters.source_resolutions import apply_resolutions
 from .adapters.yandex_accounting import expand_accounting
+from .adapters.classification import add_classification_evidence
 
 __all__ = ['read_csv', 'read_backup', 'read_cards', 'read_history', 'compare_records',
            'verify_additions', 'verify_restoration', 'prepare_backup', 'backup_fingerprint',
-           'register_backup', 'build_review', 'apply_resolutions', 'expand_accounting']
+           'register_backup', 'build_review', 'apply_resolutions', 'expand_accounting',
+           'add_classification_evidence']

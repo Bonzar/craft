@@ -20,6 +20,7 @@ from adapters.backup_registry import register_backup
 from adapters.review import build_review
 from adapters.source_resolutions import apply_resolutions
 from adapters.yandex_accounting import expand_accounting
+from adapters.classification import add_classification_evidence
 
 
 def parser() -> argparse.ArgumentParser:
@@ -45,6 +46,8 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument('--window-seconds', type=int, required=True)
     review = commands.add_parser('review', help='Полный разбор сопоставления с контекстом и группами')
     review.add_argument('input', type=Path, help='JSON результата compare')
+    classification = commands.add_parser('classification-evidence', help='Варианты категорий по истории')
+    classification.add_argument('input', type=Path, help='JSON результата review')
     resolve = commands.add_parser('resolve-source', help='Подтверждения для точных операций источника')
     resolve.add_argument('input', type=Path)
     resolve.add_argument('--resolutions', type=Path, required=True)
@@ -72,13 +75,17 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--source-filename', required=True)
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
-    for command in (debit, bank, api, backup, compare, review, resolve, accounting,
+    for command in (debit, bank, api, backup, compare, review, classification, resolve, accounting,
                     verify, restore, prepare, register):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'classification-evidence':
+        content = args.input.read_bytes()
+        result = add_classification_evidence(json.loads(content.decode('utf-8-sig')))
+        return {**result, 'classification_input_sha256': hashlib.sha256(content).hexdigest()}
     if args.adapter == 'yandex-accounting':
         content = args.input.read_bytes()
         result = expand_accounting(json.loads(content.decode('utf-8-sig')),
