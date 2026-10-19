@@ -22,6 +22,7 @@ python3 lib/cli.py yandex-bank-api /tmp/yandex-bank-history-resumed.json --outpu
 python3 lib/cli.py compare /tmp/bank-operations.json /tmp/dc-snapshot.json --accounts /tmp/accounts.json --window-seconds 120 --output /tmp/comparison.json
 python3 lib/cli.py review /tmp/comparison.json --output /tmp/review.json
 python3 lib/cli.py classification-evidence /tmp/review.json --output /tmp/classification.json
+python3 lib/cli.py movement-control /tmp/expected-source.json --ledger /tmp/dc-snapshot.json --accounts /tmp/accounts.json --from-date 2026-01-01 --to-date 2026-10-18 --timezone Europe/Moscow --output /tmp/movement.json
 python3 lib/cli.py resolve-source /tmp/bank-api-normalized.json --resolutions /tmp/confirmations.json --output /tmp/resolved-source.json
 python3 lib/cli.py yandex-accounting /tmp/resolved-source.json --parent-window-seconds 120 --output /tmp/expected-source.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
@@ -165,6 +166,41 @@ ID. Обратные переводы и обычные переводы без 
 считается числом вопросов или числом пропусков. Команда не пишет в приложение
 или Craft. Полные сведения лежат только в указанном приватном JSON, stdout
 содержит сводку. Вход связан `classification_input_sha256`.
+
+### Движение по счетам
+
+`movement-control` сравнивает движения переданного источника и приложения по
+счетам и валютам. Можно передать исходные или ожидаемые учётные записи, но
+второй вариант использует даты правил учёта, включая сдвиг кешбэка. Это сравнение
+движения, а не чтение банковских остатков. Период задаётся датами и часовым
+поясом, начало включается, конец — начало следующего дня после `--to-date`.
+
+По каждой стороне отдельно считаются число записей, доходы, расходы и итог для
+завершённых и незавершённых операций. Разницы считаются только внутри одного
+счёта и валюты. Применяются явные соответствия счетов и единиц из карты счетов.
+Ни разные валюты, ни неизвестные курсы не складываются.
+
+Каждая прочитанная строка получает результат в `source_dispositions` или
+`ledger_dispositions`: учтена, вне периода, подтверждённое второе отображение,
+неуспешная или отменённая, перевод внутри одного счёта приложения либо неясная.
+Запланированные и удалённые записи приложения не включаются. Несопоставленные
+счета и неизвестная завершённость не исчезают, а остаются с причиной.
+
+Счета приложения вне переданной карты источников показываются отдельно в
+`uncovered_ledger_accounts`, не сравниваются с нулевым движением банка. Даже
+сопоставленный счёт может покрываться источником лишь частично, например внешняя
+карта, оплата с которой видна только в одном сервисе. Поэтому у каждого счёта
+`source_coverage_verified: false` до отдельного подтверждения полноты.
+
+`opening_balance` и `closing_balance` остаются `null`, `ready` — `false`, даже
+когда разница движения равна нулю. Нужны подтверждённые остатки на один момент
+для всех источников объединённого счёта и проверка состава операций. Коррекция
+остатка для сокрытия разницы этой командой не создаётся.
+
+`records` содержит сводки счетов, `input_count` — их количество. Количество
+исходных строк отдельно в `source_input_count` и `ledger_input_count`, отказы
+парсеров и их замечания сохраняются в `input_rejections` и `input_issues`.
+Все входы связаны хешами `movement_inputs_sha256`. Команда не меняет приложение.
 
 ## Debit & Credit
 

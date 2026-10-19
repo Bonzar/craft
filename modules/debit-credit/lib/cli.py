@@ -5,8 +5,9 @@ import hashlib
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from adapters.debit_credit import read_csv
 from adapters.debit_credit_backup import read_backup
@@ -21,6 +22,7 @@ from adapters.review import build_review
 from adapters.source_resolutions import apply_resolutions
 from adapters.yandex_accounting import expand_accounting
 from adapters.classification import add_classification_evidence
+from adapters.movement_control import compare_movements
 
 
 def parser() -> argparse.ArgumentParser:
@@ -48,6 +50,13 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument('input', type=Path, help='JSON результата compare')
     classification = commands.add_parser('classification-evidence', help='Варианты категорий по истории')
     classification.add_argument('input', type=Path, help='JSON результата review')
+    movement = commands.add_parser('movement-control', help='Движение по счетам без подтверждения остатков')
+    movement.add_argument('input', type=Path)
+    movement.add_argument('--ledger', type=Path, required=True)
+    movement.add_argument('--accounts', type=Path, required=True)
+    movement.add_argument('--from-date', required=True)
+    movement.add_argument('--to-date', required=True)
+    movement.add_argument('--timezone', required=True)
     resolve = commands.add_parser('resolve-source', help='Подтверждения для точных операций источника')
     resolve.add_argument('input', type=Path)
     resolve.add_argument('--resolutions', type=Path, required=True)
@@ -75,13 +84,15 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--source-filename', required=True)
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
-    for command in (debit, bank, api, backup, compare, review, classification, resolve, accounting,
+    for command in (debit, bank, api, backup, compare, review, classification, movement, resolve, accounting,
                     verify, restore, prepare, register):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'movement-control':
+        return movement_snapshot(args)
     if args.adapter == 'classification-evidence':
         content = args.input.read_bytes()
         result = add_classification_evidence(json.loads(content.decode('utf-8-sig')))
@@ -179,6 +190,19 @@ def compare_snapshots(args: argparse.Namespace) -> dict:
             'ledger_input': {key: value for key, value in ledger.items() if key != 'records'},
             'inputs_sha256': {'source': source_hash, 'ledger': ledger_hash,
                               'accounts': hashlib.sha256(map_bytes).hexdigest()}}
+
+
+def movement_snapshot(args: argparse.Namespace) -> dict:
+    source, source_hash = read_snapshot(args.input)
+    ledger, ledger_hash = read_snapshot(args.ledger)
+    map_bytes = args.accounts.read_bytes()
+    mapping = json.loads(map_bytes.decode('utf-8-sig'))
+    zone = ZoneInfo(args.timezone)
+    start = datetime.combine(date.fromisoformat(args.from_date), time.min, zone)
+    end = datetime.combine(date.fromisoformat(args.to_date) + timedelta(days=1), time.min, zone)
+    result = compare_movements(source, ledger, mapping, start, end)
+    return {**result, 'movement_inputs_sha256': {'source': source_hash, 'ledger': ledger_hash,
+                                               'accounts': hashlib.sha256(map_bytes).hexdigest()}}
 
 
 def main(argv: list[str] | None = None) -> int:
