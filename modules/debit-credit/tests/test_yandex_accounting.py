@@ -92,3 +92,13 @@ class YandexAccountingTest(unittest.TestCase):
         expanded = expand_accounting(snapshot(purchase()), parent_window_seconds=120)
         with self.assertRaises(ValueError):
             expand_accounting(expanded, parent_window_seconds=120)
+
+    def test_derived_credit_does_not_claim_purchase_account_evidence_or_confirmation(self):
+        row = purchase(bank_account_ids=['card-agreement'], bank_fields=[['Способ оплаты', 'Карта Пэй']],
+                       resolution={'set': {'account': 'Карта Пэй'}, 'reason': 'Only purchase'},
+                       account_evidence={'kind': 'receipt_agreement'})
+        derived = expand_accounting(snapshot(row), parent_window_seconds=120)['records'][1]
+        self.assertEqual(derived['bank_account_ids'], [])
+        self.assertEqual(derived['bank_fields'], [])
+        self.assertNotIn('resolution', derived)
+        self.assertNotIn('account_evidence', derived)
