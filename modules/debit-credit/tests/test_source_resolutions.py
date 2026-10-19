@@ -73,3 +73,10 @@ class SourceResolutionsTest(unittest.TestCase):
         broken['input_count'] = 2
         with self.assertRaises(ValueError):
             apply_resolutions(broken, [])
+
+    def test_source_level_failures_survive_record_confirmation(self):
+        row = operation(account=None, issues=['unknown_account'])
+        source = snapshot(row)
+        source['issues'] = [{'code': 'incomplete_page'}, {'locator': 1, 'code': 'unknown_account'}]
+        result = apply_resolutions(source, [resolution(row, set={'account': 'Карта'})])
+        self.assertEqual(result['issues'], [{'code': 'incomplete_page'}])
