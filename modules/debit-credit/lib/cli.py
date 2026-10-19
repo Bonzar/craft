@@ -16,18 +16,33 @@ from adapters.matching import compare_records
 from adapters.yandex_bank_api import read_history
 from adapters.import_verification import verify_additions
 from adapters.restore_verification import verify_restoration
-from adapters.backup_edit import prepare_backup
+from adapters.backup_edit import prepare_backup, backup_fingerprint
 from adapters.backup_registry import register_backup
 from adapters.review import build_review
 from adapters.source_resolutions import apply_resolutions
 from adapters.yandex_accounting import expand_accounting
 from adapters.classification import add_classification_evidence
 from adapters.movement_control import compare_movements
+from adapters.transfer_plan import build_transfer_plan
+
+
+def transfer_command(commands):
+    command = commands.add_parser('plan-transfers', help='План новых переводов от полной копии')
+    command.add_argument('input', type=Path)
+    command.add_argument('--backup', type=Path, required=True)
+    command.add_argument('--accounts', type=Path, required=True)
+    command.add_argument('--from-date', required=True)
+    command.add_argument('--to-date', required=True)
+    command.add_argument('--timezone', required=True)
+    command.add_argument('--pair-window-seconds', type=int, required=True)
+    command.add_argument('--ledger-window-seconds', type=int, required=True)
+    return command
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description='Адаптеры учёта и подготовка отдельных резервных копий')
     commands = result.add_subparsers(dest='adapter', required=True)
+    transfers = transfer_command(commands)
     debit = commands.add_parser('debit-credit', help='Чтение русского CSV приложения')
     debit.add_argument('input', type=Path)
     debit.add_argument('--timezone', required=True, help='Например Europe/Moscow')
@@ -85,12 +100,14 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
     for command in (debit, bank, api, backup, compare, review, classification, movement, resolve, accounting,
-                    verify, restore, prepare, register):
+                    verify, restore, prepare, register, transfers):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'plan-transfers':
+        return transfer_snapshot(args)
     if args.adapter == 'movement-control':
         return movement_snapshot(args)
     if args.adapter == 'classification-evidence':
@@ -122,7 +139,7 @@ def normalize(args: argparse.Namespace) -> dict:
     if args.adapter == 'prepare-backup':
         if args.output and (args.output.exists() or args.output.resolve() == args.target.resolve()):
             raise FileExistsError('Отчёт должен быть новым отдельным файлом')
-        plan = json.loads(args.plan.read_text(encoding='utf-8-sig'))
+        plan = extract_backup_plan(json.loads(args.plan.read_text(encoding='utf-8-sig')))
         return prepare_backup(args.input, args.target, plan, args.timezone)
     if args.adapter == 'verify-restore':
         inputs = backup_hashes(args.input, args.after)
@@ -203,6 +220,39 @@ def movement_snapshot(args: argparse.Namespace) -> dict:
     result = compare_movements(source, ledger, mapping, start, end)
     return {**result, 'movement_inputs_sha256': {'source': source_hash, 'ledger': ledger_hash,
                                                'accounts': hashlib.sha256(map_bytes).hexdigest()}}
+
+
+def transfer_snapshot(args: argparse.Namespace) -> dict:
+    source, source_hash = read_snapshot(args.input)
+    fingerprint = backup_fingerprint(args.backup)
+    ledger = read_backup(args.backup, args.timezone)
+    map_bytes = args.accounts.read_bytes()
+    mapping = json.loads(map_bytes.decode('utf-8-sig'))
+    zone = ZoneInfo(args.timezone)
+    start = datetime.combine(date.fromisoformat(args.from_date), time.min, zone)
+    end = datetime.combine(date.fromisoformat(args.to_date) + timedelta(days=1), time.min, zone)
+    result = build_transfer_plan(source, ledger, mapping, start, end,
+        pair_window_seconds=args.pair_window_seconds, ledger_window_seconds=args.ledger_window_seconds)
+    if backup_fingerprint(args.backup) != fingerprint:
+        raise ValueError('Исходная резервная копия изменилась во время подготовки плана')
+    plan = ({'schema_version': 1, 'source_sha256': fingerprint, 'updates': [],
+             'additions': result['additions']} if result['additions'] else None)
+    return {**result, 'backup_plan': plan, 'backup_records': ledger['input_count'],
+            'inputs_sha256': {'source': source_hash, 'backup': fingerprint,
+                              'accounts': hashlib.sha256(map_bytes).hexdigest()}}
+
+
+def extract_backup_plan(value: dict) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError('Нужен объект плана')
+    if value.get('adapter') != 'transfer-plan':
+        return value
+    plan = value.get('backup_plan')
+    if (not isinstance(plan, dict) or plan.get('additions') != value.get('additions')
+            or len(plan.get('additions', [])) != 2 * value.get('selected_pair_count', 0)
+            or plan.get('source_sha256') != value.get('inputs_sha256', {}).get('backup')):
+        raise ValueError('Отчёт не содержит согласованного непустого плана')
+    return plan
 
 
 def main(argv: list[str] | None = None) -> int:
