@@ -11,12 +11,12 @@ from .adapters.backup_edit import prepare_backup, backup_fingerprint
 from .adapters.backup_registry import register_backup
 from .adapters.review import build_review
 from .adapters.source_resolutions import apply_resolutions
-from .adapters.yandex_accounting import expand_accounting
+from .adapters.yandex_accounting import expand_accounting, plan_cashback_confirmations
 from .adapters.classification import add_classification_evidence
 from .adapters.movement_control import compare_movements
 from .adapters.transfer_plan import build_transfer_plan
 
 __all__ = ['read_csv', 'read_backup', 'read_cards', 'read_history', 'compare_records',
            'verify_additions', 'verify_restoration', 'prepare_backup', 'backup_fingerprint',
-           'register_backup', 'build_review', 'apply_resolutions', 'expand_accounting',
+           'register_backup', 'build_review', 'apply_resolutions', 'expand_accounting', 'plan_cashback_confirmations',
            'add_classification_evidence', 'compare_movements', 'build_transfer_plan']

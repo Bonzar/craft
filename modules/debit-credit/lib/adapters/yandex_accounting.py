@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from .common import amount_decimal
 from .matching import validate_records
+from .review import validate_comparison
 
 CARD_ACCOUNT = 'Карта Пэй'
 ROUNDING_ACCOUNT = 'Округление'
@@ -149,3 +150,48 @@ def expand_accounting(snapshot: dict, *, parent_window_seconds: int) -> dict:
             'parent_window_seconds': parent_window_seconds, 'ready': False,
             'limitations': [*snapshot.get('limitations', []), 'cashback_credit_aliases_not_inferred',
                             'rounding_parent_candidates_not_confirmed', 'no_writes']}
+
+
+def cashback_confirmation(row: dict, ledger: list) -> tuple:
+    source = row['record']
+    if source.get('role') != 'cashback' or not source.get('accounting', {}).get('derived'):
+        return 'not_derived_cashback', None
+    if source.get('cleared') is False:
+        return 'keep_preliminary', None
+    if source.get('cleared') is not True or row['issues'] or row['match'] != 'marker' or len(row['ledger_indices']) != 1:
+        return 'requires_review', None
+    position = row['ledger_indices'][0]
+    actual = ledger[position]
+    changes = row['differences'].get(position, row['differences'].get(str(position), {}))
+    if (source.get('source') != 'yabank' or source.get('account') != POINTS_ACCOUNT
+            or source.get('currency') != 'YPLUS_POINTS'
+            or source.get('status') != 'completed' or source.get('kind') != 'income'
+            or actual.get('kind') != 'income' or actual.get('splits')
+            or actual.get('eligible_for_matching') is False
+            or not any(m['source'] == source['source'] and m['id'] == source['source_id']
+                       and m.get('role') == 'cashback' for m in actual.get('markers', []))
+            or (actual.get('account'), actual.get('currency')) != (POINTS_ACCOUNT, 'RUB')
+            or not changes.keys() <= {'amount', 'cleared'}):
+        return 'requires_review', None
+    if actual.get('cleared') is True:
+        return ('already_confirmed' if not changes else 'requires_review'), None
+    if actual.get('cleared') is not False or amount_decimal(source['amount']) <= 0:
+        return 'requires_review', None
+    return 'confirm_existing', {'locator': actual['locator'],
+                                'set': {'amount': source['amount'], 'cleared': True}}
+
+
+def plan_cashback_confirmations(comparison: dict) -> dict:
+    """Выбирает только переход предварительного дохода в подтверждённый по точной метке."""
+    validate_comparison(comparison)
+    decisions, updates = [], []
+    for index, row in enumerate(comparison['records']):
+        action, update = cashback_confirmation(row, comparison['ledger_records'])
+        decisions.append({'input_index': index, 'action': action})
+        if update is not None:
+            updates.append(update)
+    if len({row['locator'] for row in updates}) != len(updates):
+        raise ValueError('Несколько подтверждений ссылаются на одну запись приложения')
+    return {'input_count': comparison['input_count'], 'decisions': decisions, 'updates': updates,
+            'rejected': deepcopy(comparison['rejected']), 'ready': False,
+            'limitations': ['proposal_only', 'does_not_add_or_write_operations']}

@@ -73,6 +73,27 @@ class BackupAdditionsTest(unittest.TestCase):
                 prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
             self.assertFalse(self.target.exists())
 
+    def test_cashback_confirmation_and_new_pending_income_share_correct_balance_caches(self):
+        self.preliminary_cashback()
+        extra = addition('extra', kind='income', account='ЯПлюс Баллы', amount='5', cleared=False,
+                         category_path=[], tag=None)
+        plan = self.plan([extra])
+        plan['updates'] = [{'locator': 1, 'set': {'amount': '18', 'cleared': True}}]
+        prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+        snapshot = read_backup(self.target, 'Europe/Moscow')
+        self.assertEqual(snapshot['input_count'], 2)
+        self.assertEqual(self.balances(snapshot, 'ЯПлюс Баллы'), ('25', '30'))
+
+    def test_already_completed_cashback_cannot_be_changed_by_confirmation(self):
+        self.preliminary_cashback()
+        self.db.execute('UPDATE ZTRANSACTION SET ZPENDING=0 WHERE Z_PK=1')
+        self.db.commit()
+        plan = self.plan([])
+        plan['updates'] = [{'locator': 1, 'set': {'amount': '18', 'cleared': True}}]
+        with self.assertRaises(ValueError):
+            prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+        self.assertFalse(self.target.exists())
+
     def test_financial_edits_without_cashback_marker_are_rejected(self):
         self.preliminary_cashback()
         self.db.execute("UPDATE ZTRANSACTION SET ZNOTES='human note' WHERE Z_PK=1")

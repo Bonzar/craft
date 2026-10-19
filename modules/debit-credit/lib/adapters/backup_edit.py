@@ -5,17 +5,20 @@ import os
 import sqlite3
 import tempfile
 from collections import Counter
+from collections import defaultdict
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .debit_credit_backup import read_backup, snapshot_connection
 from .backup_metadata import date_values, description_key
-from .backup_additions import apply_additions, validate_additions
+from .backup_additions import apply_additions, validate_additions, update_balances
 from .common import amount_decimal
 from .debit_credit_backup import normalize_money
 
-EDITABLE_FIELDS = {'timestamp', 'description', 'notes'}
+EDITABLE_FIELDS = {'timestamp', 'description', 'notes', 'amount', 'cleared'}
+FINANCIAL_FIELDS = {'amount', 'cleared'}
 EDIT_TABLES = {'ZTRANSACTION', 'ZTRANSACTION_DESCRIPTION', 'Z_PRIMARYKEY', 'ZACCOUNT'}
 
 def validate_target(source: Path, target: Path) -> None:
@@ -47,10 +50,32 @@ def validate_plan(plan: dict, current: dict) -> list:
         if type(key) is not int or key <= 0 or key in seen:
             raise ValueError('Каждая правка должна иметь отдельный локальный указатель')
         if (not isinstance(changes, dict) or not changes or not changes.keys() <= EDITABLE_FIELDS
-                or any(not isinstance(value, str) for value in changes.values())):
-            raise ValueError('Разрешены только явные строковые дата, описание и заметка')
+                or any(type(value) is not bool if field == 'cleared' else not isinstance(value, str)
+                       for field, value in changes.items())):
+            raise ValueError('Некорректные типы явно изменяемых полей')
         seen.add(key)
     return updates
+
+
+def validate_cashback_updates(snapshot: dict, updates: list) -> None:
+    records = {row['locator']: row for row in snapshot['records']}
+    for update in updates:
+        changes = update['set']
+        if not FINANCIAL_FIELDS & changes.keys():
+            continue
+        row = records.get(update['locator'])
+        if (not row or not changes.keys() <= FINANCIAL_FIELDS or changes.get('cleared') is not True
+                or row['cleared'] is not False or row['kind'] != 'income'
+                or (row['account'], row['currency']) != ('ЯПлюс Баллы', 'RUB')
+                or row.get('eligible_for_matching') is False or row.get('splits')
+                or row.get('linked_locator') is not None
+                or not any(m['source'] == 'yabank' and m.get('role') == 'cashback'
+                           for m in row['markers'])):
+            raise ValueError('Разрешено только подтверждение прежнего предварительного кешбэка')
+        amount = changes.get('amount', row['amount'])
+        normalized, issues = normalize_money(amount, row['currency'])
+        if issues or normalized != amount_decimal(amount) or normalized <= 0:
+            raise ValueError('Нужна точная положительная итоговая сумма кешбэка')
 
 
 def table_state(connection: sqlite3.Connection) -> dict:
@@ -66,6 +91,7 @@ def indexed_table(connection: sqlite3.Connection, table: str, state: dict) -> di
 
 def apply_updates(connection: sqlite3.Connection, updates: list, zone: ZoneInfo) -> tuple:
     allowed, created = {}, {}
+    deltas = defaultdict(lambda: {'cleared': Decimal(0), 'all': Decimal(0)})
     for item in updates:
         key, changes = item['locator'], item['set']
         row = connection.execute('SELECT * FROM ZTRANSACTION WHERE Z_PK=?', (key,)).fetchone()
@@ -78,10 +104,18 @@ def apply_updates(connection: sqlite3.Connection, updates: list, zone: ZoneInfo)
             values['ZNOTES'] = changes['notes']
         if 'description' in changes:
             values['ZTRANSACTION_DESCRIPTION'] = description_key(connection, changes['description'], row['ZTYPE'], created)
+        if FINANCIAL_FIELDS & changes.keys():
+            old_amount, issues = normalize_money(str(row['ZAMOUNT']), 'RUB')
+            if issues:
+                raise ValueError('Не удалось прочитать прежнюю сумму кешбэка')
+            amount = amount_decimal(changes.get('amount', str(old_amount)))
+            values.update(ZAMOUNT=float(amount), ZPENDING=0)
+            deltas[row['ZACCOUNT']]['all'] += amount - old_amount
+            deltas[row['ZACCOUNT']]['cleared'] += amount
         columns = ','.join(name + '=?' for name in values)
         connection.execute('UPDATE ZTRANSACTION SET ' + columns + ' WHERE Z_PK=?', (*values.values(), key))
         allowed[key] = values
-    return allowed, created
+    return allowed, created, update_balances(connection, deltas)
 
 
 def verify_sql_changes(connection: sqlite3.Connection, before: dict, allowed: dict, created: dict,
@@ -138,10 +172,12 @@ def check_result(before: dict, after: dict, updates: list, additions: list, key_
             if field == 'timestamp':
                 if abs((datetime.fromisoformat(wanted) - datetime.fromisoformat(actual)).total_seconds()) > 0.000002:
                     raise ValueError('Дата записана с недопустимой погрешностью')
-            elif actual != wanted:
+            elif field == 'amount' and amount_decimal(actual) != amount_decimal(wanted):
+                raise ValueError('Сумма не соответствует плану')
+            elif field != 'amount' and actual != wanted:
                 raise ValueError('Поле не соответствует плану')
     check_additions(after, additions, key_map)
-    check_balances(before, after, additions)
+    check_balances(before, after, additions, updates)
 
 
 def check_additions(after: dict, rows: list, key_map: dict) -> None:
@@ -165,8 +201,9 @@ def check_additions(after: dict, rows: list, key_map: dict) -> None:
             raise ValueError('Неверный счёт второй стороны перевода')
 
 
-def check_balances(before: dict, after: dict, additions: list) -> None:
+def check_balances(before: dict, after: dict, additions: list, updates: list) -> None:
     last = {a['pk']: a for a in after['accounts']}
+    old_records = {r['locator']: r for r in before['records']}
     if {a['pk'] for a in before['accounts']} != last.keys():
         raise ValueError('Изменился состав счетов')
     for old in before['accounts']:
@@ -179,6 +216,13 @@ def check_balances(before: dict, after: dict, additions: list) -> None:
             first, first_issues = normalize_money(old[field], old['currency'])
             end, end_issues = normalize_money(actual[field], old['currency'])
             delta = sum((amount_decimal(r['amount']) for r in rows if field == 'uncleared_balance' or r['cleared']), amount_decimal('0'))
+            for update in updates:
+                row, changes = old_records[update['locator']], update['set']
+                if (not FINANCIAL_FIELDS & changes.keys()
+                        or (row['account'], row['currency']) != (old['name'], old['currency'])):
+                    continue
+                amount = amount_decimal(changes.get('amount', row['amount']))
+                delta += amount - (amount_decimal(row['amount']) if field == 'uncleared_balance' else 0)
             if first_issues or end_issues or end != first + delta:
                 raise ValueError('Остаток счёта не соответствует новым операциям')
 
@@ -190,6 +234,7 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
     updates = validate_plan(plan, fingerprint)
     zone = ZoneInfo(timezone)
     before_normalized = read_backup(source, timezone)
+    validate_cashback_updates(before_normalized, updates)
     additions = plan.get('additions', [])
     updated_notes = [{'notes': r['set']['notes']} for r in updates if 'notes' in r['set']]
     validate_additions(additions, [*before_normalized['records'], *updated_notes])
@@ -204,8 +249,9 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
                 original.backup(connection)
             connection.execute('PRAGMA journal_mode=DELETE')
             before = table_state(connection)
-            allowed, created = apply_updates(connection, updates, zone)
+            allowed, created, updated_accounts = apply_updates(connection, updates, zone)
             transactions, accounts, key_map = apply_additions(connection, additions, zone, created)
+            accounts = {**updated_accounts, **accounts}
             connection.commit()
             if connection.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise ValueError('Нарушена целостность SQLite')
@@ -228,5 +274,5 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
             'candidate_sha256': backup_fingerprint(target), 'table_diff': table_diff,
             'source_records': before_normalized['input_count'], 'candidate_records': after['input_count'],
             'source_files_unchanged': True, 'app_restore_verified': False,
-            'limitations': ['existing_edits_timestamp_description_notes_only', 'no_new_accounts_or_split_categories',
+            'limitations': ['financial_edits_only_preliminary_cashback_confirmation', 'no_new_accounts_or_split_categories',
                             'does_not_register_or_restore_backup', 'restore_requires_app_verification']}
