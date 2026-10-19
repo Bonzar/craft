@@ -74,13 +74,31 @@ class BankApiTest(unittest.TestCase):
         self.assertFalse(result['ready'])
         self.assertEqual(result['records'][0]['raw']['detail'], r)
 
-    def test_cashback_with_none_status_is_a_hint_requiring_review(self):
+    def test_cashback_with_none_status_is_recognized_as_preliminary(self):
         info = {'cashbackStatus': 'NONE', 'direction': 'CREDIT', 'partialValue': None,
                 'totalValue': {'money': None, 'plus': '28.00'}}
         r = detail(cashback={'summary': None, 'servicesCashback': [{'cashbackInfo': info}]})
         result = read_history(snapshot(r))
         self.assertEqual(result['records'][0]['cashback_hint'], '28.00')
+        self.assertIs(result['records'][0]['cashback_cleared'], False)
+        self.assertTrue(result['ready'])
+
+    def test_fully_accrued_cashback_is_independent_of_purchase_completion(self):
+        info = {'cashbackStatus': 'FULLY', 'direction': 'CREDIT', 'partialValue': None,
+                'totalValue': {'money': None, 'plus': '20.00'}}
+        r = detail(statusCode='HOLD', cashback={'summary': None,
+                   'servicesCashback': [{'cashbackInfo': info}]})
+        row = read_history(snapshot(r))['records'][0]
+        self.assertIs(row['cleared'], False)
+        self.assertIs(row['cashback_cleared'], True)
+
+    def test_unknown_cashback_status_still_requires_review(self):
+        info = {'cashbackStatus': 'NEW_STATUS', 'direction': 'CREDIT', 'partialValue': None,
+                'totalValue': {'money': None, 'plus': '20.00'}}
+        r = detail(cashback={'summary': None, 'servicesCashback': [{'cashbackInfo': info}]})
+        result = read_history(snapshot(r))
         self.assertFalse(result['ready'])
+        self.assertIn('cashback_status_requires_review', result['records'][0]['issues'])
 
     def test_duplicate_native_ids_do_not_merge_distinct_feed_records(self):
         result = read_history(snapshot(detail('a'), detail('b')))

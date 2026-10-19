@@ -20,6 +20,20 @@ def rounding(identifier, account, other, amount, **changes):
 
 
 class YandexAccountingTest(unittest.TestCase):
+    def test_preliminary_cashback_is_pending_even_when_purchase_is_completed(self):
+        result = expand_accounting(snapshot(purchase(cashback_cleared=False)), parent_window_seconds=120)
+        credit = result['records'][1]
+        self.assertEqual((credit['status'], credit['cleared']), ('pending', False))
+        self.assertEqual(credit['issues'], [])
+
+    def test_confirmed_cashback_keeps_identity_and_uses_final_amount(self):
+        pending = expand_accounting(snapshot(purchase(cashback_cleared=False, cashback_hint='20')),
+                                    parent_window_seconds=120)['records'][1]
+        final = expand_accounting(snapshot(purchase(cashback_cleared=True, cashback_hint='18')),
+                                  parent_window_seconds=120)['records'][1]
+        self.assertEqual((pending['source_id'], pending['role']), (final['source_id'], final['role']))
+        self.assertEqual((final['amount'], final['status'], final['cleared']), ('18', 'completed', True))
+
     def test_cashback_has_purchase_identity_with_own_role_and_two_minute_shift(self):
         source = snapshot(purchase())
         original = copy.deepcopy(source)
