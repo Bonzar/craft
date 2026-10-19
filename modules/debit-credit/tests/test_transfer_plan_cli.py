@@ -66,3 +66,15 @@ class TransferPlanCommandTest(unittest.TestCase):
                               '--target', target, '--timezone', 'Europe/Moscow')
         self.assertEqual(result.returncode, 2)
         self.assertFalse(target.exists())
+
+    def test_error_is_reported_for_null_additions_without_traceback_or_output(self):
+        report, target = self.directory / 'proposal.json', self.directory / 'prepared.dcbackup'
+        self.assertEqual(self.proposal(self.backup, report).returncode, 1)
+        data = json.loads(report.read_text())
+        data['additions'] = data['backup_plan']['additions'] = None
+        report.write_text(json.dumps(data))
+        result = self.run_cli('prepare-backup', self.backup, '--plan', report,
+                              '--target', target, '--timezone', 'Europe/Moscow')
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertFalse(target.exists())
