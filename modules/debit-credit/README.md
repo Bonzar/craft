@@ -206,6 +206,19 @@ ID. Обратные переводы и обычные переводы без 
 
 ### Пачка переводов
 
+```sh
+python3 lib/cli.py plan-transfers /tmp/expected-source.json --backup /путь/source.dcbackup --accounts /tmp/accounts.json --from-date 2026-07-20 --to-date 2026-10-18 --timezone Europe/Moscow --pair-window-seconds 300 --ledger-window-seconds 129600 --output /tmp/transfers.json
+python3 lib/cli.py prepare-backup /путь/source.dcbackup --plan /tmp/transfers.json --target /tmp/prepared.dcbackup --timezone Europe/Moscow --output /tmp/preparation.json
+```
+
+`plan-transfers` сама читает полный backup, проверяет его неизменность во время
+расчёта и сохраняет хеши исходной базы и WAL. Отчёт содержит `backup_plan`, который
+`prepare-backup` принимает напрямую. Если новых пар нет, `backup_plan: null`:
+пустая копия для повторного импорта не готовится. Изменившаяся после планирования
+база или WAL делают план недействительным. Ни одна команда не регистрирует и
+не восстанавливает копию автоматически. Код возврата 1 у планировщика означает
+предложение для проверки, а не ошибку подготовки файла.
+
 Библиотечная `build_transfer_plan(source, ledger, mapping, start, end,
 pair_window_seconds=..., ledger_window_seconds=...)` готовит новые стороны переводов
 для `prepare-backup`. Нужны полный источник с `coverage: snapshot_complete`, полный

@@ -248,7 +248,9 @@ def extract_backup_plan(value: dict) -> dict:
     if value.get('adapter') != 'transfer-plan':
         return value
     plan = value.get('backup_plan')
-    if (not isinstance(plan, dict) or plan.get('additions') != value.get('additions')
+    if (not isinstance(plan, dict) or not isinstance(plan.get('additions'), list)
+            or type(value.get('selected_pair_count')) is not int
+            or plan.get('additions') != value.get('additions')
             or len(plan.get('additions', [])) != 2 * value.get('selected_pair_count', 0)
             or plan.get('source_sha256') != value.get('inputs_sha256', {}).get('backup')):
         raise ValueError('Отчёт не содержит согласованного непустого плана')
