@@ -98,6 +98,9 @@ def expected_cashback(row: dict) -> dict | None:
     result['accounting'] = {'rule': 'cashback', 'derived': True,
                             'purchase_id': row['source_id'], 'purchase_timestamp': row['timestamp'],
                             'unresolved_fields': ['tag']}
+    result.update(bank_account_ids=[], bank_fields=[], bank_category=None, mcc=None)
+    result.pop('resolution', None)
+    result.pop('account_evidence', None)
     return result
 
 

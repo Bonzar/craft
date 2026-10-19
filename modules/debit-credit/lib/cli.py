@@ -19,6 +19,7 @@ from adapters.backup_edit import prepare_backup
 from adapters.backup_registry import register_backup
 from adapters.review import build_review
 from adapters.source_resolutions import apply_resolutions
+from adapters.yandex_accounting import expand_accounting
 
 
 def parser() -> argparse.ArgumentParser:
@@ -47,6 +48,9 @@ def parser() -> argparse.ArgumentParser:
     resolve = commands.add_parser('resolve-source', help='Подтверждения для точных операций источника')
     resolve.add_argument('input', type=Path)
     resolve.add_argument('--resolutions', type=Path, required=True)
+    accounting = commands.add_parser('yandex-accounting', help='Ожидаемые округления и кешбэк')
+    accounting.add_argument('input', type=Path)
+    accounting.add_argument('--parent-window-seconds', type=int, required=True)
     verify = commands.add_parser('verify-import', help='Проверка добавлений по полным backup до и после')
     verify.add_argument('input', type=Path, help='Резервная копия до импорта')
     verify.add_argument('after', type=Path, help='Резервная копия после импорта')
@@ -68,12 +72,18 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--source-filename', required=True)
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
-    for command in (debit, bank, api, backup, compare, review, resolve, verify, restore, prepare, register):
+    for command in (debit, bank, api, backup, compare, review, resolve, accounting,
+                    verify, restore, prepare, register):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'yandex-accounting':
+        content = args.input.read_bytes()
+        result = expand_accounting(json.loads(content.decode('utf-8-sig')),
+                                    parent_window_seconds=args.parent_window_seconds)
+        return {**result, 'accounting_input_sha256': hashlib.sha256(content).hexdigest()}
     if args.adapter == 'resolve-source':
         content, specs = args.input.read_bytes(), args.resolutions.read_bytes()
         result = apply_resolutions(json.loads(content.decode('utf-8-sig')),
