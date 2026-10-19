@@ -112,7 +112,7 @@ test('Equal mobile and desktop balances from a fresh response are retained with 
 
 test('Disagreeing mobile and desktop balances are rejected', async () => {
   const { requestCardBalance } = require('../lib/yandex_bank_capture.js');
-  await assert.rejects(requestCardBalance(directBalanceEnvironment(['Карта0 ₽', 'Карта1 ₽'])), /остаток/);
+  await assert.rejects(requestCardBalance(directBalanceEnvironment(['Карта0 ₽', 'Карта1 ₽'])), /остатк/);
 });
 
 test('Login redirects are rejected before the response body is read', async () => {
