@@ -69,6 +69,18 @@ class ReviewTest(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 build_review(broken)
 
+    def test_confirmed_alias_points_to_canonical_case_without_dropping_either(self):
+        from adapters.source_resolutions import apply_resolutions
+        from test_source_resolutions import snapshot, resolution
+        canonical, alias = operation('canonical'), operation('alias')
+        source = apply_resolutions(snapshot(canonical, alias), [resolution(alias,
+            same_operation_as={'source': 'yabank', 'id': 'canonical'})])
+        result = build_review(self.comparison(source['records'], []))
+        self.assertEqual(len(result['records']), 2)
+        self.assertEqual(result['records'][1]['same_operation_case_index'], 0)
+        self.assertEqual(result['records'][1]['assessment'], 'confirmed_source_alias')
+        self.assertEqual(result['records'][1]['source_match_assessment'], 'no_candidate')
+
 
 if __name__ == '__main__':
     unittest.main()
