@@ -4,6 +4,9 @@ import copy
 import unittest
 
 from adapters.yandex_accounting import expand_accounting
+import adapters.yandex_accounting as accounting
+from adapters.matching import compare_records
+from test_matching import entry, marker
 from test_matching import operation
 from test_source_resolutions import snapshot
 
@@ -20,6 +23,33 @@ def rounding(identifier, account, other, amount, **changes):
 
 
 class YandexAccountingTest(unittest.TestCase):
+    def cashback_comparison(self, preliminary, amount='18'):
+        source = expand_accounting(snapshot(purchase(cashback_cleared=not preliminary,
+                                                     cashback_hint=amount)), parent_window_seconds=120)
+        ledger = entry(account='ЯПлюс Баллы', amount='20', kind='income', cleared=False,
+                       timestamp='2026-07-04T10:02:00+03:00',
+                       markers=[marker('buy', role='cashback')], splits=[], eligible_for_matching=True)
+        mapping = {'yabank': {'ЯПлюс Баллы': {'account': 'ЯПлюс Баллы',
+                                            'source_currency': 'YPLUS_POINTS', 'currency': 'RUB'}}}
+        return compare_records(source['records'][1:], [ledger], mapping, window_seconds=120)
+
+    def test_preliminary_cashback_does_not_propose_existing_amount_changes(self):
+        result = accounting.plan_cashback_confirmations(self.cashback_comparison(True))
+        self.assertEqual(result['updates'], [])
+        self.assertEqual(result['decisions'][0]['action'], 'keep_preliminary')
+
+    def test_confirmed_cashback_proposes_amount_and_completion_on_marked_record(self):
+        result = accounting.plan_cashback_confirmations(self.cashback_comparison(False))
+        self.assertEqual(result['updates'], [{'locator': 1, 'set': {'amount': '18', 'cleared': True}}])
+        self.assertEqual(result['decisions'][0]['action'], 'confirm_existing')
+
+    def test_ambiguous_cashback_marker_does_not_propose_changes(self):
+        comparison = self.cashback_comparison(False)
+        comparison['records'][0]['match'] = 'marker_conflict'
+        result = accounting.plan_cashback_confirmations(comparison)
+        self.assertEqual(result['updates'], [])
+        self.assertEqual(result['decisions'][0]['action'], 'requires_review')
+
     def test_preliminary_cashback_is_pending_even_when_purchase_is_completed(self):
         result = expand_accounting(snapshot(purchase(cashback_cleared=False)), parent_window_seconds=120)
         credit = result['records'][1]

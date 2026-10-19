@@ -43,6 +43,46 @@ class BackupAdditionsTest(unittest.TestCase):
         row = next(a for a in snapshot['accounts'] if a['name'] == name)
         return row['balance'], row['uncleared_balance']
 
+    def preliminary_cashback(self):
+        self.db.execute("UPDATE ZACCOUNT SET ZNAME='ЯПлюс Баллы', ZCURRENT_BALANCE=7, ZCURRENT_UNCLEARED_BALANCE=27 WHERE Z_PK=1")
+        self.db.execute("UPDATE ZTRANSACTION SET ZTYPE=1,ZAMOUNT=20,ZPENDING=1,ZNOTES=? WHERE Z_PK=1",
+                        ('[dc-sync:v1 source=yabank id=buy role=cashback]',))
+        self.db.commit()
+
+    def test_cashback_confirmation_updates_same_record_and_both_balance_caches(self):
+        self.preliminary_cashback()
+        original = backup_fingerprint(self.source)
+        plan = self.plan([])
+        plan['updates'] = [{'locator': 1, 'set': {'amount': '18.00', 'cleared': True}}]
+        result = prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+        snapshot = read_backup(self.target, 'Europe/Moscow')
+        self.assertTrue(result['ready'])
+        self.assertEqual(snapshot['input_count'], 1)
+        self.assertEqual(snapshot['records'][0]['source_id'], 'old')
+        self.assertEqual(snapshot['records'][0]['amount'], '18')
+        self.assertTrue(snapshot['records'][0]['cleared'])
+        self.assertEqual(self.balances(snapshot, 'ЯПлюс Баллы'), ('25', '25'))
+        self.assertEqual(backup_fingerprint(self.source), original)
+
+    def test_pending_amount_changes_are_rejected_until_cashback_confirmation(self):
+        self.preliminary_cashback()
+        for changes in ({'amount': '18'}, {'amount': '18', 'cleared': False}):
+            plan = self.plan([])
+            plan['updates'] = [{'locator': 1, 'set': changes}]
+            with self.assertRaises(ValueError):
+                prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+            self.assertFalse(self.target.exists())
+
+    def test_financial_edits_without_cashback_marker_are_rejected(self):
+        self.preliminary_cashback()
+        self.db.execute("UPDATE ZTRANSACTION SET ZNOTES='human note' WHERE Z_PK=1")
+        self.db.commit()
+        plan = self.plan([])
+        plan['updates'] = [{'locator': 1, 'set': {'amount': '18', 'cleared': True}}]
+        with self.assertRaises(ValueError):
+            prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+        self.assertFalse(self.target.exists())
+
     def test_expense_keeps_category_tag_and_source_marker_and_updates_balances(self):
         before = backup_fingerprint(self.source)
         report = prepare_backup(self.source, self.target, self.plan([addition()]), 'Europe/Moscow')
