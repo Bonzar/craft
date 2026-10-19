@@ -14,6 +14,7 @@ from test_adapters import card, export_csv
 from test_backup import SCHEMA
 from test_matching import MAPPING, entry, operation
 from test_bank_api import snapshot, detail
+from adapters.matching import compare_records
 
 CLI = Path(__file__).resolve().parents[1] / 'lib' / 'cli.py'
 
@@ -27,6 +28,20 @@ class CommandTest(unittest.TestCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(CLI), *map(str, args)],
                               capture_output=True, text=True, timeout=10)
+
+    def test_review_command_keeps_context_private_and_does_not_approve_writes(self):
+        source, target = self.directory / 'comparison.json', self.directory / 'review.json'
+        comparison = compare_records([operation(description='private merchant')], [entry()],
+                                     MAPPING, window_seconds=120)
+        source.write_text(json.dumps(comparison))
+        result = self.run_cli('review', source, '--output', target)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['groups'][0]['description'], 'private merchant')
+        self.assertFalse(report['ready'])
+        self.assertEqual(len(report['comparison_sha256']), 64)
+        self.assertNotIn('private merchant', result.stdout + result.stderr)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
     def test_private_csv_rows_are_written_only_to_explicit_output(self):
         source, target = self.directory / 'source.csv', self.directory / 'result.json'
