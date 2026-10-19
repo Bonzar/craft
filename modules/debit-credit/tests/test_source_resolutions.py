@@ -80,3 +80,9 @@ class SourceResolutionsTest(unittest.TestCase):
         source['issues'] = [{'code': 'incomplete_page'}, {'locator': 1, 'code': 'unknown_account'}]
         result = apply_resolutions(source, [resolution(row, set={'account': 'Карта'})])
         self.assertEqual(result['issues'], [{'code': 'incomplete_page'}])
+
+    def test_confirmation_does_not_survive_a_changed_completion_status(self):
+        row = operation()
+        changed = {**row, 'status': 'canceled', 'cleared': False}
+        with self.assertRaises(ValueError):
+            apply_resolutions(snapshot(changed), [resolution(row, set={'account': 'Карта'})])
