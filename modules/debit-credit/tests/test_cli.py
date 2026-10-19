@@ -72,6 +72,20 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(len(report['records']), 2)
         self.assertEqual(len(report['accounting_input_sha256']), 64)
 
+    def test_classification_command_outputs_evidence_without_approving_operations(self):
+        from adapters.review import build_review
+        source, target = self.directory / 'review.json', self.directory / 'evidence.json'
+        comparison = compare_records([operation()], [entry(category_path=['Продукты'])],
+                                     MAPPING, window_seconds=120)
+        source.write_text(json.dumps(build_review(comparison)))
+        result = self.run_cli('classification-evidence', source, '--output', target)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['classification_profiles'][0]['category_options'][0]['value'],
+                         ['Продукты'])
+        self.assertFalse(report['records'][0]['classification']['approved'])
+        self.assertEqual(len(report['classification_input_sha256']), 64)
+
     def test_private_csv_rows_are_written_only_to_explicit_output(self):
         source, target = self.directory / 'source.csv', self.directory / 'result.json'
         source.write_text(export_csv({'Заметки': 'private note'}), encoding='utf-8-sig')
