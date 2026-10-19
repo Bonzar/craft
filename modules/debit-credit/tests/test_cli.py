@@ -58,6 +58,20 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(len(report['resolution_inputs_sha256']['resolutions']), 64)
         self.assertNotIn('Private Card', result.stdout + result.stderr)
 
+    def test_accounting_command_keeps_source_count_and_derived_count_separate(self):
+        from test_yandex_accounting import purchase
+        from test_source_resolutions import snapshot
+        source, target = self.directory / 'source.json', self.directory / 'expected.json'
+        source.write_text(json.dumps(snapshot(purchase())))
+        result = self.run_cli('yandex-accounting', source, '--parent-window-seconds', '120',
+                              '--output', target)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['source_input_count'], 1)
+        self.assertEqual(report['derived_count'], 1)
+        self.assertEqual(len(report['records']), 2)
+        self.assertEqual(len(report['accounting_input_sha256']), 64)
+
     def test_private_csv_rows_are_written_only_to_explicit_output(self):
         source, target = self.directory / 'source.csv', self.directory / 'result.json'
         source.write_text(export_csv({'Заметки': 'private note'}), encoding='utf-8-sig')
