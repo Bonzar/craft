@@ -2,6 +2,7 @@
 
 import re
 from collections import Counter, defaultdict
+from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
 from urllib.parse import parse_qs, urlsplit
@@ -14,6 +15,8 @@ ACCOUNT_PHRASES = {'со счёта в сейвах': 'Счёт в Сейвах'
                    'на счёт в сейвах': 'Счёт в Сейвах',
                    'с карты пэй': 'Карта Пэй', 'на карту пэй': 'Карта Пэй',
                    'с вклада в сейвах': 'Вклад в Сейвах', 'на вклад в сейвах': 'Вклад в Сейвах'}
+FILTER_ACCOUNT_PREFIXES = {'<SOURCE>::SAVINGS_ACCOUNT_': 'savings', '<SOURCE>::WALLET_': 'wallet'}
+FILTER_GROUP_IDS = {'<SOURCE>::EXTERNAL_BANKS', '<SOURCE>::SAVINGS_COMBINED'}
 
 
 def text(value) -> str:
@@ -129,6 +132,62 @@ def bank_account_ids(detail: dict) -> list:
             if len(ids) == 1 and ids[0]:
                 values.add(ids[0])
     return sorted(values)
+
+
+def source_filter_options(pages) -> list:
+    items = []
+    for page_index, page in enumerate(pages if isinstance(pages, list) else []):
+        if not isinstance(page, dict) or page.get('sourceFilter') is None:
+            continue
+        value = page['sourceFilter']
+        if not isinstance(value, dict) or not isinstance(value.get('options'), list):
+            items.append({'page_index': page_index, 'option_index': None, 'raw': value})
+            continue
+        items.extend({'page_index': page_index, 'option_index': i, 'raw': option}
+                     for i, option in enumerate(value['options']))
+    return items
+
+
+def parse_source_filter_account(item: dict) -> dict:
+    option = item['raw']
+    if item['option_index'] is None or not isinstance(option, dict):
+        raise ValueError('Некорректная структура фильтра счетов')
+    identifier, name = text(option.get('filterId')), text(option.get('title'))
+    prefix = next((p for p in FILTER_ACCOUNT_PREFIXES if identifier.startswith(p)), None)
+    if prefix is None or not identifier.removeprefix(prefix):
+        raise ValueError('Не распознан вид или идентификатор счёта фильтра')
+    balance = None
+    displayed = option.get('subtitle')
+    if displayed is not None:
+        value = normalize_space(text(displayed))
+        if not value.endswith('₽'):
+            raise ValueError('Не распознана единица отображённого остатка')
+        balance = str(amount_decimal(value[:-1]))
+    return {**deepcopy(item), 'filter_id': identifier, 'bank_account_id': identifier[len(prefix):],
+            'kind': FILTER_ACCOUNT_PREFIXES[prefix], 'name': name,
+            'displayed_balance': displayed, 'balance': balance,
+            'currency': 'RUB' if balance is not None else None}
+
+
+def read_source_filter_accounts(pages) -> dict:
+    items = source_filter_options(pages)
+    records, excluded, rejected = [], [], []
+    for item in items:
+        option = item['raw']
+        if (isinstance(option, dict) and isinstance(option.get('filterId'), str)
+                and option['filterId'] in FILTER_GROUP_IDS):
+            excluded.append({**deepcopy(item), 'reason': 'source_type_group_is_not_an_account'})
+            continue
+        try:
+            records.append(parse_source_filter_account(item))
+        except (ValueError, KeyError, TypeError) as error:
+            rejected.append({**deepcopy(item), 'reason': str(error)})
+    if len(records) + len(excluded) + len(rejected) != len(items):
+        raise RuntimeError('Не сошёлся счёт наблюдений фильтра')
+    return {'input_count': len(items), 'records': records, 'excluded': excluded, 'rejected': rejected,
+            'coverage': 'observed_source_filters', 'reconciled': False,
+            'limitations': ['current_names_are_not_historical_attribution',
+                            'displayed_balance_freshness_unknown', 'not_an_atomic_balance_snapshot']}
 
 
 def resolve_accounts(records: list) -> dict:
@@ -250,6 +309,14 @@ def read_history(snapshot: dict) -> dict:
     raw = [{'feed': feed, 'details': details.get(feed.get('id'), [])}
            for feed in snapshot['records']]
     result = report('yandex-bank-api', raw, parse_record)
+    result['source_account_observations'] = read_source_filter_accounts(snapshot.get('pages'))
+    result['balance_observations'] = deepcopy(snapshot.get('balanceObservations', []))
+    result['balance_control'] = deepcopy(snapshot.get('balanceControl'))
+    if result['source_account_observations']['rejected']:
+        result['issues'].append({'code': 'source_account_filter_requires_review'})
+    if (not isinstance(result['balance_observations'], list)
+            or any(not isinstance(o, dict) for o in result['balance_observations'])):
+        result['issues'].append({'code': 'balance_observations_require_review'})
     result['bank_account_identity_names'] = resolve_accounts(result['records'])
     feed_ids = [row.get('id') for row in snapshot['records']]
     counts = Counter(feed_ids)
