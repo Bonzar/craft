@@ -11,7 +11,7 @@ from build_userscript import build
 
 
 class UserscriptBuildTest(unittest.TestCase):
-    def test_headless_script_collects_history_and_balance_without_page_controls(self):
+    def test_headless_script_collects_new_history_and_old_ids_without_page_controls(self):
         node = shutil.which('node')
         if node is None:
             self.skipTest('Node.js нужен для проверки собранного скрипта')
@@ -32,11 +32,11 @@ const sandbox = { URL, DOMParser: Parser, Intl, window: {
     calls.push({ url, method: options.method });
     if (url === 'https://bank.yandex.ru/my') return { ok: true, url,
       text: async () => 'bank-html', headers: { get: () => null } };
-    const operation = JSON.parse(options.body).operationName;
+    const { operationName: operation, variables } = JSON.parse(options.body);
     const data = operation === 'TransactionsFeedPfm'
       ? { getTransactionsFeedPfm: { items: [{ id: 'one', date: '2026-10-18T12:00:00Z' }],
           pendingItems: [], cursor: null, analytics: [] } }
-      : { getTransactionOperationDetails: { id: 'native-one' } };
+      : { getTransactionOperationDetails: { id: `native-${variables.id}` } };
     return { ok: true, json: async () => ({ data }) };
   }
 } };
@@ -46,7 +46,7 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(resul
 '''
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / 'headless.js'
-            build(output, period=period)
+            build(output, period=period, recheck_ids=['old'])
             text = output.read_text()
             result = subprocess.run([node, '-e', runner, str(output)],
                                     capture_output=True, text=True, timeout=10)
@@ -57,10 +57,23 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(resul
         self.assertTrue(snapshot['complete'])
         self.assertEqual(len(snapshot['records']), 1)
         self.assertEqual(len(snapshot['details']), 1)
+        self.assertTrue(snapshot['rechecks']['complete'])
+        self.assertEqual(snapshot['rechecks']['details'][0]['requestedId'], 'old')
+        self.assertEqual(snapshot['rechecks']['details'][0]['id'], 'native-old')
         self.assertEqual([r['balance']['amount'] for r in snapshot['balanceObservations']], ['0.00', '0.00'])
-        self.assertEqual([r['method'] for r in report['calls']], ['GET', 'POST', 'POST', 'GET'])
+        self.assertEqual([r['method'] for r in report['calls']], ['GET', 'POST', 'POST', 'POST', 'GET'])
         self.assertNotIn('document.createElement', text)
         self.assertNotIn('window.prompt', text)
+
+    def test_invalid_recheck_ids_are_rejected_before_script_creation(self):
+        period = {'fromInclusive': '2026-10-18T00:00:00+03:00',
+                  'toExclusive': '2026-10-20T00:00:00+03:00'}
+        for ids in ('old', ['valid', None], ['']):
+            with self.subTest(ids=ids), tempfile.TemporaryDirectory() as folder:
+                output = Path(folder) / 'headless.js'
+                with self.assertRaises(ValueError):
+                    build(output, period=period, recheck_ids=ids)
+                self.assertFalse(output.exists())
 
     def test_headless_period_without_timezone_is_rejected_before_file_creation(self):
         with tempfile.TemporaryDirectory() as folder:
