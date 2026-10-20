@@ -16,6 +16,7 @@ from .backup_metadata import date_values, description_key
 from .backup_additions import apply_additions, validate_additions, update_balances
 from .common import amount_decimal
 from .debit_credit_backup import normalize_money
+from .completion import validate_confirmation_updates
 
 EDITABLE_FIELDS = {'timestamp', 'description', 'notes', 'amount', 'cleared'}
 FINANCIAL_FIELDS = {'amount', 'cleared'}
@@ -57,27 +58,6 @@ def validate_plan(plan: dict, current: dict) -> list:
     return updates
 
 
-def validate_cashback_updates(snapshot: dict, updates: list) -> None:
-    records = {row['locator']: row for row in snapshot['records']}
-    for update in updates:
-        changes = update['set']
-        if not FINANCIAL_FIELDS & changes.keys():
-            continue
-        row = records.get(update['locator'])
-        if (not row or not changes.keys() <= FINANCIAL_FIELDS or changes.get('cleared') is not True
-                or row['cleared'] is not False or row['kind'] != 'income'
-                or (row['account'], row['currency']) != ('ЯПлюс Баллы', 'RUB')
-                or row.get('eligible_for_matching') is False or row.get('splits')
-                or row.get('linked_locator') is not None
-                or not any(m['source'] == 'yabank' and m.get('role') == 'cashback'
-                           for m in row['markers'])):
-            raise ValueError('Разрешено только подтверждение прежнего предварительного кешбэка')
-        amount = changes.get('amount', row['amount'])
-        normalized, issues = normalize_money(amount, row['currency'])
-        if issues or normalized != amount_decimal(amount) or normalized <= 0:
-            raise ValueError('Нужна точная положительная итоговая сумма кешбэка')
-
-
 def table_state(connection: sqlite3.Connection) -> dict:
     names = [r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     return {name: Counter(tuple(row) for row in connection.execute(
@@ -105,9 +85,11 @@ def apply_updates(connection: sqlite3.Connection, updates: list, zone: ZoneInfo)
         if 'description' in changes:
             values['ZTRANSACTION_DESCRIPTION'] = description_key(connection, changes['description'], row['ZTYPE'], created)
         if FINANCIAL_FIELDS & changes.keys():
-            old_amount, issues = normalize_money(str(row['ZAMOUNT']), 'RUB')
+            currency = connection.execute('''SELECT c.ZCODE FROM ZACCOUNT a
+                JOIN ZCURRENCY c ON c.Z_PK=a.ZCURRENCY WHERE a.Z_PK=?''', (row['ZACCOUNT'],)).fetchone()[0]
+            old_amount, issues = normalize_money(str(row['ZAMOUNT']), currency)
             if issues:
-                raise ValueError('Не удалось прочитать прежнюю сумму кешбэка')
+                raise ValueError('Не удалось прочитать прежнюю сумму операции')
             amount = amount_decimal(changes.get('amount', str(old_amount)))
             values.update(ZAMOUNT=float(amount), ZPENDING=0)
             deltas[row['ZACCOUNT']]['all'] += amount - old_amount
@@ -234,7 +216,7 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
     updates = validate_plan(plan, fingerprint)
     zone = ZoneInfo(timezone)
     before_normalized = read_backup(source, timezone)
-    validate_cashback_updates(before_normalized, updates)
+    validate_confirmation_updates(before_normalized, updates)
     additions = plan.get('additions', [])
     updated_notes = [{'notes': r['set']['notes']} for r in updates if 'notes' in r['set']]
     validate_additions(additions, [*before_normalized['records'], *updated_notes])
@@ -274,5 +256,5 @@ def prepare_backup(source: Path | str, target: Path | str, plan: dict, timezone:
             'candidate_sha256': backup_fingerprint(target), 'table_diff': table_diff,
             'source_records': before_normalized['input_count'], 'candidate_records': after['input_count'],
             'source_files_unchanged': True, 'app_restore_verified': False,
-            'limitations': ['financial_edits_only_preliminary_cashback_confirmation', 'no_new_accounts_or_split_categories',
+            'limitations': ['financial_edits_only_pending_confirmation', 'no_new_accounts_or_split_categories',
                             'does_not_register_or_restore_backup', 'restore_requires_app_verification']}

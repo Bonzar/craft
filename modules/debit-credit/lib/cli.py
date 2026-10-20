@@ -25,6 +25,7 @@ from adapters.classification import add_classification_evidence
 from adapters.movement_control import compare_movements
 from adapters.transfer_plan import build_transfer_plan
 from adapters.transfer_accounting import expand_transfers
+from adapters.completion import plan_confirmations
 
 
 def transfer_command(commands):
@@ -64,6 +65,8 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument('--window-seconds', type=int, required=True)
     review = commands.add_parser('review', help='Полный разбор сопоставления с контекстом и группами')
     review.add_argument('input', type=Path, help='JSON результата compare')
+    confirmations = commands.add_parser('plan-confirmations', help='Подтверждения прежних незавершённых записей')
+    confirmations.add_argument('input', type=Path, help='JSON результата compare')
     classification = commands.add_parser('classification-evidence', help='Варианты категорий по истории')
     classification.add_argument('input', type=Path, help='JSON результата review')
     movement = commands.add_parser('movement-control', help='Движение по счетам без подтверждения остатков')
@@ -104,12 +107,20 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
     for command in (debit, bank, api, backup, compare, review, classification, movement, resolve, accounting,
-                    verify, restore, prepare, register, transfers, transfer_accounting):
+                    verify, restore, prepare, register, transfers, transfer_accounting, confirmations):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'plan-confirmations':
+        content = args.input.read_bytes()
+        comparison = json.loads(content.decode('utf-8-sig'))
+        result = plan_confirmations(comparison)
+        return {**result, 'adapter': 'confirmation-plan', 'records': result['decisions'],
+                'coverage': comparison['coverage'],
+                'issues': [r for r in result['decisions'] if r['action'] == 'requires_review'],
+                'comparison_sha256': hashlib.sha256(content).hexdigest()}
     if args.adapter == 'transfer-accounting':
         content, accounts = args.input.read_bytes(), args.accounts.read_bytes()
         result = expand_transfers(json.loads(content.decode('utf-8-sig')),
