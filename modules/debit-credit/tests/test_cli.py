@@ -29,6 +29,24 @@ class CommandTest(unittest.TestCase):
         return subprocess.run([sys.executable, str(CLI), *map(str, args)],
                               capture_output=True, text=True, timeout=10)
 
+    def test_single_transfer_command_hashes_inputs_without_exposing_account_names(self):
+        from test_transfer_accounting import source, transfer
+        from test_transfer_plan import MAPPING as TRANSFER_MAPPING
+        input_path, accounts = self.directory / 'source.json', self.directory / 'accounts.json'
+        output = self.directory / 'expected.json'
+        input_path.write_text(json.dumps(source(transfer(description='private description'))))
+        accounts.write_text(json.dumps(TRANSFER_MAPPING))
+        result = self.run_cli('transfer-accounting', input_path, '--accounts', accounts,
+                              '--output', output)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(output.read_text())
+        self.assertEqual(len(report['records']), 2)
+        self.assertFalse(report['ready'])
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(set(report['transfer_inputs_sha256']), {'source', 'accounts'})
+        self.assertTrue(all(len(h) == 64 for h in report['transfer_inputs_sha256'].values()))
+        self.assertNotIn('private description', result.stdout + result.stderr)
+
     def test_review_command_keeps_context_private_and_does_not_approve_writes(self):
         source, target = self.directory / 'comparison.json', self.directory / 'review.json'
         comparison = compare_records([operation(description='private merchant')], [entry()],

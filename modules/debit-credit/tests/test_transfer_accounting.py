@@ -108,3 +108,22 @@ class TransferAccountingTest(unittest.TestCase):
         expected = expand_transfers(source(transfer()), MAPPING)
         with self.assertRaises(ValueError):
             expand_transfers(expected, MAPPING)
+
+    def test_cashback_provenance_is_preserved_when_a_transfer_counterpart_is_added(self):
+        from adapters.yandex_accounting import expand_accounting
+        raw = source(transfer(), operation('buy', account='Card', cashback_hint='10', issues=[]))
+        cashback = expand_accounting(raw, parent_window_seconds=120)
+        result = expand_transfers(cashback, MAPPING)
+        self.assertEqual(result['source_input_count'], 2)
+        self.assertEqual(result['derived_count'], 2)
+        self.assertEqual(result['input_count'], 4)
+        self.assertEqual(result['origins'], [
+            {'input_index': 0, 'record_indices': [0, 3]},
+            {'input_index': 1, 'record_indices': [1, 2]}])
+
+    def test_forged_source_counts_are_rejected(self):
+        original = source(transfer())
+        for metadata in ({'source_input_count': 0}, {'derived_count': True},
+                         {'origins': [{'input_index': -1, 'record_indices': [0]}]}):
+            with self.subTest(metadata=metadata), self.assertRaises(ValueError):
+                expand_transfers({**original, **metadata}, MAPPING)
