@@ -27,6 +27,63 @@ def snapshot(*details):
 
 
 class BankApiTest(unittest.TestCase):
+    def test_filter_accounts_and_displayed_balances_are_kept_separately_from_operations(self):
+        value = snapshot(detail())
+        value['pages'][0]['sourceFilter'] = {'options': [
+            {'filterId': '<SOURCE>::WALLET_pa_card', 'title': 'Карта Пэй', 'subtitle': None},
+            {'filterId': '<SOURCE>::SAVINGS_ACCOUNT_sa_save', 'title': 'Сейв',
+             'subtitle': '1\u00a0234,56\u00a0₽'},
+            {'filterId': '<SOURCE_TYPE>::SAVINGS_ACCOUNT', 'title': 'Сейвы', 'subtitle': 'Все счета'}]}
+        value['balanceObservations'] = [{'phase': 'before', 'balance': {'amount': '900'}}]
+        saved = copy.deepcopy(value)
+        result = read_history(value)
+        observations = result['source_account_observations']
+        self.assertEqual(observations['input_count'], 3)
+        self.assertEqual(len(observations['records']), 2)
+        self.assertEqual(len(observations['excluded']), 1)
+        self.assertEqual(observations['rejected'], [])
+        save = observations['records'][1]
+        self.assertEqual((save['bank_account_id'], save['name'], save['balance'], save['currency']),
+                         ('sa_save', 'Сейв', '1234.56', 'RUB'))
+        self.assertIsNone(observations['records'][0]['balance'])
+        self.assertEqual(result['balance_observations'], value['balanceObservations'])
+        self.assertEqual(result['input_count'], 1)
+        self.assertEqual(value, saved)
+        self.assertFalse(observations['reconciled'])
+
+    def test_changed_filter_names_and_balances_remain_separate_observations(self):
+        value = snapshot(detail())
+        value['pages'][0]['sourceFilter'] = {'options': [
+            {'filterId': '<SOURCE>::SAVINGS_ACCOUNT_sa_same', 'title': 'Первое имя', 'subtitle': '10 ₽'}]}
+        value['pages'].append({'items': [], 'pendingItems': [], 'cursor': None,
+                              'sourceFilter': {'options': [
+            {'filterId': '<SOURCE>::SAVINGS_ACCOUNT_sa_same', 'title': 'Другое имя', 'subtitle': '11 ₽'}]}})
+        result = read_history(value)['source_account_observations']
+        self.assertEqual([r['name'] for r in result['records']], ['Первое имя', 'Другое имя'])
+        self.assertEqual([r['balance'] for r in result['records']], ['10', '11'])
+        self.assertEqual([r['page_index'] for r in result['records']], [0, 1])
+
+    def test_filter_evidence_does_not_silently_replace_historical_account_attribution(self):
+        row = detail(additionalFieldsList=[], amount={'money': {
+            'amount': '20', 'currency': 'RUB', 'agreementId': 'sa_same'}, 'plus': None})
+        value = snapshot(row)
+        value['pages'][0]['sourceFilter'] = {'options': [
+            {'filterId': '<SOURCE>::SAVINGS_ACCOUNT_sa_same', 'title': 'Округление', 'subtitle': '10 ₽'}]}
+        result = read_history(value)
+        self.assertIsNone(result['records'][0]['account'])
+        self.assertEqual(result['source_account_observations']['records'][0]['name'], 'Округление')
+
+    def test_invalid_filter_values_are_visible_without_losing_read_operations(self):
+        value = snapshot(detail())
+        value['pages'][0]['sourceFilter'] = {'options': [
+            {'filterId': '<SOURCE>::SAVINGS_ACCOUNT_sa_save', 'title': 'Сейв', 'subtitle': 'unknown'}]}
+        result = read_history(value)
+        observations = result['source_account_observations']
+        self.assertEqual(observations['input_count'], 1)
+        self.assertEqual(len(observations['rejected']), 1)
+        self.assertEqual(len(result['records']), 1)
+        self.assertFalse(result['ready'])
+
     def test_native_id_is_kept_without_replacing_feed_identity(self):
         result = read_history(snapshot(detail()))
         row = result['records'][0]
