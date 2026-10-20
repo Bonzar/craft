@@ -25,6 +25,7 @@ python3 lib/cli.py classification-evidence /tmp/review.json --output /tmp/classi
 python3 lib/cli.py movement-control /tmp/expected-source.json --ledger /tmp/dc-snapshot.json --accounts /tmp/accounts.json --from-date 2026-01-01 --to-date 2026-10-18 --timezone Europe/Moscow --output /tmp/movement.json
 python3 lib/cli.py resolve-source /tmp/bank-api-normalized.json --resolutions /tmp/confirmations.json --output /tmp/resolved-source.json
 python3 lib/cli.py yandex-accounting /tmp/resolved-source.json --parent-window-seconds 120 --output /tmp/expected-source.json
+python3 lib/cli.py transfer-accounting /tmp/expected-source.json --accounts /tmp/accounts.json --output /tmp/expected-transfers.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
 PYTHONPATH=lib python3 -m unittest discover -s tests -v
 node --test tests/test_capture.js tests/test_queries.js
@@ -187,6 +188,26 @@ API-статус кешбэка `NONE` означает предваритель
 ожидаемыми строками, полнота этой связи проверяется. `coverage` остаётся оценкой
 чтения источника, а не правильности учёта. Повторный разворот правил запрещён.
 Это ожидаемые записи для проверки, не утверждённый план изменения приложения.
+
+### Перевод с одной исходной записью
+
+`transfer-accounting` дополняет ожидаемые записи перед сопоставлением и `plan-transfers`.
+Тип `transfer` означает уже определённый перевод с двумя известными собственными
+счетами. Его исходная сторона становится `transfer_leg`, а ожидаемая вторая
+сторона получает противоположную сумму. Применяется только при совпадении единиц
+источника и валют счетов приложения. Межвалютный курс не предполагается.
+Неполные сведения, прежняя роль метки, замечания источника и неподтверждённый
+статус остаются в результате с причиной уточнения. Незавершённый перевод
+сохраняет незавершённость обеих ожидаемых сторон.
+
+У второй стороны нет придуманного банковского ID: используется ID исходной
+операции с ролью `transfer-counterpart`. `native_id` остаётся пустым. Это
+производная запись учёта, а не найденное зачисление из второго источника.
+Происхождение и счёт исходных/производных строк сохраняются вместе с прежними
+связями округлений и кешбэка. Обычные операции и уже прочитанные стороны
+`transfer_leg` не разворачиваются повторно. Повторный запуск этапа запрещён.
+План переводов проверяет существующие метки обеих сторон и прежние кандидаты.
+Этап не создаёт счета, не исправляет прежние записи и не меняет приложение.
 
 ### Предложения категорий по прежним записям
 

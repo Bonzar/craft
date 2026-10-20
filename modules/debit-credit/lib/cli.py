@@ -24,6 +24,7 @@ from adapters.yandex_accounting import expand_accounting
 from adapters.classification import add_classification_evidence
 from adapters.movement_control import compare_movements
 from adapters.transfer_plan import build_transfer_plan
+from adapters.transfer_accounting import expand_transfers
 
 
 def transfer_command(commands):
@@ -78,6 +79,9 @@ def parser() -> argparse.ArgumentParser:
     accounting = commands.add_parser('yandex-accounting', help='Ожидаемые округления и кешбэк')
     accounting.add_argument('input', type=Path)
     accounting.add_argument('--parent-window-seconds', type=int, required=True)
+    transfer_accounting = commands.add_parser('transfer-accounting', help='Ожидаемые стороны перевода по одной исходной записи')
+    transfer_accounting.add_argument('input', type=Path)
+    transfer_accounting.add_argument('--accounts', type=Path, required=True)
     verify = commands.add_parser('verify-import', help='Проверка добавлений по полным backup до и после')
     verify.add_argument('input', type=Path, help='Резервная копия до импорта')
     verify.add_argument('after', type=Path, help='Резервная копия после импорта')
@@ -100,12 +104,19 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
     for command in (debit, bank, api, backup, compare, review, classification, movement, resolve, accounting,
-                    verify, restore, prepare, register, transfers):
+                    verify, restore, prepare, register, transfers, transfer_accounting):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'transfer-accounting':
+        content, accounts = args.input.read_bytes(), args.accounts.read_bytes()
+        result = expand_transfers(json.loads(content.decode('utf-8-sig')),
+                                  json.loads(accounts.decode('utf-8-sig')))
+        return {**result, 'transfer_inputs_sha256': {
+            'source': hashlib.sha256(content).hexdigest(),
+            'accounts': hashlib.sha256(accounts).hexdigest()}}
     if args.adapter == 'plan-transfers':
         return transfer_snapshot(args)
     if args.adapter == 'movement-control':

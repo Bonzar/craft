@@ -44,13 +44,21 @@ def counterpart(row: dict) -> dict:
 
 
 def validated_origins(snapshot: dict) -> list:
+    counts = (snapshot.get('source_input_count', snapshot['input_count']),
+              snapshot.get('source_record_count', len(snapshot['records'])),
+              snapshot.get('derived_count', 0))
+    if (any(type(n) is not int or n < 0 for n in counts)
+            or counts[0] + counts[2] != snapshot['input_count']
+            or counts[1] + len(snapshot['rejected']) != counts[0]):
+        raise ValueError('Не сошёлся счёт исходных и производных операций')
     origins = deepcopy(snapshot.get('origins', [
         {'input_index': i, 'record_indices': [i]} for i in range(len(snapshot['records']))]))
     if (not isinstance(origins, list) or any(not isinstance(o, dict)
             or type(o.get('input_index')) is not int or not isinstance(o.get('record_indices'), list)
             or any(type(i) is not int for i in o['record_indices']) for o in origins)
             or sorted(i for o in origins for i in o['record_indices'])
-               != list(range(len(snapshot['records'])))):
+               != list(range(len(snapshot['records'])))
+            or sorted(o['input_index'] for o in origins) != list(range(counts[1]))):
         raise ValueError('Не сошлось происхождение входных операций')
     return origins
 
