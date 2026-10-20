@@ -154,9 +154,9 @@ def validate_period(period: dict) -> None:
         raise ValueError('Нужен возрастающий период с явным часовым поясом')
 
 
-def headless_body(period: dict) -> str:
+def headless_body(period: dict, recheck_ids: list[str]) -> str:
     validate_period(period)
-    options = json.dumps(period, ensure_ascii=False)
+    options = json.dumps({**period, 'recheckIds': recheck_ids}, ensure_ascii=False)
     return '''
 if (window.location.origin !== 'https://bank.yandex.ru'
     || !['/my', '/my/transactions-history'].includes(window.location.pathname)) {
@@ -173,8 +173,15 @@ try {
 '''.replace('PERIOD', options)
 
 
-def build(output: Path, *, period: dict | None = None) -> None:
-    body = INTERFACE if period is None else headless_body(period)
+def build(output: Path, *, period: dict | None = None,
+          recheck_ids: list[str] | None = None) -> None:
+    ids = [] if recheck_ids is None else recheck_ids
+    if (not isinstance(ids, list)
+            or any(not isinstance(value, str) or not value.strip() for value in ids)):
+        raise ValueError('Для повторного чтения нужен массив непустых ID')
+    if ids and period is None:
+        raise ValueError('Повторное чтение ID требует периода и запуска без интерфейса')
+    body = INTERFACE if period is None else headless_body(period, ids)
     reader = Path(__file__).with_name('yandex_bank_queries.js').read_text(encoding='utf-8')
     reader = reader.split("\nif (typeof module !== 'undefined')")[0]
     capture = Path(__file__).with_name('yandex_bank_capture.js').read_text(encoding='utf-8')
