@@ -29,6 +29,21 @@ class CommandTest(unittest.TestCase):
         return subprocess.run([sys.executable, str(CLI), *map(str, args)],
                               capture_output=True, text=True, timeout=10)
 
+    def test_confirmation_command_proposes_existing_updates_without_private_stdout(self):
+        from test_completion import comparison
+        source, output = self.directory / 'comparison.json', self.directory / 'confirmations.json'
+        value = comparison()
+        value['records'][0]['record']['description'] = 'private merchant'
+        source.write_text(json.dumps(value))
+        result = self.run_cli('plan-confirmations', source, '--output', output)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(output.read_text())
+        self.assertEqual(report['updates'], [{'locator': 1, 'set': {'amount': '-18', 'cleared': True}}])
+        self.assertEqual(len(report['comparison_sha256']), 64)
+        self.assertFalse(report['ready'])
+        self.assertNotIn('private merchant', result.stdout + result.stderr)
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
     def test_single_transfer_command_hashes_inputs_without_exposing_account_names(self):
         from test_transfer_accounting import source, transfer
         from test_transfer_plan import MAPPING as TRANSFER_MAPPING
