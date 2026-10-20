@@ -63,6 +63,11 @@ class TransferAccountingTest(unittest.TestCase):
         self.assertEqual(peer['source_id'], row['source_id'])
         self.assertIsNone(peer.get('native_id'))
 
+    def test_counterpart_amount_is_not_rounded_by_decimal_context(self):
+        exact = '12345678901234567890123456789.12'
+        result = expand_transfers(source({**transfer(), 'amount': '-' + exact}), MAPPING)
+        self.assertEqual(result['records'][1]['amount'], exact)
+
     def test_pending_transfer_keeps_both_sides_pending(self):
         result = expand_transfers(source({**transfer(), 'status': 'pending', 'cleared': False}), MAPPING)
         self.assertEqual([r['cleared'] for r in result['records']], [False, False])
