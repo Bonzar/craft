@@ -59,13 +59,20 @@ function historyDate(value) {
 function historyOptions(options) {
   const from = historyDate(options.fromInclusive), to = historyDate(options.toExclusive);
   if (from >= to) throw new Error('Начало периода должно предшествовать концу');
-  const concurrency = options.concurrency ?? 4, maxPages = options.maxPages ?? 2000;
+  const maxPages = options.maxPages ?? 2000;
+  if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error('Неверный предел страниц');
+  return { from, to, maxPages, includeDetails: options.includeDetails !== false,
+    ...detailOptions(options) };
+}
+
+/** @param {object} options @returns {object} */
+function detailOptions(options) {
+  const concurrency = options.concurrency ?? 4;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) {
     throw new Error('Одновременно читаются от 1 до 8 карточек');
   }
-  if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error('Неверный предел страниц');
-  return { from, to, concurrency, maxPages, includeDetails: options.includeDetails !== false,
-    request: options.request || requestHistory, onProgress: options.onProgress || (() => {}),
+  return { concurrency, request: options.request || requestHistory,
+    onProgress: options.onProgress || (() => {}),
     pause: options.pause || (delay => new Promise(resolve => setTimeout(resolve, delay))) };
 }
 
@@ -173,6 +180,41 @@ async function readHistoryDetails(result, config) {
   if (result.unreadIds.length || result.detailErrors.length) throw new Error('Не все карточки прочитаны');
 }
 
+/** @param {Array<string>} ids @returns {object} */
+function recheckResult(ids) {
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id.trim())) {
+    throw new Error('Для повторного чтения нужен массив непустых ID');
+  }
+  const uniqueIds = [...new Set(ids)];
+  return { schema_version: 1, adapter: 'yandex-bank-detail-rechecks', complete: false,
+    inputIds: [...ids], records: uniqueIds.map(id => ({ id })), details: [],
+    detailObservations: [], detailErrors: [], unreadIds: uniqueIds };
+}
+
+/** @param {Array<string>} ids @param {object=} options @returns {Promise<object>} */
+async function collectDetailsByIds(ids, options = {}) {
+  const result = recheckResult(ids), config = detailOptions(options);
+  try {
+    await readHistoryDetails(result, config);
+    result.complete = true;
+    return result;
+  } catch (cause) {
+    const error = cause instanceof Error ? cause : new Error('Ошибка повторного чтения');
+    error.partial = result;
+    throw error;
+  }
+}
+
+/** @param {object} result @param {Array<string>} ids @param {object} options
+ * @returns {Promise<void>} */
+async function refreshRechecks(result, ids, options) {
+  try { result.rechecks = await collectDetailsByIds(ids, options); } catch (error) {
+    result.rechecks = error.partial;
+    result.complete = false;
+    throw error;
+  }
+}
+
 /** @param {object} snapshot @param {object} config @returns {Promise<void>} */
 async function validateResumeFeed(snapshot, config) {
   if (snapshot?.adapter !== 'yandex-bank-graphql' || snapshot.schema_version !== 1
@@ -226,6 +268,7 @@ async function resumeHistory(snapshot, options = {}) {
     detailErrors: [], unreadIds: [], resumedAt: new Date().toISOString() };
   try {
     await readHistoryDetails(result, config);
+    if (snapshot.rechecks) await refreshRechecks(result, snapshot.rechecks.inputIds, config);
     result.complete = true;
     return result;
   } catch (cause) {
@@ -284,12 +327,21 @@ async function collectHistoryWithBalance(options) {
       || options.balanceSourceUrl !== 'https://bank.yandex.ru/my') {
     throw new Error('Остаток читается только с главной страницы банка');
   }
+  const rechecks = recheckResult(options.recheckIds ?? []);
   const before = await observeCardBalance(options, 'before');
   let result, failure;
   try { result = await collectHistory(options); } catch (error) {
     if (!error?.partial) throw error;
     result = error.partial;
     failure = error;
+  }
+  if (rechecks.inputIds.length) {
+    result.rechecks = rechecks;
+    if (!failure) {
+      try { await refreshRechecks(result, rechecks.inputIds, options); } catch (error) {
+        failure = error;
+      }
+    }
   }
   const after = await observeCardBalance(options, 'after');
   const output = { ...result, balanceObservations: [before, after], balanceControl: {
@@ -301,5 +353,6 @@ async function collectHistoryWithBalance(options) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance };
+  module.exports = { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance,
+    collectDetailsByIds };
 }
