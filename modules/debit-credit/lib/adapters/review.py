@@ -100,6 +100,23 @@ def link_confirmed_aliases(cases: list) -> None:
                     source_match_assessment=case['assessment'], assessment='confirmed_source_alias')
 
 
+def build_pending_rechecks(ledger: list) -> list:
+    """Повторное чтение определяется всей переданной выгрузкой, не новым периодом."""
+    result = []
+    for index, row in enumerate(ledger):
+        if row.get('cleared') is not False:
+            continue
+        identities = deepcopy(row.get('markers', []))
+        issues = [] if identities else ['missing_source_identity']
+        if row.get('eligible_for_matching') is False:
+            issues.append('ledger_requires_review')
+        result.append({**visible_record(row), 'ledger_index': index,
+                       'recheck_sources': identities, 'recheck_issues': issues})
+    if len(result) != sum(row.get('cleared') is False for row in ledger):
+        raise RuntimeError('Не все незавершённые записи попали в повторную проверку')
+    return result
+
+
 def build_review(comparison: dict) -> dict:
     """Группы помогают разбору, их число не равно числу вопросов человеку."""
     validate_comparison(comparison)
@@ -114,12 +131,15 @@ def build_review(comparison: dict) -> dict:
             'assessment_counts': dict(Counter(case['assessment'] for case in cases)),
             'unreferenced_ledger': [{**visible_record(ledger[i]), 'ledger_index': i}
                                     for i in comparison['unreferenced_ledger']],
+            'ledger_input_count': len(ledger), 'pending_rechecks': build_pending_rechecks(ledger),
             'issues': deepcopy(comparison['issues']), 'coverage': comparison['coverage'],
             'inputs_sha256': deepcopy(comparison.get('inputs_sha256', {})),
             'source_input': deepcopy(comparison.get('source_input', {})),
             'ledger_input': deepcopy(comparison.get('ledger_input', {})),
             'ready': False, 'human_question_count': None,
             'limitations': ['groups_are_not_questions', 'no_candidate_is_not_missing',
+                            'pending_rechecks_cover_provided_ledger_only',
+                            'pending_source_collection_not_performed',
                             'historical_fields_are_evidence_not_rules',
                             'accounting_expansion_not_performed', 'no_writes',
                             *comparison.get('limitations', [])]}
