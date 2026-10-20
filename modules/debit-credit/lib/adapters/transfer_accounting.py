@@ -37,7 +37,7 @@ def counterpart(row: dict) -> dict:
     # Реквизиты банковской карточки доказывают исходную сторону, а не другой счёт.
     for key in ('resolution', 'account_evidence', 'accounting'):
         peer.pop(key, None)
-    peer.update(bank_account_ids=[], bank_fields=[], bank_category=None, mcc=None,
+    peer.update(bank_account_ids=[], bank_fields=[], bank_category=None, bank_comment=None, mcc=None,
                 cashback_hint=None, cashback_cleared=None)
     peer['transfer_accounting'] = {'derived': True, 'source_id': row['source_id']}
     return peer

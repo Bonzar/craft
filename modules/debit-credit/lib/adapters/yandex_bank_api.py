@@ -134,6 +134,13 @@ def bank_account_ids(detail: dict) -> list:
     return sorted(values)
 
 
+def read_comment(detail: dict) -> tuple:
+    value = detail.get('comment')
+    if value is None or isinstance(value, str):
+        return value, []
+    return None, ['bank_comment_requires_review']
+
+
 def source_filter_options(pages) -> list:
     items = []
     for page_index, page in enumerate(pages if isinstance(pages, list) else []):
@@ -242,6 +249,8 @@ def parse_record(raw: dict, index: int) -> dict:
     account, other, kind = read_accounts(title, fields, amount, currency)
     status, cleared = STATUSES.get(detail['statusCode'], ('unknown', None))
     hint, cashback_cleared, issues = cashback_hint(detail)
+    comment, comment_issues = read_comment(detail)
+    issues.extend(comment_issues)
     if not account:
         issues.append('unknown_account')
     if status == 'unknown':
@@ -264,6 +273,7 @@ def parse_record(raw: dict, index: int) -> dict:
             'amount': str(amount), 'currency': currency, 'account': account, 'other_account': other,
             'kind': kind, 'status': status, 'cleared': cleared, 'description': description,
             'bank_fields': fields, 'bank_category': dict(fields).get('Категория'),
+            'bank_comment': comment,
             'mcc': dict(fields).get('MCC'), 'cashback_hint': hint,
             'cashback_cleared': cashback_cleared, 'issues': issues,
             'raw': {'feed': feed, 'detail': detail}}
