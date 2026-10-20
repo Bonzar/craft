@@ -33,7 +33,7 @@ class BankApiTest(unittest.TestCase):
             {'filterId': '<SOURCE>::WALLET_pa_card', 'title': 'Карта Пэй', 'subtitle': None},
             {'filterId': '<SOURCE>::SAVINGS_ACCOUNT_sa_save', 'title': 'Сейв',
              'subtitle': '1\u00a0234,56\u00a0₽'},
-            {'filterId': '<SOURCE_TYPE>::SAVINGS_ACCOUNT', 'title': 'Сейвы', 'subtitle': 'Все счета'}]}
+            {'filterId': '<SOURCE>::SAVINGS_COMBINED', 'title': 'Сейвы', 'subtitle': 'Все счета'}]}
         value['balanceObservations'] = [{'phase': 'before', 'balance': {'amount': '900'}}]
         saved = copy.deepcopy(value)
         result = read_history(value)
@@ -50,6 +50,19 @@ class BankApiTest(unittest.TestCase):
         self.assertEqual(result['input_count'], 1)
         self.assertEqual(value, saved)
         self.assertFalse(observations['reconciled'])
+
+    def test_empty_last_page_filter_groups_are_excluded_without_parse_errors(self):
+        value = snapshot(detail())
+        value['pages'].append({'items': [], 'pendingItems': [], 'cursor': None,
+                              'sourceFilter': {'options': [
+            {'filterId': '<SOURCE>::SAVINGS_COMBINED', 'title': 'Сейвы'},
+            {'filterId': '<SOURCE>::EXTERNAL_BANKS', 'title': 'Другие банки'}]}})
+        result = read_history(value)
+        observations = result['source_account_observations']
+        self.assertEqual(observations['input_count'], 2)
+        self.assertEqual(len(observations['excluded']), 2)
+        self.assertEqual(observations['rejected'], [])
+        self.assertTrue(result['ready'])
 
     def test_changed_filter_names_and_balances_remain_separate_observations(self):
         value = snapshot(detail())
