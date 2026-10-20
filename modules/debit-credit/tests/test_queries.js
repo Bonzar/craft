@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance } = require('../lib/yandex_bank_queries.js');
+const { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance,
+  collectDetailsByIds } = require('../lib/yandex_bank_queries.js');
 
 const scope = {
   fromInclusive: '2026-07-04T00:00:00+03:00',
@@ -13,6 +14,79 @@ const page = (items, cursor = null, pendingItems = []) => ({
 
 const balance = amount => ({ account: 'Карта Пэй', amount, currency: 'RUB',
   balance_type: 'displayed_unspecified', blocked_amount: null });
+
+test('Old IDs are re-read directly without a new-period feed or cached details', async () => {
+  const calls = [];
+  const ids = ['old-purchase', 'old-purchase', 'old-rounding'];
+  const result = await collectDetailsByIds(ids, { request: async (operation, variables) => {
+    calls.push({ operation, id: variables.id });
+    return { getTransactionOperationDetails: item(`native-${variables.id}`,
+      { date: '2026-01-01T10:00:00+03:00' }) };
+  } });
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.inputIds, ids);
+  assert.deepEqual(calls.map(c => c.operation), Array(2).fill('TransactionOperationDetails'));
+  assert.deepEqual(result.details.map(d => d.requestedId).sort(), ['old-purchase', 'old-rounding']);
+  assert.deepEqual(result.details.map(d => d.id).sort(), ['native-old-purchase', 'native-old-rounding']);
+  assert.deepEqual(ids, ['old-purchase', 'old-purchase', 'old-rounding']);
+});
+
+test('Unread old IDs retain successful rechecks and do not claim completeness', async () => {
+  await assert.rejects(collectDetailsByIds(['bad', 'good'], { concurrency: 1,
+    request: async (operation, { id }) => {
+      if (id === 'bad') throw new Error('not found');
+      return { getTransactionOperationDetails: item(id) };
+    },
+  }), error => error.partial.complete === false
+    && error.partial.details[0].requestedId === 'good'
+    && error.partial.unreadIds[0] === 'bad');
+});
+
+test('Balance observations surround both new history and old-operation rechecks', async () => {
+  const calls = [];
+  const result = await collectHistoryWithBalance({ ...scope, recheckIds: ['old'],
+    readBalance: () => { calls.push('balance'); return balance('1.00'); },
+    balanceSourceUrl: 'https://bank.yandex.ru/my',
+    request: async (operation, variables) => {
+      calls.push(operation);
+      return operation === 'TransactionsFeedPfm' ? page([])
+        : { getTransactionOperationDetails: item(variables.id) };
+    },
+  });
+  assert.deepEqual(calls, ['balance', 'TransactionsFeedPfm', 'TransactionOperationDetails', 'balance']);
+  assert.equal(result.rechecks.complete, true);
+  assert.equal(result.rechecks.details[0].requestedId, 'old');
+  assert.equal(result.records.length, 0);
+});
+
+test('Malformed recheck IDs are rejected before any bank request', async () => {
+  let requests = 0;
+  await assert.rejects(collectDetailsByIds(['good', null], { request: async () => { requests++; } }), /ID/);
+  assert.equal(requests, 0);
+});
+
+test('Failed old-operation recheck preserves new history and is repeated on resume', async () => {
+  let partial;
+  await assert.rejects(collectHistoryWithBalance({ ...scope, recheckIds: ['old'],
+    readBalance: () => balance('1.00'), balanceSourceUrl: 'https://bank.yandex.ru/my',
+    request: async operation => {
+      if (operation === 'TransactionsFeedPfm') return page([]);
+      throw new Error('old card unavailable');
+    },
+  }), error => { partial = error.partial; return !!partial; });
+  assert.equal(partial.complete, false);
+  assert.deepEqual(partial.rechecks.unreadIds, ['old']);
+  assert.equal(partial.balanceObservations.length, 2);
+  const calls = [];
+  const result = await resumeHistory(partial, { request: async (operation, variables) => {
+    calls.push({ operation, id: variables.id });
+    return { getTransactionOperationDetails: item('native-old') };
+  } });
+  assert.deepEqual(calls, [{ operation: 'TransactionOperationDetails', id: 'old' }]);
+  assert.equal(result.complete, true);
+  assert.equal(result.rechecks.complete, true);
+  assert.equal(partial.complete, false);
+});
 
 test('Balance observations bracket history collection without claiming an atomic checkpoint', async () => {
   let reads = 0;
