@@ -64,6 +64,60 @@ class BackupAdditionsTest(unittest.TestCase):
         self.assertEqual(self.balances(snapshot, 'ЯПлюс Баллы'), ('25', '25'))
         self.assertEqual(backup_fingerprint(self.source), original)
 
+    def test_marked_pending_expense_confirms_without_changing_its_metadata(self):
+        self.db.execute("UPDATE ZTRANSACTION SET ZPENDING=1,ZNOTES=? WHERE Z_PK=1",
+                        ('human note\n[dc-sync:v1 source=other-bank id=payment]',))
+        self.db.execute('UPDATE ZACCOUNT SET ZCURRENT_BALANCE=0 WHERE Z_PK=1')
+        self.db.commit()
+        before = read_backup(self.source, 'Europe/Moscow')
+        plan = self.plan([])
+        plan['updates'] = [{'locator': 1, 'set': {'amount': '-9.75', 'cleared': True}}]
+        result = prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+        after = read_backup(self.target, 'Europe/Moscow')
+        self.assertTrue(result['ready'])
+        self.assertEqual(after['input_count'], 1)
+        self.assertEqual(self.balances(after, 'Карта'), ('-9.75', '-9.75'))
+        for field in ('source_id', 'category_path', 'description', 'tag', 'notes', 'timestamp'):
+            self.assertEqual(before['records'][0][field], after['records'][0][field])
+
+    def test_pending_confirmation_cannot_reverse_sign_or_mix_metadata_edits(self):
+        self.db.execute("UPDATE ZTRANSACTION SET ZPENDING=1,ZNOTES=? WHERE Z_PK=1",
+                        ('[dc-sync:v1 source=other-bank id=payment]',))
+        self.db.commit()
+        for changes in ({'amount': '9', 'cleared': True},
+                        {'amount': '0', 'cleared': True},
+                        {'amount': '-9', 'cleared': True, 'notes': 'replace marker'}):
+            plan = self.plan([])
+            plan['updates'] = [{'locator': 1, 'set': changes}]
+            with self.assertRaises(ValueError):
+                prepare_backup(self.source, self.target, plan, 'Europe/Moscow')
+            self.assertFalse(self.target.exists())
+
+    def test_pending_transfer_confirmation_updates_both_linked_legs_and_balances(self):
+        outgoing = addition('out', peer_key='in', kind='transfer_leg', amount='-20',
+                            category_path=[], tag=None, cleared=False)
+        incoming = addition('in', peer_key='out', kind='transfer_leg', account='Запас',
+                            amount='20', category_path=[], tag=None, cleared=False)
+        prepared = prepare_backup(self.source, self.target, self.plan([outgoing, incoming]), 'Europe/Moscow')
+        keys = prepared['new_record_locators']
+        plan = {'schema_version': 1, 'source_sha256': backup_fingerprint(self.target),
+                'updates': [{'locator': keys['out'], 'set': {'amount': '-18', 'cleared': True}},
+                            {'locator': keys['in'], 'set': {'amount': '18', 'cleared': True}}]}
+        target = self.target.with_name('confirmed.dcbackup')
+        for invalid in (plan['updates'][:1],
+                        [plan['updates'][0], {'locator': keys['in'], 'set': {'amount': '19', 'cleared': True}}]):
+            with self.assertRaises(ValueError):
+                prepare_backup(self.target, target, {**plan, 'updates': invalid}, 'Europe/Moscow')
+            self.assertFalse(target.exists())
+        prepare_backup(self.target, target, plan, 'Europe/Moscow')
+        snapshot = read_backup(target, 'Europe/Moscow')
+        self.assertEqual(snapshot['input_count'], 3)
+        self.assertEqual(self.balances(snapshot, 'Карта'), ('-28.25', '-28.25'))
+        self.assertEqual(self.balances(snapshot, 'Запас'), ('18', '18'))
+        legs = {r['locator']: r for r in snapshot['records']}
+        self.assertEqual(legs[keys['out']]['linked_locator'], keys['in'])
+        self.assertEqual(legs[keys['in']]['linked_locator'], keys['out'])
+
     def test_pending_amount_changes_are_rejected_until_cashback_confirmation(self):
         self.preliminary_cashback()
         for changes in ({'amount': '18'}, {'amount': '18', 'cleared': False}):
