@@ -187,6 +187,7 @@ function recheckResult(ids) {
   }
   const uniqueIds = [...new Set(ids)];
   return { schema_version: 1, adapter: 'yandex-bank-detail-rechecks', complete: false,
+    coverage: 'requested_versions_only', limitations: ['current_feed_identity_required'],
     inputIds: [...ids], records: uniqueIds.map(id => ({ id })), details: [],
     detailObservations: [], detailErrors: [], unreadIds: uniqueIds };
 }
