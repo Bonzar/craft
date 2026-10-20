@@ -27,6 +27,34 @@ def snapshot(*details):
 
 
 class BankApiTest(unittest.TestCase):
+    def test_bank_comment_reaches_review_without_assigning_app_metadata(self):
+        from adapters.matching import compare_records
+        from adapters.review import build_review
+        value = snapshot(detail(comment='Предоплата за кейтеринг свадьбы'))
+        saved = copy.deepcopy(value)
+        parsed = read_history(value)
+        mapping = {'yabank': {'Карта Пэй': {'account': 'Карта Пэй',
+                   'source_currency': 'RUB', 'currency': 'RUB'}}}
+        case = build_review(compare_records(parsed['records'], [], mapping,
+                                           window_seconds=120))['records'][0]
+        self.assertEqual(case['source']['bank_comment'], 'Предоплата за кейтеринг свадьбы')
+        self.assertNotIn('raw', case['source'])
+        self.assertEqual(case['source']['notes'], '')
+        self.assertIsNone(case['source']['category'])
+        self.assertIsNone(case['source']['tag'])
+        self.assertEqual(value, saved)
+
+    def test_nontext_comment_is_flagged_without_rejecting_the_operation(self):
+        value = snapshot(detail(comment={'future': 'structured comment'}))
+        result = read_history(value)
+        self.assertEqual(len(result['records']), 1)
+        self.assertEqual(result['rejected'], [])
+        self.assertIsNone(result['records'][0]['bank_comment'])
+        self.assertIn('bank_comment_requires_review', result['records'][0]['issues'])
+        self.assertEqual(result['records'][0]['raw']['detail']['comment'],
+                         value['details'][0]['comment'])
+        self.assertFalse(result['ready'])
+
     def test_filter_accounts_and_displayed_balances_are_kept_separately_from_operations(self):
         value = snapshot(detail())
         value['pages'][0]['sourceFilter'] = {'options': [

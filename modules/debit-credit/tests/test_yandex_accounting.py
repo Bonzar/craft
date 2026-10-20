@@ -23,6 +23,12 @@ def rounding(identifier, account, other, amount, **changes):
 
 
 class YandexAccountingTest(unittest.TestCase):
+    def test_cashback_does_not_claim_the_purchase_comment_as_its_own(self):
+        original = snapshot(purchase(bank_comment='Комментарий покупки'))
+        result = expand_accounting(original, parent_window_seconds=120)
+        self.assertEqual(result['records'][0]['bank_comment'], 'Комментарий покупки')
+        self.assertIsNone(result['records'][1].get('bank_comment'))
+
     def cashback_comparison(self, preliminary, amount='18'):
         source = expand_accounting(snapshot(purchase(cashback_cleared=not preliminary,
                                                      cashback_hint=amount)), parent_window_seconds=120)

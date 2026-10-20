@@ -73,6 +73,11 @@ class TransferAccountingTest(unittest.TestCase):
         self.assertEqual([r['cleared'] for r in result['records']], [False, False])
         self.assertEqual([r['status'] for r in result['records']], ['pending', 'pending'])
 
+    def test_derived_counterpart_does_not_claim_the_source_bank_comment_as_its_own(self):
+        result = expand_transfers(source(transfer(bank_comment='Назначение исходного перевода')), MAPPING)
+        self.assertEqual(result['records'][0]['bank_comment'], 'Назначение исходного перевода')
+        self.assertIsNone(result['records'][1].get('bank_comment'))
+
     def test_existing_legs_and_nontransfers_are_preserved_without_new_rows(self):
         rows = [{**transfer(), 'kind': 'transfer_leg'}, operation('purchase', kind='expense')]
         result = expand_transfers(source(*rows), MAPPING)
