@@ -31,7 +31,7 @@ def transfer_issues(row: dict, mapping: dict) -> list:
 def counterpart(row: dict) -> dict:
     peer = deepcopy(row)
     peer.update(account=row['other_account'], other_account=row['account'],
-                amount=str(-amount_decimal(row['amount'])), kind='transfer_leg',
+                amount=str(amount_decimal(row['amount']).copy_negate()), kind='transfer_leg',
                 role=COUNTERPART_ROLE, locator=str(row['locator']) + ':transfer-counterpart',
                 native_id=None, markers=[], category=None, category_path=[], tag=None)
     # Реквизиты банковской карточки доказывают исходную сторону, а не другой счёт.
