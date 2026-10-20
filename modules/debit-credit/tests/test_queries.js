@@ -24,6 +24,8 @@ test('Old IDs are re-read directly without a new-period feed or cached details',
       { date: '2026-01-01T10:00:00+03:00' }) };
   } });
   assert.equal(result.complete, true);
+  assert.equal(result.coverage, 'requested_versions_only');
+  assert.ok(result.limitations.includes('current_feed_identity_required'));
   assert.deepEqual(result.inputIds, ids);
   assert.deepEqual(calls.map(c => c.operation), Array(2).fill('TransactionOperationDetails'));
   assert.deepEqual(result.details.map(d => d.requestedId).sort(), ['old-purchase', 'old-rounding']);
