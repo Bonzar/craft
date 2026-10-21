@@ -69,6 +69,48 @@ class BackupTest(unittest.TestCase):
         self.assertEqual(row['tag'], 'Поездка')
         self.assertEqual(result['accounts'][0]['balance'], '-10.25')
 
+    def test_recurring_template_link_is_visible_in_review_without_assigning_a_provider(self):
+        from adapters.matching import compare_records
+        from adapters.review import build_review
+        self.insert()
+        self.insert(2)
+        self.db.execute('ALTER TABLE ZTRANSACTION ADD ZRECURRING_TRANSACTION INTEGER')
+        self.db.execute('UPDATE ZTRANSACTION SET ZRECURRING_TRANSACTION=95 WHERE Z_PK=1')
+        self.db.commit()
+        result = read_backup(self.path, 'Europe/Moscow')
+        self.assertTrue(result['recurring_links_available'])
+        self.assertEqual([r['recurring_template_locator'] for r in result['records']], [95, None])
+        review = build_review(compare_records([], result['records'], {}, window_seconds=120))
+        self.assertEqual(review['unreferenced_ledger'][0]['recurring_template_locator'], 95)
+        self.assertEqual(result['records'][0]['account'], 'Карта')
+        self.assertTrue(result['ready'])
+
+    def test_legacy_backup_does_not_claim_absence_of_a_recurring_template(self):
+        self.insert()
+        result = read_backup(self.path, 'Europe/Moscow')
+        self.assertFalse(result['recurring_links_available'])
+        self.assertNotIn('recurring_template_locator', result['records'][0])
+        self.assertTrue(result['ready'])
+
+    def test_unrecognized_recurring_link_keeps_the_financial_record_for_review(self):
+        self.insert()
+        self.db.execute('ALTER TABLE ZTRANSACTION ADD ZRECURRING_TRANSACTION INTEGER')
+        self.db.execute("UPDATE ZTRANSACTION SET ZRECURRING_TRANSACTION='unrecognized'")
+        self.db.commit()
+        result = read_backup(self.path, 'Europe/Moscow')
+        self.assertEqual(len(result['records']), 1)
+        self.assertEqual(result['rejected'], [])
+        self.assertEqual(result['records'][0]['amount'], '-10.25')
+        self.assertIn('recurring_link_requires_review', result['records'][0]['issues'])
+        self.assertFalse(result['ready'])
+
+    def test_empty_backup_still_reports_available_recurring_link_metadata(self):
+        self.db.execute('ALTER TABLE ZTRANSACTION ADD ZRECURRING_TRANSACTION INTEGER')
+        self.db.commit()
+        result = read_backup(self.path, 'Europe/Moscow')
+        self.assertTrue(result['recurring_links_available'])
+        self.assertEqual(result['records'], [])
+
     def test_foreign_transfer_halves_keep_their_ids_and_other_accounts(self):
         self.insert(kind=2, amount='-1000', linked=2, category=None)
         self.insert(2, kind=2, amount='10', account=2, linked=1, category=None)
