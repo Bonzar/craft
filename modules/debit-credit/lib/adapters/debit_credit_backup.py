@@ -128,6 +128,24 @@ def read_splits(connection: sqlite3.Connection, categories: dict) -> dict:
     return splits
 
 
+def read_transactions(connection: sqlite3.Connection) -> tuple:
+    columns = {r['name'] for r in connection.execute('PRAGMA table_info(ZTRANSACTION)')}
+    has_recurring_links = 'ZRECURRING_TRANSACTION' in columns
+    query = READ_TRANSACTIONS
+    if has_recurring_links:
+        query = query.replace('FROM ZTRANSACTION t',
+                              ',t.ZRECURRING_TRANSACTION AS recurring_template_locator\nFROM ZTRANSACTION t')
+    return [dict(r) for r in connection.execute(query)], has_recurring_links
+
+
+def recurring_metadata(raw: dict) -> tuple:
+    if 'recurring_template_locator' not in raw:
+        return {}, []
+    value = raw['recurring_template_locator']
+    issues = [] if value is None or (type(value) is int and value > 0) else ['recurring_link_requires_review']
+    return {'recurring_template_locator': value}, issues
+
+
 def apple_date(value: str, zone: ZoneInfo) -> datetime:
     try:
         micros = int(Decimal(value) * MICROSECONDS)
@@ -165,6 +183,8 @@ def parse_transaction(raw: dict, accounts: dict, categories: dict, splits: dict,
     if raw['type'] == 2 and (not other or raw['linked_locator'] is None):
         raise ValueError('У перевода отсутствует связанная сторона')
     amount, issues = normalize_money(raw['amount'], account['currency'])
+    recurrence, recurrence_issues = recurring_metadata(raw)
+    issues.extend(recurrence_issues)
     if (raw['type'] == 0 and amount >= 0) or (raw['type'] == 1 and amount <= 0):
         raise ValueError('Направление суммы противоречит типу операции')
     timestamp = apple_date(raw['date'], zone)
@@ -176,7 +196,7 @@ def parse_transaction(raw: dict, accounts: dict, categories: dict, splits: dict,
     upcoming = raw['upcoming'] == 1
     split_values, split_issues = normalize_splits(splits.get(raw['pk'], []), account['currency'])
     issues.extend(split_issues)
-    return {**record_base('debit-credit', raw['pk']), 'source_id': raw['id'],
+    return {**record_base('debit-credit', raw['pk']), **recurrence, 'source_id': raw['id'],
             'timestamp': timestamp.isoformat(),
             'timestamp_precision': 'microsecond' if timestamp.microsecond else 'second',
             'amount': format(amount.normalize(), 'f'), 'currency': account['currency'], 'account': account['name'],
@@ -206,7 +226,7 @@ def read_backup(path: Path | str, timezone: str, from_date: str | None = None,
             accounts = {row['pk']: row for row in account_list}
             categories = {row['Z_PK']: dict(row) for row in connection.execute('SELECT Z_PK,ZNAME,ZPARENT FROM ZTRANSACTION_CATEGORY')}
             splits = read_splits(connection, categories)
-            rows = [dict(row) for row in connection.execute(READ_TRANSACTIONS)]
+            rows, has_recurring_links = read_transactions(connection)
     except sqlite3.Error as error:
         raise ValueError('Резервная копия SQLite не прочитана') from error
     if start or end:
@@ -221,6 +241,7 @@ def read_backup(path: Path | str, timezone: str, from_date: str | None = None,
         result['issues'].extend({'locator': row['locator'], 'code': code} for code in row['issues'])
     result['ready'] = not result['rejected'] and not result['issues']
     result['accounts'] = account_list
+    result['recurring_links_available'] = has_recurring_links
     result['cloud_identity'] = {
         'transactions_without_id': sum(row['source_id'] is None for row in result['records']),
         'accounts_without_id': sum(row['id'] is None for row in account_list),
