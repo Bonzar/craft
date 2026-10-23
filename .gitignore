@@ -7,7 +7,11 @@
 .env
 
 # Полный профиль Codex, который tools/jarvis-codex создаёт для одного worktree.
-.codex/
+.codex/*
+!.codex/config.toml
+!.codex/environments/
+.codex/environments/*
+!.codex/environments/environment.toml
 
 # macOS Finder metadata.
 .DS_Store

@@ -1,0 +1,43 @@
+[features]
+hooks = true
+
+# jarvis:begin — строки хуков, которые пишет установщик Джарвиса
+[[hooks.PermissionRequest]]
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" probe --event permission-request; fi"
+timeout = 1800
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" craft-sync --event session-start; fi"
+timeout = 1800
+additionalContextLimit = 0
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" shell-tree --event session-start; fi"
+timeout = 1800
+additionalContextLimit = 0
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" start-context-codex --event session-start --event after-compact; fi"
+timeout = 1800
+additionalContextLimit = 0
+
+[[hooks.SubagentStart]]
+
+[[hooks.SubagentStart.hooks]]
+type = "command"
+command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" probe --event subagent-start; fi"
+timeout = 1800
+additionalContextLimit = 0
+# jarvis:end

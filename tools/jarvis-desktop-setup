@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Установка набора worktree и нативное доверие его хукам в профиле Desktop."""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DESKTOP_BINARIES = (
+    '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
+    '/Applications/Codex.app/Contents/Resources/codex',
+)
+
+
+def codex_binary() -> str:
+    found = shutil.which('codex')
+    if found:
+        return found
+    for candidate in DESKTOP_BINARIES:
+        if Path(candidate).is_file():
+            return candidate
+    raise RuntimeError('CLI Codex не найден: установка Desktop не завершена')
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--trust-home', type=Path,
+                        default=Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser())
+    parser.add_argument('--codex-cli')
+    args = parser.parse_args()
+    gitdir = Path(subprocess.check_output(
+        ['git', '-C', str(ROOT), 'rev-parse', '--absolute-git-dir'], text=True).strip()).resolve()
+    common = Path(subprocess.check_output(
+        ['git', '-C', str(ROOT), 'rev-parse', '--path-format=absolute', '--git-common-dir'], text=True).strip()).resolve()
+    if gitdir == common:
+        print('Обычный checkout: модули Desktop не включены')
+        return 0
+    hook_settings = common.parent / '.codex'
+    marker = ROOT / '.codex' / 'jarvis' / 'desktop.json'
+    marker.unlink(missing_ok=True)
+    subprocess.run([
+        sys.executable, str(ROOT / 'tools' / 'jarvis-install'),
+        '--harness', 'codex', '--project', '--require-trust',
+        '--settings-dir', str(ROOT / '.codex'),
+        '--state-dir', str(ROOT / '.codex' / 'state'),
+        '--trust-home', str(args.trust_home.resolve()),
+        '--hook-settings-dir', str(hook_settings),
+        '--codex-cli', args.codex_cli or codex_binary(),
+    ], cwd=ROOT, check=True)
+    marker.write_text(json.dumps({'worktree': str(ROOT)}, ensure_ascii=False) + '\n')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

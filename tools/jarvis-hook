@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Проектная строка хука: исполняет установленный модуль своего worktree."""
+
+import runpy
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    root = Path(__file__).resolve().parents[1]
+    marker = root / '.codex' / 'jarvis' / 'desktop.json'
+    if not marker.is_file():
+        return
+    identity = json.loads(marker.read_text(encoding='utf-8'))
+    if identity.get('worktree') != str(root):
+        return
+    gitdir = subprocess.check_output(['git', '-C', str(root), 'rev-parse', '--absolute-git-dir'], text=True).strip()
+    common = subprocess.check_output(['git', '-C', str(root), 'rev-parse', '--path-format=absolute', '--git-common-dir'], text=True).strip()
+    if Path(gitdir).resolve() == Path(common).resolve():
+        return
+    slug, *arguments = sys.argv[1:]
+    if not slug or Path(slug).name != slug or slug in ('.', '..'):
+        raise ValueError('нужен slug модуля')
+    entry = root / '.codex' / 'jarvis' / 'modules' / slug / 'hooks' / 'module.py'
+    if not entry.is_file():
+        raise RuntimeError('модули worktree не установлены: выполни tools/jarvis-desktop-setup')
+    sys.argv = [str(entry), '--harness', 'codex', '--state-dir', str(root / '.codex' / 'state'), *arguments]
+    runpy.run_path(str(entry), run_name='__main__')
+
+
+if __name__ == '__main__':
+    main()

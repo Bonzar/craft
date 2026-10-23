@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Опубликовать проверенный dist точным деревом в main отдельного репозитория."""
+
+import argparse
+import base64
+import importlib.machinery
+import importlib.util
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def builder():
+    loader = importlib.machinery.SourceFileLoader(
+        'cloud_dist_builder', str(Path(__file__).with_name('build-cloud-probe')))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def git(root, *args, env=None, allow=(0,)):
+    done = subprocess.run(['git', '-C', str(root), *args], capture_output=True,
+                          text=True, env=env, check=False)
+    if done.returncode not in allow:
+        raise ValueError(done.stderr.strip() or f'git завершился с кодом {done.returncode}')
+    return done
+
+
+def publish(args):
+    build = builder()
+    manifest = build.verify(args.dist)
+    commit = git(args.source, 'rev-parse', '--verify', '--end-of-options',
+                 args.ref + '^{commit}').stdout.strip()
+    if manifest['source_commit'] != commit:
+        raise ValueError('source_commit dist не совпадает с выбранным коммитом исходников')
+
+    # Токен передаётся только Git через окружение, не в URL, argv или config.
+    # Область credential строго ограничена HTTPS-адресом целевого репозитория.
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
+    token = env.pop('CRAFT_DIST_TOKEN', '')
+    if args.remote.startswith('https://'):
+        if args.remote != 'https://github.com/Bonzar/craft-codex-dist.git':
+            raise ValueError('HTTPS remote должен быть Bonzar/craft-codex-dist')
+        if not token:
+            raise ValueError('не задан Actions secret CRAFT_DIST_TOKEN для записи в craft-codex-dist')
+        auth = base64.b64encode(('x-access-token:' + token).encode()).decode()
+        env.update(GIT_CONFIG_COUNT='1',
+                   GIT_CONFIG_KEY_0=f'http.{args.remote}.extraheader',
+                   GIT_CONFIG_VALUE_0='AUTHORIZATION: basic ' + auth)
+    elif not Path(args.remote).is_absolute():
+        raise ValueError('remote должен быть HTTPS GitHub или абсолютным локальным путём')
+
+    with tempfile.TemporaryDirectory(prefix='craft-dist-publish-') as temporary:
+        root = Path(temporary)
+        git(root, 'init', '-q', '--initial-branch=main', env=env)
+        git(root, 'remote', 'add', 'origin', args.remote, env=env)
+        head = git(root, 'ls-remote', '--heads', 'origin', 'refs/heads/main', env=env).stdout
+        if head.strip():
+            git(root, 'fetch', '--no-tags', '--depth=1', 'origin', 'refs/heads/main', env=env)
+            git(root, 'update-ref', 'HEAD', 'FETCH_HEAD', env=env)
+        git(root, 'read-tree', '--empty', env=env)
+        names = sorted(set(manifest['files']) | {build.MANIFEST})
+        for name in names:
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(args.dist / name, target)
+        # Повторная проверка уже скопированных байтов до коммита.
+        build.verify(root)
+        git(root, 'add', '--', *names, env=env)
+        if head.strip() and git(root, 'diff', '--cached', '--quiet', env=env,
+                                allow=(0, 1)).returncode == 0:
+            print(f'Dist без изменений: source={commit}')
+            return
+        git(root, '-c', 'user.name=github-actions[bot]',
+            '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+            'commit', '-qm', f'Build Codex Cloud dist from Bonzar/craft@{commit}', env=env)
+        if args.require_current_main:
+            # Поздний повтор старого workflow не откатывает уже свежий dist.
+            current = git(args.source, 'ls-remote', '--heads', 'origin',
+                          'refs/heads/main').stdout.split()
+            if not current or current[0] != commit:
+                raise ValueError('main исходников уже изменился: устаревший dist не опубликован')
+        # Обычный fast-forward push. При гонке завершаемся с текстом ошибки.
+        git(root, 'push', 'origin', 'HEAD:refs/heads/main', env=env)
+        print(f'Dist опубликован в main: source={commit}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--dist', type=Path, required=True)
+    parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument('--ref', required=True)
+    parser.add_argument('--remote', default='https://github.com/Bonzar/craft-codex-dist.git')
+    parser.add_argument('--require-current-main', action='store_true')
+    args = parser.parse_args()
+    try:
+        publish(args)
+    except (OSError, ValueError) as error:
+        # Даже при ошибке Git не печатаем credential, если сервер вернул его в тексте.
+        reason = str(error)
+        token = os.environ.get('CRAFT_DIST_TOKEN', '')
+        if token:
+            reason = reason.replace(token, '[REDACTED]')
+            encoded = base64.b64encode(('x-access-token:' + token).encode()).decode()
+            reason = reason.replace(encoded, '[REDACTED]')
+        print(f'ОШИБКА публикации dist: {reason}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -1,0 +1,16 @@
+# Desktop executes setup before the first turn in a new worktree.
+version = 1
+name = "craft-local"
+
+[setup]
+script = '''
+#!/bin/bash
+set -euo pipefail
+if [ -f "$PWD/.git" ]; then
+  test -f "$PWD/tools/jarvis-desktop-setup" || {
+    echo "Ветка не содержит Desktop bootstrap: обнови её перед запуском модулей" >&2
+    exit 1
+  }
+  python3 "$PWD/tools/jarvis-desktop-setup"
+fi
+'''

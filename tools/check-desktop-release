@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Проверяет доставку Desktop bootstrap коммитом и запуском чистого setup."""
+
+import argparse
+import json
+import os
+import subprocess
+import tempfile
+import tomllib
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REQUIRED = (
+    '.codex/config.toml', '.codex/environments/environment.toml',
+    'tools/jarvis-desktop-setup', 'tools/jarvis-hook', 'tools/jarvis-install',
+    'modules/codex-rules/module.toml', 'modules/codex-rules/lib/__init__.py',
+)
+
+
+def validate_ref(repository: Path, ref: str) -> str:
+    commit = subprocess.check_output(
+        ['git', '-C', str(repository), 'rev-parse', '--verify', ref + '^{commit}'], text=True).strip()
+    missing = [name for name in REQUIRED if subprocess.run(
+        ['git', '-C', str(repository), 'cat-file', '-e', commit + ':' + name],
+        capture_output=True).returncode]
+    if missing:
+        raise RuntimeError('коммит не содержит Desktop bootstrap: ' + ', '.join(missing))
+    return commit
+
+
+def smoke(repository: Path, commit: str) -> None:
+    with tempfile.TemporaryDirectory(prefix='desktop-release-') as directory:
+        parent = Path(directory).resolve()
+        checkout, worktree, profile = (parent / name for name in ('checkout', 'worktree', 'profile'))
+        subprocess.run(['git', 'clone', '--shared', '--no-checkout', '-q', str(repository), str(checkout)], check=True)
+        subprocess.run(['git', '-C', str(checkout), 'checkout', '-q', '--detach', commit], check=True)
+        subprocess.run(['git', '-C', str(checkout), 'worktree', 'add', '-q', '--detach', str(worktree), commit], check=True)
+        profile.mkdir()
+        (profile / 'config.toml').write_text(
+            '[projects.' + json.dumps(str(checkout)) + ']\ntrust_level = "trusted"\n')
+        environment = tomllib.loads((worktree / '.codex/environments/environment.toml').read_text())
+        completed = subprocess.run(['bash', '-c', environment['setup']['script']], cwd=worktree,
+                                   env={**os.environ, 'CODEX_HOME': str(profile)},
+                                   capture_output=True, text=True)
+        if completed.returncode:
+            raise RuntimeError(f'чистый setup коммита завершился с кодом {completed.returncode}')
+        marker = json.loads((worktree / '.codex/jarvis/desktop.json').read_text())
+        ledger = json.loads((worktree / '.codex/jarvis/installed.json').read_text())
+        if marker.get('worktree') != str(worktree) or ledger['source']['head'] != commit:
+            raise RuntimeError('setup подготовил набор другой ревизии или другого worktree')
+        if (checkout / '.codex/jarvis/installed.json').exists():
+            raise RuntimeError('setup установил модули в обычный checkout')
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('ref')
+    parser.add_argument('--check-only', action='store_true', help='только состав коммита, без native Codex')
+    args = parser.parse_args()
+    commit = validate_ref(ROOT, args.ref)
+    if not args.check_only:
+        smoke(ROOT, commit)
+    print('Desktop release PASS: ' + commit)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

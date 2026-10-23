@@ -66,6 +66,14 @@ class SessionBootstrapTest(unittest.TestCase):
         self.assertTrue((explicit / 'config.toml').is_file())
         self.assertFalse(self.profile.exists())
 
+    def test_unusable_codex_state_is_reported_before_installing_modules(self):
+        blocked = self.root / 'not-a-directory'
+        blocked.write_text('occupied')
+        report = self.install(extra=('--state-dir', str(blocked / 'state')))
+        self.assertTrue(report.errors)
+        self.assertIn(str(blocked / 'state'), ' '.join(report.errors))
+        self.assertFalse(self.profile.exists())
+
     def test_installed_hooks_use_the_selected_state_without_runtime_env(self):
         for harness in ('codex', 'claude'):
             with self.subTest(harness=harness):

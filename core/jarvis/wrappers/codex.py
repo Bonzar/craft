@@ -194,6 +194,7 @@ def run_hook(entry_file: str, module_class: type[Module], argv: list[str] | None
              stdin=None, stdout=None, stderr=None, env: Mapping[str, str] | None = None) -> int:
     """Провести модуль по одному событию Codex и напечатать ответ."""
     parser = argparse.ArgumentParser(description='Обёртка Codex вокруг одного модуля Джарвиса')
+    parser.add_argument('--state-dir', type=Path, default=None)
     parser.add_argument(
         '--event',
         required=True,
@@ -221,7 +222,7 @@ def run_hook(entry_file: str, module_class: type[Module], argv: list[str] | None
         module_class(),
         manifest,
         event,
-        Storage(default_state_dir(module_dir), event.session_id),
+        Storage(args.state_dir or default_state_dir(module_dir), event.session_id),
         translate=lambda unified, response: translate(unified, response, slug=manifest.slug),
         module_dir=module_dir,
         personal_config=Path(PERSONAL_CONFIG).expanduser(),

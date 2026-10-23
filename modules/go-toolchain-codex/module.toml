@@ -1,0 +1,5 @@
+# Адаптер подключает подготовку Go к сборщикам только в Codex.
+slug = "go-toolchain-codex"
+for = ["craft-sync", "shell-tree"]
+requires = ["go-toolchain"]
+harness = "codex"
