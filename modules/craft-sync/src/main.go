@@ -37,13 +37,15 @@ import (
 // Collection blocks carry their items in a separate "items" array (type
 // collectionItem), each with a full nested content tree — not in "content".
 type Block struct {
-	ID       string  `json:"id"`
-	Type     string  `json:"type"`
-	Markdown string  `json:"markdown"`
-	RawCode  string  `json:"rawCode"`
-	Metadata *Meta   `json:"metadata"`
-	Content  []Block `json:"content"`
-	Items    []Block `json:"items"`
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
+	Markdown  string    `json:"markdown"`
+	RawCode   string    `json:"rawCode"`
+	ListStyle string    `json:"listStyle"`
+	TaskInfo  *TaskInfo `json:"taskInfo"`
+	Metadata  *Meta     `json:"metadata"`
+	Content   []Block   `json:"content"`
+	Items     []Block   `json:"items"`
 }
 
 type Meta struct {
@@ -174,6 +176,8 @@ func main() {
 		markdownArg = flag.String("markdown", "", "Markdown mode: deep-fetch these comma-separated block IDs and print their markdown, then exit. Feeds the start-context provider.")
 		followLinks = flag.Bool("follow-links", false, "With --markdown: also read every block linked from a «Связи» section, recursively, each ID at most once.")
 		container   = flag.String("container", "", "With --markdown: deep-read this page once and serve the walk from its tree, fetching one by one only what it does not hold. Same output, far fewer requests when the walked pages live under one page.")
+
+		taskTagsArg = flag.String("task-tags", "", "Task-tags mode: deep-read these comma-separated page/document IDs with all subpages and print every task whose checkbox state and #задача tag disagree (done without /готово, canceled without /отменено, open with a closing tag), then exit.")
 	)
 	flag.Parse()
 
@@ -230,6 +234,11 @@ func main() {
 		base:      *base,
 		retries:   *retries,
 		rlRetries: *rlRetries,
+	}
+
+	if *taskTagsArg != "" {
+		runTaskTags(client, *taskTagsArg)
+		return
 	}
 
 	if *markdownArg != "" {
