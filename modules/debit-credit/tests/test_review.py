@@ -81,6 +81,17 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(result['records'][1]['assessment'], 'confirmed_source_alias')
         self.assertEqual(result['records'][1]['source_match_assessment'], 'no_candidate')
 
+    def test_alias_ignores_derived_records_with_the_same_source_id(self):
+        from adapters.source_resolutions import apply_resolutions
+        from test_source_resolutions import snapshot, resolution
+        canonical, alias = operation('canonical'), operation('alias')
+        source = apply_resolutions(snapshot(canonical, alias), [resolution(alias,
+            same_operation_as={'source': 'yabank', 'id': 'canonical'})])
+        cashback = {**copy.deepcopy(source['records'][0]), 'role': 'cashback', 'locator': '1:cashback'}
+        result = build_review(self.comparison([*source['records'], cashback], []))
+        self.assertEqual(len(result['records']), 3)
+        self.assertEqual(result['records'][1]['same_operation_case_index'], 0)
+
     def test_old_pending_records_are_reported_without_new_source_operations(self):
         ledger = [entry('old', timestamp='2026-01-01T10:00:00+03:00',
                         cleared=False, status='pending', kind='expense',

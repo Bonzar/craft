@@ -111,6 +111,13 @@ class MissingFromSourceTest(unittest.TestCase):
         ledger = [ledger_row('999', '2026-10-21T10:00:00+03:00')]
         self.assertEqual(self.compare(source['records'], ledger, source['period'])['missing_from_source'], [])
 
+    def test_empty_complete_period_still_reports_marked_records(self):
+        source = read_history(snapshot(feed_id('541')))
+        self.assertEqual(source['source'], 'yabank')
+        result = compare_records([], [ledger_row('999')], MAPPING, window_seconds=120,
+                                 source_period=source['period'], source_name=source['source'])
+        self.assertEqual([row['ledger_index'] for row in result['missing_from_source']], [0])
+
     def test_without_period_missing_operations_are_not_claimed(self):
         source = read_history(snapshot(feed_id('541')))
         result = self.compare(source['records'], [ledger_row('999')], None)
