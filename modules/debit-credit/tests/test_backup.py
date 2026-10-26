@@ -179,7 +179,9 @@ class BackupTest(unittest.TestCase):
         row = read_backup(self.path, 'Europe/Moscow')['records'][0]
 
         self.assertEqual(row['amount'], '-936.81')
-        self.assertNotEqual(row['raw']['amount'], row['amount'])
+        # Текст дробного числа зависит от версии SQLite: шум виден не везде.
+        stored = self.db.execute('SELECT CAST(ZAMOUNT AS TEXT) FROM ZTRANSACTION').fetchone()[0]
+        self.assertEqual(row['raw']['amount'], stored)
 
     def test_real_subcent_amount_is_preserved_and_requires_review(self):
         self.insert(amount='-1.005')
