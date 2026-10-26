@@ -21,7 +21,7 @@ class DebitCreditModuleTest(unittest.TestCase):
         library = library_of(manifest).load()
         self.assertTrue(callable(library.read_csv))
         self.assertTrue(callable(library.read_backup))
-        self.assertTrue(callable(library.read_cards))
+        self.assertTrue(callable(library.read_history))
         self.assertTrue(callable(library.build_review))
         self.assertTrue(callable(library.apply_resolutions))
         self.assertTrue(callable(library.expand_accounting))
