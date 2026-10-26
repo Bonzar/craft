@@ -153,7 +153,33 @@ def compare_one(row: dict, ledger: list, mapping: dict, marker_index: dict,
             'issues': issues}
 
 
-def compare_records(sources: list, ledger: list, account_map: dict, *, window_seconds: int) -> dict:
+def in_period(row: dict, period: dict) -> bool:
+    start = datetime.fromisoformat(period['fromInclusive'])
+    end = datetime.fromisoformat(period['toExclusive'])
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError('Период источника должен содержать часовой пояс')
+    row_start, row_end = time_interval(row)
+    return start <= row_start and row_end <= end
+
+
+def missing_from_source(sources: list, ledger: list, period: dict | None) -> list:
+    """Запись с меткой источника, которой нет в прочитанном периоде. Удаления нет."""
+    if period is None:
+        return []
+    names = {row['source'] for row in sources}
+    read = {identity(row) for row in sources if identity(row)}
+    result = []
+    for position, row in enumerate(ledger):
+        keys = [(m['source'], m['id'], m.get('role')) for m in row.get('markers', [])
+                if m['source'] in names]
+        if keys and not any(key in read for key in keys) and in_period(row, period):
+            result.append({'ledger_index': position, 'markers': deepcopy(row['markers']),
+                           'reason': 'marked_operation_absent_from_source_period'})
+    return result
+
+
+def compare_records(sources: list, ledger: list, account_map: dict, *, window_seconds: int,
+                    source_period: dict | None = None) -> dict:
     """Окно поиска задаёт вызывающий. no_candidate не означает доказанный пропуск."""
     validate_records(sources)
     validate_records(ledger)
@@ -176,6 +202,8 @@ def compare_records(sources: list, ledger: list, account_map: dict, *, window_se
             'issues': [{'locator': i, 'code': code} for i, row in enumerate(rows)
                        for code in row['issues']], 'coverage': 'unverified', 'ready': False,
             'window_seconds': window_seconds,
+            'missing_from_source': missing_from_source(sources, ledger, source_period),
             'limitations': ['candidates_require_human_review', 'no_candidate_is_not_missing',
                             'metadata_not_compared', 'marked_ledger_excluded_from_fuzzy_search',
-                            'balances_not_reconciled', 'no_writes']}
+                            'balances_not_reconciled', 'no_writes',
+                            *([] if source_period else ['missing_from_source_not_checked'])]}

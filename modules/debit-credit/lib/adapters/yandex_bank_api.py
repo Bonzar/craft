@@ -8,6 +8,7 @@ from decimal import Decimal
 from urllib.parse import parse_qs, urlsplit
 
 from .common import amount_decimal, normalize_space, record_base, report
+from .yandex_bank_ids import operation_id
 
 STATUSES = {'CLEAR': ('completed', True), 'HOLD': ('pending', False),
             'CANCEL': ('canceled', None), 'FAIL': ('failed', None)}
@@ -229,11 +230,11 @@ def resolve_accounts(records: list) -> dict:
 
 def parse_record(raw: dict, index: int) -> dict:
     feed, details = raw['feed'], raw['details']
-    source_id = text(feed['id'])
+    feed_id = text(feed['id'])
     if len(details) != 1:
         raise ValueError('Нужна одна карточка на каждый ID списка')
     detail = details[0]
-    if detail['requestedId'] != source_id:
+    if detail['requestedId'] != feed_id:
         raise ValueError('Карточка не связана с запросом исходного ID')
     native_id = text(detail['id'])
     timestamp = datetime.fromisoformat(text(detail['date']))
@@ -251,6 +252,10 @@ def parse_record(raw: dict, index: int) -> dict:
     hint, cashback_cleared, issues = cashback_hint(detail)
     comment, comment_issues = read_comment(detail)
     issues.extend(comment_issues)
+    source_id = operation_id(feed_id)
+    if source_id is None:
+        source_id = feed_id
+        issues.append('unstable_feed_identity')
     if not account:
         issues.append('unknown_account')
     if status == 'unknown':
@@ -266,7 +271,8 @@ def parse_record(raw: dict, index: int) -> dict:
         issues.append('feed_detail_status_differs')
     fraction = re.search(r'\.(\d+)', detail['date'])
     precision = ('millisecond' if len(fraction[1]) <= 3 else 'microsecond') if fraction else 'second'
-    return {**record_base('yabank', index + 1), 'source_id': source_id, 'native_id': native_id,
+    return {**record_base('yabank', index + 1), 'source_id': source_id, 'feed_id': feed_id,
+            'native_id': native_id,
             'bank_account_ids': bank_account_ids(detail),
             'direction_evidence': direction_evidence,
             'timestamp': timestamp.isoformat(), 'timestamp_precision': precision,
@@ -331,8 +337,9 @@ def read_history(snapshot: dict) -> dict:
     feed_ids = [row.get('id') for row in snapshot['records']]
     counts = Counter(feed_ids)
     result['unmatched_details'] = [row for row in snapshot['details'] if row.get('requestedId') not in counts]
+    operations = Counter(row['source_id'] for row in result['records'])
     for row in result['records']:
-        if counts[row['source_id']] > 1:
+        if counts[row['feed_id']] > 1 or operations[row['source_id']] > 1:
             row['issues'].append('duplicate_source_id')
         result['issues'].extend({'locator': row['locator'], 'code': code} for code in row['issues'])
     if result['unmatched_details']:

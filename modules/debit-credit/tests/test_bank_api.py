@@ -4,10 +4,12 @@ import copy
 import unittest
 
 from adapters.yandex_bank_api import read_history
+from test_yandex_bank_ids import feed_id
 
 
 def detail(identifier='feed-a', **changes):
-    return {'requestedId': identifier, 'id': 'native-a', 'date': '2026-07-04T07:00:26.388Z',
+    """identifier — номер операции, ID ленты собирается в настоящем формате."""
+    return {'requestedId': feed_id(identifier), 'id': 'native-a', 'date': '2026-07-04T07:00:26.388Z',
             'direction': 'DEBIT', 'statusCode': 'CLEAR',
             'title': {'plain': 'Магазин', 'compound': None},
             'amount': {'money': {'amount': '120.50', 'currency': 'RUB'}, 'plus': None},

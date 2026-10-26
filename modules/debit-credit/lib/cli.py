@@ -222,8 +222,10 @@ def compare_snapshots(args: argparse.Namespace) -> dict:
     ledger, ledger_hash = read_snapshot(args.ledger)
     map_bytes = args.accounts.read_bytes()
     mapping = json.loads(map_bytes.decode('utf-8-sig'))
+    # Пропавшие операции считаются только по полностью прочитанному периоду.
+    period = source.get('period') if source.get('coverage') == 'snapshot_complete' else None
     result = compare_records(source['records'], ledger['records'], mapping,
-                             window_seconds=args.window_seconds)
+                             window_seconds=args.window_seconds, source_period=period)
     return {**result, 'input_count': source['input_count'], 'rejected': source['rejected'],
             'source_input': {key: value for key, value in source.items() if key != 'records'},
             'ledger_input': {key: value for key, value in ledger.items() if key != 'records'},

@@ -4,6 +4,8 @@ import re
 from dataclasses import asdict, dataclass
 from urllib.parse import quote, unquote
 
+from .yandex_bank_ids import canonical_marker_id
+
 TOKEN_PATTERN = re.compile(r'[a-z0-9][a-z0-9-]*')
 MARKER_PATTERN = re.compile(r'\[dc-sync:v1 source=([^\s\]]+) id=([^\s\]]+)(?: role=([^\s\]]+))?\]')
 
@@ -39,5 +41,6 @@ def extract_markers(notes: str) -> list[Marker]:
         encoded = match[2]
         if re.search(r'%(?![0-9A-Fa-f]{2})', encoded):
             raise ValueError('Некорректное кодирование идентификатора метки')
-        result.append(Marker(match[1], unquote(encoded, errors='strict'), match[3]))
+        identifier = canonical_marker_id(match[1], unquote(encoded, errors='strict'))
+        result.append(Marker(match[1], identifier, match[3]))
     return result
