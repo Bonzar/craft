@@ -55,18 +55,18 @@ def ledger_row(identifier: str, timestamp='2026-10-19T16:36:00+03:00') -> dict:
 
 class OperationIdTest(unittest.TestCase):
     def test_card_operation_number_is_read_from_feed_id(self):
-        self.assertEqual(operation_id(feed_id('54186314773346304')), '54186314773346304')
+        self.assertEqual(operation_id(feed_id('50000000000000001')), '50000000000000001')
 
     def test_chain_versions_do_not_change_operation_number(self):
-        self.assertEqual(operation_id(feed_id('54186314773346304', (0,))),
-                         operation_id(feed_id('54186314773346304', (0, 4, 5))))
+        self.assertEqual(operation_id(feed_id('50000000000000001', (0,))),
+                         operation_id(feed_id('50000000000000001', (0, 4, 5))))
 
     def test_points_operation_uses_service_payment_id(self):
-        self.assertEqual(operation_id(points_feed_id('trust_6ac5d40558de748983351b61')),
-                         'trust_6ac5d40558de748983351b61')
+        self.assertEqual(operation_id(points_feed_id('trust_0000000000000000000000aa')),
+                         'trust_0000000000000000000000aa')
 
     def test_unknown_format_has_no_operation_number(self):
-        for value in ('feed-a', '54186314773346304', 'FEED_VIEW::UNQ_YABANK::broken'):
+        for value in ('feed-a', '50000000000000001', 'FEED_VIEW::UNQ_YABANK::broken'):
             self.assertIsNone(operation_id(value))
 
 

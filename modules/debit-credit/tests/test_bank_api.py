@@ -164,8 +164,8 @@ class BankApiTest(unittest.TestCase):
 
     def test_single_preposition_is_removed_from_named_source_account(self):
         r = detail(additionalFieldsList=[{'additionalFields': [
-            {'name': 'Пополнение', 'value': 'На На подарок жене'}]}], direction='CREDIT')
-        self.assertEqual(read_history(snapshot(r))['records'][0]['account'], 'На подарок жене')
+            {'name': 'Пополнение', 'value': 'На На подарок'}]}], direction='CREDIT')
+        self.assertEqual(read_history(snapshot(r))['records'][0]['account'], 'На подарок')
 
     def test_unknown_account_is_preserved_as_unknown_with_raw_fields(self):
         r = detail(additionalFieldsList=[{'additionalFields': [{'name': 'Новое поле', 'value': 'private'}]}])
