@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from contextlib import closing
 from pathlib import Path
 
-from test_adapters import card, export_csv
+from test_adapters import export_csv
 from test_backup import SCHEMA
 from test_matching import MAPPING, entry, operation
 from test_bank_api import snapshot, detail
@@ -150,11 +150,11 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(report['coverage'], 'unverified')
 
     def test_existing_output_is_not_overwritten(self):
-        source, target = self.directory / 'cards.json', self.directory / 'result.json'
-        source.write_text(json.dumps([card()]), encoding='utf-8')
+        source, target = self.directory / 'api.json', self.directory / 'result.json'
+        source.write_text(json.dumps(snapshot(detail())), encoding='utf-8')
         target.write_text('keep', encoding='utf-8')
 
-        result = self.run_cli('yandex-bank', source, '--output', target)
+        result = self.run_cli('yandex-bank-api', source, '--output', target)
 
         self.assertEqual(result.returncode, 2)
         self.assertEqual(target.read_text(encoding='utf-8'), 'keep')
@@ -169,23 +169,24 @@ class CommandTest(unittest.TestCase):
         self.assertNotIn('Traceback', result.stderr)
         self.assertIn('error', json.loads(result.stderr))
 
-    def test_one_rejected_card_stays_in_output_and_sets_failure_exit_code(self):
-        source, target = self.directory / 'cards.json', self.directory / 'result.json'
-        source.write_text(json.dumps([card(), card('b', amount='bad')]), encoding='utf-8')
+    def test_one_rejected_operation_stays_in_output_and_sets_failure_exit_code(self):
+        source, target = self.directory / 'api.json', self.directory / 'result.json'
+        bad = detail('b', amount={'money': {'amount': 'bad', 'currency': 'RUB'}, 'plus': None})
+        source.write_text(json.dumps(snapshot(detail(), bad)), encoding='utf-8')
 
-        result = self.run_cli('yandex-bank', source, '--output', target)
+        result = self.run_cli('yandex-bank-api', source, '--output', target)
 
         self.assertEqual(result.returncode, 1)
         report = json.loads(target.read_text(encoding='utf-8'))
         self.assertEqual(report['input_count'], 2)
         self.assertEqual(len(report['records']), 1)
-        self.assertEqual(report['rejected'][0]['raw']['amount'], 'bad')
+        self.assertEqual(len(report['rejected']), 1)
 
     def test_output_with_personal_data_is_only_readable_by_its_owner(self):
-        source, target = self.directory / 'cards.json', self.directory / 'private.json'
-        source.write_text(json.dumps([card()]), encoding='utf-8')
+        source, target = self.directory / 'api.json', self.directory / 'private.json'
+        source.write_text(json.dumps(snapshot(detail())), encoding='utf-8')
 
-        result = self.run_cli('yandex-bank', source, '--output', target)
+        result = self.run_cli('yandex-bank-api', source, '--output', target)
 
         self.assertEqual(result.returncode, 0)
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)

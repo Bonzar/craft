@@ -2,7 +2,6 @@
 
 from .adapters.debit_credit import read_csv
 from .adapters.debit_credit_backup import read_backup
-from .adapters.yandex_bank import read_cards
 from .adapters.matching import compare_records
 from .adapters.yandex_bank_api import read_history
 from .adapters.import_verification import verify_additions
@@ -17,7 +16,7 @@ from .adapters.movement_control import compare_movements
 from .adapters.transfer_plan import build_transfer_plan
 from .adapters.completion import plan_confirmations
 
-__all__ = ['read_csv', 'read_backup', 'read_cards', 'read_history', 'compare_records',
+__all__ = ['read_csv', 'read_backup', 'read_history', 'compare_records',
            'verify_additions', 'verify_restoration', 'prepare_backup', 'backup_fingerprint',
            'register_backup', 'build_review', 'apply_resolutions', 'expand_accounting', 'plan_cashback_confirmations',
            'add_classification_evidence', 'compare_movements', 'build_transfer_plan', 'plan_confirmations']

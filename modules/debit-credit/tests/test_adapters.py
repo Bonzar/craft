@@ -6,7 +6,6 @@ import unittest
 
 from adapters.debit_credit import HEADERS, read_csv
 from adapters.markers import Marker, extract_markers
-from adapters.yandex_bank import read_cards
 
 
 def export_csv(*changes):
@@ -21,19 +20,6 @@ def export_csv(*changes):
         writer.writerow(row)
     return stream.getvalue()
 
-
-def card(operation_id='a', **changes):
-    result = {
-        'url': 'https://bank.yandex.ru/my/transactions-history/operation?id=' + operation_id,
-        'captured_at': '2026-10-18T12:00:00+03:00',
-        'timezone': 'Europe/Moscow',
-        'title': 'Такси', 'amount': '−306 ₽',
-        'date': '5 июля 2026, 16:15', 'is_points': False,
-        'details': [['Статус', 'Выполнено'], ['Способ оплаты', 'Карта Пэй'],
-                    ['Кешбэк', '+31'], ['MCC', '3990']],
-        'transfer_accounts': [],
-    }
-    return {**result, **changes}
 
 
 class DebitCreditTest(unittest.TestCase):
@@ -90,85 +76,6 @@ class DebitCreditTest(unittest.TestCase):
         row = read_csv(export_csv({'Заметки': notes}), 'Europe/Moscow')['records'][0]
         self.assertEqual(row['notes'], notes)
         self.assertEqual(row['markers'][0]['role'], 'cashback')
-
-
-class YandexBankTest(unittest.TestCase):
-    def test_purchase_keeps_opaque_id_status_and_cashback_hint(self):
-        row = read_cards([card('opaque%2F123')])['records'][0]
-        self.assertEqual(row['source_id'], 'opaque/123')
-        self.assertEqual(row['amount'], '-306')
-        self.assertEqual(row['currency'], 'RUB')
-        self.assertTrue(row['cleared'])
-        self.assertEqual(row['cashback_hint'], '31')
-        self.assertIsNone(row['category'])
-
-    def test_equal_purchases_with_different_ids_are_kept(self):
-        rows = read_cards([card('a'), card('b')])['records']
-        self.assertEqual([r['source_id'] for r in rows], ['a', 'b'])
-
-    def test_repeated_capture_is_reported_not_silently_removed(self):
-        result = read_cards([card(), card()])
-        self.assertEqual(len(result['records']), 2)
-        self.assertFalse(result['ready'])
-        self.assertIn('duplicate_source_id', {i['code'] for i in result['issues']})
-
-    def test_pending_and_canceled_keep_distinct_statuses(self):
-        pending = card(details=[['Статус', 'В обработке'], ['Способ оплаты', 'Карта Пэй']])
-        canceled = card('b', details=[['Статус', 'Не выполнено / Отмена']])
-        rows = read_cards([pending, canceled])['records']
-        self.assertEqual([r['status'] for r in rows], ['pending', 'canceled'])
-        self.assertEqual([r['cleared'] for r in rows], [False, None])
-
-    def test_points_income_does_not_require_a_purchase(self):
-        source = card(amount='+400', is_points=True,
-                      details=[['Статус', 'Выполнено'], ['Назначение', 'Начисление баллов']])
-        row = read_cards([source])['records'][0]
-        self.assertEqual(row['currency'], 'YPLUS_POINTS')
-        self.assertEqual(row['account'], 'ЯПлюс Баллы')
-        self.assertEqual(row['amount'], '400')
-        self.assertNotIn('purchase_id', row)
-
-    def test_rounding_legs_retain_their_own_ids(self):
-        first = card('out', title='Округление', amount='−94 ₽',
-                     transfer_accounts=['Карта Пэй', 'Округление'])
-        second = card('in', title='Округление', amount='+94 ₽',
-                      transfer_accounts=['Карта Пэй', 'Округление'])
-        rows = read_cards([first, second])['records']
-        self.assertEqual([r['source_id'] for r in rows], ['out', 'in'])
-        self.assertEqual([r['account'] for r in rows], ['Карта Пэй', 'Округление'])
-
-    def test_login_and_transfer_pages_are_rejected(self):
-        for url in ('https://bank.yandex.ru/_pay/login',
-                    'https://bank.yandex.ru/my/transfers?id=a',
-                    'https://evil.example/my/transactions-history/operation?id=a'):
-            with self.subTest(url=url):
-                result = read_cards([card(url=url)])
-                self.assertEqual(len(result['rejected']), 1)
-                self.assertEqual(result['records'], [])
-
-    def test_missing_id_is_not_replaced_by_a_purchase_fingerprint(self):
-        result = read_cards([card(url='https://bank.yandex.ru/my/transactions-history/operation')])
-        self.assertEqual(len(result['rejected']), 1)
-
-    def test_duplicate_id_parameter_is_rejected_even_when_one_value_is_empty(self):
-        result = read_cards([card(url=card()['url'] + '&id=')])
-        self.assertEqual(len(result['rejected']), 1)
-
-    def test_missing_sign_or_unknown_status_blocks_automatic_use(self):
-        for change in ({'amount': '306 ₽'}, {'details': [['Статус', 'Новый статус']]}):
-            with self.subTest(change=change):
-                result = read_cards([card(**change)])
-                self.assertFalse(result['ready'])
-
-    def test_amount_with_space_after_sign_is_preserved(self):
-        row = read_cards([card(amount='− 1\u202f234,57 ₽')])['records'][0]
-        self.assertEqual(row['amount'], '-1234.57')
-
-    def test_display_timezone_is_explicit_and_not_taken_from_the_laptop(self):
-        row = read_cards([card(timezone='Europe/Istanbul')])['records'][0]
-        self.assertEqual(row['timestamp'], '2026-07-05T16:15:00+03:00')
-        result = read_cards([card(timezone='')])
-        self.assertEqual(len(result['rejected']), 1)
 
 
 class MarkerTest(unittest.TestCase):
