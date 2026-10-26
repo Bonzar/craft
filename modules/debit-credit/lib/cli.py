@@ -220,7 +220,8 @@ def compare_snapshots(args: argparse.Namespace) -> dict:
     # Пропавшие операции считаются только по полностью прочитанному периоду.
     period = source.get('period') if source.get('coverage') == 'snapshot_complete' else None
     result = compare_records(source['records'], ledger['records'], mapping,
-                             window_seconds=args.window_seconds, source_period=period)
+                             window_seconds=args.window_seconds, source_period=period,
+                             source_name=source.get('source'))
     return {**result, 'input_count': source['input_count'], 'rejected': source['rejected'],
             'source_input': {key: value for key, value in source.items() if key != 'records'},
             'ledger_input': {key: value for key, value in ledger.items() if key != 'records'},

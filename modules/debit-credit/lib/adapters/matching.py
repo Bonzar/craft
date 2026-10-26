@@ -162,11 +162,13 @@ def in_period(row: dict, period: dict) -> bool:
     return start <= row_start and row_end <= end
 
 
-def missing_from_source(sources: list, ledger: list, period: dict | None) -> list:
+def missing_from_source(sources: list, ledger: list, period: dict | None,
+                        source_name: str | None = None) -> list:
     """Запись с меткой источника, которой нет в прочитанном периоде. Удаления нет."""
     if period is None:
         return []
-    names = {row['source'] for row in sources}
+    # Пустой полный период тоже проверяется: имя источника не выводится из записей.
+    names = {row['source'] for row in sources} | ({source_name} if source_name else set())
     read = {identity(row) for row in sources if identity(row)}
     result = []
     for position, row in enumerate(ledger):
@@ -179,7 +181,7 @@ def missing_from_source(sources: list, ledger: list, period: dict | None) -> lis
 
 
 def compare_records(sources: list, ledger: list, account_map: dict, *, window_seconds: int,
-                    source_period: dict | None = None) -> dict:
+                    source_period: dict | None = None, source_name: str | None = None) -> dict:
     """Окно поиска задаёт вызывающий. no_candidate не означает доказанный пропуск."""
     validate_records(sources)
     validate_records(ledger)
@@ -202,7 +204,7 @@ def compare_records(sources: list, ledger: list, account_map: dict, *, window_se
             'issues': [{'locator': i, 'code': code} for i, row in enumerate(rows)
                        for code in row['issues']], 'coverage': 'unverified', 'ready': False,
             'window_seconds': window_seconds,
-            'missing_from_source': missing_from_source(sources, ledger, source_period),
+            'missing_from_source': missing_from_source(sources, ledger, source_period, source_name),
             'limitations': ['candidates_require_human_review', 'no_candidate_is_not_missing',
                             'metadata_not_compared', 'marked_ledger_excluded_from_fuzzy_search',
                             'balances_not_reconciled', 'no_writes',

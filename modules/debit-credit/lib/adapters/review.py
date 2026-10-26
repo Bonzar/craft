@@ -84,6 +84,9 @@ def link_confirmed_aliases(cases: list) -> None:
     positions = {}
     for case in cases:
         source = case['source']
+        # Кешбэк и встречная сторона перевода несут ID покупки, но целью связи не бывают.
+        if source.get('role') is not None:
+            continue
         positions.setdefault((source['source'], source['source_id']), []).append(case['case_index'])
     for case in cases:
         alias = case['source'].get('resolution', {}).get('same_operation_as')

@@ -350,6 +350,7 @@ def read_history(snapshot: dict) -> dict:
     result['coverage'] = 'snapshot_complete' if is_complete else 'unverified'
     result['ready'] = not result['rejected'] and not result['issues']
     result['period'] = snapshot.get('period')
+    result['source'] = 'yabank'
     result['limitations'] = ['snapshot_is_not_live_balance_reconciliation',
                              'native_id_namespace_not_used_for_deduplication',
                              'categories_and_tags_not_assigned', 'no_writes']
