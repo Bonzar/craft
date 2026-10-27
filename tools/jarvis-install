@@ -1067,7 +1067,9 @@ def install(args: argparse.Namespace) -> Report:
                      or default_state_dir()).expanduser()
 
     report = Report()
-    extra_modules = [Path(path).expanduser() for path in extra_sources(args)]
+    # Журнал хранит абсолютные пути: модуль свежести повторяет установку из
+    # другого рабочего каталога, и относительный путь там не найдётся.
+    extra_modules = [Path(path).expanduser().resolve() for path in extra_sources(args)]
     manifests = for_harness(discover_all([source_modules, *extra_modules]), backend.name)
     check_requires(manifests, report)
     check_events(manifests, report, backend)

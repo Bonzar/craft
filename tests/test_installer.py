@@ -362,7 +362,7 @@ class ExtraSourceTest(unittest.TestCase):
         self.run_installer('--extra-modules', str(self.extra))
         source = self.ledger()[installer.LEDGER_SOURCE]
         self.assertEqual(source['path'], str(self.source))
-        self.assertEqual(source['extra'], [str(self.extra)])
+        self.assertEqual(source['extra'], [str(self.extra.resolve())])
 
     def test_without_extra_sources_the_ledger_lists_none(self) -> None:
         self.add_module('probe', 'slug = "probe"\n')
@@ -377,13 +377,22 @@ class ExtraSourceTest(unittest.TestCase):
         self.add_extra_module('local', 'slug = "local"\n')
         with mock.patch.dict(os.environ, {'JARVIS_EXTRA_MODULES': f'{self.extra}::{other}'}):
             self.run_installer()
-        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [str(self.extra), str(other)])
+        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [str(self.extra.resolve()), str(other.resolve())])
 
     def test_the_flag_wins_over_the_environment(self) -> None:
         self.add_extra_module('local', 'slug = "local"\n')
         with mock.patch.dict(os.environ, {'JARVIS_EXTRA_MODULES': str(self.root / 'нет такого')}):
             self.run_installer('--extra-modules', str(self.extra))
-        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [str(self.extra)])
+        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [str(self.extra.resolve())])
+
+    def test_a_relative_extra_source_is_recorded_absolute(self) -> None:
+        self.add_extra_module('local', 'slug = "local"\n')
+        previous = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, previous)
+        self.run_installer('--extra-modules', 'extra')
+        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'],
+                         [str(self.extra.resolve())])
 
     def test_a_missing_extra_source_fails_before_any_filesystem_work(self) -> None:
         self.add_module('probe', 'slug = "probe"\n')
