@@ -9,9 +9,9 @@
 
 - Главный набор (craft) — по файлам, которые ставит установщик: `modules`,
   `core` и сам установщик, против main у origin.
-- Модуль дополнительного источника (junk в Аркадии и любой другой) — по своей
-  папке против главной ветки своей системы: коммит папки установщик пишет в
-  журнал в запись модуля.
+- Дополнительный источник (junk в Аркадии и любой другой) — по своей папке
+  целиком против главной ветки своей системы: коммит папки установщик пишет в
+  журнал рядом с её путём, в `extra_origins` источника.
 
 Исходы сверки одного источника:
 
@@ -33,7 +33,8 @@ from jarvis import vcs
 SET_PATHS = ('modules', 'core', 'tools/jarvis-install')
 LEDGER_SOURCE = 'source'
 LEDGER_MODULES = 'modules'
-RECORD_ORIGIN = 'origin'
+LEDGER_EXTRA = 'extra'
+LEDGER_EXTRA_ORIGINS = 'extra_origins'
 
 FRESH = 'fresh'
 STALE = 'stale'
@@ -47,10 +48,10 @@ UNCLEAR = 'не узнать, отстал ли {old} от {remote} {new}'
 OWN_CHOICE = 'поставлен из {old}, это не отставание от {remote}'
 NO_HEAD = 'журнал не назвал коммит источника'
 NOT_GIT = 'источник {path} не git-репозиторий'
-NO_COMMIT = 'журнал не назвал коммит модуля'
+NO_COMMIT = 'журнал не назвал коммит папки источника'
 NO_VCS = 'папка {path} не под git и не под arc'
-EXTRA_UNRECORDED = ('модули дополнительных источников ({paths}) поставлены без коммитов '
-                    'в журнале — поставь набор заново, чтобы их можно было сверять')
+EXTRA_UNRECORDED = ('дополнительный источник поставлен без коммита в журнале — поставь '
+                    'набор заново, чтобы его можно было сверять')
 
 STALE_HEAD = ('Окружение надо обновить: набор модулей агента отстал. Модуль свежести '
               'только предупреждает и ничего не меняет.')
@@ -102,12 +103,18 @@ def read_ledger(path: Path) -> tuple[dict, dict] | None:
     return {}, ledger
 
 
-def describe(paths: list[str]) -> str:
-    """Что изменилось: модули по slug, остальное — по верхнему каталогу."""
+def describe(paths: list[str], modules_dir: str | None = 'modules') -> str:
+    """Что изменилось: модули по slug, остальное — по верхнему каталогу.
+
+    `modules_dir` — где в путях лежат модули: у набора craft это `modules/`, у
+    дополнительного источника пути идут от его папки, и модуль — первый каталог.
+    """
     slugs, areas = set(), set()
     for path in paths:
         parts = path.strip().split('/')
-        if len(parts) > 2 and parts[0] == 'modules':
+        if modules_dir is None and len(parts) > 1:
+            slugs.add(parts[0])
+        elif len(parts) > 2 and parts[0] == modules_dir:
             slugs.add(parts[1])
         elif parts[0]:
             areas.add(parts[0])
@@ -119,7 +126,7 @@ def describe(paths: list[str]) -> str:
     return ' '.join(told)
 
 
-def compare(name: str, found, old: str, summarize: bool = False) -> Finding:
+def compare(name: str, found, old: str, modules_dir: str | None = 'modules') -> Finding:
     """Сверить установленную ревизию с удалённой головой по файлам источника."""
     remote = found.remote_name
     short = old[:12]
@@ -144,7 +151,7 @@ def compare(name: str, found, old: str, summarize: bool = False) -> Finding:
         return Finding(name, AWAY, OWN_CHOICE.format(old=short, remote=remote), remote,
                        old=old, new=new)
     return Finding(name, STALE, '', remote, installed, latest,
-                   describe(changed) if summarize else '', old=old, new=new)
+                   describe(changed, modules_dir), old=old, new=new)
 
 
 def check_set(source: dict, where: Path | None = None) -> Finding:
@@ -158,37 +165,33 @@ def check_set(source: dict, where: Path | None = None) -> Finding:
         root = vcs.run(['git', 'rev-parse', '--show-toplevel'], path).stdout.strip()
     except vcs.VcsError:
         return Finding(name, UNKNOWN, NOT_GIT.format(path=path))
-    return compare(f'набор {root}', vcs.Git(Path(root), SET_PATHS), old, summarize=True)
+    return compare(f'набор {root}', vcs.Git(Path(root), SET_PATHS), old)
 
 
-def check_extras(source: dict, modules: dict) -> list[Finding]:
-    """Модули дополнительных источников: каждый по коммитам в свою папку."""
-    origins = {}
-    for slug, record in modules.items():
-        origin = record.get(RECORD_ORIGIN) if isinstance(record, dict) else None
-        if isinstance(origin, dict) and origin.get('path'):
-            # Копии одного модуля несут один источник: сверяем его однажды.
-            origins.setdefault(origin['path'], (slug, origin))
-    extra = source.get('extra') or []
-    if extra and not origins:
-        return [Finding('дополнительные источники', UNKNOWN,
-                        EXTRA_UNRECORDED.format(paths=', '.join(extra)))]
-    return [check_origin(slug, origin) for slug, origin in origins.values()]
+def check_extras(source: dict) -> list[Finding]:
+    """Дополнительные источники: каждый по коммитам в свою папку целиком."""
+    origins = [origin for origin in source.get(LEDGER_EXTRA_ORIGINS) or []
+               if isinstance(origin, dict) and origin.get('path')]
+    recorded = {origin['path'] for origin in origins}
+    # Журнал до записи коммитов источников: источник есть, сверять не с чем.
+    unrecorded = [Finding(f'источник {path}', UNKNOWN, EXTRA_UNRECORDED)
+                  for path in source.get(LEDGER_EXTRA) or [] if path not in recorded]
+    return [*map(check_origin, origins), *unrecorded]
 
 
-def check_origin(slug: str, origin: dict) -> Finding:
-    name = f'модуль {slug}'
+def check_origin(origin: dict) -> Finding:
+    name = f'источник {origin["path"]}'
     if not origin.get('commit'):
         return Finding(name, UNKNOWN, NO_COMMIT)
     found = vcs.detect(Path(origin['path']))
     if found is None:
         return Finding(name, UNKNOWN, NO_VCS.format(path=origin['path']))
-    return compare(name, found, origin['commit'])
+    return compare(name, found, origin['commit'], modules_dir=None)
 
 
-def check_all(source: dict, modules: dict, where: Path | None = None) -> list[Finding]:
+def check_all(source: dict, where: Path | None = None) -> list[Finding]:
     """Все источники набора: главный первым, за ним дополнительные."""
-    return [check_set(source, where), *check_extras(source, modules)]
+    return [check_set(source, where), *check_extras(source)]
 
 
 def warning(findings: list[Finding]) -> str:

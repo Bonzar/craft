@@ -49,7 +49,7 @@ def main(argv: list[str]) -> int:
             print('\t'.join(found))
         return 0
     if command == 'diff':
-        old, new = argv[2], argv[3]
+        old, new = [arg for arg in argv[1:argv.index('--')] if not arg.startswith('-')]
         print('\n'.join(scenario.get('diff', {}).get(f'{old}..{new}', [])))
         return 0
     print(f'неизвестная команда {command}', file=sys.stderr)

@@ -14,7 +14,8 @@
 
 Замер arc 27.10.2026 на VFS-маунте: `arc fetch trunk` ~0,15 с (тянет только
 ссылку), `arc log -n1` по папке ~0,2 с, `arc diff --name-only` ~0,1 с. Замер git
-там же: `git ls-remote` к GitHub по ssh 2–3 с.
+там же: `git ls-remote` к GitHub по ssh 2–3 с. `arc diff` принимает
+`--relative` только со значением через «=».
 
 Ошибка любой команды — VcsError с причиной из её вывода, а не пустой ответ:
 «не смогли проверить» и «нечего сообщать» снаружи должны различаться.
@@ -120,7 +121,10 @@ class Git:
 
     def changed(self, old: str, new: str) -> list[str]:
         # `-z`: имена не экранируются, иначе путь с кириллицей придёт в кавычках.
-        out = self._git('diff', '--name-only', '-z', old, new, '--', *self.paths).stdout
+        # `--relative`: имена от папки, а не от корня репозитория — по ним видно,
+        # какие модули источника изменились.
+        out = self._git('diff', '--name-only', '--relative', '-z', old, new, '--',
+                        *self.paths).stdout
         return [name for name in out.split('\0') if name]
 
     def behind(self, old: str, new: str, installed: Version | None,
@@ -158,7 +162,9 @@ class Arc:
         return self._arc('rev-parse', ARC_TRUNK).stdout.strip()
 
     def changed(self, old: str, new: str) -> list[str]:
-        out = self._arc('diff', '--name-only', old, new, '--', *self.paths).stdout
+        # Без `--relative=.` arc называет пути от корня Аркадии.
+        out = self._arc('diff', '--name-only', '--relative=.', old, new, '--',
+                        *self.paths).stdout
         return [name for name in out.splitlines() if name.strip()]
 
     def behind(self, old: str, new: str, installed: Version | None,

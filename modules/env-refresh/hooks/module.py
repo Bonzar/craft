@@ -206,7 +206,8 @@ class Module(jarvis.Module):
         if ledger is None:
             return self._note(runtime, event, NO_LEDGER, jarvis.Silence(reason=NO_LEDGER),
                               seconds=time.monotonic() - started)
-        findings = freshness.check_all(*ledger)
+        source, _ = ledger
+        findings = freshness.check_all(source)
         return self._say(runtime, event, findings, freshness.warning(findings), started)
 
     def _adapt(self, checkout: Path, runtime, event) -> jarvis.Response:
@@ -218,9 +219,9 @@ class Module(jarvis.Module):
             if ledger is None:
                 return self._note(runtime, event, NO_LEDGER, jarvis.Silence(reason=NO_LEDGER),
                                   seconds=time.monotonic() - started)
-            source, modules = ledger
+            source, _ = ledger
             old = source.get('head')
-            main, *rest = freshness.check_all(source, modules, where=checkout)
+            main, *rest = freshness.check_all(source, where=checkout)
             if main.state != freshness.STALE:
                 findings = [main, *rest]
                 return self._say(runtime, event, findings, freshness.warning(findings), started)

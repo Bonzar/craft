@@ -136,7 +136,7 @@ class CodexBaseTest(BaseCase):
 
 
 class ExtraGitSourceTest(BaseCase):
-    """Модуль дополнительного источника сверяется по коммитам в свою папку."""
+    """Дополнительный источник сверяется по коммитам в свою папку целиком."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -156,12 +156,12 @@ class ExtraGitSourceTest(BaseCase):
     def install_with_extra(self):
         return self.install(None, '--extra-modules', str(self.extra / 'modules'))
 
-    def test_the_ledger_records_the_commit_of_the_extra_module(self) -> None:
+    def test_the_ledger_records_the_commit_of_the_extra_source(self) -> None:
         self.install_with_extra()
-        origin = self.ledger()['modules'][EXTRA_SLUG]['origin']
-        self.assertEqual(origin['commit'], self.extra_first)
-        self.assertEqual(origin['path'], str((self.extra / 'modules' / EXTRA_SLUG).resolve()))
-        self.assertNotIn('origin', self.ledger()['modules'][PROBE])
+        source = self.ledger()['source']
+        self.assertEqual(source['extra_origins'], [
+            {'path': str((self.extra / 'modules').resolve()), 'commit': self.extra_first}])
+        self.assertNotIn('origin', self.ledger()['modules'][EXTRA_SLUG])
 
     def test_a_newer_extra_module_is_reported(self) -> None:
         self.install_with_extra()
@@ -172,20 +172,31 @@ class ExtraGitSourceTest(BaseCase):
         text = self.context(self.run_base())
 
         self.assertIn('надо обновить', text)
-        self.assertIn(EXTRA_SLUG, text)
+        self.assertIn(f'изменились модули: {EXTRA_SLUG}', text)
         self.assertIn(new[:12], text)
         self.assertIn(self.extra_first[:12], text)
 
-    def test_a_commit_next_to_the_extra_module_says_nothing(self) -> None:
+    def test_a_commit_outside_the_extra_source_says_nothing(self) -> None:
         self.install_with_extra()
-        (self.extra_origin / 'modules' / 'other' / 'note.md').write_text('другое\n',
-                                                                       encoding='utf-8')
-        commit(self.extra_origin, 'соседняя папка')
+        (self.extra_origin / 'README.md').write_text('# junk\n', encoding='utf-8')
+        commit(self.extra_origin, 'мимо источника')
         self.assertEqual(self.context(self.run_base()), '')
+
+    def test_an_old_ledger_without_source_commits_says_the_check_failed(self) -> None:
+        self.install_with_extra()
+        ledger_path = self.settings / 'jarvis' / 'installed.json'
+        ledger = self.ledger()
+        del ledger['source']['extra_origins']
+        ledger_path.write_text(json.dumps(ledger), encoding='utf-8')
+
+        text = self.context(self.run_base())
+
+        self.assertIn('проверить не удалось', text)
+        self.assertIn('поставь набор заново', text)
 
 
 class ExtraArcSourceTest(BaseCase):
-    """Модуль junk из Аркадии: последний коммит в папку на trunk через arc."""
+    """Источник junk в Аркадии: последний коммит в папку на trunk через arc."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -217,12 +228,12 @@ class ExtraArcSourceTest(BaseCase):
     def run_arc_base(self):
         return self.run_base(path=self.path, FAKE_ARC=str(self.scenario))
 
-    def test_the_ledger_records_the_arc_commit_of_the_module(self) -> None:
+    def test_the_ledger_records_the_arc_commit_of_the_source(self) -> None:
         self.scene()
         self.install_from_mount()
-        self.assertEqual(self.ledger()['modules'][EXTRA_SLUG]['origin']['commit'], 'ветка-1')
+        self.assertEqual(self.ledger()['source']['extra_origins'][0]['commit'], 'ветка-1')
 
-    def test_a_module_not_yet_in_trunk_says_nothing(self) -> None:
+    def test_a_source_not_yet_in_trunk_says_nothing(self) -> None:
         self.scene()
         self.install_from_mount()
         self.assertEqual(self.context(self.run_arc_base()), '')
@@ -232,13 +243,13 @@ class ExtraArcSourceTest(BaseCase):
         self.install_from_mount()
         self.scene(log={'ветка-1': ['ветка-1', '2026-10-27T11:38:48+03:00'],
                         'trunk-2': ['trunk-2', '2026-10-28T09:00:00+03:00']},
-                   diff={'ветка-1..trunk-2': ['junk/ai/modules/junk-probe/skill/SKILL.md']})
+                   diff={'ветка-1..trunk-2': ['junk-probe/skill/SKILL.md']})
 
         text = self.context(self.run_arc_base())
 
         self.assertIn('надо обновить', text)
         self.assertIn('trunk-2', text)
-        self.assertIn('trunk', text)
+        self.assertIn(f'изменились модули: {EXTRA_SLUG}', text)
 
     def test_the_same_content_in_trunk_says_nothing(self) -> None:
         """PR влит: в trunk другой коммит, но папка та же — набор свежий."""
@@ -256,4 +267,4 @@ class ExtraArcSourceTest(BaseCase):
         text = self.context(self.run_arc_base())
 
         self.assertIn('проверить не удалось', text)
-        self.assertIn(EXTRA_SLUG, text)
+        self.assertIn('сеть недоступна', text)

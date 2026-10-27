@@ -1002,23 +1002,17 @@ def drop_vanished(previous: dict, records: dict, backend: Backend, report: Repor
                 report.removed.append(str(module_dir))
 
 
-def record_origins(plan: list[tuple], records: dict, extra_modules: list[Path]) -> None:
-    """Модулю дополнительного источника — его папку и последний коммит в неё.
+def extra_origins(extra_modules: list[Path]) -> list[dict]:
+    """Дополнительные источники с последним коммитом в папку каждого.
 
-    Свежесть такого модуля сверяется не по голове его репозитория, а по
+    Свежесть такого источника сверяется не по голове его репозитория, а по
     коммитам в его папку: транк Аркадии движется каждую секунду, и сверка по
-    голове тревожила бы непрерывно. Коммит спрашивается однажды на модуль, копии
-    одного модуля его делят. Не под git и не под arc — коммит пустой, и модуль
-    свежести скажет, что сверить его не может.
+    голове тревожила бы непрерывно. Папка источника целиком, а не каждый модуль:
+    одна сверка на старте при любом числе модулей, а какие модули изменились,
+    видно по самим изменённым файлам. Не под git и не под arc — коммит пустой, и
+    модуль свежести скажет, что сверить источник не может.
     """
-    commits: dict[Path, str | None] = {}
-    for target, slug in plan:
-        folder = target.path.resolve()
-        if folder.parent not in extra_modules:
-            continue
-        if folder not in commits:
-            commits[folder] = vcs.folder_commit(folder)
-        records[slug]['origin'] = {'path': str(folder), 'commit': commits[folder]}
+    return [{'path': str(path), 'commit': vcs.folder_commit(path)} for path in extra_modules]
 
 
 def backend_for(args) -> Backend:
@@ -1115,7 +1109,6 @@ def install(args: argparse.Namespace) -> Report:
         slug: install_module(target, slug, source_core, settings_root, state_dir, backend, report)
         for target, slug in plan
     }
-    record_origins(plan, records, extra_modules)
 
     ledger = modules_root(settings_root).parent / LEDGER_FILE
     drop_vanished(read_ledger(ledger)[LEDGER_MODULES], records, backend, report)
@@ -1137,6 +1130,8 @@ def install(args: argparse.Namespace) -> Report:
         # Повторная установка обязана взять те же дополнительные источники,
         # иначе модуль свежести снимет их модули как исчезнувшие.
         'extra': [str(path) for path in extra_modules],
+        # По ним модуль свежести сверяет дополнительные источники с удалённым.
+        'extra_origins': extra_origins(extra_modules),
         'harness': backend.name,
         'state_dir': str(state_dir),
         'python': args.python,
