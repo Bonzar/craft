@@ -311,6 +311,69 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('skill', ledger[installer.LEDGER_MODULES]['probe']['parts'])
 
 
+class ExtraSourceTest(unittest.TestCase):
+    """Второй источник модулей: лично-рабочий слой (junk) рядом с набором craft."""
+
+    setUp_main = InstallerTest.setUp
+    add_module = InstallerTest.add_module
+    run_installer = InstallerTest.run_installer
+    modules_root = InstallerTest.modules_root
+
+    def setUp(self) -> None:
+        self.setUp_main()
+        self.extra = self.root / 'extra'
+        self.extra.mkdir()
+
+    def add_extra_module(self, slug: str, header: str) -> Path:
+        folder = self.extra / slug
+        folder.mkdir()
+        (folder / 'module.toml').write_text(header, encoding='utf-8')
+        return folder
+
+    def ledger(self) -> dict:
+        return json.loads(
+            (self.modules_root().parent / installer.LEDGER_FILE).read_text(encoding='utf-8')
+        )
+
+    def test_modules_of_both_sources_are_installed(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n')
+        self.add_extra_module('local', 'slug = "local"\n')
+        self.run_installer('--extra-modules', str(self.extra))
+        self.assertEqual(set(self.ledger()[installer.LEDGER_MODULES]), {'probe', 'local'})
+        self.assertTrue((self.modules_root() / 'local').is_dir())
+
+    def test_a_slug_repeated_across_sources_is_rejected(self) -> None:
+        self.add_module('probe', 'slug = "same"\n')
+        self.add_extra_module('local', 'slug = "same"\n')
+        with self.assertRaises(ValueError):
+            self.run_installer('--extra-modules', str(self.extra))
+        self.assertFalse(self.settings_root.exists())
+
+    def test_a_requirement_is_satisfied_from_the_other_source(self) -> None:
+        self.add_module('shell-tree', 'slug = "shell-tree"\n')
+        self.add_extra_module('local', 'slug = "local"\nrequires = ["shell-tree"]\n')
+        self.assertEqual(self.run_installer('--extra-modules', str(self.extra)).warnings, [])
+
+    def test_ledger_names_the_extra_sources(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n')
+        self.add_extra_module('local', 'slug = "local"\n')
+        self.run_installer('--extra-modules', str(self.extra))
+        source = self.ledger()[installer.LEDGER_SOURCE]
+        self.assertEqual(source['path'], str(self.source))
+        self.assertEqual(source['extra'], [str(self.extra)])
+
+    def test_without_extra_sources_the_ledger_lists_none(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n')
+        self.run_installer()
+        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [])
+
+    def test_a_missing_extra_source_fails_before_any_filesystem_work(self) -> None:
+        self.add_module('probe', 'slug = "probe"\n')
+        with self.assertRaises(ValueError):
+            self.run_installer('--extra-modules', str(self.root / 'нет такого'))
+        self.assertFalse(self.settings_root.exists())
+
+
 class UnknownEventWarningTest(unittest.TestCase):
     """Событие вне каталога харнеса режется разбором шапки, а поверх —
     предупреждением установщика для события, которое в каталог войдёт позже."""

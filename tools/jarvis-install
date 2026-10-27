@@ -799,6 +799,24 @@ def discover(modules_dir: Path) -> list:
     return found
 
 
+def discover_all(sources: list[Path]) -> list:
+    """Шапки модулей всех источников: главного и дополнительных.
+
+    Дополнительный источник — лично-рабочий слой вроде junk на маке: он стоит
+    рядом с набором, а не вместо него. slug уникален во всех источниках сразу,
+    иначе один модуль молча занял бы место другого.
+    """
+    for directory in sources:
+        if not directory.is_dir():
+            raise ValueError(f'каталога модулей нет: {directory}')
+    found = [manifest for directory in sources for manifest in discover(directory)]
+    slugs = [m.slug for m in found]
+    duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if duplicates:
+        raise ValueError(f'slug повторяется в разных источниках: {duplicates}')
+    return found
+
+
 def for_harness(manifests: list, harness: str) -> list:
     """Модуль с полем harness существует только для него; без поля — для всех."""
     return [m for m in manifests if m.harness in (None, harness)]
@@ -999,6 +1017,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help='харнес, в который ставим')
     parser.add_argument('--settings-dir', default=None, help='каталог настроек харнеса')
     parser.add_argument('--modules', default=str(REPO_ROOT / 'modules'), help='каталог модулей-источника')
+    parser.add_argument('--extra-modules', action='append', default=[], metavar='DIR',
+                        help='дополнительный каталог модулей, ставится рядом с главным; '
+                             'можно повторять')
     parser.add_argument('--core', default=str(REPO_ROOT / 'core'), help='исходник ядра')
     parser.add_argument('--state-dir', default=None, help='каталог состояния (для плейсхолдера)')
     parser.add_argument('--python', default=sys.executable, help='интерпретатор для строк хуков')
@@ -1033,7 +1054,8 @@ def install(args: argparse.Namespace) -> Report:
                      or default_state_dir()).expanduser()
 
     report = Report()
-    manifests = for_harness(discover(source_modules), backend.name)
+    extra_modules = [Path(path).expanduser() for path in args.extra_modules]
+    manifests = for_harness(discover_all([source_modules, *extra_modules]), backend.name)
     check_requires(manifests, report)
     check_events(manifests, report, backend)
     plan = expand(manifests)
@@ -1076,6 +1098,9 @@ def install(args: argparse.Namespace) -> Report:
     source = {
         'path': str(Path(args.source_path).expanduser() if args.source_path else source_modules),
         'head': args.source_head or git_head(source_modules),
+        # Повторная установка обязана взять те же дополнительные источники,
+        # иначе модуль свежести снимет их модули как исчезнувшие.
+        'extra': [str(path) for path in extra_modules],
         'harness': backend.name,
         'state_dir': str(state_dir),
         'python': args.python,
