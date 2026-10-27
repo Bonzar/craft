@@ -3,12 +3,14 @@
 import importlib.machinery
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from . import CORE_SOURCE, INSTALLER
 
@@ -366,6 +368,22 @@ class ExtraSourceTest(unittest.TestCase):
         self.add_module('probe', 'slug = "probe"\n')
         self.run_installer()
         self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [])
+
+    def test_extra_sources_come_from_the_environment_without_the_flag(self) -> None:
+        other = self.root / 'other'
+        other.mkdir()
+        (other / 'second').mkdir()
+        (other / 'second' / 'module.toml').write_text('slug = "second"\n', encoding='utf-8')
+        self.add_extra_module('local', 'slug = "local"\n')
+        with mock.patch.dict(os.environ, {'JARVIS_EXTRA_MODULES': f'{self.extra}::{other}'}):
+            self.run_installer()
+        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [str(self.extra), str(other)])
+
+    def test_the_flag_wins_over_the_environment(self) -> None:
+        self.add_extra_module('local', 'slug = "local"\n')
+        with mock.patch.dict(os.environ, {'JARVIS_EXTRA_MODULES': str(self.root / 'нет такого')}):
+            self.run_installer('--extra-modules', str(self.extra))
+        self.assertEqual(self.ledger()[installer.LEDGER_SOURCE]['extra'], [str(self.extra)])
 
     def test_a_missing_extra_source_fails_before_any_filesystem_work(self) -> None:
         self.add_module('probe', 'slug = "probe"\n')

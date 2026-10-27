@@ -5,6 +5,7 @@
     python3 -m unittest discover -s tests -t .
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,3 +16,7 @@ INSTALLER = REPO_ROOT / 'tools' / 'jarvis-install'
 
 if str(CORE_SOURCE) not in sys.path:
     sys.path.insert(0, str(CORE_SOURCE))
+
+# Дополнительные источники модулей с машины разработчика (junk на маке) не
+# должны подмешиваться ни в один тест, включая подпроцессы установщика.
+os.environ.pop('JARVIS_EXTRA_MODULES', None)
