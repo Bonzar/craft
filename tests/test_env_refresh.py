@@ -55,7 +55,7 @@ def commit(where: Path, message: str) -> str:
     return git(where, 'rev-parse', 'HEAD').strip()
 
 
-class EnvRefreshTest(unittest.TestCase):
+class EnvRefreshCase(unittest.TestCase):
     """Каждому тесту свои репозитории, свой дом и свой каталог настроек."""
 
     def setUp(self) -> None:
@@ -74,10 +74,8 @@ class EnvRefreshTest(unittest.TestCase):
         self.origin.mkdir()
         git(self.origin, 'init', '-q', '-b', 'main')
         source = self.origin / 'modules'
-        (source / SLUG / 'hooks').mkdir(parents=True)
-        shutil.copy2(MODULES_DIR / SLUG / 'module.toml', source / SLUG / 'module.toml')
-        shutil.copy2(MODULES_DIR / SLUG / 'hooks' / 'module.py',
-                     source / SLUG / 'hooks' / 'module.py')
+        shutil.copytree(MODULES_DIR / SLUG, source / SLUG,
+                        ignore=shutil.ignore_patterns('__pycache__'))
         probe = source / PROBE / 'skill'
         probe.mkdir(parents=True)
         (source / PROBE / 'module.toml').write_text(PROBE_HEADER, encoding='utf-8')
@@ -87,18 +85,19 @@ class EnvRefreshTest(unittest.TestCase):
         shutil.copy2(INSTALLER, self.origin / 'tools' / 'jarvis-install')
         commit(self.origin, 'первый набор')
 
-    def install(self, from_repo: Path | None = None):
+    def install(self, from_repo: Path | None = None, *more: str, harness: str = 'claude',
+                settings: Path | None = None, env: dict | None = None):
         """Поставить набор так, как это делает setup-скрипт окружения."""
         repo = from_repo or self.checkout
         return subprocess.run(
             [sys.executable, str(repo / 'tools' / 'jarvis-install'),
-             '--harness', 'claude',
-             '--settings-dir', str(self.settings),
+             '--harness', harness,
+             '--settings-dir', str(settings or self.settings),
              '--modules', str(repo / 'modules'),
              '--core', str(repo / 'core'),
              '--state-dir', str(self.home / 'state'),
-             '--python', sys.executable],
-            capture_output=True, text=True, check=True,
+             '--python', sys.executable, *more],
+            capture_output=True, text=True, check=True, env=env,
         )
 
     def run_hook(self, cloud: bool = True, session: str = 'сессия-1', **extra: str):
@@ -107,6 +106,9 @@ class EnvRefreshTest(unittest.TestCase):
             'PATH': os.environ.get('PATH', ''),
             'HOME': str(self.home),
             'CLAUDE_CONFIG_DIR': str(self.settings),
+            # Хук импортирует ядро из чекаута сессии: без этого кэш байткода лёг
+            # бы в рабочее дерево, которое тест сверяет.
+            'PYTHONDONTWRITEBYTECODE': '1',
             **extra,
         }
         if cloud:
@@ -147,7 +149,10 @@ class EnvRefreshTest(unittest.TestCase):
             target.write_text(text, encoding='utf-8')
         return commit(self.origin, message)
 
-    # --- сами проверки ---
+
+
+class EnvRefreshTest(EnvRefreshCase):
+    """Адаптер облачного Claude: копия из чекаута догоняет набор до main."""
 
     def test_ledger_names_the_commit_the_set_came_from(self) -> None:
         self.install()
@@ -178,6 +183,17 @@ class EnvRefreshTest(unittest.TestCase):
         self.assertIn(PROBE, text)
         self.assertTrue((self.skill_dir() / NEW_FILE).is_file())
         self.assertEqual(self.ledger()['source']['head'], head)
+
+    def test_a_main_commit_outside_the_set_leaves_it_alone(self) -> None:
+        """Коммит мимо файлов набора не тревожит и не переставляет набор."""
+        self.install()
+        before = self.ledger()
+        (self.origin / 'README.md').write_text('# про репозиторий\n', encoding='utf-8')
+        commit(self.origin, 'мимо набора')
+
+        self.assertEqual(self.context(self.run_hook()), '')
+
+        self.assertEqual(self.ledger(), before)
 
     def test_the_second_run_says_nothing(self) -> None:
         self.install()
@@ -219,8 +235,8 @@ class EnvRefreshTest(unittest.TestCase):
 
         text = self.context(self.run_hook())
 
-        self.assertIn('не удалось догнать', text)
-        self.assertIn(before['source']['head'][:12], text)
+        self.assertIn('проверить не удалось', text)
+        self.assertIn('ls-remote', text)
         self.assertEqual(self.ledger(), before)
         self.assertTrue((self.skill_dir() / MAIN_FILE).is_file())
 
@@ -346,7 +362,7 @@ class EnvRefreshTest(unittest.TestCase):
         self.assertNotIn('usage:', text)
 
     def test_the_installed_copy_stays_out_of_the_way(self) -> None:
-        """Копия в каталоге настроек молчит: набор обновляет копия из чекаута."""
+        """В облаке база уступает адаптеру: набор обновляет копия из чекаута."""
         self.install()
         self.add_to_origin()
         installed_entry = self.settings / 'jarvis' / 'modules' / SLUG / 'hooks' / 'module.py'
@@ -355,6 +371,7 @@ class EnvRefreshTest(unittest.TestCase):
             'HOME': str(self.home),
             'CLAUDE_CONFIG_DIR': str(self.settings),
             'CLAUDE_CODE_REMOTE': 'true',
+            'CLAUDE_PROJECT_DIR': str(self.checkout),
         }
         done = subprocess.run(
             [sys.executable, str(installed_entry),
