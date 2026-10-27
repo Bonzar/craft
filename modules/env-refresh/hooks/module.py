@@ -474,6 +474,8 @@ def run_installer(unpacked: Path, checkout: Path, head: str, source: dict,
     ]
     if source.get('state_dir'):
         command += ['--state-dir', source['state_dir']]
+    for extra in source.get('extra') or []:
+        command += ['--extra-modules', extra]
     try:
         done = subprocess.run(command, capture_output=True, text=True, check=False,
                               timeout=INSTALL_TIMEOUT_SEC)

@@ -57,6 +57,7 @@ CODEX_CONFIG_FILE = 'config.toml'
 CODEX_AGENTS_FILE = 'AGENTS.md'
 BACKUP_SUFFIX = '.jarvis-bak'
 LEDGER_FILE = 'installed.json'
+EXTRA_MODULES_ENV = 'JARVIS_EXTRA_MODULES'
 # Журнал установки состоит из двух частей: чем поставлено и что поставлено.
 # Источник нужен тем, кто сверяет свежесть набора: по самим папкам модулей не
 # видно, из какого состояния репозитория они приехали.
@@ -799,6 +800,24 @@ def discover(modules_dir: Path) -> list:
     return found
 
 
+def discover_all(sources: list[Path]) -> list:
+    """Шапки модулей всех источников: главного и дополнительных.
+
+    Дополнительный источник — лично-рабочий слой вроде junk на маке: он стоит
+    рядом с набором, а не вместо него. slug уникален во всех источниках сразу,
+    иначе один модуль молча занял бы место другого.
+    """
+    for directory in sources:
+        if not directory.is_dir():
+            raise ValueError(f'каталога модулей нет: {directory}')
+    found = [manifest for directory in sources for manifest in discover(directory)]
+    slugs = [m.slug for m in found]
+    duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if duplicates:
+        raise ValueError(f'slug повторяется в разных источниках: {duplicates}')
+    return found
+
+
 def for_harness(manifests: list, harness: str) -> list:
     """Модуль с полем harness существует только для него; без поля — для всех."""
     return [m for m in manifests if m.harness in (None, harness)]
@@ -999,6 +1018,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help='харнес, в который ставим')
     parser.add_argument('--settings-dir', default=None, help='каталог настроек харнеса')
     parser.add_argument('--modules', default=str(REPO_ROOT / 'modules'), help='каталог модулей-источника')
+    parser.add_argument('--extra-modules', action='append', default=[], metavar='DIR',
+                        help='дополнительный каталог модулей, ставится рядом с главным; '
+                             'можно повторять; без флага — JARVIS_EXTRA_MODULES через двоеточие')
     parser.add_argument('--core', default=str(REPO_ROOT / 'core'), help='исходник ядра')
     parser.add_argument('--state-dir', default=None, help='каталог состояния (для плейсхолдера)')
     parser.add_argument('--python', default=sys.executable, help='интерпретатор для строк хуков')
@@ -1022,6 +1044,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def extra_sources(args: argparse.Namespace) -> list[str]:
+    """Дополнительные каталоги модулей: флаг, а без него переменная окружения.
+
+    Переменная — список через двоеточие, как PATH: она задаётся на машине, где
+    дополнительный слой есть (junk на маке), и обёртки запуска передают её
+    установщику своим окружением, ничего не зная о ней сами.
+    """
+    if args.extra_modules:
+        return args.extra_modules
+    return [path for path in os.environ.get(EXTRA_MODULES_ENV, '').split(os.pathsep) if path]
+
+
 def install(args: argparse.Namespace) -> Report:
     from jarvis.storage import default_state_dir
 
@@ -1033,7 +1067,10 @@ def install(args: argparse.Namespace) -> Report:
                      or default_state_dir()).expanduser()
 
     report = Report()
-    manifests = for_harness(discover(source_modules), backend.name)
+    # Журнал хранит абсолютные пути: модуль свежести повторяет установку из
+    # другого рабочего каталога, и относительный путь там не найдётся.
+    extra_modules = [Path(path).expanduser().resolve() for path in extra_sources(args)]
+    manifests = for_harness(discover_all([source_modules, *extra_modules]), backend.name)
     check_requires(manifests, report)
     check_events(manifests, report, backend)
     plan = expand(manifests)
@@ -1076,6 +1113,9 @@ def install(args: argparse.Namespace) -> Report:
     source = {
         'path': str(Path(args.source_path).expanduser() if args.source_path else source_modules),
         'head': args.source_head or git_head(source_modules),
+        # Повторная установка обязана взять те же дополнительные источники,
+        # иначе модуль свежести снимет их модули как исчезнувшие.
+        'extra': [str(path) for path in extra_modules],
         'harness': backend.name,
         'state_dir': str(state_dir),
         'python': args.python,

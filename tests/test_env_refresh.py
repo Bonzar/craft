@@ -408,5 +408,24 @@ class AsideTest(unittest.TestCase):
         self.assertFalse(self.settings_file.exists())
 
 
+class RunInstallerTest(unittest.TestCase):
+    """Переустановка повторяет прошлую: дополнительные источники не теряются."""
+
+    def command_for(self, source: dict) -> list[str]:
+        done = subprocess.CompletedProcess([], 0, '', '')
+        with mock.patch.object(hook.subprocess, 'run', return_value=done) as run:
+            hook.run_installer(Path('/распаковка'), Path('/чекаут'), 'abc', source,
+                               Path('/настройки'))
+        return run.call_args.args[0]
+
+    def test_extra_sources_from_the_ledger_are_passed_on(self) -> None:
+        command = self.command_for({'extra': ['/junk/ai/modules', '/ещё']})
+        pairs = [command[i + 1] for i, arg in enumerate(command) if arg == '--extra-modules']
+        self.assertEqual(pairs, ['/junk/ai/modules', '/ещё'])
+
+    def test_a_ledger_without_extra_sources_adds_nothing(self) -> None:
+        self.assertNotIn('--extra-modules', self.command_for({}))
+
+
 if __name__ == '__main__':
     unittest.main()
