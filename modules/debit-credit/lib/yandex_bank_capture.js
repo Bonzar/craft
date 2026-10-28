@@ -1,13 +1,3 @@
-/** Read only the visible main-page card tile, never storage or application state.
- * @returns {{account:string,amount:string,currency:string,balance_type:string,
- *   blocked_amount:null,raw_text:string}} */
-function captureCardBalanceDom() {
-  const tiles = Array.from(document.querySelectorAll('a[role="button"][href="/my/new-debit"]'))
-    .filter(element => element.getClientRects().length > 0);
-  if (tiles.length !== 1) throw new Error('Однозначный видимый остаток карты не найден');
-  return parseCardBalanceText(tiles[0].innerText.trim());
-}
-
 /** @param {string} rawText @returns {object} */
 function parseCardBalanceText(rawText) {
   const normalized = rawText.replace(/\s+/g, ' ');
@@ -43,4 +33,4 @@ async function requestCardBalance(environment) {
     cache_control: response.headers.get('cache-control') };
 }
 
-if (typeof module !== 'undefined') module.exports = { captureCardBalanceDom, requestCardBalance };
+if (typeof module !== 'undefined') module.exports = { requestCardBalance };
