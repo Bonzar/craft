@@ -85,3 +85,10 @@ test('Operations request refuses to run outside the bank', async () => {
   await assert.rejects(requestOperations({}, { origin: 'https://example.com',
     fetch: async () => { throw new Error('must not be called'); } }), /Сбер/);
 });
+
+test('Fractional end of period keeps its last whole second', async () => {
+  const calls = [];
+  await collectSberHistory({ fromInclusive: '2026-02-01T00:00:00+03:00',
+    toExclusive: '2026-02-01T12:00:00.500+03:00', request: async query => { calls.push(query); return answer([]); } });
+  assert.equal(calls[0].to, '01.02.2026T12:00:00');
+});

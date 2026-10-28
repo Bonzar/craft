@@ -127,6 +127,15 @@ class SberTransferTest(unittest.TestCase):
                          ('transfer', CARD['id'], CREDIT['id'], '-99'))
 
 
+    def test_own_transfer_without_other_side_stays_a_transfer_and_is_flagged(self):
+        result = read_history(snapshot([operation('t2', -99, source=CARD, form='UfsTransferSelf',
+                                                   state=('EXECUTED', 'executed'))]))
+        row = by_id(result)['t2']
+        self.assertEqual((row['kind'], row['other_account']), ('transfer', None))
+        self.assertIn('transfer_counterpart_unknown', row['issues'])
+        self.assertFalse(result['ready'])
+
+
 class SberCoverageTest(unittest.TestCase):
     def test_financial_operation_without_own_side_is_rejected_with_reason(self):
         result = read_history(snapshot([operation('x1', -10)]))
