@@ -83,9 +83,11 @@ def parse_operation(raw: dict, index: int) -> dict:
         own, other = sides(raw, amount)
         if not own:
             raise ValueError('Не определён свой счёт операции')
-        kind = 'transfer' if raw.get('form') == OWN_TRANSFER_FORM and other else None
+        kind = 'transfer' if raw.get('form') == OWN_TRANSFER_FORM else None
     # У заявки без денег статус ни на что не влияет.
     issues = ['unknown_status'] if row_status == 'unknown' and reason != 'non_financial' else []
+    if kind == 'transfer' and not other:
+        issues.append('transfer_counterpart_unknown')
     row = {**record_base(SOURCE, index + 1), 'source_id': identifier,
            'timestamp': timestamp.isoformat(), 'timestamp_precision': 'second',
            'amount': str(amount), 'currency': currency, 'account': own.get('id'),

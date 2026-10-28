@@ -104,7 +104,9 @@ function observe(row, seen, result, config) {
 /** @param {object} result @param {object} config @returns {Promise<void>} */
 async function readPages(result, config) {
   const seen = new Map();
-  const range = { from: sberDate(config.from), to: sberDate(config.to - 1000) };
+  // Банк принимает конец периода включительно и с точностью до секунды.
+  const lastSecond = Math.ceil(config.to / 1000) * 1000 - 1000;
+  const range = { from: sberDate(config.from), to: sberDate(lastSecond) };
   for (let page = 0; page < config.maxPages; page += 1) {
     const query = { paginationOffset: page * config.pageSize, paginationSize: config.pageSize, ...range };
     const operations = await readPage(config, query);
