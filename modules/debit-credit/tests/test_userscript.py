@@ -9,6 +9,8 @@ from pathlib import Path
 
 from build_userscript import build
 
+PERIOD = {'fromInclusive': '2026-10-18T00:00:00+03:00', 'toExclusive': '2026-10-20T00:00:00+03:00'}
+
 
 class UserscriptBuildTest(unittest.TestCase):
     def test_headless_script_collects_new_history_and_old_ids_without_page_controls(self):
@@ -83,22 +85,29 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(resul
                                       'toExclusive': '2026-10-20T00:00:00+03:00'})
             self.assertFalse(output.exists())
 
-    def test_browser_script_does_not_write_node_module_exports(self):
+    def test_browser_script_has_requests_only_and_no_node_exports(self):
         with tempfile.TemporaryDirectory() as folder:
-            output = Path(folder) / 'history.user.js'
-            build(output)
+            output = Path(folder) / 'history.js'
+            build(output, period=PERIOD)
             text = output.read_text()
         self.assertNotIn('module.exports', text)
         self.assertNotIn('document.cookie', text)
-        self.assertIn('@match        https://bank.yandex.ru/my/transactions-history*', text)
-        self.assertIn('@match        https://bank.yandex.ru/my', text)
+        self.assertNotIn('==UserScript==', text)
+        self.assertNotIn('captureCardBalanceDom', text)
         self.assertIn('collectHistoryWithBalance', text)
-        self.assertIn('function captureCardBalanceDom', text)
+        self.assertIn('requestCardBalance', text)
+
+    def test_script_without_period_is_not_built(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / 'history.js'
+            with self.assertRaises(TypeError):
+                build(output)
+            self.assertFalse(output.exists())
 
     def test_existing_script_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:
-            output = Path(folder) / 'history.user.js'
+            output = Path(folder) / 'history.js'
             output.write_text('keep')
             with self.assertRaises(FileExistsError):
-                build(output)
+                build(output, period=PERIOD)
             self.assertEqual(output.read_text(), 'keep')
