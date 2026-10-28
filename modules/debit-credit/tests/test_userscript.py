@@ -100,9 +100,53 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(resul
     def test_script_without_period_is_not_built(self):
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / 'history.js'
-            with self.assertRaises(TypeError):
+            with self.assertRaises(ValueError):
                 build(output)
             self.assertFalse(output.exists())
+
+    def test_resume_script_reads_only_unread_cards_from_saved_snapshot(self):
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('Node.js нужен для проверки собранного скрипта')
+        rows = [{'id': 'one', 'date': '2026-10-18T12:00:00Z'}, {'id': 'two', 'date': '2026-10-18T13:00:00Z'}]
+        saved = {'schema_version': 1, 'adapter': 'yandex-bank-graphql', 'complete': False, 'period': PERIOD,
+                 'pages': [{'items': rows, 'pendingItems': [], 'cursor': None, 'analytics': []}],
+                 'records': rows, 'observations': rows, 'repeatedObservations': 0, 'excluded': [],
+                 'conflicts': [], 'cursorExhausted': True, 'detailsRequested': True,
+                 'details': [{'id': 'native-one', 'requestedId': 'one'}],
+                 'detailObservations': [{'requestedId': 'one',
+                                         'response': {'getTransactionOperationDetails': {'id': 'native-one'}}}],
+                 'detailErrors': [{'id': 'two', 'message': 'HTTP 500'}], 'unreadIds': ['two']}
+        runner = r'''
+const fs = require('node:fs'), vm = require('node:vm');
+const calls = [];
+const sandbox = { URL, Intl, window: { location: { origin: 'https://bank.yandex.ru',
+    pathname: '/my/transactions-history' },
+  fetch: async (url, options) => {
+    const { operationName, variables } = JSON.parse(options.body);
+    calls.push(operationName);
+    return { ok: true, json: async () => ({ data: { getTransactionOperationDetails: { id: `native-${variables.id}` } } }) };
+  } } };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(result => {
+  console.log(JSON.stringify({ result, calls }));
+}).catch(error => { console.error(error); process.exitCode = 1; });
+'''
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / 'resume.js'
+            build(output, resume=saved)
+            result = subprocess.run([node, '-e', runner, str(output)],
+                                    capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report['result']['ok'], report['result'])
+        self.assertEqual(report['calls'], ['TransactionOperationDetails'])
+        self.assertTrue(report['result']['snapshot']['complete'])
+        self.assertEqual(len(report['result']['snapshot']['details']), 2)
+
+    def test_period_and_resume_are_not_combined(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(ValueError):
+                build(Path(folder) / 'x.js', period=PERIOD, resume={'adapter': 'yandex-bank-graphql'})
 
     def test_existing_script_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:
