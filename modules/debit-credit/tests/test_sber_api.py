@@ -81,6 +81,17 @@ class SberRecordTest(unittest.TestCase):
         self.assertEqual(row['amount'], '0')
         self.assertEqual(row['not_recorded_reason'], 'non_financial')
 
+    def test_draft_or_waiting_application_is_not_an_issue(self):
+        rows = []
+        for identifier, state in (('d1', ('INITIAL', 'draft')), ('d2', ('RECEIVED', 'waiting'))):
+            row = operation(identifier, 0, form='UfsLoanClaim', isFinancial=False, state=state)
+            row.pop('operationAmount')
+            row.pop('nationalAmount')
+            rows.append(row)
+        result = read_history(snapshot(rows))
+        self.assertEqual(result['issues'], [])
+        self.assertTrue(all(row['not_recorded_reason'] == 'non_financial' for row in result['records']))
+
     def test_incoming_money_lands_on_the_receiving_card(self):
         row = by_id(read_history(snapshot([operation('i1', 99, source=OUTSIDE, target=CARD,
                                                      form='P2PSBPInTransfer')])))['i1']
