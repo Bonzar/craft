@@ -32,7 +32,7 @@ python3 lib/build_userscript.py /tmp/yandex-bank-reader.js --from-inclusive 2026
 python3 lib/build_tbank_reader.py /tmp/tbank-reader.js --from-inclusive 2026-10-01T00:00:00+03:00 --to-exclusive 2026-11-01T00:00:00+03:00 --account НОМЕР_СЧЁТА --account НОМЕР_СЧЁТА
 python3 lib/cli.py tbank-api /tmp/tbank-history.json --output /tmp/tbank-normalized.json
 python3 lib/build_sber_reader.py /tmp/sber-reader.js --from-inclusive 2026-10-01T00:00:00+03:00 --to-exclusive 2026-11-01T00:00:00+03:00
-python3 lib/cli.py sber-api /tmp/sber-history.json --output /tmp/sber-normalized.json
+python3 lib/cli.py sber-api /tmp/sber-history.json --statement /tmp/sber-statement.pdf --output /tmp/sber-normalized.json
 ```
 
 Команды читают вход, возвращают краткую сводку и при `--output` создают новый
@@ -533,8 +533,18 @@ CSV сохраняет заявленную точность ISO-даты: се�
 приходит одной операцией с обеими сторонами и становится `transfer`. Операция,
 оставшаяся на авторизации, записывается как незавершённая трата. Отклонённая
 операция и заявки без денег остаются в результате с `not_recorded_reason`.
-Баллы СберСпасибо идут на счёт `СберСпасибо`. Списания, которые есть только в
-выписке, этим адаптером не читаются.
+Баллы СберСпасибо идут на счёт `СберСпасибо`.
+
+Часть списаний, например плата за страховку кредитки, есть только в выписке
+по карте. `sber-api --statement файл.pdf` читает PDF-выписку без сторонних
+библиотек и добавляет в результат только те операции, которых нет в истории:
+та же карта или перевод на неё, та же сумма и время в пределах 10 минут.
+Добавленная операция помечена `statement_only`, её номер собирается из карты,
+времени, кода авторизации и суммы и не меняется при повторном чтении. Сводка —
+в `statement_checks`. Выписку заказывают в СберБанк Онлайн в «Выписки и
+справки», она бесплатна и хранится 30 дней. PDF отдаёт адрес
+`retail-statement-ib/v2.0/web/processStatementTransfer/print` из кнопки
+«Посмотреть документ».
 
 ## Метки
 
