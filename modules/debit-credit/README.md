@@ -27,10 +27,12 @@ python3 lib/cli.py yandex-accounting /tmp/resolved-source.json --parent-window-s
 python3 lib/cli.py transfer-accounting /tmp/expected-source.json --accounts /tmp/accounts.json --output /tmp/expected-transfers.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
 PYTHONPATH=lib python3 -m unittest discover -s tests -v
-node --test tests/test_capture.js tests/test_queries.js tests/test_tbank_queries.js
+node --test tests/test_capture.js tests/test_queries.js tests/test_tbank_queries.js tests/test_sber_queries.js
 python3 lib/build_userscript.py /tmp/yandex-bank-reader.js --from-inclusive 2026-10-01T00:00:00+03:00 --to-exclusive 2026-11-01T00:00:00+03:00
 python3 lib/build_tbank_reader.py /tmp/tbank-reader.js --from-inclusive 2026-10-01T00:00:00+03:00 --to-exclusive 2026-11-01T00:00:00+03:00 --account НОМЕР_СЧЁТА --account НОМЕР_СЧЁТА
 python3 lib/cli.py tbank-api /tmp/tbank-history.json --output /tmp/tbank-normalized.json
+python3 lib/build_sber_reader.py /tmp/sber-reader.js --from-inclusive 2026-10-01T00:00:00+03:00 --to-exclusive 2026-11-01T00:00:00+03:00
+python3 lib/cli.py sber-api /tmp/sber-history.json --output /tmp/sber-normalized.json
 ```
 
 Команды читают вход, возвращают краткую сводку и при `--output` создают новый
@@ -514,6 +516,25 @@ CSV сохраняет заявленную точность ISO-даты: се�
 Живой прогон 28 октября 2026 года за 2024-01-01 — 2026-10-28 прочитал 812
 операций за 34 запроса без отложенных и конфликтов. За октябрь 2026 года
 адаптер разобрал 36 операций без отказов и связал все 5 пар переводов.
+
+## Сбер
+
+`build_sber_reader.py` собирает скрипт для вкладки СберБанк Онлайн с открытым
+входом. Скрипт делает только POST-запросы списка операций, интерфейса у него
+нет. Период передаётся в запросе, страницы читаются по 50 операций до неполной
+страницы. Без заголовка `X-Requested-With` банк отвечает пустой историей.
+Операция вне периода откладывается в `excluded`, повтор ID считается, разные
+данные у одного ID останавливают сбор. Возвращается `{ok, snapshot}` либо ошибка
+с частичным `snapshot`.
+
+`sber-api` приводит историю к общему формату. Номер операции — `uohId`, счёт —
+`id` ресурса банка, его название — в `account_name`. Свой счёт — сторона, с
+которой ушли деньги, или сторона, куда они пришли. Перевод между своими счетами
+приходит одной операцией с обеими сторонами и становится `transfer`. Операция,
+оставшаяся на авторизации, записывается как незавершённая трата. Отклонённая
+операция и заявки без денег остаются в результате с `not_recorded_reason`.
+Баллы СберСпасибо идут на счёт `СберСпасибо`. Списания, которые есть только в
+выписке, этим адаптером не читаются.
 
 ## Метки
 
