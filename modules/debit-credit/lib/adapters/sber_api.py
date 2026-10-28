@@ -16,6 +16,7 @@ MOSCOW = ZoneInfo('Europe/Moscow')
 CURRENCY_ALIASES = {'RUR': 'RUB'}
 STATE_NAMES = {'AUTHORIZATION': ('pending', False)}
 CATEGORIES = {'executed': ('completed', True), 'cancel': ('failed', None)}
+STATEMENT_WINDOW_SECONDS = 600
 
 
 def text(value) -> str:
@@ -106,11 +107,56 @@ def coverage_complete(snapshot: dict) -> bool:
             and isinstance(observations, list) and observations == snapshot['records'])
 
 
-def read_history(snapshot: dict) -> dict:
+def same_operation(row: dict, record: dict, card: str) -> bool:
+    amount = Decimal(row['amount'])
+    sided = ((record['account'] == card and Decimal(record['amount']) == amount)
+             or (record['other_account'] == card and Decimal(record['amount']) == -amount))
+    gap = abs((datetime.fromisoformat(record['timestamp'])
+               - datetime.fromisoformat(row['timestamp'])).total_seconds())
+    return sided and gap <= STATEMENT_WINDOW_SECONDS
+
+
+def statement_record(row: dict, card: str, name: str, suffix: str, locator: int) -> dict:
+    stamp = datetime.fromisoformat(row['timestamp']).strftime('%Y%m%d%H%M')
+    identifier = f"statement:{suffix}:{stamp}:{row['authorization_code']}:{row['amount']}"
+    return {**record_base(SOURCE, locator), 'source_id': identifier, 'timestamp': row['timestamp'],
+            'timestamp_precision': 'minute', 'amount': row['amount'], 'currency': 'RUB',
+            'account': card, 'account_name': name, 'other_account': None,
+            'counterparty_resource': None, 'kind': None, 'status': 'completed', 'cleared': True,
+            'description': row['description'], 'bank_category': row['category'],
+            'statement_only': True, 'issues': [], 'raw': row}
+
+
+def merge_statement(result: dict, statement: dict) -> dict:
+    """В историю добавляются только операции выписки, которых в ней нет."""
+    suffix = statement['card_suffix']
+    cards = {(r['account'], r['account_name']) for r in result['records']
+             if (r.get('account_name') or '').endswith(suffix) and not r.get('statement_only')}
+    if len(cards) != 1:
+        result['issues'].append({'code': 'statement_card_not_in_history', 'card_suffix': suffix})
+        return {'card_suffix': suffix, 'operations': len(statement['operations']), 'matched': 0, 'added': 0}
+    card, name = cards.pop()
+    used, matched, added = set(), 0, 0
+    for row in statement['operations']:
+        found = next((r for r in result['records'] if id(r) not in used and not r.get('statement_only')
+                      and same_operation(row, r, card)), None)
+        if found is not None:
+            used.add(id(found))
+            matched += 1
+            continue
+        result['records'].append(statement_record(row, card, name, suffix, len(result['records']) + 1))
+        added += 1
+    return {'card_suffix': suffix, 'operations': len(statement['operations']), 'matched': matched,
+            'added': added}
+
+
+def read_history(snapshot: dict, statements: list | None = None) -> dict:
     if (not isinstance(snapshot, dict) or snapshot.get('adapter') != 'sber-operations'
             or snapshot.get('schema_version') != 1 or not isinstance(snapshot.get('records'), list)):
         raise ValueError('Ожидается JSON сборщика истории Сбера')
     result = report('sber-api', snapshot['records'], parse_operation)
+    result['statement_checks'] = [merge_statement(result, statement) for statement in statements or []]
+    result['input_count'] += sum(check['added'] for check in result['statement_checks'])
     counts = Counter(row['source_id'] for row in result['records'])
     for row in result['records']:
         if counts[row['source_id']] > 1:
@@ -122,6 +168,6 @@ def read_history(snapshot: dict) -> dict:
     result.update(coverage='snapshot_complete' if is_complete else 'unverified',
                   ready=not result['rejected'] and not result['issues'],
                   period=snapshot.get('period'), source=SOURCE,
-                  limitations=['statement_only_charges_not_read', 'categories_and_tags_not_assigned',
+                  limitations=['categories_and_tags_not_assigned',
                                'no_writes'])
     return result
