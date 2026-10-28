@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// Режим --task-tags: чекбокс задачи и её тег говорят об одном и том же — сделана
-// она или нет. Отметку Влад ставит руками в приложении, тег при этом не меняется,
+// Режим --task-tags: чекбокс задачи, этапа или вехи и их тег говорят об одном
+// и том же — сделана работа или нет. Отметку Влад ставит руками в приложении, тег при этом не меняется,
 // поэтому расхождение и есть сигнал «отмечено, но не отражено». Инструмент только
 // находит такие задачи; что с ними делать, решает агент с Владом.
 
@@ -18,7 +18,7 @@ type TaskInfo struct {
 	State string `json:"state"`
 }
 
-// TaskMismatch — задача, у которой состояние чекбокса и тег расходятся.
+// TaskMismatch — задача, этап или веха, у которых состояние чекбокса и тег расходятся.
 type TaskMismatch struct {
 	ID    string   `json:"id"`
 	Title string   `json:"title"`
@@ -34,10 +34,11 @@ type TaskTagsResult struct {
 }
 
 // Тег у ссылки на другую задачу принадлежит ей, а не текущей: ссылки вырезаются
-// до поиска тега.
+// до поиска тега. Задачу, этап и веху делает тег типа в самом конце названия:
+// тот же тег посреди текста — часть названия, а не тип блока.
 var (
 	mdLinkRe   = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
-	taskTagRe  = regexp.MustCompile(`#задача(/[^\s#~*,]+)?`)
+	taskTagRe  = regexp.MustCompile(`#(задача|этап|веха)(/[^\s#~*,]+)?[\s~*]*$`)
 	listMarkRe = regexp.MustCompile(`^\s*(- \[[ x]\] |- |\+ )?(#+ )?`)
 )
 
@@ -79,16 +80,16 @@ func walkTaskTags(b Block, path []string, out *[]TaskMismatch, scanned *int) {
 	}
 }
 
-// taskTagMismatch отвечает, задача ли это базы и расходятся ли у неё чекбокс и тег.
+// taskTagMismatch отвечает, задача ли это базы (или этап, веха) и расходятся ли у неё чекбокс и тег.
 func taskTagMismatch(b Block, title string, path []string) (m TaskMismatch, isTask, mismatched bool) {
 	if b.ListStyle != "task" || b.TaskInfo == nil {
 		return m, false, false
 	}
-	tag := taskTagRe.FindString(mdLinkRe.ReplaceAllString(b.Markdown, ""))
-	if tag == "" {
+	found := taskTagRe.FindStringSubmatch(mdLinkRe.ReplaceAllString(firstLine(b.Markdown), ""))
+	if found == nil {
 		return m, false, false // пункт чек-листа, не задача базы
 	}
-	suffix := strings.TrimPrefix(tag, "#задача")
+	tag, suffix := "#"+found[1]+found[2], found[2]
 	want, closed := closingTagByState[b.TaskInfo.State]
 	isClosingTag := suffix == "/готово" || suffix == "/отменено"
 	if (closed && suffix == want) || (!closed && !isClosingTag) {
