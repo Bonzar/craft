@@ -1,35 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-
-function captureBalanceWithDom(texts) {
-  const sandbox = { document: { querySelectorAll() {
-    return texts.map(innerText => ({ innerText, getClientRects: () => [1] }));
-  } }, module: { exports: {} } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,
-    '../lib/yandex_bank_capture.js'), 'utf8'), sandbox);
-  return () => sandbox.module.exports.captureCardBalanceDom();
-}
-
-test('Displayed zero card balance is retained without claiming blocked funds are zero', () => {
-  const result = captureBalanceWithDom(['Карта\n0 ₽'])();
-  assert.equal(result.amount, '0.00');
-  assert.equal(result.currency, 'RUB');
-  assert.equal(result.blocked_amount, null);
-  assert.equal(result.balance_type, 'displayed_unspecified');
-});
-
-test('Displayed card balance is read with kopecks and grouped digits', () => {
-  assert.equal(captureBalanceWithDom(['Карта\n12 345,67 ₽'])().amount, '12345.67');
-});
-
-test('Missing, masked or ambiguous card balances are rejected instead of becoming zero', () => {
-  for (const texts of [[], ['Карта ••• ₽'], ['Карта 1 ₽', 'Карта 2 ₽']]) {
-    assert.throws(captureBalanceWithDom(texts), /остаток/);
-  }
-});
 
 function directBalanceEnvironment(texts, overrides = {}) {
   return { origin: 'https://bank.yandex.ru',
@@ -78,4 +48,29 @@ test('Requests from an unrelated origin are rejected before transport', async ()
     fetch: async () => { wasCalled = true; } });
   await assert.rejects(requestCardBalance(environment), /сессии банка/);
   assert.equal(wasCalled, false);
+});
+
+test('Displayed zero card balance is retained without claiming blocked funds are zero', async () => {
+  const { requestCardBalance } = require('../lib/yandex_bank_capture.js');
+  const result = await requestCardBalance(directBalanceEnvironment(['Карта 0 ₽']));
+  assert.equal(result.amount, '0.00');
+  assert.equal(result.currency, 'RUB');
+  assert.equal(result.blocked_amount, null);
+  assert.equal(result.balance_type, 'displayed_unspecified');
+});
+
+test('Card balance is read with kopecks and grouped digits', async () => {
+  const { requestCardBalance } = require('../lib/yandex_bank_capture.js');
+  assert.equal((await requestCardBalance(directBalanceEnvironment(['Карта 12 345,67 ₽']))).amount, '12345.67');
+});
+
+test('Missing or masked card balances are rejected instead of becoming zero', async () => {
+  const { requestCardBalance } = require('../lib/yandex_bank_capture.js');
+  for (const texts of [[], ['Карта ••• ₽']]) {
+    await assert.rejects(requestCardBalance(directBalanceEnvironment(texts)), /остат/);
+  }
+});
+
+test('Balance is not read from the visible page', () => {
+  assert.equal(Object.hasOwn(require('../lib/yandex_bank_capture.js'), 'captureCardBalanceDom'), false);
 });
