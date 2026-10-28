@@ -253,6 +253,30 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(len(report['input_sha256']), 64)
         self.assertNotIn('Самокат', result.stdout)
 
+    def test_sber_command_reads_history_collector_file(self):
+        from test_sber_api import CARD, operation, snapshot as sber_snapshot
+        source, target = self.directory / 'sber.json', self.directory / 'parsed.json'
+        source.write_text(json.dumps(sber_snapshot([operation('p1', -10, source=CARD)])))
+        result = self.run_cli('sber-api', source, '--output', target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['records'][0]['source_id'], 'p1')
+        self.assertEqual(report['source'], 'sber')
+        self.assertNotIn('Самокат', result.stdout)
+
+    def test_sber_command_adds_statement_charges_from_pdf(self):
+        from test_sber_statement import StatementMergeTest
+        from sber_statement_pdf import build_pdf, statement_lines
+        source, pdf = self.directory / 'sber.json', self.directory / 'statement.pdf'
+        target = self.directory / 'parsed.json'
+        source.write_text(json.dumps(StatementMergeTest().history()))
+        pdf.write_bytes(build_pdf(statement_lines()))
+        result = self.run_cli('sber-api', source, '--statement', pdf, '--output', target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['statement_checks'][0]['added'], 1)
+        self.assertEqual(len(report['statement_sha256']), 1)
+
     def test_import_verification_command_reads_full_backup_pair(self):
         before, after = self.directory / 'before.dcbackup', self.directory / 'after.dcbackup'
         expected, target = self.directory / 'expected.json', self.directory / 'verified.json'
