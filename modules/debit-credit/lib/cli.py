@@ -14,6 +14,7 @@ from adapters.debit_credit_backup import read_backup
 from adapters.matching import compare_records
 from adapters.yandex_bank_api import read_history
 from adapters.tbank_api import read_history as read_tbank_history
+from adapters.sber_api import read_history as read_sber_history
 from adapters.import_verification import verify_additions
 from adapters.restore_verification import verify_restoration
 from adapters.backup_edit import prepare_backup, backup_fingerprint
@@ -53,6 +54,8 @@ def parser() -> argparse.ArgumentParser:
     api.add_argument('input', type=Path)
     tbank = commands.add_parser('tbank-api', help='Чтение JSON сборщика ленты Т-Банка')
     tbank.add_argument('input', type=Path)
+    sber = commands.add_parser('sber-api', help='Чтение JSON сборщика истории Сбера')
+    sber.add_argument('input', type=Path)
     backup = commands.add_parser('debit-credit-backup', help='Чтение отдельной копии backup + WAL')
     backup.add_argument('input', type=Path)
     backup.add_argument('--timezone', required=True)
@@ -106,7 +109,7 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--source-filename', required=True)
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
-    for command in (debit, api, tbank, backup, compare, review, classification, movement, resolve, accounting,
+    for command in (debit, api, tbank, sber, backup, compare, review, classification, movement, resolve, accounting,
                     verify, restore, prepare, register, transfers, transfer_accounting, confirmations):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
@@ -191,6 +194,8 @@ def normalize(args: argparse.Namespace) -> dict:
         result = read_csv(text, args.timezone, currencies)
     elif args.adapter == 'tbank-api':
         result = read_tbank_history(json.loads(text))
+    elif args.adapter == 'sber-api':
+        result = read_sber_history(json.loads(text))
     else:
         result = read_history(json.loads(text))
     return {**result, 'input_sha256': hashlib.sha256(content).hexdigest()}
