@@ -27,8 +27,10 @@ python3 lib/cli.py yandex-accounting /tmp/resolved-source.json --parent-window-s
 python3 lib/cli.py transfer-accounting /tmp/expected-source.json --accounts /tmp/accounts.json --output /tmp/expected-transfers.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
 PYTHONPATH=lib python3 -m unittest discover -s tests -v
-node --test tests/test_capture.js tests/test_queries.js
+node --test tests/test_capture.js tests/test_queries.js tests/test_tbank_queries.js
 python3 lib/build_userscript.py /tmp/yandex-bank-history-reader.user.js
+python3 lib/build_tbank_reader.py /tmp/tbank-reader.js --from-inclusive 2026-10-01T00:00:00+03:00 --to-exclusive 2026-11-01T00:00:00+03:00 --account НОМЕР_СЧЁТА --account НОМЕР_СЧЁТА
+python3 lib/cli.py tbank-api /tmp/tbank-history.json --output /tmp/tbank-normalized.json
 ```
 
 Команды читают вход, возвращают краткую сводку и при `--output` создают новый
@@ -487,6 +489,31 @@ CSV сохраняет заявленную точность ISO-даты: се�
 История банка читается запросами, см. «Читающие запросы истории банка» и
 «Нормализация JSON API». Адаптер снимков открытых карточек убран: он читал DOM
 по одной карточке и давал ID ленты, которые не совпадают с постоянными метками.
+
+## Т-Банк
+
+`build_tbank_reader.py` собирает скрипт для вкладки Т-Банка с открытым входом.
+Скрипт делает только GET-запросы ленты операций, интерфейса у него нет.
+Номера своих счетов передаются явно и стоят фильтром в самом запросе: счета
+семьи не читаются. Период читается кусками не длиннее 31 дня. Параметры сессии
+берутся из запросов самой страницы и в результат не попадают. Возвращается
+`{ok, snapshot}` либо ошибка с частичным `snapshot`.
+
+Операция чужого счёта или вне периода откладывается в `excluded` с причиной.
+Повтор одного ID считается, разные данные у одного ID останавливают сбор.
+
+`tbank-api` приводит ленту к общему формату. Номер операции — поле `id`, номер
+авторизации не используется. Неуспешная операция и зачисление кешбэка с нулевой
+суммой остаются в результате с `not_recorded_reason`. Перевод между своими
+счетами приходит двумя операциями. Зачисление связывается со списанием через
+`resolution.same_operation_as`, если совпали счета из реквизитов перевода, сумма
+и время в пределах 10 минут. Перевод на счёт, который не читался, сохраняет его
+номер в `other_account`. Взять деньги из Кубышки и вернуть их — перевод между
+картой и счётом источника `Кубышка`.
+
+Живой прогон 28 октября 2026 года за 2024-01-01 — 2026-10-28 прочитал 812
+операций за 34 запроса без отложенных и конфликтов. За октябрь 2026 года
+адаптер разобрал 36 операций без отказов и связал все 5 пар переводов.
 
 ## Метки
 
