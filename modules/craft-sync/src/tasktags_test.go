@@ -48,7 +48,7 @@ func TestTaskTagsIgnoresChecklistItemsAndLinkedTags(t *testing.T) {
 }
 
 func TestTaskTagsWalksNestedPagesAndCollectionsWithPath(t *testing.T) {
-	stage := task("stage", "- [ ] ### Этап 4: Ванная отремонтирована", "todo",
+	stage := task("stage", "- [ ] ### Ванная отремонтирована #этап", "todo",
 		task("deep", "- [x] Установить свет #задача", "done"))
 	coll := Block{ID: "coll", Type: "collection", Items: []Block{
 		task("item-task", "- [x] Купить плитку #задача", "done"),
@@ -59,8 +59,38 @@ func TestTaskTagsWalksNestedPagesAndCollectionsWithPath(t *testing.T) {
 		t.Fatalf("несоответствия = %v", ids)
 	}
 	want := TaskMismatch{ID: "deep", Title: "Установить свет #задача", State: "done", Tag: "#задача",
-		Path: []string{"Проект", "Этап 4: Ванная отремонтирована"}}
+		Path: []string{"Проект", "Ванная отремонтирована #этап"}}
 	if !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("запись = %+v, ждали %+v", got[0], want)
+	}
+}
+
+func TestTaskTagsChecksStagesAndMilestones(t *testing.T) {
+	root := Block{ID: "doc", Type: "page", Markdown: "Проект", Content: []Block{
+		task("stage-ok", "- [x] ### Стяжка залита #этап/готово", "done"),
+		task("stage-ticked", "- [x] ### Плитка уложена #этап", "done"),
+		task("milestone-ok", "- [ ] ## Ванная готова #веха", "todo"),
+		task("milestone-tag-only", "- [ ] ## Кухня готова #веха/готово", "todo"),
+		task("milestone-cancel", "- [ ] ## Балкон утеплён #веха", "canceled"),
+	}}
+	got, scanned := scanTaskTags(root)
+	want := []string{"stage-ticked", "milestone-tag-only", "milestone-cancel"}
+	if ids := mismatchIDs(got); !reflect.DeepEqual(ids, want) {
+		t.Fatalf("несоответствия = %v, ждали %v", ids, want)
+	}
+	if scanned != 5 {
+		t.Fatalf("просмотрено %d, ждали 5", scanned)
+	}
+}
+
+func TestTaskTagsCountsOnlyTheTypeTagAtTheEndOfTitle(t *testing.T) {
+	// тег типа стоит в самом конце названия; тот же тег посреди текста — часть названия
+	root := Block{ID: "doc", Type: "page", Markdown: "Проект", Content: []Block{
+		task("quoted", "- [x] Завести шаблоны «10. Этап #этап» и «11. Веха #веха» #задача/готово", "done"),
+		// пункт чек-листа, где тег только в названии шаблона в кавычках
+		task("item-quoted", "- [x] Шаблон «10. Этап #этап» заведён", "done"),
+	}}
+	if got := findTaskTagMismatches(root); len(got) != 0 {
+		t.Fatalf("ждали пусто, получили %v", mismatchIDs(got))
 	}
 }

@@ -177,7 +177,7 @@ func main() {
 		followLinks = flag.Bool("follow-links", false, "With --markdown: also read every block linked from a «Связи» section, recursively, each ID at most once.")
 		container   = flag.String("container", "", "With --markdown: deep-read this page once and serve the walk from its tree, fetching one by one only what it does not hold. Same output, far fewer requests when the walked pages live under one page.")
 
-		taskTagsArg = flag.String("task-tags", "", "Task-tags mode: deep-read these comma-separated page/document IDs with all subpages and print every task whose checkbox state and #задача tag disagree (done without /готово, canceled without /отменено, open with a closing tag), then exit.")
+		taskTagsArg = flag.String("task-tags", "", "Task-tags mode: deep-read these comma-separated page/document IDs with all subpages and print every task, stage or milestone whose checkbox state and #задача/#этап/#веха tag disagree (done without /готово, canceled without /отменено, open with a closing tag), then exit.")
 	)
 	flag.Parse()
 
