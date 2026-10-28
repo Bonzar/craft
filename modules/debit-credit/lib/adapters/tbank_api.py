@@ -93,26 +93,36 @@ def seconds_apart(first: dict, second: dict) -> float:
                 - datetime.fromisoformat(second['timestamp'])).total_seconds())
 
 
+def legs_match(debit: dict, credit: dict) -> bool:
+    return (credit['account'] == debit['other_account'] and credit['other_account'] == debit['account']
+            and credit['currency'] == debit['currency']
+            and Decimal(credit['amount']) == -Decimal(debit['amount'])
+            and credit['status'] == debit['status'] and seconds_apart(credit, debit) <= PAIR_WINDOW_SECONDS)
+
+
 def pair_transfers(records: list, accounts: set) -> None:
-    """Зачисление на свой счёт связывается со списанием той же операции перевода."""
+    """Зачисление связывается со списанием, только если каждая сторона подходит единственной другой."""
     debits = [r for r in records if is_inner(r) and Decimal(r['amount']) < 0]
     credits = [r for r in records if is_inner(r) and Decimal(r['amount']) > 0]
-    paired = set()
+    options = {id(row): [] for row in debits + credits}
     for debit in debits:
-        candidates = [c for c in credits if id(c) not in paired and c['account'] == debit['other_account']
-                      and c['other_account'] == debit['account']
-                      and Decimal(c['amount']) == -Decimal(debit['amount'])
-                      and c['status'] == debit['status'] and seconds_apart(c, debit) <= PAIR_WINDOW_SECONDS]
-        if len(candidates) == 1:
-            credit = candidates[0]
-            paired.update((id(credit), id(debit)))
-            # Меняется только новая запись результата, исходная операция остаётся в raw.
-            credit['resolution'] = {'same_operation_as': {'source': SOURCE, 'id': debit['source_id']},
-                                    'reason': 'tbank_own_transfer_pair'}
-        elif len(candidates) > 1:
-            debit['issues'].append('ambiguous_transfer_pair')
+        for credit in credits:
+            if legs_match(debit, credit):
+                options[id(debit)].append(credit)
+                options[id(credit)].append(debit)
     for row in debits + credits:
-        if id(row) not in paired and row['other_account'] in accounts and row['status'] == 'completed':
+        found = options[id(row)]
+        if len(found) > 1 or any(len(options[id(other)]) > 1 for other in found):
+            row['issues'].append('ambiguous_transfer_pair')
+    for debit in debits:
+        found = options[id(debit)]
+        if len(found) == 1 and len(options[id(found[0])]) == 1:
+            # Меняется только новая запись результата, исходная операция остаётся в raw.
+            found[0]['resolution'] = {'same_operation_as': {'source': SOURCE, 'id': debit['source_id']},
+                                      'reason': 'tbank_own_transfer_pair'}
+    for row in debits + credits:
+        if (not options[id(row)] and row['other_account'] in accounts
+                and row['status'] == 'completed'):
             row['issues'].append('transfer_pair_not_found')
 
 
