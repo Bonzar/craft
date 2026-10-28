@@ -122,6 +122,22 @@ class TbankTransferTest(unittest.TestCase):
         self.assertIn('transfer_pair_not_found', by_id(result)['d3']['issues'])
         self.assertFalse(result['ready'])
 
+    def test_two_debits_matching_one_credit_leave_the_credit_unresolved_in_any_order(self):
+        rows = [inner_debit('d4', 500, CARD, CREDIT), inner_debit('d5', 500, CARD, CREDIT, seconds=30),
+                inner_credit('c4', 500, CARD, CREDIT, seconds=10)]
+        for order in (rows, list(reversed(rows))):
+            result = by_id(read_history(snapshot(order)))
+            self.assertNotIn('resolution', result['c4'])
+            self.assertIn('ambiguous_transfer_pair', result['c4']['issues'])
+            self.assertTrue(all('ambiguous_transfer_pair' in result[i]['issues'] for i in ('d4', 'd5')))
+
+    def test_legs_in_different_currencies_are_not_paired(self):
+        credit = inner_credit('c6', 100, CARD, CREDIT, seconds=1)
+        credit['accountAmount'] = {'value': 100, 'currency': {'code': 840, 'name': 'USD', 'strCode': '840'}}
+        result = read_history(snapshot([inner_debit('d6', 100, CARD, CREDIT), credit]))
+        self.assertNotIn('resolution', by_id(result)['c6'])
+        self.assertIn('transfer_pair_not_found', by_id(result)['d6']['issues'])
+
     def test_kubyshka_loan_and_repayment_are_transfers_with_the_card(self):
         loan = operation('k1', 3000, 'Credit', CARD, description='Перевод средств из Кубышки')
         repay = operation('k2', 3000, 'Debit', CARD, seconds=60, description='Пополнение Кубышки')
