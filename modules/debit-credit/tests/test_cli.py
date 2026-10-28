@@ -241,6 +241,18 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(report['records'][0]['source_id'], 'feed-a')
         self.assertEqual(len(report['input_sha256']), 64)
 
+    def test_tbank_command_reads_timeline_collector_file(self):
+        from test_tbank_api import operation, snapshot as tbank_snapshot
+        source, target = self.directory / 'tbank.json', self.directory / 'parsed.json'
+        source.write_text(json.dumps(tbank_snapshot([operation('p1', 10)])))
+        result = self.run_cli('tbank-api', source, '--output', target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(target.read_text())
+        self.assertEqual(report['records'][0]['source_id'], 'p1')
+        self.assertEqual(report['source'], 'tbank')
+        self.assertEqual(len(report['input_sha256']), 64)
+        self.assertNotIn('Самокат', result.stdout)
+
     def test_import_verification_command_reads_full_backup_pair(self):
         before, after = self.directory / 'before.dcbackup', self.directory / 'after.dcbackup'
         expected, target = self.directory / 'expected.json', self.directory / 'verified.json'

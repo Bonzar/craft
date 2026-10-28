@@ -43,7 +43,8 @@ class DebitCreditModuleTest(unittest.TestCase):
             self.skipTest('Node.js нужен только для теста DOM-считывателя браузера')
         result = subprocess.run(
             [node, '--test', str(MODULE / 'tests' / 'test_capture.js'),
-             str(MODULE / 'tests' / 'test_queries.js')],
+             str(MODULE / 'tests' / 'test_queries.js'),
+             str(MODULE / 'tests' / 'test_tbank_queries.js')],
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
