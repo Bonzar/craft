@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from urllib.parse import parse_qs, urlsplit
 
+from .balances import read_balances
 from .common import amount_decimal, normalize_space, record_base, report
 from .yandex_bank_ids import operation_id
 
@@ -326,13 +327,10 @@ def read_history(snapshot: dict) -> dict:
            for feed in snapshot['records']]
     result = report('yandex-bank-api', raw, parse_record)
     result['source_account_observations'] = read_source_filter_accounts(snapshot.get('pages'))
-    result['balance_observations'] = deepcopy(snapshot.get('balanceObservations', []))
-    result['balance_control'] = deepcopy(snapshot.get('balanceControl'))
     if result['source_account_observations']['rejected']:
         result['issues'].append({'code': 'source_account_filter_requires_review'})
-    if (not isinstance(result['balance_observations'], list)
-            or any(not isinstance(o, dict) for o in result['balance_observations'])):
-        result['issues'].append({'code': 'balance_observations_require_review'})
+    result['balances'], balance_issues = read_balances(snapshot)
+    result['issues'].extend(balance_issues)
     result['bank_account_identity_names'] = resolve_accounts(result['records'])
     feed_ids = [row.get('id') for row in snapshot['records']]
     counts = Counter(feed_ids)

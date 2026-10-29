@@ -303,57 +303,73 @@ async function collectHistory(options) {
   }
 }
 
-/** @param {object} options @param {string} phase @returns {Promise<object>} */
-async function observeCardBalance(options, phase) {
-  const observedAt = new Date().toISOString();
-  try {
-    const balance = await options.readBalance();
-    if (balance?.account !== 'Карта Пэй' || balance.currency !== 'RUB'
-        || typeof balance.amount !== 'string' || !/^-?\d+\.\d{2}$/.test(balance.amount)
-        || balance.balance_type !== 'displayed_unspecified' || balance.blocked_amount !== null) {
-      throw new Error('Некорректное наблюдение остатка карты');
-    }
-    return { phase, observed_at: observedAt, source_url: options.balanceSourceUrl, balance, error: null };
-  } catch (error) {
-    return { phase, observed_at: observedAt, source_url: options.balanceSourceUrl, balance: null,
-      error: error instanceof Error ? error.message : 'Не удалось прочитать остаток' };
+/** New history first, then fresh versions of earlier operations.
+ * @param {object} options @returns {Promise<object>} */
+async function collectHistoryWithRechecks(options) {
+  const rechecks = recheckResult(options.recheckIds ?? []);
+  let result;
+  try { result = await collectHistory(options); } catch (error) {
+    if (error?.partial && rechecks.inputIds.length) error.partial.rechecks = rechecks;
+    throw error;
   }
+  if (!rechecks.inputIds.length) return result;
+  result.rechecks = rechecks;
+  try { await refreshRechecks(result, rechecks.inputIds, options); } catch (error) {
+    error.partial = result;
+    throw error;
+  }
+  return result;
 }
 
-/** Collect history and retain separate DOM balance observations, including on partial failure.
- * Equal displayed values do not establish server freshness or an atomic snapshot.
- * @param {object} options @returns {Promise<object>} */
-async function collectHistoryWithBalance(options) {
-  if (typeof options.readBalance !== 'function'
-      || options.balanceSourceUrl !== 'https://bank.yandex.ru/my') {
-    throw new Error('Остаток читается только с главной страницы банка');
+const BALANCE_ENDPOINT = 'https://bank.yandex.ru/graphql';
+const BALANCE_QUERIES = Object.freeze({
+  HomeProductsV2: { hash: '990f85eda7d15aa75684acbf4a0fe06b0645d67b044e7eb30f69561795971251',
+    variables: { homeProductsInput: {} } },
+  SavingsAccountsList: { hash: '9ce03dbdca982b8c5fc4ba65386c0007bc5fb887ccb35304d943ac3dcfd42806',
+    variables: {} },
+});
+const OPEN_SAVING = 'Open';
+const ENDED_SAVINGS = new Set(['Closed', 'Annulled']);
+
+/** @param {object} env @param {string} operation @returns {Promise<object>} */
+async function requestBalanceQuery(env, operation) {
+  const { hash, variables } = BALANCE_QUERIES[operation];
+  const response = await env.fetch(`${BALANCE_ENDPOINT}?operationId=${hash}`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ operationName: operation, variables,
+      extensions: { persistedQuery: { version: 1, sha256Hash: hash } } }),
+  });
+  if (!response.ok) throw new Error(`Чтение остатков: HTTP ${response.status}`);
+  const payload = await response.json();
+  if (payload?.errors?.length || !payload?.data) throw new Error('Банк не вернул остатки');
+  return payload.data;
+}
+
+/** Card and every open saving; ended savings carry no money and are skipped.
+ * @param {object=} environment @returns {Promise<Array<object>>} */
+async function requestYandexBalances(environment) {
+  const env = environment || { origin: window.location.origin, fetch: window.fetch.bind(window) };
+  if (env.origin !== 'https://bank.yandex.ru' || typeof env.fetch !== 'function') {
+    throw new Error('Запуск нужен в авторизованной сессии банка');
   }
-  const rechecks = recheckResult(options.recheckIds ?? []);
-  const before = await observeCardBalance(options, 'before');
-  let result, failure;
-  try { result = await collectHistory(options); } catch (error) {
-    if (!error?.partial) throw error;
-    result = error.partial;
-    failure = error;
+  const home = await requestBalanceQuery(env, 'HomeProductsV2');
+  const card = home.homeProducts?.products?.find(product => product.id === 'CARD');
+  if (!card?.value) throw new Error('Банк не вернул остаток карты');
+  const balances = [{ account: 'CARD', account_name: 'Карта Пэй', amount: card.value.amount,
+    currency: card.value.currency }];
+  const savings = await requestBalanceQuery(env, 'SavingsAccountsList');
+  const items = savings.bankUser?.savingsAccounts?.items;
+  if (!Array.isArray(items)) throw new Error('Банк не вернул список сейвов');
+  for (const item of items) {
+    if (ENDED_SAVINGS.has(item.status)) continue;
+    if (item.status !== OPEN_SAVING) throw new Error(`Неизвестное состояние сейва: ${item.status}`);
+    balances.push({ account: item.id, account_name: item.name, amount: item.balance?.amount,
+      currency: item.balance?.currency });
   }
-  if (rechecks.inputIds.length) {
-    result.rechecks = rechecks;
-    if (!failure) {
-      try { await refreshRechecks(result, rechecks.inputIds, options); } catch (error) {
-        failure = error;
-      }
-    }
-  }
-  const after = await observeCardBalance(options, 'after');
-  const output = { ...result, balanceObservations: [before, after], balanceControl: {
-    changed: before.balance && after.balance ? before.balance.amount !== after.balance.amount : null,
-    atomic: false, freshness: 'unknown', reconciled: false,
-  } };
-  if (failure) { failure.partial = output; throw failure; }
-  return output;
+  return balances;
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance,
-    collectDetailsByIds };
+  module.exports = { collectHistory, requestHistory, resumeHistory, collectHistoryWithRechecks,
+    collectDetailsByIds, requestYandexBalances };
 }

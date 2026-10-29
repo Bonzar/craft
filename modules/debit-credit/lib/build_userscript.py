@@ -14,6 +14,12 @@ def validate_period(period: dict) -> None:
         raise ValueError('Нужен возрастающий период с явным часовым поясом')
 
 
+def page_script(name: str) -> str:
+    """Текст скрипта страницы без экспорта для Node."""
+    text = Path(__file__).with_name(name).read_text(encoding='utf-8')
+    return text.split("\nif (typeof module !== 'undefined')")[0]
+
+
 PAGE_CHECK = '''
 if (window.location.origin !== 'https://bank.yandex.ru'
     || !['/my', '/my/transactions-history'].includes(window.location.pathname)) {
@@ -34,8 +40,8 @@ try {
 def headless_body(period: dict, recheck_ids: list[str]) -> str:
     validate_period(period)
     options = json.dumps({**period, 'recheckIds': recheck_ids}, ensure_ascii=False)
-    collect = ('collectHistoryWithBalance({ ...' + options + ', concurrency: 4, '
-               "readBalance: requestCardBalance, balanceSourceUrl: 'https://bank.yandex.ru/my' })")
+    collect = ('collectWithBalances(() => collectHistoryWithRechecks({ ...' + options
+               + ', concurrency: 4 }), requestYandexBalances)')
     return PAGE_CHECK + RUN.replace('COLLECT', collect)
 
 
@@ -56,12 +62,9 @@ def build(output: Path, *, period: dict | None = None, resume: dict | None = Non
             or any(not isinstance(value, str) or not value.strip() for value in ids)):
         raise ValueError('Для повторного чтения нужен массив непустых ID')
     body = headless_body(period, ids) if resume is None else resume_body(resume)
-    reader = Path(__file__).with_name('yandex_bank_queries.js').read_text(encoding='utf-8')
-    reader = reader.split("\nif (typeof module !== 'undefined')")[0]
-    capture = Path(__file__).with_name('yandex_bank_capture.js').read_text(encoding='utf-8')
-    capture = capture.split("\nif (typeof module !== 'undefined')")[0]
+    reader = page_script('yandex_bank_queries.js')
     text = ('// Read-only Yandex Bank history collection.\n(async () => {\n"use strict";\n'
-            + reader + '\n' + capture + '\n' + body + '\n})();\n')
+            + reader + '\n' + page_script('balances.js') + '\n' + body + '\n})();\n')
     descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
         stream.write(text)
