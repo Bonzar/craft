@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectHistory, requestHistory, resumeHistory, collectHistoryWithBalance,
-  collectDetailsByIds } = require('../lib/yandex_bank_queries.js');
+const { collectHistory, requestHistory, resumeHistory, collectHistoryWithRechecks,
+  collectDetailsByIds, requestYandexBalances } = require('../lib/yandex_bank_queries.js');
 
 const scope = {
   fromInclusive: '2026-07-04T00:00:00+03:00',
@@ -11,9 +11,6 @@ const item = (id, extra = {}) => ({ id, date: '2026-07-04T10:00:00+03:00', ...ex
 const page = (items, cursor = null, pendingItems = []) => ({
   getTransactionsFeedPfm: { items, pendingItems, cursor, analytics: [] },
 });
-
-const balance = amount => ({ account: 'Карта Пэй', amount, currency: 'RUB',
-  balance_type: 'displayed_unspecified', blocked_amount: null });
 
 test('Old IDs are re-read directly without a new-period feed or cached details', async () => {
   const calls = [];
@@ -44,18 +41,16 @@ test('Unread old IDs retain successful rechecks and do not claim completeness', 
     && error.partial.unreadIds[0] === 'bad');
 });
 
-test('Balance observations surround both new history and old-operation rechecks', async () => {
+test('Old-operation rechecks follow the new history', async () => {
   const calls = [];
-  const result = await collectHistoryWithBalance({ ...scope, recheckIds: ['old'],
-    readBalance: () => { calls.push('balance'); return balance('1.00'); },
-    balanceSourceUrl: 'https://bank.yandex.ru/my',
+  const result = await collectHistoryWithRechecks({ ...scope, recheckIds: ['old'],
     request: async (operation, variables) => {
       calls.push(operation);
       return operation === 'TransactionsFeedPfm' ? page([])
         : { getTransactionOperationDetails: item(variables.id) };
     },
   });
-  assert.deepEqual(calls, ['balance', 'TransactionsFeedPfm', 'TransactionOperationDetails', 'balance']);
+  assert.deepEqual(calls, ['TransactionsFeedPfm', 'TransactionOperationDetails']);
   assert.equal(result.rechecks.complete, true);
   assert.equal(result.rechecks.details[0].requestedId, 'old');
   assert.equal(result.records.length, 0);
@@ -69,8 +64,7 @@ test('Malformed recheck IDs are rejected before any bank request', async () => {
 
 test('Failed old-operation recheck preserves new history and is repeated on resume', async () => {
   let partial;
-  await assert.rejects(collectHistoryWithBalance({ ...scope, recheckIds: ['old'],
-    readBalance: () => balance('1.00'), balanceSourceUrl: 'https://bank.yandex.ru/my',
+  await assert.rejects(collectHistoryWithRechecks({ ...scope, recheckIds: ['old'],
     request: async operation => {
       if (operation === 'TransactionsFeedPfm') return page([]);
       throw new Error('old card unavailable');
@@ -78,7 +72,6 @@ test('Failed old-operation recheck preserves new history and is repeated on resu
   }), error => { partial = error.partial; return !!partial; });
   assert.equal(partial.complete, false);
   assert.deepEqual(partial.rechecks.unreadIds, ['old']);
-  assert.equal(partial.balanceObservations.length, 2);
   const calls = [];
   const result = await resumeHistory(partial, { request: async (operation, variables) => {
     calls.push({ operation, id: variables.id });
@@ -90,40 +83,52 @@ test('Failed old-operation recheck preserves new history and is repeated on resu
   assert.equal(partial.complete, false);
 });
 
-test('Balance observations bracket history collection without claiming an atomic checkpoint', async () => {
-  let reads = 0;
-  const result = await collectHistoryWithBalance({ ...scope, includeDetails: false,
-    request: async () => page([]), readBalance: () => balance(reads++ ? '2.00' : '1.00'),
-    balanceSourceUrl: 'https://bank.yandex.ru/my',
-  });
-  assert.equal(result.complete, true);
-  assert.equal(result.balanceObservations.length, 2);
-  assert.equal(result.balanceObservations[0].phase, 'before');
-  assert.equal(result.balanceObservations[1].phase, 'after');
-  assert.match(result.balanceObservations[0].observed_at, /Z$/);
-  assert.equal(result.balanceControl.changed, true);
-  assert.equal(result.balanceControl.atomic, false);
-  assert.equal(result.balanceControl.freshness, 'unknown');
+const yandexEnvironment = (answers, calls = []) => ({ origin: 'https://bank.yandex.ru',
+  fetch: async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push({ url, method: options.method, credentials: options.credentials, body });
+    return { ok: true, json: async () => ({ data: answers[body.operationName] }) };
+  } });
+const products = amount => ({ homeProducts: { products: [
+  { id: 'CARD', title: 'Карта', value: { amount, currency: 'RUB' } },
+  { id: 'SAVING', title: 'Сейвы', value: { amount: '99.00', currency: 'RUB' } }] } });
+const saving = (id, name, status, amount) => ({ id, name, status, productCode: 'SavingsAccount',
+  balance: { amount, currency: 'RUB' } });
+
+test('Card and open savings balances are read with the bank persisted queries', async () => {
+  const calls = [];
+  const balances = await requestYandexBalances(yandexEnvironment({ HomeProductsV2: products('5717.00'),
+    SavingsAccountsList: { bankUser: { savingsAccounts: { items: [
+      saving('sa_open', 'Округление', 'Open', '12.30'), saving('sa_plain', null, 'Open', '1.00'),
+      saving('sa_closed', 'Старый', 'Closed', '0.00'), saving('dp_off', null, 'Annulled', '0.00')] } } },
+  }, calls));
+  assert.deepEqual(balances, [
+    { account: 'CARD', account_name: 'Карта Пэй', amount: '5717.00', currency: 'RUB' },
+    { account: 'sa_open', account_name: 'Округление', amount: '12.30', currency: 'RUB' },
+    { account: 'sa_plain', account_name: null, amount: '1.00', currency: 'RUB' }]);
+  assert.deepEqual(calls.map(call => call.body.operationName), ['HomeProductsV2', 'SavingsAccountsList']);
+  assert.ok(calls.every(call => call.method === 'POST' && call.credentials === 'same-origin'
+    && call.url.startsWith('https://bank.yandex.ru/graphql?operationId=')
+    && call.url.endsWith(call.body.extensions.persistedQuery.sha256Hash)));
 });
 
-test('Missing balance preserves a complete history with explicit observation errors', async () => {
-  const result = await collectHistoryWithBalance({ ...scope, includeDetails: false,
-    request: async () => page([]), readBalance: () => { throw new Error('hidden'); },
-    balanceSourceUrl: 'https://bank.yandex.ru/my',
-  });
-  assert.equal(result.complete, true);
-  assert.equal(result.balanceObservations.length, 2);
-  assert.equal(result.balanceObservations[0].balance, null);
-  assert.equal(result.balanceControl.changed, null);
-  assert.equal(result.balanceObservations[0].error, 'hidden');
+test('A saving in an unknown state stops the balance read', async () => {
+  await assert.rejects(requestYandexBalances(yandexEnvironment({ HomeProductsV2: products('1.00'),
+    SavingsAccountsList: { bankUser: { savingsAccounts: { items: [
+      saving('sa_x', null, 'Frozen', '5.00')] } } } })), /состояни/);
 });
 
-test('Partial history retains balance observations when a history request fails', async () => {
-  await assert.rejects(collectHistoryWithBalance({ ...scope,
-    request: async () => { throw new Error('offline'); }, readBalance: () => balance('0.00'),
-    balanceSourceUrl: 'https://bank.yandex.ru/my',
-  }), error => error.partial.complete === false
-    && error.partial.balanceObservations.length === 2);
+test('A missing card balance stops the balance read', async () => {
+  await assert.rejects(requestYandexBalances(yandexEnvironment({
+    HomeProductsV2: { homeProducts: { products: [] } },
+    SavingsAccountsList: { bankUser: { savingsAccounts: { items: [] } } } })), /карт/);
+});
+
+test('Balances are not requested outside the bank page', async () => {
+  let wasCalled = false;
+  await assert.rejects(requestYandexBalances({ origin: 'https://example.com',
+    fetch: async () => { wasCalled = true; } }), /банка/);
+  assert.equal(wasCalled, false);
 });
 
 test('all cursor pages and distinct IDs are retained', async () => {

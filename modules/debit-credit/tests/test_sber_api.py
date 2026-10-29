@@ -155,6 +155,22 @@ class SberCoverageTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_history({'adapter': 'tbank-timeline', 'schema_version': 1, 'records': []})
 
+    def test_bank_balances_are_kept_and_movement_during_reading_is_flagged(self):
+        rows = [{'account': CARD['id'], 'account_name': 'Счёт', 'amount': '10.00', 'currency': 'RUB'}]
+        moved = [{**rows[0], 'amount': '9.00'}]
+        steady = read_history(snapshot([operation('p1', -1, source=CARD)], balances={
+            'before': {'observed_at': 'T1', 'accounts': rows, 'error': None},
+            'after': {'observed_at': 'T2', 'accounts': rows, 'error': None}, 'changed': False}))
+        self.assertEqual(steady['balances']['accounts'], rows)
+        self.assertTrue(steady['ready'])
+        moving = read_history(snapshot([operation('p1', -1, source=CARD)], balances={
+            'before': {'observed_at': 'T1', 'accounts': rows, 'error': None},
+            'after': {'observed_at': 'T2', 'accounts': moved, 'error': None}, 'changed': True}))
+        self.assertIn({'code': 'balance_changed_during_read'}, moving['issues'])
+        self.assertFalse(moving['ready'])
+        self.assertIsNone(read_history(snapshot([operation('p1', -1, source=CARD)]))['balances'])
+
+
 
 if __name__ == '__main__':
     unittest.main()
