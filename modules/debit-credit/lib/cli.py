@@ -28,6 +28,8 @@ from adapters.movement_control import compare_movements
 from adapters.transfer_plan import build_transfer_plan
 from adapters.transfer_accounting import expand_transfers
 from adapters.completion import plan_confirmations
+from adapters.run_config import fetch_collections, parse_config
+from adapters.run_transfer import check_balances, plan_transfer
 
 
 def transfer_command(commands):
@@ -43,10 +45,26 @@ def transfer_command(commands):
     return command
 
 
+def run_command(commands):
+    command = commands.add_parser('transfer-run', help='Перенос одной командой: снимки банков и копия на входе')
+    command.add_argument('--source', type=Path, action='append', required=True, help='JSON сборщика банка')
+    command.add_argument('--backup', type=Path, required=True)
+    command.add_argument('--target', type=Path, required=True, help='Новая подготовленная копия')
+    command.add_argument('--from-date', required=True)
+    command.add_argument('--to-date', required=True)
+    command.add_argument('--timezone', required=True)
+    command.add_argument('--config', type=Path, help='JSON коллекций вместо чтения из Craft')
+    for name, default in (('window-seconds', 120), ('pair-window-seconds', 300),
+                          ('ledger-window-seconds', 129600), ('parent-window-seconds', 300)):
+        command.add_argument('--' + name, type=int, default=default)
+    return command
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description='Адаптеры учёта и подготовка отдельных резервных копий')
     commands = result.add_subparsers(dest='adapter', required=True)
     transfers = transfer_command(commands)
+    run = run_command(commands)
     debit = commands.add_parser('debit-credit', help='Чтение русского CSV приложения')
     debit.add_argument('input', type=Path)
     debit.add_argument('--timezone', required=True, help='Например Europe/Moscow')
@@ -113,12 +131,67 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument('--timestamp', required=True)
     register.add_argument('--registry-archive', type=Path, required=True)
     for command in (debit, api, tbank, sber, backup, compare, review, classification, movement, resolve, accounting,
-                    verify, restore, prepare, register, transfers, transfer_accounting, confirmations):
+                    verify, restore, prepare, register, transfers, transfer_accounting, confirmations, run):
         command.add_argument('--output', type=Path, help='Новый JSON-файл, существующий не перезаписывается')
     return result
 
 
+SOURCE_READERS = {'yandex-bank-graphql': read_history, 'tbank-timeline': read_tbank_history,
+                  'sber-operations': read_sber_history}
+
+
+def read_source(path: Path) -> dict:
+    snapshot = json.loads(path.read_text(encoding='utf-8-sig'))
+    reader = SOURCE_READERS.get(snapshot.get('adapter') if isinstance(snapshot, dict) else None)
+    if reader is None:
+        raise ValueError('Ожидается JSON сборщика Яндекс Банка, Т-Банка или Сбера')
+    return reader(snapshot)
+
+
+def transfer_run(args: argparse.Namespace) -> dict:
+    """Однозначное — в отдельную копию, остальное — в отчёт; приложение и исходная копия не меняются."""
+    if args.output and args.output.resolve() == args.target.resolve():
+        raise FileExistsError('Отчёт и копия должны быть разными файлами')
+    sources = [read_source(path) for path in args.source]
+    fingerprint = backup_fingerprint(args.backup)
+    ledger = read_backup(args.backup, args.timezone)
+    collections = (json.loads(args.config.read_text(encoding='utf-8-sig')) if args.config
+                   else fetch_collections(os.environ['CRAFT_API_BASE']))
+    config = parse_config(collections)
+    zone = ZoneInfo(args.timezone)
+    start = datetime.combine(date.fromisoformat(args.from_date), time.min, zone)
+    end = datetime.combine(date.fromisoformat(args.to_date) + timedelta(days=1), time.min, zone)
+    result = plan_transfer(sources, ledger, config, start, end, window_seconds=args.window_seconds,
+                           pair_window_seconds=args.pair_window_seconds,
+                           ledger_window_seconds=args.ledger_window_seconds,
+                           parent_window_seconds=args.parent_window_seconds)
+    if backup_fingerprint(args.backup) != fingerprint:
+        raise ValueError('Исходная резервная копия изменилась во время подготовки')
+    after, preparation = ledger, None
+    if result['additions'] or result['updates']:
+        plan = {'schema_version': 1, 'source_sha256': fingerprint, 'updates': result['updates'],
+                'additions': result['additions']}
+        preparation = prepare_backup(args.backup, args.target, plan, args.timezone)
+        after = read_backup(args.target, args.timezone)
+    balances = check_balances(after, sources, config)
+    differs = [name for name, row in balances.items() if row['state'] == 'differs']
+    return {'schema_version': 1, 'adapter': 'transfer-run', 'coverage': 'unverified',
+            'input_count': sum(s['input_count'] for s in sources), 'records': result['review'],
+            'rejected': [row for s in sources for row in s['rejected']],
+            'issues': [*({'code': 'needs_review', 'reason': r['reason']} for r in result['review']),
+                       *({'code': 'balance_differs', 'account': name} for name in differs)],
+            'ready': not result['review'] and not differs,
+            'added': len(result['additions']), 'updated': len(result['updates']),
+            'target': str(args.target) if preparation else None,
+            'outcome_counts': result['outcome_counts'], 'outcomes': result['outcomes'],
+            'review': result['review'], 'balances': balances,
+            'period': {'start': start.isoformat(), 'end': end.isoformat()},
+            'backup_sha256': fingerprint}
+
+
 def normalize(args: argparse.Namespace) -> dict:
+    if args.adapter == 'transfer-run':
+        return transfer_run(args)
     if args.adapter == 'plan-confirmations':
         content = args.input.read_bytes()
         comparison = json.loads(content.decode('utf-8-sig'))
