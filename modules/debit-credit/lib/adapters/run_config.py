@@ -9,8 +9,7 @@ from decimal import Decimal
 ACCOUNTS = 'Счета источников'
 CONTROL_POINTS = 'Контрольные точки'
 RULES = 'Правила категорий и тегов'
-DECISIONS = 'Решения по операциям'
-COLLECTION_NAMES = (ACCOUNTS, CONTROL_POINTS, RULES, DECISIONS)
+COLLECTION_NAMES = (ACCOUNTS, CONTROL_POINTS, RULES)
 SOURCE_KEYS = {'Яндекс Банк': 'yabank', 'Т-Банк': 'tbank', 'Сбер': 'sber'}
 OTHER_SOURCES = {'Билайн', 'ВТБ', 'Бейдж', 'ВкусВилл', 'Apple ID', 'Нет источника'}
 MARKS = {'не записывать': 'skip', 'уже в приложении': 'same'}
@@ -76,38 +75,37 @@ def source_key(props: dict) -> str:
     return key
 
 
-def read_rules(items: list) -> dict:
-    rules = {}
+RULE_SCOPES = {'продавец', 'операция'}
+
+
+def read_rule(item: dict) -> tuple:
+    props = item.get('properties', {})
+    scope, match = props.get('by'), text(item.get('match'))
+    path, tag, mark = category_path(props.get('category')), text(props.get('tag')) or None, props.get('action')
+    if scope not in RULE_SCOPES or not match:
+        raise ValueError(f'У правила нужны «по чему» и что искать: {match}')
+    if mark is not None and (mark not in MARKS or scope != 'операция'):
+        raise ValueError(f'Отметка правила только для одной операции: {match}')
+    action = MARKS.get(mark, 'record')
+    if action == 'record' and not (path or tag):
+        raise ValueError(f'У правила нужна категория или тег: {match}')
+    key = (source_key(props), match.lower() if scope == 'продавец' else match)
+    return scope, key, {'action': action, 'category_path': path, 'tag': tag}
+
+
+def read_rules(items: list) -> tuple[dict, dict]:
+    """Правила продавца и правила одной операции по её постоянному номеру."""
+    rules, decisions = {}, {}
     for item in items:
-        props = item.get('properties', {})
-        payee, path = text(item.get('payee')).lower(), category_path(props.get('category'))
-        tag = text(props.get('tag')) or None
-        if not text(props.get('approved')):
+        if not text(item.get('properties', {}).get('approved')):
             continue
-        key = (source_key(props), payee)
-        if not payee or not (path or tag):
-            raise ValueError('У правила нужны продавец и категория или тег')
-        if key in rules:
-            raise ValueError(f'Повтор правила для продавца: {payee}')
-        rules[key] = {'category_path': path, 'tag': tag}
-    return rules
-
-
-def read_decisions(items: list) -> dict:
-    decisions = {}
-    for item in items:
-        props = item.get('properties', {})
-        key = (source_key(props), text(item.get('sourceid')))
-        mark, path, tag = props.get('action'), category_path(props.get('category')), text(props.get('tag')) or None
-        if mark is not None and mark not in MARKS:
-            raise ValueError(f'Неизвестная отметка решения: {mark}')
-        action = MARKS.get(mark, 'record')
-        if not key[1] or (action == 'record' and not (path or tag)):
-            raise ValueError(f'Неполное решение по операции: {key[1]}')
-        if key in decisions:
-            raise ValueError(f'Повтор решения по операции: {key[1]}')
-        decisions[key] = {'action': action, 'category_path': path, 'tag': tag}
-    return decisions
+        scope, key, value = read_rule(item)
+        target = rules if scope == 'продавец' else decisions
+        if key in target:
+            raise ValueError(f'Повтор правила: {key[1]}')
+        target[key] = value if scope == 'операция' else {
+            'category_path': value['category_path'], 'tag': value['tag']}
+    return rules, decisions
 
 
 def parse_config(collections: dict) -> dict:
@@ -115,9 +113,10 @@ def parse_config(collections: dict) -> dict:
     if missing:
         raise ValueError('Нет коллекций: ' + ', '.join(missing))
     accounts, skipped = read_accounts(collections[ACCOUNTS])
+    rules, decisions = read_rules(collections[RULES])
     return {'accounts': accounts, 'not_transferred': skipped,
             'control_points': read_control_points(collections[CONTROL_POINTS]),
-            'rules': read_rules(collections[RULES]), 'decisions': read_decisions(collections[DECISIONS])}
+            'rules': rules, 'decisions': decisions}
 
 
 def open_json(url: str, headers: dict) -> dict:
@@ -127,7 +126,7 @@ def open_json(url: str, headers: dict) -> dict:
 
 
 def fetch_collections(base: str, opener=open_json) -> dict:
-    """Читает четыре коллекции переноса через connect-ссылку Craft, только GET."""
+    """Читает коллекции переноса через connect-ссылку Craft, только GET."""
     base, headers = base.rstrip('/'), {'User-Agent': BROWSER_AGENT, 'Accept': 'application/json'}
     listing = opener(base + '/collections', headers).get('items', [])
     result = {}
