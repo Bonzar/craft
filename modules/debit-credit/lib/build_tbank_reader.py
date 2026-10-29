@@ -6,11 +6,11 @@ import os
 import re
 from pathlib import Path
 
-from build_userscript import validate_period
+from build_userscript import page_script, validate_period
 
 BODY = '''
 try {
-  const snapshot = await collectTbankHistory(OPTIONS);
+  const snapshot = await collectWithBalances(() => collectTbankHistory(OPTIONS), requestTbankBalances);
   return { ok: true, snapshot };
 } catch (error) {
   return { ok: false, error: error instanceof Error ? error.message : 'Ошибка чтения',
@@ -29,8 +29,7 @@ def build(output: Path, *, period: dict, accounts: list) -> None:
     validate_period(period)
     validate_accounts(accounts)
     options = json.dumps({**period, 'accounts': accounts}, ensure_ascii=False)
-    reader = Path(__file__).with_name('tbank_queries.js').read_text(encoding='utf-8')
-    reader = reader.split("\nif (typeof module !== 'undefined')")[0]
+    reader = page_script('tbank_queries.js') + '\n' + page_script('balances.js')
     text = ('// Read-only T-Bank timeline collection.\n(async () => {\n"use strict";\n'
             + reader + '\n' + BODY.replace('OPTIONS', options) + '\n})();\n')
     descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

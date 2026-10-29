@@ -49,6 +49,49 @@ async function requestTimeline(query, environment) {
   return response.json();
 }
 
+const ACCOUNTS_PATH = '/api/common/v1/accounts_light_ib';
+const OWN_ACCOUNT_TYPES = new Set(['Current', 'Credit', 'Saving']);
+// Чужие счета с доступом на просмотр, внешние карты и рассрочка без договора — не свои деньги.
+const SKIPPED_ACCOUNT_TYPES = new Set(['SharedCurrentKids', 'ExternalAccount', 'BNPL']);
+
+/** @param {number} value @returns {number} */
+function toCents(value) {
+  if (!Number.isFinite(value)) throw new Error('Банк не вернул сумму счёта');
+  return Math.round(value * 100);
+}
+
+/** Own money of an account; a credit card owes the part of its limit it used.
+ * @param {object} account @returns {object} */
+function accountBalance(account) {
+  const cents = toCents(account.moneyAmount?.value) - toCents(account.creditLimit?.value ?? 0);
+  return { account: account.id, account_name: account.name, amount: (cents / 100).toFixed(2),
+    currency: account.currency?.name };
+}
+
+/** @param {object=} environment @returns {Promise<Array<object>>} */
+async function requestTbankBalances(environment) {
+  const env = environment || pageEnvironment();
+  if (env.origin !== TBANK_ORIGIN || typeof env.fetch !== 'function') {
+    throw new Error('Запуск нужен в авторизованной вкладке Т-Банка');
+  }
+  const url = new URL(ACCOUNTS_PATH, TBANK_ORIGIN);
+  url.search = sessionParams(env.resourceUrls).toString();
+  const response = await env.fetch(url.toString(), { method: 'GET', credentials: 'include',
+    signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined });
+  if (!response.ok) throw new Error(`Чтение счетов: HTTP ${response.status}`);
+  const answer = await response.json();
+  if (answer?.resultCode !== 'OK' || !Array.isArray(answer.payload)) {
+    throw new Error(`Банк не вернул счета: ${answer?.resultCode ?? 'нет ответа'}`);
+  }
+  return answer.payload.filter(account => {
+    if (account.shared || SKIPPED_ACCOUNT_TYPES.has(account.accountType)) return false;
+    if (!OWN_ACCOUNT_TYPES.has(account.accountType)) {
+      throw new Error(`Неизвестный вид счёта: ${account.accountType}`);
+    }
+    return true;
+  }).map(accountBalance);
+}
+
 /** @param {string} value @returns {number} */
 function periodTime(value) {
   if (typeof value !== 'string' || !/(Z|[+-]\d{2}:\d{2})$/.test(value)) {
@@ -143,5 +186,5 @@ async function collectTbankHistory(options) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { collectTbankHistory, requestTimeline };
+  module.exports = { collectTbankHistory, requestTbankBalances, requestTimeline };
 }
