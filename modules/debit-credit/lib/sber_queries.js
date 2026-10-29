@@ -1,6 +1,9 @@
 /** Read-only Sber operation history queries for a period. */
 const SBER_ORIGIN = 'https://online.sberbank.ru';
 const OPERATIONS_URL = 'https://web-node3.online.sberbank.ru/uoh-bh/v1/operations/list';
+const SECTION_URL = 'https://web-node3.online.sberbank.ru/main-screen/rest/v2/m1/web/section/meta';
+const CARD_INFO_URL = 'https://web-node3.online.sberbank.ru/ufs-carddetail/rest/card/v1/cardInfo';
+const SBER_SPASIBO = 'СберСпасибо';
 const MOSCOW_OFFSET_MS = 3 * 3600000;
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_MAX_PAGES = 400;
@@ -21,25 +24,93 @@ function parseSberDate(value) {
   return Date.parse(`${match[3]}-${match[2]}-${match[1]}T${match[4]}+03:00`);
 }
 
-/** @param {object} query @param {object=} environment @returns {Promise<object>} */
-async function requestOperations(query, environment) {
+/** @param {object=} environment @returns {object} */
+function sberEnvironment(environment) {
   const env = environment || { origin: window.location.origin, fetch: window.fetch.bind(window) };
   if (env.origin !== SBER_ORIGIN || typeof env.fetch !== 'function') {
     throw new Error('Запуск нужен в авторизованной вкладке СберБанк Онлайн');
   }
+  return env;
+}
+
+/** @param {object} env @param {string} url @param {object} body @param {string} purpose
+ * @returns {Promise<object>} */
+async function postToSber(env, url, body, purpose) {
   // Без этих заголовков банк отвечает пустой историей.
-  const response = await env.fetch(OPERATIONS_URL, { method: 'POST', credentials: 'include',
+  const response = await env.fetch(url, { method: 'POST', credentials: 'include',
     headers: { Accept: 'application/json, text/plain, */*',
       'Content-Type': 'application/json;charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
-    body: JSON.stringify({ ...query, showHidden: false, showNotTransactionBonuses: true,
-      showOpenBanking: true }),
+    body: JSON.stringify(body),
     signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined });
   if (!response.ok) {
-    const error = new Error(`Чтение истории: HTTP ${response.status}`);
+    const error = new Error(`${purpose}: HTTP ${response.status}`);
     error.httpStatus = response.status;
     throw error;
   }
   return response.json();
+}
+
+/** @param {object} query @param {object=} environment @returns {Promise<object>} */
+async function requestOperations(query, environment) {
+  const env = sberEnvironment(environment);
+  return postToSber(env, OPERATIONS_URL, { ...query, showHidden: false, showNotTransactionBonuses: true,
+    showOpenBanking: true }, 'Чтение истории');
+}
+
+/** @param {string} name @param {string} number @returns {string} */
+function productName(name, number) {
+  return `${name} •• ${String(number).slice(-4)}`;
+}
+
+/** @param {object} env @param {Array<object>} cards @returns {Promise<Map>} */
+async function requestCreditBalances(env, cards) {
+  if (!cards.length) return new Map();
+  const answer = await postToSber(env, CARD_INFO_URL, { cardIds: cards.map(card => card.id) },
+    'Чтение задолженности');
+  const details = new Map((answer?.body?.cardDetails?.cards || []).map(card => [card.id, card.creditType]));
+  return new Map(cards.map(card => {
+    const credit = details.get(card.id);
+    if (!credit?.creditDebt?.amount || !credit.creditOwnSum?.amount) {
+      throw new Error(`Банк не вернул задолженность карты ${productName(card.name, card.number)}`);
+    }
+    const cents = Math.round(Number(credit.creditOwnSum.amount) * 100) - Math.round(Number(credit.creditDebt.amount) * 100);
+    return [card.id, { amount: (cents / 100).toFixed(2), currency: credit.creditDebt.currency.code }];
+  }));
+}
+
+/** @param {object} sections @param {string} name @returns {Array<object>} */
+function loadedSection(sections, name) {
+  if (sections?.[name]?.state !== 'SUCCESS' || !Array.isArray(sections[name].data)) {
+    throw new Error(`Банк не загрузил раздел продуктов ${name}`);
+  }
+  return sections[name].data;
+}
+
+/** Cards and accounts with the ids the history uses; a credit card owes its debt.
+ * @param {object=} environment @returns {Promise<Array<object>>} */
+async function requestSberBalances(environment) {
+  const env = sberEnvironment(environment);
+  const answer = await postToSber(env, SECTION_URL, { withData: true, forceUpdate: true }, 'Чтение остатков');
+  const sections = answer?.body?.sections?.technicalSection?.sectionProductData;
+  const cards = loadedSection(sections, 'cardsInWallet'), accounts = loadedSection(sections, 'accounts');
+  if (loadedSection(sections, 'ctaccounts').length) throw new Error('Платёжные счета ещё не читаются');
+  const credit = await requestCreditBalances(env, cards.filter(card => card.type === 'credit'));
+  const balances = cards.map(card => {
+    const money = card.type === 'credit' ? credit.get(card.id)
+      : { amount: card.availableLimit?.amount, currency: card.availableLimit?.currency?.code };
+    return { account: `card:${card.id}`, account_name: productName(card.name, card.number), ...money };
+  });
+  for (const account of accounts) {
+    if (account.state !== 'OPENED') throw new Error(`Неизвестное состояние счёта: ${account.state}`);
+    balances.push({ account: `account:${account.id}`, account_name: productName(account.name, account.number),
+      amount: account.balance?.amount, currency: account.balance?.currency?.code });
+  }
+  for (const loyalty of loadedSection(sections, 'sberThanks')) {
+    if (loyalty.loyaltyType !== 'SBERSPASIBO') continue;
+    balances.push({ account: SBER_SPASIBO, account_name: SBER_SPASIBO, amount: loyalty.balance?.amount,
+      currency: 'SBER_SPASIBO' });
+  }
+  return balances;
 }
 
 /** @param {string} value @returns {number} */
@@ -140,5 +211,5 @@ async function collectSberHistory(options) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { collectSberHistory, requestOperations, sberDate };
+  module.exports = { collectSberHistory, requestOperations, requestSberBalances, sberDate };
 }
