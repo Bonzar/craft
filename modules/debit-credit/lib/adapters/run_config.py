@@ -8,12 +8,12 @@ from decimal import Decimal
 
 ACCOUNTS = 'Счета источников'
 CONTROL_POINTS = 'Контрольные точки'
-RULES = 'Правила категорий'
+RULES = 'Правила категорий и тегов'
 DECISIONS = 'Решения по операциям'
 COLLECTION_NAMES = (ACCOUNTS, CONTROL_POINTS, RULES, DECISIONS)
 SOURCE_KEYS = {'Яндекс Банк': 'yabank', 'Т-Банк': 'tbank', 'Сбер': 'sber'}
 OTHER_SOURCES = {'Билайн', 'ВТБ', 'Бейдж', 'ВкусВилл', 'Apple ID', 'Нет источника'}
-ACTIONS = {'record', 'skip', 'same'}
+MARKS = {'не записывать': 'skip', 'уже в приложении': 'same'}
 UNIT = re.compile(r'[A-Z][A-Z_]*')
 BROWSER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)'
 
@@ -81,14 +81,15 @@ def read_rules(items: list) -> dict:
     for item in items:
         props = item.get('properties', {})
         payee, path = text(item.get('payee')).lower(), category_path(props.get('category'))
+        tag = text(props.get('tag')) or None
         if not text(props.get('approved')):
             continue
         key = (source_key(props), payee)
-        if not payee or not path:
-            raise ValueError('У правила нужны продавец и категория')
+        if not payee or not (path or tag):
+            raise ValueError('У правила нужны продавец и категория или тег')
         if key in rules:
             raise ValueError(f'Повтор правила для продавца: {payee}')
-        rules[key] = {'category_path': path, 'tag': text(props.get('tag')) or None}
+        rules[key] = {'category_path': path, 'tag': tag}
     return rules
 
 
@@ -97,12 +98,15 @@ def read_decisions(items: list) -> dict:
     for item in items:
         props = item.get('properties', {})
         key = (source_key(props), text(item.get('sourceid')))
-        action, path = props.get('action'), category_path(props.get('category'))
-        if not key[1] or action not in ACTIONS or (action == 'record' and not path):
+        mark, path, tag = props.get('action'), category_path(props.get('category')), text(props.get('tag')) or None
+        if mark is not None and mark not in MARKS:
+            raise ValueError(f'Неизвестная отметка решения: {mark}')
+        action = MARKS.get(mark, 'record')
+        if not key[1] or (action == 'record' and not (path or tag)):
             raise ValueError(f'Неполное решение по операции: {key[1]}')
         if key in decisions:
             raise ValueError(f'Повтор решения по операции: {key[1]}')
-        decisions[key] = {'action': action, 'category_path': path, 'tag': text(props.get('tag')) or None}
+        decisions[key] = {'action': action, 'category_path': path, 'tag': tag}
     return decisions
 
 
