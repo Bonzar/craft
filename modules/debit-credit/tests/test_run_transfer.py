@@ -39,7 +39,7 @@ def ledger(*records, accounts=None):
 
 def entry(identifier, **changes):
     return operation(identifier, **{'source': 'debit-credit', 'account': 'Карта Тинь',
-                                    'eligible_for_matching': True, **changes})
+                                    'eligible_for_matching': True, 'notes': '', **changes})
 
 
 def config(**changes):
