@@ -18,8 +18,15 @@ const sandbox = { JSON, AbortSignal,
   window: { location: { origin: 'https://online.sberbank.ru' },
     fetch: async (url, options) => {
       calls.push({ url, method: options.method });
-      return { ok: true, json: async () => ({ success: true, body: { operations: [
-        { uohId: 'one', date: '01.02.2026T12:00:00' }] } }) };
+      const money = { amount: '5.00', currency: { code: 'RUB' } };
+      const section = { cardsInWallet: { state: 'SUCCESS', data: [{ id: 2, name: 'MIR Classic', type: 'debit',
+          number: '2202 20** **** 0002', availableLimit: money }] },
+        accounts: { state: 'SUCCESS', data: [] }, ctaccounts: { state: 'SUCCESS', data: [] },
+        sberThanks: { state: 'SUCCESS', data: [] } };
+      const body = url.includes('section/meta')
+        ? { sections: { technicalSection: { sectionProductData: section } } }
+        : { operations: [{ uohId: 'one', date: '01.02.2026T12:00:00' }] };
+      return { ok: true, json: async () => ({ success: true, body }) };
     } } };
 vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(result => {
   console.log(JSON.stringify({ result, calls }));
@@ -43,6 +50,10 @@ class SberReaderBuildTest(unittest.TestCase):
         self.assertTrue(report['result']['snapshot']['complete'])
         self.assertEqual([row['uohId'] for row in report['result']['snapshot']['records']], ['one'])
         self.assertEqual({call['method'] for call in report['calls']}, {'POST'})
+        balances = report['result']['snapshot']['balances']
+        self.assertEqual(balances['after']['accounts'][0]['account'], 'card:2')
+        self.assertTrue(report['calls'][0]['url'].endswith('section/meta'))
+        self.assertTrue(report['calls'][-1]['url'].endswith('section/meta'))
 
     def test_build_needs_a_period_with_timezone(self):
         with tempfile.TemporaryDirectory() as folder:
