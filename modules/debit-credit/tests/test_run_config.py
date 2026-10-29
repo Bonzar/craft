@@ -5,7 +5,14 @@ import unittest
 from adapters.run_config import fetch_collections, parse_config
 
 COLLECTIONS = {'accounts': 'Счета источников', 'control_points': 'Контрольные точки',
-               'rules': 'Правила категорий и тегов', 'decisions': 'Решения по операциям'}
+               'rules': 'Правила категорий и тегов'}
+RULES = 'Правила категорий и тегов'
+
+
+def rule(match, source, *, by='продавец', category='', tag='', action=None, approved='2026-10-29'):
+    return {'id': match, 'match': match, 'properties': {
+        'source': source, 'by': by, 'category': category, 'tag': tag, 'action': action,
+        'approved': approved}}
 
 
 def account(title, source, history, app, *, balance='', unit='RUB', transfer=True):
@@ -23,10 +30,8 @@ def collections(**changes):
             account('—', 'Нет источника', '', 'Наличные (RUB)')],
         'Контрольные точки': [{'id': 'c1', 'account': 'Карта Пэй', 'properties': {
             'date': '2026-03-02', 'bankbalance': 4959.89, 'appbalance': 4959.89}}],
-        'Правила категорий и тегов': [{'id': 'r1', 'payee': 'Пятёрочка', 'properties': {
-            'source': 'Яндекс Банк', 'category': 'Еда / Продукты', 'tag': '', 'approved': '2026-10-29'}}],
-        'Решения по операциям': [{'id': 'd1', 'sourceid': 'op-1', 'properties': {
-            'source': 'Т-Банк', 'action': None, 'category': 'Подарки', 'tag': 'Свадьба', 'note': ''}}]}
+        RULES: [rule('Пятёрочка', 'Яндекс Банк', category='Еда / Продукты'),
+                rule('op-1', 'Т-Банк', by='операция', category='Подарки', tag='Свадьба')]}
     value.update(changes)
     return value
 
@@ -46,22 +51,16 @@ class ParseConfigTest(unittest.TestCase):
                          {'action': 'record', 'category_path': ['Подарки'], 'tag': 'Свадьба'})
 
     def test_rule_may_set_only_a_tag_or_only_a_category(self):
-        rules = [{'id': 'r1', 'payee': 'Аэрофлот', 'properties': {
-                     'source': 'Т-Банк', 'category': '', 'tag': 'Путешествие', 'approved': '2026-10-29'}},
-                 {'id': 'r2', 'payee': 'Лента', 'properties': {
-                     'source': 'Сбер', 'category': 'Еда', 'tag': '', 'approved': '2026-10-29'}}]
-        config = parse_config(collections(**{'Правила категорий и тегов': rules}))
+        rules = [rule('Аэрофлот', 'Т-Банк', tag='Путешествие'), rule('Лента', 'Сбер', category='Еда')]
+        config = parse_config(collections(**{RULES: rules}))
         self.assertEqual(config['rules'][('tbank', 'аэрофлот')], {'category_path': [], 'tag': 'Путешествие'})
         self.assertEqual(config['rules'][('sber', 'лента')], {'category_path': ['Еда'], 'tag': None})
 
     def test_decision_marks_mean_skip_or_already_recorded(self):
-        decisions = [{'id': 'd1', 'sourceid': 'a', 'properties': {
-                         'source': 'Сбер', 'action': 'не записывать', 'category': '', 'tag': '', 'note': ''}},
-                     {'id': 'd2', 'sourceid': 'b', 'properties': {
-                         'source': 'Сбер', 'action': 'уже в приложении', 'category': '', 'tag': '', 'note': ''}},
-                     {'id': 'd3', 'sourceid': 'c', 'properties': {
-                         'source': 'Сбер', 'action': None, 'category': '', 'tag': 'Свадьба', 'note': ''}}]
-        config = parse_config(collections(**{'Решения по операциям': decisions}))
+        decisions = [rule('a', 'Сбер', by='операция', action='не записывать'),
+                     rule('b', 'Сбер', by='операция', action='уже в приложении'),
+                     rule('c', 'Сбер', by='операция', tag='Свадьба')]
+        config = parse_config(collections(**{RULES: decisions}))
         self.assertEqual([config['decisions'][('sber', k)]['action'] for k in 'abc'], ['skip', 'same', 'record'])
         self.assertEqual(config['decisions'][('sber', 'c')]['tag'], 'Свадьба')
 
@@ -70,28 +69,28 @@ class ParseConfigTest(unittest.TestCase):
         self.assertEqual(set(config['accounts']), {'yabank', 'tbank'})
 
     def test_rule_without_approval_date_is_not_used(self):
-        rule = {'id': 'r2', 'payee': 'Лента', 'properties': {
-            'source': 'Сбер', 'category': 'Еда', 'tag': '', 'approved': ''}}
-        config = parse_config(collections(**{'Правила категорий и тегов': [rule]}))
-        self.assertEqual(config['rules'], {})
+        rows = [rule('Лента', 'Сбер', category='Еда', approved=''),
+                rule('op', 'Сбер', by='операция', category='Еда', approved='')]
+        config = parse_config(collections(**{RULES: rows}))
+        self.assertEqual((config['rules'], config['decisions']), ({}, {}))
 
     def test_repeated_account_id_or_rule_is_refused(self):
         twice = [account('A', 'Т-Банк', '1', 'Карта Тинь'), account('B', 'Т-Банк', '1', 'Тинь (кред)')]
         with self.assertRaisesRegex(ValueError, 'Повтор'):
             parse_config(collections(**{'Счета источников': twice}))
-        rules = collections()['Правила категорий и тегов'] * 2
+        rules = collections()[RULES] * 2
         with self.assertRaisesRegex(ValueError, 'Повтор'):
-            parse_config(collections(**{'Правила категорий и тегов': rules}))
+            parse_config(collections(**{RULES: rules}))
 
     def test_unknown_values_are_refused(self):
         bad = [
             {'Счета источников': [account('A', 'Т-Банк', '1', '')]},
-            {'Решения по операциям': [{'id': 'd', 'sourceid': 'x', 'properties': {
-                'source': 'Сбер', 'action': 'maybe', 'category': '', 'tag': '', 'note': ''}}]},
+            {RULES: [rule('x', 'Сбер', by='операция', action='maybe')]},
             {'Контрольные точки': [{'id': 'c', 'account': 'A', 'properties': {
                 'date': '02.03.2026', 'bankbalance': 1, 'appbalance': 1}}]},
-            {'Решения по операциям': [{'id': 'd', 'sourceid': 'x', 'properties': {
-                'source': 'Сбер', 'action': None, 'category': '', 'tag': '', 'note': ''}}]}]
+            {RULES: [rule('x', 'Сбер', by='операция')]},
+            {RULES: [rule('x', 'Сбер', by='всегда', category='Еда')]},
+            {RULES: [rule('Лента', 'Сбер', action='не записывать', category='Еда')]}]
         for change in bad:
             with self.subTest(change=list(change)), self.assertRaises(ValueError):
                 parse_config(collections(**change))
