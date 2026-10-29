@@ -22,23 +22,17 @@ class UserscriptBuildTest(unittest.TestCase):
         runner = r'''
 const fs = require('node:fs'), vm = require('node:vm');
 const calls = [];
-class Parser {
-  parseFromString(html) {
-    if (html !== 'bank-html') throw new Error('Unexpected HTML');
-    return { querySelectorAll: () => [{ textContent: 'Карта0 ₽' }, { textContent: 'Карта0 ₽' }] };
-  }
-}
-const sandbox = { URL, DOMParser: Parser, Intl, window: {
+const sandbox = { URL, Intl, window: {
   location: { origin: 'https://bank.yandex.ru', pathname: '/my' },
   fetch: async (url, options) => {
-    calls.push({ url, method: options.method });
-    if (url === 'https://bank.yandex.ru/my') return { ok: true, url,
-      text: async () => 'bank-html', headers: { get: () => null } };
     const { operationName: operation, variables } = JSON.parse(options.body);
-    const data = operation === 'TransactionsFeedPfm'
-      ? { getTransactionsFeedPfm: { items: [{ id: 'one', date: '2026-10-18T12:00:00Z' }],
-          pendingItems: [], cursor: null, analytics: [] } }
-      : { getTransactionOperationDetails: { id: `native-${variables.id}` } };
+    calls.push({ url, method: options.method, operation });
+    const answers = {
+      HomeProductsV2: { homeProducts: { products: [{ id: 'CARD', value: { amount: '0.00', currency: 'RUB' } }] } },
+      SavingsAccountsList: { bankUser: { savingsAccounts: { items: [] } } },
+      TransactionsFeedPfm: { getTransactionsFeedPfm: { items: [{ id: 'one', date: '2026-10-18T12:00:00Z' }],
+        pendingItems: [], cursor: null, analytics: [] } } };
+    const data = answers[operation] || { getTransactionOperationDetails: { id: `native-${variables.id}` } };
     return { ok: true, json: async () => ({ data }) };
   }
 } };
@@ -62,8 +56,12 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(resul
         self.assertTrue(snapshot['rechecks']['complete'])
         self.assertEqual(snapshot['rechecks']['details'][0]['requestedId'], 'old')
         self.assertEqual(snapshot['rechecks']['details'][0]['id'], 'native-old')
-        self.assertEqual([r['balance']['amount'] for r in snapshot['balanceObservations']], ['0.00', '0.00'])
-        self.assertEqual([r['method'] for r in report['calls']], ['GET', 'POST', 'POST', 'POST', 'GET'])
+        self.assertEqual([snapshot['balances'][phase]['accounts'][0]['amount'] for phase in ('before', 'after')],
+                         ['0.00', '0.00'])
+        balance_reads = ['HomeProductsV2', 'SavingsAccountsList']
+        self.assertEqual([r['operation'] for r in report['calls']],
+                         balance_reads + ['TransactionsFeedPfm', 'TransactionOperationDetails',
+                                          'TransactionOperationDetails'] + balance_reads)
         self.assertNotIn('document.createElement', text)
         self.assertNotIn('window.prompt', text)
 
@@ -94,8 +92,8 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(resul
         self.assertNotIn('document.cookie', text)
         self.assertNotIn('==UserScript==', text)
         self.assertNotIn('captureCardBalanceDom', text)
-        self.assertIn('collectHistoryWithBalance', text)
-        self.assertIn('requestCardBalance', text)
+        self.assertIn('collectWithBalances', text)
+        self.assertIn('requestYandexBalances', text)
 
     def test_script_without_period_is_not_built(self):
         with tempfile.TemporaryDirectory() as folder:

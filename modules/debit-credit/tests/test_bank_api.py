@@ -64,7 +64,6 @@ class BankApiTest(unittest.TestCase):
             {'filterId': '<SOURCE>::SAVINGS_ACCOUNT_sa_save', 'title': 'Сейв',
              'subtitle': '1\u00a0234,56\u00a0₽'},
             {'filterId': '<SOURCE>::SAVINGS_COMBINED', 'title': 'Сейвы', 'subtitle': 'Все счета'}]}
-        value['balanceObservations'] = [{'phase': 'before', 'balance': {'amount': '900'}}]
         saved = copy.deepcopy(value)
         result = read_history(value)
         observations = result['source_account_observations']
@@ -76,10 +75,23 @@ class BankApiTest(unittest.TestCase):
         self.assertEqual((save['bank_account_id'], save['name'], save['balance'], save['currency']),
                          ('sa_save', 'Сейв', '1234.56', 'RUB'))
         self.assertIsNone(observations['records'][0]['balance'])
-        self.assertEqual(result['balance_observations'], value['balanceObservations'])
         self.assertEqual(result['input_count'], 1)
         self.assertEqual(value, saved)
         self.assertFalse(observations['reconciled'])
+
+    def test_bank_balances_are_kept_and_movement_during_reading_is_flagged(self):
+        rows = [{'account': 'CARD', 'account_name': 'Карта Пэй', 'amount': '10.00', 'currency': 'RUB'}]
+        steady, moving = snapshot(detail()), snapshot(detail())
+        steady['balances'] = {'before': {'observed_at': 'T1', 'accounts': rows, 'error': None},
+                              'after': {'observed_at': 'T2', 'accounts': rows, 'error': None},
+                              'changed': False}
+        moving['balances'] = {**steady['balances'], 'changed': True,
+                              'after': {'observed_at': 'T2', 'accounts': [{**rows[0], 'amount': '9.00'}],
+                                        'error': None}}
+        self.assertEqual(read_history(steady)['balances']['accounts'], rows)
+        self.assertTrue(read_history(steady)['ready'])
+        self.assertIn({'code': 'balance_changed_during_read'}, read_history(moving)['issues'])
+        self.assertIsNone(read_history(snapshot(detail()))['balances'])
 
     def test_empty_last_page_filter_groups_are_excluded_without_parse_errors(self):
         value = snapshot(detail())

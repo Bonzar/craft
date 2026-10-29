@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectSberHistory, requestOperations, sberDate } = require('../lib/sber_queries.js');
+const { collectSberHistory, requestOperations, requestSberBalances, sberDate } = require('../lib/sber_queries.js');
 
 const scope = { fromInclusive: '2026-02-01T00:00:00+03:00', toExclusive: '2026-03-01T00:00:00+03:00' };
 const operation = (uohId, extra = {}) => ({ uohId, date: '10.02.2026T12:00:00', ...extra });
@@ -91,4 +91,64 @@ test('Fractional end of period keeps its last whole second', async () => {
   await collectSberHistory({ fromInclusive: '2026-02-01T00:00:00+03:00',
     toExclusive: '2026-02-01T12:00:00.500+03:00', request: async query => { calls.push(query); return answer([]); } });
   assert.equal(calls[0].to, '01.02.2026T12:00:00');
+});
+
+const SECTION_URL = 'https://web-node3.online.sberbank.ru/main-screen/rest/v2/m1/web/section/meta';
+const CARD_INFO_URL = 'https://web-node3.online.sberbank.ru/ufs-carddetail/rest/card/v1/cardInfo';
+const money = amount => ({ amount, currency: { code: 'RUB', name: 'руб.' } });
+const products = (overrides = {}) => ({ success: true, body: { sections: { technicalSection: {
+  sectionProductData: {
+    cardsInWallet: { state: 'SUCCESS', data: [
+      { id: 1000000001, name: 'Кредитная СберКарта', type: 'credit', state: 'active',
+        number: '2202 20** **** 0001', availableLimit: money('148061.00') },
+      { id: 1000000002, name: 'MIR Classic', type: 'debit', state: 'active',
+        number: '2202 20** **** 0002', availableLimit: money('12.50') }] },
+    accounts: { state: 'SUCCESS', data: [{ id: 3000000001, name: 'Сберегательный счет', state: 'OPENED',
+      number: '40817810000000000003', balance: money('0.00') }] },
+    ctaccounts: { state: 'SUCCESS', data: [] },
+    sberThanks: { state: 'SUCCESS', data: [{ loyaltyType: 'SBERSPASIBO', balance: { amount: '0.12' } }] },
+    ...overrides } } } } });
+const cardInfo = { success: true, body: { cardDetails: { cards: [{ id: 1000000001,
+  creditType: { creditLimit: money('150000.00'), creditOwnSum: money('0.00'), creditDebt: money('1939.00') } }] } } };
+const sberEnvironment = (answers, calls = []) => ({ origin: 'https://online.sberbank.ru',
+  fetch: async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => answers[url] };
+  } });
+
+test('Cards, accounts and SberSpasibo balances come with the history resource ids', async () => {
+  const calls = [];
+  const balances = await requestSberBalances(sberEnvironment({ [SECTION_URL]: products(),
+    [CARD_INFO_URL]: cardInfo }, calls));
+  assert.deepEqual(balances, [
+    { account: 'card:1000000001', account_name: 'Кредитная СберКарта •• 0001', amount: '-1939.00', currency: 'RUB' },
+    { account: 'card:1000000002', account_name: 'MIR Classic •• 0002', amount: '12.50', currency: 'RUB' },
+    { account: 'account:3000000001', account_name: 'Сберегательный счет •• 0003', amount: '0.00', currency: 'RUB' },
+    { account: 'СберСпасибо', account_name: 'СберСпасибо', amount: '0.12', currency: 'SBER_SPASIBO' }]);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { withData: true, forceUpdate: true });
+  assert.deepEqual(JSON.parse(calls[1].options.body), { cardIds: [1000000001] });
+  assert.ok(calls.every(call => call.options.method === 'POST' && call.options.credentials === 'include'
+    && call.options.headers['X-Requested-With'] === 'XMLHttpRequest'));
+});
+
+test('A product section the bank did not load stops the balance read', async () => {
+  await assert.rejects(requestSberBalances(sberEnvironment({
+    [SECTION_URL]: products({ accounts: { state: 'ERROR', data: [] } }), [CARD_INFO_URL]: cardInfo })),
+  /accounts/);
+});
+
+test('A payment account the reader does not know yet stops the balance read', async () => {
+  await assert.rejects(requestSberBalances(sberEnvironment({
+    [SECTION_URL]: products({ ctaccounts: { state: 'SUCCESS', data: [{ id: 1 }] } }),
+    [CARD_INFO_URL]: cardInfo })), /Платёжн/);
+});
+
+test('A credit card without its debt stops the balance read', async () => {
+  await assert.rejects(requestSberBalances(sberEnvironment({ [SECTION_URL]: products(),
+    [CARD_INFO_URL]: { success: true, body: { cardDetails: { cards: [] } } } })), /задолженност/);
+});
+
+test('Balances are not requested outside the bank tab', async () => {
+  await assert.rejects(requestSberBalances({ origin: 'https://example.com',
+    fetch: async () => { throw new Error('must not be called'); } }), /Сбер/);
 });

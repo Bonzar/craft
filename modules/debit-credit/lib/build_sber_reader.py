@@ -5,11 +5,11 @@ import json
 import os
 from pathlib import Path
 
-from build_userscript import validate_period
+from build_userscript import page_script, validate_period
 
 BODY = '''
 try {
-  const snapshot = await collectSberHistory(OPTIONS);
+  const snapshot = await collectWithBalances(() => collectSberHistory(OPTIONS), requestSberBalances);
   return { ok: true, snapshot };
 } catch (error) {
   return { ok: false, error: error instanceof Error ? error.message : 'Ошибка чтения',
@@ -20,8 +20,7 @@ try {
 
 def build(output: Path, *, period: dict) -> None:
     validate_period(period)
-    reader = Path(__file__).with_name('sber_queries.js').read_text(encoding='utf-8')
-    reader = reader.split("\nif (typeof module !== 'undefined')")[0]
+    reader = page_script('sber_queries.js') + '\n' + page_script('balances.js')
     options = json.dumps(period, ensure_ascii=False)
     text = ('// Read-only Sber history collection.\n(async () => {\n"use strict";\n'
             + reader + '\n' + BODY.replace('OPTIONS', options) + '\n})();\n')

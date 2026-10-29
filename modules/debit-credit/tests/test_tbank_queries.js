@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectTbankHistory, requestTimeline } = require('../lib/tbank_queries.js');
+const { collectTbankHistory, requestTbankBalances, requestTimeline } = require('../lib/tbank_queries.js');
 
 const OWN = ['1000000001', '1000000002'];
 const scope = { fromInclusive: '2026-01-15T00:00:00+03:00',
@@ -109,4 +109,48 @@ test('Timeline request refuses to run outside the bank or without a session', as
     { origin: 'https://example.com', resourceUrls: [], fetch }), /Т-Банк/);
   await assert.rejects(requestTimeline({ start: 1, end: 2, accounts: OWN },
     { origin: 'https://www.tbank.ru', resourceUrls: [], fetch }), /сесси/i);
+});
+
+const rub = value => ({ currency: { code: 643, name: 'RUB', strCode: '643' }, value });
+const tbankAccounts = (extra = []) => ({ resultCode: 'OK', payload: [
+  { id: '1000000001', name: 'Основной', accountType: 'Current', status: 'NORM', currency: { name: 'RUB' },
+    moneyAmount: rub(12.5), creditLimit: rub(0), sharedByMeFlag: false },
+  { id: '1000000002', name: 'Платинум', accountType: 'Credit', status: 'NORM', currency: { name: 'RUB' },
+    moneyAmount: rub(1719.3), creditLimit: rub(135000), debtAmount: rub(133280.7), sharedByMeFlag: false },
+  { id: '1000000003', name: 'Накопительный счет', accountType: 'Saving', status: 'NORM',
+    currency: { name: 'RUB' }, moneyAmount: rub(0), sharedByMeFlag: false },
+  { id: '1000000004', name: 'Чужой детский', accountType: 'SharedCurrentKids', moneyAmount: rub(340.11),
+    shared: { ownerName: 'Другой человек' } },
+  { id: '1000000005', name: 'Сбербанк *0000', accountType: 'ExternalAccount' },
+  { id: '1000000006', name: 'Долями', accountType: 'BNPL', status: 'NOCONTRACTS' },
+  ...extra] });
+const tbankEnvironment = (answer, calls = []) => ({ origin: 'https://www.tbank.ru',
+  resourceUrls: ['https://www.tbank.ru/api/common/v1/session_status?sessionid=SECRET&origin=web'],
+  fetch: async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => answer };
+  } });
+
+test('Own account balances are read, a credit card owes the used limit', async () => {
+  const calls = [];
+  const balances = await requestTbankBalances(tbankEnvironment(tbankAccounts(), calls));
+  assert.deepEqual(balances, [
+    { account: '1000000001', account_name: 'Основной', amount: '12.50', currency: 'RUB' },
+    { account: '1000000002', account_name: 'Платинум', amount: '-133280.70', currency: 'RUB' },
+    { account: '1000000003', account_name: 'Накопительный счет', amount: '0.00', currency: 'RUB' }]);
+  const url = new URL(calls[0].url);
+  assert.equal(url.pathname, '/api/common/v1/accounts_light_ib');
+  assert.equal(url.searchParams.get('sessionid'), 'SECRET');
+  assert.equal(calls[0].options.credentials, 'include');
+  assert.equal(calls[0].options.method, 'GET');
+});
+
+test('An account of an unknown kind stops the balance read', async () => {
+  await assert.rejects(requestTbankBalances(tbankEnvironment(tbankAccounts([
+    { id: '1000000009', name: 'Новое', accountType: 'Deposit', moneyAmount: rub(5) }]))), /Deposit/);
+});
+
+test('A refused account list stops the balance read', async () => {
+  await assert.rejects(requestTbankBalances(tbankEnvironment({ resultCode: 'INSUFFICIENT_PRIVILEGES' })),
+    /INSUFFICIENT_PRIVILEGES/);
 });

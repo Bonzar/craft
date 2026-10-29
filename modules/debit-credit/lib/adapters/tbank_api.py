@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from .balances import read_balances
 from .common import record_base, report
 
 SOURCE = 'tbank'
@@ -147,6 +148,8 @@ def read_history(snapshot: dict) -> dict:
         if counts[row['source_id']] > 1:
             row['issues'].append('duplicate_source_id')
         result['issues'].extend({'locator': row['locator'], 'code': code} for code in row['issues'])
+    result['balances'], balance_issues = read_balances(snapshot)
+    result['issues'].extend(balance_issues)
     is_complete = coverage_complete(snapshot)
     if not is_complete:
         result['issues'].append({'code': 'collection_coverage_unverified'})

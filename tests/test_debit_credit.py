@@ -42,7 +42,7 @@ class DebitCreditModuleTest(unittest.TestCase):
         if node is None:
             self.skipTest('Node.js нужен только для теста DOM-считывателя браузера')
         result = subprocess.run(
-            [node, '--test', str(MODULE / 'tests' / 'test_capture.js'),
+            [node, '--test', str(MODULE / 'tests' / 'test_balances.js'),
              str(MODULE / 'tests' / 'test_queries.js'),
              str(MODULE / 'tests' / 'test_tbank_queries.js'),
              str(MODULE / 'tests' / 'test_sber_queries.js')],
