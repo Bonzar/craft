@@ -25,6 +25,7 @@ python3 lib/cli.py movement-control /tmp/expected-source.json --ledger /tmp/dc-s
 python3 lib/cli.py resolve-source /tmp/bank-api-normalized.json --resolutions /tmp/confirmations.json --output /tmp/resolved-source.json
 python3 lib/cli.py yandex-accounting /tmp/resolved-source.json --parent-window-seconds 120 --output /tmp/expected-source.json
 python3 lib/cli.py transfer-accounting /tmp/expected-source.json --accounts /tmp/accounts.json --output /tmp/expected-transfers.json
+python3 lib/cli.py transfer-run --source /tmp/yabank.json --source /tmp/tbank.json --source /tmp/sber.json --backup /путь/копия.dcbackup --target /путь/подготовленная.dcbackup --from-date 2026-03-02 --to-date 2026-10-29 --timezone Europe/Moscow --output /tmp/run.json
 python3 lib/cli.py verify-import /путь/before.dcbackup /путь/after.dcbackup --expected /tmp/expected-records.json --timezone Europe/Moscow --output /tmp/import-check.json
 PYTHONPATH=lib python3 -m unittest discover -s tests -v
 node --test tests/test_capture.js tests/test_queries.js tests/test_tbank_queries.js tests/test_sber_queries.js
@@ -575,6 +576,40 @@ CSV сохраняет заявленную точность ISO-даты: се�
 Живая проверка 29 октября 2026 года: у Яндекс Банка карта и восемь открытых
 сейвов, их сумма совпала с итогом «Сейвов»; у Сбера долг кредитки совпал с
 экраном карты; у Т-Банка долг «Платинума» равен лимиту минус доступным деньгам.
+
+## Перенос одной командой
+
+`transfer-run` берёт готовые снимки сборщиков и свежую резервную копию
+Debit & Credit и пишет отдельную подготовленную копию и отчёт. Браузер команда
+не открывает, исходную копию и приложение не меняет. Сборщик каждого снимка
+определяется по полю `adapter`, каждый банк передаётся один раз.
+
+Настройки читаются из трёх коллекций Craft через `CRAFT_API_BASE`, только GET:
+«Счета источников», «Контрольные точки», «Правила категорий и тегов».
+`--config` подставляет те же коллекции из JSON-файла. Правило без даты
+одобрения не действует. Правило ищет по продавцу, по постоянному номеру операции
+или по счёту источника. Правило операции сильнее правила продавца и может
+отметить её «не записывать» или «уже в приложении». Правило счёта только
+исключает счёт из переноса.
+
+В копию идут:
+
+- переводы между своими счетами, обе стороны;
+- подтверждения прежних незавершённых записей;
+- округления и ожидаемый кешбэк;
+- покупки с одобренным правилом, у которого есть категория.
+
+Покупка с одним тегом, запись без метки при найденной похожей и всё неясное идут
+в `review` с причиной и предложенными категорией и тегом. Операции до
+контрольной точки счёта, вне периода, отклонённые банком и со счетов вне
+переноса считаются в `outcome_counts` и в копию не идут. Каждая добавленная
+запись несёт метку источника, поэтому повторный запуск на подготовленной копии
+ничего не добавляет и новой копии не создаёт.
+
+После подготовки сверяются остатки: остаток счёта приложения с незавершёнными
+против суммы его банковских счетов. Счёт, у которого прочитаны не все
+банковские стороны, остаётся `not_checked`. Код возврата 0 — разбор пуст и
+остатки не разошлись, 1 — есть что разобрать или остаток разошёлся.
 
 ## Метки
 
