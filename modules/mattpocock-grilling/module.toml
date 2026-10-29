@@ -1,0 +1,4 @@
+# Гриллинг плана из набора mattpocock/skills. Часть skill, без хука: форму
+# вопроса подставляет установщик слотом {{ASK}}.
+slug = "mattpocock-grilling"
+requires = []
