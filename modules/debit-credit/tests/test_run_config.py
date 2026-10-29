@@ -15,10 +15,10 @@ def rule(match, source, *, by='продавец', category='', tag='', action=No
         'approved': approved}}
 
 
-def account(title, source, history, app, *, balance='', unit='RUB', transfer=True):
+def account(title, source, history, app, *, balance='', unit='RUB'):
     return {'id': title, 'account': title, 'properties': {
         'source': source, 'historyid': history, 'balanceid': balance, 'unit': unit,
-        'appaccount': app, 'transfer': transfer}}
+        'appaccount': app}}
 
 
 def collections(**changes):
@@ -26,12 +26,13 @@ def collections(**changes):
         'Счета источников': [
             account('Карта Пэй', 'Яндекс Банк', 'Карта Пэй', 'Карта Пэй', balance='CARD'),
             account('Основной', 'Т-Банк', '5448395953', 'Карта Тинь', balance='5448395953'),
-            account('Сберегательный', 'Сбер', 'account:1', '', transfer=False),
+            account('Сберегательный', 'Сбер', 'account:1', ''),
             account('—', 'Нет источника', '', 'Наличные (RUB)')],
         'Контрольные точки': [{'id': 'c1', 'account': 'Карта Пэй', 'properties': {
             'date': '2026-03-02', 'bankbalance': 4959.89, 'appbalance': 4959.89}}],
         RULES: [rule('Пятёрочка', 'Яндекс Банк', category='Еда / Продукты'),
-                rule('op-1', 'Т-Банк', by='операция', category='Подарки', tag='Свадьба')]}
+                rule('op-1', 'Т-Банк', by='операция', category='Подарки', tag='Свадьба'),
+                rule('account:1', 'Сбер', by='счёт', action='не записывать')]}
     value.update(changes)
     return value
 
@@ -84,7 +85,8 @@ class ParseConfigTest(unittest.TestCase):
 
     def test_unknown_values_are_refused(self):
         bad = [
-            {'Счета источников': [account('A', 'Т-Банк', '1', '')]},
+            {'Счета источников': [account('A', 'Т-Банк', '1', 'Карта Тинь', unit='')]},
+            {RULES: [rule('account:1', 'Сбер', by='счёт', category='Еда')]},
             {RULES: [rule('x', 'Сбер', by='операция', action='maybe')]},
             {'Контрольные точки': [{'id': 'c', 'account': 'A', 'properties': {
                 'date': '02.03.2026', 'bankbalance': 1, 'appbalance': 1}}]},
