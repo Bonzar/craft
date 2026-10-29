@@ -29,27 +29,25 @@ def category_path(value) -> list:
     return [part.strip() for part in text(value).split('/') if part.strip()]
 
 
-def read_accounts(items: list) -> tuple[dict, set]:
-    accounts, skipped = {}, set()
+def read_accounts(items: list) -> dict:
+    """Счета источников с их счётом приложения; строка без счёта приложения ни с чем не связана."""
+    accounts = {}
     for item in items:
         props = item.get('properties', {})
         source = props.get('source')
         if source not in SOURCE_KEYS and source not in OTHER_SOURCES:
             raise ValueError(f'Неизвестный источник счёта: {source}')
         key, history = SOURCE_KEYS.get(source), text(props.get('historyid'))
-        if key is None or not history:
-            continue
-        if history in accounts.get(key, {}) or (key, history) in skipped:
-            raise ValueError(f'Повтор счёта источника: {history}')
-        if props.get('transfer') is not True:
-            skipped.add((key, history))
-            continue
         app, unit = text(props.get('appaccount')), text(props.get('unit'))
-        if not app or not UNIT.fullmatch(unit):
-            raise ValueError(f'У переносимого счёта нужны счёт приложения и единица: {history}')
+        if key is None or not history or not app:
+            continue
+        if history in accounts.get(key, {}):
+            raise ValueError(f'Повтор счёта источника: {history}')
+        if not UNIT.fullmatch(unit):
+            raise ValueError(f'У счёта нужна единица: {history}')
         accounts.setdefault(key, {})[history] = {
             'account': app, 'unit': unit, 'balance_id': text(props.get('balanceid')) or None}
-    return accounts, skipped
+    return accounts
 
 
 def read_control_points(items: list) -> dict:
@@ -75,7 +73,7 @@ def source_key(props: dict) -> str:
     return key
 
 
-RULE_SCOPES = {'продавец', 'операция'}
+RULE_SCOPES = {'продавец', 'операция', 'счёт'}
 
 
 def read_rule(item: dict) -> tuple:
@@ -84,36 +82,44 @@ def read_rule(item: dict) -> tuple:
     path, tag, mark = category_path(props.get('category')), text(props.get('tag')) or None, props.get('action')
     if scope not in RULE_SCOPES or not match:
         raise ValueError(f'У правила нужны «по чему» и что искать: {match}')
-    if mark is not None and (mark not in MARKS or scope != 'операция'):
-        raise ValueError(f'Отметка правила только для одной операции: {match}')
+    if mark is not None and (mark not in MARKS or (scope == 'продавец')
+                             or (scope == 'счёт' and MARKS[mark] != 'skip')):
+        raise ValueError(f'Отметка не подходит правилу: {match}')
     action = MARKS.get(mark, 'record')
+    if scope == 'счёт' and (action != 'skip' or path or tag):
+        raise ValueError(f'Правило на счёт только отмечает «не записывать»: {match}')
     if action == 'record' and not (path or tag):
         raise ValueError(f'У правила нужна категория или тег: {match}')
     key = (source_key(props), match.lower() if scope == 'продавец' else match)
     return scope, key, {'action': action, 'category_path': path, 'tag': tag}
 
 
-def read_rules(items: list) -> tuple[dict, dict]:
-    """Правила продавца и правила одной операции по её постоянному номеру."""
-    rules, decisions = {}, {}
+def read_rules(items: list) -> tuple[dict, dict, set]:
+    """Правила продавца, одной операции по её постоянному номеру и счёта, который не переносим."""
+    rules, decisions, skipped = {}, {}, set()
     for item in items:
         if not text(item.get('properties', {}).get('approved')):
             continue
         scope, key, value = read_rule(item)
+        if scope == 'счёт':
+            if key in skipped:
+                raise ValueError(f'Повтор правила: {key[1]}')
+            skipped.add(key)
+            continue
         target = rules if scope == 'продавец' else decisions
         if key in target:
             raise ValueError(f'Повтор правила: {key[1]}')
         target[key] = value if scope == 'операция' else {
             'category_path': value['category_path'], 'tag': value['tag']}
-    return rules, decisions
+    return rules, decisions, skipped
 
 
 def parse_config(collections: dict) -> dict:
     missing = [name for name in COLLECTION_NAMES if not isinstance(collections.get(name), list)]
     if missing:
         raise ValueError('Нет коллекций: ' + ', '.join(missing))
-    accounts, skipped = read_accounts(collections[ACCOUNTS])
-    rules, decisions = read_rules(collections[RULES])
+    accounts = read_accounts(collections[ACCOUNTS])
+    rules, decisions, skipped = read_rules(collections[RULES])
     return {'accounts': accounts, 'not_transferred': skipped,
             'control_points': read_control_points(collections[CONTROL_POINTS]),
             'rules': rules, 'decisions': decisions}
