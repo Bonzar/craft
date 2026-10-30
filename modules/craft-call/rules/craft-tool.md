@@ -64,7 +64,7 @@ Verify-after-write: после операции результат провер�
 
 Внешний URL (магазин, соцсеть, сайт) — отдельным richUrl-блоком (JSON: `type richUrl` + `url`), а не markdown-ссылкой текстом: Craft рисует карточку и сам тянет заголовок. Сайт отдал мусорный title (Yandex, Link, голый домен) — задать title явно апдейтом; в апдейте richUrl поле `url` обязательно. richUrl на craftdocs://-адрес не делаем — выйдет безликая карточка Link вместо родного blockLink.
 
-Кликабельная ссылка на Craft в чате — https-ссылка `docs.craft.do`: клиентские поверхности гарантированно распознают http(s). Space Влада — `cd8bace6-98dd-7481-9d43-c38a37e9b6a4`. Блок: `https://docs.craft.do/editor/d/‹SPACE›/‹rootBlockId›/x/‹blockId›`. Документ целиком — тот же URL без `/x/‹blockId›`. Оба id — обычные block-ID из чтения. Ссылка — для перехода Владом, не вход для MCP: `documents resolve-link` отвечает на неё «вне scope», в командах берётся block-ID напрямую.
+Кликабельная ссылка на Craft в чате — https-ссылка `docs.craft.do`: клиентские поверхности гарантированно распознают http(s). Space Влада — `cd8bace6-98dd-7481-9d43-c38a37e9b6a4`. Блок: `https://docs.craft.do/editor/d/‹SPACE›/‹documentId›/b/‹blockId›`. Документ целиком — тот же URL без `/b/‹blockId›`. documentId — не id корневого блока: его отдаёт `documents list --metadata` в craftdocs-ссылке (`documentId=…`). С id корневого блока страница виснет заглушкой с «Connection error». Ссылка — для перехода Владом, не вход для MCP: `documents resolve-link` отвечает на неё «вне scope», в командах берётся block-ID напрямую.
 
 ## Таблицы
 
