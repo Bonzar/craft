@@ -59,7 +59,7 @@ function historyDate(value) {
 function historyOptions(options) {
   const from = historyDate(options.fromInclusive), to = historyDate(options.toExclusive);
   if (from >= to) throw new Error('Начало периода должно предшествовать концу');
-  const maxPages = options.maxPages ?? 2000;
+  const maxPages = options.maxPages ?? 20000;
   if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error('Неверный предел страниц');
   return { from, to, maxPages, includeDetails: options.includeDetails !== false,
     ...detailOptions(options) };
@@ -122,28 +122,78 @@ function observeHistoryRow(row, seen, result, config) {
   result.records.push(row);
 }
 
-/** @param {object} result @param {object} config @returns {Promise<void>} */
-async function readHistoryPages(result, config) {
-  const seen = new Map(), cursors = new Set();
-  let cursor;
-  for (let pageNumber = 0; pageNumber < config.maxPages; pageNumber += 1) {
-    const input = { categories: [], cursor, baseFilters: { filters: [], date: {
-      dateStartInclusive: new Date(config.from).toISOString(),
-      dateEndExclusive: new Date(config.to).toISOString(),
-    } } };
-    const data = await requestWithRetry(config, 'TransactionsFeedPfm', { input });
-    const page = validateHistoryPage(data.getTransactionsFeedPfm);
-    result.pages.push(page);
-    for (const row of [...page.items, ...(page.pendingItems || [])]) {
-      observeHistoryRow(row, seen, result, config);
-    }
-    config.onProgress({ phase: 'list', pages: result.pages.length, records: result.records.length });
-    if (page.cursor === null || page.cursor === '') { result.cursorExhausted = true; return; }
+const DAY_MS = 86400000;
+// Меньше секунды окно не делится: время операций в ленте с точностью до миллисекунд,
+// но пачка покупки, округления и кешбэка приходит в одну секунду.
+const MIN_WINDOW_MS = 1000;
+
+/** @param {object} config @param {number} from @param {number} to @param {string=} cursor
+ * @returns {Promise<object>} */
+async function requestFeedPage(config, from, to, cursor) {
+  const input = { categories: [], cursor, baseFilters: { filters: [], date: {
+    dateStartInclusive: new Date(from).toISOString(), dateEndExclusive: new Date(to).toISOString(),
+  } } };
+  config.requests += 1;
+  if (config.requests > config.maxPages) throw new Error('Достигнут предел запросов, полнота не доказана');
+  const data = await requestWithRetry(config, 'TransactionsFeedPfm', { input });
+  return validateHistoryPage(data.getTransactionsFeedPfm);
+}
+
+/** @param {object} page @param {Map} seen @param {object} result @param {object} config */
+function acceptPage(page, seen, result, config) {
+  result.pages.push(page);
+  for (const row of [...page.items, ...(page.pendingItems || [])]) observeHistoryRow(row, seen, result, config);
+  config.onProgress({ phase: 'list', pages: result.pages.length, records: result.records.length });
+}
+
+/** Окно в одну секунду, которое не влезло в страницу, читается по курсору и помечается.
+ * @returns {Promise<void>} */
+async function readWindowByCursor(first, from, to, seen, result, config) {
+  const cursors = new Set();
+  let page = first;
+  result.cursorWindows.push({ from: new Date(from).toISOString(), to: new Date(to).toISOString() });
+  for (;;) {
+    acceptPage(page, seen, result, config);
+    if (page.cursor === null || page.cursor === '') return;
     if (cursors.has(page.cursor)) throw new Error('Банк повторил cursor, полнота не доказана');
     cursors.add(page.cursor);
-    cursor = page.cursor;
+    page = await requestFeedPage(config, from, to, page.cursor);
   }
-  throw new Error('Достигнут предел страниц, полнота не доказана');
+}
+
+/** Лента читается окнами по суткам. Окно, которое не влезло в одну страницу, делится
+ * пополам по времени, а не дочитывается курсором: на стыках страниц банк теряет операции.
+ * @param {object} result @param {object} config @returns {Promise<void>} */
+async function readHistoryPages(result, config) {
+  const seen = new Map(), queue = [];
+  config.requests = 0;
+  for (let from = config.from; from < config.to; from += DAY_MS) queue.push([from, Math.min(from + DAY_MS, config.to)]);
+  while (queue.length) {
+    const [from, to] = queue.shift();
+    const page = await requestFeedPage(config, from, to);
+    if (page.cursor === null || page.cursor === '') { acceptPage(page, seen, result, config); continue; }
+    if (to - from > MIN_WINDOW_MS) {
+      const middle = from + Math.floor((to - from) / 2);
+      queue.unshift([from, middle], [middle, to]);
+      result.windowSplits += 1;
+      continue;
+    }
+    await readWindowByCursor(page, from, to, seen, result, config);
+  }
+  result.cursorExhausted = true;
+}
+
+/** Сохранённые страницы заново дают тот же список, без запросов к банку.
+ * @param {Array<object>} pages @param {object} config @returns {object} */
+function replayPages(pages, config) {
+  const seen = new Map();
+  const verified = { pages: [], records: [], observations: [], excluded: [], conflicts: [],
+    repeatedObservations: 0 };
+  for (const page of pages) {
+    validateHistoryPage(page);
+    for (const row of [...page.items, ...(page.pendingItems || [])]) observeHistoryRow(row, seen, verified, config);
+  }
+  return verified;
 }
 
 /** @param {object} result @param {object} config @returns {Promise<void>} */
@@ -224,12 +274,8 @@ async function validateResumeFeed(snapshot, config) {
       || !Array.isArray(snapshot.details) || !Array.isArray(snapshot.detailErrors)) {
     throw new Error('Продолжение требует сохранённый полный список операций');
   }
-  let pageIndex = 0;
-  const verified = { pages: [], records: [], observations: [], excluded: [], conflicts: [],
-    repeatedObservations: 0, cursorExhausted: false };
-  await readHistoryPages(verified, { ...config, onProgress: () => {},
-    request: async () => ({ getTransactionsFeedPfm: snapshot.pages[pageIndex++] }) });
-  if (pageIndex !== snapshot.pages.length || verified.conflicts.length
+  const verified = replayPages(snapshot.pages, config);
+  if (!snapshot.pages.length || verified.conflicts.length
       || JSON.stringify(verified.records) !== JSON.stringify(snapshot.records)) {
     throw new Error('Сохранённый список не совпадает с исходными страницами');
   }
@@ -286,7 +332,8 @@ async function collectHistory(options) {
     period: { fromInclusive: options.fromInclusive, toExclusive: options.toExclusive },
     pages: [], records: [], observations: [], repeatedObservations: 0,
     excluded: [], conflicts: [], details: [], detailObservations: [], detailErrors: [],
-    unreadIds: [], cursorExhausted: false, detailsRequested: config.includeDetails };
+    unreadIds: [], cursorExhausted: false, detailsRequested: config.includeDetails,
+    windowSplits: 0, cursorWindows: [] };
   try {
     await readHistoryPages(result, config);
     if (result.conflicts.length) throw new Error('Разные данные у одного ID, требуется повторное чтение');
