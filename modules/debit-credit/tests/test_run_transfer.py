@@ -140,6 +140,17 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual({row['peer_key'] for row in result['additions']}, keys)
         self.assertEqual(result['outcomes']['t-out'], 'transfer_added')
 
+    def test_second_side_of_a_two_sided_bank_transfer_is_neither_written_nor_reviewed(self):
+        out = bank('t-out', kind='transfer', other_account='2', description='Между своими счетами')
+        alias = bank('t-in', kind='transfer', account='2', other_account='1', amount='100',
+                     description='Между своими счетами',
+                     resolution={'same_operation_as': {'source': 'tbank', 'id': 't-out'},
+                                 'reason': 'tbank_own_transfer_pair'})
+        result = run([source(out, alias)])
+        self.assertEqual(result['review'], [])
+        self.assertEqual(len(result['additions']), 2)
+        self.assertEqual(result['outcomes']['t-in'], 'same_operation')
+
 
 class WritePlanScopeTest(unittest.TestCase):
     def legs(self, **out):

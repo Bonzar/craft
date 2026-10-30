@@ -98,6 +98,9 @@ def scope_outcome(row: dict, key: str, target: dict | None, config: dict, start,
     point = control_date(config, target['account']) if target else None
     if row.get('not_recorded_reason') or row.get('status') in FAILED_STATUSES:
         return 'not_recorded'
+    # Банк показал перевод двумя операциями; вторая сторона уже учтена через первую.
+    if row.get('resolution', {}).get('same_operation_as'):
+        return 'same_operation'
     if (key, row.get('account')) in config['not_transferred']:
         return 'not_transferred'
     if not start <= moment < end:
