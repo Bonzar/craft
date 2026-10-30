@@ -329,3 +329,77 @@ class BalanceTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CrossBankTransferTest(unittest.TestCase):
+    """Перевод себе в другой банк: стороны из разных снимков связывает правило, а не одна сумма."""
+
+    def settings(self, **changes):
+        return config(accounts={
+            'tbank': {'1': {'account': 'Карта Тинь', 'unit': 'RUB', 'balance_id': '1'}},
+            'yabank': {'Карта Пэй': {'account': 'Карта Пэй', 'unit': 'RUB', 'balance_id': 'CARD'}}},
+            **changes)
+
+    def book(self):
+        return ledger(accounts=[app_account('Карта Тинь'), app_account('Карта Пэй')])
+
+    def sent(self, **changes):
+        return bank('t-out', amount='-500', description='Себе в другой банк', timestamp_precision='second',
+                    timestamp='2026-07-04T10:00:00+03:00',
+                    raw={'payment': {'fieldsValues': {'workflowType': 'SBPTransfer', 'maskedFIO': 'Иван П.',
+                                                      'receiverBankName': 'Яндекс'}}}, **changes)
+
+    def received(self, identifier='y-in', name='Иван П.', bank_name='Т-Банк', **changes):
+        values = {'source': 'yabank', 'account': 'Карта Пэй', 'amount': '500', 'kind': None, 'issues': [],
+                  'description': f'Перевод от {name}', 'timestamp': '2026-07-04T10:00:03+03:00',
+                  'timestamp_precision': 'millisecond', 'bank_fields': [['Банк отправителя', bank_name]],
+                  'raw': {'feed': {'title': {'plain': name}}}}
+        return operation(identifier, **{**values, **changes})
+
+    def run_pair(self, sent, *received, settings=None):
+        yandex = {**source(*received), 'adapter': 'yandex-bank-api', 'source': 'yabank'}
+        return plan_transfer([source(sent), yandex], self.book(), settings or self.settings(),
+                             START, END, **WINDOWS)
+
+    def test_own_transfer_to_another_bank_is_written_as_one_transfer(self):
+        result = self.run_pair(self.sent(), self.received())
+        rows = {row['account']: row for row in result['additions']}
+        self.assertEqual(sorted(rows), ['Карта Пэй', 'Карта Тинь'])
+        self.assertEqual({row['kind'] for row in rows.values()}, {'transfer_leg'})
+        self.assertEqual(rows['Карта Тинь']['peer_key'], rows['Карта Пэй']['key'])
+        self.assertEqual(rows['Карта Пэй']['peer_key'], rows['Карта Тинь']['key'])
+        self.assertEqual(rows['Карта Тинь']['description'], 'Перевод на Карта Пэй')
+        self.assertEqual((result['outcomes']['t-out'], result['outcomes']['y-in']),
+                         ('transfer_added', 'transfer_added'))
+        self.assertEqual(result['review'], [])
+
+    def test_sides_two_days_apart_are_still_one_transfer(self):
+        result = self.run_pair(self.sent(), self.received(timestamp='2026-07-06T09:00:00+03:00'))
+        self.assertEqual(result['outcomes']['y-in'], 'transfer_added')
+
+    def test_incoming_side_before_the_outgoing_one_is_not_a_pair(self):
+        result = self.run_pair(self.sent(), self.received(timestamp='2026-07-04T09:59:00+03:00'))
+        self.assertEqual(result['additions'], [])
+
+    def test_other_person_with_the_same_amount_is_not_a_pair(self):
+        result = self.run_pair(self.sent(), self.received(name='Пётр С.'))
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(reasons(result), {'t-out': 'needs_category', 'y-in': 'needs_category'})
+
+    def test_side_naming_a_third_bank_is_not_a_pair(self):
+        result = self.run_pair(self.sent(), self.received(bank_name='Сбербанк'))
+        self.assertEqual(result['additions'], [])
+
+    def test_two_matching_incoming_sides_go_to_review_together(self):
+        result = self.run_pair(self.sent(), self.received(),
+                               self.received('y-in-2', timestamp='2026-07-04T11:00:00+03:00'))
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(reasons(result), {'t-out': 'cross_bank_ambiguous', 'y-in': 'cross_bank_ambiguous',
+                                           'y-in-2': 'cross_bank_ambiguous'})
+
+    def test_side_with_its_peer_before_the_control_point_goes_to_review(self):
+        settings = self.settings(control_points={'Карта Тинь': {'date': '2026-07-05'}})
+        result = self.run_pair(self.sent(), self.received(), settings=settings)
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(result['outcomes']['t-out'], 'before_control_point')
+        self.assertEqual(reasons(result), {'y-in': 'peer_out_of_scope'})
