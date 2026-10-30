@@ -52,9 +52,12 @@ def addition(key: str, row: dict, target: dict, category_path: list, tag: str | 
 
 
 def labels(row: dict, config: dict) -> tuple[list, str | None, str | None]:
-    """Категория и тег: разовое решение по номеру операции, затем одобренное правило продавца."""
+    """Категория и тег: разовое решение по номеру операции, затем одобренное правило продавца.
+    Расход округления берёт правило своей покупки: так его пишет приложение."""
     decision = config['decisions'].get((row['source'], row['source_id']), {})
-    rule = config['rules'].get((row['source'], (row.get('description') or '').strip().lower()), {})
+    parent = (row.get('accounting') or {}).get('parent') if row.get('kind') == 'expense' else None
+    seller = (parent or row).get('description') or ''
+    rule = config['rules'].get((row['source'], seller.strip().lower()), {})
     path = decision.get('category_path') or row.get('category_path') or rule.get('category_path') or []
     tag = decision.get('tag') or rule.get('tag')
     return path, tag, decision.get('action')
