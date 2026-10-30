@@ -286,6 +286,23 @@ class RoundingCategoryTest(unittest.TestCase):
         self.assertEqual(paths[('Округление', '7')], ['Яндекс Пэй', 'Округление'])
 
 
+class PointsExchangePairTest(unittest.TestCase):
+    def test_exchange_sides_ten_minutes_apart_are_written_as_one_transfer(self):
+        settings = config(accounts={'yabank': {
+            'Карта Пэй': {'account': 'Карта Пэй', 'unit': 'RUB', 'balance_id': 'CARD'},
+            'ЯПлюс Баллы': {'account': 'ЯПлюс Баллы', 'unit': 'YPLUS_POINTS', 'balance_id': None}}})
+        book = ledger(accounts=[app_account('Карта Пэй'), app_account('ЯПлюс Баллы')])
+        spend = operation('spend', source='yabank', account='ЯПлюс Баллы', currency='YPLUS_POINTS', amount='-10000',
+                          kind=None, description='Яндекс Плюс', issues=[], timestamp='2026-07-04T09:59:39+03:00')
+        rubles = operation('rub', source='yabank', account='Карта Пэй', amount='10000', kind=None,
+                           description='Рубли за баллы', issues=[], timestamp='2026-07-04T10:09:26+03:00')
+        snapshot = {**source(spend, rubles), 'adapter': 'yandex-bank-api', 'source': 'yabank'}
+        result = plan_transfer([snapshot], book, settings, START, END, **WINDOWS)
+        self.assertEqual(sorted((r['account'], r['amount']) for r in result['additions']),
+                         [('Карта Пэй', '10000'), ('ЯПлюс Баллы', '-10000')])
+        self.assertEqual(result['review'], [])
+
+
 class BalanceTest(unittest.TestCase):
     def balances(self, *rows):
         return {'accounts': [{'account': a, 'account_name': None, 'amount': v, 'currency': 'RUB'}
