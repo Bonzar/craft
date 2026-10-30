@@ -48,6 +48,7 @@ sys.path.insert(0, str(REPO_ROOT / 'core'))
 
 from jarvis import manifest as manifest_reader  # noqa: E402
 from jarvis import mode as mode_reader  # noqa: E402
+from jarvis import vcs  # noqa: E402
 from jarvis import wrappers  # noqa: E402
 from jarvis.registry import CORE_DIR  # noqa: E402
 from jarvis.wrappers import claude, codex  # noqa: E402
@@ -1001,6 +1002,19 @@ def drop_vanished(previous: dict, records: dict, backend: Backend, report: Repor
                 report.removed.append(str(module_dir))
 
 
+def extra_origins(extra_modules: list[Path]) -> list[dict]:
+    """Дополнительные источники с последним коммитом в папку каждого.
+
+    Свежесть такого источника сверяется не по голове его репозитория, а по
+    коммитам в его папку: транк Аркадии движется каждую секунду, и сверка по
+    голове тревожила бы непрерывно. Папка источника целиком, а не каждый модуль:
+    одна сверка на старте при любом числе модулей, а какие модули изменились,
+    видно по самим изменённым файлам. Не под git и не под arc — коммит пустой, и
+    модуль свежести скажет, что сверить источник не может.
+    """
+    return [{'path': str(path), 'commit': vcs.folder_commit(path)} for path in extra_modules]
+
+
 def backend_for(args) -> Backend:
     if args.harness == CodexBackend.name:
         return CodexBackend(cli=args.codex_cli, trust=not args.no_trust,
@@ -1116,6 +1130,8 @@ def install(args: argparse.Namespace) -> Report:
         # Повторная установка обязана взять те же дополнительные источники,
         # иначе модуль свежести снимет их модули как исчезнувшие.
         'extra': [str(path) for path in extra_modules],
+        # По ним модуль свежести сверяет дополнительные источники с удалённым.
+        'extra_origins': extra_origins(extra_modules),
         'harness': backend.name,
         'state_dir': str(state_dir),
         'python': args.python,
