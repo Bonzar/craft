@@ -141,6 +141,58 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(result['outcomes']['t-out'], 'transfer_added')
 
 
+class WritePlanScopeTest(unittest.TestCase):
+    def legs(self, **out):
+        return [bank('t-out', kind='transfer_leg', other_account='2', description='Перевод', **out),
+                bank('t-in', kind='transfer_leg', account='2', other_account='1', amount='100',
+                     description='Перевод')]
+
+    def pending(self, **changes):
+        return entry('old', kind='expense', amount='-90', cleared=False,
+                     markers=[marker('c1', source='tbank')], **changes)
+
+    def test_excluded_transfer_pair_is_not_written(self):
+        result = run([source(*self.legs())], settings=config(not_transferred={('tbank', '1'), ('tbank', '2')}))
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(result['review'], [])
+
+    def test_pair_with_one_leg_before_the_control_point_goes_to_review(self):
+        settings = config(control_points={'Карта Тинь': {'date': '2026-07-10', 'bank_balance': '0',
+                                                          'app_balance': '0'}})
+        result = run([source(*self.legs())], settings=settings)
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(result['outcomes']['t-out'], 'before_control_point')
+        self.assertEqual(reasons(result), {'t-in': 'peer_out_of_scope'})
+
+    def test_confirmation_is_written_only_in_scope(self):
+        result = run([source(bank('c1'))], ledger(self.pending()))
+        self.assertEqual([u['set'] for u in result['updates']], [{'amount': '-100', 'cleared': True}])
+        self.assertEqual(result['outcomes']['c1'], 'confirmed')
+        outside = bank('c1', timestamp='2026-06-30T10:00:00+03:00')
+        self.assertEqual(run([source(outside)], ledger(self.pending()))['updates'], [])
+        excluded = run([source(bank('c1'))], ledger(self.pending()), config(not_transferred={('tbank', '1')}))
+        self.assertEqual(excluded['updates'], [])
+
+
+class MarkedRecordTest(unittest.TestCase):
+    def test_marked_record_that_differs_goes_to_review(self):
+        book = ledger(entry('old', kind='expense', amount='-90', markers=[marker('p1', source='tbank')]))
+        result = run([source(bank('p1'))], book)
+        self.assertEqual(result['updates'], [])
+        self.assertEqual(reasons(result), {'p1': 'marker_requires_review'})
+
+    def test_marked_record_that_agrees_is_already_recorded(self):
+        book = ledger(entry('old', kind='expense', markers=[marker('p1', source='tbank')]))
+        result = run([source(bank('p1'))], book)
+        self.assertEqual((result['review'], result['outcomes']['p1']), ([], 'already_recorded'))
+
+    def test_already_in_app_decision_without_an_existing_record_goes_to_review(self):
+        settings = config(decisions={('tbank', 'p9'): {'action': 'same', 'category_path': [], 'tag': None}})
+        result = run([source(bank('p9'))], settings=settings)
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(reasons(result), {'p9': 'same_without_existing'})
+
+
 class BalanceTest(unittest.TestCase):
     def balances(self, *rows):
         return {'accounts': [{'account': a, 'account_name': None, 'amount': v, 'currency': 'RUB'}
