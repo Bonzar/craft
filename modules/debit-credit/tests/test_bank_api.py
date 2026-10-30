@@ -195,6 +195,22 @@ class BankApiTest(unittest.TestCase):
         self.assertEqual(row['account_source'], 'feed_subtitle')
         self.assertNotIn('unknown_account', row['issues'])
 
+    def test_feed_cancel_wins_over_a_card_still_on_hold(self):
+        value = snapshot(detail('eda', statusCode='HOLD'))
+        for row in (value['records'][0], value['pages'][0]['items'][0]):
+            row['statusCode'] = 'CANCEL'
+        [row] = read_history(value)['records']
+        self.assertEqual((row['status'], row['status_source']), ('canceled', 'feed'))
+        self.assertNotIn('feed_detail_status_differs', row['issues'])
+
+    def test_other_status_differences_still_require_review(self):
+        value = snapshot(detail('x', statusCode='CLEAR'))
+        for row in (value['records'][0], value['pages'][0]['items'][0]):
+            row['statusCode'] = 'HOLD'
+        [row] = read_history(value)['records']
+        self.assertEqual((row['status'], row['status_source']), ('completed', 'card'))
+        self.assertIn('feed_detail_status_differs', row['issues'])
+
     def test_single_preposition_is_removed_from_named_source_account(self):
         r = detail(additionalFieldsList=[{'additionalFields': [
             {'name': 'Пополнение', 'value': 'На На подарок'}]}], direction='CREDIT')
