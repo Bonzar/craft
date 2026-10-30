@@ -163,6 +163,50 @@ def rubles_for_points(identifier, amount='10000', time='2026-07-04T08:12:01+03:0
                                    'description': 'Рубли за баллы', 'timestamp': time, **changes})
 
 
+class RoundingParentTest(unittest.TestCase):
+    """Шаг округления как в команде «Записать округление v2»: до 50 — 10, до 300 — 50,
+    до 2000 — 100, до 10000 — 500, дальше 1000."""
+
+    def expand(self, *rows):
+        return {r['source_id']: r for r in expand_accounting(snapshot(*rows), parent_window_seconds=120)['records']}
+
+    def pair(self, amount='7'):
+        return (rounding('round-out', 'Карта Пэй', 'Округление', f'-{amount}'),
+                rounding('round-in', 'Округление', 'Карта Пэй', amount))
+
+    def test_purchase_whose_step_gives_the_rounding_is_the_parent(self):
+        rows = self.expand(purchase('buy', amount='-93', cashback_hint=None),
+                           purchase('other', amount='-120', cashback_hint=None), *self.pair())
+        for side in ('round-out', 'round-in'):
+            self.assertTrue(rows[side]['accounting']['parent_confirmed'])
+            self.assertEqual(rows[side]['accounting']['parent']['source_id'], 'buy')
+            self.assertNotIn('rounding_parent_requires_review', rows[side].get('issues', []))
+
+    def test_two_fitting_purchases_of_one_merchant_take_the_later_one(self):
+        rows = self.expand(purchase('a', amount='-93', cashback_hint=None, timestamp='2026-07-04T09:59:50+03:00'),
+                           purchase('b', amount='-93', cashback_hint=None), *self.pair())
+        self.assertEqual(rows['round-out']['accounting']['parent']['source_id'], 'b')
+
+    def test_two_fitting_purchases_of_different_merchants_stay_for_review(self):
+        rows = self.expand(purchase('a', amount='-93', cashback_hint=None),
+                           purchase('b', amount='-43', cashback_hint=None, description='Аптека'), *self.pair())
+        self.assertFalse(rows['round-out']['accounting']['parent_confirmed'])
+        self.assertIn('rounding_parent_requires_review', rows['round-out']['issues'])
+
+    def test_rounding_after_a_canceled_purchase_is_a_transfer_without_category(self):
+        rows = self.expand(purchase('gone', amount='-93', cashback_hint=None, status='canceled', cleared=None),
+                           *self.pair())
+        out, incoming = rows['round-out'], rows['round-in']
+        self.assertEqual((out['kind'], out['other_account']), ('transfer_leg', 'Округление'))
+        self.assertEqual((incoming['kind'], incoming['other_account']), ('transfer_leg', 'Карта Пэй'))
+        self.assertEqual((incoming.get('category_path'), incoming['accounting']['rule']), ([], 'rounding_without_purchase'))
+        self.assertNotIn('rounding_parent_requires_review', incoming.get('issues', []))
+
+    def test_rounding_without_a_fitting_purchase_stays_for_review(self):
+        rows = self.expand(purchase('buy', amount='-100', cashback_hint=None), *self.pair())
+        self.assertIn('rounding_parent_requires_review', rows['round-out']['issues'])
+
+
 class PointsExchangeTest(unittest.TestCase):
     def expand(self, *rows):
         return {r['source_id']: r for r in expand_accounting(snapshot(*rows), parent_window_seconds=120)['records']}
