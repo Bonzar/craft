@@ -22,9 +22,21 @@ def initial_state(row: dict, repeated: Counter, start: datetime, end: datetime) 
     return None
 
 
+def rule_peer(row: dict, valid: dict) -> list | None:
+    """Стороны обмена баллов связаны правилом, а не близостью по времени."""
+    accounting = row.get('accounting') or {}
+    if accounting.get('rule') != 'points_exchange':
+        return None
+    return [j for j, other in valid.items() if other['source_id'] == accounting.get('peer')]
+
+
 def pair_candidates(valid: dict, window: int) -> dict:
     candidates = {}
     for i, row in valid.items():
+        peers = rule_peer(row, valid)
+        if peers is not None:
+            candidates[i] = peers
+            continue
         found = []
         for j, other in valid.items():
             if i == j or (row['account'], row['other_account'], row['currency']) != (
