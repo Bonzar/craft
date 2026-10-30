@@ -226,6 +226,33 @@ class BankApiTest(unittest.TestCase):
         self.assertEqual(result['unmatched_details'], [detail('extra')])
         self.assertFalse(result['ready'])
 
+    def paged(self, repeated):
+        value = snapshot(detail('feed-a', id='native-a'), detail('feed-b', id='native-b'),
+                         detail('feed-c', id='native-c'))
+        rows = value['records']
+        value['pages'] = [{'items': copy.deepcopy(rows[:2]), 'pendingItems': [], 'cursor': 'next'},
+                          {'items': copy.deepcopy(rows[2:]), 'pendingItems': [],
+                           'cursor': None}]
+        value['repeatedObservations'] = repeated
+        return value
+
+    def test_identical_repeat_on_a_page_boundary_keeps_period_coverage(self):
+        value = self.paged(1)
+        value['pages'][1]['items'].insert(0, copy.deepcopy(value['records'][1]))
+        self.assertEqual(read_history(value)['coverage'], 'snapshot_complete')
+
+    def test_repeat_not_counted_by_the_collector_does_not_prove_coverage(self):
+        value = self.paged(0)
+        value['pages'][1]['items'].insert(0, copy.deepcopy(value['records'][1]))
+        self.assertEqual(read_history(value)['coverage'], 'unverified')
+
+    def test_repeat_with_different_data_does_not_prove_coverage(self):
+        value = self.paged(1)
+        changed = copy.deepcopy(value['records'][1])
+        changed['statusCode'] = 'HOLD'
+        value['pages'][1]['items'].insert(0, changed)
+        self.assertEqual(read_history(value)['coverage'], 'unverified')
+
     def test_page_mismatch_does_not_prove_period_coverage(self):
         value = snapshot(detail())
         value['pages'][0]['items'] = []
