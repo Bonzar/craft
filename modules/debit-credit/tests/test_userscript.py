@@ -60,7 +60,8 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), sandbox).then(resul
                          ['0.00', '0.00'])
         balance_reads = ['HomeProductsV2', 'SavingsAccountsList']
         self.assertEqual([r['operation'] for r in report['calls']],
-                         balance_reads + ['TransactionsFeedPfm', 'TransactionOperationDetails',
+                         balance_reads + ['TransactionsFeedPfm', 'TransactionsFeedPfm',
+                                          'TransactionOperationDetails',
                                           'TransactionOperationDetails'] + balance_reads)
         self.assertNotIn('document.createElement', text)
         self.assertNotIn('window.prompt', text)
