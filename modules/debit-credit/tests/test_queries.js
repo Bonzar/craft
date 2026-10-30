@@ -5,7 +5,7 @@ const { collectHistory, requestHistory, resumeHistory, collectHistoryWithRecheck
 
 const scope = {
   fromInclusive: '2026-07-04T00:00:00+03:00',
-  toExclusive: '2026-07-06T00:00:00+03:00',
+  toExclusive: '2026-07-05T00:00:00+03:00',
 };
 const item = (id, extra = {}) => ({ id, date: '2026-07-04T10:00:00+03:00', ...extra });
 const page = (items, cursor = null, pendingItems = []) => ({
@@ -131,24 +131,55 @@ test('Balances are not requested outside the bank page', async () => {
   assert.equal(wasCalled, false);
 });
 
-test('all cursor pages and distinct IDs are retained', async () => {
+/** Bank feed with a small page: a window with more items returns a cursor. */
+function fakeBank(rows, pageSize = 2) {
   const calls = [];
   const request = async (operation, variables) => {
-    calls.push({ operation, variables });
     if (operation === 'TransactionOperationDetails') {
       return { getTransactionOperationDetails: item(variables.id) };
     }
-    return variables.input.cursor ? page([item('b')]) : page([item('a')], 'next');
+    const { dateStartInclusive, dateEndExclusive } = variables.input.baseFilters.date;
+    calls.push({ from: dateStartInclusive, to: dateEndExclusive, cursor: variables.input.cursor });
+    const inside = rows.filter(row => Date.parse(row.date) >= Date.parse(dateStartInclusive)
+      && Date.parse(row.date) < Date.parse(dateEndExclusive));
+    const offset = Number(variables.input.cursor ?? 0);
+    const next = offset + pageSize < inside.length ? String(offset + pageSize) : null;
+    return page(inside.slice(offset, offset + pageSize), next);
   };
+  return { request, calls };
+}
 
-  const result = await collectHistory({ ...scope, request });
+const at = (id, time) => item(id, { date: `2026-07-04T${time}+03:00` });
 
+test('a day that fits one page is read without a cursor', async () => {
+  const bank = fakeBank([at('a', '10:00:00'), at('b', '11:00:00')]);
+  const result = await collectHistory({ ...scope, request: bank.request });
   assert.equal(result.complete, true);
-  assert.deepEqual(result.records.map(row => row.id), ['a', 'b']);
-  assert.equal(result.details.length, 2);
-  assert.equal(result.pages.length, 2);
-  assert.deepEqual(calls[0].variables.input.baseFilters.filters, []);
-  assert.equal(calls[0].variables.input.baseFilters.date.dateEndExclusive, '2026-07-05T21:00:00.000Z');
+  assert.deepEqual(result.records.map(row => row.id).sort(), ['a', 'b']);
+  assert.deepEqual(bank.calls, [{ from: '2026-07-03T21:00:00.000Z', to: '2026-07-04T21:00:00.000Z',
+    cursor: undefined }]);
+  assert.equal(result.pages.length, 1);
+});
+
+test('a window with a cursor is split in half by time instead of followed', async () => {
+  const rows = ['01', '05', '09', '13', '17', '21'].map(hour => at(`h${hour}`, `${hour}:00:00`));
+  const bank = fakeBank(rows);
+  const result = await collectHistory({ ...scope, request: bank.request });
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.records.map(row => row.id).sort(), rows.map(row => row.id));
+  assert.ok(bank.calls.every(call => call.cursor === undefined));
+  assert.ok(result.pages.every(read => read.cursor === null));
+  assert.ok(result.windowSplits > 0);
+});
+
+test('more operations than a page within one second are read by cursor and marked', async () => {
+  const rows = ['a', 'b', 'c'].map(id => at(id, '10:00:00'));
+  const bank = fakeBank(rows);
+  const result = await collectHistory({ ...scope, request: bank.request });
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.records.map(row => row.id).sort(), ['a', 'b', 'c']);
+  assert.equal(result.cursorWindows.length, 1);
+  assert.ok(Date.parse(result.cursorWindows[0].to) - Date.parse(result.cursorWindows[0].from) <= 1000);
 });
 
 test('pending items are read and repeated observations are counted', async () => {
@@ -160,9 +191,10 @@ test('pending items are read and repeated observations are counted', async () =>
   assert.equal(result.repeatedObservations, 1);
 });
 
-test('repeated cursor stops with partial data instead of claiming completeness', async () => {
-  await assert.rejects(collectHistory({ ...scope, request: async () => page([item('a')], 'same') }),
-    error => error.partial.complete === false && error.partial.pages.length === 2);
+test('repeated cursor inside a one-second window stops with partial data', async () => {
+  const request = async (operation, variables) => page([at('a', '10:00:00'), at('b', '10:00:00')], 'same');
+  await assert.rejects(collectHistory({ ...scope, request }),
+    error => error.partial.complete === false);
 });
 
 test('missing pending array is an error instead of an empty result', async () => {
