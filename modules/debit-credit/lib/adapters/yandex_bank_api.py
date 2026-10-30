@@ -249,12 +249,15 @@ def parse_record(raw: dict, index: int) -> dict:
     description = (text(compound['firstPart']) + ' → ' + text(compound['secondPart'])
                    if compound else text(title['plain']))
     account, other, kind = read_accounts(title, fields, amount, currency)
-    title_account = None
+    title_account, account_source = None, 'card' if account else None
     subtitle = feed.get('rightSubTitle')
-    # Карточка перевода может назвать сейв общим «Счёт в Сейвах», а строка ленты
-    # подписана конкретным сейвом, в чьей ленте операция лежит.
-    if compound and isinstance(subtitle, str) and subtitle.strip() and subtitle.strip() != account:
-        title_account, account = account, subtitle.strip()
+    subtitle = subtitle.strip() if isinstance(subtitle, str) and subtitle.strip() else None
+    # Строка ленты подписана счётом, в чьей ленте лежит операция. Карточка входящего
+    # перевода счёт не называет, а карточка перевода между сейвами может назвать сейв
+    # общим «Счёт в Сейвах».
+    if subtitle and (not account or (compound and subtitle != account)):
+        title_account = account if compound else None
+        account, account_source = subtitle, 'feed_subtitle'
     status, cleared = STATUSES.get(detail['statusCode'], ('unknown', None))
     hint, cashback_cleared, issues = cashback_hint(detail)
     comment, comment_issues = read_comment(detail)
@@ -285,7 +288,7 @@ def parse_record(raw: dict, index: int) -> dict:
             'timestamp': timestamp.isoformat(), 'timestamp_precision': precision,
             'amount': str(amount), 'currency': currency, 'account': account, 'other_account': other,
             'kind': kind, 'status': status, 'cleared': cleared, 'description': description,
-            'title_account': title_account,
+            'title_account': title_account, 'account_source': account_source,
             'bank_fields': fields, 'bank_category': dict(fields).get('Категория'),
             'bank_comment': comment,
             'mcc': dict(fields).get('MCC'), 'cashback_hint': hint,
