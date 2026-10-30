@@ -9,6 +9,8 @@ from .review import validate_comparison
 
 CARD_ACCOUNT = 'Карта Пэй'
 ROUNDING_ACCOUNT = 'Округление'
+# Так округления записаны в приложении: категория внутри «Яндекс Пэй».
+ROUNDING_CATEGORY = ['Яндекс Пэй', 'Округление']
 POINTS_ACCOUNT = 'ЯПлюс Баллы'
 CASHBACK_DELAY_SECONDS = 120
 ROUNDING_DELAY_SECONDS = 60
@@ -64,7 +66,7 @@ def expected_rounding(row: dict, purchases: list, window: int) -> dict:
         'parent_confirmed': False, 'unresolved_fields': ['timestamp', 'description', 'tag']}
     result['issues'] = [*row.get('issues', []), 'rounding_parent_requires_review']
     if kind == 'income':
-        result.update(category='Округление', category_path=['Округление'])
+        result.update(category='Округление', category_path=list(ROUNDING_CATEGORY))
     else:
         result['accounting']['unresolved_fields'].append('category')
     return result
