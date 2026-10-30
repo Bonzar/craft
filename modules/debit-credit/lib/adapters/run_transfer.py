@@ -6,11 +6,12 @@ from decimal import Decimal
 
 from .backup_additions import validate_additions
 from .completion import plan_confirmations
+from .cross_bank import cross_bank_links
 from .common import amount_decimal
 from .markers import Marker
 from .matching import compare_records
 from .transfer_accounting import expand_transfers
-from .transfer_plan import build_transfer_plan
+from .transfer_plan import addition as transfer_addition, build_transfer_plan
 from .yandex_accounting import expand_accounting
 
 FAILED_STATUSES = {'failed', 'canceled'}
@@ -181,7 +182,7 @@ def scoped_confirmations(comparison: dict, confirmations: dict, excluded: dict) 
 
 
 def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start, end, windows: dict,
-                blocked: set) -> dict:
+                blocked: set, links: dict) -> dict:
     key = snapshot['source']
     expected = snapshot
     if key == 'yabank':
@@ -200,7 +201,7 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
     additions, selected, transfer_orphans = scoped_transfers(transfers, excluded, key, overpaid)
     updates, actions, confirm_orphans = scoped_confirmations(
         comparison, plan_confirmations(comparison), excluded)
-    outcomes, review, reconciled = {}, [], set()
+    outcomes, review, reconciled, cross = {}, [], set(), {}
     for i, item in enumerate(comparison['records']):
         row = item['record']
         outcome, extra = excluded.get(i), None
@@ -219,6 +220,11 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
                 outcome, extra = marked_outcome(actions.get(i))
             else:
                 outcome, extra = 'review', transfers['records'][i]['state']
+        elif ((link := links.get((key, row['source_id']))) and not row.get('role')
+              and item['match'] == 'no_candidate'):
+            outcome, extra = ('review', 'cross_bank_ambiguous') if link == 'ambiguous' else ('cross_bank', None)
+            if link != 'ambiguous':
+                cross[(key, row['source_id'])] = {'row': row, 'target': targets[i], 'peer': link}
         else:
             outcome, extra = purchase_outcome(i, item, key, mapping, config, actions.get(i))
             if outcome == 'same_as_existing':
@@ -226,15 +232,41 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
             if isinstance(extra, dict):
                 additions.append(extra)
                 extra = None
-        outcomes[row['source_id'] if not row.get('role') else f'{row["source_id"]}:{row["role"]}'] = outcome
+        outcomes[outcome_key(row)] = outcome
         if outcome == 'review':
-            path, tag, _ = labels(row, config)
-            review.append({'source': key, 'source_id': row['source_id'], 'role': row.get('role'),
-                           'reason': extra, 'timestamp': row['timestamp'], 'amount': row['amount'],
-                           'account': row.get('account'), 'description': row.get('description'),
-                           'suggested_category': path or None, 'suggested_tag': tag})
+            review.append(review_row(row, extra, config))
     return {'additions': additions, 'updates': updates, 'outcomes': outcomes, 'review': review,
-            'reconciled': reconciled}
+            'reconciled': reconciled, 'cross': cross}
+
+
+def outcome_key(row: dict) -> str:
+    return row['source_id'] if not row.get('role') else f'{row["source_id"]}:{row["role"]}'
+
+
+def review_row(row: dict, reason: str | None, config: dict) -> dict:
+    path, tag, _ = labels(row, config)
+    return {'source': row['source'], 'source_id': row['source_id'], 'role': row.get('role'),
+            'reason': reason, 'timestamp': row['timestamp'], 'amount': row['amount'],
+            'account': row.get('account'), 'description': row.get('description'),
+            'suggested_category': path or None, 'suggested_tag': tag}
+
+
+def cross_bank_transfers(cross: dict, config: dict) -> tuple[list, dict, list]:
+    """Перевод между банками пишется, только если обе стороны в переносе."""
+    additions, outcomes, review = [], {}, []
+    for side, item in cross.items():
+        row, peer = item['row'], cross.get(item['peer'])
+        if peer is None:
+            outcomes[outcome_key(row)] = 'review'
+            review.append(review_row(row, 'peer_out_of_scope', config))
+            continue
+        mapped = {**row, 'account': item['target']['account'], 'currency': item['target']['currency'],
+                  'other_account': peer['target']['account']}
+        added = transfer_addition(mapped, 0, 0)
+        added.update(key='-'.join(('cross', *side)), peer_key='-'.join(('cross', *item['peer'])))
+        additions.append(added)
+        outcomes[outcome_key(row)] = 'transfer_added'
+    return additions, outcomes, review
 
 
 def unreconciled_records(ledger: dict, config: dict, mapping: dict, start, end, reconciled: set) -> list:
@@ -258,19 +290,22 @@ def plan_transfer(sources: list, ledger: dict, config: dict, start: datetime, en
     mapping = build_mapping(config, ledger)
     if len({s['source'] for s in sources}) != len(sources):
         raise ValueError('Каждый источник передаётся один раз')
-    first = [plan_source(s, ledger, config, mapping, start, end, windows, set()) for s in sources]
+    links = cross_bank_links(sources)
+    first = [plan_source(s, ledger, config, mapping, start, end, windows, set(), links) for s in sources]
     reconciled = set().union(*(part['reconciled'] for part in first))
     unreconciled = unreconciled_records(ledger, config, mapping, start, end, reconciled)
     blocked = {row['account'] for row in unreconciled}
-    parts = ([plan_source(s, ledger, config, mapping, start, end, windows, blocked) for s in sources]
+    parts = ([plan_source(s, ledger, config, mapping, start, end, windows, blocked, links) for s in sources]
              if blocked else first)
-    additions = [row for part in parts for row in part['additions']]
+    cross, cross_outcomes, cross_review = cross_bank_transfers(
+        {k: v for part in parts for k, v in part['cross'].items()}, config)
+    additions = [row for part in parts for row in part['additions']] + cross
     updates = [row for part in parts for row in part['updates']]
     validate_additions(additions, ledger['records'])
-    outcomes = {k: v for part in parts for k, v in part['outcomes'].items()}
+    outcomes = {k: v for part in parts for k, v in part['outcomes'].items()} | cross_outcomes
     return {'additions': additions, 'updates': updates, 'outcomes': outcomes,
             'outcome_counts': dict(Counter(outcomes.values())),
-            'review': [row for part in parts for row in part['review']],
+            'review': [row for part in parts for row in part['review']] + cross_review,
             'unreconciled': unreconciled}
 
 
