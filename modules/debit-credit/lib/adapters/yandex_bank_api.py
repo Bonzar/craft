@@ -306,9 +306,19 @@ def verify_pages(snapshot: dict) -> bool:
         if cursor:
             cursors.add(cursor)
         items.extend(page['items'] + (page['pendingItems'] or []))
-    # Повторы и выходы за период хранятся сборщиком отдельно. Нельзя принять их за потерянные строки.
-    return (not snapshot.get('excluded') and not snapshot.get('repeatedObservations')
-            and items == snapshot['records'])
+    # Банк иногда повторяет строку на стыке страниц. Повтор принимается, только если он
+    # совпадает с первой встречей целиком и сборщик насчитал ровно столько же повторов.
+    first, repeated = {}, 0
+    for item in items:
+        identity = item.get('id') if isinstance(item, dict) else None
+        if identity in first:
+            if first[identity] != item:
+                return False
+            repeated += 1
+        else:
+            first[identity] = item
+    return (not snapshot.get('excluded') and repeated == (snapshot.get('repeatedObservations') or 0)
+            and list(first.values()) == snapshot['records'])
 
 
 def read_history(snapshot: dict) -> dict:
