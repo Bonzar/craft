@@ -53,6 +53,12 @@ class TransferPlanTest(unittest.TestCase):
         self.assertEqual(result['selected_pair_count'], 0)
         self.assertIn('already_marked', {x['state'] for x in result['records']})
 
+    def test_marked_record_of_another_operation_is_not_a_candidate_for_a_new_transfer(self):
+        existing = entry(account='Save', kind='transfer_leg', notes='', amount='100',
+                         markers=[marker('other-operation')], timestamp='2026-07-04T10:01:00+03:00')
+        result = plan([leg('out'), leg('in', False)], [existing])
+        self.assertEqual(result['selected_pair_count'], 1)
+
     def test_nearby_expense_with_same_amount_defers_transfer_for_review(self):
         existing = entry(account='Card', kind='expense', notes='',
                          timestamp='2026-07-04T20:00:00+03:00')
