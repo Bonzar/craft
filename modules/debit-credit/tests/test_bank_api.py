@@ -174,6 +174,16 @@ class BankApiTest(unittest.TestCase):
         self.assertEqual([r['other_account'] for r in rows], ['Округление', 'Карта Пэй'])
         self.assertEqual([r['source_id'] for r in rows], ['out', 'in'])
 
+    def test_feed_subtitle_names_the_saving_when_the_card_says_only_a_saving(self):
+        title = {'plain': None, 'compound': {'firstPart': 'Карта Пэй', 'secondPart': 'Счёт в Сейвах'}}
+        value = snapshot(detail('in', title=title, direction='CREDIT', amount={
+            'money': {'amount': '20.00', 'currency': 'RUB'}, 'plus': None}))
+        value['records'][0]['rightSubTitle'] = 'Округление'
+        value['pages'][0]['items'][0]['rightSubTitle'] = 'Округление'
+        [row] = read_history(value)['records']
+        self.assertEqual((row['account'], row['other_account']), ('Округление', 'Карта Пэй'))
+        self.assertEqual(row['title_account'], 'Счёт в Сейвах')
+
     def test_single_preposition_is_removed_from_named_source_account(self):
         r = detail(additionalFieldsList=[{'additionalFields': [
             {'name': 'Пополнение', 'value': 'На На подарок'}]}], direction='CREDIT')
