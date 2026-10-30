@@ -179,12 +179,14 @@ def transfer_run(args: argparse.Namespace) -> dict:
             'input_count': sum(s['input_count'] for s in sources), 'records': result['review'],
             'rejected': [row for s in sources for row in s['rejected']],
             'issues': [*({'code': 'needs_review', 'reason': r['reason']} for r in result['review']),
-                       *({'code': 'balance_differs', 'account': name} for name in differs)],
-            'ready': not result['review'] and not differs,
+                       *({'code': 'balance_differs', 'account': name} for name in differs),
+                       *({'code': 'unreconciled_app_record', 'account': r['account']}
+                         for r in result['unreconciled'])],
+            'ready': not result['review'] and not differs and not result['unreconciled'],
             'added': len(result['additions']), 'updated': len(result['updates']),
             'target': str(args.target) if preparation else None,
             'outcome_counts': result['outcome_counts'], 'outcomes': result['outcomes'],
-            'review': result['review'], 'balances': balances,
+            'review': result['review'], 'unreconciled': result['unreconciled'], 'balances': balances,
             'period': {'start': start.isoformat(), 'end': end.isoformat()},
             'backup_sha256': fingerprint}
 

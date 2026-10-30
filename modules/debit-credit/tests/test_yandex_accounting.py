@@ -152,3 +152,37 @@ class YandexAccountingTest(unittest.TestCase):
         self.assertEqual(derived['bank_fields'], [])
         self.assertNotIn('resolution', derived)
         self.assertNotIn('account_evidence', derived)
+
+def points_spend(identifier, amount='-10000', time='2026-07-04T08:09:25+03:00', **changes):
+    return operation(identifier, **{'account': 'ЯПлюс Баллы', 'currency': 'YPLUS_POINTS', 'amount': amount,
+                                   'kind': None, 'description': 'Яндекс Плюс', 'timestamp': time, **changes})
+
+
+def rubles_for_points(identifier, amount='10000', time='2026-07-04T08:12:01+03:00', **changes):
+    return operation(identifier, **{'account': 'Карта Пэй', 'amount': amount, 'kind': None,
+                                   'description': 'Рубли за баллы', 'timestamp': time, **changes})
+
+
+class PointsExchangeTest(unittest.TestCase):
+    def expand(self, *rows):
+        return {r['source_id']: r for r in expand_accounting(snapshot(*rows), parent_window_seconds=120)['records']}
+
+    def test_points_exchange_becomes_a_transfer_from_points_to_card(self):
+        rows = self.expand(points_spend('spend'), rubles_for_points('rub'))
+        self.assertEqual((rows['spend']['kind'], rows['spend']['other_account']), ('transfer_leg', 'Карта Пэй'))
+        self.assertEqual((rows['rub']['kind'], rows['rub']['other_account']), ('transfer_leg', 'ЯПлюс Баллы'))
+        self.assertEqual(rows['rub']['accounting']['rule'], 'points_exchange')
+
+    def test_rubles_without_a_matching_points_spend_stay_as_they_are(self):
+        rows = self.expand(points_spend('taxi', amount='-538', description='Такси'), rubles_for_points('rub'),
+                           points_spend('late', time='2026-07-04T09:00:00+03:00'))
+        self.assertEqual({r['kind'] for r in rows.values()}, {None})
+
+    def test_two_possible_points_spends_leave_the_exchange_unresolved(self):
+        rows = self.expand(points_spend('a'), points_spend('b', time='2026-07-04T08:10:00+03:00'),
+                           rubles_for_points('rub'))
+        self.assertEqual({r['kind'] for r in rows.values()}, {None})
+
+
+if __name__ == '__main__':
+    unittest.main()

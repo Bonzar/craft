@@ -92,7 +92,8 @@ def purchase_outcome(i: int, item: dict, key: str, mapping: dict, config: dict, 
     return ('added_by_decision' if action == 'record' else 'added_by_rule'), added
 
 
-def scope_outcome(row: dict, key: str, target: dict | None, config: dict, start, end) -> str | None:
+def scope_outcome(row: dict, key: str, target: dict | None, config: dict, start, end,
+                  blocked: set) -> str | None:
     """Почему запись вне переноса; None — запись в переносе."""
     moment = datetime.fromisoformat(row['timestamp'])
     point = control_date(config, target['account']) if target else None
@@ -107,6 +108,8 @@ def scope_outcome(row: dict, key: str, target: dict | None, config: dict, start,
         return 'outside_period'
     if point is not None and moment < point:
         return 'before_control_point'
+    if target and target['account'] in blocked:
+        return 'account_not_reconciled'
     return None
 
 
@@ -144,7 +147,8 @@ def scoped_confirmations(comparison: dict, confirmations: dict, excluded: dict) 
     return updates, actions, orphaned
 
 
-def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start, end, windows: dict) -> dict:
+def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start, end, windows: dict,
+                blocked: set) -> dict:
     key = snapshot['source']
     expected = snapshot
     if key == 'yabank':
@@ -154,14 +158,15 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
                                  window_seconds=windows['window_seconds'])
     transfers = build_transfer_plan(expected, ledger, mapping, start, end,
                                     pair_window_seconds=windows['pair_window_seconds'],
-                                    ledger_window_seconds=windows['ledger_window_seconds'])
+                                    ledger_window_seconds=windows['ledger_window_seconds'],
+                                    check_existing=False)
     targets = [mapping.get(key, {}).get(item['record'].get('account')) for item in comparison['records']]
     excluded = {i: outcome for i, item in enumerate(comparison['records'])
-                if (outcome := scope_outcome(item['record'], key, targets[i], config, start, end))}
+                if (outcome := scope_outcome(item['record'], key, targets[i], config, start, end, blocked))}
     additions, selected, transfer_orphans = scoped_transfers(transfers, excluded, key)
     updates, actions, confirm_orphans = scoped_confirmations(
         comparison, plan_confirmations(comparison), excluded)
-    outcomes, review = {}, []
+    outcomes, review, reconciled = {}, [], set()
     for i, item in enumerate(comparison['records']):
         row = item['record']
         outcome, extra = excluded.get(i), None
@@ -180,6 +185,8 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
                 outcome, extra = 'review', transfers['records'][i]['state']
         else:
             outcome, extra = purchase_outcome(i, item, key, mapping, config, actions.get(i))
+            if outcome == 'same_as_existing':
+                reconciled.update(item['ledger_indices'])
             if isinstance(extra, dict):
                 additions.append(extra)
                 extra = None
@@ -190,21 +197,45 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
                            'reason': extra, 'timestamp': row['timestamp'], 'amount': row['amount'],
                            'account': row.get('account'), 'description': row.get('description'),
                            'suggested_category': path or None, 'suggested_tag': tag})
-    return {'additions': additions, 'updates': updates, 'outcomes': outcomes, 'review': review}
+    return {'additions': additions, 'updates': updates, 'outcomes': outcomes, 'review': review,
+            'reconciled': reconciled}
+
+
+def unreconciled_records(ledger: dict, config: dict, mapping: dict, start, end, reconciled: set) -> list:
+    """Записи приложения без метки на счетах переноса: от контрольной точки счёта, без неё — от начала периода."""
+    accounts = {target['account'] for rows in mapping.values() for target in rows.values()}
+    found = []
+    for i, row in enumerate(ledger['records']):
+        if (row['account'] not in accounts or row.get('markers') or i in reconciled
+                or row.get('eligible_for_matching') is False):
+            continue
+        since = control_date(config, row['account']) or start
+        if since <= datetime.fromisoformat(row['timestamp']) < end:
+            found.append({key: row.get(key) for key in
+                          ('source_id', 'locator', 'timestamp', 'account', 'amount', 'kind', 'description')})
+    return found
 
 
 def plan_transfer(sources: list, ledger: dict, config: dict, start: datetime, end: datetime, **windows) -> dict:
+    """Счёт, на котором после контрольной точки есть запись без метки, в копию не пишется:
+    похожесть по сумме и времени не доказывает, что запись та же операция банка."""
     mapping = build_mapping(config, ledger)
     if len({s['source'] for s in sources}) != len(sources):
         raise ValueError('Каждый источник передаётся один раз')
-    parts = [plan_source(s, ledger, config, mapping, start, end, windows) for s in sources]
+    first = [plan_source(s, ledger, config, mapping, start, end, windows, set()) for s in sources]
+    reconciled = set().union(*(part['reconciled'] for part in first))
+    unreconciled = unreconciled_records(ledger, config, mapping, start, end, reconciled)
+    blocked = {row['account'] for row in unreconciled}
+    parts = ([plan_source(s, ledger, config, mapping, start, end, windows, blocked) for s in sources]
+             if blocked else first)
     additions = [row for part in parts for row in part['additions']]
     updates = [row for part in parts for row in part['updates']]
     validate_additions(additions, ledger['records'])
     outcomes = {k: v for part in parts for k, v in part['outcomes'].items()}
     return {'additions': additions, 'updates': updates, 'outcomes': outcomes,
             'outcome_counts': dict(Counter(outcomes.values())),
-            'review': [row for part in parts for row in part['review']]}
+            'review': [row for part in parts for row in part['review']],
+            'unreconciled': unreconciled}
 
 
 def check_balances(ledger: dict, sources: list, config: dict) -> dict:

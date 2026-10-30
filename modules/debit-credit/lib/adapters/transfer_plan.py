@@ -42,10 +42,8 @@ def pair_candidates(valid: dict, window: int) -> dict:
 
 def existing_candidates(row: dict, ledger: list, window: int) -> list:
     stamp = datetime.fromisoformat(row['timestamp'])
-    # Запись с меткой уже принадлежит своей операции источника и новый перевод не заменяет.
     return [i for i, other in enumerate(ledger)
-            if not other.get('markers')
-            and (row['account'], row['currency']) == (other['account'], other['currency'])
+            if (row['account'], row['currency']) == (other['account'], other['currency'])
             and amount_decimal(row['amount']) == amount_decimal(other['amount'])
             and abs((stamp - datetime.fromisoformat(other['timestamp'])).total_seconds()) <= window]
 
@@ -83,8 +81,8 @@ def select_pair(i, j, valid, records, ledger, markers, accounts, window) -> str:
         return 'already_marked'
     if any(accounts[(row['account'], row['currency'])] != 1 for row in rows):
         return 'account_absent_or_ambiguous'
-    found = sorted(set(existing_candidates(rows[0], ledger, window)
-                       + existing_candidates(rows[1], ledger, window)))
+    found = [] if window is None else sorted(set(existing_candidates(rows[0], ledger, window)
+                                                 + existing_candidates(rows[1], ledger, window)))
     if found:
         records[i]['ledger_candidates'] = found
         records[j]['ledger_candidates'] = found
@@ -93,7 +91,8 @@ def select_pair(i, j, valid, records, ledger, markers, accounts, window) -> str:
 
 
 def build_transfer_plan(source: dict, ledger: dict, mapping: dict, start: datetime, end: datetime,
-                        *, pair_window_seconds: int, ledger_window_seconds: int) -> dict:
+                        *, pair_window_seconds: int, ledger_window_seconds: int,
+                        check_existing: bool = True) -> dict:
     validate_inputs(source, ledger, mapping, start, end, (pair_window_seconds, ledger_window_seconds))
     repeated = Counter(identity(row) for row in source['records'] if identity(row))
     records, valid = [], {}
@@ -118,7 +117,8 @@ def build_transfer_plan(source: dict, ledger: dict, mapping: dict, start: dateti
             records[i]['state'] = 'unpaired' if not peers else 'ambiguous_pair'
             continue
         j = peers[0]
-        state = select_pair(i, j, valid, records, ledger['records'], markers, accounts, ledger_window_seconds)
+        state = select_pair(i, j, valid, records, ledger['records'], markers, accounts,
+                            ledger_window_seconds if check_existing else None)
         records[i]['state'] = records[j]['state'] = state
         records[j]['peer_candidates'] = [i]
         if state == 'selected':

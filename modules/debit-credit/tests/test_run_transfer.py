@@ -97,6 +97,7 @@ class PurchaseTest(unittest.TestCase):
         self.assertEqual(result['additions'], [])
         self.assertEqual(result['review'], [])
         self.assertEqual((result['outcomes']['s1'], result['outcomes']['s2']), ('skipped', 'same_as_existing'))
+        self.assertEqual(result['unreconciled'], [])
 
     def test_already_marked_operation_is_not_added_again(self):
         book = ledger(entry('old', kind='expense', markers=[marker('p1', source='tbank')]))
@@ -104,10 +105,11 @@ class PurchaseTest(unittest.TestCase):
         self.assertEqual(result['additions'], [])
         self.assertEqual(result['outcomes']['p1'], 'already_recorded')
 
-    def test_existing_record_without_marker_goes_to_review(self):
+    def test_existing_record_without_marker_is_listed_and_its_account_is_not_written(self):
         result = run([source(bank('p5'))], ledger(entry('old')))
         self.assertEqual(result['additions'], [])
-        self.assertEqual(reasons(result), {'p5': 'existing_without_marker'})
+        self.assertEqual(result['outcomes']['p5'], 'account_not_reconciled')
+        self.assertEqual([r['source_id'] for r in result['unreconciled']], ['old'])
 
 
 class ScopeTest(unittest.TestCase):
@@ -202,6 +204,40 @@ class MarkedRecordTest(unittest.TestCase):
         result = run([source(bank('p9'))], settings=settings)
         self.assertEqual(result['additions'], [])
         self.assertEqual(reasons(result), {'p9': 'same_without_existing'})
+
+
+class ReconciledAccountTest(unittest.TestCase):
+    point = {'Карта Тинь': {'date': '2026-07-02', 'bank_balance': '0', 'app_balance': '0'}}
+
+    def manual(self, timestamp):
+        return entry('manual', amount='-500', description='Лавка', timestamp=timestamp)
+
+    def test_unmarked_record_after_the_control_point_stops_writes_to_its_account(self):
+        result = run([source(bank('p1'))], ledger(self.manual('2026-07-03T10:00:00+03:00')),
+                     config(control_points=self.point))
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(result['outcomes']['p1'], 'account_not_reconciled')
+        self.assertEqual([(r['account'], r['amount']) for r in result['unreconciled']], [('Карта Тинь', '-500')])
+
+    def test_unmarked_record_before_the_control_point_does_not_stop_writes(self):
+        result = run([source(bank('p1'))], ledger(self.manual('2026-07-01T10:00:00+03:00')),
+                     config(control_points=self.point))
+        self.assertEqual(len(result['additions']), 1)
+        self.assertEqual(result['unreconciled'], [])
+
+    def test_without_a_control_point_unmarked_records_of_the_period_stop_writes(self):
+        result = run([source(bank('p1'))], ledger(self.manual('2026-07-03T10:00:00+03:00')))
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(len(result['unreconciled']), 1)
+
+    def test_transfer_is_written_without_searching_for_similar_records(self):
+        other = entry('other', account='Тинь (кред)', kind='transfer_leg', amount='100', other_account='Карта Тинь',
+                      markers=[marker('elsewhere', source='tbank')])
+        legs = [bank('t-out', kind='transfer_leg', other_account='2', description='Перевод'),
+                bank('t-in', kind='transfer_leg', account='2', other_account='1', amount='100',
+                     description='Перевод')]
+        result = run([source(*legs)], ledger(other))
+        self.assertEqual(len(result['additions']), 2)
 
 
 class BalanceTest(unittest.TestCase):

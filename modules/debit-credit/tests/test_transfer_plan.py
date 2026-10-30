@@ -53,10 +53,13 @@ class TransferPlanTest(unittest.TestCase):
         self.assertEqual(result['selected_pair_count'], 0)
         self.assertIn('already_marked', {x['state'] for x in result['records']})
 
-    def test_marked_record_of_another_operation_is_not_a_candidate_for_a_new_transfer(self):
-        existing = entry(account='Save', kind='transfer_leg', notes='', amount='100',
-                         markers=[marker('other-operation')], timestamp='2026-07-04T10:01:00+03:00')
-        result = plan([leg('out'), leg('in', False)], [existing])
+    def test_similarity_search_can_be_switched_off(self):
+        existing = entry(account='Card', kind='expense', notes='', timestamp='2026-07-04T20:00:00+03:00')
+        source = {**snapshot(leg('out'), leg('in', False)), 'coverage': 'snapshot_complete'}
+        book = {**snapshot(existing), 'coverage': 'backup_snapshot', 'date_filter': None,
+                'accounts': [{'name': name, 'currency': 'RUB', 'deleted_locally': None} for name in ('Card', 'Save')]}
+        result = build_transfer_plan(source, book, MAPPING, START, END, pair_window_seconds=300,
+                                     ledger_window_seconds=129600, check_existing=False)
         self.assertEqual(result['selected_pair_count'], 1)
 
     def test_nearby_expense_with_same_amount_defers_transfer_for_review(self):
