@@ -13,6 +13,7 @@ from .yandex_bank_ids import operation_id
 
 STATUSES = {'CLEAR': ('completed', True), 'HOLD': ('pending', False),
             'CANCEL': ('canceled', None), 'FAIL': ('failed', None)}
+FINAL_FEED_STATUSES = {'CANCEL', 'FAIL'}
 ACCOUNT_PHRASES = {'со счёта в сейвах': 'Счёт в Сейвах',
                    'на счёт в сейвах': 'Счёт в Сейвах',
                    'с карты пэй': 'Карта Пэй', 'на карту пэй': 'Карта Пэй',
@@ -259,6 +260,12 @@ def parse_record(raw: dict, index: int) -> dict:
         title_account = account if compound else None
         account, account_source = subtitle, 'feed_subtitle'
     status, cleared = STATUSES.get(detail['statusCode'], ('unknown', None))
+    # Лента показывает отмену, а карточка ещё держит холд: деньги вернулись, остаток банка
+    # это подтверждает (заказ 10.10.2026), поэтому решает лента.
+    status_source = 'card'
+    if feed['statusCode'] in FINAL_FEED_STATUSES and detail['statusCode'] == 'HOLD':
+        status, cleared = STATUSES[feed['statusCode']]
+        status_source = 'feed'
     hint, cashback_cleared, issues = cashback_hint(detail)
     comment, comment_issues = read_comment(detail)
     issues.extend(comment_issues)
@@ -277,7 +284,7 @@ def parse_record(raw: dict, index: int) -> dict:
         issues.append('feed_detail_amount_differs')
     if datetime.fromisoformat(text(feed['date'])) != timestamp:
         issues.append('feed_detail_date_differs')
-    if feed['statusCode'] != detail['statusCode']:
+    if feed['statusCode'] != detail['statusCode'] and status_source == 'card':
         issues.append('feed_detail_status_differs')
     fraction = re.search(r'\.(\d+)', detail['date'])
     precision = ('millisecond' if len(fraction[1]) <= 3 else 'microsecond') if fraction else 'second'
@@ -289,6 +296,7 @@ def parse_record(raw: dict, index: int) -> dict:
             'amount': str(amount), 'currency': currency, 'account': account, 'other_account': other,
             'kind': kind, 'status': status, 'cleared': cleared, 'description': description,
             'title_account': title_account, 'account_source': account_source,
+            'status_source': status_source,
             'bank_fields': fields, 'bank_category': dict(fields).get('Категория'),
             'bank_comment': comment,
             'mcc': dict(fields).get('MCC'), 'cashback_hint': hint,
