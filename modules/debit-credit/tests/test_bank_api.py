@@ -183,6 +183,17 @@ class BankApiTest(unittest.TestCase):
         [row] = read_history(value)['records']
         self.assertEqual((row['account'], row['other_account']), ('Округление', 'Карта Пэй'))
         self.assertEqual(row['title_account'], 'Счёт в Сейвах')
+        self.assertEqual(row['account_source'], 'feed_subtitle')
+
+    def test_incoming_without_an_account_on_the_card_takes_it_from_the_feed_subtitle(self):
+        value = snapshot(detail('in', direction='CREDIT', title={'plain': 'Перевод от Ольга Ф.', 'compound': None},
+                                additionalFieldsList=[{'additionalFields': [{'name': 'Статус', 'value': 'Выполнено'}]}]))
+        value['records'][0]['rightSubTitle'] = 'Карта Пэй'
+        value['pages'][0]['items'][0]['rightSubTitle'] = 'Карта Пэй'
+        [row] = read_history(value)['records']
+        self.assertEqual(row['account'], 'Карта Пэй')
+        self.assertEqual(row['account_source'], 'feed_subtitle')
+        self.assertNotIn('unknown_account', row['issues'])
 
     def test_single_preposition_is_removed_from_named_source_account(self):
         r = detail(additionalFieldsList=[{'additionalFields': [
