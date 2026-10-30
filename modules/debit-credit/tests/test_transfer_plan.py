@@ -53,20 +53,14 @@ class TransferPlanTest(unittest.TestCase):
         self.assertEqual(result['selected_pair_count'], 0)
         self.assertIn('already_marked', {x['state'] for x in result['records']})
 
-    def exchange_record(self):
-        return entry(account='Save', kind='transfer_leg', notes='', amount='100',
-                     markers=[marker('exchange')], timestamp='2026-07-04T10:01:00+03:00')
-
-    def test_record_marked_for_another_operation_of_this_snapshot_does_not_block_a_transfer(self):
-        other = operation('exchange', account='Save', amount='100', kind=None, issues=[],
-                          timestamp='2026-07-04T10:01:00+03:00')
-        result = plan([leg('out'), leg('in', False), other], [self.exchange_record()])
+    def test_similarity_search_can_be_switched_off(self):
+        existing = entry(account='Card', kind='expense', notes='', timestamp='2026-07-04T20:00:00+03:00')
+        source = {**snapshot(leg('out'), leg('in', False)), 'coverage': 'snapshot_complete'}
+        book = {**snapshot(existing), 'coverage': 'backup_snapshot', 'date_filter': None,
+                'accounts': [{'name': name, 'currency': 'RUB', 'deleted_locally': None} for name in ('Card', 'Save')]}
+        result = build_transfer_plan(source, book, MAPPING, START, END, pair_window_seconds=300,
+                                     ledger_window_seconds=129600, check_existing=False)
         self.assertEqual(result['selected_pair_count'], 1)
-
-    def test_record_marked_for_an_operation_missing_from_the_snapshot_still_defers_a_transfer(self):
-        result = plan([leg('out'), leg('in', False)], [self.exchange_record()])
-        self.assertEqual(result['selected_pair_count'], 0)
-        self.assertTrue(all(x['state'] == 'existing_candidate' for x in result['records']))
 
     def test_nearby_expense_with_same_amount_defers_transfer_for_review(self):
         existing = entry(account='Card', kind='expense', notes='',

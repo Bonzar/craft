@@ -40,17 +40,10 @@ def pair_candidates(valid: dict, window: int) -> dict:
     return candidates
 
 
-def accounted_elsewhere(record: dict, present: set) -> bool:
-    """Запись занята другой операцией, только если каждая её метка ведёт на операцию этого снимка."""
-    keys = {(m['source'], m['id'], m.get('role')) for m in record.get('markers', [])}
-    return bool(keys) and keys <= present
-
-
-def existing_candidates(row: dict, ledger: list, window: int, present: set) -> list:
+def existing_candidates(row: dict, ledger: list, window: int) -> list:
     stamp = datetime.fromisoformat(row['timestamp'])
     return [i for i, other in enumerate(ledger)
-            if not accounted_elsewhere(other, present)
-            and (row['account'], row['currency']) == (other['account'], other['currency'])
+            if (row['account'], row['currency']) == (other['account'], other['currency'])
             and amount_decimal(row['amount']) == amount_decimal(other['amount'])
             and abs((stamp - datetime.fromisoformat(other['timestamp'])).total_seconds()) <= window]
 
@@ -82,14 +75,14 @@ def validate_inputs(source: dict, ledger: dict, mapping: dict, start, end, windo
         raise ValueError('Окна проверки должны быть целыми неотрицательными числами секунд')
 
 
-def select_pair(i, j, valid, records, ledger, markers, accounts, window, present) -> str:
+def select_pair(i, j, valid, records, ledger, markers, accounts, window) -> str:
     rows = [valid[i], valid[j]]
     if any(markers.get(identity(row)) for row in rows):
         return 'already_marked'
     if any(accounts[(row['account'], row['currency'])] != 1 for row in rows):
         return 'account_absent_or_ambiguous'
-    found = sorted(set(existing_candidates(rows[0], ledger, window, present)
-                       + existing_candidates(rows[1], ledger, window, present)))
+    found = [] if window is None else sorted(set(existing_candidates(rows[0], ledger, window)
+                                                 + existing_candidates(rows[1], ledger, window)))
     if found:
         records[i]['ledger_candidates'] = found
         records[j]['ledger_candidates'] = found
@@ -98,7 +91,8 @@ def select_pair(i, j, valid, records, ledger, markers, accounts, window, present
 
 
 def build_transfer_plan(source: dict, ledger: dict, mapping: dict, start: datetime, end: datetime,
-                        *, pair_window_seconds: int, ledger_window_seconds: int) -> dict:
+                        *, pair_window_seconds: int, ledger_window_seconds: int,
+                        check_existing: bool = True) -> dict:
     validate_inputs(source, ledger, mapping, start, end, (pair_window_seconds, ledger_window_seconds))
     repeated = Counter(identity(row) for row in source['records'] if identity(row))
     records, valid = [], {}
@@ -114,7 +108,6 @@ def build_transfer_plan(source: dict, ledger: dict, mapping: dict, start: dateti
     candidates = pair_candidates(valid, pair_window_seconds)
     accounts = Counter((a['name'], a['currency']) for a in ledger['accounts'] if not a.get('deleted_locally'))
     markers = index_markers(ledger['records'])
-    present = {identity(row) for row in source['records'] if identity(row)}
     additions, selected = [], []
     for i, peers in candidates.items():
         if records[i]['state'] is not None:
@@ -125,7 +118,7 @@ def build_transfer_plan(source: dict, ledger: dict, mapping: dict, start: dateti
             continue
         j = peers[0]
         state = select_pair(i, j, valid, records, ledger['records'], markers, accounts,
-                            ledger_window_seconds, present)
+                            ledger_window_seconds if check_existing else None)
         records[i]['state'] = records[j]['state'] = state
         records[j]['peer_candidates'] = [i]
         if state == 'selected':
