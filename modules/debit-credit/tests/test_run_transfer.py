@@ -262,6 +262,30 @@ class LoanRepaymentTest(unittest.TestCase):
         self.assertEqual(len(result['additions']), 2)
 
 
+class RoundingCategoryTest(unittest.TestCase):
+    def test_rounding_expense_takes_the_category_of_its_purchase(self):
+        settings = config(accounts={'yabank': {
+            'Карта Пэй': {'account': 'Карта Пэй', 'unit': 'RUB', 'balance_id': 'CARD'},
+            'Округление': {'account': 'Округление', 'unit': 'RUB', 'balance_id': 'sa'}}},
+            rules={('yabank', 'самокат'): {'category_path': ['Транспорт', 'Самокат'], 'tag': None}})
+        book = ledger(accounts=[app_account('Карта Пэй'), app_account('Округление')])
+        def row(identifier, account, other, amount, **changes):
+            return operation(identifier, **{'source': 'yabank', 'account': account, 'other_account': other,
+                                            'amount': amount, 'description': 'Самокат', 'issues': [], **changes})
+        buy = row('buy', 'Карта Пэй', None, '-93', kind=None)
+        legs = [row('r-out', 'Карта Пэй', 'Округление', '-7', kind='transfer_leg',
+                    bank_fields=[['Округление', 'С карты Пэй']], timestamp='2026-07-04T10:00:05+03:00',
+                    description='Карта Пэй → Округление'),
+                row('r-in', 'Округление', 'Карта Пэй', '7', kind='transfer_leg',
+                    bank_fields=[['Округление', 'С карты Пэй']], timestamp='2026-07-04T10:00:05+03:00',
+                    description='Карта Пэй → Округление')]
+        snapshot = {**source(buy, *legs), 'adapter': 'yandex-bank-api', 'source': 'yabank'}
+        result = plan_transfer([snapshot], book, settings, START, END, **WINDOWS)
+        paths = {(r['account'], r['amount']): r['category_path'] for r in result['additions']}
+        self.assertEqual(paths[('Карта Пэй', '-7')], ['Транспорт', 'Самокат'])
+        self.assertEqual(paths[('Округление', '7')], ['Яндекс Пэй', 'Округление'])
+
+
 class BalanceTest(unittest.TestCase):
     def balances(self, *rows):
         return {'accounts': [{'account': a, 'account_name': None, 'amount': v, 'currency': 'RUB'}

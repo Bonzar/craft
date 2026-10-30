@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import datetime, timedelta
+from decimal import ROUND_CEILING, Decimal
 
 from .common import amount_decimal
 from .matching import validate_records
@@ -45,6 +46,25 @@ def rounding_kind(row: dict) -> str | None:
     return None
 
 
+# Шаги из команды «Записать округление v2»: (покупка меньше, шаг).
+ROUNDING_STEPS = ((50, 10), (300, 50), (2000, 100), (10000, 500))
+LARGE_ROUNDING_STEP = 1000
+
+
+def rounding_for(purchase: Decimal) -> Decimal:
+    """Округление покупки: разница до ближайшего вверх числа, кратного шагу; кратная шагу — ноль."""
+    step = next((size for limit, size in ROUNDING_STEPS if purchase < limit), LARGE_ROUNDING_STEP)
+    return (purchase / step).to_integral_value(ROUND_CEILING) * step - purchase
+
+
+def fitting(row: dict, purchases: list, window: int) -> list:
+    """Покупки до округления в окне, чей шаг даёт ровно это округление."""
+    stamp, value = datetime.fromisoformat(row['timestamp']), abs(amount_decimal(row['amount']))
+    return [p for p in purchases
+            if 0 <= (stamp - datetime.fromisoformat(p['timestamp'])).total_seconds() <= window
+            and rounding_for(-amount_decimal(p['amount'])) == value]
+
+
 def parent_candidates(row: dict, purchases: list, window: int) -> list:
     stamp = datetime.fromisoformat(row['timestamp'])
     result = []
@@ -59,20 +79,39 @@ def parent_candidates(row: dict, purchases: list, window: int) -> list:
     return result
 
 
-def expected_rounding(row: dict, purchases: list, window: int) -> dict:
+def is_dropped_purchase(row: dict) -> bool:
+    return (row['source'] == 'yabank' and row['account'] == CARD_ACCOUNT and row['currency'] == 'RUB'
+            and amount_decimal(row['amount']) < 0 and row.get('kind') != 'transfer_leg'
+            and not row.get('other_account') and row['status'] in ('canceled', 'failed') and not is_alias(row))
+
+
+def expected_rounding(row: dict, purchases: list, dropped: list, window: int) -> dict:
     kind = rounding_kind(row)
     if kind is None or row['status'] not in ACTIVE_STATUSES or is_alias(row):
         return deepcopy(row)
     result = deepcopy(row)
+    parents = fitting(row, purchases, window)
+    if not parents and len(fitting(row, dropped, window)) == 1:
+        # Покупку отменили, а округление осталось: это перевод с карты без категории и тега.
+        result.update(kind='transfer_leg', category=None, category_path=[], tag=None)
+        result['accounting'] = {'rule': 'rounding_without_purchase',
+                                'canceled_purchase': fitting(row, dropped, window)[0]['source_id']}
+        return result
     result.update(kind=kind, other_account=None)
+    confirmed = bool(parents) and len({p.get('description') for p in parents}) == 1
+    parent = max(parents, key=lambda p: p['timestamp']) if confirmed else None
     result['accounting'] = {'rule': 'rounding', 'before': {
         key: row.get(key) for key in ('kind', 'other_account', 'timestamp')},
         'parent_candidates': parent_candidates(row, purchases, window),
-        'parent_confirmed': False, 'unresolved_fields': ['timestamp', 'description', 'tag']}
-    result['issues'] = [*row.get('issues', []), 'rounding_parent_requires_review']
+        'parent_confirmed': confirmed,
+        'parent': None if parent is None else {key: parent.get(key) for key in
+                                               ('source', 'source_id', 'timestamp', 'amount', 'description')},
+        'unresolved_fields': ['timestamp', 'description', 'tag']}
+    if not confirmed:
+        result['issues'] = [*row.get('issues', []), 'rounding_parent_requires_review']
     if kind == 'income':
         result.update(category='Округление', category_path=list(ROUNDING_CATEGORY))
-    else:
+    elif not confirmed:
         result['accounting']['unresolved_fields'].append('category')
     return result
 
@@ -164,7 +203,8 @@ def expand_accounting(snapshot: dict, *, parent_window_seconds: int) -> dict:
     validate_snapshot(snapshot, parent_window_seconds)
     source = snapshot['records']
     purchases = [row for row in source if is_purchase_candidate(row)]
-    records = [expected_rounding(row, purchases, parent_window_seconds) for row in source]
+    dropped = [row for row in source if is_dropped_purchase(row)]
+    records = [expected_rounding(row, purchases, dropped, parent_window_seconds) for row in source]
     mark_exchange(records, source)
     origins = [{'input_index': i, 'record_indices': [i]} for i in range(len(source))]
     for i, row in enumerate(source):

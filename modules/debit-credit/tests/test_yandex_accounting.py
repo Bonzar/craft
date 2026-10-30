@@ -180,7 +180,7 @@ class RoundingParentTest(unittest.TestCase):
         for side in ('round-out', 'round-in'):
             self.assertTrue(rows[side]['accounting']['parent_confirmed'])
             self.assertEqual(rows[side]['accounting']['parent']['source_id'], 'buy')
-            self.assertNotIn('rounding_parent_requires_review', rows[side]['issues'])
+            self.assertNotIn('rounding_parent_requires_review', rows[side].get('issues', []))
 
     def test_two_fitting_purchases_of_one_merchant_take_the_later_one(self):
         rows = self.expand(purchase('a', amount='-93', cashback_hint=None, timestamp='2026-07-04T09:59:50+03:00'),
@@ -200,7 +200,7 @@ class RoundingParentTest(unittest.TestCase):
         self.assertEqual((out['kind'], out['other_account']), ('transfer_leg', 'Округление'))
         self.assertEqual((incoming['kind'], incoming['other_account']), ('transfer_leg', 'Карта Пэй'))
         self.assertEqual((incoming.get('category_path'), incoming['accounting']['rule']), ([], 'rounding_without_purchase'))
-        self.assertNotIn('rounding_parent_requires_review', incoming['issues'])
+        self.assertNotIn('rounding_parent_requires_review', incoming.get('issues', []))
 
     def test_rounding_without_a_fitting_purchase_stays_for_review(self):
         rows = self.expand(purchase('buy', amount='-100', cashback_hint=None), *self.pair())
