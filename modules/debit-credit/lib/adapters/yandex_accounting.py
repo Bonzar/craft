@@ -15,6 +15,11 @@ POINTS_ACCOUNT = 'ЯПлюс Баллы'
 CASHBACK_DELAY_SECONDS = 120
 ROUNDING_DELAY_SECONDS = 60
 ACTIVE_STATUSES = {'completed', 'pending'}
+# Обмен баллов банк показывает двумя операциями: списание баллов «Яндекс Плюс»
+# и зачисление «Рубли за баллы» на карту. В приложении это перевод с баллов на карту.
+EXCHANGE_DEBIT = 'Яндекс Плюс'
+EXCHANGE_CREDIT = 'Рубли за баллы'
+EXCHANGE_WINDOW_SECONDS = 15 * 60
 
 
 def is_alias(row: dict) -> bool:
@@ -110,6 +115,37 @@ def expected_cashback(row: dict) -> dict | None:
     return result
 
 
+def is_exchange_side(row: dict, account: str, currency: str, description: str, sign: int) -> bool:
+    return (row['account'] == account and row['currency'] == currency
+            and row.get('description') == description and row.get('kind') is None
+            and row['status'] == 'completed' and not is_alias(row)
+            and amount_decimal(row['amount']) * sign > 0)
+
+
+def exchange_pairs(source: list) -> list:
+    """Пары обмена: рубли и единственное списание той же суммы баллов до них в окне."""
+    debits = [i for i, row in enumerate(source)
+              if is_exchange_side(row, POINTS_ACCOUNT, 'YPLUS_POINTS', EXCHANGE_DEBIT, -1)]
+    found = {}
+    for i, row in enumerate(source):
+        if not is_exchange_side(row, CARD_ACCOUNT, 'RUB', EXCHANGE_CREDIT, 1):
+            continue
+        moment = datetime.fromisoformat(row['timestamp'])
+        found[i] = [j for j in debits
+                    if amount_decimal(source[j]['amount']) == -amount_decimal(row['amount'])
+                    and 0 <= (moment - datetime.fromisoformat(source[j]['timestamp'])).total_seconds()
+                    <= EXCHANGE_WINDOW_SECONDS]
+    claimed = [j for peers in found.values() for j in peers]
+    return [(peers[0], i) for i, peers in found.items() if len(peers) == 1 and claimed.count(peers[0]) == 1]
+
+
+def mark_exchange(records: list, source: list) -> None:
+    for debit, credit in exchange_pairs(source):
+        for own, peer, other in ((debit, credit, CARD_ACCOUNT), (credit, debit, POINTS_ACCOUNT)):
+            records[own].update(kind='transfer_leg', other_account=other)
+            records[own]['accounting'] = {'rule': 'points_exchange', 'peer': source[peer]['source_id']}
+
+
 def validate_snapshot(snapshot: dict, window: int) -> None:
     if (not isinstance(snapshot, dict) or snapshot.get('adapter') == 'yandex-accounting'
             or not isinstance(snapshot.get('records'), list)
@@ -129,6 +165,7 @@ def expand_accounting(snapshot: dict, *, parent_window_seconds: int) -> dict:
     source = snapshot['records']
     purchases = [row for row in source if is_purchase_candidate(row)]
     records = [expected_rounding(row, purchases, parent_window_seconds) for row in source]
+    mark_exchange(records, source)
     origins = [{'input_index': i, 'record_indices': [i]} for i in range(len(source))]
     for i, row in enumerate(source):
         derived = expected_cashback(row)

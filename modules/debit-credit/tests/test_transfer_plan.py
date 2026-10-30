@@ -53,11 +53,20 @@ class TransferPlanTest(unittest.TestCase):
         self.assertEqual(result['selected_pair_count'], 0)
         self.assertIn('already_marked', {x['state'] for x in result['records']})
 
-    def test_marked_record_of_another_operation_is_not_a_candidate_for_a_new_transfer(self):
-        existing = entry(account='Save', kind='transfer_leg', notes='', amount='100',
-                         markers=[marker('other-operation')], timestamp='2026-07-04T10:01:00+03:00')
-        result = plan([leg('out'), leg('in', False)], [existing])
+    def exchange_record(self):
+        return entry(account='Save', kind='transfer_leg', notes='', amount='100',
+                     markers=[marker('exchange')], timestamp='2026-07-04T10:01:00+03:00')
+
+    def test_record_marked_for_another_operation_of_this_snapshot_does_not_block_a_transfer(self):
+        other = operation('exchange', account='Save', amount='100', kind=None, issues=[],
+                          timestamp='2026-07-04T10:01:00+03:00')
+        result = plan([leg('out'), leg('in', False), other], [self.exchange_record()])
         self.assertEqual(result['selected_pair_count'], 1)
+
+    def test_record_marked_for_an_operation_missing_from_the_snapshot_still_defers_a_transfer(self):
+        result = plan([leg('out'), leg('in', False)], [self.exchange_record()])
+        self.assertEqual(result['selected_pair_count'], 0)
+        self.assertTrue(all(x['state'] == 'existing_candidate' for x in result['records']))
 
     def test_nearby_expense_with_same_amount_defers_transfer_for_review(self):
         existing = entry(account='Card', kind='expense', notes='',
