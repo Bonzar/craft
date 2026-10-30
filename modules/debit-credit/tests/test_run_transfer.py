@@ -240,6 +240,28 @@ class ReconciledAccountTest(unittest.TestCase):
         self.assertEqual(len(result['additions']), 2)
 
 
+class LoanRepaymentTest(unittest.TestCase):
+    def setup(self, repaid):
+        settings = config(accounts={'tbank': {
+            '1': {'account': 'Карта Тинь', 'unit': 'RUB', 'balance_id': '1'},
+            'Кубышка': {'account': 'Тинь (кубышка)', 'unit': 'RUB', 'balance_id': None}}})
+        loan = entry('loan', account='Тинь (кубышка)', kind='transfer_leg', amount='-30000', other_account='Карта Тинь',
+                     markers=[marker('loan', source='tbank')], timestamp='2026-07-02T10:00:00+03:00')
+        book = ledger(loan, accounts=[app_account('Карта Тинь'), app_account('Тинь (кубышка)', '-30000')])
+        repay = bank('repay', kind='transfer', other_account='Кубышка', amount=f'-{repaid}',
+                     description='Пополнение Кубышки')
+        return run([source(repay)], book, settings)
+
+    def test_repayment_above_the_loan_goes_to_review(self):
+        result = self.setup('30531')
+        self.assertEqual(result['additions'], [])
+        self.assertEqual(set(reasons(result).values()), {'repayment_exceeds_loan'})
+
+    def test_repayment_of_the_whole_loan_is_written(self):
+        result = self.setup('30000')
+        self.assertEqual(len(result['additions']), 2)
+
+
 class BalanceTest(unittest.TestCase):
     def balances(self, *rows):
         return {'accounts': [{'account': a, 'account_name': None, 'amount': v, 'currency': 'RUB'}

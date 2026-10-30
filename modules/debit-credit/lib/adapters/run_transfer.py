@@ -113,11 +113,41 @@ def scope_outcome(row: dict, key: str, target: dict | None, config: dict, start,
     return None
 
 
-def scoped_transfers(transfers: dict, excluded: dict, key: str) -> tuple[list, set, set]:
+# Кубышка Т-Банка — заём до 30 000 ₽ на карту. Возврат больше долга несёт внутри
+# комиссию, и перевод на всю сумму оставил бы её на счёте займа.
+LOAN_HISTORIES = {'tbank': 'Кубышка'}
+
+
+def loan_overpayments(transfers: dict, excluded: dict, mapping: dict, key: str, ledger: dict) -> set:
+    """Пары, где возврат займа больше долга перед ним: долг — записи приложения и уже принятые возвраты."""
+    target = mapping.get(key, {}).get(LOAN_HISTORIES.get(key))
+    if not target:
+        return set()
+    account = target['account']
+    rows = {row['key']: row for row in transfers['additions']}
+    legs = sorted((datetime.fromisoformat(rows[f'transfer-{own}']['timestamp']), own, peer,
+                   amount_decimal(rows[f'transfer-{own}']['amount']))
+                  for i, j in transfers['selected_pairs'] if not {i, j} & excluded.keys()
+                  for own, peer in ((i, j), (j, i)) if rows[f'transfer-{own}']['account'] == account)
+    booked = [(datetime.fromisoformat(r['timestamp']), amount_decimal(r['amount']))
+              for r in ledger['records'] if r['account'] == account]
+    overpaid = set()
+    for moment, own, peer, amount in legs:
+        balance = sum((value for at, value in booked if at < moment), Decimal(0))
+        if amount > 0 and amount > -balance:
+            overpaid |= {own, peer}
+        else:
+            booked.append((moment, amount))
+    return overpaid
+
+
+def scoped_transfers(transfers: dict, excluded: dict, key: str, skipped: set) -> tuple[list, set, set]:
     """Пара пишется, только если обе стороны в переносе; сторона без пары идёт на разбор."""
     additions = {row['key']: row for row in transfers['additions']}
     kept, selected, orphaned = [], set(), set()
     for i, j in transfers['selected_pairs']:
+        if {i, j} & skipped:
+            continue
         out = {i, j} & excluded.keys()
         if out:
             orphaned |= {i, j} - out
@@ -163,7 +193,8 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
     targets = [mapping.get(key, {}).get(item['record'].get('account')) for item in comparison['records']]
     excluded = {i: outcome for i, item in enumerate(comparison['records'])
                 if (outcome := scope_outcome(item['record'], key, targets[i], config, start, end, blocked))}
-    additions, selected, transfer_orphans = scoped_transfers(transfers, excluded, key)
+    overpaid = loan_overpayments(transfers, excluded, mapping, key, ledger)
+    additions, selected, transfer_orphans = scoped_transfers(transfers, excluded, key, overpaid)
     updates, actions, confirm_orphans = scoped_confirmations(
         comparison, plan_confirmations(comparison), excluded)
     outcomes, review, reconciled = {}, [], set()
@@ -174,6 +205,8 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
             pass
         elif targets[i] is None:
             outcome, extra = 'review', 'unmapped_account'
+        elif i in overpaid:
+            outcome, extra = 'review', 'repayment_exceeds_loan'
         elif i in transfer_orphans or i in confirm_orphans:
             outcome, extra = 'review', 'peer_out_of_scope'
         elif row.get('kind') == 'transfer_leg':
