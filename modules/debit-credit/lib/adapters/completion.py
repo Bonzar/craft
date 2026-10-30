@@ -67,11 +67,14 @@ def confirmation(row: dict, ledger: list) -> tuple:
                            for m in actual.get('markers', []))
             or not changes.keys() <= FINANCIAL_FIELDS or actual.get('kind') not in KINDS
             or source.get('kind') not in (None, actual['kind'])
-            or (source.get('kind') is None and actual['kind'] == 'transfer_leg')
             or actual.get('eligible_for_matching') is False or actual.get('splits')):
         return 'requires_review', None
     if actual.get('cleared') is True:
         return ('already_confirmed' if not changes else 'requires_review'), None
+    # Операцию банка без вида нельзя подтверждать в сторону перевода: записывать нечего
+    # только у уже завершённой записи, как обмен баллов, записанный переводом.
+    if source.get('kind') is None and actual['kind'] == 'transfer_leg':
+        return 'requires_review', None
     if actual.get('cleared') is not False:
         return 'requires_review', None
     update = {'locator': actual['locator'], 'set': {'amount': source['amount'], 'cleared': True}}

@@ -69,6 +69,16 @@ class CompletionTest(unittest.TestCase):
         value['records'][0]['record']['kind'] = None
         self.assertEqual(len(completion.plan_confirmations(value)['updates']), 1)
 
+    def test_cleared_transfer_leg_marked_for_a_bank_operation_without_kind_is_already_confirmed(self):
+        value = comparison(source='yabank', amount='-20', cleared=True, status='completed')
+        value['records'][0]['record']['kind'] = None
+        ledger = value['ledger_records'][0]
+        ledger.update(kind='transfer_leg', cleared=True, status='completed', other_account='ЯПлюс Баллы')
+        value['records'][0]['differences'] = {0: {}}
+        result = completion.plan_confirmations(value)
+        self.assertEqual(result['updates'], [])
+        self.assertEqual(result['decisions'][0]['action'], 'already_confirmed')
+
     def test_reimport_after_confirmation_proposes_no_second_update(self):
         value = comparison()
         actual = value['ledger_records'][0]
