@@ -117,7 +117,7 @@ class YandexAccountingTest(unittest.TestCase):
         self.assertEqual([out['kind'], incoming['kind']], ['expense', 'income'])
         self.assertIsNone(out['other_account'])
         self.assertIsNone(out.get('category'))
-        self.assertEqual(incoming['category_path'], ['Округление'])
+        self.assertEqual(incoming['category_path'], ['Яндекс Пэй', 'Округление'])
         self.assertEqual(out['timestamp'], expense['timestamp'])
         candidate = out['accounting']['parent_candidates'][0]
         self.assertEqual(candidate['source_id'], 'buy')
