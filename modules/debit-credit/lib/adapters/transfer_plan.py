@@ -42,8 +42,10 @@ def pair_candidates(valid: dict, window: int) -> dict:
 
 def existing_candidates(row: dict, ledger: list, window: int) -> list:
     stamp = datetime.fromisoformat(row['timestamp'])
+    # Запись с меткой уже принадлежит своей операции источника и новый перевод не заменяет.
     return [i for i, other in enumerate(ledger)
-            if (row['account'], row['currency']) == (other['account'], other['currency'])
+            if not other.get('markers')
+            and (row['account'], row['currency']) == (other['account'], other['currency'])
             and amount_decimal(row['amount']) == amount_decimal(other['amount'])
             and abs((stamp - datetime.fromisoformat(other['timestamp'])).total_seconds()) <= window]
 
