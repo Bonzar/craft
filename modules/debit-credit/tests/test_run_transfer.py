@@ -99,7 +99,7 @@ class PurchaseTest(unittest.TestCase):
         self.assertEqual((result['outcomes']['s1'], result['outcomes']['s2']), ('skipped', 'same_as_existing'))
 
     def test_already_marked_operation_is_not_added_again(self):
-        book = ledger(entry('old', markers=[marker('p1', source='tbank')]))
+        book = ledger(entry('old', kind='expense', markers=[marker('p1', source='tbank')]))
         result = run([source(bank('p1'))], book)
         self.assertEqual(result['additions'], [])
         self.assertEqual(result['outcomes']['p1'], 'already_recorded')

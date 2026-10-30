@@ -60,15 +60,27 @@ def labels(row: dict, config: dict) -> tuple[list, str | None, str | None]:
     return path, tag, decision.get('action')
 
 
-def purchase_outcome(i: int, item: dict, key: str, mapping: dict, config: dict) -> tuple:
+MARKED_OUTCOMES = {'already_confirmed': 'already_recorded', 'keep_preliminary': 'already_recorded',
+                   'confirm_existing': 'confirmed'}
+
+
+def marked_outcome(action: str | None) -> tuple:
+    """Запись с меткой уже есть: сходится, подтверждается или идёт на разбор, но не теряется."""
+    outcome = MARKED_OUTCOMES.get(action)
+    return (outcome, None) if outcome else ('review', 'marker_requires_review')
+
+
+def purchase_outcome(i: int, item: dict, key: str, mapping: dict, config: dict, confirmed: str | None) -> tuple:
     row = item['record']
     path, tag, action = labels(row, config)
     if action == 'skip':
         return 'skipped', None
     if item['match'] in ('marker', 'marker_conflict'):
-        return ('already_recorded', None) if item['match'] == 'marker' else ('review', 'marker_conflict')
+        return marked_outcome(confirmed) if item['match'] == 'marker' else ('review', 'marker_conflict')
     if item['match'] == 'candidate':
         return ('same_as_existing', None) if action == 'same' else ('review', 'existing_without_marker')
+    if action == 'same':
+        return 'review', 'same_without_existing'
     issues = [code for code in item['issues'] if code != 'rounding_parent_requires_review'
               or len(row.get('accounting', {}).get('parent_candidates', [])) != 1]
     if issues:
@@ -80,6 +92,55 @@ def purchase_outcome(i: int, item: dict, key: str, mapping: dict, config: dict) 
     return ('added_by_decision' if action == 'record' else 'added_by_rule'), added
 
 
+def scope_outcome(row: dict, key: str, target: dict | None, config: dict, start, end) -> str | None:
+    """Почему запись вне переноса; None — запись в переносе."""
+    moment = datetime.fromisoformat(row['timestamp'])
+    point = control_date(config, target['account']) if target else None
+    if row.get('not_recorded_reason') or row.get('status') in FAILED_STATUSES:
+        return 'not_recorded'
+    if (key, row.get('account')) in config['not_transferred']:
+        return 'not_transferred'
+    if not start <= moment < end:
+        return 'outside_period'
+    if point is not None and moment < point:
+        return 'before_control_point'
+    return None
+
+
+def scoped_transfers(transfers: dict, excluded: dict, key: str) -> tuple[list, set, set]:
+    """Пара пишется, только если обе стороны в переносе; сторона без пары идёт на разбор."""
+    additions = {row['key']: row for row in transfers['additions']}
+    kept, selected, orphaned = [], set(), set()
+    for i, j in transfers['selected_pairs']:
+        out = {i, j} & excluded.keys()
+        if out:
+            orphaned |= {i, j} - out
+            continue
+        selected |= {i, j}
+        for index in (i, j):
+            row = additions[f'transfer-{index}']
+            kept.append({**row, 'key': f'{key}-{row["key"]}', 'peer_key': f'{key}-{row["peer_key"]}'})
+    return kept, selected, orphaned
+
+
+def scoped_confirmations(comparison: dict, confirmations: dict, excluded: dict) -> tuple[list, dict, set]:
+    """Подтверждения в переносе; у стороны перевода вторая сторона тоже должна быть в переносе."""
+    indices = [d['input_index'] for d in confirmations['decisions'] if d['action'] == 'confirm_existing']
+    by_locator = dict(zip((u['locator'] for u in confirmations['updates']), indices))
+    ledger = {row['locator']: row for row in comparison['ledger_records']}
+    actions = {d['input_index']: d['action'] for d in confirmations['decisions']}
+    updates, orphaned = [], set()
+    for update, i in zip(confirmations['updates'], indices):
+        peer = by_locator.get(ledger[update['locator']].get('linked_locator'))
+        if i in excluded:
+            continue
+        if peer is not None and peer in excluded:
+            orphaned.add(i)
+            continue
+        updates.append(update)
+    return updates, actions, orphaned
+
+
 def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start, end, windows: dict) -> dict:
     key = snapshot['source']
     expected = snapshot
@@ -88,38 +149,34 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
     expected = expand_transfers(expected, mapping)
     comparison = compare_records(expected['records'], ledger['records'], mapping,
                                  window_seconds=windows['window_seconds'])
-    confirmations = plan_confirmations(comparison)
     transfers = build_transfer_plan(expected, ledger, mapping, start, end,
                                     pair_window_seconds=windows['pair_window_seconds'],
                                     ledger_window_seconds=windows['ledger_window_seconds'])
-    selected = {i for pair in transfers['selected_pairs'] for i in pair}
-    additions = [{**row, 'key': f'{key}-{row["key"]}', 'peer_key': f'{key}-{row["peer_key"]}'}
-                 for row in transfers['additions']]
+    targets = [mapping.get(key, {}).get(item['record'].get('account')) for item in comparison['records']]
+    excluded = {i: outcome for i, item in enumerate(comparison['records'])
+                if (outcome := scope_outcome(item['record'], key, targets[i], config, start, end))}
+    additions, selected, transfer_orphans = scoped_transfers(transfers, excluded, key)
+    updates, actions, confirm_orphans = scoped_confirmations(
+        comparison, plan_confirmations(comparison), excluded)
     outcomes, review = {}, []
     for i, item in enumerate(comparison['records']):
         row = item['record']
-        target = mapping.get(key, {}).get(row.get('account'))
-        moment = datetime.fromisoformat(row['timestamp'])
-        point = control_date(config, target['account']) if target else None
-        if row.get('not_recorded_reason') or row.get('status') in FAILED_STATUSES:
-            outcome, extra = 'not_recorded', None
-        elif (key, row.get('account')) in config['not_transferred']:
-            outcome, extra = 'not_transferred', None
-        elif not start <= moment < end:
-            outcome, extra = 'outside_period', None
-        elif point is not None and moment < point:
-            outcome, extra = 'before_control_point', None
-        elif target is None:
+        outcome, extra = excluded.get(i), None
+        if outcome:
+            pass
+        elif targets[i] is None:
             outcome, extra = 'review', 'unmapped_account'
+        elif i in transfer_orphans or i in confirm_orphans:
+            outcome, extra = 'review', 'peer_out_of_scope'
         elif row.get('kind') == 'transfer_leg':
             if i in selected:
-                outcome, extra = 'transfer_added', None
+                outcome = 'transfer_added'
             elif item['match'] == 'marker':
-                outcome, extra = 'already_recorded', None
+                outcome, extra = marked_outcome(actions.get(i))
             else:
                 outcome, extra = 'review', transfers['records'][i]['state']
         else:
-            outcome, extra = purchase_outcome(i, item, key, mapping, config)
+            outcome, extra = purchase_outcome(i, item, key, mapping, config, actions.get(i))
             if isinstance(extra, dict):
                 additions.append(extra)
                 extra = None
@@ -130,8 +187,7 @@ def plan_source(snapshot: dict, ledger: dict, config: dict, mapping: dict, start
                            'reason': extra, 'timestamp': row['timestamp'], 'amount': row['amount'],
                            'account': row.get('account'), 'description': row.get('description'),
                            'suggested_category': path or None, 'suggested_tag': tag})
-    return {'additions': additions, 'updates': confirmations['updates'], 'outcomes': outcomes,
-            'review': review}
+    return {'additions': additions, 'updates': updates, 'outcomes': outcomes, 'review': review}
 
 
 def plan_transfer(sources: list, ledger: dict, config: dict, start: datetime, end: datetime, **windows) -> dict:
