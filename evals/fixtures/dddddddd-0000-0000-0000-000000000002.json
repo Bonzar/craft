@@ -1,0 +1,11 @@
+{
+  "id": "dddddddd-0000-0000-0000-000000000002",
+  "type": "text",
+  "textStyle": "h3",
+  "listStyle": "task",
+  "taskInfo": {
+    "state": "todo"
+  },
+  "markdown": "- [ ] ### Инструмент куплен, карниз в гостиной висит #этап",
+  "content": []
+}
