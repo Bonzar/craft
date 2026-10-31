@@ -259,8 +259,8 @@ class TurnReviewTest(TurnReviewCase):
         self.assertEqual(self.state('s-again')['nudges'], 1)
 
     def test_an_autonomous_run_waits_for_the_answer_too(self) -> None:
-        # По разделу «Рутины» застрявшее ревью в рутине ждёт ответа Влада,
-        # как в сессии с ним: ход без ревью не отпускается.
+        # Застрявшее ревью в автономном прогоне ждёт ответа, как в сессии с
+        # человеком: ход без ревью не отпускается.
         self.fire(prompt('s-auto'), autonomous=True)
         self.fire(write('s-auto'), autonomous=True)
         self.nudge_three_times('s-auto', autonomous=True)
