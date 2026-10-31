@@ -1,0 +1,51 @@
+{
+  "id": "dddddddd-0000-0000-0000-000000000003",
+  "type": "text",
+  "listStyle": "task",
+  "indentationLevel": 1,
+  "taskInfo": {
+    "state": "todo"
+  },
+  "markdown": "  - [ ] Купить базовый инструмент #задача",
+  "content": [
+    {
+      "id": "dddddddd-0000-0000-0000-000000000007",
+      "type": "text",
+      "markdown": "[Инструмент куплен, карниз в гостиной висит #этап](block://dddddddd-0000-0000-0000-000000000002)"
+    },
+    {
+      "id": "dddddddd-0000-0000-0000-000000000004",
+      "type": "text",
+      "textStyle": "h4",
+      "listStyle": "toggle",
+      "markdown": "+ #### Зависит от"
+    },
+    {
+      "id": "dddddddd-0000-0000-0000-000000000005",
+      "type": "text",
+      "textStyle": "h4",
+      "listStyle": "toggle",
+      "markdown": "+ #### Следующий шаг"
+    },
+    {
+      "id": "dddddddd-0000-0000-0000-000000000008",
+      "type": "text",
+      "textStyle": "h2",
+      "markdown": "## Описание"
+    },
+    {
+      "id": "dddddddd-0000-0000-0000-000000000009",
+      "type": "text",
+      "markdown": "Дома нет инструмента для ремонта. Покупаем базу, остальное докупаем под работы."
+    },
+    {
+      "id": "dddddddd-0000-0000-0000-000000000006",
+      "type": "text",
+      "listStyle": "task",
+      "taskInfo": {
+        "state": "todo"
+      },
+      "markdown": "- [ ] Купить перфоратор"
+    }
+  ]
+}

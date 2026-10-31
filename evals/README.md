@@ -9,7 +9,7 @@
 | Что проверяем | Контур | Раннер |
 |---|---|---|
 | Рассуждение и решение агента (закрыл ли разбор, назвал ли ступень, устоял ли под давлением) | **поведенческий**: грейд по потоку событий, записи нет | `run-incident-closure.sh` |
-| Форму записи в Craft (какая команда, какие поля) | **L1 mock**: запись перехвачена, грейд по намерению | `run-purchases.sh`, `run-matrix.sh`, `run-dates.sh` |
+| Форму записи в Craft (какая команда, какие поля) | **L1 mock**: запись перехвачена, грейд по намерению | `run-purchases.sh`, `run-matrix.sh`, `run-dates.sh`, `run-task-deps.sh` |
 | Фактический результат записи | **L2 e2e**: запись реальная, но в песочницу | `run-e2e.sh` |
 | Срабатывание триггера скилла | **триггерный**: грейд по `tool_use` Skill | `run-triggers.sh` |
 | Структуру живой страницы | **страж**: только чтение | `check-structure.sh` |
@@ -246,7 +246,7 @@ and phrasings that tempt the wrong field (an urgent event date that must stay
 | Var | Used by | Meaning |
 | --- | --- | --- |
 | `CRAFT_API_BASE` | mock (live reads) | Connect-link REST base w/ token. From env settings. |
-| `CRAFT_FIXTURE_DIR` | mock (fixture reads) | Dir of `<id>.json` / `<id>.md` fixtures. Set only by `run-dates.sh`. |
+| `CRAFT_FIXTURE_DIR` | mock (fixture reads) | Dir of `<id>.json` / `<id>.md` fixtures. Set by `run-dates.sh` and `run-task-deps.sh`. |
 | `CRAFT_MOCK_WRITE_LOG` | mock (writes) | Where intercepted writes are logged. Set to `/tmp/craft-eval-write.log` in `mcp-config.json`; the runners truncate it before each case. |
 
 Both runners isolate each case with `env -u CLAUDE_CODE_*` (fresh session, no shared
