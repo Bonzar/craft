@@ -1,12 +1,13 @@
-"""Поставщик снимка Craft: повторы, алерт вместо половины снимка, склейка.
+"""Поставщик снимка Craft: одно чтение памяти, вступление, повторы, алерт.
 
 Живой Craft тут не нужен и не годится — проверяется то, что решено кодом:
-сколько раз поставщик пробует, что отдаёт при отказе и что никогда не отдаёт
-половину.
+что читается, что стоит первым, сколько раз поставщик пробует и что отдаёт
+при отказе вместо вступления без памяти.
 """
 
 import importlib.util
 import os
+import re
 import tempfile
 import unittest
 import unittest.mock
@@ -25,6 +26,12 @@ def load_provider():
 
 
 provider = load_provider()
+
+# Вход в разделы правил: вступление его называет, а читать его поставщик не должен.
+RULES_ROOT = 'a6784801-9d92-875c-f146-50159368745b'
+# Замок вступление называет словом, а не slug: модуль, который его держит.
+LOCK_SLUG = 'craft-type-lock'
+SKILL_NAME = re.compile(r'\bcraft-[a-z]+(?:-[a-z]+)*\b')
 
 
 class Event:
@@ -84,7 +91,7 @@ class ProviderTest(unittest.TestCase):
         journal = Journal()
         self.provide(journal)
         # Пауза стоит между попытками, поэтому попыток на одну больше, чем пауз,
-        # и все паузы лестницы отрабатывают. Дальше первого чтения не идём.
+        # и все паузы лестницы отрабатывают.
         self.assertEqual(len(self.call_lines()), provider.ATTEMPTS)
         self.assertEqual(self.slept, list(provider.BACKOFF_SECONDS))
         self.assertIn('HTTP 503', journal.lines[0])
@@ -97,7 +104,7 @@ class ProviderTest(unittest.TestCase):
     def test_a_call_that_succeeds_is_not_retried(self) -> None:
         self.stub('echo "прочитано $2"')
         self.provide()
-        self.assertEqual(len(self.call_lines()), 2)  # два чтения, по одной попытке
+        self.assertEqual(len(self.call_lines()), 1)  # одно чтение, одна попытка
         self.assertEqual(self.slept, [])
 
     def test_a_late_success_is_taken(self) -> None:
@@ -108,24 +115,21 @@ class ProviderTest(unittest.TestCase):
             echo "прочитано $2"
         ''')
         text = self.provide()
-        self.assertIn(provider.RULES_TITLE, text)
-        self.assertIn(provider.MEMORY_TITLE, text)
+        self.assertTrue(text.startswith(provider.INTRO), text)
+        self.assertIn(f'прочитано {provider.MEMORY_ROOT}', text)
         self.assertNotIn('не собран', text)
 
-    # --- алерт вместо половины снимка ---
+    # --- алерт вместо вступления без памяти ---
 
-    def test_a_snapshot_is_never_delivered_in_half(self) -> None:
-        # Правила читаются, память падает — отдать первую половину нельзя:
-        # агент решил бы, что правила базы у него полные.
-        self.stub(f'''
-            if [ "$2" = "{provider.MEMORY_ROOT}" ]; then echo нет >&2; exit 1; fi
-            echo "правила базы целиком"
-        ''')
+    def test_without_memory_the_intro_is_not_delivered(self) -> None:
+        # Память не прочиталась — вступление одно отдать нельзя: оно обещает
+        # агенту текст, которого нет.
+        self.stub('echo нет >&2\nexit 1')
         journal = Journal()
         text = self.provide(journal)
         self.assertTrue(text.startswith('стартовый контекст: снимок Craft не собран:'), text)
-        self.assertNotIn('правила базы целиком', text)
-        self.assertIn('Память агента', text)  # названа причина: что именно не прочиталось
+        self.assertNotIn('Это снимок памяти', text)
+        self.assertIn(provider.MEMORY_LABEL, text)  # названа причина: что именно не прочиталось
         self.assertIn('alert', journal.lines[0])
 
     def test_a_permanent_error_is_not_retried(self) -> None:
@@ -213,9 +217,8 @@ class ProviderTest(unittest.TestCase):
         with unittest.mock.patch.object(provider, 'repository_env', return_value=dotenv):
             self.stub('test "$CRAFT_API_BASE" = "https://example/connect-secret" || exit 9\necho "прочитано $2"')
             text = self.provide()
-        self.assertIn(provider.RULES_TITLE, text)
-        self.assertIn(provider.MEMORY_TITLE, text)
-        self.assertEqual(len(self.call_lines()), 2)
+        self.assertTrue(text.startswith(provider.INTRO), text)
+        self.assertEqual(len(self.call_lines()), 1)
 
     def test_dotenv_is_not_interpreted_as_shell_code(self) -> None:
         dotenv = self.root / '.env'
@@ -228,11 +231,31 @@ class ProviderTest(unittest.TestCase):
 
     # --- склейка и аргументы ---
 
-    def test_both_roots_are_read_under_their_own_titles(self) -> None:
+    def test_only_memory_is_read_and_the_intro_goes_first(self) -> None:
         self.stub('echo "прочитано $2"')
         text = self.provide()
-        self.assertIn(f'{provider.RULES_TITLE}\n\nпрочитано {provider.RULES_ROOT}', text)
-        self.assertIn(f'{provider.MEMORY_TITLE}\n\nпрочитано {provider.MEMORY_ROOT}', text)
+        self.assertEqual(text, f'{provider.INTRO}\n\nпрочитано {provider.MEMORY_ROOT}')
+        self.assertEqual(len(self.call_lines()), 1)
+        self.assertTrue(self.call_lines()[0].startswith(f'--markdown {provider.MEMORY_ROOT} '))
+
+    def test_the_intro_names_only_skills_that_exist(self) -> None:
+        # Вступление обещает, что правила приедут скиллами, а запись без скилла
+        # не пустит замок. Нет модуля — правила не придут ниоткуда, и это
+        # должно быть видно упавшим тестом, а не после выкладки.
+        skills = set(SKILL_NAME.findall(provider.INTRO))
+        self.assertTrue(skills, 'во вступлении не нашлось ни одного скилла')
+        for skill in sorted(skills):
+            with self.subTest(skill=skill):
+                self.assertTrue((MODULES_DIR / skill / 'module.toml').is_file())
+                self.assertTrue((MODULES_DIR / skill / 'skill' / 'SKILL.md').is_file())
+        self.assertTrue((MODULES_DIR / LOCK_SLUG / 'hooks' / 'module.py').is_file())
+
+    def test_the_rules_are_not_read_at_all(self) -> None:
+        self.stub('echo "прочитано $2"')
+        self.provide()
+        lines = self.call_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertFalse(any(RULES_ROOT in line for line in lines), lines)
 
     def test_retries_of_craft_sync_itself_are_switched_off(self) -> None:
         # Политика повторов одна и живёт здесь, а не в инструменте.
@@ -242,16 +265,9 @@ class ProviderTest(unittest.TestCase):
             self.assertIn('--retries 0', line)
             self.assertIn('--rl-retries 0', line)
             self.assertIn(f'--timeout {provider.REQUEST_TIMEOUT}', line)
-        self.assertIn('--follow-links', self.call_lines()[0])
-        self.assertNotIn('--follow-links', self.call_lines()[1])
-
-    def test_the_rules_are_read_through_their_container(self) -> None:
-        # Почти все разделы правил лежат в одной странице: её глубокое чтение
-        # заменяет два десятка запросов. Память — один блок, ей контейнер незачем.
-        self.stub('echo "прочитано $2"')
-        self.provide()
-        self.assertIn(f'--container {provider.RULES_CONTAINER}', self.call_lines()[0])
-        self.assertNotIn('--container', self.call_lines()[1])
+        # Память — один блок: ни обхода по «Связям», ни контейнера ей не нужно.
+        self.assertNotIn('--follow-links', self.call_lines()[0])
+        self.assertNotIn('--container', self.call_lines()[0])
 
     def test_the_worst_case_fits_the_hook_timeout(self) -> None:
         # Худший случай обязан помещаться в timeout строки хука, иначе харнес
@@ -265,10 +281,9 @@ class ProviderTest(unittest.TestCase):
         )
         installer = iu.module_from_spec(spec)
         spec.loader.exec_module(installer)
-        # Худший случай — оба чтения целиком по длинной лестнице: каждая попытка
+        # Худший случай — чтение целиком по длинной лестнице: каждая попытка
         # упирается в свой таймаут, и между ними отстаиваются все паузы.
-        worst = 2 * (provider.ATTEMPTS_429 * provider.CALL_TIMEOUT
-                     + sum(provider.BACKOFF_429_SECONDS))
+        worst = provider.ATTEMPTS_429 * provider.CALL_TIMEOUT + sum(provider.BACKOFF_429_SECONDS)
         self.assertLess(worst, installer.HOOK_TIMEOUT_SEC, f'худший случай {worst} с')
 
 

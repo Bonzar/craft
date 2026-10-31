@@ -4,12 +4,14 @@
 
 ## Что делает
 
-Модуль из двух частей, `rules` и `skill`, и одного файла текста — `rules/craft-tool.md`.
+Модуль из двух частей, `rules` и `skill`, и двух файлов текста — `rules/craft-tool.md` и `skill/craft-base.md`.
 
 - часть `rules` едет туда, откуда харнес читает инструкции до первого хода: механика лежит в контексте с нулевого хода;
 - часть `skill` срабатывает в момент, когда агент собрался звать Craft, и ведёт его по той же механике — правило из ядра к этому моменту уже забывается.
 
 Тело скилла — указатель: `SKILL.md` велит прочитать лежащий рядом `craft-tool.md`, и называет его абсолютным путём через плейсхолдер `{{HARNESS_SETTINGS}}`. Относительным путём нельзя: в репозитории craft лежит файл с тем же именем, и сессия, запущенная внутри репозитория, читает его вместо установленной копии (живой прогон 18.09.2026).
+
+Второй файл части `skill` — `skill/craft-base.md`: общие правила записи в базу, одинаковые для всех типов сущностей. В нём шаблон и раздел до данных, форма блока, факт и ссылки, язык записи — переложение разделов «Сущность по шаблону», «Блок базы», «Факт в базе» и «Как пишет Влад» из сферы «Личное». Его читают скиллы типов сущностей (craft-task, craft-stage, craft-section, craft-note, craft-decision) по абсолютному пути `{{HARNESS_SETTINGS}}/skills/craft-call/craft-base.md`, чтобы не нести по копии. Файл лежит в самой части `skill`, установщик копирует его вместе с `SKILL.md`, в `skill/files` он не значится. Разделы в Craft поменялись — файл сверяется с ними заново.
 
 ## Откуда тело
 
@@ -19,12 +21,12 @@
 
 ## Где лежит после установки
 
-Claude: `~/.claude/rules/craft-call/craft-tool.md` и `~/.claude/skills/craft-call/` (`SKILL.md` плюс копия `craft-tool.md`).
+Claude: `~/.claude/rules/craft-call/craft-tool.md` и `~/.claude/skills/craft-call/` (`SKILL.md`, `craft-base.md` и копия `craft-tool.md`).
 
-Codex: тот же текст между метками `<!-- jarvis:craft-call -->` в `~/.codex/AGENTS.md` и `~/.codex/skills/craft-call/` (`SKILL.md` плюс копия `craft-tool.md`).
+Codex: тот же текст между метками `<!-- jarvis:craft-call -->` в `~/.codex/AGENTS.md` и `~/.codex/skills/craft-call/` (`SKILL.md`, `craft-base.md` и копия `craft-tool.md`).
 
 ## Что править и где
 
-Механику инструмента — в `rules/craft-tool.md`. Описание и сигналы скилла — во frontmatter `skill/SKILL.md`. Список соседних файлов — в `skill/files`.
+Механику инструмента — в `rules/craft-tool.md`. Описание и сигналы скилла — во frontmatter `skill/SKILL.md`. Общие правила записи для скиллов типов — в `skill/craft-base.md`. Список соседних файлов — в `skill/files`.
 
 Правила самой базы Craft здесь не живут: они в Craft, в разделах сферы «Личное».

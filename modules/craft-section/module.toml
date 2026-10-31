@@ -1,0 +1,8 @@
+# Раздел: скилл типа сущности для тега #раздел. Часть skill, без хука: правила
+# живут разделами Craft, скилл ведёт по ним агента в момент записи, а пропуск
+# записи без скилла ловит проверка craft-type-lock.
+slug = "craft-section"
+# Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
+# из behavior. Решения раздела отдаёт craft-decision, темы и заметки —
+# craft-note, задачи — craft-task.
+requires = ["craft-call", "behavior", "craft-decision", "craft-note", "craft-task"]
