@@ -72,7 +72,6 @@ OUR_OPTIONS = frozenset({OPTION_REVIEW, OPTION_RELEASE})
 NO_WRITES_REASON = 'записей в Craft не было'
 CLEAN_REASON = 'ревью чистое, ход отпущен'
 RELEASED_REASON = 'ревью не было по решению человека'
-AUTONOMOUS_REASON = 'ревью не состоялось, автономный прогон'
 SUBAGENT_REASON = 'вызов внутри подагента: в объём ревью не идёт'
 PROBLEM_SEPARATOR = '. '
 
@@ -80,7 +79,6 @@ REPORT_SEPARATOR = '\n\n---\n'
 REPORT_TITLE = 'Ревью хода:'
 REPORT_CLEAN = 'чисто.'
 REPORT_RELEASED = 'без ревью, по решению человека.'
-REPORT_AUTONOMOUS = 'без ревью, автономный прогон.'
 REPORT_REMARKS_SHOWN = 3
 REPORT_REMARK_CHARS = 60
 DEBUG_OFF_REASON = 'отладочный вывод выключен'
@@ -487,11 +485,6 @@ class Module(jarvis.Module):
             review.save_state(storage, {**state, review.NUDGES_KEY: nudges + 1,
                                         review.FIRST_NUDGE_KEY: first_nudge_at(state, review)})
             return jarvis.Block(reason=nudge_text(storage, state, runtime, review, writes, problem))
-        if runtime.autonomous:
-            # Спросить некого. Временно, пока не написан раздел рутин.
-            cleared = review.clear_volume(storage, state)
-            note_summary(storage, cleared, state, review, volume, REPORT_AUTONOMOUS)
-            return jarvis.Silence(reason=with_problem(AUTONOMOUS_REASON, problem))
         if nudges == MAX_NUDGES:
             runtime.ask_confirmation(action=RELEASE_ACTION, phrase=RELEASE_PHRASE)
             review.save_state(storage, {**state, review.NUDGES_KEY: nudges + 1})

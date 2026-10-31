@@ -258,14 +258,15 @@ class TurnReviewTest(TurnReviewCase):
         self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop('s-again'))))
         self.assertEqual(self.state('s-again')['nudges'], 1)
 
-    def test_an_autonomous_run_is_silent_after_three_nudges(self) -> None:
+    def test_an_autonomous_run_waits_for_the_answer_too(self) -> None:
+        # По разделу «Рутины» застрявшее ревью в рутине ждёт ответа Влада,
+        # как в сессии с ним: ход без ревью не отпускается.
         self.fire(prompt('s-auto'), autonomous=True)
         self.fire(write('s-auto'), autonomous=True)
         self.nudge_three_times('s-auto', autonomous=True)
-        self.assert_silent(self.fire(stop('s-auto'), autonomous=True))
-        self.assertEqual(self.last_reason('s-auto'), 'ревью не состоялось, автономный прогон')
-        self.assertEqual(self.volume('s-auto'), [])
-        self.assertEqual(confirm.pending(self.storage('s-auto'), slug=SLUG), [])
+        self.assert_question(self.fire(stop('s-auto'), autonomous=True))
+        self.assertEqual(len(self.volume('s-auto')), 1)
+        self.assertEqual(len(confirm.pending(self.storage('s-auto'), slug=SLUG)), 1)
 
     def test_providers_write_rows_with_their_fields(self) -> None:
         session = 's-rows'
@@ -315,11 +316,7 @@ class TurnReviewTest(TurnReviewCase):
                 reason = self.blocked(self.fire(stop(session), autonomous))
                 self.assertIn('нет ссылки на этап', reason)
             self.assertEqual(self.state(session)['nudges'], 3)
-            result = self.fire(stop(session), autonomous)
-            if autonomous:
-                self.assert_silent(result)
-            else:
-                self.assert_question(result)
+            self.assert_question(self.fire(stop(session), autonomous))
 
     def test_the_anchor_survives_a_clean_verdict(self) -> None:
         session = 's-keep-anchor'
