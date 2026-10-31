@@ -1,0 +1,8 @@
+# Скилл типа «задача». Часть skill, без хука: скилл ведёт запись задачи, а
+# правила типа живут разделами Craft. Замок craft-type-lock требует его вызова
+# перед любой записью с тегом #задача.
+slug = "craft-task"
+# Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
+# из behavior. Решения отдаёт craft-decision, этапы — craft-stage, факты о
+# предмете раздела — craft-section, заметки и темы — craft-note.
+requires = ["craft-call", "behavior", "craft-decision", "craft-stage", "craft-section", "craft-note"]

@@ -177,9 +177,11 @@ class InstalledProbeTest(unittest.TestCase):
 
     def test_the_registered_line_points_at_the_module_own_file(self) -> None:
         settings = json.loads((self.settings_root / 'settings.json').read_text(encoding='utf-8'))
-        args = settings['hooks']['UserPromptSubmit'][0]['hooks'][0]['args']
-        self.assertEqual(args[0], str(self.entry))
-        self.assertEqual(args[1:], ['--harness', 'claude', '--event', 'prompt'])
+        # На реплике стоит не одна проба: строку пробы ищем по её файлу, а не по месту.
+        handlers = [h for g in settings['hooks']['UserPromptSubmit'] for h in g['hooks']]
+        probe_args = [h['args'] for h in handlers if h['args'][0] == str(self.entry)]
+        self.assertEqual(len(probe_args), 1, handlers)
+        self.assertEqual(probe_args[0][1:], ['--harness', 'claude', '--event', 'prompt'])
 
 
 class SharedModuleTest(unittest.TestCase):

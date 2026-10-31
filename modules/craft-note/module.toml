@@ -1,0 +1,7 @@
+# Заметка и тема: скилл типа сущности для тегов #заметка и #тема. Часть skill,
+# без хука: правила живут разделами Craft, скилл ведёт по ним агента при
+# записи. Модуль craft-type-lock не пропускает запись без скилла.
+slug = "craft-note"
+# Механику вызовов берёт из craft-call, форму разговора — из behavior. Раздел
+# отдаёт craft-section, задачу — craft-task, этап и веху — craft-stage.
+requires = ["craft-call", "behavior", "craft-section", "craft-task", "craft-stage"]

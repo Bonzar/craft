@@ -1,0 +1,22 @@
+{
+  "types": {
+    "#задача": {
+      "skill": "craft-task"
+    },
+    "#этап": {
+      "skill": "craft-stage"
+    },
+    "#веха": {
+      "skill": "craft-stage"
+    },
+    "#раздел": {
+      "skill": "craft-section"
+    },
+    "#заметка": {
+      "skill": "craft-note"
+    },
+    "#тема": {
+      "skill": "craft-note"
+    }
+  }
+}
