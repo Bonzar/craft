@@ -182,9 +182,10 @@ def volume_record(event, turn: int, runtime, review) -> dict | None:
     if event.tool_name == SKILL_TOOL:
         return {review.KIND_KEY: review.KIND_SKILL, **base,
                 review.SKILL_KEY: type_lock(runtime).skill_slug(event.tool_input)}
-    if event.tool_name == QUESTION_TOOL \
-            and ANCHOR_QUESTION_MARK in questions_text(event.tool_input).lower():
-        return {review.KIND_KEY: review.KIND_ANCHOR, **base,
+    if event.tool_name == QUESTION_TOOL:
+        kind = (review.KIND_ANCHOR if ANCHOR_QUESTION_MARK in questions_text(event.tool_input).lower()
+                else review.KIND_ANSWER)
+        return {review.KIND_KEY: kind, **base, review.QUESTION_KEY: questions_text(event.tool_input),
                 review.ANSWER_KEY: as_is(event.tool_result)}
     return None
 
@@ -382,6 +383,11 @@ class Module(jarvis.Module):
         turn = state[review.TURN_KEY] + 1
         review.save_state(storage, {**state, review.TURN_KEY: turn})
         text = event.prompt_text or ''
+        if text.strip():
+            # Реплика идёт в объём целиком: по ней подагент видит, что Влад
+            # уже решил сам, и не ставит на это замечание.
+            review.append_record(storage, {review.KIND_KEY: review.KIND_PROMPT,
+                                           review.RECORD_TURN_KEY: turn, review.TEXT_KEY: text})
         if ANCHOR_PROMPT.search(text):
             review.append_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
                                            review.RECORD_TURN_KEY: turn, review.ANSWER_KEY: text})

@@ -125,9 +125,12 @@ class TurnReviewCase(unittest.TestCase):
     def state(self, session: str) -> dict:
         return self.storage(session).read_json('turn-review-state.json')
 
-    def volume(self, session: str) -> list[dict]:
+    def volume(self, session: str, every: bool = False) -> list[dict]:
+        # Реплики Влада лежат в объёме рядом с записями хода; тесты записей
+        # смотрят только на то, что сделал агент, если не просят всё.
         lines = self.storage(session).read_lines('turn-review-volume.jsonl')
-        return [json.loads(line) for line in lines]
+        rows = [json.loads(line) for line in lines]
+        return rows if every else [row for row in rows if row['kind'] != 'prompt']
 
     def last_reason(self, session: str) -> str:
         return Trace(self.storage(session)).read()[-1]['reason']
@@ -290,9 +293,33 @@ class TurnReviewTest(TurnReviewCase):
                                    'types': ['#задача']})
         self.assertEqual(rows[1]['ids'], [BLOCK, PARENT])
         self.assertEqual(rows[2], {'kind': 'skill', 'turn': 1, 'skill': 'craft-task'})
-        self.assertEqual(rows[3], {'kind': 'anchor', 'turn': 1,
+        self.assertEqual(rows[3], {'kind': 'anchor', 'turn': 1, 'question': 'Какой якорь у сессии?',
                                    'answer': {'answers': {'Какой якорь у сессии?':
                                                           'Задача про ревью'}}})
+
+    def test_the_human_word_goes_to_the_volume(self) -> None:
+        session = 's-word'
+        self.fire(prompt(session, 'Это не противоречие, оставь как есть'))
+        self.fire(ask(session, 'Переносить задачу?', 'Нет'))
+        self.fire(prompt(session, '   '))
+        rows = self.volume(session, every=True)
+        self.assertEqual(rows[0], {'kind': 'prompt', 'turn': 1,
+                                   'text': 'Это не противоречие, оставь как есть'})
+        self.assertEqual((rows[1]['kind'], rows[1]['turn'], rows[1]['question']),
+                         ('answer', 1, 'Переносить задачу?'))
+        self.assertEqual(rows[1]['answer'], {'answers': {'Переносить задачу?': 'Нет'}})
+        # Пустая реплика в объём не идёт, ход при этом начался.
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(self.state(session)['turn'], 2)
+
+    def test_the_human_word_is_cleared_with_the_volume(self) -> None:
+        session = 's-word-clear'
+        self.fire(prompt(session, 'Беру задачу «Ревью хода»'))
+        self.fire(prompt(session, 'Так и оставь'))
+        self.fire(write(session))
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.assert_silent(self.fire(stop(session)))
+        self.assertEqual([row['kind'] for row in self.volume(session, every=True)], ['anchor'])
 
     def test_an_anchor_named_by_prompt_goes_to_the_volume(self) -> None:
         self.fire(prompt('s-anchor'))
@@ -389,7 +416,7 @@ class TurnReviewTest(TurnReviewCase):
         self.write_verdict(session, volume_id)
         self.storage(session).append_line('turn-review-volume.jsonl', '{не json')
         reason = self.blocked(self.fire(stop(session)))
-        for needle in (str(path), 'строка 2', 'их ревью не было', 'ревью хода не сделано'):
+        for needle in (str(path), 'строка 3', 'их ревью не было', 'ревью хода не сделано'):
             self.assertIn(needle, reason)
         self.assertNotEqual(self.state(session)['volume_id'], volume_id)
         self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
