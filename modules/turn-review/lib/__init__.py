@@ -221,6 +221,12 @@ def count_writes(volume: list[dict]) -> int:
     return count_kind(volume, KIND_WRITE)
 
 
+def turn_has_writes(volume: list[dict], turn: int) -> bool:
+    """Писал ли в Craft именно этот ход, а не прежние ходы того же объёма."""
+    return any(record.get(KIND_KEY) == KIND_WRITE and record.get(RECORD_TURN_KEY) == turn
+               for record in volume)
+
+
 def fingerprint(volume: list[dict]) -> str:
     """Отпечаток записей `write` объёма: одна и та же строка у хука и у подагента.
 
