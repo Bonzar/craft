@@ -128,6 +128,15 @@ def _state_damage(storage) -> tuple[dict | None, str | None]:
     return None, f'испорчен: {state!r}'
 
 
+def peek_state(storage) -> dict | None:
+    """Состояние без починки: None, если файла нет или он испорчен.
+
+    Показ ответа идёт до остановки, а починку с её уведомлением делает stop.
+    """
+    state, _ = _state_damage(storage)
+    return state
+
+
 def load_state(storage) -> tuple[dict, str | None]:
     """Состояние сессии и что пришлось починить.
 
@@ -219,6 +228,30 @@ def count_kind(volume: list[dict], kind: str) -> int:
 
 def count_writes(volume: list[dict]) -> int:
     return count_kind(volume, KIND_WRITE)
+
+
+def writes_before_turn(volume: list[dict], turn: int) -> bool:
+    """Записи есть, и все сделаны ходами раньше этого: этот ход в Craft не писал.
+
+    Пустой объём — False: там нечего отпускать как разговор. Запись без
+    номера хода не раньше. Номер хода после потери состояния продолжается
+    от записей объёма, см. next_turn.
+    """
+    turns = [record.get(RECORD_TURN_KEY) for record in volume
+             if record.get(KIND_KEY) == KIND_WRITE]
+    return bool(turns) and all(isinstance(item, int) and item < turn for item in turns)
+
+
+def next_turn(state_turn: int, volume: list[dict]) -> int:
+    """Номер нового хода: больше и счётчика состояния, и любого хода в объёме.
+
+    Состояние потеряно — счётчик снова 0, а записи объёма помнят свои ходы.
+    Без этого ходы-разговоры после потери блокировались бы, пока счётчик не
+    догонит старые записи.
+    """
+    turns = [record.get(RECORD_TURN_KEY) for record in volume]
+    known = [item for item in turns if isinstance(item, int)]
+    return max([state_turn, *known]) + 1
 
 
 def fingerprint(volume: list[dict]) -> str:

@@ -297,6 +297,63 @@ class TurnReviewTest(TurnReviewCase):
                                    'answer': {'answers': {'Какой якорь у сессии?':
                                                           'Задача про ревью'}}})
 
+    def test_a_turn_without_writes_is_released_and_keeps_the_volume(self) -> None:
+        session = 's-quiet'
+        self.start_with_write(session)
+        self.blocked(self.fire(stop(session)))
+        self.fire(prompt(session, 'А почему так?'))
+        self.assert_silent(self.fire(stop(session)))
+        self.assertEqual(self.last_reason(session), 'в этом ходе записей не было, объём ждёт хода с записями')
+        self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
+        self.assertEqual(self.state(session)['nudges'], 1)
+        # Ход с записью снова под ревью, объём общий.
+        self.fire(write(session))
+        self.assertIn('записей write в объёме сейчас 2', self.blocked(self.fire(stop(session))))
+
+    def test_a_turn_without_writes_does_not_ask_the_stuck_question(self) -> None:
+        session = 's-quiet-stuck'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.assert_question(self.fire(stop(session)))
+        self.fire(prompt(session, 'Расскажи подробнее'))
+        self.assert_silent(self.fire(stop(session)))
+        self.assertEqual(len(self.volume(session)), 1)
+
+    def test_a_damaged_volume_on_a_quiet_turn_is_named(self) -> None:
+        session = 's-quiet-damage'
+        self.start_with_write(session)
+        self.fire(prompt(session, 'А что это?'))
+        self.storage(session).append_line('turn-review-volume.jsonl', '{не json')
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('был испорчен', reason)
+        self.assertIn('Скажи об этом человеку', reason)
+        self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
+
+    def test_a_lost_state_does_not_release_earlier_writes(self) -> None:
+        session = 's-quiet-lost'
+        self.start_with_write(session)
+        self.storage(session).path('turn-review-state.json').unlink()
+        self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop(session))))
+        # Счёт ходов продолжается от записей объёма: разговор снова отпускается.
+        self.fire(prompt(session, 'А что это?'))
+        self.assertEqual(self.state(session)['turn'], 2)
+        self.assert_silent(self.fire(stop(session)))
+
+    def test_a_verdict_with_remarks_still_returns_a_turn_without_writes(self) -> None:
+        session = 's-quiet-remark'
+        self.start_with_write(session)
+        self.fire(prompt(session, 'Ок'))
+        self.write_verdict(session, self.state(session)['volume_id'], [remark()])
+        self.assertIn('нет ссылки на этап', self.blocked(self.fire(stop(session))))
+
+    def test_a_clean_verdict_settles_a_turn_without_writes(self) -> None:
+        session = 's-quiet-clean'
+        self.start_with_write(session)
+        self.fire(prompt(session, 'Ок'))
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.assert_silent(self.fire(stop(session)))
+        self.assertEqual([row['kind'] for row in self.volume(session)], [])
+
     def test_the_human_word_goes_to_the_volume(self) -> None:
         session = 's-word'
         self.fire(prompt(session, 'Это не противоречие, оставь как есть'))

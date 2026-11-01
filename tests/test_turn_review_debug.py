@@ -4,7 +4,7 @@ import json
 import unittest
 from datetime import datetime, timezone
 
-from .test_turn_review import TurnReviewCase, prompt, remark, stop, write
+from .test_turn_review import QUESTION, TurnReviewCase, ask, prompt, remark, stop, write
 
 SEPARATOR = '\n\n---\n'
 
@@ -69,7 +69,9 @@ class TurnReviewDebugTest(TurnReviewCase):
         self.start_with_write('d-remark')
         self.write_verdict('d-remark', self.state('d-remark')['volume_id'], [remark()])
         self.blocked(self.fire(stop('d-remark')))
-        report = self.shown(self.fire(message('d-remark', 'Чиню.'))).split(SEPARATOR)[1]
+        shown = self.shown(self.fire(message('d-remark', 'Чиню.')))
+        self.assertTrue(shown.startswith('Ревью хода идёт, отчёт после него.'))
+        report = shown.split(SEPARATOR)[1]
         self.assertIn('Ревью хода: замечания (1): [craft] нет ссылки на этап.', report)
         self.assertIn('Поручений не было.', report)
 
@@ -105,15 +107,19 @@ class TurnReviewDebugTest(TurnReviewCase):
         session = 'd-preview-remark'
         self.start_with_write(session)
         self.write_verdict(session, self.state(session)['volume_id'], [remark()])
-        report = self.shown(self.fire(message(session, 'Готово.'))).split(SEPARATOR)[1]
-        self.assertIn('замечания (1): [craft] нет ссылки на этап.', report)
+        shown = self.shown(self.fire(message(session, 'Готово.')))
+        self.assertTrue(shown.startswith('Ревью хода идёт, отчёт после него.'))
+        self.assertIn('замечания (1): [craft] нет ссылки на этап.', shown.split(SEPARATOR)[1])
         self.assertIn('нет ссылки на этап', self.blocked(self.fire(stop(session))))
-        self.assert_silent(self.fire(message(session, 'Чиню.')))
+        self.assertEqual(self.shown(self.fire(message(session, 'Чиню.'))),
+                         'Ревью хода идёт, отчёт после него.')
 
     def test_a_verdict_of_another_volume_is_not_previewed(self) -> None:
         self.start_with_write('d-foreign')
         self.write_verdict('d-foreign', 'старый-объём')
-        self.assert_silent(self.fire(message('d-foreign', 'Готово.')))
+        # Чужой вердикт ответ не открывает: показана только строка про ревью.
+        self.assertEqual(self.shown(self.fire(message('d-foreign', 'Готово.'))),
+                         'Ревью хода идёт, отчёт после него.')
 
     def test_a_final_message_without_a_summary_is_silent(self) -> None:
         self.fire(prompt('d-empty'))
@@ -130,7 +136,71 @@ class TurnReviewDebugTest(TurnReviewCase):
         self.assert_silent(self.fire(stop('d-nowrite')))
         self.assert_silent(self.fire(message('d-nowrite', 'Готово.')))
         self.fire(write('d-nowrite'))
-        self.assert_silent(self.fire(message('d-nowrite', 'Записал.')))
+        # Ход с записью и без вердикта: ответ спрятан, итога под ним нет.
+        self.assertEqual(self.shown(self.fire(message('d-nowrite', 'Записал.'))),
+                         'Ревью хода идёт, отчёт после него.')
+
+
+
+
+class HiddenAnswerTest(TurnReviewCase):
+    """Ответ за ход с записями виден только после чистого вердикта, без отладки."""
+
+    def displayed(self, result) -> str:
+        payload = json.loads(result.stdout)
+        return payload['hookSpecificOutput']['displayContent']
+
+    def test_the_answer_is_hidden_until_a_clean_verdict(self) -> None:
+        session = 'h-hide'
+        self.start_with_write(session)
+        self.assertEqual(self.displayed(self.fire(message(session, 'Готово, вот', final=False))), '')
+        self.assertEqual(self.displayed(self.fire(message(session, 'отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        self.blocked(self.fire(stop(session)))
+        self.write_verdict(session, self.state(session)['volume_id'], [remark()])
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        self.blocked(self.fire(stop(session)))
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.assert_silent(self.fire(message(session, 'Отчёт.')))
+
+    def test_a_damaged_volume_or_state_keeps_the_answer_hidden(self) -> None:
+        session = 'h-damaged'
+        self.start_with_write(session)
+        self.storage(session).append_line('turn-review-volume.jsonl', '{не json')
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        self.storage(session).path('turn-review-state.json').unlink()
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        # Показ состояние не чинит: файла по-прежнему нет, его заведёт stop.
+        self.assertFalse(self.storage(session).path('turn-review-state.json').exists())
+        # Нечитаемое состояние прячет ответ и без записей.
+        session = 'h-no-state'
+        self.fire(prompt(session, 'дальше'))
+        self.storage(session).path('turn-review-state.json').unlink()
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+
+    def test_a_stale_clean_verdict_keeps_the_answer_hidden(self) -> None:
+        session = 'h-stale'
+        self.start_with_write(session)
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.fire(write(session, 'blocks update --id X --json \'{"markdown":"ещё"}\''))
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+
+    def test_a_turn_without_writes_and_a_release_show_the_answer(self) -> None:
+        session = 'h-quiet'
+        self.start_with_write(session)
+        self.fire(prompt(session, 'А что это?'))
+        self.assert_silent(self.fire(message(session, 'Это ревью.')))
+        session = 'h-released'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.fire(stop(session))
+        self.fire(ask(session, QUESTION, 'Закончить без ревью'))
+        self.assert_silent(self.fire(message(session, 'Отчёт.')))
 
 
 if __name__ == '__main__':
