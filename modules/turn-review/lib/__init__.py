@@ -11,6 +11,7 @@
 """
 
 import fcntl
+import hashlib
 import json
 import os
 import uuid
@@ -30,7 +31,7 @@ RELEASED_KEY = 'released'
 FIRST_NUDGE_KEY = 'first_nudge_at'
 SUMMARY_KEY = 'summary'
 SUMMARY_SHOWN_KEY = 'summary_shown'
-# Какой вердикт уже показан превью до stop: id объёма и число записей write.
+# Какой вердикт уже показан превью до stop: id объёма и отпечаток записей write.
 SHOWN_VERDICT_KEY = 'shown_verdict'
 
 # Поля строки объёма. Их читает и бриф подагента, поэтому имена одни на всех.
@@ -52,11 +53,13 @@ KIND_SKILL = 'skill'
 CLEAN_KEY = 'clean'
 REMARKS_KEY = 'remarks'
 CHECKED_KEY = 'checked'
-# Сколько записей write проверил подагент. Id объёма меняется только при
-# очистке, и без этого числа чистый вердикт отпустил бы и запись, сделанную
-# уже после ревью.
-WRITES_KEY = 'writes'
-CRITERIA = ('craft', 'links', 'anchor')
+# Отпечаток записей write, которые проверил подагент. Id объёма меняется
+# только при очистке, и без отпечатка чистый вердикт отпустил бы и запись,
+# сделанную уже после ревью. Отпечаток, а не число записей: он говорит, что
+# именно проверено, а не сколько.
+FINGERPRINT_KEY = 'fingerprint'
+FINGERPRINT_CHARS = 16
+CRITERIA = ('craft', 'consistency', 'anchor')
 CRITERION_KEY = 'criterion'
 WHERE_KEY = 'where'
 TEXT_KEY = 'text'
@@ -151,8 +154,13 @@ def append_record(storage, record: dict) -> None:
 
 def _parse_volume(storage) -> tuple[list[dict], list[str]]:
     """Строки объёма, которые читаются, и номера тех, что не читаются."""
+    return parse_volume_file(storage.path(VOLUME_FILE))
+
+
+def parse_volume_file(path) -> tuple[list[dict], list[str]]:
+    """Разбор файла объёма по байтам: хук и скрипт отпечатка читают его одной функцией."""
     try:
-        data = storage.path(VOLUME_FILE).read_bytes()
+        data = path.read_bytes()
     except FileNotFoundError:
         return [], []
     records, damage = [], []
@@ -207,6 +215,17 @@ def count_writes(volume: list[dict]) -> int:
     return count_kind(volume, KIND_WRITE)
 
 
+def fingerprint(volume: list[dict]) -> str:
+    """Отпечаток записей `write` объёма: одна и та же строка у хука и у подагента.
+
+    Считается по записям в каноническом виде, а не по байтам файла: починка
+    объёма переписывает файл, а записи в нём те же.
+    """
+    lines = [json.dumps(record, ensure_ascii=False, sort_keys=True)
+             for record in volume if record.get(KIND_KEY) == KIND_WRITE]
+    return hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()[:FINGERPRINT_CHARS]
+
+
 def drop_verdict(storage) -> None:
     storage.path(VERDICT_FILE).unlink(missing_ok=True)
 
@@ -250,17 +269,17 @@ def _checked_problem(checked: list, clean: bool) -> str | None:
     return None
 
 
-def _writes_problem(verdict: dict, writes: int) -> str | None:
-    checked = verdict.get(WRITES_KEY)
-    if isinstance(checked, bool) or not isinstance(checked, int):
-        return f'поле «{WRITES_KEY}» не число'
-    if checked != writes:
-        return (f'вердикт проверил записей write {checked}, а в объёме их {writes}: '
+def _fingerprint_problem(verdict: dict, expected: str) -> str | None:
+    checked = verdict.get(FINGERPRINT_KEY)
+    if not isinstance(checked, str) or not checked.strip():
+        return f'поле «{FINGERPRINT_KEY}» не строка'
+    if checked.strip() != expected:
+        return (f'отпечаток вердикта {checked.strip()} не сходится с объёмом {expected}: '
                 'объём менялся после ревью')
     return None
 
 
-def verdict_problem(verdict: dict, writes: int) -> str | None:
+def verdict_problem(verdict: dict, expected: str) -> str | None:
     """Что не так с вердиктом нашего объёма. Всё по форме — None."""
     clean, remarks, checked = (verdict.get(CLEAN_KEY), verdict.get(REMARKS_KEY),
                                verdict.get(CHECKED_KEY))
@@ -278,10 +297,10 @@ def verdict_problem(verdict: dict, writes: int) -> str | None:
         return 'clean=true при замечаниях'
     if not clean and not remarks:
         return 'clean=false без замечаний'
-    return _checked_problem(checked, clean) or _writes_problem(verdict, writes)
+    return _checked_problem(checked, clean) or _fingerprint_problem(verdict, expected)
 
 
-def read_verdict(storage, volume_id: str, writes: int) -> tuple[dict | None, str | None]:
+def read_verdict(storage, volume_id: str, expected: str) -> tuple[dict | None, str | None]:
     """Вердикт нашего объёма и что с ним не так.
 
     Чужой id — вердикт по старому объёму: его не видно, как будто его нет.
@@ -296,7 +315,7 @@ def read_verdict(storage, volume_id: str, writes: int) -> tuple[dict | None, str
         return None, f'вердикт {path} не JSON ({error})'
     if not isinstance(verdict, dict) or verdict.get(VOLUME_ID_KEY) != volume_id:
         return None, None
-    problem = verdict_problem(verdict, writes)
+    problem = verdict_problem(verdict, expected)
     if problem:
         drop_verdict(storage)
         return None, f'вердикт {path} не принят: {problem}'
@@ -304,14 +323,14 @@ def read_verdict(storage, volume_id: str, writes: int) -> tuple[dict | None, str
 
 
 def verdict_key(verdict: dict) -> str:
-    """Чем вердикт отличается от другого: id объёма и число проверенных записей."""
-    return f'{verdict[VOLUME_ID_KEY]}:{verdict[WRITES_KEY]}'
+    """Чем вердикт отличается от другого: id объёма и отпечаток проверенных записей."""
+    return f'{verdict[VOLUME_ID_KEY]}:{verdict[FINGERPRINT_KEY]}'
 
 
 def peek_verdict(storage, volume_id: str) -> dict | None:
     """Вердикт нашего объёма до stop, для превью. Файл не трогается.
 
-    Число записей с объёмом не сверяется: это превью, принимает вердикт stop.
+    Отпечаток с объёмом не сверяется: это превью, принимает вердикт stop.
     Не JSON или не по форме — None: изъян назовёт stop в поручении.
     """
     try:
@@ -320,5 +339,6 @@ def peek_verdict(storage, volume_id: str) -> dict | None:
         return None
     if not isinstance(verdict, dict) or verdict.get(VOLUME_ID_KEY) != volume_id:
         return None
-    writes = verdict.get(WRITES_KEY)
-    return None if verdict_problem(verdict, writes) else verdict
+    expected = verdict.get(FINGERPRINT_KEY)
+    expected = expected.strip() if isinstance(expected, str) else ''
+    return None if verdict_problem(verdict, expected) else verdict
