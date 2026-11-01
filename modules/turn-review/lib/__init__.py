@@ -49,6 +49,12 @@ KIND_WRITE = 'write'
 KIND_READ = 'read'
 KIND_ANCHOR = 'anchor'
 KIND_SKILL = 'skill'
+# Слово Влада: реплика и ответ на вопрос кнопками. По ним подагент снимает
+# замечание, которое Влад уже решил сам.
+KIND_PROMPT = 'prompt'
+KIND_ANSWER = 'answer'
+PROMPT_TEXT_KEY = 'text'
+QUESTION_KEY = 'question'
 
 CLEAN_KEY = 'clean'
 REMARKS_KEY = 'remarks'

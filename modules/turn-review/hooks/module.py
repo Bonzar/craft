@@ -3,7 +3,8 @@
 
 Ход — работа агента от реплики Влада до остановки. Смысловые дефекты записи в
 Craft видны только целиком, в конце хода, поэтому ревью стоит на остановке.
-На вызовах модуль копит объём ревью: записи, чтения, вызовы скиллов, якорь.
+На вызовах модуль копит объём ревью: записи, чтения, вызовы скиллов, якорь,
+ответы Влада на вопросы кнопками. Его реплики идут в объём на событии реплики.
 На остановке смотрит вердикт подагента по этому объёму и либо отпускает ход,
 либо возвращает его с замечаниями или поручением.
 
@@ -182,9 +183,10 @@ def volume_record(event, turn: int, runtime, review) -> dict | None:
     if event.tool_name == SKILL_TOOL:
         return {review.KIND_KEY: review.KIND_SKILL, **base,
                 review.SKILL_KEY: type_lock(runtime).skill_slug(event.tool_input)}
-    if event.tool_name == QUESTION_TOOL \
-            and ANCHOR_QUESTION_MARK in questions_text(event.tool_input).lower():
-        return {review.KIND_KEY: review.KIND_ANCHOR, **base,
+    if event.tool_name == QUESTION_TOOL:
+        kind = (review.KIND_ANCHOR if ANCHOR_QUESTION_MARK in questions_text(event.tool_input).lower()
+                else review.KIND_ANSWER)
+        return {review.KIND_KEY: kind, **base, review.QUESTION_KEY: questions_text(event.tool_input),
                 review.ANSWER_KEY: as_is(event.tool_result)}
     return None
 
@@ -382,6 +384,11 @@ class Module(jarvis.Module):
         turn = state[review.TURN_KEY] + 1
         review.save_state(storage, {**state, review.TURN_KEY: turn})
         text = event.prompt_text or ''
+        if text.strip():
+            # Реплика идёт в объём целиком: подагент снимает по ней замечание,
+            # если она называет место и решение (бриф, «Слово Влада»).
+            review.append_record(storage, {review.KIND_KEY: review.KIND_PROMPT,
+                                           review.RECORD_TURN_KEY: turn, review.PROMPT_TEXT_KEY: text})
         if ANCHOR_PROMPT.search(text):
             review.append_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
                                            review.RECORD_TURN_KEY: turn, review.ANSWER_KEY: text})
@@ -432,6 +439,10 @@ class Module(jarvis.Module):
             review.save_state(storage, answered)
             return jarvis.Silence(
                 reason=f'ответ на вопрос о ревью: released={answered[review.RELEASED_KEY]}')
+        if event.tool_name == QUESTION_TOOL and our_question(event.tool_input) is not None:
+            # Свободный ответ на вопрос самого ревью ничего не меняет и в
+            # объём не идёт: это не слово Влада о записях хода.
+            return jarvis.Silence(reason='свободный ответ на вопрос о ревью')
         record = volume_record(event, state[review.TURN_KEY], runtime, review)
         if record is None:
             return jarvis.Silence(reason='вызов ревью не касается')
