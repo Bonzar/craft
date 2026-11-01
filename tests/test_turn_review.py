@@ -319,6 +319,19 @@ class TurnReviewTest(TurnReviewCase):
         self.assert_silent(self.fire(stop(session)))
         self.assertEqual(len(self.volume(session)), 1)
 
+    def test_a_lost_state_does_not_release_earlier_writes(self) -> None:
+        session = 's-quiet-lost'
+        self.start_with_write(session)
+        self.storage(session).path('turn-review-state.json').unlink()
+        self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop(session))))
+
+    def test_a_verdict_with_remarks_still_returns_a_turn_without_writes(self) -> None:
+        session = 's-quiet-remark'
+        self.start_with_write(session)
+        self.fire(prompt(session, 'Ок'))
+        self.write_verdict(session, self.state(session)['volume_id'], [remark()])
+        self.assertIn('нет ссылки на этап', self.blocked(self.fire(stop(session))))
+
     def test_a_clean_verdict_settles_a_turn_without_writes(self) -> None:
         session = 's-quiet-clean'
         self.start_with_write(session)

@@ -477,11 +477,10 @@ class Module(jarvis.Module):
             cleared = review.clear_volume(storage, state)
             note_summary(storage, cleared, state, review, volume, REPORT_RELEASED)
             return jarvis.Silence(reason=with_problem(RELEASED_REASON, problem))
-        if state_problem is None and not review.turn_has_writes(volume, state[review.TURN_KEY]):
+        if review.writes_before_turn(volume, state[review.TURN_KEY]):
             # Человек разговаривает с агентом, а не ждёт записи: поручение и
             # вопрос о ревью посреди разговора мешают, а объём никуда не
             # денется и пойдёт на ревью в конце ближайшего хода с записями.
-            # Состояние заведено заново — номер хода потерян, тишины нет.
             return jarvis.Silence(reason=with_problem(QUIET_TURN_REASON, problem))
         return self.press(storage, state, runtime, review, volume, problem)
 

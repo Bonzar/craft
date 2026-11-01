@@ -221,10 +221,15 @@ def count_writes(volume: list[dict]) -> int:
     return count_kind(volume, KIND_WRITE)
 
 
-def turn_has_writes(volume: list[dict], turn: int) -> bool:
-    """Писал ли в Craft именно этот ход, а не прежние ходы того же объёма."""
-    return any(record.get(KIND_KEY) == KIND_WRITE and record.get(RECORD_TURN_KEY) == turn
-               for record in volume)
+def writes_before_turn(volume: list[dict], turn: int) -> bool:
+    """Все записи объёма сделаны ходами раньше этого: этот ход в Craft не писал.
+
+    Номер хода потерян вместе с состоянием — он снова 0, и ни одна запись
+    не раньше него: тишины нет. Запись без номера хода тоже не раньше.
+    """
+    turns = [record.get(RECORD_TURN_KEY) for record in volume
+             if record.get(KIND_KEY) == KIND_WRITE]
+    return all(isinstance(item, int) and item < turn for item in turns)
 
 
 def fingerprint(volume: list[dict]) -> str:
