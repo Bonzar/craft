@@ -27,6 +27,9 @@ DEADLINE_SEC = 12
 # проекта на глубину 2. Глубже замок на одном чтении не видит: решение на
 # вложенной странице находится, когда прочитана сама эта страница.
 API_DEPTH = 2
+# Регистр id API различает (замер 01.11.2026: у документа с id в верхнем
+# регистре нижний отвечает 404, и наоборот). Id хранятся и запрашиваются как
+# есть, сравниваются без учёта регистра.
 BLOCK_ID = re.compile(r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}')
 # Флаг цели в любом месте команды, через пробел или через «=».
 ANCHOR_FLAG = re.compile(r'--(id|ids|siblingId|targetId|targetSiblingId)(?:\s+|=)(\S+)')
@@ -62,6 +65,10 @@ class Verdict(enum.Enum):
 class Place(NamedTuple):
     verdict: Verdict
     reason: str
+    # UNKNOWN из-за окружения (нет базы API, API не ответил, не уложились в
+    # срок) стоит предупреждения в ход: такое длится всю сессию. Неразобранный
+    # id — дело одной команды, предупреждать не о чем.
+    outage: bool = False
 
 
 class Anchor(NamedTuple):
@@ -103,7 +110,7 @@ def find_block(tree: dict, target: str) -> tuple[list, int] | None:
     if not isinstance(children, list):
         return None
     for index, child in enumerate(children):
-        if isinstance(child, dict) and str(child.get('id', '')).lower() == target:
+        if isinstance(child, dict) and str(child.get('id', '')).lower() == target.lower():
             return children, index
     for child in children:
         found = find_block(child, target)
@@ -121,7 +128,7 @@ def anchors_of(command: str) -> tuple[list[Anchor], list[str]]:
     anchors, broken = [], []
     for flag, raw in ANCHOR_FLAG.findall(command):
         for value in raw.strip(QUOTES).split(','):
-            value = value.strip(QUOTES).lower()
+            value = value.strip(QUOTES)
             if BLOCK_ID.fullmatch(value):
                 anchors.append(Anchor(flag, value))
             else:
@@ -144,7 +151,7 @@ def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None
     то есть перед первым ребёнком, индекс -1. Любой другой флаг — сам блок:
     правка, перенос, удаление.
     """
-    if str(tree.get('id', '')).lower() == anchor.block_id:
+    if str(tree.get('id', '')).lower() == anchor.block_id.lower():
         siblings, index = [tree], 0
     else:
         found = find_block(tree, anchor.block_id)
@@ -208,14 +215,14 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
             return Place(Verdict.UNKNOWN, 'цель в команде не разобрана: ' + (', '.join(broken) or 'флага цели нет'))
         return Place(Verdict.OTHER, '')
     if not base:
-        return Place(Verdict.UNKNOWN, f'{BASE_ENV} не задан, место записи не проверить')
+        return Place(Verdict.UNKNOWN, f'{BASE_ENV} не задан, место записи не проверить', outage=True)
     if not reads:
         return Place(Verdict.UNREAD, 'в сессии нет чтений Craft')
     deadline, failures, pending = clock() + DEADLINE_SEC, [], list(anchors)
     for page_id in reads:
         left = deadline - clock()
         if left <= 0:
-            return Place(Verdict.UNKNOWN, f'не уложился в {DEADLINE_SEC} с')
+            return Place(Verdict.UNKNOWN, f'не уложился в {DEADLINE_SEC} с', outage=True)
         try:
             tree = fetch_tree(base, page_id, min(API_TIMEOUT_SEC, left))
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
@@ -227,7 +234,7 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
         if not pending:
             break
     if pending and failures:
-        return Place(Verdict.UNKNOWN, 'API Craft не ответил: ' + '; '.join(failures))
+        return Place(Verdict.UNKNOWN, 'API Craft не ответил: ' + '; '.join(failures), outage=True)
     if pending:
         names = ', '.join(short(anchor.block_id) for anchor in pending)
         return Place(Verdict.UNREAD, f'цель {names} не найдена среди страниц, прочитанных в сессии')

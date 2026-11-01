@@ -398,6 +398,12 @@ TREES = {
     ]},
 }
 TREES[DEEP_PAGE] = DEEP_TREE
+UPPER_PAGE = 'DDDDDDDD-0000-0000-0000-000000000001'
+UPPER_D1 = 'DDDDDDDD-0000-0000-0000-000000000011'
+TREES[UPPER_PAGE] = {'id': UPPER_PAGE, 'type': 'page', 'markdown': 'Старый документ', 'content': [
+    block('DDDDDDDD-0000-0000-0000-000000000010', '+ ### Решения', listStyle='toggle'),
+    block(UPPER_D1, '  - Решение', indentationLevel=1, listStyle='bullet'),
+]}
 
 
 def prune(tree, depth: int):
@@ -417,7 +423,8 @@ class FakeCraftApi(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
-        page = query.get('id', [''])[0].lower()
+        # Как настоящий connect-API: регистр id различается.
+        page = query.get('id', [''])[0]
         depth = int(query.get('maxDepth', ['-1'])[0])
         tree = prune(TREES.get(page), depth)
         body = json.dumps(tree if tree else {'error': 'Block not found'}).encode('utf-8')
@@ -603,12 +610,18 @@ class DecisionLockTest(LockHarness):
             second = self.fire(write('d-warn', f'blocks update --id {D2} --json {DECISION_JSON}'))
         finally:
             self.api_base = type(self).api_base
-        self.assertIn('место записи в Craft не проверяется', first.stderr)
-        self.assertEqual(second.stderr, '')
+        self.assertIn('место записи в Craft не проверяется',
+                      json.loads(first.stdout)['hookSpecificOutput']['additionalContext'])
+        self.assert_silent(second)
 
     def test_a_write_before_the_first_child_of_a_container_is_outside(self) -> None:
         self.start('d-container-first', PROJECT, DEEP_PAGE)
         self.assert_silent(self.fire(write('d-container-first', f'blocks add --id {DEEP_PAGE} --position before --json {DECISION_JSON}')))
+
+    def test_an_upper_case_id_is_requested_as_is(self) -> None:
+        self.start('d-upper', UPPER_PAGE)
+        result = self.fire(write('d-upper', f'blocks update --id {UPPER_D1.lower()} --json {DECISION_JSON}'))
+        self.assert_denied(result, 'craft-decision')
 
     def test_a_corrupted_reads_list_fails_loud(self) -> None:
         self.fire(prompt('d-corrupt'))
@@ -625,14 +638,16 @@ class DecisionLockTest(LockHarness):
         result = self.fire(write('d-compact', f'blocks update --id {D1} --json {DECISION_JSON}'))
         self.assert_denied(result, 'craft-decision')
 
-    def test_an_unreachable_api_keeps_the_lock_silent_with_a_reason(self) -> None:
+    def test_an_unreachable_api_lets_the_write_through_with_a_warning(self) -> None:
         self.start('d-api', PAGE)
         self.api_base = 'http://127.0.0.1:9/api/v1'
         try:
-            self.assert_silent(self.fire(write('d-api', f'blocks update --id {D1} --json {DECISION_JSON}')))
+            result = self.fire(write('d-api', f'blocks update --id {D1} --json {DECISION_JSON}'))
         finally:
             self.api_base = type(self).api_base
-        self.assertIn('API Craft не ответил', self.last_reason('d-api'))
+        output = json.loads(result.stdout)['hookSpecificOutput']
+        self.assertNotIn('permissionDecision', output)
+        self.assertIn('API Craft не ответил', output['additionalContext'])
 
     def test_a_write_without_a_target_id_skips_the_api(self) -> None:
         self.fire(prompt('d-noid'))
