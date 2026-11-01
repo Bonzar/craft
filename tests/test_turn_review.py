@@ -126,8 +126,8 @@ class TurnReviewCase(unittest.TestCase):
         return self.storage(session).read_json('turn-review-state.json')
 
     def volume(self, session: str, every: bool = False) -> list[dict]:
-        # Реплики Влада лежат в объёме рядом с записями хода; тесты записей
-        # смотрят только на то, что сделал агент, если не просят всё.
+        # Реплики prompt лежат в объёме рядом с записями хода и без every
+        # убираются из выборки; ответы answer остаются.
         lines = self.storage(session).read_lines('turn-review-volume.jsonl')
         rows = [json.loads(line) for line in lines]
         return rows if every else [row for row in rows if row['kind'] != 'prompt']
@@ -360,13 +360,15 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(write(session))
         self.assertEqual([row['kind'] for row in self.volume(session)], ['anchor', 'write'])
 
-    def test_a_free_answer_to_the_question_changes_nothing(self) -> None:
+    def test_a_free_answer_to_the_question_changes_nothing_and_stays_out_of_the_volume(self) -> None:
         self.start_with_write('s-free')
         self.nudge_three_times('s-free')
         self.fire(stop('s-free'))
         before = self.state('s-free')
+        volume = self.volume('s-free', every=True)
         self.fire(ask('s-free', QUESTION, 'Подожди, сам посмотрю'))
         self.assertEqual(self.state('s-free'), before)
+        self.assertEqual(self.volume('s-free', every=True), volume)
         self.assertIn(QUESTION, self.blocked(self.fire(stop('s-free'))))
 
     def test_a_question_naming_both_options_is_not_released_by_the_review_answer(self) -> None:

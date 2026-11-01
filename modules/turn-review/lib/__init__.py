@@ -53,7 +53,7 @@ KIND_SKILL = 'skill'
 # замечание, которое Влад уже решил сам.
 KIND_PROMPT = 'prompt'
 KIND_ANSWER = 'answer'
-TEXT_KEY = 'text'
+PROMPT_TEXT_KEY = 'text'
 QUESTION_KEY = 'question'
 
 CLEAN_KEY = 'clean'

@@ -3,7 +3,8 @@
 
 Ход — работа агента от реплики Влада до остановки. Смысловые дефекты записи в
 Craft видны только целиком, в конце хода, поэтому ревью стоит на остановке.
-На вызовах модуль копит объём ревью: записи, чтения, вызовы скиллов, якорь.
+На вызовах модуль копит объём ревью: записи, чтения, вызовы скиллов, якорь,
+ответы Влада на вопросы кнопками. Его реплики идут в объём на событии реплики.
 На остановке смотрит вердикт подагента по этому объёму и либо отпускает ход,
 либо возвращает его с замечаниями или поручением.
 
@@ -384,10 +385,10 @@ class Module(jarvis.Module):
         review.save_state(storage, {**state, review.TURN_KEY: turn})
         text = event.prompt_text or ''
         if text.strip():
-            # Реплика идёт в объём целиком: по ней подагент видит, что Влад
-            # уже решил сам, и не ставит на это замечание.
+            # Реплика идёт в объём целиком: подагент снимает по ней замечание,
+            # если она называет место и решение (бриф, «Слово Влада»).
             review.append_record(storage, {review.KIND_KEY: review.KIND_PROMPT,
-                                           review.RECORD_TURN_KEY: turn, review.TEXT_KEY: text})
+                                           review.RECORD_TURN_KEY: turn, review.PROMPT_TEXT_KEY: text})
         if ANCHOR_PROMPT.search(text):
             review.append_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
                                            review.RECORD_TURN_KEY: turn, review.ANSWER_KEY: text})
@@ -438,6 +439,10 @@ class Module(jarvis.Module):
             review.save_state(storage, answered)
             return jarvis.Silence(
                 reason=f'ответ на вопрос о ревью: released={answered[review.RELEASED_KEY]}')
+        if event.tool_name == QUESTION_TOOL and our_question(event.tool_input) is not None:
+            # Свободный ответ на вопрос самого ревью ничего не меняет и в
+            # объём не идёт: это не слово Влада о записях хода.
+            return jarvis.Silence(reason='свободный ответ на вопрос о ревью')
         record = volume_record(event, state[review.TURN_KEY], runtime, review)
         if record is None:
             return jarvis.Silence(reason='вызов ревью не касается')
