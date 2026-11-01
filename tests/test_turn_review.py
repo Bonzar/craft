@@ -319,6 +319,16 @@ class TurnReviewTest(TurnReviewCase):
         self.assert_silent(self.fire(stop(session)))
         self.assertEqual(len(self.volume(session)), 1)
 
+    def test_a_damaged_volume_on_a_quiet_turn_is_named(self) -> None:
+        session = 's-quiet-damage'
+        self.start_with_write(session)
+        self.fire(prompt(session, 'А что это?'))
+        self.storage(session).append_line('turn-review-volume.jsonl', '{не json')
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('был испорчен', reason)
+        self.assertIn('Скажи об этом человеку', reason)
+        self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
+
     def test_a_lost_state_does_not_release_earlier_writes(self) -> None:
         session = 's-quiet-lost'
         self.start_with_write(session)

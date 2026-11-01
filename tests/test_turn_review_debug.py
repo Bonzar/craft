@@ -175,6 +175,12 @@ class HiddenAnswerTest(TurnReviewCase):
                          'Ревью хода идёт, отчёт после него.')
         # Показ состояние не чинит: файла по-прежнему нет, его заведёт stop.
         self.assertFalse(self.storage(session).path('turn-review-state.json').exists())
+        # Нечитаемое состояние прячет ответ и без записей.
+        session = 'h-no-state'
+        self.fire(prompt(session, 'дальше'))
+        self.storage(session).path('turn-review-state.json').unlink()
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
 
     def test_a_stale_clean_verdict_keeps_the_answer_hidden(self) -> None:
         session = 'h-stale'

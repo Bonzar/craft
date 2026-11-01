@@ -369,12 +369,12 @@ def answer_hidden(storage, state: dict | None, review) -> bool:
     Вердикт с замечаниями или по другому объёму ответ не открывает: ход
     закончится блоком, и ответ придёт заново после чистого вердикта.
     Разрешение человека закончить без ревью открывает ответ. Состояние или
-    строка объёма не читаются — ответ спрятан: починку и её уведомление
-    делает stop.
+    строка объёма не читаются — ответ спрятан, даже без записей: починку и
+    её уведомление делает stop.
     """
     volume, damage = review.parse_volume_file(storage.path(review.VOLUME_FILE))
     if state is None or damage:
-        return bool(review.count_writes(volume) or damage)
+        return True
     if not review.count_writes(volume) or review.writes_before_turn(volume, state[review.TURN_KEY]):
         return False
     if state[review.RELEASED_KEY]:
@@ -518,6 +518,11 @@ class Module(jarvis.Module):
             # Человек разговаривает с агентом, а не ждёт записи: поручение и
             # вопрос о ревью посреди разговора мешают, а объём никуда не
             # денется и пойдёт на ревью в конце ближайшего хода с записями.
+            # Порча объёма или состояния молча не отпускается: о ней человек
+            # узнаёт сейчас, как и на ходе без записей.
+            if damage or state_problem:
+                return jarvis.Block(reason=f'Ход не отпущен: {joined(state_problem, damage)}. '
+                                           'Скажи об этом человеку и закончи ход снова.')
             return jarvis.Silence(reason=with_problem(QUIET_TURN_REASON, problem))
         return self.press(storage, state, runtime, review, volume, problem)
 
