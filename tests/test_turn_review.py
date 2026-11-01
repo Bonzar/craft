@@ -461,8 +461,6 @@ class TurnReviewTest(TurnReviewCase):
         self.assertEqual(self.volume('s-agent'), [])
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class FingerprintScriptTest(unittest.TestCase):
@@ -482,3 +480,21 @@ class FingerprintScriptTest(unittest.TestCase):
         self.assertEqual(len(printed), review_lib.FINGERPRINT_CHARS)
         # Чтения отпечаток не меняют: ревью смотрит на записи.
         self.assertEqual(printed, review_lib.fingerprint(records[:1]))
+
+    def test_the_script_parses_the_file_like_the_hook(self) -> None:
+        # U+2028 внутри записи и битая строка: хук режет файл по байтам и
+        # пропускает нечитаемое, скрипт обязан считать то же самое.
+        records = [{'kind': 'write', 'command': 'blocks add --json {"markdown":"раз\u2028два"}'}]
+        with tempfile.TemporaryDirectory() as folder:
+            volume = Path(folder) / 'volume.jsonl'
+            volume.write_bytes(json.dumps(records[0], ensure_ascii=False).encode('utf-8')
+                               + b'\n{"kind": "write", \xff\n')
+            script = MODULES_DIR / 'turn-review' / 'hooks' / 'fingerprint.py'
+            run = subprocess.run([sys.executable, str(script), str(volume)],
+                                 capture_output=True, text=True, check=True)
+        self.assertEqual(run.stdout.strip(), review_lib.fingerprint(records))
+        self.assertIn('нечитаемая строка объёма, строка 2', run.stderr)
+
+
+if __name__ == '__main__':
+    unittest.main()

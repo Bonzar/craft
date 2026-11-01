@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Отпечаток записей объёма ревью: та же функция, что у хука.
+"""Отпечаток записей объёма ревью: та же функция и тот же разбор, что у хука.
 
 Подагент ревью запускает этот скрипт по пути объёма и кладёт вывод в поле
 вердикта `fingerprint`. Хук сверяет его со своим: не сошлось — после ревью
-ход писал ещё, и вердикт не принимается.
+ход писал ещё, и вердикт не принимается. Нечитаемые строки объёма скрипт
+называет в stderr: хук их тоже не считает, отпечаток от них не зависит.
 """
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -26,16 +26,9 @@ def main(argv: list[str]) -> int:
         print('использование: fingerprint.py ‹путь к объёму›', file=sys.stderr)
         return 2
     lib = load_lib()
-    records = []
-    for line in Path(argv[1]).read_text(encoding='utf-8').splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
+    records, damage = lib.parse_volume_file(Path(argv[1]))
+    for problem in damage:
+        print(f'нечитаемая строка объёма, {problem}', file=sys.stderr)
     print(lib.fingerprint(records))
     return 0
 

@@ -31,7 +31,7 @@ RELEASED_KEY = 'released'
 FIRST_NUDGE_KEY = 'first_nudge_at'
 SUMMARY_KEY = 'summary'
 SUMMARY_SHOWN_KEY = 'summary_shown'
-# Какой вердикт уже показан превью до stop: id объёма и число записей write.
+# Какой вердикт уже показан превью до stop: id объёма и отпечаток записей write.
 SHOWN_VERDICT_KEY = 'shown_verdict'
 
 # Поля строки объёма. Их читает и бриф подагента, поэтому имена одни на всех.
@@ -154,8 +154,13 @@ def append_record(storage, record: dict) -> None:
 
 def _parse_volume(storage) -> tuple[list[dict], list[str]]:
     """Строки объёма, которые читаются, и номера тех, что не читаются."""
+    return parse_volume_file(storage.path(VOLUME_FILE))
+
+
+def parse_volume_file(path) -> tuple[list[dict], list[str]]:
+    """Разбор файла объёма по байтам: хук и скрипт отпечатка читают его одной функцией."""
     try:
-        data = storage.path(VOLUME_FILE).read_bytes()
+        data = path.read_bytes()
     except FileNotFoundError:
         return [], []
     records, damage = [], []

@@ -27,7 +27,7 @@ from jarvis import events, registry, wrappers  # noqa: E402
 
 MODULE_DIR = Path(__file__).resolve().parents[1]
 BRIEF_FILE = MODULE_DIR / 'data' / 'review-brief.md'
-# Подагент считает отпечаток той же командой, что и хук: одна функция в lib.
+# Подагент считает отпечаток скриптом, хук — функцией из lib: функция одна.
 FINGERPRINT_SCRIPT = MODULE_DIR / 'hooks' / 'fingerprint.py'
 DEBUG_FILE = MODULE_DIR / 'data' / 'debug.json'
 DEBUG_FIELD = 'debug'
