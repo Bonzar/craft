@@ -11,7 +11,8 @@
 craft-decision. Место замок берёт из connect-API Craft: страницы, которые
 агент читал в сессии, запрашиваются заново, и цель записи ищется среди их
 блоков. Цели нет ни на одной — запись в непрочитанное, и она тоже под
-запретом. API недоступен — замок молчит с причиной в следе. Это единственный
+запретом. API недоступен — запись пропускается, раз за сессию замок говорит
+об этом текстом в ход, дальше молчит с причиной в следе. Это единственный
 поход замка в сеть, и только ради записи в Craft.
 """
 
@@ -291,10 +292,11 @@ class Module(jarvis.Module):
         if place.verdict is Verdict.UNREAD:
             return jarvis.Deny(reason=unread_reason(place.reason))
         warning = None
-        if place.verdict is Verdict.UNKNOWN:
+        if place.verdict is Verdict.UNAVAILABLE:
             tail = f', место записи не проверено: {place.reason}'
-            if place.outage:
-                warning = self.warn_once(storage, state, place.reason)
+            warning = self.warn_once(storage, state, place.reason)
+        elif place.verdict is Verdict.UNPARSED:
+            tail = f', место записи не проверено: {place.reason}'
         elif place.verdict in (Verdict.DECISION, Verdict.OTHER):
             tail = f', {place.reason}' if place.reason else ''
         else:
@@ -305,14 +307,20 @@ class Module(jarvis.Module):
             return self.pass_through(f'тега типа нет{tail}', warning)
         missing = [slug for slug in needed if state[SKILLS_KEY].get(slug) != state[TURN_KEY]]
         if missing:
-            return jarvis.Deny(reason=deny_reason(tag_skills, tags, missing, decision))
+            # Предупреждение не теряется и на запрете: иначе первый отказ API
+            # на запрещённой записи съел бы его на всю сессию.
+            reason = deny_reason(tag_skills, tags, missing, decision)
+            return jarvis.Deny(reason=f'{reason} {warning}' if warning else reason)
         found = f'теги {", ".join(tags)}: ' if tags else ''
         return self.pass_through(f'{found}скиллы вызваны в этом ходе{tail}', warning)
 
     @staticmethod
     def pass_through(reason: str, warning: str | None) -> jarvis.Response:
-        """Пропустить запись: молча, либо с предупреждением текстом в ход."""
-        return jarvis.Context(text=warning) if warning else jarvis.Silence(reason=reason)
+        """Пропустить запись: молча с причиной в следе, либо текстом в ход.
+
+        У текста в ход поля причины нет, поэтому причина входит в сам текст.
+        """
+        return jarvis.Context(text=f'{warning} ({reason})') if warning else jarvis.Silence(reason=reason)
 
 
 if __name__ == '__main__':

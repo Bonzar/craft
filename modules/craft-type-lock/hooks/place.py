@@ -50,25 +50,30 @@ DECISION_TOGGLE = re.compile(r'^[\s+#]*Решения(\s+(проекта|сфе�
 
 
 class Verdict(enum.Enum):
-    """Четыре исхода проверки места.
+    """Пять исходов проверки места.
 
     DECISION и OTHER — суждение о месте. UNREAD — тоже суждение: цели нет ни
-    на одной прочитанной странице, запись в непрочитанное. UNKNOWN — замок
-    судить не может, и это не вина хода.
+    на одной прочитанной странице, запись в непрочитанное. Два последних —
+    замок судить не может, и это не вина хода. UNAVAILABLE — окружение: нет
+    базы API, API не ответил, не уложились в срок; такое длится всю сессию и
+    стоит предупреждения в ход. UNPARSED — id цели в одной команде не
+    разобран, предупреждать не о чем.
     """
     DECISION = 'decision'
     OTHER = 'other'
     UNREAD = 'unread'
-    UNKNOWN = 'unknown'
+    UNAVAILABLE = 'unavailable'
+    UNPARSED = 'unparsed'
 
 
 class Place(NamedTuple):
     verdict: Verdict
     reason: str
-    # UNKNOWN из-за окружения (нет базы API, API не ответил, не уложились в
-    # срок) стоит предупреждения в ход: такое длится всю сессию. Неразобранный
-    # id — дело одной команды, предупреждать не о чем.
-    outage: bool = False
+
+
+def same_id(left: str, right: str) -> bool:
+    """Один ли это блок: регистр хранится, но не различается."""
+    return left.lower() == right.lower()
 
 
 class Anchor(NamedTuple):
@@ -110,7 +115,7 @@ def find_block(tree: dict, target: str) -> tuple[list, int] | None:
     if not isinstance(children, list):
         return None
     for index, child in enumerate(children):
-        if isinstance(child, dict) and str(child.get('id', '')).lower() == target.lower():
+        if isinstance(child, dict) and same_id(str(child.get('id', '')), target):
             return children, index
     for child in children:
         found = find_block(child, target)
@@ -151,7 +156,7 @@ def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None
     то есть перед первым ребёнком, индекс -1. Любой другой флаг — сам блок:
     правка, перенос, удаление.
     """
-    if str(tree.get('id', '')).lower() == anchor.block_id.lower():
+    if same_id(str(tree.get('id', '')), anchor.block_id):
         siblings, index = [tree], 0
     else:
         found = find_block(tree, anchor.block_id)
@@ -205,24 +210,24 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
     Целей в команде бывает несколько, и решение — любая из них под
     «Решениями»: страницы идут свежие первыми, пока все цели не найдены.
     Цель, которой нет ни на одной прочитанной странице, — UNREAD: по
-    механике Craft страница цели читается до записи. UNKNOWN — замок судить
-    не может: нет CRAFT_API_BASE, у команды с целью ни один id не разобран,
-    API не ответил, проверка не уложилась в DEADLINE_SEC.
+    механике Craft страница цели читается до записи. UNAVAILABLE — нет
+    CRAFT_API_BASE, API не ответил, проверка не уложилась в DEADLINE_SEC.
+    UNPARSED — у команды с целью ни один id не разобран.
     """
     anchors, broken = anchors_of(command)
     if not anchors:
         if broken or TARGETED_COMMANDS.match(command):
-            return Place(Verdict.UNKNOWN, 'цель в команде не разобрана: ' + (', '.join(broken) or 'флага цели нет'))
+            return Place(Verdict.UNPARSED, 'цель в команде не разобрана: ' + (', '.join(broken) or 'флага цели нет'))
         return Place(Verdict.OTHER, '')
     if not base:
-        return Place(Verdict.UNKNOWN, f'{BASE_ENV} не задан, место записи не проверить', outage=True)
+        return Place(Verdict.UNAVAILABLE, f'{BASE_ENV} не задан, место записи не проверить')
     if not reads:
         return Place(Verdict.UNREAD, 'в сессии нет чтений Craft')
     deadline, failures, pending = clock() + DEADLINE_SEC, [], list(anchors)
     for page_id in reads:
         left = deadline - clock()
         if left <= 0:
-            return Place(Verdict.UNKNOWN, f'не уложился в {DEADLINE_SEC} с', outage=True)
+            return Place(Verdict.UNAVAILABLE, f'не уложился в {DEADLINE_SEC} с')
         try:
             tree = fetch_tree(base, page_id, min(API_TIMEOUT_SEC, left))
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
@@ -234,11 +239,11 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
         if not pending:
             break
     if pending and failures:
-        return Place(Verdict.UNKNOWN, 'API Craft не ответил: ' + '; '.join(failures), outage=True)
+        return Place(Verdict.UNAVAILABLE, 'API Craft не ответил: ' + '; '.join(failures))
     if pending:
         names = ', '.join(short(anchor.block_id) for anchor in pending)
         return Place(Verdict.UNREAD, f'цель {names} не найдена среди страниц, прочитанных в сессии')
     if broken:
-        return Place(Verdict.UNKNOWN, 'часть целей не разобрана: ' + ', '.join(broken))
+        return Place(Verdict.UNPARSED, 'часть целей не разобрана: ' + ', '.join(broken))
     names = ', '.join(short(anchor.block_id) for anchor in anchors)
     return Place(Verdict.OTHER, f'цель {names} не под «Решениями»')
