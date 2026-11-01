@@ -141,8 +141,6 @@ class TurnReviewDebugTest(TurnReviewCase):
                          'Ревью хода идёт, отчёт после него.')
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class HiddenAnswerTest(TurnReviewCase):
@@ -166,6 +164,18 @@ class HiddenAnswerTest(TurnReviewCase):
         self.write_verdict(session, self.state(session)['volume_id'])
         self.assert_silent(self.fire(message(session, 'Отчёт.')))
 
+    def test_a_damaged_volume_or_state_keeps_the_answer_hidden(self) -> None:
+        session = 'h-damaged'
+        self.start_with_write(session)
+        self.storage(session).append_line('turn-review-volume.jsonl', '{не json')
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        self.storage(session).path('turn-review-state.json').unlink()
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        # Показ состояние не чинит: файла по-прежнему нет, его заведёт stop.
+        self.assertFalse(self.storage(session).path('turn-review-state.json').exists())
+
     def test_a_stale_clean_verdict_keeps_the_answer_hidden(self) -> None:
         session = 'h-stale'
         self.start_with_write(session)
@@ -186,3 +196,6 @@ class HiddenAnswerTest(TurnReviewCase):
         self.fire(ask(session, QUESTION, 'Закончить без ревью'))
         self.assert_silent(self.fire(message(session, 'Отчёт.')))
 
+
+if __name__ == '__main__':
+    unittest.main()

@@ -8,9 +8,11 @@ Craft видны только целиком, в конце хода, поэто
 На остановке смотрит вердикт подагента по этому объёму и либо отпускает ход,
 либо возвращает его с замечаниями или поручением.
 
-Отладочный вывод (временный): при data/debug.json с {"debug": true} итог
-ревью дописывается к показу ответа модели на событии model-message. Модель
-этот текст не видит: меняется только показ.
+На событии model-message модуль прячет ответ за ход с записями, пока нет
+чистого вердикта: вместо ответа человек видит строку о том, что идёт ревью.
+Модель этот текст не видит: меняется только показ. Там же отладочный вывод
+(временный): при data/debug.json с {"debug": true} под показанным текстом
+дописывается итог ревью.
 
 В Craft и в сеть модуль не ходит: только хранилище и вход события.
 """
@@ -224,8 +226,8 @@ def nudge_text(storage, state: dict, runtime, review, volume: list[dict],
         f'volume_id {state[review.VOLUME_ID_KEY]}, типы {types_file}, команда отпечатка '
         f'«python3 {FINGERPRINT_SCRIPT} {volume_file}»; записей write в объёме сейчас '
         f'{review.count_writes(volume)}, отпечаток {review.fingerprint(volume)}. '
-        'Дождись, пока подагент запишет вердикт, и закончи ход снова. Текст ответа до чистого '
-        'вердикта человеку не показан: отчёт напиши заново после вердикта.'
+        'Дождись, пока подагент запишет вердикт, и закончи ход снова. Ответ до чистого '
+        'вердикта человеку не показан: напиши его заново после вердикта.'
     )
 
 
@@ -361,14 +363,18 @@ def display_gate(event) -> str | None:
     return None
 
 
-def answer_hidden(storage, state: dict, review) -> bool:
+def answer_hidden(storage, state: dict | None, review) -> bool:
     """Прятать ли ответ: ход писал в Craft, а чистого вердикта по объёму нет.
 
     Вердикт с замечаниями или по другому объёму ответ не открывает: ход
-    закончится блоком, и отчёт придёт заново после чистого вердикта.
-    Разрешение человека закончить без ревью открывает ответ.
+    закончится блоком, и ответ придёт заново после чистого вердикта.
+    Разрешение человека закончить без ревью открывает ответ. Состояние или
+    строка объёма не читаются — ответ спрятан: починку и её уведомление
+    делает stop.
     """
-    volume = review.peek_volume(storage)
+    volume, damage = review.parse_volume_file(storage.path(review.VOLUME_FILE))
+    if state is None or damage:
+        return bool(review.count_writes(volume) or damage)
     if not review.count_writes(volume) or review.writes_before_turn(volume, state[review.TURN_KEY]):
         return False
     if state[review.RELEASED_KEY]:
@@ -399,7 +405,7 @@ class Module(jarvis.Module):
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
         storage = runtime.storage
         state, problem = review.load_state(storage)
-        turn = state[review.TURN_KEY] + 1
+        turn = review.next_turn(state[review.TURN_KEY], review.peek_volume(storage))
         review.save_state(storage, {**state, review.TURN_KEY: turn})
         text = event.prompt_text or ''
         if text.strip():
@@ -426,15 +432,19 @@ class Module(jarvis.Module):
     def on_model_message(self, event, runtime, review) -> jarvis.Response:
         # Подмена только показа: сообщение модели и её контекст не меняются.
         storage = runtime.storage
-        state, problem = review.load_state(storage)
+        # Показ идёт до остановки: состояние читается без починки, чинит stop.
+        state = review.peek_state(storage)
         hidden = answer_hidden(storage, state, review)
         final = bool(event.raw.get(FINAL_FIELD))
-        # Спрятанный ответ: человек видит одну строку вместо отчёта, который
-        # ревью ещё не проверило. Куски до последнего прячутся пустотой.
+        # Спрятанный ответ: вместо ответа, который ревью ещё не проверило,
+        # человек видит строку про ревью, а с отладочным выводом под ней ещё
+        # итог ревью. Куски до последнего прячутся пустотой.
         base = (HIDDEN_TEXT if final else '') if hidden else (event.message_text or '')
         gate = display_gate(event)
-        if gate is not None:
-            return jarvis.UpdatedDisplay(text=base) if hidden else jarvis.Silence(reason=gate)
+        if gate is not None or state is None:
+            return jarvis.UpdatedDisplay(text=base) if hidden else jarvis.Silence(
+                reason=gate or 'состояние не читается, итог покажет следующий ход')
+        problem = None
         summary = state[review.SUMMARY_KEY]
         if summary and not state[review.SUMMARY_SHOWN_KEY]:
             review.save_state(storage, {**state, review.SUMMARY_SHOWN_KEY: True})

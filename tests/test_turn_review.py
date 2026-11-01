@@ -324,6 +324,10 @@ class TurnReviewTest(TurnReviewCase):
         self.start_with_write(session)
         self.storage(session).path('turn-review-state.json').unlink()
         self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop(session))))
+        # Счёт ходов продолжается от записей объёма: разговор снова отпускается.
+        self.fire(prompt(session, 'А что это?'))
+        self.assertEqual(self.state(session)['turn'], 2)
+        self.assert_silent(self.fire(stop(session)))
 
     def test_a_verdict_with_remarks_still_returns_a_turn_without_writes(self) -> None:
         session = 's-quiet-remark'
