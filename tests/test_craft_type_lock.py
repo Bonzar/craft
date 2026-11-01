@@ -548,7 +548,7 @@ class DecisionLockTest(LockHarness):
     def test_an_unparsed_id_is_not_judged(self) -> None:
         self.start('d-broken', PAGE)
         self.assert_silent(self.fire(write('d-broken', f'blocks update --id ЗАДАЧА --json {DECISION_JSON}')))
-        self.assertIn('id цели не разобран', self.last_reason('d-broken'))
+        self.assertIn('место записи не проверено: цель в команде не разобрана', self.last_reason('d-broken'))
 
     def test_a_page_read_by_date_is_remembered_from_the_answer(self) -> None:
         self.fire(prompt('d-date'))
@@ -557,6 +557,42 @@ class DecisionLockTest(LockHarness):
         self.assert_silent(self.fire(raw))
         result = self.fire(write('d-date', f'blocks update --id {D1} --json {DECISION_JSON}'))
         self.assert_denied(result, 'craft-decision')
+
+    def test_a_decision_target_on_a_later_read_page_is_still_caught(self) -> None:
+        # Страницы идут свежие первыми: PROJECT свежее, задача найдётся там,
+        # а цель переноса D2 — только на PAGE, прочитанной раньше.
+        self.start('d-later', PAGE, PROJECT)
+        result = self.fire(write('d-later', f'blocks move --id {TASK} --targetSiblingId {D2} --position after'))
+        self.assert_denied(result, 'craft-decision')
+
+    def test_an_untagged_write_to_an_unread_target_is_denied(self) -> None:
+        self.start('d-untagged', PAGE)
+        result = self.fire(write('d-untagged', f'blocks update --id {TASK} --json {DECISION_JSON}'))
+        self.assert_denied(result, 'Запись в непрочитанное', 'bbbbbbbb')
+
+    def test_a_flag_after_the_payload_is_still_seen(self) -> None:
+        self.start('d-tail', PAGE)
+        result = self.fire(write('d-tail', f'blocks add --json {DECISION_JSON} --siblingId={D2} --position=after'))
+        self.assert_denied(result, 'craft-decision')
+
+    def test_moving_into_the_end_of_a_page_lands_after_its_last_block(self) -> None:
+        self.start('d-move-end', PROJECT, PAGE)
+        result = self.fire(write('d-move-end', f'blocks move --id {TASK} --targetId {PAGE} --position end'))
+        self.assert_silent(result)
+        self.assertIn('не под «Решениями»', self.last_reason('d-move-end'))
+        self.start('d-move-deep', PROJECT, DEEP_PAGE)
+        result = self.fire(write('d-move-deep', f'blocks move --id {TASK} --targetId {DEEP_PAGE} --position end'))
+        self.assert_denied(result, 'craft-decision')
+
+    def test_a_valid_target_is_judged_next_to_a_broken_one(self) -> None:
+        self.start('d-mixed', PAGE)
+        result = self.fire(write('d-mixed', f'blocks move --id {D1} --targetSiblingId ЗАДАЧА'))
+        self.assert_denied(result, 'craft-decision')
+
+    def test_a_targeted_command_without_a_target_is_not_judged(self) -> None:
+        self.fire(prompt('d-notarget'))
+        self.assert_silent(self.fire(write('d-notarget', 'blocks delete')))
+        self.assertIn('флага цели нет', self.last_reason('d-notarget'))
 
     def test_a_corrupted_reads_list_fails_loud(self) -> None:
         self.fire(prompt('d-corrupt'))

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jarvis  # noqa: E402
 from jarvis import events, wrappers  # noqa: E402
-from place import BASE_ENV, BLOCK_ID, PLACE_DECISION, PLACE_UNREAD, decision_zone  # noqa: E402
+from place import BASE_ENV, BLOCK_ID, Verdict, decision_zone  # noqa: E402
 
 TYPES_FILE = Path(__file__).resolve().parents[1] / 'data' / 'types.json'
 TYPES_KEY = 'types'
@@ -256,11 +256,16 @@ class Module(jarvis.Module):
         tags = find_tags(command, tag_pattern(tag_skills))
         state = read_state(storage)
         place = decision_zone(command, state[READS_KEY], os.environ.get(BASE_ENV))
-        if place.verdict == PLACE_UNREAD:
+        if place.verdict is Verdict.UNREAD:
             return jarvis.Deny(reason=unread_reason(place.reason))
-        decision = place.verdict == PLACE_DECISION
+        if place.verdict is Verdict.UNKNOWN:
+            tail = f', место записи не проверено: {place.reason}'
+        elif place.verdict in (Verdict.DECISION, Verdict.OTHER):
+            tail = f', {place.reason}' if place.reason else ''
+        else:
+            raise ValueError(f'неизвестный исход проверки места: {place.verdict!r}')
+        decision = place.verdict is Verdict.DECISION
         needed = sorted({tag_skills[tag] for tag in tags} | ({DECISION_SKILL} if decision else set()))
-        tail = f', {place.reason}' if place.reason else ''
         if not needed:
             return jarvis.Silence(reason=f'тега типа нет{tail}')
         missing = [slug for slug in needed if state[SKILLS_KEY].get(slug) != state[TURN_KEY]]

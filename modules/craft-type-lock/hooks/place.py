@@ -6,6 +6,7 @@
 команды записи. Точка входа замка — hooks/module.py, здесь только суждение.
 """
 
+import enum
 import http.client
 import json
 import re
@@ -13,26 +14,29 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import namedtuple
+from typing import NamedTuple
 
 BASE_ENV = 'CRAFT_API_BASE'
 # Без User-Agent connect-API отвечает 403 (замер 01.11.2026 из контейнера).
 USER_AGENT = 'jarvis-craft-type-lock'
 API_TIMEOUT_SEC = 10
-# Потолок на всю проверку места: страниц в списке до MAX_READS, а хук не
-# должен держать запись минутами, когда API медленный.
+# Потолок на всю проверку места: прочитанных страниц в списке до двадцати, а
+# хук не должен держать запись минутами, когда API медленный.
 DEADLINE_SEC = 12
 # Решения этапа лежат внутри блока этапа, а этап агент читает со страницы
 # проекта на глубину 2. Глубже решение не ищем: ниже этапа решений нет.
 API_DEPTH = 2
 BLOCK_ID = re.compile(r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}')
-ANCHOR_FLAG = re.compile(r'--(id|ids|siblingId|targetId|targetSiblingId)\s+(\S+)')
-# Голова команды — до полезной нагрузки: внутри JSON флаги не ищем.
-PAYLOAD_FLAG = re.compile(r'\s--(?:json|markdown)\b')
+# Флаг цели в любом месте команды, через пробел или через «=».
+ANCHOR_FLAG = re.compile(r'--(id|ids|siblingId|targetId|targetSiblingId)(?:\s+|=)(\S+)')
 QUOTES = '\'"'
-POSITION_FLAG = re.compile(r'--position\s+(\S+)')
+POSITION_FLAG = re.compile(r'--position(?:\s+|=)(\S+)')
 POSITION_BEFORE = 'before'
-ADD_COMMAND = 'blocks add'
+# Команды, у которых цель есть всегда: нет распознанной цели — замок не судит.
+TARGETED_COMMANDS = re.compile(r'^\s*(blocks\s+(add|update|move|delete)|tasks\s+update)\b')
+# Флаг родителя, в чьих детях окажется запись: у add это --id, у move --targetId.
+CONTAINER_FLAG = {'blocks add': 'id', 'blocks move': 'targetId'}
+SIBLING_FLAGS = ('siblingId', 'targetSiblingId')
 CONTENT_KEY = 'content'
 LEVEL_KEY = 'indentationLevel'
 LIST_STYLE_KEY = 'listStyle'
@@ -41,17 +45,27 @@ MARKDOWN_KEY = 'markdown'
 DECISION_TOGGLE = re.compile(r'^[\s+#]*Решения(\s+(проекта|сферы))?\s*$')
 
 
+class Verdict(enum.Enum):
+    """Четыре исхода проверки места.
 
-# --- место записи: под тогглом «Решения» или нет ---------------------------
+    DECISION и OTHER — суждение о месте. UNREAD — тоже суждение: цели нет ни
+    на одной прочитанной странице, запись в непрочитанное. UNKNOWN — замок
+    судить не может, и это не вина хода.
+    """
+    DECISION = 'decision'
+    OTHER = 'other'
+    UNREAD = 'unread'
+    UNKNOWN = 'unknown'
 
-# Три исхода проверки места. Два первых — суждение, третий — замок судить не
-# может, и это не «не решение»: смешивать их нельзя.
-PLACE_DECISION = 'decision'
-PLACE_OTHER = 'other'
-PLACE_UNKNOWN = 'unknown'
-# Цели нет ни на одной прочитанной странице: запись в непрочитанное.
-PLACE_UNREAD = 'unread'
-Place = namedtuple('Place', 'verdict reason')
+
+class Place(NamedTuple):
+    verdict: Verdict
+    reason: str
+
+
+class Anchor(NamedTuple):
+    flag: str
+    block_id: str
 
 
 def is_decision_toggle(block: dict) -> bool:
@@ -70,7 +84,8 @@ def under_decisions(siblings: list, index: int) -> bool:
 
     Решения стоят соседями тоггла на +1 от него. Идём назад до первого блока
     без отступа: это сам тоггл, если блок под ним, иначе заголовок другой
-    секции или разделитель.
+    секции или разделитель. Индекс -1 — перед первым блоком, там «Решений»
+    не бывает.
     """
     for position in range(index, -1, -1):
         block = siblings[position]
@@ -96,45 +111,49 @@ def find_block(tree: dict, target: str) -> tuple[list, int] | None:
     return None
 
 
-def anchors_of(command: str) -> tuple[list[tuple[str, str]], str | None]:
-    """Пары (флаг, id цели) из головы команды, до полезной нагрузки.
+def anchors_of(command: str) -> tuple[list[Anchor], list[str]]:
+    """Цели записи из команды и значения флагов, на id не похожие.
 
-    Флаг с чем-то, что на id не похоже, — ошибка разбора: второй элемент
-    называет его, и место такой записи замок не судит.
+    Флаг ищется по всей команде: полезная нагрузка после --json бывает и
+    впереди флагов. Внутри JSON такие флаги не встречаются.
     """
-    head = PAYLOAD_FLAG.split(command, 1)[0]
-    anchors, broken = [], None
-    for flag, raw in ANCHOR_FLAG.findall(head):
+    anchors, broken = [], []
+    for flag, raw in ANCHOR_FLAG.findall(command):
         for value in raw.strip(QUOTES).split(','):
             value = value.strip(QUOTES).lower()
             if BLOCK_ID.fullmatch(value):
-                anchors.append((flag, value))
+                anchors.append(Anchor(flag, value))
             else:
-                broken = f'--{flag} {value[:24]!r}'
+                broken.append(f'--{flag} {value[:24]!r}')
     return anchors, broken
 
 
-def landing(command: str, tree: dict, flag: str, anchor: str) -> tuple[list, int] | None:
+def verb_of(command: str) -> str:
+    words = command.split()
+    return ' '.join(words[:2]) if len(words) >= 2 else ''
+
+
+def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None:
     """Соседи и индекс блока, рядом с которым окажется запись; нет — None.
 
     Сосед по --siblingId и --targetSiblingId: запись встаёт после него, при
-    --position before перед ним, то есть рядом с предыдущим блоком. Перед
-    первым блоком предыдущего нет: индекс -1, и «Решений» там не бывает.
-    Родитель по --id у `blocks add` — запись встаёт в конец его детей, при
-    before в начало. Любой другой --id — сам блок: правка, перенос, удаление.
+    --position before перед ним, то есть рядом с предыдущим блоком, у первого
+    блока это индекс -1. Родитель по --id у `blocks add` и по --targetId у
+    `blocks move` — запись встаёт в конец его детей, при before в начало.
+    Любой другой флаг — сам блок: правка, перенос, удаление.
     """
-    if str(tree.get('id', '')).lower() == anchor:
+    if str(tree.get('id', '')).lower() == anchor.block_id:
         siblings, index = [tree], 0
     else:
-        found = find_block(tree, anchor)
+        found = find_block(tree, anchor.block_id)
         if found is None:
             return None
         siblings, index = found
     position = POSITION_FLAG.search(command)
-    before = position is not None and position.group(1) == POSITION_BEFORE
-    if flag in ('siblingId', 'targetSiblingId'):
+    before = position is not None and position.group(1).strip(QUOTES) == POSITION_BEFORE
+    if anchor.flag in SIBLING_FLAGS:
         return (siblings, index - 1) if before else (siblings, index)
-    if command.lstrip().startswith(ADD_COMMAND):
+    if anchor.flag == CONTAINER_FLAG.get(verb_of(command)):
         children = siblings[index].get(CONTENT_KEY)
         if isinstance(children, list) and children:
             return children, 0 if before else len(children) - 1
@@ -155,61 +174,62 @@ def fetch_tree(base: str, page_id: str, timeout: float) -> dict:
     return tree
 
 
-def judge_on_page(command: str, tree: dict, anchors: list[tuple[str, str]]) -> Place | None:
-    """Суждение по одной странице: None, если ни одной цели на ней нет.
+def short(block_id: str) -> str:
+    return block_id[:8]
 
-    Целей бывает несколько (`blocks move --id … --targetSiblingId …`), и
-    решение — любая из них под «Решениями».
-    """
-    seen = []
-    for flag, anchor in anchors:
-        place = landing(command, tree, flag, anchor)
+
+def judge(command: str, tree: dict, pending: list[Anchor]) -> tuple[bool, list[Anchor]]:
+    """Одна страница: нашлось ли решение и какие цели на ней ещё не найдены."""
+    left = []
+    for anchor in pending:
+        place = landing(command, tree, anchor)
         if place is None:
-            continue
-        seen.append(anchor[:8])
-        if under_decisions(*place):
-            return Place(PLACE_DECISION, f'цель {anchor[:8]} под тогглом «Решения» на странице {tree.get("id", "")[:8]}')
-    if not seen:
-        return None
-    return Place(PLACE_OTHER, f'цель {", ".join(seen)} не под «Решениями» на странице {tree.get("id", "")[:8]}')
+            left.append(anchor)
+        elif under_decisions(*place):
+            return True, left
+    return False, left
 
 
 def decision_zone(command: str, reads: list[str], base: str | None, clock=time.monotonic) -> Place:
     """Ложится ли запись под «Решения».
 
-    `unknown` — замок судить не может, и это не вина хода: нет
-    `CRAFT_API_BASE`, id цели не разобран, API не ответил или не уложился в
-    DEADLINE_SEC. Замок тогда молчит с причиной в следе: лишний запрет
-    остановил бы верную запись, а решение без скилла поймает ревью хода.
-
-    Цель, которой нет ни на одной прочитанной странице, — вина хода: по
-    механике Craft страница цели читается до записи. Это не `unknown`,
-    а отдельный исход, по которому замок запрещает запись.
+    Целей в команде бывает несколько, и решение — любая из них под
+    «Решениями»: страницы идут свежие первыми, пока все цели не найдены.
+    Цель, которой нет ни на одной прочитанной странице, — UNREAD: по
+    механике Craft страница цели читается до записи. UNKNOWN — замок судить
+    не может: нет CRAFT_API_BASE, у команды с целью ни один id не разобран,
+    API не ответил, проверка не уложилась в DEADLINE_SEC.
     """
     anchors, broken = anchors_of(command)
-    if broken:
-        return Place(PLACE_UNKNOWN, f'id цели не разобран: {broken}')
     if not anchors:
-        return Place(PLACE_OTHER, '')
+        if broken or TARGETED_COMMANDS.match(command):
+            return Place(Verdict.UNKNOWN, 'цель в команде не разобрана: ' + (', '.join(broken) or 'флага цели нет'))
+        return Place(Verdict.OTHER, '')
     if not base:
-        return Place(PLACE_UNKNOWN, f'{BASE_ENV} не задан, место записи не проверить')
+        return Place(Verdict.UNKNOWN, f'{BASE_ENV} не задан, место записи не проверить')
     if not reads:
-        return Place(PLACE_UNREAD, 'в сессии нет чтений Craft')
-    deadline, failures = clock() + DEADLINE_SEC, []
+        return Place(Verdict.UNREAD, 'в сессии нет чтений Craft')
+    deadline, failures, pending = clock() + DEADLINE_SEC, [], list(anchors)
     for page_id in reads:
         left = deadline - clock()
         if left <= 0:
-            return Place(PLACE_UNKNOWN, f'не уложился в {DEADLINE_SEC} с, страниц проверено {len(failures)}')
+            return Place(Verdict.UNKNOWN, f'не уложился в {DEADLINE_SEC} с')
         try:
             tree = fetch_tree(base, page_id, min(API_TIMEOUT_SEC, left))
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
-            failures.append(f'{page_id[:8]}: {error}')
+            failures.append(f'{short(page_id)}: {error}')
             continue
-        verdict = judge_on_page(command, tree, anchors)
-        if verdict is not None:
-            return verdict
-    if failures:
-        return Place(PLACE_UNKNOWN, 'API Craft не ответил: ' + '; '.join(failures))
-    return Place(PLACE_UNREAD, 'цель записи не найдена среди страниц, прочитанных в сессии')
-
-
+        found, pending = judge(command, tree, pending)
+        if found:
+            return Place(Verdict.DECISION, f'цель под тогглом «Решения» на странице {short(page_id)}')
+        if not pending:
+            break
+    if pending and failures:
+        return Place(Verdict.UNKNOWN, 'API Craft не ответил: ' + '; '.join(failures))
+    if pending:
+        names = ', '.join(short(anchor.block_id) for anchor in pending)
+        return Place(Verdict.UNREAD, f'цель {names} не найдена среди страниц, прочитанных в сессии')
+    if broken:
+        return Place(Verdict.UNKNOWN, 'часть целей не разобрана: ' + ', '.join(broken))
+    names = ', '.join(short(anchor.block_id) for anchor in anchors)
+    return Place(Verdict.OTHER, f'цель {names} не под «Решениями»')
