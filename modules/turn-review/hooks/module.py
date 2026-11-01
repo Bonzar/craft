@@ -27,6 +27,8 @@ from jarvis import events, registry, wrappers  # noqa: E402
 
 MODULE_DIR = Path(__file__).resolve().parents[1]
 BRIEF_FILE = MODULE_DIR / 'data' / 'review-brief.md'
+# Подагент считает отпечаток той же командой, что и хук: одна функция в lib.
+FINGERPRINT_SCRIPT = MODULE_DIR / 'hooks' / 'fingerprint.py'
 DEBUG_FILE = MODULE_DIR / 'data' / 'debug.json'
 DEBUG_FIELD = 'debug'
 # дока, MessageDisplay: `final` — последний кусок сообщения.
@@ -204,15 +206,19 @@ def problem_prefix(problem: str | None) -> str:
     return f'{problem[0].upper()}{problem[1:]}. ' if problem else ''
 
 
-def nudge_text(storage, state: dict, runtime, review, writes: int, problem: str | None) -> str:
+def nudge_text(storage, state: dict, runtime, review, volume: list[dict],
+               problem: str | None) -> str:
     types_file = Path(type_lock(runtime).TYPES_FILE).resolve()
+    volume_file = storage.path(review.VOLUME_FILE).resolve()
     return (
         f'{problem_prefix(problem)}Ход не отпущен: ревью хода не сделано. Запусти подагента '
         f'инструментом Agent (subagent_type general-purpose) с брифом из файла {BRIEF_FILE}, '
-        f'передай ему пути: объём {storage.path(review.VOLUME_FILE).resolve()}, '
+        f'передай ему пути: объём {volume_file}, '
         f'вердикт {storage.path(review.VERDICT_FILE).resolve()}, '
-        f'volume_id {state[review.VOLUME_ID_KEY]}, типы {types_file}; записей write в объёме '
-        f'сейчас {writes}. Дождись, пока подагент запишет вердикт, и закончи ход снова.'
+        f'volume_id {state[review.VOLUME_ID_KEY]}, типы {types_file}, команда отпечатка '
+        f'«python3 {FINGERPRINT_SCRIPT} {volume_file}»; записей write в объёме сейчас '
+        f'{review.count_writes(volume)}, отпечаток {review.fingerprint(volume)}. '
+        'Дождись, пока подагент запишет вердикт, и закончи ход снова.'
     )
 
 
@@ -450,7 +456,7 @@ class Module(jarvis.Module):
                                            'и закончи ход снова.')
             return jarvis.Silence(reason=with_problem(NO_WRITES_REASON, state_problem))
         volume_id = state[review.VOLUME_ID_KEY]
-        verdict, verdict_problem = review.read_verdict(storage, volume_id, writes)
+        verdict, verdict_problem = review.read_verdict(storage, volume_id, review.fingerprint(volume))
         if verdict is not None:
             return self.settle(storage, state, runtime, review, verdict, volume)
         problem = joined(state_problem, damage, verdict_problem)
@@ -480,11 +486,11 @@ class Module(jarvis.Module):
 
     def press(self, storage, state: dict, runtime, review, volume: list[dict],
               problem: str | None) -> jarvis.Response:
-        nudges, writes = state[review.NUDGES_KEY], review.count_writes(volume)
+        nudges = state[review.NUDGES_KEY]
         if nudges < MAX_NUDGES:
             review.save_state(storage, {**state, review.NUDGES_KEY: nudges + 1,
                                         review.FIRST_NUDGE_KEY: first_nudge_at(state, review)})
-            return jarvis.Block(reason=nudge_text(storage, state, runtime, review, writes, problem))
+            return jarvis.Block(reason=nudge_text(storage, state, runtime, review, volume, problem))
         if nudges == MAX_NUDGES:
             runtime.ask_confirmation(action=RELEASE_ACTION, phrase=RELEASE_PHRASE)
             review.save_state(storage, {**state, review.NUDGES_KEY: nudges + 1})

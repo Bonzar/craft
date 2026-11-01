@@ -1,5 +1,6 @@
 """Ревью хода turn-review: путь от сырого события Claude до ответа и следа."""
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -13,6 +14,11 @@ from jarvis.storage import Storage
 from jarvis.trace import Trace
 
 from . import CORE_SOURCE, MODULES_DIR
+
+# Отпечаток в тестах считается той же функцией, что у хука: lib не зависит от ядра.
+LIB_SPEC = importlib.util.spec_from_file_location('turn_review_lib', MODULES_DIR / 'turn-review' / 'lib' / '__init__.py')
+review_lib = importlib.util.module_from_spec(LIB_SPEC)
+LIB_SPEC.loader.exec_module(review_lib)
 
 SLUG = 'turn-review'
 TYPE_LOCK = 'craft-type-lock'
@@ -126,13 +132,13 @@ class TurnReviewCase(unittest.TestCase):
     def last_reason(self, session: str) -> str:
         return Trace(self.storage(session)).read()[-1]['reason']
 
-    def write_verdict(self, session: str, volume_id: str, remarks=(), writes: int | None = None,
-                      checked=('craft', 'links', 'anchor')) -> None:
-        if writes is None:
-            writes = sum(1 for row in self.volume(session) if row['kind'] == 'write')
+    def write_verdict(self, session: str, volume_id: str, remarks=(), fingerprint: str | None = None,
+                      checked=('craft', 'consistency', 'anchor')) -> None:
+        if fingerprint is None:
+            fingerprint = review_lib.fingerprint(self.volume(session))
         self.storage(session).write_json('turn-review-verdict.json', {
             'volume_id': volume_id, 'clean': not remarks, 'remarks': list(remarks),
-            'checked': list(checked), 'writes': writes})
+            'checked': list(checked), 'fingerprint': fingerprint})
 
     def assert_silent(self, result) -> None:
         self.assertEqual(result.stdout, '')
@@ -415,7 +421,7 @@ class TurnReviewTest(TurnReviewCase):
         self.write_verdict(session, self.state(session)['volume_id'])
         self.fire(write(session, 'blocks update --id X --json \'{"markdown":"ещё"}\''))
         reason = self.blocked(self.fire(stop(session)))
-        self.assertIn('проверил записей write 1, а в объёме их 2', reason)
+        self.assertIn('не сходится с объёмом', reason)
         self.assertIn('ревью хода не сделано', reason)
         self.assertEqual([row['kind'] for row in self.volume(session)], ['write', 'write'])
 
@@ -424,10 +430,10 @@ class TurnReviewTest(TurnReviewCase):
         self.start_with_write(session)
         self.write_verdict(session, self.state(session)['volume_id'], checked=())
         reason = self.blocked(self.fire(stop(session)))
-        self.assertIn('критерии не пройдены: craft, links, anchor', reason)
+        self.assertIn('критерии не пройдены: craft, consistency, anchor', reason)
         self.write_verdict(session, self.state(session)['volume_id'],
-                           checked=('craft', 'links', 'anchor', 'код'))
-        self.assertIn('критерии не из craft, links, anchor: код',
+                           checked=('craft', 'consistency', 'anchor', 'код'))
+        self.assertIn('критерии не из craft, consistency, anchor: код',
                       self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 
@@ -457,3 +463,22 @@ class TurnReviewTest(TurnReviewCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FingerprintScriptTest(unittest.TestCase):
+    """Скрипт отпечатка печатает то же, что считает хук."""
+
+    def test_the_script_matches_the_library(self) -> None:
+        records = [{'kind': 'write', 'command': 'blocks add', 'types': ['задача']},
+                   {'kind': 'read', 'command': 'blocks get', 'ids': ['a']}]
+        with tempfile.TemporaryDirectory() as folder:
+            volume = Path(folder) / 'volume.jsonl'
+            volume.write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in records) + '\n',
+                              encoding='utf-8')
+            script = MODULES_DIR / 'turn-review' / 'hooks' / 'fingerprint.py'
+            printed = subprocess.run([sys.executable, str(script), str(volume)],
+                                     capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(printed, review_lib.fingerprint(records))
+        self.assertEqual(len(printed), review_lib.FINGERPRINT_CHARS)
+        # Чтения отпечаток не меняют: ревью смотрит на записи.
+        self.assertEqual(printed, review_lib.fingerprint(records[:1]))
