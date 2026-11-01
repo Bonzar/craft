@@ -10,7 +10,9 @@
 тоггл «Решения», «Решения проекта» или «Решения сферы», требует скилла
 craft-decision. Место замок берёт из connect-API Craft: страницы, которые
 агент читал в сессии, запрашиваются заново, и цель записи ищется среди их
-блоков. Это единственный поход замка в сеть, и только ради записи в Craft.
+блоков. Цели нет ни на одной — запись в непрочитанное, и она тоже под
+запретом. API недоступен — замок молчит с причиной в следе. Это единственный
+поход замка в сеть, и только ради записи в Craft.
 """
 
 import fcntl
@@ -18,16 +20,15 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jarvis  # noqa: E402
 from jarvis import events, wrappers  # noqa: E402
+from place import BASE_ENV, BLOCK_ID, PLACE_DECISION, PLACE_UNREAD, decision_zone  # noqa: E402
 
 TYPES_FILE = Path(__file__).resolve().parents[1] / 'data' / 'types.json'
 TYPES_KEY = 'types'
@@ -41,10 +42,14 @@ LOCK_FILE = 'craft-type-lock.lock'
 TURN_KEY = 'turn'
 SKILLS_KEY = 'skills'
 # Страницы, которые агент читал в сессии, свежие первыми. Среди них замок
-# ищет цель записи решения: connect-API родителя блока не отдаёт, а
-# прочитанная страница по правилу чтения до записи у цели есть всегда.
+# ищет цель записи: connect-API родителя блока не отдаёт, а по правилу
+# чтения до записи страница цели среди прочитанных должна быть.
 READS_KEY = 'reads'
-MAX_READS = 8
+MAX_READS = 20
+# Страница из ответа чтения: `blocks get --date today` id в команде не несёт,
+# а писать в заметку дня агент потом будет по id из ответа.
+PAGE_TAG = re.compile(r'<page id="([^"]+)"')
+MAX_RESULT_PAGES = 4
 
 SKILL_TOOL = 'Skill'
 SKILL_INPUT_FIELD = 'skill'
@@ -66,26 +71,6 @@ UNICODE_ESCAPE = re.compile(r'\\u([0-9a-fA-F]{4})')
 BLOCK_LINK = re.compile(r'\[[^\]]*\]\((?:block|craftdocs)://[^)]*\)')
 
 DECISION_SKILL = 'craft-decision'
-BASE_ENV = 'CRAFT_API_BASE'
-# Без User-Agent connect-API отвечает 403 (замер 01.11.2026 из контейнера).
-USER_AGENT = 'jarvis-craft-type-lock'
-API_TIMEOUT_SEC = 10
-# Решения этапа лежат внутри блока этапа, а этап агент читает со страницы
-# проекта на глубину 2: глубже цель записи решения не бывает.
-API_DEPTH = 2
-BLOCK_ID = re.compile(r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}')
-ANCHOR_FLAG = re.compile(r'--(id|ids|siblingId|targetId|targetSiblingId)\s+(\S+)')
-POSITION_FLAG = re.compile(r'--position\s+(\S+)')
-POSITION_BEFORE = 'before'
-ADD_COMMAND = 'blocks add'
-CONTENT_KEY = 'content'
-LEVEL_KEY = 'indentationLevel'
-LIST_STYLE_KEY = 'listStyle'
-TOGGLE_STYLE = 'toggle'
-MARKDOWN_KEY = 'markdown'
-DECISION_TOGGLE = re.compile(r'^[\s+#]*Решения(\s+(проекта|сферы))?\s*$')
-
-
 def load_tag_skills(path: Path = TYPES_FILE) -> dict[str, str]:
     """Тег → slug скилла."""
     try:
@@ -163,7 +148,8 @@ def read_state(storage: jarvis.Storage) -> dict:
     turn = state.get(TURN_KEY) if isinstance(state, dict) else None
     skills = state.get(SKILLS_KEY) if isinstance(state, dict) else None
     reads = state.get(READS_KEY, []) if isinstance(state, dict) else None
-    if not isinstance(turn, int) or not isinstance(skills, dict) or not isinstance(reads, list):
+    if (type(turn) is not int or not isinstance(skills, dict) or not isinstance(reads, list)
+            or not all(isinstance(item, str) and BLOCK_ID.fullmatch(item) for item in reads)):
         raise ValueError(f'файл состояния замка {path} испорчен: {state!r}. '
                          'Удали его, счёт начнётся заново')
     return new_state(turn, skills, reads)
@@ -186,127 +172,6 @@ def remember_reads(reads: list[str], fresh: list[str]) -> list[str]:
     return list(dict.fromkeys([*fresh, *reads]))[:MAX_READS]
 
 
-# --- место записи: под тогглом «Решения» или нет ---------------------------
-
-def is_decision_toggle(block: dict) -> bool:
-    markdown = block.get(MARKDOWN_KEY) if isinstance(block, dict) else None
-    return (isinstance(block, dict) and block.get(LIST_STYLE_KEY) == TOGGLE_STYLE
-            and isinstance(markdown, str) and DECISION_TOGGLE.match(markdown) is not None)
-
-
-def level_of(block: dict) -> int:
-    level = block.get(LEVEL_KEY) if isinstance(block, dict) else None
-    return level if isinstance(level, int) else 0
-
-
-def under_decisions(siblings: list, index: int) -> bool:
-    """Лежит ли блок siblings[index] под тогглом «Решения».
-
-    Решения стоят соседями тоггла на +1 от него. Идём назад до первого блока
-    без отступа: это сам тоггл, если блок под ним, иначе заголовок другой
-    секции или разделитель.
-    """
-    for position in range(index, -1, -1):
-        block = siblings[position]
-        if is_decision_toggle(block):
-            return True
-        if level_of(block) == 0:
-            return False
-    return False
-
-
-def find_block(tree: dict, target: str) -> tuple[list, int] | None:
-    """Соседи и индекс блока target внутри дерева страницы; нет — None."""
-    children = tree.get(CONTENT_KEY) if isinstance(tree, dict) else None
-    if not isinstance(children, list):
-        return None
-    for index, child in enumerate(children):
-        if isinstance(child, dict) and str(child.get('id', '')).lower() == target:
-            return children, index
-    for child in children:
-        found = find_block(child, target)
-        if found is not None:
-            return found
-    return None
-
-
-def landing(command: str, tree: dict, flag: str, anchor: str) -> tuple[list, int] | None:
-    """Соседи и индекс того блока, рядом с которым окажется запись.
-
-    Сосед по --siblingId: сама запись встаёт после него, при --position
-    before — перед ним, то есть рядом с предыдущим блоком. Родитель по --id у
-    `blocks add` — запись встаёт в конец его детей. Любой другой --id —
-    правка самого блока.
-    """
-    if str(tree.get('id', '')).lower() == anchor:
-        siblings, index = [tree], 0
-    else:
-        found = find_block(tree, anchor)
-        if found is None:
-            return None
-        siblings, index = found
-    position = POSITION_FLAG.search(command)
-    before = position is not None and position.group(1) == POSITION_BEFORE
-    if flag in ('siblingId', 'targetSiblingId'):
-        return (siblings, index - 1) if before and index > 0 else (siblings, index)
-    if command.lstrip().startswith(ADD_COMMAND):
-        children = siblings[index].get(CONTENT_KEY)
-        if isinstance(children, list) and children:
-            return children, 0 if before else len(children) - 1
-    return siblings, index
-
-
-def fetch_tree(base: str, page_id: str) -> dict:
-    query = urllib.parse.urlencode({'id': page_id, 'maxDepth': API_DEPTH})
-    request = urllib.request.Request(
-        f'{base.rstrip("/")}/blocks?{query}',
-        headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
-    with urllib.request.urlopen(request, timeout=API_TIMEOUT_SEC) as response:
-        tree = json.load(response)
-    if isinstance(tree, list):
-        tree = tree[0] if tree else {}
-    if not isinstance(tree, dict):
-        raise ValueError('ответ API не блок')
-    return tree
-
-
-def decision_zone(command: str, reads: list[str], base: str | None) -> tuple[bool | None, str]:
-    """Ложится ли запись под «Решения»: True, False или None с причиной.
-
-    None — замок судить не может: API недоступен, цель не нашлась среди
-    прочитанных страниц. Тогда он молчит с причиной в следе: лишний запрет
-    остановил бы верную запись, а запись без скилла поймает ревью хода.
-    """
-    anchors = [(flag, value.lower()) for flag, raw in ANCHOR_FLAG.findall(command)
-               for value in raw.split(',') if BLOCK_ID.fullmatch(value)]
-    if not anchors:
-        return False, ''
-    if not base:
-        return None, f'{BASE_ENV} не задан, место записи не проверить'
-    if not reads:
-        return None, 'в сессии нет чтений Craft, место записи не проверить'
-    failures = []
-    for page_id in reads:
-        try:
-            tree = fetch_tree(base, page_id)
-        except (urllib.error.URLError, OSError, ValueError) as error:
-            failures.append(f'{page_id[:8]}: {error}')
-            continue
-        for flag, anchor in anchors:
-            place = landing(command, tree, flag, anchor)
-            if place is None:
-                continue
-            siblings, index = place
-            if index < 0:
-                return False, f'цель {anchor[:8]} стоит первой, записи «Решений» выше нет'
-            if under_decisions(siblings, index):
-                return True, f'цель {anchor[:8]} под тогглом «Решения» на странице {page_id[:8]}'
-            return False, f'цель {anchor[:8]} не под «Решениями» на странице {page_id[:8]}'
-    if failures:
-        return None, 'API Craft не ответил: ' + '; '.join(failures)
-    return None, 'цель записи не найдена среди страниц, прочитанных в сессии'
-
-
 def deny_reason(tag_skills: dict[str, str], tags: list[str], missing: list[str],
                 decision: bool) -> str:
     reasons = []
@@ -317,6 +182,11 @@ def deny_reason(tag_skills: dict[str, str], tags: list[str], missing: list[str],
         reasons.append(f'Запись ложится под тоггл «Решения»: это решение, его скилл {DECISION_SKILL}.')
     return (' '.join(reasons) + f' В этом ходе не вызван скилл: {", ".join(missing)}. '
             f'Вызови его инструментом {SKILL_TOOL}, прочитай правила типа и повтори запись.')
+
+
+def unread_reason(note: str) -> str:
+    return (f'Запись в непрочитанное: {note}. Прочитай страницу, куда пишешь, '
+            '«blocks get ‹id страницы› --depth -1», и повтори запись.')
 
 
 class Module(jarvis.Module):
@@ -365,7 +235,9 @@ class Module(jarvis.Module):
         return jarvis.Silence(reason=f'скилл {slug} вызван в ходе {turn}')
 
     def on_read(self, event, storage) -> jarvis.Response:
-        ids = block_ids(command_of(event.tool_input))
+        pages = [page.lower() for page in PAGE_TAG.findall(str(event.tool_result or ''))
+                 if BLOCK_ID.fullmatch(page)][:MAX_RESULT_PAGES]
+        ids = list(dict.fromkeys([*block_ids(command_of(event.tool_input)), *pages]))
         if not ids:
             return jarvis.Silence(reason='чтение без id блока')
         with state_lock(storage):
@@ -383,14 +255,17 @@ class Module(jarvis.Module):
         tag_skills = load_tag_skills()
         tags = find_tags(command, tag_pattern(tag_skills))
         state = read_state(storage)
-        decision, note = decision_zone(command, state[READS_KEY], os.environ.get(BASE_ENV))
+        place = decision_zone(command, state[READS_KEY], os.environ.get(BASE_ENV))
+        if place.verdict == PLACE_UNREAD:
+            return jarvis.Deny(reason=unread_reason(place.reason))
+        decision = place.verdict == PLACE_DECISION
         needed = sorted({tag_skills[tag] for tag in tags} | ({DECISION_SKILL} if decision else set()))
-        tail = f', {note}' if note else ''
+        tail = f', {place.reason}' if place.reason else ''
         if not needed:
             return jarvis.Silence(reason=f'тега типа нет{tail}')
         missing = [slug for slug in needed if state[SKILLS_KEY].get(slug) != state[TURN_KEY]]
         if missing:
-            return jarvis.Deny(reason=deny_reason(tag_skills, tags, missing, bool(decision)))
+            return jarvis.Deny(reason=deny_reason(tag_skills, tags, missing, decision))
         found = f'теги {", ".join(tags)}: ' if tags else ''
         return jarvis.Silence(reason=f'{found}скиллы вызваны в этом ходе{tail}')
 
