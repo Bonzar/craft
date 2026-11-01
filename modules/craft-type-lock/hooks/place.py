@@ -24,7 +24,8 @@ API_TIMEOUT_SEC = 10
 # хук не должен держать запись минутами, когда API медленный.
 DEADLINE_SEC = 12
 # Решения этапа лежат внутри блока этапа, а этап агент читает со страницы
-# проекта на глубину 2. Глубже решение не ищем: ниже этапа решений нет.
+# проекта на глубину 2. Глубже замок на одном чтении не видит: решение на
+# вложенной странице находится, когда прочитана сама эта страница.
 API_DEPTH = 2
 BLOCK_ID = re.compile(r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}')
 # Флаг цели в любом месте команды, через пробел или через «=».
@@ -139,8 +140,9 @@ def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None
     Сосед по --siblingId и --targetSiblingId: запись встаёт после него, при
     --position before перед ним, то есть рядом с предыдущим блоком, у первого
     блока это индекс -1. Родитель по --id у `blocks add` и по --targetId у
-    `blocks move` — запись встаёт в конец его детей, при before в начало.
-    Любой другой флаг — сам блок: правка, перенос, удаление.
+    `blocks move` — запись встаёт в конец его детей, при before в начало,
+    то есть перед первым ребёнком, индекс -1. Любой другой флаг — сам блок:
+    правка, перенос, удаление.
     """
     if str(tree.get('id', '')).lower() == anchor.block_id:
         siblings, index = [tree], 0
@@ -156,7 +158,7 @@ def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None
     if anchor.flag == CONTAINER_FLAG.get(verb_of(command)):
         children = siblings[index].get(CONTENT_KEY)
         if isinstance(children, list) and children:
-            return children, 0 if before else len(children) - 1
+            return children, -1 if before else len(children) - 1
     return siblings, index
 
 
@@ -168,8 +170,8 @@ def fetch_tree(base: str, page_id: str, timeout: float) -> dict:
     with urllib.request.urlopen(request, timeout=timeout) as response:
         tree = json.load(response)
     if isinstance(tree, list):
-        tree = tree[0] if tree else {}
-    if not isinstance(tree, dict):
+        tree = tree[0] if tree else None
+    if not isinstance(tree, dict) or not tree.get('id'):
         raise ValueError('ответ API не блок')
     return tree
 

@@ -594,6 +594,22 @@ class DecisionLockTest(LockHarness):
         self.assert_silent(self.fire(write('d-notarget', 'blocks delete')))
         self.assertIn('флага цели нет', self.last_reason('d-notarget'))
 
+    def test_an_unknown_place_is_announced_once_per_session(self) -> None:
+        self.start('d-warn', PAGE)
+        self.api_base = 'http://127.0.0.1:9/api/v1'
+        try:
+            first = self.fire(write('d-warn', f'blocks update --id {D1} --json {DECISION_JSON}'))
+            self.fire(prompt('d-warn'))
+            second = self.fire(write('d-warn', f'blocks update --id {D2} --json {DECISION_JSON}'))
+        finally:
+            self.api_base = type(self).api_base
+        self.assertIn('место записи в Craft не проверяется', first.stderr)
+        self.assertEqual(second.stderr, '')
+
+    def test_a_write_before_the_first_child_of_a_container_is_outside(self) -> None:
+        self.start('d-container-first', PROJECT, DEEP_PAGE)
+        self.assert_silent(self.fire(write('d-container-first', f'blocks add --id {DEEP_PAGE} --position before --json {DECISION_JSON}')))
+
     def test_a_corrupted_reads_list_fails_loud(self) -> None:
         self.fire(prompt('d-corrupt'))
         path = self.storage('d-corrupt').path('craft-type-lock.json')

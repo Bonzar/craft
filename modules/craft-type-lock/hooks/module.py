@@ -46,6 +46,10 @@ SKILLS_KEY = 'skills'
 # чтения до записи страница цели среди прочитанных должна быть.
 READS_KEY = 'reads'
 MAX_READS = 20
+# Предупреждение о непроверенном месте записи: раз за сессию, в stderr хука,
+# который Claude показывает в чате.
+WARNED_KEY = 'place_warned'
+WARNING_PREFIX = 'craft-type-lock: место записи в Craft не проверяется,'
 # Страница из ответа чтения: `blocks get --date today` id в команде не несёт,
 # а писать в заметку дня агент потом будет по id из ответа.
 PAGE_TAG = re.compile(r'<page id="([^"]+)"')
@@ -132,8 +136,10 @@ def block_ids(text: str) -> list[str]:
     return list(dict.fromkeys(match.group(0).lower() for match in BLOCK_ID.finditer(text)))
 
 
-def new_state(turn: int = 0, skills: dict | None = None, reads: list | None = None) -> dict:
-    return {TURN_KEY: turn, SKILLS_KEY: dict(skills or {}), READS_KEY: list(reads or [])}
+def new_state(turn: int = 0, skills: dict | None = None, reads: list | None = None,
+              warned: bool = False) -> dict:
+    return {TURN_KEY: turn, SKILLS_KEY: dict(skills or {}), READS_KEY: list(reads or []),
+            WARNED_KEY: warned}
 
 
 def read_state(storage: jarvis.Storage) -> dict:
@@ -152,7 +158,7 @@ def read_state(storage: jarvis.Storage) -> dict:
             or not all(isinstance(item, str) and BLOCK_ID.fullmatch(item) for item in reads)):
         raise ValueError(f'файл состояния замка {path} испорчен: {state!r}. '
                          'Удали его, счёт начнётся заново')
-    return new_state(turn, skills, reads)
+    return new_state(turn, skills, reads, bool(state.get(WARNED_KEY)))
 
 
 @contextmanager
@@ -208,7 +214,8 @@ class Module(jarvis.Module):
         with state_lock(storage):
             state = read_state(storage)
             turn = state[TURN_KEY] + 1
-            storage.write_json(STATE_FILE, new_state(turn, state[SKILLS_KEY], state[READS_KEY]))
+            storage.write_json(STATE_FILE, new_state(turn, state[SKILLS_KEY], state[READS_KEY],
+                                                     state[WARNED_KEY]))
         return jarvis.Silence(reason=f'начался ход {turn}')
 
     def on_after_compact(self, event, storage) -> jarvis.Response:
@@ -216,7 +223,7 @@ class Module(jarvis.Module):
         # Чтения остаются: это не знание агента, а подсказка, где искать цель.
         with state_lock(storage):
             state = read_state(storage)
-            storage.write_json(STATE_FILE, new_state(reads=state[READS_KEY]))
+            storage.write_json(STATE_FILE, new_state(reads=state[READS_KEY], warned=state[WARNED_KEY]))
         return jarvis.Silence(reason='после сжатия счёт ходов и скиллов сброшен')
 
     def on_post_tool(self, event, storage) -> jarvis.Response:
@@ -231,7 +238,7 @@ class Module(jarvis.Module):
             state = read_state(storage)
             turn = state[TURN_KEY]
             storage.write_json(STATE_FILE, new_state(
-                turn, {**state[SKILLS_KEY], slug: turn}, state[READS_KEY]))
+                turn, {**state[SKILLS_KEY], slug: turn}, state[READS_KEY], state[WARNED_KEY]))
         return jarvis.Silence(reason=f'скилл {slug} вызван в ходе {turn}')
 
     def on_read(self, event, storage) -> jarvis.Response:
@@ -243,8 +250,23 @@ class Module(jarvis.Module):
         with state_lock(storage):
             state = read_state(storage)
             storage.write_json(STATE_FILE, new_state(
-                state[TURN_KEY], state[SKILLS_KEY], remember_reads(state[READS_KEY], ids)))
+                state[TURN_KEY], state[SKILLS_KEY], remember_reads(state[READS_KEY], ids),
+                state[WARNED_KEY]))
         return jarvis.Silence(reason=f'прочитано: {", ".join(item[:8] for item in ids)}')
+
+    def warn_once(self, storage, state: dict, reason: str) -> None:
+        """Раз за сессию сказать в чат, что место записи не проверяется.
+
+        Молчаливый отказ от проверки на всю сессию прятал бы решения без
+        скилла; одного предупреждения хватает, повторять на каждой записи
+        незачем.
+        """
+        if state[WARNED_KEY]:
+            return
+        with state_lock(storage):
+            fresh = read_state(storage)
+            storage.write_json(STATE_FILE, {**fresh, WARNED_KEY: True})
+        print(f'{WARNING_PREFIX} {reason}', file=sys.stderr)
 
     def on_pre_tool(self, event, storage) -> jarvis.Response:
         if not is_craft_write(event.tool_name):
@@ -260,6 +282,7 @@ class Module(jarvis.Module):
             return jarvis.Deny(reason=unread_reason(place.reason))
         if place.verdict is Verdict.UNKNOWN:
             tail = f', место записи не проверено: {place.reason}'
+            self.warn_once(storage, state, place.reason)
         elif place.verdict in (Verdict.DECISION, Verdict.OTHER):
             tail = f', {place.reason}' if place.reason else ''
         else:
