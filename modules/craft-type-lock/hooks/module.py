@@ -11,8 +11,10 @@
 craft-decision. Место замок берёт из connect-API Craft: страницы, которые
 агент читал в сессии, запрашиваются заново, и цель записи ищется среди их
 блоков. Цели нет ни на одной — запись в непрочитанное, и она тоже под
-запретом. API недоступен — замок молчит с причиной в следе. Это единственный
-поход замка в сеть, и только ради записи в Craft.
+запретом. API недоступен — место не судится, проверка по тегам идёт как
+обычно, а о том, что место не проверено, замок раз за сессию говорит
+текстом в ход, дальше молчит с причиной в следе. Это единственный поход
+замка в сеть, и только ради записи в Craft.
 """
 
 import fcntl
@@ -46,13 +48,17 @@ SKILLS_KEY = 'skills'
 # чтения до записи страница цели среди прочитанных должна быть.
 READS_KEY = 'reads'
 MAX_READS = 20
-# Предупреждение о непроверенном месте записи: раз за сессию, в stderr хука,
-# который Claude показывает в чате.
+# Предупреждение о непроверенном месте записи: раз за сессию, текстом в ход.
+# stderr хука до модели не доходит (замер 01.11.2026 живой сессией).
 WARNED_KEY = 'place_warned'
-WARNING_PREFIX = 'craft-type-lock: место записи в Craft не проверяется,'
+WARNING_PREFIX = 'Замок craft-type-lock: место записи в Craft не проверяется,'
 # Страница из ответа чтения: `blocks get --date today` id в команде не несёт,
-# а писать в заметку дня агент потом будет по id из ответа.
+# а писать в заметку дня агент потом будет по id из ответа. Id из ответа
+# идут впереди id из команды: ответ несёт id в том регистре, в каком его
+# знает API, а в команде агент мог набрать его иначе. В markdown-ответе это
+# теги страниц, в JSON-ответе первое поле id — корень прочитанного.
 PAGE_TAG = re.compile(r'<page id="([^"]+)"')
+JSON_ROOT_ID = re.compile(r'"id":\s*"([^"]+)"')
 MAX_RESULT_PAGES = 4
 
 SKILL_TOOL = 'Skill'
@@ -131,9 +137,19 @@ def command_of(tool_input) -> str:
     return command if isinstance(command, str) else ''
 
 
+def unique_ids(ids) -> list[str]:
+    """Без повторов в любом регистре, порядок и регистр первого вхождения."""
+    seen, result = set(), []
+    for block_id in ids:
+        if block_id.lower() not in seen:
+            seen.add(block_id.lower())
+            result.append(block_id)
+    return result
+
+
 def block_ids(text: str) -> list[str]:
     """Id блоков из текста, без повторов, в порядке появления."""
-    return list(dict.fromkeys(match.group(0).lower() for match in BLOCK_ID.finditer(text)))
+    return unique_ids(match.group(0) for match in BLOCK_ID.finditer(text))
 
 
 def new_state(turn: int = 0, skills: dict | None = None, reads: list | None = None,
@@ -175,7 +191,7 @@ def state_lock(storage: jarvis.Storage):
 
 def remember_reads(reads: list[str], fresh: list[str]) -> list[str]:
     """Свежие чтения вперёд, без повторов, не длиннее MAX_READS."""
-    return list(dict.fromkeys([*fresh, *reads]))[:MAX_READS]
+    return unique_ids([*fresh, *reads])[:MAX_READS]
 
 
 def deny_reason(tag_skills: dict[str, str], tags: list[str], missing: list[str],
@@ -242,9 +258,11 @@ class Module(jarvis.Module):
         return jarvis.Silence(reason=f'скилл {slug} вызван в ходе {turn}')
 
     def on_read(self, event, storage) -> jarvis.Response:
-        pages = [page.lower() for page in PAGE_TAG.findall(str(event.tool_result or ''))
+        answer = str(event.tool_result or '')
+        root = JSON_ROOT_ID.search(answer)
+        pages = [page for page in [*PAGE_TAG.findall(answer), *([root.group(1)] if root else [])]
                  if BLOCK_ID.fullmatch(page)][:MAX_RESULT_PAGES]
-        ids = list(dict.fromkeys([*block_ids(command_of(event.tool_input)), *pages]))
+        ids = unique_ids([*pages, *block_ids(command_of(event.tool_input))])
         if not ids:
             return jarvis.Silence(reason='чтение без id блока')
         with state_lock(storage):
@@ -254,19 +272,19 @@ class Module(jarvis.Module):
                 state[WARNED_KEY]))
         return jarvis.Silence(reason=f'прочитано: {", ".join(item[:8] for item in ids)}')
 
-    def warn_once(self, storage, state: dict, reason: str) -> None:
-        """Раз за сессию сказать в чат, что место записи не проверяется.
+    def warn_once(self, storage, state: dict, reason: str) -> str | None:
+        """Текст в ход о том, что место записи не проверяется; раз за сессию.
 
         Молчаливый отказ от проверки на всю сессию прятал бы решения без
         скилла; одного предупреждения хватает, повторять на каждой записи
-        незачем.
+        незачем. Второй и дальше — None.
         """
         if state[WARNED_KEY]:
-            return
+            return None
         with state_lock(storage):
             fresh = read_state(storage)
             storage.write_json(STATE_FILE, {**fresh, WARNED_KEY: True})
-        print(f'{WARNING_PREFIX} {reason}', file=sys.stderr)
+        return f'{WARNING_PREFIX} {reason}. Решение без craft-decision поймает только ревью хода.'
 
     def on_pre_tool(self, event, storage) -> jarvis.Response:
         if not is_craft_write(event.tool_name):
@@ -280,9 +298,12 @@ class Module(jarvis.Module):
         place = decision_zone(command, state[READS_KEY], os.environ.get(BASE_ENV))
         if place.verdict is Verdict.UNREAD:
             return jarvis.Deny(reason=unread_reason(place.reason))
-        if place.verdict is Verdict.UNKNOWN:
+        warning = None
+        if place.verdict is Verdict.UNAVAILABLE:
             tail = f', место записи не проверено: {place.reason}'
-            self.warn_once(storage, state, place.reason)
+            warning = self.warn_once(storage, state, place.reason)
+        elif place.verdict is Verdict.UNPARSED:
+            tail = f', место записи не проверено: {place.reason}'
         elif place.verdict in (Verdict.DECISION, Verdict.OTHER):
             tail = f', {place.reason}' if place.reason else ''
         else:
@@ -290,12 +311,23 @@ class Module(jarvis.Module):
         decision = place.verdict is Verdict.DECISION
         needed = sorted({tag_skills[tag] for tag in tags} | ({DECISION_SKILL} if decision else set()))
         if not needed:
-            return jarvis.Silence(reason=f'тега типа нет{tail}')
+            return self.pass_through(f'тега типа нет{tail}', warning)
         missing = [slug for slug in needed if state[SKILLS_KEY].get(slug) != state[TURN_KEY]]
         if missing:
-            return jarvis.Deny(reason=deny_reason(tag_skills, tags, missing, decision))
+            # Предупреждение не теряется и на запрете: иначе первый отказ API
+            # на запрещённой записи съел бы его на всю сессию.
+            reason = deny_reason(tag_skills, tags, missing, decision)
+            return jarvis.Deny(reason=f'{reason} {warning}' if warning else reason)
         found = f'теги {", ".join(tags)}: ' if tags else ''
-        return jarvis.Silence(reason=f'{found}скиллы вызваны в этом ходе{tail}')
+        return self.pass_through(f'{found}скиллы вызваны в этом ходе{tail}', warning)
+
+    @staticmethod
+    def pass_through(reason: str, warning: str | None) -> jarvis.Response:
+        """Пропустить запись: молча с причиной в следе, либо текстом в ход.
+
+        У текста в ход поля причины нет, поэтому причина входит в сам текст.
+        """
+        return jarvis.Context(text=f'{warning} ({reason})') if warning else jarvis.Silence(reason=reason)
 
 
 if __name__ == '__main__':

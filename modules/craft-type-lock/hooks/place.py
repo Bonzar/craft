@@ -27,6 +27,9 @@ DEADLINE_SEC = 12
 # проекта на глубину 2. Глубже замок на одном чтении не видит: решение на
 # вложенной странице находится, когда прочитана сама эта страница.
 API_DEPTH = 2
+# Регистр id API различает (замер 01.11.2026: у документа с id в верхнем
+# регистре нижний отвечает 404, и наоборот). Id хранятся и запрашиваются как
+# есть, сравниваются без учёта регистра.
 BLOCK_ID = re.compile(r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}')
 # Флаг цели в любом месте команды, через пробел или через «=».
 ANCHOR_FLAG = re.compile(r'--(id|ids|siblingId|targetId|targetSiblingId)(?:\s+|=)(\S+)')
@@ -47,21 +50,31 @@ DECISION_TOGGLE = re.compile(r'^[\s+#]*Решения(\s+(проекта|сфе�
 
 
 class Verdict(enum.Enum):
-    """Четыре исхода проверки места.
+    """Пять исходов проверки места.
 
     DECISION и OTHER — суждение о месте. UNREAD — тоже суждение: цели нет ни
-    на одной прочитанной странице, запись в непрочитанное. UNKNOWN — замок
-    судить не может, и это не вина хода.
+    на одной прочитанной странице, запись в непрочитанное. Два последних —
+    замок судить не может, и это не вина хода. UNAVAILABLE — окружение: нет
+    базы API, API не ответил, не уложились в срок; предупреждение в ход
+    выводится раз за сессию, разовый отказ это или постоянный.
+    UNPARSED — в одной команде не разобран ни один id цели или часть,
+    предупреждать не о чем.
     """
     DECISION = 'decision'
     OTHER = 'other'
     UNREAD = 'unread'
-    UNKNOWN = 'unknown'
+    UNAVAILABLE = 'unavailable'
+    UNPARSED = 'unparsed'
 
 
 class Place(NamedTuple):
     verdict: Verdict
     reason: str
+
+
+def same_id(left: str, right: str) -> bool:
+    """Один ли это блок: регистр хранится, но не различается."""
+    return left.lower() == right.lower()
 
 
 class Anchor(NamedTuple):
@@ -103,7 +116,7 @@ def find_block(tree: dict, target: str) -> tuple[list, int] | None:
     if not isinstance(children, list):
         return None
     for index, child in enumerate(children):
-        if isinstance(child, dict) and str(child.get('id', '')).lower() == target:
+        if isinstance(child, dict) and same_id(str(child.get('id', '')), target):
             return children, index
     for child in children:
         found = find_block(child, target)
@@ -121,7 +134,7 @@ def anchors_of(command: str) -> tuple[list[Anchor], list[str]]:
     anchors, broken = [], []
     for flag, raw in ANCHOR_FLAG.findall(command):
         for value in raw.strip(QUOTES).split(','):
-            value = value.strip(QUOTES).lower()
+            value = value.strip(QUOTES)
             if BLOCK_ID.fullmatch(value):
                 anchors.append(Anchor(flag, value))
             else:
@@ -144,7 +157,7 @@ def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None
     то есть перед первым ребёнком, индекс -1. Любой другой флаг — сам блок:
     правка, перенос, удаление.
     """
-    if str(tree.get('id', '')).lower() == anchor.block_id:
+    if same_id(str(tree.get('id', '')), anchor.block_id):
         siblings, index = [tree], 0
     else:
         found = find_block(tree, anchor.block_id)
@@ -162,18 +175,34 @@ def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None
     return siblings, index
 
 
+def other_case(block_id: str) -> str:
+    """Тот же id в другом регистре: верхний для нижнего и наоборот."""
+    return block_id.lower() if block_id != block_id.lower() else block_id.upper()
+
+
 def fetch_tree(base: str, page_id: str, timeout: float) -> dict:
-    query = urllib.parse.urlencode({'id': page_id, 'maxDepth': API_DEPTH})
-    request = urllib.request.Request(
-        f'{base.rstrip("/")}/blocks?{query}',
-        headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        tree = json.load(response)
+    """Страница на глубину API_DEPTH. 404 повторяется в другом регистре id:
+    агент мог набрать id не в том регистре, в каком его знает API."""
+    try:
+        tree = fetch_once(base, page_id, timeout)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        tree = fetch_once(base, other_case(page_id), timeout)
     if isinstance(tree, list):
         tree = tree[0] if tree else None
     if not isinstance(tree, dict) or not tree.get('id'):
         raise ValueError('ответ API не блок')
     return tree
+
+
+def fetch_once(base: str, page_id: str, timeout: float):
+    query = urllib.parse.urlencode({'id': page_id, 'maxDepth': API_DEPTH})
+    request = urllib.request.Request(
+        f'{base.rstrip("/")}/blocks?{query}',
+        headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
 
 
 def short(block_id: str) -> str:
@@ -198,26 +227,32 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
     Целей в команде бывает несколько, и решение — любая из них под
     «Решениями»: страницы идут свежие первыми, пока все цели не найдены.
     Цель, которой нет ни на одной прочитанной странице, — UNREAD: по
-    механике Craft страница цели читается до записи. UNKNOWN — замок судить
-    не может: нет CRAFT_API_BASE, у команды с целью ни один id не разобран,
-    API не ответил, проверка не уложилась в DEADLINE_SEC.
+    механике Craft страница цели читается до записи. UNAVAILABLE — нет
+    CRAFT_API_BASE, API не ответил, проверка не уложилась в DEADLINE_SEC.
+    UNPARSED — у команды с целью не разобран ни один id или часть id.
     """
     anchors, broken = anchors_of(command)
     if not anchors:
         if broken or TARGETED_COMMANDS.match(command):
-            return Place(Verdict.UNKNOWN, 'цель в команде не разобрана: ' + (', '.join(broken) or 'флага цели нет'))
+            return Place(Verdict.UNPARSED, 'цель в команде не разобрана: ' + (', '.join(broken) or 'флага цели нет'))
         return Place(Verdict.OTHER, '')
     if not base:
-        return Place(Verdict.UNKNOWN, f'{BASE_ENV} не задан, место записи не проверить')
+        return Place(Verdict.UNAVAILABLE, f'{BASE_ENV} не задан, место записи не проверить')
     if not reads:
         return Place(Verdict.UNREAD, 'в сессии нет чтений Craft')
     deadline, failures, pending = clock() + DEADLINE_SEC, [], list(anchors)
     for page_id in reads:
         left = deadline - clock()
         if left <= 0:
-            return Place(Verdict.UNKNOWN, f'не уложился в {DEADLINE_SEC} с')
+            return Place(Verdict.UNAVAILABLE, f'не уложился в {DEADLINE_SEC} с')
         try:
             tree = fetch_tree(base, page_id, min(API_TIMEOUT_SEC, left))
+        except urllib.error.HTTPError as error:
+            # 404 в обоих регистрах: страницы нет или она вне шаринга
+            # connect-ссылки. Это не сеть, и оператору важно это различать.
+            missing = error.code == 404
+            failures.append(f'{short(page_id)}: ' + ('не найдена в API в обоих регистрах' if missing else str(error)))
+            continue
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
             failures.append(f'{short(page_id)}: {error}')
             continue
@@ -227,11 +262,11 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
         if not pending:
             break
     if pending and failures:
-        return Place(Verdict.UNKNOWN, 'API Craft не ответил: ' + '; '.join(failures))
+        return Place(Verdict.UNAVAILABLE, 'API Craft не ответил: ' + '; '.join(failures))
     if pending:
         names = ', '.join(short(anchor.block_id) for anchor in pending)
         return Place(Verdict.UNREAD, f'цель {names} не найдена среди страниц, прочитанных в сессии')
     if broken:
-        return Place(Verdict.UNKNOWN, 'часть целей не разобрана: ' + ', '.join(broken))
+        return Place(Verdict.UNPARSED, 'часть целей не разобрана: ' + ', '.join(broken))
     names = ', '.join(short(anchor.block_id) for anchor in anchors)
     return Place(Verdict.OTHER, f'цель {names} не под «Решениями»')
