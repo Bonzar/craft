@@ -55,8 +55,10 @@ WARNING_PREFIX = 'Замок craft-type-lock: место записи в Craft �
 # Страница из ответа чтения: `blocks get --date today` id в команде не несёт,
 # а писать в заметку дня агент потом будет по id из ответа. Id из ответа
 # идут впереди id из команды: ответ несёт id в том регистре, в каком его
-# знает API, а в команде агент мог набрать его иначе.
-PAGE_TAG = re.compile(r'<page id="([^"]+)"|"id":\s*"([^"]+)"')
+# знает API, а в команде агент мог набрать его иначе. В markdown-ответе это
+# теги страниц, в JSON-ответе первое поле id — корень прочитанного.
+PAGE_TAG = re.compile(r'<page id="([^"]+)"')
+JSON_ROOT_ID = re.compile(r'"id":\s*"([^"]+)"')
 MAX_RESULT_PAGES = 4
 
 SKILL_TOOL = 'Skill'
@@ -256,8 +258,10 @@ class Module(jarvis.Module):
         return jarvis.Silence(reason=f'скилл {slug} вызван в ходе {turn}')
 
     def on_read(self, event, storage) -> jarvis.Response:
-        pages = [page for pair in PAGE_TAG.findall(str(event.tool_result or ''))
-                 for page in pair if page and BLOCK_ID.fullmatch(page)][:MAX_RESULT_PAGES]
+        answer = str(event.tool_result or '')
+        root = JSON_ROOT_ID.search(answer)
+        pages = [page for page in [*PAGE_TAG.findall(answer), *([root.group(1)] if root else [])]
+                 if BLOCK_ID.fullmatch(page)][:MAX_RESULT_PAGES]
         ids = unique_ids([*pages, *block_ids(command_of(event.tool_input))])
         if not ids:
             return jarvis.Silence(reason='чтение без id блока')

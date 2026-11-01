@@ -55,8 +55,8 @@ class Verdict(enum.Enum):
     DECISION и OTHER — суждение о месте. UNREAD — тоже суждение: цели нет ни
     на одной прочитанной странице, запись в непрочитанное. Два последних —
     замок судить не может, и это не вина хода. UNAVAILABLE — окружение: нет
-    базы API, API не ответил, не уложились в срок; такое длится всю сессию и
-    стоит предупреждения в ход раз за сессию, разовый он или постоянный.
+    базы API, API не ответил, не уложились в срок; предупреждение в ход
+    выводится раз за сессию, разовый отказ это или постоянный.
     UNPARSED — в одной команде не разобран ни один id цели или часть,
     предупреждать не о чем.
     """
@@ -247,6 +247,12 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
             return Place(Verdict.UNAVAILABLE, f'не уложился в {DEADLINE_SEC} с')
         try:
             tree = fetch_tree(base, page_id, min(API_TIMEOUT_SEC, left))
+        except urllib.error.HTTPError as error:
+            # 404 в обоих регистрах: страницы нет или она вне шаринга
+            # connect-ссылки. Это не сеть, и оператору важно это различать.
+            missing = error.code == 404
+            failures.append(f'{short(page_id)}: ' + ('не найдена в API в обоих регистрах' if missing else str(error)))
+            continue
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
             failures.append(f'{short(page_id)}: {error}')
             continue
