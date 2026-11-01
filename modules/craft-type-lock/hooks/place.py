@@ -56,8 +56,9 @@ class Verdict(enum.Enum):
     на одной прочитанной странице, запись в непрочитанное. Два последних —
     замок судить не может, и это не вина хода. UNAVAILABLE — окружение: нет
     базы API, API не ответил, не уложились в срок; такое длится всю сессию и
-    стоит предупреждения в ход. UNPARSED — id цели в одной команде не
-    разобран, предупреждать не о чем.
+    стоит предупреждения в ход раз за сессию, разовый он или постоянный.
+    UNPARSED — в одной команде не разобран ни один id цели или часть,
+    предупреждать не о чем.
     """
     DECISION = 'decision'
     OTHER = 'other'
@@ -174,18 +175,34 @@ def landing(command: str, tree: dict, anchor: Anchor) -> tuple[list, int] | None
     return siblings, index
 
 
+def other_case(block_id: str) -> str:
+    """Тот же id в другом регистре: верхний для нижнего и наоборот."""
+    return block_id.lower() if block_id != block_id.lower() else block_id.upper()
+
+
 def fetch_tree(base: str, page_id: str, timeout: float) -> dict:
-    query = urllib.parse.urlencode({'id': page_id, 'maxDepth': API_DEPTH})
-    request = urllib.request.Request(
-        f'{base.rstrip("/")}/blocks?{query}',
-        headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        tree = json.load(response)
+    """Страница на глубину API_DEPTH. 404 повторяется в другом регистре id:
+    агент мог набрать id не в том регистре, в каком его знает API."""
+    try:
+        tree = fetch_once(base, page_id, timeout)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        tree = fetch_once(base, other_case(page_id), timeout)
     if isinstance(tree, list):
         tree = tree[0] if tree else None
     if not isinstance(tree, dict) or not tree.get('id'):
         raise ValueError('ответ API не блок')
     return tree
+
+
+def fetch_once(base: str, page_id: str, timeout: float):
+    query = urllib.parse.urlencode({'id': page_id, 'maxDepth': API_DEPTH})
+    request = urllib.request.Request(
+        f'{base.rstrip("/")}/blocks?{query}',
+        headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
 
 
 def short(block_id: str) -> str:
@@ -212,7 +229,7 @@ def decision_zone(command: str, reads: list[str], base: str | None, clock=time.m
     Цель, которой нет ни на одной прочитанной странице, — UNREAD: по
     механике Craft страница цели читается до записи. UNAVAILABLE — нет
     CRAFT_API_BASE, API не ответил, проверка не уложилась в DEADLINE_SEC.
-    UNPARSED — у команды с целью ни один id не разобран.
+    UNPARSED — у команды с целью не разобран ни один id или часть id.
     """
     anchors, broken = anchors_of(command)
     if not anchors:

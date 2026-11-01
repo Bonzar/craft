@@ -11,9 +11,10 @@
 craft-decision. Место замок берёт из connect-API Craft: страницы, которые
 агент читал в сессии, запрашиваются заново, и цель записи ищется среди их
 блоков. Цели нет ни на одной — запись в непрочитанное, и она тоже под
-запретом. API недоступен — запись пропускается, раз за сессию замок говорит
-об этом текстом в ход, дальше молчит с причиной в следе. Это единственный
-поход замка в сеть, и только ради записи в Craft.
+запретом. API недоступен — место не судится, проверка по тегам идёт как
+обычно, а о том, что место не проверено, замок раз за сессию говорит
+текстом в ход, дальше молчит с причиной в следе. Это единственный поход
+замка в сеть, и только ради записи в Craft.
 """
 
 import fcntl
@@ -52,8 +53,10 @@ MAX_READS = 20
 WARNED_KEY = 'place_warned'
 WARNING_PREFIX = 'Замок craft-type-lock: место записи в Craft не проверяется,'
 # Страница из ответа чтения: `blocks get --date today` id в команде не несёт,
-# а писать в заметку дня агент потом будет по id из ответа.
-PAGE_TAG = re.compile(r'<page id="([^"]+)"')
+# а писать в заметку дня агент потом будет по id из ответа. Id из ответа
+# идут впереди id из команды: ответ несёт id в том регистре, в каком его
+# знает API, а в команде агент мог набрать его иначе.
+PAGE_TAG = re.compile(r'<page id="([^"]+)"|"id":\s*"([^"]+)"')
 MAX_RESULT_PAGES = 4
 
 SKILL_TOOL = 'Skill'
@@ -253,9 +256,9 @@ class Module(jarvis.Module):
         return jarvis.Silence(reason=f'скилл {slug} вызван в ходе {turn}')
 
     def on_read(self, event, storage) -> jarvis.Response:
-        pages = [page for page in PAGE_TAG.findall(str(event.tool_result or ''))
-                 if BLOCK_ID.fullmatch(page)][:MAX_RESULT_PAGES]
-        ids = unique_ids([*block_ids(command_of(event.tool_input)), *pages])
+        pages = [page for pair in PAGE_TAG.findall(str(event.tool_result or ''))
+                 for page in pair if page and BLOCK_ID.fullmatch(page)][:MAX_RESULT_PAGES]
+        ids = unique_ids([*pages, *block_ids(command_of(event.tool_input))])
         if not ids:
             return jarvis.Silence(reason='чтение без id блока')
         with state_lock(storage):

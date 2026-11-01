@@ -618,6 +618,19 @@ class DecisionLockTest(LockHarness):
         self.start('d-container-first', PROJECT, DEEP_PAGE)
         self.assert_silent(self.fire(write('d-container-first', f'blocks add --id {DEEP_PAGE} --position before --json {DECISION_JSON}')))
 
+    def test_a_lower_case_read_of_an_upper_case_page_is_served_by_the_answer(self) -> None:
+        self.fire(prompt('d-answer-case'))
+        raw = read('d-answer-case', f'blocks get {UPPER_PAGE.lower()} --depth -1')
+        raw['tool_response'] = f'<page id="{UPPER_PAGE}">\n</page>'
+        self.assert_silent(self.fire(raw))
+        result = self.fire(write('d-answer-case', f'blocks update --id {UPPER_D1} --json {DECISION_JSON}'))
+        self.assert_denied(result, 'craft-decision')
+
+    def test_a_404_is_retried_in_the_other_case(self) -> None:
+        self.start('d-retry-case', UPPER_PAGE.lower())
+        result = self.fire(write('d-retry-case', f'blocks update --id {UPPER_D1} --json {DECISION_JSON}'))
+        self.assert_denied(result, 'craft-decision')
+
     def test_an_upper_case_id_is_requested_as_is(self) -> None:
         self.start('d-upper', UPPER_PAGE)
         result = self.fire(write('d-upper', f'blocks update --id {UPPER_D1.lower()} --json {DECISION_JSON}'))
