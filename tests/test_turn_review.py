@@ -35,9 +35,10 @@ CRAFT_PARSER = 'command-tree-craft'
 # без критериев. В тестах набор как у настоящей установки, без модуля
 # сверки: он переезжает в другой модуль, и тесты от него не зависят.
 PROVIDERS = ('review-craft-calls', 'review-prompts', 'craft-session-anchor')
-CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-call')
+CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-call',
+                    'craft-reconcile')
 # Критерии к ходу с записью задачи: по slug поставщиков, как их находит ревью.
-TASK_CRITERIA = ('craft-base', 'anchor', 'task')
+TASK_CRITERIA = ('craft-base', 'consistency', 'anchor', 'task')
 TASK_CRITERIA_TEXT = ', '.join(TASK_CRITERIA)
 CRAFT_WRITE = 'mcp__Craft__craft_write'
 CRAFT_READ = 'mcp__Craft__craft_read'
