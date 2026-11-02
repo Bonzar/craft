@@ -281,7 +281,7 @@ class TurnReviewTest(TurnReviewCase):
         brief = storage.path('turn-review-brief.md').read_text(encoding='utf-8')
         for needle in ('`write` — вызов записи в Craft', '`prompt` — реплика Влада',
                        'Критерий «task»', 'Критерий «craft-base»', 'Критерий «anchor»',
-                       '"craft-base", "anchor", "task"'):
+                       '"craft-base", "consistency", "anchor", "task"'):
             self.assertIn(needle, brief)
         for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA',
                        '{{RECORDS', '`read` — вызов чтения', '`anchor` — выбор якоря'):
@@ -791,7 +791,7 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(prompt(session))
         self.fire(write(session, 'blocks update --id X --json \'{"markdown":"[Сборка #этап](block://AB-1)"}\''))
         self.blocked(self.fire(stop(session)))
-        self.assertEqual(self.state(session)['criteria'], ['craft-base', 'anchor'])
+        self.assertEqual(self.state(session)['criteria'], ['craft-base', 'consistency', 'anchor'])
 
     def test_an_unwritable_brief_is_a_block_and_not_a_crash(self) -> None:
         session = 's-brief-dir'
