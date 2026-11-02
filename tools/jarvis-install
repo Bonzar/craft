@@ -682,9 +682,7 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
     try:
-        for request in requests:
-            process.stdin.write((json.dumps({'jsonrpc': '2.0', **request}) + '\n').encode())
-            process.stdin.flush()
+        send_requests(process.stdin, requests)
         reader.join(timeout)
     finally:
         if process.poll() is None:
@@ -692,13 +690,33 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
         process.wait()
         reader.join(timeout=1)
         returncode = process.returncode
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None:
-                stream.close()
+        close_streams(process)
     if not wanted <= set(answers):
         raise RuntimeError(f'app-server не вернул ответы {sorted(wanted - set(answers))} '
                            f'(код завершения {returncode})')
     return answers
+
+
+def send_requests(stdin, requests: list[dict]) -> None:
+    """Запросы в app-server. Он уже вышел — дальше не пишем: каких ответов
+    нет, называет проверка ответов вместе с кодом завершения сервера."""
+    try:
+        for request in requests:
+            stdin.write((json.dumps({'jsonrpc': '2.0', **request}) + '\n').encode())
+            stdin.flush()
+    except BrokenPipeError:
+        return
+
+
+def close_streams(process) -> None:
+    """Закрыть трубы app-server. Недописанный в мёртвый сервер буфер stdin при
+    закрытии снова даёт BrokenPipeError: сервер уже ушёл, его код завершения
+    у вызывающего, а ошибка закрытия заслонила бы его."""
+    try:
+        process.stdin.close()
+    except BrokenPipeError:
+        pass
+    process.stdout.close()
 
 
 def listed_hooks(cli: str, codex_home: Path, config_path: Path, handshake: list[dict],

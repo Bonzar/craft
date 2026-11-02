@@ -14,6 +14,10 @@ from unittest.mock import patch
 from . import REPO_ROOT
 from .test_installer import installer
 
+# Больше буфера трубы Linux (64 КиБ): запись в вышедший сервер обязательно
+# упирается в EPIPE.
+PIPE_OVERFLOW = 1 << 20
+
 
 class DesktopBootstrapTest(unittest.TestCase):
     def test_release_check_rejects_bootstrap_present_only_in_dirty_working_tree(self):
@@ -127,6 +131,19 @@ class DesktopBootstrapTest(unittest.TestCase):
             binary.chmod(0o755)
             with self.assertRaisesRegex(RuntimeError, 'код завершения 17'):
                 installer.app_server_call(str(binary), root, [{'id': 1, 'method': 'initialize'}])
+
+    def test_a_server_gone_before_the_request_is_still_named_by_its_exit_code(self):
+        # Сервер вышел раньше, чем дописан запрос: запись в трубу ловит EPIPE.
+        # Запрос больше буфера трубы, поэтому гонка проигрывается всегда, а не
+        # только под нагрузкой, как случалось в общем прогоне тестов.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'broken-codex'
+            binary.write_text('#!/bin/sh\nexit 17\n')
+            binary.chmod(0o755)
+            request = {'id': 1, 'method': 'initialize', 'params': {'pad': 'x' * PIPE_OVERFLOW}}
+            with self.assertRaisesRegex(RuntimeError, 'код завершения 17'):
+                installer.app_server_call(str(binary), root, [request])
 
     def test_missing_hook_trust_stops_required_install(self):
         with tempfile.TemporaryDirectory() as directory:
