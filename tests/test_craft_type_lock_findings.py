@@ -123,5 +123,21 @@ class StaleTreeTest(ApiLockHarness):
         self.assertEqual(len(children), 2)
 
 
+class BatchWrittenTest(ApiLockHarness):
+    """Прошедшая пачка сбрасывает в дереве страницы всех своих целей, а не только последней."""
+
+    def test_every_target_of_a_written_batch_is_forgotten(self) -> None:
+        session = 'st-batch'
+        self.fire(prompt(session))
+        self.assert_silent(self.fire(stale_read(session)))
+        tree = self.storage(session).read_json(TREE_FILE)
+        self.assertIn(DIARY, json.dumps(tree))
+        raw = write(session, f'blocks delete --id {DIARY_LINE}; blocks delete --id {GHOST}')
+        self.fire(written(raw))
+        tree = self.storage(session).read_json(TREE_FILE)
+        pages = tree.get('pages', {})
+        self.assertIsNone((pages.get(DIARY) or {}).get('children'))
+
+
 if __name__ == '__main__':
     unittest.main()

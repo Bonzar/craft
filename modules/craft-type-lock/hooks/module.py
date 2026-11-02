@@ -274,7 +274,9 @@ class Module(jarvis.Module):
         command = craft.command_of(event.tool_input)
         parts = craft.split_commands(command) or [command]
         blind = any(craft.write_targets(part).dated or not craft.target_ids(part) for part in parts)
-        targets = craft.target_ids(command)
+        # Цели собираются по командам пачки: id в разборе всей строки
+        # теряется, когда к нему прилип «;» соседней команды.
+        targets = craft.unique_ids(target for part in parts for target in craft.target_ids(part))
         with state_lock(storage):
             released = release_row(storage, row_key(event, command))
             tree = read_tree.load(storage, time.time())
