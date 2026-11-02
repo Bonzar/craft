@@ -3,4 +3,5 @@
 # skill объявляет его списком `files`: правка руками в двух местах исключена.
 # Slug назван по вызову инструмента, а не по файлу.
 slug = "craft-call"
+for = ["turn-review"]
 requires = ["craft-sync"]

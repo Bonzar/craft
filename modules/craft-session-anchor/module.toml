@@ -1,5 +1,6 @@
 # Якорь сессии: задача или тема в базе Craft, к которой относится сессия. Модуль
 # пишет выбор якоря в объём ревью и привозит критерий «у сессии есть якорь».
 slug = "craft-session-anchor"
+for = ["turn-review"]
 events = ["prompt", "post-tool"]
 requires = ["turn-review"]

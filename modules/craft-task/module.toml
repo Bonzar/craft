@@ -2,6 +2,7 @@
 # правила типа живут разделами Craft. Замок craft-type-lock требует его вызова
 # перед любой записью с тегом #задача.
 slug = "craft-task"
+for = ["craft-type-lock", "turn-review"]
 # Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
 # из behavior. Решения отдаёт craft-decision, этапы — craft-stage, факты о
 # предмете раздела — craft-section, заметки и темы — craft-note.

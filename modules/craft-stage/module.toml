@@ -2,6 +2,7 @@
 # skill, без хука: правила живут разделами Craft, скилл ведёт по ним агента в
 # момент записи, а запись без скилла отклоняет craft-type-lock.
 slug = "craft-stage"
+for = ["craft-type-lock", "turn-review"]
 # Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
 # из behavior. Решения этапа отдаёт craft-decision, задачи этапа — craft-task,
 # факты о предмете раздела — craft-section, заметки и темы — craft-note.

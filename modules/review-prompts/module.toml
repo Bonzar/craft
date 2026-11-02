@@ -3,5 +3,6 @@
 # вопрос самого ревью, с авторством и временем. Значений у реплик нет, это
 # сырьё: ревью судит по нему само. Формат — data/review-records.md.
 slug = "review-prompts"
+for = ["turn-review"]
 events = ["prompt", "post-tool"]
 requires = ["turn-review"]

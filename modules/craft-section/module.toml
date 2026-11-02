@@ -2,6 +2,7 @@
 # живут разделами Craft, скилл ведёт по ним агента в момент записи, а пропуск
 # записи без скилла ловит проверка craft-type-lock.
 slug = "craft-section"
+for = ["craft-type-lock", "turn-review"]
 # Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
 # из behavior. Решения раздела отдаёт craft-decision, темы и заметки —
 # craft-note, задачи — craft-task.
