@@ -30,7 +30,7 @@ CRAFT_PARSER = 'command-tree-craft'
 # без критериев. В тестах набор как у настоящей установки.
 PROVIDERS = ('review-craft-calls', 'review-prompts', 'craft-session-anchor')
 CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-call',
-                    'craft-decision')
+                    'craft-reconcile')
 CRAFT_WRITE = 'mcp__Craft__craft_write'
 CRAFT_READ = 'mcp__Craft__craft_read'
 BLOCK = 'a6784801-9d92-875c-f146-50159368745b'

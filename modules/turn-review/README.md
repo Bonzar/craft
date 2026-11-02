@@ -214,7 +214,7 @@ Id в едином формате события нет, его поля зад�
 - `craft-stage`, `craft-task`, `craft-section`, `craft-note` — «записано
   правильно» по своему тегу: `stage`, `task`, `section`, `note`.
 - `craft-call` — `craft-base`: общие правила базы для любой записи.
-- `craft-decision` — `consistency`: записанное не противоречит кругу сверки.
+- `craft-reconcile` — `consistency`: записанное не противоречит кругу сверки.
 - `craft-session-anchor` — `anchor`: у сессии есть якорь.
 
 Порядок чтения до и после записи ревью не проверяет: чтение до записи — дело

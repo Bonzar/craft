@@ -4,6 +4,5 @@
 slug = "craft-section"
 for = ["craft-type-lock", "turn-review"]
 # Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
-# из behavior. Решения раздела отдаёт craft-decision, темы и заметки —
-# craft-note, задачи — craft-task.
-requires = ["craft-call", "behavior", "craft-decision", "craft-note", "craft-task"]
+# из behavior, сверку перед записью — из craft-reconcile.
+requires = ["craft-call", "behavior", "craft-reconcile"]

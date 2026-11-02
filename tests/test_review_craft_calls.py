@@ -20,7 +20,7 @@ SLUG = 'review-craft-calls'
 # Объём ведёт ревью хода, команду разбирает command-tree-craft, теги берутся из
 # data/entity.json модулей сущностей.
 NEIGHBOURS = ('turn-review', 'command-tree-craft', 'craft-task', 'craft-stage', 'craft-section',
-              'craft-note', 'craft-decision')
+              'craft-note', 'craft-reconcile')
 TASK_ADD = ('blocks add --siblingId X --position after --json '
             '\'{"type":"text","markdown":"- [ ] Купить молоко #задача/5м"}\'')
 BLOCK = 'a6784801-9d92-875c-f146-50159368745b'
