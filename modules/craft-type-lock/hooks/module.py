@@ -218,6 +218,12 @@ def deny_reason(tag_skills: dict[str, str], tags: list[str], missing: list[str],
             f'Вызови его инструментом {SKILL_TOOL}, прочитай правила типа и повтори запись.')
 
 
+def entity_reason(error: ValueError) -> str:
+    return (f'Справочник тегов типа не собирается: {error}. Запись в Craft закрыта, '
+            f'пока файл не исправлен: поправь {DATA_DIR}/{ENTITY_FILE} или переустанови набор '
+            'из свежего источника, потом повтори запись.')
+
+
 def unread_reason(note: str) -> str:
     return (f'Запись в непрочитанное: {note}. Прочитай страницу, куда пишешь, '
             '«blocks get ‹id страницы› --depth -1», и повтори запись.')
@@ -304,7 +310,12 @@ class Module(jarvis.Module):
         command = command_of(event.tool_input)
         if not command.strip():
             return jarvis.Silence(reason='в вызове нет команды')
-        tag_skills = load_tag_skills()
+        try:
+            tag_skills = load_tag_skills()
+        except ValueError as error:
+            # Без справочника тег в команде не опознать. Пропуск отдал бы
+            # запись с тегом без скилла типа, поэтому запись закрыта до починки.
+            return jarvis.Deny(reason=entity_reason(error))
         tags = find_tags(command, tag_pattern(tag_skills))
         state = read_state(storage)
         place = decision_zone(command, state[READS_KEY], os.environ.get(BASE_ENV))

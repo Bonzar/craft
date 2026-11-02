@@ -307,8 +307,8 @@ def load_lock_module():
     return module
 
 
-class TypesFileTest(unittest.TestCase):
-    """Испорченный справочник — ошибка с именем файла, а не тихий пропуск."""
+class EntityFileTest(unittest.TestCase):
+    """Испорченный data/entity.json соседа — ошибка с путём к файлу, а не тихий пропуск."""
 
     def test_the_real_entity_files_map_every_tag_to_a_module(self) -> None:
         lock = load_lock_module()
@@ -335,6 +335,35 @@ class TypesFileTest(unittest.TestCase):
             (other / 'entity.json').write_text('{"tags": ["#Задача"]}', encoding='utf-8')
             with self.assertRaises(ValueError):
                 lock.load_tag_skills(tmp)
+
+
+class BrokenEntityFileTest(LockHarness):
+    """Справочник не собирается — запись в Craft не проходит, в причине путь к файлу."""
+
+    def break_entity(self, slug: str, body: str) -> Path:
+        path = self.root / 'modules' / slug / 'data' / 'entity.json'
+        original = path.read_text(encoding='utf-8')
+        self.addCleanup(path.write_text, original, encoding='utf-8')
+        path.write_text(body, encoding='utf-8')
+        return path
+
+    def test_a_broken_entity_file_denies_the_write_with_its_path(self) -> None:
+        path = self.break_entity('craft-note', '{"tags":')
+        self.fire(prompt('s-broken-entity'))
+        # Вызов скилла без справочника — ошибка хука с путём, скилл не засчитан.
+        called = self.run_raw(skill('s-broken-entity', 'craft-task'))
+        self.assertNotEqual(called.returncode, 0)
+        self.assertIn(str(path), called.stderr)
+        result = self.fire(write('s-broken-entity', TASK_ADD))
+        self.assert_denied(result, str(path), 'entity.json')
+
+    def test_a_repeated_tag_denies_even_a_write_without_tags(self) -> None:
+        tag = json.loads((MODULES_DIR / 'craft-note' / 'data' / 'entity.json')
+                         .read_text(encoding='utf-8'))['tags'][0]
+        path = self.break_entity('craft-task', json.dumps({'tags': [tag]}, ensure_ascii=False))
+        self.fire(prompt('s-repeated-tag'))
+        result = self.fire(write('s-repeated-tag', 'blocks add --help'))
+        self.assert_denied(result, str(path), 'craft-note')
 
 
 class MissingSkillsTest(unittest.TestCase):

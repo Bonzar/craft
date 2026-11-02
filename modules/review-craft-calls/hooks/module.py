@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Поставщик данных ревью для Craft.
 
-На каждом вызове Craft MCP и скилла кладёт запись в объём ревью хода: запись
-с тегами типа, чтение с id блоков, вызов скилла. Вызовы подагента в объём не
-идут: это рецензент, а не ход. Формат записей — data/review-records.md.
+Кладёт запись в объём ревью хода на трёх вызовах Craft MCP и на вызове
+скилла: craft_write и craft_write_and_show — запись с тегами типа, craft_read —
+чтение с id блоков, Skill — slug скилла. Прочие инструменты Craft в объём не
+идут. Вызовы подагента тоже: это рецензент, а не ход. Формат записей —
+data/review-records.md.
 """
 
 import re
@@ -21,12 +23,18 @@ MCP_PREFIX = 'mcp__'
 MCP_NAME_SEPARATOR = '__'
 CRAFT_WRITE_TOOLS = ('craft_write', 'craft_write_and_show')
 CRAFT_READ_TOOL = 'craft_read'
+# Инструмент Craft узнаём по хвосту имени: имя сервера зависит от подключения.
+CRAFT_TOOL_PREFIX = 'craft_'
+# Справочник тегов не собрался: запись всё равно ложится, с текстом ошибки.
+TYPES_ERROR_KEY = 'types_error'
 COMMAND_FIELD = 'command'
 SKILL_TOOL = 'Skill'
 HEX = '[0-9a-fA-F]'
 BLOCK_ID = re.compile(rf'{HEX}{{8}}-{HEX}{{4}}-{HEX}{{4}}-{HEX}{{4}}-{HEX}{{12}}')
 SUBAGENT_REASON = 'вызов внутри подагента: в объём ревью не идёт'
 NOT_OURS_REASON = 'вызов не Craft и не скилл'
+OTHER_CRAFT_REASON = ('инструмент Craft {tool} в объём ревью не пишется: пишутся только '
+                      'craft_write, craft_write_and_show, craft_read и Skill')
 
 
 def library(runtime, slug: str):
@@ -51,22 +59,37 @@ def as_is(value):
     return value if isinstance(value, (str, dict, list)) else None
 
 
-def record_of(event, review, tags) -> dict | None:
-    """Запись объёма без номера хода: его ставит append_turn_record."""
+def write_record(event, review, tags) -> tuple[dict, ValueError | None]:
+    """Запись write и ошибка справочника тегов, если он не собрался.
+
+    Без справочника теги неизвестны: `types` равен null, текст ошибки лежит в
+    `types_error`. Запись всё равно ложится, иначе ушла бы от ревью совсем.
+    """
+    command = command_of(event.tool_input)
+    record = {review.KIND_KEY: review.KIND_WRITE, review.TOOL_KEY: event.tool_name,
+              review.COMMAND_KEY: command, review.RESULT_KEY: as_is(event.tool_result)}
+    try:
+        return {**record, review.TYPES_KEY: tags.find_tags(command, tags.load_tag_skills())}, None
+    except ValueError as error:
+        return {**record, review.TYPES_KEY: None, TYPES_ERROR_KEY: str(error)}, error
+
+
+def record_of(event, review, tags) -> tuple[dict | None, ValueError | None]:
+    """Запись объёма без номера хода и ошибка справочника; не наш вызов — None.
+
+    Номер хода ставит append_turn_record.
+    """
     tool = craft_tool(event.tool_name)
     if tool in CRAFT_WRITE_TOOLS:
-        command = command_of(event.tool_input)
-        return {review.KIND_KEY: review.KIND_WRITE, review.TOOL_KEY: event.tool_name,
-                review.COMMAND_KEY: command, review.RESULT_KEY: as_is(event.tool_result),
-                review.TYPES_KEY: tags.find_tags(command, tags.load_tag_skills())}
+        return write_record(event, review, tags)
     if tool == CRAFT_READ_TOOL:
         command = command_of(event.tool_input)
         return {review.KIND_KEY: review.KIND_READ, review.COMMAND_KEY: command,
-                review.IDS_KEY: list(dict.fromkeys(BLOCK_ID.findall(command)))}
+                review.IDS_KEY: list(dict.fromkeys(BLOCK_ID.findall(command)))}, None
     if event.tool_name == SKILL_TOOL:
         return {review.KIND_KEY: review.KIND_SKILL,
-                review.SKILL_KEY: tags.skill_slug(event.tool_input)}
-    return None
+                review.SKILL_KEY: tags.skill_slug(event.tool_input)}, None
+    return None, None
 
 
 class Module(jarvis.Module):
@@ -74,10 +97,19 @@ class Module(jarvis.Module):
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
         review = library(runtime, REVIEW)
-        record = record_of(event, review, library(runtime, TYPE_LOCK))
+        record, types_error = record_of(event, review, library(runtime, TYPE_LOCK))
         if record is None:
+            tool = craft_tool(event.tool_name)
+            if tool.startswith(CRAFT_TOOL_PREFIX):
+                return jarvis.Silence(reason=OTHER_CRAFT_REASON.format(tool=tool))
             return jarvis.Silence(reason=NOT_OURS_REASON)
-        review.append_turn_record(runtime.storage, record)
+        try:
+            review.append_turn_record(runtime.storage, record)
+        finally:
+            # Запись уже в объёме, теперь ошибка справочника. Упало и состояние
+            # ревью — его ошибка остаётся в цепочке исключения.
+            if types_error is not None:
+                raise types_error
         return jarvis.Silence(reason=f'в объём ревью: {record[review.KIND_KEY]}')
 
 
