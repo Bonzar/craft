@@ -20,7 +20,6 @@ craft-decision. Место замок берёт из connect-API Craft: стр�
 import fcntl
 import json
 import os
-import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,9 +29,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jarvis  # noqa: E402
 from jarvis import events, registry, wrappers  # noqa: E402
-from place import BASE_ENV, BLOCK_ID, Verdict, decision_zone  # noqa: E402
+from place import BASE_ENV, Verdict, decision_zone  # noqa: E402
 
 MODULE_DIR = Path(__file__).resolve().parents[1]
+# Разбор команд Craft: теги, id, цели записи, имена инструментов.
+CRAFT_PARSER = 'command-tree-craft'
 # Теги сущности лежат в данных её модуля: файл data/entity.json с полем
 # tags. Замок собирает справочник «тег → скилл» по соседям и чужих модулей
 # не знает: отказ от сущности это удаление одного модуля.
@@ -56,35 +57,20 @@ MAX_READS = 20
 # stderr хука до модели не доходит (замер 01.11.2026 живой сессией).
 WARNED_KEY = 'place_warned'
 WARNING_PREFIX = 'Замок craft-type-lock: место записи в Craft не проверяется,'
-# Страница из ответа чтения: `blocks get --date today` id в команде не несёт,
+# Страницы из ответа чтения: `blocks get --date today` id в команде не несёт,
 # а писать в заметку дня агент потом будет по id из ответа. Id из ответа
 # идут впереди id из команды: ответ несёт id в том регистре, в каком его
-# знает API, а в команде агент мог набрать его иначе. В markdown-ответе это
-# теги страниц, в JSON-ответе первое поле id — корень прочитанного.
-PAGE_TAG = re.compile(r'<page id="([^"]+)"')
-JSON_ROOT_ID = re.compile(r'"id":\s*"([^"]+)"')
+# знает API, а в команде агент мог набрать его иначе.
 MAX_RESULT_PAGES = 4
 
 SKILL_TOOL = 'Skill'
 SKILL_INPUT_FIELD = 'skill'
 # Плагинный скилл приходит как «плагин:имя»; slug — часть после двоеточия.
 PLUGIN_SEPARATOR = ':'
-# Имя сервера Craft MCP зависит от того, как его подключили, поэтому
-# инструмент узнаём по хвосту имени. write_and_show исполняет те же команды,
-# что write: без него замок обходился бы сменой инструмента.
-MCP_PREFIX = 'mcp__'
-MCP_NAME_SEPARATOR = '__'
-CRAFT_WRITE_TOOLS = ('craft_write', 'craft_write_and_show')
-CRAFT_READ_TOOL = 'craft_read'
-COMMAND_FIELD = 'command'
-# Агент может прислать JSON-полезную нагрузку с кириллицей в виде \uXXXX:
-# тег там тот же, и пропускать его нельзя.
-UNICODE_ESCAPE = re.compile(r'\\u([0-9a-fA-F]{4})')
-# Текст ссылки — копия имени цели вместе с её тегами. Ссылка на этап из
-# задачи этап не пишет, поэтому тег в тексте ссылки не считается.
-BLOCK_LINK = re.compile(r'\[[^\]]*\]\((?:block|craftdocs)://[^)]*\)')
 
 DECISION_SKILL = 'craft-decision'
+
+
 def load_tag_skills(modules_dir: Path | None = None) -> dict[str, str]:
     """Тег → slug модуля сущности по файлам data/entity.json соседей."""
     root = Path(modules_dir) if modules_dir is not None else registry.modules_dir(MODULE_DIR)
@@ -110,58 +96,11 @@ def load_tag_skills(modules_dir: Path | None = None) -> dict[str, str]:
     return result
 
 
-def tag_pattern(tags) -> re.Pattern:
-    """Тег целым словом; хвост через слеш (#задача/готово) тоже тег.
-
-    Регистр не важен: проверено ли, что Craft считает #Задача тем же тегом,
-    мы не знаем, а лишний запрет дешевле пропуска.
-    """
-    names = '|'.join(re.escape(tag[1:]) for tag in sorted(tags, key=len, reverse=True))
-    return re.compile(rf'(?<![\w#])#({names})(?![\w-])', re.IGNORECASE)
-
-
-def find_tags(command: str, pattern: re.Pattern) -> list[str]:
-    text = UNICODE_ESCAPE.sub(lambda match: chr(int(match.group(1), 16)), command)
-    text = BLOCK_LINK.sub('', text)
-    found = {TAG_PREFIX + match.group(1).lower() for match in pattern.finditer(text)}
-    return sorted(found)
-
-
-def craft_tool(tool_name) -> str:
-    if not isinstance(tool_name, str) or not tool_name.startswith(MCP_PREFIX):
-        return ''
-    return tool_name.rsplit(MCP_NAME_SEPARATOR, 1)[-1]
-
-
-def is_craft_write(tool_name) -> bool:
-    return craft_tool(tool_name) in CRAFT_WRITE_TOOLS
-
-
 def skill_slug(tool_input) -> str:
     name = tool_input.get(SKILL_INPUT_FIELD) if isinstance(tool_input, dict) else None
     if not isinstance(name, str):
         return ''
     return name.rsplit(PLUGIN_SEPARATOR, 1)[-1].strip()
-
-
-def command_of(tool_input) -> str:
-    command = tool_input.get(COMMAND_FIELD) if isinstance(tool_input, dict) else None
-    return command if isinstance(command, str) else ''
-
-
-def unique_ids(ids) -> list[str]:
-    """Без повторов в любом регистре, порядок и регистр первого вхождения."""
-    seen, result = set(), []
-    for block_id in ids:
-        if block_id.lower() not in seen:
-            seen.add(block_id.lower())
-            result.append(block_id)
-    return result
-
-
-def block_ids(text: str) -> list[str]:
-    """Id блоков из текста, без повторов, в порядке появления."""
-    return unique_ids(match.group(0) for match in BLOCK_ID.finditer(text))
 
 
 def new_state(turn: int = 0, skills: dict | None = None, reads: list | None = None,
@@ -170,7 +109,16 @@ def new_state(turn: int = 0, skills: dict | None = None, reads: list | None = No
             WARNED_KEY: warned}
 
 
-def read_state(storage: jarvis.Storage) -> dict:
+def library(runtime: jarvis.Runtime, slug: str):
+    """Часть lib соседа из requires. Нет её — ошибка с советом переустановить."""
+    found = runtime.library(slug)
+    if found is None:
+        raise RuntimeError(f'у модуля {slug} нет части lib. Переустанови набор из свежего источника')
+    return found.load()
+
+
+def read_state(storage: jarvis.Storage, craft) -> dict:
+    """Состояние замка; craft — разбор команд Craft, им проверяются id чтений."""
     path = storage.path(STATE_FILE)
     try:
         state = storage.read_json(STATE_FILE, default=None)
@@ -183,7 +131,7 @@ def read_state(storage: jarvis.Storage) -> dict:
     skills = state.get(SKILLS_KEY) if isinstance(state, dict) else None
     reads = state.get(READS_KEY, []) if isinstance(state, dict) else None
     if (type(turn) is not int or not isinstance(skills, dict) or not isinstance(reads, list)
-            or not all(isinstance(item, str) and BLOCK_ID.fullmatch(item) for item in reads)):
+            or not all(craft.is_block_id(item) for item in reads)):
         raise ValueError(f'файл состояния замка {path} испорчен: {state!r}. '
                          'Удали его, счёт начнётся заново')
     return new_state(turn, skills, reads, bool(state.get(WARNED_KEY)))
@@ -201,9 +149,9 @@ def state_lock(storage: jarvis.Storage):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def remember_reads(reads: list[str], fresh: list[str]) -> list[str]:
+def remember_reads(reads: list[str], fresh: list[str], craft) -> list[str]:
     """Свежие чтения вперёд, без повторов, не длиннее MAX_READS."""
-    return unique_ids([*fresh, *reads])[:MAX_READS]
+    return craft.unique_ids([*fresh, *reads])[:MAX_READS]
 
 
 def deny_reason(tag_skills: dict[str, str], tags: list[str], missing: list[str],
@@ -242,55 +190,52 @@ class Module(jarvis.Module):
         handler = handlers.get(event.event)
         if handler is None:
             return jarvis.Silence(reason=f'событие {event.event} замку не нужно')
-        return handler(event, runtime.storage)
+        return handler(event, runtime.storage, library(runtime, CRAFT_PARSER))
 
-    def on_prompt(self, event, storage) -> jarvis.Response:
+    def on_prompt(self, event, storage, craft) -> jarvis.Response:
         with state_lock(storage):
-            state = read_state(storage)
+            state = read_state(storage, craft)
             turn = state[TURN_KEY] + 1
             storage.write_json(STATE_FILE, new_state(turn, state[SKILLS_KEY], state[READS_KEY],
                                                      state[WARNED_KEY]))
         return jarvis.Silence(reason=f'начался ход {turn}')
 
-    def on_after_compact(self, event, storage) -> jarvis.Response:
+    def on_after_compact(self, event, storage, craft) -> jarvis.Response:
         # После сжатия правила скилла из контекста ушли: вызывать заново.
         # Чтения остаются: это не знание агента, а подсказка, где искать цель.
         with state_lock(storage):
-            state = read_state(storage)
+            state = read_state(storage, craft)
             storage.write_json(STATE_FILE, new_state(reads=state[READS_KEY], warned=state[WARNED_KEY]))
         return jarvis.Silence(reason='после сжатия счёт ходов и скиллов сброшен')
 
-    def on_post_tool(self, event, storage) -> jarvis.Response:
-        if craft_tool(event.tool_name) == CRAFT_READ_TOOL:
-            return self.on_read(event, storage)
+    def on_post_tool(self, event, storage, craft) -> jarvis.Response:
+        if craft.is_craft_read(event.tool_name):
+            return self.on_read(event, storage, craft)
         if event.tool_name != SKILL_TOOL:
             return jarvis.Silence(reason='вызван не скилл')
         slug = skill_slug(event.tool_input)
         if slug not in {*load_tag_skills().values(), DECISION_SKILL}:
             return jarvis.Silence(reason=f'скилл {slug or "без имени"} не скилл типа')
         with state_lock(storage):
-            state = read_state(storage)
+            state = read_state(storage, craft)
             turn = state[TURN_KEY]
             storage.write_json(STATE_FILE, new_state(
                 turn, {**state[SKILLS_KEY], slug: turn}, state[READS_KEY], state[WARNED_KEY]))
         return jarvis.Silence(reason=f'скилл {slug} вызван в ходе {turn}')
 
-    def on_read(self, event, storage) -> jarvis.Response:
-        answer = str(event.tool_result or '')
-        root = JSON_ROOT_ID.search(answer)
-        pages = [page for page in [*PAGE_TAG.findall(answer), *([root.group(1)] if root else [])]
-                 if BLOCK_ID.fullmatch(page)][:MAX_RESULT_PAGES]
-        ids = unique_ids([*pages, *block_ids(command_of(event.tool_input))])
+    def on_read(self, event, storage, craft) -> jarvis.Response:
+        pages = craft.answer_page_ids(str(event.tool_result or ''))[:MAX_RESULT_PAGES]
+        ids = craft.unique_ids([*pages, *craft.block_ids(craft.command_of(event.tool_input))])
         if not ids:
             return jarvis.Silence(reason='чтение без id блока')
         with state_lock(storage):
-            state = read_state(storage)
+            state = read_state(storage, craft)
             storage.write_json(STATE_FILE, new_state(
-                state[TURN_KEY], state[SKILLS_KEY], remember_reads(state[READS_KEY], ids),
+                state[TURN_KEY], state[SKILLS_KEY], remember_reads(state[READS_KEY], ids, craft),
                 state[WARNED_KEY]))
         return jarvis.Silence(reason=f'прочитано: {", ".join(item[:8] for item in ids)}')
 
-    def warn_once(self, storage, state: dict, reason: str) -> str | None:
+    def warn_once(self, storage, craft, state: dict, reason: str) -> str | None:
         """Текст в ход о том, что место записи не проверяется; раз за сессию.
 
         Молчаливый отказ от проверки на всю сессию прятал бы решения без
@@ -300,14 +245,14 @@ class Module(jarvis.Module):
         if state[WARNED_KEY]:
             return None
         with state_lock(storage):
-            fresh = read_state(storage)
+            fresh = read_state(storage, craft)
             storage.write_json(STATE_FILE, {**fresh, WARNED_KEY: True})
         return f'{WARNING_PREFIX} {reason}. Решение без craft-decision поймает только ревью хода.'
 
-    def on_pre_tool(self, event, storage) -> jarvis.Response:
-        if not is_craft_write(event.tool_name):
+    def on_pre_tool(self, event, storage, craft) -> jarvis.Response:
+        if not craft.is_craft_write(event.tool_name):
             return jarvis.Silence(reason='вызов не пишет в Craft')
-        command = command_of(event.tool_input)
+        command = craft.command_of(event.tool_input)
         if not command.strip():
             return jarvis.Silence(reason='в вызове нет команды')
         try:
@@ -316,15 +261,15 @@ class Module(jarvis.Module):
             # Без справочника тег в команде не опознать. Пропуск отдал бы
             # запись с тегом без скилла типа, поэтому запись закрыта до починки.
             return jarvis.Deny(reason=entity_reason(error))
-        tags = find_tags(command, tag_pattern(tag_skills))
-        state = read_state(storage)
-        place = decision_zone(command, state[READS_KEY], os.environ.get(BASE_ENV))
+        tags = craft.find_tags(command, tag_skills)
+        state = read_state(storage, craft)
+        place = decision_zone(craft.write_targets(command), state[READS_KEY], os.environ.get(BASE_ENV))
         if place.verdict is Verdict.UNREAD:
             return jarvis.Deny(reason=unread_reason(place.reason))
         warning = None
         if place.verdict is Verdict.UNAVAILABLE:
             tail = f', место записи не проверено: {place.reason}'
-            warning = self.warn_once(storage, state, place.reason)
+            warning = self.warn_once(storage, craft, state, place.reason)
         elif place.verdict is Verdict.UNPARSED:
             tail = f', место записи не проверено: {place.reason}'
         elif place.verdict in (Verdict.DECISION, Verdict.OTHER):

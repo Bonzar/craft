@@ -17,8 +17,9 @@ from jarvis.trace import Trace
 from . import CORE_SOURCE, MODULES_DIR
 
 SLUG = 'review-craft-calls'
-# Объём ведёт ревью хода, теги ищет замок по data/entity.json модулей сущностей.
-NEIGHBOURS = ('turn-review', 'craft-type-lock', 'craft-task', 'craft-stage', 'craft-section',
+# Объём ведёт ревью хода, команду разбирает command-tree-craft, теги берутся из
+# data/entity.json модулей сущностей.
+NEIGHBOURS = ('turn-review', 'command-tree-craft', 'craft-task', 'craft-stage', 'craft-section',
               'craft-note', 'craft-decision')
 TASK_ADD = ('blocks add --siblingId X --position after --json '
             '\'{"type":"text","markdown":"- [ ] Купить молоко #задача/5м"}\'')
@@ -120,13 +121,14 @@ class TagMapErrorTest(unittest.TestCase):
     def test_an_unreadable_modules_dir_keeps_the_write_and_raises(self) -> None:
         hook = load_file('review_craft_calls_hook', MODULES_DIR / SLUG / 'hooks' / 'module.py')
         review = registry.LibraryModule('turn-review', MODULES_DIR / 'turn-review' / 'lib').load()
-
+        craft = registry.LibraryModule(
+            'command-tree-craft', MODULES_DIR / 'command-tree-craft' / 'lib').load()
 
         def load_tag_skills():
             raise PermissionError(13, 'нет доступа', '/modules')
 
-        tags = SimpleNamespace(load_tag_skills=load_tag_skills, find_tags=lambda command, found: [])
-        libraries = {'turn-review': review, 'craft-type-lock': tags}
+        hook.load_tag_skills = load_tag_skills
+        libraries = {'turn-review': review, 'command-tree-craft': craft}
         runtime = SimpleNamespace(storage=self.storage, library=lambda slug: SimpleNamespace(
             load=lambda: libraries[slug]))
         event = SimpleNamespace(agent_id=None, tool_name='mcp__Craft__craft_write',
