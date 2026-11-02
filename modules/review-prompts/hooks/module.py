@@ -69,8 +69,8 @@ class Module(jarvis.Module):
         return jarvis.Silence(reason='ответ кнопками в объёме ревью')
 
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
-        # Номер берётся и на пустой реплике: модуль, пропустивший реплику,
-        # сбил бы общий счёт ходов (см. claim_prompt_turn).
+        # Номер берётся на каждой реплике: без id реплики от харнеса модуль,
+        # пропустивший её, сбил бы общий счёт ходов (см. claim_prompt_turn).
         storage, text = runtime.storage, event.prompt_text or ''
         with review.state_lock(storage):
             turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, event)

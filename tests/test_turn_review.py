@@ -676,10 +676,10 @@ class TurnReviewTest(TurnReviewCase):
             self.assertEqual(self.state(session)['turn'], 3)
 
     def test_identical_prompts_with_ids_keep_their_turns_when_a_provider_skips_one(self) -> None:
-        # session-anchor пропустил первую реплику (выключен режимом), на второй
+        # craft-session-anchor пропустил первую реплику (выключен режимом), на второй
         # такой же пришёл первым. По id реплики он всё равно в новом ходе.
         session = 's-skip-provider'
-        anchor = self.root / 'modules' / 'session-anchor' / 'hooks' / 'module.py'
+        anchor = self.root / 'modules' / 'craft-session-anchor' / 'hooks' / 'module.py'
         text = 'Беру задачу «Ревью»'
         for entry in self.hooks['prompt']:
             if entry != anchor:
@@ -780,18 +780,18 @@ class PromptTurnTest(unittest.TestCase):
     def test_a_module_that_skipped_a_prompt_does_not_glue_the_next_one(self) -> None:
         self.assertEqual(self.claim(SLUG, 'p-1'), 1)
         self.assertEqual(self.claim('review-prompts', 'p-1'), 1)
-        # session-anchor пропустил p-1 и на p-2 пришёл первым.
-        self.assertEqual(self.claim('session-anchor', 'p-2'), 2)
+        # craft-session-anchor пропустил p-1 и на p-2 пришёл первым.
+        self.assertEqual(self.claim('craft-session-anchor', 'p-2'), 2)
         self.assertEqual(self.claim(SLUG, 'p-2'), 2)
         self.assertEqual(self.claim('review-prompts', 'p-2'), 2)
 
     def test_a_module_switched_off_does_not_split_the_turn(self) -> None:
         # Поставщика выключили между репликами: тот, кто остался, не находит
         # себя в списке взявших — и это не повод открыть второй ход.
-        for slug in (SLUG, 'review-prompts', 'session-anchor'):
+        for slug in (SLUG, 'review-prompts', 'craft-session-anchor'):
             self.assertEqual(self.claim(slug, 'p-1'), 1)
         self.assertEqual(self.claim(SLUG, 'p-2'), 2)
-        self.assertEqual(self.claim('session-anchor', 'p-2'), 2)
+        self.assertEqual(self.claim('craft-session-anchor', 'p-2'), 2)
 
     def test_the_same_prompt_taken_twice_by_a_module_is_one_turn(self) -> None:
         # Повтор хука одного модуля на той же реплике — не новый ход.
@@ -801,7 +801,7 @@ class PromptTurnTest(unittest.TestCase):
 
     def test_identical_prompts_with_their_ids_are_two_turns(self) -> None:
         for prompt_id, turn in (('p-1', 1), ('p-2', 2)):
-            for slug in ('session-anchor', SLUG, 'review-prompts'):
+            for slug in ('craft-session-anchor', SLUG, 'review-prompts'):
                 self.assertEqual(self.claim(slug, prompt_id), turn)
 
     def test_without_an_id_the_text_and_the_takers_decide(self) -> None:
