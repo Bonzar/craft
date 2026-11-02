@@ -1,4 +1,4 @@
-// shell-tree — разбор командной строки оболочки в дерево и ответ «пишет ли она».
+// command-tree-shell — разбор командной строки оболочки в дерево и ответ «пишет ли она».
 //
 // Модули и замки живут на Python, а полное дерево команды из стандартной
 // библиотеки Python не собрать: там есть только токены shlex. Поэтому разбор
@@ -6,8 +6,8 @@
 //
 // Команда приходит на stdin:
 //
-//	echo 'cd /tmp && rm -rf build' | shell-tree parse   --cwd /repo
-//	echo 'cd /tmp && rm -rf build' | shell-tree verdict --cwd /repo
+//	echo 'cd /tmp && rm -rf build' | command-tree-shell parse   --cwd /repo
+//	echo 'cd /tmp && rm -rf build' | command-tree-shell verdict --cwd /repo
 //
 // parse печатает дерево: звенья в порядке выполнения, слова после снятия
 // кавычек, перенаправления, подстановки команд вложенными деревьями, снятые
@@ -30,10 +30,10 @@ import (
 	"os"
 )
 
-const usage = `shell-tree — разбор команды оболочки в дерево.
+const usage = `command-tree-shell — разбор команды оболочки в дерево.
 
-  shell-tree parse   [--cwd КАТАЛОГ]
-  shell-tree verdict [--cwd КАТАЛОГ] [--rules ПУТЬ] [--commands КАТАЛОГ]
+  command-tree-shell parse   [--cwd КАТАЛОГ]
+  command-tree-shell verdict [--cwd КАТАЛОГ] [--rules ПУТЬ] [--commands КАТАЛОГ]
 
 Команда читается со stdin, ответ печатается JSON на stdout.
   --cwd       каталог вызова: от него считаются относительные пути и cd

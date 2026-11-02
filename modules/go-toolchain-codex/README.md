@@ -1,6 +1,6 @@
 # go-toolchain-codex
 
-Адаптер с `for = ["craft-sync", "shell-tree"]` и зависимостью `go-toolchain`.
+Адаптер с `for = ["craft-sync", "command-tree-shell"]` и зависимостью `go-toolchain`.
 Он устанавливается только в Codex. У каждого сборщика контракт один:
 найти свои адаптеры и вызвать `lib.prepare_build(runtime)`, получив путь
 к компилятору и среду сборки.

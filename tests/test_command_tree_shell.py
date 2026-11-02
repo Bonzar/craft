@@ -1,9 +1,9 @@
-"""Библиотечная часть модуля shell-tree: вызов бинарника и ожидание сборки.
+"""Библиотечная часть модуля command-tree-shell: вызов бинарника и ожидание сборки.
 
 Настоящий бинарник тут не нужен: проверяется то, что решено кодом на Python —
 где ищется бинарник, что уходит ему на вход, чего ждут, когда его нет, и что
 происходит, когда ответ не тот. Сам разбор команд проверяют тесты на Go рядом с
-исходниками, сборку — `tests/test_shell_tree_build.py`.
+исходниками, сборку — `tests/test_command_tree_shell_build.py`.
 """
 
 import importlib.util
@@ -18,12 +18,12 @@ from pathlib import Path
 
 from . import MODULES_DIR
 
-MODULE = MODULES_DIR / 'shell-tree'
+MODULE = MODULES_DIR / 'command-tree-shell'
 
 
 def load_library():
     spec = importlib.util.spec_from_file_location(
-        'shell_tree_lib', MODULE / 'lib' / '__init__.py'
+        'command_tree_shell_lib', MODULE / 'lib' / '__init__.py'
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -65,7 +65,7 @@ class LibraryTest(unittest.TestCase):
         """Заглушка бинарника плюс журнал того, с чем её позвали."""
         self.calls = self.root / 'calls.log'
         self.input = self.root / 'input.txt'
-        tool = self.root / 'shell-tree'
+        tool = self.root / 'command-tree-shell'
         tool.write_text(
             f'#!/bin/sh\necho "$@" >> {self.calls}\ncat > {self.input}\n{body}\n',
             encoding='utf-8',
@@ -98,20 +98,20 @@ class LibraryTest(unittest.TestCase):
 
     def test_broken_json_is_an_error_and_not_an_empty_answer(self) -> None:
         self.stub('echo "не json вовсе"')
-        with self.assertRaises(library.ShellTreeError) as raised:
+        with self.assertRaises(library.CommandTreeShellError) as raised:
             library.verdict('rm -rf /')
         self.assertIn('не JSON', str(raised.exception))
 
     def test_a_failed_call_carries_its_reason_out(self) -> None:
         self.stub('echo "команда не разобралась: кавычка" >&2\nexit 1')
-        with self.assertRaises(library.ShellTreeError) as raised:
+        with self.assertRaises(library.CommandTreeShellError) as raised:
             library.parse('cat "не закрытая')
         self.assertIn('кавычка', str(raised.exception))
 
     # --- бинарника нет ---
 
     def test_no_binary_is_an_error_that_says_where_it_was_waited_for(self) -> None:
-        with self.assertRaises(library.ShellTreeError) as raised:
+        with self.assertRaises(library.CommandTreeShellError) as raised:
             library.verdict('rm -rf /')
         said = str(raised.exception)
         self.assertIn(str(library.BINARY), said)
@@ -161,7 +161,7 @@ class LibraryTest(unittest.TestCase):
         source.mkdir()
         (source / 'main.go').write_text('package main\n', encoding='utf-8')
         first = library.fingerprint(source)
-        (source / 'shell-tree').write_text('собранный бинарник', encoding='utf-8')
+        (source / 'command-tree-shell').write_text('собранный бинарник', encoding='utf-8')
         self.assertEqual(first, library.fingerprint(source))
 
 

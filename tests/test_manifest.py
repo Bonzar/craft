@@ -11,16 +11,16 @@ class ParseTest(unittest.TestCase):
     def test_six_field_header_is_read(self) -> None:
         parsed = m.parse(
             'slug = "lock-irreversible-shell"\n'
-            'for = ["shell-tree-*"]\n'
+            'for = ["command-tree-*"]\n'
             'events = ["pre-tool", "prompt"]\n'
-            'requires = ["shell-tree"]\n'
+            'requires = ["command-tree-shell"]\n'
             'harness = "claude"\n'
             'copies = 3\n'
         )
         self.assertEqual(parsed.slug, 'lock-irreversible-shell')
-        self.assertEqual(parsed.serves, ('shell-tree-*',))
+        self.assertEqual(parsed.serves, ('command-tree-*',))
         self.assertEqual(parsed.events, ('pre-tool', 'prompt'))
-        self.assertEqual(parsed.requires, ('shell-tree',))
+        self.assertEqual(parsed.requires, ('command-tree-shell',))
         self.assertEqual(parsed.harness, 'claude')
         self.assertEqual(parsed.copies, 3)
 
@@ -79,7 +79,7 @@ class ParseTest(unittest.TestCase):
 
     def test_requires_must_be_a_list_of_strings(self) -> None:
         with self.assertRaises(ValueError):
-            m.parse('slug = "probe"\nrequires = "shell-tree"\n')
+            m.parse('slug = "probe"\nrequires = "command-tree-shell"\n')
 
     def test_empty_for_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -88,7 +88,7 @@ class ParseTest(unittest.TestCase):
             m.parse('slug = "probe"\nfor = [" "]\n')
 
     def test_slug_is_limited_to_lowercase_letters_digits_and_hyphen(self) -> None:
-        for slug in ('probe', 'shell-tree', 'probe2', 'a-1'):
+        for slug in ('probe', 'command-tree-shell', 'probe2', 'a-1'):
             self.assertEqual(m.parse(f'slug = "{slug}"').slug, slug)
 
     def test_slug_that_is_not_a_safe_path_segment_is_rejected(self) -> None:
@@ -125,39 +125,39 @@ class ParseTest(unittest.TestCase):
 
 class RequiresTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.plain = m.Manifest(slug='shell-tree')
-        self.family_member = m.Manifest(slug='shell-tree-bash')
-        self.adapter = m.Manifest(slug='bash-adapter', serves=('shell-tree-*',))
+        self.plain = m.Manifest(slug='command-tree-shell')
+        self.family_member = m.Manifest(slug='command-tree-craft')
+        self.adapter = m.Manifest(slug='bash-adapter', serves=('command-tree-*',))
         self.stranger = m.Manifest(slug='other')
 
     def test_plain_slug_matches_by_slug(self) -> None:
-        self.assertTrue(m.matches('shell-tree', self.plain))
-        self.assertFalse(m.matches('shell-tree', self.stranger))
+        self.assertTrue(m.matches('command-tree-shell', self.plain))
+        self.assertFalse(m.matches('command-tree-shell', self.stranger))
 
     def test_plain_slug_does_not_match_a_family_member(self) -> None:
-        self.assertFalse(m.matches('shell-tree', self.family_member))
+        self.assertFalse(m.matches('command-tree-shell', self.family_member))
 
     def test_family_mask_matches_by_slug(self) -> None:
-        self.assertTrue(m.matches('shell-tree-*', self.family_member))
+        self.assertTrue(m.matches('command-tree-*', self.family_member))
 
     def test_family_mask_matches_an_adapter_that_wrote_the_same_mask(self) -> None:
         # Адаптер в `for` и зависимый в `requires` пишут одну и ту же маску.
-        self.assertTrue(m.matches('shell-tree-*', self.adapter))
+        self.assertTrue(m.matches('command-tree-*', self.adapter))
 
     def test_a_plain_slug_in_for_answers_that_slug_as_a_requirement(self) -> None:
-        self.assertTrue(m.matches('shell-tree', m.Manifest(slug='x', serves=('shell-tree',))))
+        self.assertTrue(m.matches('command-tree-shell', m.Manifest(slug='x', serves=('command-tree-shell',))))
 
     def test_family_mask_does_not_match_a_stranger(self) -> None:
-        self.assertFalse(m.matches('shell-tree-*', self.stranger))
+        self.assertFalse(m.matches('command-tree-*', self.stranger))
 
     def test_resolve_reports_what_was_not_found(self) -> None:
-        found, missing = m.resolve(['shell-tree', 'nothing-*'], [self.plain, self.adapter])
-        self.assertEqual(list(found), ['shell-tree'])
+        found, missing = m.resolve(['command-tree-shell', 'nothing-*'], [self.plain, self.adapter])
+        self.assertEqual(list(found), ['command-tree-shell'])
         self.assertEqual(missing, ('nothing-*',))
 
     def test_resolve_returns_every_module_behind_a_mask(self) -> None:
-        found, missing = m.resolve(['shell-tree-*'], [self.family_member, self.adapter, self.stranger])
-        self.assertEqual({item.slug for item in found['shell-tree-*']}, {'shell-tree-bash', 'bash-adapter'})
+        found, missing = m.resolve(['command-tree-*'], [self.family_member, self.adapter, self.stranger])
+        self.assertEqual({item.slug for item in found['command-tree-*']}, {'command-tree-craft', 'bash-adapter'})
         self.assertEqual(missing, ())
 
 

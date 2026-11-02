@@ -1,4 +1,4 @@
-module shell-tree
+module command-tree-shell
 
 go 1.24.7
 

@@ -13,7 +13,7 @@ timeout = 1800
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" craft-sync --event session-start; fi"
+command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" command-tree-shell --event session-start; fi"
 timeout = 1800
 additionalContextLimit = 0
 
@@ -21,7 +21,7 @@ additionalContextLimit = 0
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" shell-tree --event session-start; fi"
+command = "jarvis_root=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; if [ -f \"$jarvis_root/.git\" ] && [ -f \"$jarvis_root/.codex/jarvis/desktop.json\" ] && [ -f \"$jarvis_root/tools/jarvis-hook\" ]; then python3 \"$jarvis_root/tools/jarvis-hook\" craft-sync --event session-start; fi"
 timeout = 1800
 additionalContextLimit = 0
 

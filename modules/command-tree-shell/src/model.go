@@ -1,6 +1,6 @@
 package main
 
-// The shape of the tree: what `shell-tree parse` prints and what the verdict
+// The shape of the tree: what `command-tree-shell parse` prints and what the verdict
 // judges. The names of the modes, the kinds and the answers are the words of
 // the spec, and they go out in JSON as they are.
 

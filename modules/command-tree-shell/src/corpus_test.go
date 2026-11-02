@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Корпус старого разбора: modules/shell-tree/data/write-targets-cases.json, 233 кейса,
+// Корпус старого разбора: modules/command-tree-shell/data/write-targets-cases.json, 233 кейса,
 // снятые с тестов снятого слоя JS-хуков. Поле `expected` там — ожидание своими
 // словами, и переводится в утверждения о нашем ответе оно ЗДЕСЬ, явной
 // таблицей: без неё «прошло» значило бы только «не упало».
@@ -251,7 +251,7 @@ func hasKind(targets []Target, kind string) bool {
 	return false
 }
 
-// verdictOf — тот же путь, которым ходит команда `shell-tree verdict`.
+// verdictOf — тот же путь, которым ходит команда `command-tree-shell verdict`.
 func verdictOf(command, cwd string, rules *Rules) Verdict {
 	tree, err := Parse(command, cwd)
 	if err != nil {

@@ -171,9 +171,9 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse((self.modules_root() / 'other' / '_core' / 'jarvis' / 'marker.py').exists())
 
     def test_library_part_stays_inside_its_own_module(self) -> None:
-        self.add_module('shell-tree', 'slug = "shell-tree"\n', {'lib': {'__init__.py': 'VALUE = 1\n'}})
+        self.add_module('command-tree-shell', 'slug = "command-tree-shell"\n', {'lib': {'__init__.py': 'VALUE = 1\n'}})
         self.run_installer()
-        self.assertTrue((self.modules_root() / 'shell-tree' / 'lib' / '__init__.py').is_file())
+        self.assertTrue((self.modules_root() / 'command-tree-shell' / 'lib' / '__init__.py').is_file())
 
     def test_each_part_goes_where_it_is_read(self) -> None:
         self.add_module(
@@ -271,13 +271,13 @@ class InstallerTest(unittest.TestCase):
     # --- предупреждения ---
 
     def test_missing_requirement_is_reported_at_install_time(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\nrequires = ["shell-tree"]\n')
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\nrequires = ["command-tree-shell"]\n')
         report = self.run_installer()
-        self.assertTrue(any('shell-tree' in w for w in report.warnings))
+        self.assertTrue(any('command-tree-shell' in w for w in report.warnings))
 
     def test_a_satisfied_requirement_is_not_reported(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nrequires = ["shell-tree-*"]\n')
-        self.add_module('bash', 'slug = "bash"\nfor = "shell-tree-*"\n')
+        self.add_module('probe', 'slug = "probe"\nrequires = ["command-tree-*"]\n')
+        self.add_module('bash', 'slug = "bash"\nfor = "command-tree-*"\n')
         self.assertEqual(self.run_installer().warnings, [])
 
     def test_duplicate_slug_is_rejected(self) -> None:
@@ -400,8 +400,8 @@ class ExtraSourceTest(unittest.TestCase):
         self.assertFalse(self.settings_root.exists())
 
     def test_a_requirement_is_satisfied_from_the_other_source(self) -> None:
-        self.add_module('shell-tree', 'slug = "shell-tree"\n')
-        self.add_extra_module('local', 'slug = "local"\nrequires = ["shell-tree"]\n')
+        self.add_module('command-tree-shell', 'slug = "command-tree-shell"\n')
+        self.add_extra_module('local', 'slug = "local"\nrequires = ["command-tree-shell"]\n')
         self.assertEqual(self.run_installer('--extra-modules', str(self.extra)).warnings, [])
 
     def test_ledger_names_the_extra_sources(self) -> None:

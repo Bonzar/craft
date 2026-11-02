@@ -21,7 +21,7 @@ import subprocess
 import time
 from pathlib import Path
 
-BINARY_NAME = 'shell-tree'
+BINARY_NAME = 'command-tree-shell'
 MODULE_DIR = Path(__file__).resolve().parents[1]
 SOURCE_DIR = MODULE_DIR / 'src'
 BINARY = MODULE_DIR / 'bin' / BINARY_NAME
@@ -35,13 +35,13 @@ COMMANDS = MODULE_DIR / 'data' / 'commands'
 SOURCE_GLOBS = ('*.go', 'go.mod', 'go.sum')
 
 # Маркер сборки в зоне сессии и журнал модуля там же.
-MARKER_FILE = 'shell-tree-build.json'
-JOURNAL_FILE = 'shell-tree.jsonl'
+MARKER_FILE = 'command-tree-shell-build.json'
+JOURNAL_FILE = 'command-tree-shell.jsonl'
 BUILDING = 'сборка идёт'
 READY = 'готов'
 
 # Переменная остаётся только для тестов: настоящий путь у модуля один.
-BINARY_ENV = 'SHELL_TREE_BIN'
+BINARY_ENV = 'COMMAND_TREE_SHELL_BIN'
 
 # Шаг ожидания живой сборки. Потолка у ожидания нет — ждём, пока жив её процесс.
 WAIT_STEP = 0.05
@@ -50,7 +50,7 @@ WAIT_STEP = 0.05
 CALL_TIMEOUT = 30
 
 
-class ShellTreeError(RuntimeError):
+class CommandTreeShellError(RuntimeError):
     """Разбора не вышло. Текст говорит, что именно не получилось."""
 
 
@@ -108,7 +108,7 @@ def binary(storage=None) -> str:
     wait_for_build(storage)
     if BINARY.is_file():
         return str(BINARY)
-    raise ShellTreeError(
+    raise CommandTreeShellError(
         f'{BINARY_NAME} не собран: {BINARY} нет, и сборка не идёт. '
         'Бинарник собирает хук модуля на старте сессии; нужен Go на PATH'
     )
@@ -144,16 +144,16 @@ def call(mode: str, command: str, cwd: str, storage=None) -> dict:
             timeout=CALL_TIMEOUT, check=False,
         )
     except subprocess.TimeoutExpired:
-        raise ShellTreeError(f'{BINARY_NAME} {mode} не уложился в {CALL_TIMEOUT} с') from None
+        raise CommandTreeShellError(f'{BINARY_NAME} {mode} не уложился в {CALL_TIMEOUT} с') from None
     except OSError as failure:
-        raise ShellTreeError(f'{BINARY_NAME} {mode} не запустился: {failure}') from failure
+        raise CommandTreeShellError(f'{BINARY_NAME} {mode} не запустился: {failure}') from failure
     if done.returncode != 0:
-        raise ShellTreeError(
+        raise CommandTreeShellError(
             f'{BINARY_NAME} {mode} вернул {done.returncode}: {done.stderr.strip()[:300]}'
         )
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError as failure:
-        raise ShellTreeError(
+        raise CommandTreeShellError(
             f'ответ {BINARY_NAME} {mode} — не JSON: {failure}; начало ответа: {done.stdout[:200]!r}'
         ) from failure

@@ -135,7 +135,7 @@ def note(runtime, event, action: str, reason: str = '', seconds=None) -> None:
     if seconds is not None:
         entry['seconds'] = seconds
     library = load_library(runtime)
-    name = library.JOURNAL_FILE if library is not None else 'shell-tree.jsonl'
+    name = library.JOURNAL_FILE if library is not None else 'command-tree-shell.jsonl'
     runtime.storage.append_line(name, json.dumps(entry, ensure_ascii=False))
 
 

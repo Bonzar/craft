@@ -1,4 +1,4 @@
-"""Хук модуля shell-tree: сборка бинарника на старте сессии.
+"""Хук модуля command-tree-shell: сборка бинарника на старте сессии.
 
 Настоящий Go тут не нужен и не годится: проверяется то, что решено кодом —
 когда хук зовёт сборку, когда не зовёт вовсе, что пишет в журнал и какой маркер
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import CORE_SOURCE, INSTALLER, MODULES_DIR
 
-SLUG = 'shell-tree'
+SLUG = 'command-tree-shell'
 SOURCE_FILE = 'main.go'
 
 
@@ -53,7 +53,7 @@ class BuildTest(unittest.TestCase):
         self.source = source / SLUG / 'src'
         self.source.mkdir()
         (self.source / SOURCE_FILE).write_text('package main\n', encoding='utf-8')
-        (self.source / 'go.mod').write_text('module shell-tree\n', encoding='utf-8')
+        (self.source / 'go.mod').write_text('module command-tree-shell\n', encoding='utf-8')
         subprocess.run(
             [sys.executable, str(INSTALLER), '--settings-dir', str(self.settings),
              '--state-dir', str(self.home / '.local' / 'state' / 'jarvis'),
@@ -61,7 +61,7 @@ class BuildTest(unittest.TestCase):
             check=True, capture_output=True,
         )
         self.module = self.settings / 'jarvis' / 'modules' / SLUG
-        self.binary = self.module / 'bin' / 'shell-tree'
+        self.binary = self.module / 'bin' / 'command-tree-shell'
 
     def stub_go(self, body: str = '') -> None:
         """Заглушка `go`: пишет, с чем её позвали, и делает файл, как настоящий."""
@@ -105,13 +105,13 @@ class BuildTest(unittest.TestCase):
         return done
 
     def journal(self, session_id: str) -> list[dict]:
-        path = self.home / '.local' / 'state' / 'jarvis' / session_id / 'shell-tree.jsonl'
+        path = self.home / '.local' / 'state' / 'jarvis' / session_id / 'command-tree-shell.jsonl'
         if not path.exists():
             return []
         return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
 
     def marker(self, session_id: str) -> dict:
-        path = self.home / '.local' / 'state' / 'jarvis' / session_id / 'shell-tree-build.json'
+        path = self.home / '.local' / 'state' / 'jarvis' / session_id / 'command-tree-shell-build.json'
         return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
 
     def go_calls(self) -> list[str]:
