@@ -24,7 +24,8 @@ from . import CORE_SOURCE, MODULES_DIR
 review_lib = registry.LibraryModule('turn-review', MODULES_DIR / 'turn-review' / 'lib').load()
 
 SLUG = 'turn-review'
-TYPE_LOCK = 'craft-type-lock'
+# Разбор команды Craft для поставщика review-craft-calls.
+CRAFT_PARSER = 'command-tree-craft'
 # Поставщики, якорь и модули с критериями: без них объём пуст, а поручение
 # без критериев. В тестах набор как у настоящей установки.
 PROVIDERS = ('review-craft-calls', 'review-prompts', 'craft-session-anchor')
@@ -112,7 +113,7 @@ class TurnReviewCase(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmp.name)
         ignore = shutil.ignore_patterns('__pycache__')
-        for slug in (SLUG, TYPE_LOCK, *PROVIDERS, *CRITERIA_MODULES):
+        for slug in (SLUG, CRAFT_PARSER, *PROVIDERS, *CRITERIA_MODULES):
             module_dir = cls.root / 'modules' / slug
             shutil.copytree(MODULES_DIR / slug, module_dir, ignore=ignore)
             shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)

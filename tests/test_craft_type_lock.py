@@ -21,6 +21,8 @@ SLUG = 'craft-type-lock'
 # Скиллы типов и скилл решения строят другие модули; замку нужны только их
 # шапки в каталоге.
 LOCK_SKILLS = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-decision')
+# Команду Craft замок разбирает библиотекой соседа.
+PARSER = 'command-tree-craft'
 CRAFT_WRITE = 'mcp__Craft__craft_write'
 TASK_ADD = ('blocks add --siblingId X --position after --json '
             '\'{"type":"text","markdown":"- [ ] Купить молоко #задача/5м"}\'')
@@ -63,6 +65,7 @@ class LockHarness(unittest.TestCase):
         module_dir = modules / SLUG
         shutil.copytree(MODULES_DIR / SLUG, module_dir, ignore=ignore)
         shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
+        shutil.copytree(MODULES_DIR / PARSER, modules / PARSER, ignore=ignore)
         # Соседи-сущности: шапка и теги в данных, как у настоящих модулей.
         for slug in LOCK_SKILLS:
             (modules / slug).mkdir()

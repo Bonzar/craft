@@ -4,5 +4,6 @@
 # нашли свои записи. Формат своих записей описывает в data/review-records.md.
 slug = "review-craft-calls"
 events = ["post-tool"]
-# Объём и его форма — у ревью хода; разбор тегов в команде — у замка типов.
-requires = ["turn-review", "craft-type-lock"]
+# Объём и его форма — у ревью хода; разбор команды Craft и поиск тегов в ней —
+# у command-tree-craft. Набор тегов поставщик собирает сам по data/entity.json.
+requires = ["turn-review", "command-tree-craft"]

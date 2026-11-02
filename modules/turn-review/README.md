@@ -16,8 +16,8 @@
 
 - `review-craft-calls` на `post-tool`: `write` — запись в Craft с командой,
   ответом и тегами типа, `read` — чтение Craft с id блоков, `skill` — вызов
-  скилла. Теги ищет библиотека замка `craft-type-lock` по `data/entity.json`
-  модулей сущностей, тег в тексте ссылки на блок не считается.
+  скилла. Теги из `data/entity.json` модулей сущностей ищет в команде
+  библиотека `command-tree-craft`, тег в тексте ссылки на блок не считается.
 - `review-prompts`: `prompt` — реплика Влада, `answer` — его ответ на вопрос
   кнопками.
 - `craft-session-anchor`: `anchor` — выбор якоря сессии.

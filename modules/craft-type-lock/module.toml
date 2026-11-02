@@ -8,4 +8,6 @@ slug = "craft-type-lock"
 events = ["pre-tool", "post-tool", "prompt", "after-compact"]
 # Без скиллов типов замок запрещал бы запись навсегда: вызвать нечего. Пока
 # их нет, библиотека сама молчит за замок и говорит в чат, чего не хватает.
-requires = ["craft-task", "craft-stage", "craft-section", "craft-note", "craft-decision"]
+# Команду Craft — теги, id, цели записи — разбирает lib command-tree-craft.
+requires = ["command-tree-craft", "craft-task", "craft-stage", "craft-section", "craft-note",
+            "craft-decision"]
