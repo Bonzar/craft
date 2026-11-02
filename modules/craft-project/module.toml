@@ -1,0 +1,9 @@
+# Проект: скилл типа сущности для тега #проект. Часть skill, без хука: правила
+# живут разделами Craft, скилл ведёт по ним агента в момент записи, а запись
+# без скилла и шаблона отклоняет craft-type-lock.
+slug = "craft-project"
+for = ["craft-type-lock", "turn-review"]
+# Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
+# из behavior, сверку перед записью — из craft-reconcile, общие правила
+# «Решений» — из craft-decisions.
+requires = ["craft-call", "behavior", "craft-reconcile", "craft-decisions"]

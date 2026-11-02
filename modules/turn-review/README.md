@@ -277,10 +277,15 @@ id из события ни лока, ни состояния не требуе�
 
 Кто что привозит сейчас (у всех в шапке `for = ["turn-review"]`):
 
-- `craft-stage`, `craft-task`, `craft-section`, `craft-note` — «записано
-  правильно» по своему тегу: `stage`, `task`, `section`, `note`.
+- `craft-stage`, `craft-task`, `craft-section`, `craft-note`, `craft-project`,
+  `craft-sphere` — «записано правильно» по своему тегу: `stage`, `task`,
+  `section`, `note`, `project`, `sphere`.
 - `craft-call` — `craft-base`: общие правила базы для любой записи.
 - `craft-reconcile` — `consistency`: записанное не противоречит кругу сверки.
+- `craft-decisions` — `decision`: решение стоит на своём месте и записано блоком
+  нужной формы.
+- `craft-links` — `links`: связи «Зависит от» и «Следующий шаг» записаны с
+  обеих сторон.
 - `craft-session-anchor` — `anchor`: у сессии есть якорь.
 - `craft-type-lock` — критерия нет, только строку `entity`: тип каждой записи.
 

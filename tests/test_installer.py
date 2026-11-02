@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from . import CORE_SOURCE, INSTALLER
+from . import CORE_SOURCE, INSTALLER, MODULES_DIR
 
 
 def load_installer():
@@ -314,6 +314,21 @@ class InstallerTest(unittest.TestCase):
         self.add_entity('craft-task', self.entity('#задача'))
         self.add_entity('craft-note', self.entity('#заметка', '#тема'))
         self.assertEqual(sorted(self.run_installer().installed), ['craft-note', 'craft-task'])
+
+    def test_the_real_entity_modules_install_together(self) -> None:
+        # Проект и сфера встают рядом с остальными модулями сущностей: теги не
+        # пересекаются, у каждого тега есть шаблон, скилл ложится в настройки.
+        # Решения и связи — не сущности, без тегов, но их требуют скиллы
+        # сущностей, и ставятся они тем же набором.
+        slugs = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-project', 'craft-sphere',
+                 'craft-decisions', 'craft-links')
+        for slug in slugs:
+            shutil.copytree(MODULES_DIR / slug, self.source / slug)
+        self.assertEqual(sorted(self.run_installer().installed), sorted(slugs))
+        for slug in ('craft-project', 'craft-sphere', 'craft-decisions', 'craft-links'):
+            with self.subTest(slug=slug):
+                skill = self.settings_root / 'skills' / slug / 'SKILL.md'
+                self.assertIn(f'name: {slug}', skill.read_text(encoding='utf-8'))
 
     def test_a_broken_entity_file_fails_the_install_with_its_path(self) -> None:
         bodies = ('{"tags":', '[]', '{}', '{"tags": []}', '{"tags": "#задача"}',

@@ -29,15 +29,6 @@ ENTITY_MANIFEST = 'slug = "{slug}"\nfor = ["craft-type-lock"]\n'
 # из шаблонов её тега. Ид берутся из настоящих data/entity.json.
 ENTITY_DATA = {slug: json.loads((MODULES_DIR / slug / 'data' / 'entity.json').read_text(encoding='utf-8'))
                for slug in LOCK_SKILLS}
-# Проект и сфера — адаптеры соседней ветки; пока их нет в каталоге, тест
-# ставит поддельный адаптер проекта с той же формой данных.
-FAKE_ADAPTERS = {slug: data for slug, data in {
-    'craft-project': {'tags': ['#проект'],
-                      'templates': {'#проект': ['eeeeeeee-0000-0000-0000-000000000001']}},
-    'craft-sphere': {'tags': ['#сфера'],
-                     'templates': {'#сфера': ['eeeeeeee-0000-0000-0000-000000000002']}},
-}.items() if slug not in ENTITY_DATA}
-ENTITY_DATA = {**ENTITY_DATA, **FAKE_ADAPTERS}
 TEMPLATE = {slug: next(iter(data['templates'].values()))[0] for slug, data in ENTITY_DATA.items()}
 TASK_TEMPLATES = ENTITY_DATA['craft-task']['templates']['#задача']
 # Команду Craft замок разбирает библиотекой соседа.
@@ -93,12 +84,6 @@ class LockHarness(unittest.TestCase):
             (modules / slug / 'data').mkdir()
             shutil.copy(MODULES_DIR / slug / 'data' / 'entity.json',
                         modules / slug / 'data' / 'entity.json')
-        for slug, data in FAKE_ADAPTERS.items():
-            (modules / slug / 'data').mkdir(parents=True)
-            (modules / slug / 'module.toml').write_text(ENTITY_MANIFEST.format(slug=slug),
-                                                        encoding='utf-8')
-            (modules / slug / 'data' / 'entity.json').write_text(
-                json.dumps(data, ensure_ascii=False), encoding='utf-8')
         cls.entry = module_dir / 'hooks' / 'module.py'
 
     @classmethod
@@ -425,14 +410,17 @@ class EntityFileTest(unittest.TestCase):
     def test_the_real_entity_modules_map_every_tag_to_a_module(self) -> None:
         lock = load_lock_module()
         tag_skills = lock.load_tag_skills(MODULES_DIR / SLUG)
-        self.assertLessEqual({'craft-task', 'craft-stage', 'craft-section', 'craft-note'},
+        self.assertLessEqual({'craft-task', 'craft-stage', 'craft-section', 'craft-note',
+                              'craft-project', 'craft-sphere'},
                              set(tag_skills.values()))
         self.assertEqual(tag_skills['#этап'], 'craft-stage')
+        self.assertEqual(tag_skills['#проект'], 'craft-project')
+        self.assertEqual(tag_skills['#сфера'], 'craft-sphere')
         entries = lock.load_entities(MODULES_DIR / SLUG)
         self.assertEqual(set(entries), set(tag_skills))
         self.assertTrue(all(entry.templates for entry in entries.values()))
         # Решение не сущность: его модуль замку не адаптер.
-        self.assertNotIn('craft-decision', tag_skills.values())
+        self.assertNotIn('craft-decisions', tag_skills.values())
 
     def test_a_broken_entity_file_is_an_error(self) -> None:
         lock = load_lock_module()
@@ -630,6 +618,12 @@ UPPER_D1 = 'DDDDDDDD-0000-0000-0000-000000000011'
 DOCUMENTS += (page(UPPER_PAGE, 'Старый раздел #раздел',
                    block('DDDDDDDD-0000-0000-0000-000000000010', '+ ### Решения', listStyle='toggle'),
                    block(UPPER_D1, '  - Решение', indentationLevel=1, listStyle='bullet')),)
+# Проект с «Решениями проекта» под переключателем: решения — его.
+TAGGED_PROJECT = 'eeeeeeee-0000-0000-0000-000000000001'
+PROJECT_D1 = 'eeeeeeee-0000-0000-0000-000000000011'
+DOCUMENTS += (page(TAGGED_PROJECT, 'Свадьба #проект',
+                   block('eeeeeeee-0000-0000-0000-000000000010', '+ # Решения проекта', listStyle='toggle'),
+                   block(PROJECT_D1, '  - Решение проекта', indentationLevel=1, listStyle='bullet')),)
 # Блоки, которых поиск ещё не видит: только что записанное.
 NOT_INDEXED = {FRESH, FRESH_PAGE}
 LINK_TEXT = re.compile(r'\[([^\]]*)\]\([^)]*\)')
@@ -763,7 +757,7 @@ class PageTypeLockTest(ApiLockHarness):
         result = self.fire(write('p-next', f'blocks add --siblingId {D2} --position after --json {BULLET_JSON}'))
         self.assert_denied(result, SECTION, '#раздел → craft-section', 'не вызван скилл: craft-section.',
                            'повтори запись')
-        self.assertNotIn('craft-decision', self.reason(result))
+        self.assertNotIn('craft-decisions', self.reason(result))
 
     def test_craft_section_this_turn_opens_the_write(self) -> None:
         self.start('p-open', PAGE)
@@ -774,7 +768,7 @@ class PageTypeLockTest(ApiLockHarness):
 
     def test_a_decision_skill_is_not_an_entity_skill(self) -> None:
         self.start('p-decision', PAGE)
-        self.assert_silent(self.fire(skill('p-decision', 'craft-decision')))
+        self.assert_silent(self.fire(skill('p-decision', 'craft-decisions')))
         self.assertIn('не скилл типа', self.last_reason('p-decision'))
         result = self.fire(write('p-decision', f'blocks update --id {D1} --json {BULLET_JSON}'))
         self.assert_denied(result, 'craft-section')
@@ -806,6 +800,15 @@ class PageTypeLockTest(ApiLockHarness):
         command = f'blocks add --siblingId {DAY_LINE} --position after --json {BULLET_JSON}'
         self.assert_silent(self.fire(write('p-untyped', command)))
         self.assertIn('тега типа нет, цель ffffffff без владельца с типом', self.last_reason('p-untyped'))
+
+    def test_project_decisions_need_craft_project(self) -> None:
+        self.start('p-tagged', TAGGED_PROJECT)
+        command = f'blocks add --siblingId {PROJECT_D1} --position after --json {BULLET_JSON}'
+        result = self.fire(write('p-tagged', command))
+        self.assert_denied(result, 'Запись задевает сущность «Свадьба #проект»',
+                           '#проект → craft-project', 'не вызван скилл: craft-project')
+        self.prepare('p-tagged', 'craft-project')
+        self.assert_silent(self.fire(write('p-tagged', command)))
 
     def test_a_link_with_a_tag_does_not_type_the_block(self) -> None:
         self.start('p-link', PROJECT)

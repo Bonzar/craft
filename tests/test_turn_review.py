@@ -35,10 +35,10 @@ CRAFT_PARSER = 'command-tree-craft'
 # без критериев. В тестах набор как у настоящей установки, без модуля
 # сверки: он переезжает в другой модуль, и тесты от него не зависят.
 PROVIDERS = ('review-craft-calls', 'review-prompts', 'craft-session-anchor')
-CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-call',
-                    'craft-reconcile')
+CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-project',
+                    'craft-sphere', 'craft-call', 'craft-reconcile', 'craft-decisions', 'craft-links')
 # Критерии к ходу с записью задачи: по slug поставщиков, как их находит ревью.
-TASK_CRITERIA = ('craft-base', 'consistency', 'anchor', 'task')
+TASK_CRITERIA = ('craft-base', 'decision', 'links', 'consistency', 'anchor', 'task')
 TASK_CRITERIA_TEXT = ', '.join(TASK_CRITERIA)
 CRAFT_WRITE = 'mcp__Craft__craft_write'
 CRAFT_READ = 'mcp__Craft__craft_read'
@@ -314,7 +314,7 @@ class TurnReviewTest(TurnReviewCase):
         brief = storage.path('turn-review-brief.md').read_text(encoding='utf-8')
         for needle in ('`write` — вызов записи в Craft', '`prompt` — реплика Влада',
                        'Критерий «task»', 'Критерий «craft-base»', 'Критерий «anchor»',
-                       '"craft-base", "consistency", "anchor", "task"'):
+                       ', '.join(f'"{name}"' for name in TASK_CRITERIA)):
             self.assertIn(needle, brief)
         for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA',
                        '{{RECORDS', '`read` — вызов чтения', '`anchor` — выбор якоря'):
@@ -340,7 +340,7 @@ class TurnReviewTest(TurnReviewCase):
         self.assert_silent(self.fire(write(session, command, place=['#раздел'])))
         self.blocked(self.fire(stop(session, active=False)))
         self.assertEqual(self.state(session)['criteria'],
-                         ['craft-base', 'consistency', 'section', 'anchor'])
+                         ['craft-base', 'decision', 'consistency', 'section', 'anchor'])
 
     def test_a_clean_verdict_releases_the_turn_and_clears_the_volume(self) -> None:
         self.start_with_write('s-clean')
@@ -847,7 +847,8 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(prompt(session))
         self.fire(write(session, 'blocks update --id X --json \'{"markdown":"[Сборка #этап](block://AB-1)"}\''))
         self.blocked(self.fire(stop(session)))
-        self.assertEqual(self.state(session)['criteria'], ['craft-base', 'consistency', 'anchor'])
+        self.assertEqual(self.state(session)['criteria'],
+                         ['craft-base', 'decision', 'consistency', 'anchor'])
 
     def test_an_unwritable_brief_is_a_block_and_not_a_crash(self) -> None:
         session = 's-brief-dir'
@@ -1078,7 +1079,9 @@ SECTION_BLOCK = 'aaaaaaaa-0000-0000-0000-000000000011'
 OTHER_BLOCK = 'aaaaaaaa-0000-0000-0000-000000000012'
 DECISION_ADD = (f'blocks add --siblingId {SECTION_BLOCK} --position after --json '
                 '\'{"type":"text","markdown":"Новое решение"}\'')
-ENTITY_CRITERIA = ('note', 'section', 'stage', 'task')
+# Критерии сущностей — по тегу типа. Связи тоже идут по тегу, но сущностью не
+# являются и в этот набор не входят.
+ENTITY_CRITERIA = ('note', 'project', 'section', 'sphere', 'stage', 'task')
 
 
 class EntityTypeTest(unittest.TestCase):
@@ -1110,6 +1113,7 @@ class EntityTypeTest(unittest.TestCase):
         command = DECISION_ADD.replace('Новое решение', '- [ ] Дело #задача')
         volume = [self.row(command, place=['#раздел']), write_record(command, 'p')]
         self.assertEqual(self.entity_ids(volume), ['section', 'task'])
+        self.assertIn('links', self.taken(volume).criteria)
 
     def test_a_write_without_a_lock_row_takes_every_entity_criterion(self) -> None:
         # Замка нет, он выключен или упал: строки нет, критерии берутся все.
