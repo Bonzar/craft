@@ -73,7 +73,7 @@ class Module(jarvis.Module):
         # сбил бы общий счёт ходов (см. claim_prompt_turn).
         storage, text = runtime.storage, event.prompt_text or ''
         with review.state_lock(storage):
-            turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, text)
+            turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, event)
         if not text.strip():
             return jarvis.Silence(reason=with_problem('пустая реплика', problem))
         review.append_turn_record(

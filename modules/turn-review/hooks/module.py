@@ -80,8 +80,7 @@ class Module(jarvis.Module):
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
         # Поставщики на той же реплике берут номер той же функцией: кто бы
         # из параллельных хуков ни пришёл первым, ход у реплики один.
-        turn, problem = review.claim_prompt_turn(runtime.storage, runtime.manifest.slug,
-                                                 event.prompt_text or '')
+        turn, problem = review.claim_prompt_turn(runtime.storage, runtime.manifest.slug, event)
         return jarvis.Silence(reason=review.with_problem(f'начался ход {turn}', problem))
 
     def on_after_compact(self, event, runtime, review) -> jarvis.Response:

@@ -49,23 +49,51 @@ def append_turn_record(storage, record: VolumeRecord, *, turn: int | None = None
         append_row_unlocked(storage, record_row(replace(record, turn=turn)))
 
 
+# Поле id реплики в сыром событии Claude. Замер 02.11.2026 (Claude Code
+# 2.1.316, `claude -p`): UserPromptSubmit несёт `prompt_id`, у двух хуков
+# одной реплики он один, у двух одинаковых реплик подряд — разный. В едином
+# формате события такого поля нет, поэтому оно берётся из `raw`.
+PROMPT_ID_FIELD = 'prompt_id'
+# Метка реплики по id не совпадёт с отпечатком текста: в отпечатке только hex.
+PROMPT_ID_MARK = 'id:'
+
+
 def prompt_mark(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()[:FINGERPRINT_CHARS]
 
 
-def claim_prompt_turn(storage, slug: str, text: str) -> tuple[int, str | None]:
-    """Номер хода этой реплики для модуля `slug` и что пришлось починить.
+def prompt_id_of(event) -> str | None:
+    """Id реплики из сырого события харнеса; нет его или он не строка — None."""
+    value = event.raw.get(PROMPT_ID_FIELD)
+    return value if isinstance(value, str) and value else None
+
+
+def claim_prompt_turn(storage, slug: str, event) -> tuple[int, str | None]:
+    """Номер хода реплики `event` для модуля `slug` и что пришлось починить.
 
     Звать под state_lock на каждой реплике, даже пустой. Хуки одного события
     харнес запускает параллельно: первый пришедший модуль открывает новый ход,
-    остальные берут его номер. Реплика узнаётся по отпечатку текста, а
-    повтор той же реплики — по тому, что модуль уже брал номер по ней: тогда
-    это новый ход. Модуль, пропустивший реплику, этот счёт бы сбил.
+    остальные берут его номер.
+
+    Реплика узнаётся по id, который даёт харнес: тот же id — тот же ход, кто
+    бы из модулей ни пришёл и сколько бы раз. Поэтому счёт не зависит от того,
+    какие модули включены и не пропустил ли кто реплику.
+
+    Id нет — запасной путь по тексту: реплика узнаётся по отпечатку, а повтор
+    той же реплики — по тому, что модуль уже брал номер по ней. Тут модуль,
+    включённый или пропустивший реплику между двумя одинаковыми, счёт собьёт.
     """
     state, problem = load_state(storage)
-    mark, taken = prompt_mark(text), state.prompt_taken
-    if state.prompt_mark == mark and slug not in taken:
-        save_state(storage, replace(state, prompt_taken=(*taken, slug)))
+    prompt_id, taken = prompt_id_of(event), state.prompt_taken
+    if prompt_id is not None:
+        mark = PROMPT_ID_MARK + prompt_id
+        is_same = state.prompt_mark == mark
+    else:
+        mark = prompt_mark(event.prompt_text or '')
+        is_same = state.prompt_mark == mark and slug not in taken
+    if is_same:
+        if slug not in taken:
+            save_state(storage, replace(state, prompt_taken=(*taken, slug)))
         return state.turn, problem
     turn = next_turn(state.turn, peek_volume(storage))
     save_state(storage, replace(state, turn=turn, prompt_mark=mark, prompt_taken=(slug,)))

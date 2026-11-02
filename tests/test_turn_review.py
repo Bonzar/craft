@@ -10,6 +10,7 @@ import time
 import unittest
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from jarvis import confirm, registry
@@ -52,9 +53,10 @@ def skill_record(name: str):
     return review_lib.make_skill_record(skill=name)
 
 
-def prompt(session: str, text: str = 'дальше') -> dict:
-    return {'hook_event_name': 'UserPromptSubmit', 'session_id': session, 'cwd': '/work',
-            'prompt': text}
+def prompt(session: str, text: str = 'дальше', prompt_id: str | None = None) -> dict:
+    raw = {'hook_event_name': 'UserPromptSubmit', 'session_id': session, 'cwd': '/work',
+           'prompt': text}
+    return raw if prompt_id is None else {**raw, 'prompt_id': prompt_id}
 
 
 def tool(session: str, name: str, tool_input: dict, response) -> dict:
@@ -673,6 +675,23 @@ class TurnReviewTest(TurnReviewCase):
                               ('prompt', 3)])
             self.assertEqual(self.state(session)['turn'], 3)
 
+    def test_identical_prompts_with_ids_keep_their_turns_when_a_provider_skips_one(self) -> None:
+        # session-anchor пропустил первую реплику (выключен режимом), на второй
+        # такой же пришёл первым. По id реплики он всё равно в новом ходе.
+        session = 's-skip-provider'
+        anchor = self.root / 'modules' / 'session-anchor' / 'hooks' / 'module.py'
+        text = 'Беру задачу «Ревью»'
+        for entry in self.hooks['prompt']:
+            if entry != anchor:
+                self.assertEqual(self.run_entry(prompt(session, text, 'p-1'), entry).returncode, 0)
+        for entry in (anchor, *[item for item in self.hooks['prompt'] if item != anchor]):
+            run = self.run_entry(prompt(session, text, 'p-2'), entry)
+            self.assertEqual(run.returncode, 0, run.stderr)
+        rows = self.volume(session, every=True)
+        self.assertEqual([(row['kind'], row['turn']) for row in rows],
+                         [('prompt', 1), ('anchor', 2), ('prompt', 2)])
+        self.assertEqual(self.state(session)['turn'], 2)
+
     def test_a_damaged_state_is_an_error_for_providers_and_the_write_is_kept(self) -> None:
         session = 's-provider-damage'
         self.start_with_write(session)
@@ -726,6 +745,79 @@ class TurnReviewTest(TurnReviewCase):
         self.assertIn('turn-review-brief.md не записать', reason)
         self.assertIn('Скажи об этом человеку', reason)
         self.assertEqual(self.state(session)['nudges'], 1)
+
+
+class PromptTurnTest(unittest.TestCase):
+    """Номер хода реплики: id реплики харнеса, а не её текст и не набор модулей.
+
+    Модули зовут claim_prompt_turn по очереди, как пришли бы их параллельные
+    хуки. Модуль, которого в очереди нет, выключен режимом или пропустил реплику.
+    """
+
+    TEXT = 'дальше'
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self.tmp.name), 's-prompt-turn')
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def claim(self, slug: str, prompt_id: str | None, text: str = TEXT) -> int:
+        raw = prompt('s-prompt-turn', text, prompt_id)
+        event = SimpleNamespace(prompt_text=text, raw=raw)
+        turn, problem = review_lib.claim_prompt_turn(self.storage, slug, event)
+        self.assertIsNone(problem)
+        return turn
+
+    def test_a_module_switched_on_between_identical_prompts_opens_a_new_turn(self) -> None:
+        # Первую реплику взял только turn-review, поставщика включили до второй
+        # такой же. Пришёл первым — раньше он склеивал её с прошлым ходом.
+        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
+        self.assertEqual(self.claim('review-prompts', 'p-2'), 2)
+        self.assertEqual(self.claim(SLUG, 'p-2'), 2)
+
+    def test_a_module_that_skipped_a_prompt_does_not_glue_the_next_one(self) -> None:
+        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
+        self.assertEqual(self.claim('review-prompts', 'p-1'), 1)
+        # session-anchor пропустил p-1 и на p-2 пришёл первым.
+        self.assertEqual(self.claim('session-anchor', 'p-2'), 2)
+        self.assertEqual(self.claim(SLUG, 'p-2'), 2)
+        self.assertEqual(self.claim('review-prompts', 'p-2'), 2)
+
+    def test_a_module_switched_off_does_not_split_the_turn(self) -> None:
+        # Поставщика выключили между репликами: тот, кто остался, не находит
+        # себя в списке взявших — и это не повод открыть второй ход.
+        for slug in (SLUG, 'review-prompts', 'session-anchor'):
+            self.assertEqual(self.claim(slug, 'p-1'), 1)
+        self.assertEqual(self.claim(SLUG, 'p-2'), 2)
+        self.assertEqual(self.claim('session-anchor', 'p-2'), 2)
+
+    def test_the_same_prompt_taken_twice_by_a_module_is_one_turn(self) -> None:
+        # Повтор хука одного модуля на той же реплике — не новый ход.
+        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
+        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
+        self.assertEqual(self.claim('review-prompts', 'p-1'), 1)
+
+    def test_identical_prompts_with_their_ids_are_two_turns(self) -> None:
+        for prompt_id, turn in (('p-1', 1), ('p-2', 2)):
+            for slug in ('session-anchor', SLUG, 'review-prompts'):
+                self.assertEqual(self.claim(slug, prompt_id), turn)
+
+    def test_without_an_id_the_text_and_the_takers_decide(self) -> None:
+        # Харнес без id реплики: узнаём по тексту и по тому, кто уже брал номер.
+        for turn in (1, 2):
+            for slug in (SLUG, 'review-prompts'):
+                self.assertEqual(self.claim(slug, None), turn)
+        self.assertEqual(self.claim(SLUG, None, 'другая'), 3)
+
+    def test_an_empty_or_foreign_id_falls_back_to_the_text(self) -> None:
+        for bad in ('', 7):
+            with self.subTest(prompt_id=bad):
+                self.assertIsNone(review_lib.prompt_id_of(
+                    SimpleNamespace(prompt_text='т', raw={'prompt_id': bad})))
+        self.assertEqual(review_lib.prompt_id_of(
+            SimpleNamespace(prompt_text='т', raw={'prompt_id': 'p-1'})), 'p-1')
 
 
 class CurrentTurnTest(unittest.TestCase):
