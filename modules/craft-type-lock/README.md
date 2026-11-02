@@ -605,4 +605,7 @@ Craft — запрет с причиной и выходом: какой фай�
 ["turn-review"]` объявляет его поставщиком, а без ревью строки `entity`
 просто никто не читает.
 
-Тесты: `python3 -m unittest tests.test_craft_type_lock tests.test_craft_type_lock_tree`.
+Тесты: `python3 -m unittest tests.test_craft_type_lock
+tests.test_craft_type_lock_entities tests.test_craft_type_lock_place
+tests.test_craft_type_lock_review tests.test_craft_type_lock_tree`, общая
+обвязка — `tests/craft_type_lock_harness.py`.

@@ -7,7 +7,7 @@ import unittest
 from jarvis import registry
 
 from . import MODULES_DIR
-from .test_craft_type_lock import (
+from .craft_type_lock_harness import (
     BARE_TASK,
     BLOCKS,
     BULLET_JSON,
