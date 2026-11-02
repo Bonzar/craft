@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -109,7 +110,7 @@ class CraftSyncBuildTest(unittest.TestCase):
 
     def test_snapshot_declares_craft_sync_as_an_explicit_requirement(self) -> None:
         text = (MODULES_DIR / 'craft-snapshot' / 'module.toml').read_text(encoding='utf-8')
-        self.assertIn('requires = ["craft-sync"]', text)
+        self.assertIn('craft-sync', tomllib.loads(text)['requires'])
 
     def test_build_does_not_need_git_metadata_in_the_installed_profile(self) -> None:
         self.stub_go('case " $* " in *" -buildvcs=false "*) ;; *) exit 1 ;; esac')
