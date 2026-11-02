@@ -305,7 +305,7 @@ class CraftTypeLockTest(LockHarness):
     def test_the_trace_has_a_line_for_every_event(self) -> None:
         session = 's-trace'
         raws = [prompt(session), skill(session, 'craft-task'),
-                read(session, f'blocks get {TEMPLATE["craft-task"]}'), write(session, TASK_ADD),
+                read(session, f'blocks get {TEMPLATE["craft-task"]} --depth -1'), write(session, TASK_ADD),
                 compact(session), write(session, TASK_ADD)]
         for raw in raws:
             self.fire(raw)
@@ -624,6 +624,13 @@ PROJECT_D1 = 'eeeeeeee-0000-0000-0000-000000000011'
 DOCUMENTS += (page(TAGGED_PROJECT, 'Свадьба #проект',
                    block('eeeeeeee-0000-0000-0000-000000000010', '+ # Решения проекта', listStyle='toggle'),
                    block(PROJECT_D1, '  - Решение проекта', indentationLevel=1, listStyle='bullet')),)
+# Документ, где API отдал отступ не числом.
+BAD_PAGE = 'abababab-0000-0000-0000-000000000001'
+BAD_BLOCK = 'abababab-0000-0000-0000-000000000002'
+BAD_NEXT = 'abababab-0000-0000-0000-000000000003'
+DOCUMENTS += (page(BAD_PAGE, 'Сломанная',
+                   block(BAD_BLOCK, 'Строка с испорченным отступом', indentationLevel='два'),
+                   block(BAD_NEXT, 'Соседняя строка')),)
 # Блоки, которых поиск ещё не видит: только что записанное.
 NOT_INDEXED = {FRESH, FRESH_PAGE}
 LINK_TEXT = re.compile(r'\[([^\]]*)\]\([^)]*\)')
@@ -1007,10 +1014,13 @@ class PageTypeLockTest(ApiLockHarness):
         result = self.fire(write('p-tail', f'blocks add --json {BULLET_JSON} --siblingId={D2} --position=after'))
         self.assert_denied(result, 'craft-section')
 
-    def test_a_targeted_command_without_a_target_is_not_judged(self) -> None:
+    def test_a_targeted_command_without_any_target_is_denied(self) -> None:
         self.fire(prompt('p-notarget'))
-        self.assert_silent(self.fire(write('p-notarget', 'blocks delete')))
-        self.assertIn('флага цели нет', self.last_reason('p-notarget'))
+        for command in ('blocks delete', 'blocks update --json \'{"markdown":"Текст"}\'',
+                        'tasks update --state done'):
+            with self.subTest(command=command):
+                self.assert_denied(self.fire(write('p-notarget', command)),
+                                   'Цель записи не найдена', '--task', 'повтори запись')
 
     def test_an_unknown_place_is_announced_once_per_session(self) -> None:
         self.start('p-warn', PAGE)
@@ -1057,9 +1067,8 @@ class PageTypeLockTest(ApiLockHarness):
         self.fire(prompt('p-corrupt'))
         path = self.storage('p-corrupt').path('craft-type-lock.json')
         path.write_text('{"turn": 1, "skills": {}, "reads": [1]}', encoding='utf-8')
-        result = self.run_raw(write('p-corrupt', 'tasks add --help'))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('испорчен', result.stderr)
+        result = self.fire(write('p-corrupt', 'tasks add --help'))
+        self.assert_denied(result, 'испорчен', str(path), 'удали')
 
     def test_reads_survive_compaction(self) -> None:
         self.start('p-compact', PAGE)
@@ -1126,9 +1135,10 @@ class PayloadTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         load_lock_module()
         cls.payload = sys.modules['payload']
+        cls.craft = registry.LibraryModule(PARSER, MODULES_DIR / PARSER / 'lib').load()
 
     def write_of(self, command: str):
-        return self.payload.write_of(command, lambda text: [text], lambda text: ' '.join(text.split()[:2]))
+        return self.payload.write_of(self.craft.verb_of(command), self.craft.parse_command(command))
 
     def test_levels_come_from_the_json_and_markdown_payload(self) -> None:
         cases = ((f'blocks add --siblingId X --json {TASK_JSON}', frozenset({2})),
@@ -1137,6 +1147,7 @@ class PayloadTest(unittest.TestCase):
                  ('blocks add --siblingId X --json \'[{"indentationLevel":1},{"indentationLevel":2}]\'',
                   frozenset({1, 2})),
                  ('blocks add --siblingId X --json \'{broken\'', None),
+                 ('blocks add --siblingId X --json \'[]\'', None),
                  ('blocks add --siblingId X', None))
         for command, levels in cases:
             with self.subTest(command=command):
@@ -1152,6 +1163,7 @@ class PayloadTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertTrue(self.payload.changes_state(self.write_of(command), current))
         kept = ('tasks update --id X --scheduleDate 2026-11-05',
+                'blocks update --id X --markdown "- [ ] Учить --state done #задача/1ч"',
                 'blocks update --id X --json \'{"markdown":"- [ ] Новое имя #задача/1ч"}\'',
                 'blocks update --id X --json \'{"taskInfo":{"scheduleDate":"2026-11-05"}}\'')
         for command in kept:
@@ -1161,6 +1173,100 @@ class PayloadTest(unittest.TestCase):
     def test_reopening_is_a_state_change_too(self) -> None:
         write_ = self.write_of('blocks update --id X --json \'{"markdown":"- [ ] ### Этап #этап"}\'')
         self.assertTrue(self.payload.changes_state(write_, '  - [x] ### Этап #этап/готово'))
+
+
+class ReviewFindingsTest(ApiLockHarness):
+    """Обходы замка, найденные ревью: пачка, флаги цели, JSON, состояние, шаблон."""
+
+    def test_a_delete_after_an_add_in_one_batch_still_touches_the_stage(self) -> None:
+        self.start('f-add-delete', PROJECT)
+        self.prepare('f-add-delete', 'craft-task')
+        command = f'blocks add --id {TASK} --position end --json {LEVEL0_JSON}; blocks delete --id {TASK2}'
+        self.assert_denied(self.fire(write('f-add-delete', command)), 'не вызван скилл: craft-stage.')
+
+    def test_a_move_after_an_update_in_one_batch_touches_both_stages(self) -> None:
+        self.start('f-update-move', PROJECT)
+        self.prepare('f-update-move', 'craft-task')
+        update = f'blocks update --id {TASK} --json \'{{"markdown":"- [ ] Задача #задача/1ч","indentationLevel":2}}\''
+        command = f'{update}; blocks move --id {TASK2} --targetSiblingId {BARE_TASK} --position after'
+        result = self.fire(write('f-update-move', command))
+        self.assert_denied(result, '«- [ ] ### Второй этап #этап»', '«- [ ] ### Этап #этап»',
+                           'не вызван скилл: craft-stage.')
+
+    def test_a_close_after_an_add_in_one_batch_touches_the_stage(self) -> None:
+        self.start('f-add-close', PROJECT)
+        self.prepare('f-add-close', 'craft-task')
+        command = f'blocks add --id {TASK} --position end --json {LEVEL0_JSON}; tasks update --id {TASK2} --state done'
+        self.assert_denied(self.fire(write('f-add-close', command)), 'не вызван скилл: craft-stage.')
+
+    def test_a_batch_row_is_undetermined_when_one_command_is(self) -> None:
+        self.start('f-row', PROJECT)
+        command = (f'tasks update --id {TASK} --scheduleDate 2026-11-05; '
+                   f'blocks add --siblingId {TASK} --position after --json \'{{broken\'')
+        self.fire(write('f-row', command))
+        row = json.loads(self.storage('f-row').read_lines('turn-review-volume.jsonl')[-1])
+        self.assertEqual((row['targets'], row['determined']), ([TASK, TASK], False))
+
+    def test_an_add_with_an_empty_json_list_requires_every_candidate_owner(self) -> None:
+        self.start('f-empty', PROJECT)
+        result = self.fire(write('f-empty', f'blocks add --siblingId {TASK} --position after --json \'[]\''))
+        self.assert_denied(result, 'не вызван скилл: craft-project, craft-stage, craft-task.')
+
+    def test_closing_a_task_by_its_task_flag_touches_its_stage(self) -> None:
+        self.start('f-task-flag', PROJECT)
+        result = self.fire(write('f-task-flag', f'tasks update --task {TASK2} --state done'))
+        self.assert_denied(result, 'не вызван скилл: craft-stage, craft-task.')
+
+    def test_an_update_targeted_only_in_its_json_is_judged(self) -> None:
+        self.start('f-json-id', PAGE)
+        command = f'blocks update --json \'{{"id":"{D1}","markdown":"Правка решения"}}\''
+        self.assert_denied(self.fire(write('f-json-id', command)), SECTION, 'craft-section')
+
+    def test_deleting_a_document_needs_its_type(self) -> None:
+        self.start('f-document', PAGE)
+        result = self.fire(write('f-document', f'documents delete --document {PAGE}'))
+        self.assert_denied(result, 'Запись правит сущность «Раздел #раздел»', 'craft-section')
+        unread = self.fire(write('f-document', f'documents move --document {PROJECT}'))
+        self.assert_denied(unread, 'Запись в непрочитанное')
+
+    def test_a_daily_note_by_date_is_not_a_missing_target(self) -> None:
+        self.fire(prompt('f-date'))
+        self.assert_silent(self.fire(write('f-date', 'blocks add --date today --markdown "Купить хлеб"')))
+        self.assertIn('заметка дня', self.last_reason('f-date'))
+
+    def test_a_broken_state_file_denies_the_write_with_the_way_out(self) -> None:
+        self.start('f-state', PAGE)
+        path = self.storage('f-state').path('craft-type-lock.json')
+        path.write_text('{"turn": "x"}', encoding='utf-8')
+        result = self.fire(write('f-state', f'blocks update --id {D1} --json {BULLET_JSON}'))
+        self.assert_denied(result, str(path), 'удали', 'повтори запись')
+
+    def test_a_corrupted_indent_of_a_moved_block_denies_the_write(self) -> None:
+        self.start('f-indent', BAD_PAGE)
+        result = self.fire(write('f-indent', f'blocks move --id {BAD_BLOCK} --targetSiblingId {BAD_NEXT}'))
+        self.assert_denied(result, 'отступ не число', 'не смог судить запись')
+
+    def test_a_template_counts_only_when_read_whole(self) -> None:
+        for number, read_command in enumerate((f'blocks get {TASK_TEMPLATES[0]}',
+                                               f'blocks get {TASK_TEMPLATES[0]} --depth 1',
+                                               f'search "x" --document {TASK_TEMPLATES[0]} --depth -1')):
+            with self.subTest(read=read_command):
+                session = f'f-depth-{number}'
+                self.fire(prompt(session))
+                self.fire(skill(session, 'craft-task'))
+                self.fire(read(session, read_command))
+                self.assert_denied(self.fire(write(session, TASK_ADD)), 'не прочитан шаблон #задача')
+        self.fire(prompt('f-depth-batch'))
+        self.fire(skill('f-depth-batch', 'craft-task'))
+        self.fire(read('f-depth-batch', f'blocks get {PAGE} --depth 1; blocks get {TASK_TEMPLATES[1]} --depth -1'))
+        self.assert_silent(self.fire(write('f-depth-batch', TASK_ADD)))
+
+    def test_state_words_in_the_text_do_not_close_the_task(self) -> None:
+        self.start('f-text-state', PROJECT)
+        self.prepare('f-text-state', 'craft-task')
+        command = (f'blocks update --id {TASK} --json '
+                   '\'{"markdown":"- [ ] Учить --state done #задача/1ч","indentationLevel":2}\'')
+        self.assert_silent(self.fire(write('f-text-state', command)))
 
 
 class ReviewRowTest(ApiLockHarness):

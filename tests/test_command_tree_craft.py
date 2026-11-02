@@ -155,9 +155,66 @@ class TargetsTest(unittest.TestCase):
         command = f'blocks update --json \'[{{"id": "{OTHER}"}}, {{"id":"{LOWER}"}}]\' --id {LOWER}'
         self.assertEqual(craft.target_ids(command), [LOWER, OTHER])
 
+    def test_tasks_update_by_task_flag_targets_the_task(self) -> None:
+        [anchor] = craft.write_targets(f'tasks update --task {LOWER} --state done').anchors
+        self.assertEqual((anchor.flag, anchor.block_id, anchor.role), ('task', LOWER, craft.Role.SELF))
+        self.assertTrue(craft.write_targets(f'tasks delete --task {LOWER}').targeted)
+
+    def test_documents_delete_and_move_target_the_document(self) -> None:
+        for verb in ('documents delete', 'documents move'):
+            with self.subTest(verb=verb):
+                targets = craft.write_targets(f'{verb} --document {LOWER}')
+                self.assertEqual([(a.flag, a.block_id, a.role) for a in targets.anchors],
+                                 [('document', LOWER, craft.Role.SELF)])
+                self.assertTrue(targets.targeted)
+
+    def test_an_update_targeted_only_in_its_json_targets_the_json_ids(self) -> None:
+        command = f'blocks update --json \'[{{"id":"{LOWER}","markdown":"x"}},{{"id":"{OTHER}"}}]\''
+        targets = craft.write_targets(command)
+        self.assertEqual([(a.flag, a.block_id, a.role) for a in targets.anchors],
+                         [('json', LOWER, craft.Role.SELF), ('json', OTHER, craft.Role.SELF)])
+        # Флаг цели есть — JSON цели не добавляет: правится блок флага.
+        flagged = craft.write_targets(f'blocks update --id {OTHER} --json \'{{"id":"{LOWER}"}}\'')
+        self.assertEqual([a.block_id for a in flagged.anchors], [OTHER])
+
+    def test_flags_inside_the_payload_are_text(self) -> None:
+        command = (f'blocks add --siblingId {LOWER} --markdown "Учить --position before и '
+                   f'--id {OTHER} --state done"')
+        targets = craft.write_targets(command)
+        self.assertEqual([a.block_id for a in targets.anchors], [LOWER])
+        self.assertFalse(targets.before)
+        self.assertFalse(craft.parse_command(command).has('state'))
+
+    def test_help_is_not_a_targeted_write(self) -> None:
+        targets = craft.write_targets('blocks add --help')
+        self.assertEqual((targets.anchors, targets.broken, targets.targeted), ([], [], False))
+
+    def test_a_daily_note_by_date_is_a_target_without_an_id(self) -> None:
+        targets = craft.write_targets('blocks add --date today --markdown "x"')
+        self.assertEqual((targets.anchors, targets.broken, targets.targeted, targets.dated),
+                         ([], [], True, True))
+
     def test_verb_is_the_first_two_words(self) -> None:
         self.assertEqual(craft.verb_of('  blocks   add --id X'), 'blocks add')
         self.assertEqual(craft.verb_of('search'), '')
+
+
+class FlagsTest(unittest.TestCase):
+
+    def test_flags_values_and_arguments(self) -> None:
+        parsed = craft.parse_command(f'blocks get {LOWER} --depth -1 --format=json --help')
+        self.assertEqual(parsed.arguments, (LOWER,))
+        self.assertEqual(parsed.flags, (('depth', '-1'), ('format', 'json'), ('help', None)))
+        self.assertEqual(parsed.value('depth'), '-1')
+        self.assertIsNone(parsed.value('nope'))
+
+    def test_a_payload_flag_takes_its_value_even_when_it_looks_like_a_flag(self) -> None:
+        parsed = craft.parse_command('blocks add --markdown "--state done" --id X')
+        self.assertEqual(parsed.flags, (('markdown', '--state done'), ('id', 'X')))
+
+    def test_an_unclosed_quote_is_read_loosely(self) -> None:
+        self.assertEqual(craft.words_of('blocks add --id X --markdown "a b'),
+                         ['blocks', 'add', '--id', 'X', '--markdown', 'a b'])
 
 
 class PackageTest(unittest.TestCase):

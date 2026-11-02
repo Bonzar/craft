@@ -306,9 +306,19 @@ class InstallerTest(unittest.TestCase):
         return json.dumps({'tags': list(tags), 'templates': {tag: [template] for tag in tags}},
                           ensure_ascii=False)
 
-    def add_entity(self, slug: str, body: str) -> Path:
-        folder = self.add_module(slug, f'slug = "{slug}"\n', {'data': {'entity.json': body}})
+    def add_entity(self, slug: str, body: str, serves: bool = True) -> Path:
+        manifest = f'slug = "{slug}"\n' + ('for = ["craft-type-lock"]\n' if serves else '')
+        folder = self.add_module(slug, manifest, {'data': {'entity.json': body}})
         return folder / 'data' / 'entity.json'
+
+    def test_an_entity_file_without_for_the_lock_fails_the_install(self) -> None:
+        # Замок находит модули сущностей по `for`: файл без него замок молча не
+        # видит, и тег остался бы без скилла.
+        path = self.add_entity('craft-task', self.entity('#задача'), serves=False)
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer('--dry-run')
+        self.assertIn(str(path), str(caught.exception))
+        self.assertIn('for = ["craft-type-lock"]', str(caught.exception))
 
     def test_entity_tags_of_distinct_modules_install(self) -> None:
         self.add_entity('craft-task', self.entity('#задача'))

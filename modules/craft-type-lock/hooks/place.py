@@ -51,7 +51,10 @@ class Verdict(enum.Enum):
     место не определить, и ход в этом не виноват: нет базы API, API не
     ответил, срок вышел, страница над целью не видна; предупреждение в ход
     выводится раз за сессию. UNPARSED — в команде не разобран ни один id цели
-    или часть. Сущности уже найденных целей приходят при любом исходе.
+    или часть. UNTARGETED — у команды, у которой цель есть всегда, цели нет
+    ни во флаге, ни в JSON правки: Craft найдёт её путём, которого замок не
+    видит, и запись закрыта. Сущности уже найденных целей приходят при любом
+    исходе.
     """
     LOCATED = 'located'
     GUESSED = 'guessed'
@@ -59,6 +62,14 @@ class Verdict(enum.Enum):
     UNREAD = 'unread'
     UNAVAILABLE = 'unavailable'
     UNPARSED = 'unparsed'
+    UNTARGETED = 'untargeted'
+
+
+# Пачка судится по командам; исход пачки — самый строгий исход её команд:
+# запреты впереди, неопределённость впереди определённого.
+STRICTNESS = (Verdict.UNREAD, Verdict.UNTARGETED, Verdict.UNAVAILABLE, Verdict.UNPARSED,
+              Verdict.GUESSED, Verdict.LOCATED, Verdict.NO_TARGET)
+DATED_NOTE = 'цель — заметка дня по дате: место не судится'
 
 
 class Place(NamedTuple):
@@ -87,8 +98,8 @@ class Outcome(NamedTuple):
 
 
 def owners_at(walk: Walk, start: Start, levels) -> tuple[tuple[Entity, ...], bool]:
-    """Владельцы места на каждом из уровней; уровни не разобраны — на всех."""
-    guessed = levels is None
+    """Владельцы места на каждом из уровней; уровни не разобраны или их нет — на всех."""
+    guessed = not levels
     found = {}
     for level in GUESS_LEVELS if guessed else sorted(levels):
         owner = walk.owner(start, level)
@@ -233,23 +244,58 @@ def verdict_of(result: Search, broken: list[str]) -> Place:
     return place(Verdict.LOCATED, reason)
 
 
-def page_types(targets, write: Write, reads: list[str], base: str | None, tags_of: TagsOf,
-               clock=time.monotonic) -> Place:
-    """Какие сущности задевает запись: владельцы мест всех целей и правленые цели.
+def unique(items, key) -> tuple:
+    """Без повторов по ключу, порядок первого вхождения."""
+    found = {}
+    for item in items:
+        found.setdefault(key(item), item)
+    return tuple(found.values())
 
-    targets — цели команды записи от command-tree-craft (write_targets),
-    write — разбор её нагрузки (payload.write_of). Цель, которая не лежит ни
-    на одной прочитанной странице, — UNREAD: по механике Craft страница цели
-    читается до записи.
+
+def merge(places: list[Place]) -> Place:
+    """Исход пачки: самый строгий исход, сущности всех команд без повторов.
+
+    Причина — причины команд с этим исходом впереди, остальные за ними.
     """
+    if not places:
+        return Place(Verdict.NO_TARGET, '')
+    verdict = min((place.verdict for place in places), key=STRICTNESS.index)
+    ordered = sorted(places, key=lambda place: place.verdict is not verdict)
+    reason = '; '.join(place.reason for place in ordered if place.reason)
+    return Place(verdict, reason,
+                 unique([e for place in places for e in place.entities], lambda e: e.block_id.lower()),
+                 unique([e for place in places for e in place.edited], lambda e: e.block_id.lower()),
+                 unique([pair for place in places for pair in place.closing],
+                        lambda pair: (pair[0].block_id.lower(), pair[1].block_id.lower())))
+
+
+def part_type(targets, write: Write, base: str | None, walk: Walk | None) -> Place:
+    """Исход одной команды пачки."""
     anchors, broken = targets.anchors, targets.broken
     if not anchors:
-        if broken or targets.targeted:
-            return Place(Verdict.UNPARSED, 'цель в команде не разобрана: ' + (', '.join(broken) or 'флага цели нет'))
+        if broken:
+            return Place(Verdict.UNPARSED, 'цель в команде не разобрана: ' + ', '.join(broken))
+        if targets.dated:
+            return Place(Verdict.NO_TARGET, DATED_NOTE)
+        if targets.targeted:
+            return Place(Verdict.UNTARGETED, 'цели нет ни во флаге, ни в JSON правки')
         return Place(Verdict.NO_TARGET, '')
     if not base:
         return Place(Verdict.UNAVAILABLE, f'{BASE_ENV} не задан, место записи не проверить')
-    if not reads:
+    if walk is None:
         return Place(Verdict.UNREAD, 'в сессии нет чтений Craft')
-    walk = Walk(Api(base, clock), reads, tags_of)
     return verdict_of(search(anchors, walk, write), broken)
+
+
+def page_types(parts, reads: list[str], base: str | None, tags_of: TagsOf,
+               clock=time.monotonic) -> Place:
+    """Какие сущности задевает запись: владельцы мест всех целей и правленые цели.
+
+    parts — команды пачки парами (цели от command-tree-craft `write_targets`,
+    разбор нагрузки `payload.write_of`); каждая судится отдельно, исходы
+    сливаются (merge). Цель, которая не лежит ни на одной прочитанной
+    странице, — UNREAD: по механике Craft страница цели читается до записи.
+    Запросы всех команд идут одной проверкой: общий срок и общая память.
+    """
+    walk = Walk(Api(base, clock), reads, tags_of) if base and reads else None
+    return merge([part_type(targets, write, base, walk) for targets, write in parts])

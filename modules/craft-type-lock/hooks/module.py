@@ -61,6 +61,14 @@ PLUGIN_SEPARATOR = ':'
 UNCHECKED = (Verdict.UNAVAILABLE, Verdict.UNPARSED)
 # Исходы, при которых место судилось и владельцы требуются.
 JUDGED = (Verdict.LOCATED, Verdict.GUESSED, Verdict.NO_TARGET)
+# Место не определено, и ход в этом не виноват (API не ответил, отдал не то
+# или 404, срок вышел): запись проходит с предупреждением раз за сессию.
+# Решение открыто у владельца; закрыть такую запись — поставить False.
+UNAVAILABLE_PASSES = True
+# Шаблон прочитан, когда он прочитан целиком: `blocks get ‹шаблон› --depth -1`.
+TEMPLATE_READ_VERB = 'blocks get'
+DEPTH_FLAG = 'depth'
+WHOLE_DEPTH = '-1'
 
 
 def skill_slug(tool_input) -> str:
@@ -103,6 +111,29 @@ def unread_reason(note: str) -> str:
     return (f'Запись в непрочитанное: {note}. Прочитай страницу, куда пишешь, '
             '«blocks get ‹id страницы› --depth -1», и повтори запись: по заголовку '
             'этой страницы замок узнаёт тип сущности.')
+
+
+def untargeted_reason(note: str) -> str:
+    return (f'Цель записи не найдена: {note}. Замок не узнает, куда ляжет запись. Укажи цель '
+            'флагом с id блока (--id, --ids, --siblingId, --targetId, --targetSiblingId, --task, '
+            '--document) и повтори запись.')
+
+
+def broken_reason(storage, error: ValueError) -> str:
+    """Причина запрета, когда замок не смог судить запись: что сломано и как починить."""
+    return (f'Замок craft-type-lock не смог судить запись: {error}. Запись в Craft закрыта до '
+            f'починки. Если испорчен файл состояния замка, удали {storage.path(STATE_FILE)} — '
+            'счёт начнётся заново. Потом повтори запись.')
+
+
+def template_reads(command: str, craft) -> list[str]:
+    """Id, прочитанные целиком: аргументы `blocks get … --depth -1` каждой команды пачки."""
+    found = []
+    for part in craft.split_commands(command):
+        parsed = craft.parse_command(part)
+        if craft.verb_of(part) == TEMPLATE_READ_VERB and parsed.value(DEPTH_FLAG) == WHOLE_DEPTH:
+            found.extend(item for item in parsed.arguments if craft.is_block_id(item))
+    return craft.unique_ids(found)
 
 
 def place_tail(place: Place) -> str:
@@ -189,10 +220,9 @@ class Module(jarvis.Module):
         return jarvis.Silence(reason=f'скилл {slug} вызван в ходе {turn}')
 
     def on_read(self, event, storage, craft) -> jarvis.Response:
+        command = craft.command_of(event.tool_input)
         pages = craft.answer_page_ids(str(event.tool_result or ''))[:MAX_RESULT_PAGES]
-        # Шаблон прочитан, когда его id стоит в команде чтения: страницы из
-        # ответа поиска или ссылки в прочитанном чтением шаблона не считаются.
-        requested = craft.block_ids(craft.command_of(event.tool_input))
+        requested = craft.block_ids(command)
         ids = craft.unique_ids([*pages, *requested])
         if not ids:
             return jarvis.Silence(reason='чтение без id блока')
@@ -200,7 +230,10 @@ class Module(jarvis.Module):
             state = read_state(storage, craft)
             storage.write_json(STATE_FILE, {
                 **state, READS_KEY: remember_reads(state[READS_KEY], ids, craft),
-                TURN_READS_KEY: remember_turn_reads(state[TURN_READS_KEY], requested, craft)})
+                # Шаблон прочитан, когда он сам прочитан целиком: страницы из
+                # ответа, id из поиска и чтение не на всю глубину не считаются.
+                TURN_READS_KEY: remember_turn_reads(state[TURN_READS_KEY], template_reads(command, craft),
+                                                    craft)})
         return jarvis.Silence(reason=f'прочитано: {", ".join(item[:8] for item in ids)}')
 
     def warn_once(self, storage, craft, state: dict, reason: str) -> str | None:
@@ -231,18 +264,32 @@ class Module(jarvis.Module):
             # страницы. Пропуск отдал бы запись без скилла типа, поэтому
             # запись закрыта до починки.
             return jarvis.Deny(reason=entity_reason(error))
-        state = read_state(storage, craft)
-        targets = craft.write_targets(command)
-        write = write_of(command, craft.split_commands, craft.verb_of)
-        place = settle(entries, page_types(targets, write, state[READS_KEY], os.environ.get(BASE_ENV),
-                                           lambda text: craft.find_tags(text, entries)))
+        try:
+            state = read_state(storage, craft)
+            parts = [(craft.write_targets(part), write_of(craft.verb_of(part), craft.parse_command(part)))
+                     for part in craft.split_commands(command) or [command]]
+            place = settle(entries, page_types(parts, state[READS_KEY], os.environ.get(BASE_ENV),
+                                               lambda text: craft.find_tags(text, entries)))
+        except ValueError as error:
+            # Ошибка хука харнес считает неблокирующей: упавший замок пропустил
+            # бы запись. Испорченное состояние или отступ — запрет с выходом.
+            return jarvis.Deny(reason=broken_reason(storage, error))
         tags = craft.find_tags(command, entries)
+        targets = [anchor for found, _ in parts for anchor in found.anchors]
         # Тип записи — в объём ревью: только выбор критериев, без решения замка.
         append_row(storage, entity_row(event, command, targets, place, tags))
+        return self.decide(entries, tags, place, storage, craft, state)
+
+    def decide(self, entries, tags, place: Place, storage, craft, state: dict) -> jarvis.Response:
+        """Запрет по месту, а без него — суждение по скиллам и шаблонам."""
         if place.verdict is Verdict.UNREAD:
             return jarvis.Deny(reason=unread_reason(place.reason))
+        if place.verdict is Verdict.UNTARGETED:
+            return jarvis.Deny(reason=untargeted_reason(place.reason))
         warning = None
         if place.verdict is Verdict.UNAVAILABLE:
+            if not UNAVAILABLE_PASSES:
+                return jarvis.Deny(reason=f'Место записи не определено: {place.reason}. Повтори запись позже.')
             warning = self.warn_once(storage, craft, state, place.reason)
         return self.judge(entries, tags, place, state, warning)
 

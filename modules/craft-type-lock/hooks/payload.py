@@ -3,25 +3,25 @@
 Часть замка craft-type-lock. Владелец места зависит от отступа, с которым
 блок встанет на страницу (hooks/owner.py), а у правки блока с типом — от
 того, меняет ли она его состояние: закрытие, отмена или возврат задевают и
-владельца. Здесь разбирается полезная нагрузка команды: `--json` и
-`--markdown` каждой команды пачки, флаг `--state`, позиция.
+владельца. Здесь разбирается одна команда: `--json` и `--markdown`, флаг
+`--state`, позиция. Флаги и их значения даёт разбор слов command-tree-craft
+(`parse_command`): текст нагрузки флагом не становится. Пачку режет
+вызывающий и судит каждую команду отдельно.
 """
 
 import json
 import re
-import shlex
-from collections.abc import Callable
 from typing import NamedTuple
 
 ADD_VERB = 'blocks add'
 UPDATE_VERB = 'blocks update'
 MOVE_VERB = 'blocks move'
-DELETE_VERB = 'blocks delete'
 # Глаголы, которые уносят блок с его места: владелец места тоже задет.
-REMOVING_VERBS = (MOVE_VERB, DELETE_VERB)
-JSON_FLAG = '--json'
-MARKDOWN_FLAG = '--markdown'
-FLAG_GLUE = '='
+REMOVING_VERBS = (MOVE_VERB, 'blocks delete', 'tasks delete', 'documents delete')
+JSON_FLAG = 'json'
+MARKDOWN_FLAG = 'markdown'
+STATE_FLAG = 'state'
+POSITION_FLAG = 'position'
 INDENT_KEY = 'indentationLevel'
 MARKDOWN_KEY = 'markdown'
 TASK_INFO_KEY = 'taskInfo'
@@ -29,8 +29,6 @@ STATE_KEY = 'state'
 # `--markdown` нормализует отступ к 0, `--json` без поля отступа — тоже 0
 # (правило craft-tool.md: update без indentationLevel сбрасывает его в 0).
 DEFAULT_LEVEL = 0
-STATE_FLAG = re.compile(r'--state(?:\s+|=)\S+')
-POSITION_FLAG = re.compile(r'--position(?:\s+|=)(\S+)')
 QUOTES = '\'"'
 # «В конец» ставит место после всех детей родителя, «перед» — перед соседом.
 END_POSITION = 'end'
@@ -45,10 +43,11 @@ class Write(NamedTuple):
     """Что команда делает: глагол, отступы новых блоков, смена состояния.
 
     levels — отступы, с которыми встанут новые блоки `blocks add`; None —
-    не разобрать. at_end — место в конце детей родителя (позиция `end` или
-    без позиции), before — перед соседом. explicit_state — флаг `--state` или `taskInfo.state` в
-    полезной нагрузке. texts — новые тексты блоков из `blocks update`: их
-    чекбокс и закрывающий хвост сверяются с текстом цели.
+    не разобрать или команда не `blocks add`. at_end — место в конце детей
+    родителя (позиция `end` или без позиции), before — перед соседом.
+    explicit_state — флаг `--state` или `taskInfo.state` в полезной
+    нагрузке. texts — новые тексты блоков из `blocks update`: их чекбокс и
+    закрывающий хвост сверяются с текстом цели.
     """
     verb: str
     levels: frozenset[int] | None
@@ -72,24 +71,11 @@ class Payload(NamedTuple):
     broken: bool
 
 
-def flag_value(words: list[str], flag: str) -> str | None:
-    for index, word in enumerate(words):
-        if word == flag and index + 1 < len(words):
-            return words[index + 1]
-        if word.startswith(flag + FLAG_GLUE):
-            return word[len(flag) + len(FLAG_GLUE):]
-    return None
-
-
-def payload_of(command: str) -> Payload:
+def payload_of(parsed) -> Payload:
     """Полезная нагрузка одной команды: блоки из `--json` и текст `--markdown`."""
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        return Payload(None, None, True)
-    markdown, raw = flag_value(words, MARKDOWN_FLAG), flag_value(words, JSON_FLAG)
+    markdown, raw = parsed.value(MARKDOWN_FLAG), parsed.value(JSON_FLAG)
     if raw is None:
-        return Payload(None, markdown, False)
+        return Payload(None, markdown, parsed.has(JSON_FLAG))
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -101,13 +87,13 @@ def payload_of(command: str) -> Payload:
 
 
 def levels_of(payload: Payload) -> set[int] | None:
-    """Отступы верхних блоков нагрузки; не разобрать — None."""
+    """Отступы верхних блоков нагрузки; не разобрать или блоков нет — None."""
     if payload.broken:
         return None
     if payload.blocks is None:
         return {DEFAULT_LEVEL} if payload.markdown is not None else None
     levels = {block.get(INDENT_KEY, DEFAULT_LEVEL) for block in payload.blocks}
-    if not all(type(level) is int and level >= 0 for level in levels):
+    if not levels or not all(type(level) is int and level >= 0 for level in levels):
         return None
     return levels
 
@@ -123,23 +109,17 @@ def texts_of(payload: Payload) -> list[str]:
     return [*texts, payload.markdown] if payload.markdown is not None else texts
 
 
-def write_of(command: str, split: Callable[[str], list[str]], verb_of: Callable[[str], str]) -> Write:
-    """Разбор всей команды, пачка через «;» — по каждой команде."""
-    commands = split(command) or [command]
-    levels: set[int] | None = set()
-    explicit, texts = STATE_FLAG.search(command) is not None, []
-    for part in commands:
-        verb, payload = verb_of(part), payload_of(part)
-        if verb == ADD_VERB:
-            found = levels_of(payload)
-            levels = None if found is None or levels is None else levels | found
-        if verb == UPDATE_VERB:
-            explicit = explicit or has_state(payload)
-            texts.extend(texts_of(payload))
-    found = POSITION_FLAG.search(command)
-    position = found.group(1).strip(QUOTES) if found else None
-    return Write(verb_of(commands[0]), None if levels is None else frozenset(levels),
-                 position in (None, END_POSITION), position == BEFORE_POSITION, explicit, tuple(texts))
+def write_of(verb: str, parsed) -> Write:
+    """Разбор одной команды: глагол и её слова от command-tree-craft (`parse_command`)."""
+    payload = payload_of(parsed)
+    levels = levels_of(payload) if verb == ADD_VERB else None
+    updates = verb == UPDATE_VERB
+    explicit = parsed.has(STATE_FLAG) or (updates and has_state(payload))
+    position = parsed.value(POSITION_FLAG)
+    position = position.strip(QUOTES) if position is not None else None
+    return Write(verb, None if levels is None else frozenset(levels),
+                 position in (None, END_POSITION), position == BEFORE_POSITION, explicit,
+                 tuple(texts_of(payload)) if updates else ())
 
 
 def mark_of(markdown: str) -> tuple[str | None, frozenset[str]]:

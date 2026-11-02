@@ -27,13 +27,19 @@
 - Id блоков в команде и страницы в ответе `craft_read`: теги
   `<page id="…">` в markdown, корневой id в JSON. Регистр id API различает,
   поэтому id отдаются как есть, а повторы снимаются без учёта регистра.
+- Слова и флаги одной команды. Слова режутся как в оболочке, незакрытая
+  кавычка — терпимо, до конца команды. Значение `--json` и `--markdown` —
+  текст нагрузки: флаги внутри него флагами не считаются.
 - Цели записи. Флаги `--id`, `--ids`, `--siblingId`, `--targetId`,
-  `--targetSiblingId` в любом месте команды, через пробел или «=», кавычки
-  сняты, список через запятую разобран. У каждой цели роль: сосед
-  (`--siblingId`, `--targetSiblingId`), родитель (`--id` у `blocks add`,
-  `--targetId` у `blocks move`) или сам блок. Значения, на id не похожие,
-  отдаются отдельно. Ещё — `--position before` и то, из тех ли команда, у
-  которых цель есть всегда (`blocks add/update/move/delete`, `tasks update`).
+  `--targetSiblingId`, `--task`, `--document` в любом месте команды, через
+  пробел или «=», кавычки сняты, список через запятую разобран. У каждой
+  цели роль: сосед (`--siblingId`, `--targetSiblingId`), родитель (`--id` у
+  `blocks add`, `--targetId` у `blocks move`) или сам блок. У `blocks
+  update` без флага цели цели — поля `id` верхних блоков `--json`. Значения,
+  на id не похожие, отдаются отдельно. Ещё — `--position before`, цель ли
+  заметка дня по `--date` и то, из тех ли команда, у которых цель есть
+  всегда (`blocks add/update/move/delete`, `tasks update/delete`,
+  `documents move/delete`). Команда со `--help` целей не имеет.
 
 ## API
 
@@ -54,11 +60,13 @@
 | `block_ids(text)` | id блоков текста без повторов в любом регистре |
 | `unique_ids(ids)` | повторы в любом регистре сняты, порядок первого вхождения |
 | `answer_page_ids(answer)` | страницы из ответа `craft_read` |
-| `write_targets(command)` | `Targets`: цели `Anchor(flag, block_id, role)`, неразобранные значения, `before`, `targeted` |
+| `write_targets(command)` | `Targets`: цели `Anchor(flag, block_id, role)`, неразобранные значения, `before`, `targeted`, `dated` |
+| `parse_command(command)` | `Parsed`: флаги `(имя, значение)` и аргументы после глагола; `value`, `values`, `has` |
+| `words_of(command)` | слова команды, кавычки сняты |
 | `target_ids(command)` | id целей из флагов и полей `"id"` JSON |
 | `verb_of(command)`, `is_before(command)` | глагол команды, `--position before` |
 
-`write_targets` и `find_tags` работают по одной команде. Пачку вызывающий
+`write_targets`, `parse_command` и `find_tags` работают по одной команде. Пачку вызывающий
 режет сам `split_commands`, если ему нужно судить команды по отдельности.
 
 ## Кто зовёт
@@ -77,6 +85,7 @@
 lib/__init__.py  публичные имена
 lib/tools.py     имя инструмента и команда из входа
 lib/batch.py     пачка команд
+lib/flags.py     слова и флаги одной команды
 lib/tags.py      теги вне текста ссылок
 lib/ids.py       id блоков и страницы ответа чтения
 lib/targets.py   цели записи

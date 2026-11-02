@@ -35,7 +35,7 @@ def tags_of(entities) -> list[str]:
     return sorted({tag for entity in entities for tag in entity.tags})
 
 
-def entity_row(event, command: str, targets, place: Place, text_tags: list[str]) -> dict | None:
+def entity_row(event, command: str, anchors, place: Place, text_tags: list[str]) -> dict | None:
     """Строка `entity` для записи; вызов подагента — None: его записей в объёме нет.
 
     `command` — команда как есть: по ней и `prompt_id` ревью находит запись
@@ -47,7 +47,7 @@ def entity_row(event, command: str, targets, place: Place, text_tags: list[str])
     head = {'kind': KIND} if prompt_id is None else {'kind': KIND, PROMPT_ID_FIELD: prompt_id}
     return {**head,
             'command': command,
-            'targets': [anchor.block_id for anchor in targets.anchors],
+            'targets': [anchor.block_id for anchor in anchors],
             'place_types': tags_of(place.entities),
             'content_types': sorted({*text_tags, *tags_of(place.edited)}),
             'determined': place.verdict in DETERMINED,
