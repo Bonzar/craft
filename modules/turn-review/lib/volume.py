@@ -1,8 +1,9 @@
 """Объём ревью на диске: дописать строку, разобрать файл, починить, посчитать.
 
 Объём — всё, что ход сделал с Craft с последнего чистого вердикта или
-разрешения Влада, по строке на событие. Строки читаются словарями: файл мог
-испортить кто угодно, нечитаемое называется, а не прячется.
+разрешения Влада, по строке на событие. Строки читаются в типы записей
+(parse_record): файл мог испортить кто угодно, и строка, которая не JSON или
+не собирается в запись, называется с причиной, а не прячется.
 """
 
 import hashlib
@@ -10,7 +11,7 @@ import json
 import os
 from typing import NewType
 
-from .records import KIND_KEY, KIND_WRITE, RECORD_TURN_KEY
+from .records import KIND_WRITE, VolumeRecord, WriteRecord, parse_record, record_row
 
 VOLUME_FILE = 'turn-review-volume.jsonl'
 FINGERPRINT_CHARS = 16
@@ -27,10 +28,16 @@ def append_row_unlocked(storage, row: dict) -> None:
     storage.append_line(VOLUME_FILE, json.dumps(row, ensure_ascii=False))
 
 
-def parse_volume_file(path) -> tuple[list[dict], list[str]]:
+def parse_line(line: bytes) -> VolumeRecord:
+    """Запись из строки файла; не JSON или не запись — ValueError с причиной."""
+    return parse_record(json.loads(line.decode('utf-8')))
+
+
+def parse_volume_file(path) -> tuple[list[VolumeRecord], list[str]]:
     """Разбор файла объёма по байтам: хук и скрипт отпечатка читают его одной функцией.
 
-    Второе — описания нечитаемых строк: номер и причина.
+    Второе — описания нечитаемых строк: номер и причина. Строка JSON, которая
+    не собирается в запись, — такая же нечитаемая, как обрыв.
     """
     try:
         data = path.read_bytes()
@@ -41,36 +48,31 @@ def parse_volume_file(path) -> tuple[list[dict], list[str]]:
         if not line.strip():
             continue
         try:
-            record = json.loads(line.decode('utf-8'))
+            records.append(parse_line(line))
         except ValueError as error:
             damage.append(f'строка {number}: {error}')
-            continue
-        if not isinstance(record, dict):
-            damage.append(f'строка {number}: не объект')
-            continue
-        records.append(record)
     return records, damage
 
 
-def parse_volume(storage) -> tuple[list[dict], list[str]]:
+def parse_volume(storage) -> tuple[list[VolumeRecord], list[str]]:
     return parse_volume_file(storage.path(VOLUME_FILE))
 
 
-def rewrite_volume(storage, records: list[dict]) -> None:
+def rewrite_volume(storage, records: list[VolumeRecord]) -> None:
     path = storage.path(VOLUME_FILE)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f'.tmp-{os.getpid()}')
-    tmp.write_text(''.join(json.dumps(record, ensure_ascii=False) + '\n' for record in records),
-                   encoding='utf-8')
+    tmp.write_text(''.join(json.dumps(record_row(record), ensure_ascii=False) + '\n'
+                           for record in records), encoding='utf-8')
     os.replace(tmp, path)
 
 
-def peek_volume(storage) -> list[dict]:
-    """Читаемые строки объёма без починки файла: починка и её след — дело stop."""
+def peek_volume(storage) -> list[VolumeRecord]:
+    """Читаемые записи объёма без починки файла: починка и её след — дело stop."""
     return parse_volume(storage)[0]
 
 
-def load_volume(storage) -> tuple[list[dict], str | None]:
+def load_volume(storage) -> tuple[list[VolumeRecord], str | None]:
     """Объём и что в нём пропало.
 
     Нечитаемые строки убираются, остальное идёт на ревью как было. Что было в
@@ -84,45 +86,43 @@ def load_volume(storage) -> tuple[list[dict], str | None]:
                      f'({"; ".join(damage)}): эти строки убраны, их ревью не было')
 
 
-def count_kind(volume: list[dict], kind: str) -> int:
-    return sum(1 for record in volume if record.get(KIND_KEY) == kind)
+def count_kind(volume: list[VolumeRecord], kind: str) -> int:
+    return sum(1 for record in volume if record.kind == kind)
 
 
-def count_writes(volume: list[dict]) -> int:
+def count_writes(volume: list[VolumeRecord]) -> int:
     return count_kind(volume, KIND_WRITE)
 
 
-def writes_before_turn(volume: list[dict], turn: int) -> bool:
+def writes_before_turn(volume: list[VolumeRecord], turn: int) -> bool:
     """Записи есть, и все сделаны ходами раньше этого: этот ход в Craft не писал.
 
     Пустой объём — False: там нечего отпускать как разговор. Запись без
     номера хода не раньше. Номер хода после потери состояния продолжается
     от записей объёма, см. next_turn.
     """
-    turns = [record.get(RECORD_TURN_KEY) for record in volume
-             if record.get(KIND_KEY) == KIND_WRITE]
-    return bool(turns) and all(isinstance(item, int) and item < turn for item in turns)
+    turns = [record.turn for record in volume if isinstance(record, WriteRecord)]
+    return bool(turns) and all(item is not None and item < turn for item in turns)
 
 
-def next_turn(state_turn: int, volume: list[dict]) -> int:
+def next_turn(state_turn: int, volume: list[VolumeRecord]) -> int:
     """Номер нового хода: больше и счётчика состояния, и любого хода в объёме.
 
     Состояние потеряно — счётчик снова 0, а записи объёма помнят свои ходы.
     Без этого ходы-разговоры после потери блокировались бы, пока счётчик не
     догонит старые записи.
     """
-    turns = [record.get(RECORD_TURN_KEY) for record in volume]
-    known = [item for item in turns if isinstance(item, int)]
+    known = [record.turn for record in volume if record.turn is not None]
     return max([state_turn, *known]) + 1
 
 
-def fingerprint(volume: list[dict]) -> Fingerprint:
+def fingerprint(volume: list[VolumeRecord]) -> Fingerprint:
     """Отпечаток записей `write` объёма: одна и та же строка у хука и у подагента.
 
     Считается по записям в каноническом виде, а не по байтам файла: починка
     объёма переписывает файл, а записи в нём те же.
     """
-    lines = [json.dumps(record, ensure_ascii=False, sort_keys=True)
-             for record in volume if record.get(KIND_KEY) == KIND_WRITE]
+    lines = [json.dumps(record_row(record), ensure_ascii=False, sort_keys=True)
+             for record in volume if isinstance(record, WriteRecord)]
     digest = hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()
     return Fingerprint(digest[:FINGERPRINT_CHARS])

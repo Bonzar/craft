@@ -41,6 +41,17 @@ EVENT_OF = {'UserPromptSubmit': 'prompt', 'PostToolUse': 'post-tool', 'Stop': 's
             'SessionStart': 'after-compact', 'MessageDisplay': 'model-message'}
 
 
+def write_record(types=('#задача',), types_error: str | None = None,
+                 command: str = 'blocks add'):
+    """Запись write объёма с тегами: в тестах lib важны только теги."""
+    return review_lib.make_write_record(tool=CRAFT_WRITE, command=command, result=None,
+                                        types=types, types_error=types_error)
+
+
+def skill_record(name: str):
+    return review_lib.make_skill_record(skill=name)
+
+
 def prompt(session: str, text: str = 'дальше') -> dict:
     return {'hook_event_name': 'UserPromptSubmit', 'session_id': session, 'cwd': '/work',
             'prompt': text}
@@ -164,7 +175,8 @@ class TurnReviewCase(unittest.TestCase):
     def write_verdict(self, session: str, volume_id: str, remarks=(), fingerprint: str | None = None,
                       checked=None) -> None:
         if fingerprint is None:
-            fingerprint = review_lib.fingerprint(self.volume(session))
+            fingerprint = review_lib.fingerprint(
+                [review_lib.parse_record(row) for row in self.volume(session)])
         if checked is None:
             # Критерии последнего поручения; поручения не было — как у записи задачи.
             checked = self.state(session).get('criteria') or ['craft-base', 'consistency', 'task', 'anchor']
@@ -545,6 +557,18 @@ class TurnReviewTest(TurnReviewCase):
         self.assertNotEqual(self.state(session)['volume_id'], volume_id)
         self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
 
+    def test_a_row_that_is_not_a_record_is_dropped_and_named(self) -> None:
+        # JSON-объект, но не запись: прежде он шёл в объём словарём и мимо
+        # потребителей, теперь чтение отвергает его так же, как обрыв строки.
+        session = 's-not-a-record'
+        self.start_with_write(session)
+        self.storage(session).append_line('turn-review-volume.jsonl',
+                                          '{"kind": "write", "command": "blocks add"}')
+        reason = self.blocked(self.fire(stop(session)))
+        for needle in ('строка 3', 'запись kind write', 'их ревью не было'):
+            self.assertIn(needle, reason)
+        self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
+
     def test_a_volume_broken_to_the_end_is_named_once_and_not_called_empty(self) -> None:
         session = 's-broken-all'
         self.fire(prompt(session))
@@ -817,6 +841,59 @@ class RecordTest(unittest.TestCase):
             review_lib.make_skill_record(skill='x', turn=1)
 
 
+class VolumeReadTest(unittest.TestCase):
+    """Объём читается в те же типы, которыми пишется; не запись — порча с причиной."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self.tmp.name), 's-read')
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def parse(self, *lines: str):
+        path = self.storage.path('turn-review-volume.jsonl')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(''.join(line + '\n' for line in lines), encoding='utf-8')
+        return review_lib.parse_volume_file(path)
+
+    def test_every_kind_reads_back_as_its_record(self) -> None:
+        records = [write_record(), write_record(types=None, types_error='нет справочника'),
+                   review_lib.make_read_record(command='c', ids=['a']), skill_record('craft-task'),
+                   review_lib.make_prompt_record(text='т', author='Влад', at='t'),
+                   review_lib.make_answer_record(question='в', answer=['о'], author='Влад', at='t'),
+                   review_lib.make_anchor_record(answer={'a': 1}, question='Якорь?')]
+        for number, record in enumerate(records):
+            review_lib.append_turn_record(self.storage, record, turn=number)
+        read, damage = review_lib.parse_volume_file(self.storage.path('turn-review-volume.jsonl'))
+        self.assertEqual(damage, [])
+        self.assertEqual(read, [replace(record, turn=number)
+                                for number, record in enumerate(records)])
+
+    def test_a_row_that_is_not_a_record_is_damage_with_its_reason(self) -> None:
+        good = json.dumps(review_lib.record_row(skill_record('x')))
+        cases = (('[1]', 'не объект'), ('{"command": "x"}', "kind None"),
+                 ('{"kind": "skill"}', 'skill'), ('{"kind": "skill", "skill": "x", "лишнее": 1}',
+                                                   'лишние поля лишнее'),
+                 ('{"kind": "read", "command": "c", "ids": [1]}', 'ids'),
+                 ('{"kind": "skill", "skill": "x", "turn": true}', 'turn'))
+        for line, reason in cases:
+            with self.subTest(line=line):
+                records, damage = self.parse(good, line)
+                self.assertEqual(records, [skill_record('x')])
+                self.assertEqual(len(damage), 1)
+                self.assertTrue(damage[0].startswith('строка 2: '), damage[0])
+                self.assertIn(reason, damage[0])
+
+    def test_load_volume_drops_the_bad_row_and_names_it(self) -> None:
+        good = json.dumps(review_lib.record_row(skill_record('x')))
+        self.parse(good, '{"kind": "write"}')
+        records, problem = review_lib.load_volume(self.storage)
+        self.assertEqual(records, [skill_record('x')])
+        self.assertIn('строка 2', problem)
+        self.assertEqual(self.storage.read_lines('turn-review-volume.jsonl'), [good])
+
+
 class VolumeLockTest(unittest.TestCase):
     """Запись в объём идёт под локом ревью, как очистка на остановке."""
 
@@ -836,7 +913,7 @@ class VolumeLockTest(unittest.TestCase):
     def commands(self) -> list[str]:
         records, damage = review_lib.parse_volume_file(self.storage.path('turn-review-volume.jsonl'))
         self.assertEqual(damage, [])
-        return sorted(record['command'] for record in records)
+        return sorted(record.command for record in records)
 
     def test_parallel_records_land_as_whole_lines(self) -> None:
         # Строка пишется в два приёма с паузой посередине: без лока второй
@@ -888,25 +965,25 @@ class UnknownTagsTest(unittest.TestCase):
 
     TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
 
-    def problem(self, record: dict) -> str | None:
+    def problem(self, record) -> str | None:
         return review_lib.criteria_problem([record], ('task',), (self.TASK,), ())
 
     def test_a_types_error_is_a_problem_with_its_text(self) -> None:
-        for types in (None, ['#задача']):
-            with self.subTest(types=types):
-                problem = self.problem({'kind': 'write', 'types': types,
-                                        'types_error': '/m/entity.json: не JSON'})
-                self.assertIn('теги записи неизвестны, проверить нечем', problem)
-                self.assertIn('/m/entity.json: не JSON', problem)
+        problem = self.problem(write_record(types=None, types_error='/m/entity.json: не JSON'))
+        self.assertIn('теги записи неизвестны, проверить нечем', problem)
+        self.assertIn('/m/entity.json: не JSON', problem)
 
-    def test_types_not_a_list_is_a_problem(self) -> None:
-        for record in ({'kind': 'write'}, {'kind': 'write', 'types': '#задача'}):
-            with self.subTest(record=record):
-                self.assertIn('теги записи неизвестны', self.problem(record))
+    def test_types_not_a_list_never_reaches_the_volume(self) -> None:
+        # Теги не списком отвергает чтение строки: до критериев такая запись не доходит.
+        for row in ({'kind': 'write', 'tool': 't', 'command': 'c', 'result': None},
+                    {'kind': 'write', 'tool': 't', 'command': 'c', 'result': None,
+                     'types': '#задача'}):
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                review_lib.parse_record(row)
 
     def test_known_tags_and_other_kinds_are_no_problem(self) -> None:
-        self.assertIsNone(self.problem({'kind': 'write', 'types': ['#задача']}))
-        self.assertIsNone(self.problem({'kind': 'read', 'types': None}))
+        self.assertIsNone(self.problem(write_record()))
+        self.assertIsNone(self.problem(review_lib.make_read_record(command='c', ids=[])))
 
 
 class TakenCriteriaTest(unittest.TestCase):
@@ -914,13 +991,13 @@ class TakenCriteriaTest(unittest.TestCase):
 
     TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
     def test_a_taken_id_without_a_found_criterion_is_a_problem(self) -> None:
-        write = {'kind': 'write', 'types': ['#задача']}
+        write = write_record()
         problem = review_lib.criteria_problem([write], ['task', 'stage'], [self.TASK], [])
         self.assertIn('критерий «stage» из поручения', problem)
         self.assertNotIn('«task»', problem)
 
     def test_taken_ids_all_found_are_no_problem(self) -> None:
-        write = {'kind': 'write', 'types': ['#задача']}
+        write = write_record()
         self.assertIsNone(review_lib.criteria_problem([write], ['task'], [self.TASK], []))
 
 
@@ -1047,11 +1124,11 @@ class CriterionFilesTest(unittest.TestCase):
 
     def test_a_proper_file_is_taken_whole(self) -> None:
         self.criterion('good', 'id: good\napplies: craft\n\n## Критерий «good»: всё\nТекст.\n')
-        parts = self.assemble([{'kind': 'write'}])
+        parts = self.assemble([write_record(types=())])
         self.assertIsInstance(parts, review_lib.BriefParts)
         self.assertEqual((parts.text, parts.criteria, parts.broken),
                          ('## Критерий «good»: всё\nТекст.', ('good',), ()))
-        check = review_lib.review_criteria(self.modules, [{'kind': 'write'}], None)
+        check = review_lib.review_criteria(self.modules, [write_record(types=())], None)
         self.assertEqual(check.criteria, ('good',))
 
     def test_a_repeated_head_field_is_broken(self) -> None:
@@ -1064,7 +1141,7 @@ class CriterionFilesTest(unittest.TestCase):
         # Как теги в entity.json: «#» и хотя бы один знак, регистр не важен.
         self.criterion('bare', 'id: bare\napplies: tags #\n\nТекст.\n')
         self.criterion('upper', 'id: upper\napplies: tags #Задача\n\nТекст.\n')
-        _, ids, broken = self.assemble([{'kind': 'write', 'types': ['#задача']}])
+        _, ids, broken = self.assemble([write_record()])
         self.assertEqual(ids, ('upper',))
         self.assertEqual([item.split(' ', 1)[0] for item in broken], ['bare'])
 
@@ -1114,8 +1191,8 @@ class ModuleRequirementsFilesTest(unittest.TestCase):
     def test_a_skill_with_a_file_brings_its_text_once(self) -> None:
         self.requirements('craft-snapshot', '1. Отметка прогона записана.\n')
         self.requirements('craft-note', '1. Резюме на месте.\n')
-        volume = [{'kind': 'skill', 'skill': 'craft-snapshot'}, {'kind': 'write'},
-                  {'kind': 'skill', 'skill': 'craft-snapshot'}]
+        volume = [skill_record('craft-snapshot'), write_record(),
+                  skill_record('craft-snapshot')]
         parts = self.assemble(volume)
         self.assertEqual(parts.text,
                          '### Требования модуля craft-snapshot\n\n1. Отметка прогона записана.')
@@ -1123,16 +1200,17 @@ class ModuleRequirementsFilesTest(unittest.TestCase):
 
     def test_without_a_skill_record_the_section_is_none(self) -> None:
         self.requirements('craft-snapshot', '1. Отметка прогона записана.\n')
-        for volume in ([], [{'kind': 'write'}], [{'kind': 'read', 'skill': 'craft-snapshot'}]):
+        for volume in ([], [write_record()],
+                       [review_lib.make_read_record(command='craft-snapshot', ids=[])]):
             with self.subTest(volume=volume):
                 self.assertEqual(self.assemble(volume).text, 'нет')
 
     def test_a_skill_without_a_file_or_with_a_path_is_none(self) -> None:
         (self.modules / 'craft-task' / 'data').mkdir(parents=True)
         self.requirements('outside', 'Чужое.')
-        volume = [{'kind': 'skill', 'skill': name}
+        volume = [skill_record(name)
                   for name in ('craft-task', 'verification-loop', '../outside', 'x/../outside',
-                               '..', '', 7)]
+                               '..', '')]
         parts = self.assemble(volume)
         self.assertEqual((parts.text, parts.broken), ('нет', ()))
         self.assertEqual(review_lib.volume_skills(volume), ('craft-task', 'verification-loop'))
@@ -1140,7 +1218,7 @@ class ModuleRequirementsFilesTest(unittest.TestCase):
     def test_an_unreadable_file_is_broken_with_its_path(self) -> None:
         path = self.requirements('craft-snapshot', 'Текст.')
         path.write_bytes(b'\xff\xfe')
-        volume = [{'kind': 'skill', 'skill': 'craft-snapshot'}, {'kind': 'write'}]
+        volume = [skill_record('craft-snapshot'), write_record()]
         parts = self.assemble(volume)
         self.assertEqual(parts.text, 'нет')
         self.assertEqual(len(parts.broken), 1)
@@ -1151,7 +1229,7 @@ class ModuleRequirementsFilesTest(unittest.TestCase):
         self.assertIn(str(path), check.problem)
         # Без записи skill файл не читается и проблемой не становится.
         self.assertNotIn(str(path), review_lib.review_criteria(
-            self.modules, [{'kind': 'write'}], ()).problem or '')
+            self.modules, [write_record()], ()).problem or '')
 
 
 class CriterionTest(unittest.TestCase):
@@ -1165,7 +1243,7 @@ class CriterionTest(unittest.TestCase):
             criterion.id = 'другой'
 
     def test_rules_apply_to_the_volume(self) -> None:
-        write = {'kind': 'write', 'types': ['#этап']}
+        write = write_record(types=('#этап',))
         cases = (('always', [], True), ('craft', [], False), ('craft', [write], True),
                  ('tags #задача', [write], False), ('tags #задача #этап', [write], True))
         for rule, volume, expected in cases:
@@ -1362,12 +1440,12 @@ class FingerprintScriptTest(unittest.TestCase):
     """Скрипт отпечатка печатает то же, что считает хук."""
 
     def test_the_script_matches_the_library(self) -> None:
-        records = [{'kind': 'write', 'command': 'blocks add', 'types': ['задача']},
-                   {'kind': 'read', 'command': 'blocks get', 'ids': ['a']}]
+        records = [write_record(types=('задача',)),
+                   review_lib.make_read_record(command='blocks get', ids=['a'])]
         with tempfile.TemporaryDirectory() as folder:
             volume = Path(folder) / 'volume.jsonl'
-            volume.write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in records) + '\n',
-                              encoding='utf-8')
+            rows = (json.dumps(review_lib.record_row(r), ensure_ascii=False) for r in records)
+            volume.write_text(''.join(row + '\n' for row in rows), encoding='utf-8')
             script = MODULES_DIR / 'turn-review' / 'hooks' / 'fingerprint.py'
             printed = subprocess.run([sys.executable, str(script), str(volume)],
                                      capture_output=True, text=True, check=True).stdout.strip()
@@ -1379,10 +1457,11 @@ class FingerprintScriptTest(unittest.TestCase):
     def test_the_script_parses_the_file_like_the_hook(self) -> None:
         # U+2028 внутри записи и битая строка: хук режет файл по байтам и
         # пропускает нечитаемое, скрипт обязан считать то же самое.
-        records = [{'kind': 'write', 'command': 'blocks add --json {"markdown":"раз\u2028два"}'}]
+        records = [write_record(command='blocks add --json {"markdown":"раз\u2028два"}')]
         with tempfile.TemporaryDirectory() as folder:
             volume = Path(folder) / 'volume.jsonl'
-            volume.write_bytes(json.dumps(records[0], ensure_ascii=False).encode('utf-8')
+            volume.write_bytes(json.dumps(review_lib.record_row(records[0]),
+                                          ensure_ascii=False).encode('utf-8')
                                + b'\n{"kind": "write", \xff\n')
             script = MODULES_DIR / 'turn-review' / 'hooks' / 'fingerprint.py'
             run = subprocess.run([sys.executable, str(script), str(volume)],

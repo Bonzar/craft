@@ -7,7 +7,7 @@
 import hashlib
 from dataclasses import replace
 
-from .records import KIND_ANCHOR, KIND_KEY, VolumeRecord, check_record, record_row
+from .records import KIND_ANCHOR, VolumeRecord, check_record, record_row
 from .state import ReviewState, current_turn, load_state, save_state, state_lock
 from .verdict import drop_verdict
 from .volume import (
@@ -83,7 +83,7 @@ def clear_volume(storage, state: ReviewState) -> ReviewState:
     """
     records, _ = parse_volume(storage)
     rewrite_volume(storage, [record for record in records
-                             if record.get(KIND_KEY) == KIND_ANCHOR])
+                             if record.kind == KIND_ANCHOR])
     drop_verdict(storage)
     cleared = ReviewState(turn=state.turn)
     save_state(storage, cleared)
