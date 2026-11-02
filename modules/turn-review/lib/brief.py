@@ -7,7 +7,9 @@
 которые есть в объёме, критерии, чьё
 правило совпало с объёмом, и требования модулей из data/review.md тех
 модулей, чьи скиллы есть в записях skill объёма: те ищутся в каталоге
-модулей по slug скилла, `for` им не нужен.
+модулей по slug скилла, `for` им не нужен. Критерии по тегам выбираются по
+типу каждой записи из строки замка craft-type-lock (entity_types), а без
+строки — все.
 """
 
 from pathlib import Path
@@ -16,13 +18,11 @@ from typing import NamedTuple
 from .criteria import (
     Criterion,
     CriterionId,
-    TagFinder,
     criteria_problem,
     criterion_applies,
     make_criterion,
-    rule_tags,
-    write_tags,
 )
+from .entity_types import selection_tags, types_text
 from .records import KINDS, SkillRecord, VolumeRecord
 
 CRITERION_FILE = 'review-criterion.md'
@@ -33,6 +33,7 @@ CRITERIA_MARK = '{{CRITERIA}}'
 RECORDS_MARK = '{{RECORDS}}'
 CRITERIA_LIST_MARK = '{{CRITERIA_LIST}}'
 REQUIREMENTS_MARK = '{{MODULE_REQUIREMENTS}}'
+TYPES_MARK = '{{ENTITY_TYPES}}'
 REQUIREMENTS_HEAD = '### Требования модуля {slug}'
 NO_REQUIREMENTS = 'нет'
 REVIEW_SLUG = 'turn-review'
@@ -58,15 +59,14 @@ class Provider(NamedTuple):
 
 
 class Sources(NamedTuple):
-    """Откуда ревью берёт файлы модулей и чем ищет теги.
+    """Откуда ревью берёт файлы модулей.
 
     `providers` — модули с for = ["turn-review"], у них критерии и описания
     записей. `modules_dir` — каталог модулей: в нём требования по slug
-    скилла. `find_tags` — поиск тегов в команде; None — искать нечем.
+    скилла.
     """
     modules_dir: Path
     providers: tuple[Provider, ...]
-    find_tags: TagFinder | None
 
 
 class BriefError(Exception):
@@ -235,10 +235,14 @@ def read_criteria(providers: tuple[Provider, ...]
     return tuple(found), tuple(broken)
 
 
-def applicable(found: tuple[Criterion, ...], volume: list[VolumeRecord],
-               sources: Sources) -> tuple[Criterion, ...]:
-    """Критерии, чьё правило совпало с объёмом; теги ищутся в командах записей write."""
-    tags = write_tags(volume, rule_tags(found), sources.find_tags)
+def applicable(found: tuple[Criterion, ...], volume: list[VolumeRecord]
+               ) -> tuple[Criterion, ...]:
+    """Критерии, чьё правило совпало с объёмом.
+
+    Теги — типы записей write из строк замка; у записи без известного типа
+    берутся все критерии по тегам.
+    """
+    tags = selection_tags(volume)
     return tuple(criterion for criterion in found if criterion_applies(criterion, volume, tags))
 
 
@@ -251,12 +255,13 @@ def assemble_brief(sources: Sources, volume: list[VolumeRecord], frame: str,
     молча пропустить. Описания видов — свой файл ревью: их порча — BriefError.
     """
     found, broken = read_criteria(sources.providers)
-    chosen = applicable(found, volume, sources)
+    chosen = applicable(found, volume)
     requirements, requirements_broken = read_requirements(sources.modules_dir, volume)
     ids = tuple(criterion.id for criterion in chosen)
     text = (frame.replace(RECORDS_MARK, records_text(descriptions, volume))
             .replace(CRITERIA_MARK, '\n\n'.join(criterion.body for criterion in chosen))
             .replace(REQUIREMENTS_MARK, requirements_text(requirements))
+            .replace(TYPES_MARK, types_text(volume))
             .replace(CRITERIA_LIST_MARK, ', '.join(f'"{item}"' for item in ids)))
     return BriefParts(text, ids, broken + requirements_broken)
 
@@ -272,9 +277,8 @@ def review_criteria(sources: Sources, volume: list[VolumeRecord],
     found, broken = read_criteria(sources.providers)
     _, requirements_broken = read_requirements(sources.modules_dir, volume)
     if taken is None:
-        taken = tuple(criterion.id for criterion in applicable(found, volume, sources))
-    problem = criteria_problem(volume, taken, found, broken + requirements_broken,
-                               sources.find_tags is not None)
+        taken = tuple(criterion.id for criterion in applicable(found, volume))
+    problem = criteria_problem(volume, taken, found, broken + requirements_broken)
     return CriteriaCheck(taken, problem)
 
 

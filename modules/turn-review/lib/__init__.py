@@ -11,6 +11,7 @@
 - turns — номер хода по id реплики, очистка объёма.
 - verdict — проверка и приём вердикта подагента.
 - criteria — критерий, правило applies и проблемы приёма.
+- entity_types — тип записи из строки `entity` замка: место ∪ содержимое.
 - brief — сборка поручения подагенту.
 - question — вопрос самого ревью о застрявшем ревью: текст блока и разбор ответа.
 - texts — тексты блоков агенту: поручение, замечания, сбой поручения.
@@ -26,17 +27,20 @@ from .brief import (
     assemble_brief, providers_problem, review_criteria, volume_skills, write_brief,
 )
 from .criteria import (
-    Always, Craft, Criterion, CriterionId, Rule, TagFinder, Tags, criteria_problem,
-    criterion_applies, is_tag, make_criterion, parse_applies, rule_tags, write_tags,
+    Always, Craft, Criterion, CriterionId, Rule, Tags, criteria_problem, criterion_applies,
+    is_tag, make_criterion, parse_applies,
+)
+from .entity_types import (
+    WriteType, selection_tags, types_text, write_types,
 )
 from .question import (
     MAX_NUDGES, OPTION_RELEASE, OPTION_REVIEW, QUESTION_TOOL, RELEASE_PHRASE, answered_release,
     chosen_labels, is_review_question, review_question, stuck_text,
 )
 from .records import (
-    KIND_ANCHOR, KIND_ANSWER, KIND_KEY, KIND_PROMPT, KIND_READ, KIND_SKILL, KIND_WRITE, KINDS,
-    PROMPT_ID_KEY, AnchorRecord, AnswerRecord, PromptRecord, ReadRecord, SkillRecord,
-    VolumeRecord, WriteRecord, parse_record, record_row,
+    KIND_ANCHOR, KIND_ANSWER, KIND_ENTITY, KIND_KEY, KIND_PROMPT, KIND_READ, KIND_SKILL,
+    KIND_WRITE, KINDS, PROMPT_ID_KEY, AnchorRecord, AnswerRecord, EntityRecord, PromptRecord,
+    ReadRecord, SkillRecord, VolumeRecord, WriteRecord, parse_record, record_row,
 )
 from .report import REPORT_CLEAN, REPORT_RELEASED, elapsed_text, summary_text, verdict_head
 from .state import (
@@ -58,21 +62,23 @@ from .volume import (
 
 __all__ = [
     'BRIEF_FILE', 'CHECKED_KEY', 'CLEAN_KEY', 'CRITERION_KEY', 'FINGERPRINT_CHARS',
-    'FINGERPRINT_KEY', 'KINDS', 'KIND_ANCHOR', 'KIND_ANSWER', 'KIND_KEY', 'KIND_PROMPT',
-    'KIND_READ', 'KIND_SKILL', 'KIND_WRITE', 'MAX_NUDGES', 'NO_BRIEF', 'OPTION_RELEASE',
-    'OPTION_REVIEW', 'PROMPT_ID_KEY', 'QUESTION_TOOL', 'RELEASE_PHRASE', 'REMARKS_KEY',
-    'REPORT_CLEAN', 'REPORT_RELEASED', 'REVIEW_SLUG', 'STATE_FILE', 'TEXT_KEY', 'VERDICT_FILE',
-    'VOLUME_FILE', 'WHERE_KEY', 'Always', 'AnchorRecord', 'AnswerRecord', 'BriefCriteria',
-    'BriefError', 'BriefParts', 'Craft', 'CriteriaCheck', 'Criterion', 'CriterionId',
-    'Fingerprint', 'NudgeFacts', 'PromptRecord', 'Provider', 'ReadRecord', 'ReviewState', 'Rule',
-    'SkillRecord', 'Sources', 'TagFinder', 'Tags', 'VolumeId', 'VolumeRecord', 'WriteRecord',
-    'answered_release', 'assemble_brief', 'brief_failure_text', 'chosen_labels',
-    'claim_prompt_turn', 'clear_volume', 'count_kind', 'count_writes', 'criteria_problem',
-    'criterion_applies', 'drop_verdict', 'elapsed_text', 'fingerprint', 'is_review_question',
-    'is_tag', 'joined', 'load_state', 'load_volume', 'make_criterion', 'new_volume_id',
-    'nudge_text', 'parse_applies', 'parse_record', 'parse_volume_file', 'peek_state',
-    'peek_verdict', 'peek_volume', 'prompt_id_of', 'providers_problem', 'read_verdict',
-    'record_row', 'record_turn', 'remarks_text', 'review_criteria', 'review_question', 'rule_tags',
-    'save_state', 'state_lock', 'stuck_text', 'summary_text', 'verdict_head', 'verdict_key',
-    'volume_skills', 'with_problem', 'write_brief', 'write_tags', 'writes_before_turn',
+    'FINGERPRINT_KEY', 'KINDS', 'KIND_ANCHOR', 'KIND_ANSWER', 'KIND_ENTITY', 'KIND_KEY',
+    'KIND_PROMPT', 'KIND_READ', 'KIND_SKILL', 'KIND_WRITE', 'MAX_NUDGES', 'NO_BRIEF',
+    'OPTION_RELEASE', 'OPTION_REVIEW', 'PROMPT_ID_KEY', 'QUESTION_TOOL', 'RELEASE_PHRASE',
+    'REMARKS_KEY', 'REPORT_CLEAN', 'REPORT_RELEASED', 'REVIEW_SLUG', 'STATE_FILE', 'TEXT_KEY',
+    'VERDICT_FILE', 'VOLUME_FILE', 'WHERE_KEY', 'Always', 'AnchorRecord', 'AnswerRecord',
+    'BriefCriteria', 'BriefError', 'BriefParts', 'Craft', 'CriteriaCheck', 'Criterion',
+    'CriterionId', 'EntityRecord', 'Fingerprint', 'NudgeFacts', 'PromptRecord', 'Provider',
+    'ReadRecord', 'ReviewState', 'Rule', 'SkillRecord', 'Sources', 'Tags',
+    'VolumeId', 'VolumeRecord', 'WriteRecord', 'WriteType', 'answered_release',
+    'assemble_brief', 'brief_failure_text', 'chosen_labels', 'claim_prompt_turn', 'clear_volume',
+    'count_kind', 'count_writes', 'criteria_problem', 'criterion_applies', 'drop_verdict',
+    'elapsed_text', 'fingerprint', 'is_review_question', 'is_tag', 'joined', 'load_state',
+    'load_volume', 'make_criterion', 'new_volume_id', 'nudge_text', 'parse_applies', 'parse_record',
+    'parse_volume_file', 'peek_state', 'peek_verdict', 'peek_volume', 'prompt_id_of',
+    'providers_problem', 'read_verdict', 'record_row', 'record_turn', 'remarks_text',
+    'review_criteria', 'review_question', 'save_state', 'selection_tags', 'state_lock',
+    'stuck_text', 'summary_text', 'types_text', 'verdict_head', 'verdict_key',
+    'volume_skills', 'with_problem', 'write_brief', 'write_types',
+    'writes_before_turn',
 ]

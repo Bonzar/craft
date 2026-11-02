@@ -1,226 +1,246 @@
-"""В какую сущность ложится запись в Craft: тип страницы цели.
+"""Какие сущности задевает запись в Craft: владельцы места и правленая сущность.
 
-Часть замка craft-type-lock. Родителя блока connect-API не отдаёт, поэтому
-цель записи ищется на страницах, которые агент читал в сессии: каждая
-запрашивается заново на глубину API_DEPTH, и в её дереве ищется путь от
-корня до цели. Сущность записи — ближайший к цели блок этого пути, в тексте
-которого стоит тег типа: заголовок раздела, этапа, задачи. Цели из команды
-разбирает библиотека command-tree-craft, поиск тегов в тексте блока даёт
-точка входа замка hooks/module.py; здесь только суждение о месте.
+Часть замка craft-type-lock. Место записи судится по ближайшему владельцу с
+типом (hooks/owner.py): новая строка — владелец места, куда она встанет, с
+её отступом; правка блока без типа — владелец блока. Правка блока с типом
+задевает только его самого, кроме смены состояния — тогда задет и его
+владелец (hooks/payload.py); перенос и удаление задевают владельца там,
+откуда блок уходит, перенос — ещё и там, куда он встаёт.
+
+Цель должна лежать на странице, которую агент читал в сессии: сама цель или
+одна из страниц на пути к ней среди прочитанных. Цели из команды разбирает
+библиотека command-tree-craft, поиск тегов в тексте даёт точка входа замка
+hooks/module.py; здесь только суждение о месте.
 """
 
 import enum
-import http.client
-import json
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from typing import Callable, NamedTuple
+from typing import NamedTuple
 
-BASE_ENV = 'CRAFT_API_BASE'
-# Без User-Agent connect-API отвечает 403 (замер 01.11.2026 из контейнера).
-USER_AGENT = 'jarvis-craft-type-lock'
-API_TIMEOUT_SEC = 10
-# Потолок на всю проверку места: прочитанных страниц в списке до двадцати, а
-# хук не должен держать запись минутами, когда API медленный.
-DEADLINE_SEC = 12
-# Этап агент читает со страницы проекта на глубину 2: блок этапа на первом
-# уровне, его «Решения» и «Описание» на втором. Глубже замок на одном чтении
-# не видит: цель на вложенной странице находится, когда прочитана она сама.
-API_DEPTH = 2
-# Регистр id API различает (замер 01.11.2026: у документа с id в верхнем
-# регистре нижний отвечает 404, и наоборот). Id хранятся и запрашиваются как
-# есть, сравниваются без учёта регистра.
-CONTENT_KEY = 'content'
-MARKDOWN_KEY = 'markdown'
-ID_KEY = 'id'
-NOT_FOUND = 404
-SHORT_ID = 8
-TITLE_PREVIEW = 60
+from api import BASE_ENV, DEADLINE_SEC, FETCH_ERRORS, ID_KEY, Api, Late, same_id
+from owner import (
+    Entity,
+    Spot,
+    Start,
+    TagsOf,
+    Unseen,
+    Walk,
+    entity_of,
+    fetch_failure,
+    is_read,
+    level_of,
+    locate_spot,
+    short,
+)
+from payload import Write, changes_state
+
+__all__ = ['BASE_ENV', 'Entity', 'Place', 'Verdict', 'page_types']
+
+# Отступ новых блоков не разобран: владельцы ищутся на всех уровнях до этого.
+GUESS_LEVELS = range(8)
 
 
 class Verdict(enum.Enum):
     """Исходы проверки места.
 
-    LOCATED — все цели найдены, сущности записи известны (их может не быть:
-    страница без типа). NO_TARGET — у команды нет цели, судить нечего.
-    UNREAD — цели нет ни на одной прочитанной странице, запись в
-    непрочитанное. Два последних — замок судить не может, и это не вина
-    хода. UNAVAILABLE — окружение: нет базы API, API не ответил, не уложились
-    в срок; предупреждение в ход выводится раз за сессию. UNPARSED — в
-    команде не разобран ни один id цели или часть, предупреждать не о чем.
-    Сущности уже найденных целей приходят при любом исходе.
+    LOCATED — все цели найдены, владельцы известны (их может не быть: выше
+    места типа нет). GUESSED — цели найдены, но отступ, с которым встанет
+    запись, не разобран: владельцы — все кандидаты, тип не определён точно.
+    NO_TARGET — у команды нет цели, судить нечего. UNREAD — цель не лежит ни
+    на одной прочитанной странице: запись в непрочитанное. UNAVAILABLE —
+    место не определить, и ход в этом не виноват: нет базы API, API не
+    ответил, срок вышел, страница над целью не видна; предупреждение в ход
+    выводится раз за сессию. UNPARSED — в команде не разобран ни один id цели
+    или часть. Сущности уже найденных целей приходят при любом исходе.
     """
     LOCATED = 'located'
+    GUESSED = 'guessed'
     NO_TARGET = 'no-target'
     UNREAD = 'unread'
     UNAVAILABLE = 'unavailable'
     UNPARSED = 'unparsed'
 
 
-class Entity(NamedTuple):
-    """Сущность, в которую ложится запись: блок с тегом типа в тексте."""
-    block_id: str
-    title: str
-    tags: tuple[str, ...]
-
-
 class Place(NamedTuple):
+    """Исход проверки.
+
+    entities — владельцы места; edited — правленые цели с типом; closing —
+    владельцы целей, чьё состояние запись меняет (module.py решает, какие из
+    них требуют своего скилла).
+    """
     verdict: Verdict
     reason: str
     entities: tuple[Entity, ...] = ()
+    edited: tuple[Entity, ...] = ()
+    closing: tuple[tuple[Entity, Entity], ...] = ()
 
 
-# Теги типа в тексте блока: даёт module.py по справочнику модулей сущностей.
-TagsOf = Callable[[str], list[str]]
+class Outcome(NamedTuple):
+    """Суждение об одной цели."""
+    anchor: object
+    located: bool
+    owners: tuple[Entity, ...] = ()
+    edited: Entity | None = None
+    closing: tuple[tuple[Entity, Entity], ...] = ()
+    unknown: str = ''
+    guessed: bool = False
 
 
-def same_id(left: str, right: str) -> bool:
-    """Один ли это блок: регистр хранится, но не различается."""
-    return left.lower() == right.lower()
+def owners_at(walk: Walk, start: Start, levels) -> tuple[tuple[Entity, ...], bool]:
+    """Владельцы места на каждом из уровней; уровни не разобраны — на всех."""
+    guessed = levels is None
+    found = {}
+    for level in GUESS_LEVELS if guessed else sorted(levels):
+        owner = walk.owner(start, level)
+        if owner is not None:
+            found.setdefault(owner.block_id.lower(), owner)
+    return tuple(found.values()), guessed
 
 
-def short(block_id: str) -> str:
-    return block_id[:SHORT_ID]
+def spot_of(walk: Walk, block: dict) -> tuple[Spot | None, str]:
+    """Путь страниц до цели. Сама цель прочитана — путь не нужен: ищется, когда понадобится."""
+    if any(same_id(block[ID_KEY], read) for read in walk.reads):
+        return Spot(block, [], False), ''
+    spot, failures = locate_spot(walk.api, block, walk.reads)
+    return spot, '; '.join(failures)
 
 
-def block_id_of(block) -> str:
-    return str(block.get(ID_KEY, '')) if isinstance(block, dict) else ''
+def judge_self(walk: Walk, anchor, block: dict, start: Start, write: Write) -> Outcome:
+    """Правка, перенос или удаление самой цели."""
+    edited = entity_of(block, walk.tags_of)
+    closes = edited is not None and not write.removes and changes_state(write, block.get('markdown'))
+    if edited is not None and not write.removes and not closes:
+        return Outcome(anchor, True, edited=edited)
+    owners, _ = owners_at(walk, start, {level_of(block)})
+    if closes:
+        return Outcome(anchor, True, edited=edited, closing=tuple((edited, owner) for owner in owners))
+    return Outcome(anchor, True, owners, edited)
 
 
-def find_path(tree: dict, target: str) -> list[dict] | None:
-    """Блоки от корня дерева до target включительно; target нет — None."""
-    if same_id(block_id_of(tree), target):
-        return [tree]
-    children = tree.get(CONTENT_KEY) if isinstance(tree, dict) else None
-    if not isinstance(children, list):
-        return None
-    for child in children:
-        if not isinstance(child, dict):
-            continue
-        found = find_path(child, target)
-        if found is not None:
-            return [tree, *found]
-    return None
+def judge_target(walk: Walk, anchor, write: Write, landing) -> Outcome:
+    """Где лежит цель и каких владельцев задевает запись по ней.
 
-
-def entity_of(path: list[dict], anchor, tags_of: TagsOf) -> Entity | None:
-    """Ближайший к цели блок с тегом типа среди тех, куда ляжет запись.
-
-    Цель-сосед (--siblingId, --targetSiblingId) — запись встаёт рядом с ней, в
-    её родителя: сам сосед в счёт не идёт. Цель-родитель (--id у `blocks
-    add`, --targetId у `blocks move`) и цель-сам-блок (правка, перенос,
-    удаление) — запись ложится в неё саму. Роль цели даёт command-tree-craft.
-    Тега нет ни у одного блока пути — страница без типа, None.
+    landing — отступы, с которыми запись встанет рядом с целью или в её
+    дети: у `blocks add` из нагрузки, у переноса — отступ переносимого блока.
     """
-    chain = path[:-1] if anchor.is_sibling else path
-    for block in reversed(chain):
-        markdown = block.get(MARKDOWN_KEY)
-        tags = tags_of(markdown) if isinstance(markdown, str) else []
-        if tags:
-            title = ' '.join(markdown.split())[:TITLE_PREVIEW]
-            return Entity(block_id_of(block), title, tuple(tags))
-    return None
+    block = walk.api.block(anchor.block_id)
+    spot, failures = spot_of(walk, block)
+    if spot is None:
+        return Outcome(anchor, False, unknown=failures)
+    if not is_read(spot, walk.reads):
+        return Outcome(anchor, False)
+    pages = [page[ID_KEY] for page in spot.pages]
+    if anchor.is_container:
+        start = Start([*pages, block[ID_KEY]], spot.whole, None, write.at_end, block)
+    else:
+        start = Start(pages, spot.whole, block[ID_KEY], anchor.is_sibling and not write.before, block)
+    if not anchor.is_container and not anchor.is_sibling:
+        return judge_self(walk, anchor, block, start, write)
+    owners, guessed = owners_at(walk, start, landing)
+    return Outcome(anchor, True, owners, guessed=guessed)
 
 
-def other_case(block_id: str) -> str:
-    """Тот же id в другом регистре: верхний для нижнего и наоборот."""
-    return block_id.lower() if block_id != block_id.lower() else block_id.upper()
+def place_part(outcome: Outcome) -> str:
+    target = short(outcome.anchor.block_id)
+    owners = [*outcome.owners, *(owner for _, owner in outcome.closing)]
+    if owners:
+        part = f'цель {target} у владельца ' + ', '.join(
+            f'{short(owner.block_id)} ({", ".join(owner.tags)})' for owner in owners)
+    else:
+        part = f'цель {target} без владельца с типом'
+    if outcome.guessed:
+        part += ' (отступ записи не разобран: все кандидаты)'
+    if outcome.edited is not None:
+        part += f', правит сущность ({", ".join(outcome.edited.tags)})'
+    if outcome.closing:
+        part += ', меняет её состояние'
+    return part
 
 
-def fetch_tree(base: str, page_id: str, timeout: float) -> dict:
-    """Страница на глубину API_DEPTH. 404 повторяется в другом регистре id:
-    агент мог набрать id не в том регистре, в каком его знает API."""
-    try:
-        tree = fetch_once(base, page_id, timeout)
-    except urllib.error.HTTPError as error:
-        if error.code != NOT_FOUND:
-            raise
-        tree = fetch_once(base, other_case(page_id), timeout)
-    if isinstance(tree, list):
-        tree = tree[0] if tree else None
-    if not isinstance(tree, dict) or not tree.get(ID_KEY):
-        raise ValueError('ответ API не блок')
-    return tree
-
-
-def fetch_once(base: str, page_id: str, timeout: float):
-    query = urllib.parse.urlencode({'id': page_id, 'maxDepth': API_DEPTH})
-    request = urllib.request.Request(
-        f'{base.rstrip("/")}/blocks?{query}',
-        headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.load(response)
-
-
-def locate(tree: dict, pending: list, tags_of: TagsOf) -> tuple[list, list]:
-    """Одна страница: какие цели на ней нашлись (с сущностью или None) и какие нет."""
-    found, left = [], []
-    for anchor in pending:
-        path = find_path(tree, anchor.block_id)
-        if path is None:
-            left.append(anchor)
-        else:
-            found.append((anchor, entity_of(path, anchor, tags_of)))
-    return found, left
-
-
-def fetch_failure(page_id: str, error: Exception) -> str:
-    # 404 в обоих регистрах: страницы нет или она вне шаринга connect-ссылки.
-    # Это не сеть, и оператору важно это различать.
-    if isinstance(error, urllib.error.HTTPError) and error.code == NOT_FOUND:
-        return f'{short(page_id)}: не найдена в API в обоих регистрах'
-    return f'{short(page_id)}: {error}'
+def describe(found: list[Outcome]) -> tuple[str, tuple, tuple, tuple]:
+    """Причина для следа, владельцы, правленые сущности и владельцы закрытия без повторов."""
+    owners, edited, closing = {}, {}, {}
+    for outcome in found:
+        for owner in outcome.owners:
+            owners.setdefault(owner.block_id.lower(), owner)
+        if outcome.edited is not None:
+            edited.setdefault(outcome.edited.block_id.lower(), outcome.edited)
+        for pair in outcome.closing:
+            closing.setdefault((pair[0].block_id.lower(), pair[1].block_id.lower()), pair)
+    reason = '; '.join(place_part(outcome) for outcome in found)
+    return reason, tuple(owners.values()), tuple(edited.values()), tuple(closing.values())
 
 
 class Search(NamedTuple):
-    found: list
-    pending: list
+    outcomes: list[Outcome]
     failures: list[str]
     late: bool
 
 
-def search(anchors: list, reads: list[str], base: str, tags_of: TagsOf, clock) -> Search:
-    """Прочитанные страницы свежие первыми, пока все цели не найдены."""
-    deadline, failures, found, pending = clock() + DEADLINE_SEC, [], [], list(anchors)
-    for page_id in reads:
-        if not pending:
-            break
-        left = deadline - clock()
-        if left <= 0:
-            return Search(found, pending, failures, True)
-        try:
-            tree = fetch_tree(base, page_id, min(API_TIMEOUT_SEC, left))
-        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
-            failures.append(fetch_failure(page_id, error))
+def judge_safely(walk: Walk, anchor, write: Write, landing, result: Search) -> bool:
+    """Суждение об одной цели в result; False — срок вышел."""
+    try:
+        result.outcomes.append(judge_target(walk, anchor, write, landing))
+    except Late:
+        return False
+    except Unseen as error:
+        result.outcomes.append(Outcome(anchor, False, unknown=str(error)))
+    except FETCH_ERRORS as error:
+        result.failures.append(fetch_failure(anchor.block_id, error))
+    return True
+
+
+def search(anchors: list, walk: Walk, write: Write) -> Search:
+    """Сначала сами цели: у переноса их отступ — отступ места, куда он встаёт."""
+    result = Search([], [], False)
+    own = [anchor for anchor in anchors if not anchor.is_sibling and not anchor.is_container]
+    for anchor in own:
+        if not judge_safely(walk, anchor, write, None, result):
+            return result._replace(late=True)
+    landing = write.levels
+    if write.moves:
+        moved = [walk.api.blocks.get(anchor.block_id.lower()) for anchor in own]
+        landing = frozenset(level_of(block) for block in moved if block) or None
+    for anchor in anchors:
+        if anchor in own:
             continue
-        here, pending = locate(tree, pending, tags_of)
-        found.extend(here)
-    return Search(found, pending, failures, False)
+        if not judge_safely(walk, anchor, write, landing, result):
+            return result._replace(late=True)
+    return result
 
 
-def describe(found: list) -> tuple[str, tuple[Entity, ...]]:
-    """Причина для следа и сущности без повторов, в порядке целей."""
-    entities, parts = {}, []
-    for anchor, entity in found:
-        if entity is None:
-            parts.append(f'цель {short(anchor.block_id)} на странице без типа')
-            continue
-        entities.setdefault(entity.block_id.lower(), entity)
-        parts.append(f'цель {short(anchor.block_id)} в сущности {short(entity.block_id)} '
-                     f'({", ".join(entity.tags)})')
-    return '; '.join(parts), tuple(entities.values())
+def verdict_of(result: Search, broken: list[str]) -> Place:
+    located = [item for item in result.outcomes if item.located]
+    reason, entities, edited, closing = describe(located)
+    unread = [item for item in result.outcomes if not item.located and not item.unknown]
+    unknown = [item.unknown for item in result.outcomes if item.unknown]
+
+    def place(verdict: Verdict, why: str) -> Place:
+        return Place(verdict, why, entities, edited, closing)
+
+    if unread:
+        names = ', '.join(short(item.anchor.block_id) for item in unread)
+        return place(Verdict.UNREAD, f'цель {names} не найдена среди страниц, прочитанных в сессии')
+    if result.late:
+        return place(Verdict.UNAVAILABLE, f'не уложился в {DEADLINE_SEC} с')
+    if result.failures or unknown:
+        return place(Verdict.UNAVAILABLE,
+                     'место цели не определено: ' + '; '.join([*result.failures, *unknown]))
+    if broken:
+        return place(Verdict.UNPARSED, f'часть целей не разобрана: {", ".join(broken)}; {reason}')
+    if any(item.guessed for item in located):
+        return place(Verdict.GUESSED, reason)
+    return place(Verdict.LOCATED, reason)
 
 
-def page_types(targets, reads: list[str], base: str | None, tags_of: TagsOf,
+def page_types(targets, write: Write, reads: list[str], base: str | None, tags_of: TagsOf,
                clock=time.monotonic) -> Place:
-    """В какие сущности ложится запись.
+    """Какие сущности задевает запись: владельцы мест всех целей и правленые цели.
 
-    targets — цели команды записи от command-tree-craft (write_targets).
-    Целей в команде бывает несколько, сущности собираются со всех. Цель,
-    которой нет ни на одной прочитанной странице, — UNREAD: по механике
-    Craft страница цели читается до записи.
+    targets — цели команды записи от command-tree-craft (write_targets),
+    write — разбор её нагрузки (payload.write_of). Цель, которая не лежит ни
+    на одной прочитанной странице, — UNREAD: по механике Craft страница цели
+    читается до записи.
     """
     anchors, broken = targets.anchors, targets.broken
     if not anchors:
@@ -231,15 +251,5 @@ def page_types(targets, reads: list[str], base: str | None, tags_of: TagsOf,
         return Place(Verdict.UNAVAILABLE, f'{BASE_ENV} не задан, место записи не проверить')
     if not reads:
         return Place(Verdict.UNREAD, 'в сессии нет чтений Craft')
-    result = search(anchors, reads, base, tags_of, clock)
-    reason, entities = describe(result.found)
-    if result.late:
-        return Place(Verdict.UNAVAILABLE, f'не уложился в {DEADLINE_SEC} с', entities)
-    if result.pending and result.failures:
-        return Place(Verdict.UNAVAILABLE, 'API Craft не ответил: ' + '; '.join(result.failures), entities)
-    if result.pending:
-        names = ', '.join(short(anchor.block_id) for anchor in result.pending)
-        return Place(Verdict.UNREAD, f'цель {names} не найдена среди страниц, прочитанных в сессии', entities)
-    if broken:
-        return Place(Verdict.UNPARSED, f'часть целей не разобрана: {", ".join(broken)}; {reason}', entities)
-    return Place(Verdict.LOCATED, reason, entities)
+    walk = Walk(Api(base, clock), reads, tags_of)
+    return verdict_of(search(anchors, walk, write), broken)
