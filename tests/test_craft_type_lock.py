@@ -48,6 +48,12 @@ def write(session: str, command: str, tool: str = CRAFT_WRITE) -> dict:
             'tool_name': tool, 'tool_input': {'command': command}}
 
 
+def written(raw: dict) -> dict:
+    """Та же запись после того, как инструмент её исполнил: `post-tool` с ответом Craft."""
+    return {**raw, 'hook_event_name': 'PostToolUse',
+            'tool_response': [{'type': 'text', 'text': '{"success":true}'}]}
+
+
 def skill(session: str, name: str) -> dict:
     return {'hook_event_name': 'PostToolUse', 'session_id': session, 'cwd': '/work',
             'tool_name': 'Skill', 'tool_input': {'skill': name},
@@ -1204,6 +1210,7 @@ class ReviewFindingsTest(ApiLockHarness):
         command = (f'tasks update --id {TASK} --scheduleDate 2026-11-05; '
                    f'blocks add --siblingId {TASK} --position after --json \'{{broken\'')
         self.fire(write('f-row', command))
+        self.fire(written(write('f-row', command)))
         row = json.loads(self.storage('f-row').read_lines('turn-review-volume.jsonl')[-1])
         self.assertEqual((row['targets'], row['determined']), ([TASK, TASK], False))
 
@@ -1279,19 +1286,41 @@ class ReviewRowTest(ApiLockHarness):
         lines = self.storage(session).read_lines('turn-review-volume.jsonl')
         return [json.loads(line) for line in lines]
 
-    def test_a_denied_and_a_passed_write_leave_the_same_row(self) -> None:
+    def write_through(self, raw: dict):
+        """Запись, которую инструмент исполнил: `pre-tool`, затем `post-tool`."""
+        result = self.fire(raw)
+        self.fire(written(raw))
+        return result
+
+    def test_a_denied_write_leaves_no_row_and_a_passed_one_leaves_it_after_the_call(self) -> None:
         self.start('r-same', PAGE)
         command = f'blocks add --siblingId {D2} --position after --json {BULLET_JSON}'
+        # Запрет: инструмент не исполнен, `post-tool` нет — строки нет.
         self.assert_denied(self.fire({**write('r-same', command), 'prompt_id': 'p-1'}), 'craft-section')
+        self.assertEqual(self.rows('r-same'), [])
         self.prepare('r-same', 'craft-section')
-        self.assert_silent(self.fire({**write('r-same', command), 'prompt_id': 'p-1'}))
-        denied, passed = self.rows('r-same')
-        self.assertEqual(denied, passed)
-        self.assertEqual(set(denied), self.ROW_KEYS)
-        self.assertEqual(denied['kind'], 'entity')
-        self.assertEqual((denied['prompt_id'], denied['command'], denied['targets'],
-                          denied['place_types'], denied['content_types'], denied['determined']),
+        raw = {**write('r-same', command), 'prompt_id': 'p-1', 'tool_use_id': 'toolu_1'}
+        self.assert_silent(self.fire(raw))
+        self.assertEqual(self.rows('r-same'), [])
+        self.fire(written(raw))
+        (passed,) = self.rows('r-same')
+        self.assertEqual(set(passed), self.ROW_KEYS)
+        self.assertEqual(passed['kind'], 'entity')
+        self.assertEqual((passed['prompt_id'], passed['command'], passed['targets'],
+                          passed['place_types'], passed['content_types'], passed['determined']),
                          ('p-1', command, [D2], ['#раздел'], [], True))
+        # Повтор того же `post-tool` второй строки не даёт.
+        self.fire(written(raw))
+        self.assertEqual(len(self.rows('r-same')), 1)
+
+    def test_a_row_without_a_call_id_is_found_by_prompt_and_command(self) -> None:
+        self.start('r-key', PAGE)
+        command = f'blocks update --id {D1} --json {BULLET_JSON}'
+        self.fire({**write('r-key', command), 'prompt_id': 'p-2'})
+        self.fire(written({**write('r-key', f'blocks update --id {D2} --json {BULLET_JSON}'), 'prompt_id': 'p-2'}))
+        self.assertEqual(self.rows('r-key'), [])
+        self.fire(written({**write('r-key', command), 'prompt_id': 'p-2'}))
+        self.assertEqual([row['command'] for row in self.rows('r-key')], [command])
 
     def test_owners_and_content_go_to_their_own_lists(self) -> None:
         self.start('r-split', PROJECT)
@@ -1303,7 +1332,7 @@ class ReviewRowTest(ApiLockHarness):
             f'tasks update --id {M_STAGE} --state done',
         )
         for command in commands:
-            self.fire(write('r-split', command))
+            self.write_through(write('r-split', command))
         rows = [(row['place_types'], row['content_types'], row['determined']) for row in self.rows('r-split')]
         self.assertEqual(rows, [(['#этап'], ['#задача'], True),
                                 (['#этап'], ['#задача'], True),
@@ -1313,23 +1342,25 @@ class ReviewRowTest(ApiLockHarness):
 
     def test_a_move_between_stages_names_both_owners(self) -> None:
         self.start('r-move', PROJECT)
-        self.fire(write('r-move', f'blocks move --id {TASK2} --targetSiblingId {BARE_TASK} --position after'))
+        self.write_through(write('r-move', f'blocks move --id {TASK2} --targetSiblingId {BARE_TASK} --position after'))
         (row,) = self.rows('r-move')
         self.assertIn(STAGE2[:8], row['note'])
         self.assertIn(f'у владельца {STAGE[:8]}', row['note'])
 
     def test_a_document_without_a_type_is_an_explicit_empty_type(self) -> None:
         self.start('r-none', DAY)
-        self.fire(write('r-none', f'blocks update --id {DAY_LINE} --json {BULLET_JSON}'))
+        self.write_through(write('r-none', f'blocks update --id {DAY_LINE} --json {BULLET_JSON}'))
         (row,) = self.rows('r-none')
         self.assertEqual((row['place_types'], row['content_types'], row['determined']), ([], [], True))
         self.assertNotIn('prompt_id', row)
 
     def test_an_unknown_place_is_an_undetermined_row(self) -> None:
         self.start('r-down', PAGE)
-        self.with_api_down(write('r-down', f'blocks update --id {D1} --json {BULLET_JSON}'))
-        self.fire(write('r-down', f'blocks update --id ЗАДАЧА --json {BULLET_JSON}'))
-        self.fire(write('r-down', f'blocks update --id {TASK} --json {BULLET_JSON}'))
+        down = write('r-down', f'blocks update --id {D1} --json {BULLET_JSON}')
+        self.with_api_down(down)
+        self.fire(written(down))
+        self.write_through(write('r-down', f'blocks update --id ЗАДАЧА --json {BULLET_JSON}'))
+        self.write_through(write('r-down', f'blocks update --id {TASK} --json {BULLET_JSON}'))
         down, broken, unread = self.rows('r-down')
         self.assertEqual((down['determined'], broken['determined'], unread['determined']),
                          (False, False, False))
@@ -1338,14 +1369,14 @@ class ReviewRowTest(ApiLockHarness):
 
     def test_an_unparsed_level_is_an_undetermined_row_with_every_candidate(self) -> None:
         self.start('r-guess', PROJECT)
-        self.fire(write('r-guess', f'blocks add --siblingId {TASK} --position after --json \'{{broken\''))
+        self.write_through(write('r-guess', f'blocks add --siblingId {TASK} --position after --json \'{{broken\''))
         (row,) = self.rows('r-guess')
         self.assertEqual((row['place_types'], row['determined']), (['#задача', '#проект', '#этап'], False))
         self.assertIn('отступ записи не разобран', row['note'])
 
     def test_a_write_of_a_subagent_leaves_no_row(self) -> None:
         self.start('r-agent', PAGE)
-        self.fire({**write('r-agent', f'blocks update --id {D1} --json {BULLET_JSON}'), 'agent_id': 'a-1'})
+        self.write_through({**write('r-agent', f'blocks update --id {D1} --json {BULLET_JSON}'), 'agent_id': 'a-1'})
         self.assertEqual(self.rows('r-agent'), [])
 
 

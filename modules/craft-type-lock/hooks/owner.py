@@ -10,8 +10,9 @@
 ближайшему владельцу с типом в том же документе. До корня документа типа нет
 — владельца нет.
 
-Где лежит блок, отдаёт connect-API (hooks/api.py): путь страниц из поиска, а
-без него — из деревьев прочитанных страниц.
+Где лежит блок, отдаёт дерево прочитанного (hooks/tree.py), а без него —
+connect-API (hooks/api.py): путь страниц из поиска, а без него — из деревьев
+прочитанных страниц.
 """
 
 from collections.abc import Callable
@@ -145,8 +146,28 @@ def spot_in_reads(api: Api, block_id: str, reads: list[str]) -> tuple[Spot | Non
     return rooted, failures
 
 
+def cached_spot(api: Api, block: dict, reads: list[str]) -> Spot | None:
+    """Путь страниц из дерева прочитанного (hooks/tree.py), без запроса.
+
+    Годится, когда доходит до корня документа или проходит через прочитанную
+    страницу: иначе страница, прочитанная выше известного куска, осталась бы
+    не видна, и запись ушла бы в непрочитанное зря.
+    """
+    if api.read_tree is None:
+        return None
+    pages, whole = api.read_tree.chain(block[ID_KEY])
+    if not pages and not whole:
+        return None
+    spot = Spot(block, [{ID_KEY: page_id} for page_id in pages], whole)
+    return spot if whole or is_read(spot, reads) else None
+
+
 def locate_spot(api: Api, block: dict, reads: list[str]) -> tuple[Spot | None, list[str]]:
-    """Путь страниц из поиска, а без него — из деревьев прочитанных страниц."""
+    """Путь страниц из прочитанного, без него — из поиска, а дальше — из деревьев
+    прочитанных страниц."""
+    cached = cached_spot(api, block, reads)
+    if cached is not None:
+        return cached, []
     path = api.page_path(block)
     if path is not None:
         return Spot(block, path, True), []
@@ -171,7 +192,7 @@ class Walk:
 
     def preceding(self, page_id: str, anchor: str | None, inclusive: bool) -> list[dict]:
         """Дети страницы, стоящие перед местом."""
-        children = self.api.children(page_id)
+        children = self.api.children(page_id, anchor)
         if anchor is None:
             return children if inclusive else []
         for index, child in enumerate(children):

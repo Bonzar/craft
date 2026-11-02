@@ -128,12 +128,32 @@ def judge_self(walk: Walk, anchor, block: dict, start: Start, write: Write) -> O
     return Outcome(anchor, True, owners, edited)
 
 
+def probe_target(walk: Walk, block_id: str) -> None:
+    """Цели нет в дереве прочитанного — один запрос детей страницы, где она вероятнее.
+
+    Кандидаты: страница над целью, известная по вложенности markdown-чтения,
+    затем прочитанные страницы с неизвестными детьми, свежие первыми. Цель не
+    нашлась и там — дальше обычный путь через API.
+    """
+    tree = walk.api.read_tree
+    if tree is None or walk.api.known(block_id) is not None:
+        return
+    parent = tree.parent(block_id)
+    candidates = [parent] if parent else []
+    candidates += [read for read in walk.reads if tree.is_unknown(read)]
+    for page_id in candidates:
+        if tree.is_unknown(page_id):
+            walk.api.probe(page_id)
+            return
+
+
 def judge_target(walk: Walk, anchor, write: Write, landing) -> Outcome:
     """Где лежит цель и каких владельцев задевает запись по ней.
 
     landing — отступы, с которыми запись встанет рядом с целью или в её
     дети: у `blocks add` из нагрузки, у переноса — отступ переносимого блока.
     """
+    probe_target(walk, anchor.block_id)
     block = walk.api.block(anchor.block_id)
     spot, failures = spot_of(walk, block)
     if spot is None:
@@ -288,14 +308,15 @@ def part_type(targets, write: Write, base: str | None, walk: Walk | None) -> Pla
 
 
 def page_types(parts, reads: list[str], base: str | None, tags_of: TagsOf,
-               clock=time.monotonic) -> Place:
+               clock=time.monotonic, tree=None) -> Place:
     """Какие сущности задевает запись: владельцы мест всех целей и правленые цели.
 
     parts — команды пачки парами (цели от command-tree-craft `write_targets`,
     разбор нагрузки `payload.write_of`); каждая судится отдельно, исходы
     сливаются (merge). Цель, которая не лежит ни на одной прочитанной
     странице, — UNREAD: по механике Craft страница цели читается до записи.
-    Запросы всех команд идут одной проверкой: общий срок и общая память.
+    Запросы всех команд идут одной проверкой: общий срок и общая память. tree —
+    дерево прочитанного: что в нём есть, в API не запрашивается.
     """
-    walk = Walk(Api(base, clock), reads, tags_of) if base and reads else None
+    walk = Walk(Api(base, clock, tree), reads, tags_of) if base and reads else None
     return merge([part_type(targets, write, base, walk) for targets, write in parts])

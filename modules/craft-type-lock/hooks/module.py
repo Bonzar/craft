@@ -12,7 +12,8 @@
 Содержимое — теги типа в тексте записи и тип самой цели правки, переноса
 или удаления: новая строка `#задача` на +1 под этапом задевает задачу и
 этап, переименование задачи — только задачу, её закрытие — задачу и этап.
-Владельцев и путь к цели замок берёт из connect-API Craft (hooks/place.py,
+Владельцев и путь к цели замок берёт из того, что агент уже прочитал в сессии
+(hooks/tree.py), а чего там нет — из connect-API Craft (hooks/place.py,
 hooks/owner.py, hooks/api.py). Цель не лежит ни на одной прочитанной странице — запись в
 непрочитанное, и она под запретом. API недоступен — место не судится,
 проверка по тегам текста идёт как обычно, а о том, что место не проверено,
@@ -20,25 +21,37 @@ hooks/owner.py, hooks/api.py). Цель не лежит ни на одной п�
 сеть, и только ради записи в Craft.
 
 Что замок узнал о типе, он кладёт строкой `entity` в объём ревью хода
-(hooks/review_row.py): ревью выбирает по ней критерии.
+(hooks/review_row.py): ревью выбирает по ней критерии. Строка ложится на
+`post-tool` записи — только за запись, которая случилась.
 """
 
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jarvis  # noqa: E402
-from jarvis import events, wrappers  # noqa: E402
+import tree as read_tree  # noqa: E402
 from entities import TagEntry, entity_reason, load_entities, load_tag_skills  # noqa: E402
+from jarvis import events, wrappers  # noqa: E402
 from payload import write_of  # noqa: E402
 from place import BASE_ENV, Place, Verdict, page_types  # noqa: E402
-from review_row import append_row, entity_row  # noqa: E402
+from review_row import entity_row, hold_row, release_row, row_key  # noqa: E402
 from state import (  # noqa: E402
-    READS_KEY, SKILLS_KEY, STATE_FILE, TURN_KEY, TURN_READS_KEY, WARNED_KEY, new_state,
-    read_state, remember_reads, remember_turn_reads, state_lock,
+    READS_KEY,
+    SKILLS_KEY,
+    STATE_FILE,
+    TURN_KEY,
+    TURN_READS_KEY,
+    WARNED_KEY,
+    new_state,
+    read_state,
+    remember_reads,
+    remember_turn_reads,
+    state_lock,
 )
 
 MODULE_DIR = Path(__file__).resolve().parents[1]
@@ -203,11 +216,16 @@ class Module(jarvis.Module):
         with state_lock(storage):
             state = read_state(storage, craft)
             storage.write_json(STATE_FILE, new_state(reads=state[READS_KEY], warned=state[WARNED_KEY]))
-        return jarvis.Silence(reason='после сжатия счёт ходов и скиллов сброшен')
+            # Дерево прочитанного стирается: после сжатия агент читает страницу
+            # заново, и замок не опирается на чтение, которого в контексте нет.
+            read_tree.clear(storage)
+        return jarvis.Silence(reason='после сжатия счёт ходов и скиллов сброшен, дерево стёрто')
 
     def on_post_tool(self, event, storage, craft) -> jarvis.Response:
         if craft.is_craft_read(event.tool_name):
             return self.on_read(event, storage, craft)
+        if craft.is_craft_write(event.tool_name):
+            return self.on_written(event, storage, craft)
         if event.tool_name != SKILL_TOOL:
             return jarvis.Silence(reason='вызван не скилл')
         slug = skill_slug(event.tool_input)
@@ -234,7 +252,24 @@ class Module(jarvis.Module):
                 # ответа, id из поиска и чтение не на всю глубину не считаются.
                 TURN_READS_KEY: remember_turn_reads(state[TURN_READS_KEY], template_reads(command, craft),
                                                     craft)})
-        return jarvis.Silence(reason=f'прочитано: {", ".join(item[:8] for item in ids)}')
+            tree = read_tree.load(storage, time.time())
+            learned = read_tree.learn_read(tree, command, event.tool_result, craft)
+            read_tree.save(storage, tree)
+        return jarvis.Silence(reason=f'прочитано: {", ".join(item[:8] for item in ids)}; '
+                                     f'в дерево страниц: {learned}')
+
+    def on_written(self, event, storage, craft) -> jarvis.Response:
+        """Запись случилась: её строка — в объём ревью, задетые страницы — читать заново."""
+        command = craft.command_of(event.tool_input)
+        targets = craft.target_ids(command)
+        with state_lock(storage):
+            released = release_row(storage, row_key(event, command))
+            tree = read_tree.load(storage, time.time())
+            if targets:
+                tree.apply('forget', targets)
+            read_tree.save(storage, tree)
+        row = 'строка типа в объёме' if released else 'отложенной строки нет'
+        return jarvis.Silence(reason=f'запись прошла: {row}, сброшено в дереве: {len(targets)}')
 
     def warn_once(self, storage, craft, state: dict, reason: str) -> str | None:
         """Текст в ход о том, что место записи не проверяется; раз за сессию.
@@ -266,18 +301,22 @@ class Module(jarvis.Module):
             return jarvis.Deny(reason=entity_reason(error))
         try:
             state = read_state(storage, craft)
+            tree = read_tree.load(storage, time.time())
             parts = [(craft.write_targets(part), write_of(craft.verb_of(part), craft.parse_command(part)))
                      for part in craft.split_commands(command) or [command]]
             place = settle(entries, page_types(parts, state[READS_KEY], os.environ.get(BASE_ENV),
-                                               lambda text: craft.find_tags(text, entries)))
+                                               lambda text: craft.find_tags(text, entries), tree=tree))
         except ValueError as error:
             # Ошибка хука харнес считает неблокирующей: упавший замок пропустил
             # бы запись. Испорченное состояние или отступ — запрет с выходом.
             return jarvis.Deny(reason=broken_reason(storage, error))
         tags = craft.find_tags(command, entries)
         targets = [anchor for found, _ in parts for anchor in found.anchors]
-        # Тип записи — в объём ревью: только выбор критериев, без решения замка.
-        append_row(storage, entity_row(event, command, targets, place, tags))
+        # Тип записи — в объём ревью, когда запись случится: только выбор
+        # критериев, без решения замка. Что узнал из API — в дерево прочитанного.
+        with state_lock(storage):
+            hold_row(storage, row_key(event, command), entity_row(event, command, targets, place, tags))
+            read_tree.save(storage, tree)
         return self.decide(entries, tags, place, storage, craft, state)
 
     def decide(self, entries, tags, place: Place, storage, craft, state: dict) -> jarvis.Response:

@@ -108,13 +108,16 @@ def found_path(answer, block_id: str) -> list[dict] | None:
 class Api:
     """Запросы одной проверки места: общий срок и память уже полученных блоков."""
 
-    def __init__(self, base: str, clock) -> None:
+    def __init__(self, base: str, clock, tree=None) -> None:
         self.base = base.rstrip('/')
         self.clock = clock
         self.deadline = clock() + DEADLINE_SEC
         self.blocks: dict[str, dict] = {}
         self.kids: dict[str, list[dict]] = {}
         self.requests = 0
+        # Дерево из прочитанного (hooks/tree.py): что в нём есть, не запрашивается,
+        # а что пришло из API, ложится в него для следующих записей.
+        self.read_tree = tree
 
     def get(self, path: str, params: dict):
         left = self.deadline - self.clock()
@@ -137,25 +140,58 @@ class Api:
                 raise
         return as_block(self.get('blocks', {'id': other_case(block_id), 'maxDepth': depth}))
 
+    def known(self, block_id: str) -> dict | None:
+        """Блок без запроса: из памяти проверки или из дерева прочитанного."""
+        key = block_id.lower()
+        if key not in self.blocks and self.read_tree is not None:
+            cached = self.read_tree.block(block_id)
+            if cached is not None:
+                self.blocks[key] = cached
+        return self.blocks.get(key)
+
     def block(self, block_id: str) -> dict:
         """Сам блок без детей: тип, стиль и текст. Повтор за проверку не запрашивается."""
-        key = block_id.lower()
-        if key not in self.blocks:
-            self.blocks[key] = self.by_id(block_id, BLOCK_DEPTH)
-        return self.blocks[key]
+        found = self.known(block_id)
+        if found is None:
+            found = self.blocks[block_id.lower()] = self.by_id(block_id, BLOCK_DEPTH)
+        return found
 
-    def children(self, page_id: str) -> list[dict]:
-        """Прямые дети страницы по порядку. Сама страница ложится в память блоков."""
+    def cached_children(self, page_id: str, anchor: str | None) -> list[dict] | None:
+        """Дети из дерева прочитанного, если их хватает месту: полный список или
+        начало списка, в котором уже стоит anchor."""
+        children, complete = self.read_tree.children(page_id) if self.read_tree is not None else (None, False)
+        if children is None:
+            return None
+        if complete or (anchor is not None and any(same_id(child[ID_KEY], anchor) for child in children)):
+            return children
+        return None
+
+    def children(self, page_id: str, anchor: str | None = None) -> list[dict]:
+        """Прямые дети страницы по порядку. Сама страница и дети ложатся в память блоков."""
         key = page_id.lower()
-        if key not in self.kids:
-            page = self.by_id(page_id, CHILDREN_DEPTH)
-            content = page.get(CONTENT_KEY, [])
-            if not isinstance(content, list) or not all(
-                    isinstance(child, dict) and isinstance(child.get(ID_KEY), str) for child in content):
-                raise ValueError(f'у страницы {page_id[:8]} дети не списком блоков')
-            self.blocks.setdefault(key, {k: v for k, v in page.items() if k != CONTENT_KEY})
-            self.kids[key] = content
-        return self.kids[key]
+        if key in self.kids:
+            return self.kids[key]
+        cached = self.cached_children(page_id, anchor)
+        if cached is not None:
+            self.kids[key] = cached
+            return cached
+        page = self.by_id(page_id, CHILDREN_DEPTH)
+        content = page.get(CONTENT_KEY, [])
+        if not isinstance(content, list) or not all(
+                isinstance(child, dict) and isinstance(child.get(ID_KEY), str) for child in content):
+            raise ValueError(f'у страницы {page_id[:8]} дети не списком блоков')
+        self.store(page, content)
+        return content
+
+    def store(self, page: dict, content: list[dict]) -> None:
+        """Дети страницы из API — в память проверки и в дерево прочитанного."""
+        key = page[ID_KEY].lower()
+        self.blocks.setdefault(key, {k: v for k, v in page.items() if k != CONTENT_KEY})
+        self.kids[key] = [{k: v for k, v in child.items() if k != CONTENT_KEY} for child in content]
+        for child in self.kids[key]:
+            self.blocks.setdefault(child[ID_KEY].lower(), child)
+        if self.read_tree is not None:
+            self.read_tree.apply('learn_children', page, self.kids[key])
 
     def tree(self, page_id: str) -> dict:
         """Прочитанная страница со всем, что в ней лежит.
@@ -172,12 +208,15 @@ class Api:
         if not isinstance(content, list) or not all(
                 isinstance(child, dict) and isinstance(child.get(ID_KEY), str) for child in content):
             return
-        key = node[ID_KEY].lower()
-        self.blocks.setdefault(key, {k: v for k, v in node.items() if k != CONTENT_KEY})
-        self.kids.setdefault(key, [{k: v for k, v in child.items() if k != CONTENT_KEY}
-                                   for child in content])
+        if node[ID_KEY].lower() not in self.kids:
+            self.store(node, content)
         for child in content:
             self.remember(child)
+
+    def probe(self, page_id: str) -> None:
+        """Один запрос детей страницы, где цель вероятнее всего лежит."""
+        if page_id.lower() not in self.kids:
+            self.children(page_id)
 
     def page_path(self, block: dict) -> list[dict] | None:
         """Страницы от корня документа до той, где лежит блок: `[{id, content}, …]`.
@@ -190,4 +229,7 @@ class Api:
             return None
         answer = self.get('blocks/search', {'blockId': block[ID_KEY], 'pattern': pattern,
                                             'beforeBlockCount': 0, 'afterBlockCount': 0})
-        return found_path(answer, block[ID_KEY])
+        path = found_path(answer, block[ID_KEY])
+        if path is not None and self.read_tree is not None:
+            self.read_tree.apply('learn_path', block[ID_KEY], [page[ID_KEY] for page in path])
+        return path
