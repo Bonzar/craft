@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from jarvis import registry
 from jarvis.storage import Storage
 from jarvis.trace import Trace
 
@@ -25,7 +26,7 @@ BLOCK = 'a6784801-9d92-875c-f146-50159368745b'
 
 
 def load_file(name: str, path: Path):
-    """Хук или lib как библиотека: ядро уже на пути у пакета тестов."""
+    """Хук как библиотека: ядро уже на пути у пакета тестов."""
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -118,7 +119,8 @@ class TagMapErrorTest(unittest.TestCase):
 
     def test_an_unreadable_modules_dir_keeps_the_write_and_raises(self) -> None:
         hook = load_file('review_craft_calls_hook', MODULES_DIR / SLUG / 'hooks' / 'module.py')
-        review = load_file('turn_review_lib_calls', MODULES_DIR / 'turn-review' / 'lib' / '__init__.py')
+        review = registry.LibraryModule('turn-review', MODULES_DIR / 'turn-review' / 'lib').load()
+
 
         def load_tag_skills():
             raise PermissionError(13, 'нет доступа', '/modules')

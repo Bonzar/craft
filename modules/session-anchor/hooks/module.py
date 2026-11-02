@@ -57,9 +57,8 @@ class Module(jarvis.Module):
         question = questions_text(event.tool_input) if event.tool_name == QUESTION_TOOL else ''
         if ANCHOR_QUESTION_MARK not in question.lower():
             return jarvis.Silence(reason='вызов не вопрос о якоре')
-        review.append_turn_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
-                                            review.QUESTION_KEY: question,
-                                            review.ANSWER_KEY: as_is(event.tool_result)})
+        review.append_turn_record(storage, review.make_anchor_record(
+            answer=as_is(event.tool_result), question=question))
         return jarvis.Silence(reason='якорь выбран кнопкой')
 
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
@@ -70,8 +69,7 @@ class Module(jarvis.Module):
             turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, text)
         if not ANCHOR_PROMPT.search(text):
             return jarvis.Silence(reason=with_problem('реплика не называет якорь', problem))
-        review.append_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
-                                       review.RECORD_TURN_KEY: turn, review.ANSWER_KEY: text})
+        review.append_turn_record(storage, review.make_anchor_record(answer=text), turn=turn)
         return jarvis.Silence(reason=with_problem('якорь назван репликой', problem))
 
 

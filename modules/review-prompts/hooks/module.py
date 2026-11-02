@@ -22,8 +22,6 @@ QUESTION_TOOL = 'AskUserQuestion'
 QUESTIONS_FIELD = 'questions'
 QUESTION_FIELD = 'question'
 AUTHOR = 'Влад'
-AUTHOR_KEY = 'author'
-AT_KEY = 'at'
 SUBAGENT_REASON = 'вызов внутри подагента: в объём ревью не идёт'
 
 
@@ -65,9 +63,9 @@ class Module(jarvis.Module):
             return jarvis.Silence(reason='вызов не вопрос человеку')
         if review.is_review_question(event.tool_input):
             return jarvis.Silence(reason='вопрос самого ревью: его разбирает хук ревью')
-        review.append_turn_record(storage, {
-            review.KIND_KEY: review.KIND_ANSWER, review.QUESTION_KEY: questions_text(event.tool_input),
-            review.ANSWER_KEY: as_is(event.tool_result), AUTHOR_KEY: AUTHOR, AT_KEY: now()})
+        review.append_turn_record(storage, review.make_answer_record(
+            question=questions_text(event.tool_input), answer=as_is(event.tool_result),
+            author=AUTHOR, at=now()))
         return jarvis.Silence(reason='ответ кнопками в объёме ревью')
 
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
@@ -78,9 +76,8 @@ class Module(jarvis.Module):
             turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, text)
         if not text.strip():
             return jarvis.Silence(reason=with_problem('пустая реплика', problem))
-        review.append_record(storage, {
-            review.KIND_KEY: review.KIND_PROMPT, review.RECORD_TURN_KEY: turn,
-            review.PROMPT_TEXT_KEY: text, AUTHOR_KEY: AUTHOR, AT_KEY: now()})
+        review.append_turn_record(
+            storage, review.make_prompt_record(text=text, author=AUTHOR, at=now()), turn=turn)
         return jarvis.Silence(reason=with_problem('реплика в объёме ревью', problem))
 
 

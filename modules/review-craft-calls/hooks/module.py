@@ -57,7 +57,7 @@ def as_is(value):
     return value if isinstance(value, (str, dict, list)) else None
 
 
-def write_record(event, review, tags) -> tuple[dict, Exception | None]:
+def write_record(event, review, tags):
     """Запись write и ошибка справочника тегов, если он не собрался.
 
     Без справочника теги неизвестны: `types` равен null, текст ошибки лежит в
@@ -66,15 +66,15 @@ def write_record(event, review, tags) -> tuple[dict, Exception | None]:
     прочитаться (права, нет каталога).
     """
     command = command_of(event.tool_input)
-    record = {review.KIND_KEY: review.KIND_WRITE, review.TOOL_KEY: event.tool_name,
-              review.COMMAND_KEY: command, review.RESULT_KEY: as_is(event.tool_result)}
+    fields = {'tool': event.tool_name, 'command': command, 'result': as_is(event.tool_result)}
     try:
-        return {**record, review.TYPES_KEY: tags.find_tags(command, tags.load_tag_skills())}, None
+        found = tags.find_tags(command, tags.load_tag_skills())
     except Exception as error:  # noqa: BLE001 — запись ложится, ошибка поднимается в handle
-        return {**record, review.TYPES_KEY: None, review.TYPES_ERROR_KEY: str(error)}, error
+        return review.make_write_record(**fields, types=None, types_error=str(error)), error
+    return review.make_write_record(**fields, types=found), None
 
 
-def record_of(event, review, tags) -> tuple[dict | None, Exception | None]:
+def record_of(event, review, tags):
     """Запись объёма без номера хода и ошибка справочника; не наш вызов — None.
 
     Номер хода ставит append_turn_record.
@@ -84,11 +84,10 @@ def record_of(event, review, tags) -> tuple[dict | None, Exception | None]:
         return write_record(event, review, tags)
     if tool == CRAFT_READ_TOOL:
         command = command_of(event.tool_input)
-        return {review.KIND_KEY: review.KIND_READ, review.COMMAND_KEY: command,
-                review.IDS_KEY: list(dict.fromkeys(BLOCK_ID.findall(command)))}, None
+        return review.make_read_record(
+            command=command, ids=list(dict.fromkeys(BLOCK_ID.findall(command)))), None
     if event.tool_name == SKILL_TOOL:
-        return {review.KIND_KEY: review.KIND_SKILL,
-                review.SKILL_KEY: tags.skill_slug(event.tool_input)}, None
+        return review.make_skill_record(skill=tags.skill_slug(event.tool_input)), None
     return None, None
 
 
@@ -110,7 +109,7 @@ class Module(jarvis.Module):
             # ревью — его ошибка остаётся в цепочке исключения.
             if types_error is not None:
                 raise types_error
-        return jarvis.Silence(reason=f'в объём ревью: {record[review.KIND_KEY]}')
+        return jarvis.Silence(reason=f'в объём ревью: {record.kind}')
 
 
 if __name__ == '__main__':

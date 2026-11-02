@@ -1,6 +1,5 @@
 """Ревью хода turn-review: путь от сырого события Claude до ответа и следа."""
 
-import importlib.util
 import json
 import shutil
 import subprocess
@@ -9,20 +8,19 @@ import tempfile
 import threading
 import time
 import unittest
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from unittest import mock
 
-from jarvis import confirm
+from jarvis import confirm, registry
 from jarvis.storage import Storage
 from jarvis.trace import Trace
 
 from . import CORE_SOURCE, MODULES_DIR
 
-# Отпечаток в тестах считается той же функцией, что у хука: lib не зависит от ядра.
-LIB_SPEC = importlib.util.spec_from_file_location('turn_review_lib', MODULES_DIR / 'turn-review' / 'lib' / '__init__.py')
-review_lib = importlib.util.module_from_spec(LIB_SPEC)
-LIB_SPEC.loader.exec_module(review_lib)
+# lib грузится пакетом через реестр ядра, как у хуков: отпечаток и проверки в
+# тестах — те же функции. Загрузку по пути без ядра проверяет скрипт отпечатка.
+review_lib = registry.LibraryModule('turn-review', MODULES_DIR / 'turn-review' / 'lib').load()
 
 SLUG = 'turn-review'
 TYPE_LOCK = 'craft-type-lock'
@@ -667,9 +665,9 @@ class TurnReviewTest(TurnReviewCase):
         # не выбирают, и чистый вердикт прошёл бы без критериев её типа.
         session = 's-unknown-tags'
         self.start_with_write(session)
-        review_lib.append_turn_record(self.storage(session), {
-            'kind': 'write', 'command': 'blocks add', 'types': None,
-            'types_error': 'entity.json: файл сущности не читается'})
+        review_lib.append_turn_record(self.storage(session), review_lib.make_write_record(
+            tool=CRAFT_WRITE, command='blocks add', result=None, types=None,
+            types_error='entity.json: файл сущности не читается'))
         self.write_verdict(session, self.state(session)['volume_id'])
         self.assertEqual(self.shown(self.fire(message(session, 'Готово.'))),
                          'Ревью хода идёт, отчёт после него.')
@@ -710,11 +708,13 @@ class CurrentTurnTest(unittest.TestCase):
                 review_lib.current_turn(self.storage)
             self.assertIn(str(path), str(caught.exception))
 
+    def rows(self) -> list[dict]:
+        return [json.loads(line) for line in self.storage.read_lines('turn-review-volume.jsonl')]
+
     def test_a_provider_cannot_override_the_turn(self) -> None:
-        review_lib.save_state(self.storage, review_lib.new_state(4))
-        review_lib.append_turn_record(self.storage, {'kind': 'write', 'turn': 1, 'command': 'x'})
-        rows = [json.loads(line) for line in self.storage.read_lines('turn-review-volume.jsonl')]
-        self.assertEqual(rows, [{'kind': 'write', 'turn': 4, 'command': 'x'}])
+        review_lib.save_state(self.storage, review_lib.ReviewState(turn=4))
+        review_lib.append_turn_record(self.storage, review_lib.SkillRecord(skill='x', turn=1))
+        self.assertEqual(self.rows(), [{'kind': 'skill', 'turn': 4, 'skill': 'x'}])
 
     def test_a_provider_turn_is_dropped_when_the_state_is_damaged(self) -> None:
         # Без номера запись идёт на ревью; номер поставщика выдал бы её за прошлый ход.
@@ -722,9 +722,81 @@ class CurrentTurnTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('{не json', encoding='utf-8')
         with self.assertRaises(ValueError):
-            review_lib.append_turn_record(self.storage, {'kind': 'write', 'turn': 1})
-        rows = [json.loads(line) for line in self.storage.read_lines('turn-review-volume.jsonl')]
-        self.assertEqual(rows, [{'kind': 'write'}])
+            review_lib.append_turn_record(self.storage, review_lib.SkillRecord(skill='x', turn=1))
+        self.assertEqual(self.rows(), [{'kind': 'skill', 'skill': 'x'}])
+
+    def test_a_given_turn_is_taken_without_the_state(self) -> None:
+        # Реплика берёт номер у claim_prompt_turn и кладёт запись с ним.
+        record = review_lib.make_prompt_record(text='дальше', author='Влад', at='t')
+        review_lib.append_turn_record(self.storage, record, turn=7)
+        self.assertEqual(self.rows(), [{'kind': 'prompt', 'turn': 7, 'text': 'дальше',
+                                        'author': 'Влад', 'at': 't'}])
+        self.assertFalse(self.storage.path('turn-review-state.json').exists())
+
+
+class RecordTest(unittest.TestCase):
+    """Запись объёма: размеченное объединение по kind, строится фабриками lib."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self.tmp.name), 's-record')
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_record_without_a_known_kind_is_refused_at_the_border(self) -> None:
+        # Раньше такая запись ложилась с kind: null, и её не видел ни один потребитель.
+        for record in ({'command': 'x'}, {'kind': None, 'command': 'x'},
+                       {'kind': 'write', 'command': 'x'}, 'write'):
+            with self.subTest(record=record), self.assertRaises(ValueError) as caught:
+                review_lib.append_turn_record(self.storage, record)
+            self.assertIn('kind', str(caught.exception))
+        self.assertFalse(self.storage.path('turn-review-volume.jsonl').exists())
+
+    def test_every_kind_has_a_factory_with_its_fields(self) -> None:
+        cases = (
+            (review_lib.make_write_record(tool='t', command='c', result={'id': 1}, types=['#задача']),
+             {'kind': 'write', 'tool': 't', 'command': 'c', 'result': {'id': 1},
+              'types': ['#задача']}),
+            (review_lib.make_write_record(tool='t', command='c', result=None, types=None,
+                                          types_error='нет справочника'),
+             {'kind': 'write', 'tool': 't', 'command': 'c', 'result': None, 'types': None,
+              'types_error': 'нет справочника'}),
+            (review_lib.make_read_record(command='c', ids=['a']),
+             {'kind': 'read', 'command': 'c', 'ids': ['a']}),
+            (review_lib.make_skill_record(skill='craft-task'), {'kind': 'skill', 'skill': 'craft-task'}),
+            (review_lib.make_prompt_record(text='т', author='Влад', at='t'),
+             {'kind': 'prompt', 'text': 'т', 'author': 'Влад', 'at': 't'}),
+            (review_lib.make_answer_record(question='в', answer='о', author='Влад', at='t'),
+             {'kind': 'answer', 'question': 'в', 'answer': 'о', 'author': 'Влад', 'at': 't'}),
+            (review_lib.make_anchor_record(answer='Беру задачу'),
+             {'kind': 'anchor', 'answer': 'Беру задачу'}),
+            (review_lib.make_anchor_record(answer={'a': 1}, question='Якорь?'),
+             {'kind': 'anchor', 'answer': {'a': 1}, 'question': 'Якорь?'}),
+        )
+        self.assertEqual({record.kind for record, _ in cases}, set(review_lib.KINDS))
+        for record, row in cases:
+            with self.subTest(kind=record.kind):
+                self.assertEqual(review_lib.record_row(record), row)
+
+    def test_a_wrong_field_is_refused(self) -> None:
+        for make in (lambda: review_lib.make_read_record(command=1, ids=[]),
+                     lambda: review_lib.make_read_record(command='c', ids='a'),
+                     lambda: review_lib.make_write_record(tool='t', command='c', result=None,
+                                                          types='#задача'),
+                     lambda: review_lib.make_write_record(tool='t', command='c', result=None,
+                                                          types=None),
+                     lambda: review_lib.make_write_record(tool='t', command='c', result=None,
+                                                          types=[], types_error='лишняя'),
+                     lambda: review_lib.make_answer_record(question='в', answer=1, author='В',
+                                                           at='t'),
+                     lambda: review_lib.SkillRecord(skill='x', turn='1')):
+            with self.assertRaises(ValueError):
+                make()
+
+    def test_factories_take_no_turn(self) -> None:
+        with self.assertRaises(TypeError):
+            review_lib.make_skill_record(skill='x', turn=1)
 
 
 class VolumeLockTest(unittest.TestCase):
@@ -736,6 +808,12 @@ class VolumeLockTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def appends(self):
+        """Номер хода из состояния и номер, данный репликой: оба пути под локом."""
+        return (('из состояния', review_lib.append_turn_record),
+                ('номер дан', lambda storage, record: review_lib.append_turn_record(
+                    storage, record, turn=1)))
 
     def commands(self) -> list[str]:
         records, damage = review_lib.parse_volume_file(self.storage.path('turn-review-volume.jsonl'))
@@ -755,9 +833,10 @@ class VolumeLockTest(unittest.TestCase):
                 handle.write(line[len(line) // 2:] + '\n')
             return path
 
-        records = [{'kind': 'write', 'command': f'команда {number}'} for number in range(2)]
-        for append in (review_lib.append_record, review_lib.append_turn_record):
-            with self.subTest(append=append.__name__):
+        records = [review_lib.make_read_record(command=f'команда {number}', ids=[])
+                   for number in range(2)]
+        for name, append in self.appends():
+            with self.subTest(append=name):
                 self.storage.path('turn-review-volume.jsonl').unlink(missing_ok=True)
                 workers = [threading.Thread(target=append, args=(self.storage, record))
                            for record in records]
@@ -771,11 +850,11 @@ class VolumeLockTest(unittest.TestCase):
     def test_a_record_waits_for_the_lock_held_by_the_stop(self) -> None:
         # Остановка чистит объём под локом: запись, легшая посреди очистки,
         # пропала бы вместе со старыми.
-        for append in (review_lib.append_record, review_lib.append_turn_record):
-            with self.subTest(append=append.__name__):
+        for name, append in self.appends():
+            with self.subTest(append=name):
                 self.storage.path('turn-review-volume.jsonl').unlink(missing_ok=True)
                 worker = threading.Thread(target=append, args=(
-                    self.storage, {'kind': 'write', 'command': 'после очистки'}))
+                    self.storage, review_lib.make_read_record(command='после очистки', ids=[])))
                 with review_lib.state_lock(self.storage):
                     worker.start()
                     worker.join(0.2)
@@ -792,7 +871,7 @@ class UnknownTagsTest(unittest.TestCase):
     TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
 
     def problem(self, record: dict) -> str | None:
-        return review_lib.criteria_problem([record], ['task'], [self.TASK], [])
+        return review_lib.criteria_problem([record], ('task',), (self.TASK,), ())
 
     def test_a_types_error_is_a_problem_with_its_text(self) -> None:
         for types in (None, ['#задача']):
@@ -812,6 +891,22 @@ class UnknownTagsTest(unittest.TestCase):
         self.assertIsNone(self.problem({'kind': 'read', 'types': None}))
 
 
+class TakenCriteriaTest(unittest.TestCase):
+    """Критерии поручения сверяются с найденными: пропавший id называется."""
+
+    TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
+    def test_a_taken_id_without_a_found_criterion_is_a_problem(self) -> None:
+        write = {'kind': 'write', 'types': ['#задача']}
+        problem = review_lib.criteria_problem([write], ['task', 'stage'], [self.TASK], [])
+        self.assertIn('критерий «stage» из поручения', problem)
+        self.assertNotIn('«task»', problem)
+
+    def test_taken_ids_all_found_are_no_problem(self) -> None:
+        write = {'kind': 'write', 'types': ['#задача']}
+        self.assertIsNone(review_lib.criteria_problem([write], ['task'], [self.TASK], []))
+
+
+
 class StateTest(unittest.TestCase):
     """Состояние: поля по имени, поля с диска не теряются, элементы проверяются."""
 
@@ -822,39 +917,69 @@ class StateTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_fields_after_the_turn_are_keyword_only(self) -> None:
-        with self.assertRaises(TypeError):
-            review_lib.new_state(1, 'объём')
-        self.assertEqual(review_lib.new_state(1, volume_id='объём')['volume_id'], 'объём')
+    def disk(self) -> dict:
+        return self.storage.read_json('turn-review-state.json')
 
-    def test_a_fresh_state_has_no_brief_criteria(self) -> None:
-        self.assertIsNone(review_lib.new_state()['criteria'])
-        self.assertEqual(review_lib.new_state(criteria=[])['criteria'], [])
+    def test_fields_are_keyword_only(self) -> None:
+        with self.assertRaises(TypeError):
+            review_lib.ReviewState(1)
+        self.assertEqual(review_lib.ReviewState(turn=1, volume_id='объём').volume_id, 'объём')
+
+    def test_no_brief_and_a_brief_without_criteria_differ(self) -> None:
+        self.assertIs(review_lib.ReviewState().criteria, review_lib.NO_BRIEF)
+        self.assertIsNone(review_lib.ReviewState().to_json()['criteria'])
+        self.assertEqual(review_lib.ReviewState(criteria=()).to_json()['criteria'], [])
 
     def test_load_keeps_every_field_from_the_disk(self) -> None:
-        state = {**review_lib.new_state(3, volume_id='v', nudges=2, criteria=['task'],
-                                        last_remarks=[{'criterion': 'task'}],
-                                        prompt_taken=['turn-review']),
-                 'future': 1}
-        review_lib.save_state(self.storage, state)
-        self.assertEqual(review_lib.load_state(self.storage), (state, None))
-
-    def test_load_fills_a_missing_field_with_its_default(self) -> None:
-        state = review_lib.new_state(3, volume_id='v')
-        del state['prompt_taken']
-        review_lib.save_state(self.storage, state)
+        state = review_lib.ReviewState(turn=3, volume_id='v', nudges=2, criteria=('task',),
+                                       last_remarks=({'criterion': 'task'},),
+                                       prompt_taken=('turn-review',))
+        self.storage.write_json('turn-review-state.json', {**state.to_json(), 'future': 1})
         loaded, problem = review_lib.load_state(self.storage)
         self.assertIsNone(problem)
-        self.assertEqual(loaded['prompt_taken'], [])
+        self.assertEqual(replace(loaded, unknown={}), state)
+        review_lib.save_state(self.storage, loaded)
+        self.assertEqual(self.disk(), {**state.to_json(), 'future': 1})
+
+    def test_load_fills_a_missing_field_with_its_default(self) -> None:
+        data = review_lib.ReviewState(turn=3, volume_id='v').to_json()
+        del data['prompt_taken']
+        self.storage.write_json('turn-review-state.json', data)
+        loaded, problem = review_lib.load_state(self.storage)
+        self.assertIsNone(problem)
+        self.assertEqual(loaded.prompt_taken, ())
 
     def test_wrong_items_are_damage_and_not_a_crash_later(self) -> None:
         for field_name, value in (('criteria', [1]), ('prompt_taken', [None]),
-                                  ('last_remarks', ['нет ссылки']), ('criteria', 'task')):
-            review_lib.save_state(self.storage, {**review_lib.new_state(2, volume_id='v'),
-                                                 field_name: value})
+                                  ('last_remarks', ['нет ссылки']), ('criteria', 'task'),
+                                  ('turn', True), ('volume_id', '')):
+            self.storage.write_json('turn-review-state.json', {
+                **review_lib.ReviewState(turn=2, volume_id='v').to_json(), field_name: value})
             loaded, problem = review_lib.load_state(self.storage)
             self.assertIn('испорчен', problem, field_name)
-            self.assertEqual(loaded['turn'], 0)
+            self.assertEqual(loaded.turn, 0)
+
+    def test_save_refuses_what_load_would_refuse(self) -> None:
+        # Раньше save_state писал что угодно, а load_state потом отвергал файл.
+        for state in ({'turn': '1'}, {**review_lib.ReviewState().to_json(), 'turn': '1'}):
+            with self.subTest(state=state), self.assertRaises(ValueError):
+                review_lib.save_state(self.storage, state)
+        self.assertFalse(self.storage.path('turn-review-state.json').exists())
+
+    def test_the_state_checks_itself_on_every_construction(self) -> None:
+        state = review_lib.ReviewState(turn=2)
+        for change in ({'turn': '1'}, {'nudges': None}, {'released': 1}, {'criteria': ['task']},
+                       {'criteria': ('task', 1)}, {'prompt_taken': ['m']}, {'volume_id': ''},
+                       {'last_remarks': ('нет ссылки',)}, {'summary_shown': None}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                replace(state, **change)
+
+    def test_json_round_trip_keeps_the_state(self) -> None:
+        state = review_lib.ReviewState(turn=3, nudges=1, criteria=('task',),
+                                       last_remarks=({'criterion': 'task'},),
+                                       prompt_taken=('a', 'b'), summary='итог')
+        data = json.loads(json.dumps(state.to_json()))
+        self.assertEqual(review_lib.ReviewState.from_json(data), state)
 
 
 class CriterionFilesTest(unittest.TestCase):
@@ -880,7 +1005,7 @@ class CriterionFilesTest(unittest.TestCase):
             self.criterion(f'm{number}', f'id: c{number}\napplies: {rule}\n\nТекст.\n')
         self.criterion('ok', 'id: ok\napplies: tags #задача\n\nТекст.\n')
         _, ids, broken = self.assemble()
-        self.assertEqual(ids, [])
+        self.assertEqual(ids, ())
         self.assertEqual([item.split(' ', 1)[0] for item in broken], ['m0', 'm1', 'm2', 'm3', 'm4'])
         self.assertIn('applies', broken[0])
 
@@ -888,7 +1013,7 @@ class CriterionFilesTest(unittest.TestCase):
         self.criterion('first', 'id: task\napplies: always\n\nПервый.\n')
         self.criterion('second', 'id: task\napplies: always\n\nВторой.\n')
         text, ids, broken = self.assemble()
-        self.assertEqual(ids, ['task'])
+        self.assertEqual(ids, ('task',))
         self.assertEqual(text, 'Первый.')
         self.assertEqual(len(broken), 1)
         self.assertIn('second', broken[0])
@@ -898,7 +1023,7 @@ class CriterionFilesTest(unittest.TestCase):
         self.criterion('glued', 'id: task\napplies: always\n## Критерий «task»: задача\nТекст.\n')
         self.criterion('plain', 'id: plain\napplies: always\nТекст без пустой строки.\n')
         text, ids, broken = self.assemble()
-        self.assertEqual((text, ids), ('', []))
+        self.assertEqual((text, ids), ('', ()))
         self.assertEqual([item.split(' ', 1)[0] for item in broken], ['glued', 'plain'])
         self.assertIn('пустая строка', broken[0])
 
@@ -907,12 +1032,14 @@ class CriterionFilesTest(unittest.TestCase):
         parts = self.assemble([{'kind': 'write'}])
         self.assertIsInstance(parts, review_lib.BriefParts)
         self.assertEqual((parts.text, parts.criteria, parts.broken),
-                         ('## Критерий «good»: всё\nТекст.', ['good'], []))
+                         ('## Критерий «good»: всё\nТекст.', ('good',), ()))
+        check = review_lib.review_criteria(self.modules, [{'kind': 'write'}], None)
+        self.assertEqual(check.criteria, ('good',))
 
     def test_a_repeated_head_field_is_broken(self) -> None:
         self.criterion('twice', 'id: a\nid: b\napplies: always\n\nТекст.\n')
         _, ids, broken = self.assemble()
-        self.assertEqual(ids, [])
+        self.assertEqual(ids, ())
         self.assertIn('поле «id» в шапке дважды', broken[0])
 
     def test_a_tag_follows_the_entity_rule(self) -> None:
@@ -920,7 +1047,7 @@ class CriterionFilesTest(unittest.TestCase):
         self.criterion('bare', 'id: bare\napplies: tags #\n\nТекст.\n')
         self.criterion('upper', 'id: upper\napplies: tags #Задача\n\nТекст.\n')
         _, ids, broken = self.assemble([{'kind': 'write', 'types': ['#задача']}])
-        self.assertEqual(ids, ['upper'])
+        self.assertEqual(ids, ('upper',))
         self.assertEqual([item.split(' ', 1)[0] for item in broken], ['bare'])
 
     def test_an_unreadable_file_is_broken_with_its_path(self) -> None:
@@ -939,7 +1066,7 @@ class CriterionFilesTest(unittest.TestCase):
 
         with mock.patch.object(Path, 'read_text', read_text):
             _, ids, broken = self.assemble()
-        self.assertEqual(ids, [])
+        self.assertEqual(ids, ())
         self.assertEqual(len(broken), 2)
         self.assertIn(str(path), broken[0])
         self.assertIn(str(records), broken[1])
@@ -963,9 +1090,21 @@ class CriterionTest(unittest.TestCase):
             criterion = review_lib.make_criterion(f'id: c\napplies: {rule}\n\nТекст.')
             self.assertEqual(review_lib.criterion_applies(criterion, volume), expected, rule)
 
-    def test_applies_takes_only_a_criterion(self) -> None:
-        with self.assertRaises(TypeError):
-            review_lib.criterion_applies({'applies': 'always'}, [])
+    def test_tags_hold_their_invariant_without_the_factory(self) -> None:
+        for tags in (frozenset(), frozenset({'#Задача'}), frozenset({'задача'}), frozenset({'#'}),
+                     frozenset({'#задача', 1}), ['#задача']):
+            with self.subTest(tags=tags), self.assertRaises(ValueError):
+                review_lib.Tags(tags)
+
+    def test_a_criterion_holds_its_invariant_without_the_factory(self) -> None:
+        for criterion_id, rule, body in (('', review_lib.Always(), 'Текст.'),
+                                         ('  ', review_lib.Always(), 'Текст.'),
+                                         ('task', review_lib.Always(), ''),
+                                         ('task', review_lib.Always(), '\n '),
+                                         ('task', 'always', 'Текст.')):
+            with self.subTest(id=criterion_id, body=body), self.assertRaises(ValueError):
+                review_lib.Criterion(criterion_id, rule, body)
+
 
 
 class BrokenCriterionTest(TurnReviewCase):
