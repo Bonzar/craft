@@ -20,7 +20,7 @@
 
 from .brief import (
     BRIEF_FILE, BriefError, BriefParts, CriteriaCheck, assemble_brief, providers_problem,
-    review_criteria, write_brief,
+    review_criteria, volume_skills, write_brief,
 )
 from .criteria import (
     Always, Craft, Criterion, CriterionId, Rule, Tags, criteria_problem, criterion_applies,
@@ -62,5 +62,6 @@ __all__ = [
     'make_read_record', 'make_skill_record', 'make_write_record', 'new_volume_id',
     'parse_applies', 'parse_volume_file', 'peek_state', 'peek_verdict', 'peek_volume',
     'providers_problem', 'read_verdict', 'record_row', 'review_criteria', 'review_question',
-    'save_state', 'state_lock', 'verdict_key', 'write_brief', 'writes_before_turn',
+    'save_state', 'state_lock', 'verdict_key', 'volume_skills', 'write_brief',
+    'writes_before_turn',
 ]

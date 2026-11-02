@@ -1090,6 +1090,70 @@ class CriterionFilesTest(unittest.TestCase):
         self.assertIn(str(records), broken[1])
 
 
+class ModuleRequirementsFilesTest(unittest.TestCase):
+    """Требования модулей: data/review.md модуля, чей скилл есть в записях skill объёма."""
+
+    FRAME = '{{MODULE_REQUIREMENTS}}'
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.modules = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def requirements(self, slug: str, text: str) -> Path:
+        path = self.modules / slug / 'data' / 'review.md'
+        path.parent.mkdir(parents=True)
+        path.write_text(text, encoding='utf-8')
+        return path
+
+    def assemble(self, volume=()):
+        return review_lib.assemble_brief(self.modules, list(volume), self.FRAME)
+
+    def test_a_skill_with_a_file_brings_its_text_once(self) -> None:
+        self.requirements('craft-snapshot', '1. Отметка прогона записана.\n')
+        self.requirements('craft-note', '1. Резюме на месте.\n')
+        volume = [{'kind': 'skill', 'skill': 'craft-snapshot'}, {'kind': 'write'},
+                  {'kind': 'skill', 'skill': 'craft-snapshot'}]
+        parts = self.assemble(volume)
+        self.assertEqual(parts.text,
+                         '### Требования модуля craft-snapshot\n\n1. Отметка прогона записана.')
+        self.assertEqual(parts.broken, ())
+
+    def test_without_a_skill_record_the_section_is_none(self) -> None:
+        self.requirements('craft-snapshot', '1. Отметка прогона записана.\n')
+        for volume in ([], [{'kind': 'write'}], [{'kind': 'read', 'skill': 'craft-snapshot'}]):
+            with self.subTest(volume=volume):
+                self.assertEqual(self.assemble(volume).text, 'нет')
+
+    def test_a_skill_without_a_file_or_with_a_path_is_none(self) -> None:
+        (self.modules / 'craft-task' / 'data').mkdir(parents=True)
+        self.requirements('outside', 'Чужое.')
+        volume = [{'kind': 'skill', 'skill': name}
+                  for name in ('craft-task', 'verification-loop', '../outside', 'x/../outside',
+                               '..', '', 7)]
+        parts = self.assemble(volume)
+        self.assertEqual((parts.text, parts.broken), ('нет', ()))
+        self.assertEqual(review_lib.volume_skills(volume), ('craft-task', 'verification-loop'))
+
+    def test_an_unreadable_file_is_broken_with_its_path(self) -> None:
+        path = self.requirements('craft-snapshot', 'Текст.')
+        path.write_bytes(b'\xff\xfe')
+        volume = [{'kind': 'skill', 'skill': 'craft-snapshot'}, {'kind': 'write'}]
+        parts = self.assemble(volume)
+        self.assertEqual(parts.text, 'нет')
+        self.assertEqual(len(parts.broken), 1)
+        self.assertTrue(parts.broken[0].startswith('craft-snapshot ('))
+        self.assertIn(str(path), parts.broken[0])
+        # Тот же файл мешает принять чистый вердикт: проблема у stop и превью.
+        check = review_lib.review_criteria(self.modules, volume, ())
+        self.assertIn(str(path), check.problem)
+        # Без записи skill файл не читается и проблемой не становится.
+        self.assertNotIn(str(path), review_lib.review_criteria(
+            self.modules, [{'kind': 'write'}], ()).problem or '')
+
+
 class CriterionTest(unittest.TestCase):
     """Разобранный критерий: один тип, одна фабрика, правило applies разобрано один раз."""
 
@@ -1163,6 +1227,41 @@ class BrokenCriterionTest(TurnReviewCase):
         reason = self.blocked(self.fire(stop(session)))
         self.assertIn('нет ссылки на этап', reason)
         self.assertIn('zz-broken', reason)
+
+
+class ModuleRequirementsTest(TurnReviewCase):
+    """Набор с модулем craft-snapshot: его data/review.md идёт в поручение за записью skill."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        shutil.copytree(MODULES_DIR / 'craft-snapshot', cls.root / 'modules' / 'craft-snapshot',
+                        ignore=shutil.ignore_patterns('__pycache__'))
+        cls.requirements = (MODULES_DIR / 'craft-snapshot' / 'data' / 'review.md').read_text(
+            encoding='utf-8').strip()
+
+    def brief(self, session: str) -> str:
+        return self.storage(session).path('turn-review-brief.md').read_text(encoding='utf-8')
+
+    def test_a_called_skill_brings_its_requirements_into_the_brief(self) -> None:
+        session = 's-requirements'
+        self.fire(prompt(session))
+        self.fire(skill(session, 'craft-snapshot'))
+        self.assert_silent(self.fire(write(session)))
+        self.blocked(self.fire(stop(session)))
+        brief = self.brief(session)
+        self.assertIn('## Требования модулей', brief)
+        self.assertIn(f'### Требования модуля craft-snapshot\n\n{self.requirements}', brief)
+        self.assertNotIn('{{MODULE_REQUIREMENTS}}', brief)
+
+    def test_without_the_skill_the_requirements_stay_out(self) -> None:
+        session = 's-no-requirements'
+        self.start_with_write(session)
+        self.blocked(self.fire(stop(session)))
+        brief = self.brief(session)
+        self.assertNotIn('Требования модуля craft-snapshot', brief)
+        self.assertNotIn(self.requirements, brief)
+        self.assertNotIn('{{MODULE_REQUIREMENTS}}', brief)
 
 
 class UntaggedTest(TurnReviewCase):

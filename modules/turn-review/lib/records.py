@@ -18,6 +18,8 @@ RECORD_TURN_KEY = 'turn'
 TYPES_KEY = 'types'
 # Справочник тегов у поставщика не собрался: `types` у записи null, здесь текст ошибки.
 TYPES_ERROR_KEY = 'types_error'
+# Slug скилла у записи skill: он же slug модуля, чья папка скилла.
+SKILL_KEY = 'skill'
 
 KIND_WRITE = 'write'
 KIND_READ = 'read'
