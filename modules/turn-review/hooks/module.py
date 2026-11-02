@@ -109,37 +109,37 @@ def problem_prefix(problem: str | None) -> str:
     return f'{problem[0].upper()}{problem[1:]}. ' if problem else ''
 
 
-def broken_problem(broken: list[str]) -> str | None:
-    """Модули, чей файл критерия не разобрался: молча их критерий не пропадает."""
-    if not broken:
-        return None
-    return (f'файл критерия не разобрался у модулей: {"; ".join(broken)}. Их критериев '
-            'в поручении нет: скажи об этом человеку')
+def required_criteria(state: dict, runtime, review, volume: list[dict]):
+    """Критерии, по которым принимается вердикт, и почему чистый вердикт не принять.
 
-
-def required_criteria(state: dict, runtime, review, volume: list[dict]) -> tuple[list[str], list[str]]:
-    """Критерии, по которым принимается вердикт, и не разобранные файлы критериев.
-
-    Критерии — из последнего поручения; вердикт пришёл без него — те, что
-    подошли бы к объёму. Не разобранные считаются всегда: их называет stop.
+    Одна функция lib на stop и превью: ответ открывается ровно тогда, когда
+    stop принял бы вердикт.
     """
-    found, broken = review.criteria_for(registry.modules_dir(runtime.module_dir), volume)
-    return state[review.CRITERIA_KEY] or found, broken
+    return review.review_criteria(registry.modules_dir(runtime.module_dir), volume,
+                                  state[review.CRITERIA_KEY])
+
+
+def read_frame(review) -> str:
+    """Каркас поручения. Не читается — BriefError с путём, а не падение хука."""
+    try:
+        return FRAME_FILE.read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError) as error:
+        raise review.BriefError(f'каркас поручения {FRAME_FILE} не читается ({error})') from error
 
 
 def nudge_text(storage, state: dict, runtime, review, volume: list[dict],
                problem: str | None) -> tuple[str, list[str]]:
-    """Поручение запустить подагента и список критериев собранного поручения.
+    """Блок с просьбой запустить подагента и список критериев собранного поручения.
 
     Поручение собирается здесь из каркаса, записей поставщиков и критериев,
     чьё правило applies совпало с объёмом: always — всегда, craft — при
     записях write, tags — когда запись несёт тег из правила. Оно кладётся в
-    хранилище сессии. Не разобранные файлы критериев называет stop в problem.
+    хранилище сессии. Не разобранные файлы stop называет в problem. Каркас не
+    прочитать или поручение не записать — BriefError.
     """
-    frame = FRAME_FILE.read_text(encoding='utf-8')
-    text, criteria, _ = review.assemble_brief(registry.modules_dir(runtime.module_dir),
-                                              volume, frame)
-    brief = review.write_brief(storage, text)
+    parts = review.assemble_brief(registry.modules_dir(runtime.module_dir), volume,
+                                  read_frame(review))
+    brief = review.write_brief(storage, parts.text)
     volume_file = storage.path(review.VOLUME_FILE).resolve()
     return (
         f'{problem_prefix(problem)}Ход не отпущен: ревью хода не сделано. Запусти подагента '
@@ -149,16 +149,22 @@ def nudge_text(storage, state: dict, runtime, review, volume: list[dict],
         f'volume_id {state[review.VOLUME_ID_KEY]}, команда отпечатка '
         f'«python3 {FINGERPRINT_SCRIPT} {volume_file}»; записей write в объёме сейчас '
         f'{review.count_writes(volume)}, отпечаток {review.fingerprint(volume)}, критерии '
-        f'{", ".join(criteria) or "нет"}. Ответ до чистого вердикта человеку не показан: напиши его '
-        f'заново после вердикта.'
-    ), criteria
+        f'{", ".join(parts.criteria) or "нет"}. Ответ до чистого вердикта человеку не показан: '
+        f'напиши его заново после вердикта.'
+    ), parts.criteria
 
 
-def remarks_text(remarks: list[dict], review) -> str:
+def brief_failure_text(problem: str | None, error: Exception) -> str:
+    """Блок, когда поручение не собрать: подагенту нечего дать, хук не падает."""
+    return (f'{problem_prefix(problem)}Ход не отпущен: ревью хода не сделано, {error}. '
+            'Скажи об этом человеку и закончи ход снова.')
+
+
+def remarks_text(remarks: list[dict], review, problem: str | None = None) -> str:
     lines = [f'- [{item[review.CRITERION_KEY]}] {item[review.WHERE_KEY]}: {item[review.TEXT_KEY]}'
              for item in remarks]
-    return ('Ход не отпущен: ревью хода нашло замечания.\n' + '\n'.join(lines)
-            + '\nПочини записи и снова закончи ход: хук попросит новое ревью.')
+    return (f'{problem_prefix(problem)}Ход не отпущен: ревью хода нашло замечания.\n'
+            + '\n'.join(lines) + '\nПочини записи и снова закончи ход: хук попросит новое ревью.')
 
 
 def stuck_text(problem: str | None, review, last_remarks: list[dict]) -> str:
@@ -166,7 +172,8 @@ def stuck_text(problem: str | None, review, last_remarks: list[dict]) -> str:
     # из петли — только вопрос человеку. Блок, а не форма «вопрос»: на
     # остановке вопрос уходит контекстом, и Claude отпустил бы ход без него.
     # Человек решает по замечаниям, а не вслепую: последние замечания идут в
-    # поручение, и агент показывает их с предложением по каждому.
+    # текст этого блока с вопросом, и агент показывает их с предложением по
+    # каждому. Подагенту они не идут.
     context = ''
     if last_remarks:
         lines = '\n'.join(f'- [{item.get(review.CRITERION_KEY)}] {item.get(review.WHERE_KEY)}: '
@@ -310,14 +317,19 @@ def answer_hidden(storage, state: dict | None, runtime, review) -> bool:
         return False
     if state[review.RELEASED_KEY]:
         return False
-    criteria, _ = required_criteria(state, runtime, review, volume)
-    verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], volume, criteria)
+    criteria, problem = required_criteria(state, runtime, review, volume)
+    verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], criteria, problem)
     return not (verdict is not None and verdict[review.CLEAN_KEY]
                 and verdict.get(review.FINGERPRINT_KEY) == review.fingerprint(volume))
 
 
 class Module(jarvis.Module):
-    """Объём копится на вызовах, решение — на остановке хода."""
+    """Решение на остановке хода и показ ответа до вердикта.
+
+    Объём копят поставщики через lib, здесь его только читают. На реплике
+    модуль берёт номер хода, на post-tool разбирает только ответ на
+    собственный вопрос ревью.
+    """
 
     def handle(self, event: jarvis.Event, runtime: jarvis.Runtime) -> jarvis.Response:
         handlers = {
@@ -365,21 +377,19 @@ class Module(jarvis.Module):
         if gate is not None or state is None:
             return jarvis.UpdatedDisplay(text=base) if hidden else jarvis.Silence(
                 reason=gate or 'состояние не читается, итог покажет следующий ход')
-        problem = None
         summary = state[review.SUMMARY_KEY]
         if summary and not state[review.SUMMARY_SHOWN_KEY]:
             review.save_state(storage, {**state, review.SUMMARY_SHOWN_KEY: True})
             return displayed(base, summary)
-        return self.preview(base, hidden, runtime, state, review, problem)
+        return self.preview(base, hidden, runtime, state, review)
 
-    def preview(self, base: str, hidden: bool, runtime, state: dict, review,
-                problem) -> jarvis.Response:
+    def preview(self, base: str, hidden: bool, runtime, state: dict, review) -> jarvis.Response:
         # У Claude финальное сообщение идёт до stop, а вердикт подагент пишет
         # раньше: показываем его сейчас, под ответом этого же хода.
         storage = runtime.storage
         volume = review.peek_volume(storage)
-        criteria, _ = required_criteria(state, runtime, review, volume)
-        verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], volume, criteria)
+        criteria, problem = required_criteria(state, runtime, review, volume)
+        verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], criteria, problem)
         if verdict is None or state[review.SHOWN_VERDICT_KEY] == review.verdict_key(verdict):
             if hidden:
                 return jarvis.UpdatedDisplay(text=base)
@@ -415,22 +425,24 @@ class Module(jarvis.Module):
             # тот вердикт чужим, и ревью идёт по тому, что осталось.
             state = {**state, review.VOLUME_ID_KEY: review.new_volume_id()}
             review.save_state(storage, state)
-        writes = review.count_writes(volume)
-        if not writes:
+        # Без поставщика объём пуст не потому, что записей не было: такой
+        # ход молча не отпускается.
+        no_provider = review.providers_problem(registry.modules_dir(runtime.module_dir))
+        if not review.count_writes(volume) and no_provider is None:
             if damage:
                 return jarvis.Block(reason=f'Ход не отпущен: {damage}. Скажи об этом человеку '
                                            'и закончи ход снова.')
             return jarvis.Silence(reason=with_problem(NO_WRITES_REASON, state_problem))
-        criteria, broken = required_criteria(state, runtime, review, volume)
-        # Без критериев чистый вердикт ничего не проверил: его не читаем, а
-        # ход идёт по поручениям к вопросу человеку.
-        criteria_problem = review.criteria_problem(volume, criteria)
-        verdict, verdict_problem = (None, None) if criteria_problem else review.read_verdict(
+        criteria, criteria_problem = required_criteria(state, runtime, review, volume)
+        blocking = joined(no_provider, criteria_problem)
+        verdict, verdict_problem = review.read_verdict(
             storage, state[review.VOLUME_ID_KEY], review.fingerprint(volume), criteria)
-        if verdict is not None:
-            return self.settle(storage, state, runtime, review, verdict, volume)
-        problem = joined(state_problem, damage, criteria_problem, broken_problem(broken),
-                         verdict_problem)
+        settled = None if verdict is None else self.settle(storage, state, runtime, review,
+                                                            verdict, volume, blocking)
+        if settled is not None:
+            return settled
+        repair = joined(state_problem, damage)
+        problem = joined(repair, blocking, verdict_problem)
         if runtime.take_confirmation(RELEASE_ACTION) or state[review.RELEASED_KEY]:
             cleared = review.clear_volume(storage, state)
             note_summary(storage, cleared, state, review, volume, REPORT_RELEASED)
@@ -441,15 +453,23 @@ class Module(jarvis.Module):
             # денется и пойдёт на ревью в конце ближайшего хода с записями.
             # Порча объёма или состояния молча не отпускается: о ней человек
             # узнаёт сейчас, как и на ходе без записей.
-            if damage or state_problem:
-                return jarvis.Block(reason=f'Ход не отпущен: {joined(state_problem, damage)}. '
+            if repair:
+                return jarvis.Block(reason=f'Ход не отпущен: {repair}. '
                                            'Скажи об этом человеку и закончи ход снова.')
             return jarvis.Silence(reason=with_problem(QUIET_TURN_REASON, problem))
         return self.press(storage, state, runtime, review, volume, problem)
 
-    def settle(self, storage, state: dict, runtime, review, verdict: dict,
-               volume: list[dict]) -> jarvis.Response:
+    def settle(self, storage, state: dict, runtime, review, verdict: dict, volume: list[dict],
+               blocking: str | None) -> jarvis.Response | None:
+        """Ответ по вердикту нашего объёма; None — вердикт не принят.
+
+        Чистый вердикт при проблеме установки (`blocking`: нет поставщика,
+        не разобранные файлы, запись без критерия) не принимается: проверено
+        не всё. Вердикт с замечаниями возвращает ход с ними и с этой проблемой.
+        """
         head = verdict_head(verdict, review)
+        if verdict[review.CLEAN_KEY] and blocking:
+            return None
         if verdict[review.CLEAN_KEY]:
             cleared = review.clear_volume(storage, state)
             note_summary(storage, cleared, state, review, volume, head, verdict)
@@ -465,13 +485,18 @@ class Module(jarvis.Module):
         note_summary(storage, {**state, review.SHOWN_VERDICT_KEY: None,
                                review.LAST_REMARKS_KEY: verdict[review.REMARKS_KEY]},
                      state, review, volume, head, verdict)
-        return jarvis.Block(reason=remarks_text(verdict[review.REMARKS_KEY], review))
+        return jarvis.Block(reason=remarks_text(verdict[review.REMARKS_KEY], review, blocking))
 
     def press(self, storage, state: dict, runtime, review, volume: list[dict],
               problem: str | None) -> jarvis.Response:
         nudges = state[review.NUDGES_KEY]
         if nudges < MAX_NUDGES:
-            text, criteria = nudge_text(storage, state, runtime, review, volume, problem)
+            try:
+                text, criteria = nudge_text(storage, state, runtime, review, volume, problem)
+            except review.BriefError as error:
+                # Счёт идёт и здесь: без него сломанный каркас держал бы ход
+                # по кругу, а так ход дойдёт до вопроса человеку.
+                text, criteria = brief_failure_text(problem, error), state[review.CRITERIA_KEY]
             review.save_state(storage, {**state, review.NUDGES_KEY: nudges + 1,
                                         review.FIRST_NUDGE_KEY: first_nudge_at(state, review),
                                         review.CRITERIA_KEY: criteria})

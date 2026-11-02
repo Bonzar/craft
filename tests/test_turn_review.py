@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from unittest import mock
 
 from jarvis import confirm
 from jarvis.storage import Storage
@@ -645,6 +647,28 @@ class TurnReviewTest(TurnReviewCase):
         self.assertIn('заведён заново', reason)
         self.assertIn('записей write в объёме сейчас 2', reason)
 
+    def test_no_brief_yet_is_none_and_an_empty_brief_list_is_kept(self) -> None:
+        # None — поручения не было, критерии берутся по объёму. Пустой список —
+        # поручение без критериев: чистый вердикт по нему не принимается.
+        session = 's-empty-criteria'
+        self.start_with_write(session)
+        self.assertIsNone(self.state(session)['criteria'])
+        storage = self.storage(session)
+        storage.write_json('turn-review-state.json', {**self.state(session), 'criteria': []})
+        self.write_verdict(session, self.state(session)['volume_id'],
+                           checked=('craft-base', 'consistency', 'task', 'anchor'))
+        self.assertIn('один критерий не подошёл', self.blocked(self.fire(stop(session))))
+        self.assertEqual(len(self.volume(session)), 1)
+
+    def test_an_unwritable_brief_is_a_block_and_not_a_crash(self) -> None:
+        session = 's-brief-dir'
+        self.start_with_write(session)
+        self.storage(session).path('turn-review-brief.md').mkdir(parents=True)
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('turn-review-brief.md не записать', reason)
+        self.assertIn('Скажи об этом человеку', reason)
+        self.assertEqual(self.state(session)['nudges'], 1)
+
 
 class CurrentTurnTest(unittest.TestCase):
     """Номер хода из состояния: отсутствие файла законно, порча — ошибка."""
@@ -668,6 +692,67 @@ class CurrentTurnTest(unittest.TestCase):
                 review_lib.current_turn(self.storage)
             self.assertIn(str(path), str(caught.exception))
 
+    def test_a_provider_cannot_override_the_turn(self) -> None:
+        review_lib.save_state(self.storage, review_lib.new_state(4))
+        review_lib.append_turn_record(self.storage, {'kind': 'write', 'turn': 1, 'command': 'x'})
+        rows = [json.loads(line) for line in self.storage.read_lines('turn-review-volume.jsonl')]
+        self.assertEqual(rows, [{'kind': 'write', 'turn': 4, 'command': 'x'}])
+
+    def test_a_provider_turn_is_dropped_when_the_state_is_damaged(self) -> None:
+        # Без номера запись идёт на ревью; номер поставщика выдал бы её за прошлый ход.
+        path = self.storage.path('turn-review-state.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{не json', encoding='utf-8')
+        with self.assertRaises(ValueError):
+            review_lib.append_turn_record(self.storage, {'kind': 'write', 'turn': 1})
+        rows = [json.loads(line) for line in self.storage.read_lines('turn-review-volume.jsonl')]
+        self.assertEqual(rows, [{'kind': 'write'}])
+
+
+class StateTest(unittest.TestCase):
+    """Состояние: поля по имени, поля с диска не теряются, элементы проверяются."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self.tmp.name), 's-state')
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_fields_after_the_turn_are_keyword_only(self) -> None:
+        with self.assertRaises(TypeError):
+            review_lib.new_state(1, 'объём')
+        self.assertEqual(review_lib.new_state(1, volume_id='объём')['volume_id'], 'объём')
+
+    def test_a_fresh_state_has_no_brief_criteria(self) -> None:
+        self.assertIsNone(review_lib.new_state()['criteria'])
+        self.assertEqual(review_lib.new_state(criteria=[])['criteria'], [])
+
+    def test_load_keeps_every_field_from_the_disk(self) -> None:
+        state = {**review_lib.new_state(3, volume_id='v', nudges=2, criteria=['task'],
+                                        last_remarks=[{'criterion': 'task'}],
+                                        prompt_taken=['turn-review']),
+                 'future': 1}
+        review_lib.save_state(self.storage, state)
+        self.assertEqual(review_lib.load_state(self.storage), (state, None))
+
+    def test_load_fills_a_missing_field_with_its_default(self) -> None:
+        state = review_lib.new_state(3, volume_id='v')
+        del state['prompt_taken']
+        review_lib.save_state(self.storage, state)
+        loaded, problem = review_lib.load_state(self.storage)
+        self.assertIsNone(problem)
+        self.assertEqual(loaded['prompt_taken'], [])
+
+    def test_wrong_items_are_damage_and_not_a_crash_later(self) -> None:
+        for field_name, value in (('criteria', [1]), ('prompt_taken', [None]),
+                                  ('last_remarks', ['нет ссылки']), ('criteria', 'task')):
+            review_lib.save_state(self.storage, {**review_lib.new_state(2, volume_id='v'),
+                                                 field_name: value})
+            loaded, problem = review_lib.load_state(self.storage)
+            self.assertIn('испорчен', problem, field_name)
+            self.assertEqual(loaded['turn'], 0)
+
 
 class CriterionFilesTest(unittest.TestCase):
     """Файлы критериев: что не разобралось, называется модулем и причиной."""
@@ -684,7 +769,7 @@ class CriterionFilesTest(unittest.TestCase):
         path.parent.mkdir(parents=True)
         path.write_text(text, encoding='utf-8')
 
-    def assemble(self, volume=()) -> tuple[str, list[str], list[str]]:
+    def assemble(self, volume=()):
         return review_lib.assemble_brief(self.modules, list(volume), '{{CRITERIA}}')
 
     def test_an_unknown_applies_rule_is_broken(self) -> None:
@@ -716,8 +801,68 @@ class CriterionFilesTest(unittest.TestCase):
 
     def test_a_proper_file_is_taken_whole(self) -> None:
         self.criterion('good', 'id: good\napplies: craft\n\n## Критерий «good»: всё\nТекст.\n')
-        text, ids, broken = self.assemble([{'kind': 'write'}])
-        self.assertEqual((text, ids, broken), ('## Критерий «good»: всё\nТекст.', ['good'], []))
+        parts = self.assemble([{'kind': 'write'}])
+        self.assertIsInstance(parts, review_lib.BriefParts)
+        self.assertEqual((parts.text, parts.criteria, parts.broken),
+                         ('## Критерий «good»: всё\nТекст.', ['good'], []))
+
+    def test_a_repeated_head_field_is_broken(self) -> None:
+        self.criterion('twice', 'id: a\nid: b\napplies: always\n\nТекст.\n')
+        _, ids, broken = self.assemble()
+        self.assertEqual(ids, [])
+        self.assertIn('поле «id» в шапке дважды', broken[0])
+
+    def test_a_tag_follows_the_entity_rule(self) -> None:
+        # Как теги в entity.json: «#» и хотя бы один знак, регистр не важен.
+        self.criterion('bare', 'id: bare\napplies: tags #\n\nТекст.\n')
+        self.criterion('upper', 'id: upper\napplies: tags #Задача\n\nТекст.\n')
+        _, ids, broken = self.assemble([{'kind': 'write', 'types': ['#задача']}])
+        self.assertEqual(ids, ['upper'])
+        self.assertEqual([item.split(' ', 1)[0] for item in broken], ['bare'])
+
+    def test_an_unreadable_file_is_broken_with_its_path(self) -> None:
+        self.criterion('bytes', 'id: x\napplies: always\n\nТекст.\n')
+        path = self.modules / 'bytes' / 'data' / 'review-criterion.md'
+        path.write_bytes(b'id: x\napplies: always\n\n\xff\n')
+        records = self.modules / 'locked' / 'data' / 'review-records.md'
+        records.parent.mkdir(parents=True)
+        records.write_text('Записи.', encoding='utf-8')
+        real_read = Path.read_text
+
+        def read_text(target, *args, **kwargs):
+            if target == records:
+                raise PermissionError(13, 'нет доступа', str(target))
+            return real_read(target, *args, **kwargs)
+
+        with mock.patch.object(Path, 'read_text', read_text):
+            _, ids, broken = self.assemble()
+        self.assertEqual(ids, [])
+        self.assertEqual(len(broken), 2)
+        self.assertIn(str(path), broken[0])
+        self.assertIn(str(records), broken[1])
+
+
+class CriterionTest(unittest.TestCase):
+    """Разобранный критерий: один тип, одна фабрика, правило applies разобрано один раз."""
+
+    def test_the_factory_makes_a_frozen_criterion(self) -> None:
+        criterion = review_lib.make_criterion('id: task\napplies: tags #задача #Этап\n\nТекст.')
+        self.assertEqual(criterion, review_lib.Criterion(
+            'task', review_lib.Tags(frozenset({'#задача', '#этап'})), 'Текст.'))
+        with self.assertRaises(FrozenInstanceError):
+            criterion.id = 'другой'
+
+    def test_rules_apply_to_the_volume(self) -> None:
+        write = {'kind': 'write', 'types': ['#этап']}
+        cases = (('always', [], True), ('craft', [], False), ('craft', [write], True),
+                 ('tags #задача', [write], False), ('tags #задача #этап', [write], True))
+        for rule, volume, expected in cases:
+            criterion = review_lib.make_criterion(f'id: c\napplies: {rule}\n\nТекст.')
+            self.assertEqual(review_lib.criterion_applies(criterion, volume), expected, rule)
+
+    def test_applies_takes_only_a_criterion(self) -> None:
+        with self.assertRaises(TypeError):
+            review_lib.criterion_applies({'applies': 'always'}, [])
 
 
 class BrokenCriterionTest(TurnReviewCase):
@@ -739,6 +884,83 @@ class BrokenCriterionTest(TurnReviewCase):
         self.assertIn(QUESTION, reason)
         self.assertIn('zz-broken', reason)
 
+    def test_a_clean_verdict_is_not_taken_while_a_file_is_broken(self) -> None:
+        session = 's-broken-clean'
+        self.start_with_write(session)
+        self.blocked(self.fire(stop(session)))
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.assertEqual(self.shown(self.fire(message(session, 'Готово.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('zz-broken', reason)
+        self.assertIn('ревью хода не сделано', reason)
+        self.assertEqual(len(self.volume(session)), 1)
+
+    def test_remarks_are_returned_with_the_broken_file_named(self) -> None:
+        session = 's-broken-remark'
+        self.start_with_write(session)
+        self.write_verdict(session, self.state(session)['volume_id'], [remark()])
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('нет ссылки на этап', reason)
+        self.assertIn('zz-broken', reason)
+
+
+class UntaggedTest(TurnReviewCase):
+    """Набор, где у модуля сущности нет критерия на свой тег."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        (cls.root / 'modules' / 'craft-task' / 'data' / 'review-criterion.md').unlink()
+
+    def test_a_tag_without_a_criterion_is_not_released_by_a_clean_verdict(self) -> None:
+        # Общие критерии always и craft подходят к любой записи, но тег задачи
+        # они не проверяют: без этой проверки запись прошла бы молча.
+        session = 's-untagged'
+        self.start_with_write(session)
+        self.assertIn('Нет критерия на тег #задача', self.blocked(self.fire(stop(session))))
+        self.write_verdict(session, self.state(session)['volume_id'])
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('Нет критерия на тег #задача', reason)
+        self.assertEqual(len(self.volume(session)), 1)
+
+
+class NoProviderTest(TurnReviewCase):
+    """Набор без единого описания записей: объём некому копить."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        for slug in PROVIDERS:
+            (cls.root / 'modules' / slug / 'data' / 'review-records.md').unlink()
+
+    def test_a_stop_without_a_provider_is_not_released_as_empty(self) -> None:
+        session = 's-no-provider'
+        self.fire(prompt(session))
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('Нет поставщика записей', reason)
+        self.assertIn(str(self.root / 'modules'), reason)
+
+
+class BrokenFrameTest(TurnReviewCase):
+    """Набор, где каркас поручения не читается."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        (cls.module_dir / 'data' / 'review-frame.md').write_bytes(b'\xff\xfe')
+
+    def test_an_unreadable_frame_is_a_block_and_not_a_crash(self) -> None:
+        session = 's-frame'
+        self.start_with_write(session)
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('каркас поручения', reason)
+        self.assertIn('review-frame.md', reason)
+        self.assertIn('Скажи об этом человеку', reason)
+        state = self.state(session)
+        self.assertEqual((state['nudges'], state['criteria']), (1, None))
+        self.assertFalse(self.storage(session).path('turn-review-brief.md').exists())
+
 
 class NoCriteriaTest(TurnReviewCase):
     """Набор, где к записи не подходит ни один критерий."""
@@ -753,6 +975,8 @@ class NoCriteriaTest(TurnReviewCase):
         session = 's-no-criteria'
         self.start_with_write(session)
         self.assertIn('один критерий не подошёл', self.blocked(self.fire(stop(session))))
+        # Поручение было, но без критериев: в состоянии пустой список, не None.
+        self.assertEqual(self.state(session)['criteria'], [])
         self.write_verdict(session, self.state(session)['volume_id'], checked=())
         reason = self.blocked(self.fire(stop(session)))
         self.assertIn('один критерий не подошёл', reason)

@@ -15,8 +15,10 @@ import hashlib
 import json
 import os
 import uuid
-from pathlib import Path
 from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import NamedTuple
 
 VOLUME_FILE = 'turn-review-volume.jsonl'
 STATE_FILE = 'turn-review-state.json'
@@ -35,6 +37,7 @@ SUMMARY_SHOWN_KEY = 'summary_shown'
 # Какой вердикт уже показан превью до stop: id объёма и отпечаток записей write.
 SHOWN_VERDICT_KEY = 'shown_verdict'
 # Критерии последнего собранного поручения: по ним принимается вердикт.
+# None — поручения ещё не было, пустой список — поручение без критериев.
 CRITERIA_KEY = 'criteria'
 # Замечания последнего вердикта с замечаниями: вопрос человеку показывает их.
 LAST_REMARKS_KEY = 'last_remarks'
@@ -84,16 +87,18 @@ def new_volume_id() -> str:
     return uuid.uuid4().hex
 
 
-def new_state(turn: int = 0, volume_id: str | None = None, nudges: int = 0,
+def new_state(turn: int = 0, *, volume_id: str | None = None, nudges: int = 0,
               released: bool = False, first_nudge_at: str | None = None,
               summary: str | None = None, summary_shown: bool = False,
-              shown_verdict: str | None = None, criteria: list | None = None,
-              last_remarks: list | None = None, prompt_mark: str | None = None,
-              prompt_taken: list | None = None) -> dict:
+              shown_verdict: str | None = None, criteria: list[str] | None = None,
+              last_remarks: list[dict] | None = None, prompt_mark: str | None = None,
+              prompt_taken: list[str] | None = None) -> dict:
+    """Состояние со значениями по умолчанию. Всё после номера хода — по имени."""
     return {TURN_KEY: turn, VOLUME_ID_KEY: volume_id or new_volume_id(),
             NUDGES_KEY: nudges, RELEASED_KEY: released, FIRST_NUDGE_KEY: first_nudge_at,
             SUMMARY_KEY: summary, SUMMARY_SHOWN_KEY: summary_shown,
-            SHOWN_VERDICT_KEY: shown_verdict, CRITERIA_KEY: list(criteria or []),
+            SHOWN_VERDICT_KEY: shown_verdict,
+            CRITERIA_KEY: None if criteria is None else list(criteria),
             LAST_REMARKS_KEY: list(last_remarks or []), PROMPT_MARK_KEY: prompt_mark,
             PROMPT_TAKEN_KEY: list(prompt_taken or [])}
 
@@ -110,16 +115,25 @@ def state_lock(storage):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def _is_valid_debug_fields(state: dict) -> bool:
-    """Поля отладочного вывода: нет поля — законно, есть — нужного типа."""
+def _is_list_of(value, kind: type) -> bool:
+    return isinstance(value, list) and all(isinstance(item, kind) for item in value)
+
+
+def _are_valid_optional_fields(state: dict) -> bool:
+    """Поля с умолчанием: нет поля — законно, есть — нужного типа вместе с элементами.
+
+    Элемент не того типа — порча состояния: иначе он уронил бы хук там, где
+    его читают, например в тексте вопроса человеку.
+    """
+    criteria = state.get(CRITERIA_KEY)
     return (isinstance(state.get(FIRST_NUDGE_KEY), (str, type(None)))
             and isinstance(state.get(SUMMARY_KEY), (str, type(None)))
             and isinstance(state.get(SHOWN_VERDICT_KEY), (str, type(None)))
             and isinstance(state.get(SUMMARY_SHOWN_KEY, False), bool)
-            and isinstance(state.get(CRITERIA_KEY, []), list)
-            and isinstance(state.get(LAST_REMARKS_KEY, []), list)
+            and (criteria is None or _is_list_of(criteria, str))
+            and _is_list_of(state.get(LAST_REMARKS_KEY, []), dict)
             and isinstance(state.get(PROMPT_MARK_KEY), (str, type(None)))
-            and isinstance(state.get(PROMPT_TAKEN_KEY, []), list))
+            and _is_list_of(state.get(PROMPT_TAKEN_KEY, []), str))
 
 
 def _is_valid_state(state) -> bool:
@@ -129,7 +143,7 @@ def _is_valid_state(state) -> bool:
             and isinstance(state.get(VOLUME_ID_KEY), str) and bool(state[VOLUME_ID_KEY])
             and isinstance(state.get(NUDGES_KEY), int)
             and isinstance(state.get(RELEASED_KEY), bool)
-            and _is_valid_debug_fields(state))
+            and _are_valid_optional_fields(state))
 
 
 def _state_damage(storage) -> tuple[dict | None, str | None]:
@@ -169,16 +183,13 @@ def load_state(storage) -> tuple[dict, str | None]:
     подагенту, и вердикт должен застать тот же id, а не свежесгенерированный.
     Испорченное заводится заново с новым id: старый вердикт чужим и станет, а
     ревью пойдёт по поручению. Без починки каждая остановка упиралась бы в тот
-    же файл, и выйти можно было бы только его удалением.
+    же файл, и выйти можно было бы только его удалением. Прочитанное ложится
+    поверх умолчаний целиком: так поле, которого в файле ещё нет, получает
+    умолчание, а поле с диска не теряется.
     """
     state, damage = _state_damage(storage)
     if state is not None:
-        return new_state(state[TURN_KEY], state[VOLUME_ID_KEY], state[NUDGES_KEY],
-                         state[RELEASED_KEY], state.get(FIRST_NUDGE_KEY),
-                         state.get(SUMMARY_KEY), state.get(SUMMARY_SHOWN_KEY, False),
-                         state.get(SHOWN_VERDICT_KEY), state.get(CRITERIA_KEY),
-                         state.get(LAST_REMARKS_KEY), state.get(PROMPT_MARK_KEY),
-                         state.get(PROMPT_TAKEN_KEY)), None
+        return {**new_state(state[TURN_KEY]), **state}, None
     fresh = new_state()
     save_state(storage, fresh)
     if damage is None:
@@ -393,26 +404,15 @@ def verdict_key(verdict: dict) -> str:
     return f'{verdict[VOLUME_ID_KEY]}:{verdict[FINGERPRINT_KEY]}'
 
 
-def criteria_problem(volume: list[dict], criteria: list[str]) -> str | None:
-    """Объём с записями write, а ни один критерий не подошёл: проверять нечем.
-
-    Тогда вердикт не принимается вовсе, даже чистый, и на stop, и в превью:
-    правило одно на оба места.
-    """
-    return NO_CRITERIA_PROBLEM if count_writes(volume) and not criteria else None
-
-
-def peek_verdict(storage, volume_id: str, volume: list[dict], criteria: list[str]) -> dict | None:
+def peek_verdict(storage, volume_id: str, criteria: list[str], problem: str | None) -> dict | None:
     """Вердикт нашего объёма до stop, для превью. Файл не трогается.
 
     Отпечаток с объёмом не сверяется: это превью, принимает вердикт stop.
     Критерии те же, по которым его примет stop, а не `checked` самого
     вердикта: иначе чистый вердикт с пустым `checked` открыл бы ответ.
-    Объём с write без критериев — None, как на stop.
-    Не JSON или не по форме — None: изъян назовёт stop в поручении.
+    Чистый вердикт при проблеме критериев (`problem` из review_criteria) —
+    None, как на stop. Не JSON или не по форме — None: изъян назовёт stop.
     """
-    if criteria_problem(volume, criteria):
-        return None
     try:
         verdict = storage.read_json(VERDICT_FILE, default=None)
     except ValueError:
@@ -421,7 +421,9 @@ def peek_verdict(storage, volume_id: str, volume: list[dict], criteria: list[str
         return None
     expected = verdict.get(FINGERPRINT_KEY)
     expected = expected.strip() if isinstance(expected, str) else ''
-    return None if verdict_problem(verdict, expected, criteria) else verdict
+    if verdict_problem(verdict, expected, criteria):
+        return None
+    return None if verdict[CLEAN_KEY] and problem else verdict
 
 
 def current_turn(storage) -> int:
@@ -443,13 +445,18 @@ def append_turn_record(storage, record: dict) -> None:
     Состояние испорчено — запись всё равно ложится, без номера, и ошибка
     пробрасывается. Запись без номера не раньше ни одного хода и идёт на
     ревью; потерянная запись ушла бы от ревью совсем.
+
+    Номер хода ставит только эта функция: поле поставщика с тем же именем
+    отбрасывается. Иначе поставщик мог бы выдать запись за запись прошлого
+    хода, и ход-разговор отпустил бы её без ревью.
     """
     try:
         turn = current_turn(storage)
     except ValueError:
-        append_record(storage, record)
+        append_record(storage, {key: value for key, value in record.items()
+                                if key != RECORD_TURN_KEY})
         raise
-    append_record(storage, {KIND_KEY: record.get(KIND_KEY), RECORD_TURN_KEY: turn, **record})
+    append_record(storage, {KIND_KEY: record.get(KIND_KEY), **record, RECORD_TURN_KEY: turn})
 
 
 def prompt_mark(text: str) -> str:
@@ -529,131 +536,264 @@ BRIEF_FILE = 'turn-review-brief.md'
 CRITERIA_MARK = '{{CRITERIA}}'
 RECORDS_MARK = '{{RECORDS}}'
 CRITERIA_LIST_MARK = '{{CRITERIA_LIST}}'
-
+PROBLEM_SEPARATOR = '. '
 
 HEAD_FIELDS = (ID_FIELD, APPLIES_FIELD)
 TAG_PREFIX = '#'
+NO_PROVIDER_PROBLEM = ('нет поставщика записей ревью: ни у одного модуля каталога {modules_dir} '
+                       f'нет {DATA_DIR}/{RECORDS_FILE}. Объём пуст не потому, что записей не '
+                       'было, а потому, что их некому положить. Скажи об этом человеку: нужен '
+                       'модуль-поставщик, например review-craft-calls')
 
 
-def parse_criterion(text: str) -> tuple[dict, str]:
-    """Шапка критерия и его текст.
+class BriefError(Exception):
+    """Поручение не собрать: каркас не читается или файл поручения не записать."""
 
-    Шапка — строки «id: …» и «applies: …», за ней обязательно пустая строка.
-    Без неё граница не видна: первая строка текста ушла бы в шапку или
-    пропала. Иное — ValueError с причиной.
-    """
-    head, lines = {}, text.splitlines()
+
+@dataclass(frozen=True)
+class Always:
+    """Критерий входит в поручение всегда."""
+
+
+@dataclass(frozen=True)
+class Craft:
+    """Критерий входит, когда в объёме есть записи write."""
+
+
+@dataclass(frozen=True)
+class Tags:
+    """Критерий входит, когда запись write несёт один из тегов; теги в нижнем регистре."""
+    tags: frozenset[str]
+
+
+Rule = Always | Craft | Tags
+
+
+@dataclass(frozen=True)
+class Criterion:
+    """Разобранный файл критерия. Собирается только make_criterion."""
+    id: str
+    applies: Rule
+    body: str
+
+
+class BriefParts(NamedTuple):
+    """Собранное поручение: текст, id критериев по порядку и не разобранные файлы."""
+    text: str
+    criteria: list[str]
+    broken: list[str]
+
+
+class CriteriaCheck(NamedTuple):
+    """Критерии, по которым принимается вердикт, и почему чистый вердикт не принять."""
+    criteria: list[str]
+    problem: str | None
+
+
+def is_tag(word: str) -> bool:
+    """Тег — слово с «#» и хотя бы одним знаком после: то же правило, что у тегов
+    в data/entity.json для замка craft-type-lock. Пробелов в слове нет по разбору."""
+    return word.startswith(TAG_PREFIX) and len(word) > len(TAG_PREFIX)
+
+
+def parse_applies(rule: str) -> Rule:
+    """Правило `applies` строкой в правило-тип. Иное — ValueError с причиной."""
+    words = rule.split()
+    if words == [APPLIES_ALWAYS]:
+        return Always()
+    if words == [APPLIES_CRAFT]:
+        return Craft()
+    if words[:1] == [APPLIES_TAGS] and words[1:] and all(is_tag(word) for word in words[1:]):
+        return Tags(frozenset(word.lower() for word in words[1:]))
+    raise ValueError(f'applies «{rule}»: ждал {APPLIES_ALWAYS}, {APPLIES_CRAFT} или '
+                     f'{APPLIES_TAGS} и теги с «{TAG_PREFIX}»')
+
+
+def _parse_head(lines: list[str]) -> tuple[dict, int]:
+    """Поля шапки и номер пустой строки после неё. Иное — ValueError с причиной."""
+    head = {}
     for index, line in enumerate(lines):
         if not line.strip():
-            return head, '\n'.join(lines[index + 1:]).strip()
+            return head, index
         key, separator, value = line.partition(':')
-        if not separator or key.strip() not in HEAD_FIELDS:
+        key = key.strip()
+        if not separator or key not in HEAD_FIELDS:
             raise ValueError(f'строка «{line}» в шапке: шапка — только {", ".join(HEAD_FIELDS)}, '
                              'после неё нужна пустая строка')
-        head[key.strip()] = value.strip()
+        if key in head:
+            raise ValueError(f'поле «{key}» в шапке дважды')
+        head[key] = value.strip()
     raise ValueError('после шапки нет пустой строки и текста критерия')
 
 
-def applies_problem(rule: str) -> str | None:
-    """Что не так с правилом `applies`; всё верно — None."""
-    words = rule.split()
-    if rule in (APPLIES_ALWAYS, APPLIES_CRAFT):
-        return None
-    if words and words[0] == APPLIES_TAGS and words[1:] \
-            and all(word.startswith(TAG_PREFIX) for word in words[1:]):
-        return None
-    return (f'applies «{rule}»: ждал {APPLIES_ALWAYS}, {APPLIES_CRAFT} или '
-            f'{APPLIES_TAGS} и теги с «{TAG_PREFIX}»')
+def make_criterion(text: str) -> Criterion:
+    """Критерий из текста файла: шапка «id: …» и «applies: …», пустая строка, текст.
 
-
-def criterion_applies(head: dict, volume: list[dict]) -> bool:
-    """Подходит ли критерий к объёму. Правило уже проверено applies_problem."""
-    rule = head[APPLIES_FIELD]
-    writes = [record for record in volume if record.get(KIND_KEY) == KIND_WRITE]
-    if rule == APPLIES_ALWAYS:
-        return True
-    if rule == APPLIES_CRAFT:
-        return bool(writes)
-    wanted = {word.lower() for word in rule.split()[1:]}
-    for record in writes:
-        types = record.get(TYPES_KEY)
-        if isinstance(types, list) and wanted & {str(item).lower() for item in types}:
-            return True
-    return False
-
-
-def criterion_problem(head: dict, body: str) -> str | None:
-    """Чего не хватает разобранному файлу критерия; всё есть — None."""
+    Без пустой строки граница не видна: первая строка текста ушла бы в шапку
+    или пропала. Чего-то нет или правило не из трёх — ValueError с причиной.
+    """
+    lines = text.splitlines()
+    head, blank = _parse_head(lines)
+    body = '\n'.join(lines[blank + 1:]).strip()
     if not head.get(ID_FIELD):
-        return 'нет id'
+        raise ValueError('нет id')
     if not body:
-        return 'нет текста'
+        raise ValueError('нет текста')
     if APPLIES_FIELD not in head:
-        return 'нет applies'
-    return applies_problem(head[APPLIES_FIELD])
+        raise ValueError('нет applies')
+    return Criterion(head[ID_FIELD], parse_applies(head[APPLIES_FIELD]), body)
 
 
-def gather(modules_dir, filename: str) -> list[tuple[str, str]]:
-    """Файлы данных с этим именем у всех модулей каталога: (slug папки, текст)."""
-    found = []
-    for child in sorted(Path(modules_dir).iterdir()):
-        path = child / DATA_DIR / filename
-        if child.is_dir() and path.is_file():
-            found.append((child.name, path.read_text(encoding='utf-8')))
+def write_tags(volume: list[dict]) -> set[str]:
+    """Теги типа всех записей write объёма, в нижнем регистре."""
+    found = set()
+    for record in volume:
+        types = record.get(TYPES_KEY)
+        if record.get(KIND_KEY) == KIND_WRITE and isinstance(types, list):
+            found |= {str(item).lower() for item in types}
     return found
 
 
-def read_criteria(modules_dir) -> tuple[list[tuple[dict, str]], list[str]]:
+def criterion_applies(criterion: Criterion, volume: list[dict]) -> bool:
+    """Подходит ли критерий к объёму."""
+    if not isinstance(criterion, Criterion):
+        raise TypeError(f'ждал Criterion, пришло {type(criterion).__name__}')
+    match criterion.applies:
+        case Always():
+            return True
+        case Craft():
+            return count_writes(volume) > 0
+        case Tags(tags=tags):
+            return bool(tags & write_tags(volume))
+    raise TypeError(f'правило {criterion.applies!r} не из Always, Craft, Tags')
+
+
+def gather(modules_dir, filename: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Файлы данных с этим именем у всех модулей каталога: (slug папки, текст).
+
+    Второе — файлы, которые не прочитались, «slug (путь не читается: ошибка)»:
+    молча пропустить их нельзя, а падение хука отпустило бы ход без ревью.
+    """
+    found, broken = [], []
+    for child in sorted(Path(modules_dir).iterdir()):
+        path = child / DATA_DIR / filename
+        if not child.is_dir() or not path.is_file():
+            continue
+        try:
+            found.append((child.name, path.read_text(encoding='utf-8')))
+        except (OSError, UnicodeDecodeError) as error:
+            broken.append(f'{child.name} ({path} не читается: {error})')
+    return found, broken
+
+
+def read_criteria(modules_dir) -> tuple[list[Criterion], list[str]]:
     """Разобранные критерии модулей и что не разобралось: «slug (причина)».
 
     Повтор id у второго модуля тоже не разобран: вердикт по id не отличил бы
     один критерий от другого. Первый модуль с этим id остаётся.
     """
-    found, broken, owners = [], [], {}
-    for slug, text in gather(modules_dir, CRITERION_FILE):
+    texts, broken = gather(modules_dir, CRITERION_FILE)
+    found, owners = [], {}
+    for slug, text in texts:
         try:
-            head, body = parse_criterion(text)
+            criterion = make_criterion(text)
         except ValueError as error:
             broken.append(f'{slug} ({error})')
             continue
-        problem = criterion_problem(head, body)
-        if problem is None and head[ID_FIELD] in owners:
-            problem = f'id «{head[ID_FIELD]}» уже у модуля {owners[head[ID_FIELD]]}'
-        if problem is not None:
-            broken.append(f'{slug} ({problem})')
+        if criterion.id in owners:
+            broken.append(f'{slug} (id «{criterion.id}» уже у модуля {owners[criterion.id]})')
             continue
-        owners[head[ID_FIELD]] = slug
-        found.append((head, body))
+        owners[criterion.id] = slug
+        found.append(criterion)
     return found, broken
 
 
-def assemble_brief(modules_dir, volume: list[dict], frame: str) -> tuple[str, list[str], list[str]]:
+def broken_problem(broken: list[str]) -> str | None:
+    """Файлы ревью модулей, которые не разобрались: молча они не пропадают."""
+    if not broken:
+        return None
+    return (f'файлы ревью не разобрались у модулей: {"; ".join(broken)}. Их в поручении нет, '
+            'чистый вердикт не принимается: скажи об этом человеку')
+
+
+def untagged_problem(volume: list[dict], found: list[Criterion]) -> str | None:
+    """Теги записей write, на которые нет ни одного критерия с правилом tags.
+
+    Модуль сущности без критерия иначе прошёл бы молча: общие критерии
+    always и craft подходят к любой записи и тег не проверяют.
+    """
+    covered = set()
+    for criterion in found:
+        if isinstance(criterion.applies, Tags):
+            covered |= criterion.applies.tags
+    missing = sorted(write_tags(volume) - covered)
+    if not missing:
+        return None
+    return (f'нет критерия на тег {", ".join(missing)}: записи с ним проверить нечем, '
+            'чистый вердикт не принимается. Скажи об этом человеку')
+
+
+def criteria_problem(volume: list[dict], criteria: list[str], found: list[Criterion],
+                     broken: list[str]) -> str | None:
+    """Почему чистый вердикт по объёму не принять; всё в порядке — None.
+
+    Правило одно на stop и превью: не разобранные файлы, объём с записями
+    write без единого критерия и тег записи без своего критерия.
+    """
+    problems = (broken_problem(broken),
+                NO_CRITERIA_PROBLEM if count_writes(volume) and not criteria else None,
+                untagged_problem(volume, found))
+    return PROBLEM_SEPARATOR.join(problem for problem in problems if problem) or None
+
+
+def assemble_brief(modules_dir, volume: list[dict], frame: str) -> BriefParts:
     """Поручение подагенту из каркаса, записей поставщиков и подходящих критериев.
 
-    Возвращает текст, id критериев по порядку и список модулей с причиной,
-    чей файл критерия не разобрался: их нельзя молча пропустить.
+    Не разобранные файлы критериев и записей идут в broken: их нельзя
+    молча пропустить.
     """
-    criteria, ids = [], []
     found, broken = read_criteria(modules_dir)
-    for head, body in found:
-        if criterion_applies(head, volume):
-            ids.append(head[ID_FIELD])
-            criteria.append(body)
-    records = [text.strip() for _, text in gather(modules_dir, RECORDS_FILE)]
-    text = (frame.replace(RECORDS_MARK, '\n\n'.join(records))
-            .replace(CRITERIA_MARK, '\n\n'.join(criteria))
+    chosen = [criterion for criterion in found if criterion_applies(criterion, volume)]
+    records, records_broken = gather(modules_dir, RECORDS_FILE)
+    ids = [criterion.id for criterion in chosen]
+    text = (frame.replace(RECORDS_MARK, '\n\n'.join(text.strip() for _, text in records))
+            .replace(CRITERIA_MARK, '\n\n'.join(criterion.body for criterion in chosen))
             .replace(CRITERIA_LIST_MARK, ', '.join(f'"{item}"' for item in ids)))
-    return text, ids, broken
+    return BriefParts(text, ids, broken + records_broken)
 
 
-def criteria_for(modules_dir, volume: list[dict]) -> tuple[list[str], list[str]]:
-    """Id критериев, которые подходят к объёму, и не разобранные файлы, без сборки текста."""
-    _, ids, broken = assemble_brief(modules_dir, volume, '')
-    return ids, broken
+def review_criteria(modules_dir, volume: list[dict], taken: list[str] | None) -> CriteriaCheck:
+    """Критерии, по которым принимается вердикт, и почему чистый не принять.
+
+    Критерии — из последнего поручения (`taken`). Поручения не было (None) —
+    те, что подошли бы к объёму. Проблема считается по каталогу модулей
+    всегда: файл мог сломаться и после поручения.
+    """
+    found, broken = read_criteria(modules_dir)
+    _, records_broken = gather(modules_dir, RECORDS_FILE)
+    if taken is None:
+        taken = [criterion.id for criterion in found if criterion_applies(criterion, volume)]
+    return CriteriaCheck(taken, criteria_problem(volume, taken, found, broken + records_broken))
 
 
-def write_brief(storage, text: str):
+def providers_problem(modules_dir) -> str | None:
+    """Ни у одного модуля нет описания записей: объём некому копить.
+
+    turn-review поставщиков не требует, требуют они его. Без этой проверки
+    ревью без поставщика молча считало бы, что записей не было.
+    """
+    records, broken = gather(modules_dir, RECORDS_FILE)
+    if records or broken:
+        return None
+    return NO_PROVIDER_PROBLEM.format(modules_dir=modules_dir)
+
+
+def write_brief(storage, text: str) -> Path:
+    """Положить поручение в зону сессии. Не записать — BriefError с путём."""
     path = storage.path(BRIEF_FILE)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding='utf-8')
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+    except OSError as error:
+        raise BriefError(f'поручение {path} не записать ({error})') from error
     return path
