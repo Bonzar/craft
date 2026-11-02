@@ -51,19 +51,20 @@ def as_is(value):
     return value if isinstance(value, (str, dict, list)) else None
 
 
-def record_of(event, turn: int, review, tags) -> dict | None:
-    tool, base = craft_tool(event.tool_name), {review.RECORD_TURN_KEY: turn}
+def record_of(event, review, tags) -> dict | None:
+    """Запись объёма без номера хода: его ставит append_turn_record."""
+    tool = craft_tool(event.tool_name)
     if tool in CRAFT_WRITE_TOOLS:
         command = command_of(event.tool_input)
-        return {review.KIND_KEY: review.KIND_WRITE, **base, review.TOOL_KEY: event.tool_name,
+        return {review.KIND_KEY: review.KIND_WRITE, review.TOOL_KEY: event.tool_name,
                 review.COMMAND_KEY: command, review.RESULT_KEY: as_is(event.tool_result),
                 review.TYPES_KEY: tags.find_tags(command, tags.load_tag_skills())}
     if tool == CRAFT_READ_TOOL:
         command = command_of(event.tool_input)
-        return {review.KIND_KEY: review.KIND_READ, **base, review.COMMAND_KEY: command,
+        return {review.KIND_KEY: review.KIND_READ, review.COMMAND_KEY: command,
                 review.IDS_KEY: list(dict.fromkeys(BLOCK_ID.findall(command)))}
     if event.tool_name == SKILL_TOOL:
-        return {review.KIND_KEY: review.KIND_SKILL, **base,
+        return {review.KIND_KEY: review.KIND_SKILL,
                 review.SKILL_KEY: tags.skill_slug(event.tool_input)}
     return None
 
@@ -73,11 +74,10 @@ class Module(jarvis.Module):
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
         review = library(runtime, REVIEW)
-        record = record_of(event, review.current_turn(runtime.storage), review,
-                           library(runtime, TYPE_LOCK))
+        record = record_of(event, review, library(runtime, TYPE_LOCK))
         if record is None:
             return jarvis.Silence(reason=NOT_OURS_REASON)
-        review.append_record(runtime.storage, record)
+        review.append_turn_record(runtime.storage, record)
         return jarvis.Silence(reason=f'в объём ревью: {record[review.KIND_KEY]}')
 
 

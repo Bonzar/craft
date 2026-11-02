@@ -38,6 +38,10 @@ SHOWN_VERDICT_KEY = 'shown_verdict'
 CRITERIA_KEY = 'criteria'
 # Замечания последнего вердикта с замечаниями: вопрос человеку показывает их.
 LAST_REMARKS_KEY = 'last_remarks'
+# Реплика, открывшая текущий ход, и модули, взявшие по ней номер: хуки одного
+# события идут параллельно, и номер хода у всех модулей на реплике один.
+PROMPT_MARK_KEY = 'prompt_mark'
+PROMPT_TAKEN_KEY = 'prompt_taken'
 
 # Поля строки объёма. Их читает и бриф подагента, поэтому имена одни на всех.
 KIND_KEY = 'kind'
@@ -54,8 +58,6 @@ KIND_WRITE = 'write'
 KIND_READ = 'read'
 KIND_ANCHOR = 'anchor'
 KIND_SKILL = 'skill'
-# Слово Влада: реплика и ответ на вопрос кнопками. По ним подагент снимает
-# замечание, которое Влад уже решил сам.
 KIND_PROMPT = 'prompt'
 KIND_ANSWER = 'answer'
 PROMPT_TEXT_KEY = 'text'
@@ -84,12 +86,14 @@ def new_state(turn: int = 0, volume_id: str | None = None, nudges: int = 0,
               released: bool = False, first_nudge_at: str | None = None,
               summary: str | None = None, summary_shown: bool = False,
               shown_verdict: str | None = None, criteria: list | None = None,
-              last_remarks: list | None = None) -> dict:
+              last_remarks: list | None = None, prompt_mark: str | None = None,
+              prompt_taken: list | None = None) -> dict:
     return {TURN_KEY: turn, VOLUME_ID_KEY: volume_id or new_volume_id(),
             NUDGES_KEY: nudges, RELEASED_KEY: released, FIRST_NUDGE_KEY: first_nudge_at,
             SUMMARY_KEY: summary, SUMMARY_SHOWN_KEY: summary_shown,
             SHOWN_VERDICT_KEY: shown_verdict, CRITERIA_KEY: list(criteria or []),
-            LAST_REMARKS_KEY: list(last_remarks or [])}
+            LAST_REMARKS_KEY: list(last_remarks or []), PROMPT_MARK_KEY: prompt_mark,
+            PROMPT_TAKEN_KEY: list(prompt_taken or [])}
 
 
 @contextmanager
@@ -111,7 +115,9 @@ def _is_valid_debug_fields(state: dict) -> bool:
             and isinstance(state.get(SHOWN_VERDICT_KEY), (str, type(None)))
             and isinstance(state.get(SUMMARY_SHOWN_KEY, False), bool)
             and isinstance(state.get(CRITERIA_KEY, []), list)
-            and isinstance(state.get(LAST_REMARKS_KEY, []), list))
+            and isinstance(state.get(LAST_REMARKS_KEY, []), list)
+            and isinstance(state.get(PROMPT_MARK_KEY), (str, type(None)))
+            and isinstance(state.get(PROMPT_TAKEN_KEY, []), list))
 
 
 def _is_valid_state(state) -> bool:
@@ -125,13 +131,21 @@ def _is_valid_state(state) -> bool:
 
 
 def _state_damage(storage) -> tuple[dict | None, str | None]:
-    """Состояние с диска и что с ним не так. Файла нет — (None, None)."""
+    """Состояние с диска и что с ним не так. Файла нет — (None, None).
+
+    Пустой файл — порча, а не отсутствие: состояние пишется атомарно, и
+    пустым его оставить могла только чужая рука.
+    """
+    if not storage.path(STATE_FILE).exists():
+        return None, None
     try:
         state = storage.read_json(STATE_FILE, default=None)
     except ValueError as error:
         # ValueError ловит и битый JSON, и байты не в UTF-8.
         return None, f'не JSON ({error})'
-    if state is None or _is_valid_state(state):
+    if state is None:
+        return None, 'пуст'
+    if _is_valid_state(state):
         return state, None
     return None, f'испорчен: {state!r}'
 
@@ -140,6 +154,7 @@ def peek_state(storage) -> dict | None:
     """Состояние без починки: None, если файла нет или он испорчен.
 
     Показ ответа идёт до остановки, а починку с её уведомлением делает stop.
+    Отсутствие от порчи здесь не отличается: в обоих случаях ответ спрятан.
     """
     state, _ = _state_damage(storage)
     return state
@@ -160,7 +175,8 @@ def load_state(storage) -> tuple[dict, str | None]:
                          state[RELEASED_KEY], state.get(FIRST_NUDGE_KEY),
                          state.get(SUMMARY_KEY), state.get(SUMMARY_SHOWN_KEY, False),
                          state.get(SHOWN_VERDICT_KEY), state.get(CRITERIA_KEY),
-                         state.get(LAST_REMARKS_KEY)), None
+                         state.get(LAST_REMARKS_KEY), state.get(PROMPT_MARK_KEY),
+                         state.get(PROMPT_TAKEN_KEY)), None
     fresh = new_state()
     save_state(storage, fresh)
     if damage is None:
@@ -375,10 +391,12 @@ def verdict_key(verdict: dict) -> str:
     return f'{verdict[VOLUME_ID_KEY]}:{verdict[FINGERPRINT_KEY]}'
 
 
-def peek_verdict(storage, volume_id: str) -> dict | None:
+def peek_verdict(storage, volume_id: str, criteria: list[str]) -> dict | None:
     """Вердикт нашего объёма до stop, для превью. Файл не трогается.
 
     Отпечаток с объёмом не сверяется: это превью, принимает вердикт stop.
+    Критерии те же, по которым его примет stop, а не `checked` самого
+    вердикта: иначе чистый вердикт с пустым `checked` открыл бы ответ.
     Не JSON или не по форме — None: изъян назовёт stop в поручении.
     """
     try:
@@ -389,15 +407,58 @@ def peek_verdict(storage, volume_id: str) -> dict | None:
         return None
     expected = verdict.get(FINGERPRINT_KEY)
     expected = expected.strip() if isinstance(expected, str) else ''
-    checked = verdict.get(CHECKED_KEY)
-    criteria = [item for item in checked if isinstance(item, str)] if isinstance(checked, list) else []
     return None if verdict_problem(verdict, expected, criteria) else verdict
 
 
 def current_turn(storage) -> int:
-    """Номер текущего хода из состояния; состояния нет — 0."""
-    state = peek_state(storage)
+    """Номер текущего хода из состояния.
+
+    Файла нет — 0: свежая сессия, ни одной реплики ещё не было. Файл испорчен
+    — ValueError с путём: тихий 0 приписал бы запись не тому ходу.
+    """
+    state, damage = _state_damage(storage)
+    if damage is not None:
+        raise ValueError(f'файл состояния ревью {storage.path(STATE_FILE)} {damage}: '
+                         'номер хода не узнать. Его заведёт заново остановка хода')
     return state[TURN_KEY] if state is not None else 0
+
+
+def append_turn_record(storage, record: dict) -> None:
+    """Запись объёма с номером текущего хода.
+
+    Состояние испорчено — запись всё равно ложится, без номера, и ошибка
+    пробрасывается. Запись без номера не раньше ни одного хода и идёт на
+    ревью; потерянная запись ушла бы от ревью совсем.
+    """
+    try:
+        turn = current_turn(storage)
+    except ValueError:
+        append_record(storage, record)
+        raise
+    append_record(storage, {KIND_KEY: record.get(KIND_KEY), RECORD_TURN_KEY: turn, **record})
+
+
+def prompt_mark(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:FINGERPRINT_CHARS]
+
+
+def claim_prompt_turn(storage, slug: str, text: str) -> tuple[int, str | None]:
+    """Номер хода этой реплики для модуля `slug` и что пришлось починить.
+
+    Звать под state_lock на каждой реплике, даже пустой. Хуки одного события
+    харнес запускает параллельно: первый пришедший модуль открывает новый ход,
+    остальные берут его номер. Реплика узнаётся по отпечатку текста, а
+    повтор той же реплики — по тому, что модуль уже брал номер по ней: тогда
+    это новый ход. Модуль, пропустивший реплику, этот счёт бы сбил.
+    """
+    state, problem = load_state(storage)
+    mark, taken = prompt_mark(text), state[PROMPT_TAKEN_KEY]
+    if state[PROMPT_MARK_KEY] == mark and slug not in taken:
+        save_state(storage, {**state, PROMPT_TAKEN_KEY: [*taken, slug]})
+        return state[TURN_KEY], problem
+    turn = next_turn(state[TURN_KEY], peek_volume(storage))
+    save_state(storage, {**state, TURN_KEY: turn, PROMPT_MARK_KEY: mark, PROMPT_TAKEN_KEY: [slug]})
+    return turn, problem
 
 
 # Вопрос самого ревью о застрявшем ревью: его ответ разбирает хук, в объём
@@ -456,38 +517,66 @@ RECORDS_MARK = '{{RECORDS}}'
 CRITERIA_LIST_MARK = '{{CRITERIA_LIST}}'
 
 
+HEAD_FIELDS = (ID_FIELD, APPLIES_FIELD)
+TAG_PREFIX = '#'
+
+
 def parse_criterion(text: str) -> tuple[dict, str]:
-    """Шапка критерия и его текст. Шапка — строки «ключ: значение» до пустой."""
-    head, body = {}, []
-    lines = text.splitlines()
-    index = 0
+    """Шапка критерия и его текст.
+
+    Шапка — строки «id: …» и «applies: …», за ней обязательно пустая строка.
+    Без неё граница не видна: первая строка текста ушла бы в шапку или
+    пропала. Иное — ValueError с причиной.
+    """
+    head, lines = {}, text.splitlines()
     for index, line in enumerate(lines):
         if not line.strip():
-            break
+            return head, '\n'.join(lines[index + 1:]).strip()
         key, separator, value = line.partition(':')
-        if not separator:
-            break
+        if not separator or key.strip() not in HEAD_FIELDS:
+            raise ValueError(f'строка «{line}» в шапке: шапка — только {", ".join(HEAD_FIELDS)}, '
+                             'после неё нужна пустая строка')
         head[key.strip()] = value.strip()
-    body = lines[index + 1:] if index < len(lines) else []
-    return head, '\n'.join(body).strip()
+    raise ValueError('после шапки нет пустой строки и текста критерия')
+
+
+def applies_problem(rule: str) -> str | None:
+    """Что не так с правилом `applies`; всё верно — None."""
+    words = rule.split()
+    if rule in (APPLIES_ALWAYS, APPLIES_CRAFT):
+        return None
+    if words and words[0] == APPLIES_TAGS and words[1:] \
+            and all(word.startswith(TAG_PREFIX) for word in words[1:]):
+        return None
+    return (f'applies «{rule}»: ждал {APPLIES_ALWAYS}, {APPLIES_CRAFT} или '
+            f'{APPLIES_TAGS} и теги с «{TAG_PREFIX}»')
 
 
 def criterion_applies(head: dict, volume: list[dict]) -> bool:
-    rule = head.get(APPLIES_FIELD, '')
-    words = rule.split()
+    """Подходит ли критерий к объёму. Правило уже проверено applies_problem."""
+    rule = head[APPLIES_FIELD]
     writes = [record for record in volume if record.get(KIND_KEY) == KIND_WRITE]
     if rule == APPLIES_ALWAYS:
         return True
     if rule == APPLIES_CRAFT:
         return bool(writes)
-    if words and words[0] == APPLIES_TAGS:
-        wanted = {word.lower() for word in words[1:]}
-        for record in writes:
-            types = record.get(TYPES_KEY)
-            if isinstance(types, list) and wanted & {str(item).lower() for item in types}:
-                return True
-        return False
+    wanted = {word.lower() for word in rule.split()[1:]}
+    for record in writes:
+        types = record.get(TYPES_KEY)
+        if isinstance(types, list) and wanted & {str(item).lower() for item in types}:
+            return True
     return False
+
+
+def criterion_problem(head: dict, body: str) -> str | None:
+    """Чего не хватает разобранному файлу критерия; всё есть — None."""
+    if not head.get(ID_FIELD):
+        return 'нет id'
+    if not body:
+        return 'нет текста'
+    if APPLIES_FIELD not in head:
+        return 'нет applies'
+    return applies_problem(head[APPLIES_FIELD])
 
 
 def gather(modules_dir, filename: str) -> list[tuple[str, str]]:
@@ -500,21 +589,41 @@ def gather(modules_dir, filename: str) -> list[tuple[str, str]]:
     return found
 
 
+def read_criteria(modules_dir) -> tuple[list[tuple[dict, str]], list[str]]:
+    """Разобранные критерии модулей и что не разобралось: «slug (причина)».
+
+    Повтор id у второго модуля тоже не разобран: вердикт по id не отличил бы
+    один критерий от другого. Первый модуль с этим id остаётся.
+    """
+    found, broken, owners = [], [], {}
+    for slug, text in gather(modules_dir, CRITERION_FILE):
+        try:
+            head, body = parse_criterion(text)
+        except ValueError as error:
+            broken.append(f'{slug} ({error})')
+            continue
+        problem = criterion_problem(head, body)
+        if problem is None and head[ID_FIELD] in owners:
+            problem = f'id «{head[ID_FIELD]}» уже у модуля {owners[head[ID_FIELD]]}'
+        if problem is not None:
+            broken.append(f'{slug} ({problem})')
+            continue
+        owners[head[ID_FIELD]] = slug
+        found.append((head, body))
+    return found, broken
+
+
 def assemble_brief(modules_dir, volume: list[dict], frame: str) -> tuple[str, list[str], list[str]]:
     """Поручение подагенту из каркаса, записей поставщиков и подходящих критериев.
 
-    Возвращает текст, id критериев по порядку и список модулей, чей файл
-    критерия не разобрался: их нельзя молча пропустить.
+    Возвращает текст, id критериев по порядку и список модулей с причиной,
+    чей файл критерия не разобрался: их нельзя молча пропустить.
     """
-    criteria, ids, broken = [], [], []
-    for slug, text in gather(modules_dir, CRITERION_FILE):
-        head, body = parse_criterion(text)
-        criterion_id = head.get(ID_FIELD, '')
-        if not criterion_id or not body or APPLIES_FIELD not in head:
-            broken.append(slug)
-            continue
+    criteria, ids = [], []
+    found, broken = read_criteria(modules_dir)
+    for head, body in found:
         if criterion_applies(head, volume):
-            ids.append(criterion_id)
+            ids.append(head[ID_FIELD])
             criteria.append(body)
     records = [text.strip() for _, text in gather(modules_dir, RECORDS_FILE)]
     text = (frame.replace(RECORDS_MARK, '\n\n'.join(records))
@@ -523,9 +632,10 @@ def assemble_brief(modules_dir, volume: list[dict], frame: str) -> tuple[str, li
     return text, ids, broken
 
 
-def criteria_for(modules_dir, volume: list[dict]) -> list[str]:
-    """Id критериев, которые подходят к объёму, без сборки текста."""
-    return assemble_brief(modules_dir, volume, '')[1]
+def criteria_for(modules_dir, volume: list[dict]) -> tuple[list[str], list[str]]:
+    """Id критериев, которые подходят к объёму, и не разобранные файлы, без сборки текста."""
+    _, ids, broken = assemble_brief(modules_dir, volume, '')
+    return ids, broken
 
 
 def write_brief(storage, text: str):

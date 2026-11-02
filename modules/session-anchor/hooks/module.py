@@ -2,7 +2,8 @@
 """Якорь сессии: выбор кнопкой в вопросе про якорь или реплика «беру задачу».
 
 Фраза в реплике считается, только когда с неё начинается реплика или
-предложение: «не беру задачу» якорем не будет.
+предложение: «не беру задачу» якорем не будет. Номер хода реплики модуль
+берёт той же функцией, что ревью: хуки реплики идут параллельно.
 """
 
 import re
@@ -37,6 +38,10 @@ def questions_text(tool_input) -> str:
     return '\n'.join(text for text in texts if isinstance(text, str))
 
 
+def with_problem(reason: str, problem: str | None) -> str:
+    return f'{reason}. {problem}' if problem else reason
+
+
 def as_is(value):
     return value if isinstance(value, (str, dict, list)) else None
 
@@ -45,21 +50,29 @@ class Module(jarvis.Module):
     def handle(self, event: jarvis.Event, runtime: jarvis.Runtime) -> jarvis.Response:
         review = library(runtime)
         storage = runtime.storage
-        base = {review.KIND_KEY: review.KIND_ANCHOR, review.RECORD_TURN_KEY: review.current_turn(storage)}
         if event.event == events.PROMPT:
-            text = event.prompt_text or ''
-            if not ANCHOR_PROMPT.search(text):
-                return jarvis.Silence(reason='реплика не называет якорь')
-            review.append_record(storage, {**base, review.ANSWER_KEY: text})
-            return jarvis.Silence(reason='якорь назван репликой')
+            return self.on_prompt(event, runtime, review)
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
         question = questions_text(event.tool_input) if event.tool_name == QUESTION_TOOL else ''
         if ANCHOR_QUESTION_MARK not in question.lower():
             return jarvis.Silence(reason='вызов не вопрос о якоре')
-        review.append_record(storage, {**base, review.QUESTION_KEY: question,
-                                       review.ANSWER_KEY: as_is(event.tool_result)})
+        review.append_turn_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
+                                            review.QUESTION_KEY: question,
+                                            review.ANSWER_KEY: as_is(event.tool_result)})
         return jarvis.Silence(reason='якорь выбран кнопкой')
+
+    def on_prompt(self, event, runtime, review) -> jarvis.Response:
+        # Номер берётся на каждой реплике, даже не о якоре: модуль,
+        # пропустивший реплику, сбил бы общий счёт ходов (см. claim_prompt_turn).
+        storage, text = runtime.storage, event.prompt_text or ''
+        with review.state_lock(storage):
+            turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, text)
+        if not ANCHOR_PROMPT.search(text):
+            return jarvis.Silence(reason=with_problem('реплика не называет якорь', problem))
+        review.append_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
+                                       review.RECORD_TURN_KEY: turn, review.ANSWER_KEY: text})
+        return jarvis.Silence(reason=with_problem('якорь назван репликой', problem))
 
 
 if __name__ == '__main__':

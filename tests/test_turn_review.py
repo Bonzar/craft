@@ -78,6 +78,12 @@ def stop(session: str, active: bool = True) -> dict:
             'stop_hook_active': active}
 
 
+def message(session: str, delta: str, final: bool = True) -> dict:
+    return {'hook_event_name': 'MessageDisplay', 'session_id': session, 'cwd': '/work',
+            'turn_id': 't-1', 'message_id': 'm-1', 'index': 0, 'final': final,
+            'delta': delta}
+
+
 def compact(session: str) -> dict:
     return {'hook_event_name': 'SessionStart', 'session_id': session, 'cwd': '/work',
             'source': 'compact'}
@@ -180,6 +186,13 @@ class TurnReviewCase(unittest.TestCase):
         for _ in range(3):
             reason = self.blocked(self.fire(stop(session), autonomous))
             self.assertIn('ревью хода не сделано', reason)
+
+    def run_entry(self, raw: dict, entry: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(self.command(raw, entry), input=json.dumps(raw, ensure_ascii=False),
+                              text=True, capture_output=True, env=self.env(), check=False)
+
+    def shown(self, result) -> str:
+        return json.loads(result.stdout)['hookSpecificOutput']['displayContent']
 
     def assert_question(self, result) -> None:
         reason = self.blocked(result)
@@ -578,6 +591,172 @@ class TurnReviewTest(TurnReviewCase):
                'agent_id': 'a1', 'agent_type': 'general-purpose'}
         self.assert_silent(self.fire(raw))
         self.assertEqual(self.volume('s-agent'), [])
+
+    def test_a_clean_verdict_without_criteria_keeps_the_answer_hidden(self) -> None:
+        # Превью судит по критериям поручения, а не по `checked` самого
+        # вердикта: иначе пустой `checked` открыл бы ответ, который stop отвергнет.
+        for session, nudged in (('s-hide-nudged', True), ('s-hide-fresh', False)):
+            self.start_with_write(session)
+            if nudged:
+                self.blocked(self.fire(stop(session)))
+            self.write_verdict(session, self.state(session)['volume_id'], checked=())
+            self.assertEqual(self.shown(self.fire(message(session, 'Готово.'))),
+                             'Ревью хода идёт, отчёт после него.')
+            self.assertIn('критерии не пройдены', self.blocked(self.fire(stop(session))))
+
+    def test_a_clean_verdict_with_all_criteria_shows_the_answer(self) -> None:
+        session = 's-show'
+        self.start_with_write(session)
+        self.blocked(self.fire(stop(session)))
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.assert_silent(self.fire(message(session, 'Готово.')))
+
+    def test_prompt_hooks_give_one_turn_in_any_order(self) -> None:
+        # Хуки одного события харнес запускает параллельно: номер хода у
+        # записей реплики не зависит от того, кто из них пришёл первым.
+        entries = self.hooks['prompt']
+        self.assertEqual(entries[0], self.entry)
+        for session, order in (('s-order-review', entries), ('s-order-providers', entries[::-1])):
+            for text in ('Беру задачу «Ревью»', 'Беру задачу «Ревью»', 'дальше'):
+                for entry in order:
+                    run = self.run_entry(prompt(session, text), entry)
+                    self.assertEqual(run.returncode, 0, run.stderr)
+            rows = self.volume(session, every=True)
+            self.assertEqual([(row['kind'], row['turn']) for row in rows],
+                             [('prompt', 1), ('anchor', 1), ('prompt', 2), ('anchor', 2),
+                              ('prompt', 3)] if order is entries else
+                             [('anchor', 1), ('prompt', 1), ('anchor', 2), ('prompt', 2),
+                              ('prompt', 3)])
+            self.assertEqual(self.state(session)['turn'], 3)
+
+    def test_a_damaged_state_is_an_error_for_providers_and_the_write_is_kept(self) -> None:
+        session = 's-provider-damage'
+        self.start_with_write(session)
+        self.storage(session).path('turn-review-state.json').write_text('{не json', encoding='utf-8')
+        provider = self.root / 'modules' / 'review-craft-calls' / 'hooks' / 'module.py'
+        run = self.run_entry(write(session), provider)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('turn-review-state.json', run.stderr)
+        # Запись не потеряна: без номера хода она не раньше ни одного хода и идёт на ревью.
+        rows = self.volume(session)
+        self.assertEqual([row['kind'] for row in rows], ['write', 'write'])
+        self.assertNotIn('turn', rows[1])
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('заведён заново', reason)
+        self.assertIn('записей write в объёме сейчас 2', reason)
+
+
+class CurrentTurnTest(unittest.TestCase):
+    """Номер хода из состояния: отсутствие файла законно, порча — ошибка."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self.tmp.name), 's-turn')
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_missing_state_is_turn_zero(self) -> None:
+        self.assertEqual(review_lib.current_turn(self.storage), 0)
+
+    def test_a_damaged_state_is_an_error(self) -> None:
+        path = self.storage.path('turn-review-state.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for body in ('{не json', '[1, 2]', '{"turn": "1"}', ''):
+            path.write_text(body, encoding='utf-8')
+            with self.assertRaises(ValueError) as caught:
+                review_lib.current_turn(self.storage)
+            self.assertIn(str(path), str(caught.exception))
+
+
+class CriterionFilesTest(unittest.TestCase):
+    """Файлы критериев: что не разобралось, называется модулем и причиной."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.modules = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def criterion(self, slug: str, text: str) -> None:
+        path = self.modules / slug / 'data' / 'review-criterion.md'
+        path.parent.mkdir(parents=True)
+        path.write_text(text, encoding='utf-8')
+
+    def assemble(self, volume=()) -> tuple[str, list[str], list[str]]:
+        return review_lib.assemble_brief(self.modules, list(volume), '{{CRITERIA}}')
+
+    def test_an_unknown_applies_rule_is_broken(self) -> None:
+        for number, rule in enumerate(('alway', 'craf', 'tags', 'tags задача', '')):
+            self.criterion(f'm{number}', f'id: c{number}\napplies: {rule}\n\nТекст.\n')
+        self.criterion('ok', 'id: ok\napplies: tags #задача\n\nТекст.\n')
+        _, ids, broken = self.assemble()
+        self.assertEqual(ids, [])
+        self.assertEqual([item.split(' ', 1)[0] for item in broken], ['m0', 'm1', 'm2', 'm3', 'm4'])
+        self.assertIn('applies', broken[0])
+
+    def test_a_repeated_id_is_broken_with_both_modules(self) -> None:
+        self.criterion('first', 'id: task\napplies: always\n\nПервый.\n')
+        self.criterion('second', 'id: task\napplies: always\n\nВторой.\n')
+        text, ids, broken = self.assemble()
+        self.assertEqual(ids, ['task'])
+        self.assertEqual(text, 'Первый.')
+        self.assertEqual(len(broken), 1)
+        self.assertIn('second', broken[0])
+        self.assertIn('first', broken[0])
+
+    def test_a_head_without_a_blank_line_is_broken(self) -> None:
+        self.criterion('glued', 'id: task\napplies: always\n## Критерий «task»: задача\nТекст.\n')
+        self.criterion('plain', 'id: plain\napplies: always\nТекст без пустой строки.\n')
+        text, ids, broken = self.assemble()
+        self.assertEqual((text, ids), ('', []))
+        self.assertEqual([item.split(' ', 1)[0] for item in broken], ['glued', 'plain'])
+        self.assertIn('пустая строка', broken[0])
+
+    def test_a_proper_file_is_taken_whole(self) -> None:
+        self.criterion('good', 'id: good\napplies: craft\n\n## Критерий «good»: всё\nТекст.\n')
+        text, ids, broken = self.assemble([{'kind': 'write'}])
+        self.assertEqual((text, ids, broken), ('## Критерий «good»: всё\nТекст.', ['good'], []))
+
+
+class BrokenCriterionTest(TurnReviewCase):
+    """Набор с модулем, чей файл критерия не разобрался."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        path = cls.root / 'modules' / 'zz-broken' / 'data' / 'review-criterion.md'
+        path.parent.mkdir(parents=True)
+        path.write_text('id: zz\napplies: alway\n\nТекст.\n', encoding='utf-8')
+
+    def test_a_broken_criterion_reaches_every_stop_problem(self) -> None:
+        session = 's-broken-criterion'
+        self.start_with_write(session)
+        for _ in range(3):
+            self.assertIn('zz-broken', self.blocked(self.fire(stop(session))))
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn(QUESTION, reason)
+        self.assertIn('zz-broken', reason)
+
+
+class NoCriteriaTest(TurnReviewCase):
+    """Набор, где к записи не подходит ни один критерий."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        for slug in (*CRITERIA_MODULES, 'session-anchor'):
+            (cls.root / 'modules' / slug / 'data' / 'review-criterion.md').unlink()
+
+    def test_writes_without_criteria_are_not_released_by_a_clean_verdict(self) -> None:
+        session = 's-no-criteria'
+        self.start_with_write(session)
+        self.assertIn('один критерий не подошёл', self.blocked(self.fire(stop(session))))
+        self.write_verdict(session, self.state(session)['volume_id'], checked=())
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('один критерий не подошёл', reason)
+        self.assertEqual(len(self.volume(session)), 1)
 
 
 

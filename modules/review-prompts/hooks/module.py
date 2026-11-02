@@ -3,6 +3,9 @@
 
 Запись идёт как сырьё: текст, авторство, время, номер хода. Вопрос самого
 ревью о застрявшем ревью в объём не идёт: его разбирает хук ревью.
+
+Номер хода реплики модуль берёт той же функцией, что ревью: хуки реплики
+идут параллельно, и прочитанный счётчик мог бы ещё не вырасти.
 """
 
 import sys
@@ -42,6 +45,10 @@ def as_is(value):
     return value if isinstance(value, (str, dict, list)) else None
 
 
+def with_problem(reason: str, problem: str | None) -> str:
+    return f'{reason}. {problem}' if problem else reason
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -51,24 +58,30 @@ class Module(jarvis.Module):
         review = library(runtime)
         storage = runtime.storage
         if event.event == events.PROMPT:
-            text = event.prompt_text or ''
-            if not text.strip():
-                return jarvis.Silence(reason='пустая реплика')
-            review.append_record(storage, {
-                review.KIND_KEY: review.KIND_PROMPT, review.RECORD_TURN_KEY: review.current_turn(storage),
-                review.PROMPT_TEXT_KEY: text, AUTHOR_KEY: AUTHOR, AT_KEY: now()})
-            return jarvis.Silence(reason='реплика в объёме ревью')
+            return self.on_prompt(event, runtime, review)
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
         if event.tool_name != QUESTION_TOOL:
             return jarvis.Silence(reason='вызов не вопрос человеку')
         if review.is_review_question(event.tool_input):
             return jarvis.Silence(reason='вопрос самого ревью: его разбирает хук ревью')
-        review.append_record(storage, {
-            review.KIND_KEY: review.KIND_ANSWER, review.RECORD_TURN_KEY: review.current_turn(storage),
-            review.QUESTION_KEY: questions_text(event.tool_input),
+        review.append_turn_record(storage, {
+            review.KIND_KEY: review.KIND_ANSWER, review.QUESTION_KEY: questions_text(event.tool_input),
             review.ANSWER_KEY: as_is(event.tool_result), AUTHOR_KEY: AUTHOR, AT_KEY: now()})
         return jarvis.Silence(reason='ответ кнопками в объёме ревью')
+
+    def on_prompt(self, event, runtime, review) -> jarvis.Response:
+        # Номер берётся и на пустой реплике: модуль, пропустивший реплику,
+        # сбил бы общий счёт ходов (см. claim_prompt_turn).
+        storage, text = runtime.storage, event.prompt_text or ''
+        with review.state_lock(storage):
+            turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, text)
+        if not text.strip():
+            return jarvis.Silence(reason=with_problem('пустая реплика', problem))
+        review.append_record(storage, {
+            review.KIND_KEY: review.KIND_PROMPT, review.RECORD_TURN_KEY: turn,
+            review.PROMPT_TEXT_KEY: text, AUTHOR_KEY: AUTHOR, AT_KEY: now()})
+        return jarvis.Silence(reason=with_problem('реплика в объёме ревью', problem))
 
 
 if __name__ == '__main__':

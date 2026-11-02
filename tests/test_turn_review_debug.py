@@ -4,15 +4,9 @@ import json
 import unittest
 from datetime import datetime, timezone
 
-from .test_turn_review import QUESTION, TurnReviewCase, ask, prompt, remark, stop, write
+from .test_turn_review import QUESTION, TurnReviewCase, ask, message, prompt, remark, stop, write
 
 SEPARATOR = '\n\n---\n'
-
-
-def message(session: str, delta: str, final: bool = True) -> dict:
-    return {'hook_event_name': 'MessageDisplay', 'session_id': session, 'cwd': '/work',
-            'turn_id': 't-1', 'message_id': 'm-1', 'index': 0, 'final': final,
-            'delta': delta}
 
 
 class TurnReviewDebugTest(TurnReviewCase):
@@ -112,6 +106,14 @@ class TurnReviewDebugTest(TurnReviewCase):
         self.assertIn('замечания (1): [craft-base] нет ссылки на этап.', shown.split(SEPARATOR)[1])
         self.assertIn('нет ссылки на этап', self.blocked(self.fire(stop(session))))
         self.assertEqual(self.shown(self.fire(message(session, 'Чиню.'))),
+                         'Ревью хода идёт, отчёт после него.')
+
+    def test_a_clean_verdict_without_criteria_is_not_previewed(self) -> None:
+        session = 'd-unchecked'
+        self.start_with_write(session)
+        self.blocked(self.fire(stop(session)))
+        self.write_verdict(session, self.state(session)['volume_id'], checked=())
+        self.assertEqual(self.shown(self.fire(message(session, 'Готово.'))),
                          'Ревью хода идёт, отчёт после него.')
 
     def test_a_verdict_of_another_volume_is_not_previewed(self) -> None:
