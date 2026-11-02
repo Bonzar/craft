@@ -12,9 +12,11 @@
 а не тег в её тексте.
 
 Пара «запись — строка»: та же реплика (`prompt_id`) и та же команда, строка
-стоит в объёме раньше записи и ещё не отдана другой записи. Из таких
-берётся последняя: запрещённая попытка оставляет свою строку, а повтор
-кладёт новую.
+ещё не отдана другой записи. Место в объёме не важно: замок кладёт строку
+на `post-tool` записи, параллельно с поставщиком записей, и строка ложится
+то раньше записи, то позже. Из подходящих берётся первая: строку оставляет
+только случившаяся запись, поэтому одинаковые записи одной реплики и их
+строки идут в одном порядке.
 """
 
 from typing import NamedTuple
@@ -41,10 +43,10 @@ UNTYPED_TAIL = (f'Тип записи не известен у записей с
 ALL_TYPED = 'Тип известен у всех записей.'
 NO_WRITES = 'Записей `write` в объёме нет.'
 LOST_WRITES_PROBLEM = ('в объёме есть строки типа записей от замка craft-type-lock ({rows}), а '
-                       'записей write в объёме нет: либо не стоит поставщик записей write '
-                       '(review-craft-calls или другой с for = ["turn-review"]), либо каждая '
-                       'запись хода была запрещена или упала. Это не ход без записей. Скажи '
-                       'об этом человеку: проверить, стоит ли поставщик записей')
+                       'записей write в объёме нет: замок кладёт строку только за случившуюся '
+                       'запись, значит поставщик записей write (review-craft-calls или другой '
+                       'с for = ["turn-review"]) не стоит или упал. Это не ход без записей. '
+                       'Скажи об этом человеку: проверить, стоит ли поставщик записей')
 
 
 class WriteType(NamedTuple):
@@ -61,9 +63,8 @@ class WriteType(NamedTuple):
 
 
 def take_row(pending: list[EntityRecord], record: WriteRecord) -> EntityRecord | None:
-    """Последняя ещё не отданная строка той же реплики и команды; отдаётся один раз."""
-    for index in range(len(pending) - 1, -1, -1):
-        row = pending[index]
+    """Первая ещё не отданная строка той же реплики и команды; отдаётся один раз."""
+    for index, row in enumerate(pending):
         if row.prompt_id == record.prompt_id and row.command == record.command:
             return pending.pop(index)
     return None
@@ -80,14 +81,10 @@ def write_type(number: int, record: WriteRecord, row: EntityRecord | None) -> Wr
 
 def write_types(volume: list[VolumeRecord]) -> tuple[WriteType, ...]:
     """Тип каждой записи write объёма, по порядку записей."""
-    pending: list[EntityRecord] = []
-    found: list[WriteType] = []
-    for record in volume:
-        if isinstance(record, EntityRecord):
-            pending.append(record)
-        elif isinstance(record, WriteRecord):
-            found.append(write_type(len(found) + 1, record, take_row(pending, record)))
-    return tuple(found)
+    pending = [record for record in volume if isinstance(record, EntityRecord)]
+    writes = [record for record in volume if isinstance(record, WriteRecord)]
+    return tuple(write_type(number, record, take_row(pending, record))
+                 for number, record in enumerate(writes, start=1))
 
 
 def selection_tags(volume: list[VolumeRecord]) -> frozenset[str] | None:
@@ -133,9 +130,10 @@ def types_text(volume: list[VolumeRecord]) -> str:
 def lost_writes_problem(volume: list[VolumeRecord]) -> str | None:
     """Строки замка есть, а записей write нет ни одной: записи некому было положить.
 
-    Без этой проверки ход отпускался бы как «записей не было». Строка без своей
-    записи в объёме с записями — обычное дело: замок кладёт её и для запрещённой
-    попытки, поэтому проверяется только объём без единой записи.
+    Без этой проверки ход отпускался бы как «записей не было». Строку замок
+    кладёт только за случившуюся запись, но поставщик записей мог упасть на
+    одном вызове и устоять на других; одна строка без пары в объёме с записями
+    бедой не считается, проверяется только объём без единой записи.
     """
     rows = sum(1 for record in volume if isinstance(record, EntityRecord))
     if not rows or any(isinstance(record, WriteRecord) for record in volume):

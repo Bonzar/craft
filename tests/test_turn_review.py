@@ -103,7 +103,7 @@ def sources(modules: Path, providers=None):
 
 
 # Ключ события теста, не харнеса: строка замка craft-type-lock, которую тест
-# кладёт в объём перед записью. Замок в этом наборе не стоит (ему нужен
+# кладёт в объём рядом с записью. Замок в этом наборе не стоит (ему нужен
 # connect-API), поэтому его строку тест пишет за него, ровно по контракту:
 # содержимое — теги типа в тексте команды вне ссылок, как их ищет замок.
 LOCK_ROW = 'test_lock_row'
@@ -209,8 +209,10 @@ class TurnReviewCase(unittest.TestCase):
     def fire(self, raw: dict, autonomous: bool = False) -> subprocess.CompletedProcess:
         """Событие уходит всем модулям набора на нём; возвращается ответ ревью.
 
-        Строка замка, если она есть у события, ложится в объём раньше хуков:
-        замок пишет её на pre-tool, до вызова записи.
+        Строка замка, если она есть у события, ложится в объём раньше хуков.
+        Замок пишет её на том же post-tool параллельно с поставщиком записей, так
+        что в жизни она встаёт и раньше записи, и позже; оба порядка проверяет
+        EntityTypesTest.
         """
         if LOCK_ROW in raw:
             raw = dict(raw)
@@ -1141,9 +1143,13 @@ class EntityTypeTest(unittest.TestCase):
                 volume = [row, write_record(DECISION_ADD, 'p')]
                 self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
 
-    def test_a_row_after_the_write_does_not_type_it(self) -> None:
-        volume = [write_record(DECISION_ADD, 'p'), self.row()]
-        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+    def test_a_row_before_or_after_the_write_types_it(self) -> None:
+        # Замок и поставщик записей пишут на одном post-tool параллельно.
+        for volume in ([self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')],
+                       [write_record(DECISION_ADD, 'p'), self.row(place=['#раздел'])]):
+            with self.subTest(first=type(volume[0]).__name__):
+                self.assertEqual(self.entity_ids(volume), ['section'])
+                self.assertIn('Тип известен у всех записей', self.brief(volume))
 
     def test_one_row_types_one_write(self) -> None:
         volume = [self.row(), write_record(DECISION_ADD, 'p'), write_record(DECISION_ADD, 'p')]
@@ -1182,12 +1188,16 @@ class EntityTypeTest(unittest.TestCase):
                 self.assertNotIn('с тегом #', text)
                 self.assertIn('чей тип (раздел «Тип записей» поручения) включает', text)
 
-    def test_a_retry_takes_its_own_row_and_not_the_denied_one(self) -> None:
-        # Запрещённая попытка оставила строку без записи; повтор кладёт свою.
-        volume = [self.row(determined=False, note='запись в непрочитанное'),
-                  self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')]
-        self.assertEqual(self.entity_ids(volume), ['section'])
-        self.assertIn('Тип известен у всех записей', self.brief(volume))
+    def test_same_writes_take_their_rows_in_order_whatever_side_they_land(self) -> None:
+        # Строку кладёт только случившаяся запись: одинаковые записи реплики и
+        # их строки идут в одном порядке, даже когда строка встала после записи.
+        first = self.row(place=['#раздел'])
+        second = self.row(determined=False, note='API Craft не ответил')
+        volume = [write_record(DECISION_ADD, 'p'), first, second, write_record(DECISION_ADD, 'p')]
+        lines = [line for line in self.brief(volume).splitlines()
+                 if line.startswith('- запись write №')]
+        self.assertIn('тип #раздел', lines[0])
+        self.assertIn('API Craft не ответил', lines[1])
 
     def test_the_brief_says_the_type_is_only_a_selector(self) -> None:
         volume = [self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')]
