@@ -12,15 +12,24 @@ import unittest
 import urllib.parse
 from pathlib import Path
 
+from jarvis import registry
 from jarvis.storage import Storage
 from jarvis.trace import Trace
 
 from . import CORE_SOURCE, MODULES_DIR
 
 SLUG = 'craft-type-lock'
-# Скиллы типов и скилл решения строят другие модули; замку нужны только их
-# шапки в каталоге.
-LOCK_SKILLS = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-decision')
+# Модули сущностей строят другие; замку нужны их шапки с `for` и теги в
+# data/entity.json. Набор берётся из настоящего каталога: кто объявил себя
+# для замка, тот и сущность.
+LOCK_SKILLS = tuple(manifest.slug for manifest in registry.adapters(MODULES_DIR / SLUG, SLUG))
+ENTITY_MANIFEST = 'slug = "{slug}"\nfor = ["craft-type-lock"]\n'
+# Шаблон тега: запись в сущность проходит, когда в этом ходе прочитан любой
+# из шаблонов её тега. Ид берутся из настоящих data/entity.json.
+ENTITY_DATA = {slug: json.loads((MODULES_DIR / slug / 'data' / 'entity.json').read_text(encoding='utf-8'))
+               for slug in LOCK_SKILLS}
+TEMPLATE = {slug: next(iter(data['templates'].values()))[0] for slug, data in ENTITY_DATA.items()}
+TASK_TEMPLATES = ENTITY_DATA['craft-task']['templates']['#задача']
 # Команду Craft замок разбирает библиотекой соседа.
 PARSER = 'command-tree-craft'
 CRAFT_WRITE = 'mcp__Craft__craft_write'
@@ -69,11 +78,11 @@ class LockHarness(unittest.TestCase):
         # Соседи-сущности: шапка и теги в данных, как у настоящих модулей.
         for slug in LOCK_SKILLS:
             (modules / slug).mkdir()
-            (modules / slug / 'module.toml').write_text(f'slug = "{slug}"\n', encoding='utf-8')
-            entity = MODULES_DIR / slug / 'data' / 'entity.json'
-            if entity.is_file():
-                (modules / slug / 'data').mkdir()
-                shutil.copy(entity, modules / slug / 'data' / 'entity.json')
+            (modules / slug / 'module.toml').write_text(ENTITY_MANIFEST.format(slug=slug),
+                                                        encoding='utf-8')
+            (modules / slug / 'data').mkdir()
+            shutil.copy(MODULES_DIR / slug / 'data' / 'entity.json',
+                        modules / slug / 'data' / 'entity.json')
         cls.entry = module_dir / 'hooks' / 'module.py'
 
     @classmethod
@@ -104,6 +113,11 @@ class LockHarness(unittest.TestCase):
     def assert_silent(self, result) -> None:
         self.assertEqual(result.stdout, '')
 
+    def prepare(self, session: str, slug: str, name: str | None = None) -> None:
+        """Скилл сущности вызван и её шаблон прочитан в этом ходе."""
+        self.assert_silent(self.fire(skill(session, name or slug)))
+        self.assert_silent(self.fire(read(session, f'blocks get {TEMPLATE[slug]} --depth -1')))
+
     def storage(self, session: str) -> Storage:
         return Storage(self.root / '.local' / 'state' / 'jarvis', session)
 
@@ -123,13 +137,13 @@ class CraftTypeLockTest(LockHarness):
 
     def test_the_skill_of_this_turn_lets_the_write_through(self) -> None:
         self.fire(prompt('s-pass'))
-        self.assert_silent(self.fire(skill('s-pass', 'craft-task')))
+        self.prepare('s-pass', 'craft-task')
         self.assert_silent(self.fire(write('s-pass', TASK_ADD)))
-        self.assertIn('скиллы вызваны', self.trace('s-pass')[-1]['reason'])
+        self.assertIn('скиллы вызваны и шаблоны прочитаны', self.trace('s-pass')[-1]['reason'])
 
     def test_a_plugin_prefix_is_cut_off(self) -> None:
         self.fire(prompt('s-plugin'))
-        self.fire(skill('s-plugin', 'jarvis:craft-task'))
+        self.prepare('s-plugin', 'craft-task', 'jarvis:craft-task')
         self.assert_silent(self.fire(write('s-plugin', TASK_ADD)))
         self.assertIn('скиллы вызваны', self.last_reason('s-plugin'))
 
@@ -153,10 +167,10 @@ class CraftTypeLockTest(LockHarness):
 
     def test_a_note_tag_needs_craft_note_not_another_skill(self) -> None:
         self.fire(prompt('s-note'))
-        self.fire(skill('s-note', 'craft-task'))
+        self.prepare('s-note', 'craft-task')
         command = 'blocks add --id X --markdown "Мысль про отпуск #заметка"'
         self.assert_denied(self.fire(write('s-note', command)), '#заметка', 'craft-note')
-        self.fire(skill('s-note', 'craft-note'))
+        self.prepare('s-note', 'craft-note')
         self.assert_silent(self.fire(write('s-note', command)))
 
     def test_a_closing_tail_on_update_is_still_the_tag(self) -> None:
@@ -199,12 +213,12 @@ class CraftTypeLockTest(LockHarness):
 
     def test_a_tag_inside_link_text_does_not_count(self) -> None:
         self.fire(prompt('s-link'))
-        self.fire(skill('s-link', 'craft-task'))
+        self.prepare('s-link', 'craft-task')
         command = ('blocks add --id X --json \'{"type":"text","markdown":'
                    '"- [ ] Собрать стенд #задача/1ч [Сборка #этап](block://AB-1) '
                    '[Раздел #раздел](craftdocs://open?blockId=CD)"}\'')
         self.assert_silent(self.fire(write('s-link', command)))
-        self.assertTrue(self.last_reason('s-link').startswith('теги #задача: скиллы вызваны в этом ходе'))
+        self.assertTrue(self.last_reason('s-link').startswith('теги #задача: скиллы вызваны'))
 
     def test_a_link_alone_is_not_a_typed_write(self) -> None:
         self.fire(prompt('s-link-only'))
@@ -289,16 +303,81 @@ class CraftTypeLockTest(LockHarness):
 
     def test_the_trace_has_a_line_for_every_event(self) -> None:
         session = 's-trace'
-        raws = [prompt(session), skill(session, 'craft-task'), write(session, TASK_ADD),
+        raws = [prompt(session), skill(session, 'craft-task'),
+                read(session, f'blocks get {TEMPLATE["craft-task"]}'), write(session, TASK_ADD),
                 compact(session), write(session, TASK_ADD)]
         for raw in raws:
             self.fire(raw)
         lines = self.trace(session)
         self.assertEqual([line['event'] for line in lines],
-                         ['prompt', 'post-tool', 'pre-tool', 'after-compact', 'pre-tool'])
+                         ['prompt', 'post-tool', 'post-tool', 'pre-tool', 'after-compact', 'pre-tool'])
         self.assertEqual([line['response'] for line in lines],
-                         ['silence', 'silence', 'silence', 'silence', 'deny'])
+                         ['silence', 'silence', 'silence', 'silence', 'silence', 'deny'])
         self.assertTrue(all(line['module'] == SLUG and line['reason'] for line in lines))
+
+
+
+
+class TemplateLockTest(LockHarness):
+    """Запись в сущность — только после чтения её шаблона в этом ходе."""
+
+    def test_the_skill_without_the_template_is_denied_with_the_template_named(self) -> None:
+        self.fire(prompt('t-skill-only'))
+        self.fire(skill('t-skill-only', 'craft-task'))
+        result = self.fire(write('t-skill-only', TASK_ADD))
+        self.assert_denied(result, 'не прочитан шаблон #задача', f'blocks get {TASK_TEMPLATES[0]} --depth -1',
+                           TASK_TEMPLATES[1], 'повтори запись')
+        reason = json.loads(result.stdout)['hookSpecificOutput']['permissionDecisionReason']
+        self.assertNotIn('не вызван скилл', reason)
+
+    def test_the_template_without_the_skill_is_denied(self) -> None:
+        self.fire(prompt('t-read-only'))
+        self.fire(read('t-read-only', f'blocks get {TASK_TEMPLATES[0]} --depth -1'))
+        result = self.fire(write('t-read-only', TASK_ADD))
+        self.assert_denied(result, 'не вызван скилл: craft-task')
+        reason = json.loads(result.stdout)['hookSpecificOutput']['permissionDecisionReason']
+        self.assertNotIn('не прочитан шаблон', reason)
+
+    def test_any_template_of_the_tag_in_any_case_will_do(self) -> None:
+        for number, template in enumerate((TASK_TEMPLATES[1].upper(), TASK_TEMPLATES[0].lower())):
+            session = f't-any-{number}'
+            self.fire(prompt(session))
+            self.fire(skill(session, 'craft-task'))
+            self.fire(read(session, f'blocks get {template} --depth -1'))
+            self.assert_silent(self.fire(write(session, TASK_ADD)))
+
+    def test_a_template_of_the_last_turn_does_not_count(self) -> None:
+        self.fire(prompt('t-last-turn'))
+        self.fire(read('t-last-turn', f'blocks get {TASK_TEMPLATES[0]}'))
+        self.fire(prompt('t-last-turn'))
+        self.fire(skill('t-last-turn', 'craft-task'))
+        self.assert_denied(self.fire(write('t-last-turn', TASK_ADD)), 'не прочитан шаблон #задача')
+
+    def test_compaction_forgets_the_template(self) -> None:
+        self.fire(prompt('t-compact'))
+        self.prepare('t-compact', 'craft-task')
+        self.fire(compact('t-compact'))
+        self.fire(skill('t-compact', 'craft-task'))
+        self.assert_denied(self.fire(write('t-compact', TASK_ADD)), 'не прочитан шаблон #задача')
+
+    def test_a_template_seen_only_in_an_answer_is_not_read(self) -> None:
+        self.fire(prompt('t-answer'))
+        self.fire(skill('t-answer', 'craft-task'))
+        raw = read('t-answer', 'search "Задача"')
+        raw['tool_response'] = f'<page id="{TASK_TEMPLATES[0]}">\n</page>'
+        self.fire(raw)
+        self.assert_denied(self.fire(write('t-answer', TASK_ADD)), 'не прочитан шаблон #задача')
+
+    def test_each_tag_needs_its_own_template(self) -> None:
+        self.fire(prompt('t-two'))
+        self.prepare('t-two', 'craft-task')
+        self.fire(skill('t-two', 'craft-stage'))
+        command = 'blocks add --id X --markdown "- [ ] ### Сборка #этап"; ' + TASK_ADD
+        result = self.fire(write('t-two', command))
+        self.assert_denied(result, 'не прочитан шаблон #этап')
+        reason = json.loads(result.stdout)['hookSpecificOutput']['permissionDecisionReason']
+        self.assertNotIn('#задача:', reason)
+        self.assertNotIn('#веха', reason)
 
 
 def load_lock_module():
@@ -310,34 +389,70 @@ def load_lock_module():
     return module
 
 
-class EntityFileTest(unittest.TestCase):
-    """Испорченный data/entity.json соседа — ошибка с путём к файлу, а не тихий пропуск."""
+def entity_body(tag: str) -> str:
+    return json.dumps({'tags': [tag], 'templates': {tag: [TASK_TEMPLATES[0]]}}, ensure_ascii=False)
 
-    def test_the_real_entity_files_map_every_tag_to_a_module(self) -> None:
+
+class EntityFileTest(unittest.TestCase):
+    """Модули сущностей находятся по `for`; испорченный data/entity.json — ошибка с путём."""
+
+    def add_module(self, root: Path, slug: str, entity: str | None, serves: bool = True) -> Path:
+        folder = root / slug
+        (folder / 'data').mkdir(parents=True)
+        manifest = ENTITY_MANIFEST.format(slug=slug) if serves else f'slug = "{slug}"\n'
+        (folder / 'module.toml').write_text(manifest, encoding='utf-8')
+        path = folder / 'data' / 'entity.json'
+        if entity is not None:
+            path.write_text(entity, encoding='utf-8')
+        return path
+
+    def test_the_real_entity_modules_map_every_tag_to_a_module(self) -> None:
         lock = load_lock_module()
-        tag_skills = lock.load_tag_skills(MODULES_DIR)
-        # Решение тега не несёт: его скилл замок требует по месту, не по справочнику.
-        self.assertEqual(set(tag_skills.values()) | {lock.DECISION_SKILL}, set(LOCK_SKILLS))
+        tag_skills = lock.load_tag_skills(MODULES_DIR / SLUG)
+        self.assertLessEqual({'craft-task', 'craft-stage', 'craft-section', 'craft-note'},
+                             set(tag_skills.values()))
         self.assertEqual(tag_skills['#этап'], 'craft-stage')
+        entries = lock.load_entities(MODULES_DIR / SLUG)
+        self.assertEqual(set(entries), set(tag_skills))
+        self.assertTrue(all(entry.templates for entry in entries.values()))
+        # Решение не сущность: его модуль замку не адаптер.
+        self.assertNotIn('craft-decision', tag_skills.values())
 
     def test_a_broken_entity_file_is_an_error(self) -> None:
         lock = load_lock_module()
-        bodies = ('{"tags":', '[]', '{"tags": []}', '{"tags": ["задача"]}', '{"tags": [1]}')
+        template = TASK_TEMPLATES[0]
+        bodies = ('{"tags":', '[]', '{"tags": []}', '{"tags": ["задача"]}', '{"tags": [1]}',
+                  '{"tags": ["#задача"]}', '{"tags": ["#задача"], "templates": {}}',
+                  '{"tags": ["#задача"], "templates": {"#задача": []}}',
+                  '{"tags": ["#задача"], "templates": {"#задача": ["шаблон"]}}',
+                  json.dumps({'tags': ['#задача'], 'templates': {'#задача': [template], '#веха': [template]}}))
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'craft-x' / 'data' / 'entity.json'
-            path.parent.mkdir(parents=True)
+            path = self.add_module(Path(tmp), 'craft-x', None)
             for body in bodies:
                 path.write_text(body, encoding='utf-8')
                 with self.subTest(body=body), self.assertRaises(ValueError) as caught:
-                    lock.load_tag_skills(tmp)
+                    lock.load_tag_skills(Path(tmp) / SLUG)
                 self.assertIn(str(path), str(caught.exception))
             # Один тег у двух модулей — ошибка, а не молчаливый выбор.
-            path.write_text('{"tags": ["#задача"]}', encoding='utf-8')
-            other = Path(tmp) / 'craft-y' / 'data'
-            other.mkdir(parents=True)
-            (other / 'entity.json').write_text('{"tags": ["#Задача"]}', encoding='utf-8')
+            path.write_text(entity_body('#задача'), encoding='utf-8')
+            self.add_module(Path(tmp), 'craft-y', entity_body('#Задача'))
             with self.assertRaises(ValueError):
-                lock.load_tag_skills(tmp)
+                lock.load_tag_skills(Path(tmp) / SLUG)
+
+    def test_an_adapter_without_an_entity_file_is_an_error(self) -> None:
+        lock = load_lock_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.add_module(Path(tmp), 'craft-x', None)
+            with self.assertRaises(ValueError) as caught:
+                lock.load_tag_skills(Path(tmp) / SLUG)
+            self.assertIn(str(path), str(caught.exception))
+
+    def test_an_entity_file_without_for_is_not_the_locks(self) -> None:
+        lock = load_lock_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            self.add_module(Path(tmp), 'craft-task', entity_body('#задача'))
+            self.add_module(Path(tmp), 'craft-other', entity_body('#задача'), serves=False)
+            self.assertEqual(lock.load_tag_skills(Path(tmp) / SLUG), {'#задача': 'craft-task'})
 
 
 class BrokenEntityFileTest(LockHarness):
@@ -363,36 +478,47 @@ class BrokenEntityFileTest(LockHarness):
     def test_a_repeated_tag_denies_even_a_write_without_tags(self) -> None:
         tag = json.loads((MODULES_DIR / 'craft-note' / 'data' / 'entity.json')
                          .read_text(encoding='utf-8'))['tags'][0]
-        path = self.break_entity('craft-task', json.dumps({'tags': [tag]}, ensure_ascii=False))
+        path = self.break_entity('craft-task', entity_body(tag))
         self.fire(prompt('s-repeated-tag'))
         result = self.fire(write('s-repeated-tag', 'blocks add --help'))
         self.assert_denied(result, str(path), 'craft-note')
 
 
-class MissingSkillsTest(unittest.TestCase):
-    """Без модулей-скиллов замок не запрещает, а говорит, чего нет."""
+class MissingNeighboursTest(unittest.TestCase):
+    """Без разбора команд замок в стороне; без модулей сущностей требовать нечего."""
 
-    def test_without_type_skills_the_lock_steps_aside(self) -> None:
+    def run_alone(self, root: Path) -> subprocess.CompletedProcess:
+        result = subprocess.run(
+            [sys.executable, str(root / 'modules' / SLUG / 'hooks' / 'module.py'),
+             '--harness', 'claude', '--event', 'pre-tool'],
+            input=json.dumps(write('s-missing', TASK_ADD)), text=True,
+            capture_output=True, env={'PATH': '/usr/bin:/bin', 'HOME': str(root)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def lay_out(self, root: Path, *neighbours: str) -> None:
         ignore = shutil.ignore_patterns('__pycache__')
+        module_dir = root / 'modules' / SLUG
+        shutil.copytree(MODULES_DIR / SLUG, module_dir, ignore=ignore)
+        shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
+        for slug in neighbours:
+            shutil.copytree(MODULES_DIR / slug, root / 'modules' / slug, ignore=ignore)
+
+    def test_without_the_parser_the_lock_steps_aside(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            module_dir = root / 'modules' / SLUG
-            shutil.copytree(MODULES_DIR / SLUG, module_dir, ignore=ignore)
-            shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
-            result = subprocess.run(
-                [sys.executable, str(module_dir / 'hooks' / 'module.py'),
-                 '--harness', 'claude', '--event', 'pre-tool'],
-                input=json.dumps(write('s-missing', TASK_ADD)), text=True,
-                capture_output=True, env={'PATH': '/usr/bin:/bin', 'HOME': str(root)},
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            output = json.loads(result.stdout)['hookSpecificOutput']
+            self.lay_out(Path(tmp))
+            output = json.loads(self.run_alone(Path(tmp)).stdout)['hookSpecificOutput']
             self.assertNotIn('permissionDecision', output)
-            self.assertIn('craft-task', output['additionalContext'])
+            self.assertIn(PARSER, output['additionalContext'])
+
+    def test_without_entity_modules_a_tagged_write_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.lay_out(Path(tmp), PARSER)
+            self.assertEqual(self.run_alone(Path(tmp)).stdout, '')
 
 
-
-# --- замок на решения: место записи через connect-API -----------------------
+# --- тип страницы цели: место записи через connect-API ----------------------
 
 PAGE = 'aaaaaaaa-0000-0000-0000-000000000001'
 TOGGLE = 'aaaaaaaa-0000-0000-0000-000000000010'
@@ -408,6 +534,7 @@ REQ = 'aaaaaaaa-0000-0000-0000-000000000005'
 DEEP_PAGE = 'cccccccc-0000-0000-0000-000000000001'
 DEEP_D1 = 'cccccccc-0000-0000-0000-000000000011'
 TASK = 'bbbbbbbb-0000-0000-0000-000000000020'
+STAGE_LINK = 'bbbbbbbb-0000-0000-0000-000000000030'
 
 
 def block(block_id: str, markdown: str, **fields) -> dict:
@@ -434,7 +561,8 @@ TREES = {
     PROJECT: {'id': PROJECT, 'type': 'page', 'markdown': 'Проект', 'content': [
         block('bbbbbbbb-0000-0000-0000-000000000002', '+ ### Этапы проекта', listStyle='toggle'),
         block(TASK, '- [ ] Задача #задача/1ч', indentationLevel=2, listStyle='task'),
-        {'id': STAGE, 'type': 'page', 'markdown': '- [ ] ### Этап #этап', 'indentationLevel': 1,
+        block(STAGE_LINK, f'[Этап #этап](block://{STAGE})'),
+        {'id': STAGE, 'type': 'page', 'markdown': '- [ ] ### Этап #этап/готово', 'indentationLevel': 1,
          'listStyle': 'task', 'content': [
              block(STAGE_TOGGLE, '+ ### Решения', textStyle='h3', listStyle='toggle'),
              block(SD1, '  - Решение этапа', indentationLevel=1, listStyle='bullet'),
@@ -445,7 +573,7 @@ TREES = {
 TREES[DEEP_PAGE] = DEEP_TREE
 UPPER_PAGE = 'DDDDDDDD-0000-0000-0000-000000000001'
 UPPER_D1 = 'DDDDDDDD-0000-0000-0000-000000000011'
-TREES[UPPER_PAGE] = {'id': UPPER_PAGE, 'type': 'page', 'markdown': 'Старый документ', 'content': [
+TREES[UPPER_PAGE] = {'id': UPPER_PAGE, 'type': 'page', 'markdown': 'Старый раздел #раздел', 'content': [
     block('DDDDDDDD-0000-0000-0000-000000000010', '+ ### Решения', listStyle='toggle'),
     block(UPPER_D1, '  - Решение', indentationLevel=1, listStyle='bullet'),
 ]}
@@ -488,10 +616,12 @@ def read(session: str, command: str) -> dict:
             'tool_response': {'ok': True}}
 
 
-DECISION_JSON = '\'{"type":"text","indentationLevel":1,"listStyle":"bullet","markdown":"Новое решение"}\''
+BULLET_JSON = '\'{"type":"text","indentationLevel":1,"listStyle":"bullet","markdown":"Новое решение"}\''
+SECTION = 'Запись ложится в сущность «Раздел #раздел»'
+FIRST = 'aaaaaaaa-0000-0000-0000-000000000003'
 
 
-class DecisionLockTest(LockHarness):
+class PageTypeLockTest(LockHarness):
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -512,195 +642,213 @@ class DecisionLockTest(LockHarness):
         for page in pages:
             self.assert_silent(self.fire(read(session, f'blocks get {page} --depth -1')))
 
-    def test_a_write_next_to_a_decision_needs_craft_decision(self) -> None:
-        self.start('d-next', PAGE)
-        result = self.fire(write('d-next', f'blocks add --siblingId {D2} --position after --json {DECISION_JSON}'))
-        self.assert_denied(result, 'под тоггл «Решения»', 'craft-decision', 'повтори запись')
+    def reason(self, result) -> str:
+        return json.loads(result.stdout)['hookSpecificOutput']['permissionDecisionReason']
 
-    def test_craft_decision_this_turn_opens_the_write(self) -> None:
-        self.start('d-open', PAGE)
-        self.assert_silent(self.fire(skill('d-open', 'craft-decision')))
-        self.assert_silent(self.fire(write('d-open', f'blocks add --siblingId {D2} --position after --json {DECISION_JSON}')))
-        self.assertIn('скиллы вызваны в этом ходе, цель', self.last_reason('d-open'))
+    def test_a_write_into_the_decisions_of_a_section_needs_craft_section(self) -> None:
+        self.start('p-next', PAGE)
+        result = self.fire(write('p-next', f'blocks add --siblingId {D2} --position after --json {BULLET_JSON}'))
+        self.assert_denied(result, SECTION, '#раздел → craft-section', 'не вызван скилл: craft-section',
+                           'повтори запись')
+        self.assertNotIn('craft-decision', self.reason(result))
 
-    def test_right_after_the_toggle_is_the_decision_zone(self) -> None:
-        self.start('d-toggle', PAGE)
-        result = self.fire(write('d-toggle', f'blocks add --siblingId {TOGGLE} --position after --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+    def test_craft_section_this_turn_opens_the_write(self) -> None:
+        self.start('p-open', PAGE)
+        self.prepare('p-open', 'craft-section')
+        self.assert_silent(self.fire(write('p-open', f'blocks add --siblingId {D2} --position after --json {BULLET_JSON}')))
+        self.assertIn('шаблоны прочитаны в этом ходе, цель aaaaaaaa в сущности aaaaaaaa (#раздел)',
+                      self.last_reason('p-open'))
 
-    def test_before_the_line_after_decisions_is_still_the_zone(self) -> None:
-        self.start('d-line', PAGE)
-        result = self.fire(write('d-line', f'blocks add --siblingId {LINE} --position before --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+    def test_a_decision_skill_is_not_an_entity_skill(self) -> None:
+        self.start('p-decision', PAGE)
+        self.assert_silent(self.fire(skill('p-decision', 'craft-decision')))
+        self.assertIn('не скилл типа', self.last_reason('p-decision'))
+        result = self.fire(write('p-decision', f'blocks update --id {D1} --json {BULLET_JSON}'))
+        self.assert_denied(result, 'craft-section')
 
-    def test_after_the_line_is_outside_the_zone(self) -> None:
-        self.start('d-after-line', PAGE)
-        self.assert_silent(self.fire(write('d-after-line', f'blocks add --siblingId {LINE} --position after --json {DECISION_JSON}')))
-        self.assertIn('не под «Решениями»', self.last_reason('d-after-line'))
+    def test_every_place_of_a_section_needs_craft_section(self) -> None:
+        self.start('p-anywhere', PAGE)
+        for command in (f'blocks add --siblingId {TOGGLE} --position after --json {BULLET_JSON}',
+                        f'blocks add --siblingId {LINE} --position before --json {BULLET_JSON}',
+                        f'blocks add --siblingId {LINE} --position after --json {BULLET_JSON}',
+                        f'blocks add --siblingId {FIRST} --position before --json {BULLET_JSON}',
+                        f'blocks add --id {PAGE} --position end --json {BULLET_JSON}',
+                        f'blocks update --id {REQ} --json {BULLET_JSON}',
+                        f'blocks delete --id {NOTES}'):
+            with self.subTest(command=command):
+                self.assert_denied(self.fire(write('p-anywhere', command)), SECTION, 'craft-section')
 
-    def test_appending_to_the_page_end_is_not_a_decision(self) -> None:
-        self.start('d-end', PAGE)
-        self.assert_silent(self.fire(write('d-end', f'blocks add --id {PAGE} --position end --json {DECISION_JSON}')))
-        self.assertIn('не под «Решениями»', self.last_reason('d-end'))
+    def test_stage_decisions_need_craft_stage_from_the_project_page(self) -> None:
+        self.start('p-stage', PROJECT)
+        result = self.fire(write('p-stage', f'blocks add --siblingId {SD1} --position after --json {BULLET_JSON}'))
+        self.assert_denied(result, 'Запись ложится в сущность «- [ ] ### Этап #этап/готово»',
+                           '#этап → craft-stage')
+        self.assertNotIn('craft-section', self.reason(result))
 
-    def test_editing_a_decision_needs_the_skill(self) -> None:
-        self.start('d-edit', PAGE)
-        result = self.fire(write('d-edit', f'blocks update --id {D1} --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+    def test_a_page_without_a_type_tag_needs_no_skill(self) -> None:
+        self.start('p-project', PROJECT)
+        command = f'blocks add --siblingId {STAGE} --position after --json {BULLET_JSON}'
+        self.assert_silent(self.fire(write('p-project', command)))
+        self.assertIn('тега типа нет, цель bbbbbbbb на странице без типа', self.last_reason('p-project'))
 
-    def test_a_requirement_bullet_is_not_a_decision(self) -> None:
-        self.start('d-req', PAGE)
-        self.assert_silent(self.fire(write('d-req', f'blocks update --id {REQ} --json {DECISION_JSON}')))
+    def test_a_link_with_a_tag_does_not_type_the_block(self) -> None:
+        self.start('p-link', PROJECT)
+        self.assert_silent(self.fire(write('p-link', f'blocks update --id {STAGE_LINK} --json {BULLET_JSON}')))
 
-    def test_stage_decisions_are_found_from_the_project_page(self) -> None:
-        self.start('d-stage', PROJECT)
-        result = self.fire(write('d-stage', f'blocks add --siblingId {SD1} --position after --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+    def test_the_body_and_the_state_of_a_task_need_craft_task(self) -> None:
+        self.start('p-task', PROJECT)
+        for command in (f'blocks add --id {TASK} --position end --json {BULLET_JSON}',
+                        f'tasks update --id {TASK} --state done'):
+            with self.subTest(command=command):
+                self.assert_denied(self.fire(write('p-task', command)),
+                                   'Запись ложится в сущность «- [ ] Задача #задача/1ч»', 'craft-task')
+        # Сосед задачи ложится в её родителя, а не в неё саму.
+        self.assert_silent(self.fire(write(
+            'p-task', f'blocks add --siblingId {TASK} --position after --json {BULLET_JSON}')))
 
-    def test_a_tagged_write_under_decisions_names_both_skills(self) -> None:
-        self.start('d-both', PAGE)
-        payload = DECISION_JSON.replace('Новое решение', 'Задевает [[x]] #раздел')
-        result = self.fire(write('d-both', f'blocks add --siblingId {D1} --position after --json {payload}'))
-        self.assert_denied(result, '#раздел → craft-section', 'craft-decision, craft-section')
+    def test_a_tag_in_the_text_and_the_page_need_both_skills(self) -> None:
+        self.start('p-both', PAGE)
+        payload = BULLET_JSON.replace('Новое решение', '- [ ] Дело #задача')
+        result = self.fire(write('p-both', f'blocks add --siblingId {D1} --position after --json {payload}'))
+        self.assert_denied(result, '#задача → craft-task', SECTION, 'не вызван скилл: craft-section, craft-task')
 
     def test_without_reads_the_write_is_into_the_unread(self) -> None:
-        self.fire(prompt('d-noread'))
-        result = self.fire(write('d-noread', f'blocks add --siblingId {D1} --position after --json {DECISION_JSON}'))
-        self.assert_denied(result, 'Запись в непрочитанное', 'нет чтений', 'blocks get')
+        self.fire(prompt('p-noread'))
+        result = self.fire(write('p-noread', f'blocks add --siblingId {D1} --position after --json {BULLET_JSON}'))
+        self.assert_denied(result, 'Запись в непрочитанное', 'нет чтений', 'blocks get', 'тип сущности')
 
     def test_a_target_outside_the_read_pages_is_into_the_unread(self) -> None:
-        self.start('d-elsewhere', PROJECT)
-        result = self.fire(write('d-elsewhere', f'blocks add --siblingId {D1} --position after --json {DECISION_JSON}'))
+        self.start('p-elsewhere', PROJECT)
+        result = self.fire(write('p-elsewhere', f'blocks add --siblingId {D1} --position after --json {BULLET_JSON}'))
         self.assert_denied(result, 'Запись в непрочитанное', 'не найдена среди страниц')
 
     def test_a_target_deeper_than_two_levels_counts_as_unread(self) -> None:
-        self.start('d-deep', PROJECT)
-        result = self.fire(write('d-deep', f'blocks update --id {DEEP_D1} --json {DECISION_JSON}'))
+        self.start('p-deep', PROJECT)
+        result = self.fire(write('p-deep', f'blocks update --id {DEEP_D1} --json {BULLET_JSON}'))
         self.assert_denied(result, 'Запись в непрочитанное')
-        self.start('d-deep-read', PROJECT, DEEP_PAGE)
-        result = self.fire(write('d-deep-read', f'blocks update --id {DEEP_D1} --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
 
-    def test_moving_a_task_under_decisions_is_caught_by_the_target(self) -> None:
-        self.start('d-move', PROJECT, PAGE)
-        result = self.fire(write('d-move', f'blocks move --id {TASK} --targetSiblingId {D2} --position after'))
-        self.assert_denied(result, 'craft-decision')
+    def test_a_subpage_read_by_itself_is_judged_by_its_own_title(self) -> None:
+        # Граница схемы: сущность выше корня прочитанной страницы замок не видит.
+        self.start('p-subpage', PROJECT, DEEP_PAGE)
+        self.assert_silent(self.fire(write('p-subpage', f'blocks update --id {DEEP_D1} --json {BULLET_JSON}')))
+        self.assertIn('на странице без типа', self.last_reason('p-subpage'))
 
-    def test_before_the_first_block_is_outside_any_zone(self) -> None:
-        self.start('d-first', PAGE)
-        first = 'aaaaaaaa-0000-0000-0000-000000000003'
-        self.assert_silent(self.fire(write('d-first', f'blocks add --siblingId {first} --position before --json {DECISION_JSON}')))
-        self.assertIn('не под «Решениями»', self.last_reason('d-first'))
+    def test_moving_a_task_into_a_section_needs_both_skills(self) -> None:
+        self.start('p-move', PROJECT, PAGE)
+        result = self.fire(write('p-move', f'blocks move --id {TASK} --targetSiblingId {D2} --position after'))
+        self.assert_denied(result, 'не вызван скилл: craft-section, craft-task')
 
-    def test_a_quoted_id_is_still_found(self) -> None:
-        self.start('d-quoted', PAGE)
-        result = self.fire(write('d-quoted', f'blocks update --id "{D1}" --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
-
-    def test_an_unparsed_id_is_not_judged(self) -> None:
-        self.start('d-broken', PAGE)
-        self.assert_silent(self.fire(write('d-broken', f'blocks update --id ЗАДАЧА --json {DECISION_JSON}')))
-        self.assertIn('место записи не проверено: цель в команде не разобрана', self.last_reason('d-broken'))
-
-    def test_a_page_read_by_date_is_remembered_from_the_answer(self) -> None:
-        self.fire(prompt('d-date'))
-        raw = read('d-date', 'blocks get --date today')
-        raw['tool_response'] = f'<page id="{PAGE}">\n  <pageTitle>Сегодня</pageTitle>\n</page>'
-        self.assert_silent(self.fire(raw))
-        result = self.fire(write('d-date', f'blocks update --id {D1} --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
-
-    def test_a_decision_target_on_a_later_read_page_is_still_caught(self) -> None:
+    def test_a_target_on_a_later_read_page_is_still_found(self) -> None:
         # Страницы идут свежие первыми: PROJECT свежее, задача найдётся там,
         # а цель переноса D2 — только на PAGE, прочитанной раньше.
-        self.start('d-later', PAGE, PROJECT)
-        result = self.fire(write('d-later', f'blocks move --id {TASK} --targetSiblingId {D2} --position after'))
-        self.assert_denied(result, 'craft-decision')
+        self.start('p-later', PAGE, PROJECT)
+        self.prepare('p-later', 'craft-task')
+        result = self.fire(write('p-later', f'blocks move --id {TASK} --targetSiblingId {D2} --position after'))
+        self.assert_denied(result, 'не вызван скилл: craft-section')
+
+    def test_moving_into_a_page_is_judged_by_that_page(self) -> None:
+        self.start('p-move-end', PROJECT, PAGE, DEEP_PAGE)
+        self.prepare('p-move-end', 'craft-task')
+        result = self.fire(write('p-move-end', f'blocks move --id {TASK} --targetId {PAGE} --position end'))
+        self.assert_denied(result, 'не вызван скилл: craft-section')
+        result = self.fire(write('p-move-end', f'blocks move --id {TASK} --targetId {DEEP_PAGE} --position end'))
+        self.assert_silent(result)
+
+    def test_a_quoted_id_is_still_found(self) -> None:
+        self.start('p-quoted', PAGE)
+        result = self.fire(write('p-quoted', f'blocks update --id "{D1}" --json {BULLET_JSON}'))
+        self.assert_denied(result, 'craft-section')
+
+    def test_an_unparsed_id_is_not_judged(self) -> None:
+        self.start('p-broken', PAGE)
+        self.assert_silent(self.fire(write('p-broken', f'blocks update --id ЗАДАЧА --json {BULLET_JSON}')))
+        self.assertIn('место записи не проверено: цель в команде не разобрана', self.last_reason('p-broken'))
+
+    def test_a_valid_target_is_judged_next_to_a_broken_one(self) -> None:
+        self.start('p-mixed', PAGE)
+        result = self.fire(write('p-mixed', f'blocks move --id {D1} --targetSiblingId ЗАДАЧА'))
+        self.assert_denied(result, 'craft-section')
+
+    def test_a_page_read_by_date_is_remembered_from_the_answer(self) -> None:
+        self.fire(prompt('p-date'))
+        raw = read('p-date', 'blocks get --date today')
+        raw['tool_response'] = f'<page id="{PAGE}">\n  <pageTitle>Сегодня</pageTitle>\n</page>'
+        self.assert_silent(self.fire(raw))
+        result = self.fire(write('p-date', f'blocks update --id {D1} --json {BULLET_JSON}'))
+        self.assert_denied(result, 'craft-section')
 
     def test_an_untagged_write_to_an_unread_target_is_denied(self) -> None:
-        self.start('d-untagged', PAGE)
-        result = self.fire(write('d-untagged', f'blocks update --id {TASK} --json {DECISION_JSON}'))
+        self.start('p-untagged', PAGE)
+        result = self.fire(write('p-untagged', f'blocks update --id {TASK} --json {BULLET_JSON}'))
         self.assert_denied(result, 'Запись в непрочитанное', 'bbbbbbbb')
 
     def test_a_flag_after_the_payload_is_still_seen(self) -> None:
-        self.start('d-tail', PAGE)
-        result = self.fire(write('d-tail', f'blocks add --json {DECISION_JSON} --siblingId={D2} --position=after'))
-        self.assert_denied(result, 'craft-decision')
-
-    def test_moving_into_the_end_of_a_page_lands_after_its_last_block(self) -> None:
-        self.start('d-move-end', PROJECT, PAGE)
-        result = self.fire(write('d-move-end', f'blocks move --id {TASK} --targetId {PAGE} --position end'))
-        self.assert_silent(result)
-        self.assertIn('не под «Решениями»', self.last_reason('d-move-end'))
-        self.start('d-move-deep', PROJECT, DEEP_PAGE)
-        result = self.fire(write('d-move-deep', f'blocks move --id {TASK} --targetId {DEEP_PAGE} --position end'))
-        self.assert_denied(result, 'craft-decision')
-
-    def test_a_valid_target_is_judged_next_to_a_broken_one(self) -> None:
-        self.start('d-mixed', PAGE)
-        result = self.fire(write('d-mixed', f'blocks move --id {D1} --targetSiblingId ЗАДАЧА'))
-        self.assert_denied(result, 'craft-decision')
+        self.start('p-tail', PAGE)
+        result = self.fire(write('p-tail', f'blocks add --json {BULLET_JSON} --siblingId={D2} --position=after'))
+        self.assert_denied(result, 'craft-section')
 
     def test_a_targeted_command_without_a_target_is_not_judged(self) -> None:
-        self.fire(prompt('d-notarget'))
-        self.assert_silent(self.fire(write('d-notarget', 'blocks delete')))
-        self.assertIn('флага цели нет', self.last_reason('d-notarget'))
+        self.fire(prompt('p-notarget'))
+        self.assert_silent(self.fire(write('p-notarget', 'blocks delete')))
+        self.assertIn('флага цели нет', self.last_reason('p-notarget'))
 
     def test_an_unknown_place_is_announced_once_per_session(self) -> None:
-        self.start('d-warn', PAGE)
+        self.start('p-warn', PAGE)
         self.api_base = 'http://127.0.0.1:9/api/v1'
         try:
-            first = self.fire(write('d-warn', f'blocks update --id {D1} --json {DECISION_JSON}'))
-            self.fire(prompt('d-warn'))
-            second = self.fire(write('d-warn', f'blocks update --id {D2} --json {DECISION_JSON}'))
+            first = self.fire(write('p-warn', f'blocks update --id {D1} --json {BULLET_JSON}'))
+            self.fire(prompt('p-warn'))
+            second = self.fire(write('p-warn', f'blocks update --id {D2} --json {BULLET_JSON}'))
         finally:
             self.api_base = type(self).api_base
-        self.assertIn('место записи в Craft не проверяется',
-                      json.loads(first.stdout)['hookSpecificOutput']['additionalContext'])
+        text = json.loads(first.stdout)['hookSpecificOutput']['additionalContext']
+        self.assertIn('место записи в Craft не проверяется', text)
+        self.assertIn('Тип страницы цели не проверен', text)
         self.assert_silent(second)
 
-    def test_a_write_before_the_first_child_of_a_container_is_outside(self) -> None:
-        self.start('d-container-first', PROJECT, DEEP_PAGE)
-        self.assert_silent(self.fire(write('d-container-first', f'blocks add --id {DEEP_PAGE} --position before --json {DECISION_JSON}')))
+    def test_a_write_before_the_first_child_of_an_untyped_container_passes(self) -> None:
+        self.start('p-container-first', PROJECT, DEEP_PAGE)
+        command = f'blocks add --id {DEEP_PAGE} --position before --json {BULLET_JSON}'
+        self.assert_silent(self.fire(write('p-container-first', command)))
 
     def test_a_lower_case_read_of_an_upper_case_page_is_served_by_the_answer(self) -> None:
-        self.fire(prompt('d-answer-case'))
-        raw = read('d-answer-case', f'blocks get {UPPER_PAGE.lower()} --depth -1')
+        self.fire(prompt('p-answer-case'))
+        raw = read('p-answer-case', f'blocks get {UPPER_PAGE.lower()} --depth -1')
         raw['tool_response'] = f'<page id="{UPPER_PAGE}">\n</page>'
         self.assert_silent(self.fire(raw))
-        result = self.fire(write('d-answer-case', f'blocks update --id {UPPER_D1} --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+        result = self.fire(write('p-answer-case', f'blocks update --id {UPPER_D1} --json {BULLET_JSON}'))
+        self.assert_denied(result, 'craft-section')
 
     def test_a_404_is_retried_in_the_other_case(self) -> None:
-        self.start('d-retry-case', UPPER_PAGE.lower())
-        result = self.fire(write('d-retry-case', f'blocks update --id {UPPER_D1} --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+        self.start('p-retry-case', UPPER_PAGE.lower())
+        result = self.fire(write('p-retry-case', f'blocks update --id {UPPER_D1} --json {BULLET_JSON}'))
+        self.assert_denied(result, 'craft-section')
 
     def test_an_upper_case_id_is_requested_as_is(self) -> None:
-        self.start('d-upper', UPPER_PAGE)
-        result = self.fire(write('d-upper', f'blocks update --id {UPPER_D1.lower()} --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+        self.start('p-upper', UPPER_PAGE)
+        result = self.fire(write('p-upper', f'blocks update --id {UPPER_D1.lower()} --json {BULLET_JSON}'))
+        self.assert_denied(result, 'craft-section')
 
     def test_a_corrupted_reads_list_fails_loud(self) -> None:
-        self.fire(prompt('d-corrupt'))
-        path = self.storage('d-corrupt').path('craft-type-lock.json')
+        self.fire(prompt('p-corrupt'))
+        path = self.storage('p-corrupt').path('craft-type-lock.json')
         path.write_text('{"turn": 1, "skills": {}, "reads": [1]}', encoding='utf-8')
-        result = self.run_raw(write('d-corrupt', 'tasks add --help'))
+        result = self.run_raw(write('p-corrupt', 'tasks add --help'))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('испорчен', result.stderr)
 
     def test_reads_survive_compaction(self) -> None:
-        self.start('d-compact', PAGE)
-        self.fire(compact('d-compact'))
-        self.fire(prompt('d-compact'))
-        result = self.fire(write('d-compact', f'blocks update --id {D1} --json {DECISION_JSON}'))
-        self.assert_denied(result, 'craft-decision')
+        self.start('p-compact', PAGE)
+        self.fire(compact('p-compact'))
+        self.fire(prompt('p-compact'))
+        result = self.fire(write('p-compact', f'blocks update --id {D1} --json {BULLET_JSON}'))
+        self.assert_denied(result, 'craft-section')
 
     def test_an_unreachable_api_lets_the_write_through_with_a_warning(self) -> None:
-        self.start('d-api', PAGE)
+        self.start('p-api', PAGE)
         self.api_base = 'http://127.0.0.1:9/api/v1'
         try:
-            result = self.fire(write('d-api', f'blocks update --id {D1} --json {DECISION_JSON}'))
+            result = self.fire(write('p-api', f'blocks update --id {D1} --json {BULLET_JSON}'))
         finally:
             self.api_base = type(self).api_base
         output = json.loads(result.stdout)['hookSpecificOutput']
@@ -708,9 +856,9 @@ class DecisionLockTest(LockHarness):
         self.assertIn('API Craft не ответил', output['additionalContext'])
 
     def test_a_write_without_a_target_id_skips_the_api(self) -> None:
-        self.fire(prompt('d-noid'))
-        self.assert_silent(self.fire(write('d-noid', 'tasks add --help')))
-        self.assertEqual(self.last_reason('d-noid'), 'тега типа нет')
+        self.fire(prompt('p-noid'))
+        self.assert_silent(self.fire(write('p-noid', 'tasks add --help')))
+        self.assertEqual(self.last_reason('p-noid'), 'тега типа нет')
 
 
 if __name__ == '__main__':

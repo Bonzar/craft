@@ -300,18 +300,27 @@ class InstallerTest(unittest.TestCase):
 
     # --- теги сущностей в data/entity.json ---
 
+    @staticmethod
+    def entity(*tags: str) -> str:
+        template = '811ff148-857f-703e-35a9-06b9784e2572'
+        return json.dumps({'tags': list(tags), 'templates': {tag: [template] for tag in tags}},
+                          ensure_ascii=False)
+
     def add_entity(self, slug: str, body: str) -> Path:
         folder = self.add_module(slug, f'slug = "{slug}"\n', {'data': {'entity.json': body}})
         return folder / 'data' / 'entity.json'
 
     def test_entity_tags_of_distinct_modules_install(self) -> None:
-        self.add_entity('craft-task', '{"tags": ["#задача"]}')
-        self.add_entity('craft-note', '{"tags": ["#заметка", "#тема"]}')
+        self.add_entity('craft-task', self.entity('#задача'))
+        self.add_entity('craft-note', self.entity('#заметка', '#тема'))
         self.assertEqual(sorted(self.run_installer().installed), ['craft-note', 'craft-task'])
 
     def test_a_broken_entity_file_fails_the_install_with_its_path(self) -> None:
         bodies = ('{"tags":', '[]', '{}', '{"tags": []}', '{"tags": "#задача"}',
-                  '{"tags": ["задача"]}', '{"tags": [1]}', '{"tags": ["#"]}')
+                  '{"tags": ["задача"]}', '{"tags": [1]}', '{"tags": ["#"]}',
+                  '{"tags": ["#задача"]}', '{"tags": ["#задача"], "templates": {"#задача": []}}',
+                  '{"tags": ["#задача"], "templates": {"#задача": ["не id"]}}',
+                  self.entity('#задача').replace('}}', ', "#веха": []}}'))
         for number, body in enumerate(bodies):
             with self.subTest(body=body):
                 path = self.add_entity(f'craft-x{number}', body)
@@ -322,16 +331,24 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(self.settings_root.exists())
 
     def test_a_tag_of_two_modules_fails_the_install(self) -> None:
-        self.add_entity('craft-task', '{"tags": ["#задача"]}')
-        path = self.add_entity('craft-todo', '{"tags": ["#Задача"]}')
+        self.add_entity('craft-task', self.entity('#задача'))
+        path = self.add_entity('craft-todo', self.entity('#Задача'))
         with self.assertRaises(ValueError) as caught:
             self.run_installer()
         self.assertIn(str(path), str(caught.exception))
         self.assertIn('craft-task', str(caught.exception))
         self.assertFalse(self.settings_root.exists())
 
+    def test_an_entity_module_for_the_lock_without_its_file_fails_the_install(self) -> None:
+        folder = self.add_module('craft-task', 'slug = "craft-task"\nfor = ["craft-type-lock"]\n',
+                                 {'data': {'notes.md': '#\n'}})
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer('--dry-run')
+        self.assertIn(str(folder / 'data' / 'entity.json'), str(caught.exception))
+        self.assertIn('craft-type-lock', str(caught.exception))
+
     def test_a_tag_repeated_in_one_module_fails_the_install(self) -> None:
-        self.add_entity('craft-task', '{"tags": ["#задача", "#задача"]}')
+        self.add_entity('craft-task', self.entity('#задача', '#задача'))
         with self.assertRaises(ValueError):
             self.run_installer()
 

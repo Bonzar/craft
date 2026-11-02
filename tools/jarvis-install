@@ -15,7 +15,8 @@
 - убирает то, чего в источнике больше нет: исчезнувшие части, снятые модули и
   лишние копии;
 - предупреждает о требовании без модуля и о событии, которого у харнеса нет;
-- падает на испорченном `data/entity.json` и на теге, который стоит у двух модулей.
+- падает на испорченном `data/entity.json`, на теге, который стоит у двух модулей,
+  и на модуле с `for` на craft-type-lock без этого файла.
 
 Чего он НЕ делает: библиотеку никуда не собирает, путей модулю не сообщает,
 про стартовый контекст не знает ничего и ничего не чинит — только раскладывает
@@ -94,9 +95,16 @@ TEXT_SUFFIXES = {'.md', '.py', '.json', '.toml', '.txt', '.sh', '.yaml', '.yml',
 # Байткод — след запуска из источника, а не часть модуля: в установку он не едет.
 IGNORED = shutil.ignore_patterns('__pycache__', '*.pyc')
 # Теги сущности: файл data/entity.json модуля, поле tags. По этим файлам замок
-# craft-type-lock собирает справочник «тег → скилл» на каждой записи в Craft.
+# craft-type-lock собирает справочник «тег → скилл» на каждой записи в Craft;
+# модуль сущности объявляет себя замку полем `for`, и без файла замок
+# закрывает любую запись.
 ENTITY_FILE = 'entity.json'
+ENTITY_LOCK = 'craft-type-lock'
 ENTITY_TAGS_KEY = 'tags'
+# Шаблоны тега: id страниц, любой из которых агент читает в ходе до записи в
+# сущность. Объект «тег → непустой список id», ключи — ровно теги из tags.
+ENTITY_TEMPLATES_KEY = 'templates'
+BLOCK_ID = re.compile(r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}')
 TAG_PREFIX = '#'
 PLACEHOLDER_OPEN = '{{'
 # Единый slug возможности харнеса в тексте части. Пишется в том же синтаксисе,
@@ -870,15 +878,20 @@ def check_entity_tags(plan: list[tuple]) -> None:
     """Проверить data/entity.json всех копий набора ДО того, как установка что-то тронет.
 
     Файл разбирается, `tags` — непустой список строк с «#», тег не повторяется
-    ни у двух модулей, ни в одном. Без этой проверки битая карта тегов
-    всплыла бы только в работе: замок запрещает запись в Craft (закрыто) и
-    падает с ошибкой хука на каждом вызове Skill, а review-craft-calls падает
-    на каждой записи. Регистр не важен, как у замка.
+    ни у двух модулей, ни в одном, у каждого тега в `templates` непустой
+    список id шаблонов. Модуль с `for` на замок craft-type-lock обязан нести
+    файл. Без этой проверки битая карта тегов всплыла бы только
+    в работе: замок запрещает запись в Craft (закрыто) и падает с ошибкой
+    хука на каждом вызове Skill, а review-craft-calls падает на каждой
+    записи. Регистр не важен, как у замка.
     """
     owners = {}
     for target, slug in plan:
         path = target.path / PART_DATA / ENTITY_FILE
+        serves_lock = any(manifest_reader.serves_slug(entry, ENTITY_LOCK) for entry in target.serves)
         if not path.is_file():
+            if serves_lock:
+                raise ValueError(f'{path}: модуль «{slug}» объявил for «{ENTITY_LOCK}», а файла сущности нет')
             continue
         try:
             entity = json.loads(path.read_text(encoding='utf-8'))
@@ -893,6 +906,22 @@ def check_entity_tags(plan: list[tuple]) -> None:
             if tag.lower() in owners:
                 raise ValueError(f'{path}: тег {tag} уже у модуля «{owners[tag.lower()]}»')
             owners[tag.lower()] = slug
+        check_entity_templates(path, tags, entity.get(ENTITY_TEMPLATES_KEY))
+
+
+def check_entity_templates(path: Path, tags: list, templates) -> None:
+    """`templates` — ровно теги из `tags`, у каждого непустой список id блоков."""
+    if not isinstance(templates, dict):
+        raise ValueError(f'{path}: нет объекта «{ENTITY_TEMPLATES_KEY}»: тег → id шаблонов')
+    for tag in tags:
+        ids = templates.get(tag)
+        if (not isinstance(ids, list) or not ids
+                or not all(isinstance(item, str) and BLOCK_ID.fullmatch(item) for item in ids)):
+            raise ValueError(f'{path}: у тега {tag} в «{ENTITY_TEMPLATES_KEY}» нет непустого списка id шаблонов')
+    extra = sorted(set(templates) - set(tags))
+    if extra:
+        raise ValueError(f'{path}: в «{ENTITY_TEMPLATES_KEY}» шаблоны тегов, которых нет в '
+                         f'«{ENTITY_TAGS_KEY}»: {", ".join(extra)}')
 
 
 def check_events(manifests: list, report: Report, backend: Backend | None = None) -> None:
