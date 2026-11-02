@@ -77,7 +77,7 @@ func TestTheListsCanOnlyMakeTheAnswerStricter(t *testing.T) {
 }
 
 func TestAnUnknownCommandStaysUnknownInBothSources(t *testing.T) {
-	if got := judged(t, "craft-sync --backlinks abc", "/repo").Writes; got != writesUnknown {
+	if got := judged(t, "acme-sync --backlinks abc", "/repo").Writes; got != writesUnknown {
 		t.Errorf("writes = «%s», ждали «%s»", got, writesUnknown)
 	}
 }
