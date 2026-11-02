@@ -10,7 +10,7 @@
 from dataclasses import dataclass
 from typing import NewType
 
-from .records import KIND_KEY, KIND_WRITE, TYPES_ERROR_KEY, TYPES_KEY
+from .records import VolumeRecord, WriteRecord
 from .volume import count_writes
 
 CriterionId = NewType('CriterionId', str)
@@ -134,17 +134,16 @@ def make_criterion(text: str) -> Criterion:
     return Criterion(CriterionId(head[ID_FIELD]), parse_applies(head[APPLIES_FIELD]), body)
 
 
-def write_tags(volume: list[dict]) -> set[str]:
+def write_tags(volume: list[VolumeRecord]) -> set[str]:
     """Теги типа всех записей write объёма, в нижнем регистре."""
     found = set()
     for record in volume:
-        types = record.get(TYPES_KEY)
-        if record.get(KIND_KEY) == KIND_WRITE and isinstance(types, list):
-            found |= {str(item).lower() for item in types}
+        if isinstance(record, WriteRecord) and record.types is not None:
+            found |= {item.lower() for item in record.types}
     return found
 
 
-def criterion_applies(criterion: Criterion, volume: list[dict]) -> bool:
+def criterion_applies(criterion: Criterion, volume: list[VolumeRecord]) -> bool:
     """Подходит ли критерий к объёму. Правило из трёх держит сам Criterion."""
     match criterion.applies:
         case Always():
@@ -179,7 +178,7 @@ def missing_criteria_problem(criteria: tuple[CriterionId, ...],
             'чистый вердикт не принимается. Скажи об этом человеку')
 
 
-def untagged_problem(volume: list[dict], found: tuple[Criterion, ...]) -> str | None:
+def untagged_problem(volume: list[VolumeRecord], found: tuple[Criterion, ...]) -> str | None:
     """Теги записей write, на которые нет ни одного критерия с правилом tags.
 
     Модуль сущности без критерия иначе прошёл бы молча: общие критерии
@@ -196,28 +195,22 @@ def untagged_problem(volume: list[dict], found: tuple[Criterion, ...]) -> str | 
             'чистый вердикт не принимается. Скажи об этом человеку')
 
 
-def unknown_tags_problem(volume: list[dict]) -> str | None:
-    """Записи write, чьи теги неизвестны: `types` не список или поставщик назвал ошибку.
+def unknown_tags_problem(volume: list[VolumeRecord]) -> str | None:
+    """Записи write, чьи теги неизвестны: поставщик назвал ошибку справочника.
 
     Критерии по тегам такую запись не выбирают, и untagged_problem её не
     видит: без этой проверки чистый вердикт прошёл бы без критериев её типа.
+    `types` не список до объёма не доходит: такую строку отвергает чтение.
     """
-    reasons = []
-    for record in volume:
-        if record.get(KIND_KEY) != KIND_WRITE:
-            continue
-        error = record.get(TYPES_ERROR_KEY)
-        if error is not None:
-            reasons.append(str(error))
-        elif not isinstance(record.get(TYPES_KEY), list):
-            reasons.append(f'поле «{TYPES_KEY}» не список: {record.get(TYPES_KEY)!r}')
+    reasons = [record.types_error for record in volume
+               if isinstance(record, WriteRecord) and record.types_error is not None]
     if not reasons:
         return None
     return (f'теги записи неизвестны, проверить нечем ({"; ".join(dict.fromkeys(reasons))}): '
             'чистый вердикт не принимается. Скажи об этом человеку')
 
 
-def criteria_problem(volume: list[dict], criteria: tuple[CriterionId, ...],
+def criteria_problem(volume: list[VolumeRecord], criteria: tuple[CriterionId, ...],
                      found: tuple[Criterion, ...], broken: tuple[str, ...]) -> str | None:
     """Почему чистый вердикт по объёму не принять; всё в порядке — None.
 

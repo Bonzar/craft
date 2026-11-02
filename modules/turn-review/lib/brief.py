@@ -16,7 +16,7 @@ from .criteria import (
     criterion_applies,
     make_criterion,
 )
-from .records import KIND_KEY, KIND_SKILL, SKILL_KEY
+from .records import SkillRecord, VolumeRecord
 
 CRITERION_FILE = 'review-criterion.md'
 RECORDS_FILE = 'review-records.md'
@@ -79,7 +79,7 @@ def read_data_file(slug: str, path: Path) -> tuple[str, None] | tuple[None, str]
         return None, f'{slug} ({path} не читается: {error})'
 
 
-def volume_skills(volume: list[dict]) -> tuple[str, ...]:
+def volume_skills(volume: list[VolumeRecord]) -> tuple[str, ...]:
     """Slug скиллов из записей skill объёма: по порядку, без повторов.
 
     Slug с разделителем пути или «.», «..» модулем быть не может: такой не
@@ -87,16 +87,15 @@ def volume_skills(volume: list[dict]) -> tuple[str, ...]:
     """
     found: list[str] = []
     for record in volume:
-        slug = record.get(SKILL_KEY) if record.get(KIND_KEY) == KIND_SKILL else None
-        if not isinstance(slug, str):
+        if not isinstance(record, SkillRecord):
             continue
-        slug = slug.strip()
+        slug = record.skill.strip()
         if slug and slug not in {'.', '..'} and Path(slug).name == slug and slug not in found:
             found.append(slug)
     return tuple(found)
 
 
-def read_requirements(modules_dir, volume: list[dict]
+def read_requirements(modules_dir, volume: list[VolumeRecord]
                       ) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
     """Требования модулей, чьи скиллы есть в объёме: (slug, текст) и что не прочиталось.
 
@@ -148,7 +147,7 @@ def read_criteria(modules_dir) -> tuple[tuple[Criterion, ...], tuple[str, ...]]:
     return tuple(found), tuple(broken)
 
 
-def assemble_brief(modules_dir, volume: list[dict], frame: str) -> BriefParts:
+def assemble_brief(modules_dir, volume: list[VolumeRecord], frame: str) -> BriefParts:
     """Поручение подагенту из каркаса, записей поставщиков, подходящих критериев
     и требований модулей, чьи скиллы есть в объёме.
 
@@ -167,7 +166,7 @@ def assemble_brief(modules_dir, volume: list[dict], frame: str) -> BriefParts:
     return BriefParts(text, ids, broken + records_broken + requirements_broken)
 
 
-def review_criteria(modules_dir, volume: list[dict],
+def review_criteria(modules_dir, volume: list[VolumeRecord],
                     taken: tuple[CriterionId, ...] | None) -> CriteriaCheck:
     """Критерии, по которым принимается вердикт, и почему чистый не принять.
 

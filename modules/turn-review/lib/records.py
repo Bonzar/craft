@@ -6,8 +6,9 @@ answer, anchor. Обязательные поля у каждого вида с�
 поэтому запись без `kind` или с полем не того типа до объёма не доходит.
 
 Номер хода `turn` фабрики не принимают: его ставит только append_turn_record.
-Объём с диска читается строками-словарями: файл мог испортить кто угодно, и
-вид строки там не гарантирован. Тип нужен на записи, на границе поставщика.
+Объём с диска читается в те же типы через parse_record: файл мог испортить
+кто угодно, и строка, которая типом не собирается, отвергается на границе
+чтения с причиной, а не прячется.
 """
 
 from dataclasses import dataclass, field, fields
@@ -196,6 +197,38 @@ def make_answer_record(*, question: str, answer, author: str, at: str) -> Answer
 
 def make_anchor_record(*, answer, question: str | None = None) -> AnchorRecord:
     return AnchorRecord(answer=answer, question=question)
+
+
+RECORD_OF_KIND = {record_type.kind: record_type for record_type in RECORD_TYPES}
+# Поля-кортежи: в строке объёма они списки. Ответы JSON остаются как есть.
+TUPLE_FIELDS = frozenset({TYPES_KEY, 'ids'})
+
+
+def parse_record(row) -> VolumeRecord:
+    """Запись из строки объёма: обратное record_row. Строка не та — ValueError с причиной.
+
+    Вид по `kind`, поля — как у типа: лишнее или недостающее поле отвергается,
+    списки становятся кортежами, а значения проверяет сам тип.
+    """
+    if not isinstance(row, dict):
+        # ValueError, а не TypeError: порча строки, как и в остальных ветках.
+        raise ValueError('не объект')  # noqa: TRY004
+    kind = row.get(KIND_KEY)
+    # Список или объект в kind словарь не возьмёт ключом: проверка до поиска.
+    record_type = RECORD_OF_KIND.get(kind) if isinstance(kind, str) else None
+    if record_type is None:
+        raise ValueError(f'{KIND_KEY} {row.get(KIND_KEY)!r} не из {", ".join(sorted(KINDS))}')
+    values = {name: value for name, value in row.items() if name != KIND_KEY}
+    extra = sorted(set(values) - {item.name for item in fields(record_type)})
+    if extra:
+        raise ValueError(f'запись {KIND_KEY} {record_type.kind}: лишние поля {", ".join(extra)}')
+    values = {name: _as_tuple(value) if name in TUPLE_FIELDS else value
+              for name, value in values.items()}
+    try:
+        return record_type(**values)
+    except TypeError as error:
+        # Недостающее поле dataclass называет TypeError: на границе это та же порча строки.
+        raise ValueError(f'запись {KIND_KEY} {record_type.kind}: {error}') from error
 
 
 def check_record(record) -> None:
