@@ -47,6 +47,12 @@ LOST_WRITES_PROBLEM = ('в объёме есть строки типа запи�
                        'запись, значит поставщик записей write (review-craft-calls или другой '
                        'с for = ["turn-review"]) не стоит или упал. Это не ход без записей. '
                        'Скажи об этом человеку: проверить, стоит ли поставщик записей')
+LOST_WRITE_PROBLEM = ('запись потеряна: в объёме строки типа от замка craft-type-lock без своей '
+                      'записи write ({rows}: {commands}). Замок кладёт строку только за случившуюся '
+                      'запись, значит поставщик записей write (review-craft-calls или другой с '
+                      'for = ["turn-review"]) на этом вызове упал, и ревью эту запись не видит. '
+                      'Скажи об этом человеку: проверить поставщика записей и сверить эту запись '
+                      'в Craft')
 
 
 class WriteType(NamedTuple):
@@ -79,12 +85,18 @@ def write_type(number: int, record: WriteRecord, row: EntityRecord | None) -> Wr
                      row.place_types, row.content_types)
 
 
-def write_types(volume: list[VolumeRecord]) -> tuple[WriteType, ...]:
-    """Тип каждой записи write объёма, по порядку записей."""
+def paired(volume: list[VolumeRecord]) -> tuple[tuple[WriteType, ...], list[EntityRecord]]:
+    """Тип каждой записи write по порядку и строки замка, которым пары не нашлось."""
     pending = [record for record in volume if isinstance(record, EntityRecord)]
     writes = [record for record in volume if isinstance(record, WriteRecord)]
-    return tuple(write_type(number, record, take_row(pending, record))
-                 for number, record in enumerate(writes, start=1))
+    types = tuple(write_type(number, record, take_row(pending, record))
+                  for number, record in enumerate(writes, start=1))
+    return types, pending
+
+
+def write_types(volume: list[VolumeRecord]) -> tuple[WriteType, ...]:
+    """Тип каждой записи write объёма, по порядку записей."""
+    return paired(volume)[0]
 
 
 def selection_tags(volume: list[VolumeRecord]) -> frozenset[str] | None:
@@ -128,14 +140,18 @@ def types_text(volume: list[VolumeRecord]) -> str:
 
 
 def lost_writes_problem(volume: list[VolumeRecord]) -> str | None:
-    """Строки замка есть, а записей write нет ни одной: записи некому было положить.
+    """Строки замка без пары-записи write: записи случились, а в объём не легли.
 
-    Без этой проверки ход отпускался бы как «записей не было». Строку замок
-    кладёт только за случившуюся запись, но поставщик записей мог упасть на
-    одном вызове и устоять на других; одна строка без пары в объёме с записями
-    бедой не считается, проверяется только объём без единой записи.
+    Строку замок кладёт только за случившуюся запись, поэтому строка без пары
+    значит, что поставщик записей на этом вызове не стоял или упал. Объём без
+    единой записи — поставщика нет вовсе, и без этой проверки ход отпускался бы
+    как «записей не было». Объём с другими записями — потеряна одна запись:
+    ревью её не видит и критериев ей не даёт, поэтому ход тоже не отпускается.
     """
-    rows = sum(1 for record in volume if isinstance(record, EntityRecord))
-    if not rows or any(isinstance(record, WriteRecord) for record in volume):
+    types, orphans = paired(volume)
+    if not orphans:
         return None
-    return LOST_WRITES_PROBLEM.format(rows=rows)
+    if not types:
+        return LOST_WRITES_PROBLEM.format(rows=len(orphans))
+    commands = '; '.join(f'«{row.command[:COMMAND_PREVIEW]}»' for row in orphans)
+    return LOST_WRITE_PROBLEM.format(rows=len(orphans), commands=commands)

@@ -100,7 +100,13 @@ class Module(jarvis.Module):
         storage = runtime.storage
         # Показ идёт до остановки: состояние читается без починки, чинит stop.
         state = review.peek_state(storage)
-        hidden = answer_hidden(storage, state, runtime, review)
+        try:
+            hidden = answer_hidden(storage, state, runtime, review)
+        except SourcesError:
+            # Поставщиков не прочитать — чистому вердикту не на что опереться:
+            # ответ спрятан, а не показан непроверенным упавшим хуком. Причину
+            # назовёт остановка.
+            hidden = True
         final = is_final(event)
         # Спрятанный ответ: вместо ответа, который ревью ещё не проверило,
         # человек видит строку про ревью, а с отладочным выводом под ней ещё

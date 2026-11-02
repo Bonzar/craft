@@ -1688,7 +1688,10 @@ class LostWritesTest(TurnReviewCase):
     def test_lost_writes_problem_names_the_count(self) -> None:
         rows = [review_lib.parse_record(entity_row(DECISION_ADD, 'p')) for _ in range(2)]
         self.assertIn('2', review_lib.lost_writes_problem(rows))
-        self.assertIsNone(review_lib.lost_writes_problem([*rows, write_record(DECISION_ADD, 'p')]))
+        # Строка с парой бедой не считается; без пары — потерянная запись.
+        self.assertIsNone(review_lib.lost_writes_problem([rows[0], write_record(DECISION_ADD, 'p')]))
+        self.assertIn('запись потеряна',
+                      review_lib.lost_writes_problem([*rows, write_record(DECISION_ADD, 'p')]))
         self.assertIsNone(review_lib.lost_writes_problem([]))
 
 
