@@ -112,8 +112,8 @@ def problem_prefix(problem: str | None) -> str:
 def required_criteria(state: dict, runtime, review, volume: list[dict]):
     """Критерии, по которым принимается вердикт, и почему чистый вердикт не принять.
 
-    Одна функция lib на stop и превью: ответ открывается ровно тогда, когда
-    stop принял бы вердикт.
+    Критерии и criteria_problem у stop и превью общие: одна функция lib.
+    Нет ли поставщика (providers_problem), проверяет только stop.
     """
     return review.review_criteria(registry.modules_dir(runtime.module_dir), volume,
                                   state[review.CRITERIA_KEY])
@@ -326,7 +326,8 @@ def answer_hidden(storage, state: dict | None, runtime, review) -> bool:
 class Module(jarvis.Module):
     """Решение на остановке хода и показ ответа до вердикта.
 
-    Объём копят поставщики через lib, здесь его только читают. На реплике
+    Объём копят поставщики через lib, модуль его читает, а на остановке под
+    локом чинит (load_volume) или очищает (clear_volume) файл. На реплике
     модуль берёт номер хода, на post-tool разбирает только ответ на
     собственный вопрос ревью.
     """

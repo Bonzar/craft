@@ -25,8 +25,6 @@ CRAFT_WRITE_TOOLS = ('craft_write', 'craft_write_and_show')
 CRAFT_READ_TOOL = 'craft_read'
 # Инструмент Craft узнаём по хвосту имени: имя сервера зависит от подключения.
 CRAFT_TOOL_PREFIX = 'craft_'
-# Справочник тегов не собрался: запись всё равно ложится, с текстом ошибки.
-TYPES_ERROR_KEY = 'types_error'
 COMMAND_FIELD = 'command'
 SKILL_TOOL = 'Skill'
 HEX = '[0-9a-fA-F]'
@@ -59,22 +57,24 @@ def as_is(value):
     return value if isinstance(value, (str, dict, list)) else None
 
 
-def write_record(event, review, tags) -> tuple[dict, ValueError | None]:
+def write_record(event, review, tags) -> tuple[dict, Exception | None]:
     """Запись write и ошибка справочника тегов, если он не собрался.
 
     Без справочника теги неизвестны: `types` равен null, текст ошибки лежит в
     `types_error`. Запись всё равно ложится, иначе ушла бы от ревью совсем.
+    Ловится любая ошибка, а не только порча файла: каталог модулей мог и не
+    прочитаться (права, нет каталога).
     """
     command = command_of(event.tool_input)
     record = {review.KIND_KEY: review.KIND_WRITE, review.TOOL_KEY: event.tool_name,
               review.COMMAND_KEY: command, review.RESULT_KEY: as_is(event.tool_result)}
     try:
         return {**record, review.TYPES_KEY: tags.find_tags(command, tags.load_tag_skills())}, None
-    except ValueError as error:
-        return {**record, review.TYPES_KEY: None, TYPES_ERROR_KEY: str(error)}, error
+    except Exception as error:  # noqa: BLE001 — запись ложится, ошибка поднимается в handle
+        return {**record, review.TYPES_KEY: None, review.TYPES_ERROR_KEY: str(error)}, error
 
 
-def record_of(event, review, tags) -> tuple[dict | None, ValueError | None]:
+def record_of(event, review, tags) -> tuple[dict | None, Exception | None]:
     """Запись объёма без номера хода и ошибка справочника; не наш вызов — None.
 
     Номер хода ставит append_turn_record.

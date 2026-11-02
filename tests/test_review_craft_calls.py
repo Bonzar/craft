@@ -1,5 +1,6 @@
 """Поставщик review-craft-calls: какие вызовы ложатся в объём ревью и в каком виде."""
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from jarvis.storage import Storage
 from jarvis.trace import Trace
@@ -20,6 +22,14 @@ NEIGHBOURS = ('turn-review', 'craft-type-lock', 'craft-task', 'craft-stage', 'cr
 TASK_ADD = ('blocks add --siblingId X --position after --json '
             '\'{"type":"text","markdown":"- [ ] Купить молоко #задача/5м"}\'')
 BLOCK = 'a6784801-9d92-875c-f146-50159368745b'
+
+
+def load_file(name: str, path: Path):
+    """Хук или lib как библиотека: ядро уже на пути у пакета тестов."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def post_tool(session: str, tool: str, tool_input: dict, response) -> dict:
@@ -94,6 +104,39 @@ class ReviewCraftCallsTest(unittest.TestCase):
         run = self.run_hook(post_tool('s-foreign', 'mcp__github__get_me', {}, {}))
         self.assertEqual((run.returncode, run.stdout), (0, ''), run.stderr)
         self.assertEqual(self.last_reason('s-foreign'), 'вызов не Craft и не скилл')
+
+
+class TagMapErrorTest(unittest.TestCase):
+    """Справочник тегов упал не порчей файла: запись всё равно ложится."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self.tmp.name), 's-oserror')
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_an_unreadable_modules_dir_keeps_the_write_and_raises(self) -> None:
+        hook = load_file('review_craft_calls_hook', MODULES_DIR / SLUG / 'hooks' / 'module.py')
+        review = load_file('turn_review_lib_calls', MODULES_DIR / 'turn-review' / 'lib' / '__init__.py')
+
+        def load_tag_skills():
+            raise PermissionError(13, 'нет доступа', '/modules')
+
+        tags = SimpleNamespace(load_tag_skills=load_tag_skills, find_tags=lambda command, found: [])
+        libraries = {'turn-review': review, 'craft-type-lock': tags}
+        runtime = SimpleNamespace(storage=self.storage, library=lambda slug: SimpleNamespace(
+            load=lambda: libraries[slug]))
+        event = SimpleNamespace(agent_id=None, tool_name='mcp__Craft__craft_write',
+                                tool_input={'command': TASK_ADD}, tool_result={'id': BLOCK})
+        with self.assertRaises(PermissionError):
+            hook.Module().handle(event, runtime)
+        [line] = self.storage.read_lines('turn-review-volume.jsonl')
+        record = json.loads(line)
+        self.assertEqual((record['kind'], record['command'], record['types']),
+                         ('write', TASK_ADD, None))
+        self.assertIn('нет доступа', record['types_error'])
+        self.assertIn('/modules', record['types_error'])
 
 
 if __name__ == '__main__':

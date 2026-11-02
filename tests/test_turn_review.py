@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -660,6 +662,22 @@ class TurnReviewTest(TurnReviewCase):
         self.assertIn('один критерий не подошёл', self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 
+    def test_a_write_with_unknown_tags_is_not_released_by_a_clean_verdict(self) -> None:
+        # Поставщик не собрал справочник тегов: критерии по тегам эту запись
+        # не выбирают, и чистый вердикт прошёл бы без критериев её типа.
+        session = 's-unknown-tags'
+        self.start_with_write(session)
+        review_lib.append_turn_record(self.storage(session), {
+            'kind': 'write', 'command': 'blocks add', 'types': None,
+            'types_error': 'entity.json: файл сущности не читается'})
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.assertEqual(self.shown(self.fire(message(session, 'Готово.'))),
+                         'Ревью хода идёт, отчёт после него.')
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('Теги записи неизвестны, проверить нечем', reason)
+        self.assertIn('entity.json: файл сущности не читается', reason)
+        self.assertEqual(len(self.volume(session)), 2)
+
     def test_an_unwritable_brief_is_a_block_and_not_a_crash(self) -> None:
         session = 's-brief-dir'
         self.start_with_write(session)
@@ -707,6 +725,91 @@ class CurrentTurnTest(unittest.TestCase):
             review_lib.append_turn_record(self.storage, {'kind': 'write', 'turn': 1})
         rows = [json.loads(line) for line in self.storage.read_lines('turn-review-volume.jsonl')]
         self.assertEqual(rows, [{'kind': 'write'}])
+
+
+class VolumeLockTest(unittest.TestCase):
+    """Запись в объём идёт под локом ревью, как очистка на остановке."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self.tmp.name), 's-lock')
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def commands(self) -> list[str]:
+        records, damage = review_lib.parse_volume_file(self.storage.path('turn-review-volume.jsonl'))
+        self.assertEqual(damage, [])
+        return sorted(record['command'] for record in records)
+
+    def test_parallel_records_land_as_whole_lines(self) -> None:
+        # Строка пишется в два приёма с паузой посередине: без лока второй
+        # поток вклинился бы в первую строку.
+        def append_in_halves(storage, name, line, zone='session'):
+            path = storage.path(name, zone)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('a', encoding='utf-8') as handle:
+                handle.write(line[:len(line) // 2])
+                handle.flush()
+                time.sleep(0.1)
+                handle.write(line[len(line) // 2:] + '\n')
+            return path
+
+        records = [{'kind': 'write', 'command': f'команда {number}'} for number in range(2)]
+        for append in (review_lib.append_record, review_lib.append_turn_record):
+            with self.subTest(append=append.__name__):
+                self.storage.path('turn-review-volume.jsonl').unlink(missing_ok=True)
+                workers = [threading.Thread(target=append, args=(self.storage, record))
+                           for record in records]
+                with mock.patch.object(Storage, 'append_line', append_in_halves):
+                    for worker in workers:
+                        worker.start()
+                    for worker in workers:
+                        worker.join(5)
+                self.assertEqual(self.commands(), ['команда 0', 'команда 1'])
+
+    def test_a_record_waits_for_the_lock_held_by_the_stop(self) -> None:
+        # Остановка чистит объём под локом: запись, легшая посреди очистки,
+        # пропала бы вместе со старыми.
+        for append in (review_lib.append_record, review_lib.append_turn_record):
+            with self.subTest(append=append.__name__):
+                self.storage.path('turn-review-volume.jsonl').unlink(missing_ok=True)
+                worker = threading.Thread(target=append, args=(
+                    self.storage, {'kind': 'write', 'command': 'после очистки'}))
+                with review_lib.state_lock(self.storage):
+                    worker.start()
+                    worker.join(0.2)
+                    self.assertTrue(worker.is_alive())
+                    self.assertEqual(self.commands(), [])
+                worker.join(5)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(self.commands(), ['после очистки'])
+
+
+class UnknownTagsTest(unittest.TestCase):
+    """Запись write с неизвестными тегами: чистый вердикт по ней не принимается."""
+
+    TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
+
+    def problem(self, record: dict) -> str | None:
+        return review_lib.criteria_problem([record], ['task'], [self.TASK], [])
+
+    def test_a_types_error_is_a_problem_with_its_text(self) -> None:
+        for types in (None, ['#задача']):
+            with self.subTest(types=types):
+                problem = self.problem({'kind': 'write', 'types': types,
+                                        'types_error': '/m/entity.json: не JSON'})
+                self.assertIn('теги записи неизвестны, проверить нечем', problem)
+                self.assertIn('/m/entity.json: не JSON', problem)
+
+    def test_types_not_a_list_is_a_problem(self) -> None:
+        for record in ({'kind': 'write'}, {'kind': 'write', 'types': '#задача'}):
+            with self.subTest(record=record):
+                self.assertIn('теги записи неизвестны', self.problem(record))
+
+    def test_known_tags_and_other_kinds_are_no_problem(self) -> None:
+        self.assertIsNone(self.problem({'kind': 'write', 'types': ['#задача']}))
+        self.assertIsNone(self.problem({'kind': 'read', 'types': None}))
 
 
 class StateTest(unittest.TestCase):

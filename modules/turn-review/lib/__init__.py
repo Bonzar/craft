@@ -53,6 +53,8 @@ TOOL_KEY = 'tool'
 COMMAND_KEY = 'command'
 RESULT_KEY = 'result'
 TYPES_KEY = 'types'
+# Справочник тегов у поставщика не собрался: `types` у записи null, здесь текст ошибки.
+TYPES_ERROR_KEY = 'types_error'
 IDS_KEY = 'ids'
 SKILL_KEY = 'skill'
 ANSWER_KEY = 'answer'
@@ -201,12 +203,24 @@ def save_state(storage, state: dict) -> None:
     storage.write_json(STATE_FILE, state)
 
 
-def append_record(storage, record: dict) -> None:
+def _append_unlocked(storage, record: dict) -> None:
+    """Дописать строку в объём; лок держит вызывающий."""
     storage.append_line(VOLUME_FILE, json.dumps(record, ensure_ascii=False))
 
 
+def append_record(storage, record: dict) -> None:
+    """Дописать запись в объём под локом ревью.
+
+    Без лока параллельные поставщики могли бы перемешать строки, а очистка
+    на остановке — потерять только что дописанную. Звать не под state_lock:
+    flock на новом дескрипторе не реентерабелен и ждал бы сам себя.
+    """
+    with state_lock(storage):
+        _append_unlocked(storage, record)
+
+
 def _parse_volume(storage) -> tuple[list[dict], list[str]]:
-    """Строки объёма, которые читаются, и номера тех, что не читаются."""
+    """Строки объёма, которые читаются, и описания тех, что не читаются: номер и причина."""
     return parse_volume_file(storage.path(VOLUME_FILE))
 
 
@@ -449,14 +463,19 @@ def append_turn_record(storage, record: dict) -> None:
     Номер хода ставит только эта функция: поле поставщика с тем же именем
     отбрасывается. Иначе поставщик мог бы выдать запись за запись прошлого
     хода, и ход-разговор отпустил бы её без ревью.
+
+    Номер читается и запись ложится под одним локом, как у append_record:
+    звать не под state_lock.
     """
-    try:
-        turn = current_turn(storage)
-    except ValueError:
-        append_record(storage, {key: value for key, value in record.items()
-                                if key != RECORD_TURN_KEY})
-        raise
-    append_record(storage, {KIND_KEY: record.get(KIND_KEY), **record, RECORD_TURN_KEY: turn})
+    with state_lock(storage):
+        try:
+            turn = current_turn(storage)
+        except ValueError:
+            _append_unlocked(storage, {key: value for key, value in record.items()
+                                       if key != RECORD_TURN_KEY})
+            raise
+        _append_unlocked(storage, {KIND_KEY: record.get(KIND_KEY), **record,
+                                   RECORD_TURN_KEY: turn})
 
 
 def prompt_mark(text: str) -> str:
@@ -733,15 +752,38 @@ def untagged_problem(volume: list[dict], found: list[Criterion]) -> str | None:
             'чистый вердикт не принимается. Скажи об этом человеку')
 
 
+def unknown_tags_problem(volume: list[dict]) -> str | None:
+    """Записи write, чьи теги неизвестны: `types` не список или поставщик назвал ошибку.
+
+    Критерии по тегам такую запись не выбирают, и untagged_problem её не
+    видит: без этой проверки чистый вердикт прошёл бы без критериев её типа.
+    """
+    reasons = []
+    for record in volume:
+        if record.get(KIND_KEY) != KIND_WRITE:
+            continue
+        error = record.get(TYPES_ERROR_KEY)
+        if error is not None:
+            reasons.append(str(error))
+        elif not isinstance(record.get(TYPES_KEY), list):
+            reasons.append(f'поле «{TYPES_KEY}» не список: {record.get(TYPES_KEY)!r}')
+    if not reasons:
+        return None
+    return (f'теги записи неизвестны, проверить нечем ({"; ".join(dict.fromkeys(reasons))}): '
+            'чистый вердикт не принимается. Скажи об этом человеку')
+
+
 def criteria_problem(volume: list[dict], criteria: list[str], found: list[Criterion],
                      broken: list[str]) -> str | None:
     """Почему чистый вердикт по объёму не принять; всё в порядке — None.
 
     Правило одно на stop и превью: не разобранные файлы, объём с записями
-    write без единого критерия и тег записи без своего критерия.
+    write без единого критерия, запись с неизвестными тегами и тег записи
+    без своего критерия.
     """
     problems = (broken_problem(broken),
                 NO_CRITERIA_PROBLEM if count_writes(volume) and not criteria else None,
+                unknown_tags_problem(volume),
                 untagged_problem(volume, found))
     return PROBLEM_SEPARATOR.join(problem for problem in problems if problem) or None
 
