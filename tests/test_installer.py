@@ -298,6 +298,54 @@ class InstallerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_installer()
 
+    # --- теги сущностей в data/entity.json ---
+
+    def add_entity(self, slug: str, body: str) -> Path:
+        folder = self.add_module(slug, f'slug = "{slug}"\n', {'data': {'entity.json': body}})
+        return folder / 'data' / 'entity.json'
+
+    def test_entity_tags_of_distinct_modules_install(self) -> None:
+        self.add_entity('craft-task', '{"tags": ["#задача"]}')
+        self.add_entity('craft-note', '{"tags": ["#заметка", "#тема"]}')
+        self.assertEqual(sorted(self.run_installer().installed), ['craft-note', 'craft-task'])
+
+    def test_a_broken_entity_file_fails_the_install_with_its_path(self) -> None:
+        bodies = ('{"tags":', '[]', '{}', '{"tags": []}', '{"tags": "#задача"}',
+                  '{"tags": ["задача"]}', '{"tags": [1]}', '{"tags": ["#"]}')
+        for number, body in enumerate(bodies):
+            with self.subTest(body=body):
+                path = self.add_entity(f'craft-x{number}', body)
+                with self.assertRaises(ValueError) as caught:
+                    self.run_installer('--dry-run')
+                self.assertIn(str(path), str(caught.exception))
+                shutil.rmtree(path.parents[1])
+        self.assertFalse(self.settings_root.exists())
+
+    def test_a_tag_of_two_modules_fails_the_install(self) -> None:
+        self.add_entity('craft-task', '{"tags": ["#задача"]}')
+        path = self.add_entity('craft-todo', '{"tags": ["#Задача"]}')
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer()
+        self.assertIn(str(path), str(caught.exception))
+        self.assertIn('craft-task', str(caught.exception))
+        self.assertFalse(self.settings_root.exists())
+
+    def test_a_tag_repeated_in_one_module_fails_the_install(self) -> None:
+        self.add_entity('craft-task', '{"tags": ["#задача", "#задача"]}')
+        with self.assertRaises(ValueError):
+            self.run_installer()
+
+    def test_a_broken_entity_file_is_reported_without_a_traceback(self) -> None:
+        path = self.add_entity('craft-task', '{"tags":')
+        done = subprocess.run([
+            sys.executable, str(INSTALLER), '--harness', 'claude',
+            '--settings-dir', str(self.settings_root), '--state-dir', str(self.state_dir),
+            '--modules', str(self.source), '--core', str(CORE_SOURCE),
+        ], capture_output=True, text=True, check=False)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(str(path), done.stderr)
+        self.assertNotIn('Traceback', done.stderr)
+
     def test_dry_run_changes_nothing(self) -> None:
         self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\n')
         self.run_installer('--dry-run')

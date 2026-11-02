@@ -3,10 +3,12 @@
 
 Ход — работа агента от реплики Влада до остановки. Смысловые дефекты записи в
 Craft видны только целиком, в конце хода, поэтому ревью стоит на остановке.
-На вызовах модуль копит объём ревью: записи, чтения, вызовы скиллов, якорь,
-ответы Влада на вопросы кнопками. Его реплики идут в объём на событии реплики.
-На остановке смотрит вердикт подагента по этому объёму и либо отпускает ход,
-либо возвращает его с замечаниями или поручением.
+Объём ревью копят поставщики: модули review-craft-calls, review-prompts,
+session-anchor пишут свои записи через lib этого модуля. Критерии привозят
+модули файлом data/review-criterion.md, формат записей поставщики описывают в
+data/review-records.md. Хук на остановке собирает из них поручение подагенту
+и смотрит вердикт по объёму: либо отпускает ход, либо возвращает его с
+замечаниями или поручением.
 
 На событии model-message модуль прячет ответ за ход с записями, пока нет
 чистого вердикта: вместо ответа человек видит строку о том, что идёт ревью.
@@ -18,8 +20,8 @@ Craft видны только целиком, в конце хода, поэто
 """
 
 import json
-import re
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,7 +31,7 @@ import jarvis  # noqa: E402
 from jarvis import events, registry, wrappers  # noqa: E402
 
 MODULE_DIR = Path(__file__).resolve().parents[1]
-BRIEF_FILE = MODULE_DIR / 'data' / 'review-brief.md'
+FRAME_FILE = MODULE_DIR / 'data' / 'review-frame.md'
 # Подагент считает отпечаток скриптом, хук — функцией из lib: функция одна.
 FINGERPRINT_SCRIPT = MODULE_DIR / 'hooks' / 'fingerprint.py'
 DEBUG_FILE = MODULE_DIR / 'data' / 'debug.json'
@@ -37,49 +39,20 @@ DEBUG_FIELD = 'debug'
 # дока, MessageDisplay: `final` — последний кусок сообщения.
 FINAL_FIELD = 'final'
 
-TYPE_LOCK = 'craft-type-lock'
-
-# Имя сервера Craft MCP зависит от подключения, поэтому инструмент узнаём по
-# хвосту имени, как замок типов.
-MCP_PREFIX = 'mcp__'
-MCP_NAME_SEPARATOR = '__'
-CRAFT_WRITE_TOOLS = ('craft_write', 'craft_write_and_show')
-CRAFT_READ_TOOL = 'craft_read'
-COMMAND_FIELD = 'command'
-SKILL_TOOL = 'Skill'
 QUESTION_TOOL = 'AskUserQuestion'
-QUESTIONS_FIELD = 'questions'
-QUESTION_FIELD = 'question'
-OPTIONS_FIELD = 'options'
-LABEL_FIELD = 'label'
-HEX = '[0-9a-fA-F]'
-BLOCK_ID = re.compile(rf'{HEX}{{8}}-{HEX}{{4}}-{HEX}{{4}}-{HEX}{{4}}-{HEX}{{12}}')
-
-# Якорь сессии видно двумя путями: Влад выбрал его кнопкой в вопросе про
-# якорь или назвал репликой. Фраза в реплике считается, только когда с неё
-# начинается реплика или предложение: «не беру задачу» якорем не будет.
-ANCHOR_QUESTION_MARK = 'якор'
-ANCHOR_PROMPT = re.compile(r'(?:^|[.!?\n])\s*(?:беру задачу|якорь:)', re.IGNORECASE)
 
 MAX_NUDGES = 3
 RELEASE_ACTION = 'release'
 RELEASE_PHRASE = 'закончить без ревью'
-OPTION_REVIEW = 'Провести ревью'
-OPTION_RELEASE = 'Закончить без ревью'
 QUESTION_TEXT = ('Ревью хода не состоялось после трёх поручений. '
                  'Провести ревью или закончить без него?')
-QUESTION_MARK = 'Ревью хода не состоялось'
-# Модель может пересказать вопрос своими словами. Тогда наш вопрос узнаём по
-# паре подписей вариантов: иначе кнопка «Закончить без ревью» молча не
-# сработала бы, и выходом осталась бы только фраза репликой.
-OUR_OPTIONS = frozenset({OPTION_REVIEW, OPTION_RELEASE})
 
 NO_WRITES_REASON = 'записей в Craft не было'
 # Ход-разговор: объём с прежних ходов ждёт следующего хода с записями.
 QUIET_TURN_REASON = 'в этом ходе записей не было, объём ждёт хода с записями'
 CLEAN_REASON = 'ревью чистое, ход отпущен'
 RELEASED_REASON = 'ревью не было по решению человека'
-SUBAGENT_REASON = 'вызов внутри подагента: в объём ревью не идёт'
+SUBAGENT_REASON = 'вызов внутри подагента: ревью не касается'
 PROBLEM_SEPARATOR = '. '
 
 REPORT_SEPARATOR = '\n\n---\n'
@@ -104,59 +77,6 @@ def load_review(runtime):
     return found.load()
 
 
-def type_lock(runtime):
-    """Библиотека замка типов: справочник тегов и поиск тегов в команде."""
-    library = runtime.library(TYPE_LOCK)
-    if library is None:
-        raise RuntimeError(f'у модуля {TYPE_LOCK} нет части lib: поиск тегов типа взять '
-                           'неоткуда. Переустанови набор из свежего источника')
-    return library.load()
-
-
-def craft_tool(tool_name) -> str:
-    """Хвост имени инструмента Craft MCP; не Craft — пустая строка."""
-    if not isinstance(tool_name, str) or not tool_name.startswith(MCP_PREFIX):
-        return ''
-    return tool_name.rsplit(MCP_NAME_SEPARATOR, 1)[-1]
-
-
-def command_of(tool_input) -> str:
-    command = tool_input.get(COMMAND_FIELD) if isinstance(tool_input, dict) else None
-    return command if isinstance(command, str) else ''
-
-
-def question_items(tool_input) -> list[dict]:
-    items = tool_input.get(QUESTIONS_FIELD) if isinstance(tool_input, dict) else None
-    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
-
-
-def questions_text(tool_input) -> str:
-    texts = [item.get(QUESTION_FIELD) for item in question_items(tool_input)]
-    return '\n'.join(text for text in texts if isinstance(text, str))
-
-
-def option_labels(item: dict) -> set[str]:
-    options = item.get(OPTIONS_FIELD)
-    if not isinstance(options, list):
-        return set()
-    labels = [option.get(LABEL_FIELD) for option in options if isinstance(option, dict)]
-    return {label.strip() for label in labels if isinstance(label, str)}
-
-
-def our_question(tool_input) -> str | None:
-    """Текст нашего вопроса о ревью в вызове AskUserQuestion; нет его — None."""
-    for item in question_items(tool_input):
-        text = item.get(QUESTION_FIELD)
-        if isinstance(text, str) and (QUESTION_MARK in text or OUR_OPTIONS <= option_labels(item)):
-            return text
-    return None
-
-
-def as_is(value):
-    """Результат вызова как есть, если это строка или объект JSON."""
-    return value if isinstance(value, (str, dict, list)) else None
-
-
 def chosen_labels(answer, question: str) -> set[str]:
     """Что человек выбрал в нашем вопросе: подписи целиком, без пробелов по краям.
 
@@ -173,40 +93,16 @@ def chosen_labels(answer, question: str) -> set[str]:
     return {item.strip() for item in items if isinstance(item, str)}
 
 
-def volume_record(event, turn: int, runtime, review) -> dict | None:
-    """Строка объёма для вызова. Вызов ревью не касается — None."""
-    tool, base = craft_tool(event.tool_name), {review.RECORD_TURN_KEY: turn}
-    if tool in CRAFT_WRITE_TOOLS:
-        command, tags = command_of(event.tool_input), type_lock(runtime)
-        return {review.KIND_KEY: review.KIND_WRITE, **base, review.TOOL_KEY: event.tool_name,
-                review.COMMAND_KEY: command, review.RESULT_KEY: as_is(event.tool_result),
-                review.TYPES_KEY: tags.find_tags(command, tags.load_tag_skills())}
-    if tool == CRAFT_READ_TOOL:
-        command = command_of(event.tool_input)
-        ids = list(dict.fromkeys(BLOCK_ID.findall(command)))
-        return {review.KIND_KEY: review.KIND_READ, **base, review.COMMAND_KEY: command,
-                review.IDS_KEY: ids}
-    if event.tool_name == SKILL_TOOL:
-        return {review.KIND_KEY: review.KIND_SKILL, **base,
-                review.SKILL_KEY: type_lock(runtime).skill_slug(event.tool_input)}
-    if event.tool_name == QUESTION_TOOL:
-        kind = (review.KIND_ANCHOR if ANCHOR_QUESTION_MARK in questions_text(event.tool_input).lower()
-                else review.KIND_ANSWER)
-        return {review.KIND_KEY: kind, **base, review.QUESTION_KEY: questions_text(event.tool_input),
-                review.ANSWER_KEY: as_is(event.tool_result)}
-    return None
-
-
-def answered_release(event, state: dict, review) -> dict | None:
+def answered_release(event, state, review):
     """Ответ кнопкой на наш вопрос о ревью — новое состояние; иначе None."""
-    question = our_question(event.tool_input) if event.tool_name == QUESTION_TOOL else None
+    question = review.review_question(event.tool_input) if event.tool_name == QUESTION_TOOL else None
     if question is None:
         return None
     labels = chosen_labels(event.human_answer, question)
-    if OPTION_RELEASE in labels:
-        return {**state, review.RELEASED_KEY: True}
-    if OPTION_REVIEW in labels:
-        return {**state, review.NUDGES_KEY: 0, review.RELEASED_KEY: False}
+    if review.OPTION_RELEASE in labels:
+        return replace(state, released=True)
+    if review.OPTION_REVIEW in labels:
+        return replace(state, nudges=0, released=False)
     return None
 
 
@@ -214,40 +110,83 @@ def problem_prefix(problem: str | None) -> str:
     return f'{problem[0].upper()}{problem[1:]}. ' if problem else ''
 
 
-def nudge_text(storage, state: dict, runtime, review, volume: list[dict],
-               problem: str | None) -> str:
-    types_file = Path(type_lock(runtime).TYPES_FILE).resolve()
+def required_criteria(state, runtime, review, volume: list[dict]):
+    """Критерии, по которым принимается вердикт, и почему чистый вердикт не принять.
+
+    Критерии и criteria_problem у stop и превью общие: одна функция lib.
+    Нет ли поставщика (providers_problem), проверяет только stop.
+    """
+    return review.review_criteria(registry.modules_dir(runtime.module_dir), volume,
+                                  state.criteria)
+
+
+def read_frame(review) -> str:
+    """Каркас поручения. Не читается — BriefError с путём, а не падение хука."""
+    try:
+        return FRAME_FILE.read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError) as error:
+        raise review.BriefError(f'каркас поручения {FRAME_FILE} не читается ({error})') from error
+
+
+def nudge_text(storage, state, runtime, review, volume: list[dict],
+               problem: str | None) -> tuple[str, tuple[str, ...]]:
+    """Блок с просьбой запустить подагента и список критериев собранного поручения.
+
+    Поручение собирается здесь из каркаса, записей поставщиков и критериев,
+    чьё правило applies совпало с объёмом: always — всегда, craft — при
+    записях write, tags — когда запись несёт тег из правила. Оно кладётся в
+    хранилище сессии. Не разобранные файлы stop называет в problem. Каркас не
+    прочитать или поручение не записать — BriefError.
+    """
+    parts = review.assemble_brief(registry.modules_dir(runtime.module_dir), volume,
+                                  read_frame(review))
+    brief = review.write_brief(storage, parts.text)
     volume_file = storage.path(review.VOLUME_FILE).resolve()
     return (
         f'{problem_prefix(problem)}Ход не отпущен: ревью хода не сделано. Запусти подагента '
-        f'инструментом Agent (subagent_type general-purpose) с брифом из файла {BRIEF_FILE}, '
-        f'передай ему пути: объём {volume_file}, '
-        f'вердикт {storage.path(review.VERDICT_FILE).resolve()}, '
-        f'volume_id {state[review.VOLUME_ID_KEY]}, типы {types_file}, команда отпечатка '
+        f'инструментом Agent (subagent_type general-purpose) не в фоне, дождись его ответа '
+        f'тем же ходом. Поручение подагенту лежит в файле {brief}, передай ему пути: '
+        f'объём {volume_file}, вердикт {storage.path(review.VERDICT_FILE).resolve()}, '
+        f'volume_id {state.volume_id}, команда отпечатка '
         f'«python3 {FINGERPRINT_SCRIPT} {volume_file}»; записей write в объёме сейчас '
-        f'{review.count_writes(volume)}, отпечаток {review.fingerprint(volume)}. '
-        'Дождись, пока подагент запишет вердикт, и закончи ход снова. Ответ до чистого '
-        'вердикта человеку не показан: напиши его заново после вердикта.'
-    )
+        f'{review.count_writes(volume)}, отпечаток {review.fingerprint(volume)}, критерии '
+        f'{", ".join(parts.criteria) or "нет"}. Ответ до чистого вердикта человеку не показан: '
+        f'напиши его заново после вердикта.'
+    ), parts.criteria
 
 
-def remarks_text(remarks: list[dict], review) -> str:
+def brief_failure_text(problem: str | None, error: Exception) -> str:
+    """Блок, когда поручение не собрать: подагенту нечего дать, хук не падает."""
+    return (f'{problem_prefix(problem)}Ход не отпущен: ревью хода не сделано, {error}. '
+            'Скажи об этом человеку и закончи ход снова.')
+
+
+def remarks_text(remarks: list[dict], review, problem: str | None = None) -> str:
     lines = [f'- [{item[review.CRITERION_KEY]}] {item[review.WHERE_KEY]}: {item[review.TEXT_KEY]}'
              for item in remarks]
-    return ('Ход не отпущен: ревью хода нашло замечания.\n' + '\n'.join(lines)
-            + '\nПочини записи и снова закончи ход: хук попросит новое ревью.')
+    return (f'{problem_prefix(problem)}Ход не отпущен: ревью хода нашло замечания.\n'
+            + '\n'.join(lines) + '\nПочини записи и снова закончи ход: хук попросит новое ревью.')
 
 
-def stuck_text(problem: str | None) -> str:
+def stuck_text(problem: str | None, review, last_remarks: tuple[dict, ...]) -> str:
     # Ждать реплики модель не может: каждая остановка вернётся сюда же. Выход
     # из петли — только вопрос человеку. Блок, а не форма «вопрос»: на
     # остановке вопрос уходит контекстом, и Claude отпустил бы ход без него.
+    # Человек решает по замечаниям, а не вслепую: последние замечания идут в
+    # текст этого блока с вопросом, и агент показывает их с предложением по
+    # каждому. Подагенту они не идут.
+    context = ''
+    if last_remarks:
+        lines = '\n'.join(f'- [{item.get(review.CRITERION_KEY)}] {item.get(review.WHERE_KEY)}: '
+                           f'{item.get(review.TEXT_KEY)}' for item in last_remarks)
+        context = (f' Замечания последнего вердикта:\n{lines}\nПеред вопросом покажи человеку '
+                   'каждое незакрытое замечание и предложи, что с ним сделать.')
     return (f'{problem_prefix(problem)}Ход не отпущен: {QUESTION_TEXT} Спроси человека '
             f'инструментом {QUESTION_TOOL}: вопрос «{QUESTION_TEXT}», варианты '
-            f'«{OPTION_REVIEW}» и «{OPTION_RELEASE}». Вопрос и подписи вариантов скопируй '
+            f'«{review.OPTION_REVIEW}» и «{review.OPTION_RELEASE}». Вопрос и подписи вариантов скопируй '
             'дословно: по ним хук узнаёт ответ. Без этого вопроса ход не закончится: каждая '
             'остановка вернётся сюда. Человек может ответить и репликой, в которой только '
-            f'фраза «{RELEASE_PHRASE}».')
+            f'фраза «{RELEASE_PHRASE}».{context}')
 
 
 def with_problem(reason: str, problem: str | None) -> str:
@@ -300,10 +239,10 @@ def verdict_head(verdict: dict, review) -> str:
     return remarks_head(verdict[review.REMARKS_KEY], review)
 
 
-def elapsed_text(state: dict, review) -> str:
+def elapsed_text(state) -> str:
     # Счёт выше MAX_NUDGES — метка заданного вопроса, а не поручение.
-    nudges = min(state[review.NUDGES_KEY], MAX_NUDGES)
-    started = state[review.FIRST_NUDGE_KEY]
+    nudges = min(state.nudges, MAX_NUDGES)
+    started = state.first_nudge_at
     if not nudges:
         return 'Поручений не было.'
     if started is None:
@@ -315,17 +254,17 @@ def elapsed_text(state: dict, review) -> str:
     return f'Поручений {nudges}, с первого прошло {seconds} с.'
 
 
-def summary_text(head: str, state: dict, review, volume: list[dict],
+def summary_text(head: str, state, review, volume: list[dict],
                  verdict: dict | None) -> str:
     """Итог ревью для показа: 3 строки — вердикт, объём, поручения и время."""
     counts = (f'Записей write {review.count_writes(volume)}, '
               f'read {review.count_kind(volume, review.KIND_READ)}.')
     if verdict is not None:
         counts = f'Критерии: {", ".join(verdict[review.CHECKED_KEY])}. {counts}'
-    return f'{REPORT_TITLE} {head}\n{counts}\n{elapsed_text(state, review)}'
+    return f'{REPORT_TITLE} {head}\n{counts}\n{elapsed_text(state)}'
 
 
-def note_summary(storage, saved: dict, before: dict, review, volume: list[dict], head: str,
+def note_summary(storage, saved, before, review, volume: list[dict], head: str,
                  verdict: dict | None = None) -> None:
     """Положить итог ревью в состояние для показа; вывод выключен — ничего.
 
@@ -335,16 +274,15 @@ def note_summary(storage, saved: dict, before: dict, review, volume: list[dict],
     """
     if not debug_on():
         return
-    shown = verdict is not None \
-        and before[review.SHOWN_VERDICT_KEY] == review.verdict_key(verdict)
-    review.save_state(storage, {**saved, review.SUMMARY_KEY: summary_text(
-        head, before, review, volume, verdict), review.SUMMARY_SHOWN_KEY: shown})
+    shown = verdict is not None and before.shown_verdict == review.verdict_key(verdict)
+    review.save_state(storage, replace(
+        saved, summary=summary_text(head, before, review, volume, verdict), summary_shown=shown))
 
 
-def first_nudge_at(state: dict, review) -> str | None:
+def first_nudge_at(state) -> str | None:
     """Время первого поручения объёма, UTC; пишется только при отладочном выводе."""
-    if state[review.FIRST_NUDGE_KEY] is not None or not debug_on():
-        return state[review.FIRST_NUDGE_KEY]
+    if state.first_nudge_at is not None or not debug_on():
+        return state.first_nudge_at
     return now_utc().isoformat()
 
 
@@ -363,7 +301,7 @@ def display_gate(event) -> str | None:
     return None
 
 
-def answer_hidden(storage, state: dict | None, review) -> bool:
+def answer_hidden(storage, state, runtime, review) -> bool:
     """Прятать ли ответ: ход писал в Craft, а чистого вердикта по объёму нет.
 
     Вердикт с замечаниями или по другому объёму ответ не открывает: ход
@@ -375,17 +313,24 @@ def answer_hidden(storage, state: dict | None, review) -> bool:
     volume, damage = review.parse_volume_file(storage.path(review.VOLUME_FILE))
     if state is None or damage:
         return True
-    if not review.count_writes(volume) or review.writes_before_turn(volume, state[review.TURN_KEY]):
+    if not review.count_writes(volume) or review.writes_before_turn(volume, state.turn):
         return False
-    if state[review.RELEASED_KEY]:
+    if state.released:
         return False
-    verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY])
+    criteria, problem = required_criteria(state, runtime, review, volume)
+    verdict = review.peek_verdict(storage, state.volume_id, criteria, problem)
     return not (verdict is not None and verdict[review.CLEAN_KEY]
                 and verdict.get(review.FINGERPRINT_KEY) == review.fingerprint(volume))
 
 
 class Module(jarvis.Module):
-    """Объём копится на вызовах, решение — на остановке хода."""
+    """Решение на остановке хода и показ ответа до вердикта.
+
+    Объём копят поставщики через lib, модуль его читает, а на остановке под
+    локом чинит (load_volume) или очищает (clear_volume) файл. На реплике
+    модуль берёт номер хода, на post-tool разбирает только ответ на
+    собственный вопрос ревью.
+    """
 
     def handle(self, event: jarvis.Event, runtime: jarvis.Runtime) -> jarvis.Response:
         handlers = {
@@ -403,21 +348,10 @@ class Module(jarvis.Module):
             return handler(event, runtime, review)
 
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
-        storage = runtime.storage
-        state, problem = review.load_state(storage)
-        turn = review.next_turn(state[review.TURN_KEY], review.peek_volume(storage))
-        review.save_state(storage, {**state, review.TURN_KEY: turn})
-        text = event.prompt_text or ''
-        if text.strip():
-            # Реплика идёт в объём целиком: подагент снимает по ней замечание,
-            # если она называет место и решение (бриф, «Слово Влада»).
-            review.append_record(storage, {review.KIND_KEY: review.KIND_PROMPT,
-                                           review.RECORD_TURN_KEY: turn, review.PROMPT_TEXT_KEY: text})
-        if ANCHOR_PROMPT.search(text):
-            review.append_record(storage, {review.KIND_KEY: review.KIND_ANCHOR,
-                                           review.RECORD_TURN_KEY: turn, review.ANSWER_KEY: text})
-            return jarvis.Silence(
-                reason=with_problem(f'начался ход {turn}, якорь назван репликой', problem))
+        # Поставщики на той же реплике берут номер той же функцией: кто бы
+        # из параллельных хуков ни пришёл первым, ход у реплики один.
+        turn, problem = review.claim_prompt_turn(runtime.storage, runtime.manifest.slug,
+                                                 event.prompt_text or '')
         return jarvis.Silence(reason=with_problem(f'начался ход {turn}', problem))
 
     def on_after_compact(self, event, runtime, review) -> jarvis.Response:
@@ -425,7 +359,7 @@ class Module(jarvis.Module):
         # ревью из контекста ушли: счёт поручений начинается заново.
         storage = runtime.storage
         state, problem = review.load_state(storage)
-        review.save_state(storage, {**state, review.NUDGES_KEY: 0})
+        review.save_state(storage, replace(state, nudges=0))
         return jarvis.Silence(
             reason=with_problem('после сжатия счёт поручений обнулён, объём сохранён', problem))
 
@@ -434,7 +368,7 @@ class Module(jarvis.Module):
         storage = runtime.storage
         # Показ идёт до остановки: состояние читается без починки, чинит stop.
         state = review.peek_state(storage)
-        hidden = answer_hidden(storage, state, review)
+        hidden = answer_hidden(storage, state, runtime, review)
         final = bool(event.raw.get(FINAL_FIELD))
         # Спрятанный ответ: вместо ответа, который ревью ещё не проверило,
         # человек видит строку про ревью, а с отладочным выводом под ней ещё
@@ -444,49 +378,40 @@ class Module(jarvis.Module):
         if gate is not None or state is None:
             return jarvis.UpdatedDisplay(text=base) if hidden else jarvis.Silence(
                 reason=gate or 'состояние не читается, итог покажет следующий ход')
-        problem = None
-        summary = state[review.SUMMARY_KEY]
-        if summary and not state[review.SUMMARY_SHOWN_KEY]:
-            review.save_state(storage, {**state, review.SUMMARY_SHOWN_KEY: True})
-            return displayed(base, summary)
-        return self.preview(base, hidden, storage, state, review, problem)
+        if state.summary and not state.summary_shown:
+            review.save_state(storage, replace(state, summary_shown=True))
+            return displayed(base, state.summary)
+        return self.preview(base, hidden, runtime, state, review)
 
-    def preview(self, base: str, hidden: bool, storage, state: dict, review,
-                problem) -> jarvis.Response:
+    def preview(self, base: str, hidden: bool, runtime, state, review) -> jarvis.Response:
         # У Claude финальное сообщение идёт до stop, а вердикт подагент пишет
         # раньше: показываем его сейчас, под ответом этого же хода.
-        verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY])
-        if verdict is None or state[review.SHOWN_VERDICT_KEY] == review.verdict_key(verdict):
+        storage = runtime.storage
+        volume = review.peek_volume(storage)
+        criteria, problem = required_criteria(state, runtime, review, volume)
+        verdict = review.peek_verdict(storage, state.volume_id, criteria, problem)
+        if verdict is None or state.shown_verdict == review.verdict_key(verdict):
             if hidden:
                 return jarvis.UpdatedDisplay(text=base)
             return jarvis.Silence(reason=with_problem(NO_SUMMARY_REASON, problem))
-        review.save_state(storage, {**state,
-                                    review.SHOWN_VERDICT_KEY: review.verdict_key(verdict)})
-        text = summary_text(verdict_head(verdict, review), state, review,
-                            review.peek_volume(storage), verdict)
+        review.save_state(storage, replace(state, shown_verdict=review.verdict_key(verdict)))
+        text = summary_text(verdict_head(verdict, review), state, review, volume, verdict)
         return displayed(base, text)
 
     def on_post_tool(self, event, runtime, review) -> jarvis.Response:
-        # Вызовы подагента — это рецензент, а не ход: его чтения в объёме
-        # выдали бы «Связи» за прочитанные агентом.
+        # Объём копят поставщики. Здесь только ответ на вопрос самого ревью.
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
+        if event.tool_name != QUESTION_TOOL:
+            return jarvis.Silence(reason='вызов не вопрос человеку')
         storage = runtime.storage
         state, _ = review.load_state(storage)
         answered = answered_release(event, state, review)
         if answered is not None:
             review.save_state(storage, answered)
             return jarvis.Silence(
-                reason=f'ответ на вопрос о ревью: released={answered[review.RELEASED_KEY]}')
-        if event.tool_name == QUESTION_TOOL and our_question(event.tool_input) is not None:
-            # Свободный ответ на вопрос самого ревью ничего не меняет и в
-            # объём не идёт: это не слово Влада о записях хода.
-            return jarvis.Silence(reason='свободный ответ на вопрос о ревью')
-        record = volume_record(event, state[review.TURN_KEY], runtime, review)
-        if record is None:
-            return jarvis.Silence(reason='вызов ревью не касается')
-        review.append_record(storage, record)
-        return jarvis.Silence(reason=f'в объём ревью: {record[review.KIND_KEY]}')
+                reason=f'ответ на вопрос о ревью: released={answered.released}')
+        return jarvis.Silence(reason='не ответ кнопкой на вопрос о ревью')
 
     def on_stop(self, event, runtime, review) -> jarvis.Response:
         # stop_hook_active=true — штатная повторная остановка после блока:
@@ -497,38 +422,53 @@ class Module(jarvis.Module):
         if damage:
             # Объём уже не тот, что видел прежний вердикт: новый id делает
             # тот вердикт чужим, и ревью идёт по тому, что осталось.
-            state = {**state, review.VOLUME_ID_KEY: review.new_volume_id()}
+            state = replace(state, volume_id=review.new_volume_id())
             review.save_state(storage, state)
-        writes = review.count_writes(volume)
-        if not writes:
+        # Без поставщика объём пуст не потому, что записей не было: такой
+        # ход молча не отпускается.
+        no_provider = review.providers_problem(registry.modules_dir(runtime.module_dir))
+        if not review.count_writes(volume) and no_provider is None:
             if damage:
                 return jarvis.Block(reason=f'Ход не отпущен: {damage}. Скажи об этом человеку '
                                            'и закончи ход снова.')
             return jarvis.Silence(reason=with_problem(NO_WRITES_REASON, state_problem))
-        volume_id = state[review.VOLUME_ID_KEY]
-        verdict, verdict_problem = review.read_verdict(storage, volume_id, review.fingerprint(volume))
-        if verdict is not None:
-            return self.settle(storage, state, runtime, review, verdict, volume)
-        problem = joined(state_problem, damage, verdict_problem)
-        if runtime.take_confirmation(RELEASE_ACTION) or state[review.RELEASED_KEY]:
+        criteria, criteria_problem = required_criteria(state, runtime, review, volume)
+        blocking = joined(no_provider, criteria_problem)
+        verdict, verdict_problem = review.read_verdict(
+            storage, state.volume_id, review.fingerprint(volume), criteria)
+        settled = None if verdict is None else self.settle(storage, state, runtime, review,
+                                                            verdict, volume, blocking)
+        if settled is not None:
+            return settled
+        repair = joined(state_problem, damage)
+        problem = joined(repair, blocking, verdict_problem)
+        if runtime.take_confirmation(RELEASE_ACTION) or state.released:
             cleared = review.clear_volume(storage, state)
             note_summary(storage, cleared, state, review, volume, REPORT_RELEASED)
             return jarvis.Silence(reason=with_problem(RELEASED_REASON, problem))
-        if review.writes_before_turn(volume, state[review.TURN_KEY]):
+        if review.writes_before_turn(volume, state.turn):
             # Человек разговаривает с агентом, а не ждёт записи: поручение и
             # вопрос о ревью посреди разговора мешают, а объём никуда не
             # денется и пойдёт на ревью в конце ближайшего хода с записями.
             # Порча объёма или состояния молча не отпускается: о ней человек
             # узнаёт сейчас, как и на ходе без записей.
-            if damage or state_problem:
-                return jarvis.Block(reason=f'Ход не отпущен: {joined(state_problem, damage)}. '
+            if repair:
+                return jarvis.Block(reason=f'Ход не отпущен: {repair}. '
                                            'Скажи об этом человеку и закончи ход снова.')
             return jarvis.Silence(reason=with_problem(QUIET_TURN_REASON, problem))
         return self.press(storage, state, runtime, review, volume, problem)
 
-    def settle(self, storage, state: dict, runtime, review, verdict: dict,
-               volume: list[dict]) -> jarvis.Response:
+    def settle(self, storage, state, runtime, review, verdict: dict, volume: list[dict],
+               blocking: str | None) -> jarvis.Response | None:
+        """Ответ по вердикту нашего объёма; None — вердикт не принят.
+
+        Чистый вердикт при проблеме установки (`blocking`: нет поставщика,
+        не разобранные файлы, запись без критерия) не принимается: проверено
+        не всё. Вердикт с замечаниями возвращает ход с ними и с этой проблемой.
+        """
         head = verdict_head(verdict, review)
+        if verdict[review.CLEAN_KEY] and blocking:
+            return None
         if verdict[review.CLEAN_KEY]:
             cleared = review.clear_volume(storage, state)
             note_summary(storage, cleared, state, review, volume, head, verdict)
@@ -539,22 +479,33 @@ class Module(jarvis.Module):
         # Счёт поручений не трогаем: замечание, которое не закрыть, иначе
         # гоняло бы ход по кругу без вопроса человеку.
         review.drop_verdict(storage)
-        # Вердикт снят: следующий с тем же числом записей — уже другое ревью.
-        note_summary(storage, {**state, review.SHOWN_VERDICT_KEY: None}, state, review, volume,
-                     head, verdict)
-        return jarvis.Block(reason=remarks_text(verdict[review.REMARKS_KEY], review))
+        # Вердикт снят: следующий с тем же отпечатком — уже другое ревью.
+        # Замечания остаются в состоянии при любом отладочном выводе: вопрос
+        # человеку покажет их.
+        remarked = replace(state, shown_verdict=None,
+                           last_remarks=tuple(verdict[review.REMARKS_KEY]))
+        review.save_state(storage, remarked)
+        note_summary(storage, remarked, state, review, volume, head, verdict)
+        return jarvis.Block(reason=remarks_text(verdict[review.REMARKS_KEY], review, blocking))
 
-    def press(self, storage, state: dict, runtime, review, volume: list[dict],
+    def press(self, storage, state, runtime, review, volume: list[dict],
               problem: str | None) -> jarvis.Response:
-        nudges = state[review.NUDGES_KEY]
+        nudges = state.nudges
         if nudges < MAX_NUDGES:
-            review.save_state(storage, {**state, review.NUDGES_KEY: nudges + 1,
-                                        review.FIRST_NUDGE_KEY: first_nudge_at(state, review)})
-            return jarvis.Block(reason=nudge_text(storage, state, runtime, review, volume, problem))
+            try:
+                text, criteria = nudge_text(storage, state, runtime, review, volume, problem)
+            except review.BriefError as error:
+                # Счёт идёт и здесь: без него сломанный каркас держал бы ход
+                # по кругу, а так ход дойдёт до вопроса человеку.
+                text, criteria = brief_failure_text(problem, error), state.criteria
+            review.save_state(storage, replace(state, nudges=nudges + 1,
+                                               first_nudge_at=first_nudge_at(state),
+                                               criteria=criteria))
+            return jarvis.Block(reason=text)
         if nudges == MAX_NUDGES:
             runtime.ask_confirmation(action=RELEASE_ACTION, phrase=RELEASE_PHRASE)
-            review.save_state(storage, {**state, review.NUDGES_KEY: nudges + 1})
-        return jarvis.Block(reason=stuck_text(problem))
+            review.save_state(storage, replace(state, nudges=nudges + 1))
+        return jarvis.Block(reason=stuck_text(problem, review, state.last_remarks))
 
 
 if __name__ == '__main__':

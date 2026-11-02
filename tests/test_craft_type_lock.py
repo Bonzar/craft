@@ -63,9 +63,14 @@ class LockHarness(unittest.TestCase):
         module_dir = modules / SLUG
         shutil.copytree(MODULES_DIR / SLUG, module_dir, ignore=ignore)
         shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
+        # Соседи-сущности: шапка и теги в данных, как у настоящих модулей.
         for slug in LOCK_SKILLS:
             (modules / slug).mkdir()
             (modules / slug / 'module.toml').write_text(f'slug = "{slug}"\n', encoding='utf-8')
+            entity = MODULES_DIR / slug / 'data' / 'entity.json'
+            if entity.is_file():
+                (modules / slug / 'data').mkdir()
+                shutil.copy(entity, modules / slug / 'data' / 'entity.json')
         cls.entry = module_dir / 'hooks' / 'module.py'
 
     @classmethod
@@ -302,26 +307,63 @@ def load_lock_module():
     return module
 
 
-class TypesFileTest(unittest.TestCase):
-    """Испорченный справочник — ошибка с именем файла, а не тихий пропуск."""
+class EntityFileTest(unittest.TestCase):
+    """Испорченный data/entity.json соседа — ошибка с путём к файлу, а не тихий пропуск."""
 
-    def test_the_real_types_file_maps_every_tag_to_a_skill(self) -> None:
+    def test_the_real_entity_files_map_every_tag_to_a_module(self) -> None:
         lock = load_lock_module()
-        tag_skills = lock.load_tag_skills()
+        tag_skills = lock.load_tag_skills(MODULES_DIR)
         # Решение тега не несёт: его скилл замок требует по месту, не по справочнику.
         self.assertEqual(set(tag_skills.values()) | {lock.DECISION_SKILL}, set(LOCK_SKILLS))
+        self.assertEqual(tag_skills['#этап'], 'craft-stage')
 
-    def test_a_broken_types_file_is_an_error(self) -> None:
+    def test_a_broken_entity_file_is_an_error(self) -> None:
         lock = load_lock_module()
-        bodies = ('{"types":', '[]', '{"types": {}}', '{"types": {"#задача": {}}}',
-                  '{"types": {"задача": {"skill": "craft-task"}}}')
+        bodies = ('{"tags":', '[]', '{"tags": []}', '{"tags": ["задача"]}', '{"tags": [1]}')
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'types.json'
+            path = Path(tmp) / 'craft-x' / 'data' / 'entity.json'
+            path.parent.mkdir(parents=True)
             for body in bodies:
                 path.write_text(body, encoding='utf-8')
                 with self.subTest(body=body), self.assertRaises(ValueError) as caught:
-                    lock.load_tag_skills(path)
+                    lock.load_tag_skills(tmp)
                 self.assertIn(str(path), str(caught.exception))
+            # Один тег у двух модулей — ошибка, а не молчаливый выбор.
+            path.write_text('{"tags": ["#задача"]}', encoding='utf-8')
+            other = Path(tmp) / 'craft-y' / 'data'
+            other.mkdir(parents=True)
+            (other / 'entity.json').write_text('{"tags": ["#Задача"]}', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                lock.load_tag_skills(tmp)
+
+
+class BrokenEntityFileTest(LockHarness):
+    """Справочник не собирается — запись в Craft не проходит, в причине путь к файлу."""
+
+    def break_entity(self, slug: str, body: str) -> Path:
+        path = self.root / 'modules' / slug / 'data' / 'entity.json'
+        original = path.read_text(encoding='utf-8')
+        self.addCleanup(path.write_text, original, encoding='utf-8')
+        path.write_text(body, encoding='utf-8')
+        return path
+
+    def test_a_broken_entity_file_denies_the_write_with_its_path(self) -> None:
+        path = self.break_entity('craft-note', '{"tags":')
+        self.fire(prompt('s-broken-entity'))
+        # Вызов скилла без справочника — ошибка хука с путём, скилл не засчитан.
+        called = self.run_raw(skill('s-broken-entity', 'craft-task'))
+        self.assertNotEqual(called.returncode, 0)
+        self.assertIn(str(path), called.stderr)
+        result = self.fire(write('s-broken-entity', TASK_ADD))
+        self.assert_denied(result, str(path), 'entity.json')
+
+    def test_a_repeated_tag_denies_even_a_write_without_tags(self) -> None:
+        tag = json.loads((MODULES_DIR / 'craft-note' / 'data' / 'entity.json')
+                         .read_text(encoding='utf-8'))['tags'][0]
+        path = self.break_entity('craft-task', json.dumps({'tags': [tag]}, ensure_ascii=False))
+        self.fire(prompt('s-repeated-tag'))
+        result = self.fire(write('s-repeated-tag', 'blocks add --help'))
+        self.assert_denied(result, str(path), 'craft-note')
 
 
 class MissingSkillsTest(unittest.TestCase):

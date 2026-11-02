@@ -14,7 +14,8 @@
 - у Codex вдобавок отмечает свои строки доверенными через его app-server;
 - убирает то, чего в источнике больше нет: исчезнувшие части, снятые модули и
   лишние копии;
-- предупреждает о требовании без модуля и о событии, которого у харнеса нет.
+- предупреждает о требовании без модуля и о событии, которого у харнеса нет;
+- падает на испорченном `data/entity.json` и на теге, который стоит у двух модулей.
 
 Чего он НЕ делает: библиотеку никуда не собирает, путей модулю не сообщает,
 про стартовый контекст не знает ничего и ничего не чинит — только раскладывает
@@ -92,6 +93,11 @@ DECLARED_FILES = 'files'
 TEXT_SUFFIXES = {'.md', '.py', '.json', '.toml', '.txt', '.sh', '.yaml', '.yml', '.js'}
 # Байткод — след запуска из источника, а не часть модуля: в установку он не едет.
 IGNORED = shutil.ignore_patterns('__pycache__', '*.pyc')
+# Теги сущности: файл data/entity.json модуля, поле tags. По этим файлам замок
+# craft-type-lock собирает справочник «тег → скилл» на каждой записи в Craft.
+ENTITY_FILE = 'entity.json'
+ENTITY_TAGS_KEY = 'tags'
+TAG_PREFIX = '#'
 PLACEHOLDER_OPEN = '{{'
 # Единый slug возможности харнеса в тексте части. Пишется в том же синтаксисе,
 # что пути: установщик знает, в какой харнес ставит, а модуль про харнесы не
@@ -860,6 +866,35 @@ def check_requires(manifests: list, report: Report) -> None:
             )
 
 
+def check_entity_tags(plan: list[tuple]) -> None:
+    """Проверить data/entity.json всех копий набора ДО того, как установка что-то тронет.
+
+    Файл разбирается, `tags` — непустой список строк с «#», тег не повторяется
+    ни у двух модулей, ни в одном. Без этой проверки битая карта тегов
+    всплыла бы только в работе: замок запрещает запись в Craft (закрыто) и
+    падает с ошибкой хука на каждом вызове Skill, а review-craft-calls падает
+    на каждой записи. Регистр не важен, как у замка.
+    """
+    owners = {}
+    for target, slug in plan:
+        path = target.path / PART_DATA / ENTITY_FILE
+        if not path.is_file():
+            continue
+        try:
+            entity = json.loads(path.read_text(encoding='utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f'{path}: файл сущности не разбирается как JSON: {error}') from error
+        tags = entity.get(ENTITY_TAGS_KEY) if isinstance(entity, dict) else None
+        if not isinstance(tags, list) or not tags:
+            raise ValueError(f'{path}: нет непустого списка «{ENTITY_TAGS_KEY}»')
+        for tag in tags:
+            if not isinstance(tag, str) or not tag.startswith(TAG_PREFIX) or len(tag) < 2:
+                raise ValueError(f'{path}: {tag!r} не тег, ждал строку с «{TAG_PREFIX}»')
+            if tag.lower() in owners:
+                raise ValueError(f'{path}: тег {tag} уже у модуля «{owners[tag.lower()]}»')
+            owners[tag.lower()] = slug
+
+
 def check_events(manifests: list, report: Report, backend: Backend | None = None) -> None:
     """Предупредить, в каком харнесе модуль не сработает."""
     backend = backend or ClaudeBackend()
@@ -1074,6 +1109,7 @@ def install(args: argparse.Namespace) -> Report:
     check_requires(manifests, report)
     check_events(manifests, report, backend)
     plan = expand(manifests)
+    check_entity_tags(plan)
     for target, slug in plan:
         check_text_parts(target, slug, settings_root, state_dir, backend)
     if args.dry_run:
