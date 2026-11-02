@@ -147,6 +147,12 @@ class RunTest(unittest.TestCase):
         manifest = Manifest(slug='probe', events=(PROMPT,), requires=('command-tree-shell',), path=self.module_dir)
         self.assertEqual(self.go(Talker(), manifest).response.text, 'сказал')
 
+    def test_a_broken_neighbour_header_does_not_crash_a_module_without_requires(self) -> None:
+        # Соседей ядро читает только ради requires: модуль без них решает сам,
+        # что делать с испорченной шапкой соседа, и не падает до своего хода.
+        make_module_dir(self.modules, 'zz-broken', 'slug = \n')
+        self.assertEqual(self.go(Talker()).response.text, 'сказал')
+
     def test_family_mask_is_satisfied_by_an_adapter_next_door(self) -> None:
         make_module_dir(self.modules, 'bash', 'slug = "bash"\nfor = "command-tree-shell"\n')
         manifest = Manifest(slug='probe', events=(PROMPT,), requires=('command-tree-*',), path=self.module_dir)
