@@ -36,9 +36,9 @@ CRAFT_PARSER = 'command-tree-craft'
 # сверки: он переезжает в другой модуль, и тесты от него не зависят.
 PROVIDERS = ('review-craft-calls', 'review-prompts', 'craft-session-anchor')
 CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-project',
-                    'craft-sphere', 'craft-call', 'craft-reconcile')
+                    'craft-sphere', 'craft-call', 'craft-reconcile', 'craft-decisions', 'craft-links')
 # Критерии к ходу с записью задачи: по slug поставщиков, как их находит ревью.
-TASK_CRITERIA = ('craft-base', 'consistency', 'anchor', 'task')
+TASK_CRITERIA = ('craft-base', 'decision', 'links', 'consistency', 'anchor', 'task')
 TASK_CRITERIA_TEXT = ', '.join(TASK_CRITERIA)
 CRAFT_WRITE = 'mcp__Craft__craft_write'
 CRAFT_READ = 'mcp__Craft__craft_read'
@@ -281,7 +281,7 @@ class TurnReviewTest(TurnReviewCase):
         brief = storage.path('turn-review-brief.md').read_text(encoding='utf-8')
         for needle in ('`write` — вызов записи в Craft', '`prompt` — реплика Влада',
                        'Критерий «task»', 'Критерий «craft-base»', 'Критерий «anchor»',
-                       '"craft-base", "consistency", "anchor", "task"'):
+                       ', '.join(f'"{name}"' for name in TASK_CRITERIA)):
             self.assertIn(needle, brief)
         for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA',
                        '{{RECORDS', '`read` — вызов чтения', '`anchor` — выбор якоря'):
@@ -791,7 +791,8 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(prompt(session))
         self.fire(write(session, 'blocks update --id X --json \'{"markdown":"[Сборка #этап](block://AB-1)"}\''))
         self.blocked(self.fire(stop(session)))
-        self.assertEqual(self.state(session)['criteria'], ['craft-base', 'consistency', 'anchor'])
+        self.assertEqual(self.state(session)['criteria'],
+                         ['craft-base', 'decision', 'consistency', 'anchor'])
 
     def test_an_unwritable_brief_is_a_block_and_not_a_crash(self) -> None:
         session = 's-brief-dir'

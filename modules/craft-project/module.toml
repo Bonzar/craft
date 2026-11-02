@@ -4,5 +4,6 @@
 slug = "craft-project"
 for = ["craft-type-lock", "turn-review"]
 # Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
-# из behavior, сверку перед записью — из craft-reconcile.
-requires = ["craft-call", "behavior", "craft-reconcile"]
+# из behavior, сверку перед записью — из craft-reconcile, общие правила
+# «Решений» — из craft-decisions.
+requires = ["craft-call", "behavior", "craft-reconcile", "craft-decisions"]

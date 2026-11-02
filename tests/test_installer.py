@@ -318,11 +318,14 @@ class InstallerTest(unittest.TestCase):
     def test_the_real_entity_modules_install_together(self) -> None:
         # Проект и сфера встают рядом с остальными модулями сущностей: теги не
         # пересекаются, у каждого тега есть шаблон, скилл ложится в настройки.
-        slugs = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-project', 'craft-sphere')
+        # Решения и связи — не сущности, без тегов, но их требуют скиллы
+        # сущностей, и ставятся они тем же набором.
+        slugs = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-project', 'craft-sphere',
+                 'craft-decisions', 'craft-links')
         for slug in slugs:
             shutil.copytree(MODULES_DIR / slug, self.source / slug)
         self.assertEqual(sorted(self.run_installer().installed), sorted(slugs))
-        for slug in ('craft-project', 'craft-sphere'):
+        for slug in ('craft-project', 'craft-sphere', 'craft-decisions', 'craft-links'):
             with self.subTest(slug=slug):
                 skill = self.settings_root / 'skills' / slug / 'SKILL.md'
                 self.assertIn(f'name: {slug}', skill.read_text(encoding='utf-8'))
