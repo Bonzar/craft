@@ -1,4 +1,4 @@
-"""Connect-API Craft для замка craft-type-lock: блок, путь страниц до него, дерево.
+"""Connect-API Craft для замка craft-type-lock: блок, дети страницы, путь страниц, дерево.
 
 Только чтение, только GET. Родителя у блока API не отдаёт (замер 02.11.2026:
 ни `GET /blocks`, ни `fetchMetadata` поля родителя не несут), а путь страниц
@@ -8,6 +8,12 @@
 самого блока, а находка сверяется по id. Блок без слов (разделитель,
 картинка) и блок, которого поиск ещё не видит, путь так не получают: их
 место ищется в деревьях прочитанных страниц (`tree`).
+
+Владельца по отступу замок ищет среди детей страницы: `GET /blocks` с
+`maxDepth=1` отдаёт страницу и её прямых детей по порядку, у каждого
+`indentationLevel` (поля нет — уровень 0) и текст (замер 02.11.2026: проект
+на 60 детей — 46 КБ, 2 с). Поиск соседей блока (`beforeBlocks`) уровня не
+несёт, поэтому он владельца не даёт.
 """
 
 import http.client
@@ -26,6 +32,9 @@ API_TIMEOUT_SEC = 10
 DEADLINE_SEC = 12
 NOT_FOUND = 404
 BLOCK_DEPTH = 0
+# Страница и её прямые дети: порядок и отступы для владельца по отступу.
+CHILDREN_DEPTH = 1
+CONTENT_KEY = 'content'
 # Запасной путь: прочитанная страница целиком. Глубина не ограничена, иначе
 # цель на вложенной странице считалась бы непрочитанной.
 TREE_DEPTH = -1
@@ -104,6 +113,7 @@ class Api:
         self.clock = clock
         self.deadline = clock() + DEADLINE_SEC
         self.blocks: dict[str, dict] = {}
+        self.kids: dict[str, list[dict]] = {}
         self.requests = 0
 
     def get(self, path: str, params: dict):
@@ -134,9 +144,40 @@ class Api:
             self.blocks[key] = self.by_id(block_id, BLOCK_DEPTH)
         return self.blocks[key]
 
+    def children(self, page_id: str) -> list[dict]:
+        """Прямые дети страницы по порядку. Сама страница ложится в память блоков."""
+        key = page_id.lower()
+        if key not in self.kids:
+            page = self.by_id(page_id, CHILDREN_DEPTH)
+            content = page.get(CONTENT_KEY, [])
+            if not isinstance(content, list) or not all(
+                    isinstance(child, dict) and isinstance(child.get(ID_KEY), str) for child in content):
+                raise ValueError(f'у страницы {page_id[:8]} дети не списком блоков')
+            self.blocks.setdefault(key, {k: v for k, v in page.items() if k != CONTENT_KEY})
+            self.kids[key] = content
+        return self.kids[key]
+
     def tree(self, page_id: str) -> dict:
-        """Прочитанная страница со всем, что в ней лежит."""
-        return self.by_id(page_id, TREE_DEPTH)
+        """Прочитанная страница со всем, что в ней лежит.
+
+        Дети каждой страницы дерева ложатся в память: владельца по отступу
+        потом не нужно запрашивать второй раз.
+        """
+        tree = self.by_id(page_id, TREE_DEPTH)
+        self.remember(tree)
+        return tree
+
+    def remember(self, node: dict) -> None:
+        content = node.get(CONTENT_KEY)
+        if not isinstance(content, list) or not all(
+                isinstance(child, dict) and isinstance(child.get(ID_KEY), str) for child in content):
+            return
+        key = node[ID_KEY].lower()
+        self.blocks.setdefault(key, {k: v for k, v in node.items() if k != CONTENT_KEY})
+        self.kids.setdefault(key, [{k: v for k, v in child.items() if k != CONTENT_KEY}
+                                   for child in content])
+        for child in content:
+            self.remember(child)
 
     def page_path(self, block: dict) -> list[dict] | None:
         """Страницы от корня документа до той, где лежит блок: `[{id, content}, …]`.

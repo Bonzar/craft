@@ -34,6 +34,8 @@ ENTITY_DATA = {slug: json.loads((MODULES_DIR / slug / 'data' / 'entity.json').re
 FAKE_ADAPTERS = {slug: data for slug, data in {
     'craft-project': {'tags': ['#проект'],
                       'templates': {'#проект': ['eeeeeeee-0000-0000-0000-000000000001']}},
+    'craft-sphere': {'tags': ['#сфера'],
+                     'templates': {'#сфера': ['eeeeeeee-0000-0000-0000-000000000002']}},
 }.items() if slug not in ENTITY_DATA}
 ENTITY_DATA = {**ENTITY_DATA, **FAKE_ADAPTERS}
 TEMPLATE = {slug: next(iter(data['templates'].values()))[0] for slug, data in ENTITY_DATA.items()}
@@ -553,6 +555,21 @@ TASK = 'bbbbbbbb-0000-0000-0000-000000000020'
 TASK_BODY = 'bbbbbbbb-0000-0000-0000-000000000021'
 BARE_TASK = 'bbbbbbbb-0000-0000-0000-000000000025'
 STAGE_LINK = 'bbbbbbbb-0000-0000-0000-000000000030'
+STAGE2 = 'bbbbbbbb-0000-0000-0000-000000000040'
+TASK2 = 'bbbbbbbb-0000-0000-0000-000000000041'
+MILESTONE = 'bbbbbbbb-0000-0000-0000-000000000050'
+M_STAGE = 'bbbbbbbb-0000-0000-0000-000000000051'
+M_TASK = 'bbbbbbbb-0000-0000-0000-000000000052'
+SPHERE = 'eeeeeeee-1000-0000-0000-000000000001'
+ARCHIVE = 'eeeeeeee-1000-0000-0000-000000000010'
+ARCHIVE_LINE = 'eeeeeeee-1000-0000-0000-000000000011'
+REPAIR = 'eeeeeeee-1000-0000-0000-000000000020'
+REPAIR_STAGE = 'eeeeeeee-1000-0000-0000-000000000022'
+NOTE = 'eeeeeeee-1000-0000-0000-000000000030'
+MENU = 'eeeeeeee-1000-0000-0000-000000000031'
+MENU_LINE = 'eeeeeeee-1000-0000-0000-000000000032'
+DAY = 'ffffffff-0000-0000-0000-000000000001'
+DAY_LINE = 'ffffffff-0000-0000-0000-000000000002'
 
 
 def block(block_id: str, markdown: str, **fields) -> dict:
@@ -567,6 +584,8 @@ DEEP_TREE = page(DEEP_PAGE, 'Вложенная',
                  block('cccccccc-0000-0000-0000-000000000010', '+ ### Решения', listStyle='toggle'),
                  block(DEEP_D1, '  - Глубокое решение', indentationLevel=1, listStyle='bullet'))
 # Корни документов. Поиск, как у настоящего API, ищет по документу блока.
+# Страница проекта устроена, как в Craft: этапы на +1 под переключателем,
+# задачи на +1 под своим этапом, этапы вехи на +1 под вехой.
 DOCUMENTS = (
     page(PAGE, 'Раздел #раздел',
          block('aaaaaaaa-0000-0000-0000-000000000003', '### Требования', textStyle='h3'),
@@ -581,14 +600,30 @@ DOCUMENTS = (
          block('aaaaaaaa-0000-0000-0000-000000000022', 'Справочное.')),
     page(PROJECT, 'Проект #проект',
          block('bbbbbbbb-0000-0000-0000-000000000002', '+ ### Этапы проекта', listStyle='toggle'),
-         page(TASK, '- [ ] Задача #задача/1ч', block(TASK_BODY, '### Описание', textStyle='h3'),
-              indentationLevel=2, listStyle='task'),
-         block(BARE_TASK, '- [ ] Задача без тела #задача', indentationLevel=2, listStyle='task'),
-         block(STAGE_LINK, f'[Этап #этап](block://{STAGE})'),
-         page(STAGE, '- [ ] ### Этап #этап/готово',
+         page(STAGE, '  - [ ] ### Этап #этап',
               block(STAGE_TOGGLE, '+ ### Решения', textStyle='h3', listStyle='toggle'),
               block(SD1, '  - Решение этапа', indentationLevel=1, listStyle='bullet'),
-              DEEP_TREE, indentationLevel=1, listStyle='task')),
+              DEEP_TREE, indentationLevel=1, listStyle='task'),
+         page(TASK, '    - [ ] Задача #задача/1ч', block(TASK_BODY, '### Описание', textStyle='h3'),
+              indentationLevel=2, listStyle='task'),
+         block(BARE_TASK, '    - [ ] Задача без тела #задача', indentationLevel=2, listStyle='task'),
+         block(STAGE2, '  - [ ] ### Второй этап #этап', indentationLevel=1, listStyle='task'),
+         block(TASK2, '    - [ ] Задача второго этапа #задача', indentationLevel=2, listStyle='task'),
+         block(MILESTONE, '  - [ ] ## Веха #веха', indentationLevel=1, listStyle='task'),
+         block(M_STAGE, '    - [ ] ### Этап вехи #этап', indentationLevel=2, listStyle='task'),
+         block(M_TASK, '      - [ ] Задача этапа вехи #задача', indentationLevel=3, listStyle='task'),
+         block(STAGE_LINK, f'[Этап #этап](block://{STAGE})')),
+    # Сфера: подстраница «Архив» без тега и заметка с подстраницей без тега.
+    page(SPHERE, 'Дом #сфера',
+         page(ARCHIVE, 'Архив', block(ARCHIVE_LINE, 'Строка архива')),
+         block('eeeeeeee-1000-0000-0000-000000000002', '# Активное', textStyle='h1'),
+         page(REPAIR, 'Ремонт #проект',
+              block('eeeeeeee-1000-0000-0000-000000000021', '+ ### Этапы проекта', listStyle='toggle'),
+              block(REPAIR_STAGE, '  - [ ] ### Этап ремонта #этап', indentationLevel=1,
+                    listStyle='task')),
+         page(NOTE, 'Банкет #заметка', page(MENU, 'Меню', block(MENU_LINE, 'Салат с крабом')))),
+    # Документ без тега: заметка дня.
+    page(DAY, 'Сегодня', block(DAY_LINE, 'Купить хлеб')),
 )
 UPPER_PAGE = 'DDDDDDDD-0000-0000-0000-000000000001'
 UPPER_D1 = 'DDDDDDDD-0000-0000-0000-000000000011'
@@ -681,7 +716,10 @@ def read(session: str, command: str) -> dict:
 
 
 BULLET_JSON = '\'{"type":"text","indentationLevel":1,"listStyle":"bullet","markdown":"Новое решение"}\''
-SECTION = 'Запись ложится в сущность «Раздел #раздел»'
+SECTION = 'Запись задевает сущность «Раздел #раздел»'
+# Новая задача на +1 под этапом и строка без отступа.
+TASK_JSON = '\'{"type":"text","indentationLevel":2,"listStyle":"task","markdown":"- [ ] Новая задача #задача"}\''
+LEVEL0_JSON = '\'{"type":"text","markdown":"Строка"}\''
 FIRST = 'aaaaaaaa-0000-0000-0000-000000000003'
 DOWN = 'http://127.0.0.1:9/api/v1'
 
@@ -731,7 +769,7 @@ class PageTypeLockTest(ApiLockHarness):
         self.start('p-open', PAGE)
         self.prepare('p-open', 'craft-section')
         self.assert_silent(self.fire(write('p-open', f'blocks add --siblingId {D2} --position after --json {BULLET_JSON}')))
-        self.assertIn('шаблоны прочитаны в этом ходе, цель aaaaaaaa в сущности aaaaaaaa (#раздел)',
+        self.assertIn('шаблоны прочитаны в этом ходе, цель aaaaaaaa у владельца aaaaaaaa (#раздел)',
                       self.last_reason('p-open'))
 
     def test_a_decision_skill_is_not_an_entity_skill(self) -> None:
@@ -759,16 +797,15 @@ class PageTypeLockTest(ApiLockHarness):
     def test_stage_decisions_need_craft_stage_from_the_project_page(self) -> None:
         self.start('p-stage', PROJECT)
         result = self.fire(write('p-stage', f'blocks add --siblingId {SD1} --position after --json {BULLET_JSON}'))
-        self.assert_denied(result, 'Запись ложится в сущность «- [ ] ### Этап #этап/готово»',
-                           '#этап → craft-stage')
+        self.assert_denied(result, 'Запись задевает сущность «- [ ] ### Этап #этап»', '#этап → craft-stage')
         self.assertNotIn('craft-section', self.reason(result))
+        self.assertNotIn('craft-project', self.reason(result))
 
-    def test_a_page_without_a_type_tag_needs_no_skill(self) -> None:
-        self.start('p-untyped', PROJECT)
-        command = f'blocks add --siblingId {DEEP_D1} --position after --json {BULLET_JSON}'
+    def test_a_document_without_a_type_tag_needs_no_skill(self) -> None:
+        self.start('p-untyped', DAY)
+        command = f'blocks add --siblingId {DAY_LINE} --position after --json {BULLET_JSON}'
         self.assert_silent(self.fire(write('p-untyped', command)))
-        self.assertIn('тега типа нет, цель cccccccc на странице cccccccc без типа',
-                      self.last_reason('p-untyped'))
+        self.assertIn('тега типа нет, цель ffffffff без владельца с типом', self.last_reason('p-untyped'))
 
     def test_a_link_with_a_tag_does_not_type_the_block(self) -> None:
         self.start('p-link', PROJECT)
@@ -776,50 +813,100 @@ class PageTypeLockTest(ApiLockHarness):
         self.assert_denied(result, 'не вызван скилл: craft-project.')
         self.assertNotIn('craft-stage', self.reason(result))
 
-    def test_a_new_task_on_a_project_page_needs_task_and_project(self) -> None:
-        self.start('p-new-task', PROJECT)
-        payload = BULLET_JSON.replace('Новое решение', '- [ ] Дело #задача')
+    def test_a_new_line_at_the_level_of_stages_lands_in_the_project(self) -> None:
+        self.start('p-new-stage', PROJECT)
+        payload = BULLET_JSON.replace('Новое решение', '- [ ] ### Новый этап #этап')
         command = f'blocks add --siblingId {TASK} --position after --json {payload}'
-        result = self.fire(write('p-new-task', command))
-        self.assert_denied(result, '#задача → craft-task', '«Проект #проект»: #проект → craft-project',
-                           'не вызван скилл: craft-project, craft-task')
-        self.prepare('p-new-task', 'craft-task')
-        self.assert_denied(self.fire(write('p-new-task', command)), 'не вызван скилл: craft-project.')
-        self.prepare('p-new-task', 'craft-project')
-        self.assert_silent(self.fire(write('p-new-task', command)))
+        result = self.fire(write('p-new-stage', command))
+        self.assert_denied(result, '#этап → craft-stage', '«Проект #проект»: #проект → craft-project',
+                           'не вызван скилл: craft-project, craft-stage')
+        self.prepare('p-new-stage', 'craft-stage')
+        self.assert_denied(self.fire(write('p-new-stage', command)), 'не вызван скилл: craft-project.')
+        self.prepare('p-new-stage', 'craft-project')
+        self.assert_silent(self.fire(write('p-new-stage', command)))
 
-    def test_the_body_and_the_state_of_a_task_need_craft_task(self) -> None:
+    def test_a_new_task_indented_under_a_stage_lands_in_the_stage(self) -> None:
+        self.start('p-new-task', PROJECT)
+        payload = TASK_JSON.replace('Новая задача', 'Дело')
+        for command in (f'blocks add --siblingId {STAGE} --position after --json {payload}',
+                        f'blocks add --siblingId {TASK} --position after --json {payload}',
+                        f'blocks add --siblingId {STAGE2} --position before --json {payload}'):
+            with self.subTest(command=command):
+                result = self.fire(write('p-new-task', command))
+                self.assert_denied(result, '«- [ ] ### Этап #этап»', 'не вызван скилл: craft-stage, craft-task')
+                self.assertNotIn('craft-project', self.reason(result))
+
+    def test_the_body_of_a_task_needs_craft_task(self) -> None:
         self.start('p-task', PROJECT)
         for command in (f'blocks add --id {TASK} --position end --json {BULLET_JSON}',
-                        f'tasks update --id {TASK} --state done',
                         f'blocks update --id {TASK_BODY} --json {BULLET_JSON}',
-                        f'blocks add --id {BARE_TASK} --position end --json {BULLET_JSON}'):
+                        f'blocks add --id {BARE_TASK} --position end --json {LEVEL0_JSON}'):
             with self.subTest(command=command):
-                self.assert_denied(self.fire(write('p-task', command)), 'craft-task')
-        # Закрытие задачи правит задачу и ложится в проект, где она стоит.
-        self.assert_denied(self.fire(write('p-task', f'tasks update --id {TASK} --state done')),
-                           'Запись правит сущность «- [ ] Задача #задача/1ч»',
-                           'не вызван скилл: craft-project, craft-task')
-        # Сосед задачи ложится в её страницу, а не в неё саму.
-        result = self.fire(write('p-task', f'blocks add --siblingId {TASK} --position after --json {BULLET_JSON}'))
-        self.assert_denied(result, 'не вызван скилл: craft-project.')
+                self.assert_denied(self.fire(write('p-task', command)), 'не вызван скилл: craft-task.')
+        # Сосед задачи на её же отступе ложится к её этапу, а не в неё саму.
+        result = self.fire(write('p-task', f'blocks add --siblingId {TASK} --position after --json {TASK_JSON}'))
+        self.assert_denied(result, 'не вызван скилл: craft-stage, craft-task.')
 
-    def test_a_task_without_a_body_is_still_a_task(self) -> None:
-        # Задача без тела — текстовый блок, а не страница: место её правки —
-        # проект, а тег в её тексте делает правку правкой задачи.
-        self.start('p-bare', PROJECT)
-        result = self.fire(write('p-bare', f'tasks update --id {BARE_TASK} --state done'))
-        self.assert_denied(result, 'не вызван скилл: craft-project, craft-task')
+    def test_closing_a_task_touches_its_stage(self) -> None:
+        self.start('p-close', PROJECT)
+        for command in (f'tasks update --id {TASK} --state done',
+                        f'tasks update --id {BARE_TASK} --state canceled',
+                        f'blocks update --id {TASK} --json \'{{"taskInfo":{{"state":"done"}},"indentationLevel":2}}\'',
+                        (f'blocks update --id {BARE_TASK} --json '
+                         '\'{"markdown":"- [x] Задача без тела #задача/готово","indentationLevel":2}\'')):
+            with self.subTest(command=command):
+                result = self.fire(write('p-close', command))
+                self.assert_denied(result, 'Запись правит сущность', 'не вызван скилл: craft-stage, craft-task')
+                self.assertNotIn('craft-project', self.reason(result))
 
-    def test_a_block_under_an_untagged_subpage_is_not_a_write_into_the_stage(self) -> None:
-        self.start('p-deep', PROJECT)
-        self.assert_silent(self.fire(write('p-deep', f'blocks update --id {DEEP_D1} --json {BULLET_JSON}')))
-        self.assertIn('на странице cccccccc без типа', self.last_reason('p-deep'))
+    def test_retitling_or_rescheduling_a_task_touches_the_task_only(self) -> None:
+        self.start('p-retitle', PROJECT)
+        self.prepare('p-retitle', 'craft-task')
+        for command in ((f'blocks update --id {TASK} --json '
+                         '\'{"markdown":"- [ ] Новое имя #задача/1ч","indentationLevel":2}\''),
+                        f'tasks update --id {TASK} --scheduleDate 2026-11-05',
+                        f'blocks update --id {BARE_TASK} --markdown "- [ ] Другое имя #задача"'):
+            with self.subTest(command=command):
+                self.assert_silent(self.fire(write('p-retitle', command)))
+                self.assertIn('без владельца с типом, правит сущность (#задача)', self.last_reason('p-retitle'))
 
-    def test_a_subpage_read_by_itself_is_judged_by_its_own_title(self) -> None:
+    def test_closing_a_stage_touches_its_project(self) -> None:
+        self.start('p-stage-close', PROJECT)
+        command = (f'blocks update --id {STAGE2} --json '
+                   '\'{"markdown":"- [x] ### Второй этап #этап/готово","indentationLevel":1}\'')
+        result = self.fire(write('p-stage-close', command))
+        self.assert_denied(result, 'не вызван скилл: craft-project, craft-stage')
+
+    def test_closing_a_stage_inside_a_milestone_needs_the_stage_skill_only(self) -> None:
+        # Веха — сущность того же модуля, что этап: её правила несёт тот же скилл.
+        self.start('p-milestone', PROJECT)
+        self.prepare('p-milestone', 'craft-stage')
+        self.assert_silent(self.fire(write('p-milestone', f'tasks update --id {M_STAGE} --state done')))
+        result = self.fire(write('p-milestone', f'tasks update --id {M_TASK} --state done'))
+        self.assert_denied(result, '«- [ ] ### Этап вехи #этап»', 'не вызван скилл: craft-task.')
+
+    def test_closing_a_project_touches_its_sphere(self) -> None:
+        self.start('p-project-close', SPHERE)
+        command = f'blocks update --id {REPAIR} --json \'{{"markdown":"Ремонт #проект/готово"}}\''
+        result = self.fire(write('p-project-close', command))
+        self.assert_denied(result, '«Дом #сфера»', 'не вызван скилл: craft-project, craft-sphere')
+
+    def test_an_untagged_subpage_belongs_to_the_typed_entity_it_lies_in(self) -> None:
+        self.start('p-subpages', SPHERE, PROJECT)
+        cases = ((f'blocks update --id {ARCHIVE_LINE} --json {LEVEL0_JSON}', 'craft-sphere.'),
+                 (f'blocks add --id {ARCHIVE} --position end --json {LEVEL0_JSON}', 'craft-sphere.'),
+                 (f'blocks update --id {MENU_LINE} --json {LEVEL0_JSON}', 'craft-note.'),
+                 (f'blocks add --siblingId {MENU_LINE} --position after --json {LEVEL0_JSON}', 'craft-note.'),
+                 (f'blocks update --id {DEEP_D1} --json {BULLET_JSON}', 'craft-stage.'),
+                 (f'blocks add --id {DEEP_PAGE} --position start --json {LEVEL0_JSON}', 'craft-stage.'))
+        for command, needed in cases:
+            with self.subTest(command=command):
+                self.assert_denied(self.fire(write('p-subpages', command)), f'не вызван скилл: {needed}')
+
+    def test_a_subpage_read_by_itself_still_finds_the_owner_above(self) -> None:
         self.start('p-subpage', DEEP_PAGE)
-        self.assert_silent(self.fire(write('p-subpage', f'blocks update --id {DEEP_D1} --json {BULLET_JSON}')))
-        self.assertIn('на странице cccccccc без типа', self.last_reason('p-subpage'))
+        result = self.fire(write('p-subpage', f'blocks update --id {DEEP_D1} --json {BULLET_JSON}'))
+        self.assert_denied(result, 'не вызван скилл: craft-stage.')
 
     def test_a_sibling_of_a_read_subpage_lands_in_the_page_above(self) -> None:
         self.start('p-above', DEEP_PAGE)
@@ -831,6 +918,11 @@ class PageTypeLockTest(ApiLockHarness):
         payload = BULLET_JSON.replace('Новое решение', '- [ ] Дело #задача')
         result = self.fire(write('p-both', f'blocks add --siblingId {D1} --position after --json {payload}'))
         self.assert_denied(result, '#задача → craft-task', SECTION, 'не вызван скилл: craft-section, craft-task')
+
+    def test_an_unparsed_level_requires_every_candidate_owner(self) -> None:
+        self.start('p-guess', PROJECT)
+        result = self.fire(write('p-guess', f'blocks add --siblingId {TASK} --position after --json \'{{broken\''))
+        self.assert_denied(result, 'не вызван скилл: craft-project, craft-stage, craft-task.')
 
     def test_without_reads_the_write_is_into_the_unread(self) -> None:
         self.fire(prompt('p-noread'))
@@ -844,26 +936,40 @@ class PageTypeLockTest(ApiLockHarness):
                 result = self.fire(write('p-elsewhere', f'blocks add --siblingId {target} --position after --json {BULLET_JSON}'))
                 self.assert_denied(result, 'Запись в непрочитанное', 'не найдена среди страниц')
 
-    def test_moving_a_task_into_a_section_needs_both_skills(self) -> None:
+    def test_moving_a_task_between_stages_touches_both_stages(self) -> None:
+        self.start('p-between', PROJECT)
+        self.prepare('p-between', 'craft-task')
+        command = f'blocks move --id {TASK2} --targetSiblingId {BARE_TASK} --position after'
+        result = self.fire(write('p-between', command))
+        self.assert_denied(result, '«- [ ] ### Второй этап #этап»', '«- [ ] ### Этап #этап»',
+                           'не вызван скилл: craft-stage.')
+        self.assertNotIn('craft-project', self.reason(result))
+
+    def test_moving_a_task_into_a_section_needs_all_three_skills(self) -> None:
         self.start('p-move', PROJECT, PAGE)
         result = self.fire(write('p-move', f'blocks move --id {TASK} --targetSiblingId {D2} --position after'))
-        self.assert_denied(result, 'не вызван скилл: craft-project, craft-section, craft-task')
+        self.assert_denied(result, 'не вызван скилл: craft-section, craft-stage, craft-task')
 
     def test_a_target_on_an_earlier_read_page_is_still_found(self) -> None:
         self.start('p-later', PAGE, PROJECT)
         self.prepare('p-later', 'craft-task')
-        self.prepare('p-later', 'craft-project')
+        self.prepare('p-later', 'craft-stage')
         result = self.fire(write('p-later', f'blocks move --id {TASK} --targetSiblingId {D2} --position after'))
         self.assert_denied(result, 'не вызван скилл: craft-section.')
 
     def test_moving_into_a_page_is_judged_by_that_page(self) -> None:
-        self.start('p-move-end', PROJECT, PAGE, DEEP_PAGE)
+        self.start('p-move-end', PROJECT, PAGE, DAY)
         self.prepare('p-move-end', 'craft-task')
-        self.prepare('p-move-end', 'craft-project')
+        self.prepare('p-move-end', 'craft-stage')
         result = self.fire(write('p-move-end', f'blocks move --id {TASK} --targetId {PAGE} --position end'))
         self.assert_denied(result, 'не вызван скилл: craft-section.')
-        result = self.fire(write('p-move-end', f'blocks move --id {TASK} --targetId {DEEP_PAGE} --position end'))
+        result = self.fire(write('p-move-end', f'blocks move --id {TASK} --targetId {DAY} --position end'))
         self.assert_silent(result)
+
+    def test_deleting_a_task_touches_its_stage(self) -> None:
+        self.start('p-delete', PROJECT)
+        result = self.fire(write('p-delete', f'blocks delete --id {TASK2}'))
+        self.assert_denied(result, 'не вызван скилл: craft-stage, craft-task')
 
     def test_a_quoted_id_is_still_found(self) -> None:
         self.start('p-quoted', PAGE)
@@ -921,9 +1027,9 @@ class PageTypeLockTest(ApiLockHarness):
         text = json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
         self.assertIn('страница над целью aaaaaaaa не видна', text)
 
-    def test_a_write_before_the_first_child_of_an_untyped_container_passes(self) -> None:
-        self.start('p-container-first', PROJECT, DEEP_PAGE)
-        command = f'blocks add --id {DEEP_PAGE} --position before --json {BULLET_JSON}'
+    def test_a_write_before_the_first_child_of_an_untyped_document_passes(self) -> None:
+        self.start('p-container-first', DAY)
+        command = f'blocks add --id {DAY} --position start --json {BULLET_JSON}'
         self.assert_silent(self.fire(write('p-container-first', command)))
 
     def test_a_lower_case_read_of_an_upper_case_page_is_served_by_the_answer(self) -> None:
@@ -980,13 +1086,18 @@ class LookupCostTest(ApiLockHarness):
         self.fire(write(session, command))
         return [endpoint for endpoint, _ in FakeCraftApi.requests]
 
-    def test_a_read_container_costs_one_request(self) -> None:
+    def test_a_read_typed_container_costs_one_request(self) -> None:
         self.start('c-task', TASK)
         self.assertEqual(
-            self.requests_of('c-task', f'blocks add --id {TASK} --position end --json {BULLET_JSON}'),
+            self.requests_of('c-task', f'blocks add --id {TASK} --position end --json {LEVEL0_JSON}'),
             ['blocks'])
 
-    def test_a_block_inside_a_page_costs_the_block_the_search_and_the_page(self) -> None:
+    def test_a_typed_target_edited_in_place_costs_the_block_and_the_search(self) -> None:
+        self.start('c-retitle', PROJECT)
+        command = f'blocks update --id {TASK} --json \'{{"markdown":"- [ ] Новое имя #задача","indentationLevel":2}}\''
+        self.assertEqual(self.requests_of('c-retitle', command), ['blocks', 'blocks/search'])
+
+    def test_an_indented_block_costs_the_block_the_search_and_the_children(self) -> None:
         self.start('c-decision', PAGE)
         self.assertEqual(
             self.requests_of('c-decision', f'blocks add --siblingId {D2} --position after --json {BULLET_JSON}'),
@@ -994,13 +1105,59 @@ class LookupCostTest(ApiLockHarness):
         query = dict(FakeCraftApi.requests)['blocks/search']
         self.assertEqual(query['pattern'], r'Второе\W+решение')
         self.assertEqual((query['beforeBlockCount'], query['afterBlockCount']), ('0', '0'))
+        self.assertEqual(FakeCraftApi.requests[-1][1]['maxDepth'], '1')
 
     def test_a_block_without_words_falls_back_to_the_read_page(self) -> None:
+        # Дети страницы приходят деревом прочитанной страницы: второго запроса нет.
         self.start('c-line', PAGE)
         self.assertEqual(
             self.requests_of('c-line', f'blocks add --siblingId {LINE} --position after --json {BULLET_JSON}'),
             ['blocks', 'blocks'])
         self.assertEqual(FakeCraftApi.requests[-1][1]['maxDepth'], '-1')
+
+
+class PayloadTest(unittest.TestCase):
+    """Разбор нагрузки: отступ новых блоков и смена состояния."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        load_lock_module()
+        cls.payload = sys.modules['payload']
+
+    def write_of(self, command: str):
+        return self.payload.write_of(command, lambda text: [text], lambda text: ' '.join(text.split()[:2]))
+
+    def test_levels_come_from_the_json_and_markdown_payload(self) -> None:
+        cases = ((f'blocks add --siblingId X --json {TASK_JSON}', frozenset({2})),
+                 ('blocks add --siblingId X --json \'{"type":"text","markdown":"Строка"}\'', frozenset({0})),
+                 ('blocks add --siblingId X --markdown "Строка"', frozenset({0})),
+                 ('blocks add --siblingId X --json \'[{"indentationLevel":1},{"indentationLevel":2}]\'',
+                  frozenset({1, 2})),
+                 ('blocks add --siblingId X --json \'{broken\'', None),
+                 ('blocks add --siblingId X', None))
+        for command, levels in cases:
+            with self.subTest(command=command):
+                self.assertEqual(self.write_of(command).levels, levels)
+
+    def test_a_state_change_is_seen_in_the_flag_the_task_info_and_the_text(self) -> None:
+        current = '    - [ ] Задача #задача/1ч'
+        changed = ('tasks update --id X --state done',
+                   'blocks update --id X --json \'{"taskInfo":{"state":"canceled"}}\'',
+                   'blocks update --id X --json \'{"markdown":"- [x] Задача #задача/1ч"}\'',
+                   'blocks update --id X --json \'{"markdown":"- [ ] Задача #задача/отменено"}\'')
+        for command in changed:
+            with self.subTest(command=command):
+                self.assertTrue(self.payload.changes_state(self.write_of(command), current))
+        kept = ('tasks update --id X --scheduleDate 2026-11-05',
+                'blocks update --id X --json \'{"markdown":"- [ ] Новое имя #задача/1ч"}\'',
+                'blocks update --id X --json \'{"taskInfo":{"scheduleDate":"2026-11-05"}}\'')
+        for command in kept:
+            with self.subTest(command=command):
+                self.assertFalse(self.payload.changes_state(self.write_of(command), current))
+
+    def test_reopening_is_a_state_change_too(self) -> None:
+        write_ = self.write_of('blocks update --id X --json \'{"markdown":"- [ ] ### Этап #этап"}\'')
+        self.assertTrue(self.payload.changes_state(write_, '  - [x] ### Этап #этап/готово'))
 
 
 class ReviewRowTest(ApiLockHarness):
@@ -1027,18 +1184,34 @@ class ReviewRowTest(ApiLockHarness):
                           denied['place_types'], denied['content_types'], denied['determined']),
                          ('p-1', command, [D2], ['#раздел'], [], True))
 
-    def test_place_and_content_go_to_their_own_lists(self) -> None:
+    def test_owners_and_content_go_to_their_own_lists(self) -> None:
         self.start('r-split', PROJECT)
-        payload = BULLET_JSON.replace('Новое решение', '- [ ] Дело #задача')
-        self.fire(write('r-split', f'blocks add --siblingId {TASK} --position after --json {payload}'))
-        self.fire(write('r-split', f'tasks update --id {TASK} --state done'))
-        added, closed = self.rows('r-split')
-        self.assertEqual((added['place_types'], added['content_types']), (['#проект'], ['#задача']))
-        self.assertEqual((closed['place_types'], closed['content_types']), (['#проект'], ['#задача']))
+        commands = (
+            f'blocks add --siblingId {TASK} --position after --json {TASK_JSON}',
+            f'tasks update --id {TASK} --state done',
+            f'tasks update --id {TASK} --scheduleDate 2026-11-05',
+            f'blocks move --id {TASK2} --targetSiblingId {BARE_TASK} --position after',
+            f'tasks update --id {M_STAGE} --state done',
+        )
+        for command in commands:
+            self.fire(write('r-split', command))
+        rows = [(row['place_types'], row['content_types'], row['determined']) for row in self.rows('r-split')]
+        self.assertEqual(rows, [(['#этап'], ['#задача'], True),
+                                (['#этап'], ['#задача'], True),
+                                ([], ['#задача'], True),
+                                (['#этап'], ['#задача'], True),
+                                ([], ['#этап'], True)])
 
-    def test_a_page_without_a_type_is_an_explicit_empty_type(self) -> None:
-        self.start('r-none', PROJECT)
-        self.fire(write('r-none', f'blocks update --id {DEEP_D1} --json {BULLET_JSON}'))
+    def test_a_move_between_stages_names_both_owners(self) -> None:
+        self.start('r-move', PROJECT)
+        self.fire(write('r-move', f'blocks move --id {TASK2} --targetSiblingId {BARE_TASK} --position after'))
+        (row,) = self.rows('r-move')
+        self.assertIn(STAGE2[:8], row['note'])
+        self.assertIn(f'у владельца {STAGE[:8]}', row['note'])
+
+    def test_a_document_without_a_type_is_an_explicit_empty_type(self) -> None:
+        self.start('r-none', DAY)
+        self.fire(write('r-none', f'blocks update --id {DAY_LINE} --json {BULLET_JSON}'))
         (row,) = self.rows('r-none')
         self.assertEqual((row['place_types'], row['content_types'], row['determined']), ([], [], True))
         self.assertNotIn('prompt_id', row)
@@ -1053,6 +1226,13 @@ class ReviewRowTest(ApiLockHarness):
                          (False, False, False))
         self.assertIn('место цели не определено', down['note'])
         self.assertIn('не найдена среди страниц', unread['note'])
+
+    def test_an_unparsed_level_is_an_undetermined_row_with_every_candidate(self) -> None:
+        self.start('r-guess', PROJECT)
+        self.fire(write('r-guess', f'blocks add --siblingId {TASK} --position after --json \'{{broken\''))
+        (row,) = self.rows('r-guess')
+        self.assertEqual((row['place_types'], row['determined']), (['#задача', '#проект', '#этап'], False))
+        self.assertIn('отступ записи не разобран', row['note'])
 
     def test_a_write_of_a_subagent_leaves_no_row(self) -> None:
         self.start('r-agent', PAGE)

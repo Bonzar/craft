@@ -7,12 +7,13 @@
 длинного хода уже забыто — поэтому счёт идёт по ходам, а не по сессии.
 
 Тип записи — место ∪ содержимое, и по каждому задетому типу нужны скилл и
-шаблон. Место — ближайшая страница, внутри которой запись окажется, не
-выше: «Решения» раздела, тело задачи, страница проекта. Содержимое — теги
-типа в тексте записи и тип самой цели правки, переноса или удаления:
-новая строка `#задача` на странице проекта задевает задачу и проект.
-Страницу и путь к цели замок берёт из connect-API Craft (hooks/place.py,
-hooks/api.py). Цель не лежит ни на одной прочитанной странице — запись в
+шаблон. Место — ближайший владелец с типом: страница или блок, которому
+место принадлежит детьми или отступом; уровни без тега пропускаются.
+Содержимое — теги типа в тексте записи и тип самой цели правки, переноса
+или удаления: новая строка `#задача` на +1 под этапом задевает задачу и
+этап, переименование задачи — только задачу, её закрытие — задачу и этап.
+Владельцев и путь к цели замок берёт из connect-API Craft (hooks/place.py,
+hooks/owner.py, hooks/api.py). Цель не лежит ни на одной прочитанной странице — запись в
 непрочитанное, и она под запретом. API недоступен — место не судится,
 проверка по тегам текста идёт как обычно, а о том, что место не проверено,
 замок раз за сессию говорит текстом в ход. Это единственный поход замка в
@@ -32,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import jarvis  # noqa: E402
 from jarvis import events, wrappers  # noqa: E402
 from entities import TagEntry, entity_reason, load_entities, load_tag_skills  # noqa: E402
+from payload import write_of  # noqa: E402
 from place import BASE_ENV, Place, Verdict, page_types  # noqa: E402
 from review_row import append_row, entity_row  # noqa: E402
 from state import (  # noqa: E402
@@ -57,6 +59,8 @@ SKILL_INPUT_FIELD = 'skill'
 PLUGIN_SEPARATOR = ':'
 # Исходы, при которых место не проверено: причина идёт в след с этой пометкой.
 UNCHECKED = (Verdict.UNAVAILABLE, Verdict.UNPARSED)
+# Исходы, при которых место судилось и владельцы требуются.
+JUDGED = (Verdict.LOCATED, Verdict.GUESSED, Verdict.NO_TARGET)
 
 
 def skill_slug(tool_input) -> str:
@@ -82,7 +86,7 @@ def deny_reason(entries: dict[str, TagEntry], tags: list[str], place: Place,
         reasons.append(f'В записи есть тег типа: {pairs}.')
     for entity in place.entities:
         pairs = ', '.join(f'{tag} → {entries[tag].skill}' for tag in entity.tags)
-        reasons.append(f'Запись ложится в сущность «{entity.title}»: {pairs}.')
+        reasons.append(f'Запись задевает сущность «{entity.title}»: {pairs}.')
     for entity in place.edited:
         pairs = ', '.join(f'{tag} → {entries[tag].skill}' for tag in entity.tags)
         reasons.append(f'Запись правит сущность «{entity.title}»: {pairs}.')
@@ -105,9 +109,25 @@ def place_tail(place: Place) -> str:
     """Хвост причины для следа: что известно о месте записи."""
     if place.verdict in UNCHECKED:
         return f', место записи не проверено: {place.reason}'
-    if place.verdict in (Verdict.LOCATED, Verdict.NO_TARGET):
+    if place.verdict in JUDGED:
         return f', {place.reason}' if place.reason else ''
     raise ValueError(f'неизвестный исход проверки места: {place.verdict!r}')
+
+
+def skills_of(entries: dict[str, TagEntry], entity) -> set[str]:
+    return {entries[tag].skill for tag in entity.tags}
+
+
+def settle(entries: dict[str, TagEntry], place: Place) -> Place:
+    """Владельцы сменивших состояние сущностей — в место, кроме владельца того же модуля.
+
+    Скилл закрытой сущности уже несёт правила такого владельца: этап закрывается
+    внутри вехи скиллом этапов. Правило общее, по модулю, а не по имени типа.
+    """
+    extra = [owner for closed, owner in place.closing
+             if skills_of(entries, owner) - skills_of(entries, closed)]
+    owners = {entity.block_id.lower(): entity for entity in (*place.entities, *extra)}
+    return place._replace(entities=tuple(owners.values()), closing=())
 
 
 def needed_tags(tags: list[str], place: Place) -> list[str]:
@@ -213,8 +233,9 @@ class Module(jarvis.Module):
             return jarvis.Deny(reason=entity_reason(error))
         state = read_state(storage, craft)
         targets = craft.write_targets(command)
-        place = page_types(targets, state[READS_KEY], os.environ.get(BASE_ENV),
-                           lambda text: craft.find_tags(text, entries))
+        write = write_of(command, craft.split_commands, craft.verb_of)
+        place = settle(entries, page_types(targets, write, state[READS_KEY], os.environ.get(BASE_ENV),
+                                           lambda text: craft.find_tags(text, entries)))
         tags = craft.find_tags(command, entries)
         # Тип записи — в объём ревью: только выбор критериев, без решения замка.
         append_row(storage, entity_row(event, command, targets, place, tags))
