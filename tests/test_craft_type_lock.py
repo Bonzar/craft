@@ -409,9 +409,12 @@ class EntityFileTest(unittest.TestCase):
     def test_the_real_entity_modules_map_every_tag_to_a_module(self) -> None:
         lock = load_lock_module()
         tag_skills = lock.load_tag_skills(MODULES_DIR / SLUG)
-        self.assertLessEqual({'craft-task', 'craft-stage', 'craft-section', 'craft-note'},
+        self.assertLessEqual({'craft-task', 'craft-stage', 'craft-section', 'craft-note',
+                              'craft-project', 'craft-sphere'},
                              set(tag_skills.values()))
         self.assertEqual(tag_skills['#этап'], 'craft-stage')
+        self.assertEqual(tag_skills['#проект'], 'craft-project')
+        self.assertEqual(tag_skills['#сфера'], 'craft-sphere')
         entries = lock.load_entities(MODULES_DIR / SLUG)
         self.assertEqual(set(entries), set(tag_skills))
         self.assertTrue(all(entry.templates for entry in entries.values()))
@@ -571,6 +574,13 @@ TREES = {
     ]},
 }
 TREES[DEEP_PAGE] = DEEP_TREE
+# Проект с тегом в заголовке: сущность со своим модулем, «Решения проекта» — его.
+TAGGED_PROJECT = 'eeeeeeee-0000-0000-0000-000000000001'
+PROJECT_D1 = 'eeeeeeee-0000-0000-0000-000000000011'
+TREES[TAGGED_PROJECT] = {'id': TAGGED_PROJECT, 'type': 'page', 'markdown': 'Свадьба #проект', 'content': [
+    block('eeeeeeee-0000-0000-0000-000000000010', '+ # Решения проекта', listStyle='toggle'),
+    block(PROJECT_D1, '  - Решение проекта', indentationLevel=1, listStyle='bullet'),
+]}
 UPPER_PAGE = 'DDDDDDDD-0000-0000-0000-000000000001'
 UPPER_D1 = 'DDDDDDDD-0000-0000-0000-000000000011'
 TREES[UPPER_PAGE] = {'id': UPPER_PAGE, 'type': 'page', 'markdown': 'Старый раздел #раздел', 'content': [
@@ -690,6 +700,15 @@ class PageTypeLockTest(LockHarness):
         command = f'blocks add --siblingId {STAGE} --position after --json {BULLET_JSON}'
         self.assert_silent(self.fire(write('p-project', command)))
         self.assertIn('тега типа нет, цель bbbbbbbb на странице без типа', self.last_reason('p-project'))
+
+    def test_project_decisions_need_craft_project(self) -> None:
+        self.start('p-tagged', TAGGED_PROJECT)
+        command = f'blocks add --siblingId {PROJECT_D1} --position after --json {BULLET_JSON}'
+        result = self.fire(write('p-tagged', command))
+        self.assert_denied(result, 'Запись ложится в сущность «Свадьба #проект»',
+                           '#проект → craft-project', 'не вызван скилл: craft-project')
+        self.prepare('p-tagged', 'craft-project')
+        self.assert_silent(self.fire(write('p-tagged', command)))
 
     def test_a_link_with_a_tag_does_not_type_the_block(self) -> None:
         self.start('p-link', PROJECT)
