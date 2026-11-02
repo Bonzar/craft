@@ -11,7 +11,7 @@ events = ["stop", "post-tool", "prompt", "after-compact", "model-message"]
 # только «после сжатия» (SessionStart с source=compact); остановку хода,
 # вызовы, реплику и показ ответа она не знает, установщик об этом
 # предупреждает, как у замка craft-type-lock.
-# Объём копят поставщики review-craft-calls, review-prompts и session-anchor
+# Объём копят поставщики review-craft-calls, review-prompts и craft-session-anchor
 # через lib этого модуля, поэтому они требуют turn-review, а не он их. Модули
 # критериев его не требуют: их файлы ревью находит в каталоге модулей. Нет
 # ни одного поставщика — остановка не отпускает ход и называет это.

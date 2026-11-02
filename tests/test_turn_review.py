@@ -27,7 +27,7 @@ SLUG = 'turn-review'
 TYPE_LOCK = 'craft-type-lock'
 # Поставщики, якорь и модули с критериями: без них объём пуст, а поручение
 # без критериев. В тестах набор как у настоящей установки.
-PROVIDERS = ('review-craft-calls', 'review-prompts', 'session-anchor')
+PROVIDERS = ('review-craft-calls', 'review-prompts', 'craft-session-anchor')
 CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-call',
                     'craft-decision')
 CRAFT_WRITE = 'mcp__Craft__craft_write'
@@ -181,7 +181,7 @@ class TurnReviewCase(unittest.TestCase):
                 [review_lib.parse_record(row) for row in self.volume(session)])
         if checked is None:
             # Критерии последнего поручения; поручения не было — как у записи задачи.
-            checked = self.state(session).get('criteria') or ['craft-base', 'consistency', 'task', 'anchor']
+            checked = self.state(session).get('criteria') or ['craft-base', 'consistency', 'anchor', 'task']
         self.storage(session).write_json('turn-review-verdict.json', {
             'volume_id': volume_id, 'clean': not remarks, 'remarks': list(remarks),
             'checked': list(checked), 'fingerprint': fingerprint})
@@ -234,15 +234,15 @@ class TurnReviewTest(TurnReviewCase):
                        str(storage.path('turn-review-brief.md').resolve()),
                        str(storage.path('turn-review-volume.jsonl').resolve()),
                        str(storage.path('turn-review-verdict.json').resolve()),
-                       state['volume_id'], 'критерии craft-base, consistency, task, anchor'):
+                       state['volume_id'], 'критерии craft-base, consistency, anchor, task'):
             self.assertIn(needle, reason)
         self.assertEqual(state['nudges'], 1)
-        self.assertEqual(state['criteria'], ['craft-base', 'consistency', 'task', 'anchor'])
+        self.assertEqual(state['criteria'], ['craft-base', 'consistency', 'anchor', 'task'])
         # Поручение собрано из каркаса, записей поставщиков и критериев модулей.
         brief = storage.path('turn-review-brief.md').read_text(encoding='utf-8')
         for needle in ('Записи поставщика Craft', 'Записи поставщика реплик', 'Записи поставщика якоря',
                        'Критерий «task»', 'Критерий «craft-base»', 'Критерий «consistency»',
-                       'Критерий «anchor»', '"craft-base", "consistency", "task", "anchor"'):
+                       'Критерий «anchor»', '"craft-base", "consistency", "anchor", "task"'):
             self.assertIn(needle, brief)
         for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA'):
             self.assertNotIn(absent, brief)
@@ -608,10 +608,10 @@ class TurnReviewTest(TurnReviewCase):
         self.blocked(self.fire(stop(session)))
         self.write_verdict(session, self.state(session)['volume_id'], checked=())
         reason = self.blocked(self.fire(stop(session)))
-        self.assertIn('критерии не пройдены: craft-base, consistency, task, anchor', reason)
+        self.assertIn('критерии не пройдены: craft-base, consistency, anchor, task', reason)
         self.write_verdict(session, self.state(session)['volume_id'],
-                           checked=('craft-base', 'consistency', 'task', 'anchor', 'код'))
-        self.assertIn('критерии не из craft-base, consistency, task, anchor: код',
+                           checked=('craft-base', 'consistency', 'anchor', 'task', 'код'))
+        self.assertIn('критерии не из craft-base, consistency, anchor, task: код',
                       self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 
@@ -717,7 +717,7 @@ class TurnReviewTest(TurnReviewCase):
         storage = self.storage(session)
         storage.write_json('turn-review-state.json', {**self.state(session), 'criteria': []})
         self.write_verdict(session, self.state(session)['volume_id'],
-                           checked=('craft-base', 'consistency', 'task', 'anchor'))
+                           checked=('craft-base', 'consistency', 'anchor', 'task'))
         self.assertIn('один критерий не подошёл', self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 
@@ -1497,7 +1497,7 @@ class NoCriteriaTest(TurnReviewCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        for slug in (*CRITERIA_MODULES, 'session-anchor'):
+        for slug in (*CRITERIA_MODULES, 'craft-session-anchor'):
             (cls.root / 'modules' / slug / 'data' / 'review-criterion.md').unlink()
 
     def test_writes_without_criteria_are_not_released_by_a_clean_verdict(self) -> None:
