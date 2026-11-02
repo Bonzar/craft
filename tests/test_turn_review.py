@@ -968,7 +968,8 @@ class VolumeReadTest(unittest.TestCase):
                  ('{"kind": "skill"}', 'skill'), ('{"kind": "skill", "skill": "x", "лишнее": 1}',
                                                    'лишние поля лишнее'),
                  ('{"kind": "read", "command": "c", "ids": [1]}', 'ids'),
-                 ('{"kind": "skill", "skill": "x", "turn": true}', 'turn'))
+                 ('{"kind": "skill", "skill": "x", "turn": true}', 'turn'),
+                 ('{"kind": ["write"]}', "kind ['write']"), ('{"kind": {"a": 1}}', "kind {'a': 1}"))
         for line, reason in cases:
             with self.subTest(line=line):
                 records, damage = self.parse(good, line)

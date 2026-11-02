@@ -213,7 +213,9 @@ def parse_record(row) -> VolumeRecord:
     if not isinstance(row, dict):
         # ValueError, а не TypeError: порча строки, как и в остальных ветках.
         raise ValueError('не объект')  # noqa: TRY004
-    record_type = RECORD_OF_KIND.get(row.get(KIND_KEY))
+    kind = row.get(KIND_KEY)
+    # Список или объект в kind словарь не возьмёт ключом: проверка до поиска.
+    record_type = RECORD_OF_KIND.get(kind) if isinstance(kind, str) else None
     if record_type is None:
         raise ValueError(f'{KIND_KEY} {row.get(KIND_KEY)!r} не из {", ".join(sorted(KINDS))}')
     values = {name: value for name, value in row.items() if name != KIND_KEY}
