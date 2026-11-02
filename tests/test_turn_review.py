@@ -454,6 +454,24 @@ class TurnReviewTest(TurnReviewCase):
             self.assertEqual(self.state(session)['nudges'], 3)
             self.assert_question(self.fire(stop(session), autonomous))
 
+    def test_the_stuck_question_carries_the_last_remarks_without_debug(self) -> None:
+        # Замечания идут в вопрос человеку всегда: отладочный вывод в тестах
+        # ревью выключен, и прежде они ложились в состояние только с ним.
+        session = 's-stuck-remarks'
+        self.assertFalse(self.debug_file.exists())
+        self.start_with_write(session)
+        for number in range(3):
+            self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop(session))))
+            self.write_verdict(session, self.state(session)['volume_id'],
+                               [remark(f'замечание раунда {number}')])
+            self.assertIn(f'замечание раунда {number}', self.blocked(self.fire(stop(session))))
+        result = self.fire(stop(session))
+        self.assert_question(result)
+        reason = self.blocked(result)
+        self.assertIn('Замечания последнего вердикта', reason)
+        self.assertIn(f'- [craft-base] {BLOCK}: замечание раунда 2', reason)
+        self.assertNotIn('замечание раунда 1', reason)
+
     def test_the_anchor_survives_a_clean_verdict(self) -> None:
         session = 's-keep-anchor'
         self.fire(prompt(session, 'Беру задачу «Ревью хода»'))

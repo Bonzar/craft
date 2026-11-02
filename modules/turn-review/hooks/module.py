@@ -480,10 +480,12 @@ class Module(jarvis.Module):
         # гоняло бы ход по кругу без вопроса человеку.
         review.drop_verdict(storage)
         # Вердикт снят: следующий с тем же отпечатком — уже другое ревью.
-        # Замечания остаются в состоянии: вопрос человеку покажет их.
-        note_summary(storage, replace(state, shown_verdict=None,
-                                      last_remarks=tuple(verdict[review.REMARKS_KEY])),
-                     state, review, volume, head, verdict)
+        # Замечания остаются в состоянии при любом отладочном выводе: вопрос
+        # человеку покажет их.
+        remarked = replace(state, shown_verdict=None,
+                           last_remarks=tuple(verdict[review.REMARKS_KEY]))
+        review.save_state(storage, remarked)
+        note_summary(storage, remarked, state, review, volume, head, verdict)
         return jarvis.Block(reason=remarks_text(verdict[review.REMARKS_KEY], review, blocking))
 
     def press(self, storage, state, runtime, review, volume: list[dict],
