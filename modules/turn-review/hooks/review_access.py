@@ -16,11 +16,27 @@ def load_review(runtime):
     return found.load()
 
 
+SOURCES_PROBLEM = ('поставщиков ревью не прочитать: шапка соседнего модуля не разбирается '
+                   '({error}). Ревью не знает, кто копит объём и привозит критерии, ход не '
+                   'отпущен. Скажи об этом человеку: починить или переустановить модуль')
+
+
+class SourcesError(Exception):
+    """Шапки соседних модулей не прочитать: ни поставщиков, ни критериев."""
+
+
 def sources(runtime, review):
-    """Поставщики ревью — модули, чей `for` называет turn-review."""
+    """Поставщики ревью — модули, чей `for` называет turn-review.
+
+    Испорченная шапка соседа (ValueError ядра) — SourcesError с причиной:
+    падение хука отпустило бы ход без ревью.
+    """
+    try:
+        found = registry.adapters(runtime.module_dir, review.REVIEW_SLUG)
+    except ValueError as error:
+        raise SourcesError(SOURCES_PROBLEM.format(error=error)) from error
     providers = tuple(review.Provider(manifest.slug, manifest.path, bool(manifest.events))
-                      for manifest in registry.adapters(runtime.module_dir, review.REVIEW_SLUG)
-                      if manifest.path is not None)
+                      for manifest in found if manifest.path is not None)
     return review.Sources(registry.modules_dir(runtime.module_dir), providers)
 
 

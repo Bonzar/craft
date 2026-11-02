@@ -1148,8 +1148,39 @@ class EntityTypeTest(unittest.TestCase):
     def test_one_row_types_one_write(self) -> None:
         volume = [self.row(), write_record(DECISION_ADD, 'p'), write_record(DECISION_ADD, 'p')]
         self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
-        self.assertIn('запись write № 2', self.brief(volume))
-        self.assertNotIn('запись write № 1', self.brief(volume))
+        brief = self.brief(volume)
+        self.assertIn('- запись write № 1 «', brief)
+        self.assertIn('- запись write № 2 «', brief)
+        second = brief.split('- запись write № 2', 1)[1].splitlines()[0]
+        self.assertIn('тип не определён', second)
+
+    def test_every_write_is_listed_with_its_place_and_content_types(self) -> None:
+        # Критерий сущности спрашивает тип записи, а не тег в её тексте: тип
+        # каждой записи стоит в поручении по номеру, вместе с местом и содержимым.
+        command = DECISION_ADD.replace('Новое решение', '- [ ] Дело #задача')
+        volume = [self.row(command, place=['#раздел']), write_record(command, 'p'),
+                  self.row(place=[], content=[]), write_record(DECISION_ADD, 'p'),
+                  write_record(DECISION_ADD, 'p')]
+        lines = [line for line in self.brief(volume).splitlines()
+                 if line.startswith('- запись write №')]
+        self.assertEqual(len(lines), 3)
+        self.assertIn('№ 1', lines[0])
+        self.assertIn('место #раздел', lines[0])
+        self.assertIn('содержимое #задача', lines[0])
+        self.assertIn('тип #раздел, #задача', lines[0])
+        self.assertIn('№ 2', lines[1])
+        self.assertIn('тип пуст', lines[1])
+        self.assertIn('№ 3', lines[2])
+        self.assertIn('тип не определён', lines[2])
+
+    def test_entity_criteria_ask_the_write_type_and_not_a_tag(self) -> None:
+        for slug in ('craft-task', 'craft-stage', 'craft-note', 'craft-section', 'craft-project',
+                     'craft-sphere', 'craft-links'):
+            with self.subTest(slug=slug):
+                text = (MODULES_DIR / slug / 'data' / 'review-criterion.md').read_text(
+                    encoding='utf-8')
+                self.assertNotIn('с тегом #', text)
+                self.assertIn('чей тип (раздел «Тип записей» поручения) включает', text)
 
     def test_a_retry_takes_its_own_row_and_not_the_denied_one(self) -> None:
         # Запрещённая попытка оставила строку без записи; повтор кладёт свою.
@@ -1620,6 +1651,69 @@ class NoProviderTest(TurnReviewCase):
         reason = self.blocked(self.fire(stop(session)))
         self.assertIn('Нет поставщика записей', reason)
         self.assertIn(str(self.root / 'modules'), reason)
+
+
+class LostWritesTest(TurnReviewCase):
+    """Набор без поставщика записей write: замок кладёт строки типа, записей нет."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        # Поставщик записей write снят: его хуки на событиях больше не стоят.
+        lost = cls.root / 'modules' / 'review-craft-calls' / 'hooks' / 'module.py'
+        for entries in cls.hooks.values():
+            if lost in entries:
+                entries.remove(lost)
+
+    def test_lock_rows_without_writes_are_not_released_as_empty(self) -> None:
+        session = 's-lost-writes'
+        self.fire(prompt(session))
+        self.assert_silent(self.fire(write(session)))
+        self.assertEqual(self.volume(session), [])
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('строки типа записей от замка', reason)
+        self.assertIn('записей write в объёме нет', reason)
+        self.assertNotEqual(self.last_reason(session), 'записей в Craft не было')
+
+    def test_lost_writes_problem_names_the_count(self) -> None:
+        rows = [review_lib.parse_record(entity_row(DECISION_ADD, 'p')) for _ in range(2)]
+        self.assertIn('2', review_lib.lost_writes_problem(rows))
+        self.assertIsNone(review_lib.lost_writes_problem([*rows, write_record(DECISION_ADD, 'p')]))
+        self.assertIsNone(review_lib.lost_writes_problem([]))
+
+
+class BrokenNeighbourTest(TurnReviewCase):
+    """Набор, где шапка соседнего модуля испорчена: поставщиков не прочитать."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        broken = cls.root / 'modules' / 'zz-broken'
+        broken.mkdir()
+        (broken / 'module.toml').write_text('slug = \n', encoding='utf-8')
+
+    def start_with_row(self, session: str) -> None:
+        # Хуки соседей с requires падают на той же шапке сами: строку записи
+        # тест кладёт за поставщика, а событие получает только ревью.
+        row = {'kind': 'write', 'tool': CRAFT_WRITE, 'command': TASK_ADD, 'result': None}
+        self.storage(session).append_line('turn-review-volume.jsonl',
+                                          json.dumps(row, ensure_ascii=False))
+
+    def test_a_broken_neighbour_header_blocks_the_stop_with_its_reason(self) -> None:
+        session = 's-broken-neighbour'
+        self.start_with_row(session)
+        run = self.run_entry(stop(session), self.entry)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        reason = self.blocked(run)
+        self.assertIn('поставщиков ревью не прочитать', reason)
+        self.assertIn('Скажи об этом человеку', reason)
+
+    def test_a_broken_neighbour_header_keeps_the_answer_hidden_in_the_preview(self) -> None:
+        session = 's-broken-preview'
+        self.start_with_row(session)
+        run = self.run_entry(message(session, 'ответ'), self.entry)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertNotIn('ответ', run.stdout)
 
 
 class BrokenFrameTest(TurnReviewCase):

@@ -31,7 +31,7 @@ from .criteria import (
     is_tag, make_criterion, parse_applies,
 )
 from .entity_types import (
-    WriteType, selection_tags, types_text, write_types,
+    WriteType, lost_writes_problem, selection_tags, types_text, write_types,
 )
 from .question import (
     MAX_NUDGES, OPTION_RELEASE, OPTION_REVIEW, QUESTION_TOOL, RELEASE_PHRASE, answered_release,
@@ -74,7 +74,7 @@ __all__ = [
     'assemble_brief', 'brief_failure_text', 'chosen_labels', 'claim_prompt_turn', 'clear_volume',
     'count_kind', 'count_writes', 'criteria_problem', 'criterion_applies', 'drop_verdict',
     'elapsed_text', 'fingerprint', 'is_review_question', 'is_tag', 'joined', 'load_state',
-    'load_volume', 'make_criterion', 'new_volume_id', 'nudge_text', 'parse_applies', 'parse_record',
+    'load_volume', 'lost_writes_problem', 'make_criterion', 'new_volume_id', 'nudge_text', 'parse_applies', 'parse_record',
     'parse_volume_file', 'peek_state', 'peek_verdict', 'peek_volume', 'prompt_id_of',
     'providers_problem', 'read_verdict', 'record_row', 'record_turn', 'remarks_text',
     'review_criteria', 'review_question', 'save_state', 'selection_tags', 'state_lock',

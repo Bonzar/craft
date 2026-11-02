@@ -81,7 +81,11 @@ def _requires_gap(manifest: Manifest, event: Event, module_dir: Path):
 
     Модуль, у которого на событии не нашлось ничего из requires, говорит об
     этом в чате и молчит: называет, чего нет, и своего хода не делает.
+    Модулю без requires соседи не читаются: испорченная шапка соседа не роняет
+    его до собственного хода, а что с ней делать, он решает сам.
     """
+    if not manifest.requires:
+        return None, {}
     found, missing = resolve(manifest.requires, registry.neighbours(module_dir))
     if not missing:
         return None, found
