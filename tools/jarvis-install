@@ -15,7 +15,11 @@
 - убирает то, чего в источнике больше нет: исчезнувшие части, снятые модули и
   лишние копии;
 - предупреждает о требовании без модуля и о событии, которого у харнеса нет;
-- падает на испорченном `data/entity.json` и на теге, который стоит у двух модулей.
+- падает на испорченном `data/entity.json`, на теге, который стоит у двух модулей,
+  на модуле с `for` на craft-type-lock без этого файла и на файле в модуле без
+  такого `for`;
+- падает, когда файл модуля называет другой модуль набора, которого нет в его
+  `requires` или `for` и который не служит ему сам через `for`.
 
 Чего он НЕ делает: библиотеку никуда не собирает, путей модулю не сообщает,
 про стартовый контекст не знает ничего и ничего не чинит — только раскладывает
@@ -93,10 +97,34 @@ DECLARED_FILES = 'files'
 TEXT_SUFFIXES = {'.md', '.py', '.json', '.toml', '.txt', '.sh', '.yaml', '.yml', '.js'}
 # Байткод — след запуска из источника, а не часть модуля: в установку он не едет.
 IGNORED = shutil.ignore_patterns('__pycache__', '*.pyc')
+# Упоминание другого модуля в любом файле модуля обязано стоять в его requires
+# или for (решение Влада, 02.11.2026). Правило совпадения — в check_mentions.
+# Однословный slug («behavior», «code», «probe») неотличим от обычного слова,
+# поэтому считается только сразу после слова «модуль» в любой форме или
+# «module», списком через запятую или «и», и головой пути к части модуля.
+MENTION_MODULE_WORD = re.compile(r'(?i)(?<!\w)(?:модул\w*|modules?)(?!\w)')
+MENTION_LIST_ITEM = re.compile(r'\s*[«`"\']?([a-z0-9-]+)[»`"\']?(\s*,|\s+(?:и|and)(?!\w))?')
+MENTION_PATH_HEADS = (*PARTS, 'module.toml', 'README.md')
+# Исключения: (модуль, файл от папки модуля) → slug'и, которые там законны вне
+# requires и for. Каждое исключение временное и с причиной.
+MENTION_EXEMPTIONS = {
+    # До решения Влада по тексту INTRO: вступление снимка памяти — его дословный
+    # текст, и называет скиллы типов по slug. Править без его ока нельзя.
+    ('craft-snapshot', 'lib/__init__.py'): {
+        'craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-reconcile',
+    },
+}
 # Теги сущности: файл data/entity.json модуля, поле tags. По этим файлам замок
-# craft-type-lock собирает справочник «тег → скилл» на каждой записи в Craft.
+# craft-type-lock собирает справочник «тег → скилл» на каждой записи в Craft;
+# модуль сущности объявляет себя замку полем `for`, и без файла замок
+# закрывает любую запись.
 ENTITY_FILE = 'entity.json'
+ENTITY_LOCK = 'craft-type-lock'
 ENTITY_TAGS_KEY = 'tags'
+# Шаблоны тега: id страниц, любой из которых агент читает в ходе до записи в
+# сущность. Объект «тег → непустой список id», ключи — ровно теги из tags.
+ENTITY_TEMPLATES_KEY = 'templates'
+BLOCK_ID = re.compile(r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}')
 TAG_PREFIX = '#'
 PLACEHOLDER_OPEN = '{{'
 # Единый slug возможности харнеса в тексте части. Пишется в том же синтаксисе,
@@ -673,9 +701,7 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
     try:
-        for request in requests:
-            process.stdin.write((json.dumps({'jsonrpc': '2.0', **request}) + '\n').encode())
-            process.stdin.flush()
+        send_requests(process.stdin, requests)
         reader.join(timeout)
     finally:
         if process.poll() is None:
@@ -683,13 +709,33 @@ def app_server_call(cli: str, codex_home: Path, requests: list[dict], timeout: f
         process.wait()
         reader.join(timeout=1)
         returncode = process.returncode
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None:
-                stream.close()
+        close_streams(process)
     if not wanted <= set(answers):
         raise RuntimeError(f'app-server не вернул ответы {sorted(wanted - set(answers))} '
                            f'(код завершения {returncode})')
     return answers
+
+
+def send_requests(stdin, requests: list[dict]) -> None:
+    """Запросы в app-server. Он уже вышел — дальше не пишем: каких ответов
+    нет, называет проверка ответов вместе с кодом завершения сервера."""
+    try:
+        for request in requests:
+            stdin.write((json.dumps({'jsonrpc': '2.0', **request}) + '\n').encode())
+            stdin.flush()
+    except BrokenPipeError:
+        return
+
+
+def close_streams(process) -> None:
+    """Закрыть трубы app-server. Недописанный в мёртвый сервер буфер stdin при
+    закрытии снова даёт BrokenPipeError: сервер уже ушёл, его код завершения
+    у вызывающего, а ошибка закрытия заслонила бы его."""
+    try:
+        process.stdin.close()
+    except BrokenPipeError:
+        pass
+    process.stdout.close()
 
 
 def listed_hooks(cli: str, codex_home: Path, config_path: Path, handshake: list[dict],
@@ -870,16 +916,26 @@ def check_entity_tags(plan: list[tuple]) -> None:
     """Проверить data/entity.json всех копий набора ДО того, как установка что-то тронет.
 
     Файл разбирается, `tags` — непустой список строк с «#», тег не повторяется
-    ни у двух модулей, ни в одном. Без этой проверки битая карта тегов
-    всплыла бы только в работе: замок запрещает запись в Craft (закрыто) и
-    падает с ошибкой хука на каждом вызове Skill, а review-craft-calls падает
-    на каждой записи. Регистр не важен, как у замка.
+    ни у двух модулей, ни в одном, у каждого тега в `templates` непустой
+    список id шаблонов. Модуль с `for` на замок craft-type-lock обязан нести
+    файл, а файл лежит только в таком модуле. Без этой проверки битая карта тегов всплыла бы только в работе:
+    замок запрещает запись в Craft (закрыто) и падает с ошибкой хука на
+    каждом вызове Skill. Регистр не важен, как у замка.
     """
     owners = {}
     for target, slug in plan:
         path = target.path / PART_DATA / ENTITY_FILE
+        serves_lock = any(manifest_reader.serves_slug(entry, ENTITY_LOCK) for entry in target.serves)
         if not path.is_file():
+            if serves_lock:
+                raise ValueError(f'{path}: модуль «{slug}» объявил for «{ENTITY_LOCK}», а файла сущности нет')
             continue
+        if not serves_lock:
+            # Замок находит модули сущностей по `for`: файл без него он молча не
+            # видит, и теги файла остались бы без скилла.
+            raise ValueError(f'{path}: у модуля «{slug}» есть файл сущности, но нет for «{ENTITY_LOCK}» — '
+                             f'замок его не увидит. Добавь в module.toml for = ["{ENTITY_LOCK}"] '
+                             'или убери файл')
         try:
             entity = json.loads(path.read_text(encoding='utf-8'))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -893,6 +949,104 @@ def check_entity_tags(plan: list[tuple]) -> None:
             if tag.lower() in owners:
                 raise ValueError(f'{path}: тег {tag} уже у модуля «{owners[tag.lower()]}»')
             owners[tag.lower()] = slug
+        check_entity_templates(path, tags, entity.get(ENTITY_TEMPLATES_KEY))
+
+
+def check_entity_templates(path: Path, tags: list, templates) -> None:
+    """`templates` — ровно теги из `tags`, у каждого непустой список id блоков."""
+    if not isinstance(templates, dict):
+        raise ValueError(f'{path}: нет объекта «{ENTITY_TEMPLATES_KEY}»: тег → id шаблонов')
+    for tag in tags:
+        ids = templates.get(tag)
+        if (not isinstance(ids, list) or not ids
+                or not all(isinstance(item, str) and BLOCK_ID.fullmatch(item) for item in ids)):
+            raise ValueError(f'{path}: у тега {tag} в «{ENTITY_TEMPLATES_KEY}» нет непустого списка id шаблонов')
+    extra = sorted(set(templates) - set(tags))
+    if extra:
+        raise ValueError(f'{path}: в «{ENTITY_TEMPLATES_KEY}» шаблоны тегов, которых нет в '
+                         f'«{ENTITY_TAGS_KEY}»: {", ".join(extra)}')
+
+
+def allowed_mentions(target, manifests: list) -> set[str]:
+    """Кого модуль вправе называть: себя, то, что требует, то, чему служит, и своих адаптеров.
+
+    Адаптер объявляет `for` на модуль — это договор, по которому модуль-хозяин
+    знает своих поставщиков, так что называть их ему можно.
+    """
+    allowed = {target.slug}
+    for other in manifests:
+        if any(manifest_reader.matches(requirement, other) for requirement in target.requires):
+            allowed.add(other.slug)
+        if any(manifest_reader.serves_slug(entry, other.slug) for entry in target.serves):
+            allowed.add(other.slug)
+    allowed.update(adapter.slug for adapter in manifest_reader.adapters_of(target.slug, manifests))
+    return allowed
+
+
+def mention_patterns(slugs: list[str]) -> tuple[re.Pattern | None, re.Pattern | None]:
+    """Регулярки упоминаний: составные slug'и — целым словом, однословные — головой пути.
+
+    Граница составного slug'а — не буква, не цифра и не дефис: `craft-decisions`
+    не упоминает `craft-decision`, а `base-2` (копия) — `base`.
+    """
+    longest_first = sorted(slugs, key=len, reverse=True)
+    compound = [re.escape(slug) for slug in longest_first if '-' in slug]
+    single = [re.escape(slug) for slug in longest_first if '-' not in slug]
+    compound_pattern = re.compile(r'(?<![\w-])(' + '|'.join(compound) + r')(?![\w-])') if compound else None
+    heads = '|'.join(re.escape(head) for head in MENTION_PATH_HEADS)
+    path_pattern = (re.compile(r'(?<![\w.-])('+ '|'.join(single) + r')/(?:' + heads + r')(?![\w-])')
+                    if single else None)
+    return compound_pattern, path_pattern
+
+
+def mentions_in_line(line: str, slugs: set[str], compound, path) -> set[str]:
+    """Slug'и модулей, которые строка называет."""
+    found = set(compound.findall(line)) if compound else set()
+    if path:
+        found.update(path.findall(line))
+    for word in MENTION_MODULE_WORD.finditer(line):
+        position = word.end()
+        while item := MENTION_LIST_ITEM.match(line, position):
+            if item.group(1) not in slugs:
+                break
+            found.add(item.group(1))
+            if not item.group(2):
+                break  # список кончился: дальше идёт уже не перечень модулей
+            position = item.end()
+    return found
+
+
+def check_mentions(manifests: list) -> None:
+    """Каждый модуль называет только тех, кто у него в requires или for.
+
+    Проверяются все файлы модуля: шапка с комментариями, README, скилл,
+    правила, данные, библиотека, хуки. Известен только slug модуля этого же
+    набора: чужое имя не модуль. Падает списком всех нарушений с модулем, файлом
+    и строкой — ДО того, как установка что-то тронет.
+    """
+    slugs = {manifest.slug for manifest in manifests}
+    compound, path = mention_patterns(sorted(slugs))
+    problems = []
+    for target in manifests:
+        allowed = allowed_mentions(target, manifests)
+        for file in sorted(target.path.rglob('*')):
+            if not file.is_file() or '__pycache__' in file.parts or file.suffix == '.pyc':
+                continue
+            try:
+                lines = file.read_text(encoding='utf-8').splitlines()
+            except UnicodeDecodeError:
+                continue  # бинарь: в нём не пишут прозой
+            relative = file.relative_to(target.path).as_posix()
+            exempt = MENTION_EXEMPTIONS.get((target.slug, relative), set())
+            for number, line in enumerate(lines, 1):
+                for slug in sorted(mentions_in_line(line, slugs, compound, path) - allowed - exempt):
+                    problems.append(f'модуль «{target.slug}», файл {relative}:{number} называет модуль «{slug}»')
+    if problems:
+        raise ValueError(
+            'Модуль называет другой модуль, которого нет в его requires или for:\n  '
+            + '\n  '.join(problems)
+            + '\nДобавь модуль в requires или for либо назови его без slug'
+        )
 
 
 def check_events(manifests: list, report: Report, backend: Backend | None = None) -> None:
@@ -1105,7 +1259,11 @@ def install(args: argparse.Namespace) -> Report:
     # Журнал хранит абсолютные пути: модуль свежести повторяет установку из
     # другого рабочего каталога, и относительный путь там не найдётся.
     extra_modules = [Path(path).expanduser().resolve() for path in extra_sources(args)]
-    manifests = for_harness(discover_all([source_modules, *extra_modules]), backend.name)
+    discovered = discover_all([source_modules, *extra_modules])
+    # Упоминания сверяются по всему набору, а не по модулям харнеса: исход
+    # проверки не зависит от того, под какой харнес идёт установка.
+    check_mentions(discovered)
+    manifests = for_harness(discovered, backend.name)
     check_requires(manifests, report)
     check_events(manifests, report, backend)
     plan = expand(manifests)

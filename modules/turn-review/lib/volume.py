@@ -9,10 +9,12 @@
 import hashlib
 import json
 import os
+from collections.abc import Callable, Mapping
 from typing import NewType
 
 from .records import KIND_WRITE, VolumeRecord, WriteRecord, parse_record, record_row
 
+# Имя файла объёма в зоне сессии хранилища — часть контракта поставщиков.
 VOLUME_FILE = 'turn-review-volume.jsonl'
 FINGERPRINT_CHARS = 16
 
@@ -21,11 +23,6 @@ FINGERPRINT_CHARS = 16
 # сделанную уже после ревью. Отпечаток, а не число записей: он говорит, что
 # именно проверено, а не сколько.
 Fingerprint = NewType('Fingerprint', str)
-
-
-def append_row_unlocked(storage, row: dict) -> None:
-    """Дописать строку в объём; лок держит вызывающий."""
-    storage.append_line(VOLUME_FILE, json.dumps(row, ensure_ascii=False))
 
 
 def parse_line(line: bytes) -> VolumeRecord:
@@ -58,13 +55,22 @@ def parse_volume(storage) -> tuple[list[VolumeRecord], list[str]]:
     return parse_volume_file(storage.path(VOLUME_FILE))
 
 
-def rewrite_volume(storage, records: list[VolumeRecord]) -> None:
-    path = storage.path(VOLUME_FILE)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f'.tmp-{os.getpid()}')
-    tmp.write_text(''.join(json.dumps(record_row(record), ensure_ascii=False) + '\n'
-                           for record in records), encoding='utf-8')
-    os.replace(tmp, path)
+def rewrite_volume(storage, choose: Callable[[list[VolumeRecord]], list[VolumeRecord]]
+                   ) -> tuple[list[VolumeRecord], list[str]]:
+    """Переписать объём записями, которые выбрал `choose` из читаемых; вернуть прочитанное.
+
+    Чтение и замена файла идут под локом журнала ядра (Storage.journal_lock):
+    поставщики дописывают объём из своих процессов тем же append_line, и
+    строка, дописанная между чтением и заменой, иначе пропала бы. Возвращает
+    читаемые записи и нечитаемые строки на момент замены.
+    """
+    with storage.journal_lock(VOLUME_FILE) as path:
+        records, damage = parse_volume_file(path)
+        tmp = path.with_name(path.name + f'.tmp-{os.getpid()}')
+        tmp.write_text(''.join(json.dumps(record_row(record), ensure_ascii=False) + '\n'
+                               for record in choose(records)), encoding='utf-8')
+        os.replace(tmp, path)
+    return records, damage
 
 
 def peek_volume(storage) -> list[VolumeRecord]:
@@ -81,7 +87,10 @@ def load_volume(storage) -> tuple[list[VolumeRecord], str | None]:
     records, damage = parse_volume(storage)
     if not damage:
         return records, None
-    rewrite_volume(storage, records)
+    # Под локом перечитывается: пока шла проверка, поставщик мог дописать строку.
+    records, damage = rewrite_volume(storage, lambda readable: readable)
+    if not damage:
+        return records, None
     return records, (f'объём ревью {storage.path(VOLUME_FILE)} был испорчен '
                      f'({"; ".join(damage)}): эти строки убраны, их ревью не было')
 
@@ -94,26 +103,24 @@ def count_writes(volume: list[VolumeRecord]) -> int:
     return count_kind(volume, KIND_WRITE)
 
 
-def writes_before_turn(volume: list[VolumeRecord], turn: int) -> bool:
+def record_turn(record: VolumeRecord, prompt_turns: Mapping[str, int]) -> int | None:
+    """Номер хода записи по id её реплики; id нет или он ревью незнаком — None."""
+    if record.prompt_id is None:
+        return None
+    return prompt_turns.get(record.prompt_id)
+
+
+def writes_before_turn(volume: list[VolumeRecord], turn: int,
+                       prompt_turns: Mapping[str, int]) -> bool:
     """Записи есть, и все сделаны ходами раньше этого: этот ход в Craft не писал.
 
-    Пустой объём — False: там нечего отпускать как разговор. Запись без
-    номера хода не раньше. Номер хода после потери состояния продолжается
-    от записей объёма, см. next_turn.
+    Пустой объём — False: там нечего отпускать как разговор. Запись без id
+    реплики или с id, которого ревью не знает, не раньше: её ход неизвестен,
+    и она идёт на ревью, а не отпускается молча.
     """
-    turns = [record.turn for record in volume if isinstance(record, WriteRecord)]
+    turns = [record_turn(record, prompt_turns) for record in volume
+             if isinstance(record, WriteRecord)]
     return bool(turns) and all(item is not None and item < turn for item in turns)
-
-
-def next_turn(state_turn: int, volume: list[VolumeRecord]) -> int:
-    """Номер нового хода: больше и счётчика состояния, и любого хода в объёме.
-
-    Состояние потеряно — счётчик снова 0, а записи объёма помнят свои ходы.
-    Без этого ходы-разговоры после потери блокировались бы, пока счётчик не
-    догонит старые записи.
-    """
-    known = [record.turn for record in volume if record.turn is not None]
-    return max([state_turn, *known]) + 1
 
 
 def fingerprint(volume: list[VolumeRecord]) -> Fingerprint:

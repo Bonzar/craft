@@ -101,10 +101,10 @@ class CodexBuildEnvironmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, profile, state = root / 'source', root / 'profile', root / 'state'
-            for slug in ('craft-sync', 'shell-tree', 'go-toolchain', 'go-toolchain-codex'):
+            for slug in ('craft-sync', 'command-tree-shell', 'go-toolchain', 'go-toolchain-codex'):
                 shutil.copytree(MODULES_DIR / slug, source / slug,
                                 ignore=shutil.ignore_patterns('bin', '__pycache__'))
-            for slug in ('craft-sync', 'shell-tree'):
+            for slug in ('craft-sync', 'command-tree-shell'):
                 shutil.rmtree(source / slug / 'src')
                 (source / slug / 'src').mkdir()
                 (source / slug / 'src/main.go').write_text('package main\n')
@@ -126,7 +126,7 @@ class CodexBuildEnvironmentTest(unittest.TestCase):
                     capture_output=True, text=True,
                     env={**os.environ, 'PATH': str(stubs) + ':/usr/bin:/bin', 'BUILD_LOG': str(journal)})
                 self.assertEqual(done.returncode, 0, done.stderr)
-            for slug in ('craft-sync', 'shell-tree'):
+            for slug in ('craft-sync', 'command-tree-shell'):
                 self.assertTrue((profile / f'jarvis/modules/{slug}/bin/{slug}').is_file())
             entries = journal.read_text().splitlines()
             self.assertEqual(len(entries), 2)

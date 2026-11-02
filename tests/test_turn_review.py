@@ -1,16 +1,16 @@
 """Ревью хода turn-review: путь от сырого события Claude до ответа и следа."""
 
+import itertools
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from unittest import mock
 
 from jarvis import confirm, registry
@@ -22,14 +22,24 @@ from . import CORE_SOURCE, MODULES_DIR
 # lib грузится пакетом через реестр ядра, как у хуков: отпечаток и проверки в
 # тестах — те же функции. Загрузку по пути без ядра проверяет скрипт отпечатка.
 review_lib = registry.LibraryModule('turn-review', MODULES_DIR / 'turn-review' / 'lib').load()
+craft_lib = registry.LibraryModule(
+    'command-tree-craft', MODULES_DIR / 'command-tree-craft' / 'lib').load()
+# Описания видов записей: свой файл ревью, без него поручение не собрать.
+DESCRIPTIONS = (MODULES_DIR / 'turn-review' / 'data' / 'review-records.md').read_text(
+    encoding='utf-8')
 
 SLUG = 'turn-review'
-TYPE_LOCK = 'craft-type-lock'
+# Разбор команд Craft: поставщику review-craft-calls и тегам ревью.
+CRAFT_PARSER = 'command-tree-craft'
 # Поставщики, якорь и модули с критериями: без них объём пуст, а поручение
-# без критериев. В тестах набор как у настоящей установки.
+# без критериев. В тестах набор как у настоящей установки, без модуля
+# сверки: он переезжает в другой модуль, и тесты от него не зависят.
 PROVIDERS = ('review-craft-calls', 'review-prompts', 'craft-session-anchor')
-CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-call',
-                    'craft-decision')
+CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-project',
+                    'craft-sphere', 'craft-call', 'craft-reconcile', 'craft-decisions', 'craft-links')
+# Критерии к ходу с записью задачи: по slug поставщиков, как их находит ревью.
+TASK_CRITERIA = ('craft-base', 'decision', 'links', 'consistency', 'anchor', 'task')
+TASK_CRITERIA_TEXT = ', '.join(TASK_CRITERIA)
 CRAFT_WRITE = 'mcp__Craft__craft_write'
 CRAFT_READ = 'mcp__Craft__craft_read'
 BLOCK = 'a6784801-9d92-875c-f146-50159368745b'
@@ -42,30 +52,82 @@ EVENT_OF = {'UserPromptSubmit': 'prompt', 'PostToolUse': 'post-tool', 'Stop': 's
             'SessionStart': 'after-compact', 'MessageDisplay': 'model-message'}
 
 
-def write_record(types=('#задача',), types_error: str | None = None,
-                 command: str = 'blocks add'):
-    """Запись write объёма с тегами: в тестах lib важны только теги."""
-    return review_lib.make_write_record(tool=CRAFT_WRITE, command=command, result=None,
-                                        types=types, types_error=types_error)
+def write_record(command: str = 'blocks add #задача', prompt_id: str | None = None):
+    """Запись write объёма, как её читает ревью из строки поставщика."""
+    row = {'kind': 'write', 'tool': CRAFT_WRITE, 'command': command, 'result': None}
+    return review_lib.parse_record(row if prompt_id is None else {**row, 'prompt_id': prompt_id})
+
+
+def read_record(command: str = 'blocks get', ids=()):
+    return review_lib.parse_record({'kind': 'read', 'command': command, 'ids': list(ids)})
 
 
 def skill_record(name: str):
-    return review_lib.make_skill_record(skill=name)
+    return review_lib.parse_record({'kind': 'skill', 'skill': name})
+
+
+# Id текущей реплики сессии: вызовы хода несут id своей реплики, как у Claude
+# (замер 02.11.2026: PostToolUse и Stop несут prompt_id реплики).
+PROMPT_IDS: dict[str, str] = {}
+PROMPT_COUNTER = itertools.count(1)
+# Реплика без id: так приходит событие старого харнеса.
+NO_ID = ''
 
 
 def prompt(session: str, text: str = 'дальше', prompt_id: str | None = None) -> dict:
+    """Реплика с новым id, если он не задан; NO_ID — реплика без id."""
     raw = {'hook_event_name': 'UserPromptSubmit', 'session_id': session, 'cwd': '/work',
            'prompt': text}
-    return raw if prompt_id is None else {**raw, 'prompt_id': prompt_id}
+    if prompt_id is None:
+        prompt_id = f'{session}-p{next(PROMPT_COUNTER)}'
+    if prompt_id == NO_ID:
+        PROMPT_IDS.pop(session, None)
+        return raw
+    PROMPT_IDS[session] = prompt_id
+    return {**raw, 'prompt_id': prompt_id}
 
 
 def tool(session: str, name: str, tool_input: dict, response) -> dict:
-    return {'hook_event_name': 'PostToolUse', 'session_id': session, 'cwd': '/work',
-            'tool_name': name, 'tool_input': tool_input, 'tool_response': response}
+    raw = {'hook_event_name': 'PostToolUse', 'session_id': session, 'cwd': '/work',
+           'tool_name': name, 'tool_input': tool_input, 'tool_response': response}
+    prompt_id = PROMPT_IDS.get(session)
+    return raw if prompt_id is None else {**raw, 'prompt_id': prompt_id}
 
 
-def write(session: str, command: str = TASK_ADD) -> dict:
-    return tool(session, CRAFT_WRITE, {'command': command}, {'id': BLOCK, 'ok': True})
+def sources(modules: Path, providers=None):
+    """Откуда ревью берёт файлы: поставщики по умолчанию — все папки каталога."""
+    if providers is None:
+        providers = tuple(review_lib.Provider(child.name, child, False)
+                          for child in sorted(modules.iterdir()) if child.is_dir())
+    return review_lib.Sources(modules, providers)
+
+
+# Ключ события теста, не харнеса: строка замка craft-type-lock, которую тест
+# кладёт в объём рядом с записью. Замок в этом наборе не стоит (ему нужен
+# connect-API), поэтому его строку тест пишет за него, ровно по контракту:
+# содержимое — теги типа в тексте команды вне ссылок, как их ищет замок.
+LOCK_ROW = 'test_lock_row'
+ENTITY_TAGS = ('#задача', '#этап', '#веха', '#раздел', '#заметка', '#тема')
+
+
+def entity_row(command: str, prompt_id: str | None, place=(), content=None,
+               determined: bool = True, note: str = 'цель на странице без типа') -> dict:
+    """Строка `entity` замка для записи с этой командой."""
+    if content is None:
+        content = craft_lib.find_tags(command, ENTITY_TAGS)
+    targets = [anchor.block_id for anchor in craft_lib.write_targets(command).anchors]
+    row = {'command': command, 'targets': targets, 'place_types': list(place),
+           'content_types': list(content), 'determined': determined, 'note': note}
+    head = {'kind': 'entity'} if prompt_id is None else {'kind': 'entity', 'prompt_id': prompt_id}
+    return {**head, **row}
+
+
+def write(session: str, command: str = TASK_ADD, place=(), lock: bool = True) -> dict:
+    """Запись в Craft; place — типы места из строки замка, lock=False — строки замка нет."""
+    raw = tool(session, CRAFT_WRITE, {'command': command}, {'id': BLOCK, 'ok': True})
+    if not lock:
+        return raw
+    return {**raw, LOCK_ROW: entity_row(command, raw.get('prompt_id'), place)}
 
 
 def read(session: str, command: str) -> dict:
@@ -112,7 +174,7 @@ class TurnReviewCase(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmp.name)
         ignore = shutil.ignore_patterns('__pycache__')
-        for slug in (SLUG, TYPE_LOCK, *PROVIDERS, *CRITERIA_MODULES):
+        for slug in (SLUG, CRAFT_PARSER, *PROVIDERS, *CRITERIA_MODULES):
             module_dir = cls.root / 'modules' / slug
             shutil.copytree(MODULES_DIR / slug, module_dir, ignore=ignore)
             shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
@@ -145,7 +207,18 @@ class TurnReviewCase(unittest.TestCase):
         return env
 
     def fire(self, raw: dict, autonomous: bool = False) -> subprocess.CompletedProcess:
-        """Событие уходит всем модулям набора на нём; возвращается ответ ревью."""
+        """Событие уходит всем модулям набора на нём; возвращается ответ ревью.
+
+        Строка замка, если она есть у события, ложится в объём раньше хуков.
+        Замок пишет её на том же post-tool параллельно с поставщиком записей, так
+        что в жизни она встаёт и раньше записи, и позже; оба порядка проверяет
+        EntityTypesTest.
+        """
+        if LOCK_ROW in raw:
+            raw = dict(raw)
+            row = raw.pop(LOCK_ROW)
+            self.storage(raw['session_id']).append_line(
+                'turn-review-volume.jsonl', json.dumps(row, ensure_ascii=False))
         event = EVENT_OF[raw['hook_event_name']]
         result = None
         for entry in self.hooks.get(event, [self.entry]):
@@ -165,11 +238,11 @@ class TurnReviewCase(unittest.TestCase):
         return self.storage(session).read_json('turn-review-state.json')
 
     def volume(self, session: str, every: bool = False) -> list[dict]:
-        # Реплики prompt лежат в объёме рядом с записями хода и без every
-        # убираются из выборки; ответы answer остаются.
+        # Реплики prompt и строки замка entity лежат в объёме рядом с записями
+        # хода и без every убираются из выборки; ответы answer остаются.
         lines = self.storage(session).read_lines('turn-review-volume.jsonl')
         rows = [json.loads(line) for line in lines]
-        return rows if every else [row for row in rows if row['kind'] != 'prompt']
+        return rows if every else [row for row in rows if row['kind'] not in ('prompt', 'entity')]
 
     def last_reason(self, session: str) -> str:
         return Trace(self.storage(session)).read()[-1]['reason']
@@ -181,7 +254,7 @@ class TurnReviewCase(unittest.TestCase):
                 [review_lib.parse_record(row) for row in self.volume(session)])
         if checked is None:
             # Критерии последнего поручения; поручения не было — как у записи задачи.
-            checked = self.state(session).get('criteria') or ['craft-base', 'consistency', 'anchor', 'task']
+            checked = self.state(session).get('criteria') or list(TASK_CRITERIA)
         self.storage(session).write_json('turn-review-verdict.json', {
             'volume_id': volume_id, 'clean': not remarks, 'remarks': list(remarks),
             'checked': list(checked), 'fingerprint': fingerprint})
@@ -234,18 +307,42 @@ class TurnReviewTest(TurnReviewCase):
                        str(storage.path('turn-review-brief.md').resolve()),
                        str(storage.path('turn-review-volume.jsonl').resolve()),
                        str(storage.path('turn-review-verdict.json').resolve()),
-                       state['volume_id'], 'критерии craft-base, consistency, anchor, task'):
+                       state['volume_id'], f'критерии {TASK_CRITERIA_TEXT}'):
             self.assertIn(needle, reason)
         self.assertEqual(state['nudges'], 1)
-        self.assertEqual(state['criteria'], ['craft-base', 'consistency', 'anchor', 'task'])
-        # Поручение собрано из каркаса, записей поставщиков и критериев модулей.
+        self.assertEqual(state['criteria'], list(TASK_CRITERIA))
+        # Поручение собрано из каркаса, описаний видов записей объёма и
+        # критериев модулей; тег задачи ревью нашло в команде само.
         brief = storage.path('turn-review-brief.md').read_text(encoding='utf-8')
-        for needle in ('Записи поставщика Craft', 'Записи поставщика реплик', 'Записи поставщика якоря',
-                       'Критерий «task»', 'Критерий «craft-base»', 'Критерий «consistency»',
-                       'Критерий «anchor»', '"craft-base", "consistency", "anchor", "task"'):
+        for needle in ('`write` — вызов записи в Craft', '`prompt` — реплика Влада',
+                       'Критерий «task»', 'Критерий «craft-base»', 'Критерий «anchor»',
+                       ', '.join(f'"{name}"' for name in TASK_CRITERIA)):
             self.assertIn(needle, brief)
-        for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA'):
+        for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA',
+                       '{{RECORDS', '`read` — вызов чтения', '`anchor` — выбор якоря'):
             self.assertNotIn(absent, brief)
+
+    def test_a_write_without_the_lock_row_is_reviewed_by_every_entity_criterion(self) -> None:
+        session = 's-untyped'
+        self.fire(prompt(session))
+        self.assert_silent(self.fire(write(session, lock=False)))
+        reason = self.blocked(self.fire(stop(session, active=False)))
+        self.assertEqual(sorted(set(self.state(session)['criteria']) & set(ENTITY_CRITERIA)),
+                         list(ENTITY_CRITERIA))
+        self.assertIn('ревью хода не сделано', reason)
+        brief = self.storage(session).path('turn-review-brief.md').read_text(encoding='utf-8')
+        for needle in ('## Тип записей', 'Тип записи не известен', 'Это не довод'):
+            self.assertIn(needle, brief)
+        self.assertNotIn('{{ENTITY_TYPES', brief)
+
+    def test_the_lock_row_brings_the_section_criterion_to_an_untagged_write(self) -> None:
+        session = 's-typed'
+        command = f'blocks update --id {SECTION_BLOCK} --json \'{{"markdown":"ещё"}}\''
+        self.fire(prompt(session))
+        self.assert_silent(self.fire(write(session, command, place=['#раздел'])))
+        self.blocked(self.fire(stop(session, active=False)))
+        self.assertEqual(self.state(session)['criteria'],
+                         ['craft-base', 'decision', 'consistency', 'section', 'anchor'])
 
     def test_a_clean_verdict_releases_the_turn_and_clears_the_volume(self) -> None:
         self.start_with_write('s-clean')
@@ -345,16 +442,20 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(ask(session, 'Какой якорь у сессии?', 'Задача про ревью'))
         self.fire(tool(session, 'Bash', {'command': 'ls'}, 'ok'))
         rows = self.volume(session)
+        prompt_id = PROMPT_IDS[session]
         # Вопрос о якоре записан дважды: как сырой ответ поставщиком реплик и как якорь.
         self.assertEqual([row['kind'] for row in rows], ['write', 'read', 'skill', 'answer', 'anchor'])
-        self.assertEqual(rows[0], {'kind': 'write', 'turn': 1, 'tool': CRAFT_WRITE,
-                                   'command': TASK_ADD, 'result': {'id': BLOCK, 'ok': True},
-                                   'types': ['#задача']})
+        # Команда лежит как есть, без тегов: теги в ней ищет ревью.
+        self.assertEqual(rows[0], {'kind': 'write', 'prompt_id': prompt_id, 'tool': CRAFT_WRITE,
+                                   'command': TASK_ADD, 'result': {'id': BLOCK, 'ok': True}})
         self.assertEqual(rows[1]['ids'], [BLOCK, PARENT])
-        self.assertEqual(rows[2], {'kind': 'skill', 'turn': 1, 'skill': 'craft-task'})
-        self.assertEqual(rows[4], {'kind': 'anchor', 'turn': 1, 'question': 'Какой якорь у сессии?',
+        self.assertEqual(rows[2], {'kind': 'skill', 'prompt_id': prompt_id, 'skill': 'craft-task'})
+        self.assertEqual(rows[4], {'kind': 'anchor', 'prompt_id': prompt_id,
                                    'answer': {'answers': {'Какой якорь у сессии?':
-                                                          'Задача про ревью'}}})
+                                                          'Задача про ревью'}},
+                                   'question': 'Какой якорь у сессии?'})
+        # Номер хода по id реплики знает ревью.
+        self.assertEqual(self.state(session)['prompt_turns'], {prompt_id: 1})
 
     def test_a_turn_without_writes_is_released_and_keeps_the_volume(self) -> None:
         session = 's-quiet'
@@ -393,10 +494,23 @@ class TurnReviewTest(TurnReviewCase):
         self.start_with_write(session)
         self.storage(session).path('turn-review-state.json').unlink()
         self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop(session))))
-        # Счёт ходов продолжается от записей объёма: разговор снова отпускается.
+        # Номер хода записи пропал с состоянием: она не из прошлого хода и
+        # идёт на ревью и в разговоре, пока чистый вердикт не очистит объём.
         self.fire(prompt(session, 'А что это?'))
-        self.assertEqual(self.state(session)['turn'], 2)
+        self.assertEqual(self.state(session)['turn'], 1)
+        self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop(session))))
+        self.write_verdict(session, self.state(session)['volume_id'])
         self.assert_silent(self.fire(stop(session)))
+
+    def test_a_write_without_a_prompt_id_goes_to_review_in_a_quiet_turn(self) -> None:
+        # Старый харнес не даёт id: ход записи неизвестен, молча она не отпускается.
+        session = 's-quiet-no-id'
+        self.fire(prompt(session, prompt_id=NO_ID))
+        self.fire(write(session))
+        self.assertNotIn('prompt_id', self.volume(session)[0])
+        self.blocked(self.fire(stop(session)))
+        self.fire(prompt(session, 'А что это?'))
+        self.assertIn('ревью хода не сделано', self.blocked(self.fire(stop(session))))
 
     def test_a_verdict_with_remarks_still_returns_a_turn_without_writes(self) -> None:
         session = 's-quiet-remark'
@@ -419,10 +533,12 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(ask(session, 'Переносить задачу?', 'Нет'))
         self.fire(prompt(session, '   '))
         rows = self.volume(session, every=True)
-        self.assertEqual((rows[0]['kind'], rows[0]['turn'], rows[0]['text'], rows[0]['author']),
+        turns = self.state(session)['prompt_turns']
+        self.assertEqual((rows[0]['kind'], turns[rows[0]['prompt_id']], rows[0]['text'],
+                          rows[0]['author']),
                          ('prompt', 1, 'Это не противоречие, оставь как есть', 'Влад'))
         self.assertRegex(rows[0]['at'], r'^\d{4}-\d{2}-\d{2}T')
-        self.assertEqual((rows[1]['kind'], rows[1]['turn'], rows[1]['question']),
+        self.assertEqual((rows[1]['kind'], turns[rows[1]['prompt_id']], rows[1]['question']),
                          ('answer', 1, 'Переносить задачу?'))
         self.assertEqual(rows[1]['answer'], {'answers': {'Переносить задачу?': 'Нет'}})
         # Пустая реплика в объём не идёт, ход при этом начался.
@@ -441,9 +557,11 @@ class TurnReviewTest(TurnReviewCase):
     def test_an_anchor_named_by_prompt_goes_to_the_volume(self) -> None:
         self.fire(prompt('s-anchor'))
         self.fire(prompt('s-anchor', 'Беру задачу «Собрать ревью хода»'))
+        prompt_id = PROMPT_IDS['s-anchor']
         self.assertEqual(self.volume('s-anchor'),
-                         [{'kind': 'anchor', 'turn': 2,
+                         [{'kind': 'anchor', 'prompt_id': prompt_id,
                            'answer': 'Беру задачу «Собрать ревью хода»'}])
+        self.assertEqual(self.state('s-anchor')['prompt_turns'][prompt_id], 2)
 
     def test_after_compact_resets_nudges_and_keeps_the_volume(self) -> None:
         self.start_with_write('s-compact')
@@ -495,7 +613,9 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(write(session))
         self.assertEqual([row['kind'] for row in self.volume(session)], ['anchor', 'write'])
 
-    def test_a_free_answer_to_the_question_changes_nothing_and_stays_out_of_the_volume(self) -> None:
+    def test_a_free_answer_to_the_question_changes_nothing_but_the_raw_answer(self) -> None:
+        # Поставщик не знает, что это вопрос ревью: ответ ложится сырьём, а
+        # описание записей answer велит подагенту по нему не судить.
         self.start_with_write('s-free')
         self.nudge_three_times('s-free')
         self.fire(stop('s-free'))
@@ -503,7 +623,9 @@ class TurnReviewTest(TurnReviewCase):
         volume = self.volume('s-free', every=True)
         self.fire(ask('s-free', QUESTION, 'Подожди, сам посмотрю'))
         self.assertEqual(self.state('s-free'), before)
-        self.assertEqual(self.volume('s-free', every=True), volume)
+        after = self.volume('s-free', every=True)
+        self.assertEqual(after[:-1], volume)
+        self.assertEqual((after[-1]['kind'], after[-1]['question']), ('answer', QUESTION))
         self.assertIn(QUESTION, self.blocked(self.fire(stop('s-free'))))
 
     def test_a_question_naming_both_options_is_not_released_by_the_review_answer(self) -> None:
@@ -554,7 +676,8 @@ class TurnReviewTest(TurnReviewCase):
         self.write_verdict(session, volume_id)
         self.storage(session).append_line('turn-review-volume.jsonl', '{не json')
         reason = self.blocked(self.fire(stop(session)))
-        for needle in (str(path), 'строка 3', 'их ревью не было', 'ревью хода не сделано'):
+        # Строки: реплика, строка замка, запись, обрыв.
+        for needle in (str(path), 'строка 4', 'их ревью не было', 'ревью хода не сделано'):
             self.assertIn(needle, reason)
         self.assertNotEqual(self.state(session)['volume_id'], volume_id)
         self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
@@ -567,7 +690,7 @@ class TurnReviewTest(TurnReviewCase):
         self.storage(session).append_line('turn-review-volume.jsonl',
                                           '{"kind": "write", "command": "blocks add"}')
         reason = self.blocked(self.fire(stop(session)))
-        for needle in ('строка 3', 'запись kind write', 'их ревью не было'):
+        for needle in ('строка 4', 'запись kind write', 'их ревью не было'):
             self.assertIn(needle, reason)
         self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
 
@@ -608,10 +731,10 @@ class TurnReviewTest(TurnReviewCase):
         self.blocked(self.fire(stop(session)))
         self.write_verdict(session, self.state(session)['volume_id'], checked=())
         reason = self.blocked(self.fire(stop(session)))
-        self.assertIn('критерии не пройдены: craft-base, consistency, anchor, task', reason)
+        self.assertIn(f'критерии не пройдены: {TASK_CRITERIA_TEXT}', reason)
         self.write_verdict(session, self.state(session)['volume_id'],
-                           checked=('craft-base', 'consistency', 'anchor', 'task', 'код'))
-        self.assertIn('критерии не из craft-base, consistency, anchor, task: код',
+                           checked=(*TASK_CRITERIA, 'код'))
+        self.assertIn(f'критерии не из {TASK_CRITERIA_TEXT}: код',
                       self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 
@@ -629,7 +752,8 @@ class TurnReviewTest(TurnReviewCase):
     def test_not_taking_a_task_is_not_an_anchor(self) -> None:
         self.fire(prompt('s-no-anchor', 'Нет, не беру задачу про ревью'))
         self.fire(prompt('s-no-anchor', 'Ладно. Якорь: ревью хода'))
-        self.assertEqual([row['turn'] for row in self.volume('s-no-anchor')], [2])
+        self.assertEqual([row['answer'] for row in self.volume('s-no-anchor')],
+                         ['Ладно. Якорь: ревью хода'])
 
     def test_calls_inside_a_subagent_stay_out_of_the_volume(self) -> None:
         self.fire(prompt('s-agent'))
@@ -657,6 +781,12 @@ class TurnReviewTest(TurnReviewCase):
         self.write_verdict(session, self.state(session)['volume_id'])
         self.assert_silent(self.fire(message(session, 'Готово.')))
 
+    def turns_of(self, session: str) -> list[tuple[str, int]]:
+        """Вид и номер хода каждой строки объёма: номер по id реплики из состояния."""
+        turns = self.state(session)['prompt_turns']
+        return [(row['kind'], turns[row['prompt_id']])
+                for row in self.volume(session, every=True)]
+
     def test_prompt_hooks_give_one_turn_in_any_order(self) -> None:
         # Хуки одного события харнес запускает параллельно: номер хода у
         # записей реплики не зависит от того, кто из них пришёл первым.
@@ -664,20 +794,18 @@ class TurnReviewTest(TurnReviewCase):
         self.assertEqual(entries[0], self.entry)
         for session, order in (('s-order-review', entries), ('s-order-providers', entries[::-1])):
             for text in ('Беру задачу «Ревью»', 'Беру задачу «Ревью»', 'дальше'):
+                raw = prompt(session, text)
                 for entry in order:
-                    run = self.run_entry(prompt(session, text), entry)
+                    run = self.run_entry(raw, entry)
                     self.assertEqual(run.returncode, 0, run.stderr)
-            rows = self.volume(session, every=True)
-            self.assertEqual([(row['kind'], row['turn']) for row in rows],
-                             [('prompt', 1), ('anchor', 1), ('prompt', 2), ('anchor', 2),
-                              ('prompt', 3)] if order is entries else
-                             [('anchor', 1), ('prompt', 1), ('anchor', 2), ('prompt', 2),
+            self.assertEqual(sorted(self.turns_of(session)),
+                             [('anchor', 1), ('anchor', 2), ('prompt', 1), ('prompt', 2),
                               ('prompt', 3)])
             self.assertEqual(self.state(session)['turn'], 3)
 
     def test_identical_prompts_with_ids_keep_their_turns_when_a_provider_skips_one(self) -> None:
         # craft-session-anchor пропустил первую реплику (выключен режимом), на второй
-        # такой же пришёл первым. По id реплики он всё равно в новом ходе.
+        # такой же пришёл первым. По id реплики его запись всё равно в новом ходе.
         session = 's-skip-provider'
         anchor = self.root / 'modules' / 'craft-session-anchor' / 'hooks' / 'module.py'
         text = 'Беру задачу «Ревью»'
@@ -687,23 +815,18 @@ class TurnReviewTest(TurnReviewCase):
         for entry in (anchor, *[item for item in self.hooks['prompt'] if item != anchor]):
             run = self.run_entry(prompt(session, text, 'p-2'), entry)
             self.assertEqual(run.returncode, 0, run.stderr)
-        rows = self.volume(session, every=True)
-        self.assertEqual([(row['kind'], row['turn']) for row in rows],
-                         [('prompt', 1), ('anchor', 2), ('prompt', 2)])
+        self.assertEqual(self.turns_of(session), [('prompt', 1), ('anchor', 2), ('prompt', 2)])
         self.assertEqual(self.state(session)['turn'], 2)
 
-    def test_a_damaged_state_is_an_error_for_providers_and_the_write_is_kept(self) -> None:
+    def test_a_damaged_state_does_not_touch_providers(self) -> None:
+        # Поставщик состояние ревью не читает: запись ложится, как всегда.
         session = 's-provider-damage'
         self.start_with_write(session)
         self.storage(session).path('turn-review-state.json').write_text('{не json', encoding='utf-8')
         provider = self.root / 'modules' / 'review-craft-calls' / 'hooks' / 'module.py'
         run = self.run_entry(write(session), provider)
-        self.assertNotEqual(run.returncode, 0)
-        self.assertIn('turn-review-state.json', run.stderr)
-        # Запись не потеряна: без номера хода она не раньше ни одного хода и идёт на ревью.
-        rows = self.volume(session)
-        self.assertEqual([row['kind'] for row in rows], ['write', 'write'])
-        self.assertNotIn('turn', rows[1])
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual([row['kind'] for row in self.volume(session)], ['write', 'write'])
         reason = self.blocked(self.fire(stop(session)))
         self.assertIn('заведён заново', reason)
         self.assertIn('записей write в объёме сейчас 2', reason)
@@ -716,26 +839,18 @@ class TurnReviewTest(TurnReviewCase):
         self.assertIsNone(self.state(session)['criteria'])
         storage = self.storage(session)
         storage.write_json('turn-review-state.json', {**self.state(session), 'criteria': []})
-        self.write_verdict(session, self.state(session)['volume_id'],
-                           checked=('craft-base', 'consistency', 'anchor', 'task'))
+        self.write_verdict(session, self.state(session)['volume_id'], checked=TASK_CRITERIA)
         self.assertIn('один критерий не подошёл', self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 
-    def test_a_write_with_unknown_tags_is_not_released_by_a_clean_verdict(self) -> None:
-        # Поставщик не собрал справочник тегов: критерии по тегам эту запись
-        # не выбирают, и чистый вердикт прошёл бы без критериев её типа.
-        session = 's-unknown-tags'
-        self.start_with_write(session)
-        review_lib.append_turn_record(self.storage(session), review_lib.make_write_record(
-            tool=CRAFT_WRITE, command='blocks add', result=None, types=None,
-            types_error='entity.json: файл сущности не читается'))
-        self.write_verdict(session, self.state(session)['volume_id'])
-        self.assertEqual(self.shown(self.fire(message(session, 'Готово.'))),
-                         'Ревью хода идёт, отчёт после него.')
-        reason = self.blocked(self.fire(stop(session)))
-        self.assertIn('Теги записи неизвестны, проверить нечем', reason)
-        self.assertIn('entity.json: файл сущности не читается', reason)
-        self.assertEqual(len(self.volume(session)), 2)
+    def test_a_tag_in_a_link_text_does_not_choose_its_criterion(self) -> None:
+        # Тег в тексте ссылки на блок — имя цели, а не тип записи.
+        session = 's-link-tag'
+        self.fire(prompt(session))
+        self.fire(write(session, 'blocks update --id X --json \'{"markdown":"[Сборка #этап](block://AB-1)"}\''))
+        self.blocked(self.fire(stop(session)))
+        self.assertEqual(self.state(session)['criteria'],
+                         ['craft-base', 'decision', 'consistency', 'anchor'])
 
     def test_an_unwritable_brief_is_a_block_and_not_a_crash(self) -> None:
         session = 's-brief-dir'
@@ -748,13 +863,7 @@ class TurnReviewTest(TurnReviewCase):
 
 
 class PromptTurnTest(unittest.TestCase):
-    """Номер хода реплики: id реплики харнеса, а не её текст и не набор модулей.
-
-    Модули зовут claim_prompt_turn по очереди, как пришли бы их параллельные
-    хуки. Модуль, которого в очереди нет, выключен режимом или пропустил реплику.
-    """
-
-    TEXT = 'дальше'
+    """Номер хода реплики: по id реплики харнеса, его ставит только ревью."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -763,55 +872,28 @@ class PromptTurnTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def claim(self, slug: str, prompt_id: str | None, text: str = TEXT) -> int:
-        raw = prompt('s-prompt-turn', text, prompt_id)
-        event = SimpleNamespace(prompt_text=text, raw=raw)
-        turn, problem = review_lib.claim_prompt_turn(self.storage, slug, event)
+    def claim(self, prompt_id: str) -> int:
+        raw = prompt('s-prompt-turn', 'дальше', prompt_id)
+        event = SimpleNamespace(prompt_text='дальше', raw=raw)
+        turn, problem = review_lib.claim_prompt_turn(self.storage, event)
         self.assertIsNone(problem)
         return turn
 
-    def test_a_module_switched_on_between_identical_prompts_opens_a_new_turn(self) -> None:
-        # Первую реплику взял только turn-review, поставщика включили до второй
-        # такой же. Пришёл первым — раньше он склеивал её с прошлым ходом.
-        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
-        self.assertEqual(self.claim('review-prompts', 'p-2'), 2)
-        self.assertEqual(self.claim(SLUG, 'p-2'), 2)
-
-    def test_a_module_that_skipped_a_prompt_does_not_glue_the_next_one(self) -> None:
-        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
-        self.assertEqual(self.claim('review-prompts', 'p-1'), 1)
-        # craft-session-anchor пропустил p-1 и на p-2 пришёл первым.
-        self.assertEqual(self.claim('craft-session-anchor', 'p-2'), 2)
-        self.assertEqual(self.claim(SLUG, 'p-2'), 2)
-        self.assertEqual(self.claim('review-prompts', 'p-2'), 2)
-
-    def test_a_module_switched_off_does_not_split_the_turn(self) -> None:
-        # Поставщика выключили между репликами: тот, кто остался, не находит
-        # себя в списке взявших — и это не повод открыть второй ход.
-        for slug in (SLUG, 'review-prompts', 'craft-session-anchor'):
-            self.assertEqual(self.claim(slug, 'p-1'), 1)
-        self.assertEqual(self.claim(SLUG, 'p-2'), 2)
-        self.assertEqual(self.claim('craft-session-anchor', 'p-2'), 2)
-
-    def test_the_same_prompt_taken_twice_by_a_module_is_one_turn(self) -> None:
-        # Повтор хука одного модуля на той же реплике — не новый ход.
-        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
-        self.assertEqual(self.claim(SLUG, 'p-1'), 1)
-        self.assertEqual(self.claim('review-prompts', 'p-1'), 1)
+    def test_the_same_id_twice_is_one_turn(self) -> None:
+        # Хук ревью, запущенный на реплике дважды, ход не делит.
+        self.assertEqual([self.claim('p-1'), self.claim('p-1')], [1, 1])
+        self.assertEqual(review_lib.load_state(self.storage)[0].prompt_turns, {'p-1': 1})
 
     def test_identical_prompts_with_their_ids_are_two_turns(self) -> None:
-        for prompt_id, turn in (('p-1', 1), ('p-2', 2)):
-            for slug in ('craft-session-anchor', SLUG, 'review-prompts'):
-                self.assertEqual(self.claim(slug, prompt_id), turn)
+        self.assertEqual([self.claim('p-1'), self.claim('p-2')], [1, 2])
+        self.assertEqual(review_lib.load_state(self.storage)[0].prompt_turns,
+                         {'p-1': 1, 'p-2': 2})
 
-    def test_without_an_id_the_text_and_the_takers_decide(self) -> None:
-        # Харнес без id реплики: узнаём по тексту и по тому, кто уже брал номер.
-        for turn in (1, 2):
-            for slug in (SLUG, 'review-prompts'):
-                self.assertEqual(self.claim(slug, None), turn)
-        self.assertEqual(self.claim(SLUG, None, 'другая'), 3)
+    def test_without_an_id_every_prompt_is_a_new_turn(self) -> None:
+        self.assertEqual([self.claim(NO_ID), self.claim(NO_ID)], [1, 2])
+        self.assertEqual(review_lib.load_state(self.storage)[0].prompt_turns, {})
 
-    def test_an_empty_or_foreign_id_falls_back_to_the_text(self) -> None:
+    def test_an_empty_or_foreign_id_is_no_id(self) -> None:
         for bad in ('', 7):
             with self.subTest(prompt_id=bad):
                 self.assertIsNone(review_lib.prompt_id_of(
@@ -820,121 +902,82 @@ class PromptTurnTest(unittest.TestCase):
             SimpleNamespace(prompt_text='т', raw={'prompt_id': 'p-1'})), 'p-1')
 
 
-class CurrentTurnTest(unittest.TestCase):
-    """Номер хода из состояния: отсутствие файла законно, порча — ошибка."""
+class RecordTurnTest(unittest.TestCase):
+    """Ход записи — по id её реплики; неизвестный ход на ревью, а не в прошлое."""
 
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.storage = Storage(Path(self.tmp.name), 's-turn')
+    TURNS = MappingProxyType({'p-1': 1, 'p-2': 2})
 
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
+    def test_only_known_earlier_writes_are_before_the_turn(self) -> None:
+        cases = (([write_record(prompt_id='p-1')], True),
+                 ([write_record(prompt_id='p-1'), write_record(prompt_id='p-2')], False),
+                 ([write_record()], False),
+                 ([write_record(prompt_id='p-чужой')], False),
+                 ([read_record()], False), ([], False))
+        for volume, expected in cases:
+            with self.subTest(volume=volume):
+                self.assertEqual(review_lib.writes_before_turn(volume, 2, self.TURNS), expected)
 
-    def test_a_missing_state_is_turn_zero(self) -> None:
-        self.assertEqual(review_lib.current_turn(self.storage), 0)
+    def test_a_clear_keeps_the_turns_of_the_current_prompt_only(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            storage = Storage(Path(folder), 's-clear')
+            state = review_lib.ReviewState(turn=2, prompt_turns=self.TURNS)
+            cleared = review_lib.clear_volume(storage, state)
+        self.assertEqual((cleared.turn, dict(cleared.prompt_turns)), (2, {'p-2': 2}))
 
-    def test_a_damaged_state_is_an_error(self) -> None:
-        path = self.storage.path('turn-review-state.json')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        for body in ('{не json', '[1, 2]', '{"turn": "1"}', ''):
-            path.write_text(body, encoding='utf-8')
-            with self.assertRaises(ValueError) as caught:
-                review_lib.current_turn(self.storage)
-            self.assertIn(str(path), str(caught.exception))
 
-    def rows(self) -> list[dict]:
-        return [json.loads(line) for line in self.storage.read_lines('turn-review-volume.jsonl')]
-
-    def test_a_provider_cannot_override_the_turn(self) -> None:
-        review_lib.save_state(self.storage, review_lib.ReviewState(turn=4))
-        review_lib.append_turn_record(self.storage, review_lib.SkillRecord(skill='x', turn=1))
-        self.assertEqual(self.rows(), [{'kind': 'skill', 'turn': 4, 'skill': 'x'}])
-
-    def test_a_provider_turn_is_dropped_when_the_state_is_damaged(self) -> None:
-        # Без номера запись идёт на ревью; номер поставщика выдал бы её за прошлый ход.
-        path = self.storage.path('turn-review-state.json')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{не json', encoding='utf-8')
-        with self.assertRaises(ValueError):
-            review_lib.append_turn_record(self.storage, review_lib.SkillRecord(skill='x', turn=1))
-        self.assertEqual(self.rows(), [{'kind': 'skill', 'skill': 'x'}])
-
-    def test_a_given_turn_is_taken_without_the_state(self) -> None:
-        # Реплика берёт номер у claim_prompt_turn и кладёт запись с ним.
-        record = review_lib.make_prompt_record(text='дальше', author='Влад', at='t')
-        review_lib.append_turn_record(self.storage, record, turn=7)
-        self.assertEqual(self.rows(), [{'kind': 'prompt', 'turn': 7, 'text': 'дальше',
-                                        'author': 'Влад', 'at': 't'}])
-        self.assertFalse(self.storage.path('turn-review-state.json').exists())
+ENTITY_OK = {'kind': 'entity', 'command': 'c', 'targets': [], 'place_types': [],
+             'content_types': [], 'determined': True, 'note': 'n'}
 
 
 class RecordTest(unittest.TestCase):
-    """Запись объёма: размеченное объединение по kind, строится фабриками lib."""
+    """Строка объёма по контракту: размеченное объединение по kind, схема в lib."""
 
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.storage = Storage(Path(self.tmp.name), 's-record')
+    ROWS = (
+        {'kind': 'write', 'prompt_id': 'p', 'tool': 't', 'command': 'c', 'result': {'id': 1}},
+        {'kind': 'write', 'tool': 't', 'command': 'c', 'result': None},
+        {'kind': 'read', 'prompt_id': 'p', 'command': 'c', 'ids': ['a']},
+        {'kind': 'skill', 'skill': 'craft-task'},
+        {'kind': 'prompt', 'prompt_id': 'p', 'text': 'т', 'author': 'Влад', 'at': 't'},
+        {'kind': 'answer', 'question': 'в', 'answer': 'о', 'author': 'Влад', 'at': 't'},
+        {'kind': 'anchor', 'answer': 'Беру задачу'},
+        {'kind': 'anchor', 'prompt_id': 'p', 'answer': {'a': 1}, 'question': 'Якорь?'},
+        {'kind': 'entity', 'prompt_id': 'p', 'command': 'c', 'targets': ['a'],
+         'place_types': ['#проект'], 'content_types': ['#задача'], 'determined': True,
+         'note': 'цель a в сущности b (#проект)'},
+        {'kind': 'entity', 'command': 'c', 'targets': [], 'place_types': [], 'content_types': [],
+         'determined': False, 'note': 'API'},
+    )
 
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
+    def test_every_kind_reads_and_writes_back_the_same_row(self) -> None:
+        self.assertEqual({row['kind'] for row in self.ROWS}, set(review_lib.KINDS))
+        for row in self.ROWS:
+            with self.subTest(row=row):
+                self.assertEqual(review_lib.record_row(review_lib.parse_record(row)), row)
 
-    def test_a_record_without_a_known_kind_is_refused_at_the_border(self) -> None:
-        # Раньше такая запись ложилась с kind: null, и её не видел ни один потребитель.
-        for record in ({'command': 'x'}, {'kind': None, 'command': 'x'},
-                       {'kind': 'write', 'command': 'x'}, 'write'):
-            with self.subTest(record=record), self.assertRaises(ValueError) as caught:
-                review_lib.append_turn_record(self.storage, record)
-            self.assertIn('kind', str(caught.exception))
-        self.assertFalse(self.storage.path('turn-review-volume.jsonl').exists())
+    def test_a_wrong_row_is_refused(self) -> None:
+        for row in ({'kind': 'read', 'command': 1, 'ids': []},
+                    {'kind': 'read', 'command': 'c', 'ids': 'a'},
+                    {'kind': 'write', 'tool': 't', 'command': 'c'},
+                    {'kind': 'write', 'tool': 't', 'command': 'c', 'result': None,
+                     'types': ['#задача']},
+                    {'kind': 'answer', 'question': 'в', 'answer': 1, 'author': 'В', 'at': 't'},
+                    {'kind': 'skill', 'skill': 'x', 'turn': 1},
+                    {'kind': 'skill', 'skill': 'x', 'prompt_id': 7},
+                    {**ENTITY_OK, 'place_types': ['#Раздел']},
+                    {**ENTITY_OK, 'content_types': ['раздел']},
+                    {**ENTITY_OK, 'determined': 'да'},
+                    {key: value for key, value in ENTITY_OK.items() if key != 'note'},
+                    {'command': 'x'}, {'kind': None}, 'write'):
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                review_lib.parse_record(row)
 
-    def test_every_kind_has_a_factory_with_its_fields(self) -> None:
-        cases = (
-            (review_lib.make_write_record(tool='t', command='c', result={'id': 1}, types=['#задача']),
-             {'kind': 'write', 'tool': 't', 'command': 'c', 'result': {'id': 1},
-              'types': ['#задача']}),
-            (review_lib.make_write_record(tool='t', command='c', result=None, types=None,
-                                          types_error='нет справочника'),
-             {'kind': 'write', 'tool': 't', 'command': 'c', 'result': None, 'types': None,
-              'types_error': 'нет справочника'}),
-            (review_lib.make_read_record(command='c', ids=['a']),
-             {'kind': 'read', 'command': 'c', 'ids': ['a']}),
-            (review_lib.make_skill_record(skill='craft-task'), {'kind': 'skill', 'skill': 'craft-task'}),
-            (review_lib.make_prompt_record(text='т', author='Влад', at='t'),
-             {'kind': 'prompt', 'text': 'т', 'author': 'Влад', 'at': 't'}),
-            (review_lib.make_answer_record(question='в', answer='о', author='Влад', at='t'),
-             {'kind': 'answer', 'question': 'в', 'answer': 'о', 'author': 'Влад', 'at': 't'}),
-            (review_lib.make_anchor_record(answer='Беру задачу'),
-             {'kind': 'anchor', 'answer': 'Беру задачу'}),
-            (review_lib.make_anchor_record(answer={'a': 1}, question='Якорь?'),
-             {'kind': 'anchor', 'answer': {'a': 1}, 'question': 'Якорь?'}),
-        )
-        self.assertEqual({record.kind for record, _ in cases}, set(review_lib.KINDS))
-        for record, row in cases:
-            with self.subTest(kind=record.kind):
-                self.assertEqual(review_lib.record_row(record), row)
-
-    def test_a_wrong_field_is_refused(self) -> None:
-        for make in (lambda: review_lib.make_read_record(command=1, ids=[]),
-                     lambda: review_lib.make_read_record(command='c', ids='a'),
-                     lambda: review_lib.make_write_record(tool='t', command='c', result=None,
-                                                          types='#задача'),
-                     lambda: review_lib.make_write_record(tool='t', command='c', result=None,
-                                                          types=None),
-                     lambda: review_lib.make_write_record(tool='t', command='c', result=None,
-                                                          types=[], types_error='лишняя'),
-                     lambda: review_lib.make_answer_record(question='в', answer=1, author='В',
-                                                           at='t'),
-                     lambda: review_lib.SkillRecord(skill='x', turn='1')):
-            with self.assertRaises(ValueError):
-                make()
-
-    def test_factories_take_no_turn(self) -> None:
-        with self.assertRaises(TypeError):
-            review_lib.make_skill_record(skill='x', turn=1)
+    def test_only_a_record_goes_to_a_row(self) -> None:
+        with self.assertRaises(ValueError):
+            review_lib.record_row({'kind': 'skill', 'skill': 'x'})
 
 
 class VolumeReadTest(unittest.TestCase):
-    """Объём читается в те же типы, которыми пишется; не запись — порча с причиной."""
+    """Объём читается в типы записей; не запись — порча с причиной."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -949,18 +992,12 @@ class VolumeReadTest(unittest.TestCase):
         path.write_text(''.join(line + '\n' for line in lines), encoding='utf-8')
         return review_lib.parse_volume_file(path)
 
-    def test_every_kind_reads_back_as_its_record(self) -> None:
-        records = [write_record(), write_record(types=None, types_error='нет справочника'),
-                   review_lib.make_read_record(command='c', ids=['a']), skill_record('craft-task'),
-                   review_lib.make_prompt_record(text='т', author='Влад', at='t'),
-                   review_lib.make_answer_record(question='в', answer=['о'], author='Влад', at='t'),
-                   review_lib.make_anchor_record(answer={'a': 1}, question='Якорь?')]
-        for number, record in enumerate(records):
-            review_lib.append_turn_record(self.storage, record, turn=number)
+    def test_rows_appended_by_the_core_read_back_as_records(self) -> None:
+        for row in RecordTest.ROWS:
+            self.storage.append_line('turn-review-volume.jsonl', json.dumps(row, ensure_ascii=False))
         read, damage = review_lib.parse_volume_file(self.storage.path('turn-review-volume.jsonl'))
         self.assertEqual(damage, [])
-        self.assertEqual(read, [replace(record, turn=number)
-                                for number, record in enumerate(records)])
+        self.assertEqual(read, [review_lib.parse_record(row) for row in RecordTest.ROWS])
 
     def test_a_row_that_is_not_a_record_is_damage_with_its_reason(self) -> None:
         good = json.dumps(review_lib.record_row(skill_record('x')))
@@ -968,7 +1005,8 @@ class VolumeReadTest(unittest.TestCase):
                  ('{"kind": "skill"}', 'skill'), ('{"kind": "skill", "skill": "x", "лишнее": 1}',
                                                    'лишние поля лишнее'),
                  ('{"kind": "read", "command": "c", "ids": [1]}', 'ids'),
-                 ('{"kind": "skill", "skill": "x", "turn": true}', 'turn'),
+                 ('{"kind": "skill", "skill": "x", "turn": 1}', 'лишние поля turn'),
+                 ('{"kind": "skill", "skill": "x", "prompt_id": true}', 'prompt_id'),
                  ('{"kind": ["write"]}', "kind ['write']"), ('{"kind": {"a": 1}}', "kind {'a': 1}"))
         for line, reason in cases:
             with self.subTest(line=line):
@@ -988,111 +1026,198 @@ class VolumeReadTest(unittest.TestCase):
 
 
 class VolumeLockTest(unittest.TestCase):
-    """Запись в объём идёт под локом ревью, как очистка на остановке."""
+    """Очистка объёма и дописывание поставщиков идут под локом журнала ядра."""
 
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.storage = Storage(Path(self.tmp.name), 's-lock')
+    ANCHORS = 40
+    CLEARS = 15
 
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
+    def test_rows_appended_during_clears_are_not_lost(self) -> None:
+        # Якорь очистку переживает: если строка, легшая между чтением и
+        # заменой файла, пропала бы, якорей в конце было бы меньше.
+        with tempfile.TemporaryDirectory() as folder:
+            storage = Storage(Path(folder), 's-lock')
 
-    def appends(self):
-        """Номер хода из состояния и номер, данный репликой: оба пути под локом."""
-        return (('из состояния', review_lib.append_turn_record),
-                ('номер дан', lambda storage, record: review_lib.append_turn_record(
-                    storage, record, turn=1)))
+            def append_anchors() -> None:
+                for number in range(self.ANCHORS):
+                    storage.append_line('turn-review-volume.jsonl', json.dumps(
+                        {'kind': 'anchor', 'answer': f'якорь {number}'}, ensure_ascii=False))
+                    storage.append_line('turn-review-volume.jsonl', json.dumps(
+                        {'kind': 'skill', 'skill': 'x'}))
 
-    def commands(self) -> list[str]:
-        records, damage = review_lib.parse_volume_file(self.storage.path('turn-review-volume.jsonl'))
+            worker = threading.Thread(target=append_anchors)
+            worker.start()
+            state = review_lib.ReviewState()
+            for _ in range(self.CLEARS):
+                state = review_lib.clear_volume(storage, state)
+            worker.join(10)
+            records, damage = review_lib.parse_volume_file(storage.path('turn-review-volume.jsonl'))
         self.assertEqual(damage, [])
-        return sorted(record.command for record in records)
-
-    def test_parallel_records_land_as_whole_lines(self) -> None:
-        # Строка пишется в два приёма с паузой посередине: без лока второй
-        # поток вклинился бы в первую строку.
-        def append_in_halves(storage, name, line, zone='session'):
-            path = storage.path(name, zone)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open('a', encoding='utf-8') as handle:
-                handle.write(line[:len(line) // 2])
-                handle.flush()
-                time.sleep(0.1)
-                handle.write(line[len(line) // 2:] + '\n')
-            return path
-
-        records = [review_lib.make_read_record(command=f'команда {number}', ids=[])
-                   for number in range(2)]
-        for name, append in self.appends():
-            with self.subTest(append=name):
-                self.storage.path('turn-review-volume.jsonl').unlink(missing_ok=True)
-                workers = [threading.Thread(target=append, args=(self.storage, record))
-                           for record in records]
-                with mock.patch.object(Storage, 'append_line', append_in_halves):
-                    for worker in workers:
-                        worker.start()
-                    for worker in workers:
-                        worker.join(5)
-                self.assertEqual(self.commands(), ['команда 0', 'команда 1'])
-
-    def test_a_record_waits_for_the_lock_held_by_the_stop(self) -> None:
-        # Остановка чистит объём под локом: запись, легшая посреди очистки,
-        # пропала бы вместе со старыми.
-        for name, append in self.appends():
-            with self.subTest(append=name):
-                self.storage.path('turn-review-volume.jsonl').unlink(missing_ok=True)
-                worker = threading.Thread(target=append, args=(
-                    self.storage, review_lib.make_read_record(command='после очистки', ids=[])))
-                with review_lib.state_lock(self.storage):
-                    worker.start()
-                    worker.join(0.2)
-                    self.assertTrue(worker.is_alive())
-                    self.assertEqual(self.commands(), [])
-                worker.join(5)
-                self.assertFalse(worker.is_alive())
-                self.assertEqual(self.commands(), ['после очистки'])
+        self.assertEqual(sorted(record.answer for record in records if record.kind == 'anchor'),
+                         sorted(f'якорь {number}' for number in range(self.ANCHORS)))
 
 
-class UnknownTagsTest(unittest.TestCase):
-    """Запись write с неизвестными тегами: чистый вердикт по ней не принимается."""
+class TagsTest(unittest.TestCase):
+    """Критерий по тегам: тип записи известен — по нему, не известен — при любой записи."""
 
     TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
 
-    def problem(self, record) -> str | None:
-        return review_lib.criteria_problem([record], ('task',), (self.TASK,), ())
+    def test_unknown_types_apply_tag_criteria_to_any_write(self) -> None:
+        volume = [write_record('blocks add')]
+        self.assertTrue(review_lib.criterion_applies(self.TASK, volume, None))
+        self.assertFalse(review_lib.criterion_applies(self.TASK, [read_record()], None))
+        self.assertFalse(review_lib.criterion_applies(self.TASK, volume, frozenset({'#раздел'})))
+        self.assertIsNone(review_lib.criteria_problem(volume, ('task',), (self.TASK,), ()))
 
-    def test_a_types_error_is_a_problem_with_its_text(self) -> None:
-        problem = self.problem(write_record(types=None, types_error='/m/entity.json: не JSON'))
-        self.assertIn('теги записи неизвестны, проверить нечем', problem)
-        self.assertIn('/m/entity.json: не JSON', problem)
+    def test_the_review_does_not_search_tags_in_the_command_itself(self) -> None:
+        # Тег в тексте записи без строки замка не выбирает критерий сам: тип
+        # не известен, и берутся все критерии сущностей.
+        command = '- [ ] Купить #задача'
+        volume = [review_lib.parse_record(entity_row(command, None, content=[])),
+                  write_record(command)]
+        self.assertEqual(review_lib.selection_tags(volume), frozenset())
 
-    def test_types_not_a_list_never_reaches_the_volume(self) -> None:
-        # Теги не списком отвергает чтение строки: до критериев такая запись не доходит.
-        for row in ({'kind': 'write', 'tool': 't', 'command': 'c', 'result': None},
-                    {'kind': 'write', 'tool': 't', 'command': 'c', 'result': None,
-                     'types': '#задача'}):
-            with self.subTest(row=row), self.assertRaises(ValueError):
-                review_lib.parse_record(row)
 
-    def test_known_tags_and_other_kinds_are_no_problem(self) -> None:
-        self.assertIsNone(self.problem(write_record()))
-        self.assertIsNone(self.problem(review_lib.make_read_record(command='c', ids=[])))
+SECTION_BLOCK = 'aaaaaaaa-0000-0000-0000-000000000011'
+OTHER_BLOCK = 'aaaaaaaa-0000-0000-0000-000000000012'
+DECISION_ADD = (f'blocks add --siblingId {SECTION_BLOCK} --position after --json '
+                '\'{"type":"text","markdown":"Новое решение"}\'')
+# Критерии сущностей — по тегу типа. Связи тоже идут по тегу, но сущностью не
+# являются и в этот набор не входят.
+ENTITY_CRITERIA = ('note', 'project', 'section', 'sphere', 'stage', 'task')
+
+
+class EntityTypeTest(unittest.TestCase):
+    """Тип записи — только из строки замка: место ∪ содержимое; без строки — все критерии."""
+
+    PROVIDERS = tuple(review_lib.Provider(slug, MODULES_DIR / slug, False)
+                      for slug in CRITERIA_MODULES)
+
+    def taken(self, volume):
+        return review_lib.review_criteria(sources(MODULES_DIR, self.PROVIDERS), list(volume), None)
+
+    def entity_ids(self, volume) -> list[str]:
+        return sorted(set(self.taken(volume).criteria) & set(ENTITY_CRITERIA))
+
+    def brief(self, volume) -> str:
+        return review_lib.assemble_brief(sources(MODULES_DIR, self.PROVIDERS), list(volume),
+                                         '{{ENTITY_TYPES}}', DESCRIPTIONS).text
+
+    @staticmethod
+    def row(command: str = DECISION_ADD, prompt_id='p', **fields):
+        return review_lib.parse_record(entity_row(command, prompt_id, **fields))
+
+    def test_the_place_type_brings_the_criterion_of_a_write_without_a_tag(self) -> None:
+        volume = [self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), ['section'])
+        self.assertIsNone(self.taken(volume).problem)
+
+    def test_place_and_content_are_united(self) -> None:
+        command = DECISION_ADD.replace('Новое решение', '- [ ] Дело #задача')
+        volume = [self.row(command, place=['#раздел']), write_record(command, 'p')]
+        self.assertEqual(self.entity_ids(volume), ['section', 'task'])
+        self.assertIn('links', self.taken(volume).criteria)
+
+    def test_a_write_without_a_lock_row_takes_every_entity_criterion(self) -> None:
+        # Замка нет, он выключен или упал: строки нет, критерии берутся все.
+        volume = [write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+        # Чистый вердикт по всем критериям принимается: тип выбирает критерии, не вердикт.
+        self.assertIsNone(self.taken(volume).problem)
+        brief = self.brief(volume)
+        for needle in ('Тип записи не известен', 'запись write № 1', 'строки типа от замка',
+                       'Определи сам, какие сущности задела'):
+            self.assertIn(needle, brief)
+
+    def test_an_undetermined_row_takes_every_entity_criterion_and_names_why(self) -> None:
+        volume = [self.row(place=['#раздел'], determined=False,
+                           note='место цели не определено: API Craft не ответил'),
+                  write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+        self.assertIn('API Craft не ответил', self.brief(volume))
+
+    def test_a_row_of_another_reply_or_another_command_does_not_type_the_write(self) -> None:
+        other = DECISION_ADD.replace(SECTION_BLOCK, OTHER_BLOCK)
+        for row in (self.row(prompt_id='другая', place=['#раздел']),
+                    self.row(other, place=['#раздел']), self.row(prompt_id=None)):
+            with self.subTest(row=row):
+                volume = [row, write_record(DECISION_ADD, 'p')]
+                self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+
+    def test_a_row_before_or_after_the_write_types_it(self) -> None:
+        # Замок и поставщик записей пишут на одном post-tool параллельно.
+        for volume in ([self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')],
+                       [write_record(DECISION_ADD, 'p'), self.row(place=['#раздел'])]):
+            with self.subTest(first=type(volume[0]).__name__):
+                self.assertEqual(self.entity_ids(volume), ['section'])
+                self.assertIn('Тип известен у всех записей', self.brief(volume))
+
+    def test_one_row_types_one_write(self) -> None:
+        volume = [self.row(), write_record(DECISION_ADD, 'p'), write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+        brief = self.brief(volume)
+        self.assertIn('- запись write № 1 «', brief)
+        self.assertIn('- запись write № 2 «', brief)
+        second = brief.split('- запись write № 2', 1)[1].splitlines()[0]
+        self.assertIn('тип не определён', second)
+
+    def test_every_write_is_listed_with_its_place_and_content_types(self) -> None:
+        # Критерий сущности спрашивает тип записи, а не тег в её тексте: тип
+        # каждой записи стоит в поручении по номеру, вместе с местом и содержимым.
+        command = DECISION_ADD.replace('Новое решение', '- [ ] Дело #задача')
+        volume = [self.row(command, place=['#раздел']), write_record(command, 'p'),
+                  self.row(place=[], content=[]), write_record(DECISION_ADD, 'p'),
+                  write_record(DECISION_ADD, 'p')]
+        lines = [line for line in self.brief(volume).splitlines()
+                 if line.startswith('- запись write №')]
+        self.assertEqual(len(lines), 3)
+        self.assertIn('№ 1', lines[0])
+        self.assertIn('место #раздел', lines[0])
+        self.assertIn('содержимое #задача', lines[0])
+        self.assertIn('тип #раздел, #задача', lines[0])
+        self.assertIn('№ 2', lines[1])
+        self.assertIn('тип пуст', lines[1])
+        self.assertIn('№ 3', lines[2])
+        self.assertIn('тип не определён', lines[2])
+
+    def test_entity_criteria_ask_the_write_type_and_not_a_tag(self) -> None:
+        for slug in ('craft-task', 'craft-stage', 'craft-note', 'craft-section', 'craft-project',
+                     'craft-sphere', 'craft-links'):
+            with self.subTest(slug=slug):
+                text = (MODULES_DIR / slug / 'data' / 'review-criterion.md').read_text(
+                    encoding='utf-8')
+                self.assertNotIn('с тегом #', text)
+                self.assertIn('чей тип (раздел «Тип записей» поручения) включает', text)
+
+    def test_same_writes_take_their_rows_in_order_whatever_side_they_land(self) -> None:
+        # Строку кладёт только случившаяся запись: одинаковые записи реплики и
+        # их строки идут в одном порядке, даже когда строка встала после записи.
+        first = self.row(place=['#раздел'])
+        second = self.row(determined=False, note='API Craft не ответил')
+        volume = [write_record(DECISION_ADD, 'p'), first, second, write_record(DECISION_ADD, 'p')]
+        lines = [line for line in self.brief(volume).splitlines()
+                 if line.startswith('- запись write №')]
+        self.assertIn('тип #раздел', lines[0])
+        self.assertIn('API Craft не ответил', lines[1])
+
+    def test_the_brief_says_the_type_is_only_a_selector(self) -> None:
+        volume = [self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')]
+        brief = self.brief(volume)
+        self.assertIn('Тип выбирает только критерии. Это не довод, что запись верна', brief)
+        self.assertIn('записанный блок ты читаешь сам', brief)
 
 
 class TakenCriteriaTest(unittest.TestCase):
     """Критерии поручения сверяются с найденными: пропавший id называется."""
 
     TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
+
     def test_a_taken_id_without_a_found_criterion_is_a_problem(self) -> None:
-        write = write_record()
-        problem = review_lib.criteria_problem([write], ['task', 'stage'], [self.TASK], [])
+        problem = review_lib.criteria_problem([write_record()], ['task', 'stage'], [self.TASK], [])
         self.assertIn('критерий «stage» из поручения', problem)
         self.assertNotIn('«task»', problem)
 
     def test_taken_ids_all_found_are_no_problem(self) -> None:
-        write = write_record()
-        self.assertIsNone(review_lib.criteria_problem([write], ['task'], [self.TASK], []))
-
+        self.assertIsNone(review_lib.criteria_problem([write_record()], ['task'], [self.TASK], []))
 
 
 class StateTest(unittest.TestCase):
@@ -1121,7 +1246,7 @@ class StateTest(unittest.TestCase):
     def test_load_keeps_every_field_from_the_disk(self) -> None:
         state = review_lib.ReviewState(turn=3, volume_id='v', nudges=2, criteria=('task',),
                                        last_remarks=({'criterion': 'task'},),
-                                       prompt_taken=('turn-review',))
+                                       prompt_turns=MappingProxyType({'p-1': 3}))
         self.storage.write_json('turn-review-state.json', {**state.to_json(), 'future': 1})
         loaded, problem = review_lib.load_state(self.storage)
         self.assertIsNone(problem)
@@ -1131,14 +1256,15 @@ class StateTest(unittest.TestCase):
 
     def test_load_fills_a_missing_field_with_its_default(self) -> None:
         data = review_lib.ReviewState(turn=3, volume_id='v').to_json()
-        del data['prompt_taken']
+        del data['prompt_turns']
         self.storage.write_json('turn-review-state.json', data)
         loaded, problem = review_lib.load_state(self.storage)
         self.assertIsNone(problem)
-        self.assertEqual(loaded.prompt_taken, ())
+        self.assertEqual(loaded.prompt_turns, {})
 
     def test_wrong_items_are_damage_and_not_a_crash_later(self) -> None:
-        for field_name, value in (('criteria', [1]), ('prompt_taken', [None]),
+        for field_name, value in (('criteria', [1]), ('prompt_turns', {'p-1': '1'}),
+                                  ('prompt_turns', ['p-1']), ('prompt_turns', {'': 1}),
                                   ('last_remarks', ['нет ссылки']), ('criteria', 'task'),
                                   ('turn', True), ('volume_id', '')):
             self.storage.write_json('turn-review-state.json', {
@@ -1157,7 +1283,8 @@ class StateTest(unittest.TestCase):
     def test_the_state_checks_itself_on_every_construction(self) -> None:
         state = review_lib.ReviewState(turn=2)
         for change in ({'turn': '1'}, {'nudges': None}, {'released': 1}, {'criteria': ['task']},
-                       {'criteria': ('task', 1)}, {'prompt_taken': ['m']}, {'volume_id': ''},
+                       {'criteria': ('task', 1)}, {'prompt_turns': {'p': True}},
+                       {'volume_id': ''},
                        {'last_remarks': ('нет ссылки',)}, {'summary_shown': None}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 replace(state, **change)
@@ -1165,7 +1292,8 @@ class StateTest(unittest.TestCase):
     def test_json_round_trip_keeps_the_state(self) -> None:
         state = review_lib.ReviewState(turn=3, nudges=1, criteria=('task',),
                                        last_remarks=({'criterion': 'task'},),
-                                       prompt_taken=('a', 'b'), summary='итог')
+                                       prompt_turns=MappingProxyType({'a': 1, 'b': 2}),
+                                       summary='итог')
         data = json.loads(json.dumps(state.to_json()))
         self.assertEqual(review_lib.ReviewState.from_json(data), state)
 
@@ -1186,7 +1314,8 @@ class CriterionFilesTest(unittest.TestCase):
         path.write_text(text, encoding='utf-8')
 
     def assemble(self, volume=()):
-        return review_lib.assemble_brief(self.modules, list(volume), '{{CRITERIA}}')
+        return review_lib.assemble_brief(sources(self.modules), list(volume), '{{CRITERIA}}',
+                                         DESCRIPTIONS)
 
     def test_an_unknown_applies_rule_is_broken(self) -> None:
         for number, rule in enumerate(('alway', 'craf', 'tags', 'tags задача', '')):
@@ -1217,11 +1346,12 @@ class CriterionFilesTest(unittest.TestCase):
 
     def test_a_proper_file_is_taken_whole(self) -> None:
         self.criterion('good', 'id: good\napplies: craft\n\n## Критерий «good»: всё\nТекст.\n')
-        parts = self.assemble([write_record(types=())])
+        parts = self.assemble([write_record('blocks add')])
         self.assertIsInstance(parts, review_lib.BriefParts)
         self.assertEqual((parts.text, parts.criteria, parts.broken),
                          ('## Критерий «good»: всё\nТекст.', ('good',), ()))
-        check = review_lib.review_criteria(self.modules, [write_record(types=())], None)
+        check = review_lib.review_criteria(sources(self.modules), [write_record('blocks add')],
+                                           None)
         self.assertEqual(check.criteria, ('good',))
 
     def test_a_repeated_head_field_is_broken(self) -> None:
@@ -1242,13 +1372,13 @@ class CriterionFilesTest(unittest.TestCase):
         self.criterion('bytes', 'id: x\napplies: always\n\nТекст.\n')
         path = self.modules / 'bytes' / 'data' / 'review-criterion.md'
         path.write_bytes(b'id: x\napplies: always\n\n\xff\n')
-        records = self.modules / 'locked' / 'data' / 'review-records.md'
-        records.parent.mkdir(parents=True)
-        records.write_text('Записи.', encoding='utf-8')
+        locked = self.modules / 'locked' / 'data' / 'review-criterion.md'
+        locked.parent.mkdir(parents=True)
+        locked.write_text('id: y\napplies: always\n\nТекст.\n', encoding='utf-8')
         real_read = Path.read_text
 
         def read_text(target, *args, **kwargs):
-            if target == records:
+            if target == locked:
                 raise PermissionError(13, 'нет доступа', str(target))
             return real_read(target, *args, **kwargs)
 
@@ -1257,7 +1387,55 @@ class CriterionFilesTest(unittest.TestCase):
         self.assertEqual(ids, ())
         self.assertEqual(len(broken), 2)
         self.assertIn(str(path), broken[0])
-        self.assertIn(str(records), broken[1])
+        self.assertIn(str(locked), broken[1])
+
+    def test_a_provider_with_nothing_to_give_is_broken(self) -> None:
+        # for = ["turn-review"] без критерия и без хуков: модулю сущности,
+        # потерявшему критерий, молча пройти нельзя. С хуками он поставщик записей.
+        self.criterion('good', 'id: good\napplies: always\n\nТекст.\n')
+        (self.modules / 'empty').mkdir()
+        (self.modules / 'writer').mkdir()
+        providers = (review_lib.Provider('empty', self.modules / 'empty', False),
+                     review_lib.Provider('good', self.modules / 'good', False),
+                     review_lib.Provider('writer', self.modules / 'writer', True))
+        parts = review_lib.assemble_brief(sources(self.modules, providers), [], '{{CRITERIA}}',
+                                          DESCRIPTIONS)
+        self.assertEqual(parts.criteria, ('good',))
+        self.assertEqual(len(parts.broken), 1)
+        self.assertTrue(parts.broken[0].startswith('empty ('), parts.broken[0])
+        self.assertIsNone(review_lib.providers_problem(sources(self.modules, providers)))
+        self.assertIn('нет поставщика', review_lib.providers_problem(
+            sources(self.modules, providers[:2])))
+
+
+class RecordsTextTest(unittest.TestCase):
+    """Описания видов записей — свои у ревью; в поручение идут виды из объёма."""
+
+    def assemble(self, volume, descriptions: str = DESCRIPTIONS) -> str:
+        with tempfile.TemporaryDirectory() as folder:
+            return review_lib.assemble_brief(sources(Path(folder), ()), volume, '{{RECORDS}}',
+                                             descriptions).text
+
+    def test_only_kinds_of_the_volume_are_described(self) -> None:
+        text = self.assemble([write_record(), skill_record('craft-task')])
+        self.assertIn('`prompt_id`', text)
+        self.assertIn('`write` — вызов записи', text)
+        self.assertIn('`skill` — вызов скилла', text)
+        self.assertNotIn('`read` — вызов чтения', text)
+        self.assertNotIn('## ', text)
+
+    def test_every_kind_is_described(self) -> None:
+        rows = [review_lib.parse_record(row) for row in RecordTest.ROWS]
+        text = self.assemble(rows)
+        for kind in review_lib.KINDS:
+            self.assertIn(f'`{kind}` — ', text)
+
+    def test_a_kind_without_a_description_is_a_brief_error(self) -> None:
+        with self.assertRaises(review_lib.BriefError) as caught:
+            self.assemble([write_record()], 'Общее.\n\n## read\n\nЧтение.')
+        self.assertIn('write', str(caught.exception))
+        with self.assertRaises(review_lib.BriefError):
+            self.assemble([], '## чужой\n\nТекст.')
 
 
 class ModuleRequirementsFilesTest(unittest.TestCase):
@@ -1279,7 +1457,8 @@ class ModuleRequirementsFilesTest(unittest.TestCase):
         return path
 
     def assemble(self, volume=()):
-        return review_lib.assemble_brief(self.modules, list(volume), self.FRAME)
+        return review_lib.assemble_brief(sources(self.modules, ()), list(volume), self.FRAME,
+                                         DESCRIPTIONS)
 
     def test_a_skill_with_a_file_brings_its_text_once(self) -> None:
         self.requirements('craft-snapshot', '1. Отметка прогона записана.\n')
@@ -1294,7 +1473,7 @@ class ModuleRequirementsFilesTest(unittest.TestCase):
     def test_without_a_skill_record_the_section_is_none(self) -> None:
         self.requirements('craft-snapshot', '1. Отметка прогона записана.\n')
         for volume in ([], [write_record()],
-                       [review_lib.make_read_record(command='craft-snapshot', ids=[])]):
+                       [read_record('craft-snapshot')]):
             with self.subTest(volume=volume):
                 self.assertEqual(self.assemble(volume).text, 'нет')
 
@@ -1318,11 +1497,11 @@ class ModuleRequirementsFilesTest(unittest.TestCase):
         self.assertTrue(parts.broken[0].startswith('craft-snapshot ('))
         self.assertIn(str(path), parts.broken[0])
         # Тот же файл мешает принять чистый вердикт: проблема у stop и превью.
-        check = review_lib.review_criteria(self.modules, volume, ())
+        check = review_lib.review_criteria(sources(self.modules, ()), volume, ())
         self.assertIn(str(path), check.problem)
         # Без записи skill файл не читается и проблемой не становится.
         self.assertNotIn(str(path), review_lib.review_criteria(
-            self.modules, [write_record()], ()).problem or '')
+            sources(self.modules, ()), [write_record()], ()).problem or '')
 
 
 class CriterionTest(unittest.TestCase):
@@ -1336,12 +1515,14 @@ class CriterionTest(unittest.TestCase):
             criterion.id = 'другой'
 
     def test_rules_apply_to_the_volume(self) -> None:
-        write = write_record(types=('#этап',))
+        write = write_record('blocks add #этап')
+        tags = frozenset({'#этап'})
         cases = (('always', [], True), ('craft', [], False), ('craft', [write], True),
                  ('tags #задача', [write], False), ('tags #задача #этап', [write], True))
         for rule, volume, expected in cases:
             criterion = review_lib.make_criterion(f'id: c\napplies: {rule}\n\nТекст.')
-            self.assertEqual(review_lib.criterion_applies(criterion, volume), expected, rule)
+            self.assertEqual(review_lib.criterion_applies(criterion, volume, tags), expected,
+                             rule)
 
     def test_tags_hold_their_invariant_without_the_factory(self) -> None:
         for tags in (frozenset(), frozenset({'#Задача'}), frozenset({'задача'}), frozenset({'#'}),
@@ -1369,6 +1550,8 @@ class BrokenCriterionTest(TurnReviewCase):
         path = cls.root / 'modules' / 'zz-broken' / 'data' / 'review-criterion.md'
         path.parent.mkdir(parents=True)
         path.write_text('id: zz\napplies: alway\n\nТекст.\n', encoding='utf-8')
+        (cls.root / 'modules' / 'zz-broken' / 'module.toml').write_text(
+            'slug = "zz-broken"\nfor = ["turn-review"]\n', encoding='utf-8')
 
     def test_a_broken_criterion_reaches_every_stop_problem(self) -> None:
         session = 's-broken-criterion'
@@ -1435,34 +1618,42 @@ class ModuleRequirementsTest(TurnReviewCase):
         self.assertNotIn('{{MODULE_REQUIREMENTS}}', brief)
 
 
-class UntaggedTest(TurnReviewCase):
-    """Набор, где у модуля сущности нет критерия на свой тег."""
+class ForDiscoveryTest(TurnReviewCase):
+    """Ревью ищет файлы только у модулей с for = ["turn-review"]."""
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        # Модуль сущности потерял критерий: for остался, дать ревью нечего.
         (cls.root / 'modules' / 'craft-task' / 'data' / 'review-criterion.md').unlink()
+        # Модуль без for: его критерий лежит на месте, но не читается.
+        stray = cls.root / 'modules' / 'zz-stray'
+        (stray / 'data').mkdir(parents=True)
+        (stray / 'module.toml').write_text('slug = "zz-stray"\n', encoding='utf-8')
+        (stray / 'data' / 'review-criterion.md').write_text(
+            'id: stray\napplies: always\n\nЧужой критерий.\n', encoding='utf-8')
 
-    def test_a_tag_without_a_criterion_is_not_released_by_a_clean_verdict(self) -> None:
-        # Общие критерии always и craft подходят к любой записи, но тег задачи
-        # они не проверяют: без этой проверки запись прошла бы молча.
-        session = 's-untagged'
+    def test_a_provider_without_a_criterion_is_named_and_a_stray_file_is_ignored(self) -> None:
+        session = 's-for'
         self.start_with_write(session)
-        self.assertIn('Нет критерия на тег #задача', self.blocked(self.fire(stop(session))))
-        self.write_verdict(session, self.state(session)['volume_id'])
         reason = self.blocked(self.fire(stop(session)))
-        self.assertIn('Нет критерия на тег #задача', reason)
+        self.assertIn('craft-task (объявил for = ["turn-review"]', reason)
+        self.assertNotIn('stray', self.state(session)['criteria'])
+        self.write_verdict(session, self.state(session)['volume_id'])
+        self.assertIn('craft-task (объявил', self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 
 
 class NoProviderTest(TurnReviewCase):
-    """Набор без единого описания записей: объём некому копить."""
+    """Набор, где ни один модуль с хуками не объявил for = ["turn-review"]: объём некому копить."""
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
         for slug in PROVIDERS:
-            (cls.root / 'modules' / slug / 'data' / 'review-records.md').unlink()
+            path = cls.root / 'modules' / slug / 'module.toml'
+            text = path.read_text(encoding='utf-8')
+            path.write_text(text.replace('for = ["turn-review"]\n', ''), encoding='utf-8')
 
     def test_a_stop_without_a_provider_is_not_released_as_empty(self) -> None:
         session = 's-no-provider'
@@ -1470,6 +1661,72 @@ class NoProviderTest(TurnReviewCase):
         reason = self.blocked(self.fire(stop(session)))
         self.assertIn('Нет поставщика записей', reason)
         self.assertIn(str(self.root / 'modules'), reason)
+
+
+class LostWritesTest(TurnReviewCase):
+    """Набор без поставщика записей write: замок кладёт строки типа, записей нет."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        # Поставщик записей write снят: его хуки на событиях больше не стоят.
+        lost = cls.root / 'modules' / 'review-craft-calls' / 'hooks' / 'module.py'
+        for entries in cls.hooks.values():
+            if lost in entries:
+                entries.remove(lost)
+
+    def test_lock_rows_without_writes_are_not_released_as_empty(self) -> None:
+        session = 's-lost-writes'
+        self.fire(prompt(session))
+        self.assert_silent(self.fire(write(session)))
+        self.assertEqual(self.volume(session), [])
+        reason = self.blocked(self.fire(stop(session)))
+        self.assertIn('строки типа записей от замка', reason)
+        self.assertIn('записей write в объёме нет', reason)
+        self.assertNotEqual(self.last_reason(session), 'записей в Craft не было')
+
+    def test_lost_writes_problem_names_the_count(self) -> None:
+        rows = [review_lib.parse_record(entity_row(DECISION_ADD, 'p')) for _ in range(2)]
+        self.assertIn('2', review_lib.lost_writes_problem(rows))
+        # Строка с парой бедой не считается; без пары — потерянная запись.
+        self.assertIsNone(review_lib.lost_writes_problem([rows[0], write_record(DECISION_ADD, 'p')]))
+        self.assertIn('запись потеряна',
+                      review_lib.lost_writes_problem([*rows, write_record(DECISION_ADD, 'p')]))
+        self.assertIsNone(review_lib.lost_writes_problem([]))
+
+
+class BrokenNeighbourTest(TurnReviewCase):
+    """Набор, где шапка соседнего модуля испорчена: поставщиков не прочитать."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        broken = cls.root / 'modules' / 'zz-broken'
+        broken.mkdir()
+        (broken / 'module.toml').write_text('slug = \n', encoding='utf-8')
+
+    def start_with_row(self, session: str) -> None:
+        # Хуки соседей с requires падают на той же шапке сами: строку записи
+        # тест кладёт за поставщика, а событие получает только ревью.
+        row = {'kind': 'write', 'tool': CRAFT_WRITE, 'command': TASK_ADD, 'result': None}
+        self.storage(session).append_line('turn-review-volume.jsonl',
+                                          json.dumps(row, ensure_ascii=False))
+
+    def test_a_broken_neighbour_header_blocks_the_stop_with_its_reason(self) -> None:
+        session = 's-broken-neighbour'
+        self.start_with_row(session)
+        run = self.run_entry(stop(session), self.entry)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        reason = self.blocked(run)
+        self.assertIn('поставщиков ревью не прочитать', reason)
+        self.assertIn('Скажи об этом человеку', reason)
+
+    def test_a_broken_neighbour_header_keeps_the_answer_hidden_in_the_preview(self) -> None:
+        session = 's-broken-preview'
+        self.start_with_row(session)
+        run = self.run_entry(message(session, 'ответ'), self.entry)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertNotIn('ответ', run.stdout)
 
 
 class BrokenFrameTest(TurnReviewCase):
@@ -1533,8 +1790,7 @@ class FingerprintScriptTest(unittest.TestCase):
     """Скрипт отпечатка печатает то же, что считает хук."""
 
     def test_the_script_matches_the_library(self) -> None:
-        records = [write_record(types=('задача',)),
-                   review_lib.make_read_record(command='blocks get', ids=['a'])]
+        records = [write_record(), read_record('blocks get', ['a'])]
         with tempfile.TemporaryDirectory() as folder:
             volume = Path(folder) / 'volume.jsonl'
             rows = (json.dumps(review_lib.record_row(r), ensure_ascii=False) for r in records)

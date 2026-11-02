@@ -3,10 +3,12 @@
 
 Ход — работа агента от реплики Влада до остановки. Смысловые дефекты записи в
 Craft видны только целиком, в конце хода, поэтому ревью стоит на остановке.
-Объём ревью копят поставщики: модули review-craft-calls, review-prompts,
-craft-session-anchor пишут свои записи через lib этого модуля. Критерии привозят
-модули файлом data/review-criterion.md, формат записей поставщики описывают в
-data/review-records.md. Хук на остановке собирает из них поручение подагенту
+Объём ревью копят поставщики — модули с for = ["turn-review"]: они дописывают
+строки в файл объёма хранилища сами, по контракту из README («Контракт
+поставщиков»), и lib этого модуля не импортируют. Критерии привозят они же
+файлом data/review-criterion.md. Формат строк объёма описывает сам ревью:
+data/review-records.md этого модуля.
+Хук на остановке собирает из них поручение подагенту
 и смотрит вердикт по объёму: либо отпускает ход, либо возвращает его с
 замечаниями или поручением.
 
@@ -18,7 +20,8 @@ data/review-records.md. Хук на остановке собирает из н�
 
 Здесь точка входа и решения по событиям. Рядом в hooks/ то, что знает только
 хук: display — показ ответа и итога, debug_output — флаг отладки, nudge —
-поручение с путями хранилища, review_access — своя lib и каталог модулей.
+поручение с путями хранилища, review_access — своя lib, поставщики и
+поиск тегов.
 Тексты и разбор ответа на вопрос ревью — в lib.
 
 В Craft и в сеть модуль не ходит: только хранилище и вход события.
@@ -40,7 +43,7 @@ from display import (  # noqa: E402
 )
 from jarvis import events, wrappers  # noqa: E402
 from nudge import nudge_text  # noqa: E402
-from review_access import load_review, modules_dir, required_criteria  # noqa: E402
+from review_access import SourcesError, load_review, required_criteria, sources  # noqa: E402
 
 RELEASE_ACTION = 'release'
 
@@ -56,9 +59,9 @@ NO_SUMMARY_REASON = 'неотчитанного итога ревью нет'
 class Module(jarvis.Module):
     """Решение на остановке хода и показ ответа до вердикта.
 
-    Объём копят поставщики через lib, модуль его читает, а на остановке под
-    локом чинит (load_volume) или очищает (clear_volume) файл. На реплике
-    модуль берёт номер хода, на post-tool разбирает только ответ на
+    Объём копят поставщики по контракту, модуль его читает, а на остановке
+    под локом журнала чинит (load_volume) или очищает (clear_volume) файл. На
+    реплике модуль связывает id реплики с номером хода, на post-tool разбирает только ответ на
     собственный вопрос ревью.
     """
 
@@ -78,9 +81,9 @@ class Module(jarvis.Module):
             return handler(event, runtime, review)
 
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
-        # Поставщики на той же реплике берут номер той же функцией: кто бы
-        # из параллельных хуков ни пришёл первым, ход у реплики один.
-        turn, problem = review.claim_prompt_turn(runtime.storage, runtime.manifest.slug, event)
+        # Номер хода знает только ревью: поставщики кладут в записи id
+        # реплики, и здесь id связывается с номером.
+        turn, problem = review.claim_prompt_turn(runtime.storage, event)
         return jarvis.Silence(reason=review.with_problem(f'начался ход {turn}', problem))
 
     def on_after_compact(self, event, runtime, review) -> jarvis.Response:
@@ -97,7 +100,13 @@ class Module(jarvis.Module):
         storage = runtime.storage
         # Показ идёт до остановки: состояние читается без починки, чинит stop.
         state = review.peek_state(storage)
-        hidden = answer_hidden(storage, state, runtime, review)
+        try:
+            hidden = answer_hidden(storage, state, runtime, review)
+        except SourcesError:
+            # Поставщиков не прочитать — чистому вердикту не на что опереться:
+            # ответ спрятан, а не показан непроверенным упавшим хуком. Причину
+            # назовёт остановка.
+            hidden = True
         final = is_final(event)
         # Спрятанный ответ: вместо ответа, который ревью ещё не проверило,
         # человек видит строку про ревью, а с отладочным выводом под ней ещё
@@ -117,7 +126,14 @@ class Module(jarvis.Module):
         # раньше: показываем его сейчас, под ответом этого же хода.
         storage = runtime.storage
         volume = review.peek_volume(storage)
-        criteria, problem = required_criteria(state, runtime, review, volume)
+        try:
+            criteria, problem = required_criteria(state, runtime, review, volume)
+        except SourcesError as error:
+            # Поставщиков не прочитать — вердикту не на что опереться: ответ
+            # остаётся спрятанным, причину назовёт остановка.
+            if hidden:
+                return jarvis.UpdatedDisplay(text=base)
+            return jarvis.Silence(reason=str(error))
         verdict = review.peek_verdict(storage, state.volume_id, criteria, problem)
         if verdict is None or state.shown_verdict == review.verdict_key(verdict):
             if hidden:
@@ -144,6 +160,15 @@ class Module(jarvis.Module):
         return jarvis.Silence(reason='не ответ кнопкой на вопрос о ревью')
 
     def on_stop(self, event, runtime, review) -> jarvis.Response:
+        # Шапку соседа не прочитать — ход не отпускается молча и не роняет
+        # хук: падение харнес принял бы за пропуск.
+        try:
+            return self.stop_reviewed(runtime, review)
+        except SourcesError as error:
+            return jarvis.Block(reason=f'Ход не отпущен: {error}. Закончи ход снова после '
+                                       'починки.')
+
+    def stop_reviewed(self, runtime, review) -> jarvis.Response:
         # stop_hook_active=true — штатная повторная остановка после блока:
         # от петли защищает счёт поручений, а не этот признак.
         storage = runtime.storage
@@ -155,8 +180,10 @@ class Module(jarvis.Module):
             state = replace(state, volume_id=review.new_volume_id())
             review.save_state(storage, state)
         # Без поставщика объём пуст не потому, что записей не было: такой
-        # ход молча не отпускается.
-        no_provider = review.providers_problem(modules_dir(runtime))
+        # ход молча не отпускается. Строки замка без единой записи write —
+        # тот же случай: записи были, а положить их в объём было некому.
+        no_provider = review.joined(review.providers_problem(sources(runtime, review)),
+                                    review.lost_writes_problem(volume))
         if not review.count_writes(volume) and no_provider is None:
             if damage:
                 return jarvis.Block(reason=f'Ход не отпущен: {damage}. Скажи об этом человеку '
@@ -176,7 +203,7 @@ class Module(jarvis.Module):
             cleared = review.clear_volume(storage, state)
             note_summary(storage, cleared, state, review, volume, review.REPORT_RELEASED)
             return jarvis.Silence(reason=review.with_problem(RELEASED_REASON, problem))
-        if review.writes_before_turn(volume, state.turn):
+        if review.writes_before_turn(volume, state.turn, state.prompt_turns):
             # Человек разговаривает с агентом, а не ждёт записи: поручение и
             # вопрос о ревью посреди разговора мешают, а объём никуда не
             # денется и пойдёт на ревью в конце ближайшего хода с записями.

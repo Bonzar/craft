@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from . import CORE_SOURCE, INSTALLER
+from . import CORE_SOURCE, INSTALLER, MODULES_DIR
 
 
 def load_installer():
@@ -171,9 +171,9 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse((self.modules_root() / 'other' / '_core' / 'jarvis' / 'marker.py').exists())
 
     def test_library_part_stays_inside_its_own_module(self) -> None:
-        self.add_module('shell-tree', 'slug = "shell-tree"\n', {'lib': {'__init__.py': 'VALUE = 1\n'}})
+        self.add_module('command-tree-shell', 'slug = "command-tree-shell"\n', {'lib': {'__init__.py': 'VALUE = 1\n'}})
         self.run_installer()
-        self.assertTrue((self.modules_root() / 'shell-tree' / 'lib' / '__init__.py').is_file())
+        self.assertTrue((self.modules_root() / 'command-tree-shell' / 'lib' / '__init__.py').is_file())
 
     def test_each_part_goes_where_it_is_read(self) -> None:
         self.add_module(
@@ -271,13 +271,13 @@ class InstallerTest(unittest.TestCase):
     # --- предупреждения ---
 
     def test_missing_requirement_is_reported_at_install_time(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\nrequires = ["shell-tree"]\n')
+        self.add_module('probe', 'slug = "probe"\nevents = ["prompt"]\nrequires = ["command-tree-shell"]\n')
         report = self.run_installer()
-        self.assertTrue(any('shell-tree' in w for w in report.warnings))
+        self.assertTrue(any('command-tree-shell' in w for w in report.warnings))
 
     def test_a_satisfied_requirement_is_not_reported(self) -> None:
-        self.add_module('probe', 'slug = "probe"\nrequires = ["shell-tree-*"]\n')
-        self.add_module('bash', 'slug = "bash"\nfor = "shell-tree-*"\n')
+        self.add_module('probe', 'slug = "probe"\nrequires = ["command-tree-*"]\n')
+        self.add_module('bash', 'slug = "bash"\nfor = "command-tree-*"\n')
         self.assertEqual(self.run_installer().warnings, [])
 
     def test_duplicate_slug_is_rejected(self) -> None:
@@ -300,18 +300,52 @@ class InstallerTest(unittest.TestCase):
 
     # --- теги сущностей в data/entity.json ---
 
-    def add_entity(self, slug: str, body: str) -> Path:
-        folder = self.add_module(slug, f'slug = "{slug}"\n', {'data': {'entity.json': body}})
+    @staticmethod
+    def entity(*tags: str) -> str:
+        template = '811ff148-857f-703e-35a9-06b9784e2572'
+        return json.dumps({'tags': list(tags), 'templates': {tag: [template] for tag in tags}},
+                          ensure_ascii=False)
+
+    def add_entity(self, slug: str, body: str, serves: bool = True) -> Path:
+        manifest = f'slug = "{slug}"\n' + ('for = ["craft-type-lock"]\n' if serves else '')
+        folder = self.add_module(slug, manifest, {'data': {'entity.json': body}})
         return folder / 'data' / 'entity.json'
 
+    def test_an_entity_file_without_for_the_lock_fails_the_install(self) -> None:
+        # Замок находит модули сущностей по `for`: файл без него замок молча не
+        # видит, и тег остался бы без скилла.
+        path = self.add_entity('craft-task', self.entity('#задача'), serves=False)
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer('--dry-run')
+        self.assertIn(str(path), str(caught.exception))
+        self.assertIn('for = ["craft-type-lock"]', str(caught.exception))
+
     def test_entity_tags_of_distinct_modules_install(self) -> None:
-        self.add_entity('craft-task', '{"tags": ["#задача"]}')
-        self.add_entity('craft-note', '{"tags": ["#заметка", "#тема"]}')
+        self.add_entity('craft-task', self.entity('#задача'))
+        self.add_entity('craft-note', self.entity('#заметка', '#тема'))
         self.assertEqual(sorted(self.run_installer().installed), ['craft-note', 'craft-task'])
+
+    def test_the_real_entity_modules_install_together(self) -> None:
+        # Проект и сфера встают рядом с остальными модулями сущностей: теги не
+        # пересекаются, у каждого тега есть шаблон, скилл ложится в настройки.
+        # Решения и связи — не сущности, без тегов, но их требуют скиллы
+        # сущностей, и ставятся они тем же набором.
+        slugs = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-project', 'craft-sphere',
+                 'craft-decisions', 'craft-links')
+        for slug in slugs:
+            shutil.copytree(MODULES_DIR / slug, self.source / slug)
+        self.assertEqual(sorted(self.run_installer().installed), sorted(slugs))
+        for slug in ('craft-project', 'craft-sphere', 'craft-decisions', 'craft-links'):
+            with self.subTest(slug=slug):
+                skill = self.settings_root / 'skills' / slug / 'SKILL.md'
+                self.assertIn(f'name: {slug}', skill.read_text(encoding='utf-8'))
 
     def test_a_broken_entity_file_fails_the_install_with_its_path(self) -> None:
         bodies = ('{"tags":', '[]', '{}', '{"tags": []}', '{"tags": "#задача"}',
-                  '{"tags": ["задача"]}', '{"tags": [1]}', '{"tags": ["#"]}')
+                  '{"tags": ["задача"]}', '{"tags": [1]}', '{"tags": ["#"]}',
+                  '{"tags": ["#задача"]}', '{"tags": ["#задача"], "templates": {"#задача": []}}',
+                  '{"tags": ["#задача"], "templates": {"#задача": ["не id"]}}',
+                  self.entity('#задача').replace('}}', ', "#веха": []}}'))
         for number, body in enumerate(bodies):
             with self.subTest(body=body):
                 path = self.add_entity(f'craft-x{number}', body)
@@ -322,16 +356,24 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(self.settings_root.exists())
 
     def test_a_tag_of_two_modules_fails_the_install(self) -> None:
-        self.add_entity('craft-task', '{"tags": ["#задача"]}')
-        path = self.add_entity('craft-todo', '{"tags": ["#Задача"]}')
+        self.add_entity('craft-task', self.entity('#задача'))
+        path = self.add_entity('craft-todo', self.entity('#Задача'))
         with self.assertRaises(ValueError) as caught:
             self.run_installer()
         self.assertIn(str(path), str(caught.exception))
         self.assertIn('craft-task', str(caught.exception))
         self.assertFalse(self.settings_root.exists())
 
+    def test_an_entity_module_for_the_lock_without_its_file_fails_the_install(self) -> None:
+        folder = self.add_module('craft-task', 'slug = "craft-task"\nfor = ["craft-type-lock"]\n',
+                                 {'data': {'notes.md': '#\n'}})
+        with self.assertRaises(ValueError) as caught:
+            self.run_installer('--dry-run')
+        self.assertIn(str(folder / 'data' / 'entity.json'), str(caught.exception))
+        self.assertIn('craft-type-lock', str(caught.exception))
+
     def test_a_tag_repeated_in_one_module_fails_the_install(self) -> None:
-        self.add_entity('craft-task', '{"tags": ["#задача", "#задача"]}')
+        self.add_entity('craft-task', self.entity('#задача', '#задача'))
         with self.assertRaises(ValueError):
             self.run_installer()
 
@@ -400,8 +442,8 @@ class ExtraSourceTest(unittest.TestCase):
         self.assertFalse(self.settings_root.exists())
 
     def test_a_requirement_is_satisfied_from_the_other_source(self) -> None:
-        self.add_module('shell-tree', 'slug = "shell-tree"\n')
-        self.add_extra_module('local', 'slug = "local"\nrequires = ["shell-tree"]\n')
+        self.add_module('command-tree-shell', 'slug = "command-tree-shell"\n')
+        self.add_extra_module('local', 'slug = "local"\nrequires = ["command-tree-shell"]\n')
         self.assertEqual(self.run_installer('--extra-modules', str(self.extra)).warnings, [])
 
     def test_ledger_names_the_extra_sources(self) -> None:

@@ -4,7 +4,7 @@
 
     slug = "lock-irreversible-shell"
     events = ["pre-tool", "prompt"]
-    requires = ["shell-tree-*"]
+    requires = ["command-tree-*"]
     harness = "claude"
     copies = 1
 

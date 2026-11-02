@@ -135,21 +135,27 @@ class RunTest(unittest.TestCase):
         self.assertEqual(self.trace()[0]['module'], 'probe')
 
     def test_module_without_its_requires_says_what_is_missing_and_stays_quiet(self) -> None:
-        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('shell-tree', 'other-*'), path=self.module_dir)
+        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('command-tree-shell', 'other-*'), path=self.module_dir)
         outcome = self.go(Talker(), manifest)
         self.assertEqual(outcome.response.kind, 'context')
-        self.assertIn('shell-tree', outcome.response.text)
+        self.assertIn('command-tree-shell', outcome.response.text)
         self.assertIn('other-*', outcome.response.text)
         self.assertIn('не найдено из requires', self.trace()[0]['reason'])
 
     def test_module_with_a_neighbour_it_requires_runs(self) -> None:
-        make_module_dir(self.modules, 'shell-tree')
-        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('shell-tree',), path=self.module_dir)
+        make_module_dir(self.modules, 'command-tree-shell')
+        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('command-tree-shell',), path=self.module_dir)
         self.assertEqual(self.go(Talker(), manifest).response.text, 'сказал')
 
+    def test_a_broken_neighbour_header_does_not_crash_a_module_without_requires(self) -> None:
+        # Соседей ядро читает только ради requires: модуль без них решает сам,
+        # что делать с испорченной шапкой соседа, и не падает до своего хода.
+        make_module_dir(self.modules, 'zz-broken', 'slug = \n')
+        self.assertEqual(self.go(Talker()).response.text, 'сказал')
+
     def test_family_mask_is_satisfied_by_an_adapter_next_door(self) -> None:
-        make_module_dir(self.modules, 'bash', 'slug = "bash"\nfor = "shell-tree"\n')
-        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('shell-tree-*',), path=self.module_dir)
+        make_module_dir(self.modules, 'bash', 'slug = "bash"\nfor = "command-tree-shell"\n')
+        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('command-tree-*',), path=self.module_dir)
         self.assertEqual(self.go(Talker(), manifest).response.kind, 'context')
 
     def test_confirmation_is_checked_on_the_prompt_event(self) -> None:
@@ -186,12 +192,12 @@ class RunTest(unittest.TestCase):
         self.assertFalse(line['delivered'])
 
     def test_runtime_finds_a_library_neighbour_by_slug(self) -> None:
-        make_module_dir(self.modules, 'shell-tree', lib={'__init__.py': 'VALUE = 5\n'})
-        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('shell-tree',), path=self.module_dir)
+        make_module_dir(self.modules, 'command-tree-shell', lib={'__init__.py': 'VALUE = 5\n'})
+        manifest = Manifest(slug='probe', events=(PROMPT,), requires=('command-tree-shell',), path=self.module_dir)
 
         class Caller(Module):
             def handle(self, event, runtime):
-                return Context(str(runtime.library('shell-tree').load().VALUE))
+                return Context(str(runtime.library('command-tree-shell').load().VALUE))
 
         self.assertEqual(self.go(Caller(), manifest).response.text, '5')
 
@@ -209,52 +215,52 @@ class RegistryTest(unittest.TestCase):
             del sys.modules[name]
 
     def test_neighbours_are_read_from_the_modules_directory(self) -> None:
-        make_module_dir(self.modules, 'shell-tree')
-        self.assertEqual({m.slug for m in registry.neighbours(self.caller)}, {'probe', 'shell-tree'})
+        make_module_dir(self.modules, 'command-tree-shell')
+        self.assertEqual({m.slug for m in registry.neighbours(self.caller)}, {'probe', 'command-tree-shell'})
 
     def test_a_folder_without_a_header_is_not_a_module(self) -> None:
         (self.modules / registry.CORE_DIR).mkdir()
         self.assertEqual({m.slug for m in registry.neighbours(self.caller)}, {'probe'})
 
     def test_library_part_is_found_by_slug(self) -> None:
-        make_module_dir(self.modules, 'shell-tree', lib={'__init__.py': 'VALUE = 42\n'})
-        found = registry.find('shell-tree', self.caller)
-        self.assertEqual(found.slug, 'shell-tree')
+        make_module_dir(self.modules, 'command-tree-shell', lib={'__init__.py': 'VALUE = 42\n'})
+        found = registry.find('command-tree-shell', self.caller)
+        self.assertEqual(found.slug, 'command-tree-shell')
         self.assertEqual(found.load().VALUE, 42)
 
     def test_library_part_is_found_by_a_family_mask(self) -> None:
-        make_module_dir(self.modules, 'bash', 'slug = "bash"\nfor = "shell-tree-*"\n', lib={'__init__.py': 'V = 1\n'})
-        self.assertEqual(registry.find('shell-tree-*', self.caller).slug, 'bash')
+        make_module_dir(self.modules, 'bash', 'slug = "bash"\nfor = "command-tree-*"\n', lib={'__init__.py': 'V = 1\n'})
+        self.assertEqual(registry.find('command-tree-*', self.caller).slug, 'bash')
 
     def test_a_module_that_is_not_there_is_not_found(self) -> None:
         self.assertIsNone(registry.find('nothing', self.caller))
 
     def test_a_neighbour_without_a_library_part_is_not_found(self) -> None:
-        make_module_dir(self.modules, 'shell-tree')
-        self.assertIsNone(registry.find('shell-tree', self.caller))
+        make_module_dir(self.modules, 'command-tree-shell')
+        self.assertIsNone(registry.find('command-tree-shell', self.caller))
 
     def test_multi_file_library_part_loads_with_the_ordinary_package_form(self) -> None:
         # `from . import helper` требует, чтобы родительский пакет был заведён.
         make_module_dir(
             self.modules,
-            'shell-tree',
+            'command-tree-shell',
             lib={'helper.py': 'VALUE = 7\n', '__init__.py': 'from . import helper\n\nVALUE = helper.VALUE\n'},
         )
-        self.assertEqual(registry.find('shell-tree', self.caller).load().VALUE, 7)
+        self.assertEqual(registry.find('command-tree-shell', self.caller).load().VALUE, 7)
 
     def test_multi_file_library_part_loads_with_the_from_dot_form(self) -> None:
         make_module_dir(
             self.modules,
-            'shell-tree',
+            'command-tree-shell',
             lib={'helper.py': 'VALUE = 9\n', '__init__.py': 'from .helper import VALUE\n'},
         )
-        self.assertEqual(registry.find('shell-tree', self.caller).load().VALUE, 9)
+        self.assertEqual(registry.find('command-tree-shell', self.caller).load().VALUE, 9)
 
     def test_a_library_part_that_fails_leaves_nothing_half_loaded(self) -> None:
-        make_module_dir(self.modules, 'shell-tree', lib={'__init__.py': 'raise RuntimeError("дефект")\n'})
+        make_module_dir(self.modules, 'command-tree-shell', lib={'__init__.py': 'raise RuntimeError("дефект")\n'})
         with self.assertRaises(RuntimeError):
-            registry.find('shell-tree', self.caller).load()
-        self.assertNotIn(f'{registry.PARENT_PACKAGE}.shell_tree', sys.modules)
+            registry.find('command-tree-shell', self.caller).load()
+        self.assertNotIn(f'{registry.PARENT_PACKAGE}.command_tree_shell', sys.modules)
 
 
 if __name__ == '__main__':

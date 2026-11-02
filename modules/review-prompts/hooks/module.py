@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Поставщик данных ревью для чата: реплики Влада и его ответы кнопками.
 
-Запись идёт как сырьё: текст, авторство, время, номер хода. Вопрос самого
-ревью о застрявшем ревью в объём не идёт: его разбирает хук ревью.
-
-Номер хода реплики модуль берёт той же функцией, что ревью: хуки реплики
-идут параллельно, и прочитанный счётчик мог бы ещё не вырасти.
+Запись идёт как сырьё: текст, авторство, время и id реплики харнеса. Номер
+хода модуль не считает: по id реплики его знает ревью. Строки пишутся по
+контракту поставщиков из README turn-review, одной строкой JSON через
+append_line хранилища ядра; lib ревью модуль не импортирует.
 """
 
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,19 +17,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 import jarvis  # noqa: E402
 from jarvis import events, wrappers  # noqa: E402
 
-REVIEW = 'turn-review'
+# Контракт поставщиков ревью: файл объёма в зоне сессии и id реплики в строке.
+VOLUME_FILE = 'turn-review-volume.jsonl'
+PROMPT_ID_FIELD = 'prompt_id'
 QUESTION_TOOL = 'AskUserQuestion'
 QUESTIONS_FIELD = 'questions'
 QUESTION_FIELD = 'question'
 AUTHOR = 'Влад'
 SUBAGENT_REASON = 'вызов внутри подагента: в объём ревью не идёт'
-
-
-def library(runtime):
-    found = runtime.library(REVIEW)
-    if found is None:
-        raise RuntimeError(f'у модуля {REVIEW} нет части lib. Переустанови набор из свежего источника')
-    return found.load()
 
 
 def questions_text(tool_input) -> str:
@@ -43,42 +38,48 @@ def as_is(value):
     return value if isinstance(value, (str, dict, list)) else None
 
 
-def with_problem(reason: str, problem: str | None) -> str:
-    return f'{reason}. {problem}' if problem else reason
-
-
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
+def prompt_id_of(event) -> str | None:
+    """Id реплики харнеса из сырого события; нет его или он не строка — None."""
+    value = event.raw.get(PROMPT_ID_FIELD)
+    return value if isinstance(value, str) and value else None
+
+
+def volume_row(kind: str, event, **fields) -> dict:
+    """Строка объёма по контракту: вид, id реплики (если харнес его дал) и поля вида."""
+    prompt_id = prompt_id_of(event)
+    head = {'kind': kind} if prompt_id is None else {'kind': kind, PROMPT_ID_FIELD: prompt_id}
+    return {**head, **fields}
+
+
+def append_row(runtime, row: dict) -> None:
+    runtime.storage.append_line(VOLUME_FILE, json.dumps(row, ensure_ascii=False))
+
+
 class Module(jarvis.Module):
     def handle(self, event: jarvis.Event, runtime: jarvis.Runtime) -> jarvis.Response:
-        review = library(runtime)
-        storage = runtime.storage
         if event.event == events.PROMPT:
-            return self.on_prompt(event, runtime, review)
+            return self.on_prompt(event, runtime)
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
         if event.tool_name != QUESTION_TOOL:
             return jarvis.Silence(reason='вызов не вопрос человеку')
-        if review.is_review_question(event.tool_input):
-            return jarvis.Silence(reason='вопрос самого ревью: его разбирает хук ревью')
-        review.append_turn_record(storage, review.make_answer_record(
-            question=questions_text(event.tool_input), answer=as_is(event.tool_result),
-            author=AUTHOR, at=now()))
+        # Ответ на вопрос самого ревью тоже ложится: что это вопрос ревью,
+        # знает только ревью, а поставщик пишет сырьё.
+        append_row(runtime, volume_row(
+            'answer', event, question=questions_text(event.tool_input),
+            answer=as_is(event.tool_result), author=AUTHOR, at=now()))
         return jarvis.Silence(reason='ответ кнопками в объёме ревью')
 
-    def on_prompt(self, event, runtime, review) -> jarvis.Response:
-        # Номер берётся на каждой реплике: без id реплики от харнеса модуль,
-        # пропустивший её, сбил бы общий счёт ходов (см. claim_prompt_turn).
-        storage, text = runtime.storage, event.prompt_text or ''
-        with review.state_lock(storage):
-            turn, problem = review.claim_prompt_turn(storage, runtime.manifest.slug, event)
+    def on_prompt(self, event, runtime) -> jarvis.Response:
+        text = event.prompt_text or ''
         if not text.strip():
-            return jarvis.Silence(reason=with_problem('пустая реплика', problem))
-        review.append_turn_record(
-            storage, review.make_prompt_record(text=text, author=AUTHOR, at=now()), turn=turn)
-        return jarvis.Silence(reason=with_problem('реплика в объёме ревью', problem))
+            return jarvis.Silence(reason='пустая реплика')
+        append_row(runtime, volume_row('prompt', event, text=text, author=AUTHOR, at=now()))
+        return jarvis.Silence(reason='реплика в объёме ревью')
 
 
 if __name__ == '__main__':

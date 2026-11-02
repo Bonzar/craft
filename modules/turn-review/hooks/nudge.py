@@ -6,33 +6,37 @@
 
 from pathlib import Path
 
-from review_access import modules_dir
+from review_access import sources
 
 MODULE_DIR = Path(__file__).resolve().parents[1]
 FRAME_FILE = MODULE_DIR / 'data' / 'review-frame.md'
+# Описания видов записей объёма: формат строк задаёт только контракт ревью.
+RECORDS_FILE = MODULE_DIR / 'data' / 'review-records.md'
 # Подагент считает отпечаток скриптом, хук — функцией из lib: функция одна.
 FINGERPRINT_SCRIPT = MODULE_DIR / 'hooks' / 'fingerprint.py'
 
 
-def read_frame(review) -> str:
-    """Каркас поручения. Не читается — BriefError с путём, а не падение хука."""
+def read_own(review, path: Path, what: str) -> str:
+    """Свой файл данных. Не читается — BriefError с путём, а не падение хука."""
     try:
-        return FRAME_FILE.read_text(encoding='utf-8')
+        return path.read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError) as error:
-        raise review.BriefError(f'каркас поручения {FRAME_FILE} не читается ({error})') from error
+        raise review.BriefError(f'{what} {path} не читается ({error})') from error
 
 
 def nudge_text(storage, state, runtime, review, volume: list,
                problem: str | None) -> tuple[str, tuple[str, ...]]:
     """Блок с просьбой запустить подагента и список критериев собранного поручения.
 
-    Поручение собирается здесь из каркаса, записей поставщиков и критериев,
+    Поручение собирается здесь из каркаса, описаний видов записей и критериев,
     чьё правило applies совпало с объёмом: always — всегда, craft — при
     записях write, tags — когда запись несёт тег из правила. Оно кладётся в
     хранилище сессии. Не разобранные файлы stop называет в problem. Каркас не
     прочитать или поручение не записать — BriefError.
     """
-    parts = review.assemble_brief(modules_dir(runtime), volume, read_frame(review))
+    parts = review.assemble_brief(sources(runtime, review), volume,
+                                  read_own(review, FRAME_FILE, 'каркас поручения'),
+                                  read_own(review, RECORDS_FILE, 'описания записей'))
     brief = review.write_brief(storage, parts.text)
     volume_file = storage.path(review.VOLUME_FILE).resolve()
     facts = review.NudgeFacts(

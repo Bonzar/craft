@@ -55,7 +55,9 @@ def answer_hidden(storage, state, runtime, review) -> bool:
     volume, damage = review.parse_volume_file(storage.path(review.VOLUME_FILE))
     if state is None or damage:
         return True
-    if not review.count_writes(volume) or review.writes_before_turn(volume, state.turn):
+    if not review.count_writes(volume):
+        return False
+    if review.writes_before_turn(volume, state.turn, state.prompt_turns):
         return False
     if state.released:
         return False
