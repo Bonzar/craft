@@ -2,7 +2,8 @@
 
 Код живёт в точке входа замка, а здесь только отдаётся соседям по slug. Так
 источник один: правило «тег в тексте ссылки не считается» и разбор `\\uXXXX`
-меняются в одном месте и сразу у всех, кто читает записи по типу.
+меняются в одном месте и сразу у всех, кто читает записи по типу. Справочник
+«тег → модуль» собирается по файлам data/entity.json модулей сущностей.
 """
 
 import importlib.util
@@ -23,12 +24,12 @@ def _load_hook():
 
 _hook = _load_hook()
 
-TYPES_FILE = _hook.TYPES_FILE
+ENTITY_FILE = _hook.ENTITY_FILE
 
 
-def load_tag_skills(path: Path = TYPES_FILE) -> dict[str, str]:
-    """Тег → slug скилла из справочника типов замка."""
-    return _hook.load_tag_skills(path)
+def load_tag_skills(modules_dir: Path | None = None) -> dict[str, str]:
+    """Тег → slug модуля сущности по файлам data/entity.json соседей."""
+    return _hook.load_tag_skills(modules_dir)
 
 
 def find_tags(command: str, tag_skills: dict[str, str]) -> list[str]:

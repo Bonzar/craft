@@ -29,12 +29,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jarvis  # noqa: E402
-from jarvis import events, wrappers  # noqa: E402
+from jarvis import events, registry, wrappers  # noqa: E402
 from place import BASE_ENV, BLOCK_ID, Verdict, decision_zone  # noqa: E402
 
-TYPES_FILE = Path(__file__).resolve().parents[1] / 'data' / 'types.json'
-TYPES_KEY = 'types'
-TYPE_SKILL_KEY = 'skill'
+MODULE_DIR = Path(__file__).resolve().parents[1]
+# Теги сущности лежат в данных её модуля: файл data/entity.json с полем
+# tags. Замок собирает справочник «тег → скилл» по соседям и чужих модулей
+# не знает: отказ от сущности это удаление одного модуля.
+ENTITY_FILE = 'entity.json'
+ENTITY_TAGS_KEY = 'tags'
+DATA_DIR = 'data'
 TAG_PREFIX = '#'
 
 STATE_FILE = 'craft-type-lock.json'
@@ -81,20 +85,28 @@ UNICODE_ESCAPE = re.compile(r'\\u([0-9a-fA-F]{4})')
 BLOCK_LINK = re.compile(r'\[[^\]]*\]\((?:block|craftdocs)://[^)]*\)')
 
 DECISION_SKILL = 'craft-decision'
-def load_tag_skills(path: Path = TYPES_FILE) -> dict[str, str]:
-    """Тег → slug скилла."""
-    try:
-        table = json.loads(path.read_text(encoding='utf-8')).get(TYPES_KEY)
-    except (json.JSONDecodeError, AttributeError) as error:
-        raise ValueError(f'{path}: справочник типов не читается как объект JSON') from error
-    if not isinstance(table, dict) or not table:
-        raise ValueError(f'{path}: нет непустого объекта «{TYPES_KEY}»')
+def load_tag_skills(modules_dir: Path | None = None) -> dict[str, str]:
+    """Тег → slug модуля сущности по файлам data/entity.json соседей."""
+    root = Path(modules_dir) if modules_dir is not None else registry.modules_dir(MODULE_DIR)
     result = {}
-    for tag, entry in table.items():
-        skill = entry.get(TYPE_SKILL_KEY) if isinstance(entry, dict) else None
-        if not tag.startswith(TAG_PREFIX) or not isinstance(skill, str) or not skill:
-            raise ValueError(f'{path}: у тега {tag!r} нет скилла')
-        result[tag.lower()] = skill
+    for child in sorted(root.iterdir()):
+        path = child / DATA_DIR / ENTITY_FILE
+        if not child.is_dir() or not path.is_file():
+            continue
+        try:
+            tags = json.loads(path.read_text(encoding='utf-8')).get(ENTITY_TAGS_KEY)
+        except (json.JSONDecodeError, AttributeError) as error:
+            raise ValueError(f'{path}: файл сущности не читается как объект JSON') from error
+        if not isinstance(tags, list) or not tags:
+            raise ValueError(f'{path}: нет непустого списка «{ENTITY_TAGS_KEY}»')
+        for tag in tags:
+            if not isinstance(tag, str) or not tag.startswith(TAG_PREFIX) or len(tag) < 2:
+                raise ValueError(f'{path}: {tag!r} не тег')
+            if tag.lower() in result:
+                raise ValueError(f'{path}: тег {tag} уже у модуля {result[tag.lower()]}')
+            result[tag.lower()] = child.name
+    if not result:
+        raise ValueError(f'{root}: ни у одного модуля нет data/{ENTITY_FILE}')
     return result
 
 

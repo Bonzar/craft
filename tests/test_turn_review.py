@@ -22,6 +22,11 @@ LIB_SPEC.loader.exec_module(review_lib)
 
 SLUG = 'turn-review'
 TYPE_LOCK = 'craft-type-lock'
+# Поставщики, якорь и модули с критериями: без них объём пуст, а поручение
+# без критериев. В тестах набор как у настоящей установки.
+PROVIDERS = ('review-craft-calls', 'review-prompts', 'session-anchor')
+CRITERIA_MODULES = ('craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-call',
+                    'craft-decision')
 CRAFT_WRITE = 'mcp__Craft__craft_write'
 CRAFT_READ = 'mcp__Craft__craft_read'
 BLOCK = 'a6784801-9d92-875c-f146-50159368745b'
@@ -65,7 +70,7 @@ def ask(session: str, question: str, answer: str,
 
 
 def remark(text: str = 'нет ссылки на этап') -> dict:
-    return {'criterion': 'craft', 'where': BLOCK, 'text': text}
+    return {'criterion': 'craft-base', 'where': BLOCK, 'text': text}
 
 
 def stop(session: str, active: bool = True) -> dict:
@@ -86,12 +91,19 @@ class TurnReviewCase(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmp.name)
         ignore = shutil.ignore_patterns('__pycache__')
-        for slug in (SLUG, TYPE_LOCK):
+        for slug in (SLUG, TYPE_LOCK, *PROVIDERS, *CRITERIA_MODULES):
             module_dir = cls.root / 'modules' / slug
             shutil.copytree(MODULES_DIR / slug, module_dir, ignore=ignore)
             shutil.copytree(CORE_SOURCE, module_dir / '_core', ignore=ignore)
         cls.module_dir = cls.root / 'modules' / SLUG
         cls.entry = cls.module_dir / 'hooks' / 'module.py'
+        # Кто из набора стоит на каком событии: тест запускает их все, как харнес.
+        cls.hooks = {}
+        for slug in (SLUG, *PROVIDERS):
+            text = (cls.root / 'modules' / slug / 'module.toml').read_text(encoding='utf-8')
+            line = next(line for line in text.splitlines() if line.startswith('events'))
+            for name in json.loads(line.split('=', 1)[1].strip()):
+                cls.hooks.setdefault(name, []).append(cls.root / 'modules' / slug / 'hooks' / 'module.py')
         # Отладочный вывод в источнике может быть включён: тесты ревью идут
         # без него, его тесты включают его сами.
         cls.debug_file = cls.module_dir / 'data' / 'debug.json'
@@ -101,8 +113,8 @@ class TurnReviewCase(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
-    def command(self, raw: dict) -> list[str]:
-        return [sys.executable, str(self.entry), '--harness', 'claude',
+    def command(self, raw: dict, entry: Path | None = None) -> list[str]:
+        return [sys.executable, str(entry or self.entry), '--harness', 'claude',
                 '--event', EVENT_OF[raw['hook_event_name']]]
 
     def env(self, autonomous: bool = False) -> dict:
@@ -112,11 +124,17 @@ class TurnReviewCase(unittest.TestCase):
         return env
 
     def fire(self, raw: dict, autonomous: bool = False) -> subprocess.CompletedProcess:
-        result = subprocess.run(
-            self.command(raw), input=json.dumps(raw, ensure_ascii=False), text=True,
-            capture_output=True, env=self.env(autonomous), check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        """Событие уходит всем модулям набора на нём; возвращается ответ ревью."""
+        event = EVENT_OF[raw['hook_event_name']]
+        result = None
+        for entry in self.hooks.get(event, [self.entry]):
+            run = subprocess.run(
+                self.command(raw, entry), input=json.dumps(raw, ensure_ascii=False), text=True,
+                capture_output=True, env=self.env(autonomous), check=False,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            if entry == self.entry:
+                result = run
         return result
 
     def storage(self, session: str) -> Storage:
@@ -136,9 +154,12 @@ class TurnReviewCase(unittest.TestCase):
         return Trace(self.storage(session)).read()[-1]['reason']
 
     def write_verdict(self, session: str, volume_id: str, remarks=(), fingerprint: str | None = None,
-                      checked=('craft', 'consistency', 'anchor')) -> None:
+                      checked=None) -> None:
         if fingerprint is None:
             fingerprint = review_lib.fingerprint(self.volume(session))
+        if checked is None:
+            # Критерии последнего поручения; поручения не было — как у записи задачи.
+            checked = self.state(session).get('criteria') or ['craft-base', 'consistency', 'task', 'anchor']
         self.storage(session).write_json('turn-review-verdict.json', {
             'volume_id': volume_id, 'clean': not remarks, 'remarks': list(remarks),
             'checked': list(checked), 'fingerprint': fingerprint})
@@ -180,14 +201,22 @@ class TurnReviewTest(TurnReviewCase):
         reason = self.blocked(self.fire(stop('s-nudge', active=False)))
         storage = self.storage('s-nudge')
         state = self.state('s-nudge')
-        for needle in ('Agent', 'general-purpose', 'записей write в объёме сейчас 1',
-                       str((self.module_dir / 'data' / 'review-brief.md').resolve()),
+        for needle in ('Agent', 'general-purpose', 'не в фоне', 'записей write в объёме сейчас 1',
+                       str(storage.path('turn-review-brief.md').resolve()),
                        str(storage.path('turn-review-volume.jsonl').resolve()),
                        str(storage.path('turn-review-verdict.json').resolve()),
-                       state['volume_id'],
-                       str((self.root / 'modules' / TYPE_LOCK / 'data' / 'types.json').resolve())):
+                       state['volume_id'], 'критерии craft-base, consistency, task, anchor'):
             self.assertIn(needle, reason)
         self.assertEqual(state['nudges'], 1)
+        self.assertEqual(state['criteria'], ['craft-base', 'consistency', 'task', 'anchor'])
+        # Поручение собрано из каркаса, записей поставщиков и критериев модулей.
+        brief = storage.path('turn-review-brief.md').read_text(encoding='utf-8')
+        for needle in ('Записи поставщика Craft', 'Записи поставщика реплик', 'Записи поставщика якоря',
+                       'Критерий «task»', 'Критерий «craft-base»', 'Критерий «consistency»',
+                       'Критерий «anchor»', '"craft-base", "consistency", "task", "anchor"'):
+            self.assertIn(needle, brief)
+        for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA'):
+            self.assertNotIn(absent, brief)
 
     def test_a_clean_verdict_releases_the_turn_and_clears_the_volume(self) -> None:
         self.start_with_write('s-clean')
@@ -206,7 +235,7 @@ class TurnReviewTest(TurnReviewCase):
         self.start_with_write('s-remark')
         self.write_verdict('s-remark', self.state('s-remark')['volume_id'], [remark()])
         reason = self.blocked(self.fire(stop('s-remark')))
-        self.assertIn(f'[craft] {BLOCK}: нет ссылки на этап', reason)
+        self.assertIn(f'[craft-base] {BLOCK}: нет ссылки на этап', reason)
         self.assertIn('Почини', reason)
         self.assertFalse(self.storage('s-remark').path('turn-review-verdict.json').exists())
         self.assertEqual(len(self.volume('s-remark')), 1)
@@ -223,7 +252,7 @@ class TurnReviewTest(TurnReviewCase):
         volume_id = self.state('s-malformed')['volume_id']
         self.storage('s-malformed').write_json('turn-review-verdict.json', {
             'volume_id': volume_id, 'clean': True,
-            'remarks': [{'criterion': 'craft', 'where': BLOCK, 'text': 'x'}], 'checked': []})
+            'remarks': [{'criterion': 'craft-base', 'where': BLOCK, 'text': 'x'}], 'checked': []})
         reason = self.blocked(self.fire(stop('s-malformed')))
         self.assertIn('clean=true при замечаниях', reason)
         self.assertIn('ревью хода не сделано', reason)
@@ -287,13 +316,14 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(ask(session, 'Какой якорь у сессии?', 'Задача про ревью'))
         self.fire(tool(session, 'Bash', {'command': 'ls'}, 'ok'))
         rows = self.volume(session)
-        self.assertEqual([row['kind'] for row in rows], ['write', 'read', 'skill', 'anchor'])
+        # Вопрос о якоре записан дважды: как сырой ответ поставщиком реплик и как якорь.
+        self.assertEqual([row['kind'] for row in rows], ['write', 'read', 'skill', 'answer', 'anchor'])
         self.assertEqual(rows[0], {'kind': 'write', 'turn': 1, 'tool': CRAFT_WRITE,
                                    'command': TASK_ADD, 'result': {'id': BLOCK, 'ok': True},
                                    'types': ['#задача']})
         self.assertEqual(rows[1]['ids'], [BLOCK, PARENT])
         self.assertEqual(rows[2], {'kind': 'skill', 'turn': 1, 'skill': 'craft-task'})
-        self.assertEqual(rows[3], {'kind': 'anchor', 'turn': 1, 'question': 'Какой якорь у сессии?',
+        self.assertEqual(rows[4], {'kind': 'anchor', 'turn': 1, 'question': 'Какой якорь у сессии?',
                                    'answer': {'answers': {'Какой якорь у сессии?':
                                                           'Задача про ревью'}}})
 
@@ -360,8 +390,9 @@ class TurnReviewTest(TurnReviewCase):
         self.fire(ask(session, 'Переносить задачу?', 'Нет'))
         self.fire(prompt(session, '   '))
         rows = self.volume(session, every=True)
-        self.assertEqual(rows[0], {'kind': 'prompt', 'turn': 1,
-                                   'text': 'Это не противоречие, оставь как есть'})
+        self.assertEqual((rows[0]['kind'], rows[0]['turn'], rows[0]['text'], rows[0]['author']),
+                         ('prompt', 1, 'Это не противоречие, оставь как есть', 'Влад'))
+        self.assertRegex(rows[0]['at'], r'^\d{4}-\d{2}-\d{2}T')
         self.assertEqual((rows[1]['kind'], rows[1]['turn'], rows[1]['question']),
                          ('answer', 1, 'Переносить задачу?'))
         self.assertEqual(rows[1]['answer'], {'answers': {'Переносить задачу?': 'Нет'}})
@@ -458,7 +489,8 @@ class TurnReviewTest(TurnReviewCase):
         session = 's-parallel'
         self.fire(prompt(session))
         raws = [read(session, f'blocks get {BLOCK} --n {number}') for number in range(8)]
-        workers = [subprocess.Popen(self.command(raw), stdin=subprocess.PIPE, text=True,
+        provider = self.root / 'modules' / 'review-craft-calls' / 'hooks' / 'module.py'
+        workers = [subprocess.Popen(self.command(raw, provider), stdin=subprocess.PIPE, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env())
                    for raw in raws]
         for worker, raw in zip(workers, raws):
@@ -514,12 +546,13 @@ class TurnReviewTest(TurnReviewCase):
     def test_a_clean_verdict_without_all_criteria_is_not_taken(self) -> None:
         session = 's-unchecked'
         self.start_with_write(session)
+        self.blocked(self.fire(stop(session)))
         self.write_verdict(session, self.state(session)['volume_id'], checked=())
         reason = self.blocked(self.fire(stop(session)))
-        self.assertIn('критерии не пройдены: craft, consistency, anchor', reason)
+        self.assertIn('критерии не пройдены: craft-base, consistency, task, anchor', reason)
         self.write_verdict(session, self.state(session)['volume_id'],
-                           checked=('craft', 'consistency', 'anchor', 'код'))
-        self.assertIn('критерии не из craft, consistency, anchor: код',
+                           checked=('craft-base', 'consistency', 'task', 'anchor', 'код'))
+        self.assertIn('критерии не из craft-base, consistency, task, anchor: код',
                       self.blocked(self.fire(stop(session))))
         self.assertEqual(len(self.volume(session)), 1)
 

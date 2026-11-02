@@ -60,7 +60,7 @@ class TurnReviewDebugTest(TurnReviewCase):
         self.assertEqual(delta, 'Готово.')
         lines = report.split('\n')
         self.assertEqual(lines[0], 'Ревью хода: чисто.')
-        self.assertEqual(lines[1], 'Критерии: craft, consistency, anchor. Записей write 1, read 0.')
+        self.assertEqual(lines[1], 'Критерии: craft-base, consistency, task, anchor. Записей write 1, read 0.')
         self.assertRegex(lines[2], r'^Поручений 1, с первого прошло \d+ с\.$')
         self.assertTrue(self.state('d-clean')['summary_shown'])
         self.assert_silent(self.fire(message('d-clean', 'Ещё.')))
@@ -72,7 +72,7 @@ class TurnReviewDebugTest(TurnReviewCase):
         shown = self.shown(self.fire(message('d-remark', 'Чиню.')))
         self.assertTrue(shown.startswith('Ревью хода идёт, отчёт после него.'))
         report = shown.split(SEPARATOR)[1]
-        self.assertIn('Ревью хода: замечания (1): [craft] нет ссылки на этап.', report)
+        self.assertIn('Ревью хода: замечания (1): [craft-base] нет ссылки на этап.', report)
         self.assertIn('Поручений не было.', report)
 
     def test_a_release_by_the_human_is_reported(self) -> None:
@@ -95,7 +95,7 @@ class TurnReviewDebugTest(TurnReviewCase):
         delta, report = text.split(SEPARATOR)
         self.assertEqual(delta, 'Ревью прошло.')
         self.assertIn('Ревью хода: чисто.', report)
-        self.assertIn('Критерии: craft, consistency, anchor. Записей write 1, read 0.', report)
+        self.assertIn('Критерии: craft-base, consistency, task, anchor. Записей write 1, read 0.', report)
         self.assertIn('Поручений 1, с первого прошло', report)
         self.assert_silent(self.fire(message(session, 'Ещё.')))
         self.assert_silent(self.fire(stop(session)))
@@ -109,7 +109,7 @@ class TurnReviewDebugTest(TurnReviewCase):
         self.write_verdict(session, self.state(session)['volume_id'], [remark()])
         shown = self.shown(self.fire(message(session, 'Готово.')))
         self.assertTrue(shown.startswith('Ревью хода идёт, отчёт после него.'))
-        self.assertIn('замечания (1): [craft] нет ссылки на этап.', shown.split(SEPARATOR)[1])
+        self.assertIn('замечания (1): [craft-base] нет ссылки на этап.', shown.split(SEPARATOR)[1])
         self.assertIn('нет ссылки на этап', self.blocked(self.fire(stop(session))))
         self.assertEqual(self.shown(self.fire(message(session, 'Чиню.'))),
                          'Ревью хода идёт, отчёт после него.')

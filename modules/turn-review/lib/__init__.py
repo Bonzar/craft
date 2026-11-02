@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import uuid
+from pathlib import Path
 from contextlib import contextmanager
 
 VOLUME_FILE = 'turn-review-volume.jsonl'
@@ -33,6 +34,10 @@ SUMMARY_KEY = 'summary'
 SUMMARY_SHOWN_KEY = 'summary_shown'
 # Какой вердикт уже показан превью до stop: id объёма и отпечаток записей write.
 SHOWN_VERDICT_KEY = 'shown_verdict'
+# Критерии последнего собранного поручения: по ним принимается вердикт.
+CRITERIA_KEY = 'criteria'
+# Замечания последнего вердикта с замечаниями: вопрос человеку показывает их.
+LAST_REMARKS_KEY = 'last_remarks'
 
 # Поля строки объёма. Их читает и бриф подагента, поэтому имена одни на всех.
 KIND_KEY = 'kind'
@@ -65,7 +70,6 @@ CHECKED_KEY = 'checked'
 # именно проверено, а не сколько.
 FINGERPRINT_KEY = 'fingerprint'
 FINGERPRINT_CHARS = 16
-CRITERIA = ('craft', 'consistency', 'anchor')
 CRITERION_KEY = 'criterion'
 WHERE_KEY = 'where'
 TEXT_KEY = 'text'
@@ -79,11 +83,13 @@ def new_volume_id() -> str:
 def new_state(turn: int = 0, volume_id: str | None = None, nudges: int = 0,
               released: bool = False, first_nudge_at: str | None = None,
               summary: str | None = None, summary_shown: bool = False,
-              shown_verdict: str | None = None) -> dict:
+              shown_verdict: str | None = None, criteria: list | None = None,
+              last_remarks: list | None = None) -> dict:
     return {TURN_KEY: turn, VOLUME_ID_KEY: volume_id or new_volume_id(),
             NUDGES_KEY: nudges, RELEASED_KEY: released, FIRST_NUDGE_KEY: first_nudge_at,
             SUMMARY_KEY: summary, SUMMARY_SHOWN_KEY: summary_shown,
-            SHOWN_VERDICT_KEY: shown_verdict}
+            SHOWN_VERDICT_KEY: shown_verdict, CRITERIA_KEY: list(criteria or []),
+            LAST_REMARKS_KEY: list(last_remarks or [])}
 
 
 @contextmanager
@@ -103,7 +109,9 @@ def _is_valid_debug_fields(state: dict) -> bool:
     return (isinstance(state.get(FIRST_NUDGE_KEY), (str, type(None)))
             and isinstance(state.get(SUMMARY_KEY), (str, type(None)))
             and isinstance(state.get(SHOWN_VERDICT_KEY), (str, type(None)))
-            and isinstance(state.get(SUMMARY_SHOWN_KEY, False), bool))
+            and isinstance(state.get(SUMMARY_SHOWN_KEY, False), bool)
+            and isinstance(state.get(CRITERIA_KEY, []), list)
+            and isinstance(state.get(LAST_REMARKS_KEY, []), list))
 
 
 def _is_valid_state(state) -> bool:
@@ -151,7 +159,8 @@ def load_state(storage) -> tuple[dict, str | None]:
         return new_state(state[TURN_KEY], state[VOLUME_ID_KEY], state[NUDGES_KEY],
                          state[RELEASED_KEY], state.get(FIRST_NUDGE_KEY),
                          state.get(SUMMARY_KEY), state.get(SUMMARY_SHOWN_KEY, False),
-                         state.get(SHOWN_VERDICT_KEY)), None
+                         state.get(SHOWN_VERDICT_KEY), state.get(CRITERIA_KEY),
+                         state.get(LAST_REMARKS_KEY)), None
     fresh = new_state()
     save_state(storage, fresh)
     if damage is None:
@@ -287,22 +296,22 @@ def clear_volume(storage, state: dict) -> dict:
     return cleared
 
 
-def _remark_problem(remark) -> str | None:
+def _remark_problem(remark, criteria: list[str]) -> str | None:
     if not isinstance(remark, dict):
         return f'замечание {remark!r} не объект'
     for field_name in REMARK_FIELDS:
         if not isinstance(remark.get(field_name), str) or not remark[field_name].strip():
             return f'у замечания нет поля «{field_name}» строкой'
-    if remark[CRITERION_KEY] not in CRITERIA:
-        return f'критерий «{remark[CRITERION_KEY]}» не из {", ".join(CRITERIA)}'
+    if remark[CRITERION_KEY] not in criteria:
+        return f'критерий «{remark[CRITERION_KEY]}» не из {", ".join(criteria)}'
     return None
 
 
-def _checked_problem(checked: list, clean: bool) -> str | None:
-    unknown = [str(item) for item in checked if item not in CRITERIA]
+def _checked_problem(checked: list, clean: bool, criteria: list[str]) -> str | None:
+    unknown = [str(item) for item in checked if item not in criteria]
     if unknown:
-        return f'в «{CHECKED_KEY}» критерии не из {", ".join(CRITERIA)}: {", ".join(unknown)}'
-    missing = [item for item in CRITERIA if item not in checked]
+        return f'в «{CHECKED_KEY}» критерии не из {", ".join(criteria)}: {", ".join(unknown)}'
+    missing = [item for item in criteria if item not in checked]
     if clean and missing:
         return f'clean=true, а критерии не пройдены: {", ".join(missing)}'
     return None
@@ -318,8 +327,8 @@ def _fingerprint_problem(verdict: dict, expected: str) -> str | None:
     return None
 
 
-def verdict_problem(verdict: dict, expected: str) -> str | None:
-    """Что не так с вердиктом нашего объёма. Всё по форме — None."""
+def verdict_problem(verdict: dict, expected: str, criteria: list[str]) -> str | None:
+    """Что не так с вердиктом нашего объёма по критериям поручения. Всё по форме — None."""
     clean, remarks, checked = (verdict.get(CLEAN_KEY), verdict.get(REMARKS_KEY),
                                verdict.get(CHECKED_KEY))
     if not isinstance(clean, bool):
@@ -329,17 +338,17 @@ def verdict_problem(verdict: dict, expected: str) -> str | None:
     if not isinstance(checked, list):
         return f'поле «{CHECKED_KEY}» не список'
     for remark in remarks:
-        problem = _remark_problem(remark)
+        problem = _remark_problem(remark, criteria)
         if problem:
             return problem
     if clean and remarks:
         return 'clean=true при замечаниях'
     if not clean and not remarks:
         return 'clean=false без замечаний'
-    return _checked_problem(checked, clean) or _fingerprint_problem(verdict, expected)
+    return _checked_problem(checked, clean, criteria) or _fingerprint_problem(verdict, expected)
 
 
-def read_verdict(storage, volume_id: str, expected: str) -> tuple[dict | None, str | None]:
+def read_verdict(storage, volume_id: str, expected: str, criteria: list[str]) -> tuple[dict | None, str | None]:
     """Вердикт нашего объёма и что с ним не так.
 
     Чужой id — вердикт по старому объёму: его не видно, как будто его нет.
@@ -354,7 +363,7 @@ def read_verdict(storage, volume_id: str, expected: str) -> tuple[dict | None, s
         return None, f'вердикт {path} не JSON ({error})'
     if not isinstance(verdict, dict) or verdict.get(VOLUME_ID_KEY) != volume_id:
         return None, None
-    problem = verdict_problem(verdict, expected)
+    problem = verdict_problem(verdict, expected, criteria)
     if problem:
         drop_verdict(storage)
         return None, f'вердикт {path} не принят: {problem}'
@@ -380,4 +389,147 @@ def peek_verdict(storage, volume_id: str) -> dict | None:
         return None
     expected = verdict.get(FINGERPRINT_KEY)
     expected = expected.strip() if isinstance(expected, str) else ''
-    return None if verdict_problem(verdict, expected) else verdict
+    checked = verdict.get(CHECKED_KEY)
+    criteria = [item for item in checked if isinstance(item, str)] if isinstance(checked, list) else []
+    return None if verdict_problem(verdict, expected, criteria) else verdict
+
+
+def current_turn(storage) -> int:
+    """Номер текущего хода из состояния; состояния нет — 0."""
+    state = peek_state(storage)
+    return state[TURN_KEY] if state is not None else 0
+
+
+# Вопрос самого ревью о застрявшем ревью: его ответ разбирает хук, в объём
+# он не идёт. Модель может пересказать вопрос, тогда он узнаётся по паре
+# подписей вариантов.
+OPTION_REVIEW = 'Провести ревью'
+OPTION_RELEASE = 'Закончить без ревью'
+QUESTION_MARK = 'Ревью хода не состоялось'
+OUR_OPTIONS = frozenset({OPTION_REVIEW, OPTION_RELEASE})
+QUESTIONS_FIELD = 'questions'
+QUESTION_FIELD = 'question'
+OPTIONS_FIELD = 'options'
+LABEL_FIELD = 'label'
+
+
+def question_items(tool_input) -> list[dict]:
+    items = tool_input.get(QUESTIONS_FIELD) if isinstance(tool_input, dict) else None
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def option_labels(item: dict) -> set[str]:
+    options = item.get(OPTIONS_FIELD)
+    if not isinstance(options, list):
+        return set()
+    labels = [option.get(LABEL_FIELD) for option in options if isinstance(option, dict)]
+    return {label.strip() for label in labels if isinstance(label, str)}
+
+
+def review_question(tool_input) -> str | None:
+    """Текст вопроса о ревью в вызове AskUserQuestion; нет его — None."""
+    for item in question_items(tool_input):
+        text = item.get(QUESTION_FIELD)
+        if isinstance(text, str) and (QUESTION_MARK in text or OUR_OPTIONS <= option_labels(item)):
+            return text
+    return None
+
+
+def is_review_question(tool_input) -> bool:
+    return review_question(tool_input) is not None
+
+
+# Сборка поручения подагенту. Каркас у ревью, записи описывают поставщики,
+# критерии привозят модули: файл data/review-criterion.md с шапкой
+# «id: ‹имя›» и «applies: always | craft | tags #тег …», потом текст.
+CRITERION_FILE = 'review-criterion.md'
+RECORDS_FILE = 'review-records.md'
+DATA_DIR = 'data'
+ID_FIELD = 'id'
+APPLIES_FIELD = 'applies'
+APPLIES_ALWAYS = 'always'
+APPLIES_CRAFT = 'craft'
+APPLIES_TAGS = 'tags'
+BRIEF_FILE = 'turn-review-brief.md'
+CRITERIA_MARK = '{{CRITERIA}}'
+RECORDS_MARK = '{{RECORDS}}'
+CRITERIA_LIST_MARK = '{{CRITERIA_LIST}}'
+
+
+def parse_criterion(text: str) -> tuple[dict, str]:
+    """Шапка критерия и его текст. Шапка — строки «ключ: значение» до пустой."""
+    head, body = {}, []
+    lines = text.splitlines()
+    index = 0
+    for index, line in enumerate(lines):
+        if not line.strip():
+            break
+        key, separator, value = line.partition(':')
+        if not separator:
+            break
+        head[key.strip()] = value.strip()
+    body = lines[index + 1:] if index < len(lines) else []
+    return head, '\n'.join(body).strip()
+
+
+def criterion_applies(head: dict, volume: list[dict]) -> bool:
+    rule = head.get(APPLIES_FIELD, '')
+    words = rule.split()
+    writes = [record for record in volume if record.get(KIND_KEY) == KIND_WRITE]
+    if rule == APPLIES_ALWAYS:
+        return True
+    if rule == APPLIES_CRAFT:
+        return bool(writes)
+    if words and words[0] == APPLIES_TAGS:
+        wanted = {word.lower() for word in words[1:]}
+        for record in writes:
+            types = record.get(TYPES_KEY)
+            if isinstance(types, list) and wanted & {str(item).lower() for item in types}:
+                return True
+        return False
+    return False
+
+
+def gather(modules_dir, filename: str) -> list[tuple[str, str]]:
+    """Файлы данных с этим именем у всех модулей каталога: (slug папки, текст)."""
+    found = []
+    for child in sorted(Path(modules_dir).iterdir()):
+        path = child / DATA_DIR / filename
+        if child.is_dir() and path.is_file():
+            found.append((child.name, path.read_text(encoding='utf-8')))
+    return found
+
+
+def assemble_brief(modules_dir, volume: list[dict], frame: str) -> tuple[str, list[str], list[str]]:
+    """Поручение подагенту из каркаса, записей поставщиков и подходящих критериев.
+
+    Возвращает текст, id критериев по порядку и список модулей, чей файл
+    критерия не разобрался: их нельзя молча пропустить.
+    """
+    criteria, ids, broken = [], [], []
+    for slug, text in gather(modules_dir, CRITERION_FILE):
+        head, body = parse_criterion(text)
+        criterion_id = head.get(ID_FIELD, '')
+        if not criterion_id or not body or APPLIES_FIELD not in head:
+            broken.append(slug)
+            continue
+        if criterion_applies(head, volume):
+            ids.append(criterion_id)
+            criteria.append(body)
+    records = [text.strip() for _, text in gather(modules_dir, RECORDS_FILE)]
+    text = (frame.replace(RECORDS_MARK, '\n\n'.join(records))
+            .replace(CRITERIA_MARK, '\n\n'.join(criteria))
+            .replace(CRITERIA_LIST_MARK, ', '.join(f'"{item}"' for item in ids)))
+    return text, ids, broken
+
+
+def criteria_for(modules_dir, volume: list[dict]) -> list[str]:
+    """Id критериев, которые подходят к объёму, без сборки текста."""
+    return assemble_brief(modules_dir, volume, '')[1]
+
+
+def write_brief(storage, text: str):
+    path = storage.path(BRIEF_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding='utf-8')
+    return path
