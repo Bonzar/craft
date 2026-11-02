@@ -37,7 +37,7 @@ from .state import (
     NO_BRIEF, STATE_FILE, BriefCriteria, ReviewState, VolumeId, current_turn, load_state,
     new_volume_id, peek_state, save_state, state_lock,
 )
-from .turns import append_turn_record, claim_prompt_turn, clear_volume
+from .turns import append_turn_record, claim_prompt_turn, clear_volume, prompt_id_of
 from .verdict import (
     CHECKED_KEY, CLEAN_KEY, CRITERION_KEY, FINGERPRINT_KEY, REMARKS_KEY, TEXT_KEY, VERDICT_FILE,
     WHERE_KEY, drop_verdict, peek_verdict, read_verdict, verdict_key,
@@ -61,7 +61,7 @@ __all__ = [
     'make_anchor_record', 'make_answer_record', 'make_criterion', 'make_prompt_record',
     'make_read_record', 'make_skill_record', 'make_write_record', 'new_volume_id',
     'parse_applies', 'parse_volume_file', 'peek_state', 'peek_verdict', 'peek_volume',
-    'providers_problem', 'read_verdict', 'record_row', 'review_criteria', 'review_question',
-    'save_state', 'state_lock', 'verdict_key', 'volume_skills', 'write_brief',
-    'writes_before_turn',
+    'prompt_id_of', 'providers_problem', 'read_verdict', 'record_row', 'review_criteria',
+    'review_question', 'save_state', 'state_lock', 'verdict_key', 'volume_skills',
+    'write_brief', 'writes_before_turn',
 ]
