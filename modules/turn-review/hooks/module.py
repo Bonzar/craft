@@ -65,8 +65,6 @@ REPORT_REMARK_CHARS = 60
 DEBUG_OFF_REASON = 'отладочный вывод выключен'
 NOT_FINAL_REASON = 'не последний кусок сообщения'
 NO_SUMMARY_REASON = 'неотчитанного итога ревью нет'
-NO_CRITERIA_PROBLEM = ('ни один критерий не подошёл к объёму с записями write: проверять '
-                       'записи нечем, чистый вердикт не принимается. Скажи об этом человеку')
 
 
 def load_review(runtime):
@@ -313,7 +311,7 @@ def answer_hidden(storage, state: dict | None, runtime, review) -> bool:
     if state[review.RELEASED_KEY]:
         return False
     criteria, _ = required_criteria(state, runtime, review, volume)
-    verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], criteria)
+    verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], volume, criteria)
     return not (verdict is not None and verdict[review.CLEAN_KEY]
                 and verdict.get(review.FINGERPRINT_KEY) == review.fingerprint(volume))
 
@@ -379,16 +377,16 @@ class Module(jarvis.Module):
         # У Claude финальное сообщение идёт до stop, а вердикт подагент пишет
         # раньше: показываем его сейчас, под ответом этого же хода.
         storage = runtime.storage
-        criteria, _ = required_criteria(state, runtime, review, review.peek_volume(storage))
-        verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], criteria)
+        volume = review.peek_volume(storage)
+        criteria, _ = required_criteria(state, runtime, review, volume)
+        verdict = review.peek_verdict(storage, state[review.VOLUME_ID_KEY], volume, criteria)
         if verdict is None or state[review.SHOWN_VERDICT_KEY] == review.verdict_key(verdict):
             if hidden:
                 return jarvis.UpdatedDisplay(text=base)
             return jarvis.Silence(reason=with_problem(NO_SUMMARY_REASON, problem))
         review.save_state(storage, {**state,
                                     review.SHOWN_VERDICT_KEY: review.verdict_key(verdict)})
-        text = summary_text(verdict_head(verdict, review), state, review,
-                            review.peek_volume(storage), verdict)
+        text = summary_text(verdict_head(verdict, review), state, review, volume, verdict)
         return displayed(base, text)
 
     def on_post_tool(self, event, runtime, review) -> jarvis.Response:
@@ -426,7 +424,7 @@ class Module(jarvis.Module):
         criteria, broken = required_criteria(state, runtime, review, volume)
         # Без критериев чистый вердикт ничего не проверил: его не читаем, а
         # ход идёт по поручениям к вопросу человеку.
-        criteria_problem = None if criteria else NO_CRITERIA_PROBLEM
+        criteria_problem = review.criteria_problem(volume, criteria)
         verdict, verdict_problem = (None, None) if criteria_problem else review.read_verdict(
             storage, state[review.VOLUME_ID_KEY], review.fingerprint(volume), criteria)
         if verdict is not None:

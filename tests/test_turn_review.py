@@ -758,6 +758,20 @@ class NoCriteriaTest(TurnReviewCase):
         self.assertIn('один критерий не подошёл', reason)
         self.assertEqual(len(self.volume(session)), 1)
 
+    def test_a_clean_verdict_without_criteria_keeps_the_answer_hidden_in_the_preview(self) -> None:
+        # Превью судит как stop: объём с write без критериев чистым вердиктом
+        # не открывается, и итог ревью под ответом не показывается.
+        self.debug_file.write_text(json.dumps({'debug': True}), encoding='utf-8')
+        self.addCleanup(self.debug_file.unlink, missing_ok=True)
+        for session, nudged in (('s-no-criteria-peek-nudged', True), ('s-no-criteria-peek', False)):
+            self.start_with_write(session)
+            if nudged:
+                self.blocked(self.fire(stop(session)))
+            self.write_verdict(session, self.state(session)['volume_id'], checked=())
+            self.assertEqual(self.shown(self.fire(message(session, 'Готово.'))),
+                             'Ревью хода идёт, отчёт после него.')
+            self.assertIsNone(self.state(session)['shown_verdict'])
+
 
 
 

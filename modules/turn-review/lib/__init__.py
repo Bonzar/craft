@@ -76,6 +76,8 @@ CRITERION_KEY = 'criterion'
 WHERE_KEY = 'where'
 TEXT_KEY = 'text'
 REMARK_FIELDS = (CRITERION_KEY, WHERE_KEY, TEXT_KEY)
+NO_CRITERIA_PROBLEM = ('ни один критерий не подошёл к объёму с записями write: проверять '
+                       'записи нечем, чистый вердикт не принимается. Скажи об этом человеку')
 
 
 def new_volume_id() -> str:
@@ -391,14 +393,26 @@ def verdict_key(verdict: dict) -> str:
     return f'{verdict[VOLUME_ID_KEY]}:{verdict[FINGERPRINT_KEY]}'
 
 
-def peek_verdict(storage, volume_id: str, criteria: list[str]) -> dict | None:
+def criteria_problem(volume: list[dict], criteria: list[str]) -> str | None:
+    """Объём с записями write, а ни один критерий не подошёл: проверять нечем.
+
+    Тогда вердикт не принимается вовсе, даже чистый, и на stop, и в превью:
+    правило одно на оба места.
+    """
+    return NO_CRITERIA_PROBLEM if count_writes(volume) and not criteria else None
+
+
+def peek_verdict(storage, volume_id: str, volume: list[dict], criteria: list[str]) -> dict | None:
     """Вердикт нашего объёма до stop, для превью. Файл не трогается.
 
     Отпечаток с объёмом не сверяется: это превью, принимает вердикт stop.
     Критерии те же, по которым его примет stop, а не `checked` самого
     вердикта: иначе чистый вердикт с пустым `checked` открыл бы ответ.
+    Объём с write без критериев — None, как на stop.
     Не JSON или не по форме — None: изъян назовёт stop в поручении.
     """
+    if criteria_problem(volume, criteria):
+        return None
     try:
         verdict = storage.read_json(VERDICT_FILE, default=None)
     except ValueError:
