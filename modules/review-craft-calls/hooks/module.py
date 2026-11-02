@@ -9,7 +9,7 @@ craft_read — чтение с id блоков, Skill — slug скилла. П�
 Строки пишутся по контракту поставщиков из README turn-review: словарь с
 `kind`, id реплики харнеса `prompt_id` и полями вида, одной строкой JSON через
 append_line хранилища ядра. lib ревью модуль не импортирует, теги в команде
-не ищет: это делает ревью на остановке. Формат записей — data/review-records.md.
+не ищет: тип записи кладёт строкой entity замок craft-type-lock. Формат записей — data/review-records.md.
 """
 
 import json

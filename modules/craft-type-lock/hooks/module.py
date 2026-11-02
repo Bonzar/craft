@@ -6,16 +6,20 @@
 правила типа, шаблон — форму сущности, и прочитанное в начале сессии к концу
 длинного хода уже забыто — поэтому счёт идёт по ходам, а не по сессии.
 
-Тип берётся из двух мест. Тег типа в тексте записи — запись заводит или
-правит сущность этого типа. Тег типа в заголовке страницы, куда ложится
-запись, — запись внутри сущности: в «Решения» раздела, в тело задачи, в
-описание этапа. Страницу цели замок берёт из connect-API Craft: страницы,
-которые агент читал в сессии, запрашиваются заново, и цель записи ищется
-среди их блоков (hooks/place.py). Цели нет ни на одной — запись в
-непрочитанное, и она под запретом. API недоступен — тип страницы не
-судится, проверка по тегам текста идёт как обычно, а о том, что место не
-проверено, замок раз за сессию говорит текстом в ход. Это единственный
-поход замка в сеть, и только ради записи в Craft.
+Тип записи — место ∪ содержимое, и по каждому задетому типу нужны скилл и
+шаблон. Место — ближайшая страница, внутри которой запись окажется, не
+выше: «Решения» раздела, тело задачи, страница проекта. Содержимое — теги
+типа в тексте записи и тип самой цели правки, переноса или удаления:
+новая строка `#задача` на странице проекта задевает задачу и проект.
+Страницу и путь к цели замок берёт из connect-API Craft (hooks/place.py,
+hooks/api.py). Цель не лежит ни на одной прочитанной странице — запись в
+непрочитанное, и она под запретом. API недоступен — место не судится,
+проверка по тегам текста идёт как обычно, а о том, что место не проверено,
+замок раз за сессию говорит текстом в ход. Это единственный поход замка в
+сеть, и только ради записи в Craft.
+
+Что замок узнал о типе, он кладёт строкой `entity` в объём ревью хода
+(hooks/review_row.py): ревью выбирает по ней критерии.
 """
 
 import os
@@ -29,6 +33,7 @@ import jarvis  # noqa: E402
 from jarvis import events, wrappers  # noqa: E402
 from entities import TagEntry, entity_reason, load_entities, load_tag_skills  # noqa: E402
 from place import BASE_ENV, Place, Verdict, page_types  # noqa: E402
+from review_row import append_row, entity_row  # noqa: E402
 from state import (  # noqa: E402
     READS_KEY, SKILLS_KEY, STATE_FILE, TURN_KEY, TURN_READS_KEY, WARNED_KEY, new_state,
     read_state, remember_reads, remember_turn_reads, state_lock,
@@ -78,6 +83,9 @@ def deny_reason(entries: dict[str, TagEntry], tags: list[str], place: Place,
     for entity in place.entities:
         pairs = ', '.join(f'{tag} → {entries[tag].skill}' for tag in entity.tags)
         reasons.append(f'Запись ложится в сущность «{entity.title}»: {pairs}.')
+    for entity in place.edited:
+        pairs = ', '.join(f'{tag} → {entries[tag].skill}' for tag in entity.tags)
+        reasons.append(f'Запись правит сущность «{entity.title}»: {pairs}.')
     if missing:
         reasons.append(f'В этом ходе не вызван скилл: {", ".join(missing)}. '
                        f'Вызови его инструментом {SKILL_TOOL} и прочитай правила типа.')
@@ -103,9 +111,9 @@ def place_tail(place: Place) -> str:
 
 
 def needed_tags(tags: list[str], place: Place) -> list[str]:
-    """Теги текста и сущностей, куда ложится запись, без повторов."""
-    page_tags = [tag for entity in place.entities for tag in entity.tags]
-    return sorted({*tags, *page_tags})
+    """Все задетые типы: место записи ∪ содержимое (теги текста и правленые цели)."""
+    touched = [tag for entity in (*place.entities, *place.edited) for tag in entity.tags]
+    return sorted({*tags, *touched})
 
 
 def unread_templates(entries: dict[str, TagEntry], needed: list[str], turn_reads: list[str]) -> list[str]:
@@ -204,14 +212,18 @@ class Module(jarvis.Module):
             # запись закрыта до починки.
             return jarvis.Deny(reason=entity_reason(error))
         state = read_state(storage, craft)
-        place = page_types(craft.write_targets(command), state[READS_KEY], os.environ.get(BASE_ENV),
+        targets = craft.write_targets(command)
+        place = page_types(targets, state[READS_KEY], os.environ.get(BASE_ENV),
                            lambda text: craft.find_tags(text, entries))
+        tags = craft.find_tags(command, entries)
+        # Тип записи — в объём ревью: только выбор критериев, без решения замка.
+        append_row(storage, entity_row(event, command, targets, place, tags))
         if place.verdict is Verdict.UNREAD:
             return jarvis.Deny(reason=unread_reason(place.reason))
         warning = None
         if place.verdict is Verdict.UNAVAILABLE:
             warning = self.warn_once(storage, craft, state, place.reason)
-        return self.judge(entries, craft.find_tags(command, entries), place, state, warning)
+        return self.judge(entries, tags, place, state, warning)
 
     def judge(self, entries: dict[str, TagEntry], tags: list[str], place: Place, state: dict,
               warning: str | None) -> jarvis.Response:

@@ -94,16 +94,40 @@ def tool(session: str, name: str, tool_input: dict, response) -> dict:
     return raw if prompt_id is None else {**raw, 'prompt_id': prompt_id}
 
 
-def sources(modules: Path, providers=None, find_tags=craft_lib.find_tags):
+def sources(modules: Path, providers=None):
     """Откуда ревью берёт файлы: поставщики по умолчанию — все папки каталога."""
     if providers is None:
         providers = tuple(review_lib.Provider(child.name, child, False)
                           for child in sorted(modules.iterdir()) if child.is_dir())
-    return review_lib.Sources(modules, providers, find_tags)
+    return review_lib.Sources(modules, providers)
 
 
-def write(session: str, command: str = TASK_ADD) -> dict:
-    return tool(session, CRAFT_WRITE, {'command': command}, {'id': BLOCK, 'ok': True})
+# Ключ события теста, не харнеса: строка замка craft-type-lock, которую тест
+# кладёт в объём перед записью. Замок в этом наборе не стоит (ему нужен
+# connect-API), поэтому его строку тест пишет за него, ровно по контракту:
+# содержимое — теги типа в тексте команды вне ссылок, как их ищет замок.
+LOCK_ROW = 'test_lock_row'
+ENTITY_TAGS = ('#задача', '#этап', '#веха', '#раздел', '#заметка', '#тема')
+
+
+def entity_row(command: str, prompt_id: str | None, place=(), content=None,
+               determined: bool = True, note: str = 'цель на странице без типа') -> dict:
+    """Строка `entity` замка для записи с этой командой."""
+    if content is None:
+        content = craft_lib.find_tags(command, ENTITY_TAGS)
+    targets = [anchor.block_id for anchor in craft_lib.write_targets(command).anchors]
+    row = {'command': command, 'targets': targets, 'place_types': list(place),
+           'content_types': list(content), 'determined': determined, 'note': note}
+    head = {'kind': 'entity'} if prompt_id is None else {'kind': 'entity', 'prompt_id': prompt_id}
+    return {**head, **row}
+
+
+def write(session: str, command: str = TASK_ADD, place=(), lock: bool = True) -> dict:
+    """Запись в Craft; place — типы места из строки замка, lock=False — строки замка нет."""
+    raw = tool(session, CRAFT_WRITE, {'command': command}, {'id': BLOCK, 'ok': True})
+    if not lock:
+        return raw
+    return {**raw, LOCK_ROW: entity_row(command, raw.get('prompt_id'), place)}
 
 
 def read(session: str, command: str) -> dict:
@@ -183,7 +207,16 @@ class TurnReviewCase(unittest.TestCase):
         return env
 
     def fire(self, raw: dict, autonomous: bool = False) -> subprocess.CompletedProcess:
-        """Событие уходит всем модулям набора на нём; возвращается ответ ревью."""
+        """Событие уходит всем модулям набора на нём; возвращается ответ ревью.
+
+        Строка замка, если она есть у события, ложится в объём раньше хуков:
+        замок пишет её на pre-tool, до вызова записи.
+        """
+        if LOCK_ROW in raw:
+            raw = dict(raw)
+            row = raw.pop(LOCK_ROW)
+            self.storage(raw['session_id']).append_line(
+                'turn-review-volume.jsonl', json.dumps(row, ensure_ascii=False))
         event = EVENT_OF[raw['hook_event_name']]
         result = None
         for entry in self.hooks.get(event, [self.entry]):
@@ -203,11 +236,11 @@ class TurnReviewCase(unittest.TestCase):
         return self.storage(session).read_json('turn-review-state.json')
 
     def volume(self, session: str, every: bool = False) -> list[dict]:
-        # Реплики prompt лежат в объёме рядом с записями хода и без every
-        # убираются из выборки; ответы answer остаются.
+        # Реплики prompt и строки замка entity лежат в объёме рядом с записями
+        # хода и без every убираются из выборки; ответы answer остаются.
         lines = self.storage(session).read_lines('turn-review-volume.jsonl')
         rows = [json.loads(line) for line in lines]
-        return rows if every else [row for row in rows if row['kind'] != 'prompt']
+        return rows if every else [row for row in rows if row['kind'] not in ('prompt', 'entity')]
 
     def last_reason(self, session: str) -> str:
         return Trace(self.storage(session)).read()[-1]['reason']
@@ -286,6 +319,28 @@ class TurnReviewTest(TurnReviewCase):
         for absent in ('Критерий «stage»', 'Критерий «section»', 'Критерий «note»', '{{CRITERIA',
                        '{{RECORDS', '`read` — вызов чтения', '`anchor` — выбор якоря'):
             self.assertNotIn(absent, brief)
+
+    def test_a_write_without_the_lock_row_is_reviewed_by_every_entity_criterion(self) -> None:
+        session = 's-untyped'
+        self.fire(prompt(session))
+        self.assert_silent(self.fire(write(session, lock=False)))
+        reason = self.blocked(self.fire(stop(session, active=False)))
+        self.assertEqual(sorted(set(self.state(session)['criteria']) & set(ENTITY_CRITERIA)),
+                         list(ENTITY_CRITERIA))
+        self.assertIn('ревью хода не сделано', reason)
+        brief = self.storage(session).path('turn-review-brief.md').read_text(encoding='utf-8')
+        for needle in ('## Тип записей', 'Тип записи не известен', 'Это не довод'):
+            self.assertIn(needle, brief)
+        self.assertNotIn('{{ENTITY_TYPES', brief)
+
+    def test_the_lock_row_brings_the_section_criterion_to_an_untagged_write(self) -> None:
+        session = 's-typed'
+        command = f'blocks update --id {SECTION_BLOCK} --json \'{{"markdown":"ещё"}}\''
+        self.fire(prompt(session))
+        self.assert_silent(self.fire(write(session, command, place=['#раздел'])))
+        self.blocked(self.fire(stop(session, active=False)))
+        self.assertEqual(self.state(session)['criteria'],
+                         ['craft-base', 'consistency', 'section', 'anchor'])
 
     def test_a_clean_verdict_releases_the_turn_and_clears_the_volume(self) -> None:
         self.start_with_write('s-clean')
@@ -619,7 +674,8 @@ class TurnReviewTest(TurnReviewCase):
         self.write_verdict(session, volume_id)
         self.storage(session).append_line('turn-review-volume.jsonl', '{не json')
         reason = self.blocked(self.fire(stop(session)))
-        for needle in (str(path), 'строка 3', 'их ревью не было', 'ревью хода не сделано'):
+        # Строки: реплика, строка замка, запись, обрыв.
+        for needle in (str(path), 'строка 4', 'их ревью не было', 'ревью хода не сделано'):
             self.assertIn(needle, reason)
         self.assertNotEqual(self.state(session)['volume_id'], volume_id)
         self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
@@ -632,7 +688,7 @@ class TurnReviewTest(TurnReviewCase):
         self.storage(session).append_line('turn-review-volume.jsonl',
                                           '{"kind": "write", "command": "blocks add"}')
         reason = self.blocked(self.fire(stop(session)))
-        for needle in ('строка 3', 'запись kind write', 'их ревью не было'):
+        for needle in ('строка 4', 'запись kind write', 'их ревью не было'):
             self.assertIn(needle, reason)
         self.assertEqual([row['kind'] for row in self.volume(session)], ['write'])
 
@@ -866,6 +922,10 @@ class RecordTurnTest(unittest.TestCase):
         self.assertEqual((cleared.turn, dict(cleared.prompt_turns)), (2, {'p-2': 2}))
 
 
+ENTITY_OK = {'kind': 'entity', 'command': 'c', 'targets': [], 'place_types': [],
+             'content_types': [], 'determined': True, 'note': 'n'}
+
+
 class RecordTest(unittest.TestCase):
     """Строка объёма по контракту: размеченное объединение по kind, схема в lib."""
 
@@ -878,6 +938,11 @@ class RecordTest(unittest.TestCase):
         {'kind': 'answer', 'question': 'в', 'answer': 'о', 'author': 'Влад', 'at': 't'},
         {'kind': 'anchor', 'answer': 'Беру задачу'},
         {'kind': 'anchor', 'prompt_id': 'p', 'answer': {'a': 1}, 'question': 'Якорь?'},
+        {'kind': 'entity', 'prompt_id': 'p', 'command': 'c', 'targets': ['a'],
+         'place_types': ['#проект'], 'content_types': ['#задача'], 'determined': True,
+         'note': 'цель a в сущности b (#проект)'},
+        {'kind': 'entity', 'command': 'c', 'targets': [], 'place_types': [], 'content_types': [],
+         'determined': False, 'note': 'API'},
     )
 
     def test_every_kind_reads_and_writes_back_the_same_row(self) -> None:
@@ -895,6 +960,10 @@ class RecordTest(unittest.TestCase):
                     {'kind': 'answer', 'question': 'в', 'answer': 1, 'author': 'В', 'at': 't'},
                     {'kind': 'skill', 'skill': 'x', 'turn': 1},
                     {'kind': 'skill', 'skill': 'x', 'prompt_id': 7},
+                    {**ENTITY_OK, 'place_types': ['#Раздел']},
+                    {**ENTITY_OK, 'content_types': ['раздел']},
+                    {**ENTITY_OK, 'determined': 'да'},
+                    {key: value for key, value in ENTITY_OK.items() if key != 'note'},
                     {'command': 'x'}, {'kind': None}, 'write'):
             with self.subTest(row=row), self.assertRaises(ValueError):
                 review_lib.parse_record(row)
@@ -985,27 +1054,111 @@ class VolumeLockTest(unittest.TestCase):
 
 
 class TagsTest(unittest.TestCase):
-    """Теги записей ищет ревью в командах; искать нечем — чистый вердикт не принят."""
+    """Критерий по тегам: тип записи известен — по нему, не известен — при любой записи."""
 
     TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
-    STAGE = review_lib.make_criterion('id: stage\napplies: tags #этап #веха\n\nТекст.')
 
-    def test_tags_are_found_outside_link_texts(self) -> None:
-        tags = review_lib.rule_tags((self.TASK, self.STAGE))
-        self.assertEqual(tags, frozenset({'#задача', '#этап', '#веха'}))
-        volume = [write_record('- [ ] Купить #Задача/5м [Сборка #этап](block://AB-1)'),
-                  read_record('blocks get #веха')]
-        self.assertEqual(review_lib.write_tags(volume, tags, craft_lib.find_tags),
-                         frozenset({'#задача'}))
-
-    def test_without_a_finder_tag_criteria_apply_to_any_write_and_block_a_clean_verdict(self) -> None:
+    def test_unknown_types_apply_tag_criteria_to_any_write(self) -> None:
         volume = [write_record('blocks add')]
-        self.assertIsNone(review_lib.write_tags(volume, frozenset({'#задача'}), None))
         self.assertTrue(review_lib.criterion_applies(self.TASK, volume, None))
         self.assertFalse(review_lib.criterion_applies(self.TASK, [read_record()], None))
-        problem = review_lib.criteria_problem(volume, ('task',), (self.TASK,), (), False)
-        self.assertIn('теги в командах записей искать нечем', problem)
-        self.assertIsNone(review_lib.criteria_problem(volume, ('task',), (self.TASK,), (), True))
+        self.assertFalse(review_lib.criterion_applies(self.TASK, volume, frozenset({'#раздел'})))
+        self.assertIsNone(review_lib.criteria_problem(volume, ('task',), (self.TASK,), ()))
+
+    def test_the_review_does_not_search_tags_in_the_command_itself(self) -> None:
+        # Тег в тексте записи без строки замка не выбирает критерий сам: тип
+        # не известен, и берутся все критерии сущностей.
+        command = '- [ ] Купить #задача'
+        volume = [review_lib.parse_record(entity_row(command, None, content=[])),
+                  write_record(command)]
+        self.assertEqual(review_lib.selection_tags(volume), frozenset())
+
+
+SECTION_BLOCK = 'aaaaaaaa-0000-0000-0000-000000000011'
+OTHER_BLOCK = 'aaaaaaaa-0000-0000-0000-000000000012'
+DECISION_ADD = (f'blocks add --siblingId {SECTION_BLOCK} --position after --json '
+                '\'{"type":"text","markdown":"Новое решение"}\'')
+ENTITY_CRITERIA = ('note', 'section', 'stage', 'task')
+
+
+class EntityTypeTest(unittest.TestCase):
+    """Тип записи — только из строки замка: место ∪ содержимое; без строки — все критерии."""
+
+    PROVIDERS = tuple(review_lib.Provider(slug, MODULES_DIR / slug, False)
+                      for slug in CRITERIA_MODULES)
+
+    def taken(self, volume):
+        return review_lib.review_criteria(sources(MODULES_DIR, self.PROVIDERS), list(volume), None)
+
+    def entity_ids(self, volume) -> list[str]:
+        return sorted(set(self.taken(volume).criteria) & set(ENTITY_CRITERIA))
+
+    def brief(self, volume) -> str:
+        return review_lib.assemble_brief(sources(MODULES_DIR, self.PROVIDERS), list(volume),
+                                         '{{ENTITY_TYPES}}', DESCRIPTIONS).text
+
+    @staticmethod
+    def row(command: str = DECISION_ADD, prompt_id='p', **fields):
+        return review_lib.parse_record(entity_row(command, prompt_id, **fields))
+
+    def test_the_place_type_brings_the_criterion_of_a_write_without_a_tag(self) -> None:
+        volume = [self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), ['section'])
+        self.assertIsNone(self.taken(volume).problem)
+
+    def test_place_and_content_are_united(self) -> None:
+        command = DECISION_ADD.replace('Новое решение', '- [ ] Дело #задача')
+        volume = [self.row(command, place=['#раздел']), write_record(command, 'p')]
+        self.assertEqual(self.entity_ids(volume), ['section', 'task'])
+
+    def test_a_write_without_a_lock_row_takes_every_entity_criterion(self) -> None:
+        # Замка нет, он выключен или упал: строки нет, критерии берутся все.
+        volume = [write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+        # Чистый вердикт по всем критериям принимается: тип выбирает критерии, не вердикт.
+        self.assertIsNone(self.taken(volume).problem)
+        brief = self.brief(volume)
+        for needle in ('Тип записи не известен', 'запись write № 1', 'строки типа от замка',
+                       'Определи сам, какие сущности задела'):
+            self.assertIn(needle, brief)
+
+    def test_an_undetermined_row_takes_every_entity_criterion_and_names_why(self) -> None:
+        volume = [self.row(place=['#раздел'], determined=False,
+                           note='место цели не определено: API Craft не ответил'),
+                  write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+        self.assertIn('API Craft не ответил', self.brief(volume))
+
+    def test_a_row_of_another_reply_or_another_command_does_not_type_the_write(self) -> None:
+        other = DECISION_ADD.replace(SECTION_BLOCK, OTHER_BLOCK)
+        for row in (self.row(prompt_id='другая', place=['#раздел']),
+                    self.row(other, place=['#раздел']), self.row(prompt_id=None)):
+            with self.subTest(row=row):
+                volume = [row, write_record(DECISION_ADD, 'p')]
+                self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+
+    def test_a_row_after_the_write_does_not_type_it(self) -> None:
+        volume = [write_record(DECISION_ADD, 'p'), self.row()]
+        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+
+    def test_one_row_types_one_write(self) -> None:
+        volume = [self.row(), write_record(DECISION_ADD, 'p'), write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), list(ENTITY_CRITERIA))
+        self.assertIn('запись write № 2', self.brief(volume))
+        self.assertNotIn('запись write № 1', self.brief(volume))
+
+    def test_a_retry_takes_its_own_row_and_not_the_denied_one(self) -> None:
+        # Запрещённая попытка оставила строку без записи; повтор кладёт свою.
+        volume = [self.row(determined=False, note='запись в непрочитанное'),
+                  self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')]
+        self.assertEqual(self.entity_ids(volume), ['section'])
+        self.assertIn('Тип известен у всех записей', self.brief(volume))
+
+    def test_the_brief_says_the_type_is_only_a_selector(self) -> None:
+        volume = [self.row(place=['#раздел']), write_record(DECISION_ADD, 'p')]
+        brief = self.brief(volume)
+        self.assertIn('Тип выбирает только критерии. Это не довод, что запись верна', brief)
+        self.assertIn('записанный блок ты читаешь сам', brief)
 
 
 class TakenCriteriaTest(unittest.TestCase):
@@ -1014,14 +1167,12 @@ class TakenCriteriaTest(unittest.TestCase):
     TASK = review_lib.make_criterion('id: task\napplies: tags #задача\n\nТекст.')
 
     def test_a_taken_id_without_a_found_criterion_is_a_problem(self) -> None:
-        problem = review_lib.criteria_problem([write_record()], ['task', 'stage'], [self.TASK], [],
-                                              True)
+        problem = review_lib.criteria_problem([write_record()], ['task', 'stage'], [self.TASK], [])
         self.assertIn('критерий «stage» из поручения', problem)
         self.assertNotIn('«task»', problem)
 
     def test_taken_ids_all_found_are_no_problem(self) -> None:
-        self.assertIsNone(review_lib.criteria_problem([write_record()], ['task'], [self.TASK], [],
-                                                      True))
+        self.assertIsNone(review_lib.criteria_problem([write_record()], ['task'], [self.TASK], []))
 
 
 class StateTest(unittest.TestCase):

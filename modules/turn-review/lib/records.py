@@ -3,7 +3,7 @@
 Поставщики пишут строки объёма сами, простыми словарями по контракту из
 README модуля, и эту lib не импортируют. Здесь схема строки на каждый вид:
 размеченное объединение по `kind` — write, read, skill, prompt, answer,
-anchor. Объём с диска читается в эти типы через parse_record: файл пишут
+anchor, entity. Объём с диска читается в эти типы через parse_record: файл пишут
 чужие модули, и строка, которая типом не собирается, отвергается на границе
 чтения с причиной, а не прячется.
 
@@ -25,6 +25,8 @@ KIND_ANCHOR = 'anchor'
 KIND_SKILL = 'skill'
 KIND_PROMPT = 'prompt'
 KIND_ANSWER = 'answer'
+KIND_ENTITY = 'entity'
+TAG_PREFIX = '#'
 
 # Ответ инструмента и ответ Влада кладутся как есть: строка, объект, список или null.
 JSON_TYPES = (str, dict, list)
@@ -42,6 +44,17 @@ def _is_json(value) -> bool:
 
 def _is_texts(value) -> bool:
     return isinstance(value, tuple) and all(isinstance(item, str) for item in value)
+
+
+def _is_tags(value) -> bool:
+    """Теги типа в нижнем регистре: «#» и хотя бы один знак после."""
+    return _is_texts(value) and all(
+        item.startswith(TAG_PREFIX) and len(item) > len(TAG_PREFIX) and item == item.lower()
+        for item in value)
+
+
+def _is_bool(value) -> bool:
+    return type(value) is bool
 
 
 def _is_text(value) -> bool:
@@ -85,7 +98,7 @@ class _Record:
 
 @dataclass(frozen=True, kw_only=True)
 class WriteRecord(_Record):
-    """Запись в Craft: команда как есть. Теги в ней ищет ревью на остановке."""
+    """Запись в Craft: команда как есть. Её тип — в строке `entity` замка."""
 
     kind: ClassVar[str] = KIND_WRITE
     CHECKS: ClassVar[tuple] = (('tool', *TEXT), ('command', *TEXT), ('result', *JSON))
@@ -148,12 +161,39 @@ class AnchorRecord(_Record):
     question: str | None = _absent_when_none()
 
 
-VolumeRecord = WriteRecord | ReadRecord | SkillRecord | PromptRecord | AnswerRecord | AnchorRecord
-RECORD_TYPES = (WriteRecord, ReadRecord, SkillRecord, PromptRecord, AnswerRecord, AnchorRecord)
+@dataclass(frozen=True, kw_only=True)
+class EntityRecord(_Record):
+    """Тип записи от замка craft-type-lock: только выбор критериев, не довод.
+
+    `command` — команда записи как есть: по ней и `prompt_id` строка находит
+    свою запись `write`. `targets` — id целей записи. `place_types` — теги типа
+    страниц, куда запись легла; `content_types` — теги типа в тексте записи и
+    у правленой цели; пустой список — такой сущности нет. `determined` —
+    место всех целей известно; `note` — что замок увидел или почему не смог.
+    """
+
+    kind: ClassVar[str] = KIND_ENTITY
+    TAGS_EXPECTED: ClassVar[str] = 'кортеж тегов «#…» в нижнем регистре'
+    CHECKS: ClassVar[tuple] = (('command', *TEXT), ('targets', _is_texts, 'кортеж строк'),
+                               ('place_types', _is_tags, TAGS_EXPECTED),
+                               ('content_types', _is_tags, TAGS_EXPECTED),
+                               ('determined', _is_bool, 'true или false'), ('note', *TEXT))
+    command: str
+    targets: tuple[str, ...]
+    place_types: tuple[str, ...]
+    content_types: tuple[str, ...]
+    determined: bool
+    note: str
+
+
+VolumeRecord = (WriteRecord | ReadRecord | SkillRecord | PromptRecord | AnswerRecord | AnchorRecord
+                | EntityRecord)
+RECORD_TYPES = (WriteRecord, ReadRecord, SkillRecord, PromptRecord, AnswerRecord, AnchorRecord,
+                EntityRecord)
 KINDS = frozenset(record_type.kind for record_type in RECORD_TYPES)
 RECORD_OF_KIND = {record_type.kind: record_type for record_type in RECORD_TYPES}
 # Поля-кортежи: в строке объёма они списки. Ответы JSON остаются как есть.
-TUPLE_FIELDS = frozenset({'ids'})
+TUPLE_FIELDS = frozenset({'ids', 'targets', 'place_types', 'content_types'})
 
 
 def parse_record(row) -> VolumeRecord:
