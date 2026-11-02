@@ -3,10 +3,13 @@
 Критерии привозят модули файлом data/review-criterion.md: шапка «id: ‹имя›»
 и «applies: always | craft | tags #тег …», пустая строка, текст. Файл
 разбирается в неизменяемый Criterion, чьи правила держит сам тип.
+Теги в командах записей поставщик не размечает: их ищет здесь функция
+поиска тегов, которую передаёт хук (find_tags модуля command-tree-craft).
 Здесь же правило, по которому чистый вердикт не принимается: одно на stop и
 превью.
 """
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import NewType
 
@@ -14,6 +17,8 @@ from .records import VolumeRecord, WriteRecord
 from .volume import count_writes
 
 CriterionId = NewType('CriterionId', str)
+# Поиск тегов набора в команде: (команда, теги) → найденные теги в нижнем регистре.
+TagFinder = Callable[[str, Iterable[str]], list[str]]
 
 ID_FIELD = 'id'
 APPLIES_FIELD = 'applies'
@@ -23,6 +28,9 @@ APPLIES_TAGS = 'tags'
 HEAD_FIELDS = (ID_FIELD, APPLIES_FIELD)
 TAG_PREFIX = '#'
 PROBLEM_SEPARATOR = '. '
+NO_TAG_FINDER_PROBLEM = ('теги в командах записей искать нечем: нет библиотеки разбора команд '
+                         'command-tree-craft. Критерии по тегам взяты все, но чистый вердикт '
+                         'не принимается. Скажи об этом человеку')
 NO_CRITERIA_PROBLEM = ('ни один критерий не подошёл к объёму с записями write: проверять '
                        'записи нечем, чистый вердикт не принимается. Скажи об этом человеку')
 
@@ -134,24 +142,44 @@ def make_criterion(text: str) -> Criterion:
     return Criterion(CriterionId(head[ID_FIELD]), parse_applies(head[APPLIES_FIELD]), body)
 
 
-def write_tags(volume: list[VolumeRecord]) -> set[str]:
-    """Теги типа всех записей write объёма, в нижнем регистре."""
-    found = set()
+def rule_tags(criteria: Iterable[Criterion]) -> frozenset[str]:
+    """Все теги из правил tags: их и ищем в командах записей."""
+    found: set[str] = set()
+    for criterion in criteria:
+        if isinstance(criterion.applies, Tags):
+            found |= criterion.applies.tags
+    return frozenset(found)
+
+
+def write_tags(volume: list[VolumeRecord], tags: frozenset[str],
+               find_tags: TagFinder | None) -> frozenset[str] | None:
+    """Теги из `tags`, которые несут команды записей write объёма; искать нечем — None.
+
+    Тег в тексте ссылки на блок не считается: это правило find_tags.
+    """
+    if find_tags is None:
+        return None
+    found: set[str] = set()
     for record in volume:
-        if isinstance(record, WriteRecord) and record.types is not None:
-            found |= {item.lower() for item in record.types}
-    return found
+        if isinstance(record, WriteRecord):
+            found |= {tag.lower() for tag in find_tags(record.command, tags)}
+    return frozenset(found)
 
 
-def criterion_applies(criterion: Criterion, volume: list[VolumeRecord]) -> bool:
-    """Подходит ли критерий к объёму. Правило из трёх держит сам Criterion."""
+def criterion_applies(criterion: Criterion, volume: list[VolumeRecord],
+                      tags: frozenset[str] | None) -> bool:
+    """Подходит ли критерий к объёму. `tags` — теги записей write, None — не найти.
+
+    Теги не найти — критерий по тегам берётся при любой записи write: лишняя
+    проверка дешевле пропущенной, а чистый вердикт всё равно не примется.
+    """
     match criterion.applies:
         case Always():
             return True
         case Craft():
             return count_writes(volume) > 0
-        case Tags(tags=tags):
-            return bool(tags & write_tags(volume))
+        case Tags(tags=rule):
+            return count_writes(volume) > 0 if tags is None else bool(rule & tags)
 
 
 def broken_problem(broken: tuple[str, ...]) -> str | None:
@@ -178,49 +206,18 @@ def missing_criteria_problem(criteria: tuple[CriterionId, ...],
             'чистый вердикт не принимается. Скажи об этом человеку')
 
 
-def untagged_problem(volume: list[VolumeRecord], found: tuple[Criterion, ...]) -> str | None:
-    """Теги записей write, на которые нет ни одного критерия с правилом tags.
-
-    Модуль сущности без критерия иначе прошёл бы молча: общие критерии
-    always и craft подходят к любой записи и тег не проверяют.
-    """
-    covered: set[str] = set()
-    for criterion in found:
-        if isinstance(criterion.applies, Tags):
-            covered |= criterion.applies.tags
-    missing = sorted(write_tags(volume) - covered)
-    if not missing:
-        return None
-    return (f'нет критерия на тег {", ".join(missing)}: записи с ним проверить нечем, '
-            'чистый вердикт не принимается. Скажи об этом человеку')
-
-
-def unknown_tags_problem(volume: list[VolumeRecord]) -> str | None:
-    """Записи write, чьи теги неизвестны: поставщик назвал ошибку справочника.
-
-    Критерии по тегам такую запись не выбирают, и untagged_problem её не
-    видит: без этой проверки чистый вердикт прошёл бы без критериев её типа.
-    `types` не список до объёма не доходит: такую строку отвергает чтение.
-    """
-    reasons = [record.types_error for record in volume
-               if isinstance(record, WriteRecord) and record.types_error is not None]
-    if not reasons:
-        return None
-    return (f'теги записи неизвестны, проверить нечем ({"; ".join(dict.fromkeys(reasons))}): '
-            'чистый вердикт не принимается. Скажи об этом человеку')
-
-
 def criteria_problem(volume: list[VolumeRecord], criteria: tuple[CriterionId, ...],
-                     found: tuple[Criterion, ...], broken: tuple[str, ...]) -> str | None:
+                     found: tuple[Criterion, ...], broken: tuple[str, ...],
+                     can_find_tags: bool) -> str | None:
     """Почему чистый вердикт по объёму не принять; всё в порядке — None.
 
     Правило одно на stop и превью: не разобранные файлы, объём с записями
-    write без единого критерия, критерий поручения без найденного файла,
-    запись с неизвестными тегами и тег записи без своего критерия.
+    write без единого критерия, критерий поручения без найденного файла и
+    записи write, в чьих командах теги искать нечем.
     """
+    writes = count_writes(volume)
     problems = (broken_problem(broken),
-                NO_CRITERIA_PROBLEM if count_writes(volume) and not criteria else None,
+                NO_CRITERIA_PROBLEM if writes and not criteria else None,
                 missing_criteria_problem(criteria, found),
-                unknown_tags_problem(volume),
-                untagged_problem(volume, found))
+                NO_TAG_FINDER_PROBLEM if writes and not can_find_tags else None)
     return PROBLEM_SEPARATOR.join(problem for problem in problems if problem) or None

@@ -3,10 +3,11 @@
 
 Ход — работа агента от реплики Влада до остановки. Смысловые дефекты записи в
 Craft видны только целиком, в конце хода, поэтому ревью стоит на остановке.
-Объём ревью копят поставщики: модули review-craft-calls, review-prompts,
-craft-session-anchor пишут свои записи через lib этого модуля. Критерии привозят
-модули файлом data/review-criterion.md, формат записей поставщики описывают в
-data/review-records.md. Хук на остановке собирает из них поручение подагенту
+Объём ревью копят поставщики — модули с for = ["turn-review"]: они дописывают
+строки в файл объёма хранилища сами, по контракту из README, и lib этого
+модуля не импортируют. Критерии привозят они же файлом
+data/review-criterion.md, формат записей описывают в data/review-records.md.
+Хук на остановке собирает из них поручение подагенту
 и смотрит вердикт по объёму: либо отпускает ход, либо возвращает его с
 замечаниями или поручением.
 
@@ -18,7 +19,8 @@ data/review-records.md. Хук на остановке собирает из н�
 
 Здесь точка входа и решения по событиям. Рядом в hooks/ то, что знает только
 хук: display — показ ответа и итога, debug_output — флаг отладки, nudge —
-поручение с путями хранилища, review_access — своя lib и каталог модулей.
+поручение с путями хранилища, review_access — своя lib, поставщики и
+поиск тегов.
 Тексты и разбор ответа на вопрос ревью — в lib.
 
 В Craft и в сеть модуль не ходит: только хранилище и вход события.
@@ -40,7 +42,7 @@ from display import (  # noqa: E402
 )
 from jarvis import events, wrappers  # noqa: E402
 from nudge import nudge_text  # noqa: E402
-from review_access import load_review, modules_dir, required_criteria  # noqa: E402
+from review_access import load_review, required_criteria, sources  # noqa: E402
 
 RELEASE_ACTION = 'release'
 
@@ -56,9 +58,9 @@ NO_SUMMARY_REASON = 'неотчитанного итога ревью нет'
 class Module(jarvis.Module):
     """Решение на остановке хода и показ ответа до вердикта.
 
-    Объём копят поставщики через lib, модуль его читает, а на остановке под
-    локом чинит (load_volume) или очищает (clear_volume) файл. На реплике
-    модуль берёт номер хода, на post-tool разбирает только ответ на
+    Объём копят поставщики по контракту, модуль его читает, а на остановке
+    под локом журнала чинит (load_volume) или очищает (clear_volume) файл. На
+    реплике модуль связывает id реплики с номером хода, на post-tool разбирает только ответ на
     собственный вопрос ревью.
     """
 
@@ -78,9 +80,9 @@ class Module(jarvis.Module):
             return handler(event, runtime, review)
 
     def on_prompt(self, event, runtime, review) -> jarvis.Response:
-        # Поставщики на той же реплике берут номер той же функцией: кто бы
-        # из параллельных хуков ни пришёл первым, ход у реплики один.
-        turn, problem = review.claim_prompt_turn(runtime.storage, runtime.manifest.slug, event)
+        # Номер хода знает только ревью: поставщики кладут в записи id
+        # реплики, и здесь id связывается с номером.
+        turn, problem = review.claim_prompt_turn(runtime.storage, event)
         return jarvis.Silence(reason=review.with_problem(f'начался ход {turn}', problem))
 
     def on_after_compact(self, event, runtime, review) -> jarvis.Response:
@@ -156,7 +158,7 @@ class Module(jarvis.Module):
             review.save_state(storage, state)
         # Без поставщика объём пуст не потому, что записей не было: такой
         # ход молча не отпускается.
-        no_provider = review.providers_problem(modules_dir(runtime))
+        no_provider = review.providers_problem(sources(runtime, review))
         if not review.count_writes(volume) and no_provider is None:
             if damage:
                 return jarvis.Block(reason=f'Ход не отпущен: {damage}. Скажи об этом человеку '
@@ -176,7 +178,7 @@ class Module(jarvis.Module):
             cleared = review.clear_volume(storage, state)
             note_summary(storage, cleared, state, review, volume, review.REPORT_RELEASED)
             return jarvis.Silence(reason=review.with_problem(RELEASED_REASON, problem))
-        if review.writes_before_turn(volume, state.turn):
+        if review.writes_before_turn(volume, state.turn, state.prompt_turns):
             # Человек разговаривает с агентом, а не ждёт записи: поручение и
             # вопрос о ревью посреди разговора мешают, а объём никуда не
             # денется и пойдёт на ревью в конце ближайшего хода с записями.

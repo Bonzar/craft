@@ -1,7 +1,7 @@
 """Состояние ревью сессии: тип с проверкой полей, файл и лок.
 
-Состояние — номер хода, id объёма, счёт поручений, критерии последнего
-поручения, а при отладочном выводе ещё время первого поручения и итог ревью
+Состояние — номер хода, номера ходов по id реплик, id объёма, счёт
+поручений, критерии последнего поручения, а при отладочном выводе ещё время первого поручения и итог ревью
 для показа. Поля проверяет сам тип при каждой сборке: на чтении с диска, в
 dataclasses.replace и до записи. Поэтому save_state не запишет то, что
 load_state потом отвергнет.
@@ -34,7 +34,9 @@ NO_BRIEF: BriefCriteria = None
 # Без этих полей файл — порча, остальные получают умолчание.
 REQUIRED_FIELDS = ('turn', 'volume_id', 'nudges', 'released')
 # Поля-кортежи в JSON лежат списками.
-TUPLE_FIELDS = ('criteria', 'last_remarks', 'prompt_taken')
+TUPLE_FIELDS = ('criteria', 'last_remarks')
+# Поля-словари в JSON лежат объектами, в состоянии они только для чтения.
+MAPPING_FIELDS = ('prompt_turns',)
 UNKNOWN_FIELD = 'unknown'
 
 
@@ -54,6 +56,11 @@ def _is_optional_text(value) -> bool:
     return value is None or isinstance(value, str)
 
 
+def _is_prompt_turns(value) -> bool:
+    return isinstance(value, Mapping) and all(
+        isinstance(key, str) and key and _is_count(turn) for key, turn in value.items())
+
+
 def _is_unknown(value) -> bool:
     """Незнакомые поля не перекрывают известные: иначе to_json затёр бы проверенное."""
     known = {item.name for item in fields(ReviewState)}
@@ -70,8 +77,7 @@ CHECKS = (
     # тексте вопроса человеку.
     ('last_remarks', lambda value: isinstance(value, tuple)
      and all(isinstance(item, dict) for item in value), 'кортеж объектов'),
-    ('prompt_mark', _is_optional_text, 'строка или null'),
-    ('prompt_taken', _is_texts, 'кортеж строк'),
+    ('prompt_turns', _is_prompt_turns, 'объект «id реплики → номер хода»'),
     ('first_nudge_at', _is_optional_text, 'строка или null'),
     ('summary', _is_optional_text, 'строка или null'),
     ('summary_shown', lambda value: isinstance(value, bool), 'true или false'),
@@ -91,10 +97,9 @@ class ReviewState:
     criteria: BriefCriteria = NO_BRIEF
     # Замечания последнего вердикта с замечаниями: вопрос человеку показывает их.
     last_remarks: tuple[dict, ...] = ()
-    # Реплика, открывшая текущий ход, и модули, взявшие по ней номер: хуки
-    # одного события идут параллельно, и номер хода у всех модулей на реплике один.
-    prompt_mark: str | None = None
-    prompt_taken: tuple[str, ...] = ()
+    # Номер хода по id реплики харнеса: поставщики кладут в записи id, а не
+    # номер, и ход записи ревью узнаёт здесь.
+    prompt_turns: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     # Поля отладочного вывода. Пишутся только при включённом выводе.
     first_nudge_at: str | None = None
     summary: str | None = None
@@ -132,14 +137,18 @@ class ReviewState:
 
 
 def _from_json_value(name: str, value):
-    """Список JSON — в кортеж у полей-кортежей; иное как есть, его отвергнет проверка."""
+    """Список JSON — в кортеж, объект — в словарь только для чтения; иное отвергнет проверка."""
     if name in TUPLE_FIELDS and isinstance(value, list):
         return tuple(value)
+    if name in MAPPING_FIELDS and isinstance(value, dict):
+        return MappingProxyType(dict(value))
     return value
 
 
 def _to_json_value(value):
-    return list(value) if isinstance(value, tuple) else value
+    if isinstance(value, tuple):
+        return list(value)
+    return dict(value) if isinstance(value, MappingProxyType) else value
 
 
 @contextmanager
@@ -210,16 +219,3 @@ def save_state(storage, state: ReviewState) -> None:
         # ValueError, как у порчи на чтении: правило записи и чтения одно.
         raise ValueError(f'состояние ревью не ReviewState: {state!r}')  # noqa: TRY004
     storage.write_json(STATE_FILE, state.to_json())
-
-
-def current_turn(storage) -> int:
-    """Номер текущего хода из состояния.
-
-    Файла нет — 0: свежая сессия, ни одной реплики ещё не было. Файл испорчен
-    — ValueError с путём: тихий 0 приписал бы запись не тому ходу.
-    """
-    state, damage = _state_damage(storage)
-    if damage is not None:
-        raise ValueError(f'файл состояния ревью {storage.path(STATE_FILE)} {damage}: '
-                         'номер хода не узнать. Его заведёт заново остановка хода')
-    return state.turn if state is not None else 0

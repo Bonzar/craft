@@ -1,6 +1,5 @@
 """Поставщик review-craft-calls: какие вызовы ложатся в объём ревью и в каком виде."""
 
-import importlib.util
 import json
 import shutil
 import subprocess
@@ -8,7 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from jarvis import registry
 from jarvis.storage import Storage
@@ -17,21 +15,12 @@ from jarvis.trace import Trace
 from . import CORE_SOURCE, MODULES_DIR
 
 SLUG = 'review-craft-calls'
-# Объём ведёт ревью хода, команду разбирает command-tree-craft, теги берутся из
-# data/entity.json модулей сущностей.
-NEIGHBOURS = ('turn-review', 'command-tree-craft', 'craft-task', 'craft-stage', 'craft-section',
-              'craft-note', 'craft-decision')
+# Команду разбирает command-tree-craft. Ревью поставщику не нужно: строки он
+# пишет по контракту сам.
+NEIGHBOURS = ('command-tree-craft',)
 TASK_ADD = ('blocks add --siblingId X --position after --json '
             '\'{"type":"text","markdown":"- [ ] Купить молоко #задача/5м"}\'')
 BLOCK = 'a6784801-9d92-875c-f146-50159368745b'
-
-
-def load_file(name: str, path: Path):
-    """Хук как библиотека: ядро уже на пути у пакета тестов."""
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def post_tool(session: str, tool: str, tool_input: dict, response) -> dict:
@@ -72,27 +61,29 @@ class ReviewCraftCallsTest(unittest.TestCase):
     def last_reason(self, session: str) -> str:
         return Trace(self.storage(session)).read()[-1]['reason']
 
-    def test_a_write_carries_the_type_tags(self) -> None:
-        run = self.run_hook(post_tool('s-write', 'mcp__Craft__craft_write', {'command': TASK_ADD},
-                                      {'id': BLOCK}))
+    def test_a_write_lies_as_is_with_the_prompt_id(self) -> None:
+        raw = {**post_tool('s-write', 'mcp__Craft__craft_write', {'command': TASK_ADD},
+                           {'id': BLOCK}), 'prompt_id': 'p-1'}
+        run = self.run_hook(raw)
         self.assertEqual(run.returncode, 0, run.stderr)
-        [record] = self.volume('s-write')
-        self.assertEqual((record['kind'], record['types']), ('write', ['#задача']))
-        self.assertNotIn('types_error', record)
+        self.assertEqual(self.volume('s-write'), [
+            {'kind': 'write', 'prompt_id': 'p-1', 'tool': 'mcp__Craft__craft_write',
+             'command': TASK_ADD, 'result': {'id': BLOCK}}])
 
-    def test_a_broken_entity_file_keeps_the_write_and_names_the_error(self) -> None:
-        path = self.root / 'modules' / 'craft-note' / 'data' / 'entity.json'
-        original = path.read_text(encoding='utf-8')
-        self.addCleanup(path.write_text, original, encoding='utf-8')
-        path.write_text('{"tags":', encoding='utf-8')
-        run = self.run_hook(post_tool('s-broken', 'mcp__Craft__craft_write', {'command': TASK_ADD},
-                                      {'id': BLOCK}))
-        self.assertNotEqual(run.returncode, 0)
-        self.assertIn(str(path), run.stderr)
-        [record] = self.volume('s-broken')
-        self.assertEqual((record['kind'], record['command'], record['types']),
-                         ('write', TASK_ADD, None))
-        self.assertIn(str(path), record['types_error'])
+    def test_without_a_prompt_id_the_field_is_left_out(self) -> None:
+        run = self.run_hook(post_tool('s-no-id', 'Skill', {'skill': 'jarvis:craft-task'},
+                                      {'success': True}))
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(self.volume('s-no-id'), [{'kind': 'skill', 'skill': 'craft-task'}])
+
+    def test_the_rows_follow_the_review_contract(self) -> None:
+        # Схему строк держит ревью: строка поставщика читается его разбором.
+        review = registry.LibraryModule('turn-review', MODULES_DIR / 'turn-review' / 'lib').load()
+        raw = {**post_tool('s-contract', 'mcp__Craft__craft_read',
+                           {'command': f'blocks get {BLOCK}'}, '# Страница'), 'prompt_id': 'p'}
+        self.assertEqual(self.run_hook(raw).returncode, 0)
+        [row] = self.volume('s-contract')
+        self.assertEqual(review.record_row(review.parse_record(row)), row)
 
     def test_another_craft_tool_is_silent_with_its_own_reason(self) -> None:
         run = self.run_hook(post_tool('s-other-craft', 'mcp__Craft__craft_search',
@@ -106,41 +97,6 @@ class ReviewCraftCallsTest(unittest.TestCase):
         run = self.run_hook(post_tool('s-foreign', 'mcp__github__get_me', {}, {}))
         self.assertEqual((run.returncode, run.stdout), (0, ''), run.stderr)
         self.assertEqual(self.last_reason('s-foreign'), 'вызов не Craft и не скилл')
-
-
-class TagMapErrorTest(unittest.TestCase):
-    """Справочник тегов упал не порчей файла: запись всё равно ложится."""
-
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.storage = Storage(Path(self.tmp.name), 's-oserror')
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def test_an_unreadable_modules_dir_keeps_the_write_and_raises(self) -> None:
-        hook = load_file('review_craft_calls_hook', MODULES_DIR / SLUG / 'hooks' / 'module.py')
-        review = registry.LibraryModule('turn-review', MODULES_DIR / 'turn-review' / 'lib').load()
-        craft = registry.LibraryModule(
-            'command-tree-craft', MODULES_DIR / 'command-tree-craft' / 'lib').load()
-
-        def load_tag_skills():
-            raise PermissionError(13, 'нет доступа', '/modules')
-
-        hook.load_tag_skills = load_tag_skills
-        libraries = {'turn-review': review, 'command-tree-craft': craft}
-        runtime = SimpleNamespace(storage=self.storage, library=lambda slug: SimpleNamespace(
-            load=lambda: libraries[slug]))
-        event = SimpleNamespace(agent_id=None, tool_name='mcp__Craft__craft_write',
-                                tool_input={'command': TASK_ADD}, tool_result={'id': BLOCK})
-        with self.assertRaises(PermissionError):
-            hook.Module().handle(event, runtime)
-        [line] = self.storage.read_lines('turn-review-volume.jsonl')
-        record = json.loads(line)
-        self.assertEqual((record['kind'], record['command'], record['types']),
-                         ('write', TASK_ADD, None))
-        self.assertIn('нет доступа', record['types_error'])
-        self.assertIn('/modules', record['types_error'])
 
 
 if __name__ == '__main__':

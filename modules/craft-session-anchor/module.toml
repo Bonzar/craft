@@ -3,4 +3,6 @@
 slug = "craft-session-anchor"
 for = ["turn-review"]
 events = ["prompt", "post-tool"]
-requires = ["turn-review"]
+# Ревью он не требует: объём дописывается механизмом хранилища ядра, по
+# контракту из README turn-review.
+requires = []

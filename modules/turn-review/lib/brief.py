@@ -1,9 +1,13 @@
 """Сборка поручения подагенту и критерии, по которым принимается вердикт.
 
-Каркас у ревью, записи описывают поставщики файлом data/review-records.md,
-критерии привозят модули файлом data/review-criterion.md. Поручение берёт
-критерии, чьё правило совпало с объёмом, и требования модулей из
-data/review.md тех модулей, чьи скиллы есть в записях skill объёма.
+Каркас и описания видов записей — у ревью: формат строк задаёт только его
+контракт. Критерии привозят модули файлом data/review-criterion.md, и ищутся
+они только у модулей, чей `for` называет turn-review: их список даёт хук по
+шапкам соседей (registry.adapters ядра). Поручение берёт описания видов,
+которые есть в объёме, критерии, чьё
+правило совпало с объёмом, и требования модулей из data/review.md тех
+модулей, чьи скиллы есть в записях skill объёма: те ищутся в каталоге
+модулей по slug скилла, `for` им не нужен.
 """
 
 from pathlib import Path
@@ -12,14 +16,16 @@ from typing import NamedTuple
 from .criteria import (
     Criterion,
     CriterionId,
+    TagFinder,
     criteria_problem,
     criterion_applies,
     make_criterion,
+    rule_tags,
+    write_tags,
 )
-from .records import SkillRecord, VolumeRecord
+from .records import KINDS, SkillRecord, VolumeRecord
 
 CRITERION_FILE = 'review-criterion.md'
-RECORDS_FILE = 'review-records.md'
 REQUIREMENTS_FILE = 'review.md'
 DATA_DIR = 'data'
 BRIEF_FILE = 'turn-review-brief.md'
@@ -29,10 +35,38 @@ CRITERIA_LIST_MARK = '{{CRITERIA_LIST}}'
 REQUIREMENTS_MARK = '{{MODULE_REQUIREMENTS}}'
 REQUIREMENTS_HEAD = '### Требования модуля {slug}'
 NO_REQUIREMENTS = 'нет'
-NO_PROVIDER_PROBLEM = ('нет поставщика записей ревью: ни у одного модуля каталога {modules_dir} '
-                       f'нет {DATA_DIR}/{RECORDS_FILE}. Объём пуст не потому, что записей не '
-                       'было, а потому, что их некому положить. Скажи об этом человеку: нужен '
-                       'модуль-поставщик, например review-craft-calls')
+REVIEW_SLUG = 'turn-review'
+# Описание вида записи в data/review-records.md ревью: раздел «## ‹вид›».
+KIND_HEAD = '## '
+NO_PROVIDER_PROBLEM = ('нет поставщика записей ревью: ни у одного модуля с for = '
+                       f'["{REVIEW_SLUG}"] в каталоге {{modules_dir}} нет хуков. Объём пуст не '
+                       'потому, что записей не было, а потому, что их некому положить. Скажи '
+                       'об этом человеку: нужен модуль-поставщик, например review-craft-calls')
+EMPTY_PROVIDER = (f'{{slug}} (объявил for = ["{REVIEW_SLUG}"], а нет ни '
+                  f'{DATA_DIR}/{CRITERION_FILE}, ни хуков, которые писали бы записи)')
+
+
+class Provider(NamedTuple):
+    """Модуль, чей `for` называет turn-review: slug, папка и есть ли у него хуки.
+
+    Поставщик критерия узнаётся по файлу критерия, поставщик записей — по
+    хукам: строки объёма пишут только они.
+    """
+    slug: str
+    path: Path
+    has_hooks: bool
+
+
+class Sources(NamedTuple):
+    """Откуда ревью берёт файлы модулей и чем ищет теги.
+
+    `providers` — модули с for = ["turn-review"], у них критерии и описания
+    записей. `modules_dir` — каталог модулей: в нём требования по slug
+    скилла. `find_tags` — поиск тегов в команде; None — искать нечем.
+    """
+    modules_dir: Path
+    providers: tuple[Provider, ...]
+    find_tags: TagFinder | None
 
 
 class BriefError(Exception):
@@ -52,20 +86,22 @@ class CriteriaCheck(NamedTuple):
     problem: str | None
 
 
-def gather(modules_dir, filename: str) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
-    """Файлы данных с этим именем у всех модулей каталога: (slug папки, текст).
+def gather(providers: tuple[Provider, ...], filename: str
+           ) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    """Файлы данных с этим именем у модулей-поставщиков: (slug, текст).
 
     Второе — файлы, которые не прочитались, «slug (путь не читается: ошибка)»:
     молча пропустить их нельзя, а падение хука отпустило бы ход без ревью.
+    Модули без for = ["turn-review"] сюда не попадают, их файлы не читаются.
     """
     found, broken = [], []
-    for child in sorted(Path(modules_dir).iterdir()):
-        path = child / DATA_DIR / filename
-        if not child.is_dir() or not path.is_file():
+    for provider in providers:
+        path = Path(provider.path) / DATA_DIR / filename
+        if not path.is_file():
             continue
-        text, problem = read_data_file(child.name, path)
+        text, problem = read_data_file(provider.slug, path)
         if problem is None:
-            found.append((child.name, text))
+            found.append((provider.slug, text))
         else:
             broken.append(problem)
     return tuple(found), tuple(broken)
@@ -123,15 +159,67 @@ def requirements_text(requirements: tuple[tuple[str, str], ...]) -> str:
                         for slug, text in requirements)
 
 
-def read_criteria(modules_dir) -> tuple[tuple[Criterion, ...], tuple[str, ...]]:
-    """Разобранные критерии модулей и что не разобралось: «slug (причина)».
+def empty_providers(providers: tuple[Provider, ...]) -> tuple[str, ...]:
+    """Модули с for = ["turn-review"] без критерия и без хуков.
+
+    Модуль объявил, что служит ревью, а дать ему нечего: например, модуль
+    сущности потерял критерий. Молча он не проходит.
+    """
+    return tuple(EMPTY_PROVIDER.format(slug=provider.slug) for provider in providers
+                 if not provider.has_hooks
+                 and not (Path(provider.path) / DATA_DIR / CRITERION_FILE).is_file())
+
+
+def kind_sections(descriptions: str) -> tuple[str, dict[str, str]]:
+    """Описания видов записей ревью: общая часть до разделов и текст на вид.
+
+    Раздел вида — «## ‹вид›» и текст до следующего раздела. Вид не из
+    KINDS или раздел дважды — ValueError: файл свой, и порча в нём — дефект.
+    """
+    common: list[str] = []
+    sections: dict[str, list[str]] = {}
+    current = common
+    for line in descriptions.splitlines():
+        if line.startswith(KIND_HEAD):
+            kind = line[len(KIND_HEAD):].strip()
+            if kind not in KINDS or kind in sections:
+                raise ValueError(f'раздел «{line}» описаний записей: вида нет или он дважды')
+            current = sections[kind] = []
+            continue
+        current.append(line)
+    return ('\n'.join(common).strip(),
+            {kind: '\n'.join(lines).strip() for kind, lines in sections.items()})
+
+
+def records_text(descriptions: str, volume: list[VolumeRecord]) -> str:
+    """Описания видов, которые есть в объёме, по порядку файла, с общей частью.
+
+    Вид в объёме без описания — BriefError: подагент получил бы запись, о
+    которой ему ничего не сказали.
+    """
+    try:
+        common, sections = kind_sections(descriptions)
+    except ValueError as error:
+        raise BriefError(str(error)) from error
+    present = {record.kind for record in volume}
+    missing = sorted(present - set(sections))
+    if missing:
+        raise BriefError(f'нет описания записей вида {", ".join(missing)}')
+    chosen = [text for kind, text in sections.items() if kind in present]
+    return '\n\n'.join([common, *chosen]) if chosen else common
+
+
+def read_criteria(providers: tuple[Provider, ...]
+                  ) -> tuple[tuple[Criterion, ...], tuple[str, ...]]:
+    """Разобранные критерии поставщиков и что не разобралось: «slug (причина)».
 
     Повтор id у второго модуля тоже не разобран: вердикт по id не отличил бы
-    один критерий от другого. Первый модуль с этим id остаётся.
+    один критерий от другого. Первый модуль с этим id остаётся. Поставщик
+    без обоих файлов тоже здесь: см. empty_providers.
     """
-    texts, unread = gather(modules_dir, CRITERION_FILE)
+    texts, unread = gather(providers, CRITERION_FILE)
     found: list[Criterion] = []
-    broken = list(unread)
+    broken = [*empty_providers(providers), *unread]
     owners: dict[str, str] = {}
     for slug, text in texts:
         try:
@@ -147,52 +235,58 @@ def read_criteria(modules_dir) -> tuple[tuple[Criterion, ...], tuple[str, ...]]:
     return tuple(found), tuple(broken)
 
 
-def assemble_brief(modules_dir, volume: list[VolumeRecord], frame: str) -> BriefParts:
-    """Поручение подагенту из каркаса, записей поставщиков, подходящих критериев
-    и требований модулей, чьи скиллы есть в объёме.
+def applicable(found: tuple[Criterion, ...], volume: list[VolumeRecord],
+               sources: Sources) -> tuple[Criterion, ...]:
+    """Критерии, чьё правило совпало с объёмом; теги ищутся в командах записей write."""
+    tags = write_tags(volume, rule_tags(found), sources.find_tags)
+    return tuple(criterion for criterion in found if criterion_applies(criterion, volume, tags))
 
-    Не разобранные файлы критериев, записей и требований идут в broken: их
-    нельзя молча пропустить.
+
+def assemble_brief(sources: Sources, volume: list[VolumeRecord], frame: str,
+                   descriptions: str) -> BriefParts:
+    """Поручение подагенту из каркаса, описаний видов записей объёма, подходящих
+    критериев и требований модулей, чьи скиллы есть в объёме.
+
+    Не разобранные файлы критериев и требований идут в broken: их нельзя
+    молча пропустить. Описания видов — свой файл ревью: их порча — BriefError.
     """
-    found, broken = read_criteria(modules_dir)
-    chosen = [criterion for criterion in found if criterion_applies(criterion, volume)]
-    records, records_broken = gather(modules_dir, RECORDS_FILE)
-    requirements, requirements_broken = read_requirements(modules_dir, volume)
+    found, broken = read_criteria(sources.providers)
+    chosen = applicable(found, volume, sources)
+    requirements, requirements_broken = read_requirements(sources.modules_dir, volume)
     ids = tuple(criterion.id for criterion in chosen)
-    text = (frame.replace(RECORDS_MARK, '\n\n'.join(text.strip() for _, text in records))
+    text = (frame.replace(RECORDS_MARK, records_text(descriptions, volume))
             .replace(CRITERIA_MARK, '\n\n'.join(criterion.body for criterion in chosen))
             .replace(REQUIREMENTS_MARK, requirements_text(requirements))
             .replace(CRITERIA_LIST_MARK, ', '.join(f'"{item}"' for item in ids)))
-    return BriefParts(text, ids, broken + records_broken + requirements_broken)
+    return BriefParts(text, ids, broken + requirements_broken)
 
 
-def review_criteria(modules_dir, volume: list[VolumeRecord],
+def review_criteria(sources: Sources, volume: list[VolumeRecord],
                     taken: tuple[CriterionId, ...] | None) -> CriteriaCheck:
     """Критерии, по которым принимается вердикт, и почему чистый не принять.
 
     Критерии — из последнего поручения (`taken`). Поручения не было (None) —
-    те, что подошли бы к объёму. Проблема считается по каталогу модулей
-    всегда: файл мог сломаться и после поручения.
+    те, что подошли бы к объёму. Проблема считается по поставщикам всегда:
+    файл мог сломаться и после поручения.
     """
-    found, broken = read_criteria(modules_dir)
-    _, records_broken = gather(modules_dir, RECORDS_FILE)
-    _, requirements_broken = read_requirements(modules_dir, volume)
+    found, broken = read_criteria(sources.providers)
+    _, requirements_broken = read_requirements(sources.modules_dir, volume)
     if taken is None:
-        taken = tuple(criterion.id for criterion in found if criterion_applies(criterion, volume))
-    return CriteriaCheck(taken, criteria_problem(volume, taken, found,
-                                                 broken + records_broken + requirements_broken))
+        taken = tuple(criterion.id for criterion in applicable(found, volume, sources))
+    problem = criteria_problem(volume, taken, found, broken + requirements_broken,
+                               sources.find_tags is not None)
+    return CriteriaCheck(taken, problem)
 
 
-def providers_problem(modules_dir) -> str | None:
-    """Ни у одного модуля нет описания записей: объём некому копить.
+def providers_problem(sources: Sources) -> str | None:
+    """Ни у одного модуля с for = ["turn-review"] нет хуков: объём некому копить.
 
-    turn-review поставщиков не требует, требуют они его. Без этой проверки
-    ревью без поставщика молча считало бы, что записей не было.
+    Поставщики ревью не требуют и пишут объём сами, по контракту. Без этой
+    проверки ревью без поставщика молча считало бы, что записей не было.
     """
-    records, broken = gather(modules_dir, RECORDS_FILE)
-    if records or broken:
+    if any(provider.has_hooks for provider in sources.providers):
         return None
-    return NO_PROVIDER_PROBLEM.format(modules_dir=modules_dir)
+    return NO_PROVIDER_PROBLEM.format(modules_dir=sources.modules_dir)
 
 
 def write_brief(storage, text: str) -> Path:

@@ -9,8 +9,11 @@
 сессии из события.
 """
 
+import fcntl
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 SESSION = 'session'
@@ -18,6 +21,36 @@ PERSISTENT = 'persistent'
 ZONES = (SESSION, PERSISTENT)
 
 DEFAULT_STATE_DIR = '~/.local/state/jarvis'
+JOURNAL_MODE = 0o644
+
+
+def _is_current(handle: int, path: Path) -> bool:
+    """Открытый файл всё ещё лежит по пути: переписчик не заменил его, пока ждали лок."""
+    try:
+        current = os.stat(path)
+    except FileNotFoundError:
+        return False
+    opened = os.fstat(handle)
+    return (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
+
+
+def _open_locked(path: Path) -> int:
+    """Дескриптор журнала на дописывание под исключительным flock самого файла.
+
+    Переписчик журнала заменяет файл переименованием поверх. Кто ждал лок на
+    старом файле, после него видит другой файл по пути и открывает журнал
+    заново: иначе его строка легла бы в уже заменённый файл и пропала.
+    """
+    while True:
+        handle = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, JOURNAL_MODE)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            if _is_current(handle, path):
+                return handle
+        except BaseException:
+            os.close(handle)
+            raise
+        os.close(handle)
 
 
 def default_state_dir(module_dir: Path | None = None) -> Path:
@@ -95,17 +128,41 @@ class Storage:
         return path
 
     def append_line(self, name: str, line: str, zone: str = SESSION) -> Path:
-        """Дописать строку в журнал.
+        """Дописать строку в журнал целиком, даже из многих процессов сразу.
 
-        Открытие на 'a' на POSIX пишет строку одним вызовом в конец файла.
-        Целостность журнала при дописывании из многих процессов без лока —
-        открытая задача раздела «Библиотека», здесь она не решается.
+        Строка пишется под исключительным flock самого файла журнала, в
+        режиме O_APPEND: хуки одного события идут параллельными процессами, и
+        без лока длинная строка, которую ядро записало бы не одним вызовом,
+        перемешалась бы с чужой. Короткая запись дописывается под тем же
+        локом. Переписать журнал, не потеряв дописанное, — journal_lock.
         """
         path = self.path(name, zone)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('a', encoding='utf-8') as handle:
-            handle.write(line.rstrip('\n') + '\n')
+        data = (line.rstrip('\n') + '\n').encode('utf-8')
+        handle = _open_locked(path)
+        try:
+            written = os.write(handle, data)
+            while written < len(data):
+                written += os.write(handle, data[written:])
+        finally:
+            os.close(handle)
         return path
+
+    @contextmanager
+    def journal_lock(self, name: str, zone: str = SESSION) -> Iterator[Path]:
+        """Журнал под тем же локом, что у append_line: прочитать и переписать без потерь.
+
+        Пока лок взят, строки не дописываются. Переписывать — временным файлом
+        рядом и переименованием поверх пути внутри блока: дописывающие, что
+        ждали лок, увидят новый файл и допишут в него.
+        """
+        path = self.path(name, zone)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = _open_locked(path)
+        try:
+            yield path
+        finally:
+            os.close(handle)
 
     def read_lines(self, name: str, zone: str = SESSION) -> list[str]:
         path = self.path(name, zone)
