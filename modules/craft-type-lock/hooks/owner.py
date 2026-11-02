@@ -71,6 +71,14 @@ class Unseen(Exception):
     """Страница над блоком не видна: ни поиск, ни прочитанные деревья её не дали."""
 
 
+class Missing(Exception):
+    """Цели нет среди детей страницы, где её нашли, и после повторного запроса.
+
+    Это не сбой сети: страница уже не та, что агент читал, и запись судится
+    как запись в непрочитанное.
+    """
+
+
 def short(block_id: str) -> str:
     return block_id[:SHORT_ID]
 
@@ -84,6 +92,11 @@ def level_of(block: dict) -> int:
     if type(level) is not int or level < 0:
         raise ValueError(f'у блока {short(block[ID_KEY])} отступ не число: {level!r}')
     return level
+
+
+def position(children: list[dict], anchor: str) -> int | None:
+    """Место anchor среди детей; нет его — None."""
+    return next((index for index, child in enumerate(children) if same_id(child[ID_KEY], anchor)), None)
 
 
 def entity_of(block: dict, tags_of: TagsOf) -> Entity | None:
@@ -191,14 +204,21 @@ class Walk:
         return [page[ID_KEY] for page in spot.pages], spot.whole
 
     def preceding(self, page_id: str, anchor: str | None, inclusive: bool) -> list[dict]:
-        """Дети страницы, стоящие перед местом."""
+        """Дети страницы, стоящие перед местом.
+
+        anchor нет среди детей — список устарел: он запрашивается заново один
+        раз, а без anchor и тогда — Missing.
+        """
         children = self.api.children(page_id, anchor)
         if anchor is None:
             return children if inclusive else []
-        for index, child in enumerate(children):
-            if same_id(child[ID_KEY], anchor):
-                return children[:index + 1] if inclusive else children[:index]
-        raise ValueError(f'блок {short(anchor)} не найден среди детей страницы {short(page_id)}')
+        index = position(children, anchor)
+        if index is None:
+            children = self.api.children(page_id, anchor, fresh=True)
+            index = position(children, anchor)
+        if index is None:
+            raise Missing(f'блок {short(anchor)} не найден среди детей страницы {short(page_id)}')
+        return children[:index + 1] if inclusive else children[:index]
 
     def by_indent(self, page_id: str, anchor: str | None, inclusive: bool,
                   level: int) -> tuple[Entity | None, int]:

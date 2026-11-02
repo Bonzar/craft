@@ -257,6 +257,17 @@ BAD_NEXT = 'abababab-0000-0000-0000-000000000003'
 DOCUMENTS += (page(BAD_PAGE, 'Сломанная',
                    block(BAD_BLOCK, 'Строка с испорченным отступом', indentationLevel='два'),
                    block(BAD_NEXT, 'Соседняя строка')),)
+# Заметка, в которую после чтения легла задача: чтение агента её ещё не знает.
+DIARY = 'acacacac-0000-0000-0000-000000000001'
+DIARY_LINE = 'acacacac-0000-0000-0000-000000000002'
+DIARY_TASK = 'acacacac-0000-0000-0000-000000000003'
+DOCUMENTS += (page(DIARY, 'Дневник #заметка',
+                   block(DIARY_LINE, 'Первая строка'),
+                   block(DIARY_TASK, '- [ ] Задача из заметки #задача', listStyle='task')),)
+# Страница, среди детей которой нет блока, хотя поиск кладёт его на неё.
+GHOST_PAGE = 'adadadad-0000-0000-0000-000000000001'
+GHOST = 'adadadad-0000-0000-0000-000000000002'
+DOCUMENTS += (page(GHOST_PAGE, 'Страница с пропажей', block('adadadad-0000-0000-0000-000000000003', 'Строка')),)
 # Блоки, которых поиск ещё не видит: только что записанное.
 NOT_INDEXED = {FRESH, FRESH_PAGE}
 LINK_TEXT = re.compile(r'\[([^\]]*)\]\([^)]*\)')
@@ -280,6 +291,7 @@ def index(tree: dict, document: str, pages: list, found: dict) -> dict:
 BLOCKS = {}
 for document in DOCUMENTS:
     index(document, document['id'], [], BLOCKS)
+BLOCKS[GHOST] = (block(GHOST, 'Пропавшая строка'), GHOST_PAGE, [BLOCKS[GHOST_PAGE][0]])
 
 
 def prune(tree, depth: int):

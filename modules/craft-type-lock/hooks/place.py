@@ -20,6 +20,7 @@ from typing import NamedTuple
 from api import BASE_ENV, DEADLINE_SEC, FETCH_ERRORS, ID_KEY, Api, Late, same_id
 from owner import (
     Entity,
+    Missing,
     Spot,
     Start,
     TagsOf,
@@ -216,6 +217,9 @@ def judge_safely(walk: Walk, anchor, write: Write, landing, result: Search) -> b
         return False
     except Unseen as error:
         result.outcomes.append(Outcome(anchor, False, unknown=str(error)))
+    except Missing:
+        # Страница цели уже не та, что агент читал: запись в непрочитанное.
+        result.outcomes.append(Outcome(anchor, False))
     except FETCH_ERRORS as error:
         result.failures.append(fetch_failure(anchor.block_id, error))
     return True

@@ -19,6 +19,7 @@
 import json
 
 from place import Place, Verdict
+from state import BrokenFile
 
 # Контракт поставщиков ревью: файл объёма в зоне сессии, вид и поля строки.
 VOLUME_FILE = 'turn-review-volume.jsonl'
@@ -104,7 +105,7 @@ def read_held(storage) -> dict:
     try:
         held = storage.read_json(PENDING_FILE, default={})
     except json.JSONDecodeError as error:
-        raise ValueError(f'файл отложенных строк замка {path} не JSON: {error}. Удали его') from error
+        raise BrokenFile(path, f'файл отложенных строк замка {path} не JSON: {error}. Удали его') from error
     if not isinstance(held, dict) or not all(isinstance(row, dict) for row in held.values()):
-        raise ValueError(f'файл отложенных строк замка {path} испорчен. Удали его')
+        raise BrokenFile(path, f'файл отложенных строк замка {path} испорчен. Удали его')
     return held

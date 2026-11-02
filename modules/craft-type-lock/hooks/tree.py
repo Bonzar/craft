@@ -20,6 +20,7 @@ TTL_SEC: страницу мог поменять человек в прилож
 import json
 
 from reads import CONTENT_KEY, ID_KEY, cursor_offsets, json_reads, markdown_pages, response_text, slim
+from state import BrokenFile
 
 TREE_FILE = 'craft-type-lock-tree.json'
 PAGES_KEY = 'pages'
@@ -46,19 +47,39 @@ def empty() -> dict:
     return {PAGES_KEY: {}, LINKS_KEY: {}, ROOTS_KEY: {}}
 
 
+def is_time(value) -> bool:
+    return type(value) in (int, float)
+
+
+def is_block(value) -> bool:
+    return isinstance(value, dict) and isinstance(value.get(ID_KEY), str)
+
+
 def is_entry(entry) -> bool:
-    children = entry.get(CHILDREN_KEY) if isinstance(entry, dict) else None
-    return (isinstance(entry, dict) and isinstance(entry.get(ID_KEY), str)
-            and isinstance(entry.get(AT_KEY), (int, float))
-            and (children is None or isinstance(children, list)))
+    """Страница кэша: id, время, блок (или None) и дети списком блоков (или None)."""
+    if not (is_block(entry) and is_time(entry.get(AT_KEY))):
+        return False
+    block, children = entry.get(BLOCK_KEY), entry.get(CHILDREN_KEY)
+    return ((block is None or isinstance(block, dict))
+            and (children is None or (isinstance(children, list) and all(map(is_block, children)))))
+
+
+def is_link(link) -> bool:
+    return isinstance(link, dict) and isinstance(link.get(PARENT_KEY), str) and is_time(link.get(AT_KEY))
 
 
 def check(data, path) -> dict:
-    """Файл кэша как есть или ValueError с путём: порча — не тихий сброс."""
+    """Файл кэша как есть или BrokenFile с путём: порча — не тихий сброс и не падение хука.
+
+    Проверяется каждая запись: страница, связь и корень. Испорченная запись
+    иначе уронила бы хук на первом обращении, а упавший хук пропускает запись.
+    """
     ok = isinstance(data, dict) and all(isinstance(data.get(key), dict)
                                         for key in (PAGES_KEY, LINKS_KEY, ROOTS_KEY))
-    if not ok or not all(is_entry(entry) for entry in data[PAGES_KEY].values()):
-        raise ValueError(f'файл дерева замка {path} испорчен. Удали его, дерево соберётся заново')
+    if not (ok and all(map(is_entry, data[PAGES_KEY].values()))
+            and all(map(is_link, data[LINKS_KEY].values()))
+            and all(map(is_time, data[ROOTS_KEY].values()))):
+        raise BrokenFile(path, f'файл дерева замка {path} испорчен. Удали его, дерево соберётся заново')
     return data
 
 
@@ -223,6 +244,10 @@ class Tree:
             if parent is not None:
                 self.unknown(parent, keep_block=True)
 
+    def forget_all(self) -> None:
+        """После записи без id цели: куда она легла, не известно — дерево пусто."""
+        self.data = empty()
+
     def prune(self) -> None:
         """Старше TTL_SEC — вон; страниц не больше MAX_PAGES, связей — MAX_LINKS."""
         for key in (PAGES_KEY, LINKS_KEY):
@@ -256,8 +281,8 @@ def load(storage, now: float) -> Tree:
     try:
         data = storage.read_json(TREE_FILE, default=None)
     except json.JSONDecodeError as error:
-        raise ValueError(f'файл дерева замка {path} не JSON: {error}. Удали его, '
-                         'дерево соберётся заново') from error
+        raise BrokenFile(path, f'файл дерева замка {path} не JSON: {error}. Удали его, '
+                               'дерево соберётся заново') from error
     return Tree(empty() if data is None else check(data, path), now)
 
 

@@ -29,6 +29,14 @@ MAX_TURN_READS = 200
 WARNED_KEY = 'place_warned'
 
 
+class BrokenFile(ValueError):
+    """Файл замка испорчен: path — какой именно, его и удалять."""
+
+    def __init__(self, path, message: str) -> None:
+        super().__init__(message)
+        self.path = path
+
+
 def new_state(turn: int = 0, skills: dict | None = None, reads: list | None = None,
               warned: bool = False, turn_reads: list | None = None) -> dict:
     return {TURN_KEY: turn, SKILLS_KEY: dict(skills or {}), READS_KEY: list(reads or []),
@@ -41,8 +49,8 @@ def read_state(storage: jarvis.Storage, craft) -> dict:
     try:
         state = storage.read_json(STATE_FILE, default=None)
     except json.JSONDecodeError as error:
-        raise ValueError(f'файл состояния замка {path} не JSON: {error}. '
-                         'Удали его, счёт начнётся заново') from error
+        raise BrokenFile(path, f'файл состояния замка {path} не JSON: {error}. '
+                               'Удали его, счёт начнётся заново') from error
     if state is None:
         return new_state()
     turn = state.get(TURN_KEY) if isinstance(state, dict) else None
@@ -51,8 +59,8 @@ def read_state(storage: jarvis.Storage, craft) -> dict:
     turn_reads = state.get(TURN_READS_KEY, []) if isinstance(state, dict) else None
     if (type(turn) is not int or not isinstance(skills, dict) or not is_id_list(reads, craft)
             or not is_id_list(turn_reads, craft)):
-        raise ValueError(f'файл состояния замка {path} испорчен: {state!r}. '
-                         'Удали его, счёт начнётся заново')
+        raise BrokenFile(path, f'файл состояния замка {path} испорчен: {state!r}. '
+                               'Удали его, счёт начнётся заново')
     return new_state(turn, skills, reads, bool(state.get(WARNED_KEY)), turn_reads)
 
 

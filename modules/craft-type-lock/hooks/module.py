@@ -47,6 +47,7 @@ from state import (  # noqa: E402
     TURN_KEY,
     TURN_READS_KEY,
     WARNED_KEY,
+    BrokenFile,
     new_state,
     read_state,
     remember_reads,
@@ -132,11 +133,16 @@ def untargeted_reason(note: str) -> str:
             '--document) и повтори запись.')
 
 
-def broken_reason(storage, error: ValueError) -> str:
-    """Причина запрета, когда замок не смог судить запись: что сломано и как починить."""
-    return (f'Замок craft-type-lock не смог судить запись: {error}. Запись в Craft закрыта до '
-            f'починки. Если испорчен файл состояния замка, удали {storage.path(STATE_FILE)} — '
-            'счёт начнётся заново. Потом повтори запись.')
+def broken_reason(error: ValueError) -> str:
+    """Причина запрета, когда замок не смог судить запись: что сломано и как починить.
+
+    Испорчен файл замка — причина называет именно его: удалить другой файл
+    значило бы оставить запись закрытой.
+    """
+    reason = f'Замок craft-type-lock не смог судить запись: {error}. Запись в Craft закрыта до починки.'
+    if isinstance(error, BrokenFile):
+        reason += f' Чтобы починить, удали {error.path}: замок начнёт этот файл заново.'
+    return f'{reason} Потом повтори запись.'
 
 
 def template_reads(command: str, craft) -> list[str]:
@@ -259,17 +265,27 @@ class Module(jarvis.Module):
                                      f'в дерево страниц: {learned}')
 
     def on_written(self, event, storage, craft) -> jarvis.Response:
-        """Запись случилась: её строка — в объём ревью, задетые страницы — читать заново."""
+        """Запись случилась: её строка — в объём ревью, задетые страницы — читать заново.
+
+        Команда без id цели (`--date`, `tasks add`) легла на страницу, которую
+        замок по команде не узнает: дерево сбрасывается целиком, иначе
+        следующая запись судилась бы по списку детей без только что записанного.
+        """
         command = craft.command_of(event.tool_input)
+        parts = craft.split_commands(command) or [command]
+        blind = any(craft.write_targets(part).dated or not craft.target_ids(part) for part in parts)
         targets = craft.target_ids(command)
         with state_lock(storage):
             released = release_row(storage, row_key(event, command))
             tree = read_tree.load(storage, time.time())
-            if targets:
+            if blind:
+                tree.apply('forget_all')
+            elif targets:
                 tree.apply('forget', targets)
             read_tree.save(storage, tree)
         row = 'строка типа в объёме' if released else 'отложенной строки нет'
-        return jarvis.Silence(reason=f'запись прошла: {row}, сброшено в дереве: {len(targets)}')
+        dropped = 'всё дерево: у записи нет id цели' if blind else str(len(targets))
+        return jarvis.Silence(reason=f'запись прошла: {row}, сброшено в дереве: {dropped}')
 
     def warn_once(self, storage, craft, state: dict, reason: str) -> str | None:
         """Текст в ход о том, что место записи не проверяется; раз за сессию.
@@ -299,6 +315,7 @@ class Module(jarvis.Module):
             # страницы. Пропуск отдал бы запись без скилла типа, поэтому
             # запись закрыта до починки.
             return jarvis.Deny(reason=entity_reason(error))
+        tags = craft.find_tags(command, entries)
         try:
             state = read_state(storage, craft)
             tree = read_tree.load(storage, time.time())
@@ -306,17 +323,16 @@ class Module(jarvis.Module):
                      for part in craft.split_commands(command) or [command]]
             place = settle(entries, page_types(parts, state[READS_KEY], os.environ.get(BASE_ENV),
                                                lambda text: craft.find_tags(text, entries), tree=tree))
+            targets = [anchor for found, _ in parts for anchor in found.anchors]
+            # Тип записи — в объём ревью, когда запись случится: только выбор
+            # критериев, без решения замка. Что узнал из API — в дерево прочитанного.
+            with state_lock(storage):
+                hold_row(storage, row_key(event, command), entity_row(event, command, targets, place, tags))
+                read_tree.save(storage, tree)
         except ValueError as error:
             # Ошибка хука харнес считает неблокирующей: упавший замок пропустил
-            # бы запись. Испорченное состояние или отступ — запрет с выходом.
-            return jarvis.Deny(reason=broken_reason(storage, error))
-        tags = craft.find_tags(command, entries)
-        targets = [anchor for found, _ in parts for anchor in found.anchors]
-        # Тип записи — в объём ревью, когда запись случится: только выбор
-        # критериев, без решения замка. Что узнал из API — в дерево прочитанного.
-        with state_lock(storage):
-            hold_row(storage, row_key(event, command), entity_row(event, command, targets, place, tags))
-            read_tree.save(storage, tree)
+            # бы запись. Испорченный файл замка или отступ — запрет с выходом.
+            return jarvis.Deny(reason=broken_reason(error))
         return self.decide(entries, tags, place, storage, craft, state)
 
     def decide(self, entries, tags, place: Place, storage, craft, state: dict) -> jarvis.Response:

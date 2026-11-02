@@ -158,20 +158,27 @@ class Api:
 
     def cached_children(self, page_id: str, anchor: str | None) -> list[dict] | None:
         """Дети из дерева прочитанного, если их хватает месту: полный список или
-        начало списка, в котором уже стоит anchor."""
+        начало списка, в котором уже стоит anchor.
+
+        Полный список без anchor устарел: блок лёг после чтения, и такой
+        список место не судит — дети запрашиваются у API.
+        """
         children, complete = self.read_tree.children(page_id) if self.read_tree is not None else (None, False)
         if children is None:
             return None
-        if complete or (anchor is not None and any(same_id(child[ID_KEY], anchor) for child in children)):
-            return children
-        return None
+        if anchor is not None:
+            return children if any(same_id(child[ID_KEY], anchor) for child in children) else None
+        return children if complete else None
 
-    def children(self, page_id: str, anchor: str | None = None) -> list[dict]:
-        """Прямые дети страницы по порядку. Сама страница и дети ложатся в память блоков."""
+    def children(self, page_id: str, anchor: str | None = None, fresh: bool = False) -> list[dict]:
+        """Прямые дети страницы по порядку. Сама страница и дети ложатся в память блоков.
+
+        fresh — мимо памяти проверки и дерева прочитанного, прямо из API.
+        """
         key = page_id.lower()
-        if key in self.kids:
+        if not fresh and key in self.kids:
             return self.kids[key]
-        cached = self.cached_children(page_id, anchor)
+        cached = None if fresh else self.cached_children(page_id, anchor)
         if cached is not None:
             self.kids[key] = cached
             return cached
