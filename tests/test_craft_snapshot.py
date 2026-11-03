@@ -286,6 +286,32 @@ class ProviderTest(unittest.TestCase):
         worst = provider.ATTEMPTS_429 * provider.CALL_TIMEOUT + sum(provider.BACKOFF_429_SECONDS)
         self.assertLess(worst, installer.HOOK_TIMEOUT_SEC, f'худший случай {worst} с')
 
+class RoutineSkillTest(unittest.TestCase):
+    """Скилл заведения рутины: парный модуль только для Claude, промпт зовёт craft-snapshot."""
+
+    folder = MODULES_DIR / 'craft-snapshot-claude'
+
+    def test_the_module_exists_only_for_claude_and_needs_the_refresh_skill(self) -> None:
+        from jarvis import manifest
+
+        header = manifest.load(self.folder)
+        self.assertEqual(header.harness, 'claude')
+        self.assertIn('craft-snapshot', header.requires)
+
+    def test_the_routine_prompt_only_calls_the_refresh_skill(self) -> None:
+        text = (self.folder / 'skill' / 'SKILL.md').read_text(encoding='utf-8')
+        prompt = re.search(r'```text\n(.+?)\n```', text, re.S).group(1)
+        self.assertIn('craft-snapshot', prompt)
+        self.assertEqual(len(prompt.splitlines()), 1, 'порядок работы живёт в скилле, не в промпте')
+
+    def test_the_schedule_is_inside_the_night_window_moscow_time(self) -> None:
+        text = (self.folder / 'skill' / 'SKILL.md').read_text(encoding='utf-8')
+        minute, hour = re.search(r'CRON_TZ=Europe/Moscow (\d+) (\d+) \* \* \*', text).groups()
+        self.assertEqual(int(hour), 2)
+        self.assertTrue(30 <= int(minute) < 60)
+        self.assertNotIn(int(minute), (0, 30))
+
+
 
 if __name__ == '__main__':
     unittest.main()
