@@ -123,16 +123,6 @@ class MentionCheckTest(unittest.TestCase):
         self.add_module('craft-note', files={'README.md': 'Сверяет craft-reconcile.\n'})
         self.run_installer()
 
-    def test_an_exemption_covers_only_its_file_and_slugs(self) -> None:
-        intro = "INTRO = 'craft-task для задачи, скилл craft-reconcile'\n"
-        self.add_module('craft-task')
-        self.add_module('craft-reconcile')
-        self.add_module('craft-snapshot', files={'lib/__init__.py': intro, 'skill/SKILL.md': 'craft-task\n'})
-        with self.assertRaises(ValueError) as caught:
-            self.run_installer()
-        self.assertIn('файл skill/SKILL.md:1 называет модуль «craft-task»', str(caught.exception))
-        self.assertNotIn('lib/__init__.py', str(caught.exception))
-
     def test_the_real_set_installs(self) -> None:
         self.run_installer(MODULES_DIR)
 

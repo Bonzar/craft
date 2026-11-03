@@ -105,15 +105,6 @@ IGNORED = shutil.ignore_patterns('__pycache__', '*.pyc')
 MENTION_MODULE_WORD = re.compile(r'(?i)(?<!\w)(?:модул\w*|modules?)(?!\w)')
 MENTION_LIST_ITEM = re.compile(r'\s*[«`"\']?([a-z0-9-]+)[»`"\']?(\s*,|\s+(?:и|and)(?!\w))?')
 MENTION_PATH_HEADS = (*PARTS, 'module.toml', 'README.md')
-# Исключения: (модуль, файл от папки модуля) → slug'и, которые там законны вне
-# requires и for. Каждое исключение временное и с причиной.
-MENTION_EXEMPTIONS = {
-    # До решения Влада по тексту INTRO: вступление снимка памяти — его дословный
-    # текст, и называет скиллы типов по slug. Править без его ока нельзя.
-    ('craft-snapshot', 'lib/__init__.py'): {
-        'craft-task', 'craft-stage', 'craft-section', 'craft-note', 'craft-reconcile',
-    },
-}
 # Теги сущности: файл data/entity.json модуля, поле tags. По этим файлам замок
 # craft-type-lock собирает справочник «тег → скилл» на каждой записи в Craft;
 # модуль сущности объявляет себя замку полем `for`, и без файла замок
@@ -1037,9 +1028,8 @@ def check_mentions(manifests: list) -> None:
             except UnicodeDecodeError:
                 continue  # бинарь: в нём не пишут прозой
             relative = file.relative_to(target.path).as_posix()
-            exempt = MENTION_EXEMPTIONS.get((target.slug, relative), set())
             for number, line in enumerate(lines, 1):
-                for slug in sorted(mentions_in_line(line, slugs, compound, path) - allowed - exempt):
+                for slug in sorted(mentions_in_line(line, slugs, compound, path) - allowed):
                     problems.append(f'модуль «{target.slug}», файл {relative}:{number} называет модуль «{slug}»')
     if problems:
         raise ValueError(
