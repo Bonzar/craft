@@ -5,6 +5,8 @@
 
 - читает шапки модулей и проверяет requires по slug и маскам семейств;
 - берёт из набора те модули, что существуют для выбранного харнеса;
+- там, где нет человека (JARVIS_AUTONOMOUS=1), не ставит модули с
+  `autonomous = false` и называет их в отчёте;
 - ставит столько копий модуля, сколько сказано в шапке полем `copies`;
 - раскладывает части модуля по закреплённым именам папок — каждую туда, где её
   читает тот, кому она нужна;
@@ -52,6 +54,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / 'core'))
 
 from jarvis import manifest as manifest_reader  # noqa: E402
+from jarvis.autonomy import is_autonomous  # noqa: E402
 from jarvis import mode as mode_reader  # noqa: E402
 from jarvis import wrappers  # noqa: E402
 from jarvis.registry import CORE_DIR  # noqa: E402
@@ -165,6 +168,7 @@ class Report:
     lines: list[tuple[str, str]] = field(default_factory=list)
     parts: list[tuple[str, str, str]] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     source: dict = field(default_factory=dict)
@@ -178,7 +182,9 @@ class Report:
         for slug, event in self.lines:
             out.append(f'  {slug}: строка на событие {event}')
         for where in self.removed:
-            out.append(f'  убрано, в источнике больше нет: {where}')
+            out.append(f'  убрано, в этой установке его нет: {where}')
+        for slug in self.skipped:
+            out.append(f'  не поставлено: человека нет, а в шапке autonomous = false: {slug}')
         for warning in self.warnings:
             out.append(f'  ВНИМАНИЕ: {warning}')
         for error in self.errors:
@@ -866,6 +872,14 @@ def for_harness(manifests: list, harness: str) -> list:
     return [m for m in manifests if m.harness in (None, harness)]
 
 
+def for_autonomy(manifests: list, autonomous: bool, report: Report) -> list:
+    """Без человека модуль с `autonomous = false` не ставится; пропуск называется в отчёте."""
+    if not autonomous:
+        return manifests
+    report.skipped.extend(m.slug for m in manifests if not m.autonomous)
+    return [m for m in manifests if m.autonomous]
+
+
 def copies_of(manifest) -> list[str]:
     """Slug'и копий модуля. Копия одна — slug тот же, без номера."""
     if manifest.copies == 1:
@@ -1253,7 +1267,7 @@ def install(args: argparse.Namespace) -> Report:
     # Упоминания сверяются по всему набору, а не по модулям харнеса: исход
     # проверки не зависит от того, под какой харнес идёт установка.
     check_mentions(discovered)
-    manifests = for_harness(discovered, backend.name)
+    manifests = for_autonomy(for_harness(discovered, backend.name), is_autonomous(), report)
     check_requires(manifests, report)
     check_events(manifests, report, backend)
     plan = expand(manifests)

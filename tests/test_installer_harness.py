@@ -158,6 +158,64 @@ class HarnessAndCopiesTest(unittest.TestCase):
         self.run_installer('--harness', 'codex', '--no-trust')
         self.assertTrue((self.modules_root() / 'everywhere').is_dir())
 
+    # --- без человека ---
+
+    def without_person(self) -> None:
+        previous = os.environ.get('JARVIS_AUTONOMOUS')
+        os.environ['JARVIS_AUTONOMOUS'] = '1'
+        self.addCleanup(lambda: os.environ.pop('JARVIS_AUTONOMOUS') if previous is None
+                        else os.environ.__setitem__('JARVIS_AUTONOMOUS', previous))
+
+    def test_a_module_not_for_autonomous_runs_is_skipped_without_a_person(self) -> None:
+        self.add_module('needs-person', 'slug = "needs-person"\nautonomous = false\n')
+        self.add_module('everywhere', 'slug = "everywhere"\n')
+        self.without_person()
+        report = self.run_installer()
+        self.assertEqual(report.installed, ['everywhere'])
+        self.assertEqual(report.skipped, ['needs-person'])
+        self.assertFalse((self.modules_root() / 'needs-person').exists())
+        self.assertIn('needs-person', report.render())
+
+    def with_person(self) -> None:
+        previous = os.environ.pop('JARVIS_AUTONOMOUS', None)
+        if previous is not None:
+            self.addCleanup(os.environ.__setitem__, 'JARVIS_AUTONOMOUS', previous)
+
+    def test_a_module_not_for_autonomous_runs_is_installed_with_a_person(self) -> None:
+        self.add_module('needs-person', 'slug = "needs-person"\nautonomous = false\n')
+        self.with_person()
+        report = self.run_installer()
+        self.assertEqual(report.installed, ['needs-person'])
+        self.assertEqual(report.skipped, [])
+
+    def test_an_autonomous_install_takes_away_what_a_person_install_left(self) -> None:
+        self.add_module('needs-person', 'slug = "needs-person"\nautonomous = false\n')
+        self.with_person()
+        self.run_installer()
+        self.without_person()
+        report = self.run_installer()
+        self.assertFalse((self.modules_root() / 'needs-person').exists())
+        self.assertIn(str(self.modules_root() / 'needs-person'), report.removed)
+        self.assertNotIn('в источнике больше нет', report.render())
+
+    def test_a_dry_run_without_a_person_names_the_skipped_module(self) -> None:
+        self.add_module('needs-person', 'slug = "needs-person"\nautonomous = false\n')
+        self.without_person()
+        report = self.run_installer('--dry-run')
+        self.assertEqual(report.installed, [])
+        self.assertEqual(report.skipped, ['needs-person'])
+
+    def test_a_module_needing_a_skipped_one_is_warned_about(self) -> None:
+        self.add_module('needs-person', 'slug = "needs-person"\nautonomous = false\n')
+        self.add_module('user', 'slug = "user"\nrequires = ["needs-person"]\n')
+        self.without_person()
+        report = self.run_installer('--dry-run')
+        self.assertTrue(any('needs-person' in warning for warning in report.warnings))
+
+    def test_the_session_anchor_is_not_for_autonomous_runs(self) -> None:
+        anchor = installer.manifest_reader.load(Path(__file__).resolve().parents[1] / 'modules' / 'craft-session-anchor')
+        self.assertFalse(anchor.autonomous)
+
     def test_the_default_harness_is_claude(self) -> None:
         self.assertEqual(installer.parse_args([]).harness, 'claude')
 

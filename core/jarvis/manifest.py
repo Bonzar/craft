@@ -1,12 +1,13 @@
 """Шапка модуля и разбор requires.
 
-Шапка из шести полей, файл `module.toml` в корне папки модуля:
+Шапка из семи полей, файл `module.toml` в корне папки модуля:
 
     slug = "lock-irreversible-shell"
     events = ["pre-tool", "prompt"]
     requires = ["command-tree-*"]
     harness = "claude"
     copies = 1
+    autonomous = false
 
 - `slug` — имя модуля. От имени папки не зависит, по набору уникален.
 - `for` — чему модуль служит: slug модулей и маски семейств. Только у адаптеров.
@@ -15,6 +16,8 @@
 - `harness` — харнес, только для которого модуль существует. Без поля модуль
   ставится во все.
 - `copies` — сколько копий ставит установщик. Только у хуков, по умолчанию одна.
+- `autonomous` — ставится ли модуль туда, где нет человека (JARVIS_AUTONOMOUS=1).
+  При `false` установщик в такое окружение его не ставит. Без поля — ставится.
 
 TOML взят потому, что его читает стандартная библиотека Python 3.11
 (`tomllib`), а зависимостей у нас нет. Данных, режима, вида и привязки в шапке
@@ -44,7 +47,7 @@ MANIFEST_NAME = 'module.toml'
 # запрещённых имён нет и не нужно: папка ядра внутри модуля называется с
 # подчёркивания, а его в slug быть не может.
 SLUG_PATTERN = re.compile(r'^[a-z0-9-]+$')
-FIELDS = ('slug', 'for', 'events', 'requires', 'harness', 'copies')
+FIELDS = ('slug', 'for', 'events', 'requires', 'harness', 'copies', 'autonomous')
 FAMILY_SUFFIX = '-*'
 # Копия получает slug с номером на конце; номер копия читает из своего slug.
 COPY_SLUG = re.compile(r'^(?P<base>.+)-(?P<index>[1-9][0-9]*)$')
@@ -60,6 +63,7 @@ class Manifest:
     serves: tuple[str, ...] = ()  # поле `for`: `for` — ключевое слово Python
     harness: str | None = None
     copies: int = 1
+    autonomous: bool = True
     path: Path | None = None
 
 
@@ -115,6 +119,10 @@ def parse(text: str, where: str = MANIFEST_NAME, path: Path | None = None) -> Ma
             'копировать нечего — строки хука у модуля нет'
         )
 
+    autonomous = raw.get('autonomous', True)
+    if not isinstance(autonomous, bool):
+        raise ValueError(f'{where}: поле autonomous — true или false, а не {autonomous!r}')
+
     return Manifest(
         slug=slug,
         events=events,
@@ -122,6 +130,7 @@ def parse(text: str, where: str = MANIFEST_NAME, path: Path | None = None) -> Ma
         serves=_string_list(raw, 'for', where, bare_string=True),
         harness=harness.strip() if isinstance(harness, str) else None,
         copies=copies,
+        autonomous=autonomous,
         path=path,
     )
 

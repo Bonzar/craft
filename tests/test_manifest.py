@@ -47,6 +47,14 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.parse('slug = "a"\nharness = ""\n')
 
+    def test_autonomous_is_an_optional_boolean_true_by_default(self) -> None:
+        self.assertTrue(m.parse('slug = "a"\n').autonomous)
+        self.assertFalse(m.parse('slug = "a"\nautonomous = false\n').autonomous)
+        self.assertTrue(m.parse('slug = "a"\nautonomous = true\n').autonomous)
+        for bad in ('"false"', '0', '1'):
+            with self.assertRaises(ValueError, msg=bad):
+                m.parse(f'slug = "a"\nautonomous = {bad}\n')
+
     def test_copies_must_be_a_whole_number_of_at_least_one(self) -> None:
         for bad in ('0', '-2', '"3"', 'true', '1.5'):
             with self.assertRaises(ValueError, msg=bad):
