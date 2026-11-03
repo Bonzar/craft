@@ -1,55 +1,31 @@
 #!/usr/bin/env python3
-"""Модуль env-refresh: набор модулей догоняет main на старте облачной сессии.
+"""Модуль env-refresh: сессия узнаёт, что её набор модулей устарел.
 
-Зачем. Модули ставит setup-скрипт окружения, а он выполняется один раз — при
-сборке снимка окружения; дальше сессии стартуют из снимка, пропуская скрипт
-(дока cloud-environments, раздел Environment caching, 19.09.2026). Код
-репозитория платформа отдаёт свежим на каждом старте, а набор в домашнем
-каталоге остаётся тем, каким его застал снимок: до недели старым. Этот модуль
-догоняет его до main.
+Зачем. Набор модулей ставится один раз, а репозиторий, из которого он
+поставлен, меняется дальше. Сессия на старом наборе работает по старым правилам
+и скиллам, а человек не знает, что окружение надо обновить.
 
-Только догоняет. Набор трогается ровно в одном случае: коммит, из которого он
-поставлен, — предок нынешней головы main, то есть набор просто отстал.
-Поставлен он из ветки и предком main не является — это осознанный выбор
-человека, и модуль молчит. Журнала установки нет вовсе — окружение не наше,
-набор не ставится: приносить его туда, где его нарочно нет, модуль не вправе.
+База — установленная копия, в любом харнесе и окружении. Она сверяет набор с
+удалённым по коммитам в его файлы (`freshness.py`) и, если набор отстал,
+говорит в контекст, что окружение надо обновить, с версиями. Ничего не ставит и
+не меняет. Проверить не вышло — говорит и это, с причиной. Набор из ветки и
+модуль, которого на удалённом нет, — выбор человека, тут база молчит.
 
-Где он работает. Только в облачной сессии Claude Code on the web: кеш
-окружения — её особенность. Без признака `CLAUDE_CODE_REMOTE` модуль молчит. В
-автономном прогоне тоже молчит: остановка старта имеет смысл там, где её есть
-кому исполнить, а рутина по ней встанет и работу не сделает.
+Адаптер облачного Claude — копия из чекаута. В облаке снимок окружения отстаёт
+от main до недели (дока cloud-environments, раздел Environment caching,
+19.09.2026), и набор там не предупреждает, а догоняет main сам: адаптер берёт
+вердикт базы и, если набор craft отстал, ставит его заново. Её зовёт строка хука
+в `.claude/settings.json` репозитория: она приезжает с чекаутом и потому свежая
+по построению. База в облаке при живом адаптере молчит, чтобы не говорить
+дважды. Вне облака копия из чекаута молчит: предупреждает установленная.
 
-Две роли одного файла.
+Две роли адаптера. Копия из чекаута — запускатель: сверяет, доносит объекты и
+разворачивает main рядом. Копия из распаковки — работник: ставит набор своим же
+установщиком из того же коммита, иначе договор между модулем и установщиком
+(флаги, форма журнала) разъезжается — это поймала живая проба 19.09.2026.
 
-Копия из чекаута — запускатель. Её зовёт строка хука из `.claude/settings.json`
-самого репозитория, она приезжает с чекаутом и потому свежая по построению. Она
-сверяет набор с main, доносит объекты и разворачивает main рядом — и на этом её
-работа кончается.
-
-Копия из распаковки — работник. Установку делает она, своим же установщиком из
-того же коммита: договор между модулем и установщиком (флаги, форма журнала)
-живёт в одном коммите, и стороны обязаны браться оттуда же. Иначе выходит то,
-что поймала живая проба 19.09.2026: модуль с ветки позвал установщик из main
-флагами, которых в main ещё нет, и установщик отказал на разборе аргументов.
-Копии модуля в распаковке нет — передавать работу некому: одна строка в
-контекст, ничего не тронуто.
-
-Что не трогается. Рабочее дерево сессии, её HEAD и ветка: ни checkout, ни
-reset, ни смены ветки. `git fetch` доносит объекты в хранилище клона, а сам
-набор ставится из распаковки main рядом.
-
-Провал ничего не портит. Прежний набор уходит в сторону одним переименованием и
-возвращается на место, если установка не дошла до конца. Запасных путей нет:
-либо набор обновился, либо в контекст уходит одна строка с причиной.
-
-Успех останавливает старт. Контекст этого старта собран прежним набором, и
-работать по нему нельзя: модуль печатает остановку и просит человека сжать
-контекст. После сжатия событие приходит уже с `source = compact`, на нём модуль
-не стоит, и старт печатается по новому набору.
-
-Что модуль знает и чего не знает. Он знает только про свежесть окружения: ни
-про Craft, ни про поставщиков данных, ни про стартовый контекст — и в их
-цепочку не встраивается.
+Что не трогается. Рабочее дерево сессии, её HEAD и ветка. Провал установки
+возвращает прежний набор на место целиком.
 """
 
 import argparse
@@ -70,20 +46,25 @@ for _core in (_MODULE_DIR / '_core', _MODULE_DIR.parents[1] / 'core'):
     if _core.is_dir():
         sys.path.insert(0, str(_core))
         break
+# Сверка живёт рядом, в той же части hooks.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jarvis  # noqa: E402
-from jarvis import wrappers  # noqa: E402
+from jarvis import vcs, wrappers  # noqa: E402
+
+import freshness  # noqa: E402
 
 # Признак облачной сессии Claude Code on the web.
 ENV_CLOUD = 'CLAUDE_CODE_REMOTE'
 CLOUD = 'true'
+# Корень проекта сессии Claude: в облаке там чекаут с адаптером.
+ENV_PROJECT = 'CLAUDE_PROJECT_DIR'
 # Каталог настроек харнеса задаёт сам харнес, а не прошлая установка: ставим
 # туда, откуда идущая сессия читает настройки.
 ENV_SETTINGS = 'CLAUDE_CONFIG_DIR'
 SETTINGS_DEFAULT = '~/.claude'
 LEDGER = ('jarvis', 'installed.json')
-LEDGER_SOURCE = 'source'
-LEDGER_MODULES = 'modules'
+LEDGER_FILE = 'installed.json'
 JARVIS_DIR = 'jarvis'
 HARNESS_PARTS = ('skills', 'agents', 'rules')
 SETTINGS_FILE = 'settings.json'
@@ -98,28 +79,16 @@ WORKER = ('modules', 'env-refresh', 'hooks', 'module.py')
 WORK_FLAG = '--install'
 HARNESS_DEFAULT = 'claude'
 
-GIT = 'git'
-ORIGIN = 'origin'
-MAIN_REF = 'refs/heads/main'
 # Пределы у каждого шага свои и все вместе заведомо меньше срока хука: хук,
 # убитый харнесом посреди установки, вернуть набор на место уже не успеет.
-LS_REMOTE_TIMEOUT_SEC = 120
-FETCH_TIMEOUT_SEC = 600
+ARCHIVE_TIMEOUT_SEC = 600
 INSTALL_TIMEOUT_SEC = 600
-# `git merge-base --is-ancestor` отвечает кодом: 0 — предок, 1 — не предок,
-# остальное — не ответил вовсе (в мелком клоне коммита может не быть).
-ANCESTOR = 0
-NOT_ANCESTOR = 1
 
 JOURNAL = 'env-refresh.jsonl'
-NOT_CLOUD = 'не облачная сессия'
 AUTONOMOUS = 'автономный прогон: набор рутины без человека не трогаем'
-INSTALLED_COPY = 'запуск не из чекаута: набор догоняет копия из чекаута'
+DEFER = 'облако с адаптером в чекауте: набор догоняет он, база молчит'
+LOCAL_CHECKOUT = 'не облако: предупреждает установленная копия, копия из чекаута молчит'
 NO_LEDGER = 'журнала установки нет: набор в этом окружении ставили не мы'
-NO_SOURCE = 'журнал не назвал коммит источника: чем набор поставлен, неизвестно'
-SAME = 'набор уже стоит по main {head}'
-OWN_CHOICE = 'набор поставлен из {old} — это не предок main {new}, не трогаем'
-UNCLEAR = 'предок ли {old} для main {new}, узнать не вышло: {reason}'
 UPDATED = 'набор обновлён с {old} на {new}'
 NO_WORKER = ('в main нет модуля свежести ({where}): передать работу некому, '
              'а ставить набор чужим кодом модуль не станет')
@@ -142,62 +111,17 @@ class Trouble(Exception):
     """Причина, по которой набор остался прежним. Текст идёт человеку как есть."""
 
 
-def reason_of(text: str) -> str:
-    """Причина отказа из вывода команды: последняя содержательная строка.
-
-    Последняя, а не первые знаки: у argparse и у git самое главное стоит в
-    конце, а обрезание по знакам рвёт фразу посреди слова — человек видит
-    «error: un» и не знает ничего.
-    """
-    lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
-    return lines[-1] if lines else 'причину команда не назвала'
-
-
-def git(where: Path, *args: str, timeout: int) -> str:
-    """Вызов git. Не вышло — Trouble с причиной, а не пустой ответ."""
-    try:
-        done = subprocess.run(
-            [GIT, '-C', str(where), *args],
-            capture_output=True, text=True, check=False, timeout=timeout,
-        )
-    except FileNotFoundError as failure:
-        raise Trouble('в окружении нет git') from failure
-    except (OSError, subprocess.SubprocessError) as failure:
-        raise Trouble(f'git {args[0]} не отработал: {type(failure).__name__}: {failure}') from failure
-    if done.returncode != 0:
-        raise Trouble(f'git {args[0]} вернул {done.returncode}: {reason_of(done.stderr)}')
-    return done.stdout
-
-
 def settings_dir(env) -> Path:
     """Каталог настроек идущего харнеса."""
     return Path(env.get(ENV_SETTINGS) or SETTINGS_DEFAULT).expanduser()
 
 
 def installed(settings: Path) -> tuple[dict, dict] | None:
-    """Журнал прошлой установки: чем набор поставлен и что в нём стоит.
-
-    Журнала нет — None: набор в этом окружении ставили не мы, и приносить его
-    туда, где его нарочно нет, модуль не вправе.
-    """
+    """Журнал прошлой установки в каталоге настроек. Нет журнала — None."""
     try:
-        text = settings.joinpath(*LEDGER).read_text(encoding='utf-8')
-    except OSError:
-        return None
-    try:
-        ledger = json.loads(text)
-    except ValueError as failure:
-        raise Trouble(f'журнал установки не читается: {failure}') from failure
-    modules = ledger.get(LEDGER_MODULES)
-    # Запись модуля всегда несёт свой каталог: по этому журнал прежней плоской
-    # формы отличается от нынешнего, у которого источник и модули врозь.
-    if isinstance(modules, dict) and 'dir' not in modules:
-        source = ledger.get(LEDGER_SOURCE)
-        return (source if isinstance(source, dict) else {}), modules
-    return {}, ledger
-
-
-# --- запускатель: сверить, донести, передать работу ---
+        return freshness.read_ledger(settings.joinpath(*LEDGER))
+    except freshness.LedgerError as failure:
+        raise Trouble(str(failure)) from failure
 
 
 def checkout_of(entry: Path) -> Path | None:
@@ -210,49 +134,22 @@ def checkout_of(entry: Path) -> Path | None:
     return root if root.joinpath(*INSTALLER).is_file() else None
 
 
-def remote_head(checkout: Path) -> str:
-    """Голова main у origin. Один запрос, объекты не качаются."""
-    out = git(checkout, 'ls-remote', ORIGIN, MAIN_REF, timeout=LS_REMOTE_TIMEOUT_SEC)
-    first = out.split('\n', 1)[0].split('\t', 1)[0].strip()
-    if not first:
-        raise Trouble(f'у origin нет ветки main (ссылка {MAIN_REF})')
-    return first
-
-
-def fetch(checkout: Path) -> None:
-    """Донести объекты main в хранилище клона. Рабочее дерево не трогается."""
-    git(checkout, 'fetch', '--quiet', ORIGIN, MAIN_REF, timeout=FETCH_TIMEOUT_SEC)
-
-
-def behind_main(checkout: Path, old: str, head: str) -> tuple[bool, str]:
-    """Отстал ли набор: предок ли его коммит нынешней голове main.
-
-    Предок — набор просто отстал, догоняем. Не предок — набор поставлен из
-    ветки нарочно, и стирать его нельзя. Ответа нет вовсе (клон мелкий, коммита
-    в нём нет) — считаем, что не отстал: трогаем только то, про что доказано,
-    что оно отстало.
-    """
-    try:
-        done = subprocess.run(
-            [GIT, '-C', str(checkout), 'merge-base', '--is-ancestor', old, head],
-            capture_output=True, text=True, check=False, timeout=LS_REMOTE_TIMEOUT_SEC,
-        )
-    except (OSError, subprocess.SubprocessError) as failure:
-        return False, UNCLEAR.format(old=_short(old), new=_short(head),
-                                     reason=f'{type(failure).__name__}: {failure}')
-    if done.returncode == ANCESTOR:
-        return True, ''
-    if done.returncode == NOT_ANCESTOR:
-        return False, OWN_CHOICE.format(old=_short(old), new=_short(head))
-    return False, UNCLEAR.format(old=_short(old), new=_short(head),
-                                 reason=reason_of(done.stderr))
+def adapter_in_charge(env) -> bool:
+    """Облачный Claude с адаптером в чекауте проекта: набор догоняет он."""
+    project = env.get(ENV_PROJECT)
+    return (env.get(ENV_CLOUD) == CLOUD and bool(project)
+            and Path(project).joinpath(*WORKER).is_file()
+            and Path(project).joinpath(*INSTALLER).is_file())
 
 
 def unpack(checkout: Path, head: str, into: Path) -> None:
     """Развернуть main рядом, не трогая рабочее дерево."""
     archive = into / 'main.tar'
-    git(checkout, 'archive', '--format=tar', '-o', str(archive), head,
-        timeout=FETCH_TIMEOUT_SEC)
+    try:
+        vcs.run(['git', 'archive', '--format=tar', '-o', str(archive), head], checkout,
+                timeout=ARCHIVE_TIMEOUT_SEC)
+    except vcs.VcsError as failure:
+        raise Trouble(str(failure)) from failure
     with tarfile.open(archive) as bundle:
         bundle.extractall(into, filter='data')
     archive.unlink()
@@ -274,41 +171,64 @@ def hand_off(unpacked: Path, checkout: Path, head: str, python: str) -> str:
     except (OSError, subprocess.SubprocessError) as failure:
         raise Trouble(f'работник не запустился: {type(failure).__name__}: {failure}') from failure
     if done.returncode != 0:
-        raise Trouble(f'работник вернул {done.returncode}: {reason_of(done.stderr)}')
+        raise Trouble(f'работник вернул {done.returncode}: {vcs.last_line(done.stderr)}')
     return done.stdout.strip()
 
 
 class Module(jarvis.Module):
-    """Запускатель: сверка с main и передача установки работнику из распаковки."""
+    """База в установленной копии, адаптер облачного Claude в копии из чекаута."""
 
     def handle(self, event: jarvis.Event, runtime: jarvis.Runtime) -> jarvis.Response:
-        if os.environ.get(ENV_CLOUD) != CLOUD:
-            return self._note(runtime, event, NOT_CLOUD, jarvis.Silence(reason=NOT_CLOUD))
         if runtime.autonomous:
             return self._note(runtime, event, AUTONOMOUS, jarvis.Silence(reason=AUTONOMOUS))
         checkout = checkout_of(Path(__file__))
-        if checkout is None:
-            return self._note(runtime, event, INSTALLED_COPY,
-                              jarvis.Silence(reason=INSTALLED_COPY))
+        if checkout is not None:
+            if os.environ.get(ENV_CLOUD) != CLOUD:
+                return self._note(runtime, event, LOCAL_CHECKOUT,
+                                  jarvis.Silence(reason=LOCAL_CHECKOUT))
+            return self._adapt(checkout, runtime, event)
+        if adapter_in_charge(os.environ):
+            return self._note(runtime, event, DEFER, jarvis.Silence(reason=DEFER))
+        return self._warn(runtime, event)
+
+    def _warn(self, runtime, event) -> jarvis.Response:
+        """База: сверить и сказать, ничего не меняя."""
         started = time.monotonic()
-        settings = settings_dir(os.environ)
+        # Журнал лежит над каталогом модулей той установки, что запустила эту
+        # копию: так база находит его в любом харнесе, не зная его настроек.
+        ledger_path = Path(__file__).resolve().parents[3] / LEDGER_FILE
+        try:
+            ledger = freshness.read_ledger(ledger_path)
+        except freshness.LedgerError as failure:
+            text = freshness.UNKNOWN_HEAD.format(items=str(failure))
+            return self._note(runtime, event, str(failure), jarvis.Context(text),
+                              seconds=time.monotonic() - started)
+        if ledger is None:
+            return self._note(runtime, event, NO_LEDGER, jarvis.Silence(reason=NO_LEDGER),
+                              seconds=time.monotonic() - started)
+        source, _ = ledger
+        findings = freshness.check_all(source)
+        return self._say(runtime, event, findings, freshness.warning(findings), started)
+
+    def _adapt(self, checkout: Path, runtime, event) -> jarvis.Response:
+        """Адаптер облака: вердикт базы, и если набор craft отстал — поставить заново."""
+        started = time.monotonic()
         old = None
         try:
-            ledger = installed(settings)
+            ledger = installed(settings_dir(os.environ))
             if ledger is None:
-                return self._quiet(runtime, event, NO_LEDGER, started)
+                return self._note(runtime, event, NO_LEDGER, jarvis.Silence(reason=NO_LEDGER),
+                                  seconds=time.monotonic() - started)
             source, _ = ledger
             old = source.get('head')
-            head = remote_head(checkout)
-            if head == old:
-                return self._quiet(runtime, event, SAME.format(head=head), started)
-            if not old:
-                return self._quiet(runtime, event, NO_SOURCE, started)
-            fetch(checkout)
-            behind, why = behind_main(checkout, old, head)
-            if not behind:
-                return self._quiet(runtime, event, why, started)
-            return self._catch_up(checkout, source, old, head, runtime, event, started)
+            main, *rest = freshness.check_all(source, where=checkout)
+            if main.state != freshness.STALE:
+                findings = [main, *rest]
+                return self._say(runtime, event, findings, freshness.warning(findings), started)
+            said = self._catch_up(checkout, source, main.new)
+            text = ' '.join(part for part in (said, freshness.warning(rest)) if part)
+            return self._say(runtime, event, [main, *rest], text, started,
+                             reason=UPDATED.format(old=_short(old), new=_short(main.new)))
         except (Trouble, OSError) as failure:
             # Причина не глотается: она и в журнале модуля, и в контексте, где её
             # прочитает человек. Набор при этом цел — прежний, не половинчатый.
@@ -316,26 +236,22 @@ class Module(jarvis.Module):
             return self._note(runtime, event, str(failure), jarvis.Context(text),
                               seconds=time.monotonic() - started)
 
-    def _catch_up(self, checkout: Path, source: dict, old: str, head: str,
-                  runtime, event, started: float) -> jarvis.Response:
+    @staticmethod
+    def _catch_up(checkout: Path, source: dict, head: str) -> str:
         """Развернуть main рядом и отдать установку работнику из распаковки."""
         unpacked = Path(tempfile.mkdtemp(prefix='env-refresh-'))
         try:
             unpack(checkout, head, unpacked)
-            said = hand_off(unpacked, checkout, head, source.get('python') or sys.executable)
+            return hand_off(unpacked, checkout, head, source.get('python') or sys.executable)
         finally:
             shutil.rmtree(unpacked, ignore_errors=True)
-        return self._note(
-            runtime, event,
-            UPDATED.format(old=_short(old), new=_short(head)),
-            jarvis.Context(said) if said else jarvis.Silence(),
-            seconds=time.monotonic() - started,
-        )
 
-    def _quiet(self, runtime, event, reason: str, started: float) -> jarvis.Response:
-        """Набор не трогаем и в контекст не говорим: причина живёт в журнале."""
-        return self._note(runtime, event, reason, jarvis.Silence(reason=reason),
-                          seconds=time.monotonic() - started)
+    def _say(self, runtime, event, findings, text: str, started: float,
+             reason: str | None = None) -> jarvis.Response:
+        """Сказать в контекст, если есть что; сверка — в журнал модуля всегда."""
+        reason = reason or freshness.journal(findings)
+        response = jarvis.Context(text) if text else jarvis.Silence(reason=reason)
+        return self._note(runtime, event, reason, response, seconds=time.monotonic() - started)
 
     @staticmethod
     def _note(runtime, event, reason: str, response, seconds: float | None = None):
@@ -482,7 +398,7 @@ def run_installer(unpacked: Path, checkout: Path, head: str, source: dict,
     except (OSError, subprocess.SubprocessError) as failure:
         raise Trouble(f'установщик не запустился: {type(failure).__name__}: {failure}') from failure
     if done.returncode != 0:
-        raise Trouble(f'установщик вернул {done.returncode}: {reason_of(done.stderr)}')
+        raise Trouble(f'установщик вернул {done.returncode}: {vcs.last_line(done.stderr)}')
 
 
 def changed(checkout: Path, old: str | None, new: str) -> str:
@@ -490,25 +406,10 @@ def changed(checkout: Path, old: str | None, new: str) -> str:
     if not old:
         return CHANGED_UNKNOWN
     try:
-        # `-z`: имена разделены нулём и не экранируются. Без него git закавычит
-        # любой путь с не-ASCII символом, и первым сегментом станет кавычка.
-        out = git(checkout, 'diff', '--name-only', '-z', old, new,
-                  timeout=LS_REMOTE_TIMEOUT_SEC)
-    except Trouble:
+        names = vcs.Git(checkout).changed(old, new)
+    except vcs.VcsError:
         return CHANGED_UNKNOWN
-    slugs, areas = set(), set()
-    for line in out.split('\0'):
-        parts = line.strip().split('/')
-        if len(parts) > 2 and parts[0] == 'modules':
-            slugs.add(parts[1])
-        elif parts[0]:
-            areas.add(parts[0])
-    told = []
-    if slugs:
-        told.append('изменились модули: ' + ', '.join(sorted(slugs)))
-    if areas:
-        told.append('и остальное: ' + ', '.join(sorted(areas)))
-    return ' '.join(told) if told else 'файлы набора не изменились'
+    return freshness.describe(names) or 'файлы набора не изменились'
 
 
 def work(checkout: Path, head: str) -> int:
