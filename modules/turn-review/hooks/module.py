@@ -125,6 +125,18 @@ class Module(jarvis.Module):
         storage = runtime.storage
         # Показ идёт до остановки: состояние читается без починки, чинит stop.
         state = review.peek_state(storage)
+        if is_final(event) and state is not None and review.question_shown(event.message_text):
+            volume, damage = review.parse_volume_file(storage.path(review.VOLUME_FILE))
+            if (not damage and state.question_fingerprint is not None
+                    and state.question_fingerprint == review.fingerprint(volume)):
+                # Показываем вопрос, но не непроверенный отчёт вокруг него.
+                review.save_state(storage, replace(state, is_question_delivered=True))
+                question = (review.QUESTION_TEXT + '\n' + review.OPTION_REVIEW
+                            + '\n' + review.OPTION_RELEASE)
+                if state.last_remarks:
+                    remarks = '\n'.join(review.remark_line(item) for item in state.last_remarks)
+                    question = remarks + '\n\n' + question
+                return jarvis.UpdatedDisplay(text=question)
         try:
             hidden = answer_hidden(storage, state, runtime, review)
         except SourcesError:

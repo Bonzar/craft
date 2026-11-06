@@ -167,8 +167,8 @@ def to_event(raw: Mapping[str, Any]) -> Event:
         permission_options=tuple(raw.get('permission_suggestions') or ()),
         agent_id=raw.get('agent_id'),
         agent_type=raw.get('agent_type'),
-        message_text=raw.get('delta') if raw.get('hook_event_name') == 'MessageDisplay'
-        else raw.get('last_assistant_message'),
+        # Stop содержит исходный ответ: MessageDisplay мог скрыть его от человека.
+        message_text=raw.get('delta') if raw.get('hook_event_name') == 'MessageDisplay' else None,
     )
 
 

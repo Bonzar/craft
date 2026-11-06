@@ -34,7 +34,7 @@ from .entity_types import (
     WriteType, lost_writes_problem, selection_tags, types_text, write_types,
 )
 from .question import (
-    MAX_NUDGES, OPTION_RELEASE, OPTION_REVIEW, QUESTION_TOOL, RELEASE_PHRASE, answered_release,
+    MAX_NUDGES, OPTION_RELEASE, OPTION_REVIEW, QUESTION_TEXT, QUESTION_TOOL, RELEASE_PHRASE, answered_release,
     chosen_labels, is_review_question, review_question, stuck_text, question_shown, question_accepted,
 )
 from .records import (
@@ -48,6 +48,7 @@ from .state import (
     peek_state, save_state, state_lock,
 )
 from .texts import (
+    remark_line,
     NudgeFacts, brief_failure_text, joined, nudge_text, remarks_text, with_problem,
 )
 from .turns import claim_prompt_turn, clear_volume, prompt_id_of
@@ -64,7 +65,7 @@ __all__ = [
     'BRIEF_FILE', 'CHECKED_KEY', 'CLEAN_KEY', 'CRITERION_KEY', 'FINGERPRINT_CHARS',
     'FINGERPRINT_KEY', 'KINDS', 'KIND_ANCHOR', 'KIND_ANSWER', 'KIND_ENTITY', 'KIND_KEY',
     'KIND_PROMPT', 'KIND_READ', 'KIND_SKILL', 'KIND_WRITE', 'MAX_NUDGES', 'NO_BRIEF',
-    'OPTION_RELEASE', 'OPTION_REVIEW', 'PROMPT_ID_KEY', 'QUESTION_TOOL', 'RELEASE_PHRASE',
+    'OPTION_RELEASE', 'OPTION_REVIEW', 'PROMPT_ID_KEY', 'QUESTION_TEXT', 'QUESTION_TOOL', 'RELEASE_PHRASE',
     'REMARKS_KEY', 'REPORT_CLEAN', 'REPORT_RELEASED', 'REVIEW_SLUG', 'STATE_FILE', 'TEXT_KEY',
     'VERDICT_FILE', 'VOLUME_FILE', 'WHERE_KEY', 'Always', 'AnchorRecord', 'AnswerRecord',
     'BriefCriteria', 'BriefError', 'BriefParts', 'Craft', 'CriteriaCheck', 'Criterion',
@@ -77,7 +78,7 @@ __all__ = [
     'load_volume', 'lost_writes_problem', 'make_criterion', 'new_volume_id', 'nudge_text', 'parse_applies', 'parse_record',
     'parse_volume_file', 'peek_state', 'peek_verdict', 'peek_volume', 'prompt_id_of',
     'providers_problem', 'read_verdict', 'record_row', 'record_turn', 'remarks_text',
-    'review_criteria', 'review_question', 'save_state', 'selection_tags', 'state_lock',
+    'remark_line', 'review_criteria', 'review_question', 'save_state', 'selection_tags', 'state_lock',
     'stuck_text', 'summary_text', 'types_text', 'verdict_head', 'verdict_key',
     'volume_skills', 'with_problem', 'write_brief', 'write_types',
     'writes_before_turn',
