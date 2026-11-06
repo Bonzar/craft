@@ -68,6 +68,17 @@ class ConfirmTest(unittest.TestCase):
         self.storage = storage_at(Path(self.tmp.name))
         confirm.request(self.storage, 'probe', 'снести ветку', 'снеси ветку')
 
+    def test_cancel_withdraws_only_the_named_action(self):
+        confirm.request(self.storage, 'review', 'release', 'да')
+        confirm.request(self.storage, 'other', 'send', 'да')
+        confirm.match_prompt(self.storage, 'да')
+        confirm.cancel(self.storage, 'review', 'release')
+        self.assertFalse(confirm.take(self.storage, 'review', 'release'))
+        self.assertTrue(confirm.take(self.storage, 'other', 'send'))
+        confirm.request(self.storage, 'review', 'release', 'да')
+        confirm.cancel(self.storage, 'review', 'release')
+        self.assertEqual(confirm.match_prompt(self.storage, 'да'), [])
+
     def test_phrase_matches_one_to_one(self) -> None:
         granted = confirm.match_prompt(self.storage, 'снеси ветку')
         self.assertEqual([g.action for g in granted], ['снести ветку'])

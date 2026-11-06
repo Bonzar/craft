@@ -35,14 +35,14 @@ def option_labels(item: dict) -> set[str]:
     options = item.get(OPTIONS_FIELD)
     if not isinstance(options, list):
         return set()
-    labels = [option.get(LABEL_FIELD) for option in options if isinstance(option, dict)]
+    labels = [option.get(LABEL_FIELD) if isinstance(option, dict) else option for option in options]
     return {label.strip() for label in labels if isinstance(label, str)}
 
 
 def review_question(tool_input) -> str | None:
     """Текст вопроса о ревью в вызове AskUserQuestion; нет его — None."""
     for item in question_items(tool_input):
-        text = item.get(QUESTION_FIELD)
+        text = item.get(QUESTION_FIELD, item.get('title'))
         if isinstance(text, str) and (QUESTION_MARK in text or OUR_OPTIONS <= option_labels(item)):
             return text
     return None
@@ -71,7 +71,7 @@ def chosen_labels(answer, question: str) -> set[str]:
 def answered_release(tool_name: str | None, tool_input, answer,
                      state: ReviewState) -> ReviewState | None:
     """Ответ кнопкой на наш вопрос о ревью — новое состояние; иначе None."""
-    question = review_question(tool_input) if tool_name == QUESTION_TOOL else None
+    question = review_question(tool_input)
     if question is None:
         return None
     labels = chosen_labels(answer, question)
@@ -83,9 +83,8 @@ def answered_release(tool_name: str | None, tool_input, answer,
 
 
 def stuck_text(problem: str | None, last_remarks: tuple[dict, ...]) -> str:
-    # Ждать реплики модель не может: каждая остановка вернётся сюда же. Выход
-    # из петли — только вопрос человеку. Блок, а не форма «вопрос»: на
-    # остановке вопрос уходит контекстом, и Claude отпустил бы ход без него.
+    # Остановку держит обёртка: она же выбирает доступную форму вопроса.
+    # Модуль не должен называть инструмент конкретного харнеса.
     # Человек решает по замечаниям, а не вслепую: последние замечания идут в
     # текст этого блока с вопросом, и агент показывает их с предложением по
     # каждому. Подагенту они не идут.
@@ -94,9 +93,19 @@ def stuck_text(problem: str | None, last_remarks: tuple[dict, ...]) -> str:
         lines = '\n'.join(remark_line(item) for item in last_remarks)
         context = (f' Замечания последнего вердикта:\n{lines}\nПеред вопросом покажи человеку '
                    'каждое незакрытое замечание и предложи, что с ним сделать.')
-    return (f'{problem_prefix(problem)}Ход не отпущен: {QUESTION_TEXT} Спроси человека '
-            f'инструментом {QUESTION_TOOL}: вопрос «{QUESTION_TEXT}», варианты '
+    return (f'{problem_prefix(problem)}Ход не отпущен: {QUESTION_TEXT} Спроси человека: вопрос «{QUESTION_TEXT}», варианты '
             f'«{OPTION_REVIEW}» и «{OPTION_RELEASE}». Вопрос и подписи вариантов скопируй '
             'дословно: по ним хук узнаёт ответ. Без этого вопроса ход не закончится: каждая '
             'остановка вернётся сюда. Человек может ответить и репликой, в которой только '
             f'фраза «{RELEASE_PHRASE}».{context}')
+
+
+def question_shown(text) -> bool:
+    return isinstance(text, str) and all(
+        part in text for part in (QUESTION_TEXT, OPTION_REVIEW, OPTION_RELEASE))
+
+
+def question_accepted(questions) -> bool:
+    return questions is not None and any(
+        QUESTION_TEXT in item['title'] and OUR_OPTIONS <= set(item['options'])
+        for item in questions)

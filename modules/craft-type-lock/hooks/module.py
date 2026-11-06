@@ -25,7 +25,9 @@ hooks/owner.py, hooks/api.py). Цель не лежит ни на одной п�
 `post-tool` записи — только за запись, которая случилась.
 """
 
+import json
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -39,7 +41,7 @@ from entities import TagEntry, entity_reason, load_entities, load_tag_skills  # 
 from jarvis import events, wrappers  # noqa: E402
 from payload import write_of  # noqa: E402
 from place import BASE_ENV, Place, Verdict, page_types  # noqa: E402
-from review_row import entity_row, hold_row, release_row, row_key  # noqa: E402
+from review_row import append_row, entity_row, hold_row, release_row, row_key, skill_row  # noqa: E402
 from state import (  # noqa: E402
     READS_KEY,
     SKILLS_KEY,
@@ -92,6 +94,37 @@ def skill_slug(tool_input) -> str:
     return name.rsplit(PLUGIN_SEPARATOR, 1)[-1].strip()
 
 
+def file_skill_slug(event) -> str:
+    """Полный успешный вывод SKILL.md, а не упоминание пути в команде."""
+    if event.tool_name != 'Bash' or not isinstance(event.tool_input, dict):
+        return ''
+    command = event.tool_input.get('command')
+    if not isinstance(command, str):
+        return ''
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return ''
+    if len(words) != 2 or words[0] != 'cat':
+        return ''
+    path = Path(words[1])
+    if not path.is_absolute():
+        path = Path(event.cwd) / path
+    if path.name != 'SKILL.md':
+        return ''
+    try:
+        ledger = json.loads((MODULE_DIR.parent.parent / 'installed.json').read_text())
+        skills = ledger['modules'][path.parent.name]['parts']['skill']
+        if path.resolve() != (Path(skills) / 'SKILL.md').resolve():
+            return ''
+        text = path.read_text(encoding='utf-8')
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
+    if not text.strip() or not isinstance(event.tool_result, str) or text not in event.tool_result:
+        return ''
+    return path.parent.name
+
+
 def library(runtime: jarvis.Runtime, slug: str):
     """Часть lib соседа из requires. Нет её — ошибка с советом переустановить."""
     found = runtime.library(slug)
@@ -114,7 +147,7 @@ def deny_reason(entries: dict[str, TagEntry], tags: list[str], place: Place,
         reasons.append(f'Запись правит сущность «{entity.title}»: {pairs}.')
     if missing:
         reasons.append(f'В этом ходе не вызван скилл: {", ".join(missing)}. '
-                       f'Вызови его инструментом {SKILL_TOOL} и прочитай правила типа.')
+                       'Вызови скилл или прочитай целиком его SKILL.md. Затем прочитай правила типа.')
     for tag in unread:
         reads = ' или '.join(f'«blocks get {template} --depth -1»' for template in entries[tag].templates)
         reasons.append(f'В этом ходе не прочитан шаблон {tag}: прочитай {reads}.')
@@ -232,9 +265,12 @@ class Module(jarvis.Module):
             return self.on_read(event, storage, craft)
         if craft.is_craft_write(event.tool_name):
             return self.on_written(event, storage, craft)
-        if event.tool_name != SKILL_TOOL:
+        slug = skill_slug(event.tool_input) if event.tool_name == SKILL_TOOL else file_skill_slug(event)
+        if not slug:
             return jarvis.Silence(reason='вызван не скилл')
-        slug = skill_slug(event.tool_input)
+        if event.tool_name != SKILL_TOOL:
+            with state_lock(storage):
+                append_row(storage, skill_row(event, slug))
         if slug not in set(load_tag_skills(MODULE_DIR).values()):
             return jarvis.Silence(reason=f'скилл {slug or "без имени"} не скилл типа')
         with state_lock(storage):

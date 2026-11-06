@@ -15,12 +15,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 
 import jarvis  # noqa: E402
-from jarvis import events, wrappers  # noqa: E402
+from jarvis import events, wrappers
+from jarvis.questions import remember_questions, take_answer  # noqa: E402
 
 # Контракт поставщиков ревью: файл объёма в зоне сессии и id реплики в строке.
 VOLUME_FILE = 'turn-review-volume.jsonl'
 PROMPT_ID_FIELD = 'prompt_id'
 QUESTION_TOOL = 'AskUserQuestion'
+PENDING_QUESTIONS = 'review-prompts-questions.json'
 QUESTIONS_FIELD = 'questions'
 QUESTION_FIELD = 'question'
 AUTHOR = 'Влад'
@@ -29,7 +31,7 @@ SUBAGENT_REASON = 'вызов внутри подагента: в объём р�
 
 def questions_text(tool_input) -> str:
     items = tool_input.get(QUESTIONS_FIELD) if isinstance(tool_input, dict) else None
-    texts = [item.get(QUESTION_FIELD) for item in items if isinstance(item, dict)] \
+    texts = [item.get(QUESTION_FIELD, item.get('title')) for item in items if isinstance(item, dict)] \
         if isinstance(items, list) else []
     return '\n'.join(text for text in texts if isinstance(text, str))
 
@@ -44,7 +46,7 @@ def now() -> str:
 
 def prompt_id_of(event) -> str | None:
     """Id реплики харнеса из сырого события; нет его или он не строка — None."""
-    value = event.raw.get(PROMPT_ID_FIELD)
+    value = event.raw.get(PROMPT_ID_FIELD) or event.raw.get('turn_id')
     return value if isinstance(value, str) and value else None
 
 
@@ -65,13 +67,15 @@ class Module(jarvis.Module):
             return self.on_prompt(event, runtime)
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
-        if event.tool_name != QUESTION_TOOL:
+        if remember_questions(runtime.storage, PENDING_QUESTIONS, event):
+            return jarvis.Silence(reason='вопрос доставлен, ответа пока нет')
+        if event.human_answer is None:
             return jarvis.Silence(reason='вызов не вопрос человеку')
         # Ответ на вопрос самого ревью тоже ложится: что это вопрос ревью,
         # знает только ревью, а поставщик пишет сырьё.
         append_row(runtime, volume_row(
             'answer', event, question=questions_text(event.tool_input),
-            answer=as_is(event.tool_result), author=AUTHOR, at=now()))
+            answer={'answers': as_is(event.human_answer)}, author=AUTHOR, at=now()))
         return jarvis.Silence(reason='ответ кнопками в объёме ревью')
 
     def on_prompt(self, event, runtime) -> jarvis.Response:
@@ -79,6 +83,11 @@ class Module(jarvis.Module):
         if not text.strip():
             return jarvis.Silence(reason='пустая реплика')
         append_row(runtime, volume_row('prompt', event, text=text, author=AUTHOR, at=now()))
+        matched = take_answer(runtime.storage, PENDING_QUESTIONS, text)
+        if matched is not None:
+            question, answer = matched
+            append_row(runtime, volume_row('answer', event, question=question,
+                                          answer=answer, author=AUTHOR, at=now()))
         return jarvis.Silence(reason='реплика в объёме ревью')
 
 

@@ -16,7 +16,7 @@
 core/jarvis/                     ядро: хранилище, режим, автономия, след,
                                  подтверждение, поиск соседей
 core/jarvis/wrappers/claude.py   обёртка Claude
-core/jarvis/wrappers/codex.py    обёртка Codex (пока только старт и сжатие)
+core/jarvis/wrappers/codex.py    обёртка Codex (старт, сжатие, вызовы, реплика и остановка)
 modules/‹slug›/module.toml       шапка модуля
 modules/‹slug›/hooks/module.py   точка входа: её и запускает харнес
 modules/‹slug›/lib/              библиотечная часть, её зовут соседи по slug
@@ -281,7 +281,7 @@ slug, всё остальное едет как в источнике, поэт�
 `[[hooks.‹событие›.hooks]]` с полями `type`, `command`, `timeout` и
 `additionalContextLimit = 0`. Последний ключ пишется только там, где событие
 Codex принимает текст в ход, — это `CONTEXT_EVENTS` в его обёртке: `SessionStart`
-и `SubagentStart`. Где текста не ждут, Codex на ключ отвечает предупреждением
+и `SubagentStart`, а также `UserPromptSubmit`, `PreToolUse` и `PostToolUse`. Где текста не ждут, Codex на ключ отвечает предупреждением
 «this event cannot emit additionalContext» (замер: так на `PermissionRequest` и
 на `PostCompact`).
 
@@ -357,8 +357,8 @@ code.claude.com, снятая 17.09.2026; «замер» — проверено 
 
 ## Факты о Codex и их источники
 
-Обёртка Codex этапа 3 несёт только старт сессии и «после сжатия»; полная —
-этап 7. Источники помечены так же: «дока» — схема протокола app-server,
+Обёртка Codex несёт старт, сжатие, запрос разрешения, старт подагента,
+реплику, вызовы инструментов и остановку. Источники помечены так же: «дока» — схема протокола app-server,
 снятая `codex app-server generate-json-schema`; «замер» — прогон в этом
 окружении.
 
@@ -411,3 +411,23 @@ code.claude.com, снятая 17.09.2026; «замер» — проверено 
 - в `codex exec` запрос разрешения срабатывает только с ключом
   `--approve-for-me`: без него `permission_mode` равен `bypassPermissions` и
   харнес никого не спрашивает.
+
+
+Замеры 04.11.2026, codex-cli 0.166.0-alpha.6 на macOS arm64:
+
+- `PreToolUse` с `permissionDecision=deny` предотвращает выполнение; нативный
+  `ask` не поддержан и не отправляется.
+- `PostToolUse` с `decision=block` заменяет результат для модели после действия.
+- `Stop` с `decision=block` продолжает тот же `turn_id`, без нового
+  `UserPromptSubmit`; новая настоящая реплика получает новый `turn_id`.
+- `request_user_input_async` работает в Default и Plan. Ответ `accepted`
+  подтверждает доставку вопроса; выбор приходит отдельной репликой.
+- `request_user_input` работает в Plan, в Default отклоняется. JSON-строка
+  `answers` сопоставляется с текстом вопроса через его id в `human_answer`.
+- Поставщики используют `jarvis.questions` для связи async-вопроса с точным
+  однозначным выбором в реплике. Каждый хранит свой список ожидания; чужой
+  ответ и неоднозначный выбор не присваиваются вопросу.
+
+Проверка шла через установленный модуль и native app-server с локальным
+Responses SSE stub; внешний API модели не вызывался. UI-клик Desktop
+отдельно не замерен. Протокол: https://learn.chatgpt.com/docs/hooks.

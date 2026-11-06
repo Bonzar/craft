@@ -69,6 +69,7 @@ class DesktopBootstrapTest(unittest.TestCase):
             subprocess.run(['git', '-C', str(main), 'worktree', 'add', '-q', '--detach', str(root)], check=True)
             (root / 'tools').mkdir()
             (root / 'tools' / 'jarvis-hook').write_bytes((REPO_ROOT / 'tools' / 'jarvis-hook').read_bytes())
+            (root / 'tools' / 'jarvis_python.py').write_bytes((REPO_ROOT / 'tools' / 'jarvis_python.py').read_bytes())
             module = root / '.codex/jarvis/modules/example/hooks'
             module.mkdir(parents=True)
             (module / 'module.py').write_text('import json,sys\nprint(json.dumps(sys.argv[1:]))\n')

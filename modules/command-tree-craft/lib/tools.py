@@ -22,7 +22,10 @@ def craft_tool(tool_name) -> str:
     """
     if not isinstance(tool_name, str) or not tool_name.startswith(MCP_PREFIX):
         return ''
-    return tool_name.rsplit(MCP_NAME_SEPARATOR, 1)[-1]
+    tail = tool_name.rsplit(MCP_NAME_SEPARATOR, 1)[-1]
+    # Apps добавляет slug плагина Craft к имени его capability.
+    app_names = {f'craft_{name}': name for name in (*CRAFT_WRITE_TOOLS, CRAFT_READ_TOOL)}
+    return app_names.get(tail, tail)
 
 
 def is_craft_write(tool_name) -> bool:

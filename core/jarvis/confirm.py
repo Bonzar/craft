@@ -11,6 +11,7 @@
 """
 
 from dataclasses import dataclass
+from functools import wraps
 
 from .storage import SESSION, Storage
 
@@ -39,6 +40,16 @@ def _save(storage: Storage, state: dict) -> None:
     storage.write_json(CONFIRM_FILE, state, zone=SESSION)
 
 
+def _locked(function):
+    @wraps(function)
+    def call(storage, *args, **kwargs):
+        # Все модули меняют один JSON: изоляция slug не заменяет общий лок.
+        with storage.journal_lock(CONFIRM_FILE):
+            return function(storage, *args, **kwargs)
+    return call
+
+
+@_locked
 def request(storage: Storage, slug: str, action: str, phrase: str) -> None:
     """Модуль спросил — запоминаем, какой фразы ждём и на какое действие."""
     if not phrase.strip():
@@ -49,6 +60,7 @@ def request(storage: Storage, slug: str, action: str, phrase: str) -> None:
     _save(storage, {'pending': pending, 'granted': state['granted']})
 
 
+@_locked
 def match_prompt(storage: Storage, prompt_text: str | None, slug: str | None = None) -> list[Grant]:
     """Сверка на событии «реплика». Совпало 1:1 — подтверждение выдано.
 
@@ -74,6 +86,7 @@ def match_prompt(storage: Storage, prompt_text: str | None, slug: str | None = N
     return matched
 
 
+@_locked
 def take(storage: Storage, slug: str, action: str) -> bool:
     """Израсходовать подтверждение на одно действие. Второй раз его уже нет."""
     state = _load(storage)
@@ -85,6 +98,16 @@ def take(storage: Storage, slug: str, action: str) -> bool:
     return False
 
 
+@_locked
 def pending(storage: Storage, slug: str | None = None) -> list[dict]:
     items = _load(storage)['pending']
     return [item for item in items if slug is None or item['slug'] == slug]
+
+
+@_locked
+def cancel(storage: Storage, slug: str, action: str) -> None:
+    """Убрать ожидание и grant одного действия, сохранив подтверждения других модулей."""
+    state = _load(storage)
+    _save(storage, {key: [item for item in state[key]
+                         if not (item['slug'] == slug and item['action'] == action)]
+                    for key in ('pending', 'granted')})

@@ -540,12 +540,9 @@ class CodexBackend(Backend):
     # У Codex своей переменной каталога проекта нет: хук получает `cwd` в
     # событии, а в текстах частей подставляется рабочий каталог установки.
     project_dir = '${PWD}'
-    # Инструмент вопроса с вариантами у Codex есть — request_user_input, — но
-    # по умолчанию выключен (ToolsToml.experimental_request_user_input, флаг
-    # default_mode_request_user_input «under development») и в `codex exec` не
-    # работает вовсе (строки codex-cli 0.155.0, замер 18.09.2026). Поэтому
-    # форма замены — обычный текст.
-    slugs = {ASK: 'текстом в ответе, варианты строками'}
+    # Замер 04.11.2026, CLI 0.166.0-alpha.6: async работает в Default,
+    # sync работает в Plan. accepted у async — не ответ человека.
+    slugs = {ASK: 'инструментом request_user_input_async'}
 
     def __init__(self, cli: str = 'codex', trust: bool = True,
                  project: bool = False, trust_home: Path | None = None,

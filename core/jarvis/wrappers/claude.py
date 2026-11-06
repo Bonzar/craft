@@ -167,7 +167,8 @@ def to_event(raw: Mapping[str, Any]) -> Event:
         permission_options=tuple(raw.get('permission_suggestions') or ()),
         agent_id=raw.get('agent_id'),
         agent_type=raw.get('agent_type'),
-        message_text=raw.get('delta'),
+        # Stop содержит исходный ответ: MessageDisplay мог скрыть его от человека.
+        message_text=raw.get('delta') if raw.get('hook_event_name') == 'MessageDisplay' else None,
     )
 
 
@@ -216,24 +217,17 @@ def translate(unified: str, response: Response, slug: str = '') -> Delivery:
     if response.kind == forms.CONTEXT:
         return Delivery(payload=_context_payload(unified, response.text))
     if response.kind == forms.QUESTION:
-        return Delivery(payload=_context_payload(unified, question_instruction(response, slug)))
+        instruction = question_instruction(response, slug)
+        if unified in (ev.STOP, ev.SUBAGENT_STOP):
+            return Delivery(payload={'decision': 'block', 'reason': instruction})
+        return Delivery(payload=_context_payload(unified, instruction))
     if response.kind == forms.BLOCK:
         # дока: block на этих событиях — верхнеуровневые decision и reason.
         return Delivery(payload={'decision': 'block', 'reason': response.reason})
-    if response.kind == forms.ALLOW:
-        return Delivery(
-            payload=_hook_specific(
-                unified,
-                {'permissionDecision': 'allow', 'permissionDecisionReason': response.reason},
-            )
-        )
-    if response.kind == forms.DENY:
-        return Delivery(
-            payload=_hook_specific(
-                unified,
-                {'permissionDecision': 'deny', 'permissionDecisionReason': response.reason},
-            )
-        )
+    if response.kind in (forms.ALLOW, forms.DENY):
+        decision = 'allow' if response.kind == forms.ALLOW else 'deny'
+        return Delivery(payload=_hook_specific(
+            unified, {'permissionDecision': decision, 'permissionDecisionReason': response.reason}))
     if response.kind == forms.ASK:
         # Фраза подтверждения идёт человеку той же причиной: своего поля под
         # неё у Claude нет (дока).

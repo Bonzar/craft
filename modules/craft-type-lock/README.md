@@ -532,9 +532,9 @@ Craft — запрет с причиной и выходом: какой фай�
 - Чтение: `craft_read` замок не блокирует, только запоминает id прочитанных
   страниц в `craft-type-lock.json`, поле `reads`, и само прочитанное — в
   дереве `craft-type-lock-tree.json`.
-- Запись из Codex. Обёртка Codex пока знает только старт и сжатие, событий
-  `pre-tool`, `post-tool` и `prompt` у неё нет. Установщик ставит замок и
-  туда, но предупреждает: в Codex он не сработает.
+- В Codex замок получает `pre-tool`, `post-tool`, `prompt` и `after-compact`.
+  Имена `craft_craft_read` и `craft_craft_write` из Apps узнаются так же, как
+  обычные имена Craft MCP.
 
 ## Как устроен ход
 
@@ -620,3 +620,11 @@ Craft — запрет с причиной и выходом: какой фай�
 tests.test_craft_type_lock_entities tests.test_craft_type_lock_place
 tests.test_craft_type_lock_review tests.test_craft_type_lock_tree`, общая
 обвязка — `tests/craft_type_lock_harness.py`.
+
+
+Полное чтение установленного скилла через отдельный `cat /…/SKILL.md`
+на событии `post-tool` тоже засчитывается. Путь сверяется с частью `skill`
+журнала установки, а вывод обязан содержать весь актуальный файл. `head`,
+обрезанный вывод и одноимённая копия в другом месте не открывают замок.
+Подтверждённое чтение пишет строку `skill` в объём ревью, чтобы требования
+скилла попали в поручение ревью. Счёт сбрасывается новой репликой и compact.

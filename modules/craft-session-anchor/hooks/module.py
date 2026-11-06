@@ -16,13 +16,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '_core'))
 
 import jarvis  # noqa: E402
-from jarvis import events, wrappers  # noqa: E402
+from jarvis import events, wrappers
+from jarvis.questions import remember_questions, take_answer  # noqa: E402
 
 # Контракт поставщиков ревью: файл объёма в зоне сессии и id реплики в строке.
 VOLUME_FILE = 'turn-review-volume.jsonl'
 PROMPT_ID_FIELD = 'prompt_id'
 KIND_ANCHOR = 'anchor'
 QUESTION_TOOL = 'AskUserQuestion'
+PENDING_QUESTIONS = 'session-anchor-questions.json'
 QUESTIONS_FIELD = 'questions'
 QUESTION_FIELD = 'question'
 ANCHOR_QUESTION_MARK = 'якор'
@@ -32,7 +34,7 @@ SUBAGENT_REASON = 'вызов внутри подагента: в объём р�
 
 def questions_text(tool_input) -> str:
     items = tool_input.get(QUESTIONS_FIELD) if isinstance(tool_input, dict) else None
-    texts = [item.get(QUESTION_FIELD) for item in items if isinstance(item, dict)] \
+    texts = [item.get(QUESTION_FIELD, item.get('title')) for item in items if isinstance(item, dict)] \
         if isinstance(items, list) else []
     return '\n'.join(text for text in texts if isinstance(text, str))
 
@@ -43,7 +45,7 @@ def as_is(value):
 
 def prompt_id_of(event) -> str | None:
     """Id реплики харнеса из сырого события; нет его или он не строка — None."""
-    value = event.raw.get(PROMPT_ID_FIELD)
+    value = event.raw.get(PROMPT_ID_FIELD) or event.raw.get('turn_id')
     return value if isinstance(value, str) and value else None
 
 
@@ -65,14 +67,22 @@ class Module(jarvis.Module):
             return self.on_prompt(event, runtime)
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
-        question = questions_text(event.tool_input) if event.tool_name == QUESTION_TOOL else ''
+        if remember_questions(runtime.storage, PENDING_QUESTIONS, event):
+            return jarvis.Silence(reason='вопрос доставлен, ответа пока нет')
+        question = questions_text(event.tool_input) if event.human_answer is not None else ''
         if ANCHOR_QUESTION_MARK not in question.lower():
             return jarvis.Silence(reason='вызов не вопрос о якоре')
-        append_row(runtime, anchor_row(event, answer=as_is(event.tool_result), question=question))
+        append_row(runtime, anchor_row(event, answer={'answers': as_is(event.human_answer)}, question=question))
         return jarvis.Silence(reason='якорь выбран кнопкой')
 
     def on_prompt(self, event, runtime) -> jarvis.Response:
         text = event.prompt_text or ''
+        matched = take_answer(runtime.storage, PENDING_QUESTIONS, text)
+        if matched is not None:
+            question, answer = matched
+            if ANCHOR_QUESTION_MARK in question.lower():
+                append_row(runtime, anchor_row(event, answer=answer, question=question))
+                return jarvis.Silence(reason='якорь выбран вариантом async-вопроса')
         if not ANCHOR_PROMPT.search(text):
             return jarvis.Silence(reason='реплика не называет якорь')
         append_row(runtime, anchor_row(event, answer=text))

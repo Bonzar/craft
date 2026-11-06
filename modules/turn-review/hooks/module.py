@@ -41,7 +41,8 @@ from display import (  # noqa: E402
     HIDDEN_TEXT, answer_hidden, display_gate, displayed, first_nudge_at, is_final, note_summary,
     now_utc,
 )
-from jarvis import events, wrappers  # noqa: E402
+from jarvis import events, wrappers
+from jarvis.questions import delivered_questions  # noqa: E402
 from nudge import nudge_text  # noqa: E402
 from review_access import SourcesError, load_review, required_criteria, sources  # noqa: E402
 
@@ -84,7 +85,31 @@ class Module(jarvis.Module):
         # Номер хода знает только ревью: поставщики кладут в записи id
         # реплики, и здесь id связывается с номером.
         turn, problem = review.claim_prompt_turn(runtime.storage, event)
+        state, _ = review.load_state(runtime.storage)
+        answer = (event.prompt_text or '').strip()
+        has_grant = answer == review.RELEASE_PHRASE and runtime.take_confirmation(RELEASE_ACTION)
+        has_question = (state.nudges > review.MAX_NUDGES
+                        or state.question_fingerprint is not None or state.released)
+        if has_question and answer == review.OPTION_REVIEW:
+            self.restart_review(runtime, review, state)
+        elif answer in (review.OPTION_RELEASE, review.RELEASE_PHRASE) and (has_question or has_grant):
+            return self.accept_release(runtime, review, state)
         return jarvis.Silence(reason=review.with_problem(f'начался ход {turn}', problem))
+
+    def accept_release(self, runtime, review, state) -> jarvis.Response:
+        volume, damage = review.parse_volume_file(runtime.storage.path(review.VOLUME_FILE))
+        fingerprint = review.fingerprint(volume)
+        expected_scope = state.question_fingerprint or state.release_fingerprint
+        is_stale = expected_scope is None or expected_scope != fingerprint
+        if damage or is_stale:
+            self.restart_review(runtime, review, state)
+            return jarvis.Context('Ответ на прежний вопрос не принят: объём ревью изменился. '
+                                  'Новые записи сохранены; выполни их автоматическое ревью.')
+        runtime.cancel_confirmation(RELEASE_ACTION)
+        review.save_state(runtime.storage, replace(
+            state, released=True, release_fingerprint=fingerprint, question_fingerprint=None,
+            is_question_delivered=False))
+        return jarvis.Silence(reason='ответ человека принят для текущего отпечатка объёма')
 
     def on_after_compact(self, event, runtime, review) -> jarvis.Response:
         # Объём и вердикт лежат в хранилище и сжатие переживают, а правила
@@ -100,6 +125,18 @@ class Module(jarvis.Module):
         storage = runtime.storage
         # Показ идёт до остановки: состояние читается без починки, чинит stop.
         state = review.peek_state(storage)
+        if is_final(event) and state is not None and review.question_shown(event.message_text):
+            volume, damage = review.parse_volume_file(storage.path(review.VOLUME_FILE))
+            if (not damage and state.question_fingerprint is not None
+                    and state.question_fingerprint == review.fingerprint(volume)):
+                # Показываем вопрос, но не непроверенный отчёт вокруг него.
+                review.save_state(storage, replace(state, is_question_delivered=True))
+                question = (review.QUESTION_TEXT + '\n' + review.OPTION_REVIEW
+                            + '\n' + review.OPTION_RELEASE)
+                if state.last_remarks:
+                    remarks = '\n'.join(review.remark_line(item) for item in state.last_remarks)
+                    question = remarks + '\n\n' + question
+                return jarvis.UpdatedDisplay(text=question)
         try:
             hidden = answer_hidden(storage, state, runtime, review)
         except SourcesError:
@@ -147,14 +184,23 @@ class Module(jarvis.Module):
         # Объём копят поставщики. Здесь только ответ на вопрос самого ревью.
         if event.agent_id:
             return jarvis.Silence(reason=SUBAGENT_REASON)
-        if event.tool_name != review.QUESTION_TOOL:
-            return jarvis.Silence(reason='вызов не вопрос человеку')
         storage = runtime.storage
         state, _ = review.load_state(storage)
+        if state.question_fingerprint is not None and review.question_accepted(delivered_questions(event)):
+            volume, damage = review.parse_volume_file(storage.path(review.VOLUME_FILE))
+            if damage or state.question_fingerprint != review.fingerprint(volume):
+                self.restart_review(runtime, review, state)
+                return jarvis.Context('Доставлен вопрос по прежним записям. Проведи ревью новых записей.')
+            review.save_state(storage, replace(state, is_question_delivered=True))
+            return jarvis.Silence(reason='вопрос показан, ждём ответа человека')
+        if event.human_answer is None:
+            return jarvis.Silence(reason='ответа человека нет')
         answered = review.answered_release(event.tool_name, event.tool_input,
                                            event.human_answer, state)
         if answered is not None:
-            review.save_state(storage, answered)
+            if answered.released:
+                return self.accept_release(runtime, review, answered)
+            self.restart_review(runtime, review, answered)
             return jarvis.Silence(
                 reason=f'ответ на вопрос о ревью: released={answered.released}')
         return jarvis.Silence(reason='не ответ кнопкой на вопрос о ревью')
@@ -163,12 +209,12 @@ class Module(jarvis.Module):
         # Шапку соседа не прочитать — ход не отпускается молча и не роняет
         # хук: падение харнес принял бы за пропуск.
         try:
-            return self.stop_reviewed(runtime, review)
+            return self.stop_reviewed(runtime, review, event)
         except SourcesError as error:
             return jarvis.Block(reason=f'Ход не отпущен: {error}. Закончи ход снова после '
                                        'починки.')
 
-    def stop_reviewed(self, runtime, review) -> jarvis.Response:
+    def stop_reviewed(self, runtime, review, event) -> jarvis.Response:
         # stop_hook_active=true — штатная повторная остановка после блока:
         # от петли защищает счёт поручений, а не этот признак.
         storage = runtime.storage
@@ -200,10 +246,26 @@ class Module(jarvis.Module):
         repair = review.joined(state_problem, damage)
         problem = review.joined(repair, blocking, verdict_problem)
         if runtime.take_confirmation(RELEASE_ACTION) or state.released:
-            cleared = review.clear_volume(storage, state)
-            note_summary(storage, cleared, state, review, volume, review.REPORT_RELEASED)
-            return jarvis.Silence(reason=review.with_problem(RELEASED_REASON, problem))
-        if review.writes_before_turn(volume, state.turn, state.prompt_turns):
+            if state.release_fingerprint != review.fingerprint(volume):
+                state = self.restart_review(runtime, review, state)
+                problem = review.joined(problem, 'после разрешения появились новые записи')
+                return self.press(storage, state, runtime, review, volume, problem)
+            return self.finish_review(runtime, review, state, volume, review.REPORT_RELEASED,
+                                      review.with_problem(RELEASED_REASON, problem))
+        waiting = self.wait_or_defer(event, runtime, review, state, volume, problem, repair)
+        return waiting if waiting is not None else self.press(storage, state, runtime, review, volume, problem)
+
+    def wait_or_defer(self, event, runtime, review, state, volume, problem, repair):
+        storage = runtime.storage
+        if state.question_fingerprint is not None:
+            fingerprint = review.fingerprint(volume)
+            if state.question_fingerprint != fingerprint:
+                state = self.restart_review(runtime, review, state)
+                return self.press(storage, state, runtime, review, volume, problem)
+            if not repair and (state.is_question_delivered or review.question_shown(event.message_text)):
+                review.save_state(storage, replace(state, is_question_delivered=True))
+                return jarvis.Silence(reason='вопрос показан, объём ждёт ответа человека')
+        if not state.review_requested and review.writes_before_turn(volume, state.turn, state.prompt_turns):
             # Человек разговаривает с агентом, а не ждёт записи: поручение и
             # вопрос о ревью посреди разговора мешают, а объём никуда не
             # денется и пойдёт на ревью в конце ближайшего хода с записями.
@@ -213,7 +275,7 @@ class Module(jarvis.Module):
                 return jarvis.Block(reason=f'Ход не отпущен: {repair}. '
                                            'Скажи об этом человеку и закончи ход снова.')
             return jarvis.Silence(reason=review.with_problem(QUIET_TURN_REASON, problem))
-        return self.press(storage, state, runtime, review, volume, problem)
+        return None
 
     def settle(self, storage, state, runtime, review, verdict: dict, volume: list,
                blocking: str | None) -> jarvis.Response | None:
@@ -227,11 +289,7 @@ class Module(jarvis.Module):
         if verdict[review.CLEAN_KEY] and blocking:
             return None
         if verdict[review.CLEAN_KEY]:
-            cleared = review.clear_volume(storage, state)
-            note_summary(storage, cleared, state, review, volume, head, verdict)
-            # Разрешение фразой больше не нужно: ход отпущен вердиктом.
-            runtime.take_confirmation(RELEASE_ACTION)
-            return jarvis.Silence(reason=CLEAN_REASON)
+            return self.finish_review(runtime, review, state, volume, head, CLEAN_REASON, verdict)
         # Вердикт отработан: новый даст только новое ревью после починки.
         # Счёт поручений не трогаем: замечание, которое не закрыть, иначе
         # гоняло бы ход по кругу без вопроса человеку.
@@ -244,6 +302,24 @@ class Module(jarvis.Module):
         review.save_state(storage, remarked)
         note_summary(storage, remarked, state, review, volume, head, verdict)
         return jarvis.Block(reason=review.remarks_text(verdict[review.REMARKS_KEY], blocking))
+
+    def restart_review(self, runtime, review, state):
+        runtime.cancel_confirmation(RELEASE_ACTION)
+        restarted = replace(state, released=False, release_fingerprint=None,
+                            question_fingerprint=None, is_question_delivered=False,
+                            review_requested=True, nudges=0)
+        review.save_state(runtime.storage, restarted)
+        return restarted
+
+    def finish_review(self, runtime, review, state, volume, head, reason, verdict=None):
+        storage = runtime.storage
+        cleared = review.clear_volume(storage, state, expected_fingerprint=review.fingerprint(volume))
+        if cleared is None:
+            self.restart_review(runtime, review, state)
+            return jarvis.Block('Объём изменился во время завершения. Проведи ревью новых записей.')
+        note_summary(storage, cleared, state, review, volume, head, verdict)
+        runtime.cancel_confirmation(RELEASE_ACTION)
+        return jarvis.Silence(reason=reason)
 
     def press(self, storage, state, runtime, review, volume: list,
               problem: str | None) -> jarvis.Response:
@@ -259,10 +335,13 @@ class Module(jarvis.Module):
                                                first_nudge_at=first_nudge_at(state),
                                                criteria=criteria))
             return jarvis.Block(reason=text)
-        if nudges == review.MAX_NUDGES:
+        if nudges == review.MAX_NUDGES or state.question_fingerprint is None:
             runtime.ask_confirmation(action=RELEASE_ACTION, phrase=review.RELEASE_PHRASE)
-            review.save_state(storage, replace(state, nudges=nudges + 1))
-        return jarvis.Block(reason=review.stuck_text(problem, state.last_remarks))
+            review.save_state(storage, replace(state, nudges=review.MAX_NUDGES + 1,
+                                               question_fingerprint=review.fingerprint(volume),
+                                               is_question_delivered=False))
+        return jarvis.Question(text=review.stuck_text(problem, state.last_remarks),
+                               options=(review.OPTION_REVIEW, review.OPTION_RELEASE))
 
 
 if __name__ == '__main__':

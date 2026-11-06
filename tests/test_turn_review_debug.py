@@ -12,6 +12,55 @@ SEPARATOR = '\n\n---\n'
 
 class TurnReviewDebugTest(TurnReviewCase):
 
+    def test_text_review_question_is_visible_before_waiting_for_the_human(self):
+        session = 'd-text-question'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.fire(stop(session))
+        question = QUESTION + '\nПровести ревью\nЗакончить без ревью'
+        displayed = self.shown(self.fire(message(session, 'Непроверенный отчёт\n' + question)))
+        self.assertEqual(displayed, question)
+        self.assertTrue(self.state(session)['is_question_delivered'])
+        self.assert_silent(self.fire({**stop(session), 'last_assistant_message': question}))
+        self.assertTrue(self.volume(session))
+
+    def test_unshown_claude_stop_text_does_not_confirm_question_delivery(self):
+        session = 'd-unshown-question'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.fire(stop(session))
+        result = self.fire({**stop(session), 'last_assistant_message':
+                            QUESTION + '\nПровести ревью\nЗакончить без ревью'})
+        self.assertTrue(result.stdout, 'Невидимый вопрос не должен отпускать Stop')
+        self.blocked(result)
+        self.assertFalse(self.state(session)['is_question_delivered'])
+
+    def test_partial_or_stale_question_does_not_open_the_display(self):
+        session = 'd-stale-text-question'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.fire(stop(session))
+        question = QUESTION + '\nПровести ревью\nЗакончить без ревью'
+        self.assertEqual(self.shown(self.fire(message(session, question, final=False))), '')
+        self.assertFalse(self.state(session)['is_question_delivered'])
+        self.fire(write(session))
+        self.assertNotIn(QUESTION, self.shown(self.fire(message(session, question))))
+        self.assertFalse(self.state(session)['is_question_delivered'])
+
+    def test_text_question_keeps_review_remarks_visible_with_debug_off(self):
+        self.debug_file.unlink()
+        session = 'd-question-remarks'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.write_verdict(session, self.state(session)['volume_id'], [remark()])
+        self.blocked(self.fire(stop(session)))
+        self.fire(stop(session))
+        question = QUESTION + '\nПровести ревью\nЗакончить без ревью'
+        shown = self.shown(self.fire(message(session, 'Непроверенный отчёт\n' + question)))
+        self.assertIn('нет ссылки на этап', shown)
+        self.assertIn(question, shown)
+        self.assertNotIn('Непроверенный отчёт', shown)
+
     def setUp(self) -> None:
         self.debug_file.write_text(json.dumps({'debug': True}), encoding='utf-8')
 
@@ -204,6 +253,16 @@ class HiddenAnswerTest(TurnReviewCase):
         self.fire(stop(session))
         self.fire(ask(session, QUESTION, 'Закончить без ревью'))
         self.assert_silent(self.fire(message(session, 'Отчёт.')))
+
+    def test_new_writes_after_a_release_keep_the_answer_hidden(self) -> None:
+        session = 'h-release-stale'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.fire(stop(session))
+        self.fire(ask(session, QUESTION, 'Закончить без ревью'))
+        self.fire(write(session, 'blocks update --id X --json \'{"markdown":"новая запись"}\''))
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
 
 
 if __name__ == '__main__':

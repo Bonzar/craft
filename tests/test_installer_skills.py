@@ -195,7 +195,8 @@ class HarnessSlugTest(SkillInstallCase):
         self.add_module('probe', 'slug = "probe"\n', {'skill': {'SKILL.md': 'Спросить {{ASK}}.\n'}})
         self.run_codex()
         text = (self.skill_dir('probe') / 'SKILL.md').read_text(encoding='utf-8')
-        self.assertEqual(text, 'Спросить текстом в ответе, варианты строками.\n')
+        self.assertIn('request_user_input_async', text)
+        self.assertNotIn('Спросить текстом в ответе', text)
 
     def test_ask_becomes_the_claude_form_in_rules(self) -> None:
         self.add_module('behavior', 'slug = "behavior"\n',
@@ -208,7 +209,7 @@ class HarnessSlugTest(SkillInstallCase):
         self.add_module('behavior', 'slug = "behavior"\n',
                         {'rules': {'behavior.md': 'Вопрос задаётся {{ASK}}.\n'}})
         self.run_codex()
-        self.assertIn('Вопрос задаётся текстом в ответе, варианты строками.', self.agents_md())
+        self.assertIn('request_user_input_async', self.agents_md())
         self.assertNotIn('{{ASK}}', self.agents_md())
 
     def test_ask_is_substituted_in_a_declared_file_too(self) -> None:

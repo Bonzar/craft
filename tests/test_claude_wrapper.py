@@ -322,5 +322,13 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(code, 0)
 
 
+class BlockingQuestionTest(unittest.TestCase):
+    def test_stop_question_waits_for_the_human_instead_of_finishing(self):
+        payload = claude.translate(ev.STOP, Question('Продолжить?', ('Да', 'Нет')), slug='review').payload
+        self.assertEqual(payload['decision'], 'block')
+        self.assertIn('AskUserQuestion', payload['reason'])
+        self.assertIn('Продолжить?', payload['reason'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -27,6 +27,44 @@ class CraftTypeLockTest(LockHarness):
         result = self.fire(write('s-deny', TASK_ADD))
         self.assert_denied(result, '#задача', 'craft-task', 'повтори запись')
 
+    def test_reading_the_whole_skill_file_counts_as_calling_it(self):
+        from pathlib import Path
+        session = 's-file-skill'
+        path = self.root / 'skills' / 'craft-task' / 'SKILL.md'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = '---\nname: craft-task\n---\nRead the template.\n'
+        path.write_text(text)
+        (self.root / 'installed.json').write_text(json.dumps({'source': {'state_dir': str(self.root / '.local/state/jarvis')}, 'modules': {
+            'craft-task': {'parts': {'skill': str(path.parent)}}}}))
+        self.fire(prompt(session))
+        event = {'hook_event_name': 'PostToolUse', 'session_id': session,
+                 'cwd': str(self.root), 'tool_name': 'Bash',
+                 'tool_input': {'command': f'cat {path}'}, 'tool_response': text}
+        self.fire(event)
+        rows = [json.loads(line) for line in self.storage(session).path('turn-review-volume.jsonl').read_text().splitlines()]
+        self.assertEqual(rows[-1]['skill'], 'craft-task')
+        self.fire(read(session, f'blocks get {TEMPLATE["craft-task"]} --depth -1'))
+        self.assert_silent(self.fire(write(session, TASK_ADD)))
+        self.fire(prompt(session))
+        self.fire({**event, 'tool_response': text[:15]})
+        self.fire(read(session, f'blocks get {TEMPLATE["craft-task"]} --depth -1'))
+        self.assert_denied(self.fire(write(session, TASK_ADD)), 'craft-task')
+
+    def test_whole_non_entity_skill_file_is_also_in_the_review_volume(self):
+        session = 's-other-file-skill'
+        path = self.root / 'skills' / 'craft-snapshot' / 'SKILL.md'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('---\nname: craft-snapshot\n---\nRead the memory.\n')
+        (self.root / 'installed.json').write_text(json.dumps({
+            'source': {'state_dir': str(self.root / '.local/state/jarvis')},
+            'modules': {'craft-snapshot': {'parts': {'skill': str(path.parent)}}}}))
+        self.fire(prompt(session))
+        self.fire({'hook_event_name': 'PostToolUse', 'session_id': session,
+                   'cwd': str(self.root), 'tool_name': 'Bash',
+                   'tool_input': {'command': f'cat {path}'}, 'tool_response': path.read_text()})
+        rows = [json.loads(line) for line in self.storage(session).path('turn-review-volume.jsonl').read_text().splitlines()]
+        self.assertEqual(rows[-1]['skill'], 'craft-snapshot')
+
     def test_the_skill_of_this_turn_lets_the_write_through(self) -> None:
         self.fire(prompt('s-pass'))
         self.prepare('s-pass', 'craft-task')

@@ -44,13 +44,13 @@ def nudge_text(facts: NudgeFacts, problem: str | None) -> str:
     """Блок с просьбой запустить подагента по собранному поручению."""
     return (
         f'{problem_prefix(problem)}Ход не отпущен: ревью хода не сделано. Запусти подагента '
-        f'инструментом Agent (subagent_type general-purpose) не в фоне, дождись его ответа '
+        f'доступным инструментом не в фоне, дождись его ответа '
         f'тем же ходом. Поручение подагенту лежит в файле {facts.brief}, передай ему пути: '
         f'объём {facts.volume_file}, вердикт {facts.verdict_file}, '
         f'volume_id {facts.volume_id}, команда отпечатка '
         f'«{facts.fingerprint_command}»; записей write в объёме сейчас '
         f'{facts.writes}, отпечаток {facts.fingerprint}, критерии '
-        f'{", ".join(facts.criteria) or "нет"}. Ответ до чистого вердикта человеку не показан: '
+        f'{", ".join(facts.criteria) or "нет"}. Итоговый ответ '
         f'напиши его заново после вердикта.'
     )
 
