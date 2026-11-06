@@ -29,7 +29,7 @@ RULES = '''
 Модульная установка и автоматические хуки проверяются отдельно по их следам.
 <!-- /jarvis:cloud-repo-probe -->
 '''
-ARTIFACTS = frozenset({'AGENTS.md', SKILL, CALLBACK, '.codex/hooks.json'})
+ARTIFACTS = frozenset({'AGENTS.md', SKILL, CALLBACK, '.codex/hooks.json', '.codex/config.toml'})
 
 
 def git(source: Path, *args: str) -> bytes:
@@ -57,6 +57,21 @@ def encode(value: dict) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode()
 
 
+def project_config(runtime_root: Path) -> bytes:
+    command = shlex.join(['python3', str(runtime_root / CALLBACK),
+                          '--registration', 'inline-toml'])
+    # Обе регистрации оставлены намеренно: сравниваем transport TOML и JSON.
+    # Trust, sandbox и разрешения здесь не задаются.
+    return ('[features]\nhooks = true\n\n'
+            '[[hooks.SessionStart]]\n'
+            'matcher = "startup|resume|clear|compact|fork"\n\n'
+            '[[hooks.SessionStart.hooks]]\n'
+            'type = "command"\n'
+            f'command = {json.dumps(command, ensure_ascii=False)}\n'
+            'timeout = 30\n'
+            'additionalContextLimit = 0\n').encode()
+
+
 def assemble(source: Path, revision: str, runtime_root: Path) -> dict[str, bytes]:
     if not runtime_root.is_absolute():
         raise ValueError('--runtime-root должен быть абсолютным путём')
@@ -72,6 +87,7 @@ def assemble(source: Path, revision: str, runtime_root: Path) -> dict[str, bytes
         SKILL: git(source, 'show', commit + ':modules/probe/skill/SKILL.md'),
         CALLBACK: git(source, 'show', commit + ':tests/cloud_repo_probe.py'),
         '.codex/hooks.json': hooks(runtime_root),
+        '.codex/config.toml': project_config(runtime_root),
     }
     files[MANIFEST] = encode({
         'schema_version': 1, 'kind': 'codex-cloud-probe',
@@ -102,7 +118,7 @@ def verify(root: Path) -> dict:
         raise ValueError('неизвестный формат dist manifest')
     files = manifest.get('files')
     if not isinstance(files, dict) or set(files) != ARTIFACTS:
-        raise ValueError('manifest должен перечислять все четыре артефакта dist')
+        raise ValueError('manifest должен перечислять все пять артефактов dist')
     if not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('source_commit', ''))):
         raise ValueError('manifest не содержит source commit')
     runtime_root = manifest.get('runtime_root')
