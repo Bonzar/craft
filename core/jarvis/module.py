@@ -51,6 +51,9 @@ class Runtime:
     def take_confirmation(self, action: str) -> bool:
         return confirm.take(self.storage, self.manifest.slug, action)
 
+    def cancel_confirmation(self, action: str) -> None:
+        confirm.cancel(self.storage, self.manifest.slug, action)
+
 
 @dataclass(frozen=True)
 class Outcome:

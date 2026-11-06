@@ -22,7 +22,7 @@ PROMPT_ID_FIELD = 'prompt_id'
 
 def prompt_id_of(event) -> str | None:
     """Id реплики из сырого события харнеса; нет его или он не строка — None."""
-    value = event.raw.get(PROMPT_ID_FIELD)
+    value = event.raw.get(PROMPT_ID_FIELD) or event.raw.get('turn_id')
     return value if isinstance(value, str) and value else None
 
 
@@ -53,7 +53,7 @@ def keep_after_clear(records: list[VolumeRecord]) -> list[VolumeRecord]:
     return [record for record in records if record.kind == KIND_ANCHOR]
 
 
-def clear_volume(storage, state: ReviewState) -> ReviewState:
+def clear_volume(storage, state: ReviewState, *, expected_fingerprint: str | None = None) -> ReviewState | None:
     """Очистить объём и вердикт; новое состояние — с новым id и без поручений.
 
     Поля отладочного вывода тоже обнуляются: итог очищенного объёма хук
@@ -64,7 +64,9 @@ def clear_volume(storage, state: ReviewState) -> ReviewState:
     только номера текущего хода: записи прежних ходов ушли с очисткой, а
     запись, дописанная в этом же ходе после очистки, свой ход знать должна.
     """
-    rewrite_volume(storage, keep_after_clear)
+    _, problems = rewrite_volume(storage, keep_after_clear, expected_fingerprint=expected_fingerprint)
+    if expected_fingerprint is not None and problems:
+        return None
     drop_verdict(storage)
     current = {prompt_id: turn for prompt_id, turn in state.prompt_turns.items()
                if turn == state.turn}

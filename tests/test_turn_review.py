@@ -303,12 +303,14 @@ class TurnReviewTest(TurnReviewCase):
         reason = self.blocked(self.fire(stop('s-nudge', active=False)))
         storage = self.storage('s-nudge')
         state = self.state('s-nudge')
-        for needle in ('Agent', 'general-purpose', 'не в фоне', 'записей write в объёме сейчас 1',
+        for needle in ('доступным инструментом', 'не в фоне', 'записей write в объёме сейчас 1',
                        str(storage.path('turn-review-brief.md').resolve()),
                        str(storage.path('turn-review-volume.jsonl').resolve()),
                        str(storage.path('turn-review-verdict.json').resolve()),
                        state['volume_id'], f'критерии {TASK_CRITERIA_TEXT}'):
             self.assertIn(needle, reason)
+        self.assertNotIn('subagent_type', reason)
+        self.assertNotIn('человеку не показан', reason)
         self.assertEqual(state['nudges'], 1)
         self.assertEqual(state['criteria'], list(TASK_CRITERIA))
         # Поручение собрано из каркаса, описаний видов записей объёма и

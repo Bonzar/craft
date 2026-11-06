@@ -58,7 +58,7 @@ def as_is(value):
 
 def prompt_id_of(event) -> str | None:
     """Id реплики харнеса из сырого события; нет его или он не строка — None."""
-    value = event.raw.get(PROMPT_ID_FIELD)
+    value = event.raw.get(PROMPT_ID_FIELD) or event.raw.get('turn_id')
     return value if isinstance(value, str) and value else None
 
 

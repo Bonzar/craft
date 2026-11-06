@@ -55,8 +55,8 @@ def parse_volume(storage) -> tuple[list[VolumeRecord], list[str]]:
     return parse_volume_file(storage.path(VOLUME_FILE))
 
 
-def rewrite_volume(storage, choose: Callable[[list[VolumeRecord]], list[VolumeRecord]]
-                   ) -> tuple[list[VolumeRecord], list[str]]:
+def rewrite_volume(storage, choose: Callable[[list[VolumeRecord]], list[VolumeRecord]],
+                   *, expected_fingerprint: str | None = None) -> tuple[list[VolumeRecord], list[str]]:
     """Переписать объём записями, которые выбрал `choose` из читаемых; вернуть прочитанное.
 
     Чтение и замена файла идут под локом журнала ядра (Storage.journal_lock):
@@ -66,6 +66,8 @@ def rewrite_volume(storage, choose: Callable[[list[VolumeRecord]], list[VolumeRe
     """
     with storage.journal_lock(VOLUME_FILE) as path:
         records, damage = parse_volume_file(path)
+        if expected_fingerprint is not None and (damage or fingerprint(records) != expected_fingerprint):
+            return records, damage or ['объём изменился перед очисткой']
         tmp = path.with_name(path.name + f'.tmp-{os.getpid()}')
         tmp.write_text(''.join(json.dumps(record_row(record), ensure_ascii=False) + '\n'
                                for record in choose(records)), encoding='utf-8')

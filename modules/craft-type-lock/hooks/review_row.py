@@ -39,7 +39,7 @@ TOOL_USE_FIELD = 'tool_use_id'
 
 def prompt_id_of(event) -> str | None:
     """Id реплики харнеса из сырого события; нет его или он не строка — None."""
-    value = event.raw.get(PROMPT_ID_FIELD)
+    value = event.raw.get(PROMPT_ID_FIELD) or event.raw.get('turn_id')
     return value if isinstance(value, str) and value else None
 
 
@@ -64,6 +64,14 @@ def entity_row(event, command: str, anchors, place: Place, text_tags: list[str])
             'content_types': sorted({*text_tags, *tags_of(place.edited)}),
             'determined': place.verdict in DETERMINED,
             'note': place.reason or NO_TARGET_NOTE}
+
+
+def skill_row(event, slug: str) -> dict | None:
+    if event.agent_id:
+        return None
+    prompt_id = prompt_id_of(event)
+    row = {'kind': 'skill', 'skill': slug}
+    return {**row, PROMPT_ID_FIELD: prompt_id} if prompt_id else row
 
 
 def append_row(storage, row: dict | None) -> None:

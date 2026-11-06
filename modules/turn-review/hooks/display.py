@@ -59,7 +59,7 @@ def answer_hidden(storage, state, runtime, review) -> bool:
         return False
     if review.writes_before_turn(volume, state.turn, state.prompt_turns):
         return False
-    if state.released:
+    if state.released and state.release_fingerprint == review.fingerprint(volume):
         return False
     criteria, problem = required_criteria(state, runtime, review, volume)
     verdict = review.peek_verdict(storage, state.volume_id, criteria, problem)

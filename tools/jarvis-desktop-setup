@@ -57,4 +57,6 @@ def main() -> int:
 
 
 if __name__ == '__main__':
+    from jarvis_python import ensure_python
+    ensure_python()
     raise SystemExit(main())

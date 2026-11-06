@@ -1,0 +1,3 @@
+# Общий consumer обсуждений: адаптеры доставки находит только по for.
+slug = "review-discussion"
+events = ["session-start", "after-compact", "prompt"]

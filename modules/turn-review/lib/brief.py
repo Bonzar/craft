@@ -295,7 +295,7 @@ def providers_problem(sources: Sources) -> str | None:
 
 def write_brief(storage, text: str) -> Path:
     """Положить поручение в зону сессии. Не записать — BriefError с путём."""
-    path = storage.path(BRIEF_FILE)
+    path = storage.path(BRIEF_FILE).resolve()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding='utf-8')

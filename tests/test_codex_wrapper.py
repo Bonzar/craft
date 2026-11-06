@@ -46,13 +46,43 @@ class EventTest(unittest.TestCase):
 
     def test_an_event_the_stage_does_not_carry_is_named(self) -> None:
         with self.assertRaises(ValueError) as caught:
-            codex.to_event(raw('PreToolUse'))
-        self.assertIn('PreToolUse', str(caught.exception))
+            codex.to_event(raw('UnknownEvent'))
+        self.assertIn('UnknownEvent', str(caught.exception))
 
     def test_the_model_message_event_codex_does_not_have_at_all(self) -> None:
         # замер 18.09.2026: в списке хуков Codex такого события нет, поэтому
         # его нет и в карте — установщик по ней и предупреждает.
         self.assertNotIn(ev.MODEL_MESSAGE, codex.CODEX_BY_EVENT)
+
+
+class ReviewAndLocksTest(unittest.TestCase):
+    def test_tool_result_and_prompt_reach_modules(self):
+        before = codex.to_event(raw('PreToolUse', tool_name='craft_write', tool_input={'command': 'test'}))
+        after = codex.to_event(raw('PostToolUse', tool_name='craft_read', tool_response={'content': 'read'}))
+        prompt = codex.to_event(raw('UserPromptSubmit', prompt='Продолжай'))
+        stop = codex.to_event(raw('Stop', stop_hook_active=True))
+        self.assertEqual(before.event, ev.PRE_TOOL)
+        self.assertEqual(after.event, ev.POST_TOOL)
+        self.assertEqual(after.tool_result, {'content': 'read'})
+        self.assertEqual(prompt.prompt_text, 'Продолжай')
+        self.assertEqual(stop.event, ev.STOP)
+        self.assertTrue(stop.raw['stop_hook_active'])
+
+    def test_lock_denial_is_a_native_pre_tool_denial(self):
+        delivery = codex.translate(ev.PRE_TOOL, Deny('Сначала прочитай шаблон'))
+        self.assertEqual(delivery.payload, {'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+            'permissionDecisionReason': 'Сначала прочитай шаблон'}})
+
+    def test_review_block_keeps_the_turn_running(self):
+        delivery = codex.translate(ev.STOP, Block('Проведи ревью'))
+        self.assertEqual(delivery.payload, {'decision': 'block', 'reason': 'Проведи ревью'})
+
+    def test_post_tool_context_is_delivered_to_the_model(self):
+        delivery = codex.translate(ev.POST_TOOL, Context('Результат чтения учтён'))
+        self.assertEqual(delivery.payload, {'hookSpecificOutput': {
+            'hookEventName': 'PostToolUse', 'additionalContext': 'Результат чтения учтён'}})
+
 
 
 class ThreeLaidInEventsTest(unittest.TestCase):

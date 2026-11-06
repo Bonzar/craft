@@ -35,7 +35,7 @@ from .entity_types import (
 )
 from .question import (
     MAX_NUDGES, OPTION_RELEASE, OPTION_REVIEW, QUESTION_TOOL, RELEASE_PHRASE, answered_release,
-    chosen_labels, is_review_question, review_question, stuck_text,
+    chosen_labels, is_review_question, review_question, stuck_text, question_shown, question_accepted,
 )
 from .records import (
     KIND_ANCHOR, KIND_ANSWER, KIND_ENTITY, KIND_KEY, KIND_PROMPT, KIND_READ, KIND_SKILL,

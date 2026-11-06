@@ -35,6 +35,10 @@ class ToolsTest(unittest.TestCase):
         self.assertTrue(craft.is_craft_read('mcp__Craft__craft_read'))
         self.assertFalse(craft.is_craft_read('craft_read'))
 
+    def test_codex_app_tools_are_recognized(self):
+        self.assertTrue(craft.is_craft_write('mcp__codex_apps__craft_craft_write'))
+        self.assertTrue(craft.is_craft_read('mcp__codex_apps__craft_craft_read'))
+
     def test_command_of_takes_only_a_string(self) -> None:
         self.assertEqual(craft.command_of({'command': 'blocks get x'}), 'blocks get x')
         self.assertEqual(craft.command_of({'command': 1}), '')

@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = (
     '.codex/config.toml', '.codex/environments/environment.toml',
     'tools/jarvis-desktop-setup', 'tools/jarvis-hook', 'tools/jarvis-install',
+    'tools/jarvis_python.py',
     'modules/codex-rules/module.toml', 'modules/codex-rules/lib/__init__.py',
 )
 

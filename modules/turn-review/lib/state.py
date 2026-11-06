@@ -72,6 +72,10 @@ CHECKS = (
     ('volume_id', lambda value: isinstance(value, str) and bool(value), 'непустая строка'),
     ('nudges', _is_count, 'целое число'),
     ('released', lambda value: isinstance(value, bool), 'true или false'),
+    ('question_fingerprint', _is_optional_text, 'строка или null'),
+    ('is_question_delivered', lambda value: isinstance(value, bool), 'true или false'),
+    ('release_fingerprint', _is_optional_text, 'строка или null'),
+    ('review_requested', lambda value: isinstance(value, bool), 'true или false'),
     ('criteria', lambda value: value is NO_BRIEF or _is_texts(value), 'кортеж строк или null'),
     # Элемент не того типа уронил бы хук там, где поле читают, например в
     # тексте вопроса человеку.
@@ -94,6 +98,10 @@ class ReviewState:
     volume_id: VolumeId = field(default_factory=new_volume_id)
     nudges: int = 0
     released: bool = False
+    question_fingerprint: str | None = None
+    is_question_delivered: bool = False
+    release_fingerprint: str | None = None
+    review_requested: bool = False
     criteria: BriefCriteria = NO_BRIEF
     # Замечания последнего вердикта с замечаниями: вопрос человеку показывает их.
     last_remarks: tuple[dict, ...] = ()

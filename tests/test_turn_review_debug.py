@@ -205,6 +205,16 @@ class HiddenAnswerTest(TurnReviewCase):
         self.fire(ask(session, QUESTION, 'Закончить без ревью'))
         self.assert_silent(self.fire(message(session, 'Отчёт.')))
 
+    def test_new_writes_after_a_release_keep_the_answer_hidden(self) -> None:
+        session = 'h-release-stale'
+        self.start_with_write(session)
+        self.nudge_three_times(session)
+        self.fire(stop(session))
+        self.fire(ask(session, QUESTION, 'Закончить без ревью'))
+        self.fire(write(session, 'blocks update --id X --json \'{"markdown":"новая запись"}\''))
+        self.assertEqual(self.displayed(self.fire(message(session, 'Отчёт.'))),
+                         'Ревью хода идёт, отчёт после него.')
+
 
 if __name__ == '__main__':
     unittest.main()

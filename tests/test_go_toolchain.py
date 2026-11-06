@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import platform
 import shlex
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ import tempfile
 import tomllib
 import unittest
 import urllib.error
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,9 +33,13 @@ done
 
 class GoToolchainTest(unittest.TestCase):
     def setUp(self):
+        for name, value in (('system', 'Linux'), ('machine', 'x86_64')):
+            mocked = patch.object(platform, name, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.module = self.root / 'go-toolchain'
         shutil.copytree(MODULES_DIR / 'go-toolchain', self.module)
         spec = importlib.util.spec_from_file_location('toolchain_test', self.module / 'lib/__init__.py')
@@ -48,6 +54,25 @@ class GoToolchainTest(unittest.TestCase):
             entry.size, entry.mode = len(body), 0o755
             archive.addfile(entry, io.BytesIO(body))
         return buffer.getvalue()
+
+    def test_macos_arm64_download_is_verified_and_reused(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as bundle:
+            entry = zipfile.ZipInfo('golang.org/toolchain@v0.0.1-go1.24.7.darwin-arm64/bin/go')
+            entry.external_attr = 0o100755 << 16
+            bundle.writestr(entry, GO_STUB)
+        archive = buffer.getvalue()
+        with patch.object(self.library.platform, 'system', return_value='Darwin'), \
+             patch.object(self.library.platform, 'machine', return_value='arm64'), \
+             patch.object(self.library.shutil, 'which', return_value=None), \
+             patch.object(self.library.urllib.request, 'urlopen', return_value=io.BytesIO(archive)) as fetch, \
+             patch.object(self.library, 'DARWIN_ARM64_SHA256', hashlib.sha256(archive).hexdigest(), create=True):
+            tool, _ = self.library.prepare()
+            again, _ = self.library.prepare()
+        self.assertEqual(tool, again)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertIn('darwin-arm64.zip', fetch.call_args.args[0].full_url)
+        self.assertTrue(fetch.call_args.args[0].get_header('User-agent'))
 
     def test_download_is_verified_and_reused_inside_the_module(self):
         archive = self.archive()
@@ -99,7 +124,7 @@ class GoToolchainTest(unittest.TestCase):
 class CodexBuildEnvironmentTest(unittest.TestCase):
     def test_both_builders_get_go_and_caches_through_the_installed_adapter(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source, profile, state = root / 'source', root / 'profile', root / 'state'
             for slug in ('craft-sync', 'command-tree-shell', 'go-toolchain', 'go-toolchain-codex'):
                 shutil.copytree(MODULES_DIR / slug, source / slug,

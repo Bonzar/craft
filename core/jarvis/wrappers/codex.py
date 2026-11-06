@@ -1,30 +1,13 @@
-"""Минимальная обёртка Codex: старт сессии, «после сжатия» и три заложенных события.
+"""Обёртка Codex: перевод событий и ответов без логики модулей.
 
-Этап 3 везёт стартовый контекст в оба харнеса, поэтому здесь ровно столько
-Codex, сколько нужно базе стартового контекста, плюс те из трёх заложенных
-заранее событий, что у Codex есть: запрос разрешения и старт подагента. Полная
-обёртка со всеми событиями и всеми формами ответа — этап 7; чего тут нет,
-названо в `UNSUPPORTED_NOTE`, а не подменено соседней формой.
+Протокол: https://learn.chatgpt.com/docs/hooks и схема app-server.
+Замер 04.11.2026, codex-cli 0.166.0-alpha.6: PreToolUse deny предотвращает
+выполнение, PostToolUse приходит после результата, Stop block продолжает тот
+же turn_id без повторного UserPromptSubmit. Проверено локальным модельным
+stub: запрещённый файл не создан, контрольный разрешённый создан.
 
-«Ответа и мысли модели» у Codex нет вовсе: в списке его хуков такого события
-не значится (замер 18.09.2026), поэтому в карте его нет и установщик
-предупреждает, что модуль на нём в Codex не сработает.
-
-Факты о харнесе помечены источником: «дока» — схема протокола app-server,
-снятая `codex app-server generate-json-schema` (codex-cli 0.154.0), и страница
-хуков https://learn.chatgpt.com/docs/hooks (снята 18.09.2026); «замер» —
-проверено прогоном в этом окружении 17 и 18.09.2026.
-
-Замеры 17.09.2026 (codex-cli 0.154.0, контейнер облачной сессии):
-
-- хуку на stdin приходит JSON тех же полей, что у Claude: `hook_event_name`,
-  `session_id`, `cwd`, `source`, `transcript_path`, `model`, `permission_mode`;
-- stdout хука старта доходит до модели нулевым ходом: модель повторила
-  положенный хуком маркер;
-- хук без доверия молча не исполняется: строка в конфиге есть, процесса нет и
-  сообщения тоже;
-- потолок ответа снимается ключом `additionalContextLimit = 0` в строке хука
-  (дока: `null` — 2 500 токенов, `0` — без потолка).
+Показ ответа модели подменить нельзя. Нативный PreToolUse ask не поддержан:
+Codex считает его ошибкой хука и продолжает вызов, поэтому его не отправляем.
 """
 
 import argparse
@@ -53,13 +36,15 @@ CODEX_EVENTS: dict[str, tuple[str, ...]] = {
     'SessionStart': (ev.SESSION_START, ev.AFTER_COMPACT),
     'PermissionRequest': (ev.PERMISSION_REQUEST,),
     'SubagentStart': (ev.SUBAGENT_START,),
+    'UserPromptSubmit': (ev.PROMPT,),
+    'PreToolUse': (ev.PRE_TOOL,),
+    'PostToolUse': (ev.POST_TOOL,),
+    'Stop': (ev.STOP,),
 }
 CODEX_BY_EVENT = {
-    ev.SESSION_START: 'SessionStart',
-    ev.AFTER_COMPACT: 'SessionStart',
-    ev.PERMISSION_REQUEST: 'PermissionRequest',
-    ev.SUBAGENT_START: 'SubagentStart',
+    unified: native for native, group in CODEX_EVENTS.items() for unified in group
 }
+
 # Какие события Codex принимают текст в ход. По ним установщик решает, писать
 # ли в строку хука ключ снятия потолка: где текста не ждут, Codex на ключ
 # ругается предупреждением. `SessionStart` несёт оба наших события — и старт
@@ -70,7 +55,7 @@ CODEX_BY_EVENT = {
 # показывает в `hooks/list` как 0, а на `PermissionRequest` отвечает
 # «ignoring additionalContextLimit … this event cannot emit additionalContext»
 # — ровно как на `PostCompact`.
-CONTEXT_EVENTS = frozenset({'SessionStart', 'SubagentStart'})
+CONTEXT_EVENTS = frozenset({'SessionStart', 'SubagentStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse'})
 
 # Личный конфиг режимов общий для харнесов.
 PERSONAL_CONFIG = mode_reader.PERSONAL_CONFIG
@@ -90,6 +75,10 @@ SUPPORTED: dict[str, frozenset[str]] = {
     # зарезервированными: с ними хук «падает закрыто», поэтому их тут нет.
     ev.PERMISSION_REQUEST: frozenset({forms.ALLOW, forms.DENY}),
     ev.SUBAGENT_START: frozenset({forms.CONTEXT}),
+    ev.PROMPT: frozenset({forms.CONTEXT, forms.BLOCK, forms.QUESTION}),
+    ev.PRE_TOOL: frozenset({forms.CONTEXT, forms.ALLOW, forms.DENY, forms.QUESTION}),
+    ev.POST_TOOL: frozenset({forms.CONTEXT, forms.BLOCK, forms.QUESTION}),
+    ev.STOP: frozenset({forms.BLOCK, forms.QUESTION}),
 }
 
 # Чего у Codex нет вовсе, каким бы событием ни пришло. Подменять показанный
@@ -106,6 +95,10 @@ UNSUPPORTED_NOTE = {
     ev.PERMISSION_REQUEST: 'Codex на запросе разрешения принимает только «разрешить» и '
                            '«запретить»: вопроса человеку и контекста там нет (замер)',
     ev.SUBAGENT_START: 'Codex на старте подагента принимает только контекст (замер)',
+    ev.PROMPT: 'Codex на реплике принимает контекст и блок',
+    ev.PRE_TOOL: 'Codex перед вызовом принимает контекст, allow и deny; ask и updatedInput не поддержаны',
+    ev.POST_TOOL: 'Codex после вызова принимает контекст и блок',
+    ev.STOP: 'Codex на остановке принимает блок продолжения, не additionalContext',
 }
 
 
@@ -115,12 +108,40 @@ def unified_of(raw: Mapping[str, Any]) -> str:
     group = CODEX_EVENTS.get(codex_name)
     if group is None:
         raise ValueError(
-            f'событие Codex {codex_name!r} обёртке этапа 3 неизвестно; '
+            f'событие Codex {codex_name!r} обёртке неизвестно; '
             f'есть {sorted(CODEX_EVENTS)}'
         )
     if codex_name == 'SessionStart':
         return ev.AFTER_COMPACT if raw.get('source') == COMPACT_SOURCE else ev.SESSION_START
     return group[0]
+
+
+def human_answer(raw: Mapping[str, Any]) -> Any:
+    # Замер 04.11.2026: sync отдаёт JSON-строку answers по id вопроса.
+    # Async отдаёт только accepted; ответ придёт настоящей репликой позже.
+    if raw.get('tool_name') != 'request_user_input':
+        return None
+    result = raw.get('tool_response')
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return None
+    if not isinstance(result, Mapping) or not isinstance(result.get('answers'), Mapping):
+        return None
+    inputs = raw.get('tool_input')
+    questions = inputs.get('questions') if isinstance(inputs, Mapping) else None
+    if not isinstance(questions, list):
+        return None
+    answers = {}
+    for question in questions:
+        if not isinstance(question, Mapping) or not isinstance(question.get('question'), str):
+            continue
+        answer = result['answers'].get(question.get('id'))
+        values = answer.get('answers') if isinstance(answer, Mapping) else None
+        if isinstance(values, list) and all(isinstance(value, str) for value in values):
+            answers[question['question']] = values
+    return answers or None
 
 
 def to_event(raw: Mapping[str, Any]) -> Event:
@@ -133,6 +154,10 @@ def to_event(raw: Mapping[str, Any]) -> Event:
         raw=raw,
         tool_name=raw.get('tool_name'),
         tool_input=raw.get('tool_input'),
+        tool_result=raw.get('tool_response'),
+        prompt_text=raw.get('prompt'),
+        human_answer=human_answer(raw),
+        message_text=raw.get('last_assistant_message'),
         # замер 18.09.2026: вариантов для человека Codex на запросе разрешения
         # не даёт вовсе — вопрос человеку лежит текстом внутри `tool_input`.
         # Подагента он называет той же парой полей, что и Claude.
@@ -162,6 +187,8 @@ def translate(unified: str, response: Response, slug: str = '') -> Delivery:
     if response.kind not in SUPPORTED[unified]:
         return Delivery(supported=False, note=UNSUPPORTED_NOTE[unified])
 
+    if unified in (ev.PROMPT, ev.PRE_TOOL, ev.POST_TOOL, ev.STOP):
+        return translate_review_event(unified, response, slug)
     if unified == ev.PERMISSION_REQUEST:
         # Поля причины у «разрешить» в схеме Codex нет, как и у Claude: она
         # остаётся в следе.
@@ -174,6 +201,26 @@ def translate(unified: str, response: Response, slug: str = '') -> Delivery:
     if unified == ev.SUBAGENT_START:
         return Delivery(payload=_hook_specific(unified, {'additionalContext': response.text}))
     return Delivery(payload={TEXT_KEY: response.text})
+
+
+def translate_review_event(unified: str, response: Response, slug: str) -> Delivery:
+    if response.kind == forms.QUESTION:
+        options = '\n'.join(response.options)
+        text = (f'Модулю «{slug}» нужен ответ человека. Задай вопрос кнопками '
+                f'инструментом request_user_input_async. Вопрос: {response.text}\n{options}\n'
+                'accepted подтверждает только показ вопроса, а не выбор человека.')
+        if unified == ev.PRE_TOOL:
+            return translate_review_event(unified, forms.Deny(text), slug)
+        if unified == ev.STOP:
+            return translate_review_event(unified, forms.Block(text), slug)
+        return translate_review_event(unified, forms.Context(text), slug)
+    if response.kind == forms.BLOCK:
+        return Delivery(payload={'decision': 'block', 'reason': response.reason})
+    if response.kind == forms.CONTEXT:
+        return Delivery(payload=_hook_specific(unified, {'additionalContext': response.text}))
+    decision = 'deny' if response.kind == forms.DENY else 'allow'
+    return Delivery(payload=_hook_specific(unified, {
+        'permissionDecision': decision, 'permissionDecisionReason': response.reason}))
 
 
 def emit(delivery: Delivery, stdout=None, stderr=None) -> int:

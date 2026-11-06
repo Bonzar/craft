@@ -31,4 +31,6 @@ def main() -> None:
 
 
 if __name__ == '__main__':
+    from jarvis_python import ensure_python
+    ensure_python()
     main()

@@ -12,6 +12,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 MODULE_DIR = Path(__file__).resolve().parents[1]
@@ -19,6 +20,8 @@ VERSION = '1.24.7'
 MINIMUM = (1, 24, 7)
 SHA256 = 'da18191ddb7db8a9339816f3e2b54bdded8047cdc2a5d67059478f8d1595c43f'
 URL = f'https://go.dev/dl/go{VERSION}.linux-amd64.tar.gz'
+# Архив proxy.golang.org сверен с h1 из sum.golang.org (Go dirhash).
+DARWIN_ARM64_SHA256 = 'b529787fe1ee7c4a1e5b9635e97ff0840d1206b7cccc958ec1f8296fac604f63'
 DOWNLOAD_TIMEOUT = 60
 VERSION_TIMEOUT = 15
 RETRY_DELAYS = (1, 2, 4)
@@ -59,26 +62,47 @@ def prepare() -> tuple[str, dict]:
 
 
 def install(root: Path, environment: dict) -> None:
-    if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
-        raise ValueError('автозагрузка Go поддерживает Linux x86_64, нужен совместимый go на PATH')
+    target = (platform.system(), platform.machine())
+    archives = {
+        ('Linux', 'x86_64'): (URL, SHA256),
+        ('Darwin', 'arm64'): (f'https://proxy.golang.org/golang.org/toolchain/@v/v0.0.1-go{VERSION}.darwin-arm64.zip', DARWIN_ARM64_SHA256),
+    }
+    if target not in archives:
+        raise ValueError(f'автозагрузка Go не поддерживает {target}, нужен совместимый go на PATH')
+    url, checksum = archives[target]
     with tempfile.TemporaryDirectory(prefix='.go-install-', dir=root) as temporary:
         stage = Path(temporary)
         archive = stage / 'go.tar.gz'
-        if download(archive) != SHA256:
+        if download(archive, url) != checksum:
             raise ValueError('SHA256 архива Go не совпал, программа не установлена')
-        with tarfile.open(archive, mode='r:gz') as bundle:
-            bundle.extractall(stage, filter='data')
+        extract(archive, stage, url)
         tool = stage / 'go/bin/go'
         if not compatible(str(tool), environment):
             raise ValueError('скачанный Go не прошёл проверку версии')
         os.replace(stage / 'go', root / 'go')
 
 
-def download(archive: Path) -> str:
+def extract(archive: Path, stage: Path, url: str) -> None:
+    if not url.endswith('.zip'):
+        with tarfile.open(archive, mode='r:gz') as bundle:
+            bundle.extractall(stage, filter='data')
+        return
+    # ZipFile не восстанавливает executable-биты компилятора и его инструментов.
+    with zipfile.ZipFile(archive) as bundle:
+        for entry in bundle.infolist():
+            extracted = Path(bundle.extract(entry, stage))
+            if not entry.is_dir():
+                extracted.chmod((entry.external_attr >> 16) & 0o777)
+        source = stage.joinpath(*bundle.namelist()[0].split('/')[:2])
+    os.replace(source, stage / 'go')
+
+
+def download(archive: Path, url: str = URL) -> str:
     for attempt in range(len(RETRY_DELAYS) + 1):
         digest = hashlib.sha256()
         try:
-            with urllib.request.urlopen(URL, timeout=DOWNLOAD_TIMEOUT) as response, archive.open('wb') as output:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'}),
+                                        timeout=DOWNLOAD_TIMEOUT) as response, archive.open('wb') as output:
                 while chunk := response.read(1024 * 1024):
                     digest.update(chunk)
                     output.write(chunk)
