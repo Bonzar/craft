@@ -2,5 +2,5 @@
 # процесса живут разделом «Просмотр проекта» в Craft.
 slug = "craft-project-review"
 # Механику вызовов берёт из craft-call, форму разговора — из behavior,
-# проверку чекбоксов и тегов — из craft-task, свёртку этапа — из craft-stage.
-requires = ["craft-call", "behavior", "craft-task", "craft-stage"]
+# проверку чекбоксов и тегов — из craft-sync, свёртку этапа — из craft-stage.
+requires = ["craft-call", "behavior", "craft-sync", "craft-stage"]

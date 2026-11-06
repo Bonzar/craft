@@ -376,7 +376,7 @@ class RepositoryModulesTest(unittest.TestCase):
         expected = {
             'craft-groceries': {'craft-call'},
             'craft-inbox': {'craft-call', 'behavior', 'craft-task'},
-            'craft-project-review': {'craft-call', 'behavior', 'craft-task', 'craft-stage'},
+            'craft-project-review': {'craft-call', 'behavior', 'craft-sync', 'craft-stage'},
             'craft-incident': {'craft-call', 'behavior', 'code'},
         }
         for slug, needed in expected.items():
