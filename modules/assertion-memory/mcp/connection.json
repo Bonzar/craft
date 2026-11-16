@@ -1,0 +1,15 @@
+{
+  "server_name": "assertion_memory",
+  "url_env": "ASSERTION_MEMORY_URL",
+  "connection": {
+    "url": "https://bonzarr.taile5403c.ts.net/memory/mcp",
+    "bearer_token_env_var": "ASSERTION_MEMORY_TOKEN",
+    "tool_timeout_sec": 1800,
+    "capture": {
+      "enabled": true,
+      "actor_id": "vlad",
+      "scope": "conversation",
+      "state_dir": "~/.local/state/jarvis/assertion-memory"
+    }
+  }
+}

@@ -1,0 +1,2 @@
+slug = "assertion-memory"
+events = ["session-start", "after-compact", "subagent-start"]
