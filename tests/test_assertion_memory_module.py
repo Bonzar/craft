@@ -199,7 +199,9 @@ class MemoryModuleTest(unittest.TestCase):
         self.configure(url='https://updated.test/mcp')
         with patch.object(installer.CodexBackend, 'register', side_effect=RuntimeError('trust unavailable')):
             with self.assertRaisesRegex(RuntimeError, 'trust unavailable'): self.install()
-        self.install()
+        self.assertTrue((self.profile/'jarvis/modules/assertion-memory/mcp/installed.json').is_file())
+        with patch.dict(os.environ):
+            os.environ.pop('MEMORY_TOKEN',None);self.install()
         config = tomllib.loads((self.profile / 'config.toml').read_text())
         self.assertEqual(config['mcp_servers']['assertion_memory']['url'], 'https://updated.test/mcp')
 

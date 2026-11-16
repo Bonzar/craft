@@ -1333,13 +1333,13 @@ def install(args: argparse.Namespace) -> Report:
         + '\n',
         encoding='utf-8',
     )
-    # Журнал описывает уже разложенные файлы, даже когда строгая проверка
-    # нативного доверия затем остановит setup. Не оставляем старый состав.
-    backend.register(records, settings_root, args.python, report)
     for slug in mcp_plan.modules:
         binding = modules_root(settings_root) / slug / PART_MCP / mcp_config.BINDING
         write_atomic(binding, json.dumps(mcp_plan.binding(slug), indent=2) + '\n')
         report.parts.append((slug, 'MCP', str(mcp_plan.path)))
+    # Журнал и binding согласованы до проверки доверия: её отказ не должен
+    # лишать следующий запуск метаданных уже настроенного подключения.
+    backend.register(records, settings_root, args.python, report)
     return report
 
 

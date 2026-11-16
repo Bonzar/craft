@@ -555,6 +555,18 @@ class CaptureTest(unittest.TestCase):
         self.assertNotIn(secret,tool['arguments']['text']);self.assertIn('[REDACTED:credential]',tool['arguments']['text'])
         self.assertIn('Preserve this exact exception.',tool['arguments']['text'])
 
+    def test_nonobject_payload_is_a_gap_and_breaks_source_chain(self):
+        expected=[]
+        for index,payload in enumerate((None,[],42,'unsupported payload')):
+            text='Independent user '+str(index);expected.append(text)
+            self.turn(text,turn='payload-'+str(index),mid='payload-'+str(index))
+            self.append({'type':'event_msg','payload':payload})
+            self.assistant('Do not inherit the previous source',mid='unproven-'+str(index))
+        expected.append('Next proven turn');self.turn(expected[-1],turn='after-payloads',mid='after-payloads')
+        self.capture.register(self.store,self.raw);result=self.poll()
+        self.assertEqual([message['arguments']['text'] for message in self.messages()],expected)
+        self.assertEqual(result['gaps'].count('invalid_record'),4)
+
     def test_nonobject_native_record_is_a_gap_and_breaks_source_chain(self):
         self.turn('Before unsupported record',turn='before',mid='before')
         for row in ([],None,42,'unsupported native envelope'):

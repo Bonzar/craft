@@ -195,7 +195,10 @@ def _assistant_mode(payload):
 
 def _process(store, state, meta, row, offset, position, config):
     payload = row.get('payload', {})
-    if not isinstance(payload, dict): return 0
+    if not isinstance(payload, dict):
+        state['gaps'].append('invalid_record')
+        state['turn']=None
+        return 0
     if row.get('type') == 'event_msg' and payload.get('type') == 'task_started':
         queued = _flush_user(store, state, config, final=True)
         state['witnesses'] = [row['_witness']]
