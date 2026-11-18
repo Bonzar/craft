@@ -145,7 +145,8 @@ class ThoughtService(MemoryService):
         elif section == 'edges':
             value = self.thoughts.links(record_id)
         elif section == 'extraction_history':
-            value = [public_thought(row, self.engine.question_texts(row)) for row in self.thoughts.versions(record_id)]
+            value = [public_thought(row, self.engine.question_texts(row))
+                     for row in self.thoughts.versions(record_id) if row.version <= thought.version]
         else:
             raise ValueError('unknown thought section')
         return _text_page(value, 'memory_source', {'record_id': record_id,
@@ -159,7 +160,7 @@ class ThoughtService(MemoryService):
         version_id = kwargs.get('version_id')
         value = [public_thought(row, self.engine.question_texts(row)) for row in versions if row.version <= maximum
                  and (version_id is None or row.version == version_id)]
-        return _text_page(value, 'memory_history', {'view_id': view_id, 'section': section,
+        return _text_page(value, 'memory_history', {'view_id': view_id, 'section': section, 'version_id': version_id,
                           'snapshot_id': maximum}, offset, limit)
 
     def provenance(self, record_ids):
