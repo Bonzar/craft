@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from prototypes.assertion_memory.model import Candidate, ModelContextExceeded
+from prototypes.assertion_memory.model import Candidate, ModelContextExceeded, ModelError
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_engine import ThoughtEngine
 from prototypes.assertion_memory.thought_navigation import navigate, neighborhood
@@ -60,18 +60,13 @@ class ThoughtIterativeNavigationTest(unittest.TestCase):
         self.assertEqual(choices[1]['thought'],{'thought_id':campus.id,'version':1})
         self.assertTrue(choices[1]['spans'])
 
-    def test_ambiguous_quote_and_unchanged_search_do_not_guess_or_loop(self):
+    def test_ambiguous_quote_does_not_guess(self):
         a=self.store.publish('The shared phrase is not a unique address.',thought_id='a')
         b=self.store.publish('The shared phrase also occurs here.',thought_id='b')
         engine=ThoughtEngine(self.store,Model(decision('inspect',quote='shared phrase'),
             {'action':'unknown','quote':None,'question':None,'text':'The visible quotation does not uniquely identify a thought.'}))
         with patch.object(engine,'retrieve',return_value=[a,b]):result=navigate(engine,'Which material answers this?')
         self.assertIsNone(result.thought);self.assertIn('does not uniquely identify',result.reason)
-        model=Model(decision('search',question='Another formulation'),decision('search',question='Another formulation'))
-        engine=ThoughtEngine(self.store,model)
-        with patch.object(engine,'retrieve',return_value=[a]):result=navigate(engine,'Original question')
-        self.assertIsNone(result.thought);self.assertEqual(len(model.requests),2)
-        self.assertEqual(result.reason,'repeated_navigation_search')
 
     def test_neighbors_obey_selection_exact_versions_and_real_provider_capacity(self):
         a=self.store.publish('Alpha source.',thought_id='a',origin={'scope':'alpha'})
@@ -93,25 +88,45 @@ class ThoughtIterativeNavigationTest(unittest.TestCase):
         self.assertTrue(any(row.get('pinned_target_ref')=={'thought_id':'a','version':1}
                             for row in catalog['relations']))
 
-    def test_order_only_search_results_do_not_create_new_frontiers(self):
-        a = self.store.publish('Alpha location.', thought_id='a')
-        b = self.store.publish('Beta location.', thought_id='b')
-        model = Model(*(decision('search', question='New wording ' + str(i)) for i in range(4)))
-        engine = ThoughtEngine(self.store, model)
-        with patch.object(engine, 'retrieve', side_effect=[[a, b], [b, a], [a, b], [b, a]]):
-            result = navigate(engine, 'Original question')
-        self.assertIsNone(result.thought)
-        self.assertEqual(result.reason, 'unchanged_navigation_frontier')
-        self.assertEqual(len(model.requests), 2)
+    def test_model_search_is_rejected_by_schema_and_both_validators(self):
+        from prototypes.assertion_memory.thought_schema import response_schema
+        from prototypes.assertion_memory.thought_engine_contract import validate_response
+        from prototypes.assertion_memory.thought_navigation import _decision
+        response = decision('search', question='Another formulation')
+        self.assertNotIn('search', response_schema('Navigate thought graph')['properties']['action']['enum'])
+        for validate in (_decision, lambda value: validate_response('Navigate thought graph', value)):
+            with self.subTest(validate=validate), self.assertRaises(ModelError):
+                validate(response)
 
-    def test_no_new_search_keeps_an_unopened_useful_starting_point(self):
+    def test_model_search_cannot_trigger_another_index_lookup(self):
         a = self.store.publish('Alpha location.', thought_id='a')
-        b = self.store.publish('Beta contains the required exception.', thought_id='b')
-        model = Model(decision('search', question='Another formulation'), decision('focus', quote=b.text))
+        model = Model(*(decision('search', question='Another formulation') for _ in range(2)))
         engine = ThoughtEngine(self.store, model)
-        with patch.object(engine, 'retrieve', side_effect=[[a, b], [a]]):
-            result = navigate(engine, 'Original question')
-        self.assertEqual(result.thought, b)
+        with patch.object(engine, 'retrieve', return_value=[a]) as retrieve:
+            with self.assertRaises(ModelError):
+                navigate(engine, 'Original question')
+        retrieve.assert_called_once_with('Original question', explicit_ids=())
+
+    def test_graph_walk_passes_depth_three_without_expanding_unselected_seeds(self):
+        chain = [self.store.publish('Graph location zero.', thought_id='walk-0')]
+        for index in range(1, 7):
+            chain.append(self.store.publish('Graph location ' + str(index) + '.',
+                thought_id='walk-' + str(index), bases=[{'thought_id': chain[-1].id}]))
+        other = self.store.publish('An unselected seed.', thought_id='other-seed')
+        hidden = self.store.publish('UNOPENED_SEED_NEIGHBOR.', bases=[{'thought_id': other.id}])
+        model = Model(*(decision('inspect', quote=row.text) for row in chain[:-1]),
+                      decision('focus', quote=chain[-1].text))
+        engine = ThoughtEngine(self.store, model)
+        with patch.object(engine, 'retrieve', return_value=[chain[0], other]) as retrieve:
+            result = navigate(engine, 'Which graph location supplies the answer?')
+        self.assertEqual(result.thought, chain[-1])
+        self.assertEqual(retrieve.call_count, 1)
+        for index, request in enumerate(model.requests):
+            wire = json.dumps(request.records)
+            self.assertNotIn(hidden.text, wire)
+            if index + 1 < len(chain):
+                self.assertNotIn(chain[index + 1].text, wire)
+        self.assertEqual([request.task for request in model.requests], ['Navigate thought graph'] * len(chain))
 
     def test_different_repair_notice_wording_does_not_create_progress(self):
         a = self.store.publish('The shared phrase is here.', thought_id='a')

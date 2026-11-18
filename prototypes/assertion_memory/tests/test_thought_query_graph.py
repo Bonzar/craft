@@ -92,26 +92,56 @@ class ThoughtQueryGraphTest(unittest.TestCase):
                 self.assertEqual(service.engine.answer('Original question'), resolved)
             self.assertEqual(asked, ['Original question', 'Which inspection?', 'Original question'])
 
-    def test_detail_chain_continues_when_new_source_support_is_found(self):
+    def test_detail_frames_reuse_initial_pending_sources_without_searching_again(self):
         from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
+        from prototypes.assertion_memory.model import SemanticUnavailable
         with MemoryStore(':memory:') as memory:
             service = ThoughtService(memory)
             sources = [service.queue.capture_event('fixture', str(index), text, source='fixture')
                        for index, text in enumerate(('Inspection is required.', 'Mira signs the inspection.'))]
             packets = [service.engine._raw_packet(source.id) for source in sources]
             material = [([record for record, _ in packet], [basis for _, basis in packet]) for packet in packets]
-            resolved = service.thoughts.publish('Mira signs the inspection.', metadata={'verification': 'accepted'})
             asked = []
             def construct(*args, question=None, **kwargs):
                 asked.append(question)
-                if len(asked) < 3:
-                    raise ThoughtDetailNeeded('Detail ' + str(len(asked)), 'Find the next source.')
-                return resolved, ()
-            with patch.object(service.engine, 'retrieve', return_value=[]), \
-                 patch.object(service.engine, '_pending_raw_material', side_effect=[material[0], material[1], material[1]]), \
+                if len(asked) > 2:
+                    self.fail('a detail frame reran source discovery')
+                raise ThoughtDetailNeeded('Detail ' + str(len(asked)), 'Read the existing source.')
+            with patch.object(service.engine, 'retrieve', return_value=[]) as retrieve, \
+                 patch.object(service.engine, '_pending_raw_material', side_effect=material) as pending, \
                  patch.object(service.engine, '_construct', side_effect=construct):
-                self.assertEqual(service.engine.answer('Original question'), resolved)
-            self.assertEqual(asked, ['Original question', 'Detail 1', 'Detail 2', 'Detail 1', 'Original question'])
+                with self.assertRaises(SemanticUnavailable):
+                    service.engine.answer('Original question')
+            self.assertEqual(asked, ['Original question', 'Detail 1'])
+            retrieve.assert_called_once_with('Original question', ())
+            pending.assert_called_once_with('Original question')
+
+    def test_detail_frames_reopen_discovered_graph_locations_and_parent_full_material(self):
+        from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
+        from prototypes.assertion_memory.thought_navigation import NavigationResult
+        with MemoryStore(':memory:') as memory:
+            service = ThoughtService(memory)
+            seed = service.thoughts.publish('Initial navigation description.')
+            parent = service.thoughts.publish('Discovered parent.\n\nFull parent condition.')
+            detail = service.thoughts.publish('Discovered detail.\n\nFull exception.')
+            routes, prepared = [], []
+            def route(engine, question, explicit=(), **kwargs):
+                routes.append(kwargs['initial'])
+                return NavigationResult(parent, (seed, parent), 'fixture') if len(routes) == 1 else NavigationResult(detail, (), 'fixture')
+            def prepare(engine, question, selected, **kwargs):
+                prepared.append((selected, kwargs['additional']))
+                if len(prepared) == 1:
+                    raise ThoughtDetailNeeded('What exception applies?', 'Open the linked detail.')
+                return detail
+            with patch.object(service.engine, 'retrieve', return_value=[seed]) as retrieve, \
+                 patch.object(service.engine, '_pending_raw_material', return_value=((), ())) as pending, \
+                 patch('prototypes.assertion_memory.thought_query.navigate', side_effect=route), \
+                 patch('prototypes.assertion_memory.thought_query.answer_selected', side_effect=prepare):
+                self.assertEqual(service.engine.answer('Original question'), detail)
+            self.assertEqual(retrieve.call_count, 1)
+            self.assertEqual(pending.call_count, 1)
+            self.assertIn(parent, routes[1])
+            self.assertIn(parent, prepared[1][1])
 
     def test_same_question_detail_reuses_complete_answer_without_copying_it(self):
         from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
