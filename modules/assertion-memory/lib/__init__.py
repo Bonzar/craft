@@ -109,9 +109,10 @@ def context(event, storage):
                     local_report = store.summary(event.session_id)
                 finally: store.close()
                 capture_status = 'blocked_source' if registered.get('blocked') else 'registered_local_outbox'
-                # Process environments cannot be repaired from a different shell.
-                # Never keep the endpoint lock in a worker with missing credentials.
-                has_auth_environment=not env_name or bool(os.environ.get(env_name))
+                # Use the same resolver as both transports, including the pinned dotenv.
+                from .headers import token
+                try: has_auth_environment=bool(token(binding['connection']))
+                except (OSError, ValueError): has_auth_environment=False
                 if not registered.get('blocked') and not has_auth_environment:capture_status='auth_environment_missing'
                 if not registered.get('blocked') and has_auth_environment:
                     subprocess.Popen([sys.executable, str(Path(__file__).parent / 'capture_worker.py'),
@@ -137,7 +138,8 @@ def context(event, storage):
         '\nAuthentication is configured through environment variable '+env_name+'. Its runtime availability is not verified here. '
         'Do not inspect or echo the credential; only the transport uses it. A value exported in an unrelated shell '
         'does not establish the Codex GUI environment. Restart Codex after configuring its process environment. '
-        'No worker starts while this credential is absent/empty. Installed configuration is not authenticated readiness. '
+        'When configured, the main checkout dotenv is used as a fallback by the transport. '
+        'No worker starts without a valid credential from either source. Installed configuration is not authenticated readiness. '
         'No per-turn environment/status ritual is required.\n' if env_name else '')
     if not capture.get('enabled'): return POLICY + caller_context + auth_note
     prefix = POLICY.split('This hook registers only')[0]

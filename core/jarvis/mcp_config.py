@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import sys
 import tomllib
 from urllib.parse import urlsplit
@@ -32,6 +33,28 @@ def _object(path):
     return value
 
 
+def repository_env(directory):
+    """Resolve the main checkout's dotenv without reading credential values."""
+    try:
+        result = subprocess.run(['git', '-C', str(directory), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                                capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0: return None
+    path = Path(result.stdout.strip()).parent / '.env'
+    return path if path.is_file() else None
+
+
+def dotenv_declares(path, name):
+    """Check assignment names only; leave credential parsing to the transport."""
+    pattern = re.compile(r'^\s*(?:export\s+)?' + re.escape(name) + r'\s*=')
+    try:
+        with path.open(encoding='utf-8') as stream:
+            return any(pattern.match(line) for line in stream)
+    except OSError:
+        return False
+
+
 def _descriptor_config(path,descriptor,previous_binding=None):
     """Choose source defaults or an existing generic file-backed descriptor.
 
@@ -47,7 +70,13 @@ def _descriptor_config(path,descriptor,previous_binding=None):
             raise ValueError(f'Source MCP connection requires environment authentication: {path}')
         if url_env==auth_env:raise ValueError(f'URL and credential environment names must differ: {path}')
         if type(config.get('enabled',True)) is not bool:raise ValueError(f'Invalid source MCP enable flag: {path}')
-        if config.get('enabled',True) and auth_env not in set(os.environ):
+        if config.get('bearer_token_env_file') == '.env':
+            # The installer records only a path. The transport reads the secret at runtime.
+            env_file = repository_env(path.parent)
+            config = {key:value for key,value in config.items() if key != 'bearer_token_env_file'}
+            if env_file is not None and dotenv_declares(env_file, auth_env):
+                config = {**config, 'bearer_token_env_file': str(env_file)}
+        if config.get('enabled',True) and auth_env not in set(os.environ) and not config.get('bearer_token_env_file'):
             if previous_binding is None:return None,path
             prior=_object(previous_binding)
             if prior.get('server_name')!=descriptor['server_name'] or not isinstance(prior.get('connection'),dict):
@@ -71,7 +100,7 @@ def _connection(module,previous_binding=None):
     if not isinstance(name,str) or not SERVER_NAME.fullmatch(name):raise ValueError(f'Invalid MCP server_name: {path}')
     config,config_path=_descriptor_config(path,descriptor,previous_binding)
     if config is None:return None
-    if set(config) - {'enabled', 'url', 'bearer_token_env_var', 'bearer_token_file', 'capture', 'tool_timeout_sec'}:
+    if set(config) - {'enabled', 'url', 'bearer_token_env_var', 'bearer_token_file', 'bearer_token_env_file', 'capture', 'tool_timeout_sec'}:
         raise ValueError(f'Unsupported MCP connection fields: {config_path}')
     if type(config.get('enabled', True)) is not bool:
         raise ValueError(f'MCP enabled must be boolean: {config_path}')
@@ -102,7 +131,7 @@ def _connection(module,previous_binding=None):
     if token_file is not None:
         if not isinstance(token_file, str) or not Path(token_file).expanduser().is_absolute():
             raise ValueError(f'MCP bearer_token_file must be absolute: {config_path}')
-        if config.get('bearer_token_env_var') is not None:
+        if config.get('bearer_token_env_var') is not None or config.get('bearer_token_env_file') is not None:
             raise ValueError(f'Use only one MCP credential source: {config_path}')
         native['bearer_token_file'] = str(Path(token_file).expanduser())
     capture = config.get('capture', {})
@@ -124,6 +153,11 @@ def _connection(module,previous_binding=None):
         if not isinstance(token, str) or not IDENTIFIER.fullmatch(token):
             raise ValueError(f'MCP bearer_token_env_var must name an environment variable: {config_path}')
         native['bearer_token_env_var'] = token
+    env_file = config.get('bearer_token_env_file')
+    if env_file is not None:
+        if not token or not isinstance(env_file, str) or not Path(env_file).is_absolute():
+            raise ValueError(f'MCP bearer_token_env_file requires an absolute path and environment name: {config_path}')
+        native['bearer_token_env_file'] = env_file
     return name, native
 
 
@@ -141,6 +175,12 @@ def _region(text):
 
 
 def _native(config, harness, helper, python):
+    if config.get('bearer_token_env_file'):
+        command = shlex.join([python, str(helper), '--env-var', config['bearer_token_env_var'],
+                              '--env-file', config['bearer_token_env_file']])
+        if harness == 'codex':
+            return {'url':config['url'], 'tool_timeout_sec':config['tool_timeout_sec'], 'http_headers_helper':command}
+        return {'type':'http', 'url':config['url'], 'headersHelper':command}
     if harness == 'codex':
         value = {key:config[key] for key in ('url','bearer_token_env_var','tool_timeout_sec') if key in config}
         if config.get('bearer_token_file'):
@@ -238,7 +278,7 @@ def prepare(plan, settings_root, harness, previous, settings_file=None, python=N
         if name in desired:
             raise ValueError(f'Multiple modules own MCP server {name}')
         helper = settings_root / 'jarvis' / 'modules' / slug / 'lib' / 'headers.py'
-        if config.get('bearer_token_file') and not (target.path / 'lib' / 'headers.py').is_file():
+        if (config.get('bearer_token_file') or config.get('bearer_token_env_file')) and not (target.path / 'lib' / 'headers.py').is_file():
             raise ValueError('MCP token-file binding requires module lib/headers.py helper')
         desired[name] = _native(config, harness, helper.resolve(), python)
         modules[slug] = name
