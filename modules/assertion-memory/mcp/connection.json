@@ -4,6 +4,7 @@
   "connection": {
     "url": "https://bonzarr.taile5403c.ts.net/memory/mcp",
     "bearer_token_env_var": "ASSERTION_MEMORY_TOKEN",
+    "bearer_token_env_file": ".env",
     "tool_timeout_sec": 1800,
     "capture": {
       "enabled": true,

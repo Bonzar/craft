@@ -23,6 +23,8 @@ class SingleMemoryModuleTest(unittest.TestCase):
         self.env=patch.dict(os.environ,{'JARVIS_ASSERTION_MEMORY_CONFIG':str(self.root/'absent-legacy.json'),'ASSERTION_MEMORY_URL':'https://unit.invalid/memory/mcp','ASSERTION_MEMORY_TOKEN':'synthetic-fixture-token'})
         self.env.start();self.addCleanup(self.env.stop)
         self.safe_descriptor()
+        self.dotenv=patch.object(installer.mcp_config,'repository_env',return_value=None,create=True)
+        self.dotenv.start();self.addCleanup(self.dotenv.stop)
 
     def safe_descriptor(self):
         value=json.loads(self.config.read_text())
@@ -40,6 +42,97 @@ class SingleMemoryModuleTest(unittest.TestCase):
                 '--settings-dir',str(self.profile),'--state-dir',str(self.root/'hook-state'),'--core',str(CORE_SOURCE)]))
         self.assertFalse((self.profile/'jarvis/modules/assertion-memory/mcp/installed.json').exists())
 
+    def test_dotenv_connects_native_mcp_without_export_and_keeps_secrets_out_of_config(self):
+        dotenv=self.root/'.env';secret='SYNTHETIC_DOTENV_SECRET'
+        dotenv.write_text('UNRELATED=ignored\nexport ASSERTION_MEMORY_TOKEN="'+secret+'" # local\n')
+        with patch.dict(os.environ),patch.object(installer.mcp_config,'repository_env',return_value=dotenv):
+            os.environ.pop('ASSERTION_MEMORY_TOKEN',None);self.install()
+            server=tomllib.loads((self.profile/'config.toml').read_text())['mcp_servers']['assertion_memory']
+            self.assertNotIn('bearer_token_env_var',server)
+            result=subprocess.run(server['http_headers_helper'],shell=True,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout),{'Authorization':'Bearer '+secret})
+        for path in (self.profile/'config.toml',self.profile/'jarvis/installed.json',
+                     self.profile/'jarvis/modules/assertion-memory/mcp/installed.json'):
+            self.assertNotIn(secret,path.read_text())
+
+    def test_unrelated_dotenv_does_not_enable_optional_memory_connection(self):
+        dotenv=self.root/'.env';dotenv.write_text('CRAFT_API_BASE=synthetic-other-service\n')
+        with patch.dict(os.environ),patch.object(installer.mcp_config,'repository_env',return_value=dotenv):
+            os.environ.pop('ASSERTION_MEMORY_TOKEN',None)
+            installer.install(installer.parse_args(['--harness','claude','--modules',str(self.source),
+                '--settings-dir',str(self.profile),'--state-dir',str(self.root/'hook-state'),'--core',str(CORE_SOURCE)]))
+        self.assertFalse((self.profile/'jarvis/modules/assertion-memory/mcp/installed.json').exists())
+
+    def test_dotenv_worker_transport_uses_env_priority_and_reloads_file(self):
+        # Install the real module, then exercise its public transport credential resolver.
+        dotenv=self.root/'.env';dotenv.write_text('ASSERTION_MEMORY_TOKEN=file-first\n')
+        with patch.object(installer.mcp_config,'repository_env',return_value=dotenv):self.install()
+        entry=self.profile/'jarvis/modules/assertion-memory/lib/headers.py'
+        spec=importlib.util.spec_from_file_location('dotenv_headers',entry)
+        headers=importlib.util.module_from_spec(spec);spec.loader.exec_module(headers)
+        binding=json.loads((self.profile/'jarvis/modules/assertion-memory/mcp/installed.json').read_text())
+        config=binding['connection']
+        self.assertEqual(headers.token(config),'synthetic-fixture-token')
+        with patch.dict(os.environ):
+            os.environ.pop('ASSERTION_MEMORY_TOKEN',None)
+            self.assertEqual(headers.token(config),'file-first')
+            dotenv.write_text("ASSERTION_MEMORY_TOKEN='file-second'\n")
+            self.assertEqual(headers.token(config),'file-second')
+            dotenv.write_text('ASSERTION_MEMORY_TOKEN=$(touch forbidden)\n')
+            with self.assertRaises(ValueError):headers.token(config)
+
+    def test_dotenv_missing_or_malformed_token_fails_without_echoing_secrets(self):
+        dotenv=self.root/'.env';dotenv.write_text('ASSERTION_MEMORY_TOKEN=synthetic-initial-token\n')
+        with patch.object(installer.mcp_config,'repository_env',return_value=dotenv):self.install()
+        server=tomllib.loads((self.profile/'config.toml').read_text())['mcp_servers']['assertion_memory']
+        for content in ('UNRELATED=private-other-value\n', 'ASSERTION_MEMORY_TOKEN="bad secret"\n',
+                        'ASSERTION_MEMORY_TOKEN="$(touch forbidden)"\n', 'ASSERTION_MEMORY_TOKEN=\n', None):
+            if content is None:dotenv.unlink()
+            else:dotenv.write_text(content)
+            with patch.dict(os.environ):
+                os.environ.pop('ASSERTION_MEMORY_TOKEN',None)
+                result=subprocess.run(server['http_headers_helper'],shell=True,capture_output=True,text=True)
+            self.assertEqual(result.returncode,1)
+            self.assertEqual(result.stdout,'')
+            self.assertEqual(result.stderr,'Memory credential unavailable\n')
+        self.assertFalse((self.root/'forbidden').exists())
+
+    def test_dotenv_path_is_main_checkout_even_when_installer_runs_from_worktree(self):
+        main=self.root/'main';main.mkdir();worktree=self.root/'worktree'
+        for args in (['init',str(main)], ['-C',str(main),'-c','user.name=Fixture','-c',
+                     'user.email=fixture@example.invalid','commit','--allow-empty','-m','fixture'],
+                     ['-C',str(main),'worktree','add','--detach',str(worktree)]):
+            subprocess.run(['git',*args],check=True,capture_output=True)
+        dotenv=main/'.env';dotenv.write_text('ASSERTION_MEMORY_TOKEN=synthetic-main-secret\n')
+        (worktree/'.env').write_text('ASSERTION_MEMORY_TOKEN=wrong-worktree-secret\n')
+        shutil.copytree(self.source,worktree/'modules');self.source=worktree/'modules'
+        # Undo only this test's discovery seam: exercise actual Git resolution.
+        self.dotenv.stop()
+        before=Path.cwd()
+        try:
+            os.chdir(worktree)
+            with patch.dict(os.environ):
+                os.environ.pop('ASSERTION_MEMORY_TOKEN',None);self.install()
+                server=tomllib.loads((self.profile/'config.toml').read_text())['mcp_servers']['assertion_memory']
+                result=subprocess.run(server['http_headers_helper'],shell=True,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads(result.stdout),{'Authorization':'Bearer synthetic-main-secret'})
+        finally:os.chdir(before)
+
+    def test_claude_dotenv_uses_native_header_helper(self):
+        dotenv=self.root/'.env';dotenv.write_text('ASSERTION_MEMORY_TOKEN=synthetic-claude-secret\n')
+        with patch.dict(os.environ),patch.object(installer.mcp_config,'repository_env',return_value=dotenv):
+            os.environ.pop('ASSERTION_MEMORY_TOKEN',None)
+            installer.install(installer.parse_args(['--harness','claude','--modules',str(self.source),
+                '--settings-dir',str(self.profile),'--state-dir',str(self.root/'hook-state'),'--core',str(CORE_SOURCE),
+                '--mcp-settings-file',str(self.root/'claude.json')]))
+            server=json.loads((self.root/'claude.json').read_text())['mcpServers']['assertion_memory']
+            result=subprocess.run(server['headersHelper'],shell=True,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout),{'Authorization':'Bearer synthetic-claude-secret'})
+        self.assertNotIn('headers',server)
+
     def test_configured_connection_survives_update_without_installer_credentials(self):
         self.install();before=tomllib.loads((self.profile/'config.toml').read_text())['mcp_servers']
         binding=self.profile/'jarvis/modules/assertion-memory/mcp/installed.json'
@@ -48,6 +141,18 @@ class SingleMemoryModuleTest(unittest.TestCase):
             os.environ.pop('ASSERTION_MEMORY_TOKEN',None);self.install()
         self.assertEqual(tomllib.loads((self.profile/'config.toml').read_text())['mcp_servers'],before)
         self.assertEqual(json.loads(binding.read_text()),prior)
+
+    def test_unrelated_dotenv_preserves_existing_binding_without_export(self):
+        self.install()
+        before=tomllib.loads((self.profile/'config.toml').read_text())['mcp_servers']
+        binding=self.profile/'jarvis/modules/assertion-memory/mcp/installed.json'
+        prior=binding.read_text();dotenv=self.root/'.env';dotenv.write_text('CRAFT_API_BASE=other-service\n')
+        with patch.dict(os.environ),patch.object(installer.mcp_config,'repository_env',return_value=dotenv):
+            os.environ.pop('ASSERTION_MEMORY_TOKEN',None)
+            os.environ['ASSERTION_MEMORY_URL']='https://changed.invalid/mcp'
+            self.install()
+        self.assertEqual(tomllib.loads((self.profile/'config.toml').read_text())['mcp_servers'],before)
+        self.assertEqual(binding.read_text(),prior)
 
     def test_main_module_owns_all_hooks_and_default_env_binding_without_machine_json(self):
         self.install();cfg=tomllib.loads((self.profile/'config.toml').read_text());server=cfg['mcp_servers']['assertion_memory']
@@ -139,3 +244,11 @@ class SingleMemoryModuleTest(unittest.TestCase):
             text=library.context(event,Storage(self.root/'hook-state','physical'))
             self.assertEqual(spawn.call_count,1);self.assertIn('registered_local_outbox',text)
             self.assertNotIn('00000000-0000-0000-0000-000000000001',text)
+        dotenv=self.root/'.env';dotenv.write_text('ASSERTION_MEMORY_TOKEN=synthetic-worker-secret\n')
+        binding_path=self.profile/'jarvis/modules/assertion-memory/mcp/installed.json'
+        binding=json.loads(binding_path.read_text());binding['connection']['bearer_token_env_file']=str(dotenv)
+        binding_path.write_text(json.dumps(binding))
+        with patch.dict(os.environ,{},clear=True),patch.object(library.subprocess,'Popen') as spawn:
+            text=library.context(event,Storage(self.root/'hook-state','physical'))
+            self.assertEqual(spawn.call_count,1);self.assertIn('registered_local_outbox',text)
+            self.assertNotIn('synthetic-worker-secret',text)
