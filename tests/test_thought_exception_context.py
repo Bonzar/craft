@@ -20,7 +20,8 @@ class ThoughtExceptionContextTest(unittest.TestCase):
                 if request.task=='Construct thought':
                     support=next(fragment['option'] for row in request.records for fragment in row.get('fragments', [])
                                  if fragment['text']==ready.text)
-                    return json.dumps({'thoughts':[{'text':'All rooms are ready.','question':None,'support_fragments':[support]}]})
+                    return json.dumps({'thought':{'text':'All rooms are ready.','question':None,
+                                                 'support_fragments':[support]},'needs_detail':None})
                 self.assertEqual(request.task,'Verify thought')
                 exception_fragment=next(fragment for row in request.records for fragment in row.get('fragments', [])
                                         if '214' in fragment['text'])

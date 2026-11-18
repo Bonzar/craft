@@ -31,8 +31,9 @@ def construction(request, text, support):
                  if fragment['text'] == support]
     if len(fragments) != 1:
         raise AssertionError('expected one exact prepared support fragment')
-    return {'thoughts': [{'text': text, 'question': None,
-                          'support_fragments': [fragments[0]['option']]}]}
+    item = {'text': text, 'question': None, 'support_fragments': [fragments[0]['option']]}
+    key = 'thought' if 'thought' in request.response_schema['properties'] else 'thoughts'
+    return {key: item if key == 'thought' else [item], 'needs_detail': None}
 
 
 class ThoughtServiceTest(unittest.TestCase):
