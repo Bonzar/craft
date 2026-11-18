@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime
 
+TOOL_EVENT_TYPES = frozenset({'function_call','custom_tool_call','function_call_output','custom_tool_call_output'})
+
 MAX_RECORD = 512 * 1024
 MAX_POLL = 2 * 1024 * 1024
 # One bounded record may carry 8 images, each <=2 MiB decoded. Normal text
@@ -206,7 +208,7 @@ def _process(store, state, meta, row, offset, position, config):
         allowed = _allowed_start(payload, meta)
         attribution = payload.get('turn_attribution') or {}
         state['turn'] = {'id': turn, 'allowed': allowed, 'human': allowed and attribution.get('turn_trigger') in HUMAN,
-            'verified': False, 'pending': None, 'ambiguous': False, 'tools': {}, 'assistant': None} if isinstance(turn, str) and turn and len(turn) <= 256 else None
+            'verified': False, 'pending': None, 'ambiguous': False, 'assistant': None} if isinstance(turn, str) and turn and len(turn) <= 256 else None
         return queued
     turn = state.get('turn')
     if not turn or not turn['allowed']: return 0
@@ -285,30 +287,16 @@ def _process(store, state, meta, row, offset, position, config):
                 or _assistant_mode(payload) in ('final','commentary'))
                 or row.get('type') == 'event_msg' and payload.get('type') == 'task_complete')
     queued = _flush_user(store, state, config, final=payload.get('type') == 'task_complete') if boundary else 0
+    if row.get('type')=='response_item' and payload.get('type') in TOOL_EVENT_TYPES:
+        _exclude(state,'non_dialogue_'+payload['type'])
+        return queued
     if not turn['verified']:
         if row.get('type') == 'response_item' and _assistant_mode(payload) in ('final','commentary'):
             state['gaps'].append('visible_assistant_before_user_proof')
         return queued
     if row.get('type') == 'response_item':
         kind = payload.get('type')
-        if kind in ('function_call', 'custom_tool_call'):
-            call_id, name = payload.get('call_id'), payload.get('name')
-            if isinstance(call_id, str) and isinstance(name, str): turn['tools'][call_id] = name
-        elif kind in ('function_call_output', 'custom_tool_call_output'):
-            call = payload.get('call_id')
-            if call in turn['tools']:
-                from .tool_projection import project_result
-                try: projection=project_result(payload.get('output'),credential_env_var=config.get('credential_env_var'))
-                except (ValueError,TypeError,RecursionError):
-                    state['gaps'].append('unsupported_tool_output_projection')
-                    return queued
-                if projection['redactions']:_exclude(state,'credential_fields_redacted',projection['redactions'])
-                artifact_ids=[store.store_artifact(image) for image in projection['artifacts']]
-                for omission in projection['omissions']:state['gaps'].append('unsupported_tool_media:'+omission)
-                return queued + int(_enqueue(store, state, row, 'tool', projection['text'], call, position,
-                    'tool:' + turn['tools'][call], config, 'tool:' + turn['id'] + ':byte:' + str(offset),artifact_ids=artifact_ids))
-            state['gaps'].append('unattributed_or_unsupported_tool_output')
-        elif kind == 'message' and payload.get('role') == 'assistant':
+        if kind == 'message' and payload.get('role') == 'assistant':
             mode=_assistant_mode(payload)
             if mode is None:
                 _exclude(state,'assistant_private_or_unproven_route')
@@ -408,7 +396,9 @@ def poll(store, session_id, config):
                 if isinstance(row,dict):
                     from .user_projection import is_photo_response
                     media_envelope=media_envelope or is_photo_response(row)
-                if len(line)>MAX_RECORD and not media_envelope:
+                excluded_tool=(isinstance(row,dict) and row.get('type')=='response_item'
+                    and isinstance(payload,dict) and payload.get('type') in TOOL_EVENT_TYPES)
+                if len(line)>MAX_RECORD and not media_envelope and not excluded_tool:
                     state['gaps'].append('oversized_record');state['turn']=None
                     state.setdefault('gap_witnesses',[]).append({'reason':'oversized_record','start':offset,
                         'end':stream.tell(),'sha256':hashlib.sha256(line).hexdigest()})

@@ -27,7 +27,7 @@ class BoundedReplayTest(unittest.TestCase):
         return replay_from_snapshot(self.store,'physical',snapshot_path=path,expected_snapshot_sha256=digest,
             expected_snapshot_cursor=cursor,expected_header_sha256=self.store.session('physical')['header_hash'],reason=BOUNDED_REASON,**extra)
 
-    def test_resume_bounded_replay_keeps_precheckpoint_gap_and_old_receipts_recovers_image(self):
+    def test_resume_bounded_replay_keeps_receipts_and_recovers_visible_answer_without_tool_artifacts(self):
         self.turn('OLD HISTORY NEVER IMPORT');self.assistant('OLD ANSWER NEVER IMPORT')
         self.capture.register(self.store,{**self.raw,'source':'resume'});self.poll()
         state=self.store.session('physical');state['gaps']=['oversized_record']
@@ -36,8 +36,10 @@ class BoundedReplayTest(unittest.TestCase):
         self.append({'type':'response_item','payload':{'type':'custom_tool_call','name':'fixture','call_id':'photo'}})
         self.append({'type':'response_item','payload':{'type':'custom_tool_call_output','call_id':'photo','output':[
             {'type':'input_text','text':'All current text stays.'},{'type':'input_image','image_url':'data:image/png;base64,'+base64.b64encode(PNG).decode()}]}})
-        import synthetic_memory_adapter.tool_projection as projection
-        with patch.object(projection,'project_result',side_effect=ValueError('old parser shape')):old_result=self.poll()
+        self.assistant('Current visible answer','recovered-final')
+        mode=self.capture._assistant_mode
+        with patch.object(self.capture,'_assistant_mode',side_effect=lambda payload:None if payload.get('id')=='recovered-final' else mode(payload)):
+            old_result=self.poll()
         from synthetic_memory_adapter.frontier import Coordinator
         remote=ArtifactRemote();coordinator=Coordinator(self.store,remote);coordinator.observe('physical',old_result);coordinator.tick()
         before={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()}
@@ -47,7 +49,8 @@ class BoundedReplayTest(unittest.TestCase):
         after={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()}
         self.assertTrue(all(after[k]==v for k,v in before.items()));self.assertEqual(len(after),2)
         self.assertNotIn('OLD HISTORY',json.dumps(after));self.assertNotIn('OLD ANSWER',json.dumps(after))
-        self.assertEqual(result['gaps'],['oversized_record']);self.assertEqual(len(remote.blobs),1)
+        self.assertEqual(result['gaps'],['oversized_record']);self.assertEqual(len(remote.blobs),0)
+        self.assertEqual([message['arguments']['role'] for message in self.messages()],['user','assistant'])
         self.assertEqual(self.store.session('physical')['cursor'],self.path.stat().st_size)
 
     def test_wrong_snapshot_hash_or_active_worker_never_rewinds_current_state(self):
