@@ -113,5 +113,16 @@ class ThoughtIterativeNavigationTest(unittest.TestCase):
             result = navigate(engine, 'Original question')
         self.assertEqual(result.thought, b)
 
+    def test_different_repair_notice_wording_does_not_create_progress(self):
+        a = self.store.publish('The shared phrase is here.', thought_id='a')
+        b = self.store.publish('The shared phrase is also here.', thought_id='b')
+        model = Model(decision('inspect', quote='shared phrase'),
+                      decision('inspect', quote='A quotation that was never visible.'))
+        engine = ThoughtEngine(self.store, model)
+        with patch.object(engine, 'retrieve', return_value=[a, b]):
+            result = navigate(engine, 'Original question')
+        self.assertEqual(result.reason, 'unchanged_navigation_frontier')
+        self.assertEqual(len(model.requests), 2)
+
 
 if __name__=='__main__':unittest.main()

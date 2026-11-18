@@ -14,10 +14,11 @@ def navigation(action, quote):
 
 class ThoughtQueryGraphTest(unittest.TestCase):
     def test_unknown_graph_route_does_not_discard_already_found_pending_source(self):
-        from prototypes.assertion_memory.tests.test_thought_engine import ScriptedModel, draft, ACCEPT
+        from prototypes.assertion_memory.tests.test_thought_engine import ScriptedModel, ACCEPT
         model = ScriptedModel({'action': 'unknown', 'quote': None, 'question': None,
             'text': 'No matching thought exists in this graph yet.'},
-            draft('The team chose the amber route.', ['The team chose the amber route.']), ACCEPT)
+            {'thoughts': [{'text': 'The team chose the amber route.', 'question': None,
+                           'support_fragments': [0]}], 'needs_detail': None}, ACCEPT)
         with MemoryStore(':memory:') as memory:
             service = ThoughtService(memory, model)
             other = service.thoughts.publish('Unrelated garden supplies.')
@@ -90,6 +91,27 @@ class ThoughtQueryGraphTest(unittest.TestCase):
                  patch.object(service.engine, '_construct', side_effect=construct):
                 self.assertEqual(service.engine.answer('Original question'), resolved)
             self.assertEqual(asked, ['Original question', 'Which inspection?', 'Original question'])
+
+    def test_detail_chain_continues_when_new_source_support_is_found(self):
+        from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
+        with MemoryStore(':memory:') as memory:
+            service = ThoughtService(memory)
+            sources = [service.queue.capture_event('fixture', str(index), text, source='fixture')
+                       for index, text in enumerate(('Inspection is required.', 'Mira signs the inspection.'))]
+            packets = [service.engine._raw_packet(source.id) for source in sources]
+            material = [([record for record, _ in packet], [basis for _, basis in packet]) for packet in packets]
+            resolved = service.thoughts.publish('Mira signs the inspection.', metadata={'verification': 'accepted'})
+            asked = []
+            def construct(*args, question=None, **kwargs):
+                asked.append(question)
+                if len(asked) < 3:
+                    raise ThoughtDetailNeeded('Detail ' + str(len(asked)), 'Find the next source.')
+                return resolved, ()
+            with patch.object(service.engine, 'retrieve', return_value=[]), \
+                 patch.object(service.engine, '_pending_raw_material', side_effect=[material[0], material[1], material[1]]), \
+                 patch.object(service.engine, '_construct', side_effect=construct):
+                self.assertEqual(service.engine.answer('Original question'), resolved)
+            self.assertEqual(asked, ['Original question', 'Detail 1', 'Detail 2', 'Detail 1', 'Original question'])
 
     def test_same_question_detail_reuses_complete_answer_without_copying_it(self):
         from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded

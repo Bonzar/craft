@@ -86,6 +86,15 @@ def _missing(question, reason, fingerprint, *, incomplete=False):
     return error
 
 
+def support_fingerprint(records, bindings):
+    """Identify exact support and coverage, independent of routing and pair order."""
+    if len(records) != len(bindings):
+        raise ModelError('support records and bindings must remain paired')
+    pairs = [json.dumps([binding, {key: value for key, value in record.items() if key != 'role'}],
+                        ensure_ascii=False, sort_keys=True) for record, binding in zip(records, bindings)]
+    return hashlib.sha256(json.dumps(sorted(pairs), ensure_ascii=False).encode()).hexdigest()
+
+
 def answer_selected(engine, question, selected, *, neighborhood, additional=(), seen_packets=None,
                     raw_material=((), ())):
     """Use one selected location; navigation owns any subsequent missing question.
@@ -98,8 +107,7 @@ def answer_selected(engine, question, selected, *, neighborhood, additional=(), 
     additional = tuple(row for row in additional if _key(row) != _key(selected))
     records, bindings = _material(engine, question, selected, neighborhood, additional)
     records, bindings = engine._merge_material(records, bindings, *raw_material)
-    fingerprint = hashlib.sha256(json.dumps([question, records, bindings],
-        ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    fingerprint = support_fingerprint(records, bindings)
     if seen_packets is not None:
         if fingerprint in seen_packets:
             raise _missing(question, 'The selected neighborhood is unchanged; no new supporting detail was found',

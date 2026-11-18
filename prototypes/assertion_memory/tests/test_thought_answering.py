@@ -18,21 +18,28 @@ class ThoughtAnsweringTest(unittest.TestCase):
         packets = [
             ([{'role': 'candidate', 'text': 'Gate rules.'}, {'role': 'neighbor_option', 'description': 'Exception.'}],
              [{'thought_id': selected.id, 'version': 1}, {'thought_id': 'detail', 'version': 1}]),
-            ([{'role': 'neighbor_option', 'description': 'Exception.'}, {'role': 'candidate', 'text': 'Gate rules.'}],
+            ([{'role': 'neighbor_option', 'description': 'Exception.'}, {'role': 'material', 'text': 'Gate rules.'}],
              [{'thought_id': 'detail', 'version': 1}, {'thought_id': selected.id, 'version': 1}]),
             ([{'role': 'candidate', 'text': 'Gate rules.'}, {'role': 'material', 'text': 'Exception. Full condition.'}],
              [{'thought_id': selected.id, 'version': 1}, {'thought_id': 'detail', 'version': 1}]),
+            ([{'role': 'candidate', 'text': 'Gate rules.'}, {'role': 'material', 'text': 'Exception. Full condition.'}],
+             [{'thought_id': selected.id, 'version': 1}, {'thought_id': 'detail', 'version': 2}]),
+            ([{'role': 'candidate', 'text': 'Gate rules.'}, {'role': 'material', 'text': 'Exception. Full condition.'}],
+             [{'thought_id': selected.id, 'version': 1}, {'event_id': 'new-source'}]),
+            ([{'role': 'candidate', 'text': 'Gate rules.'}, {'role': 'neighbor_option', 'description': 'Exception.'}],
+             [{'thought_id': 'detail', 'version': 1}, {'thought_id': selected.id, 'version': 1}]),
         ]
         model = ScriptedModel(*({'verdict': 'drill', 'question': 'Missing condition', 'text': 'The condition is missing.'} for _ in packets))
         engine = self.engine(model)
         fingerprints = []
         with patch('prototypes.assertion_memory.thought_answering._material', side_effect=packets):
-            for question in ('Original question', 'Different wording', 'Read the full condition'):
+            for index in range(len(packets)):
                 with self.assertRaises(ThoughtDetailNeeded) as need:
-                    answer_selected(engine, question, selected, neighborhood=None)
+                    answer_selected(engine, 'Question wording ' + str(index), selected, neighborhood=None)
                 fingerprints.append(need.exception.packet_fingerprint)
         self.assertEqual(fingerprints[0], fingerprints[1])
         self.assertNotEqual(fingerprints[1], fingerprints[2])
+        self.assertEqual(len(set(fingerprints)), len(packets) - 1)
 
     def test_changed_support_is_not_a_current_ground_and_new_head_is_discoverable(self):
         from prototypes.assertion_memory.thought_navigation import neighborhood

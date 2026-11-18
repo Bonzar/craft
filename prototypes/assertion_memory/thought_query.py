@@ -7,7 +7,7 @@ from .model import SemanticUnavailable
 from .thought_engine import ThoughtDetailNeeded
 from .thought_engine_contract import semantic_text
 from .thought_navigation import navigate, neighborhood
-from .thought_answering import answer_selected
+from .thought_answering import answer_selected, support_fingerprint
 
 
 @dataclass
@@ -81,12 +81,13 @@ def _step(engine, frame):
 
 
 def _request_detail(frames, frame, need):
-    packet = getattr(need, 'packet_fingerprint', None) or hashlib.sha256(json.dumps(
-        [frame.raw, [_key(row) for row in frame.additional]], sort_keys=True).encode()).hexdigest()
-    marker = (need.question, packet)
-    if getattr(need, 'incomplete', False) or any(marker in active.requested for active in frames):
+    packet = getattr(need, 'packet_fingerprint', None) or support_fingerprint(
+        [*frame.raw[0], *({'text': row.text, 'bases': row.bases} for row in frame.additional)],
+        [*frame.raw[1], *({'thought_id': row.id, 'version': row.version} for row in frame.additional)])
+    # A new question may answer this support; another drill needs changed evidence.
+    if getattr(need, 'incomplete', False) or any(packet in active.requested for active in frames):
         raise SemanticUnavailable('Supporting detail remains unresolved: ' + need.reason) from need
-    frame.requested.add(marker)
+    frame.requested.add(packet)
     frames.append(_Frame(need.question, guidance=need.reason))
 
 

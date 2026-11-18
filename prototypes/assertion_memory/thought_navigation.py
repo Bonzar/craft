@@ -265,12 +265,15 @@ class _Navigation:
             return False
         self.searches.add(normalized)
         rows = self.engine.retrieve(question, explicit_ids=explicit_ids) if initial is None else initial
-        self.seeds = [row for row in rows if _admit(self.engine, row) is None]
-        keys = {_key(row) for row in self.seeds}
+        admitted = [row for row in rows if _admit(self.engine, row) is None]
+        keys = {_key(row) for row in admitted}
         self.notice = None if keys - self.known else 'search_added_no_new_starting_points'
+        # A redundant formulation must not erase a useful unopened starting point.
+        self.seeds = (admitted if keys - self.known else
+                      list({_key(row): row for row in (*self.seeds, *admitted)}.values()))
         self.known.update(keys)
         self.engine._emit('navigation_search', question=question,
-                          bindings=tuple(_ref(row) for row in self.seeds), outcome=self.notice)
+                          bindings=tuple(_ref(row) for row in admitted), outcome=self.notice)
         return True
 
     def visible(self):
@@ -314,7 +317,8 @@ class _Navigation:
                     return self.finish('navigation_source_changed: ' + reason)
             records, visible = self.visible()
             state = (_key(self.focus) if self.focus is not None else None,
-                     tuple(sorted(_key(row) for row, _, _ in visible)), tuple(self.inspected), self.notice)
+                     tuple(sorted(_key(row) for row, _, _ in visible)), tuple(sorted(self.inspected)),
+                     self.notice is not None)
             if state in self.states:
                 return self.finish('unchanged_navigation_frontier')
             self.states.add(state)
