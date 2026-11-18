@@ -15,6 +15,10 @@ def draft(text, support):
     return json.dumps({'thoughts': [{'text': text, 'question': None, 'support_fragments': support}], 'needs_detail': None})
 
 
+def answer(text, support):
+    return json.dumps({'thought': {'text': text, 'question': None, 'support_fragments': support}, 'needs_detail': None})
+
+
 ACCEPT = json.dumps({'verdict': 'accept', 'text': 'Every claim preserves its exact evidence and conditions.'})
 
 
@@ -99,10 +103,10 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
         self.assertEqual(self.store.list_thoughts(), before)
 
     def test_requested_answer_cardinality_repairs_query_and_whole_refresh(self):
-        good = draft('Mira approval is required before opening.', [0])
-        row = json.loads(good)['thoughts'][0]
+        good = answer('Mira approval is required before opening.', [0])
+        row = json.loads(good)['thought']
         for whole in (False, True):
-            for count in (0, 4):
+            for count in (0, 1, 4):
                 with self.subTest(whole=whole, count=count):
                     records, bindings = self.records, self.bindings
                     question = 'When may the gate open?'
@@ -123,8 +127,9 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
                     self.assertEqual(pinned[0], pinned[1])
                     self.assertNotIn(bad, cached.values())
                     self.assertIn(good, cached.values())
-                    thoughts = calls[0].response_schema['properties']['thoughts']
-                    self.assertEqual(thoughts['maxItems'], 1)
+                    properties = calls[0].response_schema['properties']
+                    self.assertNotIn('thoughts', properties)
+                    self.assertEqual(properties['thought']['anyOf'][0]['type'], 'object')
                     self.assertNotIn('anyOf', calls[0].response_schema)
 
     def test_repeated_invalid_answer_count_is_bounded_and_never_published(self):
@@ -152,7 +157,7 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
 
     def test_needs_detail_is_valid_for_requested_answers_even_without_support(self):
         detail = {'question': 'Who may approve the opening?', 'text': 'The approver is unspecified.'}
-        body = json.dumps({'thoughts': [], 'needs_detail': detail})
+        body = json.dumps({'thought': None, 'needs_detail': detail})
         for whole in (False, True):
             for has_support in (False, True):
                 with self.subTest(whole=whole, has_support=has_support):
@@ -167,6 +172,55 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
                     self.assertEqual(caught.exception.question, detail['question'])
                     self.assertEqual(len(calls), 1)
                     self.assertIsNotNone(replay.pending)
+
+    def test_scalar_query_and_whole_refresh_publish_one_thought_with_selected_support(self):
+        text = 'Mira approval is required before opening.'
+        for whole in (False, True):
+            with self.subTest(whole=whole):
+                target = self.store.publish('The prior gate interpretation.') if whole else None
+                question = 'When may the gate open?'
+                records, bindings = self.records, self.bindings
+                if whole:
+                    records = [{'role': 'whole_refresh_scope', 'prior_content': target.text,
+                                'questions': [question]}, *records]
+                    bindings = [{'thought_id': target.id, 'version': target.version}, *bindings]
+                engine, _, calls, _, _ = self.replay_engine([answer(text, [0]), ACCEPT])
+                result = engine._construct(records, bindings, question=None if whole else question, target=target)
+                self.assertEqual(len(result), 1)
+                saved = self.store.get(result[0].id)
+                self.assertEqual(saved.text, text)
+                self.assertEqual(saved.question, None if whole else question)
+                self.assertEqual(saved.bases[0]['thought_id'], self.source.id)
+                self.assertEqual(saved.bases[0]['meaning'], self.source.text)
+                self.assertEqual(saved.bases[0]['span'], {'start': 0, 'end': len(self.source.text)})
+                if whole:
+                    self.assertEqual((saved.id, saved.version), (target.id, 2))
+                self.assertIn('"thought":', calls[0].instructions)
+                self.assertNotIn('"thoughts":', calls[0].instructions)
+
+    def test_malformed_scalar_and_mixed_responses_are_bounded_without_publication(self):
+        row = json.loads(answer('Mira approval is required.', [0]))['thought']
+        detail = {'question': 'Which approval?', 'text': 'The required approval is unspecified.'}
+        malformed = [
+            {'thought': [row], 'needs_detail': None},
+            {'thought': None, 'needs_detail': None},
+            {'thought': row, 'needs_detail': detail},
+            {'thought': row, 'thoughts': [row], 'needs_detail': None},
+            {'thought': row},
+            {'thought': 'unsupported scalar text', 'needs_detail': None},
+            {'thought': dict(row, support_fragments=[999]), 'needs_detail': None}]
+        for payload in malformed:
+            with self.subTest(payload=payload):
+                body = json.dumps(payload)
+                engine, replay, calls, _, cached = self.replay_engine([body, body])
+                before = self.store.list_thoughts()
+                with self.assertRaises(ModelError) as caught:
+                    engine._construct(self.records, self.bindings, question='When may the gate open?')
+                replay.confirm()
+                self.assertTrue(caught.exception.recoverable)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(cached, {})
+                self.assertEqual(self.store.list_thoughts(), before)
 
 
 if __name__ == '__main__':

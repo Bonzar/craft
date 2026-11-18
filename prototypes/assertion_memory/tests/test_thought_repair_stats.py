@@ -54,6 +54,30 @@ class ThoughtRepairStatsTest(unittest.TestCase):
         self.assertEqual(report['tokens']['input_tokens']['unknown_calls'],2)
         self.assertEqual(report['publication_refs'][0]['construction_call_id'],trace.calls()[0]['id'])
 
+    def test_scalar_answer_counts_construction_and_preserves_creator_attribution(self):
+        memory,store,_=self.setup_memory()
+        source=store.publish('Approval is required before opening.')
+        text='Opening requires approval.'
+        responses=[{'thought':{'text':text,'question':None,'support_fragments':[0]},'needs_detail':None},
+                   {'verdict':'accept','text':'The exact approval condition is retained.'}]
+        router=Router(lambda request:json.dumps(responses.pop(0)))
+        trace=ThoughtTrace(memory,'query')
+        engine=traced_engine(store,router,CandidateSearch(),trace)
+        thought=engine._construct([{'role':'material','text':source.text}],
+            [{'thought_id':source.id,'version':source.version}],question='When may it open?')[0]
+        trace.finish()
+        report=repair_statistics(memory,router)
+        self.assertEqual(report['summary']['construct_cycles'],1)
+        self.assertEqual(report['summary']['first_review_accept'],1)
+        self.assertEqual(thought.text,text)
+        self.assertEqual(thought.bases[0]['thought_id'],source.id)
+        self.assertEqual([call['requested_model'] for call in trace.calls()],['luna','sol'])
+        self.assertEqual(report['publication_refs'][0]['construction_call_id'],trace.calls()[0]['id'])
+        with memory.transaction() as db:
+            creator=db.execute('SELECT requested_model FROM memory_thought_model_calls WHERE id=?',
+                (report['publication_refs'][0]['construction_call_id'],)).fetchone()
+        self.assertEqual(creator[0],'luna')
+
     def test_semantic_reject_reconstruction_has_explicit_denominator_and_referenced_example(self):
         memory,store,queue=self.setup_memory();raw=queue.capture_event('s','b','Approval is required.',source='fixture')
         reviewed=0
