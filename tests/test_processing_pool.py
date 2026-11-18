@@ -175,29 +175,30 @@ class ProcessingPoolTest(unittest.TestCase):
                 'peak_source_io':peak[0],'maintenance_turns':len(maintenance),'conditional_payloads_unchanged':True})
         print('PROCESSING_POOL_FIXED_LATENCY '+json.dumps(metrics))
     def test_run_worker_recovers_once_and_preserves_budget_after_idle_race(self):
-        from prototypes.assertion_memory import mcp_server,processing_pool
+        from prototypes.assertion_memory import mcp_server,thought_processing
         from prototypes.assertion_memory.storage import MemoryStore
-        from prototypes.assertion_memory.queue import CaptureQueue
-        from prototypes.assertion_memory.derived_work import DerivedWorkQueue
-        from prototypes.assertion_memory.view_name_work import NameWorkQueue
-        limits=[];recovery_sql=[]
+        limits=[]
         with tempfile.TemporaryDirectory() as directory:
             database=Path(directory)/'memory.sqlite3';config=ServiceConfig(str(database),'none',worker_idle_seconds=.01)
-            class ObservedStore(MemoryStore):
-                def __init__(self,path):
-                    super().__init__(path)
-                    self._connection.set_trace_callback(lambda sql:recovery_sql.append(sql) if 'Worker interrupted; source lease recovered' in sql else None)
+            with MemoryStore(str(database)) as store:
+                service=config.service(store)
+                captured=service.capture_message('fixture','m','fixture','user','Opening requires approval.',0,'fixture')
+                job_id=captured['job']['id']
+                with store.transaction(write=True) as db:
+                    db.execute("UPDATE memory_capture_jobs SET status='running',lease_token='abandoned',"
+                               "lease_until='2999-01-01T00:00:00+00:00' WHERE id=?",(job_id,))
             class Epoch:
                 def __init__(self,*args,**kwargs):limits.append(kwargs['limit'])
                 def run(self):return {'reason':'idle','completed':2 if len(limits)==1 else 1}
-            derived=DerivedWorkQueue.recover_abandoned;names=NameWorkQueue.recover_abandoned
-            with patch.object(mcp_server,'MemoryStore',ObservedStore),patch.object(processing_pool,'ProcessingPool',Epoch), \
+            recover=thought_processing._recover_selected
+            with patch.object(thought_processing,'ProcessingPool',Epoch), \
                  patch.object(mcp_server,'_idle_handoff',side_effect=[False,True]), \
-                 patch.object(DerivedWorkQueue,'recover_abandoned',autospec=True,side_effect=derived) as recover_derived, \
-                 patch.object(NameWorkQueue,'recover_abandoned',autospec=True,side_effect=names) as recover_names:
+                 patch.object(thought_processing,'_recover_selected',side_effect=recover) as recover_selected:
                 mcp_server.run_worker(config,limit=5)
-            self.assertEqual(limits,[5,3]);self.assertEqual(len(recovery_sql),1)
-            self.assertEqual(recover_derived.call_count,1);self.assertEqual(recover_names.call_count,1)
+            self.assertEqual(limits,[5,3]);self.assertEqual(recover_selected.call_count,1)
+            with MemoryStore(str(database)) as store:
+                row=store._connection.execute('SELECT status,lease_token,lease_until FROM memory_capture_jobs WHERE id=?',(job_id,)).fetchone()
+                self.assertEqual(tuple(row),('pending',None,None))
     def test_invalid_global_limit_cannot_recover_or_create_database(self):
         from prototypes.assertion_memory.mcp_server import run_worker
         with tempfile.TemporaryDirectory() as directory:

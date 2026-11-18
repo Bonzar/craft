@@ -26,6 +26,15 @@ def readiness(request):
             'question': None, 'text': 'The candidate answers this question, or needs a focused construction.'}
 
 
+def construction(request, text, support):
+    fragments = [fragment for row in request.records for fragment in row.get('fragments', [])
+                 if fragment['text'] == support]
+    if len(fragments) != 1:
+        raise AssertionError('expected one exact prepared support fragment')
+    return {'thoughts': [{'text': text, 'question': None,
+                          'support_fragments': [fragments[0]['option']]}]}
+
+
 class ThoughtServiceTest(unittest.TestCase):
     def test_text_read_does_not_load_unrequested_version_history(self):
         with MemoryStore(':memory:') as store:
@@ -45,8 +54,7 @@ class ThoughtServiceTest(unittest.TestCase):
             if request.task == 'Check ready thought':
                 return json.dumps(readiness(request))
             if request.task == 'Construct thought':
-                return json.dumps({'thoughts': [{'text': 'Approval is required.',
-                    'question': None, 'support': ['Opening requires approval.']}]})
+                return json.dumps(construction(request, 'Approval is required.', 'Opening requires approval.'))
             if calls.count('Verify thought') == 1:
                 raise ModelError('temporarily unavailable')
             return json.dumps({'verdict': 'accept', 'text': 'The condition is preserved.'})
@@ -81,8 +89,8 @@ class ThoughtServiceTest(unittest.TestCase):
                 if request.task == 'Check ready thought':
                     return json.dumps(readiness(request))
                 if request.task == 'Construct thought':
-                    return json.dumps({'thoughts': [{'text': 'Engineering approval is required.',
-                        'question': None, 'support': ['Opening requires engineering approval.']}]})
+                    return json.dumps(construction(request, 'Engineering approval is required.',
+                                                   'Opening requires engineering approval.'))
                 entered.set()
                 if not release.wait(2):
                     raise AssertionError('caller cancellation did not release the test provider')
@@ -164,14 +172,18 @@ class ThoughtServiceTest(unittest.TestCase):
 
     def test_query_construction_preserves_ids_outside_model(self):
         with MemoryStore(':memory:') as store:
-            replies=iter([{'verdict':'build','question':None,'text':'Different question.'},
-                {'thoughts':[{'text':'Gate opening needs engineering approval.','question':None,
-                              'support':['Gate opens only after engineering approval.']}]},
-                {'verdict':'accept','text':'All conditions retained.'}])
             def model(request):
                 self.assertFalse(store._connection.in_transaction)
                 self.assertNotIn('thought-',json.dumps(request.records))
-                return json.dumps(navigation_focus(request) if request.task == 'Navigate thought graph' else next(replies))
+                if request.task == 'Navigate thought graph':
+                    return json.dumps(navigation_focus(request))
+                if request.task == 'Check ready thought':
+                    return json.dumps({'verdict': 'build', 'question': None, 'text': 'Different question.'})
+                if request.task == 'Construct thought':
+                    return json.dumps(construction(request, 'Gate opening needs engineering approval.',
+                                                   'Gate opens only after engineering approval.'))
+                self.assertEqual(request.task, 'Verify thought')
+                return json.dumps({'verdict': 'accept', 'text': 'All conditions retained.'})
             service=ThoughtService(store,model)
             base=service.thoughts.publish('Gate opens only after engineering approval.')
             result=service.query('What is required to open the gate?')
