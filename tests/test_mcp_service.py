@@ -141,7 +141,9 @@ class MCPServiceTest(unittest.IsolatedAsyncioTestCase):
             historic = result(await claude.call_tool("memory_query", {
                 "query":"widget collection", "recorded_as_of":"2000-01-01"}))
             self.assertFalse(historic['answer_accepted'])
-            self.assertIsNone(historic['answer'])
+            self.assertEqual(historic['answer'],'В полученных материалах нет сведений для ответа на этот вопрос')
+            self.assertEqual(historic['answer_metadata']['notice']['purpose'],'knowledge_limit_notice')
+            self.assertTrue(historic['answer_metadata']['notice']['notice_payload_complete'])
         async with connect(self.db, self.provider, name="AnotherHarness") as (other, _):
             seen = result(await other.call_tool("memory_source", {"record_id":saved["event"]["id"]}))
             self.assertEqual(seen["event"]["actor"], "alice")
