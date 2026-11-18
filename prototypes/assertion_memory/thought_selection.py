@@ -14,7 +14,7 @@ class ThoughtSelection:
     Missing valid time is deliberately unknown, matching MemoryStore's API.
     """
     def __init__(self, thoughts, *, scope=None, scopes=None, valid_as_of=None,
-                 recorded_as_of=None, max_snapshot_versions=10000):
+                 recorded_as_of=None, max_snapshot_versions=10000, thought_ids=None):
         if scope is not None and scopes is not None:
             raise ValueError('use scope or scopes, not both')
         values = scopes if scopes is not None else (scope,) if scope is not None else None
@@ -34,9 +34,13 @@ class ThoughtSelection:
         self._question_proofs = {}
         with self.store.transaction() as c:
             from .thought_store import Thought
+            if thought_ids is not None and (not isinstance(thought_ids,(list,tuple))
+                    or any(not isinstance(key,str) or not key for key in thought_ids)):
+                raise ValueError('thought_ids must contain existing identity strings')
+            predicate = ' WHERE h.id IN (SELECT value FROM json_each(?))' if thought_ids is not None else ''
+            arguments = (json.dumps(thought_ids),max_snapshot_versions+1) if thought_ids is not None else (max_snapshot_versions+1,)
             rows = c.execute('SELECT v.payload FROM memory_thoughts h JOIN memory_thought_versions v '
-                'ON v.thought_id=h.id AND v.version=h.current_version ORDER BY h.id LIMIT ?',
-                (max_snapshot_versions + 1,)).fetchall()
+                'ON v.thought_id=h.id AND v.version=h.current_version'+predicate+' ORDER BY h.id LIMIT ?',arguments).fetchall()
             if len(rows) > max_snapshot_versions:
                 raise ValueError('canonical selection exceeds the explicit snapshot version budget')
             heads = [Thought(**decode_payload(row[0])) for row in rows]

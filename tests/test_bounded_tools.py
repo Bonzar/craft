@@ -48,6 +48,9 @@ else:
     print('Fixture summary: '+','.join('['+r['id']+']' for r in v['records'] if 'id' in r and 'text' in r)
           +'\\n'+'\\n'.join(conditions))
 """
+        if model=='canonical':
+            from tests.test_mcp_service import MODEL_SCRIPT
+            script=MODEL_SCRIPT
         extra=['--model-command-json',json.dumps([sys.executable,'-c',script,str(db)+'.requests'])]
     params=StdioServerParameters(command=sys.executable,args=[
         '-m','prototypes.assertion_memory.mcp_server','--db',str(db),'--provider','subprocess' if model else 'none','--no-background',*extra],
@@ -236,7 +239,7 @@ class BoundedToolsTest(unittest.IsolatedAsyncioTestCase):
             with store.transaction(write=True) as connection:
                 connection.execute('UPDATE memory_capture_jobs SET proposals=? WHERE id=?',
                     (json.dumps([{'kind':'interpretation','status':'unresolved','reason':huge}]),event['id']))
-        async with connect(self.db) as client:
+        async with connect(self.db,model='canonical') as client:
             status=await self.call(client,'memory_status',{'scope':'scope'})
             self.assertEqual(status['unresolved_count'],1)
             self.assertFalse(status['response_complete'])

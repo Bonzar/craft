@@ -92,12 +92,41 @@ class ThoughtStatusTest(unittest.TestCase):
         for index in range(12):self.service.thoughts.publish('Unqueued '+str(index))
         with self.store.transaction(write=True) as db:
             db.execute("UPDATE memory_capture_jobs SET status='completed'")
+            db.execute("UPDATE memory_thought_work SET error='Private maintenance error' WHERE thought_id=?",(a.id,))
         with patch.object(self.service.thoughts,'list_thoughts',side_effect=AssertionError('whole corpus loaded')):
             scoped=self.service.status(scope='public')
         self.assertEqual(scoped['pending_count'],1)
         self.assertEqual(scoped['thought_work_counts'],{'pending':1})
-        self.assertEqual(self.service.status()['pending_count'],3)
+        self.assertEqual(scoped['error_count'],0)
+        self.assertNotIn('Private maintenance error',json.dumps(scoped))
+        self.assertNotIn('thought_count',scoped)
+        with self.store.transaction(write=True) as db:
+            db.execute("UPDATE memory_thought_work SET status='completed' WHERE thought_id=?",(a.id,))
+        self.assertNotIn('completed',self.service.status(scope='public')['thought_work_counts'])
+        self.assertEqual(self.service.status()['pending_count'],2)
         self.assertEqual(self.service.status(scope='missing')['pending_count'],0)
+
+    def test_canonical_work_errors_are_bounded_and_recoverable_by_job_id(self):
+        identity=self.capture(0,'public')
+        thought=self.service.thoughts.publish('Public interpretation.',bases=[{'event_id':identity}])
+        self.service.work.enqueue([thought])
+        reason='Exact maintenance failure. '*4000
+        with self.store.transaction(write=True) as db:
+            db.execute("UPDATE memory_capture_jobs SET status='completed'")
+            db.execute("UPDATE memory_thought_work SET error=? WHERE thought_id=?",(reason,thought.id))
+        page=self.service.status(scope='public')
+        self.assertEqual(page['pending_count'],1)
+        self.assertEqual(page['raw_pending_count'],0)
+        self.assertEqual(page['error_count'],1)
+        self.assertEqual(page['pagination']['pending_jobs']['total'],0)
+        self.assertEqual(page['pagination']['thought_pending_jobs']['total'],1)
+        self.assertFalse(page['response_complete'])
+        cursor=next(item for item in page['continuations'] if item['arguments'].get('event_id')==thought.id)
+        pieces=[]
+        while cursor:
+            chunk=self.service.status(**cursor['arguments'])
+            pieces.append(chunk['content']);cursor=chunk['continuation']
+        self.assertEqual(json.loads(''.join(pieces))['error'],reason)
 
     def test_unsupported_sections_and_invalid_arguments_are_rejected(self):
         for section in ('unknown','derived_overview','derived_overviews','view_names','policy_coverage'):

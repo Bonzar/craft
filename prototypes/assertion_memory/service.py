@@ -968,8 +968,8 @@ class MemoryService:
             raise ValueError('unknown job or event ID in requested scope')
         return asdict(job)
 
-    def _status_counts(self, connection, scope) -> dict:
-        base, parameters = _status_selection(scope)
+    def _status_counts(self, connection, scope, *, selection=None) -> dict:
+        base, parameters = selection if selection is not None else _status_selection(scope)
         rows=connection.execute(f'SELECT j.phase,j.status,j.event_id IS NOT NULL,count(*) '
             f'{base} GROUP BY j.phase,j.status,j.event_id IS NOT NULL',parameters).fetchall()
         counts,by_phase,by_origin={},{},{}
@@ -996,8 +996,8 @@ class MemoryService:
         if recoveries:result['source_audit_request_counts']=recoveries
         return result
 
-    def _status_details(self, connection, scope, offset, limit, counts) -> dict:
-        base, parameters = _status_selection(scope)
+    def _status_details(self, connection, scope, offset, limit, counts, *, selection=None) -> dict:
+        base, parameters = selection if selection is not None else _status_selection(scope)
         pending = connection.execute('SELECT j.id job_id,j.status,j.phase,j.attempts,j.available_at '+base+
             " AND j.status != 'completed' ORDER BY j.available_at,j.id LIMIT ? OFFSET ?",
             (*parameters,limit,offset)).fetchall()
@@ -1142,7 +1142,7 @@ def _route_descriptor(row):
 
 
 def _bounded_status(result,scope,offset):
-    names = tuple(name for name in ('pending_jobs','errors','unresolved','source_audit_requests') if name in result)
+    names = tuple(name for name in ('pending_jobs','errors','unresolved','source_audit_requests','thought_pending_jobs','thought_errors') if name in result)
     while True:
         result=_diagnostic_pagination(result,scope,offset)
         if _fits(result):
@@ -1181,7 +1181,8 @@ def _diagnostic_pagination(result,scope,offset):
 
 def _diagnostic_descriptors(result,scope,offset):
     cursors=[]
-    for name in ('pending_jobs','errors','unresolved'):
+    for name in ('pending_jobs','errors','unresolved','thought_pending_jobs','thought_errors'):
+        if name not in result:continue
         compact=[]
         for row in result[name]:
             job_id=row['job_id']
@@ -1198,8 +1199,8 @@ def _diagnostic_descriptors(result,scope,offset):
     result['response_complete']=False
     result.setdefault('continuations',[]).extend(cursors)
     if not _fits(result):
-        for name in ('pending_jobs', 'errors', 'unresolved'):
-            for row in result[name]:
+        for name in ('pending_jobs', 'errors', 'unresolved','thought_pending_jobs','thought_errors'):
+            for row in result.get(name,[]):
                 row.pop('continuation', None)
                 row['details_in_continuations'] = True
     directory = result.get('derived_overviews')

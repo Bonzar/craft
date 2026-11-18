@@ -118,13 +118,9 @@ class ThoughtService(MemoryService):
                     result['knowledge_limit'] = ('Сохранён параллельно подготовленный проверенный вариант. '
                         'Его совместимость с другим ответом на тот же вопрос ещё не установлена; '
                         'порядок завершения не определяет, какой вариант верен.')
-        pending = self._pending_count()
-        incomplete = bool(pending) or bool(result.get('knowledge_limit'))
-        result.update(pending_count=pending, refresh_required=bool(pending),
-                      completeness='incomplete' if incomplete else 'available_evidence',
-                      response_complete=True, request_usage=_request_usage(self.store.path, usage_id,
-                          round((time.monotonic()-started)*1000)))
-        return self._attach_query_transport(result)
+        result['request_usage']=_request_usage(self.store.path,usage_id,round((time.monotonic()-started)*1000))
+        from .thought_status import query_diagnostics
+        return query_diagnostics(self,result,scope)
 
     def source(self, record_id, start=None, end=None, *, section='overview', offset=0, limit=6000, snapshot_id=None):
         thought = self.thoughts.get(record_id, snapshot_id)
@@ -246,8 +242,20 @@ class ThoughtService(MemoryService):
             from .thought_repair_stats import repair_statistics
             result['thought_repairs']=repair_statistics(self.store,self.engine.model)
             return result
-        if section in ('transport', 'job'):
-            return super().status(event_id, scope=scope, offset=offset, limit=limit, section=section, catalog_id=catalog_id)
+        if section=='transport':
+            return super().status(event_id,scope=scope,offset=offset,limit=limit,section=section,catalog_id=catalog_id)
+        if section not in ('overview','job','navigation_catalog'):
+            raise ValueError('unsupported canonical diagnostic section')
+        if catalog_id is not None:
+            raise ValueError('canonical diagnostics do not use catalog_id')
+        if section=='job':
+            if event_id is None:raise ValueError('job section requires event_id')
+            from .thought_status import job
+            return _text_page(job(self,event_id,scope),'memory_status',
+                {'event_id':event_id,'scope':scope,'section':'job'},offset,limit)
+        if section=='overview':
+            from .thought_status import snapshot
+            return snapshot(self,event_id,scope,offset,limit)
         if type(limit) is not int or not 1 <= limit <= 200 or type(offset) is not int or offset < 0:
             raise ValueError('bounded positive page required')
         if section == 'navigation_catalog':
@@ -258,19 +266,6 @@ class ThoughtService(MemoryService):
             end = offset+len(page)
             return {'thoughts': [thought_descriptor(row, self.engine.question_texts(row)) for row in page], 'total': len(rows),
                     'next_offset': end if end < len(rows) else None, 'response_complete': end >= len(rows)}
-        with self.store.transaction() as db:
-            jobs = dict(db.execute('SELECT status,count(*) FROM memory_capture_jobs WHERE event_id IS NOT NULL GROUP BY status').fetchall())
-            work = dict(db.execute('SELECT status,count(*) FROM memory_thought_work GROUP BY status').fetchall())
-            count = db.execute('SELECT count(*) FROM memory_thoughts').fetchone()[0]
-            legacy = db.execute('SELECT count(*) FROM memory_assertions').fetchone()[0]
-        from .thought_repair_stats import repair_statistics
-        repair=repair_statistics(self.store,self.engine.model)
-        return {'thought_repairs':repair['summary'],'repair_tracking':{key:repair[key] for key in ('scope','coverage') if key in repair},
-                'storage': 'unified-thought-v1', 'thought_count': count, 'job_counts': jobs,
-                'configured_processing_session_ids': list(self.processing_session_ids) if self.processing_session_ids is not None else None,
-                'thought_work_counts': work,
-                'pending_count': self._pending_count(), 'legacy_assertion_audit_count': legacy,
-                'response_complete': True}
 
 
 def public_thought(thought, questions):
