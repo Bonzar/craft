@@ -1,0 +1,27 @@
+{
+  "baseline": "d1054446e268964bcd8eb6ee6d0a360d0988ec45",
+  "defect": "Real SQLite external writer120ms with5msbusytimeout causes actual maintenance_tick preclaimBEGINIMMEDIATE to kill2source+maintenance lanes. Exact final three-job fixture fails on unmodifiedbaseline; no external models.",
+  "production_files": [
+    "storage.py",
+    "processing_pool.py"
+  ],
+  "foreground": "ContextVar defaultNone: existing SQLite busy timeout and one original BEGIN path unchanged; no infinite background policy in capture/UI/API threads.",
+  "background": "Pool threads alone install cancellation-aware bounded30s write admission retry. Only real SQLITE_BUSY family; beforeyield only; temporarybusy_timeout0 restored beforebody on success/refusal/cancel. SQL/modelbody is never retried.",
+  "cleanup": "Continuous busy episode deadline survives propagation into failed-cleanup. Cleanup cannot reset exhausted budget. SuccessfulBEGIN clears episode. Partiallyconstructed factory stores close before constructor retry; only preyieldconstruction can restart.",
+  "cancellation": "BackgroundWriteCancelled blocks new write admission after poolstop, allowing maintenance to stop after its current provider call instead of continuing another whole chain. Only swallowed by pool when already stopping.",
+  "safety": "Lease/source/publication fences untouched and validated after actualBEGIN acquisition. Expired claim still raisesLeaseLost afterwait, revoked/expiredtokens never revived.",
+  "heartbeat": "d105444 _beat exact source text preserved, verified; main heartbeat does not inherit child ContextVar.",
+  "boundaries": "Initial main run_worker bootstrap/recovery remains existing native SQLite behavior; this patch does not expand mcp_server.py. Long/unrecoverable lane write contention emits sanitized exhaustion/fatal telemetry and refuses the operation.",
+  "verification": {
+    "pool_and_busy_tests": 23,
+    "lane_publication_causal_regressions": 53,
+    "total": 76,
+    "syntax": "3 py_compile PASS",
+    "diff": "PASS",
+    "foreground": "actual locked SQLite remains nativeBUSY failure",
+    "cancellation": "actual external writer remains held while cancellation interrupts an already-attemptedBEGIN",
+    "constructor": "allpartialstoresclosed; real preyieldSQLitebusyretried",
+    "fences": "leaseexpiredwhilewaitingrefused; nonBUSYbodyerrornotmasked/bodycount1"
+  },
+  "scope": "Synthetic databases only; no private data, models, production changes, 100k or full suite."
+}

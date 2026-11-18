@@ -1,0 +1,13 @@
+test_acquired_proof_is_immutable_and_never_current_or_cache_answer (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_acquired_proof_is_immutable_and_never_current_or_cache_answer) ... ok
+test_discovery_persistence_failure_keeps_every_scanned_source_inline (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_discovery_persistence_failure_keeps_every_scanned_source_inline) ... ok
+test_evidence_acquired_by_reviewer_survives_next_writer_failure (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_evidence_acquired_by_reviewer_survives_next_writer_failure) ... ok
+test_failed_dependency_keeps_prior_sibling_lineage_and_parent_missing_roots (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_failed_dependency_keeps_prior_sibling_lineage_and_parent_missing_roots) ... ok
+test_failed_planning_attempt_does_not_bypass_planner_on_retry (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_failed_planning_attempt_does_not_bypass_planner_on_retry) ... ok
+test_failure_does_not_replace_existing_success_pointer (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_failure_does_not_replace_existing_success_pointer) ... ok
+test_first_planner_failure_has_deterministic_attempt_definition (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_first_planner_failure_has_deterministic_attempt_definition) ... ok
+test_persistence_failure_keeps_acquired_inline_proof_without_fake_cursor (prototypes.assertion_memory.tests.test_v8_failure_proof.FailureProofTest.test_persistence_failure_keeps_acquired_inline_proof_without_fake_cursor) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.072s
+
+OK

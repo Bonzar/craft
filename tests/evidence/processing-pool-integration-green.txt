@@ -1,0 +1,19 @@
+test_error_stops_new_turns_but_joins_active_source_and_heartbeats (tests.test_processing_pool.ProcessingPoolTest.test_error_stops_new_turns_but_joins_active_source_and_heartbeats) ... ok
+test_fixed_latency_same_conditional_corpus_reports_throughput_and_p95 (tests.test_processing_pool.ProcessingPoolTest.test_fixed_latency_same_conditional_corpus_reports_throughput_and_p95) ... ok
+test_global_limit_is_shared_not_per_lane (tests.test_processing_pool.ProcessingPoolTest.test_global_limit_is_shared_not_per_lane) ... ok
+test_heartbeat_only_owned_registered_unexpired_tokens (tests.test_processing_pool.ProcessingPoolTest.test_heartbeat_only_owned_registered_unexpired_tokens) ... ok
+test_idle_return_and_failure_wait_for_all_connections_to_close (tests.test_processing_pool.ProcessingPoolTest.test_idle_return_and_failure_wait_for_all_connections_to_close) ... ok
+test_invalid_global_limit_cannot_recover_or_create_database (tests.test_processing_pool.ProcessingPoolTest.test_invalid_global_limit_cannot_recover_or_create_database) ... ok
+test_run_worker_recovers_once_and_preserves_budget_after_idle_race (tests.test_processing_pool.ProcessingPoolTest.test_run_worker_recovers_once_and_preserves_budget_after_idle_race) ... ok
+test_source_workers_default_two_and_bounded (tests.test_processing_pool.ProcessingPoolTest.test_source_workers_default_two_and_bounded) ... ok
+test_two_source_calls_overlap_and_maintenance_advances (tests.test_processing_pool.ProcessingPoolTest.test_two_source_calls_overlap_and_maintenance_advances) ... ok
+test_real_source_jobs_overlap_on_two_isolated_provider_instances (tests.test_processing_pool_integration.PoolSourceIntegrationTest.test_real_source_jobs_overlap_on_two_isolated_provider_instances) ... ok
+test_supervisor_heartbeat_keeps_real_claims_alive_during_longer_provider_wait (tests.test_processing_pool_integration.PoolSourceIntegrationTest.test_supervisor_heartbeat_keeps_real_claims_alive_during_longer_provider_wait) ... ok
+test_capture_after_last_idle_check_is_owned_by_reacquired_worker (prototypes.assertion_memory.tests.test_worker_lifecycle.WorkerLifecycleTest.test_capture_after_last_idle_check_is_owned_by_reacquired_worker) ... ok
+test_empty_idle_queue_releases_worker_ownership (prototypes.assertion_memory.tests.test_worker_lifecycle.WorkerLifecycleTest.test_empty_idle_queue_releases_worker_ownership) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 1.167s
+
+OK
+PROCESSING_POOL_FIXED_LATENCY [{"source_workers": 1, "maintenance_workers": 1, "source_items": 8, "fixed_io_seconds": 0.02, "elapsed_seconds": 0.212939, "source_items_per_second": 37.57, "source_queue_completion_p95_seconds": 0.202629, "peak_source_io": 1, "maintenance_turns": 4, "conditional_payloads_unchanged": true}, {"source_workers": 2, "maintenance_workers": 1, "source_items": 8, "fixed_io_seconds": 0.02, "elapsed_seconds": 0.106434, "source_items_per_second": 75.164, "source_queue_completion_p95_seconds": 0.095982, "peak_source_io": 2, "maintenance_turns": 4, "conditional_payloads_unchanged": true}]

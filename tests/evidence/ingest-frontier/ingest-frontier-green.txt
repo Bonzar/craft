@@ -1,0 +1,18 @@
+test_capture_receipt_and_raw_insert_rollback_together (tests.test_ingest_streams.IngestStreamsTest.test_capture_receipt_and_raw_insert_rollback_together) ... ok
+test_closed_clean_stream_does_not_become_stale_blocker (tests.test_ingest_streams.IngestStreamsTest.test_closed_clean_stream_does_not_become_stale_blocker) ... ok
+test_duplicate_heartbeat_does_not_extend_lease (tests.test_ingest_streams.IngestStreamsTest.test_duplicate_heartbeat_does_not_extend_lease) ... ok
+test_lost_ack_replays_identical_receipt_without_new_revision (tests.test_ingest_streams.IngestStreamsTest.test_lost_ack_replays_identical_receipt_without_new_revision) ... ok
+test_old_report_and_old_epoch_cannot_clear_pending (tests.test_ingest_streams.IngestStreamsTest.test_old_report_and_old_epoch_cannot_clear_pending) ... ok
+test_out_of_order_delivery_1_3_2_closes_only_exact_prefix (tests.test_ingest_streams.IngestStreamsTest.test_out_of_order_delivery_1_3_2_closes_only_exact_prefix) ... ok
+test_read_only_status_does_not_create_schema (tests.test_ingest_streams.IngestStreamsTest.test_read_only_status_does_not_create_schema) ... ok
+test_register_is_idempotent_and_unknown_is_bounded (tests.test_ingest_streams.IngestStreamsTest.test_register_is_idempotent_and_unknown_is_bounded) ... ok
+test_same_event_cannot_fill_two_slots_in_one_stream_but_can_be_seen_by_another_device (tests.test_ingest_streams.IngestStreamsTest.test_same_event_cannot_fill_two_slots_in_one_stream_but_can_be_seen_by_another_device) ... ok
+test_stale_explicit_catching_up_remains_known_incomplete (tests.test_ingest_streams.IngestStreamsTest.test_stale_explicit_catching_up_remains_known_incomplete) ... ok
+test_stale_pending_gaps_and_scanning_are_not_erased_by_ttl (tests.test_ingest_streams.IngestStreamsTest.test_stale_pending_gaps_and_scanning_are_not_erased_by_ttl) ... ok
+test_transport_health_is_global_and_other_device_cannot_close_this_stream (tests.test_ingest_streams.IngestStreamsTest.test_transport_health_is_global_and_other_device_cannot_close_this_stream) ... ok
+test_wrong_session_and_nontransactional_mutations_are_rejected (tests.test_ingest_streams.IngestStreamsTest.test_wrong_session_and_nontransactional_mutations_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.005s
+
+OK

@@ -1,0 +1,14 @@
+test_resumed_legacy_generation_rescans_previously_skipped_assistant (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_resumed_legacy_generation_rescans_previously_skipped_assistant) ... FAIL
+
+======================================================================
+FAIL: test_resumed_legacy_generation_rescans_previously_skipped_assistant (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_resumed_legacy_generation_rescans_previously_skipped_assistant)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 154, in test_resumed_legacy_generation_rescans_previously_skipped_assistant
+    self.assertEqual(result['scanned'], 1)
+AssertionError: 0 != 1
+
+----------------------------------------------------------------------
+Ran 1 test in 0.006s
+
+FAILED (failures=1)

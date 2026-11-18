@@ -1,0 +1,42 @@
+[
+  {
+    "source": "/private/tmp/assertion-lane-safeclaims-3_eovvdq/prototypes/assertion_memory/queue.py",
+    "relative": "prototypes/assertion_memory/queue.py",
+    "sha256": "318e3eae64ae25cf758718da1b2c4e38fbbecb1610c05131faeaeeeace69d673"
+  },
+  {
+    "source": "/private/tmp/assertion-lane-safeclaims-3_eovvdq/prototypes/assertion_memory/worker.py",
+    "relative": "prototypes/assertion_memory/worker.py",
+    "sha256": "d20df63189a1779b1f8120e645e89de328d0ea6d8a6a34aa93c98f2c1426b5b0"
+  },
+  {
+    "source": "/private/tmp/assertion-lane-safeclaims-3_eovvdq/prototypes/assertion_memory/view_name_work.py",
+    "relative": "prototypes/assertion_memory/view_name_work.py",
+    "sha256": "e1a562a0396707efb1333a96a390019dafface81430928e43828285b53f9f7ca"
+  },
+  {
+    "source": "/private/tmp/assertion-lane-safeclaims-3_eovvdq/prototypes/assertion_memory/derived_work.py",
+    "relative": "prototypes/assertion_memory/derived_work.py",
+    "sha256": "fe8e490b876e8e3d12bc51e4f1a28a1b4a389b0894a70e38128a09382df57ae7"
+  },
+  {
+    "source": "/private/tmp/assertion-publication-fences-utf4v298/prototypes/assertion_memory/publication_fences.py",
+    "relative": "prototypes/assertion_memory/publication_fences.py",
+    "sha256": "3accaac6350b6059f0c34382b2f6f5677f47f3ab29e7403c0496ed06e38b566c"
+  },
+  {
+    "source": "/private/tmp/assertion-publication-fences-utf4v298/prototypes/assertion_memory/engine.py",
+    "relative": "prototypes/assertion_memory/engine.py",
+    "sha256": "a3023eb504cd69f3eb0d7578dddfb8cae03280a0d00c8b77e7005278186626a3"
+  },
+  {
+    "source": "/private/tmp/assertion-publication-fences-utf4v298/prototypes/assertion_memory/build_proof.py",
+    "relative": "prototypes/assertion_memory/build_proof.py",
+    "sha256": "d6a44aabf85fad81359821f7dfa8209f5c31fd42b7a1fcbb0e5a0fa9974d2d8e"
+  },
+  {
+    "source": "/private/tmp/assertion-publication-fences-utf4v298/prototypes/assertion_memory/view_names.py",
+    "relative": "prototypes/assertion_memory/view_names.py",
+    "sha256": "56092126cc31adc5a4723cf38b4209a40cdabab87901396b50b2422eaa59a8bb"
+  }
+]

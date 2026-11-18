@@ -1,0 +1,130 @@
+test_all_semantic_passes_explicitly_preserve_nonuser_attribution (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_all_semantic_passes_explicitly_preserve_nonuser_attribution) ... FAIL
+test_assistant_omission_repair_receives_same_verification (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_assistant_omission_repair_receives_same_verification) ... FAIL
+test_assistant_proposal_survives_without_user_adoption (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_assistant_proposal_survives_without_user_adoption) ... FAIL
+test_optional_open_classification_is_preserved (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_optional_open_classification_is_preserved) ... ERROR
+test_source_roles_are_not_operational_instructions (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_source_roles_are_not_operational_instructions) ... FAIL
+test_tool_origin_survives_extraction_and_evidence (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_tool_origin_survives_extraction_and_evidence) ... FAIL
+test_unsupported_nonuser_claim_cannot_bypass_verification (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_unsupported_nonuser_claim_cannot_bypass_verification) ... FAIL
+test_assistant_is_pending_until_real_extraction_and_preserves_actor (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_assistant_is_pending_until_real_extraction_and_preserves_actor) ... FAIL
+test_generation_admits_assistant_as_source (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_generation_admits_assistant_as_source) ... FAIL
+test_no_raw_reasoning_or_system_intake (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_no_raw_reasoning_or_system_intake) ... FAIL
+test_old_context_only_job_is_requeued_without_rewriting_raw (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_old_context_only_job_is_requeued_without_rewriting_raw) ... FAIL
+
+======================================================================
+ERROR: test_optional_open_classification_is_preserved (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_optional_open_classification_is_preserved)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 85, in test_optional_open_classification_is_preserved
+    self.assertEqual(result['assertions'][0]['kind'], 'investigation-note')
+                     ~~~~~~~~~~~~~~~~~~~~^^^
+IndexError: list index out of range
+
+======================================================================
+FAIL: test_all_semantic_passes_explicitly_preserve_nonuser_attribution (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_all_semantic_passes_explicitly_preserve_nonuser_attribution)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 97, in test_all_semantic_passes_explicitly_preserve_nonuser_attribution
+    self.assertGreaterEqual(len(semantic), 4)
+AssertionError: 0 not greater than or equal to 4
+
+======================================================================
+FAIL: test_assistant_omission_repair_receives_same_verification (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_assistant_omission_repair_receives_same_verification)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 71, in test_assistant_omission_repair_receives_same_verification
+    self.assertEqual(len(result['assertions']), 1)
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_assistant_proposal_survives_without_user_adoption (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_assistant_proposal_survives_without_user_adoption)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 52, in test_assistant_proposal_survives_without_user_adoption
+    self.assertEqual(len(result['assertions']), 1)
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_source_roles_are_not_operational_instructions (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_source_roles_are_not_operational_instructions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 91, in test_source_roles_are_not_operational_instructions
+    extract_dialogue(lambda request: self.fail('Excluded origin reached model'), target, [target])
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/dialogue.py", line 332, in extract_dialogue
+    values, records, truncated, exhausted = _request_extraction(model, window)
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/dialogue.py", line 439, in _request_extraction
+    response = response_object(model, request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/dialogue.py", line 52, in response_object
+    return decode_response_object(model(request))
+                                  ^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/dialogue.py", line 364, in model
+    return provider(request)
+           ^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 91, in <lambda>
+    extract_dialogue(lambda request: self.fail('Excluded origin reached model'), target, [target])
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Excluded origin reached model
+
+======================================================================
+FAIL: test_tool_origin_survives_extraction_and_evidence (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_tool_origin_survives_extraction_and_evidence)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 61, in test_tool_origin_survives_extraction_and_evidence
+    self.assertEqual(event_role(target), 'tool')
+AssertionError: 'user' != 'tool'
+- user
++ tool
+
+
+======================================================================
+FAIL: test_unsupported_nonuser_claim_cannot_bypass_verification (prototypes.assertion_memory.tests.test_unified_origins.UnifiedOrigins.test_unsupported_nonuser_claim_cannot_bypass_verification)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 80, in test_unsupported_nonuser_claim_cannot_bypass_verification
+    self.assertTrue(any(r.task == 'Verify contextual assertion interpretations' for r in self.calls))
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_assistant_is_pending_until_real_extraction_and_preserves_actor (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_assistant_is_pending_until_real_extraction_and_preserves_actor)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 121, in test_assistant_is_pending_until_real_extraction_and_preserves_actor
+    self.assertEqual(self.queue.get(target.id).status, 'waiting_model')
+AssertionError: 'completed' != 'waiting_model'
+- completed
++ waiting_model
+
+
+======================================================================
+FAIL: test_generation_admits_assistant_as_source (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_generation_admits_assistant_as_source)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 144, in test_generation_admits_assistant_as_source
+    self.assertEqual(result['context'], 0)
+AssertionError: 1 != 0
+
+======================================================================
+FAIL: test_no_raw_reasoning_or_system_intake (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_no_raw_reasoning_or_system_intake)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 134, in test_no_raw_reasoning_or_system_intake
+    with self.assertRaises(ValueError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_old_context_only_job_is_requeued_without_rewriting_raw (prototypes.assertion_memory.tests.test_unified_origins.UnifiedQueue.test_old_context_only_job_is_requeued_without_rewriting_raw)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 156, in test_old_context_only_job_is_requeued_without_rewriting_raw
+    self.assertEqual(job.status, 'waiting_model')
+AssertionError: 'completed' != 'waiting_model'
+- completed
++ waiting_model
+
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.019s
+
+FAILED (failures=10, errors=1)

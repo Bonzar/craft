@@ -1,0 +1,8 @@
+test_material_gap_requests_are_async_coalesced_and_independently_audited (prototypes.assertion_memory.tests.test_source_reprocessing.SourceReprocessingTest.test_material_gap_requests_are_async_coalesced_and_independently_audited) ... ok
+test_new_capture_empty_coverage_publishes_and_dirties_without_assertion_insert (prototypes.assertion_memory.tests.test_source_reprocessing.SourceReprocessingTest.test_new_capture_empty_coverage_publishes_and_dirties_without_assertion_insert) ... ok
+test_same_position_origin_confirmation_reaudits_accepted_nonempty_prior (prototypes.assertion_memory.tests.test_source_reprocessing.SourceReprocessingTest.test_same_position_origin_confirmation_reaudits_accepted_nonempty_prior) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.030s
+
+OK

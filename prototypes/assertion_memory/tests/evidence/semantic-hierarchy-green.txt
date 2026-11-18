@@ -1,0 +1,15 @@
+test_budget_reduction_follows_only_one_semantic_pass (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_budget_reduction_follows_only_one_semantic_pass) ... ok
+test_manual_small_catalog_does_not_gain_semantic_pass (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_manual_small_catalog_does_not_gain_semantic_pass) ... ok
+test_no_useful_group_preserves_forest_and_audit (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_no_useful_group_preserves_forest_and_audit) ... ok
+test_one_automatic_child_does_not_need_wrapper (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_one_automatic_child_does_not_need_wrapper) ... ok
+test_overlap_singleton_and_ungrouped_are_legal (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_overlap_singleton_and_ungrouped_are_legal) ... ok
+test_protocol_versions_the_pipeline (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_protocol_versions_the_pipeline) ... ok
+test_small_catalog_creates_real_semantic_group_once (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_small_catalog_creates_real_semantic_group_once) ... ok
+test_unseen_child_rejected_without_publishing (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_unseen_child_rejected_without_publishing) ... ok
+test_large_thematic_catalog_builds_real_reusable_grouping_definitions (prototypes.assertion_memory.tests.test_v8_topic_discovery.TopicDiscoveryTest.test_large_thematic_catalog_builds_real_reusable_grouping_definitions) ... ok
+test_hierarchy_cannot_reference_unseen_children_or_discard_ungrouped_work (prototypes.assertion_memory.tests.test_v8_topic_discovery.TopicDiscoveryTest.test_hierarchy_cannot_reference_unseen_children_or_discard_ungrouped_work) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.526s
+
+OK

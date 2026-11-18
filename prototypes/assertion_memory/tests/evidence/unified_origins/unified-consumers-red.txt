@@ -1,0 +1,55 @@
+test_assistant_is_pending_until_real_extraction_and_preserves_actor (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_assistant_is_pending_until_real_extraction_and_preserves_actor) ... ok
+test_assistant_zero_canonical_omission_has_source_authority (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_assistant_zero_canonical_omission_has_source_authority) ... ERROR
+test_catalog_counts_humans_separately_without_excluding_agent_sources (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_catalog_counts_humans_separately_without_excluding_agent_sources) ... FAIL
+test_generation_admits_assistant_as_source (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_generation_admits_assistant_as_source) ... ok
+test_no_raw_reasoning_or_system_intake (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_no_raw_reasoning_or_system_intake) ... ok
+test_old_context_only_job_is_requeued_without_rewriting_raw (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_old_context_only_job_is_requeued_without_rewriting_raw) ... ok
+test_pending_assistant_is_a_query_processing_gap (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_pending_assistant_is_a_query_processing_gap) ... FAIL
+test_same_agent_can_correct_its_own_report_without_user_adoption (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_same_agent_can_correct_its_own_report_without_user_adoption) ... FAIL
+test_tool_or_assistant_output_cannot_supply_user_decision_anchor (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_tool_or_assistant_output_cannot_supply_user_decision_anchor) ... FAIL
+
+======================================================================
+ERROR: test_assistant_zero_canonical_omission_has_source_authority (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_assistant_zero_canonical_omission_has_source_authority)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 182, in test_assistant_zero_canonical_omission_has_source_authority
+    self.assertEqual(gap['raw_source']['role'], 'assistant')
+                     ~~~~~~~~~~~~~~~~~^^^^^^^^
+KeyError: 'role'
+
+======================================================================
+FAIL: test_catalog_counts_humans_separately_without_excluding_agent_sources (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_catalog_counts_humans_separately_without_excluding_agent_sources)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 193, in test_catalog_counts_humans_separately_without_excluding_agent_sources
+    self.assertFalse(rows[0]['context_only'])
+AssertionError: 1 is not false
+
+======================================================================
+FAIL: test_pending_assistant_is_a_query_processing_gap (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_pending_assistant_is_a_query_processing_gap)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 164, in test_pending_assistant_is_a_query_processing_gap
+    self.assertFalse(row['context_only'])
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_same_agent_can_correct_its_own_report_without_user_adoption (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_same_agent_can_correct_its_own_report_without_user_adoption)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 219, in test_same_agent_can_correct_its_own_report_without_user_adoption
+    self.assertTrue(self_correction_proof(record, record, verdict))
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_tool_or_assistant_output_cannot_supply_user_decision_anchor (prototypes.assertion_memory.tests.test_unified_origins.UnifiedConsumers.test_tool_or_assistant_output_cannot_supply_user_decision_anchor)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-unified-intake/prototypes/assertion_memory/tests/test_unified_origins.py", line 208, in test_tool_or_assistant_output_cannot_supply_user_decision_anchor
+    self.assertIsNone(result)
+AssertionError: {'basis': 'reported_decision', 'decision_evidence': {'source_refs': [{'event_id': 'e', 'start': 0, 'end': 3, 'role': 'tool', 'relation': 'statement'}], 'target_refs': [{'event_id': 'e', 'start': 0, 'end': 3, 'role': 'tool', 'relation': 'statement'}]}} is not None
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.054s
+
+FAILED (failures=4, errors=1)

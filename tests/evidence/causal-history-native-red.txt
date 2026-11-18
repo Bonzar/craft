@@ -1,0 +1,62 @@
+test_actual_derived_worker_activates_publication_context (test_run_provenance.RunProvenanceTest.test_actual_derived_worker_activates_publication_context) ... ok
+test_automatic_source_refresh_keeps_exact_old_and_recursive_versions (test_run_provenance.RunProvenanceTest.test_automatic_source_refresh_keeps_exact_old_and_recursive_versions) ... ok
+test_caller_context_is_explicit_optional_and_not_source_authentication (test_run_provenance.RunProvenanceTest.test_caller_context_is_explicit_optional_and_not_source_authentication) ... ERROR
+test_causal_history_tables_reject_rewriting_published_records (test_run_provenance.RunProvenanceTest.test_causal_history_tables_reject_rewriting_published_records) ... ok
+test_coalesced_generation_has_multiple_exact_trigger_sessions (test_run_provenance.RunProvenanceTest.test_coalesced_generation_has_multiple_exact_trigger_sessions) ... ok
+test_derived_generation_retains_run_across_yield_and_mutable_result_replacement (test_run_provenance.RunProvenanceTest.test_derived_generation_retains_run_across_yield_and_mutable_result_replacement) ... ok
+test_failed_automatic_build_retains_its_real_published_failure_version (test_run_provenance.RunProvenanceTest.test_failed_automatic_build_retains_its_real_published_failure_version) ... ok
+test_native_source_session_is_preferred_over_logical_capture_group (test_run_provenance.RunProvenanceTest.test_native_source_session_is_preferred_over_logical_capture_group) ... FAIL
+test_no_causal_backfill_from_membership_episode_or_time (test_run_provenance.RunProvenanceTest.test_no_causal_backfill_from_membership_episode_or_time) ... ok
+test_pagination_pins_outputs_and_reads_do_not_change_graph_or_pipeline (test_run_provenance.RunProvenanceTest.test_pagination_pins_outputs_and_reads_do_not_change_graph_or_pipeline) ... ok
+test_provenance_mutation_rolls_back_with_source_publication (test_run_provenance.RunProvenanceTest.test_provenance_mutation_rolls_back_with_source_publication) ... ok
+test_read_helpers_missing_history_do_not_create_schema (test_run_provenance.RunProvenanceTest.test_read_helpers_missing_history_do_not_create_schema) ... ERROR
+test_reused_versions_are_recorded_as_reused_not_new_generation (test_run_provenance.RunProvenanceTest.test_reused_versions_are_recorded_as_reused_not_new_generation) ... ok
+test_two_native_sessions_under_one_group_and_unknown_fallback_stay_separate (test_run_provenance.RunProvenanceTest.test_two_native_sessions_under_one_group_and_unknown_fallback_stay_separate) ... FAIL
+
+======================================================================
+ERROR: test_caller_context_is_explicit_optional_and_not_source_authentication (test_run_provenance.RunProvenanceTest.test_caller_context_is_explicit_optional_and_not_source_authentication)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-history-final-20261116/tests/test_run_provenance.py", line 208, in test_caller_context_is_explicit_optional_and_not_source_authentication
+    with provenance.execution(self.engine,owner_id='request:synthetic',request_session_id='caller-native'):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/contextlib.py", line 301, in helper
+    return _GeneratorContextManager(func, args, kwds)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/contextlib.py", line 105, in __init__
+    self.gen = func(*args, **kwds)
+               ^^^^^^^^^^^^^^^^^^^
+TypeError: execution() got an unexpected keyword argument 'request_session_id'
+
+======================================================================
+ERROR: test_read_helpers_missing_history_do_not_create_schema (test_run_provenance.RunProvenanceTest.test_read_helpers_missing_history_do_not_create_schema)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-history-final-20261116/tests/test_run_provenance.py", line 220, in test_read_helpers_missing_history_do_not_create_schema
+    with self.assertRaisesRegex(ValueError,'unknown provenance event'):provenance.event_page(db,1)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-causal-history-final-20261116/prototypes/assertion_memory/run_provenance.py", line 215, in event_page
+    row=db.execute('SELECT * FROM memory_run_events WHERE id=?',(event_id,)).fetchone()
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: no such table: memory_run_events
+
+======================================================================
+FAIL: test_native_source_session_is_preferred_over_logical_capture_group (test_run_provenance.RunProvenanceTest.test_native_source_session_is_preferred_over_logical_capture_group)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-history-final-20261116/tests/test_run_provenance.py", line 186, in test_native_source_session_is_preferred_over_logical_capture_group
+    self.assertTrue(self.outputs('native-chat')['entries'])
+AssertionError: [] is not true
+
+======================================================================
+FAIL: test_two_native_sessions_under_one_group_and_unknown_fallback_stay_separate (test_run_provenance.RunProvenanceTest.test_two_native_sessions_under_one_group_and_unknown_fallback_stay_separate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-history-final-20261116/tests/test_run_provenance.py", line 204, in test_two_native_sessions_under_one_group_and_unknown_fallback_stay_separate
+    self.assertTrue(self.outputs('native-b')['entries'])
+AssertionError: [] is not true
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.197s
+
+FAILED (failures=2, errors=2)

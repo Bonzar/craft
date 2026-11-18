@@ -1,0 +1,78 @@
+{
+  "baseline": {
+    "run": 22,
+    "errors": [
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_malformed_review_keeps_same_candidate_and_new_cache_key_after_restart",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_second_contract_failure_is_terminal_without_writer_or_third_review",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_reviewer_preflight_budget_preserves_candidate_and_semantic_attempts",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_transport_outage_during_repair_preserves_diagnostic_and_candidate",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_provider_exception_with_decoder_wording_is_operational_not_format_failure",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_repair_lease_loser_cannot_publish_or_erase_candidate",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_desired_revision_during_repair_cannot_accept_old_candidate",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_discarded_candidate_gets_one_explicit_new_operation_with_failure_audit",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_saved_candidate_resumes_reviewer_without_resetting_attempts",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_upgrade_respects_live_lease_then_runs_after_cursor_finished",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_accepted_legacy_names_remain_byte_identical_and_no_provider_is_called",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_semantic_rejection_is_not_reopened",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_repeated_same_candidate_cannot_reset_repair_allowance",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='accepted', value=1)",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='accepted', value='true')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='accepted', value=None)",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='reason', value='')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='reason', value=[])",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='title', value='Wrong conclusion')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='context_sha256', value='wrong')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='input_fingerprint', value='wrong')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='reference_ids', value=['foreign'])",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='title', value=None)",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_reference_order_and_all_missing_echo_fields_remain_structural",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_false_with_missing_binding_is_contract_failure_before_semantic_rejection",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_raw_method_suffix_is_never_cleaned_or_accepted",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_review_family_preflights_worst_case_serialized_repair_before_provider",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_missing_review_reason_cannot_be_imported_as_approved_manifest"
+    ],
+    "failures": [
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_bound_semantic_rejection_revises_writer_then_repairs_second_review",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_two_distinct_candidates_share_two_format_repairs_and_six_call_bound",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_failed_append_reuses_exact_cached_repair_and_audit"
+    ]
+  },
+  "changed": {
+    "run": 22,
+    "errors": [
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_malformed_review_keeps_same_candidate_and_new_cache_key_after_restart",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_second_contract_failure_is_terminal_without_writer_or_third_review",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_reviewer_preflight_budget_preserves_candidate_and_semantic_attempts",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_transport_outage_during_repair_preserves_diagnostic_and_candidate",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_provider_exception_with_decoder_wording_is_operational_not_format_failure",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_repair_lease_loser_cannot_publish_or_erase_candidate",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_desired_revision_during_repair_cannot_accept_old_candidate",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_discarded_candidate_gets_one_explicit_new_operation_with_failure_audit",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_saved_candidate_resumes_reviewer_without_resetting_attempts",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_upgrade_respects_live_lease_then_runs_after_cursor_finished",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_accepted_legacy_names_remain_byte_identical_and_no_provider_is_called",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_legacy_semantic_rejection_is_not_reopened",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_repeated_same_candidate_cannot_reset_repair_allowance",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='accepted', value=1)",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='accepted', value='true')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='accepted', value=None)",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='reason', value='')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='reason', value=[])",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='title', value='Wrong conclusion')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='context_sha256', value='wrong')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='input_fingerprint', value='wrong')",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='reference_ids', value=['foreign'])",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_invalid_schema_or_binding_retries_review_without_inferred_verdict (field='title', value=None)",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_reference_order_and_all_missing_echo_fields_remain_structural",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_false_with_missing_binding_is_contract_failure_before_semantic_rejection",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_raw_method_suffix_is_never_cleaned_or_accepted",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_review_family_preflights_worst_case_serialized_repair_before_provider",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewContractTest.test_missing_review_reason_cannot_be_imported_as_approved_manifest"
+    ],
+    "failures": [
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_bound_semantic_rejection_revises_writer_then_repairs_second_review",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_two_distinct_candidates_share_two_format_repairs_and_six_call_bound",
+      "prototypes.assertion_memory.tests.test_view_name_review_format.ReviewFormatWorkerTest.test_failed_append_reuses_exact_cached_repair_and_audit"
+    ]
+  }
+}

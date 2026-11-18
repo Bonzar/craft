@@ -1,0 +1,54 @@
+test_catalog_splits_two_native_chats_and_retains_unknown_fallback (test_native_session_api.NativeSessionAPITest.test_catalog_splits_two_native_chats_and_retains_unknown_fallback) ... FAIL
+test_exact_native_and_legacy_capture_lookup_with_separate_provenance (test_native_session_api.NativeSessionAPITest.test_exact_native_and_legacy_capture_lookup_with_separate_provenance) ... FAIL
+test_provenance_uses_raw_native_anchors_not_capture_group_or_claim_metadata (test_native_session_api.NativeSessionAPITest.test_provenance_uses_raw_native_anchors_not_capture_group_or_claim_metadata) ... FAIL
+test_watermark_pagination_preserves_source_catalog_and_native_message_slice (test_native_session_api.NativeSessionAPITest.test_watermark_pagination_preserves_source_catalog_and_native_message_slice) ... FAIL
+
+======================================================================
+FAIL: test_catalog_splits_two_native_chats_and_retains_unknown_fallback (test_native_session_api.NativeSessionAPITest.test_catalog_splits_two_native_chats_and_retains_unknown_fallback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-native-session-api-20261116/tests/test_native_session_api.py", line 26, in test_catalog_splits_two_native_chats_and_retains_unknown_fallback
+    self.assertEqual(result['total'],4)
+AssertionError: 3 != 4
+
+======================================================================
+FAIL: test_exact_native_and_legacy_capture_lookup_with_separate_provenance (test_native_session_api.NativeSessionAPITest.test_exact_native_and_legacy_capture_lookup_with_separate_provenance)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-native-session-api-20261116/tests/test_native_session_api.py", line 39, in test_exact_native_and_legacy_capture_lookup_with_separate_provenance
+    self.assertEqual(len(messages),1);row=messages[0]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_provenance_uses_raw_native_anchors_not_capture_group_or_claim_metadata (test_native_session_api.NativeSessionAPITest.test_provenance_uses_raw_native_anchors_not_capture_group_or_claim_metadata)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-native-session-api-20261116/tests/test_native_session_api.py", line 49, in test_provenance_uses_raw_native_anchors_not_capture_group_or_claim_metadata
+    self.assertEqual(records[0]['session_ids'],['native-one','native-two'])
+AssertionError: Lists differ: ['capture-group'] != ['native-one', 'native-two']
+
+First differing element 0:
+'capture-group'
+'native-one'
+
+Second list contains 1 additional elements.
+First extra element 1:
+'native-two'
+
+- ['capture-group']
++ ['native-one', 'native-two']
+
+======================================================================
+FAIL: test_watermark_pagination_preserves_source_catalog_and_native_message_slice (test_native_session_api.NativeSessionAPITest.test_watermark_pagination_preserves_source_catalog_and_native_message_slice)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-native-session-api-20261116/tests/test_native_session_api.py", line 66, in test_watermark_pagination_preserves_source_catalog_and_native_message_slice
+    self.assertEqual(len(ids),4);self.assertNotIn('native-three',ids)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 3 != 4
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.004s
+
+FAILED (failures=4)

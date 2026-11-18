@@ -1,0 +1,19 @@
+test_processing_pool (unittest.loader._FailedTest.test_processing_pool) ... ERROR
+
+======================================================================
+ERROR: test_processing_pool (unittest.loader._FailedTest.test_processing_pool)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_processing_pool
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-processing-pool-20261116/tests/test_processing_pool.py", line 8, in <module>
+    from prototypes.assertion_memory.processing_pool import ActiveClaims,ProcessingPool
+ModuleNotFoundError: No module named 'prototypes.assertion_memory.processing_pool'
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

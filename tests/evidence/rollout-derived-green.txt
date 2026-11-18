@@ -1,0 +1,15 @@
+test_burst_coalesces_and_commits_only_frozen_frontier (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_burst_coalesces_and_commits_only_frozen_frontier) ... ok
+test_edge_atomically_dirties_both_scopes_and_rollback_is_clean (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_edge_atomically_dirties_both_scopes_and_rollback_is_clean) ... ok
+test_expired_lease_recovers_frozen_snapshot_and_checkpoint (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_expired_lease_recovers_frozen_snapshot_and_checkpoint) ... ok
+test_repeated_provider_errors_are_bounded_and_new_dirty_work_rearms (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_repeated_provider_errors_are_bounded_and_new_dirty_work_rearms) ... ok
+test_round_robin_and_exclusive_supervisor_recovery_preserve_checkpoint (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_round_robin_and_exclusive_supervisor_recovery_preserve_checkpoint) ... ok
+test_temporal_boundary_on_cross_scope_endpoint_wakes_related_scope (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_temporal_boundary_on_cross_scope_endpoint_wakes_related_scope) ... ok
+test_temporal_change_requeues_but_pipeline_alone_does_not (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_temporal_change_requeues_but_pipeline_alone_does_not) ... ok
+test_waiting_model_is_honest_and_later_model_resumes (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_waiting_model_is_honest_and_later_model_resumes) ... ok
+test_worker_deadline_includes_scheduled_temporal_scope_work (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_worker_deadline_includes_scheduled_temporal_scope_work) ... ok
+test_worker_marks_derivation_waiting_without_failing_source_job (prototypes.assertion_memory.tests.test_derived_work.DerivedWorkTest.test_worker_marks_derivation_waiting_without_failing_source_job) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.044s
+
+OK

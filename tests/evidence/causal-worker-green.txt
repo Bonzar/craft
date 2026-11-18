@@ -1,0 +1,10 @@
+test_capture_after_last_idle_check_is_owned_by_reacquired_worker (prototypes.assertion_memory.tests.test_worker_lifecycle.WorkerLifecycleTest.test_capture_after_last_idle_check_is_owned_by_reacquired_worker) ... ok
+test_empty_idle_queue_releases_worker_ownership (prototypes.assertion_memory.tests.test_worker_lifecycle.WorkerLifecycleTest.test_empty_idle_queue_releases_worker_ownership) ... ok
+test_checkpoint_has_only_descriptor_and_never_copies_long_source_body (prototypes.assertion_memory.tests.test_compact_derived_snapshot.CompactDerivedSnapshotTest.test_checkpoint_has_only_descriptor_and_never_copies_long_source_body) ... ok
+test_explicit_requested_cutoffs_and_unknown_valid_policy_survive_hydration (prototypes.assertion_memory.tests.test_compact_derived_snapshot.CompactDerivedSnapshotTest.test_explicit_requested_cutoffs_and_unknown_valid_policy_survive_hydration) ... ok
+test_restart_restores_original_rows_edges_reviews_and_time_after_backdated_arrivals (prototypes.assertion_memory.tests.test_compact_derived_snapshot.CompactDerivedSnapshotTest.test_restart_restores_original_rows_edges_reviews_and_time_after_backdated_arrivals) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.047s
+
+OK

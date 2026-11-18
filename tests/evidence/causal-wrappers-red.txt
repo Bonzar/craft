@@ -1,0 +1,64 @@
+test_cached_fastpath_records_reused_once_without_publish (test_causal_history_tools.CausalHistoryToolsTest.test_cached_fastpath_records_reused_once_without_publish) ... ERROR
+test_invalid_context_and_query_validate_before_mutations (test_causal_history_tools.CausalHistoryToolsTest.test_invalid_context_and_query_validate_before_mutations) ... ERROR
+test_old_query_without_context_does_not_invent_caller (test_causal_history_tools.CausalHistoryToolsTest.test_old_query_without_context_does_not_invent_caller) ... ERROR
+test_reads_have_bounds_and_frozen_event_watermark (test_causal_history_tools.CausalHistoryToolsTest.test_reads_have_bounds_and_frozen_event_watermark) ... ERROR
+test_thread_fresh_connection_forwards_optional_caller_context (test_causal_history_tools.CausalHistoryToolsTest.test_thread_fresh_connection_forwards_optional_caller_context) ... ERROR
+test_three_readonly_public_tools_and_exact_query_output_pin (test_causal_history_tools.CausalHistoryToolsTest.test_three_readonly_public_tools_and_exact_query_output_pin) ... ERROR
+
+======================================================================
+ERROR: test_cached_fastpath_records_reused_once_without_publish (test_causal_history_tools.CausalHistoryToolsTest.test_cached_fastpath_records_reused_once_without_publish)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-wrappers-20261116/tests/test_causal_history_tools.py", line 40, in test_cached_fastpath_records_reused_once_without_publish
+    first=self.service.query('Synthetic condition?',scope='s',request_session_id='first-client')
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: MemoryService.query() got an unexpected keyword argument 'request_session_id'
+
+======================================================================
+ERROR: test_invalid_context_and_query_validate_before_mutations (test_causal_history_tools.CausalHistoryToolsTest.test_invalid_context_and_query_validate_before_mutations)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-wrappers-20261116/tests/test_causal_history_tools.py", line 54, in test_invalid_context_and_query_validate_before_mutations
+    with self.assertRaises(ValueError):self.service.query('Synthetic?',request_session_id=value)
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: MemoryService.query() got an unexpected keyword argument 'request_session_id'
+
+======================================================================
+ERROR: test_old_query_without_context_does_not_invent_caller (test_causal_history_tools.CausalHistoryToolsTest.test_old_query_without_context_does_not_invent_caller)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-wrappers-20261116/tests/test_causal_history_tools.py", line 49, in test_old_query_without_context_does_not_invent_caller
+    self.assertEqual(self.service.session_outputs('native-chat')['entries'],[])
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'session_outputs'
+
+======================================================================
+ERROR: test_reads_have_bounds_and_frozen_event_watermark (test_causal_history_tools.CausalHistoryToolsTest.test_reads_have_bounds_and_frozen_event_watermark)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-wrappers-20261116/tests/test_causal_history_tools.py", line 59, in test_reads_have_bounds_and_frozen_event_watermark
+    self.service.query('Synthetic condition?',scope='s',request_session_id='client')
+TypeError: MemoryService.query() got an unexpected keyword argument 'request_session_id'
+
+======================================================================
+ERROR: test_thread_fresh_connection_forwards_optional_caller_context (test_causal_history_tools.CausalHistoryToolsTest.test_thread_fresh_connection_forwards_optional_caller_context)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-wrappers-20261116/tests/test_causal_history_tools.py", line 70, in test_thread_fresh_connection_forwards_optional_caller_context
+    answer=_query_with_connection(self.config,'Synthetic condition?','s',None,None,request_session_id='thread-client')
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: _query_with_connection() got an unexpected keyword argument 'request_session_id'
+
+======================================================================
+ERROR: test_three_readonly_public_tools_and_exact_query_output_pin (test_causal_history_tools.CausalHistoryToolsTest.test_three_readonly_public_tools_and_exact_query_output_pin)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-wrappers-20261116/tests/test_causal_history_tools.py", line 28, in test_three_readonly_public_tools_and_exact_query_output_pin
+    answer=asyncio.run(self.mcp.tools['memory_query']('Synthetic condition?',scope='s',request_session_id='caller-chat'))
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: _register_read_tools.<locals>.memory_query() got an unexpected keyword argument 'request_session_id'
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.140s
+
+FAILED (errors=6)

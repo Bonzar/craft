@@ -1,0 +1,12 @@
+test_batch_real_origins_mixed_and_missing (test_session_api.SessionAPITest.test_batch_real_origins_mixed_and_missing) ... ok
+test_bounds (test_session_api.SessionAPITest.test_bounds) ... ok
+test_exact_lookup_no_turn_message_guess (test_session_api.SessionAPITest.test_exact_lookup_no_turn_message_guess) ... ok
+test_large_identifiers_have_bounded_pagination (test_session_api.SessionAPITest.test_large_identifiers_have_bounded_pagination) ... ok
+test_sessions_snapshot_and_no_titles_or_bodies (test_session_api.SessionAPITest.test_sessions_snapshot_and_no_titles_or_bodies) ... ok
+test_snapshot_excludes_new_session (test_session_api.SessionAPITest.test_snapshot_excludes_new_session) ... ok
+test_service_and_registered_tools_never_generate_or_write (test_session_api_service.SessionServiceTest.test_service_and_registered_tools_never_generate_or_write) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.018s
+
+OK

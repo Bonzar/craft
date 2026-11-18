@@ -1,0 +1,10 @@
+{
+  "db": "/absolute/path/to/assertion-memory.sqlite3",
+  "scope": "personal",
+  "cwd_roots": ["/absolute/path/to/your/project"],
+  "auto_process": true,
+  "environment": {
+    "ASSERTION_MEMORY_MODEL_MODE": "codex",
+    "ASSERTION_MEMORY_EMBEDDING_MODE": "fastembed"
+  }
+}

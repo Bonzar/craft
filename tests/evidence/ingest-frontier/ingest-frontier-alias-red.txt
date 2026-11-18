@@ -1,0 +1,15 @@
+test_same_event_cannot_fill_two_slots_in_one_stream_but_can_be_seen_by_another_device (tests.test_ingest_streams.IngestStreamsTest.test_same_event_cannot_fill_two_slots_in_one_stream_but_can_be_seen_by_another_device) ... FAIL
+
+======================================================================
+FAIL: test_same_event_cannot_fill_two_slots_in_one_stream_but_can_be_seen_by_another_device (tests.test_ingest_streams.IngestStreamsTest.test_same_event_cannot_fill_two_slots_in_one_stream_but_can_be_seen_by_another_device)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_streams.py", line 74, in test_same_event_cannot_fill_two_slots_in_one_stream_but_can_be_seen_by_another_device
+    with self.assertRaises(ValueError): self.deliver(2, event='shared-event')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

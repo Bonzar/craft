@@ -1,0 +1,15 @@
+{
+  "baseline": "982254fcf5598f87a493bfaf087eeaa759fd916d",
+  "inherited_unit": "Astra dirty derived_work.py,engine.py,worker.py,run_provenance.py and10 green synthetic tests copied over cleanbaseline; no private files.",
+  "read_helpers": [
+    "session_outputs(db,source_session_id,offset=0,limit=50,snapshot_id=None)",
+    "event_page(db,event_id,offset=0,limit=6000)",
+    "run_page(db,run_id,section=run|causes|events,offset=0,limit=6000,snapshot_id=None)"
+  ],
+  "session_identity": "Only explicit nonempty native_session_id in raw metadata, else stored raw.session_id. No source URI, scope, time or evidence-membership causal inference. Causes detail labels native/capture IDs separately.",
+  "automatic_chain": "Owned worker mutation+frontier delta causes; coalesced derived run pins linked causes; explicit execution context binds actual publications/reuses/checks/upstream and lifecycle outcomes. Four operational tables append-only.",
+  "caller_context": "Optional execution(...request_session_id=...) yields direct_request/caller_context_only; explicit caller claim, not raw source authentication. No service/MCP signature changes in this unit.",
+  "legacy": "Old/uninstrumented history remains unknown. No retrospective output reconstruction, pipeline-key change or canonical-body rewriting.",
+  "bounds": "Session entries bounded by row/page JSON budget; event/run detail JSON uses character continuation. Run events snapshot watermark stable.",
+  "verification": "17 focused+10 derived+5 worker/frozen-snapshot+8 failure-proof tests green; all synthetic local deterministic providers, no external models."
+}

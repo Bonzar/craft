@@ -1,0 +1,80 @@
+test_background_claim_and_failed_cleanup_wait_before_body_without_replaying_it (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_background_claim_and_failed_cleanup_wait_before_body_without_replaying_it) ... ERROR
+test_cancel_and_exhaustion_are_bounded_with_real_writer_still_holding_lock (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_cancel_and_exhaustion_are_bounded_with_real_writer_still_holding_lock) ... ERROR
+test_constructor_busy_retries_and_closes_each_partial_store (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_constructor_busy_retries_and_closes_each_partial_store) ... ERROR
+test_expired_claim_is_not_revived_after_waiting_for_writer (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_expired_claim_is_not_revived_after_waiting_for_writer) ... ERROR
+test_foreground_does_not_inherit_background_wait_policy (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_foreground_does_not_inherit_background_wait_policy) ... ok
+test_short_writer_during_actual_maintenance_tick_does_not_stop_two_plus_one (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_short_writer_during_actual_maintenance_tick_does_not_stop_two_plus_one) ... Processing lane failed: lane=source index=0 error_type=OperationalError
+Processing lane failed: lane=source index=1 error_type=OperationalError
+Processing lane failed: lane=maintenance index=2 error_type=OperationalError
+ERROR
+
+======================================================================
+ERROR: test_background_claim_and_failed_cleanup_wait_before_body_without_replaying_it (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_background_claim_and_failed_cleanup_wait_before_body_without_replaying_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-lane-busy-repro-20261116/tests/test_lane_sqlite_busy.py", line 55, in test_background_claim_and_failed_cleanup_wait_before_body_without_replaying_it
+    from prototypes.assertion_memory.storage import background_write_retry
+ImportError: cannot import name 'background_write_retry' from 'prototypes.assertion_memory.storage' (/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/storage.py)
+
+======================================================================
+ERROR: test_cancel_and_exhaustion_are_bounded_with_real_writer_still_holding_lock (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_cancel_and_exhaustion_are_bounded_with_real_writer_still_holding_lock)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-lane-busy-repro-20261116/tests/test_lane_sqlite_busy.py", line 84, in test_cancel_and_exhaustion_are_bounded_with_real_writer_still_holding_lock
+    from prototypes.assertion_memory.storage import background_write_retry,BackgroundWriteCancelled
+ImportError: cannot import name 'background_write_retry' from 'prototypes.assertion_memory.storage' (/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/storage.py)
+
+======================================================================
+ERROR: test_constructor_busy_retries_and_closes_each_partial_store (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_constructor_busy_retries_and_closes_each_partial_store)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-lane-busy-repro-20261116/tests/test_lane_sqlite_busy.py", line 123, in test_constructor_busy_retries_and_closes_each_partial_store
+    pool=ProcessingPool(factory,source_workers=2,idle_seconds=.02,poll_seconds=.002,write_retry_seconds=.5,write_retry_poll_seconds=.005)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: ProcessingPool.__init__() got an unexpected keyword argument 'write_retry_seconds'
+
+======================================================================
+ERROR: test_expired_claim_is_not_revived_after_waiting_for_writer (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_expired_claim_is_not_revived_after_waiting_for_writer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-lane-busy-repro-20261116/tests/test_lane_sqlite_busy.py", line 129, in test_expired_claim_is_not_revived_after_waiting_for_writer
+    from prototypes.assertion_memory.storage import background_write_retry
+ImportError: cannot import name 'background_write_retry' from 'prototypes.assertion_memory.storage' (/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/storage.py)
+
+======================================================================
+ERROR: test_short_writer_during_actual_maintenance_tick_does_not_stop_two_plus_one (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_short_writer_during_actual_maintenance_tick_does_not_stop_two_plus_one)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-lane-busy-repro-20261116/tests/test_lane_sqlite_busy.py", line 43, in test_short_writer_during_actual_maintenance_tick_does_not_stop_two_plus_one
+    try:result=pool.run()
+               ^^^^^^^^^^
+  File "/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/processing_pool.py", line 166, in run
+    if self._errors:raise self._errors[0]
+                    ^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/processing_pool.py", line 102, in _lane
+    result=worker.run_once();worked=result is not None
+           ^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-lane-busy-repro-20261116/tests/test_lane_sqlite_busy.py", line 39, in run_once
+    return worker.run_once()
+           ^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/worker.py", line 80, in run_once
+    return run_lane(self)
+           ^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/worker_lanes.py", line 6, in run_lane
+    worker.queue._maintenance_tick()
+  File "/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/queue.py", line 289, in _maintenance_tick
+    tick(self)
+  File "/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/source_reprocessing.py", line 273, in tick
+    with queue.store.transaction(write=True) as db:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-lane-busy-repro-20261116/prototypes/assertion_memory/storage.py", line 293, in transaction
+    connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+sqlite3.OperationalError: database is locked
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.089s
+
+FAILED (errors=5)

@@ -1,0 +1,130 @@
+test_alias_obtains_fresh_question_local_relation_clearance (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_alias_obtains_fresh_question_local_relation_clearance) ... ok
+test_canonical_only_engine_does_not_require_optional_capture_queue_schema (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_canonical_only_engine_does_not_require_optional_capture_queue_schema) ... ok
+test_changed_proposal_reason_status_or_frontier_invalidates_old_local_receipt (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_changed_proposal_reason_status_or_frontier_invalidates_old_local_receipt) ... ok
+test_changed_relation_revision_cannot_reuse_old_semantic_applicability (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_changed_relation_revision_cannot_reuse_old_semantic_applicability) ... ok
+test_complete_inline_answer_with_large_optional_proof_needs_no_answer_pages (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_complete_inline_answer_with_large_optional_proof_needs_no_answer_pages) ... ok
+test_complete_terminal_relation_inventory_receives_independent_query_local_review (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_complete_terminal_relation_inventory_receives_independent_query_local_review) ... ok
+test_contract_repair_cannot_weaken_material_relation (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_contract_repair_cannot_weaken_material_relation) ... ok
+test_equivalent_question_reuse_gets_independent_exact_new_question_review (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_equivalent_question_reuse_gets_independent_exact_new_question_review) ... ok
+test_exact_answer_question_and_frontier_bind_local_receipt (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_exact_answer_question_and_frontier_bind_local_receipt) ... ok
+test_frozen_relation_inventory_is_separate_from_mutable_current_frontier (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_frozen_relation_inventory_is_separate_from_mutable_current_frontier) ... ok
+test_generation_failure_and_unreviewed_summary_are_not_complete_answers (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_generation_failure_and_unreviewed_summary_are_not_complete_answers) ... ok
+test_large_summary_requires_every_pinned_answer_page_including_final_condition (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_large_summary_requires_every_pinned_answer_page_including_final_condition) ... ok
+test_legacy_snapshot_cannot_acquire_new_mutable_relation_inventory (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_legacy_snapshot_cannot_acquire_new_mutable_relation_inventory) ... ok
+test_malformed_relation_proposal_stays_operational_without_forcing_semantic_review (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_malformed_relation_proposal_stays_operational_without_forcing_semantic_review) ... ok
+test_material_relation_requires_real_action_qualification (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_material_relation_requires_real_action_qualification) ... ok
+test_mcp_instructions_separate_required_answer_pages_from_optional_proof (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_mcp_instructions_separate_required_answer_pages_from_optional_proof) ... ok
+test_missing_review_or_invalid_canonical_ids_never_waive_relation (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_missing_review_or_invalid_canonical_ids_never_waive_relation) ... ok
+test_new_raw_or_operational_error_still_blocks_local_relation_clearance (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_new_raw_or_operational_error_still_blocks_local_relation_clearance) ... ok
+test_omitted_relation_inventory_cannot_clear_potential_materiality (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_omitted_relation_inventory_cannot_clear_potential_materiality) ... ok
+test_small_answer_has_priority_over_large_pinned_freshness_audit (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_small_answer_has_priority_over_large_pinned_freshness_audit) ... ok
+test_source_frontier_change_invalidates_relation_applicability_receipt (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_source_frontier_change_invalidates_relation_applicability_receipt) ... ok
+test_unapproved_candidate_cannot_disclose_cross_scope_endpoint_body (prototypes.assertion_memory.tests.test_answer_contract_v21.AnswerContractTest.test_unapproved_candidate_cannot_disclose_cross_scope_endpoint_body) ... ok
+test_closed_or_clean_expired_stream_is_not_an_eternal_blocker (tests.test_ingest_service.IngestCaptureServiceTest.test_closed_or_clean_expired_stream_is_not_an_eternal_blocker) ... ERROR
+test_global_status_is_read_only_and_never_invokes_model (tests.test_ingest_service.IngestCaptureServiceTest.test_global_status_is_read_only_and_never_invokes_model) ... ERROR
+test_invalid_delivery_rolls_back_raw_job_and_canonical_receipt (tests.test_ingest_service.IngestCaptureServiceTest.test_invalid_delivery_rolls_back_raw_job_and_canonical_receipt) ... ERROR
+test_two_device_envelopes_do_not_change_canonical_message (tests.test_ingest_service.IngestCaptureServiceTest.test_two_device_envelopes_do_not_change_canonical_message) ... ERROR
+test_public_tools_keep_exact_names_and_receipt_shape_without_network (tests.test_ingest_service.IngestMCPToolsTest.test_public_tools_keep_exact_names_and_receipt_shape_without_network) ... Executing <Task finished name='Task-2' coro=<IngestMCPToolsTest.test_public_tools_keep_exact_names_and_receipt_shape_without_network() done, defined at /private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py:132> exception=AssertionError('False is not true') created at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py:100> took 0.335 seconds
+FAIL
+test_current_transport_limit_survives_historical_answer_and_pagination (tests.test_ingest_service.IngestQueryHealthTest.test_current_transport_limit_survives_historical_answer_and_pagination) ... ERROR
+test_history_pages_retain_exact_immutable_content_with_separate_current_health (tests.test_ingest_service.IngestQueryHealthTest.test_history_pages_retain_exact_immutable_content_with_separate_current_health) ... ERROR
+test_known_incoming_globally_limits_even_previously_accepted_scoped_answer (tests.test_ingest_service.IngestQueryHealthTest.test_known_incoming_globally_limits_even_previously_accepted_scoped_answer) ... ERROR
+
+======================================================================
+ERROR: test_closed_or_clean_expired_stream_is_not_an_eternal_blocker (tests.test_ingest_service.IngestCaptureServiceTest.test_closed_or_clean_expired_stream_is_not_an_eternal_blocker)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 58, in test_closed_or_clean_expired_stream_is_not_an_eternal_blocker
+    stream = self.stream()
+             ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 25, in stream
+    return self.service.ingest_register(device, 'session')
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'ingest_register'
+
+======================================================================
+ERROR: test_global_status_is_read_only_and_never_invokes_model (tests.test_ingest_service.IngestCaptureServiceTest.test_global_status_is_read_only_and_never_invokes_model)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 47, in test_global_status_is_read_only_and_never_invokes_model
+    self.stream()
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 25, in stream
+    return self.service.ingest_register(device, 'session')
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'ingest_register'
+
+======================================================================
+ERROR: test_invalid_delivery_rolls_back_raw_job_and_canonical_receipt (tests.test_ingest_service.IngestCaptureServiceTest.test_invalid_delivery_rolls_back_raw_job_and_canonical_receipt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 39, in test_invalid_delivery_rolls_back_raw_job_and_canonical_receipt
+    stream = self.stream()
+             ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 25, in stream
+    return self.service.ingest_register(device, 'session')
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'ingest_register'
+
+======================================================================
+ERROR: test_two_device_envelopes_do_not_change_canonical_message (tests.test_ingest_service.IngestCaptureServiceTest.test_two_device_envelopes_do_not_change_canonical_message)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 28, in test_two_device_envelopes_do_not_change_canonical_message
+    a, b = self.stream(), self.stream('laptop-b')
+           ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 25, in stream
+    return self.service.ingest_register(device, 'session')
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'ingest_register'
+
+======================================================================
+ERROR: test_current_transport_limit_survives_historical_answer_and_pagination (tests.test_ingest_service.IngestQueryHealthTest.test_current_transport_limit_survives_historical_answer_and_pagination)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 98, in test_current_transport_limit_survives_historical_answer_and_pagination
+    self.pending()
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 77, in pending
+    stream = self.service.ingest_register('other-laptop','other-session')
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'ingest_register'
+
+======================================================================
+ERROR: test_history_pages_retain_exact_immutable_content_with_separate_current_health (tests.test_ingest_service.IngestQueryHealthTest.test_history_pages_retain_exact_immutable_content_with_separate_current_health)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 112, in test_history_pages_retain_exact_immutable_content_with_separate_current_health
+    self.pending()
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 77, in pending
+    stream = self.service.ingest_register('other-laptop','other-session')
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'ingest_register'
+
+======================================================================
+ERROR: test_known_incoming_globally_limits_even_previously_accepted_scoped_answer (tests.test_ingest_service.IngestQueryHealthTest.test_known_incoming_globally_limits_even_previously_accepted_scoped_answer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 86, in test_known_incoming_globally_limits_even_previously_accepted_scoped_answer
+    self.pending()
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 77, in pending
+    stream = self.service.ingest_register('other-laptop','other-session')
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'ingest_register'
+
+======================================================================
+FAIL: test_public_tools_keep_exact_names_and_receipt_shape_without_network (tests.test_ingest_service.IngestMCPToolsTest.test_public_tools_keep_exact_names_and_receipt_shape_without_network)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-ingest-frontier-20261116/tests/test_ingest_service.py", line 139, in test_public_tools_keep_exact_names_and_receipt_shape_without_network
+    self.assertTrue({'memory_ingest_register','memory_ingest_report','memory_capture_message','memory_status'} <= names)
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 30 tests in 0.715s
+
+FAILED (failures=1, errors=7)

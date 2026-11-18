@@ -1,0 +1,18 @@
+test_catalog_splits_two_native_chats_and_retains_unknown_fallback (test_native_session_api.NativeSessionAPITest.test_catalog_splits_two_native_chats_and_retains_unknown_fallback) ... ok
+test_exact_native_and_legacy_capture_lookup_with_separate_provenance (test_native_session_api.NativeSessionAPITest.test_exact_native_and_legacy_capture_lookup_with_separate_provenance) ... ok
+test_nonstring_or_empty_native_id_remains_labeled_stored_fallback (test_native_session_api.NativeSessionAPITest.test_nonstring_or_empty_native_id_remains_labeled_stored_fallback) ... ok
+test_provenance_uses_raw_native_anchors_not_capture_group_or_claim_metadata (test_native_session_api.NativeSessionAPITest.test_provenance_uses_raw_native_anchors_not_capture_group_or_claim_metadata) ... ok
+test_same_literal_native_and_fallback_id_catalog_is_explicitly_mixed (test_native_session_api.NativeSessionAPITest.test_same_literal_native_and_fallback_id_catalog_is_explicitly_mixed) ... ok
+test_watermark_pagination_preserves_source_catalog_and_native_message_slice (test_native_session_api.NativeSessionAPITest.test_watermark_pagination_preserves_source_catalog_and_native_message_slice) ... ok
+test_batch_real_origins_mixed_and_missing (test_session_api.SessionAPITest.test_batch_real_origins_mixed_and_missing) ... ok
+test_bounds (test_session_api.SessionAPITest.test_bounds) ... ok
+test_exact_lookup_no_turn_message_guess (test_session_api.SessionAPITest.test_exact_lookup_no_turn_message_guess) ... ok
+test_large_identifiers_have_bounded_pagination (test_session_api.SessionAPITest.test_large_identifiers_have_bounded_pagination) ... ok
+test_sessions_snapshot_and_no_titles_or_bodies (test_session_api.SessionAPITest.test_sessions_snapshot_and_no_titles_or_bodies) ... ok
+test_snapshot_excludes_new_session (test_session_api.SessionAPITest.test_snapshot_excludes_new_session) ... ok
+test_service_and_registered_tools_never_generate_or_write (test_session_api_service.SessionServiceTest.test_service_and_registered_tools_never_generate_or_write) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.024s
+
+OK

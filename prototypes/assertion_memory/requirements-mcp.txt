@@ -1,0 +1,2 @@
+# Official MCP SDK; Python >=3.10. Embeddings are optional (requirements-runtime.txt).
+mcp==1.30.0
