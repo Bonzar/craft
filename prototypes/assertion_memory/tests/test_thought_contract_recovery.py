@@ -125,6 +125,7 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
                     self.assertIn(good, cached.values())
                     thoughts = calls[0].response_schema['properties']['thoughts']
                     self.assertEqual(thoughts['maxItems'], 1)
+                    self.assertNotIn('anyOf', calls[0].response_schema)
 
     def test_repeated_invalid_answer_count_is_bounded_and_never_published(self):
         row = json.loads(draft('Mira approval is required.', [0]))['thoughts'][0]
