@@ -11,9 +11,24 @@ def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def watching_marker(root, session):
+    return Path(root) / 'inactive' / hashlib.sha256(session.encode()).hexdigest()
+
+
+def set_watching(root, session, is_watching):
+    marker = watching_marker(root, session)
+    if is_watching:
+        marker.unlink(missing_ok=True)
+        return
+    # SessionEnd must not wait for a transcript reader holding the SQLite write lock.
+    marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    marker.touch(mode=0o600, exist_ok=True)
+
+
 class Outbox:
     def __init__(self, path):
         path = Path(path)
+        self.root = path.parent
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(path, timeout=5)
         os.chmod(path, 0o600)
@@ -40,7 +55,7 @@ class Outbox:
 
     def session(self, session):
         row = self.db.execute('SELECT data FROM sessions WHERE session_id=?', (session,)).fetchone()
-        return json.loads(row['data']) if row else None
+        return (json.loads(row['data']) | {'watching': not watching_marker(self.root, session).exists()}) if row else None
 
     def register_session(self, value):
         # Concurrent global/project hooks must never replace a worker's newer cursor.
@@ -51,10 +66,14 @@ class Outbox:
 
     def save_session(self, value):
         self.db.execute('INSERT INTO sessions VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET data=excluded.data',
-                        (value['session_id'], encoded(value)))
+            (value['session_id'], encoded({key: item for key, item in value.items() if key != 'watching'})))
+
+    def set_watching(self, session, is_watching):
+        set_watching(self.root, session, is_watching)
 
     def sessions(self):
-        return [json.loads(row['data']) for row in self.db.execute('SELECT data FROM sessions ORDER BY session_id')]
+        return [json.loads(row['data']) | {'watching': not watching_marker(self.root, row['session_id']).exists()}
+            for row in self.db.execute('SELECT session_id,data FROM sessions ORDER BY session_id')]
 
     def occurrence_id(self, session, locator, provider_id=None):
         row = self.db.execute('SELECT message_id FROM occurrences WHERE session_id=? AND locator=?', (session, locator)).fetchone()

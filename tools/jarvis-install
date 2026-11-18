@@ -156,6 +156,8 @@ CODEX_CONTEXT_LIMIT = 0
 # 17.09.2026: `timeout = 60` в config.toml приезжает в hooks/list как
 # timeoutSec 60).
 HOOK_TIMEOUT_SEC = 1800
+# Codex cleanup hooks accept at most three seconds (learn.chatgpt.com/docs/hooks).
+CODEX_SESSION_END_TIMEOUT_SEC = 3
 
 # Обёртку называет строка хука: установщик знает, в какой харнес ставит, а
 # модуль про харнесы не знает вовсе. Флаг тот же, что читает `jarvis.wrappers`.
@@ -626,7 +628,8 @@ class CodexBackend(Backend):
                 body_lines.append(f'[[hooks.{harness_event}.hooks]]')
                 body_lines.append('type = "command"')
                 body_lines.append(f'command = {toml_string(command)}')
-                body_lines.append(f'timeout = {HOOK_TIMEOUT_SEC}')
+                timeout = CODEX_SESSION_END_TIMEOUT_SEC if harness_event == 'SessionEnd' else HOOK_TIMEOUT_SEC
+                body_lines.append(f'timeout = {timeout}')
                 # Без этого ключа Codex режет ответ хука потолком в 2 500
                 # токенов, и снимок Craft приезжает обрезанным (дока). Там, где
                 # событие текста не принимает вовсе, ключ не пишется: Codex на

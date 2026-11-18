@@ -160,11 +160,23 @@ class SingleMemoryModuleTest(unittest.TestCase):
         self.assertNotIn('http_headers_helper',server)
         ledger=json.loads((self.profile/'jarvis/installed.json').read_text())['modules']
         self.assertNotIn('assertion-memory-context',ledger)
-        self.assertEqual(ledger['assertion-memory']['events'],['session-start','after-compact','subagent-start'])
-        for event in ('SessionStart','SubagentStart'):
+        self.assertEqual(ledger['assertion-memory']['events'],['session-start','session-end','after-compact','subagent-start'])
+        for event in ('SessionStart','SessionEnd','SubagentStart'):
             commands=[h['command'] for group in cfg['hooks'][event] for h in group['hooks']]
             self.assertEqual(sum('/assertion-memory/hooks/module.py' in c for c in commands),1)
             self.assertFalse(any('assertion-memory-context' in c for c in commands))
+
+    def test_session_end_hook_is_silent_and_uses_the_codex_cleanup_timeout(self):
+        self.install();cfg=tomllib.loads((self.profile/'config.toml').read_text())
+        hook=next(h for group in cfg['hooks']['SessionEnd'] for h in group['hooks']
+            if '/assertion-memory/hooks/module.py' in h['command'])
+        self.assertLessEqual(hook['timeout'],3)
+        self.assertNotIn('additionalContextLimit',hook)
+        done=subprocess.run(hook['command'],shell=True,text=True,capture_output=True,
+            input=json.dumps({'hook_event_name':'SessionEnd','session_id':'synthetic-ended',
+                'cwd':str(self.root),'reason':'other'}))
+        self.assertEqual(done.returncode,0,done.stderr)
+        self.assertEqual(done.stdout,'')
 
     def test_installer_never_reads_host_token_value_or_serializes_it(self):
         original_get=os.environ.get

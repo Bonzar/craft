@@ -1,2 +1,2 @@
 slug = "assertion-memory"
-events = ["session-start", "after-compact", "subagent-start"]
+events = ["session-start", "session-end", "after-compact", "subagent-start"]

@@ -146,6 +146,9 @@ class Coordinator:
         result={'attempted':0,'acknowledged':0,'stream_errors':0}
         for session in self.store.sessions():
             value=self.local(session['session_id'])
+            if (not session.get('watching',True) and value['pending_report'] is None
+                    and not self.db.execute('SELECT 1 FROM delivery_sequences WHERE session_id=? AND receipt IS NULL LIMIT 1',
+                        (session['session_id'],)).fetchone()):continue
             if value['retry_at']>self.clock():continue
             try:
                 if value['session_id'] not in self.reconciled:self._register(value)
