@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from .model import SemanticUnavailable
-from .thought_engine import ThoughtDetailNeeded
+from .thought_engine import ThoughtDetailNeeded, empty_material
 from .thought_engine_contract import semantic_text
 from .thought_navigation import navigate, neighborhood
 from .thought_answering import answer_selected, support_fingerprint
@@ -56,7 +56,7 @@ def _locate(engine, frame):
         frame.frontier = _frontier(engine, frame, None)
         return None
     if not frame.initial:
-        raise SemanticUnavailable('No admitted search starting points or pending source messages were found')
+        raise empty_material('No admitted search starting points or pending source messages were found')
     route = navigate(engine, frame.question, frame.explicit, initial=frame.initial,
                      guidance=frame.guidance)
     discovered = (*route.inspected, *((route.thought,) if route.thought is not None else ()))

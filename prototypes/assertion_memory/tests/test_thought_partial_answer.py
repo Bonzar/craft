@@ -6,6 +6,9 @@ from unittest.mock import patch
 from prototypes.assertion_memory.model import ModelError, SemanticUnavailable
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_engine import ThoughtEngine
+from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
+from prototypes.assertion_memory.thought_answering import answer_selected
+from prototypes.assertion_memory.thought_navigation import neighborhood
 from prototypes.assertion_memory.thought_service import ThoughtService
 from prototypes.assertion_memory.thought_store import ThoughtStore
 
@@ -103,6 +106,55 @@ class ThoughtPartialAnswerTest(unittest.TestCase):
         self.assertEqual(calls, ['Construct thought', 'Construct thought'])
         self.assertEqual(retrieval.call_count, 1)
         self.assertEqual(service.thoughts.list_thoughts(), [])
+
+    def test_whole_refresh_keeps_known_budget_and_replaces_unsupported_date_with_a_gap(self):
+        memory = self.memory()
+        store = ThoughtStore(memory)
+        source = store.publish('The budget is 120 units.')
+        target = store.publish('The budget is 120 units and the date is Friday.',
+            bases=[{'thought_id': source.id, 'version': source.version}])
+        text = 'The budget is 120 units. The current supplied material does not establish the date.'
+        calls = []
+        def model(request):
+            calls.append(request.task)
+            if request.task == 'Construct thought':
+                return json.dumps({'thought': {'text': text, 'question': None, 'support_fragments': [0]},
+                                   'needs_detail': None})
+            self.assertEqual(request.records[-1]['text'], text)
+            self.assertIn('gap rather than an unsupported old assertion', request.instructions)
+            return ACCEPT
+        result = ThoughtEngine(store, model)._construct([
+            {'role': 'whole_refresh_scope', 'prior_content': target.text, 'questions': ['What budget?', 'Which date?']},
+            {'role': 'material', 'text': source.text}],
+            [{'thought_id': target.id, 'version': target.version}, {'thought_id': source.id, 'version': source.version}],
+            target=target)[0]
+        self.assertEqual((result.id, result.version), (target.id, 2))
+        self.assertEqual(result.text, text)
+        self.assertIsNone(result.question)
+        self.assertEqual(result.bases[0]['thought_id'], source.id)
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'])
+
+    def test_description_without_full_ground_is_empty_but_known_link_can_still_be_read(self):
+        for linked, opened in ((False, False), (True, False), (True, True)):
+            with self.subTest(linked=linked, opened=opened):
+                memory = self.memory()
+                store = ThoughtStore(memory)
+                child = store.publish('An unverified linked description.', metadata={'verification': 'legacy_unverified'})
+                hint = store.publish('An unverified starting description.',
+                    bases=[{'thought_id': child.id, 'version': child.version}] if linked else [],
+                    metadata={'verification': 'legacy_unverified'})
+                calls = []
+                def model(request):
+                    calls.append(request.task)
+                    self.fail('Descriptions alone cannot supply construction facts')
+                engine = ThoughtEngine(store, model)
+                with self.assertRaises(SemanticUnavailable) as caught:
+                    answer_selected(engine, 'What is known?', hint, neighborhood=neighborhood,
+                        additional=(child,) if opened else ())
+                should_read_link = linked and not opened
+                self.assertEqual(isinstance(caught.exception, ThoughtDetailNeeded), should_read_link)
+                self.assertEqual(bool(getattr(caught.exception, 'empty_ground', False)), not should_read_link)
+                self.assertEqual(calls, [])
 
     def test_reviewer_rejection_and_provider_errors_are_not_empty_material_notices(self):
         for failure in ('reject', 'provider'):

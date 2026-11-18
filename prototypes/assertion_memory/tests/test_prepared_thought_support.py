@@ -120,7 +120,7 @@ class PreparedThoughtSupportTest(unittest.TestCase):
             if request.task=='Construct thought':
                 choices=options(request)
                 self.assertEqual(len(choices),175)
-                selection_schema=request.response_schema['properties']['thought']['anyOf'][0]['properties']['support_fragments']
+                selection_schema=request.response_schema['properties']['thought']['properties']['support_fragments']
                 self.assertNotIn('uniqueItems',selection_schema)
                 spec=selection_schema['items']
                 self.assertEqual(spec,{'type':'integer','minimum':0,'maximum':174})

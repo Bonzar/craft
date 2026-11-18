@@ -7,7 +7,9 @@ from pathlib import Path
 from prototypes.assertion_memory.model import ModelContextExceeded, ModelError, SemanticUnavailable, format_prompt
 from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.storage import MemoryStore
-from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded, ThoughtEngine
+from prototypes.assertion_memory.thought_engine import ThoughtEngine
+from prototypes.assertion_memory.thought_engine_contract import thought_drafts, validate_response
+from prototypes.assertion_memory.thought_schema import response_schema
 from prototypes.assertion_memory.thought_store import ThoughtStore
 from prototypes.assertion_memory.thought_worker import _Replay
 
@@ -130,7 +132,7 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
                     self.assertIn(good, cached.values())
                     properties = calls[0].response_schema['properties']
                     self.assertNotIn('thoughts', properties)
-                    self.assertEqual(properties['thought']['anyOf'][0]['type'], 'object')
+                    self.assertEqual(properties['thought']['type'], 'object')
                     self.assertNotIn('anyOf', calls[0].response_schema)
 
     def test_repeated_invalid_answer_count_is_bounded_and_never_published(self):
@@ -184,23 +186,15 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
         self.assertEqual(cached, {})
         self.assertEqual(self.store.list_thoughts(), before)
 
-    def test_needs_detail_is_valid_for_requested_answers_even_without_support(self):
+    def test_null_thought_with_detail_remains_valid_wire_without_support(self):
         detail = {'question': 'Who may approve the opening?', 'text': 'The approver is unspecified.'}
-        body = json.dumps({'thought': None, 'needs_detail': detail})
-        for whole in (False, True):
-            for has_support in (False, True):
-                with self.subTest(whole=whole, has_support=has_support):
-                    records = self.records if has_support else []
-                    bindings = self.bindings if has_support else []
-                    if whole:
-                        records = [{'role': 'whole_refresh_scope', 'questions': [detail['question']]}, *records]
-                        bindings = [{}, *bindings]
-                    engine, replay, calls, _, _ = self.replay_engine([body])
-                    with self.assertRaises(ThoughtDetailNeeded) as caught:
-                        engine._prepare(records, bindings, question=None if whole else detail['question'])
-                    self.assertEqual(caught.exception.question, detail['question'])
-                    self.assertEqual(len(calls), 1)
-                    self.assertIsNotNone(replay.pending)
+        body = {'thought': None, 'needs_detail': detail}
+        validate_response('Construct thought', body, support_count=0, single_thought=True)
+        self.assertEqual(thought_drafts(body, support_count=0, single_thought=True), [])
+        schema = response_schema('Construct thought', support_count=0, single_thought=True)
+        self.assertEqual(schema['properties']['thought'], {'type': 'null'})
+        with self.assertRaises(ModelError):
+            validate_response('Construct thought', body, support_count=1, single_thought=True)
 
     def test_scalar_query_and_whole_refresh_publish_one_thought_with_selected_support(self):
         text = 'Mira approval is required before opening.'

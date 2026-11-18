@@ -25,6 +25,12 @@ class ThoughtDetailNeeded(SemanticUnavailable):
         super().__init__('Additional supporting detail is needed: ' + question + '. ' + reason)
 
 
+def empty_material(reason):
+    error = SemanticUnavailable(reason)
+    error.empty_ground = True
+    return error
+
+
 class ThoughtEngine:
     def __init__(self, thought_store, model, candidates=None, trace=None, *, gateway=None):
         self.thoughts = thought_store
@@ -212,6 +218,8 @@ class ThoughtEngine:
                       review_ambiguity=True, correction=''):
         from .thought_support import prepare_support
         catalog=prepare_support(records,bases)
+        if not catalog.fragments:
+            raise empty_material('The retrieved material contains no admitted full supporting content')
         whole = any(record.get('role') == 'whole_refresh_scope' for record in records)
         single_thought = question is not None or whole
         instructions = construction_instructions(single_thought=single_thought) + correction
@@ -633,7 +641,7 @@ class ThoughtEngine:
         unread.update(pending)
         unread.difference_update(basis.get('thought_id') for _, basis in material)
         if not material:
-            raise SemanticUnavailable('No admitted current supporting source was found; a more specific supporting question is needed')
+            raise empty_material('No admitted current supporting source was found in the selected material')
         if unread:
             availability = {'coverage': 'partial', 'unread_supporting_branches': len(unread),
                 'uncertainty': 'Unopened related support may contain additional conditions or conflicts; completeness is not established.'}

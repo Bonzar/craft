@@ -15,6 +15,8 @@ from .thought_trace import ThoughtTrace
 from .usage_context import query_usage_trace
 from .thought_processing_selection import normalize_session_ids, processing_cohort
 
+EMPTY_RETRIEVED_MATERIAL_NOTICE = 'В полученных материалах нет сведений для ответа на этот вопрос'
+
 INSTRUCTIONS = ('Shared thought memory. Source interpretations and composite explanations use one thought format. '
     'A thought has equal questions; their order gives no priority and does not prove applicability to a changed version. '
     'Capture raw user, assistant and useful tool reports with stable session/message provenance. '
@@ -89,6 +91,10 @@ class ThoughtService(MemoryService):
                 trace.finish('knowledge_limit')
                 result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
                           'knowledge_limit': str(error), 'run_id': trace.id}
+                if getattr(error, 'empty_ground', False):
+                    result.update(answer=EMPTY_RETRIEVED_MATERIAL_NOTICE, answer_continuations=[],
+                        answer_metadata={'notice':{'purpose':'knowledge_limit_notice', 'scope':'retrieved_material',
+                            'text':EMPTY_RETRIEVED_MATERIAL_NOTICE, 'notice_payload_complete':True}})
             except BaseException:
                 trace.finish('failed')
                 raise

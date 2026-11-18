@@ -17,8 +17,8 @@ def response_schema(task, *, support_count=None, single_thought=False):
                         'support_fragments':{'type':'array','items':choices,'minItems':1}})
         detail = _object({'question':text,'text':text})
         if single_thought:
-            return _object({'thought':{'anyOf':[item,{'type':'null'}]} if support_count else {'type':'null'},
-                            'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
+            return _object({'thought':item if support_count else {'type':'null'},
+                            'needs_detail':{'type':'null'} if support_count else {'anyOf':[detail,{'type':'null'}]}})
         thoughts = {'type':'array','items':item}
         if not support_count:
             thoughts['maxItems'] = 0

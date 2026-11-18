@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from .model import ModelError
-from .thought_engine import ThoughtDetailNeeded
+from .thought_engine import ThoughtDetailNeeded, empty_material
 from .thought_engine_contract import APPLICABILITY, exact_fields, semantic_text
 
 READINESS = APPLICABILITY + '''
@@ -17,8 +17,10 @@ its remaining content has NOT been read. It cannot establish missing facts or
 absence of exceptions. Known qualifications/conflicts are supplied immediately.
 Return ready only if the candidate itself already answers the original question
 with all material conditions and conflicts accounted for. A potentially material
-incomplete neighbor requires drill with a specific semantic question. Return
-build when the supplied full text material suffices to construct the answer now.
+incomplete linked neighbor permits drill to read that known location. Missing
+requested information without a known unread linked location requires no drill:
+return build with the supplied facts and explicit gaps, or ready if the candidate
+already preserves both. Never ask another search to discover an unavailable fact.
 Only text fields are eligible support quotations; descriptions are routing hints.
 Never introduce source IDs, node aliases, indices or addresses in your response.
 '''
@@ -128,7 +130,11 @@ def answer_selected(engine, question, selected, *, neighborhood, additional=(), 
         if decision.get('verdict') != 'build':
             raise ModelError('answer readiness requires ready, build or drill')
     if not any(record.get('text') for record in records):
-        raise _missing(question, 'The selected descriptions have no admitted full source content', fingerprint)
+        reason = 'The selected descriptions have no admitted full source content'
+        opened = {_key(row) for row in (selected, *additional)}
+        if any((basis['thought_id'], basis['version']) not in opened for basis in bindings if 'thought_id' in basis):
+            raise _missing(question, reason, fingerprint)
+        raise empty_material(reason)
     try:
         return engine._construct(records, bindings, question=question, origin={'kind': 'inference'}, target=None)[0]
     except ThoughtDetailNeeded as need:
