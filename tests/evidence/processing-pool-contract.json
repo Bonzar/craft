@@ -1,0 +1,48 @@
+{
+  "baseline": "1c4b96a680b1023cc8f32a609b644bc9f88f7588",
+  "source_workers_default": 2,
+  "source_workers_bounds": [
+    1,
+    4
+  ],
+  "maintenance_workers": 1,
+  "ownership": "One supervisor process owns existing DB flock; all writers are non-daemon threads with factory-created/closed SQLite stores, mutable engines and providers inside their own threads. Constructor DDL serialized only.",
+  "lane_dependency_contract": "LinkWorker(lane=source|maintenance,source_first=True,claim_observer=callback). callback(event=claimed|released,kind=source|derived|name,identity,token), at most one actual claim per run_once. Lane implementation/publication fences are separate sibling units, not included in this patch.",
+  "recovery": "Existing source seven-line recovery plus derived/name recover_abandoned once under exclusive flock, before any lane starts. No repeated recovery across idle handshake epochs.",
+  "heartbeat": "Main supervisor own connection/transaction renews ONLY registered exact identity+token rows with running status and unexpired lease. Default heartbeat30sec and TTL300sec. Continues during graceful stop/drain/join. Revoked/expired tokens never resurrected.",
+  "shutdown": "Stop new budget reservations; join all active threads with ongoing heartbeat; only then idle unlock/probe/reacquire. Fatal lane or supervisor exception still joins; exception re-raised after closure. Process death kills writing threads.",
+  "budget": "worker_limit is one global completed-turn budget, reservations cap concurrent claims; remaining budget retained across idle race/reacquire epochs. No per-thread multiplication.",
+  "verification": {
+    "pool_and_actual_queue_tests": 13,
+    "api_ingest_causal_regressions": 25,
+    "actual_run_worker_source_parallelism": "2 simultaneous source extraction calls, distinct thread-bound provider/store instances, conditional synthetic source text retained",
+    "actual_heartbeat": "source lease0.15s vs providerwait0.35s, main heartbeat0.01s, both jobs completed without lease loss",
+    "fixed_latency_metrics": [
+      {
+        "source_workers": 1,
+        "maintenance_workers": 1,
+        "source_items": 8,
+        "fixed_io_seconds": 0.02,
+        "elapsed_seconds": 0.212939,
+        "source_items_per_second": 37.57,
+        "source_queue_completion_p95_seconds": 0.202629,
+        "peak_source_io": 1,
+        "maintenance_turns": 4,
+        "conditional_payloads_unchanged": true
+      },
+      {
+        "source_workers": 2,
+        "maintenance_workers": 1,
+        "source_items": 8,
+        "fixed_io_seconds": 0.02,
+        "elapsed_seconds": 0.106434,
+        "source_items_per_second": 75.164,
+        "source_queue_completion_p95_seconds": 0.095982,
+        "peak_source_io": 2,
+        "maintenance_turns": 4,
+        "conditional_payloads_unchanged": true
+      }
+    ]
+  },
+  "quality_boundary": "No external model/network/private/prod/campus calls. Controlled-latency test preserves exact conditional payloads; timing is measurement, not flaky correctness assertion or model quality claim."
+}

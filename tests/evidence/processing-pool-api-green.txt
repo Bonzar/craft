@@ -1,0 +1,34 @@
+test_authenticated_independent_clients_share_idempotent_capture (tests.test_memory_http.MemoryHTTPTest.test_authenticated_independent_clients_share_idempotent_capture) ... Executing <Task pending name='Task-2' coro=<MemoryHTTPTest.test_authenticated_independent_clients_share_idempotent_capture() running at /private/tmp/assertion-pool-lanes-integration-20261116/tests/test_memory_http.py:19> cb=[_run_until_complete_cb() at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py:181] created at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py:100> took 0.156 seconds
+ok
+test_bearer_does_not_disable_host_or_origin_protection (tests.test_memory_http.MemoryHTTPTest.test_bearer_does_not_disable_host_or_origin_protection) ... Invalid Host header: attacker.test
+Invalid Origin header: https://attacker.test
+ok
+test_capture_schedules_processing_after_startup_worker_can_exit (tests.test_memory_http.MemoryHTTPTest.test_capture_schedules_processing_after_startup_worker_can_exit) ... ok
+test_conflicting_retry_preserves_first_message (tests.test_memory_http.MemoryHTTPTest.test_conflicting_retry_preserves_first_message) ... ok
+test_real_asgi_startup_and_shutdown_are_forwarded (tests.test_memory_http.MemoryHTTPTest.test_real_asgi_startup_and_shutdown_are_forwarded) ... ok
+test_unauthenticated_and_wrong_token_cannot_list_or_capture (tests.test_memory_http.MemoryHTTPTest.test_unauthenticated_and_wrong_token_cannot_list_or_capture) ... ok
+test_caller_store_cannot_mix_two_databases (tests.test_memory_http.TokenFileTest.test_caller_store_cannot_mix_two_databases) ... ok
+test_token_file_must_be_private_and_nonempty (tests.test_memory_http.TokenFileTest.test_token_file_must_be_private_and_nonempty) ... ok
+test_closed_or_clean_expired_stream_is_not_an_eternal_blocker (tests.test_ingest_service.IngestCaptureServiceTest.test_closed_or_clean_expired_stream_is_not_an_eternal_blocker) ... ok
+test_global_status_is_read_only_and_never_invokes_model (tests.test_ingest_service.IngestCaptureServiceTest.test_global_status_is_read_only_and_never_invokes_model) ... ok
+test_invalid_delivery_rolls_back_raw_job_and_canonical_receipt (tests.test_ingest_service.IngestCaptureServiceTest.test_invalid_delivery_rolls_back_raw_job_and_canonical_receipt) ... ok
+test_token_meter_section_contract_is_unchanged (tests.test_ingest_service.IngestCaptureServiceTest.test_token_meter_section_contract_is_unchanged) ... ok
+test_two_device_envelopes_do_not_change_canonical_message (tests.test_ingest_service.IngestCaptureServiceTest.test_two_device_envelopes_do_not_change_canonical_message) ... ok
+test_public_tools_keep_exact_names_and_receipt_shape_without_network (tests.test_ingest_service.IngestMCPToolsTest.test_public_tools_keep_exact_names_and_receipt_shape_without_network) ... Executing <Task finished name='Task-40' coro=<IngestMCPToolsTest.test_public_tools_keep_exact_names_and_receipt_shape_without_network() done, defined at /private/tmp/assertion-pool-lanes-integration-20261116/tests/test_ingest_service.py:138> result=None created at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py:100> took 0.125 seconds
+ok
+test_current_transport_limit_survives_historical_answer_and_pagination (tests.test_ingest_service.IngestQueryHealthTest.test_current_transport_limit_survives_historical_answer_and_pagination) ... ok
+test_history_pages_retain_exact_immutable_content_with_separate_current_health (tests.test_ingest_service.IngestQueryHealthTest.test_history_pages_retain_exact_immutable_content_with_separate_current_health) ... ok
+test_known_incoming_globally_limits_even_previously_accepted_scoped_answer (tests.test_ingest_service.IngestQueryHealthTest.test_known_incoming_globally_limits_even_previously_accepted_scoped_answer) ... ok
+test_authenticated_http_public_query_and_causal_read_tools (tests.test_causal_history_tools.CausalHistoryToolsTest.test_authenticated_http_public_query_and_causal_read_tools) ... ok
+test_cached_fastpath_records_reused_once_without_publish (tests.test_causal_history_tools.CausalHistoryToolsTest.test_cached_fastpath_records_reused_once_without_publish) ... ok
+test_invalid_context_and_query_validate_before_mutations (tests.test_causal_history_tools.CausalHistoryToolsTest.test_invalid_context_and_query_validate_before_mutations) ... ok
+test_old_query_without_context_does_not_invent_caller (tests.test_causal_history_tools.CausalHistoryToolsTest.test_old_query_without_context_does_not_invent_caller) ... ok
+test_reads_have_bounds_and_frozen_event_watermark (tests.test_causal_history_tools.CausalHistoryToolsTest.test_reads_have_bounds_and_frozen_event_watermark) ... ok
+test_real_sdk_registers_names_and_optional_query_context_schema (tests.test_causal_history_tools.CausalHistoryToolsTest.test_real_sdk_registers_names_and_optional_query_context_schema) ... ok
+test_thread_fresh_connection_forwards_optional_caller_context (tests.test_causal_history_tools.CausalHistoryToolsTest.test_thread_fresh_connection_forwards_optional_caller_context) ... ok
+test_three_readonly_public_tools_and_exact_query_output_pin (tests.test_causal_history_tools.CausalHistoryToolsTest.test_three_readonly_public_tools_and_exact_query_output_pin) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 6.162s
+
+OK

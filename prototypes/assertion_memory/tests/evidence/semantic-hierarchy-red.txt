@@ -1,0 +1,69 @@
+test_manual_small_catalog_does_not_gain_semantic_pass (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_manual_small_catalog_does_not_gain_semantic_pass) ... FAIL
+test_no_useful_group_preserves_forest_and_audit (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_no_useful_group_preserves_forest_and_audit) ... ERROR
+test_overlap_singleton_and_ungrouped_are_legal (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_overlap_singleton_and_ungrouped_are_legal) ... FAIL
+test_small_catalog_creates_real_semantic_group_once (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_small_catalog_creates_real_semantic_group_once) ... FAIL
+test_unseen_child_rejected_without_publishing (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_unseen_child_rejected_without_publishing) ... FAIL
+
+======================================================================
+ERROR: test_no_useful_group_preserves_forest_and_audit (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_no_useful_group_preserves_forest_and_audit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-semantic-index-20261116/prototypes/assertion_memory/tests/test_semantic_hierarchy.py", line 36, in test_no_useful_group_preserves_forest_and_audit
+    self.assertEqual(children,['a','c']);self.assertEqual(audit[0]['groups'],[])
+                                                          ~~~~~^^^
+IndexError: list index out of range
+
+======================================================================
+FAIL: test_manual_small_catalog_does_not_gain_semantic_pass (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_manual_small_catalog_does_not_gain_semantic_pass)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-semantic-index-20261116/prototypes/assertion_memory/tests/test_semantic_hierarchy.py", line 52, in test_manual_small_catalog_does_not_gain_semantic_pass
+    self.assertEqual(children,['a','b']);self.assertEqual(audit,[]);self.assertEqual(self.calls,[])
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['a', 'b', 'a'] != ['a', 'b']
+
+First list contains 1 additional elements.
+First extra element 2:
+'a'
+
+- ['a', 'b', 'a']
+?          -----
+
++ ['a', 'b']
+
+======================================================================
+FAIL: test_overlap_singleton_and_ungrouped_are_legal (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_overlap_singleton_and_ungrouped_are_legal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-semantic-index-20261116/prototypes/assertion_memory/tests/test_semantic_hierarchy.py", line 44, in test_overlap_singleton_and_ungrouped_are_legal
+    self.assertEqual([self.engine._spec(k).depends_on for k in children if k!='c'],[('a','b'),('a',)])
+AssertionError: Lists differ: [(), ()] != [('a', 'b'), ('a',)]
+
+First differing element 0:
+()
+('a', 'b')
+
+- [(), ()]
++ [('a', 'b'), ('a',)]
+
+======================================================================
+FAIL: test_small_catalog_creates_real_semantic_group_once (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_small_catalog_creates_real_semantic_group_once)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-semantic-index-20261116/prototypes/assertion_memory/tests/test_semantic_hierarchy.py", line 26, in test_small_catalog_creates_real_semantic_group_once
+    self.assertEqual(len(audit),1)
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_unseen_child_rejected_without_publishing (prototypes.assertion_memory.tests.test_semantic_hierarchy.SemanticHierarchyTest.test_unseen_child_rejected_without_publishing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-semantic-index-20261116/prototypes/assertion_memory/tests/test_semantic_hierarchy.py", line 47, in test_unseen_child_rejected_without_publishing
+    with self.assertRaises(ModelError):group_definitions(self.engine,self.spec,self.request,['a','b'])
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ModelError not raised
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.043s
+
+FAILED (failures=4, errors=1)

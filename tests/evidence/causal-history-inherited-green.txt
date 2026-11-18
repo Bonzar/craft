@@ -1,0 +1,15 @@
+test_actual_derived_worker_activates_publication_context (test_run_provenance.RunProvenanceTest.test_actual_derived_worker_activates_publication_context) ... ok
+test_automatic_source_refresh_keeps_exact_old_and_recursive_versions (test_run_provenance.RunProvenanceTest.test_automatic_source_refresh_keeps_exact_old_and_recursive_versions) ... ok
+test_causal_history_tables_reject_rewriting_published_records (test_run_provenance.RunProvenanceTest.test_causal_history_tables_reject_rewriting_published_records) ... ok
+test_coalesced_generation_has_multiple_exact_trigger_sessions (test_run_provenance.RunProvenanceTest.test_coalesced_generation_has_multiple_exact_trigger_sessions) ... ok
+test_derived_generation_retains_run_across_yield_and_mutable_result_replacement (test_run_provenance.RunProvenanceTest.test_derived_generation_retains_run_across_yield_and_mutable_result_replacement) ... ok
+test_failed_automatic_build_retains_its_real_published_failure_version (test_run_provenance.RunProvenanceTest.test_failed_automatic_build_retains_its_real_published_failure_version) ... ok
+test_no_causal_backfill_from_membership_episode_or_time (test_run_provenance.RunProvenanceTest.test_no_causal_backfill_from_membership_episode_or_time) ... ok
+test_pagination_pins_outputs_and_reads_do_not_change_graph_or_pipeline (test_run_provenance.RunProvenanceTest.test_pagination_pins_outputs_and_reads_do_not_change_graph_or_pipeline) ... ok
+test_provenance_mutation_rolls_back_with_source_publication (test_run_provenance.RunProvenanceTest.test_provenance_mutation_rolls_back_with_source_publication) ... ok
+test_reused_versions_are_recorded_as_reused_not_new_generation (test_run_provenance.RunProvenanceTest.test_reused_versions_are_recorded_as_reused_not_new_generation) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.203s
+
+OK

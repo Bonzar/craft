@@ -1,0 +1,36 @@
+test_coverage_repair_never_exceeds_exhausted_context_recovery_budget (prototypes.assertion_memory.tests.test_source_meaning.SourceMeaningTest.test_coverage_repair_never_exceeds_exhausted_context_recovery_budget) ... FAIL
+test_missing_target_tail_is_scanned_and_recovered_as_exact_repair_evidence (prototypes.assertion_memory.tests.test_source_meaning.SourceMeaningTest.test_missing_target_tail_is_scanned_and_recovered_as_exact_repair_evidence) ... FAIL
+
+======================================================================
+FAIL: test_coverage_repair_never_exceeds_exhausted_context_recovery_budget (prototypes.assertion_memory.tests.test_source_meaning.SourceMeaningTest.test_coverage_repair_never_exceeds_exhausted_context_recovery_budget)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-intake-baseline/prototypes/assertion_memory/tests/test_source_meaning.py", line 264, in test_coverage_repair_never_exceeds_exhausted_context_recovery_budget
+    self.assertFalse(any(call.task == 'Repair omitted source meanings' for call in self.calls))
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_missing_target_tail_is_scanned_and_recovered_as_exact_repair_evidence (prototypes.assertion_memory.tests.test_source_meaning.SourceMeaningTest.test_missing_target_tail_is_scanned_and_recovered_as_exact_repair_evidence)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-intake-baseline/prototypes/assertion_memory/tests/test_source_meaning.py", line 192, in test_missing_target_tail_is_scanned_and_recovered_as_exact_repair_evidence
+    self.assertEqual([row['text'] for row in result['assertions']], [self.base['text'], self.relation['text']])
+AssertionError: Lists differ: ['The[34 chars]val.'] != ['The[34 chars]val.', 'In the described trial, the sensor che[67 chars]ed.']
+
+Second list contains 1 additional elements.
+First extra element 1:
+'In the described trial, the sensor check was inside the cooling interval; other intervals were not recorded.'
+
+- ['The speaker reports one cooling interval.']
+?                                             ^
+
++ ['The speaker reports one cooling interval.',
+?                                             ^
+
++  'In the described trial, the sensor check was inside the cooling interval; '
++  'other intervals were not recorded.']
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.047s
+
+FAILED (failures=2)

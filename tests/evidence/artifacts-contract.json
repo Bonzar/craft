@@ -1,0 +1,30 @@
+{
+  "baseline": "cad2e613e2628b72bf5daff8adc4956df99b5d32",
+  "artifact_id": "artifact-sha256-lowerhex",
+  "store_tool": "memory_store_artifact(data_base64,mime_type,sha256=None)",
+  "read_tool": "memory_artifact(artifact_id,include_content=False)",
+  "descriptor_fields": [
+    "artifact_id",
+    "sha256",
+    "size_bytes",
+    "mime_type",
+    "not_interpreted"
+  ],
+  "supported_canonical_mime": [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif"
+  ],
+  "aliases": {
+    "image/x-png": "image/png",
+    "image/jpg": "image/jpeg",
+    "image/pjpeg": "image/jpeg"
+  },
+  "validation": "Canonical strict standard base64, <=2097152 decoded bytes, MIME/signature match and optional actual-byte SHA256. Signature validation is technical, not full media decoding or semantic interpretation.",
+  "image_delivery": "include_content=true yields typed MCP ImageContent plus text/structured technical metadata; no duplicated base64 in metadata. Default is metadata only.",
+  "capture_contract": "artifact_ids optional <=8 input IDs, first occurrence order retained and duplicates removed. Uploaded metadata descriptors normalized server-side into raw.metadata.artifact_refs. Missing/changed/removed refs reject atomically with raw/job/receipt/delivery. Text-only omitted/[] replay stays unchanged.",
+  "binary_boundary": "BLOB table same knowledge DB; base64 never in raw prompt/metadata/model records. No URL fetch/local-file access/model/vision/OCR. Auth is existing HTTP bearer boundary.",
+  "immutability": "Content ID dedup; schema guards UPDATE/DELETE/REPLACE. SQLite backup/restore copies bytes and guards with entire DB.",
+  "verification": "10 focused artifact+17 ingest/HTTP+17 current clock/session tests green. One existing LegacyTemporalAuditTest still fails on candidate and restored baseline identically because it expects package-triggered historical audit now explicitly gated; no artifact regression asserted from that old expectation."
+}

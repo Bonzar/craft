@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime
 
-TOOL_EVENT_TYPES = frozenset({'function_call','custom_tool_call','function_call_output','custom_tool_call_output'})
+CHAT_EXCLUDED_TYPES = frozenset({'function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output', 'reasoning'})
 
 MAX_RECORD = 512 * 1024
 MAX_POLL = 2 * 1024 * 1024
@@ -83,11 +83,17 @@ def register(store, raw):
     return registered
 
 
-def _allowed_start(payload, meta):
+def _allowed_start(payload, meta, roots=None):
     attribution = payload.get('turn_attribution')
-    if not isinstance(attribution, dict) or attribution.get('parent_turn_id') or attribution.get('initiating_agent_path'):
+    if not isinstance(attribution, dict) or attribution.get('initiating_agent_path'):
         return False
     trigger = attribution.get('turn_trigger')
+    parent,root=attribution.get('parent_turn_id'),attribution.get('root_turn_id')
+    if trigger == 'goal':
+        return (isinstance(parent,str) and isinstance(root,str) and len(parent)<=256 and len(root)<=256
+            and payload.get('root_turn_id') == root and (roots or {}).get(parent) == root)
+    if parent:
+        return False
     if trigger in HUMAN: return True
     turn = payload.get('turn_id')
     return (trigger is None and {'turn_trigger','parent_turn_id','initiating_agent_path','root_turn_id'} <= attribution.keys()
@@ -103,15 +109,20 @@ def _service_context(row):
     if not isinstance(meta,dict) or not isinstance(parts,list) or not parts:return False
     kinds=meta.get('content_item_kinds');sources=meta.get('content_item_metadata')
     if not isinstance(kinds,list) or not isinstance(sources,list) or len(kinds)!=len(parts) or len(sources)!=len(parts):return False
-    known={'agents_md.instructions':'agents_md','environments.environment_context':'harness'}
-    return all(isinstance(part,dict) and part.get('type')=='input_text' and kind in known
-        and isinstance(source,dict) and isinstance(source.get('provenance'),dict)
-        and source['provenance'].get('type')==known[kind] for part,kind,source in zip(parts,kinds,sources))
+    return all(isinstance(part,dict) and part.get('type')=='input_text'
+        and isinstance(kind,str) and isinstance(source,dict) and isinstance(source.get('provenance'),dict)
+        and source['provenance'].get('type') in ('agents_md','harness')
+        for part,kind,source in zip(parts,kinds,sources))
 
 
 def _exclude(state,reason,count=1):
     excluded=state.setdefault('exclusions',{})
     excluded[reason]=excluded.get(reason,0)+count
+
+
+def _remember_turn(state):
+    turn=state['turn']
+    state.setdefault('dialogue_turn_roots',{})[turn['id']]=turn.get('root_id') or turn['id']
 
 
 def _candidate(row, session, turn, *, human=False):
@@ -173,6 +184,7 @@ def _flush_user(store, state, config, *, final=False):
             and not turn.get('ambiguous')):
         pending['emitted'] = True
         turn['verified'] = True
+        _remember_turn(state)
         return int(_enqueue(store, state, pending.get('row', {}), 'user', pending['text'], pending['id'],
             pending.get('position'), config.get('actor_id', 'user'), config,
             'user:' + turn['id'] + ':byte:' + str(pending.get('offset', 0))))
@@ -195,6 +207,18 @@ def _assistant_mode(payload):
     return 'pending'
 
 
+def _chat_exclusion(payload):
+    if payload.get('type') in CHAT_EXCLUDED_TYPES:
+        return 'non_dialogue_' + payload['type']
+    if payload.get('type') != 'message':
+        return None
+    if payload.get('role') in ('system', 'developer', 'tool'):
+        return 'non_dialogue_role_' + payload['role']
+    if payload.get('role') == 'assistant' and _assistant_mode(payload) is None:
+        return 'assistant_private_or_unproven_route'
+    return None
+
+
 def _process(store, state, meta, row, offset, position, config):
     payload = row.get('payload', {})
     if not isinstance(payload, dict):
@@ -205,12 +229,19 @@ def _process(store, state, meta, row, offset, position, config):
         queued = _flush_user(store, state, config, final=True)
         state['witnesses'] = [row['_witness']]
         turn = payload.get('turn_id')
-        allowed = _allowed_start(payload, meta)
+        allowed = _allowed_start(payload, meta, state.get('dialogue_turn_roots'))
         attribution = payload.get('turn_attribution') or {}
-        state['turn'] = {'id': turn, 'allowed': allowed, 'human': allowed and attribution.get('turn_trigger') in HUMAN,
-            'verified': False, 'pending': None, 'ambiguous': False, 'assistant': None} if isinstance(turn, str) and turn and len(turn) <= 256 else None
+        goal=allowed and attribution.get('turn_trigger')=='goal'
+        state['turn'] = {'id': turn, 'root_id': attribution.get('root_turn_id') if goal else turn,
+            'allowed': allowed, 'human': allowed and attribution.get('turn_trigger') in HUMAN,
+            'verified': goal, 'pending': None, 'ambiguous': False, 'assistant': None} if isinstance(turn, str) and turn and len(turn) <= 256 else None
+        if goal and state['turn'] is not None:
+            _remember_turn(state)
         return queued
     turn = state.get('turn')
+    if row.get('type')=='compacted':
+        _exclude(state,'harness_compaction')
+        return 0
     if not turn or not turn['allowed']: return 0
     human_singleton = turn.get('human') and not state.get('fork_requires_current_session_proof')
     if _service_context(row):
@@ -235,7 +266,7 @@ def _process(store, state, meta, row, offset, position, config):
         if turn.get('ambiguous') or not completion_matches(pending_photo['photo'],row,state['session_id'],turn['id'],human=human_singleton):
             state['gaps'].append('unsupported_user_photo_proof');turn['ambiguous']=False
             return 0
-        projected=render(pending_photo['photo']);turn['verified']=True;state['witnesses'].append(row['_witness'])
+        projected=render(pending_photo['photo']);turn['verified']=True;_remember_turn(state);state['witnesses'].append(row['_witness'])
         _exclude(state,'generated_user_image_framing',pending_photo['photo']['generated_frame_parts'])
         for omission in projected['omissions']:state['gaps'].append('unsupported_user_photo_media:'+omission)
         return int(_enqueue(store,state,pending_photo['row'],'user',projected['text'],pending_photo['id'] or payload['item'].get('id'),
@@ -261,6 +292,7 @@ def _process(store, state, meta, row, offset, position, config):
                 and (human_singleton or payload.get('thread_id') == state['session_id'])):
             # A singleton completion proves content under a human turn, not its producer clock.
             turn['verified'] = True
+            _remember_turn(state)
             state['witnesses'].append(row['_witness'])
             return int(_enqueue(store, state, {}, 'user', text, native_id, position,
                 config.get('actor_id', 'user'), config, 'user:' + turn['id'] + ':byte:' + str(offset)))
@@ -269,6 +301,7 @@ def _process(store, state, meta, row, offset, position, config):
             state['gaps'].append('unpaired_or_ambiguous_user')
             return 0
         turn['verified'] = True
+        _remember_turn(state)
         state['witnesses'].append(row['_witness'])
         if pending.get('emitted'): return 0
         # R is the original source. I corroborates occurrence identity; its completion
@@ -287,8 +320,9 @@ def _process(store, state, meta, row, offset, position, config):
                 or _assistant_mode(payload) in ('final','commentary'))
                 or row.get('type') == 'event_msg' and payload.get('type') == 'task_complete')
     queued = _flush_user(store, state, config, final=payload.get('type') == 'task_complete') if boundary else 0
-    if row.get('type')=='response_item' and payload.get('type') in TOOL_EVENT_TYPES:
-        _exclude(state,'non_dialogue_'+payload['type'])
+    exclusion = _chat_exclusion(payload) if row.get('type') == 'response_item' else None
+    if exclusion:
+        _exclude(state, exclusion)
         return queued
     if not turn['verified']:
         if row.get('type') == 'response_item' and _assistant_mode(payload) in ('final','commentary'):
@@ -329,6 +363,16 @@ def _process(store, state, meta, row, offset, position, config):
     return queued
 
 
+def _exclude_prior_tool_gaps(state):
+    retained=[]
+    for gap in state.get('gaps', []):
+        if gap in ('unsupported_tool_output_projection', 'unattributed_or_unsupported_tool_output') or gap.startswith('unsupported_tool_media:'):
+            _exclude(state, 'prior_non_dialogue_tool_gap')
+        else:
+            retained.append(gap)
+    state['gaps']=retained
+
+
 def poll(store, session_id, config):
     state = store.session(session_id)
     if state is None: raise ValueError('Unregistered session')
@@ -355,6 +399,7 @@ def poll(store, session_id, config):
             data = stream.read(witness['end'] - witness['start'])
             if hashlib.sha256(data).hexdigest() != witness['sha256']:
                 raise ValueError('Retained native proof bytes changed; review required')
+        _exclude_prior_tool_gaps(state)
         stream.seek(state['cursor'])
         start = state['cursor']
         while stream.tell() - start < MAX_POLL:
@@ -396,9 +441,9 @@ def poll(store, session_id, config):
                 if isinstance(row,dict):
                     from .user_projection import is_photo_response
                     media_envelope=media_envelope or is_photo_response(row)
-                excluded_tool=(isinstance(row,dict) and row.get('type')=='response_item'
-                    and isinstance(payload,dict) and payload.get('type') in TOOL_EVENT_TYPES)
-                if len(line)>MAX_RECORD and not media_envelope and not excluded_tool:
+                excluded_chat_item=(isinstance(row,dict) and (row.get('type')=='compacted'
+                    or row.get('type')=='response_item' and isinstance(payload,dict) and _chat_exclusion(payload) is not None))
+                if len(line)>MAX_RECORD and not media_envelope and not excluded_chat_item:
                     state['gaps'].append('oversized_record');state['turn']=None
                     state.setdefault('gap_witnesses',[]).append({'reason':'oversized_record','start':offset,
                         'end':stream.tell(),'sha256':hashlib.sha256(line).hexdigest()})

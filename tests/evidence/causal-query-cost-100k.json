@@ -1,0 +1,27 @@
+{
+  "synthetic_only": true,
+  "performance_metadata_probe_not_semantic_acceptance": true,
+  "raw_causes": 100000,
+  "coalesced_output_events": 100000,
+  "sqlite_version": "3.53.4",
+  "probes": [
+    {
+      "session_kind": "absent",
+      "seconds": 0.094007,
+      "sqlite_vm_steps_approx": 2000000,
+      "total": 0,
+      "returned": 0,
+      "next_offset": null
+    },
+    {
+      "session_kind": "last_native_root",
+      "seconds": 0.111333,
+      "sqlite_vm_steps_approx": 3701000,
+      "total": 100000,
+      "returned": 1,
+      "next_offset": 1
+    }
+  ],
+  "timing_not_a_unit_assertion": true,
+  "fixed_cost_regression": "128 causes/events3300VMsteps;256\u21925800, versus694000\u21922763800before"
+}

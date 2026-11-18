@@ -1,0 +1,15 @@
+test_real_sdk_and_authenticated_http_return_typed_image_only_on_demand (test_artifacts.ArtifactSDKTest.test_real_sdk_and_authenticated_http_return_typed_image_only_on_demand) ... ok
+test_artifact_immutability_and_sqlite_backup_restore (test_artifacts.ArtifactTest.test_artifact_immutability_and_sqlite_backup_restore) ... ok
+test_artifact_operations_do_not_change_source_version_or_pipeline (test_artifacts.ArtifactTest.test_artifact_operations_do_not_change_source_version_or_pipeline) ... ok
+test_capture_refs_exact_replay_changed_or_missing_refs_atomic (test_artifacts.ArtifactTest.test_capture_refs_exact_replay_changed_or_missing_refs_atomic) ... ok
+test_exact_decoded_limit_and_same_stream_lost_ack_replay (test_artifacts.ArtifactTest.test_exact_decoded_limit_and_same_stream_lost_ack_replay) ... ok
+test_idempotent_content_and_readonly_metadata_or_exact_bytes (test_artifacts.ArtifactTest.test_idempotent_content_and_readonly_metadata_or_exact_bytes) ... ok
+test_missing_artifact_rejects_raw_job_receipt_and_delivery_together (test_artifacts.ArtifactTest.test_missing_artifact_rejects_raw_job_receipt_and_delivery_together) ... ok
+test_model_boundary_gets_only_technical_refs_and_no_store_model_calls (test_artifacts.ArtifactTest.test_model_boundary_gets_only_technical_refs_and_no_store_model_calls) ... ok
+test_old_text_only_replay_unchanged_and_attachment_bound (test_artifacts.ArtifactTest.test_old_text_only_replay_unchanged_and_attachment_bound) ... ok
+test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.481s
+
+OK

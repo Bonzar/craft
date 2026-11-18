@@ -1,0 +1,15 @@
+test_session_lookup_cost_is_not_causes_times_output_events (tests.test_run_provenance.RunProvenanceTest.test_session_lookup_cost_is_not_causes_times_output_events) ... FAIL
+
+======================================================================
+FAIL: test_session_lookup_cost_is_not_causes_times_output_events (tests.test_run_provenance.RunProvenanceTest.test_session_lookup_cost_is_not_causes_times_output_events)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-causal-query-cost-20261116/tests/test_run_provenance.py", line 279, in test_session_lookup_cost_is_not_causes_times_output_events
+    self.assertLessEqual(costs[1],costs[0]*3+5000,
+AssertionError: 2763800 not less than or equal to 2087000 : Doubling causes and outputs must not quadruple source-matching work
+
+----------------------------------------------------------------------
+Ran 1 test in 0.217s
+
+FAILED (failures=1)
+CAUSAL_QUERY_VM_STEPS {"sizes": [128, 256], "steps": [694000, 2763800]}

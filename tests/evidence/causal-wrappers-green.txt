@@ -1,0 +1,13 @@
+test_authenticated_http_public_query_and_causal_read_tools (test_causal_history_tools.CausalHistoryToolsTest.test_authenticated_http_public_query_and_causal_read_tools) ... ok
+test_cached_fastpath_records_reused_once_without_publish (test_causal_history_tools.CausalHistoryToolsTest.test_cached_fastpath_records_reused_once_without_publish) ... ok
+test_invalid_context_and_query_validate_before_mutations (test_causal_history_tools.CausalHistoryToolsTest.test_invalid_context_and_query_validate_before_mutations) ... ok
+test_old_query_without_context_does_not_invent_caller (test_causal_history_tools.CausalHistoryToolsTest.test_old_query_without_context_does_not_invent_caller) ... ok
+test_reads_have_bounds_and_frozen_event_watermark (test_causal_history_tools.CausalHistoryToolsTest.test_reads_have_bounds_and_frozen_event_watermark) ... ok
+test_real_sdk_registers_names_and_optional_query_context_schema (test_causal_history_tools.CausalHistoryToolsTest.test_real_sdk_registers_names_and_optional_query_context_schema) ... ok
+test_thread_fresh_connection_forwards_optional_caller_context (test_causal_history_tools.CausalHistoryToolsTest.test_thread_fresh_connection_forwards_optional_caller_context) ... ok
+test_three_readonly_public_tools_and_exact_query_output_pin (test_causal_history_tools.CausalHistoryToolsTest.test_three_readonly_public_tools_and_exact_query_output_pin) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.946s
+
+OK

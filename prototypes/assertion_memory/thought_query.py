@@ -1,0 +1,125 @@
+"""Central graph search and answer preparation, with resumable missing-detail frames."""
+from dataclasses import dataclass, field
+import hashlib
+import json
+
+from .model import SemanticUnavailable
+from .thought_engine import ThoughtDetailNeeded
+from .thought_engine_contract import semantic_text
+from .thought_navigation import navigate, neighborhood
+from .thought_answering import answer_selected
+
+
+@dataclass
+class _Frame:
+    question: str
+    guidance: str | None = None
+    explicit: tuple = ()
+    selected: object = None
+    initial: list = field(default_factory=list)
+    raw: tuple = ((), ())
+    additional: list = field(default_factory=list)
+    packets: set = field(default_factory=set)
+    requested: set = field(default_factory=set)
+    frontier: str | None = None
+    initialized: bool = False
+
+
+def _key(thought):
+    return thought.id, thought.version
+
+
+def _frontier(engine, frame, selected):
+    catalog = neighborhood(engine, selected, frame.question) if selected else None
+    base = engine._frontier(frame.initial, selected.id if selected else None, *frame.raw)
+    # Old flat-search receipts cannot certify the new graph-neighborhood contract.
+    payload = ['central-graph-answer-v1', base,
+               catalog['bindings'] if catalog else (), catalog['relations'] if catalog else (),
+               catalog['omissions'] if catalog else ()]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _locate(engine, frame, ancestors):
+    frame.initial = engine.retrieve(frame.question, frame.explicit)
+    frame.raw = engine._pending_raw_material(frame.question)
+    cached_candidates = [row for row in frame.initial if frame.question in engine.question_texts(row)
+        and row.metadata.get('verification') == 'accepted' and not engine._is_parallel_alternative(row)
+        and engine._fresh(row)]
+    for cached in cached_candidates:
+        frame.frontier = _frontier(engine, frame, cached)
+        if engine._checked(cached, frame.question, frame.frontier, allow_unrecorded=False):
+            engine._emit('reuse', thought=engine._basis(cached), reason='checked question and unchanged graph neighborhood')
+            return cached
+    frame.initialized = True
+    if not frame.initial and frame.raw[0]:
+        frame.frontier = _frontier(engine, frame, None)
+        return None
+    if not frame.initial:
+        raise SemanticUnavailable('No admitted search starting points or pending source messages were found')
+    route = navigate(engine, frame.question, frame.explicit, initial=frame.initial,
+                     guidance=frame.guidance, avoid_focus=ancestors)
+    if route.thought is None:
+        if frame.raw[0]:
+            frame.frontier = _frontier(engine, frame, None)
+            engine._emit('pending_source_answer', reason=route.reason, bindings=frame.raw[1])
+            return None
+        raise SemanticUnavailable('Graph search is incomplete: ' + route.reason)
+    frame.selected = route.thought
+    frame.frontier = _frontier(engine, frame, frame.selected)
+    return None
+
+
+def _step(engine, frame):
+    if frame.selected is not None:
+        return answer_selected(engine, frame.question, frame.selected, neighborhood=neighborhood,
+            additional=frame.additional, seen_packets=frame.packets, raw_material=frame.raw)
+    records, bases = frame.raw
+    for thought in frame.additional:
+        records, bases = engine._merge_material(records, bases,
+            [{'role': 'material', **engine._content(thought)}], [engine._basis(thought)])
+    return engine._construct(records, bases, question=frame.question, origin={'kind': 'inference'})[0]
+
+
+def _request_detail(frames, frame, need):
+    packet = getattr(need, 'packet_fingerprint', None) or hashlib.sha256(json.dumps(
+        [frame.raw, [_key(row) for row in frame.additional]], sort_keys=True).encode()).hexdigest()
+    marker = (need.question, packet)
+    if getattr(need, 'incomplete', False) or any(marker in active.requested for active in frames):
+        raise SemanticUnavailable('Supporting detail remains unresolved: ' + need.reason) from need
+    frame.requested.add(marker)
+    frames.append(_Frame(need.question, guidance=need.reason))
+
+
+def answer(engine, question, explicit_ids=()):
+    """An explicit stack avoids an accidental recursion/depth limit on detail queries."""
+    question = semantic_text(question, 'question')
+    frames = [_Frame(question, explicit=tuple(explicit_ids))]
+    while frames:
+        frame = frames[-1]
+        try:
+            result = None
+            if not frame.initialized:
+                ancestors = {_key(row.selected) for row in frames[:-1] if row.selected is not None}
+                result = _locate(engine, frame, ancestors)
+            if result is None:
+                result = _step(engine, frame)
+        except ThoughtDetailNeeded as need:
+            _request_detail(frames, frame, need)
+            continue
+        engine._save_check(result, frame.question, frame.frontier)
+        frames.pop()
+        if not frames:
+            return result
+        parent = frames[-1]
+        if _key(result) in {_key(row) for row in parent.additional}:
+            raise SemanticUnavailable('The detail search returned already consumed material; completeness is not established')
+        if frame.question == parent.question:
+            # A detail search may already have answered the original question.
+            # Recheck that answer with the old location as context, rather than copying it into a new thought.
+            if parent.selected is not None:
+                parent.additional.append(parent.selected)
+            parent.selected = result
+        else:
+            parent.additional.append(result)
+        engine._emit('detail_fulfilled', question=parent.question, missing_question=frame.question,
+                     selected=[engine._basis(result)], reason=frame.guidance)

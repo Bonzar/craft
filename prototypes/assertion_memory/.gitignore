@@ -1,0 +1,6 @@
+.local/
+__pycache__/
+*.py[cod]
+*.sqlite3*
+*.db
+*.log

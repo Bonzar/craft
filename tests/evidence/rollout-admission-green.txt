@@ -1,0 +1,15 @@
+test_constructor_pin_is_idempotent_and_skips_unadmitted_old_cursor (test_rollout_admission.RolloutAdmissionTest.test_constructor_pin_is_idempotent_and_skips_unadmitted_old_cursor) ... ok
+test_explicit_component_range_admits_historical_source (test_rollout_admission.RolloutAdmissionTest.test_explicit_component_range_admits_historical_source) ... ok
+test_explicit_material_gap_request_still_admits_historical_source (test_rollout_admission.RolloutAdmissionTest.test_explicit_material_gap_request_still_admits_historical_source) ... ok
+test_explicit_view_policy_work_admits_scope (test_rollout_admission.RolloutAdmissionTest.test_explicit_view_policy_work_admits_scope) ... ok
+test_hundred_thousand_historical_rows_do_not_become_work (test_rollout_admission.RolloutAdmissionTest.test_hundred_thousand_historical_rows_do_not_become_work) ... ok
+test_new_capture_keeps_its_extraction_job (test_rollout_admission.RolloutAdmissionTest.test_new_capture_keeps_its_extraction_job) ... ok
+test_old_completed_navigation_is_idle_until_real_change (test_rollout_admission.RolloutAdmissionTest.test_old_completed_navigation_is_idle_until_real_change) ... ok
+test_package_change_does_not_enqueue_old_sources_or_rewrite_receipts (test_rollout_admission.RolloutAdmissionTest.test_package_change_does_not_enqueue_old_sources_or_rewrite_receipts) ... ok
+test_readonly_legacy_counts_do_not_claim_new_coverage (test_rollout_admission.RolloutAdmissionTest.test_readonly_legacy_counts_do_not_claim_new_coverage) ... ok
+test_real_inserted_context_suffix_still_audits_old_source (test_rollout_admission.RolloutAdmissionTest.test_real_inserted_context_suffix_still_audits_old_source) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.568s
+
+OK

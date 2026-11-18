@@ -1,0 +1,51 @@
+test_explicit_component_range_admits_historical_source (test_rollout_admission.RolloutAdmissionTest.test_explicit_component_range_admits_historical_source) ... ok
+test_explicit_view_policy_work_admits_scope (test_rollout_admission.RolloutAdmissionTest.test_explicit_view_policy_work_admits_scope) ... ok
+test_new_capture_keeps_its_extraction_job (test_rollout_admission.RolloutAdmissionTest.test_new_capture_keeps_its_extraction_job) ... FAIL
+test_old_completed_navigation_is_idle_until_real_change (test_rollout_admission.RolloutAdmissionTest.test_old_completed_navigation_is_idle_until_real_change) ... FAIL
+test_package_change_does_not_enqueue_old_sources_or_rewrite_receipts (test_rollout_admission.RolloutAdmissionTest.test_package_change_does_not_enqueue_old_sources_or_rewrite_receipts) ... FAIL
+test_readonly_legacy_counts_do_not_claim_new_coverage (test_rollout_admission.RolloutAdmissionTest.test_readonly_legacy_counts_do_not_claim_new_coverage) ... ERROR
+test_real_inserted_context_suffix_still_audits_old_source (test_rollout_admission.RolloutAdmissionTest.test_real_inserted_context_suffix_still_audits_old_source) ... ok
+
+======================================================================
+ERROR: test_readonly_legacy_counts_do_not_claim_new_coverage (test_rollout_admission.RolloutAdmissionTest.test_readonly_legacy_counts_do_not_claim_new_coverage)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-rollout-admission-20261116/tests/test_rollout_admission.py", line 68, in test_readonly_legacy_counts_do_not_claim_new_coverage
+    self.assertEqual(sources.legacy_coverage(self.store._connection,scope='s')['legacy_event_count'],1)
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'prototypes.assertion_memory.source_reprocessing' has no attribute 'legacy_coverage'
+
+======================================================================
+FAIL: test_new_capture_keeps_its_extraction_job (test_rollout_admission.RolloutAdmissionTest.test_new_capture_keeps_its_extraction_job)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-rollout-admission-20261116/tests/test_rollout_admission.py", line 37, in test_new_capture_keeps_its_extraction_job
+    self.assertEqual(self.queue.get(old.id).status,'completed')
+AssertionError: 'pending' != 'completed'
+- pending
++ completed
+
+
+======================================================================
+FAIL: test_old_completed_navigation_is_idle_until_real_change (test_rollout_admission.RolloutAdmissionTest.test_old_completed_navigation_is_idle_until_real_change)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-rollout-admission-20261116/tests/test_rollout_admission.py", line 52, in test_old_completed_navigation_is_idle_until_real_change
+    self.assertIsNone(self.work.claim(new,with_model=True))
+AssertionError: DerivedClaim(scope='s', token='655c59a8a1a649d587accee16565cf72', frontier={'generation': 1, 'assertion_watermark': 1, 'edge_watermark': 0, 'pipeline_key': '6b4da500f3c9282b840f8f9a9e42c72c0248b250ab15f225e80fc5cace7120f1'}, snapshot=QuerySnapshot(source_version=1, captured_at='2026-11-16T08:26:03.139484+00:00', assertion_watermark=1, edge_watermark=0, review_watermark=0, requested_valid_as_of=None, requested_recorded_as_of=None, effective_valid_as_of='2026-11-16T08:26:03.139484+00:00', effective_recorded_as_of='2026-11-16T08:26:03.139484+00:00', assertions={'one': {'assertion_id': 'one', 'text': 'Synthetic one', 'actor': 'user', 'source': 'fixture://one', 'episode': 'session', 'valid_at': None, 'recorded_at': '2026-11-16T08:26:03.138425+00:00', 'scope': 's', 'metadata': {}, 'id': 'one'}}, edges=[], reviews=(), source_revision_watermark=0, source_revision_evidence=(), raw_event_watermark=0, source_processing_evidence=(), relation_processing_frontier='4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945', relation_processing_evidence=(), raw_store_absent=False), checkpoint={'_scheduler': {'snapshot': {'source_version': 1, 'captured_at': '2026-11-16T08:26:03.139484+00:00', 'assertion_watermark': 1, 'edge_watermark': 0, 'review_watermark': 0, 'requested_valid_as_of': None, 'requested_recorded_as_of': None, 'effective_valid_as_of': '2026-11-16T08:26:03.139484+00:00', 'effective_recorded_as_of': '2026-11-16T08:26:03.139484+00:00', 'source_revision_watermark': 0, 'raw_event_watermark': 0, 'relation_processing_frontier': '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945', 'raw_store_absent': False}, 'frontier': {'generation': 1, 'assertion_watermark': 1, 'edge_watermark': 0, 'pipeline_key': '6b4da500f3c9282b840f8f9a9e42c72c0248b250ab15f225e80fc5cace7120f1'}}}, refresh_fairness=False) is not None
+
+======================================================================
+FAIL: test_package_change_does_not_enqueue_old_sources_or_rewrite_receipts (test_rollout_admission.RolloutAdmissionTest.test_package_change_does_not_enqueue_old_sources_or_rewrite_receipts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-rollout-admission-20261116/tests/test_rollout_admission.py", line 29, in test_package_change_does_not_enqueue_old_sources_or_rewrite_receipts
+    self.assertEqual(self.queue.get(event.id).status,'completed')
+AssertionError: 'pending' != 'completed'
+- pending
++ completed
+
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.068s
+
+FAILED (failures=3, errors=1)

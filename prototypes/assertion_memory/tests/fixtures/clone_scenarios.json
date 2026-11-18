@@ -1,0 +1,229 @@
+{
+  "assertions": [
+    {
+      "assertion_id": "clone-ui-version",
+      "text": "В форме «Клонирование сценария» выбрана опубликованная версия по умолчанию.",
+      "actor": "Участник",
+      "source": "chat://clone-entry-points",
+      "episode": "chat-clone-entry-points",
+      "valid_at": "2026-09-10T10:00:00Z",
+      "recorded_at": "2026-09-10T10:01:00Z",
+      "scope": "clone/ui",
+      "metadata": {
+        "kind": "decision",
+        "excerpt": "Для формы клонирования сценария берём опубликованную версию по умолчанию."
+      }
+    },
+    {
+      "assertion_id": "clone-collection",
+      "text": "В таблице сценариев запрос на создание использует collectionId таблицы.",
+      "actor": "Участник",
+      "source": "chat://clone-entry-points",
+      "episode": "chat-clone-entry-points",
+      "valid_at": "2026-09-10T10:05:00Z",
+      "recorded_at": "2026-09-10T10:06:00Z",
+      "scope": "clone/ui",
+      "metadata": {
+        "kind": "decision",
+        "excerpt": "При создании передавай collectionId таблицы сценариев."
+      }
+    },
+    {
+      "assertion_id": "widget-collection-exception",
+      "text": "Виджет передаёт собственный идентификатор коллекции в createDraft.",
+      "actor": "Участник",
+      "source": "chat://widget-integration",
+      "episode": "chat-widget-integration",
+      "valid_at": "2026-09-11T10:00:00Z",
+      "recorded_at": "2026-09-11T10:01:00Z",
+      "scope": "clone/ui/widgets",
+      "metadata": {
+        "kind": "decision",
+        "excerpt": "Для виджета нужно передавать его идентификатор коллекции в createDraft."
+      }
+    },
+    {
+      "assertion_id": "clone-bff-source",
+      "text": "BFF читает последнее сохранённое состояние выбранной версии при клонировании сценария.",
+      "actor": "Участник",
+      "source": "chat://bff-contract",
+      "episode": "chat-bff-contract",
+      "valid_at": "2026-09-12T10:00:00Z",
+      "recorded_at": "2026-09-12T10:01:00Z",
+      "scope": "clone/bff",
+      "metadata": {
+        "kind": "decision",
+        "excerpt": "Когда отправили форму, читаем на BFF последнее сохранённое состояние выбранной версии."
+      }
+    },
+    {
+      "assertion_id": "clone-bff-rollback",
+      "text": "Если создание версии не удалось, BFF откатывает создание сценария.",
+      "actor": "Участник",
+      "source": "chat://bff-contract",
+      "episode": "chat-bff-contract",
+      "valid_at": "2026-09-12T10:10:00Z",
+      "recorded_at": "2026-09-12T10:11:00Z",
+      "scope": "clone/bff",
+      "metadata": {
+        "kind": "decision",
+        "excerpt": "Откат создания сценария берём из ScenarioService.create."
+      }
+    },
+    {
+      "assertion_id": "clone-ui-version-revised",
+      "text": "В форме «Клонирование сценария» выбран черновик, а при его отсутствии опубликованная версия.",
+      "actor": "Участник",
+      "source": "chat://ui-followup",
+      "episode": "chat-ui-followup",
+      "valid_at": "2026-09-16T10:00:00Z",
+      "recorded_at": "2026-09-15T10:01:00Z",
+      "scope": "clone/ui",
+      "metadata": {
+        "kind": "decision",
+        "excerpt": "Выбирай черновик по умолчанию, а опубликованную версию — когда черновика нет."
+      }
+    },
+    {
+      "assertion_id": "clone-ui-version-proposal",
+      "text": "Предложено убрать предвыбор версии в форме клонирования сценария.",
+      "actor": "Агент",
+      "source": "chat://ui-followup",
+      "episode": "chat-ui-followup",
+      "valid_at": "2026-09-17T10:00:00Z",
+      "recorded_at": "2026-09-17T10:01:00Z",
+      "scope": "clone/ui",
+      "metadata": {
+        "kind": "proposal",
+        "excerpt": "Можно вообще оставить селектор пустым."
+      }
+    },
+    {
+      "assertion_id": "clone-ui-old-observation",
+      "text": "В проверке от 12 сентября форма клонирования сценария открылась с опубликованной версией.",
+      "actor": "Инженер",
+      "source": "chat://late-test-import",
+      "episode": "chat-late-test-import",
+      "valid_at": "2026-09-12T12:00:00Z",
+      "recorded_at": "2026-09-21T10:01:00Z",
+      "scope": "clone/ui",
+      "metadata": {
+        "kind": "observation",
+        "excerpt": "Прогнал 12 сентября и увидел опубликованную версию в селекторе."
+      }
+    },
+    {
+      "assertion_id": "clone-bff-dispute",
+      "text": "По сообщению проверки BFF читает снимок версии с открытия формы клонирования сценария.",
+      "actor": "QA",
+      "source": "chat://qa-disagreement",
+      "episode": "chat-qa-disagreement",
+      "valid_at": "2026-09-22T10:00:00Z",
+      "recorded_at": "2026-09-22T10:01:00Z",
+      "scope": "clone/bff",
+      "metadata": {
+        "kind": "observation",
+        "excerpt": "В моей проверке BFF скопировал снимок с открытия формы."
+      }
+    },
+    {
+      "assertion_id": "unrelated-receipt",
+      "text": "Чек на канцелярию хранится в бухгалтерии.",
+      "actor": "Инженер",
+      "source": "chat://unrelated",
+      "episode": "chat-unrelated",
+      "valid_at": "2026-09-23T10:00:00Z",
+      "recorded_at": "2026-09-23T10:01:00Z",
+      "scope": "finance",
+      "metadata": {
+        "kind": "observation",
+        "excerpt": "Чек на канцелярию передали в бухгалтерию."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "widget-collection-exception/exception_to/clone-collection",
+      "from_id": "widget-collection-exception",
+      "to_id": "clone-collection",
+      "kind": "exception_to",
+      "recorded_at": "2026-09-11T10:01:00Z"
+    },
+    {
+      "edge_id": "clone-ui-version-revised/supersedes/clone-ui-version",
+      "from_id": "clone-ui-version-revised",
+      "to_id": "clone-ui-version",
+      "kind": "supersedes",
+      "recorded_at": "2026-09-15T10:01:00Z"
+    },
+    {
+      "edge_id": "clone-ui-version-proposal/supersedes/clone-ui-version-revised",
+      "from_id": "clone-ui-version-proposal",
+      "to_id": "clone-ui-version-revised",
+      "kind": "supersedes",
+      "recorded_at": "2026-09-17T10:01:00Z"
+    },
+    {
+      "edge_id": "clone-ui-old-observation/supports/clone-ui-version",
+      "from_id": "clone-ui-old-observation",
+      "to_id": "clone-ui-version",
+      "kind": "supports",
+      "recorded_at": "2026-09-21T10:01:00Z"
+    },
+    {
+      "edge_id": "clone-bff-dispute/contradicts/clone-bff-source",
+      "from_id": "clone-bff-dispute",
+      "to_id": "clone-bff-source",
+      "kind": "contradicts",
+      "recorded_at": "2026-09-22T10:01:00Z"
+    }
+  ],
+  "views": [
+    {
+      "id": "ui",
+      "title": "Форма клонирования",
+      "query": "Клонирование сценария",
+      "scopes": [
+        "clone/ui"
+      ],
+      "root_ids": [
+        "clone-ui-version",
+        "clone-collection"
+      ]
+    },
+    {
+      "id": "bff",
+      "title": "Контракт BFF",
+      "query": "Клонирование сценария",
+      "scopes": [
+        "clone/bff"
+      ],
+      "root_ids": [
+        "clone-bff-source",
+        "clone-bff-rollback"
+      ]
+    },
+    {
+      "id": "integration",
+      "title": "Схема интеграции",
+      "query": "Клонирование сценария",
+      "scopes": [
+        "clone/ui",
+        "clone/bff"
+      ],
+      "depends_on": [
+        "ui",
+        "bff"
+      ]
+    },
+    {
+      "id": "collection",
+      "title": "Передача коллекции",
+      "query": "collectionId таблицы сценариев",
+      "scopes": [
+        "clone/ui"
+      ],
+      "max_seeds": 1
+    }
+  ]
+}

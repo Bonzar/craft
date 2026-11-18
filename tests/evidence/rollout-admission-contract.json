@@ -1,0 +1,16 @@
+{
+  "baseline": "41816b74033c65aaa897908ca72d7dd59362253d",
+  "startup_hook": "Call source_reprocessing.initialize_admission(connection) in a write transaction after CaptureQueue construction and before first capture. Tick has idempotent fallback.",
+  "admission": "New protocol gets operational highwater marker in existing cursor table; existing jobs, explicit requests/policy ranges and real context changes remain independent obligations.",
+  "legacy_proof": "No old source audit receipt, immutable view version/check or completed derived frontier is rewritten to the new policy.",
+  "new_semantic_change_boundary": "First actual assertion/edge/temporal/policy change may admit one whole-scope navigation classification when old pipeline is incompatible; no unproven classification compatibility or delta registry is introduced. Small personal-scope one-off classification was explicitly accepted; 100000-source navigation migration is not claimed incremental.",
+  "scale_evidence": "100000 completed historical raw/jobs, initialization+tick mutate only 2 operational cursor rows and enqueue none. This is an admission probe, not a full processing benchmark.",
+  "health_helpers": [
+    "source_reprocessing.legacy_coverage(connection,scope=None)",
+    "DerivedWorkQueue.legacy_coverage(engine,scope=None)"
+  ],
+  "test_contract_updates": [
+    "Pipeline-only change no longer automatically queues completed idle navigation.",
+    "Origin confirmation adds one actual source audit; future assistant intake can run without reauditing preceding source."
+  ]
+}

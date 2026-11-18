@@ -1,0 +1,11 @@
+test_daily_backup_manifest_has_no_restarting_loop (test_server_operations.ServerOperationsTest.test_daily_backup_manifest_has_no_restarting_loop) ... ok
+test_invalid_source_never_publishes_destination (test_server_operations.ServerOperationsTest.test_invalid_source_never_publishes_destination) ... ok
+test_ledger_collision_does_not_start_knowledge_copy (test_server_operations.ServerOperationsTest.test_ledger_collision_does_not_start_knowledge_copy) ... ok
+test_live_wal_backup_separate_ledger_and_restore_new_path (test_server_operations.ServerOperationsTest.test_live_wal_backup_separate_ledger_and_restore_new_path) ... ok
+test_log_symlink_is_rejected_without_touching_target (test_server_operations.ServerOperationsTest.test_log_symlink_is_rejected_without_touching_target) ... ok
+test_manifest_is_scoped_and_logs_private (test_server_operations.ServerOperationsTest.test_manifest_is_scoped_and_logs_private) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.017s
+
+OK

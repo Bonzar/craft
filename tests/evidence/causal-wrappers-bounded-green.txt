@@ -1,0 +1,12 @@
+test_large_query_pages_preserve_all_ids_conditions_and_old_snapshot (tests.test_bounded_tools.BoundedToolsTest.test_large_query_pages_preserve_all_ids_conditions_and_old_snapshot) ... Executing <Task pending name='Task-2' coro=<BoundedToolsTest.test_large_query_pages_preserve_all_ids_conditions_and_old_snapshot() running at /private/tmp/assertion-causal-wrappers-20261116/tests/test_bounded_tools.py:120> cb=[_run_until_complete_cb() at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py:181] created at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py:100> took 0.126 seconds
+ok
+test_many_versions_are_explicitly_paged_and_large_source_spans_reassemble (tests.test_bounded_tools.BoundedToolsTest.test_many_versions_are_explicitly_paged_and_large_source_spans_reassemble) ... Executing <Task pending name='Task-8' coro=<BoundedToolsTest.test_many_versions_are_explicitly_paged_and_large_source_spans_reassemble() running at /private/tmp/assertion-causal-wrappers-20261116/tests/test_bounded_tools.py:179> cb=[_run_until_complete_cb() at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py:181] created at /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py:100> took 0.183 seconds
+ok
+test_oversize_diagnostics_and_single_edge_are_explicitly_recoverable (tests.test_bounded_tools.BoundedToolsTest.test_oversize_diagnostics_and_single_edge_are_explicitly_recoverable) ... ok
+test_route_upgrade_history_exposes_both_plans_with_historical_cutoffs (tests.test_bounded_tools.BoundedToolsTest.test_route_upgrade_history_exposes_both_plans_with_historical_cutoffs) ... ok
+test_single_oversize_edge_condition_and_escaped_source_pages_remain_exact (tests.test_bounded_tools.BoundedToolsTest.test_single_oversize_edge_condition_and_escaped_source_pages_remain_exact) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 4.122s
+
+OK

@@ -1,0 +1,344 @@
+test_artifact_immutability_and_sqlite_backup_restore (test_artifacts.ArtifactSDKTest.test_artifact_immutability_and_sqlite_backup_restore) ... ERROR
+test_capture_refs_exact_replay_changed_or_missing_refs_atomic (test_artifacts.ArtifactSDKTest.test_capture_refs_exact_replay_changed_or_missing_refs_atomic) ... ERROR
+test_idempotent_content_and_readonly_metadata_or_exact_bytes (test_artifacts.ArtifactSDKTest.test_idempotent_content_and_readonly_metadata_or_exact_bytes) ... ERROR
+test_missing_artifact_rejects_raw_job_receipt_and_delivery_together (test_artifacts.ArtifactSDKTest.test_missing_artifact_rejects_raw_job_receipt_and_delivery_together) ... ERROR
+test_model_boundary_gets_only_technical_refs_and_no_store_model_calls (test_artifacts.ArtifactSDKTest.test_model_boundary_gets_only_technical_refs_and_no_store_model_calls) ... ERROR
+test_old_text_only_replay_unchanged_and_attachment_bound (test_artifacts.ArtifactSDKTest.test_old_text_only_replay_unchanged_and_attachment_bound) ... ERROR
+test_real_sdk_and_authenticated_http_return_typed_image_only_on_demand (test_artifacts.ArtifactSDKTest.test_real_sdk_and_authenticated_http_return_typed_image_only_on_demand) ... FAIL
+test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) ...
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/jpeg', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='application/octet-stream', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='0000000000000000000000000000000000000000000000000000000000000000') ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='bad') ... ERROR
+test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) ... ERROR
+test_artifact_immutability_and_sqlite_backup_restore (test_artifacts.ArtifactTest.test_artifact_immutability_and_sqlite_backup_restore) ... ERROR
+test_capture_refs_exact_replay_changed_or_missing_refs_atomic (test_artifacts.ArtifactTest.test_capture_refs_exact_replay_changed_or_missing_refs_atomic) ... ERROR
+test_idempotent_content_and_readonly_metadata_or_exact_bytes (test_artifacts.ArtifactTest.test_idempotent_content_and_readonly_metadata_or_exact_bytes) ... ERROR
+test_missing_artifact_rejects_raw_job_receipt_and_delivery_together (test_artifacts.ArtifactTest.test_missing_artifact_rejects_raw_job_receipt_and_delivery_together) ... ERROR
+test_model_boundary_gets_only_technical_refs_and_no_store_model_calls (test_artifacts.ArtifactTest.test_model_boundary_gets_only_technical_refs_and_no_store_model_calls) ... ERROR
+test_old_text_only_replay_unchanged_and_attachment_bound (test_artifacts.ArtifactTest.test_old_text_only_replay_unchanged_and_attachment_bound) ... ERROR
+test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) ...
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/jpeg', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='application/octet-stream', sha=None) ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='0000000000000000000000000000000000000000000000000000000000000000') ... ERROR
+  test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='bad') ... ERROR
+test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) ... ERROR
+
+======================================================================
+ERROR: test_artifact_immutability_and_sqlite_backup_restore (test_artifacts.ArtifactSDKTest.test_artifact_immutability_and_sqlite_backup_restore)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 69, in test_artifact_immutability_and_sqlite_backup_restore
+    one=self.upload()
+        ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_capture_refs_exact_replay_changed_or_missing_refs_atomic (test_artifacts.ArtifactSDKTest.test_capture_refs_exact_replay_changed_or_missing_refs_atomic)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 46, in test_capture_refs_exact_replay_changed_or_missing_refs_atomic
+    one=self.upload();two=self.service.store_artifact(base64.b64encode(self.binary+b'other').decode(),'image/png')
+        ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_idempotent_content_and_readonly_metadata_or_exact_bytes (test_artifacts.ArtifactSDKTest.test_idempotent_content_and_readonly_metadata_or_exact_bytes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 30, in test_idempotent_content_and_readonly_metadata_or_exact_bytes
+    receipt=self.upload();self.assertEqual(receipt['artifact_id'],'artifact-'+hashlib.sha256(self.binary).hexdigest())
+            ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_missing_artifact_rejects_raw_job_receipt_and_delivery_together (test_artifacts.ArtifactSDKTest.test_missing_artifact_rejects_raw_job_receipt_and_delivery_together)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 58, in test_missing_artifact_rejects_raw_job_receipt_and_delivery_together
+    with self.assertRaises(ValueError):self.capture(artifact_ids=['artifact-'+'0'*64],delivery={'stream_id':state['stream_id'],'epoch':state['epoch'],'seq':1})
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 28, in capture
+    def capture(self,**extra):return self.service.capture_message('session','m','tool:fixture','tool','Synthetic tool text.',None,'fixture://tool',**extra)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: MemoryService.capture_message() got an unexpected keyword argument 'artifact_ids'
+
+======================================================================
+ERROR: test_model_boundary_gets_only_technical_refs_and_no_store_model_calls (test_artifacts.ArtifactSDKTest.test_model_boundary_gets_only_technical_refs_and_no_store_model_calls)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 80, in test_model_boundary_gets_only_technical_refs_and_no_store_model_calls
+    receipt=self.upload();capture=self.capture(artifact_ids=[receipt['artifact_id']])
+            ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_old_text_only_replay_unchanged_and_attachment_bound (test_artifacts.ArtifactSDKTest.test_old_text_only_replay_unchanged_and_attachment_bound)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 63, in test_old_text_only_replay_unchanged_and_attachment_bound
+    self.assertEqual(first['event']['id'],self.capture(artifact_ids=[])['event']['id'])
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 28, in capture
+    def capture(self,**extra):return self.service.capture_message('session','m','tool:fixture','tool','Synthetic tool text.',None,'fixture://tool',**extra)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: MemoryService.capture_message() got an unexpected keyword argument 'artifact_ids'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/jpeg', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='application/octet-stream', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='0000000000000000000000000000000000000000000000000000000000000000')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='bad')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactSDKTest.test_strict_size_base64_mime_magic_expected_hash_validation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 43, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.assertRaises(ValueError):self.service.store_artifact(oversized,'image/png')
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_artifact_immutability_and_sqlite_backup_restore (test_artifacts.ArtifactTest.test_artifact_immutability_and_sqlite_backup_restore)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 69, in test_artifact_immutability_and_sqlite_backup_restore
+    one=self.upload()
+        ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_capture_refs_exact_replay_changed_or_missing_refs_atomic (test_artifacts.ArtifactTest.test_capture_refs_exact_replay_changed_or_missing_refs_atomic)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 46, in test_capture_refs_exact_replay_changed_or_missing_refs_atomic
+    one=self.upload();two=self.service.store_artifact(base64.b64encode(self.binary+b'other').decode(),'image/png')
+        ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_idempotent_content_and_readonly_metadata_or_exact_bytes (test_artifacts.ArtifactTest.test_idempotent_content_and_readonly_metadata_or_exact_bytes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 30, in test_idempotent_content_and_readonly_metadata_or_exact_bytes
+    receipt=self.upload();self.assertEqual(receipt['artifact_id'],'artifact-'+hashlib.sha256(self.binary).hexdigest())
+            ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_missing_artifact_rejects_raw_job_receipt_and_delivery_together (test_artifacts.ArtifactTest.test_missing_artifact_rejects_raw_job_receipt_and_delivery_together)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 58, in test_missing_artifact_rejects_raw_job_receipt_and_delivery_together
+    with self.assertRaises(ValueError):self.capture(artifact_ids=['artifact-'+'0'*64],delivery={'stream_id':state['stream_id'],'epoch':state['epoch'],'seq':1})
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 28, in capture
+    def capture(self,**extra):return self.service.capture_message('session','m','tool:fixture','tool','Synthetic tool text.',None,'fixture://tool',**extra)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: MemoryService.capture_message() got an unexpected keyword argument 'artifact_ids'
+
+======================================================================
+ERROR: test_model_boundary_gets_only_technical_refs_and_no_store_model_calls (test_artifacts.ArtifactTest.test_model_boundary_gets_only_technical_refs_and_no_store_model_calls)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 80, in test_model_boundary_gets_only_technical_refs_and_no_store_model_calls
+    receipt=self.upload();capture=self.capture(artifact_ids=[receipt['artifact_id']])
+            ^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 27, in upload
+    def upload(self,**extra):return self.service.store_artifact(self.encoded,'image/png',**extra)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_old_text_only_replay_unchanged_and_attachment_bound (test_artifacts.ArtifactTest.test_old_text_only_replay_unchanged_and_attachment_bound)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 63, in test_old_text_only_replay_unchanged_and_attachment_bound
+    self.assertEqual(first['event']['id'],self.capture(artifact_ids=[])['event']['id'])
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 28, in capture
+    def capture(self,**extra):return self.service.capture_message('session','m','tool:fixture','tool','Synthetic tool text.',None,'fixture://tool',**extra)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: MemoryService.capture_message() got an unexpected keyword argument 'artifact_ids'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/jpeg', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='application/octet-stream', sha=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='0000000000000000000000000000000000000000000000000000000000000000')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation) (mime='image/png', sha='bad')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 41, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.subTest(mime=mime,sha=sha),self.assertRaises(ValueError):self.service.store_artifact(encoded,mime,sha256=sha)
+                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+ERROR: test_strict_size_base64_mime_magic_expected_hash_validation (test_artifacts.ArtifactTest.test_strict_size_base64_mime_magic_expected_hash_validation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 43, in test_strict_size_base64_mime_magic_expected_hash_validation
+    with self.assertRaises(ValueError):self.service.store_artifact(oversized,'image/png')
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemoryService' object has no attribute 'store_artifact'
+
+======================================================================
+FAIL: test_real_sdk_and_authenticated_http_return_typed_image_only_on_demand (test_artifacts.ArtifactSDKTest.test_real_sdk_and_authenticated_http_return_typed_image_only_on_demand)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 110, in test_real_sdk_and_authenticated_http_return_typed_image_only_on_demand
+    asyncio.run(scenario())
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/private/tmp/assertion-image-artifacts-20261116/tests/test_artifacts.py", line 94, in scenario
+    self.assertIn('memory_store_artifact',listed);self.assertIn('memory_artifact',listed)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'memory_store_artifact' not found in {'memory_ingest_register': Tool(name='memory_ingest_register', title=None, description="Register one authorized adapter installation's delivery stream for a stable session.\n        Idempotently returns flat stream_id/epoch/frontier state. replace_epoch explicitly replaces\n        that exact prior writer epoch, preserving known backlog/gaps. No model or worker work.\n        Producer reports are operational claims, never source facts or world verification.\n        ", inputSchema={'properties': {'producer_id': {'title': 'Producer Id', 'type': 'string'}, 'session_id': {'title': 'Session Id', 'type': 'string'}, 'replace_epoch': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Replace Epoch'}}, 'required': ['producer_id', 'session_id'], 'title': 'memory_ingest_registerArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_ingest_report': Tool(name='memory_ingest_report', title=None, description='Report durable local delivery frontier before upload; heartbeat uses a new report_seq.\n        observed_seq counts local durable outbox messages, not physical transcript positions.\n        Reports must advance monotonically; exact replay is safe but does not prolong a heartbeat.\n        gap_count is positive exactly for gapped state. Close only after current scan, no gaps and\n        a fully acknowledged prefix. Server derives acked_through from committed capture receipts.\n        A stale clean heartbeat means unobserved, not known pending or world-current evidence.\n        ', inputSchema={'properties': {'stream_id': {'title': 'Stream Id', 'type': 'string'}, 'epoch': {'title': 'Epoch', 'type': 'string'}, 'report_seq': {'title': 'Report Seq', 'type': 'integer'}, 'observed_seq': {'title': 'Observed Seq', 'type': 'integer'}, 'scan_state': {'enum': ['current', 'catching_up', 'gapped', 'unknown'], 'title': 'Scan State', 'type': 'string'}, 'gap_count': {'title': 'Gap Count', 'type': 'integer'}, 'lifecycle': {'default': 'active', 'enum': ['active', 'closed'], 'title': 'Lifecycle', 'type': 'string'}}, 'required': ['stream_id', 'epoch', 'report_seq', 'observed_seq', 'scan_state', 'gap_count'], 'title': 'memory_ingest_reportArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_capture_message': Tool(name='memory_capture_message', title=None, description="Durably capture one raw message. Stable IDs are immutable/idempotent; position is zero-based\n        producer session transcript order, or omitted when unknown; never use local file line numbers.\n        actor_id names the speaker and role preserves user/assistant/tool attribution.\n        source is a stable producer provenance URI. The receipt contains identifiers and\n        status rather than echoing the source body. Optional source_message_at is an offset-aware\n        producer-message timestamp, distinct from this base's capture/knowledge time. Optional basis\n        attributes the producer claim; it does not authenticate it. timezone is an explicitly supplied\n        speaker IANA calendar timezone, never inferred from a UTC transport offset. Missing origin\n        clock stays unknown. Optional delivery={stream_id,epoch,seq} is an operational receipt\n        committed atomically with this raw event; it does not change canonical message identity.\n        The returned delivery state includes the server-derived acked_through prefix.\n        Extraction/linking runs independently.\n        ", inputSchema={'properties': {'session_id': {'title': 'Session Id', 'type': 'string'}, 'message_id': {'title': 'Message Id', 'type': 'string'}, 'actor_id': {'title': 'Actor Id', 'type': 'string'}, 'role': {'enum': ['user', 'assistant', 'tool'], 'title': 'Role', 'type': 'string'}, 'text': {'title': 'Text', 'type': 'string'}, 'source': {'title': 'Source', 'type': 'string'}, 'position': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Position'}, 'scope': {'default': 'default', 'title': 'Scope', 'type': 'string'}, 'source_message_at': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Source Message At'}, 'source_message_clock_basis': {'anyOf': [{'additionalProperties': True, 'type': 'object'}, {'type': 'null'}], 'default': None, 'title': 'Source Message Clock Basis'}, 'timezone': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Timezone'}, 'delivery': {'anyOf': [{'additionalProperties': True, 'type': 'object'}, {'type': 'null'}], 'default': None, 'title': 'Delivery'}}, 'required': ['session_id', 'message_id', 'actor_id', 'role', 'text', 'source'], 'title': 'memory_capture_messageArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_process': Tool(name='memory_process', title=None, description='Schedule up to 1..1000 worker attempts asynchronously. Returns immediately; poll status.\n        An already-running database worker owns processing. Optionally retry one failed job by its ID.\n        ', inputSchema={'properties': {'limit': {'default': 100, 'title': 'Limit', 'type': 'integer'}, 'retry_job_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Retry Job Id'}}, 'title': 'memory_processArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_sessions': Tool(name='memory_sessions', title=None, description='List stored raw sessions without bodies or model work. Titles remain unknown. Counts\n        describe captured messages, not complete provider transcripts. Follow pinned snapshot pages.', inputSchema={'properties': {'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 50, 'title': 'Limit', 'type': 'integer'}, 'snapshot_id': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Snapshot Id'}}, 'title': 'memory_sessionsArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_session_messages': Tool(name='memory_session_messages', title=None, description='Exact session/capture-turn/explicit-message lookup, no semantic search or model. No bodies.\n        Generic capture turn_id may equal message_id; native_turn_id is separately explicit.\n        Retrieve source text with memory_source(event_id). Limits 1..200, pinned append watermark.', inputSchema={'properties': {'session_id': {'title': 'Session Id', 'type': 'string'}, 'turn_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Turn Id'}, 'message_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Message Id'}, 'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 50, 'title': 'Limit', 'type': 'integer'}, 'snapshot_id': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Snapshot Id'}}, 'required': ['session_id'], 'title': 'memory_session_messagesArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_provenance': Tool(name='memory_provenance', title=None, description='Resolve 1..100 raw/assertion IDs to real source-session membership without bodies/model.\n        Mixed origins stay mixed; incomplete or missing anchors never imply exclusive membership.\n        Session IDs express provenance, not topic relevance, speaker consent or factual acceptance.', inputSchema={'properties': {'record_ids': {'items': {'type': 'string'}, 'title': 'Record Ids', 'type': 'array'}}, 'required': ['record_ids'], 'title': 'memory_provenanceArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_session_outputs': Tool(name='memory_session_outputs', title=None, description='Read recorded causal outputs for an exact source/native session or explicit caller context.\n        Limit 1..100; snapshot_id pins append-only event pages. Legacy history remains unknown;\n        scope membership or matching timestamps do not establish causality. No model work.', inputSchema={'properties': {'session_id': {'title': 'Session Id', 'type': 'string'}, 'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 50, 'title': 'Limit', 'type': 'integer'}, 'snapshot_id': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Snapshot Id'}}, 'required': ['session_id'], 'title': 'memory_session_outputsArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_run_history': Tool(name='memory_run_history', title=None, description='Read an actual execution run, explicit causes or pinned lifecycle/output events. JSON is\n        paged by characters (limit 1..6000); concatenate all content pages before decoding. Events\n        snapshot_id freezes append-only history. Caller context alone is not authenticated source proof.', inputSchema={'properties': {'run_id': {'title': 'Run Id', 'type': 'string'}, 'section': {'default': 'run', 'enum': ['run', 'causes', 'events'], 'title': 'Section', 'type': 'string'}, 'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 6000, 'title': 'Limit', 'type': 'integer'}, 'snapshot_id': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Snapshot Id'}}, 'required': ['run_id'], 'title': 'memory_run_historyArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_run_event': Tool(name='memory_run_event', title=None, description="Read one immutable execution event with exact version/check/upstream pins, never the\n        view's later current pointer. Concatenate JSON content pages; limit 1..6000 characters.", inputSchema={'properties': {'event_id': {'title': 'Event Id', 'type': 'integer'}, 'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 6000, 'title': 'Limit', 'type': 'integer'}}, 'required': ['event_id'], 'title': 'memory_run_eventArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_source': Tool(name='memory_source', title=None, description="Retrieve original event/extraction history or an assertion's resolved evidence references and\n        graph edges. Paired Python character offsets return only that raw span and compact source\n        metadata. Spans are limited to6000 characters and also support normalized assertions. Large\n        sources return text/metadata/reference/edge/history continuations. A completed requested span\n        covers only that interval; source_text_complete distinguishes full-source coverage.\n        ", inputSchema={'properties': {'record_id': {'title': 'Record Id', 'type': 'string'}, 'start': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Start'}, 'end': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'End'}, 'section': {'default': 'overview', 'enum': ['overview', 'text', 'metadata', 'references', 'edges', 'extraction_history'], 'title': 'Section', 'type': 'string'}, 'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 6000, 'title': 'Limit', 'type': 'integer'}, 'snapshot_id': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Snapshot Id'}}, 'required': ['record_id'], 'title': 'memory_sourceArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_history': Tool(name='memory_history', title=None, description="Read immutable versions, freshness checks and route revisions. Sections summary/evidence/edges/metadata require\n        version_id; versions pins the maximum version ID. routes/checks pin their upper revision/check snapshot_id. checks optionally filters version_id.\n        Section content is exact text or JSON streamed by character offset; concatenate every page\n        before decoding JSON or interpreting conditions. current_transport_status is live invocation\n        metadata outside the immutable content and pinned historical snapshot.\n        Follow this requested section's continuation until complete;\n        optional proof sections are not required solely because a query envelope is paged.\n        ", inputSchema={'properties': {'view_id': {'title': 'View Id', 'type': 'string'}, 'version_id': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Version Id'}, 'section': {'default': 'overview', 'enum': ['overview', 'summary', 'evidence', 'edges', 'metadata', 'versions', 'routes', 'checks'], 'title': 'Section', 'type': 'string'}, 'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 6000, 'title': 'Limit', 'type': 'integer'}, 'snapshot_id': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Snapshot Id'}, 'presentation_cutoff': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Presentation Cutoff'}, 'name_watermark': {'anyOf': [{'type': 'integer'}, {'type': 'null'}], 'default': None, 'title': 'Name Watermark'}}, 'required': ['view_id'], 'title': 'memory_historyArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_query': Tool(name='memory_query', title=None, description="Answer from a versioned evidence view. Omitted/null scope searches every known scope in this\n        connected database; an explicit scope restricts retrieval to that exact scope. Optional inclusive\n        ISO cutoffs distinguish applicable\n        time from knowledge recorded by that time. Unknown valid time is excluded by valid_as_of.\n        Known incoming transport_limit applies globally even to scoped/historical queries; accepted\n        text remains limited to available evidence. Do not retry queries in a loop before the delivery\n        frontier advances. Current transport_status is separate from the immutable snapshot/check.\n        Pending work means this answer is incomplete. query_snapshot pins the source membership and\n        effective cutoffs; freshness_check names this invocation's exact check. refresh_required forbids\n        using this dated snapshot to authorize current-state action; query again for a new frontier.\n        answer_payload_complete reports inline answer delivery only; answer_accepted, completeness and\n        refresh_required separately report review and limitations. Follow every answer_continuations\n        page for missing answer content and qualifications. Optional proof pagination alone does not\n        require reading all audit appendices. A complete answer_metadata.notice with purpose\n        knowledge_limit_notice and notice_payload_complete=true explains only the base's knowledge limit.\n        Show that notice even if answer_accepted and answer_payload_complete remain false; no missing\n        notice page or automatic retry is implied. It cannot establish world absence, event dates or\n        permission. The same query/scope retains summary history. Optional request_session_id is an explicit\n        caller-session claim for execution history, never source authentication, factual proof or user approval.\n        Omit it when the actual current caller session is unknown.\n        ", inputSchema={'properties': {'query': {'title': 'Query', 'type': 'string'}, 'scope': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Scope'}, 'valid_as_of': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Valid As Of'}, 'recorded_as_of': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Recorded As Of'}, 'request_session_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Request Session Id'}}, 'required': ['query'], 'title': 'memory_queryArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None), 'memory_status': Tool(name='memory_status', title=None, description='Inspect exact job counts and bounded pending/error/unresolved detail pages. Scope=None\n        explicitly requests global diagnostics; use scope for project-local details. Each list has\n        independent total/next_offset metadata. Follow offset pages to retrieve all details.\n        Oversized individual jobs use section=job, streamed as JSON with character offset/limit.\n        navigation_catalog requires an explicit scope and lists read-only partial routing metadata,\n        including planned questions and historical snapshots. Follow its catalog_id-pinned continuation;\n        stale/restart_required means restart at offset zero. Catalog completeness is transport only,\n        never domain acceptance, source clearance or permission. It never starts processing.\n        transport returns global producer-delivery limits without model work; omit scope/event/catalog.\n        Current known incoming gaps apply across query scopes; clean closed/stale streams do not\n        permanently block queries. reported_current does not establish unseen offline changes.\n        policy_coverage reports current versus historical audit policy coverage without scheduling it;\n        it does not establish domain completeness. model_usage returns database-wide provider token accounting; it does not start model work.\n        Cached input is a subset of input, reasoning output a subset of output. Unknown usage is\n        not zero. This section requires scope=None and reports generation calls, not main-agent usage.\n        ', inputSchema={'properties': {'event_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Event Id'}, 'scope': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Scope'}, 'offset': {'default': 0, 'title': 'Offset', 'type': 'integer'}, 'limit': {'default': 100, 'title': 'Limit', 'type': 'integer'}, 'section': {'default': 'overview', 'enum': ['overview', 'job', 'derived_overview', 'derived_overviews', 'navigation_catalog', 'view_names', 'model_usage', 'transport', 'policy_coverage'], 'title': 'Section', 'type': 'string'}, 'catalog_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None, 'title': 'Catalog Id'}}, 'title': 'memory_statusArguments', 'type': 'object'}, outputSchema=None, icons=None, annotations=None, meta=None, execution=None)}
+
+----------------------------------------------------------------------
+Ran 15 tests in 1.020s
+
+FAILED (failures=1, errors=28)

@@ -1,0 +1,2290 @@
+{
+  "production_commit": "84af55f",
+  "runtime": "Python3.12 / official mcp1.30",
+  "provider": "deterministic subprocess fixture; orchestration protocol only; no semantic quality claim",
+  "result": "7 tests passed in 21.000s; all tracked owned provider/worker processes exited",
+  "tests": [
+    {
+      "test": "prototypes.assertion_memory.tests.test_automatic_overviews.AutomaticOverviewTest.test_R24_capture_alone_produces_first_shared_overview",
+      "public_tool_counts": {
+        "memory_capture_message": 3,
+        "memory_status": 9,
+        "memory_history": 4
+      },
+      "capture_receipts": [
+        {
+          "event": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "session_id": "planning",
+            "turn_id": "message-0",
+            "actor": "Ava",
+            "source": "fixture://planning/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:45.129686+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 56
+          },
+          "job": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "event_id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:45.129686+00:00",
+            "available_at": "2026-11-11T22:41:45.129686+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92192,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-14wgu2ta/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "session_id": "operations",
+            "turn_id": "message-0",
+            "actor": "Bo",
+            "source": "fixture://operations/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:45.144604+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "event_id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:45.144604+00:00",
+            "available_at": "2026-11-11T22:41:45.144604+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 2,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92193,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-14wgu2ta/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "session_id": "review",
+            "turn_id": "message-0",
+            "actor": "Cy",
+            "source": "fixture://review/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:45.154420+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "event_id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:45.154420+00:00",
+            "available_at": "2026-11-11T22:41:45.154420+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 3,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92194,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-14wgu2ta/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        }
+      ],
+      "last_public_status_by_scope": {
+        "campus": {
+          "job_counts": {
+            "completed": 6
+          },
+          "pending_count": 0,
+          "event_count": 3,
+          "assertion_count": 3,
+          "error_count": 0,
+          "unresolved_count": 0,
+          "pending_jobs": [],
+          "errors": [],
+          "unresolved": [],
+          "pagination": {
+            "pending_jobs": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "errors": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "unresolved": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            }
+          },
+          "source_version": 3,
+          "model_configured": true,
+          "provider_status": "configured",
+          "model_backend": "SubprocessModel",
+          "retrieval_backend": "lexical",
+          "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6",
+          "diagnostic_scope": "campus",
+          "derived_overviews": {
+            "entries": [
+              {
+                "scope": "campus",
+                "state": "idle",
+                "status": "idle",
+                "desired_frontier": {
+                  "generation": 3,
+                  "assertion_watermark": 3,
+                  "edge_watermark": 0,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "completed_frontier": {
+                  "assertion_watermark": 3,
+                  "edge_watermark": 0,
+                  "generation": 3,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "current_version_id": 2,
+                "current_check_id": 2,
+                "published_theme_count": 1,
+                "error": null,
+                "updated_at": "2026-11-11T22:41:45.872099+00:00",
+                "next_wake_at": null,
+                "root_view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+                "version_id": 2,
+                "check_id": 2,
+                "manifest_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7@1",
+                "unassigned_count": 0,
+                "root_request_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7",
+                "canonical_ready": true,
+                "continuations": [
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+                      "version_id": 2,
+                      "section": "summary",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+                      "version_id": 2,
+                      "section": "evidence",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+                      "version_id": 2,
+                      "section": "edges",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+                      "version_id": 2,
+                      "section": "metadata",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+                      "version_id": 2,
+                      "section": "checks",
+                      "offset": 0,
+                      "limit": 6000,
+                      "snapshot_id": 2
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+                      "section": "routes",
+                      "snapshot_id": 1,
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  }
+                ]
+              }
+            ],
+            "total": 1,
+            "offset": 0,
+            "limit": 10,
+            "continuation": null
+          },
+          "response_complete": true
+        }
+      },
+      "public_summary_pages": [
+        {
+          "arguments": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+            "version_id": 2,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-71a2783d2af0bab5b62334ec",
+            "version_id": 2,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 403,
+            "total_characters": 403,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]",
+            "response_complete": true,
+            "continuation": null
+          }
+        }
+      ],
+      "provider_task_counts": {
+        "Extract attributable assertions from the user event": 3,
+        "Verify contextual assertion interpretations": 3,
+        "Propose evidence links for the source assertion": 3,
+        "Discover reusable memory themes": 1,
+        "What does release policy require?": 1,
+        "Review grounded memory overview": 2,
+        "Summarize the known topics, reported decisions, material conditions, open questions and interfaces in this scope.": 1
+      },
+      "owned_pids": [
+        92191,
+        92192,
+        92193,
+        92194,
+        92195,
+        92196,
+        92197,
+        92198,
+        92200,
+        92209,
+        92211,
+        92214,
+        92215,
+        92218,
+        92220,
+        92221,
+        92222,
+        92223
+      ],
+      "remaining_owned_pids": [],
+      "detailed_trace": "/private/tmp/assertion-v8-sdk-green-proof/test_R24_capture_alone_produces_first_shared_overview.json",
+      "detailed_trace_sha256": "8693a621ecab73181bb7068e2c9826671cb6202b275127e1eb937dad42282dcf"
+    },
+    {
+      "test": "prototypes.assertion_memory.tests.test_automatic_overviews.AutomaticOverviewTest.test_R25_clarification_revises_affected_summary_and_keeps_unrelated_material",
+      "public_tool_counts": {
+        "memory_capture_message": 5,
+        "memory_status": 16,
+        "memory_history": 11
+      },
+      "capture_receipts": [
+        {
+          "event": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "session_id": "planning",
+            "turn_id": "message-0",
+            "actor": "Ava",
+            "source": "fixture://planning/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:47.661204+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 56
+          },
+          "job": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "event_id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:47.661204+00:00",
+            "available_at": "2026-11-11T22:41:47.661204+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92535,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-r714xk9w/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "session_id": "operations",
+            "turn_id": "message-0",
+            "actor": "Bo",
+            "source": "fixture://operations/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:47.677761+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "event_id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:47.677761+00:00",
+            "available_at": "2026-11-11T22:41:47.677761+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 2,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92536,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-r714xk9w/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "session_id": "review",
+            "turn_id": "message-0",
+            "actor": "Cy",
+            "source": "fixture://review/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:47.689013+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "event_id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:47.689013+00:00",
+            "available_at": "2026-11-11T22:41:47.689013+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 3,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92537,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-r714xk9w/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-0988917bbe5dd43efdbb8f3c79dd3c2b26d85b3dd0431d1fd2fee6327965973c",
+            "session_id": "supplies",
+            "turn_id": "message-0",
+            "actor": "Dee",
+            "source": "fixture://supplies/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:47.707128+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 43
+          },
+          "job": {
+            "id": "event-0988917bbe5dd43efdbb8f3c79dd3c2b26d85b3dd0431d1fd2fee6327965973c",
+            "event_id": "event-0988917bbe5dd43efdbb8f3c79dd3c2b26d85b3dd0431d1fd2fee6327965973c",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:47.707128+00:00",
+            "available_at": "2026-11-11T22:41:47.707128+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 4,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92538,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-r714xk9w/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-8f11813cd9a9beed68b3d2b940c8e2b634b1abdfe8eb580ed55a7ed65f0622a7",
+            "session_id": "clarification",
+            "turn_id": "message-0",
+            "actor": "Eli",
+            "source": "fixture://clarification/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:48.597350+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 94
+          },
+          "job": {
+            "id": "event-8f11813cd9a9beed68b3d2b940c8e2b634b1abdfe8eb580ed55a7ed65f0622a7",
+            "event_id": "event-8f11813cd9a9beed68b3d2b940c8e2b634b1abdfe8eb580ed55a7ed65f0622a7",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:48.597350+00:00",
+            "available_at": "2026-11-11T22:41:48.597350+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92560,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-r714xk9w/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        }
+      ],
+      "last_public_status_by_scope": {
+        "campus": {
+          "job_counts": {
+            "completed": 10
+          },
+          "pending_count": 0,
+          "event_count": 5,
+          "assertion_count": 5,
+          "error_count": 0,
+          "unresolved_count": 0,
+          "pending_jobs": [],
+          "errors": [],
+          "unresolved": [],
+          "pagination": {
+            "pending_jobs": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "errors": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "unresolved": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            }
+          },
+          "source_version": 5,
+          "model_configured": true,
+          "provider_status": "configured",
+          "model_backend": "SubprocessModel",
+          "retrieval_backend": "lexical",
+          "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6",
+          "diagnostic_scope": "campus",
+          "derived_overviews": {
+            "entries": [
+              {
+                "scope": "campus",
+                "state": "idle",
+                "status": "idle",
+                "desired_frontier": {
+                  "generation": 5,
+                  "assertion_watermark": 5,
+                  "edge_watermark": 0,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "completed_frontier": {
+                  "assertion_watermark": 5,
+                  "edge_watermark": 0,
+                  "generation": 5,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "current_version_id": 5,
+                "current_check_id": 6,
+                "published_theme_count": 2,
+                "error": null,
+                "updated_at": "2026-11-11T22:41:48.941055+00:00",
+                "next_wake_at": null,
+                "root_view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+                "version_id": 5,
+                "check_id": 6,
+                "manifest_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7@2",
+                "unassigned_count": 0,
+                "root_request_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7",
+                "canonical_ready": true,
+                "continuations": [
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+                      "version_id": 5,
+                      "section": "summary",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+                      "version_id": 5,
+                      "section": "evidence",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+                      "version_id": 5,
+                      "section": "edges",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+                      "version_id": 5,
+                      "section": "metadata",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+                      "version_id": 5,
+                      "section": "checks",
+                      "offset": 0,
+                      "limit": 6000,
+                      "snapshot_id": 6
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+                      "section": "routes",
+                      "snapshot_id": 2,
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  }
+                ]
+              }
+            ],
+            "total": 1,
+            "offset": 0,
+            "limit": 10,
+            "continuation": null
+          },
+          "response_complete": true
+        }
+      },
+      "public_summary_pages": [
+        {
+          "arguments": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-3228fab9bb89fb36bf8d7e85",
+            "version_id": 3,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-3228fab9bb89fb36bf8d7e85",
+            "version_id": 3,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 524,
+            "total_characters": 524,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]\nStationery orders require a monthly budget. [assertion-ef4ea237a1572d0b960de7c5512cc380a7c905999109da783302efe89f3716a1]",
+            "response_complete": true,
+            "continuation": null
+          }
+        },
+        {
+          "arguments": {
+            "view_id": "theme-7509c911080ac25fa95fd653ff4628e6",
+            "version_id": 2,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "theme-7509c911080ac25fa95fd653ff4628e6",
+            "version_id": 2,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 120,
+            "total_characters": 120,
+            "item_count": null,
+            "content": "Stationery orders require a monthly budget. [assertion-ef4ea237a1572d0b960de7c5512cc380a7c905999109da783302efe89f3716a1]",
+            "response_complete": true,
+            "continuation": null
+          }
+        },
+        {
+          "arguments": {
+            "view_id": "theme-c8cbab4fc22fd8ba09c70c0e7def55c2",
+            "version_id": 1,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "theme-c8cbab4fc22fd8ba09c70c0e7def55c2",
+            "version_id": 1,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 403,
+            "total_characters": 403,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]",
+            "response_complete": true,
+            "continuation": null
+          }
+        },
+        {
+          "arguments": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+            "version_id": 5,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-afc304199d14ac6807121347",
+            "version_id": 5,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 696,
+            "total_characters": 696,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]\nRelease clarification: the pilot permit remains required even when backup approval is present. [assertion-6eb892f3c95b4b3b5cecc1b7a247fdfd2b1eda0524ba6e57ea974f3c84c2edb1]\nStationery orders require a monthly budget. [assertion-ef4ea237a1572d0b960de7c5512cc380a7c905999109da783302efe89f3716a1]",
+            "response_complete": true,
+            "continuation": null
+          }
+        },
+        {
+          "arguments": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-3228fab9bb89fb36bf8d7e85",
+            "version_id": 3,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-3228fab9bb89fb36bf8d7e85",
+            "version_id": 3,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 524,
+            "total_characters": 524,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]\nStationery orders require a monthly budget. [assertion-ef4ea237a1572d0b960de7c5512cc380a7c905999109da783302efe89f3716a1]",
+            "response_complete": true,
+            "continuation": null
+          }
+        }
+      ],
+      "provider_task_counts": {
+        "Extract attributable assertions from the user event": 5,
+        "Verify contextual assertion interpretations": 5,
+        "Propose evidence links for the source assertion": 5,
+        "Discover reusable memory themes": 2,
+        "Plan memory retrieval for a question": 2,
+        "What does release policy require?": 2,
+        "Review grounded memory overview": 5,
+        "What does office supplies require?": 1,
+        "Summarize the known topics, reported decisions, material conditions, open questions and interfaces in this scope.": 2
+      },
+      "owned_pids": [
+        92534,
+        92535,
+        92536,
+        92537,
+        92538,
+        92539,
+        92540,
+        92541,
+        92542,
+        92543,
+        92544,
+        92545,
+        92546,
+        92548,
+        92549,
+        92550,
+        92551,
+        92552,
+        92553,
+        92554,
+        92555,
+        92556,
+        92557,
+        92558,
+        92559,
+        92560,
+        92561,
+        92562,
+        92563,
+        92564,
+        92565,
+        92566,
+        92567,
+        92568,
+        92569
+      ],
+      "remaining_owned_pids": [],
+      "detailed_trace": "/private/tmp/assertion-v8-sdk-green-proof/test_R25_clarification_revises_affected_summary_and_keeps_unrelated_material.json",
+      "detailed_trace_sha256": "644e16c7d50fe35fbc2ce79f344d3ffedb3c847171c145552ecb1402ea7ce159"
+    },
+    {
+      "test": "prototypes.assertion_memory.tests.test_automatic_overviews.AutomaticOverviewTest.test_R27_killed_owned_worker_resumes_accepted_leaf_without_duplicate_provider_call",
+      "public_tool_counts": {
+        "memory_capture_message": 3,
+        "memory_status": 5,
+        "memory_history": 2
+      },
+      "capture_receipts": [
+        {
+          "event": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "session_id": "planning",
+            "turn_id": "message-0",
+            "actor": "Ava",
+            "source": "fixture://planning/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:50.730500+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 56
+          },
+          "job": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "event_id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:50.730500+00:00",
+            "available_at": "2026-11-11T22:41:50.730500+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        },
+        {
+          "event": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "session_id": "operations",
+            "turn_id": "message-0",
+            "actor": "Bo",
+            "source": "fixture://operations/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:50.733429+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "event_id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:50.733429+00:00",
+            "available_at": "2026-11-11T22:41:50.733429+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 2,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        },
+        {
+          "event": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "session_id": "review",
+            "turn_id": "message-0",
+            "actor": "Cy",
+            "source": "fixture://review/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:50.735321+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "event_id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:50.735321+00:00",
+            "available_at": "2026-11-11T22:41:50.735321+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 3,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        }
+      ],
+      "last_public_status_by_scope": {
+        "campus": {
+          "job_counts": {
+            "completed": 6
+          },
+          "pending_count": 0,
+          "event_count": 3,
+          "assertion_count": 3,
+          "error_count": 0,
+          "unresolved_count": 0,
+          "pending_jobs": [],
+          "errors": [],
+          "unresolved": [],
+          "pagination": {
+            "pending_jobs": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "errors": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "unresolved": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            }
+          },
+          "source_version": 3,
+          "model_configured": true,
+          "provider_status": "configured",
+          "model_backend": "SubprocessModel",
+          "retrieval_backend": "lexical",
+          "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6",
+          "diagnostic_scope": "campus",
+          "derived_overviews": {
+            "entries": [
+              {
+                "scope": "campus",
+                "state": "idle",
+                "status": "idle",
+                "desired_frontier": {
+                  "generation": 3,
+                  "assertion_watermark": 3,
+                  "edge_watermark": 0,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "completed_frontier": {
+                  "assertion_watermark": 3,
+                  "edge_watermark": 0,
+                  "generation": 3,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "current_version_id": 2,
+                "current_check_id": 2,
+                "published_theme_count": 1,
+                "error": null,
+                "updated_at": "2026-11-11T22:41:52.631078+00:00",
+                "next_wake_at": null,
+                "root_view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+                "version_id": 2,
+                "check_id": 2,
+                "manifest_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7@1",
+                "unassigned_count": 0,
+                "root_request_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7",
+                "canonical_ready": true,
+                "continuations": [
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+                      "version_id": 2,
+                      "section": "summary",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+                      "version_id": 2,
+                      "section": "evidence",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+                      "version_id": 2,
+                      "section": "edges",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+                      "version_id": 2,
+                      "section": "metadata",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+                      "version_id": 2,
+                      "section": "checks",
+                      "offset": 0,
+                      "limit": 6000,
+                      "snapshot_id": 2
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+                      "section": "routes",
+                      "snapshot_id": 1,
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  }
+                ]
+              }
+            ],
+            "total": 1,
+            "offset": 0,
+            "limit": 10,
+            "continuation": null
+          },
+          "response_complete": true
+        }
+      },
+      "public_summary_pages": [
+        {
+          "arguments": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+            "version_id": 2,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-b41a56db9f9f25a951d107ab",
+            "version_id": 2,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 403,
+            "total_characters": 403,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]",
+            "response_complete": true,
+            "continuation": null
+          }
+        },
+        {
+          "arguments": {
+            "view_id": "theme-c8cbab4fc22fd8ba09c70c0e7def55c2",
+            "version_id": 1,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "theme-c8cbab4fc22fd8ba09c70c0e7def55c2",
+            "version_id": 1,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 403,
+            "total_characters": 403,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]",
+            "response_complete": true,
+            "continuation": null
+          }
+        }
+      ],
+      "provider_task_counts": {
+        "Extract attributable assertions from the user event": 3,
+        "Verify contextual assertion interpretations": 3,
+        "Propose evidence links for the source assertion": 3,
+        "Discover reusable memory themes": 1,
+        "What does release policy require?": 1,
+        "Review grounded memory overview": 2,
+        "Summarize the known topics, reported decisions, material conditions, open questions and interfaces in this scope.": 2
+      },
+      "owned_pids": [
+        92586,
+        92587,
+        92588,
+        92589,
+        92590,
+        92591,
+        92592,
+        92593,
+        92594,
+        92595,
+        92596,
+        92597,
+        92598,
+        92599,
+        92604,
+        92605,
+        92606
+      ],
+      "remaining_owned_pids": [],
+      "detailed_trace": "/private/tmp/assertion-v8-sdk-green-proof/test_R27_killed_owned_worker_resumes_accepted_leaf_without_duplicate_provider_call.json",
+      "detailed_trace_sha256": "0f629a7e3b8a5715d562088cb0d0f8c33af8e948a9314934dc53137652d55525"
+    },
+    {
+      "test": "prototypes.assertion_memory.tests.test_automatic_overviews.AutomaticOverviewTest.test_R28_shared_membership_and_cross_session_topics_without_source_copies",
+      "public_tool_counts": {
+        "memory_capture_message": 4,
+        "memory_status": 11,
+        "memory_history": 3
+      },
+      "capture_receipts": [
+        {
+          "event": {
+            "id": "event-6ec3960639bca0ac034d7bfe8fa458cbee73e475bf6e5129d0e3d8f800350953",
+            "session_id": "one",
+            "turn_id": "message-0",
+            "actor": "Ava",
+            "source": "fixture://one/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:54.394941+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 33
+          },
+          "job": {
+            "id": "event-6ec3960639bca0ac034d7bfe8fa458cbee73e475bf6e5129d0e3d8f800350953",
+            "event_id": "event-6ec3960639bca0ac034d7bfe8fa458cbee73e475bf6e5129d0e3d8f800350953",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:54.394941+00:00",
+            "available_at": "2026-11-11T22:41:54.394941+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92610,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-ai_e3_u2/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-8eb17a26fef3c73a8235c705b006e4dcf0363727dffb6d7b13e9ebe6b9cd5475",
+            "session_id": "two",
+            "turn_id": "message-0",
+            "actor": "Bo",
+            "source": "fixture://two/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:54.406104+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 40
+          },
+          "job": {
+            "id": "event-8eb17a26fef3c73a8235c705b006e4dcf0363727dffb6d7b13e9ebe6b9cd5475",
+            "event_id": "event-8eb17a26fef3c73a8235c705b006e4dcf0363727dffb6d7b13e9ebe6b9cd5475",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:54.406104+00:00",
+            "available_at": "2026-11-11T22:41:54.406104+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 2,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92611,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-ai_e3_u2/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-7893cd7160ac876556a89b42025529b446dbc5da953a87b4ecd18db229bb0c16",
+            "session_id": "one",
+            "turn_id": "message-1",
+            "actor": "Cy",
+            "source": "fixture://one/1",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:54.414744+00:00",
+            "metadata": {
+              "message_id": "message-1",
+              "role": "user"
+            },
+            "text_characters": 42
+          },
+          "job": {
+            "id": "event-7893cd7160ac876556a89b42025529b446dbc5da953a87b4ecd18db229bb0c16",
+            "event_id": "event-7893cd7160ac876556a89b42025529b446dbc5da953a87b4ecd18db229bb0c16",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:54.414744+00:00",
+            "available_at": "2026-11-11T22:41:54.414744+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 3,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92612,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-ai_e3_u2/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-7cf5700108340dbba8a015ae22cfe4e0e37a476353df1e6804c655f36e39c0a6",
+            "session_id": "three",
+            "turn_id": "message-0",
+            "actor": "Dee",
+            "source": "fixture://three/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:54.425415+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 63
+          },
+          "job": {
+            "id": "event-7cf5700108340dbba8a015ae22cfe4e0e37a476353df1e6804c655f36e39c0a6",
+            "event_id": "event-7cf5700108340dbba8a015ae22cfe4e0e37a476353df1e6804c655f36e39c0a6",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:54.425415+00:00",
+            "available_at": "2026-11-11T22:41:54.425415+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 4,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92613,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-ai_e3_u2/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        }
+      ],
+      "last_public_status_by_scope": {
+        "campus": {
+          "job_counts": {
+            "completed": 8
+          },
+          "pending_count": 0,
+          "event_count": 4,
+          "assertion_count": 4,
+          "error_count": 0,
+          "unresolved_count": 0,
+          "pending_jobs": [],
+          "errors": [],
+          "unresolved": [],
+          "pagination": {
+            "pending_jobs": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "errors": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "unresolved": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            }
+          },
+          "source_version": 4,
+          "model_configured": true,
+          "provider_status": "configured",
+          "model_backend": "SubprocessModel",
+          "retrieval_backend": "lexical",
+          "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6",
+          "diagnostic_scope": "campus",
+          "derived_overviews": {
+            "entries": [
+              {
+                "scope": "campus",
+                "state": "idle",
+                "status": "idle",
+                "desired_frontier": {
+                  "generation": 4,
+                  "assertion_watermark": 4,
+                  "edge_watermark": 0,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "completed_frontier": {
+                  "assertion_watermark": 4,
+                  "edge_watermark": 0,
+                  "generation": 4,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "current_version_id": 3,
+                "current_check_id": 3,
+                "published_theme_count": 2,
+                "error": null,
+                "updated_at": "2026-11-11T22:41:55.246357+00:00",
+                "next_wake_at": null,
+                "root_view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-17aa9e40954ce7285ee5f0eb",
+                "version_id": 3,
+                "check_id": 3,
+                "manifest_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7@1",
+                "unassigned_count": 0,
+                "root_request_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7",
+                "canonical_ready": true,
+                "continuations": [
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-17aa9e40954ce7285ee5f0eb",
+                      "version_id": 3,
+                      "section": "summary",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-17aa9e40954ce7285ee5f0eb",
+                      "version_id": 3,
+                      "section": "evidence",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-17aa9e40954ce7285ee5f0eb",
+                      "version_id": 3,
+                      "section": "edges",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-17aa9e40954ce7285ee5f0eb",
+                      "version_id": 3,
+                      "section": "metadata",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-17aa9e40954ce7285ee5f0eb",
+                      "version_id": 3,
+                      "section": "checks",
+                      "offset": 0,
+                      "limit": 6000,
+                      "snapshot_id": 3
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-17aa9e40954ce7285ee5f0eb",
+                      "section": "routes",
+                      "snapshot_id": 1,
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  }
+                ]
+              }
+            ],
+            "total": 1,
+            "offset": 0,
+            "limit": 10,
+            "continuation": null
+          },
+          "response_complete": true
+        }
+      },
+      "public_summary_pages": [],
+      "provider_task_counts": {
+        "Extract attributable assertions from the user event": 4,
+        "Verify contextual assertion interpretations": 4,
+        "Propose evidence links for the source assertion": 4,
+        "Discover reusable memory themes": 1,
+        "Plan memory retrieval for a question": 1,
+        "What does release policy require?": 1,
+        "Review grounded memory overview": 3,
+        "What does office supplies require?": 1,
+        "Summarize the known topics, reported decisions, material conditions, open questions and interfaces in this scope.": 1
+      },
+      "owned_pids": [
+        92609,
+        92610,
+        92611,
+        92612,
+        92613,
+        92614,
+        92615,
+        92616,
+        92617,
+        92618,
+        92619,
+        92620,
+        92621,
+        92622,
+        92623,
+        92624,
+        92625,
+        92626,
+        92627,
+        92628,
+        92629,
+        92630,
+        92631,
+        92632,
+        92633
+      ],
+      "remaining_owned_pids": [],
+      "detailed_trace": "/private/tmp/assertion-v8-sdk-green-proof/test_R28_shared_membership_and_cross_session_topics_without_source_copies.json",
+      "detailed_trace_sha256": "0743e8f4cd9b94220a3d5be50eef3308e0ab2b1054ac8bf239a82dc830e0bd3d"
+    },
+    {
+      "test": "prototypes.assertion_memory.tests.test_automatic_overviews.AutomaticOverviewTest.test_R29_assistant_context_alone_never_becomes_canonical_overview_truth",
+      "public_tool_counts": {
+        "memory_capture_message": 1,
+        "memory_status": 1
+      },
+      "capture_receipts": [
+        {
+          "event": {
+            "id": "event-81071803a38e121e7e77ee0e95008f15b63580f3699510b6794b6f9f469d3427",
+            "session_id": "assistant-only",
+            "turn_id": "message-0",
+            "actor": "assistant-proposer",
+            "source": "fixture://assistant-only/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:57.002367+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "assistant"
+            },
+            "text_characters": 43
+          },
+          "job": {
+            "id": "event-81071803a38e121e7e77ee0e95008f15b63580f3699510b6794b6f9f469d3427",
+            "event_id": "event-81071803a38e121e7e77ee0e95008f15b63580f3699510b6794b6f9f469d3427",
+            "status": "completed",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:57.002367+00:00",
+            "available_at": "2026-11-11T22:41:57.002367+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 0,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92637,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-ba0hjz5v/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        }
+      ],
+      "last_public_status_by_scope": {
+        "campus": {
+          "job_counts": {
+            "completed": 1
+          },
+          "pending_count": 0,
+          "event_count": 1,
+          "assertion_count": 0,
+          "error_count": 0,
+          "unresolved_count": 0,
+          "pending_jobs": [],
+          "errors": [],
+          "unresolved": [],
+          "pagination": {
+            "pending_jobs": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "errors": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "unresolved": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            }
+          },
+          "source_version": 0,
+          "model_configured": true,
+          "provider_status": "configured",
+          "model_backend": "SubprocessModel",
+          "retrieval_backend": "lexical",
+          "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6",
+          "diagnostic_scope": "campus",
+          "derived_overviews": {
+            "entries": [],
+            "total": 0,
+            "offset": 0,
+            "limit": 10,
+            "continuation": null
+          },
+          "response_complete": true
+        }
+      },
+      "public_summary_pages": [],
+      "provider_task_counts": {},
+      "owned_pids": [
+        92637
+      ],
+      "remaining_owned_pids": [],
+      "detailed_trace": "/private/tmp/assertion-v8-sdk-green-proof/test_R29_assistant_context_alone_never_becomes_canonical_overview_truth.json",
+      "detailed_trace_sha256": "f457a55694b917a6aed1d0cc3bc023eb1e582284610c8d5799ec6bdcd425edba"
+    },
+    {
+      "test": "prototypes.assertion_memory.tests.test_automatic_overviews.AutomaticOverviewTest.test_R29_unconfigured_model_is_honest_and_restart_resumes_automatically",
+      "public_tool_counts": {
+        "memory_capture_message": 3,
+        "memory_status": 9,
+        "memory_history": 1
+      },
+      "capture_receipts": [
+        {
+          "event": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "session_id": "planning",
+            "turn_id": "message-0",
+            "actor": "Ava",
+            "source": "fixture://planning/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:59.690099+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 56
+          },
+          "job": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "event_id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:59.690099+00:00",
+            "available_at": "2026-11-11T22:41:59.690099+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        },
+        {
+          "event": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "session_id": "operations",
+            "turn_id": "message-0",
+            "actor": "Bo",
+            "source": "fixture://operations/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:59.692810+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "event_id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:59.692810+00:00",
+            "available_at": "2026-11-11T22:41:59.692810+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 2,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        },
+        {
+          "event": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "session_id": "review",
+            "turn_id": "message-0",
+            "actor": "Cy",
+            "source": "fixture://review/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:41:59.694923+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "event_id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:41:59.694923+00:00",
+            "available_at": "2026-11-11T22:41:59.694923+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 3,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        }
+      ],
+      "last_public_status_by_scope": {
+        "campus": {
+          "job_counts": {
+            "completed": 6
+          },
+          "pending_count": 0,
+          "event_count": 3,
+          "assertion_count": 3,
+          "error_count": 0,
+          "unresolved_count": 0,
+          "pending_jobs": [],
+          "errors": [],
+          "unresolved": [],
+          "pagination": {
+            "pending_jobs": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "errors": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "unresolved": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            }
+          },
+          "source_version": 3,
+          "model_configured": true,
+          "provider_status": "configured",
+          "model_backend": "SubprocessModel",
+          "retrieval_backend": "lexical",
+          "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6",
+          "diagnostic_scope": "campus",
+          "derived_overviews": {
+            "entries": [
+              {
+                "scope": "campus",
+                "state": "idle",
+                "status": "idle",
+                "desired_frontier": {
+                  "generation": 3,
+                  "assertion_watermark": 3,
+                  "edge_watermark": 0,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "completed_frontier": {
+                  "assertion_watermark": 3,
+                  "edge_watermark": 0,
+                  "generation": 3,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "current_version_id": 2,
+                "current_check_id": 2,
+                "published_theme_count": 1,
+                "error": null,
+                "updated_at": "2026-11-11T22:42:00.788873+00:00",
+                "next_wake_at": null,
+                "root_view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+                "version_id": 2,
+                "check_id": 2,
+                "manifest_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7@1",
+                "unassigned_count": 0,
+                "root_request_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7",
+                "canonical_ready": true,
+                "continuations": [
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+                      "version_id": 2,
+                      "section": "summary",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+                      "version_id": 2,
+                      "section": "evidence",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+                      "version_id": 2,
+                      "section": "edges",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+                      "version_id": 2,
+                      "section": "metadata",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+                      "version_id": 2,
+                      "section": "checks",
+                      "offset": 0,
+                      "limit": 6000,
+                      "snapshot_id": 2
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+                      "section": "routes",
+                      "snapshot_id": 1,
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  }
+                ]
+              }
+            ],
+            "total": 1,
+            "offset": 0,
+            "limit": 10,
+            "continuation": null
+          },
+          "response_complete": true
+        }
+      },
+      "public_summary_pages": [
+        {
+          "arguments": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+            "version_id": 2,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-e43b1c4612910b6256784908",
+            "version_id": 2,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 403,
+            "total_characters": 403,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]",
+            "response_complete": true,
+            "continuation": null
+          }
+        }
+      ],
+      "provider_task_counts": {
+        "Extract attributable assertions from the user event": 3,
+        "Verify contextual assertion interpretations": 3,
+        "Propose evidence links for the source assertion": 3,
+        "Discover reusable memory themes": 1,
+        "What does release policy require?": 1,
+        "Review grounded memory overview": 2,
+        "Summarize the known topics, reported decisions, material conditions, open questions and interfaces in this scope.": 1
+      },
+      "owned_pids": [
+        92643,
+        92645,
+        92646,
+        92647,
+        92648,
+        92649,
+        92650,
+        92651,
+        92652,
+        92653,
+        92654,
+        92655,
+        92656,
+        92657,
+        92658
+      ],
+      "remaining_owned_pids": [],
+      "detailed_trace": "/private/tmp/assertion-v8-sdk-green-proof/test_R29_unconfigured_model_is_honest_and_restart_resumes_automatically.json",
+      "detailed_trace_sha256": "73593264f2beece5d3884703e74d5887c4e778756eca5569f3dd5c3a8f34f77c"
+    },
+    {
+      "test": "prototypes.assertion_memory.tests.test_automatic_overviews.AutomaticOverviewTest.test_R30_new_capture_during_frozen_generation_cannot_leak_into_old_history",
+      "public_tool_counts": {
+        "memory_capture_message": 5,
+        "memory_status": 10,
+        "memory_history": 7
+      },
+      "capture_receipts": [
+        {
+          "event": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "session_id": "planning",
+            "turn_id": "message-0",
+            "actor": "Ava",
+            "source": "fixture://planning/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:42:02.497295+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 56
+          },
+          "job": {
+            "id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "event_id": "event-6b3e69595d15c71ba689581d5cbd7829a1fa28998aadf7c64abbe0e570544c4d",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:42:02.497295+00:00",
+            "available_at": "2026-11-11T22:42:02.497295+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        },
+        {
+          "event": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "session_id": "operations",
+            "turn_id": "message-0",
+            "actor": "Bo",
+            "source": "fixture://operations/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:42:02.500150+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "event_id": "event-b251b7a0580076671c5ace977c89fc1ff7f39be01cadee6f1778a51e0309a7d1",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:42:02.500150+00:00",
+            "available_at": "2026-11-11T22:42:02.500150+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 2,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        },
+        {
+          "event": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "session_id": "review",
+            "turn_id": "message-0",
+            "actor": "Cy",
+            "source": "fixture://review/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:42:02.502305+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 57
+          },
+          "job": {
+            "id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "event_id": "event-849e08c0d8d78c7391cfecaf532b31a308d73e47ea79f82e3da595d163bb4666",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:42:02.502305+00:00",
+            "available_at": "2026-11-11T22:42:02.502305+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 3,
+          "processing": {
+            "scheduled": false,
+            "reason": "no model provider configured; raw events remain durable"
+          }
+        },
+        {
+          "event": {
+            "id": "event-371ad18883dc04ab818d6cc87d22ba73c827002d77e03ab9c3556f50f5bae764",
+            "session_id": "late",
+            "turn_id": "message-0",
+            "actor": "Eli",
+            "source": "fixture://late/0",
+            "scope": "campus",
+            "recorded_at": "2026-11-11T22:42:03.524264+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 67
+          },
+          "job": {
+            "id": "event-371ad18883dc04ab818d6cc87d22ba73c827002d77e03ab9c3556f50f5bae764",
+            "event_id": "event-371ad18883dc04ab818d6cc87d22ba73c827002d77e03ab9c3556f50f5bae764",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:42:03.524264+00:00",
+            "available_at": "2026-11-11T22:42:03.524264+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 1,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92688,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-82sup1t2/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        },
+        {
+          "event": {
+            "id": "event-2a0f464905d66ecd4362a1d0c7e404000446a5faf7a67cc64eb4badd8c7a4a0d",
+            "session_id": "private",
+            "turn_id": "message-0",
+            "actor": "Fox",
+            "source": "fixture://private/0",
+            "scope": "private",
+            "recorded_at": "2026-11-11T22:42:03.531344+00:00",
+            "metadata": {
+              "message_id": "message-0",
+              "role": "user"
+            },
+            "text_characters": 53
+          },
+          "job": {
+            "id": "event-2a0f464905d66ecd4362a1d0c7e404000446a5faf7a67cc64eb4badd8c7a4a0d",
+            "event_id": "event-2a0f464905d66ecd4362a1d0c7e404000446a5faf7a67cc64eb4badd8c7a4a0d",
+            "status": "waiting_model",
+            "phase": "extract",
+            "attempts": 0,
+            "error": null,
+            "updated_at": "2026-11-11T22:42:03.531344+00:00",
+            "available_at": "2026-11-11T22:42:03.531344+00:00",
+            "extracted_count": 0,
+            "review_count": 0
+          },
+          "pending_count": 2,
+          "processing": {
+            "scheduled": true,
+            "worker_pid": 92689,
+            "attempt_limit": null,
+            "log_path": "/var/folders/5s/7zp64x6j563dqg46bq58b6cw0000gn/T/automatic-overview-sdk-82sup1t2/memory.sqlite3.worker.log",
+            "durability": "SQLite queue; independent worker process"
+          }
+        }
+      ],
+      "last_public_status_by_scope": {
+        "campus": {
+          "job_counts": {
+            "completed": 8
+          },
+          "pending_count": 0,
+          "event_count": 4,
+          "assertion_count": 4,
+          "error_count": 0,
+          "unresolved_count": 0,
+          "pending_jobs": [],
+          "errors": [],
+          "unresolved": [],
+          "pagination": {
+            "pending_jobs": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "errors": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            },
+            "unresolved": {
+              "offset": 0,
+              "limit": 100,
+              "total": 0,
+              "next_offset": null
+            }
+          },
+          "source_version": 4,
+          "model_configured": true,
+          "provider_status": "configured",
+          "model_backend": "SubprocessModel",
+          "retrieval_backend": "lexical",
+          "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6",
+          "diagnostic_scope": "campus",
+          "derived_overviews": {
+            "entries": [
+              {
+                "scope": "campus",
+                "state": "idle",
+                "status": "idle",
+                "desired_frontier": {
+                  "generation": 4,
+                  "assertion_watermark": 4,
+                  "edge_watermark": 0,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "completed_frontier": {
+                  "assertion_watermark": 4,
+                  "edge_watermark": 0,
+                  "generation": 4,
+                  "pipeline_key": "44e014805f37839079edd76d5554641e24fcd75267b13ebf19382921e3a41ef6"
+                },
+                "current_version_id": 6,
+                "current_check_id": 6,
+                "published_theme_count": 1,
+                "error": null,
+                "updated_at": "2026-11-11T22:42:04.289740+00:00",
+                "next_wake_at": null,
+                "root_view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-48638e663a962e81a591c826",
+                "version_id": 6,
+                "check_id": 6,
+                "manifest_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7@2",
+                "unassigned_count": 0,
+                "root_request_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7",
+                "canonical_ready": true,
+                "continuations": [
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-48638e663a962e81a591c826",
+                      "version_id": 6,
+                      "section": "summary",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-48638e663a962e81a591c826",
+                      "version_id": 6,
+                      "section": "evidence",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-48638e663a962e81a591c826",
+                      "version_id": 6,
+                      "section": "edges",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-48638e663a962e81a591c826",
+                      "version_id": 6,
+                      "section": "metadata",
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-48638e663a962e81a591c826",
+                      "version_id": 6,
+                      "section": "checks",
+                      "offset": 0,
+                      "limit": 6000,
+                      "snapshot_id": 6
+                    }
+                  },
+                  {
+                    "tool": "memory_history",
+                    "arguments": {
+                      "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-48638e663a962e81a591c826",
+                      "section": "routes",
+                      "snapshot_id": 3,
+                      "offset": 0,
+                      "limit": 6000
+                    }
+                  }
+                ]
+              }
+            ],
+            "total": 1,
+            "offset": 0,
+            "limit": 10,
+            "continuation": null
+          },
+          "response_complete": true
+        }
+      },
+      "public_summary_pages": [
+        {
+          "arguments": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-fb134f48208703a0c49df12d",
+            "version_id": 4,
+            "section": "summary"
+          },
+          "response": {
+            "view_id": "scope-overview-c2ac909939b9efd10c0fd62d8896adc7-plan-fb134f48208703a0c49df12d",
+            "version_id": 4,
+            "section": "summary",
+            "snapshot_id": null,
+            "encoding": "text",
+            "offset": 0,
+            "end": 403,
+            "total_characters": 403,
+            "item_count": null,
+            "content": "Release requires a signed permit. Only during the pilot. [assertion-e763ca64d80c6e3934b2734f57d57a708e7e0fe3969db3cf9f87e77ff706b533]\nRelease requires backup approval when the lead is absent. [assertion-a1f0309081edd831a5c3e753279fc47c2b97425df0f2f057523f2ad75ac0c116]\nRelease excludes the archive until its audit is complete. [assertion-f6953a05c6e53db7d910775430b434a0a12743f7180e3a2c14690e9f3f7d52fe]",
+            "response_complete": true,
+            "continuation": null
+          }
+        }
+      ],
+      "provider_task_counts": {
+        "Extract attributable assertions from the user event": 5,
+        "Verify contextual assertion interpretations": 5,
+        "Propose evidence links for the source assertion": 5,
+        "Discover reusable memory themes": 3,
+        "What does release policy require?": 3,
+        "Review grounded memory overview": 6,
+        "Summarize the known topics, reported decisions, material conditions, open questions and interfaces in this scope.": 3,
+        "Plan memory retrieval for a question": 1
+      },
+      "owned_pids": [
+        92664,
+        92665,
+        92666,
+        92667,
+        92668,
+        92669,
+        92671,
+        92679,
+        92683,
+        92685,
+        92687,
+        92688,
+        92689,
+        92690,
+        92691,
+        92692,
+        92693,
+        92694,
+        92695,
+        92696,
+        92697,
+        92698,
+        92699,
+        92700,
+        92701,
+        92702,
+        92703,
+        92704,
+        92705,
+        92706,
+        92707,
+        92708,
+        92709,
+        92711
+      ],
+      "remaining_owned_pids": [],
+      "detailed_trace": "/private/tmp/assertion-v8-sdk-green-proof/test_R30_new_capture_during_frozen_generation_cannot_leak_into_old_history.json",
+      "detailed_trace_sha256": "054532f65f9e8cd6a554bc4bb0e2b2b85ad1abee1dc32ec5cc77e958fb9c7037"
+    }
+  ]
+}

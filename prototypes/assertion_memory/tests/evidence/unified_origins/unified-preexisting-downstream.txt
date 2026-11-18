@@ -1,0 +1,33 @@
+test_preflight_reserves_proof_in_entire_family_and_never_truncates (prototypes.assertion_memory.tests.test_overview_source_proof.OverviewSourceProofTest.test_preflight_reserves_proof_in_entire_family_and_never_truncates) ... FAIL
+test_proof_overhead_derives_smaller_output_and_irreducible_proof_still_fails (prototypes.assertion_memory.tests.test_overview_source_proof.OverviewSourceProofTest.test_proof_overhead_derives_smaller_output_and_irreducible_proof_still_fails) ... FAIL
+test_body_lookalike_json_has_no_origin_and_cutoff_rejects_entire_old_turn (prototypes.assertion_memory.native_occurrences_test.NativeOccurrenceTests.test_body_lookalike_json_has_no_origin_and_cutoff_rejects_entire_old_turn) ... FAIL
+
+======================================================================
+FAIL: test_preflight_reserves_proof_in_entire_family_and_never_truncates (prototypes.assertion_memory.tests.test_overview_source_proof.OverviewSourceProofTest.test_preflight_reserves_proof_in_entire_family_and_never_truncates)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-intake-baseline/prototypes/assertion_memory/tests/test_overview_source_proof.py", line 180, in test_preflight_reserves_proof_in_entire_family_and_never_truncates
+    with self.assertRaises(ModelError): _write(engine,spec,rows,[],self.frame,ledger,'global')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ModelError not raised
+
+======================================================================
+FAIL: test_proof_overhead_derives_smaller_output_and_irreducible_proof_still_fails (prototypes.assertion_memory.tests.test_overview_source_proof.OverviewSourceProofTest.test_proof_overhead_derives_smaller_output_and_irreducible_proof_still_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-intake-baseline/prototypes/assertion_memory/tests/test_overview_source_proof.py", line 245, in test_proof_overhead_derives_smaller_output_and_irreducible_proof_still_fails
+    self.assertLess(bound,8000)
+AssertionError: 8000 not less than 8000
+
+======================================================================
+FAIL: test_body_lookalike_json_has_no_origin_and_cutoff_rejects_entire_old_turn (prototypes.assertion_memory.native_occurrences_test.NativeOccurrenceTests.test_body_lookalike_json_has_no_origin_and_cutoff_rejects_entire_old_turn)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/assertion-intake-baseline/prototypes/assertion_memory/native_occurrences_test.py", line 182, in test_body_lookalike_json_has_no_origin_and_cutoff_rejects_entire_old_turn
+    self.assertEqual(self.drain(watcher), 1)
+AssertionError: 3 != 1
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.045s
+
+FAILED (failures=3)

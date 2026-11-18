@@ -1,0 +1,9 @@
+{
+  "scope": "synthetic existing navigation suites only",
+  "baseline_commit": "a7ce900",
+  "baseline_result": "21 tests, 2 failures, 14 errors",
+  "candidate_result": "21 tests, 2 failures, 14 errors",
+  "limitation": "Historical root-directory tests already fail on rootless baseline. Shared background model fixture does not implement the newly required small-catalog hierarchy task; candidate may encounter model JSON errors earlier than baseline root errors. Focused current contract tests and existing large hierarchy tests pass.",
+  "baseline_log": "/private/tmp/semantic-navigation-baseline.txt",
+  "candidate_log": "/private/tmp/semantic-navigation-regression.txt"
+}

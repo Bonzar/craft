@@ -1,0 +1,6 @@
+test_authenticated_independent_clients_share_idempotent_capture (tests.test_memory_http.MemoryHTTPTest.test_authenticated_independent_clients_share_idempotent_capture) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.738s
+
+OK

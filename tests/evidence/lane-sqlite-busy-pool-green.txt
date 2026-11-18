@@ -1,0 +1,35 @@
+test_background_claim_and_failed_cleanup_wait_before_body_without_replaying_it (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_background_claim_and_failed_cleanup_wait_before_body_without_replaying_it) ... ok
+test_cancel_and_exhaustion_are_bounded_with_real_writer_still_holding_lock (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_cancel_and_exhaustion_are_bounded_with_real_writer_still_holding_lock) ... Background SQLite write retry exhausted
+ok
+test_cancel_interrupts_an_already_attempted_real_write_admission (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_cancel_interrupts_an_already_attempted_real_write_admission) ... ok
+test_cancelled_background_context_cannot_reach_a_new_write_body (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_cancelled_background_context_cannot_reach_a_new_write_body) ... ok
+test_constructor_busy_retries_and_closes_each_partial_store (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_constructor_busy_retries_and_closes_each_partial_store) ... Processing constructor deferred: lane=source index=0 writer_busy
+ok
+test_expired_claim_is_not_revived_after_waiting_for_writer (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_expired_claim_is_not_revived_after_waiting_for_writer) ... ok
+test_failed_cleanup_cannot_reset_an_exhausted_busy_episode (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_failed_cleanup_cannot_reset_an_exhausted_busy_episode) ... Background SQLite write retry exhausted
+Background SQLite write retry exhausted
+ok
+test_foreground_does_not_inherit_background_wait_policy (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_foreground_does_not_inherit_background_wait_policy) ... ok
+test_nonbusy_sql_error_and_body_errors_are_never_retried (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_nonbusy_sql_error_and_body_errors_are_never_retried) ... ok
+test_short_writer_during_actual_maintenance_tick_does_not_stop_two_plus_one (tests.test_lane_sqlite_busy.LaneSQLiteBusyTest.test_short_writer_during_actual_maintenance_tick_does_not_stop_two_plus_one) ... ok
+test_error_stops_new_turns_but_joins_active_source_and_heartbeats (tests.test_processing_pool.ProcessingPoolTest.test_error_stops_new_turns_but_joins_active_source_and_heartbeats) ... Processing lane failed: lane=maintenance index=1 error_type=RuntimeError
+ok
+test_fixed_latency_same_conditional_corpus_reports_throughput_and_p95 (tests.test_processing_pool.ProcessingPoolTest.test_fixed_latency_same_conditional_corpus_reports_throughput_and_p95) ... ok
+test_global_limit_is_shared_not_per_lane (tests.test_processing_pool.ProcessingPoolTest.test_global_limit_is_shared_not_per_lane) ... ok
+test_heartbeat_only_owned_registered_unexpired_tokens (tests.test_processing_pool.ProcessingPoolTest.test_heartbeat_only_owned_registered_unexpired_tokens) ... ok
+test_idle_return_and_failure_wait_for_all_connections_to_close (tests.test_processing_pool.ProcessingPoolTest.test_idle_return_and_failure_wait_for_all_connections_to_close) ... ok
+test_invalid_global_limit_cannot_recover_or_create_database (tests.test_processing_pool.ProcessingPoolTest.test_invalid_global_limit_cannot_recover_or_create_database) ... ok
+test_non_busy_sqlite_errors_are_not_hidden_as_contention (tests.test_processing_pool.ProcessingPoolTest.test_non_busy_sqlite_errors_are_not_hidden_as_contention) ... ok
+test_run_worker_recovers_once_and_preserves_budget_after_idle_race (tests.test_processing_pool.ProcessingPoolTest.test_run_worker_recovers_once_and_preserves_budget_after_idle_race) ... ok
+test_source_workers_default_two_and_bounded (tests.test_processing_pool.ProcessingPoolTest.test_source_workers_default_two_and_bounded) ... ok
+test_sqlite_writer_contention_does_not_stop_source_lanes (tests.test_processing_pool.ProcessingPoolTest.test_sqlite_writer_contention_does_not_stop_source_lanes) ... Processing heartbeat deferred: SQLite writer busy
+ok
+test_two_source_calls_overlap_and_maintenance_advances (tests.test_processing_pool.ProcessingPoolTest.test_two_source_calls_overlap_and_maintenance_advances) ... ok
+test_real_source_jobs_overlap_on_two_isolated_provider_instances (tests.test_processing_pool_integration.PoolSourceIntegrationTest.test_real_source_jobs_overlap_on_two_isolated_provider_instances) ... ok
+test_supervisor_heartbeat_keeps_real_claims_alive_during_longer_provider_wait (tests.test_processing_pool_integration.PoolSourceIntegrationTest.test_supervisor_heartbeat_keeps_real_claims_alive_during_longer_provider_wait) ... ok
+
+----------------------------------------------------------------------
+Ran 23 tests in 2.501s
+
+OK
+PROCESSING_POOL_FIXED_LATENCY [{"source_workers": 1, "maintenance_workers": 1, "source_items": 8, "fixed_io_seconds": 0.02, "elapsed_seconds": 0.192765, "source_items_per_second": 41.501, "source_queue_completion_p95_seconds": 0.181318, "peak_source_io": 1, "maintenance_turns": 4, "conditional_payloads_unchanged": true}, {"source_workers": 2, "maintenance_workers": 1, "source_items": 8, "fixed_io_seconds": 0.02, "elapsed_seconds": 0.124154, "source_items_per_second": 64.436, "source_queue_completion_p95_seconds": 0.113724, "peak_source_io": 2, "maintenance_turns": 4, "conditional_payloads_unchanged": true}]
