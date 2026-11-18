@@ -114,19 +114,49 @@ class CaptureTest(unittest.TestCase):
         self.poll()
         self.assertEqual(before, self.messages())
 
-    def test_only_verified_turn_tool_outputs_and_visible_assistant_not_reasoning(self):
+    def test_only_user_and_visible_assistant_are_automatically_captured_and_acknowledged(self):
+        from unittest.mock import patch
+        from synthetic_memory_adapter.frontier import Coordinator
+        from .test_assertion_memory_frontier import FakeRemote
+        from .test_assertion_memory_artifacts import PNG
+        import base64
         self.turn()
-        self.assistant('secret reasoning', 'r1', 'analysis')
-        self.append({'type': 'response_item', 'payload': {'type': 'function_call', 'name': 'tool-name', 'call_id': 'c1', 'arguments': 'DO-NOT-CAPTURE'}})
-        self.append({'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'c1', 'output': 'observed result'}})
-        self.assistant('visible', 'a1', 'commentary')
-        self.append({'type': 'response_item', 'payload': {'type': 'message', 'role': 'system', 'content': [{'type': 'input_text', 'text': 'secret system'}]}})
-        self.capture.register(self.store, self.raw)
+        self.assistant('secret reasoning','r1','analysis')
+        for kind in ('function','custom_tool'):
+            self.append({'type':'response_item','payload':{'type':kind+'_call','name':'fixture','call_id':kind,'arguments':'DO-NOT-CAPTURE'}})
+            output='observed result' if kind=='function' else [{'type':'input_text','text':'tool-only words'},
+                {'type':'input_image','image_url':'data:image/png;base64,'+base64.b64encode(PNG).decode()}]
+            self.append({'type':'response_item','payload':{'type':kind+'_call_output','call_id':kind,'output':output}})
+        self.append({'type':'response_item','payload':{'type':'function_call_output','call_id':'large','output':'x'*(self.capture.MAX_RECORD+1)}})
+        self.assistant('visible progress','a1','commentary');self.assistant('visible final','a2','final')
+        self.capture.register(self.store,self.raw)
+        with patch.object(self.store,'store_artifact',side_effect=AssertionError('automatic tool artifacts are forbidden')):
+            result=self.poll()
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant','assistant'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','visible progress','visible final'])
+        self.assertEqual(result['gaps'],[])
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM artifacts').fetchone()[0],0)
+        remote=FakeRemote();coordinator=Coordinator(self.store,remote);coordinator.observe('physical',result);coordinator.tick()
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],3)
+        self.assertEqual(coordinator.local('physical')['scan_state'],'current')
+        self.assertTrue(all(m['status']=='acknowledged' for m in self.messages()))
+        self.assertEqual(self.store.session('physical')['cursor'],self.path.stat().st_size)
+
+    def test_over_media_cap_keeps_explicit_gap_and_drops_unproven_following_assistant(self):
+        from unittest.mock import patch
+        self.turn()
+        self.append({'type':'response_item','payload':{'type':'function_call_output','output':'x'*4097}})
+        self.assistant('No binding may survive this unparsed record')
+        self.capture.register(self.store,self.raw)
+        with patch.object(self.capture,'MAX_MEDIA_RECORD',4096):
+            result=self.poll()
+        self.assertEqual(result['gaps'],['oversized_record'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes'])
+        self.assertFalse(any(m['arguments']['role']=='tool' for m in self.messages()))
+        self.assertIsNone(self.store.session('physical')['turn'])
+        self.turn('Next proven source','next','next-user');self.assistant('Next proven reply','next-answer')
         self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()], ['user', 'tool', 'assistant'])
-        serialized = json.dumps(self.messages())
-        for excluded in ('secret reasoning', 'DO-NOT-CAPTURE', 'secret system'): self.assertNotIn(excluded, serialized)
-        self.assertEqual(self.messages()[1]['arguments']['actor_id'], 'tool:tool-name')
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','Next proven source','Next proven reply'])
 
     def test_nonhuman_and_unknown_origin_and_inherited_fork_history_are_excluded(self):
         for i, trigger in enumerate(('automation', 'subagent_message', 'auto_resume', 'unknown-new-trigger')):
@@ -218,9 +248,9 @@ class CaptureTest(unittest.TestCase):
         self.poll()
         self.assertEqual(len(self.messages()), 1)
 
-    def test_oversized_record_is_explicit_gap_and_next_proven_turn_still_captures(self):
+    def test_oversized_visible_record_is_explicit_gap_and_next_proven_turn_still_captures(self):
         self.turn()
-        self.append({'type':'response_item','payload':{'type':'function_call_output','output':'x'*(self.capture.MAX_RECORD+1)}})
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant','channel':'final','content':[{'type':'output_text','text':'x'*(self.capture.MAX_RECORD+1)}]}})
         self.turn('later','two','u2')
         self.capture.register(self.store, self.raw)
         result = self.poll()
@@ -454,7 +484,7 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(result['gaps'],[])
         self.assertEqual(self.store.session('physical')['exclusions']['harness_service_context'],1)
 
-    def test_actual_input_text_tool_blocks_preserve_knowledge_and_redact_precise_credentials(self):
+    def test_automatic_tool_blocks_are_excluded_and_explicit_projection_remains_lossless(self):
         self.turn()
         self.append({'type':'response_item','payload':{'type':'custom_tool_call','name':'exec','call_id':'structured'}})
         payload={'site_status':'draft','conditions':['keep all qualifications','first condition'],
@@ -465,8 +495,9 @@ class CaptureTest(unittest.TestCase):
                 {'type':'input_text','text':json.dumps(payload)}]
         self.append({'type':'response_item','payload':{'type':'custom_tool_call_output','call_id':'structured','output':blocks}})
         self.capture.register(self.store,self.raw);result=self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','tool'])
-        text=self.messages()[1]['arguments']['text'];rendered=json.loads(text)
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user'])
+        from synthetic_memory_adapter.tool_projection import project_result
+        text=project_result(blocks)['text'];rendered=json.loads(text)
         self.assertEqual(rendered['format'],'native-tool-output/v1')
         self.assertEqual(rendered['output'][0],blocks[0])
         clean=json.loads(rendered['output'][1]['text'])
@@ -474,7 +505,7 @@ class CaptureTest(unittest.TestCase):
         for secret in ('SYNTHETIC_REPO_SECRET_314','SYNTHETIC_SERVICE_SECRET_271','SYNTHETIC_AUTH_SECRET_161'):self.assertNotIn(secret,text)
         self.assertEqual(rendered['credential_redactions'],3)
         self.assertEqual(result['gaps'],[])
-        self.assertEqual(self.store.session('physical')['exclusions']['credential_fields_redacted'],3)
+        self.assertEqual(self.store.session('physical')['exclusions']['non_dialogue_custom_tool_call_output'],1)
 
     def test_genuine_user_multicontent_still_reports_gap(self):
         self.turn()
@@ -512,9 +543,11 @@ class CaptureTest(unittest.TestCase):
             self.append({'type':'response_item','payload':{'type':'function_call','name':'fixture','call_id':'env-'+str(index)}})
             self.append({'type':'response_item','payload':{'type':'function_call_output','call_id':'env-'+str(index),'output':output}})
         self.capture.register(self.store,self.raw)
+        from synthetic_memory_adapter.tool_projection import project_result
         with patch.object(os.environ,'get',side_effect=AssertionError('projection must not read environment values')):
             self.poll()
-        tools=[message['arguments']['text'] for message in self.messages() if message['arguments']['role']=='tool']
+            tools=[project_result(output)['text'] for output in outputs]
+        self.assertFalse(any(message['arguments']['role']=='tool' for message in self.messages()))
         self.assertEqual(len(tools),len(outputs))
         for text in tools:
             self.assertNotIn(secret,text);self.assertIn(condition,text);self.assertIn(reference,text)
@@ -524,7 +557,7 @@ class CaptureTest(unittest.TestCase):
         self.assertTrue(any('Final output:' in text for text in tools))
         self.assertTrue(any('```json' in text and 'End of output.' in text for text in tools))
         self.assertTrue(all(reference in message['arguments']['text'] for message in self.messages() if message['arguments']['role']=='user'))
-        self.assertEqual(self.store.session('physical')['exclusions']['credential_fields_redacted'],len(outputs))
+        self.assertEqual(self.store.session('physical')['exclusions']['non_dialogue_function_call_output'],len(outputs))
         from synthetic_memory_adapter.tool_projection import project_result
         for empty in ('ASSERTION_MEMORY_TOKEN=', 'export ASSERTION_MEMORY_TOKEN=""', "ASSERTION_MEMORY_TOKEN='' # remains unset"):
             self.assertEqual(project_result(empty)['text'],empty)
@@ -542,18 +575,21 @@ class CaptureTest(unittest.TestCase):
         self.append({'type':'response_item','payload':{'type':'function_call_output','call_id':'custom-env',
             'output':{'CUSTOM_AUTH_ENV':secret,'condition':'Preserve this exact exception.',
                 'wrapped':'Final output:\n'+json.dumps({'CUSTOM_AUTH_ENV':secret})}}})
+        self.assistant('Visible final after excluded tool')
         self.capture.register(self.store,self.raw)
         from synthetic_memory_adapter import capture_worker
         from .test_assertion_memory_frontier import FakeRemote
         binding={'capture':dict(self.config),'connection':{'url':'https://fixture.invalid/mcp','bearer_token_env_var':'CUSTOM_AUTH_ENV'}}
         before=json.loads(json.dumps(binding))
-        with patch.object(capture_worker.signal,'signal'),patch.object(capture_worker,'Client',return_value=FakeRemote()):
+        with patch.object(capture_worker.signal,'signal'),patch.object(capture_worker,'Client',return_value=FakeRemote()), \
+                patch.object(capture_worker,'poll',wraps=capture_worker.poll) as observed_poll:
             self.assertEqual(capture_worker.run(binding,self.root,once=True),0)
         self.assertEqual(binding,before)
-        tool=next(message for message in self.messages() if message['arguments']['role']=='tool')
-        self.assertEqual(tool['status'],'acknowledged')
-        self.assertNotIn(secret,tool['arguments']['text']);self.assertIn('[REDACTED:credential]',tool['arguments']['text'])
-        self.assertIn('Preserve this exact exception.',tool['arguments']['text'])
+        self.assertEqual(observed_poll.call_args.args[2]['credential_env_var'],'CUSTOM_AUTH_ENV')
+        self.assertEqual([message['arguments']['role'] for message in self.messages()],['user','assistant'])
+        self.assertTrue(all(message['status']=='acknowledged' for message in self.messages()))
+        self.assertNotIn(secret,json.dumps(self.messages()))
+        self.assertNotIn('Preserve this exact exception.',json.dumps(self.messages()))
 
     def test_nonobject_payload_is_a_gap_and_breaks_source_chain(self):
         expected=[]
@@ -655,7 +691,7 @@ class CaptureTest(unittest.TestCase):
         coordinator=Coordinator(self.store,object());coordinator.observe('physical',result)
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
 
-    def test_phase_v2_replay_keeps_32_acknowledged_receipts_and_adds_only_three_commentaries(self):
+    def test_phase_v2_replay_keeps_dialogue_receipts_and_adds_only_three_commentaries(self):
         from unittest.mock import patch
         from synthetic_memory_adapter.frontier import Coordinator
         from .test_assertion_memory_frontier import FakeRemote
@@ -676,16 +712,16 @@ class CaptureTest(unittest.TestCase):
         with patch.object(self.capture,'_assistant_mode',side_effect=old_mode):before_result=self.poll()
         remote=FakeRemote();coordinator=Coordinator(self.store,remote);coordinator.observe('physical',before_result);coordinator.tick()
         before={m['message_id']:(m['arguments'],m['receipt'],m['status']) for m in self.messages()}
-        self.assertEqual(len(before),32);self.assertTrue(all(value[2]=='acknowledged' for value in before.values()))
+        self.assertEqual(len(before),2);self.assertTrue(all(value[2]=='acknowledged' for value in before.values()))
         from synthetic_memory_adapter.repair import reset_parser_checkpoint,REASON
         self.assertTrue(REASON.endswith('_v2'))
         reset_parser_checkpoint(self.store,'physical',expected_header_sha256=self.store.session('physical')['header_hash'],reason=REASON)
         result=self.poll();coordinator.observe('physical',result);coordinator.tick()
         after={m['message_id']:(m['arguments'],m['receipt'],m['status']) for m in self.messages()}
-        self.assertEqual(len(after),35);self.assertTrue(all(after[key]==value for key,value in before.items()))
+        self.assertEqual(len(after),5);self.assertTrue(all(after[key]==value for key,value in before.items()))
         self.assertTrue(all(value[2]=='acknowledged' for value in after.values()))
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
-        self.assertEqual(coordinator.local('physical')['server_acked_through'],35)
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],5)
         self.assertEqual(sum(m['arguments']['role']=='assistant' for m in self.messages()),4)
-        self.assertEqual(sum(m['arguments']['role']=='tool' and m['arguments']['text'].startswith('{"credential_redactions"') for m in self.messages()),18)
+        self.assertEqual(sum(m['arguments']['role']=='tool' for m in self.messages()),0)
         self.assertIsNone(self.store.session('physical')['turn']['assistant'])
