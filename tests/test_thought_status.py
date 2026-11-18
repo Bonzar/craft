@@ -128,6 +128,51 @@ class ThoughtStatusTest(unittest.TestCase):
             pieces.append(chunk['content']);cursor=chunk['continuation']
         self.assertEqual(json.loads(''.join(pieces))['error'],reason)
 
+    def test_unrequested_canonical_error_bodies_are_not_loaded(self):
+        import sqlite3
+        thoughts=[]
+        for index in range(2):
+            identity=self.capture(index,'public')
+            thoughts.append(self.service.thoughts.publish('Interpretation '+str(index),bases=[{'event_id':identity}]))
+        self.service.work.enqueue(thoughts)
+        reason='Unrequested oversized maintenance error. '*4000
+        with self.store.transaction(write=True) as db:
+            db.execute("UPDATE memory_capture_jobs SET status='completed'")
+            for index,thought in enumerate(thoughts):
+                db.execute('UPDATE memory_thought_work SET available_at=?,error=? WHERE thought_id=?',
+                    (str(index),reason if index==0 else None,thought.id))
+        loaded=[]
+        def observe(cursor,values):
+            loaded.extend(True for value in values if isinstance(value,str) and value==reason)
+            return sqlite3.Row(cursor,values)
+        self.store._connection.row_factory=observe
+        for scope in (None,'public'):
+            page=self.service.status(scope=scope,offset=1,limit=1)
+            self.assertEqual(page['error_count'],1)
+            self.assertEqual(page['thought_errors'],[])
+            self.assertEqual(len(page['thought_pending_jobs']),1)
+        self.assertEqual(loaded,[])
+        page=self.service.status(thoughts[0].id,scope='public',section='job')
+        pieces=[page['content']]
+        while page['continuation']:
+            page=self.service.status(**page['continuation']['arguments']);pieces.append(page['content'])
+        self.assertEqual(json.loads(''.join(pieces))['error'],reason)
+        self.assertTrue(loaded)
+
+    def test_query_diagnostic_fallback_preserves_answer_and_existing_continuations(self):
+        from prototypes.assertion_memory.thought_status import query_diagnostics
+        answer_cursor={'tool':'memory_source','arguments':{'record_id':'answer','section':'text'}}
+        job_cursor={'tool':'memory_status','arguments':{'event_id':'job','section':'job'}}
+        health={'error_count':1,'pending_count':1,'unresolved_count':0,'response_complete':False,
+                'continuations':[job_cursor]}
+        result={'answer':'Retained answer.','answer_continuations':[answer_cursor]}
+        with patch('prototypes.assertion_memory.thought_status.snapshot',return_value=health), \
+             patch('prototypes.assertion_memory.thought_status._fits',side_effect=[False,True]):
+            page=query_diagnostics(self.service,result,'public')
+        self.assertEqual(page['answer_continuations'],[answer_cursor])
+        self.assertIn(job_cursor,page['continuations'])
+        self.assertIn({'tool':'memory_status','arguments':{'scope':'public','offset':0,'limit':100}},page['continuations'])
+
     def test_unsupported_sections_and_invalid_arguments_are_rejected(self):
         for section in ('unknown','derived_overview','derived_overviews','view_names','policy_coverage'):
             with self.subTest(section=section),self.assertRaises(ValueError):
