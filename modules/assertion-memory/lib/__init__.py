@@ -93,6 +93,12 @@ def context(event, storage):
     capture_status = 'not_configured'
     local_report = None
     capture = binding.get('capture', {})
+    if event.event == 'session-end':
+        if capture.get('enabled') and event.harness == 'codex':
+            from .outbox import set_watching
+            root = Path(capture['state_dir']) / binding['endpoint_sha256']
+            set_watching(root, event.session_id, False)
+        return ''
     if capture.get('enabled'):
         if event.harness != 'codex':
             capture_status = 'unsupported_harness'
@@ -106,6 +112,7 @@ def context(event, storage):
                 store = Outbox(root / 'outbox.sqlite3')
                 try:
                     registered = register(store, dict(event.raw))
+                    store.set_watching(event.session_id, True)
                     local_report = store.summary(event.session_id)
                 finally: store.close()
                 capture_status = 'blocked_source' if registered.get('blocked') else 'registered_local_outbox'

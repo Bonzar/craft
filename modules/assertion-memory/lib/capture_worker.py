@@ -36,6 +36,7 @@ def run(binding, state, *, once=False, binding_path=None):
                     except (OSError, ValueError): return 0
                     if current != binding: return 0
                 for session in store.sessions():
+                    if not session.get('watching', True): continue
                     if session.get('blocked'):
                         coordinator.observe(session['session_id'], {'status':'blocked'})
                         continue
@@ -47,7 +48,8 @@ def run(binding, state, *, once=False, binding_path=None):
                         current['blocked'] = type(failure).__name__
                         with store.db: store.save_session(current)
                         observation = {'status':'blocked'}
-                    coordinator.observe(session['session_id'], observation)
+                    if observation.get('status') != 'inactive':
+                        coordinator.observe(session['session_id'], observation)
                 coordinator.tick()
                 if once: return 0
                 stop.wait(1.0)

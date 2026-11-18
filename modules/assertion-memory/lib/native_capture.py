@@ -344,6 +344,7 @@ def _process(store, state, meta, row, offset, position, config):
 def poll(store, session_id, config):
     state = store.session(session_id)
     if state is None: raise ValueError('Unregistered session')
+    if not state.get('watching', True): return {'queued': 0, 'status': 'inactive'}
     path = Path(state['path'])
     if not path.exists(): return {'queued': 0, 'status': 'waiting_transcript'}
     queued = 0

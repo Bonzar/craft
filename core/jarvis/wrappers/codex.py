@@ -34,6 +34,7 @@ HARNESS = 'codex'
 # нести туда стартовый контекст нечем и незачем.
 CODEX_EVENTS: dict[str, tuple[str, ...]] = {
     'SessionStart': (ev.SESSION_START, ev.AFTER_COMPACT),
+    'SessionEnd': (ev.SESSION_END,),
     'PermissionRequest': (ev.PERMISSION_REQUEST,),
     'SubagentStart': (ev.SUBAGENT_START,),
     'UserPromptSubmit': (ev.PROMPT,),
@@ -67,6 +68,8 @@ COMPACT_SOURCE = 'compact'
 
 SUPPORTED: dict[str, frozenset[str]] = {
     ev.SESSION_START: frozenset({forms.CONTEXT}),
+    # SessionEnd is advisory: modules may perform cleanup but cannot steer Codex.
+    ev.SESSION_END: frozenset(),
     ev.AFTER_COMPACT: frozenset({forms.CONTEXT}),
     # замер 18.09.2026: схемы ответов у Codex один в один как у Claude —
     # `decision` с `behavior` allow или deny на запросе разрешения и
@@ -91,6 +94,7 @@ UNSUPPORTED_FORMS = {
 
 UNSUPPORTED_NOTE = {
     ev.SESSION_START: 'обёртка Codex этапа 3 несёт только контекст на старте сессии',
+    ev.SESSION_END: 'Codex на завершении сессии не принимает управляющих ответов',
     ev.AFTER_COMPACT: 'обёртка Codex этапа 3 несёт только контекст после сжатия',
     ev.PERMISSION_REQUEST: 'Codex на запросе разрешения принимает только «разрешить» и '
                            '«запретить»: вопроса человеку и контекста там нет (замер)',

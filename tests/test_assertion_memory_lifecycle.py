@@ -112,6 +112,36 @@ class MemoryLifecycleTest(unittest.TestCase):
         self.assertFalse(self.store.session('physical')['watching'])
         self.assertEqual(self.store.session('physical')['cursor'], 123)
 
+    def test_session_end_stops_watching_while_another_session_holds_the_queue_write_lock(self):
+        self.context('session-start')
+        store = self.hook_store()
+        store.db.execute('BEGIN IMMEDIATE')
+        try:
+            self.assertEqual(self.context('session-end'), '')
+            self.assertFalse(store.session('physical')['watching'])
+        finally:
+            store.db.rollback()
+
+    def test_stopped_session_retries_missing_receipts_even_when_server_prefix_is_acknowledged(self):
+        from synthetic_memory_adapter.frontier import Coordinator
+        self.capture.register(self.store, self.raw)
+        self.turn()
+        self.poll()
+        self.store.set_watching('physical', False)
+        remote = FakeRemote()
+        now = 1000
+        coordinator = Coordinator(self.store, remote, clock=lambda: now)
+        remote.fail_capture = True
+        coordinator.tick()
+        now += 65
+        remote.fail_capture = True
+        coordinator.tick()
+        self.assertEqual(coordinator.local('physical')['server_acked_through'], 1)
+        self.assertEqual(self.messages()[0]['status'], 'pending')
+        now += 65
+        coordinator.tick()
+        self.assertEqual(self.messages()[0]['status'], 'acknowledged')
+
     def test_session_end_is_translated_and_accepts_a_silent_response(self):
         from jarvis import events
         from jarvis.response import Silence
