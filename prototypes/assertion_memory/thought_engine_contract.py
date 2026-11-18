@@ -193,9 +193,9 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
         if set(response) != {'action', 'question', 'quote', 'text'}:
             raise ModelError('graph navigation response omitted required fields')
         action = response.get('action')
-        if action not in ('search', 'inspect', 'focus', 'unknown'):
+        if action not in ('inspect', 'focus', 'unknown'):
             raise ModelError('invalid graph navigation action')
-        for field, required in (('question', action == 'search'),
+        for field, required in (('question', False),
                                 ('quote', action in ('inspect', 'focus'))):
             if required:
                 semantic_text(response.get(field), field)

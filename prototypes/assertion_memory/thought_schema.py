@@ -9,8 +9,8 @@ def response_schema(task, *, support_count=None, single_thought=False):
     text = {'type':'string'}
     question = {'type':['string','null']}
     if task == 'Navigate thought graph':
-        return _object({'action':{'type':'string','enum':['search','inspect','focus','unknown']},
-                        'question':question,'quote':question,'text':text})
+        return _object({'action':{'type':'string','enum':['inspect','focus','unknown']},
+                        'question':{'type':'null'},'quote':question,'text':text})
     if task == 'Construct thought':
         choices={'type':'integer','minimum':0,'maximum':max(0,(support_count or 0)-1)}
         item = _object({'text':text,'question':question,

@@ -139,5 +139,16 @@ class ThoughtIterativeNavigationTest(unittest.TestCase):
         self.assertEqual(result.reason, 'unchanged_navigation_frontier')
         self.assertEqual(len(model.requests), 2)
 
+    def test_graph_cycle_stops_when_no_new_content_is_opened(self):
+        a = self.store.publish('Alpha graph location.', thought_id='cycle-a')
+        b = self.store.publish('Beta graph location.', thought_id='cycle-b', bases=[{'thought_id': a.id}])
+        model = Model(*(decision('inspect', quote=row.text) for row in (a, b, a, b)))
+        engine = ThoughtEngine(self.store, model)
+        with patch.object(engine, 'retrieve', return_value=[a]) as retrieve:
+            result = navigate(engine, 'Original question')
+        self.assertEqual(result.reason, 'unchanged_navigation_frontier')
+        self.assertEqual(result.inspected, (a, b))
+        self.assertEqual(retrieve.call_count, 1)
+
 
 if __name__=='__main__':unittest.main()

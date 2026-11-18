@@ -16,7 +16,7 @@ at a time. Its incoming and outgoing direct relations can lead to a more useful
 area, even when a starting point does not answer the question itself. A description
 may be only the exact first paragraph; description_complete reports this honestly.
 The current thought is supplied in full. Use action inspect to open a starting
-point or neighbor, search to formulate another semantic search question, focus to
+point or neighbor, focus to
 choose a visible thought as the appropriate answer location, or unknown when
 further progress is unsupported. A focus is a location, not a claim its answer is
 already verified. Return exactly action, question, quote, text.
@@ -26,10 +26,10 @@ of text already visible. The separate answer stage reads and checks the focus.
 Select existing thoughts using a substantive verbatim quotation from their visible questions,
 description/text, actor or recording timestamp, never IDs, versions, indices, or invented short aliases.
 recorded_at is when this thought version was recorded, not when its event occurred.
-The
-quotation must identify one thought unambiguously. For search supply question and
-null quote; for inspect/focus supply quote and null question; for unknown use both
-null. text explains the choice. Do not repeat unchanged searches or cycle between
+The quotation must identify one thought unambiguously. The program performs the
+initial semantic search once; further discovery follows direct graph relations.
+Search is not an available action. For inspect/focus supply quote and null
+question; for unknown use both null. text explains the choice. Do not cycle between
 unchanged frontiers. Source, scope and temporal exclusions are real boundaries;
 never assume excluded or uninspected material has been checked.'''
 
@@ -235,10 +235,10 @@ def _resolve(quote, visible):
 def _decision(response):
     exact_fields(response, {'action', 'question', 'quote', 'text'})
     action = response['action']
-    if action not in ('search', 'inspect', 'focus', 'unknown'):
+    if action not in ('inspect', 'focus', 'unknown'):
         raise ModelError('unknown thought navigation action')
     semantic_text(response['text'], 'navigation reason')
-    for field, required in (('question', action == 'search'), ('quote', action in ('inspect', 'focus'))):
+    for field, required in (('question', False), ('quote', action in ('inspect', 'focus'))):
         if required:
             semantic_text(response[field], 'navigation ' + field)
         elif response[field] is not None:
@@ -248,33 +248,18 @@ def _decision(response):
 
 class _Navigation:
     """Invocation-local progress state; canonical thoughts are never mutated."""
-    def __init__(self, engine, question, explicit_ids, initial=None, guidance=None, avoid_focus=()):
+    def __init__(self, engine, question, explicit_ids, initial=None, guidance=None):
         self.engine, self.question = engine, question
         self.focus = None
         self.focus_pinned = False
-        self.seeds = []
-        self.inspected, self.known = {}, set()
-        self.searches, self.states = set(), set()
+        self.inspected = {}
+        self.states = set()
         self.notice = None
-        self.guidance, self.avoid_focus = guidance, set(avoid_focus)
-        self.search(question, explicit_ids, initial)
-
-    def search(self, question, explicit_ids=(), initial=None):
-        normalized = ' '.join(question.casefold().split())
-        if normalized in self.searches:
-            return False
-        self.searches.add(normalized)
-        rows = self.engine.retrieve(question, explicit_ids=explicit_ids) if initial is None else initial
-        admitted = [row for row in rows if _admit(self.engine, row) is None]
-        keys = {_key(row) for row in admitted}
-        self.notice = None if keys - self.known else 'search_added_no_new_starting_points'
-        # A redundant formulation must not erase a useful unopened starting point.
-        self.seeds = (admitted if keys - self.known else
-                      list({_key(row): row for row in (*self.seeds, *admitted)}.values()))
-        self.known.update(keys)
+        self.guidance = guidance
+        rows = engine.retrieve(question, explicit_ids=explicit_ids) if initial is None else initial
+        self.seeds = [row for row in rows if _admit(engine, row) is None]
         self.engine._emit('navigation_search', question=question,
-                          bindings=tuple(_ref(row) for row in admitted), outcome=self.notice)
-        return True
+                          bindings=tuple(_ref(row) for row in self.seeds), outcome=None)
 
     def visible(self):
         records = [{'role': 'question', 'text': self.question}]
@@ -300,7 +285,6 @@ class _Navigation:
                 records.append({'role': 'option', **record, 'inspected': _key(thought) in self.inspected})
         if self.notice:
             records.append({'role': 'navigation_notice', 'text': self.notice})
-        self.known.update(visible)
         return records, list(visible.values())
 
     def finish(self, reason, thought=None):
@@ -327,10 +311,6 @@ class _Navigation:
             action = _decision(response)
             if action == 'unknown':
                 return self.finish(response['text'])
-            if action == 'search':
-                if not self.search(response['question']):
-                    return self.finish('repeated_navigation_search')
-                continue
             result = self.choose(action, response, visible)
             if result is not None:
                 return result
@@ -339,8 +319,8 @@ class _Navigation:
         matches = _resolve(response['quote'], visible)
         if len(matches) != 1:
             self.engine._discard_provisional()
-            self.notice = ('The previous quotation matched multiple thoughts; use a uniquely identifying visible quotation or search.'
-                if matches else 'The previous quotation was not visible; use an exact visible quotation or search.')
+            self.notice = ('The previous quotation matched multiple thoughts; use a uniquely identifying visible quotation.'
+                if matches else 'The previous quotation was not visible; use an exact visible quotation.')
             self.engine._emit('navigation_choice_repair', reason=self.notice)
             return None
         thought, pinned, spans = matches[0]
@@ -350,19 +330,16 @@ class _Navigation:
         self.engine._emit('navigation_choice', action=action, thought=_ref(thought),
                           quote=response['quote'], spans=spans, reason=response['text'])
         if action == 'focus':
-            if _key(thought) in self.avoid_focus:
-                self.notice = 'This location has already been insufficient; inspect its support or find another location.'
-                return None
             return self.finish(response['text'], thought)
         self.focus, self.focus_pinned = thought, pinned
         self.inspected.setdefault(_key(thought), thought)
         self.notice = None
 
 
-def navigate(engine, question, explicit_ids=(), *, initial=None, guidance=None, avoid_focus=()):
+def navigate(engine, question, explicit_ids=(), *, initial=None, guidance=None):
     """Locate useful content without a fixed graph depth or model-round budget."""
     question = semantic_text(question, 'question')
-    navigation = _Navigation(engine, question, explicit_ids, initial, guidance, avoid_focus)
+    navigation = _Navigation(engine, question, explicit_ids, initial, guidance)
     try:
         return navigation.run()
     except ModelContextExceeded:

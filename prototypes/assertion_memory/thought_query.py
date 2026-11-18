@@ -39,9 +39,10 @@ def _frontier(engine, frame, selected):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def _locate(engine, frame, ancestors):
-    frame.initial = engine.retrieve(frame.question, frame.explicit)
-    frame.raw = engine._pending_raw_material(frame.question)
+def _locate(engine, frame):
+    if frame.guidance is None:
+        frame.initial = engine.retrieve(frame.question, frame.explicit)
+        frame.raw = engine._pending_raw_material(frame.question)
     cached_candidates = [row for row in frame.initial if frame.question in engine.question_texts(row)
         and row.metadata.get('verification') == 'accepted' and not engine._is_parallel_alternative(row)
         and engine._fresh(row)]
@@ -57,7 +58,9 @@ def _locate(engine, frame, ancestors):
     if not frame.initial:
         raise SemanticUnavailable('No admitted search starting points or pending source messages were found')
     route = navigate(engine, frame.question, frame.explicit, initial=frame.initial,
-                     guidance=frame.guidance, avoid_focus=ancestors)
+                     guidance=frame.guidance)
+    discovered = (*route.inspected, *((route.thought,) if route.thought is not None else ()))
+    frame.initial = list({_key(row): row for row in (*frame.initial, *discovered)}.values())
     if route.thought is None:
         if frame.raw[0]:
             frame.frontier = _frontier(engine, frame, None)
@@ -88,7 +91,9 @@ def _request_detail(frames, frame, need):
     if getattr(need, 'incomplete', False) or any(packet in active.requested for active in frames):
         raise SemanticUnavailable('Supporting detail remains unresolved: ' + need.reason) from need
     frame.requested.add(packet)
-    frames.append(_Frame(need.question, guidance=need.reason))
+    full = [*frame.additional, *((frame.selected,) if frame.selected is not None else ())]
+    frames.append(_Frame(need.question, guidance=need.reason, initial=list(frame.initial),
+                         raw=frame.raw, additional=list({_key(row): row for row in full}.values())))
 
 
 def answer(engine, question, explicit_ids=()):
@@ -100,8 +105,7 @@ def answer(engine, question, explicit_ids=()):
         try:
             result = None
             if not frame.initialized:
-                ancestors = {_key(row.selected) for row in frames[:-1] if row.selected is not None}
-                result = _locate(engine, frame, ancestors)
+                result = _locate(engine, frame)
             if result is None:
                 result = _step(engine, frame)
         except ThoughtDetailNeeded as need:
