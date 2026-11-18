@@ -173,6 +173,30 @@ class ThoughtStatusTest(unittest.TestCase):
         self.assertIn(job_cursor,page['continuations'])
         self.assertIn({'tool':'memory_status','arguments':{'scope':'public','offset':0,'limit':100}},page['continuations'])
 
+    def test_intentional_source_exclusion_is_not_a_processing_error(self):
+        captured=self.service.capture_message('fixture','tool','fixture-tool','tool','Tool result.',0,
+            'codex://fixture/tool','public')
+        self.assertEqual(captured['job']['status'],'completed')
+        self.assertEqual(captured['job']['phase'],'excluded')
+        self.assertFalse(captured['semantic_admission']['allowed'])
+        state=self.service.status(captured['event']['id'],scope='public')
+        self.assertEqual(state['error_count'],0)
+        self.assertEqual(state['errors'],[])
+        self.assertIn('automatic_codex_tool',state['job']['error'])
+        self.assertEqual(state['pagination']['errors']['total'],0)
+        answer=self.service.query('What is public?',scope='public')
+        self.assertEqual(answer['processing_state'],'idle')
+        self.assertEqual(answer['error_count'],0)
+        self.assertEqual(answer['errors'],[])
+        ordinary=self.capture(1,'public')
+        with self.store.transaction(write=True) as db:
+            db.execute("UPDATE memory_capture_jobs SET status='completed',error='Real completed failure',proposals=? WHERE id=?",
+                (json.dumps([{'status':'unresolved','reason':'Actual unresolved interpretation.'}]),ordinary))
+        state=self.service.status(scope='public')
+        self.assertEqual(state['error_count'],1)
+        self.assertEqual([row['job_id'] for row in state['errors']],[ordinary])
+        self.assertEqual(state['unresolved_count'],1)
+
     def test_unsupported_sections_and_invalid_arguments_are_rejected(self):
         for section in ('unknown','derived_overview','derived_overviews','view_names','policy_coverage'):
             with self.subTest(section=section),self.assertRaises(ValueError):
