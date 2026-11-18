@@ -30,9 +30,9 @@ source: do not repeat long attribution or execution boilerplate in every thought
 Keep attribution and uncertainty where they change what the claim means.
 Preserve the proposition's strength, not merely its topic. A speaker's belief,
 self-assessment or account of another person's view remains that attributed
-claim. Keep negation, degree, modality, quantifiers and causal direction: 'may',
-'sometimes' and 'not very' cannot become certainty, universality or a stronger
-evaluation. Distinguish an earlier hypothesis from a later revised interpretation;
+claim. Preserve negation, degree, modality, quantifiers and causal direction
+without strengthening, weakening or broadening the source meaning.
+Distinguish an earlier hypothesis from a later revised interpretation;
 do not fuse them into one established explanation. A brief confirmation applies
 only to its resolved antecedent. Preserve an unanswered alternative explicitly
 when omitting it would make that confirmation appear broader or exclusive.
@@ -40,8 +40,7 @@ Visible assistant chat is an agent-reported account, not implicit access to its
 internal reasoning, tool calls or raw tool results. An assistant saying it ran a
 test or saw a tool result establishes its report only; never write as though the
 original tool evidence was supplied or independently verified when it was not.
-Never strengthen a claim beyond its evidence. In particular, an
-individual electric kettle does not establish that all kettles are electric.
+Never strengthen or generalize a claim beyond its evidence.
 Unverified legacy views are routing hints, never established factual evidence.
 Use their supporting source thoughts before relying on their summarized claims.
 Answer to the fullest extent supported by the supplied material, with explicit
@@ -51,15 +50,17 @@ Knowledge completeness and semantic correctness are independent: an answer can b
 correct and useful while explicitly incomplete. An explicit scoped knowledge gap
 does not by itself make an answer unready. Do not confuse it with a supplied fact
 that the answer omitted. Do not label information unknown when it is in this packet.
-If material_availability says coverage is partial, preserve that limitation;
-say that information is absent from the supplied/retrieved records, not from the
-entire database. Database-wide absence requires explicit evidence of exhaustive
+If coverage is partial, make that limitation explicit where it changes the answer,
+such as an absence or completeness claim. Fully supported requested facts do not
+need an unrelated generic incompleteness disclaimer. Say that missing information
+is absent from the supplied/retrieved records, not from the entire database.
+Database-wide absence requires explicit evidence of exhaustive
 relevant coverage. No evidence for a fact is not evidence that the fact is false.
 Keep all supplied conditions/conflicts visible. State unresolved facts or conflicts
 without inventing their resolution or requiring the caller to fill them before an
 answer is possible. A lack of evidence must not be turned into a new positive fact.
-A question specifies a semantic purpose: a room's dimensions and whether its
-finishes/equipment are ready are distinct questions despite a shared room.
+A question specifies the information to answer, not merely an object.
+Questions about the same object may have different semantic purposes.
 Allocate meaning between the thought and its linked details as follows:
 | In the thought itself | In linked supporting details |
 | Main answer and distinctions that change it | Concrete cases and examples |
@@ -73,7 +74,10 @@ or identify the specific missing detail to open. Do not repeat all supporting
 thoughts or hide the answer in them. Do not put identifiers, aliases, hashes,
 coordinates, source references or citation markers in semantic prose. Return only
 the current job's JSON fields; its support_fragments integer options are permitted
-structural selections, not prose citations.''' + CLOCK_RULES + ORIGIN_RULES + MATERIAL_REFERENT_RULES
+structural selections, not prose citations. Instructions define constraints, not
+answer content: use only concepts needed by the supplied material and this job.
+Do not introduce an unrelated topic or classification from these instructions.
+''' + CLOCK_RULES + ORIGIN_RULES + MATERIAL_REFERENT_RULES
 
 CONSTRUCT = CONTENT_RULES + '''
 Determine the output scope in this priority order:
@@ -93,12 +97,9 @@ Construct directly from grounds:
    fragments for each claim and every qualifier that constrains it, including the
    speaker, referent, actor, degree, uncertainty and unresolved alternatives.
    Select the actual confirmation AND the antecedent needed to interpret it.
-2. Express those grounded claims without changing their logical relationships.
-   CAN/CANNOT describes ability; WANT/DO NOT WANT describes preference; THINK/MAY
-   describes a belief or uncertainty. Keep these distinct when the source does.
-   Several statements joined by AND do not establish BECAUSE, WHEN or THEREFORE.
-   Retain an explicit cause or condition when supplied; do not invent one to make
-   the prose smoother. Do not add intensity, duration or frequency to a claim.
+2. Preserve each grounded statement's exact meaning and qualifications.
+   Add only relationships and conclusions that follow from its selected grounds;
+   do not replace distinct source claims with a new unsupported relationship.
 3. Preserve already precise, qualified wording when current grounds support it.
    Correct the parts current grounds contradict or qualify, rather than freely
    resummarizing an entire supported account. prior_content defines the scope,
@@ -113,8 +114,8 @@ scope. Reconstruct the full requested result from the same grounds, including
 parts the feedback did not mention. Do not answer only the feedback's topic or
 expand into unrelated neighboring material. Apply all corrections together while
 preserving the other supported meaning.
-For a requested answer, return the supported answer with its explicit knowledge
-gaps and needs_detail=null. Missing requested facts,
+For a requested answer, return the supported answer
+with its explicit knowledge gaps and needs_detail=null. Missing requested facts,
 including necessary facts, are not by themselves a reason to return an empty
 thoughts array or needs_detail. Do not request the same missing facts under a
 different question instead of reporting the limitation in the answer.
@@ -136,6 +137,25 @@ Check two independent obligations: (1) every retained claim follows from its own
 selected grounds, with the same attribution and strength; (2) the batch preserves
 the useful meaning required by this job's coverage purpose. Passing either one
 alone is insufficient. Resolve the job's scope before assessing omissions.
+Establish coverage FROM THE MATERIAL TO THE DRAFT, before checking the reverse.
+Use the job's scope to identify the material propositions and their qualifications.
+For each, locate an equivalent meaning in the draft. The draft is not the coverage
+checklist: a proposition absent from it is otherwise easy to overlook. Selecting
+a supporting fragment is not the same as expressing its meaning in the answer.
+A draft may follow from the source yet be incomplete because it states less.
+Do not count a general statement as covering every distinction in its grounds.
+Combining statements is acceptable only when their separate meaning and relevant
+relationships survive. Judge semantic equivalence, not word overlap or length;
+synonymous wording, changed order and concise phrasing are acceptable.
+When an attributed claim has both original speech and a derivative summary in
+the packet, compare its meaning with the supplied original. A less precise
+paraphrase does not authorize dropping a qualification from the original. Keep
+a report about a summary distinct from a claim about what the original said.
+Then check FROM THE DRAFT TO ITS SELECTED GROUNDS for additions, altered meaning
+or unsupported relationships. A faithful topic is insufficient if the actual
+propositions or their constraints changed. A material omission changes how a
+scoped claim can be understood or applied; do not reject mere stylistic changes
+or require unrelated details outside that scope. Do not output a checklist.
 Accept an answer that includes all relevant supplied information, no unsupported
 additions, and explicit gaps for requested facts absent from the supplied material.
 Assess completeness against WHAT THE BUILDER WAS GIVEN, not against all facts a
@@ -168,6 +188,8 @@ Acceptance means the draft follows from the bound material, not just sounds plau
 Equivalent wording is allowed; literal quotation is not required unless the wording
 itself is material. On rejection, name the unsupported or missing proposition,
 qualification or grounding gap precisely enough to repair against this same packet.
+Explain the semantic difference between the source meaning and the draft's
+meaning or omission, rather than prescribing a particular word to copy.
 Do not require unrelated context to be copied or treat a proposed explanation as fact.'''
 
 RAW_PASSAGE = """
@@ -230,8 +252,8 @@ Prior passage checks establish local grounding, not consistency across passages.
 
 GENERALIZE = CONTENT_RULES + '''
 Propose at most one useful shared question that newly supplied thoughts support.
-This may describe a concept (for example what a kettle does), without an explicit
-request for a definition. Do not merely broaden the subject or produce an empty
+This may describe a concept without an explicit request for a definition.
+Do not merely broaden the subject or produce an empty
 heading. A previously stored equivalent useful question should be reused verbatim.
 Return JSON {"question":"shared semantic question" or null, "text":"why useful"}.
 Return null if these thoughts do not support a useful shared answer, or if an
