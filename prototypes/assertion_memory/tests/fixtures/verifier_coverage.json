@@ -1,0 +1,260 @@
+[
+  {
+    "name": "equivalent_comparison",
+    "question": "What comparison is established?",
+    "records": [
+      {
+        "role": "material",
+        "text": "Both channels transmit data. Channel A has a higher rate than channel B.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-equivalent_comparison-0"
+      }
+    ],
+    "text": "Both channels transmit; B has a lower rate than A.",
+    "expected": "accept"
+  },
+  {
+    "name": "comparison_lost",
+    "question": "What comparison is established?",
+    "records": [
+      {
+        "role": "material",
+        "text": "Both channels transmit data. Channel A has a higher rate than channel B.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-comparison_lost-0"
+      }
+    ],
+    "text": "Both channels transmit data.",
+    "expected": "reject",
+    "support_fragments": [
+      0
+    ]
+  },
+  {
+    "name": "equivalent_condition",
+    "question": "What does the certificate establish?",
+    "records": [
+      {
+        "role": "material",
+        "text": "The certificate covers batch R17 exactly when its enclosure is sealed.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-equivalent_condition-0"
+      }
+    ],
+    "text": "The certificate covers R17 while its enclosure is sealed, and does not cover it otherwise.",
+    "expected": "accept"
+  },
+  {
+    "name": "condition_lost",
+    "question": "What does the certificate establish?",
+    "records": [
+      {
+        "role": "material",
+        "text": "The certificate covers batch R17 exactly when its enclosure is sealed.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-condition_lost-0"
+      }
+    ],
+    "text": "The certificate covers batch R17.",
+    "expected": "reject"
+  },
+  {
+    "name": "necessary_not_sufficient",
+    "question": "What coverage conditions are established?",
+    "records": [
+      {
+        "role": "material",
+        "text": "Sealing the enclosure is required for coverage of batch R17. No sufficient condition for coverage is established by these records.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-necessary_not_sufficient-0"
+      }
+    ],
+    "text": "The enclosure must be sealed for R17 to be covered. The supplied records do not identify any condition that is enough to ensure coverage.",
+    "expected": "accept"
+  },
+  {
+    "name": "independent_claim_lost",
+    "question": "What is stated about the shipment?",
+    "records": [
+      {
+        "role": "material",
+        "text": "The shipment arrived on Tuesday. It contained six samples.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-independent_claim_lost-0"
+      }
+    ],
+    "text": "The shipment arrived on Tuesday.",
+    "expected": "reject",
+    "support_fragments": [
+      0
+    ]
+  },
+  {
+    "name": "original_preserved",
+    "question": "What display support is established?",
+    "records": [
+      {
+        "role": "material",
+        "text": "The display supports 120 Hz only through port 2.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      },
+      {
+        "role": "material",
+        "text": "The assistant summarized the display as supporting 120 Hz.",
+        "origin": {
+          "role": "assistant",
+          "actor": "synthetic-summary"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-original_preserved-0"
+      },
+      {
+        "event_id": "synthetic-original_preserved-1"
+      }
+    ],
+    "text": "The supplied original states 120 Hz support through port 2 only.",
+    "expected": "accept",
+    "support_fragments": [
+      0
+    ]
+  },
+  {
+    "name": "paraphrase_hides_condition",
+    "question": "What display support is established?",
+    "records": [
+      {
+        "role": "material",
+        "text": "The display supports 120 Hz only through port 2.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-original"
+        }
+      },
+      {
+        "role": "material",
+        "text": "The assistant summarized the display as supporting 120 Hz.",
+        "origin": {
+          "role": "assistant",
+          "actor": "synthetic-summary"
+        }
+      }
+    ],
+    "bases": [
+      {
+        "event_id": "synthetic-paraphrase_hides_condition-0"
+      },
+      {
+        "event_id": "synthetic-paraphrase_hides_condition-1"
+      }
+    ],
+    "text": "The display supports 120 Hz.",
+    "expected": "reject",
+    "support_fragments": [
+      1
+    ]
+  },
+  {
+    "name": "honest_missing_fact",
+    "question": "What are the confirmed event budget and date?",
+    "records": [
+      {
+        "role": "material_availability",
+        "coverage": "partial",
+        "text": "These are the retrieved records, not a certified exhaustive database search."
+      },
+      {
+        "role": "material",
+        "text": "The user set an event budget of 30000 roubles.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-user",
+          "kind": "source_interpretation"
+        }
+      }
+    ],
+    "bases": [
+      {},
+      {
+        "event_id": "synthetic-event-budget"
+      }
+    ],
+    "text": "The confirmed budget is 30000 roubles. The event date is not specified in the supplied records; database-wide absence is not established.",
+    "expected": "accept"
+  },
+  {
+    "name": "known_fact_hidden",
+    "question": "What are the confirmed event budget and date?",
+    "records": [
+      {
+        "role": "material_availability",
+        "coverage": "partial",
+        "text": "These are the retrieved records, not a certified exhaustive database search."
+      },
+      {
+        "role": "material",
+        "text": "The user set an event budget of 30000 roubles.",
+        "origin": {
+          "role": "user",
+          "actor": "synthetic-user",
+          "kind": "source_interpretation"
+        }
+      }
+    ],
+    "bases": [
+      {},
+      {
+        "event_id": "synthetic-event-budget"
+      }
+    ],
+    "text": "The supplied records establish neither the budget nor the date.",
+    "expected": "reject"
+  }
+]
