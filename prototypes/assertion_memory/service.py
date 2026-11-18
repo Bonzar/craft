@@ -982,7 +982,7 @@ class MemoryService:
             'WHERE ? IS NULL OR scope = ?',(scope,scope)).fetchone()[0]
         assertion_count = connection.execute('SELECT count(*) FROM memory_assertions '
             'WHERE ? IS NULL OR scope = ?',(scope,scope)).fetchone()[0]
-        error_count = connection.execute(f'SELECT count(*) {base} AND j.error IS NOT NULL',
+        error_count = connection.execute(f"SELECT count(*) {base} AND j.error IS NOT NULL AND j.phase!='excluded'",
                                          parameters).fetchone()[0]
         unresolved_from = base.replace(' WHERE ', ', json_each(j.proposals) p WHERE ',1)
         unresolved_count = connection.execute(f"SELECT count(*) {unresolved_from} AND "
@@ -1002,7 +1002,7 @@ class MemoryService:
             " AND j.status != 'completed' ORDER BY j.available_at,j.id LIMIT ? OFFSET ?",
             (*parameters,limit,offset)).fetchall()
         errors = connection.execute('SELECT j.id job_id,j.status,j.error '+base+
-            ' AND j.error IS NOT NULL ORDER BY j.available_at,j.id LIMIT ? OFFSET ?',
+            " AND j.error IS NOT NULL AND j.phase!='excluded' ORDER BY j.available_at,j.id LIMIT ? OFFSET ?",
             (*parameters,limit,offset)).fetchall()
         unresolved_from = base.replace(' WHERE ', ', json_each(j.proposals) p WHERE ',1)
         owner = ('coalesce(e.scope,a.scope)' if scope is not None else
