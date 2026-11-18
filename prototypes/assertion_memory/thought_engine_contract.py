@@ -175,7 +175,7 @@ class SupportQuoteMissing(ModelError):
     """A generated quotation did not address any pinned input exactly."""
 
 
-def validate_response(task, response, *, support_count=None):
+def validate_response(task, response, *, support_count=None, single_thought=False):
     """Check only the existing semantic wire shape, never its factual verdict."""
     if task == 'Navigate thought graph':
         exact_fields(response, {'action', 'question', 'quote', 'text'})
@@ -201,10 +201,14 @@ def validate_response(task, response, *, support_count=None):
             if detail is not response:
                 exact_fields(response, {'thoughts', 'needs_detail'})
                 exact_fields(detail, {'question', 'text'})
+                if single_thought and response.get('thoughts') != []:
+                    raise ModelError('a requested thought needing detail must have no drafts')
             semantic_text(detail.get('question'), 'question')
             semantic_text(detail.get('text'))
         else:
-            thought_drafts(response, support_count=support_count)
+            drafts = thought_drafts(response, support_count=support_count)
+            if single_thought and len(drafts) != 1:
+                raise ModelError('a requested thought requires exactly one draft')
         return
     if task == 'Find useful shared thought question':
         exact_fields(response, {'question', 'text'})

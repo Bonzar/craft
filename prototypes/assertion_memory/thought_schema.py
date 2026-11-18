@@ -5,7 +5,7 @@ def _object(properties):
     return {'type':'object','properties':properties,'required':list(properties),'additionalProperties':False}
 
 
-def response_schema(task, *, support_count=None):
+def response_schema(task, *, support_count=None, single_thought=False):
     text = {'type':'string'}
     question = {'type':['string','null']}
     if task == 'Navigate thought graph':
@@ -16,8 +16,15 @@ def response_schema(task, *, support_count=None):
         item = _object({'text':text,'question':question,
                         'support_fragments':{'type':'array','items':choices,'minItems':1}})
         detail = _object({'question':text,'text':text})
-        return _object({'thoughts':{'type':'array','items':item,**({'maxItems':0} if not support_count else {})},
-                        'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
+        thoughts = {'type':'array','items':item}
+        if not support_count or single_thought:
+            thoughts['maxItems'] = 0 if not support_count else 1
+        schema = _object({'thoughts':thoughts,'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
+        if single_thought:
+            schema['anyOf'] = [
+                {'properties':{'thoughts':{'minItems':1},'needs_detail':{'type':'null'}}},
+                {'properties':{'thoughts':{'maxItems':0},'needs_detail':detail}}]
+        return schema
     if task == 'Check ready thought':
         return _object({'verdict':{'type':'string','enum':['ready','build','drill']},'text':text,'question':question})
     if task == 'Find useful shared thought question':

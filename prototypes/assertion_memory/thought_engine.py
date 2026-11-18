@@ -42,10 +42,11 @@ class ThoughtEngine:
         if self.trace is not None:
             self.trace({'stage': stage, **payload})
 
-    def _call(self, task, records, bindings, instructions, *, support_count=None):
+    def _call(self, task, records, bindings, instructions, *, support_count=None, single_thought=False):
         if self.model is None and self.gateway is None:
             raise ModelError('unified thought processing requires a semantic model')
-        request = ModelRequest(task, records, instructions, usage_task=task,response_schema=response_schema(task,support_count=support_count))
+        request = ModelRequest(task, records, instructions, usage_task=task,
+            response_schema=response_schema(task,support_count=support_count,single_thought=single_thought))
         frozen = tuple(dict(basis) for basis in bindings)
         wire=format_prompt(request)
         request_hash=hashlib.sha256(wire.encode()).hexdigest()
@@ -58,7 +59,7 @@ class ThoughtEngine:
                 raise TypeError('thought model must return serialized JSON text')
             try:
                 result = object_response(body)
-                validate_response(task, result, support_count=support_count)
+                validate_response(task, result, support_count=support_count,single_thought=single_thought)
             except ModelError as malformed:
                 self._discard_provisional()
                 self._emit('model_contract_repair', task=task, attempt=attempt + 1, reason=str(malformed),
@@ -219,7 +220,8 @@ class ThoughtEngine:
         if question is not None:
             instructions += '\nProduce exactly one useful answer to the supplied question.'
             request_records = [{'role': 'question', 'text': question}, *catalog.wire]
-        response = self._call('Construct thought', request_records, bases, instructions, support_count=len(catalog.fragments))
+        response = self._call('Construct thought', request_records, bases, instructions,
+            support_count=len(catalog.fragments),single_thought=question is not None or whole)
         detail = response.get('needs_detail')
         if response.get('verdict') == 'needs_detail':
             detail = {key: response.get(key) for key in ('question', 'text')}
@@ -228,8 +230,6 @@ class ThoughtEngine:
             raise ThoughtDetailNeeded(semantic_text(detail.get('question'), 'missing question'),
                                       semantic_text(detail.get('text')))
         drafts = thought_drafts(response, support_count=len(catalog.fragments))
-        if (question is not None or whole) and len(drafts) != 1:
-            raise ModelError('a requested thought requires exactly one draft')
         verified, selections = [], []
         primary_ids = {basis.get('event_id') for record, basis in zip(records, bases)
                        if record.get('role') == 'source'}
