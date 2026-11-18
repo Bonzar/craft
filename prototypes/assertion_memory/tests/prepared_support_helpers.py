@@ -25,8 +25,12 @@ def selected_options(request,passages):
 
 
 def drafts(request,*items,question=None):
-    return {'thoughts':[{'text':text,'question':question,'support_fragments':selected_options(request,passages)}
-                       for text,passages in items],'needs_detail':None}
+    rows=[{'text':text,'question':question,'support_fragments':selected_options(request,passages)}
+          for text,passages in items]
+    if 'thought' in request.response_schema['properties']:
+        if len(rows)!=1:raise AssertionError('A scalar construction fixture needs exactly one thought')
+        return {'thought':rows[0],'needs_detail':None}
+    return {'thoughts':rows,'needs_detail':None}
 
 
 class PreparedModel:

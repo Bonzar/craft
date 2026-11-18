@@ -38,7 +38,9 @@ class ThoughtRepairStatsTest(unittest.TestCase):
     @staticmethod
     def constructed(request):
         option=next(fragment['option'] for row in request.records for fragment in row.get('fragments',[]))
-        return json.dumps({'thoughts':[{'text':'Approval is required.','question':None,'support_fragments':[option]}],'needs_detail':None})
+        row={'text':'Approval is required.','question':None,'support_fragments':[option]}
+        field='thought' if 'thought' in request.response_schema['properties'] else 'thoughts'
+        return json.dumps({field:row if field=='thought' else [row],'needs_detail':None})
 
     def test_first_accept_records_requested_route_and_leaves_actual_and_tokens_unknown(self):
         memory,store,queue=self.setup_memory();raw=queue.capture_event('s','a','Approval is required.',source='fixture')

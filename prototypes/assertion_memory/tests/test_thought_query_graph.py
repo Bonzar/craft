@@ -17,8 +17,8 @@ class ThoughtQueryGraphTest(unittest.TestCase):
         from prototypes.assertion_memory.tests.test_thought_engine import ScriptedModel, ACCEPT
         model = ScriptedModel({'action': 'unknown', 'quote': None, 'question': None,
             'text': 'No matching thought exists in this graph yet.'},
-            {'thoughts': [{'text': 'The team chose the amber route.', 'question': None,
-                           'support_fragments': [0]}], 'needs_detail': None}, ACCEPT)
+            {'thought': {'text': 'The team chose the amber route.', 'question': None,
+                         'support_fragments': [0]}, 'needs_detail': None}, ACCEPT)
         with MemoryStore(':memory:') as memory:
             service = ThoughtService(memory, model)
             other = service.thoughts.publish('Unrelated garden supplies.')

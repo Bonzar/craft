@@ -9,6 +9,7 @@ from .model import SemanticUnavailable
 from .service import MemoryService, _text_page, _request_usage
 from .storage import background_write_retry
 from .thought_engine import ThoughtEngine
+from .thought_engine_contract import thought_drafts
 from .thought_store import ThoughtStore
 from .thought_trace import ThoughtTrace
 from .usage_context import query_usage_trace
@@ -293,8 +294,9 @@ def traced_engine(thoughts, model, candidates, trace):
         output=fields.pop('output',None)
         if stage=='model_output' and fields.get('task')=='Construct thought' and isinstance(output,dict):
             import hashlib
+            drafts=thought_drafts(output,single_thought='thought' in output) if fields.get('has_draft_batch') else []
             fields['draft_text_hashes']=[hashlib.sha256(row['text'].strip().encode()).hexdigest()
-                for row in output.get('thoughts',[]) if isinstance(row.get('text'),str)]
+                for row in drafts]
         trace.record(stage, inputs=fields.pop('bindings', ()),
                      candidates=fields.pop('candidates', ()), selected=fields.pop('selected', ()),
                      details=fields)

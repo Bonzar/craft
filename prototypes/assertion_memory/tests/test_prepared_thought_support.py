@@ -15,8 +15,10 @@ ACCEPT={'verdict':'accept','text':'Selected support retains the meaning and cond
 def options(request):
     return [(fragment,record) for record in request.records for fragment in record.get('fragments',[])]
 
-def result(text,selections):
-    return json.dumps({'thoughts':[{'text':text,'question':None,'support_fragments':selections}],'needs_detail':None})
+def result(request,text,selections):
+    row={'text':text,'question':None,'support_fragments':selections}
+    field='thought' if 'thought' in request.response_schema['properties'] else 'thoughts'
+    return json.dumps({field:row if field=='thought' else [row],'needs_detail':None})
 
 
 class PreparedThoughtSupportTest(unittest.TestCase):
@@ -35,7 +37,7 @@ class PreparedThoughtSupportTest(unittest.TestCase):
         def model(request):
             if request.task=='Construct thought':
                 self.assertNotIn('text',request.records[0])
-                return result('Только при одобрении.',[selected.option])
+                return result(request,'Только при одобрении.',[selected.option])
             return json.dumps(ACCEPT)
         thought=ThoughtEngine(store,model).ingest(raw,consolidate=False)[0]
         basis=thought.bases[0]
@@ -62,7 +64,7 @@ class PreparedThoughtSupportTest(unittest.TestCase):
             calls.append(request.task)
             if request.task=='Construct thought':
                 choice=next(f['option'] for f,row in options(request) if row.get('origin',{}).get('actor')=='assistant')
-                return result('The assistant reported that approval is required.',[choice])
+                return result(request,'The assistant reported that approval is required.',[choice])
             return json.dumps(ACCEPT)
         engine=ThoughtEngine(selection,model)
         thought=engine._construct([{'role':'material',**engine._content(row)} for row in (first,selected)],
@@ -77,7 +79,7 @@ class PreparedThoughtSupportTest(unittest.TestCase):
         def model(request):
             if request.task=='Construct thought':
                 picked=[f['option'] for f,row in options(request) if f['text'].strip()=='Да' or 'Choose lunch' in f['text']]
-                return result('The user agreed to lunch on weekends.',picked)
+                return result(request,'The user agreed to lunch on weekends.',picked)
             source=next(row for row in request.records if row.get('role')=='source')
             self.assertTrue(all(f['selected_for_grounding'] for f in source['fragments']))
             return json.dumps(ACCEPT)
@@ -97,7 +99,7 @@ class PreparedThoughtSupportTest(unittest.TestCase):
                 entries=options(request)
                 picked=[f['option'] for f,_ in entries if 'Approval' in f['text'] or
                     (calls.count('Construct thought')>1 and 'Evacuation' in f['text'])]
-                return result('Approval is required except during evacuation.',picked)
+                return result(request,'Approval is required except during evacuation.',picked)
             fragments=[f for row in request.records for f in row.get('fragments',[])]
             selected=[f['text'] for f in fragments if f['selected_for_grounding']]
             return json.dumps(ACCEPT if any('Evacuation' in text for text in selected) else
@@ -118,11 +120,11 @@ class PreparedThoughtSupportTest(unittest.TestCase):
             if request.task=='Construct thought':
                 choices=options(request)
                 self.assertEqual(len(choices),175)
-                selection_schema=request.response_schema['properties']['thoughts']['items']['properties']['support_fragments']
+                selection_schema=request.response_schema['properties']['thought']['anyOf'][0]['properties']['support_fragments']
                 self.assertNotIn('uniqueItems',selection_schema)
                 spec=selection_schema['items']
                 self.assertEqual(spec,{'type':'integer','minimum':0,'maximum':174})
-                return result('Condition 174.',[999] if calls.count('Construct thought')==1 else [174,174])
+                return result(request,'Condition 174.',[999] if calls.count('Construct thought')==1 else [174,174])
             return json.dumps(ACCEPT)
         engine=ThoughtEngine(store,model)
         thought=engine._construct([{'role':'material',**engine._content(base)}],[engine._basis(base)],question='Last condition?')[0]

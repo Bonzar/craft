@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from prototypes.assertion_memory.model import ModelContextExceeded, ModelError, SemanticUnavailable, format_prompt
+from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded, ThoughtEngine
 from prototypes.assertion_memory.thought_store import ThoughtStore
@@ -154,6 +155,34 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
         self.assertEqual(len(result), 4)
         self.assertEqual([call.task for call in calls], ['Construct thought', 'Verify thought'])
         self.assertNotIn('maxItems', calls[0].response_schema['properties']['thoughts'])
+
+    def test_raw_extraction_publishes_multiple_thoughts_with_their_own_support(self):
+        text = 'Approval is required. Evacuation is the exception.'
+        raw = CaptureQueue(self.memory).capture_event('fixture', 'raw', text, source='fixture')
+        rows = [{'text': claim, 'question': None, 'support_fragments': [index]}
+                for index, claim in enumerate(('Approval is required.', 'Evacuation is the exception.'))]
+        body = json.dumps({'thoughts': rows, 'needs_detail': None})
+        engine, _, calls, _, _ = self.replay_engine([body, ACCEPT])
+        result = engine.ingest(raw, consolidate=False)
+        self.assertEqual([thought.text for thought in result], [row['text'] for row in rows])
+        for thought in result:
+            basis = thought.bases[0]
+            self.assertEqual(basis['event_id'], raw.id)
+            self.assertEqual(text[basis['span']['start']:basis['span']['end']].strip(), thought.text)
+        self.assertIn('"thoughts":', calls[0].instructions)
+        self.assertNotIn('"thought":', calls[0].instructions)
+
+    def test_raw_construction_rejects_scalar_wire_without_publishing(self):
+        body = answer('Approval is required.', [0])
+        engine, replay, calls, _, cached = self.replay_engine([body, body])
+        before = self.store.list_thoughts()
+        with self.assertRaises(ModelError) as caught:
+            engine._construct(self.records, self.bindings)
+        replay.confirm()
+        self.assertTrue(caught.exception.recoverable)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(cached, {})
+        self.assertEqual(self.store.list_thoughts(), before)
 
     def test_needs_detail_is_valid_for_requested_answers_even_without_support(self):
         detail = {'question': 'Who may approve the opening?', 'text': 'The approver is unspecified.'}

@@ -16,9 +16,12 @@ def response_schema(task, *, support_count=None, single_thought=False):
         item = _object({'text':text,'question':question,
                         'support_fragments':{'type':'array','items':choices,'minItems':1}})
         detail = _object({'question':text,'text':text})
+        if single_thought:
+            return _object({'thought':{'anyOf':[item,{'type':'null'}]} if support_count else {'type':'null'},
+                            'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
         thoughts = {'type':'array','items':item}
-        if not support_count or single_thought:
-            thoughts['maxItems'] = 0 if not support_count else 1
+        if not support_count:
+            thoughts['maxItems'] = 0
         return _object({'thoughts':thoughts,'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
     if task == 'Check ready thought':
         return _object({'verdict':{'type':'string','enum':['ready','build','drill']},'text':text,'question':question})

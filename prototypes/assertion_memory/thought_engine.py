@@ -11,7 +11,7 @@ from .storage import _timestamp
 from .model import CandidateSearch, ModelError, ModelRequest, SemanticUnavailable, format_prompt
 from .thought_source_policy import event_eligibility, thought_eligibility
 from .thought_engine_inputs import RAW_CHUNK_CHARACTERS, paragraph_chunks
-from .thought_engine_contract import (APPLICABILITY, CONSTRUCT, GENERALIZE, GROUNDING,
+from .thought_engine_contract import (APPLICABILITY, construction_instructions, GENERALIZE, GROUNDING,
     MAX_THOUGHTS, PROTOCOL, SOURCE_BATCH, VERIFY, WHOLE_REFRESH, exact_fields, object_response, semantic_text,
     thought_drafts, validate_response, SupportQuoteMissing, RAW_PASSAGE, SemanticReviewRejected)
 from .thought_schema import response_schema
@@ -72,7 +72,8 @@ class ThoughtEngine:
                 continue
             self._emit('model_output', task=task, output=result,request_hash=request_hash,
                        response_hash=hashlib.sha256(body.encode()).hexdigest(),verdict=result.get('verdict'),
-                       has_draft_batch=isinstance(result.get('thoughts'),list) and result.get('needs_detail') is None)
+                       has_draft_batch=(isinstance(result.get('thoughts'),list) or isinstance(result.get('thought'),dict))
+                           and result.get('needs_detail') is None)
             return result
 
     def _discard_provisional(self):
@@ -211,8 +212,10 @@ class ThoughtEngine:
                       review_ambiguity=True, correction=''):
         from .thought_support import prepare_support
         catalog=prepare_support(records,bases)
-        instructions, request_records = CONSTRUCT + correction, catalog.wire
         whole = any(record.get('role') == 'whole_refresh_scope' for record in records)
+        single_thought = question is not None or whole
+        instructions = construction_instructions(single_thought=single_thought) + correction
+        request_records = catalog.wire
         if whole:
             instructions += WHOLE_REFRESH
         elif any(record.get('role')=='source' for record in records):
@@ -221,7 +224,7 @@ class ThoughtEngine:
             instructions += '\nProduce exactly one useful answer to the supplied question.'
             request_records = [{'role': 'question', 'text': question}, *catalog.wire]
         response = self._call('Construct thought', request_records, bases, instructions,
-            support_count=len(catalog.fragments),single_thought=question is not None or whole)
+            support_count=len(catalog.fragments),single_thought=single_thought)
         detail = response.get('needs_detail')
         if response.get('verdict') == 'needs_detail':
             detail = {key: response.get(key) for key in ('question', 'text')}
@@ -229,7 +232,7 @@ class ThoughtEngine:
             exact_fields(detail, {'question', 'text'})
             raise ThoughtDetailNeeded(semantic_text(detail.get('question'), 'missing question'),
                                       semantic_text(detail.get('text')))
-        drafts = thought_drafts(response, support_count=len(catalog.fragments))
+        drafts = thought_drafts(response, support_count=len(catalog.fragments),single_thought=single_thought)
         verified, selections = [], []
         primary_ids = {basis.get('event_id') for record, basis in zip(records, bases)
                        if record.get('role') == 'source'}

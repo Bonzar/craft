@@ -39,7 +39,7 @@ Use their supporting source thoughts before relying on their summarized claims.
 If material_availability says coverage is partial, preserve that uncertainty in
 any resulting answer; do not claim an exhaustive set of conditions or absence of
 exceptions. Keep all supplied conditions/conflicts visible. If a missing detail
-is necessary to answer, return {"thoughts":[], "needs_detail":{"question":"specific missing semantic question", "text":"why needed"}}
+is necessary to answer, return needs_detail={"question":"specific missing semantic question", "text":"why needed"}
 from a construction job rather than inventing completeness or reporting absence.
 A question specifies a semantic purpose: a room's dimensions and whether its
 finishes/equipment are ready are distinct questions despite a shared room.
@@ -58,12 +58,7 @@ coordinates, source references or citation markers. Only semantic text, question
 and verdict fields requested by the current job may be returned.''' + CLOCK_RULES + ORIGIN_RULES + MATERIAL_REFERENT_RULES
 
 CONSTRUCT = CONTENT_RULES + '''
-Return JSON {"thoughts":[{"text":"useful thought", "question":null or "semantic question", "support_fragments":[0]}], "needs_detail":null}.
-Both fields are required. If a necessary semantic detail is missing, return an
-empty thoughts array and needs_detail={"question":"missing semantic question","text":"why needed"}.
 Interpret raw speech and existing thoughts using the same grounding requirements.
-Keep distinct meanings as separate thoughts. Return an empty thoughts array for
-pure service chatter, execution bookkeeping and pure copies of existing material.
 Do not manufacture a new event from a memory paraphrase.
 For each thought, support_fragments selects only the supplied integer fragment options
 sufficient for that thought, including its conditions and attribution. These code-provided
@@ -175,6 +170,22 @@ class SupportQuoteMissing(ModelError):
     """A generated quotation did not address any pinned input exactly."""
 
 
+def construction_instructions(*, single_thought=False):
+    if single_thought:
+        return CONSTRUCT + '''
+Return JSON {"thought":{"text":"useful thought", "question":null or "semantic question", "support_fragments":[0]}, "needs_detail":null}.
+Both fields are required. Return exactly one thought object, never a thoughts array.
+If a necessary semantic detail is missing, return {"thought":null,
+"needs_detail":{"question":"missing semantic question","text":"why needed"}}.
+Do not return a thought and a request for detail together.'''
+    return CONSTRUCT + '''
+Return JSON {"thoughts":[{"text":"useful thought", "question":null or "semantic question", "support_fragments":[0]}], "needs_detail":null}.
+Both fields are required. If a necessary semantic detail is missing, return an
+empty thoughts array and needs_detail={"question":"missing semantic question","text":"why needed"}.
+Keep distinct meanings as separate thoughts. Return an empty thoughts array for
+pure service chatter, execution bookkeeping and pure copies of existing material.'''
+
+
 def validate_response(task, response, *, support_count=None, single_thought=False):
     """Check only the existing semantic wire shape, never its factual verdict."""
     if task == 'Navigate thought graph':
@@ -193,6 +204,9 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
         semantic_text(response.get('text'))
         return
     if task == 'Construct thought':
+        if single_thought:
+            thought_drafts(response,support_count=support_count,single_thought=True)
+            return
         detail = response.get('needs_detail')
         if response.get('verdict') == 'needs_detail':
             exact_fields(response, {'verdict', 'question', 'text'})
@@ -201,14 +215,10 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
             if detail is not response:
                 exact_fields(response, {'thoughts', 'needs_detail'})
                 exact_fields(detail, {'question', 'text'})
-                if single_thought and response.get('thoughts') != []:
-                    raise ModelError('a requested thought needing detail must have no drafts')
             semantic_text(detail.get('question'), 'question')
             semantic_text(detail.get('text'))
         else:
-            drafts = thought_drafts(response, support_count=support_count)
-            if single_thought and len(drafts) != 1:
-                raise ModelError('a requested thought requires exactly one draft')
+            thought_drafts(response, support_count=support_count)
         return
     if task == 'Find useful shared thought question':
         exact_fields(response, {'question', 'text'})
@@ -247,9 +257,24 @@ def exact_fields(value, allowed):
     return value
 
 
-def thought_drafts(response, *, support_count=None):
-    exact_fields(response, {'thoughts', 'needs_detail'})
-    rows = response.get('thoughts')
+def thought_drafts(response, *, support_count=None, single_thought=False):
+    exact_fields(response, {'thought' if single_thought else 'thoughts', 'needs_detail'})
+    if single_thought:
+        if set(response) != {'thought', 'needs_detail'}:
+            raise ModelError('a requested thought response requires thought and needs_detail')
+        detail = response['needs_detail']
+        if detail is not None:
+            if response['thought'] is not None:
+                raise ModelError('a requested thought needing detail must have no draft')
+            exact_fields(detail, {'question', 'text'})
+            semantic_text(detail.get('question'), 'question')
+            semantic_text(detail.get('text'))
+            return []
+        if not isinstance(response['thought'], dict):
+            raise ModelError('a requested thought must be one object or request missing detail')
+        rows = [response['thought']]
+    else:
+        rows = response.get('thoughts')
     if not isinstance(rows, list):
         raise ModelError('thought draft batch must be a list')
     result = []
