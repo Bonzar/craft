@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_answering import answer_selected
@@ -12,6 +13,27 @@ from prototypes.assertion_memory.tests.test_thought_engine import ACCEPT, Script
 
 
 class ThoughtAnsweringTest(unittest.TestCase):
+    def test_support_identity_ignores_question_and_pair_order_but_preserves_full_content(self):
+        selected = self.store.publish('Gate rules.', metadata={'verification': 'accepted'})
+        packets = [
+            ([{'role': 'candidate', 'text': 'Gate rules.'}, {'role': 'neighbor_option', 'description': 'Exception.'}],
+             [{'thought_id': selected.id, 'version': 1}, {'thought_id': 'detail', 'version': 1}]),
+            ([{'role': 'neighbor_option', 'description': 'Exception.'}, {'role': 'candidate', 'text': 'Gate rules.'}],
+             [{'thought_id': 'detail', 'version': 1}, {'thought_id': selected.id, 'version': 1}]),
+            ([{'role': 'candidate', 'text': 'Gate rules.'}, {'role': 'material', 'text': 'Exception. Full condition.'}],
+             [{'thought_id': selected.id, 'version': 1}, {'thought_id': 'detail', 'version': 1}]),
+        ]
+        model = ScriptedModel(*({'verdict': 'drill', 'question': 'Missing condition', 'text': 'The condition is missing.'} for _ in packets))
+        engine = self.engine(model)
+        fingerprints = []
+        with patch('prototypes.assertion_memory.thought_answering._material', side_effect=packets):
+            for question in ('Original question', 'Different wording', 'Read the full condition'):
+                with self.assertRaises(ThoughtDetailNeeded) as need:
+                    answer_selected(engine, question, selected, neighborhood=None)
+                fingerprints.append(need.exception.packet_fingerprint)
+        self.assertEqual(fingerprints[0], fingerprints[1])
+        self.assertNotEqual(fingerprints[1], fingerprints[2])
+
     def test_changed_support_is_not_a_current_ground_and_new_head_is_discoverable(self):
         from prototypes.assertion_memory.thought_navigation import neighborhood
         source = self.store.publish('The meeting is on Tuesday.', metadata={'verification': 'accepted'})

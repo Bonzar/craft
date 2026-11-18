@@ -93,5 +93,25 @@ class ThoughtIterativeNavigationTest(unittest.TestCase):
         self.assertTrue(any(row.get('pinned_target_ref')=={'thought_id':'a','version':1}
                             for row in catalog['relations']))
 
+    def test_order_only_search_results_do_not_create_new_frontiers(self):
+        a = self.store.publish('Alpha location.', thought_id='a')
+        b = self.store.publish('Beta location.', thought_id='b')
+        model = Model(*(decision('search', question='New wording ' + str(i)) for i in range(4)))
+        engine = ThoughtEngine(self.store, model)
+        with patch.object(engine, 'retrieve', side_effect=[[a, b], [b, a], [a, b], [b, a]]):
+            result = navigate(engine, 'Original question')
+        self.assertIsNone(result.thought)
+        self.assertEqual(result.reason, 'unchanged_navigation_frontier')
+        self.assertEqual(len(model.requests), 2)
+
+    def test_no_new_search_keeps_an_unopened_useful_starting_point(self):
+        a = self.store.publish('Alpha location.', thought_id='a')
+        b = self.store.publish('Beta contains the required exception.', thought_id='b')
+        model = Model(decision('search', question='Another formulation'), decision('focus', quote=b.text))
+        engine = ThoughtEngine(self.store, model)
+        with patch.object(engine, 'retrieve', side_effect=[[a, b], [a]]):
+            result = navigate(engine, 'Original question')
+        self.assertEqual(result.thought, b)
+
 
 if __name__=='__main__':unittest.main()

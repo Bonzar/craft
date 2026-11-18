@@ -39,7 +39,7 @@ class ThoughtQueryGraphTest(unittest.TestCase):
             asked = []
             def construct(*args, question=None, **kwargs):
                 asked.append(question)
-                if len(asked) > 3:
+                if len(asked) > 2:
                     self.fail('missing questions cycled without new evidence')
                 raise ThoughtDetailNeeded('B' if question == 'A' else 'A', 'The other detail is missing.')
             with patch.object(service.engine, 'retrieve', return_value=[]), \
@@ -47,7 +47,49 @@ class ThoughtQueryGraphTest(unittest.TestCase):
                  patch.object(service.engine, '_construct', side_effect=construct):
                 with self.assertRaises(SemanticUnavailable):
                     service.engine.answer('A')
-            self.assertEqual(asked, ['A', 'B', 'A'])
+            # B may answer the same evidence, but cannot send it back for another drill.
+            self.assertEqual(asked, ['A', 'B'])
+
+    def test_paraphrased_detail_chain_cannot_restart_unchanged_support(self):
+        from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
+        from prototypes.assertion_memory.model import SemanticUnavailable
+        with MemoryStore(':memory:') as memory:
+            service = ThoughtService(memory)
+            raw = service.queue.capture_event('fixture', 'turn', 'One fixed source.', source='fixture')
+            packet = service.engine._raw_packet(raw.id)
+            material = ([record for record, _ in packet], [basis for _, basis in packet])
+            asked = []
+            def construct(*args, question=None, **kwargs):
+                asked.append(question)
+                if len(asked) > 2:
+                    self.fail('new wording restarted an unchanged evidence packet')
+                raise ThoughtDetailNeeded('More specific wording ' + str(len(asked)), 'The detail is still missing.')
+            with patch.object(service.engine, 'retrieve', return_value=[]), \
+                 patch.object(service.engine, '_pending_raw_material', return_value=material), \
+                 patch.object(service.engine, '_construct', side_effect=construct):
+                with self.assertRaises(SemanticUnavailable):
+                    service.engine.answer('Original question')
+            self.assertEqual(len(asked), 2)
+
+    def test_different_detail_question_can_answer_the_same_evidence(self):
+        from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
+        with MemoryStore(':memory:') as memory:
+            service = ThoughtService(memory)
+            raw = service.queue.capture_event('fixture', 'turn', 'Inspection is required.', source='fixture')
+            packet = service.engine._raw_packet(raw.id)
+            material = ([record for record, _ in packet], [basis for _, basis in packet])
+            resolved = service.thoughts.publish('Inspection is required.', metadata={'verification': 'accepted'})
+            asked = []
+            def construct(*args, question=None, **kwargs):
+                asked.append(question)
+                if asked == ['Original question']:
+                    raise ThoughtDetailNeeded('Which inspection?', 'Check the specific condition.')
+                return resolved, ()
+            with patch.object(service.engine, 'retrieve', return_value=[]), \
+                 patch.object(service.engine, '_pending_raw_material', return_value=material), \
+                 patch.object(service.engine, '_construct', side_effect=construct):
+                self.assertEqual(service.engine.answer('Original question'), resolved)
+            self.assertEqual(asked, ['Original question', 'Which inspection?', 'Original question'])
 
     def test_same_question_detail_reuses_complete_answer_without_copying_it(self):
         from prototypes.assertion_memory.thought_engine import ThoughtDetailNeeded
