@@ -1,4 +1,4 @@
-"""Optional native images: synthetic bytes only, no vision/network/personal media."""
+"""Explicit manual tool-artifact delivery: synthetic bytes, no network or vision."""
 import base64
 import hashlib
 import json
@@ -31,13 +31,26 @@ class ArtifactTest(unittest.TestCase):
     pair=fixture.CaptureTest.pair
     poll=fixture.CaptureTest.poll
     messages=fixture.CaptureTest.messages
+    def manual_report(self,output):
+        from synthetic_memory_adapter.tool_projection import project_result
+        projection=project_result(output)
+        # Explicit caller-owned reports remain supported by the generic outbox;
+        # none of these bytes or arguments come from native automatic capture.
+        with self.store.db:
+            artifacts=[self.store.store_artifact(image) for image in projection['artifacts']]
+            arguments={'session_id':'physical','message_id':'manual-report','role':'tool','actor_id':'tool:fixture',
+                'text':projection['text'],'source':'fixture://explicit-manual-report','scope':'fiction'}
+            if artifacts:arguments['artifact_ids']=artifacts
+            self.store.enqueue(arguments,local_position=self.store.session('physical')['line']+1)
+        return projection
     def mixed(self,uri=None):
-        self.turn();self.append({'type':'response_item','payload':{'type':'custom_tool_call','name':'synthetic-tool','call_id':'photo'}})
+        self.turn();self.capture.register(self.store,self.raw);result=self.poll()
         output=[{'type':'input_text','text':'All business words and exceptions remain exactly.'},
                 {'type':'input_text','text':json.dumps({'condition':'only after review, except unfinished cases','source_repository_credential':'SYNTHETIC_CREDENTIAL_VALUE'})},
                 {'type':'input_image','detail':'high','image_url':uri or 'data:image/png;base64,'+base64.b64encode(PNG).decode()}]
-        self.append({'type':'response_item','payload':{'type':'custom_tool_call_output','call_id':'photo','output':output}})
-        self.capture.register(self.store,self.raw);return self.poll()
+        projection=self.manual_report(output)
+        result['manual_projection_omissions']=projection['omissions']
+        return result
     def coordinator(self,remote):
         from synthetic_memory_adapter.frontier import Coordinator
         c=Coordinator(self.store,remote,clock=lambda:1000.0);return c
@@ -73,7 +86,8 @@ class ArtifactTest(unittest.TestCase):
         args=self.messages()[1]['arguments'];self.assertNotIn('artifact_ids',args)
         self.assertIn('All business words and exceptions remain exactly.',args['text'])
         self.assertNotIn('DO-NOT-STORE',args['text']);self.assertIn('not_interpreted',args['text'])
-        self.assertIn('unsupported_tool_media:external_image_not_fetched',result['gaps'])
+        self.assertIn('external_image_not_fetched',result['manual_projection_omissions'])
+        self.assertEqual(result['gaps'],[])
 
     def test_replay_preserves_same_attachment_refs_and_durable_blob_without_duplicate(self):
         self.mixed();before=[m['arguments'] for m in self.messages()]
@@ -107,10 +121,14 @@ class ArtifactTest(unittest.TestCase):
 
     def test_artifact_and_message_cursor_rollback_together_on_failed_capture_enqueue(self):
         from unittest.mock import patch
+        self.turn();self.capture.register(self.store,self.raw);self.poll()
+        cursor=self.store.session('physical')['cursor']
+        output=[{'type':'input_image','image_url':'data:image/png;base64,'+base64.b64encode(PNG).decode()}]
         with patch.object(self.store,'enqueue',side_effect=ValueError('synthetic rollback')):
-            with self.assertRaises(ValueError):self.mixed()
+            with self.assertRaises(ValueError):self.manual_report(output)
         self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0],0)
-        self.assertEqual(self.store.session('physical')['cursor'],0)
+        self.assertEqual(self.store.session('physical')['cursor'],cursor)
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user'])
 
     def test_future_resume_partial_record_is_discarded_before_size_limit_with_proven_cutoff(self):
         self.path.write_bytes(self.path.read_bytes()+b'old partial record')
@@ -135,7 +153,7 @@ class ArtifactTest(unittest.TestCase):
         self.assertIn('unsupported_nontext_type',result['omissions']);self.assertIn('Keep every word.',result['text'])
 
     def test_future_nonmedia_oversize_records_keep_bounded_gap_witness(self):
-        self.turn();self.append({'type':'response_item','payload':{'type':'function_call_output','output':'z'*(self.capture.MAX_RECORD+1)}})
+        self.turn();self.append({'type':'response_item','payload':{'type':'message','role':'assistant','channel':'final','content':[{'type':'output_text','text':'z'*(self.capture.MAX_RECORD+1)}]}})
         self.capture.register(self.store,self.raw);self.poll();state=self.store.session('physical')
         witness=state['gap_witnesses'][-1]
         self.assertEqual(witness['reason'],'oversized_record')
