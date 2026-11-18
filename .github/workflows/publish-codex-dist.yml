@@ -28,6 +28,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install memory protocol dependencies
+        run: python3 -m pip install -r prototypes/assertion_memory/requirements-mcp.txt
+
       - name: Check source tree
         run: node tools/no-snapshot-files.js --tree HEAD
 
