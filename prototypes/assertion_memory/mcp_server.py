@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import time
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -403,24 +403,42 @@ def _register_write_tools(mcp, service, launcher, background):
         return value
 
     @mcp.tool()
-    async def memory_process(limit: int = 100, retry_job_id: str | None = None) -> dict:
+    async def memory_process(limit: int = 100, retry_job_id: str | None = None,
+                             session_ids: list[str] | None = None) -> dict:
         """Schedule up to 1..1000 worker attempts asynchronously. Returns immediately; poll status.
         An already-running database worker owns processing. Optionally retry one failed job by its ID.
+        Optional session_ids selects exact source sessions and their causal follow-up jobs for
+        this launch. It leaves the automatic selection and the worker lock in place.
         """
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError('limit must be between 1 and 1000 attempts')
+        worker = launcher
+        if session_ids is not None:
+            from .thought_processing_selection import normalize_session_ids
+            from .thought_service import ThoughtService
+            selected = normalize_session_ids(session_ids)
+            if not selected:
+                raise ValueError('session_ids must not be empty')
+            configured = launcher.config.processing_session_ids
+            if configured and not set(selected).issubset(configured):
+                raise ValueError('session_ids includes a session outside startup processing selection')
+            if not isinstance(service, ThoughtService):
+                raise ValueError('session processing selection requires the canonical thought runtime')
+            # An empty automatic selection can coexist with an explicit one-time request.
+            worker = WorkerLauncher(replace(launcher.config, processing_session_ids=selected))
         if retry_job_id is not None:
-            if launcher.config.processing_session_ids is not None:
+            if worker.config.processing_session_ids is not None:
                 from .thought_processing_selection import source_predicate
-                predicate,arguments=source_predicate(launcher.config.processing_session_ids,'e')
+                predicate,arguments=source_predicate(worker.config.processing_session_ids,'e')
                 with service.store.transaction() as connection:
                     admitted=connection.execute('SELECT 1 FROM memory_capture_jobs j JOIN memory_raw_events e '
                         f'ON e.id=j.event_id WHERE j.id=? AND ({predicate})',
                         (retry_job_id,*arguments)).fetchone()
                 if admitted is None:
-                    raise ValueError('retry job is outside startup processing selection')
+                    selection = 'startup' if session_ids is None else 'requested'
+                    raise ValueError(f'retry job is outside {selection} processing selection')
             service.queue.retry(retry_job_id)
-        return {**launcher.start(limit), **service.status()}
+        return {**worker.start(limit), **service.status()}
 
 
 
