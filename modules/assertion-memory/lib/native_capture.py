@@ -150,7 +150,7 @@ def _candidate(row, session, turn, *, human=False):
     return None
 
 
-def _enqueue(store, state, row, role, text, provider_id, position, actor, config, locator, *, artifact_ids=None):
+def _enqueue(store, state, row, role, text, provider_id, position, actor, config, locator, *, artifact_ids=None, proof=None):
     if not isinstance(text, str) or not text.strip(): return False
     turn = state['turn']['id']
     provider = ('codex:' + role + ':' + turn + ':' + provider_id) if isinstance(provider_id, str) and provider_id else None
@@ -169,6 +169,14 @@ def _enqueue(store, state, row, role, text, provider_id, position, actor, config
                 arguments['source_message_clock_basis'] = {'kind': 'producer', 'field': 'timestamp',
                     'value': timestamp, 'source': source, 'message_id': mid}
         except ValueError: pass
+    if role == 'user':
+        active = state['turn']
+        if active.get('assistant_finished'):
+            return False
+        active.setdefault('user_messages', []).append((arguments, position))
+        active.setdefault('user_witnesses', []).extend(
+            item for item in (row.get('_witness'), proof) if item is not None)
+        return False
     return store.enqueue(arguments, local_position=position)
 
 
@@ -243,24 +251,34 @@ def _stage_assistant(state, row, mode, offset, position):
     turn['assistant'] = {'row': row, 'offset': offset, 'position': position}
 
 
-def _complete_assistant(store, state, config, payload):
+def _seal_turn(state):
     turn = state['turn']
+    turn['assistant_finished'] = True
+    turn.pop('user_witnesses', None)
     pending = turn.get('assistant')
     turn['assistant'] = None
-    turn['assistant_finished'] = True
-    if not pending:
-        return 0
-    row = pending['row']
-    source = row['payload']
-    if _assistant_mode(source) not in ('final', 'pending'):
-        return 0
-    text = source['content'][0].get('text')
-    if text != payload.get('last_agent_message'):
-        if payload.get('last_agent_message'):
-            state['gaps'].append('unmatched_assistant_completion')
-        return 0
-    return int(_enqueue(store, state, row, 'assistant', text, source.get('id'),
-        pending['position'], 'assistant', config, 'assistant:' + turn['id'] + ':byte:' + str(pending['offset'])))
+    return pending, turn.pop('user_messages', [])
+
+
+def _complete_assistant(store, state, config, payload):
+    pending, messages = _seal_turn(state)
+    if pending:
+        row = pending['row']
+        source = row['payload']
+        text = source['content'][0].get('text')
+        if _assistant_mode(source) in ('final', 'pending') and isinstance(text, str) and text.strip():
+            if text == payload.get('last_agent_message'):
+                # The whole turn becomes eligible for delivery in the polling transaction.
+                queued = sum(store.enqueue(args, local_position=position)
+                             for args, position in sorted(messages, key=lambda entry: entry[1]))
+                turn_id = state['turn']['id']
+                return queued + int(_enqueue(store, state, row, 'assistant', text, source.get('id'),
+                    pending['position'], 'assistant', config, 'assistant:' + turn_id + ':byte:' + str(pending['offset'])))
+            if payload.get('last_agent_message'):
+                state['gaps'].append('unmatched_assistant_completion')
+    if messages:
+        _exclude(state, 'user_messages_in_turn_without_final', len(messages))
+    return 0
 
 
 def _process(store, state, meta, row, offset, position, config):
@@ -271,6 +289,10 @@ def _process(store, state, meta, row, offset, position, config):
         return 0
     if row.get('type') == 'event_msg' and payload.get('type') == 'task_started':
         queued = _flush_user(store, state, config, final=True)
+        if state.get('turn'):
+            _, discarded = _seal_turn(state)
+            if discarded:
+                _exclude(state, 'user_messages_in_turn_without_final', len(discarded))
         state['witnesses'] = [row['_witness']]
         turn = payload.get('turn_id')
         allowed = _allowed_start(payload, meta, state.get('dialogue_turn_roots'))
@@ -315,7 +337,7 @@ def _process(store, state, meta, row, offset, position, config):
         for omission in projected['omissions']:state['gaps'].append('unsupported_user_photo_media:'+omission)
         return int(_enqueue(store,state,pending_photo['row'],'user',projected['text'],pending_photo['id'] or payload['item'].get('id'),
             pending_photo['position'],config.get('actor_id','user'),config,'user:'+turn['id']+':byte:'+str(pending_photo['offset']),
-            artifact_ids=projected['artifact_ids']))
+            artifact_ids=projected['artifact_ids'], proof=row['_witness']))
     candidate = _candidate(row, state['session_id'], turn['id'], human=human_singleton)
     if candidate:
         kind, text, native_id = candidate
@@ -338,7 +360,7 @@ def _process(store, state, meta, row, offset, position, config):
             turn['verified'] = True
             _remember_turn(state)
             state['witnesses'].append(row['_witness'])
-            return int(_enqueue(store, state, {}, 'user', text, native_id, position,
+            return int(_enqueue(store, state, {'_witness': row['_witness']}, 'user', text, native_id, position,
                 config.get('actor_id', 'user'), config, 'user:' + turn['id'] + ':byte:' + str(offset)))
         if pending is None or turn['ambiguous'] or pending['text'] != text:
             turn['ambiguous'] = False
@@ -352,7 +374,7 @@ def _process(store, state, meta, row, offset, position, config):
         # timestamp must never substitute for an absent R/source timestamp.
         return int(_enqueue(store, state, pending.get('row', {}), 'user', text, pending['id'] or native_id,
             pending.get('position'), config.get('actor_id', 'user'), config,
-            'user:' + turn['id'] + ':byte:' + str(pending.get('offset', 0))))
+            'user:' + turn['id'] + ':byte:' + str(pending.get('offset', 0)), proof=row['_witness']))
     if (row.get('type') == 'response_item' and payload.get('role') == 'user'
             or row.get('type') == 'event_msg' and payload.get('type') == 'item_completed'
             and isinstance(payload.get('item'), dict) and payload['item'].get('type') == 'UserMessage'):
@@ -361,8 +383,9 @@ def _process(store, state, meta, row, offset, position, config):
         return 0
     event_type = payload.get('type') if row.get('type') == 'event_msg' and payload.get('turn_id') == turn['id'] else None
     if event_type == 'turn_aborted':
-        turn['assistant'] = None
-        turn['assistant_finished'] = True
+        _, discarded = _seal_turn(state)
+        if discarded:
+            _exclude(state, 'user_messages_in_turn_without_final', len(discarded))
         return 0
     is_complete = event_type == 'task_complete'
     mode = _assistant_mode(payload) if row.get('type') == 'response_item' else None
@@ -412,9 +435,11 @@ def poll(store, session_id, config):
                 attachment_partial_record=state['skip_partial'])
         if state['identity'] != identity or state['header_hash'] != digest or stat.st_size < state['cursor']:
             raise ValueError('Native source replaced or truncated; review required')
-        pending_assistant = (state.get('turn') or {}).get('assistant') or {}
+        active_turn = state.get('turn') or {}
+        pending_assistant = active_turn.get('assistant') or {}
         pending_witness = pending_assistant.get('row', {}).get('_witness')
-        for witness in [*state.get('witnesses', []), state.get('checkpoint'), pending_witness]:
+        for witness in [*state.get('witnesses', []), *active_turn.get('user_witnesses', []),
+                        state.get('checkpoint'), pending_witness]:
             if witness is None:
                 continue
             stream.seek(witness['start'])

@@ -10,6 +10,7 @@ class UserPhotoTest(unittest.TestCase):
     setUp=fixture.CaptureTest.setUp
     append=fixture.CaptureTest.append
     turn=fixture.CaptureTest.turn
+    assistant=fixture.CaptureTest.assistant
     pair=fixture.CaptureTest.pair
     poll=fixture.CaptureTest.poll
     messages=fixture.CaptureTest.messages
@@ -33,8 +34,8 @@ class UserPhotoTest(unittest.TestCase):
                 'content':[{'type':'text','text':caption,'text_elements':[]},{'type':'local_image','path':path}]}}})
 
     def test_actual_user_caption_and_photo_retained_with_R_clock_and_generated_manifest(self):
-        caption=self.photo();self.capture.register(self.store,self.raw);result=self.poll()
-        self.assertEqual(result['gaps'],[]);self.assertEqual(len(self.messages()),1)
+        caption=self.photo();self.assistant();self.capture.register(self.store,self.raw);result=self.poll()
+        self.assertEqual(result['gaps'],[]);self.assertEqual(len(self.messages()),2)
         args=self.messages()[0]['arguments'];self.assertEqual(args['role'],'user');self.assertEqual(args['artifact_ids'],[AID])
         self.assertTrue(args['text'].startswith(caption));self.assertIn('not user words',args['text'])
         self.assertNotIn('/synthetic/private-photo.jpg',args['text']);self.assertNotIn('<image',args['text'])
@@ -72,8 +73,9 @@ class UserPhotoTest(unittest.TestCase):
     def test_native_client_photo_positive_proof_and_parser_state_never_embeds_base64(self):
         self.photo(trigger=None,completion=False);self.capture.register(self.store,self.raw);self.poll()
         self.assertNotIn(base64.b64encode(PNG).decode(),json.dumps(self.store.session('physical')))
-        self.complete();result=self.poll()
-        self.assertEqual(result['gaps'],[]);self.assertEqual(len(self.messages()),1)
+        self.complete();self.poll();self.assertEqual(self.messages(),[])
+        self.assistant();result=self.poll()
+        self.assertEqual(result['gaps'],[]);self.assertEqual(len(self.messages()),2)
         self.assertEqual(self.messages()[0]['arguments']['artifact_ids'],[AID])
 
     def test_unknown_image_format_preserves_verified_words_with_explicit_limit(self):
@@ -81,13 +83,13 @@ class UserPhotoTest(unittest.TestCase):
         rows=[json.loads(line) for line in self.path.read_text().splitlines()]
         rows[-2]['payload']['content'][2]['image_url']='https://example.invalid/photo?token=DO-NOT-RETAIN'
         self.path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
-        self.capture.register(self.store,self.raw);result=self.poll()
+        self.assistant();self.capture.register(self.store,self.raw);result=self.poll()
         args=self.messages()[0]['arguments'];self.assertTrue(args['text'].startswith(caption))
         self.assertNotIn('artifact_ids',args);self.assertNotIn('DO-NOT-RETAIN',args['text'])
         self.assertIn('unsupported_user_photo_media:external_image_not_fetched',result['gaps'])
 
     def test_photo_replay_is_idempotent_and_scalar_callbacks_unchanged(self):
-        self.photo();self.capture.register(self.store,self.raw);result=self.poll()
+        self.photo();self.assistant();self.capture.register(self.store,self.raw);result=self.poll()
         from synthetic_memory_adapter.frontier import Coordinator
         remote=ArtifactRemote();c=Coordinator(self.store,remote);c.observe('physical',result);c.tick()
         before=self.messages()[0]
@@ -95,7 +97,7 @@ class UserPhotoTest(unittest.TestCase):
         reset_parser_checkpoint(self.store,'physical',expected_header_sha256=self.store.session('physical')['header_hash'],reason=REASON)
         self.poll();after=self.messages()[0]
         self.assertEqual(before['arguments'],after['arguments']);self.assertEqual(before['receipt'],after['receipt'])
-        self.assertEqual(after['status'],'acknowledged');self.assertEqual(len(self.messages()),1)
+        self.assertEqual(after['status'],'acknowledged');self.assertEqual(len(self.messages()),2)
         self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0],1)
 
     def test_supported_jpeg_bytes_are_retained_without_any_image_file_access(self):
@@ -103,7 +105,7 @@ class UserPhotoTest(unittest.TestCase):
         self.photo();rows=[json.loads(line) for line in self.path.read_text().splitlines()]
         rows[-2]['payload']['content'][2]['image_url']='data:image/jpeg;base64,'+base64.b64encode(data).decode()
         self.path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
-        self.capture.register(self.store,self.raw);self.poll()
+        self.assistant();self.capture.register(self.store,self.raw);self.poll()
         blob=self.store.db.execute('SELECT data,mime_type FROM artifacts').fetchone()
         self.assertEqual(bytes(blob['data']),data);self.assertEqual(blob['mime_type'],'image/jpeg')
         self.assertEqual(self.messages()[0]['arguments']['role'],'user')
@@ -117,5 +119,5 @@ class UserPhotoTest(unittest.TestCase):
         self.assertTrue(first['backlog']);self.assertEqual(self.messages(),[])
         self.assertEqual(bytes(self.store.db.execute('SELECT data FROM artifacts').fetchone()[0]),data)
         self.assertNotIn(base64.b64encode(data).decode(),json.dumps(self.store.session('physical')))
-        second=self.poll();self.assertEqual(second['gaps'],[])
+        self.assistant();second=self.poll();self.assertEqual(second['gaps'],[])
         self.assertTrue(self.messages()[0]['arguments']['text'].startswith(caption))

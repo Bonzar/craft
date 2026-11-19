@@ -131,6 +131,8 @@ class Outbox:
                 'retained_source_gap_count': len(state.get('gaps', [])),
                 'intentional_exclusions': state.get('exclusions', {}),
                 'blocked': state.get('blocked'),
+                'pending_turn_completion': bool((state.get('turn') or {}).get('user_messages')
+                    or (state.get('turn') or {}).get('assistant')),
                 'pending_source_proof': bool((state.get('turn') or {}).get('pending')
                     and not (state.get('turn') or {}).get('pending', {}).get('emitted'))}
 

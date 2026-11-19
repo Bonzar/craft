@@ -43,7 +43,7 @@ class BoundedReplayTest(unittest.TestCase):
         from synthetic_memory_adapter.frontier import Coordinator
         remote=ArtifactRemote();coordinator=Coordinator(self.store,remote);coordinator.observe('physical',old_result);coordinator.tick()
         before={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()}
-        self.assertEqual(len(before),1)
+        self.assertEqual(len(before),0)
         repair=self.restore(saved);self.assertEqual(repair['replay_start_offset'],saved[2]);result=self.poll()
         coordinator.observe('physical',result);coordinator.tick()
         after={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()}

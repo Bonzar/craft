@@ -78,6 +78,7 @@ class MemoryLifecycleTest(unittest.TestCase):
     def test_worker_does_not_read_or_heartbeat_a_stopped_transcript(self):
         self.capture.register(self.store, self.raw)
         self.turn()
+        self.assistant()
         self.poll()
         remote = FakeRemote()
         self.run_worker(remote)
@@ -91,11 +92,12 @@ class MemoryLifecycleTest(unittest.TestCase):
         self.run_worker(remote)
         self.assertEqual(self.store.session('physical')['cursor'], before)
         self.assertEqual(remote.calls, [])
-        self.assertEqual(len(self.messages()), 1)
+        self.assertEqual(len(self.messages()), 2)
 
     def test_pending_delivery_is_retried_after_watching_stops(self):
         self.capture.register(self.store, self.raw)
         self.turn()
+        self.assistant()
         self.poll()
         self.store.set_watching('physical', False)
         self.path.unlink()
@@ -126,6 +128,7 @@ class MemoryLifecycleTest(unittest.TestCase):
         from synthetic_memory_adapter.frontier import Coordinator
         self.capture.register(self.store, self.raw)
         self.turn()
+        self.assistant()
         self.poll()
         self.store.set_watching('physical', False)
         remote = FakeRemote()
