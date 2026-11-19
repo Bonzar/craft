@@ -48,3 +48,31 @@ class ThoughtChangePropagationTest(unittest.TestCase):
             self.assertIsNone(worker.work.get(unrelated.id))
             worker.work.enqueue_refresh(unrelated,(child.id,child.version))
             self.assertEqual(worker.run_once()['status'],'completed')
+
+    def test_rephrasing_updates_ground_version_without_waking_its_parent(self):
+        with MemoryStore(':memory:') as memory:
+            store, queue = ThoughtStore(memory), CaptureQueue(memory)
+            child = store.publish('Blue is supported.')
+            parent = store.publish('Blue is supported.',question='Is blue supported?',
+                                   bases=[{'thought_id':child.id,'version':child.version}])
+            grandparent = store.publish('The blue option is available.',question='What color is available?',
+                                        bases=[{'thought_id':parent.id,'version':parent.version}])
+            child = store.publish('Blue is supported. Red is discontinued.',thought_id=child.id,
+                                  expected_version=child.version)
+            def model(request):
+                if request.task == 'Construct thought':
+                    return json.dumps({'thought':{'question':None,'text':'Blue is available.',
+                                                   'support_fragments':[0]},'needs_detail':None})
+                return json.dumps({'verdict':'accept','text':'Same answer and confidence.',
+                                   'meaning_changed':False})
+            engine = ThoughtEngine(store,model)
+            worker = ThoughtWorker(queue,engine,lane='maintenance')
+            worker.enqueue_dependents([child])
+            latest_work = worker.run_once()
+            self.assertEqual(latest_work['status'],'completed',latest_work)
+            refreshed = store.get(parent.id)
+            self.assertGreater(refreshed.version,parent.version)
+            self.assertEqual(refreshed.text,parent.text)
+            self.assertEqual(refreshed.bases[0]['version'],child.version)
+            self.assertIsNone(worker.work.get(grandparent.id))
+            self.assertTrue(engine._fresh(grandparent))
