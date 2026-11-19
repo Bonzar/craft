@@ -6,11 +6,14 @@ from pathlib import Path
 from prototypes.assertion_memory.model import ModelRequest
 from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.storage import MemoryStore
+from prototypes.assertion_memory.thought_engine import ThoughtEngine
 from prototypes.assertion_memory.thought_store import ThoughtStore
 from prototypes.assertion_memory.thought_worker import ThoughtWorker
 
 
 class Engine:
+    _source_key = staticmethod(ThoughtEngine._source_key)
+
     def __init__(self, thoughts):
         self.thoughts, self.store = thoughts, thoughts.store
         self.model = lambda request: '{"text":"accepted"}'
@@ -52,6 +55,8 @@ class Engine:
 
     def consolidate(self, changed, *, on_affected=None):
         self.consolidations.append([row.id for row in changed])
+        if on_affected is not None:
+            on_affected([])
         return []
 
 
@@ -87,6 +92,18 @@ class ThoughtWorkerTest(unittest.TestCase):
             self.assertEqual(self.engine.calls, 0)
             self.assertEqual(len(self.queue.list_events()), 2)
         self.assertEqual(self.worker.run_once().status, 'completed')
+
+    def test_context_respects_native_session_within_a_shared_capture_session(self):
+        foreign = self.queue.capture_event('shared', 'foreign', 'Foreign context', source='test',
+                                           metadata={'native_session_id': 'foreign'})
+        own = self.queue.capture_event('shared', 'own', 'Own context', source='test',
+                                       metadata={'native_session_id': 'chosen'})
+        target = self.queue.capture_event('shared', 'target', 'Chosen message', source='test',
+                                          metadata={'native_session_id': 'chosen'})
+        worker = ThoughtWorker(self.queue, self.engine, processing_session_ids=('chosen',))
+        self.assertNotEqual(foreign.id, own.id)
+        self.assertEqual([], [row.id for row in worker._context(foreign)])
+        self.assertEqual([own.id], [row.id for row in worker._context(target)])
 
     def test_context_budget_reports_known_omissions_and_uninspected_prefix(self):
         oldest = self.queue.capture_event('bounded', 'old', 'Older context.', source='test')

@@ -37,6 +37,9 @@ class CaptureTest(unittest.TestCase):
         self.config = {'actor_id': 'fiction-user', 'scope': 'fiction'}
 
     def append(self, row):
+        payload = row.get('payload') if isinstance(row, dict) else None
+        if isinstance(payload, dict) and row.get('type')=='event_msg' and payload.get('type')=='task_started':
+            self.turn_id = payload['turn_id']
         with self.path.open('ab') as stream:
             stream.write((json.dumps(row, ensure_ascii=False) + '\n').encode())
 
@@ -58,6 +61,9 @@ class CaptureTest(unittest.TestCase):
     def assistant(self, text='proposal', mid='a1', channel='final'):
         self.append({'type': 'response_item', 'payload': {'type': 'message', 'id': mid, 'role': 'assistant',
             'channel': channel, 'content': [{'type': 'output_text', 'text': text}]}})
+        if channel == 'final':
+            self.append({'type':'event_msg','payload':{'type':'task_complete',
+                'turn_id':self.turn_id,'last_agent_message':text}})
 
     def poll(self):
         return self.capture.poll(self.store, 'physical', self.config)
@@ -75,6 +81,67 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual([m['arguments']['role'] for m in messages], ['user', 'assistant'])
         self.assertEqual([m['arguments']['text'] for m in messages], ['yes', 'proposal'])
         self.assertTrue(all('/session/physical/turn/one/message/' in m['arguments']['source'] for m in messages))
+
+    def test_all_user_messages_wait_for_the_confirmed_final_reply(self):
+        from synthetic_memory_adapter.frontier import Coordinator
+        from .test_assertion_memory_frontier import FakeRemote
+
+        self.turn('request')
+        self.capture.register(self.store, self.raw)
+        remote = FakeRemote()
+        coordinator = Coordinator(self.store, remote)
+        coordinator.observe('physical', self.poll())
+        self.assertEqual(coordinator.tick()['attempted'], 0)
+        self.assertEqual(self.messages(), [])
+
+        self.assistant('working on it', 'progress', 'commentary')
+        self.pair('steering', 'one', 'u2')
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+            'id':'answer','phase':'final_answer','content':[{'type':'output_text','text':'result'}]}})
+        coordinator.observe('physical', self.poll())
+        self.assertEqual(coordinator.tick()['attempted'], 0)
+        self.assertEqual(self.messages(), [])
+
+        self.append({'type':'event_msg','payload':{'type':'task_complete',
+            'turn_id':'one','last_agent_message':'result'}})
+        coordinator.observe('physical', self.poll())
+        self.assertEqual(coordinator.tick()['acknowledged'], 3)
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],
+                         ['request', 'steering', 'result'])
+
+    def test_only_completed_turn_final_is_queued_once(self):
+        self.turn('request')
+        self.capture.register(self.store, self.raw)
+        for text, phase in [('progress', 'commentary'), ('discarded final', 'final_answer'),
+                            ('delivered final', 'final_answer')]:
+            self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+                'id':text, 'phase':phase,'content':[{'type':'output_text','text':text}]}})
+        self.poll()
+        self.assertEqual([m['arguments']['text'] for m in self.messages()], [])
+
+        for turn in ('another', 'one', 'one'):
+            self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':turn,
+                'last_agent_message':'delivered final'}})
+            self.poll()
+            expected = [] if turn == 'another' else ['request', 'delivered final']
+            self.assertEqual([m['arguments']['text'] for m in self.messages()], expected)
+
+    def test_interrupted_final_and_commentary_only_turn_produce_no_assistant_message(self):
+        self.turn('first request')
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+            'phase':'final_answer','content':[{'type':'output_text','text':'interrupted final'}]}})
+        self.append({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':'one','reason':'interrupted'}})
+        self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'one',
+            'last_agent_message':'interrupted final'}})
+        self.turn('second request', turn='two', mid='u2')
+        self.assistant('progress only', 'a1', 'commentary')
+        self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'two',
+            'last_agent_message':'progress only'}})
+        self.capture.register(self.store, self.raw)
+        self.poll()
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],
+                         [])
+        self.assertEqual(self.store.session('physical')['exclusions']['user_messages_in_turn_without_final'], 2)
 
     def test_resume_without_registration_starts_after_existing_tail(self):
         self.turn('old')
@@ -105,11 +172,12 @@ class CaptureTest(unittest.TestCase):
     def test_identical_text_occurrences_are_distinct_and_idless_restart_is_stable(self):
         self.turn(mid=None)
         self.pair(mid=None)
+        self.assistant(mid=None)
         self.capture.register(self.store, self.raw)
         self.poll()
         before = self.messages()
-        self.assertEqual(len(before), 2)
-        self.assertEqual(len({m['arguments']['message_id'] for m in before}), 2)
+        self.assertEqual(len(before), 3)
+        self.assertEqual(len({m['arguments']['message_id'] for m in before}), 3)
         self.capture.register(self.store, {**self.raw, 'source': 'resume'})
         self.poll()
         self.assertEqual(before, self.messages())
@@ -132,12 +200,12 @@ class CaptureTest(unittest.TestCase):
         self.capture.register(self.store,self.raw)
         with patch.object(self.store,'store_artifact',side_effect=AssertionError('automatic tool artifacts are forbidden')):
             result=self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant','assistant'])
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','visible progress','visible final'])
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','visible final'])
         self.assertEqual(result['gaps'],[])
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM artifacts').fetchone()[0],0)
         remote=FakeRemote();coordinator=Coordinator(self.store,remote);coordinator.observe('physical',result);coordinator.tick()
-        self.assertEqual(coordinator.local('physical')['server_acked_through'],3)
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],2)
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
         self.assertTrue(all(m['status']=='acknowledged' for m in self.messages()))
         self.assertEqual(self.store.session('physical')['cursor'],self.path.stat().st_size)
@@ -151,12 +219,12 @@ class CaptureTest(unittest.TestCase):
         with patch.object(self.capture,'MAX_MEDIA_RECORD',4096):
             result=self.poll()
         self.assertEqual(result['gaps'],['oversized_record'])
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],[])
         self.assertFalse(any(m['arguments']['role']=='tool' for m in self.messages()))
         self.assertIsNone(self.store.session('physical')['turn'])
         self.turn('Next proven source','next','next-user');self.assistant('Next proven reply','next-answer')
         self.poll()
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','Next proven source','Next proven reply'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['Next proven source','Next proven reply'])
 
     def test_nonhuman_and_unknown_origin_and_inherited_fork_history_are_excluded(self):
         for i, trigger in enumerate(('automation', 'subagent_message', 'auto_resume', 'unknown-new-trigger')):
@@ -198,11 +266,13 @@ class CaptureTest(unittest.TestCase):
         self.poll()
         self.assertEqual(self.messages(), [])
         with self.path.open('ab') as stream: stream.write(partial[22:])
+        self.assistant()
         self.poll()
-        self.assertEqual(len(self.messages()), 1)
+        self.assertEqual(len(self.messages()), 2)
 
     def test_remote_commit_then_lost_ack_retries_same_arguments_and_keeps_receipts(self):
         self.turn()
+        self.assistant()
         self.capture.register(self.store, self.raw)
         self.poll()
         seen, committed = [], {}
@@ -212,16 +282,18 @@ class CaptureTest(unittest.TestCase):
             if len(seen) == 1: raise OSError('synthetic lost ACK')
             return {'event': {'id': 'server-event', 'session_id': arguments['session_id'],
                 'message_id': arguments['message_id'], 'source': arguments['source']}}
-        self.assertEqual(self.store.deliver(sender)['acknowledged'], 0)
-        self.assertEqual(self.store.deliver(sender)['acknowledged'], 1)
+        self.assertEqual(self.store.deliver(sender, limit=1)['acknowledged'], 0)
+        self.assertEqual(self.store.deliver(sender, limit=1)['acknowledged'], 1)
         self.assertEqual(seen[0], seen[1])
         self.assertEqual(len(committed), 1)
         self.assertEqual(self.messages()[0]['status'], 'acknowledged')
         self.assertEqual(self.messages()[0]['receipt']['event']['id'], 'server-event')
+        self.assertEqual(self.store.deliver(sender)['attempted'], 1)
         self.assertEqual(self.store.deliver(sender)['attempted'], 0)
 
     def test_error_or_wrong_message_receipt_is_not_acknowledged(self):
         self.turn()
+        self.assistant()
         self.capture.register(self.store, self.raw)
         self.poll()
         self.store.deliver(lambda args: {'event': {'id': 'foreign', 'session_id': 'other'}})
@@ -234,7 +306,7 @@ class CaptureTest(unittest.TestCase):
         self.path.write_bytes(self.path.read_bytes().replace(b'yes', b'bad'))
         self.assistant()
         with self.assertRaisesRegex(ValueError, 'proof bytes changed'): self.poll()
-        self.assertEqual(len(self.messages()), 1)
+        self.assertEqual(len(self.messages()), 0)
 
     def test_pending_header_and_pending_source_are_retried_without_missing_first_user(self):
         self.path.unlink()
@@ -245,17 +317,18 @@ class CaptureTest(unittest.TestCase):
         self.path.write_bytes(b'')
         self.append({'type':'session_meta','payload':{'id':'physical','cwd':str(self.root),'source':'vscode','originator':'Codex Desktop'}})
         self.turn()
+        self.assistant()
         self.poll()
-        self.assertEqual(len(self.messages()), 1)
+        self.assertEqual(len(self.messages()), 2)
 
     def test_oversized_visible_record_is_explicit_gap_and_next_proven_turn_still_captures(self):
         self.turn()
         self.append({'type':'response_item','payload':{'type':'message','role':'assistant','channel':'final','content':[{'type':'output_text','text':'x'*(self.capture.MAX_RECORD+1)}]}})
-        self.turn('later','two','u2')
+        self.turn('later','two','u2');self.assistant()
         self.capture.register(self.store, self.raw)
         result = self.poll()
         self.assertIn('oversized_record', result['gaps'])
-        self.assertEqual([m['arguments']['text'] for m in self.messages()], ['yes','later'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()], ['later','proposal'])
 
     def test_ambiguous_RR_does_not_borrow_a_later_item_as_proof(self):
         self.turn()
@@ -279,12 +352,14 @@ class CaptureTest(unittest.TestCase):
         self.poll()
         before = self.store.session('physical')['cursor']
         self.pair('changed', mid='same')
+        self.assistant()
         with self.assertRaisesRegex(ValueError, 'conflicting'): self.poll()
         self.assertEqual(self.store.session('physical')['cursor'], before)
-        self.assertEqual([m['arguments']['text'] for m in self.messages()], ['first'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()], [])
 
     def test_worker_does_not_send_pending_messages_after_binding_disabled(self):
         self.turn()
+        self.assistant()
         self.capture.register(self.store, self.raw)
         self.poll()
         from synthetic_memory_adapter import capture_worker
@@ -314,9 +389,10 @@ class CaptureTest(unittest.TestCase):
             if timestamp: rows[-2]['timestamp']=timestamp
             rows[-1]['timestamp']='2026-11-16T09:00:00Z'
             self.path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            self.assistant(mid='answer-'+str(timestamp))
         self.capture.register(self.store,self.raw)
         self.poll()
-        messages=self.messages()
+        messages=[m for m in self.messages() if m['arguments']['role']=='user']
         self.assertEqual(messages[0]['arguments']['source_message_at'],'2026-11-16T08:00:00Z')
         self.assertNotIn('source_message_at',messages[1]['arguments'])
 
@@ -345,7 +421,7 @@ class CaptureTest(unittest.TestCase):
         self.poll()
         self.turn('later','later','later-user')
         self.poll()
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','proposal','later'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','proposal'])
         self.assertEqual(self.messages()[0]['arguments']['source_message_at'],'2026-11-16T08:00:00Z')
 
     def test_unverified_native_client_R_is_reported_when_next_turn_begins(self):
@@ -354,9 +430,9 @@ class CaptureTest(unittest.TestCase):
         self.path.write_bytes(b''.join(lines[:-1]))
         self.capture.register(self.store,self.raw)
         self.poll()
-        self.turn('later','later','later-user')
+        self.turn('later','later','later-user');self.assistant()
         result=self.poll()
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['later'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['later','proposal'])
         self.assertIn('unverified_native_user_at_turn_end',result['gaps'])
 
     def test_fork_recovers_current_session_first_prehook_input_but_not_inherited_history(self):
@@ -409,9 +485,10 @@ class CaptureTest(unittest.TestCase):
             else: rows[-1]['payload']['thread_id']=thread
             rows[-1]['timestamp']='2026-11-16T09:00:00Z'
             self.path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            self.assistant(mid='answer-'+suffix)
         self.capture.register(self.store,self.raw)
         self.poll()
-        self.assertEqual(len(self.messages()),1)
+        self.assertEqual(len(self.messages()),2)
         self.assertIn('absent',self.messages()[0]['arguments']['message_id'])
         self.assertNotIn('source_message_at',self.messages()[0]['arguments'])
 
@@ -420,10 +497,10 @@ class CaptureTest(unittest.TestCase):
         lines=self.path.read_bytes().splitlines(keepends=True)
         self.path.write_bytes(b''.join(lines[:-1])+lines[-2])
         self.assistant()
-        self.turn('later','later','later-user')
+        self.turn('later','later','later-user');self.assistant(mid='later-answer')
         self.capture.register(self.store,self.raw)
         result=self.poll()
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['later'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['later','proposal'])
         self.assertIn('unverified_native_user_at_turn_end',result['gaps'])
 
     def test_fork_unproven_singleton_input_is_explicit_gap_not_silent_loss(self):
@@ -448,6 +525,7 @@ class CaptureTest(unittest.TestCase):
 
     def test_concurrent_global_project_registration_never_resets_progressed_cursor(self):
         self.turn()
+        self.assistant()
         _,outbox=load_capture()
         other=outbox.Outbox(self.root/'outbox.sqlite3')
         self.addCleanup(other.close)
@@ -467,7 +545,7 @@ class CaptureTest(unittest.TestCase):
             registered=self.capture.register(self.store,self.raw)
         self.assertEqual(registered['cursor'],progressed)
         self.assertEqual(self.store.session('physical')['cursor'],progressed)
-        self.assertEqual(len(self.messages()),1)
+        self.assertEqual(len(self.messages()),2)
 
     def test_harness_service_context_is_excluded_without_gap_or_poisoning_user_pair(self):
         self.turn()
@@ -479,8 +557,9 @@ class CaptureTest(unittest.TestCase):
                 'content_item_kinds':['agents_md.instructions','environments.environment_context'],
                 'content_item_metadata':[{'provenance':{'type':'agents_md'}},{'provenance':{'type':'harness'}}]}}})
         self.path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+        self.assistant()
         self.capture.register(self.store,self.raw);result=self.poll()
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','proposal'])
         self.assertEqual(result['gaps'],[])
         self.assertEqual(self.store.session('physical')['exclusions']['harness_service_context'],1)
 
@@ -494,8 +573,9 @@ class CaptureTest(unittest.TestCase):
         blocks=[{'type':'input_text','text':'Complete synthetic observation, including exceptions.'},
                 {'type':'input_text','text':json.dumps(payload)}]
         self.append({'type':'response_item','payload':{'type':'custom_tool_call_output','call_id':'structured','output':blocks}})
+        self.assistant()
         self.capture.register(self.store,self.raw);result=self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user'])
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant'])
         from synthetic_memory_adapter.tool_projection import project_result
         text=project_result(blocks)['text'];rendered=json.loads(text)
         self.assertEqual(rendered['format'],'native-tool-output/v1')
@@ -594,11 +674,13 @@ class CaptureTest(unittest.TestCase):
     def test_nonobject_payload_is_a_gap_and_breaks_source_chain(self):
         expected=[]
         for index,payload in enumerate((None,[],42,'unsupported payload')):
-            text='Independent user '+str(index);expected.append(text)
+            text='Independent user '+str(index)
             self.turn(text,turn='payload-'+str(index),mid='payload-'+str(index))
             self.append({'type':'event_msg','payload':payload})
             self.assistant('Do not inherit the previous source',mid='unproven-'+str(index))
         expected.append('Next proven turn');self.turn(expected[-1],turn='after-payloads',mid='after-payloads')
+        self.assistant()
+        expected.append('proposal')
         self.capture.register(self.store,self.raw);result=self.poll()
         self.assertEqual([message['arguments']['text'] for message in self.messages()],expected)
         self.assertEqual(result['gaps'].count('invalid_record'),4)
@@ -609,9 +691,10 @@ class CaptureTest(unittest.TestCase):
             self.append(row)
         self.assistant('Must not cross unknown source boundary',mid='not-proven')
         self.turn('Next independently proven turn',turn='after',mid='after')
+        self.assistant()
         self.capture.register(self.store,self.raw);result=self.poll()
         self.assertEqual([message['arguments']['text'] for message in self.messages()],
-            ['Before unsupported record','Next independently proven turn'])
+            ['Next independently proven turn','proposal'])
         self.assertIn('invalid_record',result['gaps'])
         from synthetic_memory_adapter.frontier import Coordinator
         coordinator=Coordinator(self.store,object());coordinator.observe('physical',result)
@@ -649,7 +732,7 @@ class CaptureTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'history expansion'):
             reset_parser_checkpoint(self.store,'physical',expected_header_sha256=state['header_hash'],reason=REASON)
 
-    def test_native_phase_commentary_without_channel_is_visible_and_frontier_becomes_current(self):
+    def test_native_phase_commentary_is_excluded_and_frontier_becomes_current(self):
         self.turn()
         for i in range(3):
             self.append({'type':'response_item','payload':{'type':'message','role':'assistant','id':'phase-commentary-'+str(i),
@@ -658,7 +741,7 @@ class CaptureTest(unittest.TestCase):
             'phase':'final_answer','content':[{'type':'output_text','text':'Synthetic final'}]}})
         self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'one','last_agent_message':'Synthetic final'}})
         self.capture.register(self.store,self.raw);result=self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant','assistant','assistant','assistant'])
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant'])
         self.assertIsNone(self.store.session('physical')['turn']['assistant'])
         from synthetic_memory_adapter.frontier import Coordinator
         coordinator=Coordinator(self.store,object());coordinator.observe('physical',result)
@@ -673,7 +756,7 @@ class CaptureTest(unittest.TestCase):
                     'channel':channel,'phase':phase,'content':[{'type':'output_text','text':'Synthetic private '+identity}]}})
                 self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':identity,'last_agent_message':'Synthetic private '+identity}})
         self.capture.register(self.store,self.raw);self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user']*6)
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],[])
         self.assertNotIn('Synthetic private',json.dumps(self.messages()))
         self.assertIsNone(self.store.session('physical')['turn']['assistant'])
 
@@ -691,7 +774,7 @@ class CaptureTest(unittest.TestCase):
         coordinator=Coordinator(self.store,object());coordinator.observe('physical',result)
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
 
-    def test_phase_v2_replay_keeps_dialogue_receipts_and_adds_only_three_commentaries(self):
+    def test_phase_v2_replay_keeps_dialogue_receipts_and_excludes_commentary(self):
         from unittest.mock import patch
         from synthetic_memory_adapter.frontier import Coordinator
         from .test_assertion_memory_frontier import FakeRemote
@@ -718,10 +801,10 @@ class CaptureTest(unittest.TestCase):
         reset_parser_checkpoint(self.store,'physical',expected_header_sha256=self.store.session('physical')['header_hash'],reason=REASON)
         result=self.poll();coordinator.observe('physical',result);coordinator.tick()
         after={m['message_id']:(m['arguments'],m['receipt'],m['status']) for m in self.messages()}
-        self.assertEqual(len(after),5);self.assertTrue(all(after[key]==value for key,value in before.items()))
+        self.assertEqual(len(after),2);self.assertTrue(all(after[key]==value for key,value in before.items()))
         self.assertTrue(all(value[2]=='acknowledged' for value in after.values()))
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
-        self.assertEqual(coordinator.local('physical')['server_acked_through'],5)
-        self.assertEqual(sum(m['arguments']['role']=='assistant' for m in self.messages()),4)
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],2)
+        self.assertEqual(sum(m['arguments']['role']=='assistant' for m in self.messages()),1)
         self.assertEqual(sum(m['arguments']['role']=='tool' for m in self.messages()),0)
         self.assertIsNone(self.store.session('physical')['turn']['assistant'])

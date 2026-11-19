@@ -22,16 +22,16 @@ class DialogueOnlyTest(unittest.TestCase):
         f.assistant('Visible progress','progress','commentary')
         f.assistant('Visible answer','answer','final')
         f.capture.register(f.store,f.raw);result=f.poll()
-        self.assertEqual([m['arguments']['role'] for m in f.messages()],['user','assistant','assistant'])
-        self.assertEqual([m['arguments']['text'] for m in f.messages()],['Actual user words','Visible progress','Visible answer'])
+        self.assertEqual([m['arguments']['role'] for m in f.messages()],['user','assistant'])
+        self.assertEqual([m['arguments']['text'] for m in f.messages()],['Actual user words','Visible answer'])
         self.assertEqual(result['gaps'],[])
         self.assertEqual(f.store.session('physical')['cursor'],f.path.stat().st_size)
         from synthetic_memory_adapter.frontier import Coordinator
         remote=FakeRemote(); coordinator=Coordinator(f.store,remote)
         coordinator.observe('physical',result); coordinator.tick()
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
-        self.assertEqual(coordinator.local('physical')['server_acked_through'],3)
-        self.assertEqual([row[0] for row in f.store.db.execute('SELECT seq FROM delivery_sequences ORDER BY seq')],[1,2,3])
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],2)
+        self.assertEqual([row[0] for row in f.store.db.execute('SELECT seq FROM delivery_sequences ORDER BY seq')],[1,2])
         self.assertEqual(f.poll()['queued'],0)
 
     def test_excluded_large_tool_media_never_creates_artifacts_or_gaps(self):

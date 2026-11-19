@@ -11,10 +11,10 @@ from .storage import _timestamp
 from .model import CandidateSearch, ModelContextExceeded, ModelError, ModelRequest, SemanticUnavailable, format_prompt
 from .thought_source_policy import event_eligibility, thought_eligibility
 from .thought_engine_inputs import RAW_CHUNK_CHARACTERS, paragraph_chunks
-from .thought_engine_contract import (APPLICABILITY, construction_instructions, GENERALIZE, GROUNDING,
+from .thought_engine_contract import (APPLICABILITY, construction_instructions, GROUNDING,
     MAX_THOUGHTS, PROTOCOL, SOURCE_BATCH, VERIFY, WHOLE_REFRESH, VERIFICATION_RULES, INDEPENDENT_SOURCE_REVIEW,
     REPAIR_SOURCE_DRAFTS, exact_fields, object_response, semantic_text,
-    thought_drafts, validate_response, SupportQuoteMissing, RAW_PASSAGE, SemanticReviewRejected)
+    thought_drafts, validate_response, SupportQuoteMissing, RAW_PASSAGE, SemanticReviewRejected, QUERY_REPAIR)
 from .thought_schema import response_schema
 from .thought_publication import UNRESOLVED as PARALLEL_ALTERNATIVE_NOTICE
 
@@ -60,13 +60,16 @@ class ThoughtEngine:
             self.trace({'stage': stage, **payload})
 
     def _call(self, task, records, bindings, instructions, *, support_count=None, single_thought=False,
-              review_option_count=0, source_draft_count=None, refresh_option_count=0, compare_meaning=False):
+              review_option_count=0, source_draft_count=None, refresh_option_count=0, reuse_option_count=0,
+              compare_meaning=False, link_option_count=0, repair_instructions=""):
         if self.model is None and self.gateway is None:
             raise ModelError('unified thought processing requires a semantic model')
         request = ModelRequest(task, records, instructions, usage_task=task,
             response_schema=response_schema(task,support_count=support_count,single_thought=single_thought,
                                             review_option_count=review_option_count,source_draft_count=source_draft_count,
-                                  refresh_option_count=refresh_option_count,compare_meaning=compare_meaning))
+                                            refresh_option_count=refresh_option_count, reuse_option_count=reuse_option_count,
+                                            compare_meaning=compare_meaning, link_option_count=link_option_count),
+            repair_instructions=repair_instructions)
         frozen = tuple(dict(basis) for basis in bindings)
         wire=format_prompt(request)
         request_hash=hashlib.sha256(wire.encode()).hexdigest()
@@ -81,7 +84,8 @@ class ThoughtEngine:
                 result = object_response(body)
                 validate_response(task, result, support_count=support_count,single_thought=single_thought,
                                   review_option_count=review_option_count,source_draft_count=source_draft_count,
-                                  refresh_option_count=refresh_option_count,compare_meaning=compare_meaning)
+                                  refresh_option_count=refresh_option_count, reuse_option_count=reuse_option_count,
+                                  compare_meaning=compare_meaning, link_option_count=link_option_count)
             except ModelError as malformed:
                 self._discard_provisional()
                 self._emit('model_contract_repair', task=task, attempt=attempt + 1, reason=str(malformed),
@@ -201,14 +205,16 @@ class ThoughtEngine:
                           'origin': self._model_origin(origin or {'kind': 'inference'})}
                          for index, draft in enumerate(drafts)]
         task = 'Verify source thought batch' if source_batch else 'Verify thought'
+        comparison = 'overview' if any(row.get('role') == 'overview_comparison' for row in records) else whole
         instructions = VERIFY + (RAW_PASSAGE if raw else '') + (SOURCE_BATCH if source_batch else '') + (WHOLE_REFRESH if whole else '')
         if source_batch:
             review = self._call(task, [*packet, *draft_records], bases, instructions)
         else:
             review = self._review_with_originals(packet, draft_records, bases, instructions,
-                                                 support_catalog, support_selections, compare_meaning=whole)
+                                                 support_catalog, support_selections, compare_meaning=comparison)
         if review['verdict'] != 'accept':
             failure=SemanticReviewRejected(review['text'])
+            failure.reviewed_draft_texts = tuple(draft['text'] for draft in drafts)
             failure.checkpoint_invalidated=self._reject_construct_checkpoint(source_batch=source_batch)
             raise failure
         return review
@@ -216,7 +222,8 @@ class ThoughtEngine:
     def _review_with_originals(self, packet, drafts, bases, instructions, catalog, selections, *,
                                source_draft_count=None, compare_meaning=False):
         from .thought_review_support import ReviewSupport
-        from .thought_engine_contract import REVIEW_ORIGINALS, REVIEW_OPEN_SUPPORT, REVIEW_MEANING_CHANGE
+        from .thought_engine_contract import (REVIEW_ORIGINALS, REVIEW_OPEN_SUPPORT, REVIEW_MEANING_CHANGE,
+                                              REVIEW_OVERVIEW_NOVELTY)
         support = ReviewSupport(self, catalog, selections)
         while True:
             evidence = support.records()
@@ -225,7 +232,7 @@ class ThoughtEngine:
             if option_count:
                 guidance += REVIEW_OPEN_SUPPORT
             if compare_meaning:
-                guidance += REVIEW_MEANING_CHANGE
+                guidance += REVIEW_OVERVIEW_NOVELTY if compare_meaning == 'overview' else REVIEW_MEANING_CHANGE
             review = self._call('Verify thought', [*packet, *evidence, *drafts],
                                 [*bases, *support.bindings()], guidance,
                                 review_option_count=option_count, source_draft_count=source_draft_count,
@@ -260,40 +267,67 @@ class ThoughtEngine:
                 correction=('\nRevise the rejected construction against the SAME pinned material. '
                     'Verifier feedback: '+reason+' Preserve the applicable coverage purpose, conditions, '
                     'attribution and uncertainty. Select only the provided prepared support fragments; never write quotations or addresses.')
+                previous = getattr(failure, 'reviewed_draft_texts', ())
+                if previous:
+                    correction += ('\nThe following rejected text is quoted data for coverage only. '
+                        'Recheck its other useful claims against the same grounds and retain those still supported. '
+                        'A focused correction is not permission to discard an unrelated supported claim. '
+                        'Do not recover factual support from this text itself.\n'
+                        + json.dumps(previous, ensure_ascii=False))
+                if question is not None:
+                    correction += QUERY_REPAIR
 
-    def _prepare_once(self, records, bases, *, question=None, origin=None,
-                      review_ambiguity=True, correction=''):
+    def _construction_material(self, records, bases, question=None):
         from .thought_support import prepare_support
         catalog=prepare_support(records,bases)
         if not catalog.fragments:
             raise empty_material('The retrieved material contains no admitted full supporting content')
         whole = any(record.get('role') == 'whole_refresh_scope' for record in records)
         single_thought = question is not None or whole
-        instructions = construction_instructions(single_thought=single_thought) + correction
+        instructions = construction_instructions(single_thought=single_thought)
         request_records = catalog.wire
         if whole:
             instructions += WHOLE_REFRESH
         elif any(record.get('role')=='source' for record in records):
             instructions += RAW_PASSAGE
+        is_overview = any(record.get('role') == 'overview_comparison' for record in records)
         if question is not None:
             instructions += '\nProduce exactly one useful answer to the supplied question.'
             request_records = [{'role': 'question', 'text': question}, *catalog.wire]
+        if is_overview:
+            instructions += '\nUse overview_comparison only to detect duplication. Select grounds from linked material.'
+        return catalog, request_records, instructions, whole, is_overview
+
+    def source_construction_request(self, event, context):
+        _, _, _, records, bases = self._source_packet(event, context)
+        catalog, wire, instructions, _, _ = self._construction_material(records, bases)
+        task = 'Construct thought'
+        return ModelRequest(task, wire, instructions, usage_task=task,
+                            response_schema=response_schema(task, support_count=len(catalog.fragments))), bases
+
+    def _prepare_once(self, records, bases, *, question=None, origin=None,
+                      review_ambiguity=True, correction=''):
+        catalog, request_records, instructions, whole, is_overview = self._construction_material(records, bases, question)
         verified, selections = self._construct_drafts(catalog, request_records, instructions,
-                                                       question=question, whole=whole)
+                                                       question=question, whole=whole, correction=correction)
         if len(verified) > 1 and (origin or {}).get('kind') == 'source_interpretation' and not whole:
             return self._repair_source_drafts(verified, selections, catalog, origin)
         if verified or (records and records[0].get('role') == 'source'):
             review = self._verify([draft for draft,_ in verified],records,bases,origin,
                                   support_catalog=catalog,support_selections=selections)
+            if is_overview and review['meaning_changed'] is False:
+                self._emit('automatic_overview_skipped', reason='Verified draft repeats existing meaning',
+                           question=question)
+                return []
             if whole and review and review.get('meaning_changed') is False:
                 return [(dict(draft, meaning_changed=False), actual_bases) for draft, actual_bases in verified]
         return verified
 
-    def _construct_drafts(self, catalog, request_records, instructions, *, question=None, whole=False):
+    def _construct_drafts(self, catalog, request_records, instructions, *, question=None, whole=False, correction=''):
         records, bases = catalog.records, catalog.bases
         single_thought = question is not None or whole
         response = self._call('Construct thought', request_records, bases, instructions,
-            support_count=len(catalog.fragments),single_thought=single_thought)
+            support_count=len(catalog.fragments), single_thought=single_thought, repair_instructions=correction)
         detail = response.get('needs_detail')
         if response.get('verdict') == 'needs_detail':
             detail = {key: response.get(key) for key in ('question', 'text')}
@@ -428,15 +462,18 @@ class ThoughtEngine:
     def _source_key(basis):
         return (basis.get('event_id'), basis.get('thought_id'), basis.get('version'))
 
-    def _publish(self, verified, *, origin=None, target=None, emit=True, whole_refresh=None, title=None):
+    def _publish(self, verified, *, origin=None, target=None, emit=True, whole_refresh=None, title=None, rebuild=True):
         from .thought_publication import publish
-        return publish(self, verified, origin=origin, target=target, emit=emit, whole_refresh=whole_refresh, title=title)
+        return publish(self, verified, origin=origin, target=target, emit=emit, whole_refresh=whole_refresh,
+                       title=title, rebuild=rebuild)
 
     def _construct(self, records, bases, *, question=None, origin=None, target=None, title=None):
         verified = self._prepare(records, bases, question=question, origin=origin)
         scope = next(((record, basis) for record, basis in zip(records, bases)
                       if record.get('role') == 'whole_refresh_scope'), None)
-        return self._publish(verified, origin=origin, target=target, whole_refresh=scope, title=title)
+        is_overview = any(record.get('role') == 'overview_comparison' for record in records)
+        return self._publish(verified, origin=origin, target=target, whole_refresh=scope, title=title,
+                             rebuild=not is_overview)
 
     @staticmethod
     def _model_origin(origin):
@@ -819,50 +856,5 @@ class ThoughtEngine:
         return answer(self, question, explicit_ids)
 
     def consolidate(self, changed, *, on_affected=None):
-        from .thought_answering import can_refresh, refresh_thought
-        from .thought_engine_contract import GENERALIZE_REFRESH, MAX_OVERVIEW_TITLE_CHARACTERS
-        changed = list(changed)
-        if not changed:
-            return []
-        changed_ids = {row.id for row in changed}
-        related = self.retrieve('\n'.join(row.text for row in changed), [row.id for row in changed])
-        existing = [row for row in related if row.id not in changed_ids]
-        has_source = any(row.origin.get('event_id') for row in changed)
-        refresh_options = [row for row in existing if can_refresh(self, row)] if on_affected and has_source else []
-        options = {row.id: index for index, row in enumerate(refresh_options)}
-        records = [{'role': 'changed', **self._content(row)} for row in changed]
-        records.extend({'role': 'existing', **self._content(row),
-                        **({'refresh_option': options[row.id]} if row.id in options else {})}
-                       for row in existing)
-        response = self._call('Find useful shared thought question', records,
-            [self._basis(row) for row in related], GENERALIZE + (GENERALIZE_REFRESH if options else ''),
-            refresh_option_count=len(options))
-        affected = [refresh_options[index] for index in dict.fromkeys(response.get('affected_candidates', []))]
-        if on_affected:
-            on_affected(affected)
-        question = semantic_text(response.get('question'), 'question', nullable=True)
-        if question is None:
-            return []
-        title = semantic_text(response.get('text'))
-        if len(title) > MAX_OVERVIEW_TITLE_CHARACTERS or len(title.splitlines()) != 1:
-            self._emit('automatic_overview_skipped', reason='Missing concise title for proposed scope', question=question)
-            return []
-        candidates = self.retrieve(question, [row.id for row in changed])
-        target = next((row for row in candidates if question in self.question_texts(row)
-                       and not self._is_parallel_alternative(row)), None)
-        if target is not None and all((row.id, row.version) == (target.id, target.version) for row in changed):
-            return [target]
-        if target is not None:
-            if can_refresh(self, target):
-                if on_affected is not None:
-                    # Known questions already have a refresh path. Only verified candidates enter it.
-                    return []
-                return [refresh_thought(self, target, additional=changed)]
-            target = None
-        frontier = self._frontier(candidates, target.id if target else None)
-        records, bases = self._current_material(question, candidates, known_ids=[row.id for row in changed])
-        result = self._construct(records, bases, question=question,
-            origin={'kind': 'inference'}, target=target, title=title)
-        for thought in result:
-            self._save_check(thought, question, frontier)
-        return result
+        from .thought_maintenance import consolidate
+        return consolidate(self, changed, on_affected=on_affected)

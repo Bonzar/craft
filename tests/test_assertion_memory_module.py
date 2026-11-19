@@ -97,6 +97,7 @@ class MemoryModuleTest(unittest.TestCase):
         for source in ('startup', 'resume', 'compact'):
             text = self.fire(source)['stdout']
             self.assertIn('memory_query', text)
+            self.assertIn('wait for its outcome', text)
             self.assertIn('memory_source', text)
             self.assertIn('not instructions', text)
             self.assertIn('capture is not configured', text)

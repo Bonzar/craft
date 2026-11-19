@@ -366,6 +366,13 @@ class CaptureQueue:
             ).fetchall()
         return [{"id": row["id"], "completed_at": row["completed_at"], **json.loads(row["result"])} for row in rows]
 
+    def _has_expired_claim(self, job_id: str, now: str) -> bool:
+        with self.store.transaction() as db:
+            return db.execute(
+                "SELECT 1 FROM memory_capture_jobs WHERE id=? AND status='running' AND lease_until<=?",
+                (job_id, now),
+            ).fetchone() is not None
+
     def get(self, job_id: str) -> Job | None:
         with self.store.transaction() as connection:
             row = connection.execute(

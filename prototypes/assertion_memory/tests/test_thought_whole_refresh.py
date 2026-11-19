@@ -8,6 +8,7 @@ from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_answering import answer_selected, refresh_thought
 from prototypes.assertion_memory.thought_engine import ThoughtEngine
+from prototypes.assertion_memory.thought_engine_contract import PROTOCOL
 from prototypes.assertion_memory.thought_store import ThoughtStore
 from prototypes.assertion_memory.thought_worker import ThoughtWorker
 from .prepared_support_helpers import PreparedModel, drafts, record_text
@@ -49,6 +50,47 @@ class ThoughtWholeRefreshTest(unittest.TestCase):
         self.assertIsNone(worker.work.get(selected.id))
         self.assertEqual(refresh_thought(engine, selected), selected)
         self.assertEqual(len(model.requests), 3)
+
+    def test_earlier_report_processed_later_does_not_replace_current_state(self):
+        question = 'Has the room been inspected?'
+        latest = 'The room has been inspected.'
+        earlier = 'The room has not been inspected yet.'
+        newer_at = '2026-11-19T12:00:00Z'
+        older_at = '2026-11-19T10:00:00Z'
+        metadata = {'protocol': PROTOCOL, 'verification': 'accepted'}
+        newer = self.store.publish(latest,
+            origin={'kind': 'source_interpretation', 'source_message_at': newer_at},
+            metadata=metadata)
+        published = self.store.publish(latest, question=question, origin={'kind': 'inference'},
+            bases=[{'thought_id': newer.id, 'version': newer.version,
+                    'span': {'start': 0, 'end': len(latest)}, 'meaning': latest}],
+            metadata=metadata)
+        older = self.store.publish(earlier,
+            origin={'kind': 'source_interpretation', 'source_message_at': older_at},
+            metadata=metadata)
+        self.assertGreater(older.created_at, newer.created_at)
+
+        def build(request):
+            by_text = {record_text(row): row for row in request.records}
+            self.assertTrue(by_text[latest]['was_prior_basis'])
+            self.assertFalse(by_text[earlier]['was_prior_basis'])
+            self.assertEqual(by_text[latest]['origin']['source_message_at'], newer_at)
+            self.assertEqual(by_text[earlier]['origin']['source_message_at'], older_at)
+            self.assertIn('A late-processed report of an earlier state', request.instructions)
+            return drafts(request, (latest, [latest]))
+
+        def verify(request):
+            self.assertIn('A late-processed report of an earlier state', request.instructions)
+            self.assertTrue(any(record_text(row) == earlier for row in request.records))
+            return dict(ACCEPT, meaning_changed=False)
+
+        model = PreparedModel(build, verify)
+        engine = ThoughtEngine(self.store, model)
+        result = refresh_thought(engine, published, additional=[older])
+        self.assertEqual(result, published)
+        self.assertEqual(self.store.versions(published.id), [published])
+        self.assertEqual(self.store.get(older.id), older)
+        self.assertEqual([row.task for row in model.requests], ['Construct thought', 'Verify thought'])
 
     def test_worker_refreshes_all_questions_with_one_builder_and_no_old_ready_inheritance(self):
         old_text = 'The room is twelve square metres and has a stove.'

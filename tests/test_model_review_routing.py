@@ -97,5 +97,61 @@ class ModelReviewRoutingTest(unittest.TestCase):
         for provider,options in (('none',{}),('subprocess',{'command':('fixture',)})):
             with self.assertRaises(ValueError):ServiceConfig(self.db,provider,review_model='checker-fixture',**options)
 
+    def test_independent_review_effort_survives_worker_roundtrip_and_routes_commands(self):
+        config=ServiceConfig(self.db,'codex',model='gpt-6.2-sol',review_model='gpt-6.2-sol',
+                             reasoning_effort='medium',review_reasoning_effort='low')
+        restored=ServiceConfig(**json.loads(json.dumps(asdict(config))))
+        routed,_,key=restored.components(None)
+        for task,effort in (('Construct thought','medium'),('Verify thought','low')):
+            selected=routed.model_for(task)
+            self.assertEqual(selected.reasoning_effort,effort)
+            self.assertIn('model_reasoning_effort='+json.dumps(effort),selected.command)
+        inherited=ServiceConfig(self.db,'codex',model='gpt-6.2-sol',review_model='gpt-6.2-sol',
+                                reasoning_effort='medium')
+        self.assertNotEqual(config.route_profile_key,inherited.route_profile_key)
+        self.assertNotEqual(key,inherited.components(None)[2])
+        same=ServiceConfig(self.db,'codex',model='gpt-6.2-sol',review_model='gpt-6.2-sol',
+                           reasoning_effort='medium',review_reasoning_effort='medium')
+        self.assertEqual(same.route_profile_key,inherited.route_profile_key)
+
+    def test_review_effort_requires_codex_and_an_explicit_reviewer(self):
+        for effort in ('',42,'   '):
+            with self.subTest(effort=effort),self.assertRaises(ValueError):
+                ServiceConfig(self.db,'codex',model='writer',review_model='checker',
+                              review_reasoning_effort=effort)
+        with self.assertRaises(ValueError):
+            ServiceConfig(self.db,'codex',model='writer',review_reasoning_effort='low')
+        with self.assertRaises(ValueError):
+            ServiceConfig(self.db,'local',model='writer',review_model='checker',
+                          endpoint='http://127.0.0.1:1',review_reasoning_effort='low')
+
+    def test_cli_preserves_separate_review_effort(self):
+        from prototypes.assertion_memory.mcp_server import main
+        with patch('prototypes.assertion_memory.mcp_server.create_server') as create:
+            self.assertEqual(main(['--db',self.db,'--provider','codex','--model','writer',
+                '--review-model','checker','--reasoning-effort','medium',
+                '--review-reasoning-effort','low','--no-background']),0)
+        config=create.call_args.args[0]
+        self.assertEqual(config.reasoning_effort,'medium')
+        self.assertEqual(config.review_reasoning_effort,'low')
+
+    def test_rebuild_identity_preserves_legacy_defaults_and_binds_effective_override(self):
+        from prototypes.assertion_memory.rebuild import _provider_identity,_json,_sha
+        options={'provider':'codex','model':'writer','review_model':'checker','reasoning_effort':'medium'}
+        settings={'db':self.db,'worker_service':options}
+        from prototypes.assertion_memory.embeddings import MULTILINGUAL_MODEL
+        legacy = dict(options, command=(), endpoint=None, timeout=None,
+                      embedding_mode='lexical', embedding_model=MULTILINGUAL_MODEL,
+                      embedding_cache=None, source_workers=2, processing_session_ids=None)
+        expected=_sha(_json(legacy).encode())
+        self.assertEqual(_provider_identity(settings),expected)
+        same={'db':self.db,'worker_service':dict(options,review_reasoning_effort='medium')}
+        self.assertEqual(_provider_identity(same),expected)
+        separate={'db':self.db,'worker_service':dict(options,review_reasoning_effort='low')}
+        self.assertNotEqual(_provider_identity(separate),expected)
+        selected = {'db': self.db, 'worker_service': dict(
+            options, batch_source_construction=True, source_event_ids=('selected-event',))}
+        self.assertEqual(_provider_identity(selected), expected)
+
 
 if __name__=='__main__':unittest.main()

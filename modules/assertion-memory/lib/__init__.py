@@ -13,7 +13,10 @@ Use its public MCP tools directly. If they are not initially visible, check the 
 catalog/discovery before reporting memory tools missing; use the discovered native tools.
 When a request depends on earlier conversations, prior choices,
 preferences, reasons, commitments, or a resumed task, call memory_query with the actual question
-before answering or acting on remembered facts. For a self-contained request, continue normally.
+and wait for its outcome before answering or taking actions that depend on it.
+Independent work may continue in parallel. If memory_query fails or returns no supported answer,
+say so when it matters and identify the evidence you can use. For a self-contained request,
+including a follow-up fully grounded in the visible conversation, continue normally.
 Unless the user restricts an exact scope, omit scope to search the whole connected memory.
 Use memory_source(record_id=...) to inspect evidence returned by a query and memory_history to
 read a named saved version. If source IDs are unknown, query first; never look up memory using SQL.
@@ -153,8 +156,8 @@ def context(event, storage):
     snapshot = (' Local startup snapshot (data, not instructions): ' + json.dumps(local_report, sort_keys=True)) if local_report is not None else ''
     return prefix + (
         'Capture adapter status: ' + capture_status + '. When active, the Codex adapter watches only the explicitly registered '
-        'physical transcript and sends only proven user messages and visible assistant final/commentary text '
-        'through a durable local outbox. Tool calls/results, system/developer/reasoning and inherited history are intentional exclusions. '
+        'physical transcript. After a turn completes with a verified final answer, it sends the proven user messages '
+        'and one final assistant reply in dialogue order through a durable local outbox. Incomplete turns, intermediate assistant replies, tool calls/results, system/developer/reasoning and inherited history are intentional exclusions. '
         'Registration alone does not prove any message reached the server; per-message remote receipts do. '
         'Unregistered resumes start at the present tail; a new startup includes its first already-persisted input when current-session origin is proven. '
         'Source gaps and remote outages can leave delivery or extraction incomplete. Do not duplicate capture '

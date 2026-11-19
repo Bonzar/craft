@@ -9,6 +9,11 @@ from prototypes.assertion_memory.thought_store import ThoughtStore
 from prototypes.assertion_memory.thought_worker import ThoughtWorker
 
 
+def relation(request, source, target, meaning):
+    options = {record['text']: record['link_option'] for record in request.records}
+    return {'source': options[source.text], 'target': options[target.text], 'text': meaning}
+
+
 class ThoughtChangePropagationTest(unittest.TestCase):
     def test_search_candidates_require_semantic_confirmation_in_existing_model_call(self):
         with MemoryStore(':memory:') as memory:
@@ -24,7 +29,8 @@ class ThoughtChangePropagationTest(unittest.TestCase):
                 options = [record for record in request.records if 'refresh_option' in record]
                 selected = [record['refresh_option'] for record in options if record['text']==relevant.text]
                 return json.dumps({'question':None,'text':'Only the swipe condition changed.',
-                                   'affected_candidates':selected})
+                                   'affected_candidates':selected,
+                                   'relations':[relation(request, new, relevant, 'Sets a swipe condition.')]})
             engine = ThoughtEngine(store,model)
             engine.retrieve = lambda *args,**kwargs: [new,relevant,unrelated]
             worker = ThoughtWorker(queue,engine,lane='maintenance')
@@ -33,6 +39,161 @@ class ThoughtChangePropagationTest(unittest.TestCase):
             self.assertEqual(worker.work.get(relevant.id)['action'],'refresh')
             self.assertIsNone(worker.work.get(unrelated.id))
             self.assertEqual(calls,['Find useful shared thought question'])
+
+    def test_links_are_saved_before_refresh_and_overview_uses_only_linked_material(self):
+        with MemoryStore(':memory:') as memory:
+            store, queue = ThoughtStore(memory), CaptureQueue(memory)
+            event = queue.capture_event('s', 'inspection', 'The hall inspection is complete.', source='fixture')
+            new = store.publish(event.prompt, origin={'event_id': event.id, 'kind': 'source_interpretation'},
+                                bases=[{'event_id': event.id}])
+            status = store.publish('Inspection of the hall is still pending.', question='Is inspection done?')
+            detail = store.publish('The hall is the venue for Friday.')
+            unrelated = store.publish('The outdoor venue is unavailable.')
+            question = 'Can the Friday venue be used after inspection?'
+            worker = None
+
+            def model(request):
+                if request.task == 'Find useful shared thought question':
+                    self.assertFalse(memory._writing)
+                    rows = {record['text']: record for record in request.records}
+                    return json.dumps({'question': question, 'text': 'Friday venue readiness',
+                        'reuse_candidate': None, 'affected_candidates': [rows[status.text]['refresh_option']],
+                        'relations': [
+                            {'source': rows[new.text]['link_option'], 'target': rows[status.text]['link_option'],
+                             'text': 'The completed inspection changes the pending status.'},
+                            {'source': rows[new.text]['link_option'], 'target': rows[detail.text]['link_option'],
+                             'text': 'The venue thought identifies which hall was inspected.'},
+                        ]})
+                if request.task == 'Construct thought':
+                    self.assertEqual({edge['target_id'] for edge in store.links(new.id)}, {status.id, detail.id})
+                    self.assertEqual(worker.work.get(status.id)['action'], 'refresh')
+                    self.assertIsNone(worker.work.get(detail.id))
+                    from .prepared_support_helpers import drafts
+                    return json.dumps(drafts(request, ('The Friday venue passed inspection.',
+                                                       [new.text, detail.text])))
+                return json.dumps({'verdict': 'accept', 'text': 'This synthesis adds a distinct answer.',
+                                   'meaning_changed': True})
+
+            engine = ThoughtEngine(store, model)
+            engine.retrieve = lambda *args, **kwargs: [new, status, detail, unrelated]
+            worker = ThoughtWorker(queue, engine, lane='maintenance')
+            worker.enqueue_changed([new])
+            self.assertEqual(worker.run_once()['status'], 'completed')
+            overview = next(row for row in store.list_thoughts() if row.question == question)
+            self.assertEqual({basis['thought_id'] for basis in overview.bases}, {new.id, detail.id})
+            self.assertIsNone(worker.work.get(unrelated.id))
+
+    def test_semantically_covered_question_reuses_bound_thought_without_generation(self):
+        with MemoryStore(':memory:') as memory:
+            store = ThoughtStore(memory)
+            changed = store.publish('The north building contains classrooms.')
+            overview = store.publish('Classes take place in the north building.',
+                                     question='Where are classes held?')
+            calls = []
+
+            def model(request):
+                calls.append(request.task)
+                option = next(record['reuse_option'] for record in request.records
+                              if record['text'] == overview.text)
+                return json.dumps({'question': None, 'text': 'Already covered.',
+                                   'reuse_candidate': option, 'relations': []})
+
+            engine = ThoughtEngine(store, model)
+            result = engine.consolidate([changed])
+            self.assertEqual(result, [overview])
+            self.assertEqual(calls, ['Find useful shared thought question'])
+            self.assertEqual(store.versions(overview.id), [overview])
+            self.assertEqual(len(store.list_thoughts()), 2)
+
+    def test_distinct_question_can_use_an_existing_overview_as_one_ground(self):
+        with MemoryStore(':memory:') as memory:
+            store = ThoughtStore(memory)
+            overview = store.publish('Rooms 214 and 216 in the north building are classrooms.',
+                                     question='Where are the classrooms?')
+            changed = store.publish('Ventilation in rooms 214 and 216 has not been checked.')
+            question = 'Can classes begin in rooms 214 and 216?'
+            calls = []
+
+            def model(request):
+                calls.append(request.task)
+                if request.task == 'Find useful shared thought question':
+                    return json.dumps({'question': question, 'text': 'Readiness of rooms 214 and 216',
+                                       'reuse_candidate': None,
+                                       'relations': [relation(request, changed, overview, 'Adds a check status to the rooms.')]})
+                if request.task == 'Construct thought':
+                    self.assertIn('A different question may reuse', request.instructions)
+                    return json.dumps({'thought': {'question': question,
+                        'text': 'Rooms 214 and 216 are classrooms awaiting ventilation checks.',
+                        'support_fragments': [0, 1]}, 'needs_detail': None})
+                self.assertIn('Repeating a relevant fact across different answers is valid.', request.instructions)
+                return json.dumps({'verdict': 'accept', 'text': 'The answer is scoped to readiness.',
+                                   'meaning_changed': True})
+
+            engine = ThoughtEngine(store, model)
+            engine.retrieve = lambda *args, **kwargs: [changed, overview]
+            result = engine.consolidate([changed])[0]
+            self.assertEqual(result.question, question)
+            self.assertNotEqual(result.id, overview.id)
+            self.assertEqual(store.versions(overview.id), [overview])
+            self.assertIn((overview.id, overview.version),
+                          [(basis['thought_id'], basis['version']) for basis in result.bases])
+            self.assertEqual(calls, ['Find useful shared thought question', 'Construct thought', 'Verify thought'])
+
+    def test_review_stops_a_paraphrased_overview_without_removing_links(self):
+        with MemoryStore(':memory:') as memory:
+            store, queue = ThoughtStore(memory), CaptureQueue(memory)
+            start = store.publish('Boarding starts at 18:40.')
+            arrival = store.publish('The train arrives at 18:50.')
+            original = store.publish('The train arrives after boarding starts.',
+                                     question='Do we make the start of boarding?')
+            calls = []
+
+            def model(request):
+                calls.append(request.task)
+                if request.task == 'Find useful shared thought question':
+                    return json.dumps({'question': 'Will the train be on time for boarding?',
+                        'text': 'Arrival and boarding', 'reuse_candidate': None,
+                        'relations': [relation(request, start, arrival, 'Both times describe the connection.')]})
+                if request.task == 'Construct thought':
+                    from .prepared_support_helpers import drafts
+                    return json.dumps(drafts(request, ('We arrive after boarding begins.',
+                                                       [start.text, arrival.text])))
+                self.assertIn('only restates existing meaning', request.instructions)
+                self.assertTrue(any(record.get('role') == 'overview_comparison' and
+                    original.text in {row['text'] for row in record['existing']} for record in request.records))
+                return json.dumps({'verdict': 'accept', 'text': 'It repeats the saved timing conclusion.',
+                                   'meaning_changed': False})
+
+            engine = ThoughtEngine(store, model)
+            engine.retrieve = lambda *args, **kwargs: [start, arrival, original]
+            worker = ThoughtWorker(queue, engine, lane='maintenance')
+            worker.enqueue_changed([start])
+            self.assertEqual(worker.run_once()['status'], 'completed')
+            self.assertIsNone(worker.run_once())
+            self.assertEqual(len(store.list_thoughts()), 3)
+            self.assertEqual(len(store.links(start.id)), 1)
+            self.assertEqual(calls, ['Find useful shared thought question', 'Construct thought', 'Verify thought'])
+
+    def test_derived_thought_links_to_its_basis_without_refreshing_that_basis(self):
+        with MemoryStore(':memory:') as memory:
+            store, queue = ThoughtStore(memory), CaptureQueue(memory)
+            original = store.publish('A ticket costs 300.', question='What is the fare?')
+            reply = store.publish('The fare is 300.', origin={'kind': 'inference'},
+                                  bases=[{'thought_id': original.id, 'version': original.version}])
+
+            def model(request):
+                self.assertFalse(any('refresh_option' in record for record in request.records))
+                return json.dumps({'question': None, 'text': 'The original establishes the fare.',
+                    'relations': [relation(request, reply, original, 'The fare matches its source.')],
+                    'reuse_candidate': None})
+
+            engine = ThoughtEngine(store, model)
+            engine.retrieve = lambda *args, **kwargs: [reply, original]
+            worker = ThoughtWorker(queue, engine, lane='maintenance')
+            worker.enqueue_changed([reply])
+            self.assertEqual(worker.run_once()['status'], 'completed')
+            self.assertEqual(len(store.links(reply.id)), 1)
+            self.assertIsNone(worker.work.get(original.id))
 
     def test_relevance_is_checked_again_if_a_candidate_changes_during_review(self):
         now = datetime.now(timezone.utc)
@@ -51,7 +212,9 @@ class ThoughtChangePropagationTest(unittest.TestCase):
                     store.publish('Swiping and tapping are available.', question=target.question,
                                   thought_id=target.id, expected_version=target.version)
                 return json.dumps({'question': None, 'text': 'The deck condition changes this answer.',
-                                   'affected_candidates': [option['refresh_option']]})
+                                   'affected_candidates': [option['refresh_option']],
+                                   'relations': [{'source': 0, 'target': option['link_option'],
+                                                  'text': 'The reported deck condition changes the answer.'}]})
 
             engine = ThoughtEngine(store, model)
             engine.retrieve = lambda *args, **kwargs: [source, store.get(target.id)]
@@ -158,18 +321,20 @@ class ThoughtChangePropagationTest(unittest.TestCase):
         with MemoryStore(':memory:') as memory:
             store = ThoughtStore(memory)
             source = store.publish('The deck uses a short swipe.',metadata={'verification':'accepted'})
-            body = 'The deck uses a short swipe to accept a card. Other views have no swipe.'
+            detail = store.publish('A swipe accepts the selected card.', metadata={'verification':'accepted'})
+            body = 'The deck uses a short swipe to accept a card.'
             title = 'Accepting cards with a swipe'
             proposal = {'question':'How does a user accept deck cards?','text':title}
             def model(request):
                 if request.task == 'Find useful shared thought question':
-                    return json.dumps(proposal)
+                    return json.dumps(dict(proposal, relations=[
+                        relation(request, source, detail, 'The two thoughts describe deck gestures.')]))
                 if request.task == 'Construct thought':
                     return json.dumps({'thought':{'question':None,'text':body,
-                                                   'support_fragments':[0]},'needs_detail':None})
-                return json.dumps({'verdict':'accept','text':'The scope is the deck.'})
+                                                   'support_fragments':[0, 1]},'needs_detail':None})
+                return json.dumps({'verdict':'accept','text':'The scope is the deck.', 'meaning_changed': True})
             engine = ThoughtEngine(store,model)
-            engine.retrieve = lambda *args,**kwargs: [source]
+            engine.retrieve = lambda *args,**kwargs: [source, detail]
             result = engine.consolidate([source],on_affected=lambda _:None)[0]
             self.assertEqual(result.metadata.get('title'),title)
             proposal['text'] = body * 2

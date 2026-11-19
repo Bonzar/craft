@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import time
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -47,10 +47,14 @@ class ServiceConfig:
     processing_session_ids: tuple[str, ...] | None = None
     review_model: str | None = None
     reasoning_effort: str | None = None
+    review_reasoning_effort: str | None = None
+    batch_source_construction: bool = False
+    source_event_ids: tuple[str, ...] | None = None
 
     def __post_init__(self):
         from .thought_processing_selection import normalize_session_ids
         object.__setattr__(self, 'processing_session_ids', normalize_session_ids(self.processing_session_ids))
+        object.__setattr__(self, 'source_event_ids', normalize_session_ids(self.source_event_ids))
         if not Path(self.db).is_absolute() or self.db == ':memory:':
             raise ValueError('db must be an absolute persistent SQLite path')
         if self.provider not in ('none', 'subprocess', 'local', 'codex'):
@@ -65,6 +69,11 @@ class ServiceConfig:
                 raise ValueError('review_model must be null or a nonempty model name')
             if self.provider not in ('codex','local'):
                 raise ValueError('review_model requires a provider with explicit model selection')
+        if self.review_reasoning_effort is not None:
+            if not isinstance(self.review_reasoning_effort,str) or not self.review_reasoning_effort.strip():
+                raise ValueError('review_reasoning_effort must be null or a nonempty effort name')
+            if self.provider!='codex' or self.review_model is None:
+                raise ValueError('review_reasoning_effort requires an explicit Codex review_model')
         if self.provider == 'subprocess' and (not self.command or not all(
                 isinstance(part, str) and part for part in self.command)):
             raise ValueError('subprocess provider requires a JSON command argument array')
@@ -92,7 +101,8 @@ class ServiceConfig:
     def route_profile_key(self):
         from .model_router import route_profile_key
         return route_profile_key({'kind':self.provider,'command':self.command,'endpoint':self.endpoint},
-                                 self.model,self.review_model,self.reasoning_effort)
+                                 self.model,self.review_model,self.reasoning_effort,
+                                 review_reasoning_effort=self.review_reasoning_effort)
 
     def components(self, store: MemoryStore):
         model = None
@@ -113,7 +123,8 @@ class ServiceConfig:
             from .model_router import TaskModelRouter
             if self.provider=='codex':
                 review=CodexModel(model=self.review_model,timeout=self.timeout,usage_ledger=usage,
-                                  reasoning_effort=self.reasoning_effort)
+                                  reasoning_effort=(self.review_reasoning_effort
+                                      if self.review_reasoning_effort is not None else self.reasoning_effort))
             else:
                 review=LocalOpenAIModel(self.endpoint,self.review_model,timeout=self.timeout,usage_ledger=usage)
                 review.requested_model=self.review_model
@@ -395,24 +406,60 @@ def _register_write_tools(mcp, service, launcher, background):
         return value
 
     @mcp.tool()
-    async def memory_process(limit: int = 100, retry_job_id: str | None = None) -> dict:
+    async def memory_process(limit: int = 100, retry_job_id: str | None = None,
+                             session_ids: list[str] | None = None,
+                             batch_source_construction: bool = False,
+                             source_event_ids: list[str] | None = None) -> dict:
         """Schedule up to 1..1000 worker attempts asynchronously. Returns immediately; poll status.
         An already-running database worker owns processing. Optionally retry one failed job by its ID.
+        Optional session_ids selects exact source sessions and their causal follow-up jobs for
+        this launch. It leaves the automatic selection and the worker lock in place.
+        batch_source_construction shares initial draft generation among concurrent source jobs.
+        Independent review, publication and follow-up jobs still use their normal processing.
+        source_event_ids instead defines one exact group of queued messages for a single
+        initial model call. Supply one source session and a limit covering all message IDs.
         """
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError('limit must be between 1 and 1000 attempts')
+        worker = launcher
+        if batch_source_construction and session_ids is None:
+            raise ValueError('batch_source_construction requires explicit session_ids')
+        if source_event_ids is not None and (
+                not source_event_ids or len(source_event_ids) > limit
+                or len(set(source_event_ids)) != len(source_event_ids)
+                or not session_ids or len(session_ids) != 1 or retry_job_id is not None):
+            raise ValueError('source_event_ids requires a nonempty unique group from one session within limit, without retry')
+        if session_ids is not None:
+            from .thought_processing_selection import normalize_session_ids
+            from .thought_service import ThoughtService
+            selected = normalize_session_ids(session_ids)
+            if not selected:
+                raise ValueError('session_ids must not be empty')
+            configured = launcher.config.processing_session_ids
+            if configured and not set(selected).issubset(configured):
+                raise ValueError('session_ids includes a session outside startup processing selection')
+            if not isinstance(service, ThoughtService):
+                raise ValueError('session processing selection requires the canonical thought runtime')
+            if source_event_ids is not None:
+                from .source_model_batch import pending_sources
+                pending_sources(service.queue, selected[0], source_event_ids)
+            # An empty automatic selection can coexist with an explicit one-time request.
+            worker = WorkerLauncher(replace(launcher.config, processing_session_ids=selected,
+                                            batch_source_construction=batch_source_construction,
+                                            source_event_ids=source_event_ids))
         if retry_job_id is not None:
-            if launcher.config.processing_session_ids is not None:
+            if worker.config.processing_session_ids is not None:
                 from .thought_processing_selection import source_predicate
-                predicate,arguments=source_predicate(launcher.config.processing_session_ids,'e')
+                predicate,arguments=source_predicate(worker.config.processing_session_ids,'e')
                 with service.store.transaction() as connection:
                     admitted=connection.execute('SELECT 1 FROM memory_capture_jobs j JOIN memory_raw_events e '
                         f'ON e.id=j.event_id WHERE j.id=? AND ({predicate})',
                         (retry_job_id,*arguments)).fetchone()
                 if admitted is None:
-                    raise ValueError('retry job is outside startup processing selection')
+                    selection = 'startup' if session_ids is None else 'requested'
+                    raise ValueError(f'retry job is outside {selection} processing selection')
             service.queue.retry(retry_job_id)
-        return {**launcher.start(limit), **service.status()}
+        return {**worker.start(limit), **service.status()}
 
 
 
@@ -440,7 +487,10 @@ def _register_read_tools(mcp, service, config, launcher=None):
         knowledge_limit_notice and notice_payload_complete=true explains only the base's knowledge limit.
         Show that notice even if answer_accepted and answer_payload_complete remain false; no missing
         notice page or automatic retry is implied. It cannot establish world absence, event dates or
-        permission. The same query/scope retains summary history. Optional request_session_id is an explicit
+        permission. With answer_error=semantic_review_rejected (in its code field),
+        drafting ended without an accepted answer. No draft was published and
+        this says nothing about whether the underlying facts exist.
+        The same query/scope retains summary history. Optional request_session_id is an explicit
         caller-session claim for execution history, never source authentication, factual proof or user approval.
         Omit it when the actual current caller session is unknown.
         """
@@ -602,7 +652,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--endpoint')
     parser.add_argument('--model')
     parser.add_argument('--review-model',help='Optional explicit model for semantic verification tasks')
-    parser.add_argument('--reasoning-effort',help='Optional explicit Codex reasoning effort for both models')
+    parser.add_argument('--reasoning-effort',help='Codex writer effort; reviewer inherits unless overridden')
+    parser.add_argument('--review-reasoning-effort',help='Optional separate Codex reviewer effort')
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--embedding-mode', choices=('lexical', 'fastembed'), default='lexical')
     parser.add_argument('--embedding-model', default=MULTILINGUAL_MODEL)
@@ -629,6 +680,7 @@ def main(argv: list[str] | None = None) -> int:
                                    args.timeout, args.embedding_mode, args.embedding_model,
                                    args.embedding_cache, args.worker_idle_seconds, args.source_workers,
                                    review_model=args.review_model,reasoning_effort=args.reasoning_effort,
+                                   review_reasoning_effort=args.review_reasoning_effort,
                                    processing_session_ids=json.loads(args.processing_session_ids_json)
                                        if args.processing_session_ids_json is not None else None)
             create_server(config, background=not args.no_background).run(transport='stdio')

@@ -130,13 +130,16 @@ class ThoughtWorker:
                     return self._consolidate(task)
         return None
 
-    def _claim_source(self):
+    def _claim_source(self, *, event_id=None):
         with self.queue.store.transaction(write=True) as c:
             # SQLite write admission may have waited past the pause request.
             if self.is_pausing is not None and self.is_pausing():
                 return None
             now = self.queue._time()
             eligible,args = source_predicate(self.processing_session_ids,'e')
+            if event_id is not None:
+                eligible += ' AND e.id=?'
+                args = [*args, event_id]
             c.execute("UPDATE memory_capture_jobs SET status='failed',lease_token=NULL,lease_until=NULL,"
                 "error='Thought source lease expired too many times' WHERE event_id IS NOT NULL "
                 "AND status='running' AND lease_until<=? AND attempts>=? AND EXISTS(SELECT 1 FROM memory_raw_events e "
@@ -160,10 +163,11 @@ class ThoughtWorker:
             cutoff = target['rowid'] if target['position'] is None else target['position']
             from .thought_source_policy import eligible_sql
             eligibility, arguments = eligible_sql('e')
+            session, session_arguments = source_predicate((canonical_session_id(event),), 'e')
             rows = c.execute(f'SELECT e.*,j.status,{column} AS context_position FROM memory_raw_events e JOIN memory_capture_jobs j ON j.event_id=e.id '
                 'LEFT JOIN memory_event_positions p ON p.event_id=e.id WHERE e.session_id=? AND e.scope=? '
-                f'AND {column}<? AND {eligibility} ORDER BY {column} DESC,e.rowid DESC LIMIT ?',
-                (event.session_id, event.scope, cutoff, *arguments, self.context_limit + 1)).fetchall()
+                f'AND {column}<? AND {session} AND {eligibility} ORDER BY {column} DESC,e.rowid DESC LIMIT ?',
+                (event.session_id, event.scope, cutoff, *session_arguments, *arguments, self.context_limit + 1)).fetchall()
         context, omitted, size = [], [], 0
         for row in rows[:self.context_limit]:
             reason = ('unverified_origin' if row['status'] == 'waiting_origin' else
@@ -361,13 +365,12 @@ class ThoughtWorker:
 
     def _generalize(self, current, task):
         def on_affected(parents):
-            if not parents:
-                return
             with self.queue.store.transaction(write=True) as connection:
                 self.work.owned(connection, task)
                 if self.engine.thoughts.get(current.id) != current or any(
                         self.engine.thoughts.get(parent.id) != parent for parent in parents):
                     raise ThoughtConflict('A thought changed during maintenance relevance review')
+                self.enqueue_dependents([current])
                 for parent in parents:
                     self.work.request(parent, 'refresh', ('relevance', current.id, current.version))
         return self.engine.consolidate([current], on_affected=on_affected)
@@ -384,8 +387,6 @@ class ThoughtWorker:
             if current is None:
                 return self.work.finish(task, task['version'])
             is_refresh = task['action'] == 'refresh'
-            if not is_refresh:
-                self.enqueue_dependents([current])
 
             def queue_followup(previous, published):
                 # A retry can see this head as current before the claim is finished.

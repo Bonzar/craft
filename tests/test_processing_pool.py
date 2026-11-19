@@ -66,7 +66,11 @@ class ProcessingPoolTest(unittest.TestCase):
                 model=object()
                 def run_once(self):
                     db.execute('SELECT 1')
-                    if lane=='maintenance':maintenance.set();return object()
+                    if lane=='maintenance':
+                        if maintenance.is_set():
+                            return None
+                        maintenance.set()
+                        return object()
                     with lock:sources[0]+=1;identity=str(sources[0])
                     observer('claimed','source',identity,identity)
                     try:
