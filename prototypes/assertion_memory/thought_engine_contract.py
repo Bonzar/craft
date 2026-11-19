@@ -119,8 +119,12 @@ scope. Reconstruct the full requested result from the same grounds, including
 parts the feedback did not mention. Do not answer only the feedback's topic or
 expand into unrelated neighboring material. Apply all corrections together while
 preserving the other supported meaning.
-For a requested answer, return the supported answer
-with its explicit knowledge gaps and needs_detail=null. Missing requested facts,
+For a requested answer, account for each materially different part of the
+question, even when the answer to one part is a scoped gap. If the question
+asks what was agreed, attribute each proposal or report and distinguish it
+from a decision the supplied material actually confirms. Do not use one
+confirmed decision as evidence of another. Return the supported answer with
+its explicit knowledge gaps and needs_detail=null. Missing requested facts,
 including necessary facts, are not by themselves a reason to return an empty
 thoughts array or needs_detail. Do not request the same missing facts under a
 different question instead of reporting the limitation in the answer.
@@ -135,6 +139,14 @@ context for coverage and qualifications, not factual support for the draft.
 The same quotation from memory does not create independent corroboration.
 When a source is explicitly a partial passage, keep that limitation visible in
 each thought; do not infer source-wide completeness or absence of exceptions.'''
+
+QUERY_REPAIR = '''
+For each part of the original question, retain the supported answer or state
+which requested fact the supplied material does not establish. Keep the parts
+the review did not dispute. Remove unsupported conclusions. If the grounds
+only show someone proposing, discussing, or reporting a change, attribute it
+and say whether the material confirms the decision requested in the question.
+'''
 
 _ATOMIC_DRAFT_VERDICTS = '''A single accept verdict means EVERY draft passes; reject the whole batch if any
 draft fails. Do not return per-draft indices, identifiers or individual verdicts.

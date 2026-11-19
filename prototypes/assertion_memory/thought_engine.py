@@ -14,7 +14,7 @@ from .thought_engine_inputs import RAW_CHUNK_CHARACTERS, paragraph_chunks
 from .thought_engine_contract import (APPLICABILITY, construction_instructions, GENERALIZE, GROUNDING,
     MAX_THOUGHTS, PROTOCOL, SOURCE_BATCH, VERIFY, WHOLE_REFRESH, VERIFICATION_RULES, INDEPENDENT_SOURCE_REVIEW,
     REPAIR_SOURCE_DRAFTS, exact_fields, object_response, semantic_text,
-    thought_drafts, validate_response, SupportQuoteMissing, RAW_PASSAGE, SemanticReviewRejected)
+    thought_drafts, validate_response, SupportQuoteMissing, RAW_PASSAGE, SemanticReviewRejected, QUERY_REPAIR)
 from .thought_schema import response_schema
 from .thought_publication import UNRESOLVED as PARALLEL_ALTERNATIVE_NOTICE
 
@@ -264,6 +264,8 @@ class ThoughtEngine:
                 correction=('\nRevise the rejected construction against the SAME pinned material. '
                     'Verifier feedback: '+reason+' Preserve the applicable coverage purpose, conditions, '
                     'attribution and uncertainty. Select only the provided prepared support fragments; never write quotations or addresses.')
+                if question is not None:
+                    correction += QUERY_REPAIR
 
     def _prepare_once(self, records, bases, *, question=None, origin=None,
                       review_ambiguity=True, correction=''):
