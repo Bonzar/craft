@@ -135,5 +135,18 @@ class ModelReviewRoutingTest(unittest.TestCase):
         self.assertEqual(config.reasoning_effort,'medium')
         self.assertEqual(config.review_reasoning_effort,'low')
 
+    def test_rebuild_identity_preserves_legacy_defaults_and_binds_effective_override(self):
+        from prototypes.assertion_memory.rebuild import _provider_identity,_json,_sha
+        options={'provider':'codex','model':'writer','review_model':'checker','reasoning_effort':'medium'}
+        settings={'db':self.db,'worker_service':options}
+        legacy=asdict(ServiceConfig(db=self.db,**options))
+        for field in ('db','worker_idle_seconds','review_reasoning_effort'):legacy.pop(field)
+        expected=_sha(_json(legacy).encode())
+        self.assertEqual(_provider_identity(settings),expected)
+        same={'db':self.db,'worker_service':dict(options,review_reasoning_effort='medium')}
+        self.assertEqual(_provider_identity(same),expected)
+        separate={'db':self.db,'worker_service':dict(options,review_reasoning_effort='low')}
+        self.assertNotEqual(_provider_identity(separate),expected)
+
 
 if __name__=='__main__':unittest.main()
