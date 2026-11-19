@@ -48,7 +48,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             self.assertFalse(memory._connection.in_transaction);calls.append(request)
             if request.task=='Construct thought':
                 if sum(row.task=='Construct thought' for row in calls)==1:return json.dumps(drafts(request,(first.text,[first.text])))
-                self.assertIn('Preserve the evacuation exception',request.instructions)
+                self.assertIn('Preserve the evacuation exception',request.repair_instructions)
                 return json.dumps(drafts(request,(target.text,[first.text,second.text])))
             self.assertIn('ONE WHOLE thought',request.instructions)
             if second.text in request.records[-1]['text']:
@@ -117,7 +117,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             if request.task=='Construct thought':
                 body=record_text(request.records[0])
                 if body==text:raise ModelContextExceeded('fixture requires passages')
-                repairing='Preserve the storm exception' in request.instructions
+                repairing='Preserve the storm exception' in request.repair_instructions
                 if repairing and head in body:
                     self.assertTrue(any(tail in record_text(row) for row in request.records))
                     return json.dumps(drafts(request,('Visits are permitted except during storms.',[head,tail])))
@@ -133,7 +133,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertIn('Visits are permitted except during storms.',[row.text for row in result])
         constructions=[row for row in calls if row.task=='Construct thought' and record_text(row.records[0])!=text]
         self.assertEqual(len(constructions),4)
-        self.assertTrue(all('Preserve the storm exception' in row.instructions for row in constructions[2:]))
+        self.assertTrue(all('Preserve the storm exception' in row.repair_instructions for row in constructions[2:]))
 
     def test_malformed_verification_keeps_successful_construct_for_worker_retry(self):
         memory,store,queue=self.memory();raw=queue.capture_event('s','x','Only after approval.',source='fixture')
@@ -193,7 +193,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             calls.append(request.task)
             if request.task=='Construct thought':
                 if calls.count('Construct thought')==1:return json.dumps(drafts(request))
-                self.assertIn('The current reply adopts the lunch proposal',request.instructions)
+                self.assertIn('The current reply adopts the lunch proposal',request.repair_instructions)
                 return json.dumps(drafts(request,('The user agreed to lunch on weekends.',['Да',proposal.prompt])))
             return json.dumps(ACCEPT if any(row.get('role')=='draft' for row in request.records) else
                 {'verdict':'reject','text':'The current reply adopts the lunch proposal; preserve that new decision only.'})

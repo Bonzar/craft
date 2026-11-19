@@ -70,11 +70,12 @@ class ThoughtChangePropagationTest(unittest.TestCase):
                 if request.task == 'Find useful shared thought question':
                     return json.dumps({'question': question, 'text': 'Readiness of rooms 214 and 216',
                                        'reuse_candidate': None})
-                self.assertIn('A different question may reuse', request.instructions)
                 if request.task == 'Construct thought':
+                    self.assertIn('A different question may reuse', request.instructions)
                     return json.dumps({'thought': {'question': question,
                         'text': 'Rooms 214 and 216 are classrooms awaiting ventilation checks.',
                         'support_fragments': [0, 1]}, 'needs_detail': None})
+                self.assertIn('Repeating a relevant fact across different answers is valid.', request.instructions)
                 return json.dumps({'verdict': 'accept', 'text': 'The answer is scoped to readiness.'})
 
             engine = ThoughtEngine(store, model)

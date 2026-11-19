@@ -109,6 +109,10 @@ Construct directly from grounds:
 4. Keep all other supported parts of the scope, with specific gaps for what the
    packet does not establish. Unknown parts do not erase known parts. Material
    outside that scope stays context rather than becoming extra answer content.
+   A different question may reuse a fact or conclusion from an existing
+   overview. Select only the supporting fragments that answer the question, make
+   the answer understandable, or change its qualifications. Other useful details
+   can be reached through the linked thought.
 
 On repair, verifier feedback identifies defects; it does NOT replace the output
 scope. Reconstruct the full requested result from the same grounds, including
@@ -158,8 +162,10 @@ the packet, compare its meaning with the supplied original. A less precise
 paraphrase does not authorize dropping a qualification from the original. Keep
 a report about a summary distinct from a claim about what the original said.
 Then check FROM THE DRAFT TO ITS SELECTED GROUNDS for additions, altered meaning
-or unsupported relationships. A faithful topic is insufficient if the actual
-propositions or their constraints changed. A material omission changes how a
+or unsupported relationships. For a requested question, also reject passages
+that answer a neighboring question without contributing to this answer or its
+qualifications. Repeating a relevant fact across different answers is valid.
+A shared topic is insufficient if the propositions or their constraints changed. A material omission changes how a
 scoped claim can be understood or applied; do not reject mere stylistic changes
 or require unrelated details outside that scope. Do not output a checklist.
 Accept an answer that includes all relevant supplied information, no unsupported
@@ -313,8 +319,11 @@ GENERALIZE = CONTENT_RULES + '''
 Propose at most one useful shared question that newly supplied thoughts support.
 This may describe a concept without an explicit request for a definition.
 Do not merely broaden the subject or produce an empty
-heading. A previously stored equivalent useful question should be reused verbatim.
-Return JSON {"question":"shared semantic question" or null, "text":"short title"}.
+heading. Compare the intended answer and its conditions, not literal question
+wording. If the answer would merely restate an input thought, already exists in
+another thought, or merely reorders facts without a distinct useful answer,
+do not propose a new overview.
+Return question and text as defined below, plus the decision fields required by the response schema.
 When question is present, text is a meaningful single-line title of at most 80
 characters, written in the source language. A reader should be able to tell what
 the overview describes or answers from this title. Use ordinary words, not a
@@ -327,6 +336,15 @@ Choose a question with a distinct reusable answer. A timeline of work is useful
 only when the chronology is itself the subject. Do not combine preferences,
 provisional options, permissions and completion reports into an automatic
 overview merely because they came from the same session.'''
+
+GENERALIZE_REUSE = """
+If an offered reuse_option already answers the intended question with all its
+material qualifications, set reuse_candidate to that number and question to
+null. A new formulation of the same question is not a new purpose. Set
+reuse_candidate to null if there is no such option. If new material changes
+that same answer, prefer the affected-candidate refresh decision where offered.
+A distinct question can use a part of any overview as a ground.
+"""
 
 GENERALIZE_REFRESH = """
 In affected_candidates list the offered refresh_option numbers whose existing
@@ -381,7 +399,7 @@ pure service chatter, execution bookkeeping and pure copies of existing material
 
 
 def validate_response(task, response, *, support_count=None, single_thought=False, review_option_count=0,
-                      source_draft_count=None, refresh_option_count=0, compare_meaning=False):
+                      source_draft_count=None, refresh_option_count=0, reuse_option_count=0, compare_meaning=False):
     """Check only the existing semantic wire shape, never its factual verdict."""
     if task == 'Navigate thought graph':
         exact_fields(response, {'action', 'question', 'quote', 'text'})
@@ -437,8 +455,16 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
         semantic_text(response.get('text'))
         return
     if task == 'Find useful shared thought question':
-        allowed = {'question', 'text'} | ({'affected_candidates'} if refresh_option_count else set())
+        allowed = {'question', 'text'}
+        if refresh_option_count:
+            allowed.add('affected_candidates')
+        if reuse_option_count:
+            allowed.add('reuse_candidate')
         exact_fields(response, allowed)
+        reuse = response.get('reuse_candidate')
+        if reuse is not None and (type(reuse) is not int or not 0 <= reuse < reuse_option_count
+                                  or response.get('question') is not None):
+            raise ModelError('reuse must select one offered thought without proposing a new question')
         if refresh_option_count and 'affected_candidates' not in response:
             raise ModelError('refresh classification must specify affected candidates')
         affected = response.get('affected_candidates', [])

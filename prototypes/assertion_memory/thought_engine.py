@@ -60,13 +60,16 @@ class ThoughtEngine:
             self.trace({'stage': stage, **payload})
 
     def _call(self, task, records, bindings, instructions, *, support_count=None, single_thought=False,
-              review_option_count=0, source_draft_count=None, refresh_option_count=0, compare_meaning=False):
+              review_option_count=0, source_draft_count=None, refresh_option_count=0, reuse_option_count=0,
+              compare_meaning=False, repair_instructions=""):
         if self.model is None and self.gateway is None:
             raise ModelError('unified thought processing requires a semantic model')
         request = ModelRequest(task, records, instructions, usage_task=task,
             response_schema=response_schema(task,support_count=support_count,single_thought=single_thought,
                                             review_option_count=review_option_count,source_draft_count=source_draft_count,
-                                  refresh_option_count=refresh_option_count,compare_meaning=compare_meaning))
+                                            refresh_option_count=refresh_option_count, reuse_option_count=reuse_option_count,
+                                            compare_meaning=compare_meaning),
+            repair_instructions=repair_instructions)
         frozen = tuple(dict(basis) for basis in bindings)
         wire=format_prompt(request)
         request_hash=hashlib.sha256(wire.encode()).hexdigest()
@@ -81,7 +84,8 @@ class ThoughtEngine:
                 result = object_response(body)
                 validate_response(task, result, support_count=support_count,single_thought=single_thought,
                                   review_option_count=review_option_count,source_draft_count=source_draft_count,
-                                  refresh_option_count=refresh_option_count,compare_meaning=compare_meaning)
+                                  refresh_option_count=refresh_option_count, reuse_option_count=reuse_option_count,
+                                  compare_meaning=compare_meaning)
             except ModelError as malformed:
                 self._discard_provisional()
                 self._emit('model_contract_repair', task=task, attempt=attempt + 1, reason=str(malformed),
@@ -269,7 +273,7 @@ class ThoughtEngine:
             raise empty_material('The retrieved material contains no admitted full supporting content')
         whole = any(record.get('role') == 'whole_refresh_scope' for record in records)
         single_thought = question is not None or whole
-        instructions = construction_instructions(single_thought=single_thought) + correction
+        instructions = construction_instructions(single_thought=single_thought)
         request_records = catalog.wire
         if whole:
             instructions += WHOLE_REFRESH
@@ -279,7 +283,7 @@ class ThoughtEngine:
             instructions += '\nProduce exactly one useful answer to the supplied question.'
             request_records = [{'role': 'question', 'text': question}, *catalog.wire]
         verified, selections = self._construct_drafts(catalog, request_records, instructions,
-                                                       question=question, whole=whole)
+                                                       question=question, whole=whole, correction=correction)
         if len(verified) > 1 and (origin or {}).get('kind') == 'source_interpretation' and not whole:
             return self._repair_source_drafts(verified, selections, catalog, origin)
         if verified or (records and records[0].get('role') == 'source'):
@@ -289,11 +293,11 @@ class ThoughtEngine:
                 return [(dict(draft, meaning_changed=False), actual_bases) for draft, actual_bases in verified]
         return verified
 
-    def _construct_drafts(self, catalog, request_records, instructions, *, question=None, whole=False):
+    def _construct_drafts(self, catalog, request_records, instructions, *, question=None, whole=False, correction=''):
         records, bases = catalog.records, catalog.bases
         single_thought = question is not None or whole
         response = self._call('Construct thought', request_records, bases, instructions,
-            support_count=len(catalog.fragments),single_thought=single_thought)
+            support_count=len(catalog.fragments), single_thought=single_thought, repair_instructions=correction)
         detail = response.get('needs_detail')
         if response.get('verdict') == 'needs_detail':
             detail = {key: response.get(key) for key in ('question', 'text')}
@@ -818,31 +822,59 @@ class ThoughtEngine:
         from .thought_query import answer
         return answer(self, question, explicit_ids)
 
-    def consolidate(self, changed, *, on_affected=None):
-        from .thought_answering import can_refresh, refresh_thought
-        from .thought_engine_contract import GENERALIZE_REFRESH, MAX_OVERVIEW_TITLE_CHARACTERS
-        changed = list(changed)
-        if not changed:
-            return []
+    def _classify_consolidation(self, changed):
+        from .thought_answering import can_refresh
+        from .thought_engine_contract import GENERALIZE_REFRESH, GENERALIZE_REUSE
         changed_ids = {row.id for row in changed}
         related = self.retrieve('\n'.join(row.text for row in changed), [row.id for row in changed])
         existing = [row for row in related if row.id not in changed_ids]
-        has_source = any(row.origin.get('event_id') for row in changed)
-        refresh_options = [row for row in existing if can_refresh(self, row)] if on_affected and has_source else []
-        options = {row.id: index for index, row in enumerate(refresh_options)}
-        records = [{'role': 'changed', **self._content(row)} for row in changed]
-        records.extend({'role': 'existing', **self._content(row),
-                        **({'refresh_option': options[row.id]} if row.id in options else {})}
-                       for row in existing)
+        refresh = ([row for row in existing if can_refresh(self, row)]
+                   if any(row.origin.get('event_id') for row in changed) else [])
+        candidates = [*changed, *existing]
+        reusable = [row for row in candidates
+                    if row.metadata.get('verification') != 'legacy_unverified'
+                    and not self._is_parallel_alternative(row)]
+        reuse_numbers = {row.id: index for index, row in enumerate(reusable)}
+        refresh_numbers = {row.id: index for index, row in enumerate(refresh)}
+        records = []
+        for row in candidates:
+            record = {'role': 'changed' if row.id in changed_ids else 'existing', **self._content(row)}
+            if row.id in reuse_numbers:
+                record['reuse_option'] = reuse_numbers[row.id]
+            if row.id in refresh_numbers:
+                record['refresh_option'] = refresh_numbers[row.id]
+            records.append(record)
+        instructions = GENERALIZE + (GENERALIZE_REUSE if reusable else '') + (GENERALIZE_REFRESH if refresh else '')
         response = self._call('Find useful shared thought question', records,
-            [self._basis(row) for row in related], GENERALIZE + (GENERALIZE_REFRESH if options else ''),
-            refresh_option_count=len(options))
-        affected = [refresh_options[index] for index in dict.fromkeys(response.get('affected_candidates', []))]
-        if on_affected:
+            [self._basis(row) for row in candidates], instructions,
+            refresh_option_count=len(refresh), reuse_option_count=len(reusable))
+        affected = [refresh[index] for index in dict.fromkeys(response.get('affected_candidates', []))]
+        reuse = response.get('reuse_candidate')
+        return response, affected, reusable[reuse] if reuse is not None else None
+
+    def consolidate(self, changed, *, on_affected=None):
+        from .thought_answering import can_refresh, refresh_thought
+        from .thought_engine_contract import MAX_OVERVIEW_TITLE_CHARACTERS
+        from .thought_store import ThoughtConflict
+        changed = list(changed)
+        if not changed:
+            return []
+        response, affected, reusable = self._classify_consolidation(changed)
+        if reusable is not None and any(row.id == reusable.id for row in affected):
+            reusable = None  # Material changes take precedence over a reuse suggestion.
+        if reusable is not None and not self._fresh(reusable):
+            raise ThoughtConflict('A reusable thought changed during maintenance classification')
+        refreshed = {}
+        if on_affected is not None:
             on_affected(affected)
+        else:
+            refreshed = {row.id: refresh_thought(self, row, additional=changed) for row in affected}
         question = semantic_text(response.get('question'), 'question', nullable=True)
         if question is None:
-            return []
+            if reusable is not None:
+                self._emit('automatic_overview_reused', thought=self._basis(reusable))
+                return [reusable]
+            return list(refreshed.values())
         title = semantic_text(response.get('text'))
         if len(title) > MAX_OVERVIEW_TITLE_CHARACTERS or len(title.splitlines()) != 1:
             self._emit('automatic_overview_skipped', reason='Missing concise title for proposed scope', question=question)
@@ -857,7 +889,7 @@ class ThoughtEngine:
                 if on_affected is not None:
                     # Known questions already have a refresh path. Only verified candidates enter it.
                     return []
-                return [refresh_thought(self, target, additional=changed)]
+                return [refreshed.get(target.id) or refresh_thought(self, target, additional=changed)]
             target = None
         frontier = self._frontier(candidates, target.id if target else None)
         records, bases = self._current_material(question, candidates, known_ids=[row.id for row in changed])
