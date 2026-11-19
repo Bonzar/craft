@@ -21,7 +21,6 @@ class TracedThoughtWorker(ThoughtWorker):
         trace = ThoughtTrace(original.store, operation, inputs)
         self.engine = traced_engine(original.thoughts, original.model, original.candidates, trace)
         try:
-            check_processing_cancelled()
             yield trace
         except ProcessingCancelled:
             # Releasing the lease and finalizing its trace are one durable outcome.
@@ -38,6 +37,7 @@ class TracedThoughtWorker(ThoughtWorker):
         with self._attempt('source', {'event_id': claim.job.event_id, 'job_id': claim.job.id,
                            'attempt':claim.job.attempts,'previous_error':claim.job.error},
                            lambda db: self._cancel_source(db, claim)) as trace:
+            check_processing_cancelled()
             result = super()._source(claim)
             trace.finish('completed' if result.status == 'completed' else 'retry_required')
             return result
@@ -47,6 +47,7 @@ class TracedThoughtWorker(ThoughtWorker):
                            'version': task['version'], 'generation': task.get('generation'),
                            'attempt':task.get('attempts'),'previous_error':task.get('error')},
                            lambda db: self._cancel_thought(db, task)) as trace:
+            check_processing_cancelled()
             result = super()._consolidate(task)
             trace.finish('completed' if result['status'] == 'completed' else 'retry_required')
             return result
