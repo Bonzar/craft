@@ -256,6 +256,7 @@ class JsonSnapshotSource:
     def __init__(self, path, state_dir):
         from .source_ir import materialize
         doc, fingerprint = capture(path)
+        self.source_path = Path(path).absolute()
         self.provider_id = doc['provider_id']
         self._revision = 'sha256:' + fingerprint
         self.path = materialize(doc, fingerprint, state_dir)

@@ -11,7 +11,7 @@ python -m apps.graph_viewer.server \
   --port 8791
 ```
 
-The password file must have mode 600 and contain an owner password of at least twelve characters. Alternatively, provide `GRAPH_VIEWER_PASSWORD` for initial setup. There is no default credential. Existing owner credentials stay in the viewer state; passing a different bootstrap password does not rotate them. Sessions and bookmarks persist in that state. Use a dedicated state directory: its directory permissions become 700 and private files become 600.
+The password file must have mode 600 and contain an owner password of at least twelve characters. Alternatively, provide `GRAPH_VIEWER_PASSWORD` for initial setup. There is no default credential. Existing owner credentials stay in the viewer state; passing a different bootstrap password does not rotate them. Sessions and bookmarks persist in that state. Use a dedicated state directory. Its permissions become 700 and private files become 600. Keep the frontend build directory separate from source data, viewer state, credentials and embedding caches.
 
 The service binds only loopback. For an explicitly configured HTTPS tunnel, add `--public-origin https://your-host.example`. This enables the exact browser origin, HTTPS-only cookies and HSTS without trusting arbitrary forwarded headers. Keep the proxy/tunnel on the same machine. No private graph data is uploaded by the service.
 

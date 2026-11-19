@@ -195,11 +195,29 @@ async def static(request):
     if not target.is_relative_to(root):
         raise APIError('not_found','File unavailable',404)
     if not target.is_file():
-        target=root/'index.html'
+        target=(root/'index.html').resolve()
+        if not target.is_relative_to(root):
+            raise APIError('not_found','File unavailable',404)
     return FileResponse(target) if target.is_file() else Response('Frontend build unavailable',status_code=503)
 
 
+def validate_static_directory(static_dir, *private_paths):
+    if static_dir is None:
+        return None
+    root=Path(static_dir).resolve()
+    for value in private_paths:
+        if value is None:
+            continue
+        private=Path(value).resolve()
+        if root.is_relative_to(private) or private.is_relative_to(root):
+            raise ValueError('Frontend directory overlaps a private path')
+    return root
+
+
 def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=()):
+    static_dir=validate_static_directory(
+        static_dir,state_dir,source_path,bridge_read_token_file,
+        getattr(source,'source_path',None),getattr(source,'path',None))
     bridge_read_service=BridgeReadService(bridge_read_token_file)
     owner=OwnerStore(state_dir,password)
     manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model)
@@ -222,7 +240,7 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     app.state.bridge_read_service=bridge_read_service
     app.state.synthetic_fixture=synthetic_fixture
     app.state.owner=owner; app.state.manager=manager
-    app.state.static_dir=Path(static_dir).resolve() if static_dir else None
+    app.state.static_dir=static_dir
     return app
 
 

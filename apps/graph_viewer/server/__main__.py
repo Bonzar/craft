@@ -3,7 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import uvicorn
-from .app import create_app
+from .app import create_app,validate_static_directory
 
 
 def main():
@@ -22,6 +22,11 @@ def main():
     parser.add_argument('--bridge-read-token-file',type=Path,help='Owner-only high-entropy read service credential file; no write or session authority')
     parser.add_argument('--static-dir',type=Path,default=Path(__file__).resolve().parents[1]/'web'/'dist')
     args=parser.parse_args()
+    try:
+        validate_static_directory(args.static_dir,args.source,args.state_dir,
+                                  args.password_file,args.bridge_read_token_file,args.embedding_cache)
+    except ValueError as error:
+        parser.error(str(error))
     password=os.environ.get('GRAPH_VIEWER_PASSWORD')
     if args.password_file:
         if args.password_file.stat().st_mode & 0o077:

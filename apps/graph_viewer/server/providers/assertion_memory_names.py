@@ -70,19 +70,17 @@ def resolve_name(connection, tables, view_id, definition, snapshot, *, version_i
 
 
 def transitional_name(engine, view_id, definition, snapshot):
-    # Compatibility only: core resolve also reads the optional work table. Do not
-    # create it, suppress SQLite errors, or replace a valid accepted journal row.
-    from prototypes.assertion_memory.view_names import _definition_sha, _record
-    sha=_definition_sha(engine._spec(view_id)); c=engine.connection
-    row=c.execute('SELECT * FROM memory_view_names WHERE view_id=? '
-        'AND definition_sha256=? AND recorded_at<=? AND id<=? ORDER BY id DESC LIMIT 1',
-        (view_id,sha,snapshot['presentation_cutoff'],snapshot['name_watermark'])).fetchone()
+    # Legacy sources have no version binding. Reuse core's reviewed-record
+    # checks, and keep the historical display fallback explicit.
+    from prototypes.assertion_memory.view_names import PROTOCOL,_definition_sha,_normal_record,_prior_name
+    spec=engine._spec(view_id); c=engine.connection
+    row=_prior_name(c,spec,cutoff=snapshot['presentation_cutoff'],watermark=snapshot['name_watermark'])
     if row is not None:
-        row=_record(row)  # Decode both audits exactly as core; malformed JSON must fail.
         return {'display_title':row['title'],'naming_status':'accepted',
                 'name_record_id':row['id'],'name_recorded_at':row['recorded_at']}
-    first=c.execute('SELECT definition_sha256,provenance FROM memory_view_names '
-        'WHERE view_id=? AND definition_sha256=? ORDER BY id LIMIT 1',(view_id,sha)).fetchone()
-    created=bool(first and json.loads(first['provenance']).get('input_definition_sha256')
-                 !=first['definition_sha256'])
+    sha=_definition_sha(spec)
+    records=c.execute('SELECT * FROM memory_view_names WHERE view_id=? '
+        'AND definition_sha256=? AND protocol=? ORDER BY id',(view_id,sha,PROTOCOL))
+    first=next((name for row in records if (name:=_normal_record(row,spec.query))),None)
+    created=bool(first and first['provenance'].get('input_definition_sha256')!=sha)
     return fallback_name(definition,created_with_name=created)
