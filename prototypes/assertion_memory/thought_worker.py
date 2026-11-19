@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .model import format_prompt
 from .queue import _Claim, _event, LeaseLost
-from .thought_store import publication_guard, same_meaning_version
+from .thought_store import ThoughtConflict, publication_guard, same_meaning_version
 from .thought_worker_queue import ThoughtWorkQueue
 from .thought_answering import can_refresh, refresh_thought
 from .thought_processing_selection import (normalize_session_ids,source_predicate,processing_cohort,
@@ -187,7 +187,7 @@ class ThoughtWorker:
         return context
 
     @contextmanager
-    def _processing(self, identity, guard, renew, cached, save):
+    def _processing(self, identity, guard, renew, cached, save, *, on_publish=None):
         original = self.engine.gateway
         provider = self.engine.model
         def invoke(request):
@@ -212,7 +212,7 @@ class ThoughtWorker:
         gateway.reject_construct = replay.reject_construct
         self.engine.gateway = gateway
         try:
-            with publication_guard(guard):
+            with publication_guard(guard, on_publish=on_publish):
                 yield replay
         finally:
             self.engine.gateway = original
@@ -365,11 +365,11 @@ class ThoughtWorker:
                 return
             with self.queue.store.transaction(write=True) as connection:
                 self.work.owned(connection, task)
-                if self.engine.thoughts.get(current.id) != current:
-                    return
+                if self.engine.thoughts.get(current.id) != current or any(
+                        self.engine.thoughts.get(parent.id) != parent for parent in parents):
+                    raise ThoughtConflict('A thought changed during maintenance relevance review')
                 for parent in parents:
-                    if self.engine.thoughts.get(parent.id) == parent:
-                        self.work.request(parent, 'refresh', ('relevance', current.id, current.version))
+                    self.work.request(parent, 'refresh', ('relevance', current.id, current.version))
         return self.engine.consolidate([current], on_affected=on_affected)
 
     def _consolidate(self, task):
@@ -383,33 +383,34 @@ class ThoughtWorker:
             current = self.engine.thoughts.get(identity)
             if current is None:
                 return self.work.finish(task, task['version'])
-            if task['action'] == 'consolidate':
+            is_refresh = task['action'] == 'refresh'
+            if not is_refresh:
                 self.enqueue_dependents([current])
-            with self.queue.store.transaction() as c:
-                watermark = c.execute('SELECT coalesce(max(rowid),0) FROM memory_thought_versions').fetchone()[0]
+
+            def queue_followup(previous, published):
+                # A retry can see this head as current before the claim is finished.
+                if is_refresh:
+                    if previous == current and not same_meaning_version(previous, published):
+                        self.enqueue_dependents([published])
+                elif previous is None and published.origin.get('kind') == 'inference':
+                    self.enqueue_changed([published])
+
             with self._processing(('change-v2', identity, current.version, task['generation'], task['action']),
                 lambda c: self.work.owned(c, task), lambda: self.work.renew(task), self.work.cached,
-                lambda key, body: self.work.save(task, key, body)) as replay:
-                if task['action'] == 'refresh':
+                lambda key, body: self.work.save(task, key, body), on_publish=queue_followup) as replay:
+                processed_version = current.version
+                if is_refresh:
                     needed, additional = self._refresh_inputs(task, current)
                     result = refresh_thought(self.engine, current, additional=additional) if needed else current
-                    changed = [] if same_meaning_version(current, result) else [result]
+                    if result.id == current.id:
+                        processed_version = result.version
                 else:
-                    changed = [row for row in self._generalize(current, task)
-                        if row.id != current.id or row.version != current.version or row.text != current.text]
+                    self._generalize(current, task)
                 replay.confirm()
-                changed = [row for row in changed if self._published_after(row, watermark)]
                 with self.queue.store.transaction(write=True) as c:
                     self.work.owned(c, task)
-                    if task['action'] == 'refresh':
-                        self.enqueue_dependents(changed)
-                    else:
-                        self.enqueue_changed(changed)
                     replay.clear(c,'memory_thought_generations')
-                    processed = [current.version] + [row.version for row in changed if row.id == current.id]
-                    if task['action'] == 'refresh' and result.id == current.id:
-                        processed.append(result.version)
-                    return self.work.finish(task, max(processed))
+                    return self.work.finish(task, processed_version)
         except LeaseLost:
             return self.work.get(identity)
         except Exception as error:
@@ -419,13 +420,6 @@ class ThoughtWorker:
                 return self.work.get(identity)
         finally:
             self._notify('released', 'thought', identity, token)
-
-    def _published_after(self, thought, watermark):
-        with self.queue.store.transaction() as c:
-            row = c.execute('SELECT rowid FROM memory_thought_versions WHERE thought_id=? AND version=?',
-                (thought.id, thought.version)).fetchone()
-            current = self.engine.thoughts.get(thought.id)
-            return row is not None and row[0] > watermark and current is not None and current.version == thought.version
 
     def seconds_until_work(self, *, with_model=True):
         if not with_model and self.engine.gateway is None:
