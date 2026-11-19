@@ -107,6 +107,31 @@ class PoolSourceIntegrationTest(unittest.TestCase):
                 self.assertIsNotNone(traces[0]['finished_at'])
                 self.assertEqual(db.execute("SELECT count(*) FROM memory_thought_model_calls WHERE status='running'").fetchone()[0], 0)
 
+    def test_cancellation_after_claim_before_provider_releases_job_cleanly(self):
+        from prototypes.assertion_memory.model import processing_cancellation
+        from prototypes.assertion_memory.thought_processing import TracedThoughtWorker
+
+        with MemoryStore(':memory:') as store:
+            def unexpected_model(_request):
+                self.fail('Cancellation should stop the job before starting the model')
+
+            service = ThoughtService(store, unexpected_model)
+            service.capture_message('synthetic-session', 'm', 'fixture', 'user',
+                                    'A synthetic report.', 0, 'fixture://source', 's')
+            worker = TracedThoughtWorker(service.queue, service.engine)
+            source = worker._claim_source()
+            thought = service.thoughts.publish('A synthetic thought.')
+            worker.work.enqueue([thought])
+            maintenance = worker.work.claim()
+            with processing_cancellation(lambda: True):
+                worker._source(source)
+                worker._consolidate(maintenance)
+            self.assertEqual(worker.queue.get(source.job.id).status, 'pending')
+            self.assertEqual(worker.work.get(thought.id)['status'], 'pending')
+            with store.transaction() as db:
+                self.assertEqual([row['status'] for row in db.execute(
+                    'SELECT status FROM memory_thought_runs ORDER BY rowid')], ['interrupted', 'interrupted'])
+
     def test_explicit_cancel_reaps_only_the_owned_model_and_requeues_the_attempt(self):
         from prototypes.assertion_memory.model import CodexModel
         from prototypes.assertion_memory.processing_pool import ProcessingPool
