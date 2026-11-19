@@ -46,6 +46,9 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             calls.append(request.task)
             if request.task == 'Construct thought':
                 self.assertIn('reporter and the participant', request.instructions)
+                if request.repair_instructions:
+                    self.assertIn('тесты проходят', request.repair_instructions.lower())
+                    self.assertIn(lossy, request.repair_instructions)
                 candidate = precise if request.repair_instructions else lossy
                 return json.dumps(drafts(request, (candidate, [source])))
             self.assertIn('reporter and the participant', request.instructions)
