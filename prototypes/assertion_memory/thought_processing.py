@@ -1,4 +1,5 @@
 """Canonical worker lanes, retaining the existing supervisor's exclusive pause lock."""
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import signal
@@ -6,12 +7,37 @@ import threading
 
 from .model import ProcessingCancelled, check_processing_cancelled, processing_cancellation
 from .processing_pool import ActiveClaims, ProcessingPool
-from .storage import MemoryStore
+from .storage import MemoryStore, background_write_retry
 from .queue import CaptureQueue
 from .thought_processing_selection import source_predicate, maintenance_predicate, processing_deadline
 from .thought_service import traced_engine
 from .thought_trace import ThoughtTrace
 from .thought_worker import ThoughtWorker
+
+GROUP_HEARTBEAT_SECONDS = 30
+
+
+@contextmanager
+def _keep_group_claims(queue, active_claims):
+    stop = threading.Event()
+    interval = min(GROUP_HEARTBEAT_SECONDS, queue._lease_seconds / 3)
+
+    def renew_until_stopped():
+        if stop.wait(interval):
+            return
+        with MemoryStore(queue.store.path) as heartbeat_store, background_write_retry():
+            while not stop.is_set():
+                if active_claims.snapshot():
+                    with heartbeat_store.transaction(write=True) as db:
+                        active_claims.renew(db, lease_seconds=queue._lease_seconds)
+                stop.wait(interval)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        renewal = executor.submit(renew_until_stopped)
+        try:
+            yield renewal
+        finally:
+            stop.set()
 
 
 class TracedThoughtWorker(ThoughtWorker):
@@ -82,35 +108,89 @@ class TracedThoughtWorker(ThoughtWorker):
         return result, batch_trace.id
 
     def process_source_group(self, event_ids, limit):
-        from .source_model_batch import (pending_sources, PreparedSourceGroup, generate_source_drafts,
-                                         MAX_EXPLICIT_BATCH_CHARACTERS)
-        if len(self.processing_session_ids or ()) != 1 or not 1 <= len(event_ids) <= limit:
+        from .thought_worker_queue import track_group_followups
+        if (len(self.processing_session_ids or ()) != 1 or not 1 <= len(event_ids) <= limit
+                or len(set(event_ids)) != len(event_ids)):
             raise ValueError('one source session and a sufficient queue attempt limit are required')
-        events = pending_sources(self.queue, self.processing_session_ids[0], event_ids)
-        is_pausing = self.is_pausing or (lambda: False)
-        self.batch_contexts = {event.id: self._context(event) for event in events}
+        active_claims = ActiveClaims()
+        previous_observer = self.claim_observer
+
+        def observe(event, kind, identity, token):
+            active_claims.observe(event, kind, identity, token)
+            if previous_observer is not None:
+                previous_observer(event, kind, identity, token)
+
+        self.claim_observer = observe
         try:
+            with (background_write_retry(), track_group_followups(self) as work,
+                  _keep_group_claims(self.queue, active_claims) as renewal):
+                if self._run_source_group(event_ids, renewal, active_claims):
+                    self._process_group_followups(work, limit - len(event_ids), renewal)
+        except ProcessingCancelled:
+            return
+        finally:
+            self.claim_observer = previous_observer
+
+    def _run_source_group(self, event_ids, renewal, active_claims):
+        claims = self._claim_source_group(event_ids)
+        for claim in claims:
+            active_claims.observe('claimed', 'source', claim.job.id, claim.token)
+        error = None
+        try:
+            if claims:
+                self._process_claimed_group(claims, renewal, active_claims)
+        except Exception as failure:
+            error = f'{type(failure).__name__}: {failure}'[:1000]
+            raise
+        finally:
+            with self.queue.store.transaction(write=True) as db:
+                for claim in claims:
+                    self._cancel_source(db, claim, error=error)
+        return bool(claims)
+
+    def _claim_source_group(self, event_ids):
+        from .source_model_batch import pending_sources
+        with self.queue.store.transaction(write=True):
+            if self.is_pausing and self.is_pausing():
+                return []
+            events = pending_sources(self.queue, self.processing_session_ids[0], event_ids)
+            claims = [self._claim_source(event_id=event.id) for event in events]
+            if any(claim is None for claim in claims):
+                if self.is_pausing and self.is_pausing():
+                    # Roll back any partial admission before returning to the supervisor.
+                    raise ProcessingCancelled()
+                raise ValueError('a queued source became unavailable during group admission')
+            return claims
+
+    def _process_claimed_group(self, claims, renewal, active_claims):
+        from .source_model_batch import (PreparedSourceGroup, generate_source_drafts,
+                                         MAX_EXPLICIT_BATCH_CHARACTERS)
+        events = [self.queue.get_event(claim.job.event_id) for claim in claims]
+        try:
+            check_processing_cancelled()
+            self.batch_contexts = {event.id: self._context(event) for event in events}
             requests = [self.engine.source_construction_request(event, self.batch_contexts[event.id])
                         for event in events]
-            if is_pausing():
-                return
             drafts = generate_source_drafts(requests, self._generate_source_batch,
                                            max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True)
             if any(draft is None for draft in drafts):
                 raise ValueError('one group response did not cover every source; original jobs remain queued')
             self.source_batch = PreparedSourceGroup(requests, drafts)
-            for event in events:
-                if is_pausing():
-                    return
-                claim = self._claim_source(event_id=event.id)
-                if claim is None:
-                    raise ValueError(f'queued source became unavailable: {event.id}')
+            for claim in claims:
+                check_processing_cancelled()
+                if renewal.done():
+                    renewal.result()
                 self._source(claim)
+                active_claims.observe('released', 'source', claim.job.id, claim.token)
         finally:
             self.source_batch = None
             self.batch_contexts = {}
-        for _ in range(max(0, limit - len(events))):
-            task = self.work.claim(is_pausing=self.is_pausing)
+    def _process_group_followups(self, work, limit, renewal):
+        for _ in range(limit):
+            check_processing_cancelled()
+            if renewal.done():
+                renewal.result()
+            task = work.claim_next(self.is_pausing)
             if task is None:
                 break
             self._consolidate(task)
@@ -135,12 +215,12 @@ class TracedThoughtWorker(ThoughtWorker):
             return result
 
 
-    def _cancel_source(self, db, claim):
+    def _cancel_source(self, db, claim, *, error=None):
         now = self.queue._time()
         db.execute("UPDATE memory_capture_jobs SET status='pending',attempts=max(0,attempts-1),"
-                   "lease_token=NULL,lease_until=NULL,available_at=?,updated_at=? "
+                   "lease_token=NULL,lease_until=NULL,available_at=?,updated_at=?,error=coalesce(?,error) "
                    "WHERE id=? AND status='running' AND lease_token=?",
-                   (now, now, claim.job.id, claim.token))
+                   (now, now, error, claim.job.id, claim.token))
 
     def _cancel_thought(self, db, task):
         db.execute("UPDATE memory_thought_work SET status='pending',attempts=max(0,attempts-1),"

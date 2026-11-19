@@ -15,18 +15,25 @@ MAX_EXPLICIT_BATCH_CHARACTERS = 256000
 
 def pending_sources(queue, session_id, event_ids):
     events = []
+    now = queue._time()
     for event_id in event_ids:
         event = queue.get_event(event_id)
         job = queue.get(event_id)
         if event is None or canonical_session_id(event) != session_id or not event_eligibility(event)['allowed']:
             raise ValueError(f'source event is outside the admitted session: {event_id}')
-        if (job is None or job.event_id != event_id or job.status not in ('pending', 'waiting_model')
-                or job.phase != 'extract' or job.extracted_ids
-                or (job.status == 'pending' and job.available_at > queue._time())):
+        if (job is None or job.event_id != event_id or job.phase != 'extract'
+                or job.extracted_ids or not _is_ready(queue, job, now)):
             raise ValueError(f'source event is not ready for initial generation: {event_id}')
         events.append(event)
     return sorted(events, key=lambda event: (
         event.metadata.get('source_message_at') or event.recorded_at, event.id))
+
+
+def _is_ready(queue, job, now):
+    return (job.status == 'waiting_model'
+            or (job.status == 'pending' and job.available_at <= now)
+            or (job.status == 'running' and job.attempts < queue._max_attempts
+                and queue._has_expired_claim(job.id, now)))
 
 
 class PreparedSourceGroup:

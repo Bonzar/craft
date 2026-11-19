@@ -6,7 +6,7 @@ from time import sleep
 from .session_api import _id
 from .thought_processing_selection import source_predicate
 from .thought_source_policy import eligible_sql
-from .thought_worker_queue import ThoughtWorkQueue
+from .thought_worker_queue import MessageWork
 
 
 SOURCE_OPEN = ('pending', 'waiting_model', 'running')
@@ -59,59 +59,6 @@ class MessageRun:
     def close(self):
         with self.store.transaction(write=True) as db:
             db.execute('DELETE FROM memory_one_message_run WHERE session_id=?', (self.session_id,))
-
-
-class MessageWork(ThoughtWorkQueue):
-    def __init__(self, worker, run):
-        super().__init__(worker.queue, processing_session_ids=(run.session_id,))
-        self.run = run
-
-    def request(self, thought, action, cause):
-        with self.store.transaction(write=True) as db:
-            before = self.get(thought.id)
-            accepted = super().request(thought, action, cause)
-            current = self.get(thought.id)
-            if not accepted or current is None:
-                return accepted
-            if before and before['desired_generation'] == current['desired_generation']:
-                return accepted
-            progress = self.run.load(db)
-            previous = progress['jobs'].get(thought.id)
-            has_older_work = before and before['completed_generation'] < before['desired_generation']
-            owns_older_work = (before and previous and previous['exclusive']
-                               and previous['generation'] == before['desired_generation'])
-            progress['jobs'][thought.id] = {'generation': current['desired_generation'],
-                                            'exclusive': not has_older_work or bool(owns_older_work)}
-            self.run.save(db, progress)
-            return accepted
-
-    def rows(self, db):
-        for thought_id, target in self.run.load(db)['jobs'].items():
-            row = self.get(thought_id)
-            item = {'thought_id': thought_id, 'generation': target['generation']}
-            if row is None:
-                yield {**item, 'status': 'blocked', 'error': 'Queued thought job disappeared'}
-                continue
-            yield {**item, **_job_state(row, target)}
-
-    def claim_next(self, pausing):
-        with self.store.transaction(write=True) as db:
-            for row in self.rows(db):
-                if row['status'] in ('pending','running'):
-                    claim = self.claim(thought_id=row['thought_id'], is_pausing=pausing)
-                    if claim is not None:
-                        return claim
-        return None
-
-
-def _job_state(row, target):
-    fields = ('action','completed_version','status','error','available_at','lease_until')
-    result = {key: row[key] for key in fields}
-    if row['completed_generation'] >= target['generation']:
-        return {**result, 'status': 'completed', 'error': None}
-    if not target['exclusive'] or row['desired_generation'] != target['generation']:
-        return {**result, 'status': 'blocked', 'error': 'Merged with another queued cause'}
-    return result
 
 
 def _wait(queue, until):

@@ -1,5 +1,6 @@
 """Coalesced canonical change work; CaptureQueue continues owning raw jobs."""
 from __future__ import annotations
+from contextlib import contextmanager
 import json
 from uuid import uuid4
 from .queue import LeaseLost
@@ -173,3 +174,83 @@ class ThoughtWorkQueue:
         with self.store.transaction(write=True) as c:
             self.owned(c, task)
             c.execute('INSERT INTO memory_thought_generations VALUES(?,?) ON CONFLICT(request_key) DO NOTHING', (key, response))
+
+
+class MessageWork(ThoughtWorkQueue):
+    def __init__(self, worker, run):
+        super().__init__(worker.queue, processing_session_ids=(run.session_id,))
+        self.run = run
+
+    def request(self, thought, action, cause):
+        with self.store.transaction(write=True) as db:
+            before = self.get(thought.id)
+            accepted = super().request(thought, action, cause)
+            current = self.get(thought.id)
+            if not accepted or current is None:
+                return accepted
+            if before and before['desired_generation'] == current['desired_generation']:
+                return accepted
+            progress = self.run.load(db)
+            previous = progress['jobs'].get(thought.id)
+            has_older_work = before and before['completed_generation'] < before['desired_generation']
+            owns_older_work = (before and previous and previous['exclusive']
+                               and previous['generation'] == before['desired_generation'])
+            progress['jobs'][thought.id] = {'generation': current['desired_generation'],
+                                            'exclusive': not has_older_work or bool(owns_older_work)}
+            self.run.save(db, progress)
+            return accepted
+
+    def rows(self, db):
+        for thought_id, target in self.run.load(db)['jobs'].items():
+            row = self.get(thought_id)
+            item = {'thought_id': thought_id, 'generation': target['generation']}
+            if row is None:
+                yield {**item, 'status': 'blocked', 'error': 'Queued thought job disappeared'}
+                continue
+            yield {**item, **_job_state(row, target)}
+
+    def claim_next(self, pausing):
+        with self.store.transaction(write=True) as db:
+            for row in self.rows(db):
+                if row['status'] in ('pending','running'):
+                    claim = self.claim(thought_id=row['thought_id'], is_pausing=pausing)
+                    if claim is not None:
+                        return claim
+        return None
+
+
+@contextmanager
+def track_group_followups(worker):
+    """Keep queue generations attributable to this invocation on its own connection."""
+    original = worker.work
+    with worker.queue.store.transaction(write=True) as db:
+        db.execute('CREATE TEMP TABLE memory_group_progress (progress TEXT NOT NULL)')
+        db.execute('INSERT INTO memory_group_progress VALUES (?)', ('{"jobs":{}}',))
+    try:
+        worker.work = MessageWork(worker, GroupProgress(worker.processing_session_ids[0]))
+        yield worker.work
+    finally:
+        worker.work = original
+        with worker.queue.store.transaction(write=True) as db:
+            db.execute('DROP TABLE temp.memory_group_progress')
+
+
+class GroupProgress:
+    def __init__(self, session_id):
+        self.session_id = session_id
+
+    def load(self, db):
+        return json.loads(db.execute('SELECT progress FROM temp.memory_group_progress').fetchone()[0])
+
+    def save(self, db, progress):
+        db.execute('UPDATE temp.memory_group_progress SET progress=?', (json.dumps(progress),))
+
+
+def _job_state(row, target):
+    fields = ('action','completed_version','status','error','available_at','lease_until')
+    result = {key: row[key] for key in fields}
+    if row['completed_generation'] >= target['generation']:
+        return {**result, 'status': 'completed', 'error': None}
+    if not target['exclusive'] or row['desired_generation'] != target['generation']:
+        return {**result, 'status': 'blocked', 'error': 'Merged with another queued cause'}
+    return result
