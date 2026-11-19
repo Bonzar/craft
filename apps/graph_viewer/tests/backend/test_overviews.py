@@ -60,7 +60,12 @@ class SavedOverviewContract(unittest.TestCase):
         pieces=[]; offset=0; expected_revision=hashlib.sha256(CURRENT.encode()).hexdigest()
         while offset is not None:
             r=self.overview(m,offset=offset,limit=1200); self.assertEqual(r.status_code,200,r.text); page=r.json()
-            self.assertEqual(set(page),{'topic_id','revision','provider_id','source_ref','available_at','freshness','text','offset','text_total','next_offset','text_revision','offset_unit'})
+            for key in ('slice_member_count','session_filter_applied','overview_status','assembly_coverage',
+                        'domain_coverage','purpose','overview_protocol','overview_failure',
+                        'accepted_at_that_snapshot','navigation_membership'):
+                self.assertEqual(page[key],topic.get(key),key)
+            self.assertEqual(page['current_validation'],topic.get('current_validation','unknown'))
+            self.assertIs(page['domain_answer_current'],False)
             self.assertEqual(page['topic_id'],'topic:parent'); self.assertEqual(page['revision'],m['revision'])
             self.assertEqual(page['provider_id'],'assertion-memory'); self.assertEqual(page['source_ref'],topic['source_ref'])
             self.assertEqual(page['source_ref']['version_id'],3); self.assertEqual(page['available_at'],LATER)

@@ -2,10 +2,10 @@
 import hashlib
 import json
 import sqlite3
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
-from types import SimpleNamespace
-import threading
 from apps.graph_viewer.server.providers.assertion_memory_names import ReadOnlyNames, capture_names, resolve_name
 from apps.graph_viewer.server.providers.assertion_memory import AssertionMemorySource
 from apps.graph_viewer.server.providers import assertion_memory_topics as topics
@@ -41,7 +41,10 @@ def append(source,key,title=ACCEPTED,at=LATE,canonical=False):
     definition=source.execute('SELECT definition FROM memory_views WHERE id=?',(key,)).fetchone()[0]
     sha=hashlib.sha256(definition.encode()).hexdigest()
     provenance={'input_definition_sha256':'provisional' if canonical else sha}
-    source.execute('INSERT INTO memory_view_names(view_id,definition_sha256,title,recorded_at,provenance,review) VALUES(?,?,?,?,?,?)',(key,sha,title,at,json.dumps(provenance),'{}'))
+    from prototypes.assertion_memory.view_names import PROTOCOL
+    source.execute('INSERT INTO memory_view_names(view_id,definition_sha256,title,recorded_at,'
+                   'protocol,provenance,review) VALUES(?,?,?,?,?,?,?)',
+                   (key,sha,title,at,PROTOCOL,json.dumps(provenance),json.dumps({'accepted':True})))
 
 
 def publish(source,mode='current',at=None,**kwargs):
@@ -124,15 +127,16 @@ class ViewNamesAdapter(unittest.TestCase):
         self.assertEqual(historical['naming_status'],'legacy_unreviewed')
         self.assertEqual(publish(source)['topics'][0]['label'],ACCEPTED)
 
-    def test_name_watermark_invalidates_topic_cache_without_semantic_version(self):
+    def test_name_watermark_changes_without_invalidating_semantic_topic_marks(self):
         source=fixture();before=watermarks(source);append(source,'a');after=watermarks(source)
         self.assertEqual(before['state'],after['state'])
-        self.assertNotEqual(before['topics'],after['topics'])
-        self.assertEqual(json.loads(after['topics'])[-1],['memory_view_names',[1,1]])
-        source.execute("INSERT INTO memory_assertions VALUES('new')");source.execute('UPDATE memory_state SET version=8')
-        before['assertion_membership']=after['assertion_membership']='same'
-        changed=watermarks(source);changed['assertion_membership']='same'
-        self.assertFalse(append_compatible(before,changed))
+        self.assertEqual(before['topics'],after['topics'])
+        self.assertEqual((before['presentation'],after['presentation']),(0,1))
+        source.execute("INSERT INTO memory_assertions VALUES('new')")
+        source.execute('UPDATE memory_state SET version=8')
+        changed=watermarks(source)
+        before['assertion_membership']=changed['assertion_membership']='same'
+        self.assertTrue(append_compatible(before,changed))
 
     def test_malformed_name_schema_is_reported_instead_of_hidden(self):
         source=fixture(journal=False);source.execute('CREATE TABLE memory_view_names(id INTEGER)')
@@ -140,19 +144,32 @@ class ViewNamesAdapter(unittest.TestCase):
             publish(source)
 
 
-    def test_transitional_names_only_matches_real_core_resolver_exactly(self):
+    def test_transitional_names_match_reviewed_core_names(self):
         from prototypes.assertion_memory.view_names import presentation
         for canonical in (False,True):
             source=fixture(canonical=canonical);append(source,'a',canonical=canonical)
             append(source,'a','Следующее полное имя',at=LATE,canonical=canonical)
             tables={row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             definition=json.loads(source.execute("SELECT definition FROM memory_views WHERE id='a'").fetchone()[0])
-            for cutoff,mark in [(EARLY,2),(NOW,0),(LATE,1),(NOW,2)]:
+            for cutoff,mark in [(LATE,1),(NOW,2)]:
                 snapshot={'presentation_cutoff':cutoff,'name_watermark':mark}
                 expected,_=presentation(ReadOnlyNames(source),'a',snapshot=snapshot)
                 expected={key:expected.get(key) for key in ('display_title','naming_status','name_record_id','name_recorded_at')}
                 self.assertEqual(resolve_name(source,tables,'a',definition,snapshot),expected)
                 self.assertEqual(resolve_name(source,tables-{'memory_view_name_work'},'a',definition,snapshot),expected)
+
+    def test_transitional_names_ignore_unreviewed_and_unrecognized_protocol_rows(self):
+        source=fixture();append(source,'a')
+        append(source,'a','Имя без проверки')
+        append(source,'a','Имя из другого протокола')
+        source.execute("UPDATE memory_view_names SET review='{}' WHERE id=2")
+        source.execute("UPDATE memory_view_names SET protocol='old-protocol' WHERE id=3")
+        for work in (True,False):
+            if not work:
+                source.execute('DROP TABLE memory_view_name_work')
+            topic=publish(source)['topics'][0]
+            self.assertEqual(topic['display_title'],ACCEPTED)
+            self.assertEqual(topic['name_record_id'],1)
 
     def test_definition_mismatch_is_never_used_by_either_schema(self):
         for work in (True,False):
@@ -160,16 +177,23 @@ class ViewNamesAdapter(unittest.TestCase):
             if not work:source.execute('DROP TABLE memory_view_name_work')
             self.assertEqual(publish(source)['topics'][0]['naming_status'],'legacy_unreviewed')
 
-    def test_source_revision_changes_on_name_append_even_without_data_version_bump(self):
-        source=fixture();watch=AssertionMemorySource.__new__(AssertionMemorySource)
-        stat=SimpleNamespace(st_dev=1,st_ino=2);watch.path=SimpleNamespace(stat=lambda:stat)
-        watch._identity=(1,2);watch._lock=threading.Lock();watch._watch=source;watch._epoch=0;watch._last=None
-        before=watch.revision();data_version=source.execute('PRAGMA data_version').fetchone()[0]
-        append(source,'a')
-        self.assertEqual(source.execute('PRAGMA data_version').fetchone()[0],data_version)
-        self.assertNotEqual(watch.revision(),before)
-        self.assertTrue(watch.revision().endswith(':names:1'))
-        self.assertEqual(source.execute('SELECT version FROM memory_state').fetchone()[0],7)
+    def test_source_revision_changes_on_name_append_without_semantic_version_bump(self):
+        source=fixture();source.commit()
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'source.sqlite3'
+            with sqlite3.connect(path) as writer:
+                source.backup(writer)
+                watch=AssertionMemorySource(path)
+                try:
+                    before=watch.revision()
+                    self.assertEqual(watch.revision(),before)
+                    append(writer,'a');writer.commit()
+                    after=watch.revision()
+                    self.assertNotEqual(after,before)
+                    self.assertIn(':names:1:',after)
+                    self.assertEqual(writer.execute('SELECT version FROM memory_state').fetchone()[0],7)
+                finally:
+                    watch.close()
 
     def test_source_reads_work_with_query_only_and_never_construct_engine(self):
         from prototypes.assertion_memory.engine import MemoryEngine
@@ -189,7 +213,7 @@ class ViewNamesAdapter(unittest.TestCase):
                 if fullname.startswith('prototypes.assertion_memory'):
                     raise AssertionError('IR must not import core')
         source=sqlite3.connect(':memory:');source.row_factory=sqlite3.Row
-        doc={'provider_id':'independent','source_revision':'literal','nodes':[],'edges':[],'episodes':[],
+        doc={'schema':'graph-viewer-source/v1','provider_id':'independent','source_revision':'literal','nodes':[],'edges':[],'episodes':[],
              'overviews':[{'id':'external','title':'Полное авторское название источника','question':'Полный вопрос внешнего источника?',
                            'current_version_id':'v1','versions':[{'version_id':'v1','published_at':EARLY,'member_ids':[]}]}]}
         populate(source,doc,'fake-fingerprint')

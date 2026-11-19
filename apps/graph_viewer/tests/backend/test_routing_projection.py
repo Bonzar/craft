@@ -68,9 +68,9 @@ class RoutingProjection(unittest.TestCase):
   old=SimpleNamespace(manifest={'preparation':{'source_membership_policy':SOURCE_MEMBERSHIP_POLICY},'layout':{'version':VERSION}},watermarks={'assertion_membership':'test'})
   self.assertIsNone(incremental(None,old,None,{'mode':'current'}))
  def test_policy_persists_in_incremental_manifest(self):
-  old=SimpleNamespace(manifest={'preparation':{'topic_projection_policy':'verified-domain-topics-v1'},'nodes':{'stride':16},'edges':{'stride':8},'selector':{'mode':'current'}})
+  old=SimpleNamespace(manifest={'preparation':{'topic_projection_policy':'verified-thematic-maps-v3'},'nodes':{'stride':16},'edges':{'stride':8},'selector':{'mode':'current'}})
   new=updated_manifest(old,'r',EARLY,'s',{'nodes':1,'edges':0},0)
-  self.assertEqual(new['preparation'].get('topic_projection_policy'),'verified-domain-topics-v1')
+  self.assertEqual(new['preparation'].get('topic_projection_policy'),'verified-thematic-maps-v3')
  def test_poll_rebuilds_unchanged_source_legacy_topic_policy(self):
   async def run():
    source=SimpleNamespace(revision=lambda:'same');m=GraphManager(source,None);selection={'mode':'current'};key=m.key(selection)

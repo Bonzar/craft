@@ -30,6 +30,21 @@ class SecurityContract(unittest.TestCase):
             OwnerStore(directory,'owner-test-strong')
             self.assertEqual(directory.stat().st_mode&0o777,0o700)
             self.assertEqual((directory/'viewer.sqlite3').stat().st_mode&0o777,0o600)
+    def test_frontend_directory_must_be_separate_from_private_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            public=root/'dist'; public.mkdir()
+            source=root/'source.sqlite3'; fixture(source)
+            bundled_source=public/'source.sqlite3'; fixture(bundled_source)
+            for path,state,secret in [
+                (source,public/'private-state',None),
+                (bundled_source,root/'private-state',None),
+                (source,root/'private-state',public/'bridge.secret'),
+            ]:
+                with self.subTest(path=path,state=state,secret=secret):
+                    with self.assertRaisesRegex(ValueError,'Frontend directory overlaps a private path'):
+                        create_app(path,state,password='owner-test-strong',static_dir=public,
+                                   bridge_read_token_file=secret)
     def test_bookmark_label_and_selector_are_validated(self):
         with tempfile.TemporaryDirectory() as tmp:
             store=OwnerStore(Path(tmp)/'state','owner-test-strong')
