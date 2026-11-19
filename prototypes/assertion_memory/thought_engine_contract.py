@@ -335,6 +335,18 @@ class SemanticReviewRejected(ModelError):
         super().__init__('thought draft batch rejected: '+reason)
 
 
+STATE_CHRONOLOGY = """
+A late-processed report of an earlier state can add history, but cannot replace
+a supported later state of the same subject. Distinguish the time a state held
+from the time the message was sent or the time the database processed it.
+Use explicit dates and transitions in the evidence. A message time can order
+reports about their own then-current state, not events recalled in them.
+A previous basis is not necessarily earlier in real time. A newly supplied basis
+is not necessarily newer. When times or claims cannot be compared, attribute
+and preserve material uncertainty. An explicit retrospective correction can
+revise the affected period if supported by its evidence.
+"""
+
 WHOLE_REFRESH = """
 This job refreshes ONE WHOLE thought, not an answer to one chosen question.
 The whole_refresh_scope lists ALL equal semantic question inputs with no main
@@ -361,7 +373,13 @@ For a part not established by current grounds, preserve the specific knowledge
 gap rather than an unsupported old assertion. Covering every equal question does
 not require inventing answers to unknown parts or searching again for them.
 An explicit gap is acceptable; omitting a still-supported part is not.
-"""
+was_prior_basis marks a record used as a source by the exact previously
+published version. Compare the relevant previous and newly supplied evidence when
+revising or verifying a state. Reject a draft that silently restores an older
+state as current or invents an order for incompatible reports. If an earlier
+report adds no information needed by the existing questions and scope, preserve
+the current answer and its grounds.
+""" + STATE_CHRONOLOGY
 
 SOURCE_BATCH = """
 This final job reconciles the ENTIRE source's already checked passage drafts and
@@ -412,8 +430,13 @@ thought consider ALL its questions and current content. Include changes to facts
 conditions, exceptions, conflicts, or the strength of confirmation. Similar wording,
 topics, and equivalent paraphrases do not qualify. An existing thought that already
 contains the change does not qualify. Include every qualifying candidate or [].
+For a question about current state, a new historical detail alone does not
+require a refresh. Include it when it changes a supported answer, for example
+when the question asks about the history itself or the detail corrects the
+current answer's evidence. If the supplied evidence cannot establish the
+sequence, do not infer it from the changed/existing labels.
 This decision is independent from proposing a useful shared question.
-"""
+""" + STATE_CHRONOLOGY
 
 APPLICABILITY = CONTENT_RULES + """
 Decide whether the single bound candidate already answers the requested question,
