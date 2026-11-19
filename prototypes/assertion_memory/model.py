@@ -169,12 +169,13 @@ def _signal_model_group(process, signum):
 
 
 def _terminate_model_group(process):
+    # Keep the session leader unreaped until the last group signal so its PID
+    # cannot be reused. The leader's pipes cannot tell us whether descendants
+    # with redirected streams are still alive.
     _signal_model_group(process, signal.SIGTERM)
-    try:
-        process.communicate(timeout=_MODEL_TERMINATION_SECONDS)
-    except subprocess.TimeoutExpired:
-        _signal_model_group(process, signal.SIGKILL)
-        process.wait()
+    time.sleep(_MODEL_TERMINATION_SECONDS)
+    _signal_model_group(process, signal.SIGKILL)
+    process.wait()
 
 
 def _model_output_text(output):
