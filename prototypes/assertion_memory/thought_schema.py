@@ -5,7 +5,7 @@ def _object(properties):
     return {'type':'object','properties':properties,'required':list(properties),'additionalProperties':False}
 
 
-def response_schema(task, *, support_count=None, single_thought=False):
+def response_schema(task, *, support_count=None, single_thought=False, review_option_count=0):
     text = {'type':'string'}
     question = {'type':['string','null']}
     if task == 'Navigate thought graph':
@@ -25,6 +25,10 @@ def response_schema(task, *, support_count=None, single_thought=False):
         return _object({'thoughts':thoughts,'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
     if task == 'Check ready thought':
         return _object({'verdict':{'type':'string','enum':['ready','build','drill']},'text':text,'question':question})
+    if task == 'Verify thought' and review_option_count:
+        option = {'type':'integer','minimum':0,'maximum':review_option_count-1}
+        return _object({'verdict':{'type':'string','enum':['accept','reject','drill']}, 'text':text,
+                        'open_support':{'anyOf':[option,{'type':'null'}]}})
     if task == 'Find useful shared thought question':
         return _object({'question':question,'text':text})
     return _object({'verdict':{'type':'string','enum':['accept','reject']},'text':text})

@@ -183,7 +183,7 @@ an empty accepted batch when no reusable meaning was added, even if the source
 contains many concrete operational details. Do not force a separate attributed
 thought for each command, warning, readiness claim or repeated checklist item. Reject unsupported claims or lost
 conditions; reject unrelated material included merely because it shares an object.
-Return JSON {"verdict":"accept" or "reject", "text":"semantic reason"}.
+For a final verdict use "accept" or "reject" and give the semantic reason in text.
 Acceptance means the draft follows from the bound material, not just sounds plausible.
 Equivalent wording is allowed; literal quotation is not required unless the wording
 itself is material. On rejection, name the unsupported or missing proposition,
@@ -191,6 +191,25 @@ qualification or grounding gap precisely enough to repair against this same pack
 Explain the semantic difference between the source meaning and the draft's
 meaning or omission, rather than prescribing a particular word to copy.
 Do not require unrelated context to be copied or treat a proposed explanation as fact.'''
+
+REVIEW_ORIGINALS = """
+Original evidence records reveal the actual author and exact source passage behind
+the chosen thought fragments listed in supports_fragments. These are stored
+links from the supplying thought and may support only part of it. If source_option is
+given, read its text from the existing fragment with that number. Use an original
+only to verify the selected fragment(s) it supports. Direct speech can establish
+who said something; a later report is still a report. Repeated provenance is not
+independent corroboration. Supplementary originals are for checking the draft's
+selected support; do not require additional facts merely because they occur there.
+"""
+
+REVIEW_OPEN_SUPPORT = """
+If a factual claim cannot be checked with the visible evidence, and an offered
+linked_evidence_option supports that claim's chosen fragment, you may request
+one step: return verdict "drill", the option number as open_support, and explain
+what needs checking in text. Use only an offered option. For accept or reject
+return open_support=null. Do not drill to fill an honest gap in a partial answer.
+"""
 
 RAW_PASSAGE = """
 This job extracts NEW useful meaning from the current records with role=source.
@@ -302,7 +321,7 @@ Keep distinct meanings as separate thoughts. Return an empty thoughts array for
 pure service chatter, execution bookkeeping and pure copies of existing material.'''
 
 
-def validate_response(task, response, *, support_count=None, single_thought=False):
+def validate_response(task, response, *, support_count=None, single_thought=False, review_option_count=0):
     """Check only the existing semantic wire shape, never its factual verdict."""
     if task == 'Navigate thought graph':
         exact_fields(response, {'action', 'question', 'quote', 'text'})
@@ -335,6 +354,16 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
             semantic_text(detail.get('text'))
         else:
             thought_drafts(response, support_count=support_count)
+        return
+    if task == 'Verify thought' and review_option_count:
+        exact_fields(response, {'verdict', 'text', 'open_support'})
+        verdict, option = response.get('verdict'), response.get('open_support')
+        if verdict == 'drill':
+            if type(option) is not int or not 0 <= option < review_option_count:
+                raise ModelError('review drill requires an offered support option')
+        elif verdict not in ('accept', 'reject') or option is not None:
+            raise ModelError('review must accept, reject, or open one offered support option')
+        semantic_text(response.get('text'))
         return
     if task == 'Find useful shared thought question':
         exact_fields(response, {'question', 'text'})

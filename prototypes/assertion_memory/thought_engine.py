@@ -48,11 +48,13 @@ class ThoughtEngine:
         if self.trace is not None:
             self.trace({'stage': stage, **payload})
 
-    def _call(self, task, records, bindings, instructions, *, support_count=None, single_thought=False):
+    def _call(self, task, records, bindings, instructions, *, support_count=None, single_thought=False,
+              review_option_count=0):
         if self.model is None and self.gateway is None:
             raise ModelError('unified thought processing requires a semantic model')
         request = ModelRequest(task, records, instructions, usage_task=task,
-            response_schema=response_schema(task,support_count=support_count,single_thought=single_thought))
+            response_schema=response_schema(task,support_count=support_count,single_thought=single_thought,
+                                            review_option_count=review_option_count))
         frozen = tuple(dict(basis) for basis in bindings)
         wire=format_prompt(request)
         request_hash=hashlib.sha256(wire.encode()).hexdigest()
@@ -65,7 +67,8 @@ class ThoughtEngine:
                 raise TypeError('thought model must return serialized JSON text')
             try:
                 result = object_response(body)
-                validate_response(task, result, support_count=support_count,single_thought=single_thought)
+                validate_response(task, result, support_count=support_count,single_thought=single_thought,
+                                  review_option_count=review_option_count)
             except ModelError as malformed:
                 self._discard_provisional()
                 self._emit('model_contract_repair', task=task, attempt=attempt + 1, reason=str(malformed),
@@ -175,19 +178,38 @@ class ThoughtEngine:
         raw = not whole and (source_batch or any(record.get('role') == 'source' for record in records))
         if support_catalog is None or support_selections is None:
             raise ModelError('verification requires program-bound prepared support selections')
-        packet=support_catalog.selected_packet(support_selections)
-        review = self._call('Verify source thought batch' if source_batch else 'Verify thought', [*packet,
-            *[{'role': 'draft', **draft, 'support_fragments':support_selections[index],
-               'origin': self._model_origin(origin or {'kind': 'inference'})} for index,draft in enumerate(drafts)]],
-            bases, VERIFY + (RAW_PASSAGE if raw else '') + (SOURCE_BATCH if source_batch else '') + (WHOLE_REFRESH if whole else ''))
-        exact_fields(review, {'verdict', 'text'})
-        if review.get('verdict') not in ('accept', 'reject'):
-            raise ModelError('thought verifier must return an explicit whole-batch verdict')
-        semantic_text(review.get('text'))
+        packet = support_catalog.selected_packet(support_selections)
+        draft_records = [{'role': 'draft', **draft, 'support_fragments': support_selections[index],
+                          'origin': self._model_origin(origin or {'kind': 'inference'})}
+                         for index, draft in enumerate(drafts)]
+        task = 'Verify source thought batch' if source_batch else 'Verify thought'
+        instructions = VERIFY + (RAW_PASSAGE if raw else '') + (SOURCE_BATCH if source_batch else '') + (WHOLE_REFRESH if whole else '')
+        if source_batch:
+            review = self._call(task, [*packet, *draft_records], bases, instructions)
+        else:
+            review = self._review_with_originals(packet, draft_records, bases, instructions,
+                                                 support_catalog, support_selections)
         if review['verdict'] != 'accept':
             failure=SemanticReviewRejected(review['text'])
             failure.checkpoint_invalidated=self._reject_construct_checkpoint(source_batch=source_batch)
             raise failure
+
+    def _review_with_originals(self, packet, drafts, bases, instructions, catalog, selections):
+        from .thought_review_support import ReviewSupport
+        from .thought_engine_contract import REVIEW_ORIGINALS, REVIEW_OPEN_SUPPORT
+        support = ReviewSupport(self, catalog, selections)
+        while True:
+            evidence = support.records()
+            option_count = len(support.options())
+            guidance = instructions + (REVIEW_ORIGINALS if evidence else '')
+            if option_count:
+                guidance += REVIEW_OPEN_SUPPORT
+            review = self._call('Verify thought', [*packet, *evidence, *drafts],
+                                [*bases, *support.bindings()], guidance,
+                                review_option_count=option_count)
+            if review['verdict'] != 'drill':
+                return review
+            support.open(review['open_support'])
 
     def _resolve_support(self, draft, catalog):
         return catalog.resolve(draft['support_fragments'])
