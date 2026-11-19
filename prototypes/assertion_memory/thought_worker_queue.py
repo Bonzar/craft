@@ -85,13 +85,16 @@ class ThoughtWorkQueue:
                 (thought.version, generation, action, now, thought.id))
             return True
 
-    def claim(self, *, is_pausing=None):
+    def claim(self, *, is_pausing=None, thought_id=None):
         with self.store.transaction(write=True) as c:
             # SQLite write admission may have waited past the pause request.
             if is_pausing is not None and is_pausing():
                 return None
             now = self.queue._time()
             eligible,args = maintenance_predicate(c,self.processing_session_ids,'w')
+            if thought_id is not None:
+                eligible += ' AND w.thought_id=?'
+                args = [*args, thought_id]
             c.execute("UPDATE memory_thought_work AS w SET status='failed',lease_token=NULL,lease_until=NULL,"
                 "error='Thought lease expired too many times' WHERE w.status='running' AND w.lease_until<=? AND w.attempts>=? AND "+eligible,
                 (now,self.queue._max_attempts,*args))

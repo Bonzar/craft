@@ -2,6 +2,10 @@
 import unittest
 
 from prototypes.assertion_memory.queue import CaptureQueue
+from prototypes.assertion_memory.model import ModelRequest
+from prototypes.assertion_memory.process_one_report import collect_report
+from prototypes.assertion_memory.thought_service import ThoughtService
+from prototypes.assertion_memory.thought_trace import ThoughtTrace
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.tests.test_thought_worker import Engine
 from prototypes.assertion_memory.thought_store import ThoughtStore
@@ -51,10 +55,61 @@ class ProcessOneTest(unittest.TestCase):
         self.assertEqual(self.worker.work.get(unrelated.id)['status'], 'pending')
         self.assertEqual(self.engine.consolidations, [['from-' + oldest.id], ['overview']])
 
+    def test_interrupted_run_resumes_its_generated_jobs_before_newer_source(self):
+        first = self.capture('film', 'First', '2026-11-19T08:00:00Z')
+        second = self.capture('film', 'Second', '2026-11-19T09:00:00Z')
+        self.worker.is_pausing = lambda: bool(self.engine.consolidations)
+        interrupted = process_one(self.worker, 'film')
+        self.assertEqual(interrupted['status'], 'interrupted')
+
+        self.worker.is_pausing = None
+        resumed = process_one(self.worker, 'film')
+        self.assertEqual(resumed['event_id'], first.id)
+        self.assertEqual(resumed['status'], 'completed')
+        self.assertEqual(self.engine.calls, 1)
+        self.assertEqual(self.queue.get(second.id).attempts, 0)
+
+    def test_reports_a_mixed_job_without_claiming_it(self):
+        self.capture('film', 'First', '2026-11-19T08:00:00Z')
+        previous = self.thoughts.publish('Previous report', thought_id='mixed')
+        self.worker.work.enqueue([previous])
+
+        consolidate = self.engine.consolidate
+
+        def attach(previous):
+            def update(changed, *, on_affected):
+                def affected(parents):
+                    on_affected([*parents, previous])
+                return consolidate(changed, on_affected=affected)
+            return update
+
+        self.engine.consolidate = attach(previous)
+        report = process_one(self.worker, 'film')
+        self.assertEqual(report['status'], 'blocked')
+        mixed = next(job for job in report['jobs'] if job['thought_id'] == previous.id)
+        self.assertEqual(mixed['status'], 'blocked')
+        self.assertEqual(self.worker.work.get(previous.id)['attempts'], 0)
+
     def test_session_without_dialogue_leaves_all_work_pending(self):
         other = self.capture('other', 'Other', '2026-11-19T08:00:00Z')
         self.assertEqual(process_one(self.worker, 'film')['status'], 'empty')
         self.assertEqual(self.queue.get(other.id).attempts, 0)
+
+    def test_report_uses_published_versions_and_provider_usage_without_generation(self):
+        source = self.capture('film', 'Source', '2026-11-19T08:00:00Z')
+        service = ThoughtService(self.store)
+        topic = service.thoughts.publish('First version', thought_id='topic')
+        trace = ThoughtTrace(self.store, 'source')
+        ref = {'thought_id': topic.id, 'version': topic.version}
+        trace.record('publication', details={'thought': ref})
+        trace.call(lambda request: 'fixture', ModelRequest('test', []))
+        trace.finish()
+        report = collect_report(service, {'event_id': source.id, 'source_thought_ids': [topic.id],
+                                          'run_ids': [trace.id]})
+        self.assertEqual(report['thoughts'][0]['text'], 'First version')
+        self.assertEqual(report['usage']['calls'], 1)
+        self.assertEqual(report['usage']['unknown_calls'], 1)
+        self.assertEqual(report['link_count'], 0)
 
 
 if __name__ == '__main__':

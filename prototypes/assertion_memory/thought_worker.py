@@ -130,13 +130,16 @@ class ThoughtWorker:
                     return self._consolidate(task)
         return None
 
-    def _claim_source(self):
+    def _claim_source(self, *, event_id=None):
         with self.queue.store.transaction(write=True) as c:
             # SQLite write admission may have waited past the pause request.
             if self.is_pausing is not None and self.is_pausing():
                 return None
             now = self.queue._time()
             eligible,args = source_predicate(self.processing_session_ids,'e')
+            if event_id is not None:
+                eligible += ' AND e.id=?'
+                args = [*args, event_id]
             c.execute("UPDATE memory_capture_jobs SET status='failed',lease_token=NULL,lease_until=NULL,"
                 "error='Thought source lease expired too many times' WHERE event_id IS NOT NULL "
                 "AND status='running' AND lease_until<=? AND attempts>=? AND EXISTS(SELECT 1 FROM memory_raw_events e "

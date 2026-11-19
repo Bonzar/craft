@@ -40,6 +40,23 @@ jobs to the queue with their completed checkpoints. A remote HTTP provider may
 still take until its response or timeout. The configured processing selection
 controls whether later intake may start another worker.
 
+## Разовый прогон реплики на Mac
+
+На хосте с базой команда обрабатывает самое раннее ожидающее сообщение указанной
+сессии и её собственные задания по связям, обзорам и обновлениям. Дата отправки
+используется при наличии, иначе применяется время сохранения. Прерванный прогон
+при следующем запуске продолжает ту же реплику. Задание, объединённое с более
+ранней работой, показывается в отчёте как заблокированное и остаётся в очереди.
+
+```sh
+python3 -m prototypes.assertion_memory.process_one_host --server-dir SERVER_DIR --check
+python3 -m prototypes.assertion_memory.process_one_host --server-dir SERVER_DIR SESSION_ID
+```
+
+Используйте Python из окружения сервера. Команда требует паузу фоновой обработки.
+Она выводит один JSON-отчёт с изменёнными мыслями, связями и расходом модели.
+Для проверки настроек `--check` не вызывает модель и не обрабатывает очередь.
+
 ## Запуск MCP
 
 Нужны Python 3.10+, SQLite с FTS5 и зависимости из `requirements-mcp.txt`. Команды выполняются из корня репозитория. Создайте отдельное окружение:
