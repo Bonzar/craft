@@ -420,12 +420,14 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
         return
     if task == 'Verify thought' and compare_meaning:
         changed = response.get('meaning_changed')
-        if ('meaning_changed' in response
-                and (type(changed) is not bool if response.get('verdict') == 'accept' else changed is not None)):
+        is_valid_change = type(changed) is bool if response.get('verdict') == 'accept' else changed is None
+        if 'meaning_changed' not in response or not is_valid_change:
             raise ModelError('meaning_changed must be Boolean on acceptance, null otherwise')
         response = {key: value for key, value in response.items() if key != 'meaning_changed'}
     if task == 'Verify thought' and review_option_count:
         exact_fields(response, {'verdict', 'text', 'open_support'})
+        if 'open_support' not in response:
+            raise ModelError('review must specify whether it opens support')
         verdict, option = response.get('verdict'), response.get('open_support')
         if verdict == 'drill':
             if type(option) is not int or not 0 <= option < review_option_count:
@@ -437,6 +439,8 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
     if task == 'Find useful shared thought question':
         allowed = {'question', 'text'} | ({'affected_candidates'} if refresh_option_count else set())
         exact_fields(response, allowed)
+        if refresh_option_count and 'affected_candidates' not in response:
+            raise ModelError('refresh classification must specify affected candidates')
         affected = response.get('affected_candidates', [])
         if not isinstance(affected, list) or any(
                 type(option) is not int or not 0 <= option < refresh_option_count for option in affected):

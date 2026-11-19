@@ -122,7 +122,7 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
                         bindings = [self.bindings[0], *bindings]
                         question = None
                     bad = json.dumps({'thoughts': [row] * count, 'needs_detail': None})
-                    engine, replay, calls, pinned, cached = self.replay_engine([bad, good, ACCEPT])
+                    engine, replay, calls, pinned, cached = self.replay_engine([bad, good, json.dumps(dict(json.loads(ACCEPT), meaning_changed=True)) if whole else ACCEPT])
                     result = engine._prepare(records, bindings, question=question)
                     replay.confirm()
                     self.assertEqual(len(result), 1)
@@ -362,7 +362,7 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
                     records = [{'role': 'whole_refresh_scope', 'prior_content': target.text,
                                 'questions': [question]}, *records]
                     bindings = [{'thought_id': target.id, 'version': target.version}, *bindings]
-                engine, _, calls, _, _ = self.replay_engine([answer(text, [0]), ACCEPT])
+                engine, _, calls, _, _ = self.replay_engine([answer(text, [0]), json.dumps(dict(json.loads(ACCEPT), meaning_changed=True)) if whole else ACCEPT])
                 result = engine._construct(records, bindings, question=None if whole else question, target=target)
                 self.assertEqual(len(result), 1)
                 saved = self.store.get(result[0].id)
