@@ -95,7 +95,7 @@ def _recoverable(error):
     return error
 
 
-def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=None,title=None):
+def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=None,title=None,rebuild=True):
     prepared = verified
     outer_writer = engine.store._writing
     for attempt in range(2):
@@ -104,8 +104,8 @@ def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=No
                 published = [_one(engine,draft,bases,origin,target,whole_refresh,title) for draft,bases in prepared]
             break
         except ThoughtConflict as conflict:
-            if attempt or outer_writer:
-                # An owning source transaction must retry after releasing its writer.
+            if attempt or outer_writer or not rebuild:
+                # Source writes and overview comparisons must restart with their original scope.
                 raise _recoverable(conflict)
             try:
                 question,records,bases = _fresh_material(engine,prepared,origin,whole_refresh=whole_refresh)

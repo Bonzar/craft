@@ -418,6 +418,27 @@ only when the chronology is itself the subject. Do not combine preferences,
 provisional options, permissions and completion reports into an automatic
 overview merely because they came from the same session.'''
 
+GENERALIZE_RELATIONS = """
+First evaluate the exact offered thoughts. Put a relation in relations only if
+their texts support a concrete relationship. Use link_option numbers: source
+must be a changed thought, target an existing thought. Explain the direction
+and specific meaning in text. Similar subjects alone do not establish a link.
+Use at most one relation for each source and target. Return [] if none qualify.
+Then decide whether those relationships produce a distinct useful answer.
+A synthesis may add a new inference from the same evidence. Restating an
+existing answer or only changing the wording of its question adds no meaning.
+"""
+
+REVIEW_OVERVIEW_NOVELTY = """
+For an automatic overview, compare its answer and material qualifications
+with the supplied thoughts and overview_comparison records. The comparison
+records are for detecting repeats, not factual grounds. On accept set
+meaning_changed to true only for a distinct useful answer or inference. Set it
+to false if the draft only restates existing meaning, even if the question is
+phrased differently. A new inference may use already known evidence.
+On reject or drill set meaning_changed to null.
+"""
+
 GENERALIZE_REUSE = """
 If an offered reuse_option already answers the intended question with all its
 material qualifications, set reuse_candidate to that number and question to
@@ -441,7 +462,10 @@ require a refresh. Include it when it changes a supported answer, for example
 when the question asks about the history itself or the detail corrects the
 current answer's evidence. If the supplied evidence cannot establish the
 sequence, do not infer it from the changed/existing labels.
-This decision is independent from proposing a useful shared question.
+Report an affected candidate only when a concrete relation from the new thought
+shows what could change the existing answer. A relation that only explains the
+new thought calls for no refresh. A derived restatement is not fresh evidence
+for the thought it relied on. A refresh and a distinct overview may both be useful.
 """
 
 APPLICABILITY = CONTENT_RULES + """
@@ -487,7 +511,8 @@ pure service chatter, execution bookkeeping and pure copies of existing material
 
 
 def validate_response(task, response, *, support_count=None, single_thought=False, review_option_count=0,
-                      source_draft_count=None, refresh_option_count=0, reuse_option_count=0, compare_meaning=False):
+                      source_draft_count=None, refresh_option_count=0, reuse_option_count=0, compare_meaning=False,
+                      link_option_count=0):
     """Check only the existing semantic wire shape, never its factual verdict."""
     if task == 'Navigate thought graph':
         exact_fields(response, {'action', 'question', 'quote', 'text'})
@@ -544,6 +569,9 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
         return
     if task == 'Find useful shared thought question':
         allowed = {'question', 'text'}
+        if link_option_count:
+            allowed.add('relations')
+            validate_relations(response.get('relations'), link_option_count)
         if refresh_option_count:
             allowed.add('affected_candidates')
         if reuse_option_count:
@@ -655,3 +683,19 @@ def thought_drafts(response, *, support_count=None, single_thought=False):
                        'question':semantic_text(row.get('question'),'question',nullable=True),
                        'support_fragments':list(dict.fromkeys(support))})
     return result
+
+
+def validate_relations(relations, count):
+    if not isinstance(relations, list):
+        raise ModelError('semantic classification must specify relations')
+    pairs = set()
+    for relation in relations:
+        if not isinstance(relation, dict) or set(relation) != {'source', 'target', 'text'}:
+            raise ModelError('semantic relation must have two offered options and meaning')
+        source, target = relation['source'], relation['target']
+        if any(type(option) is not int or not 0 <= option < count for option in (source, target)):
+            raise ModelError('semantic relation must cite offered options')
+        if source == target or (source, target) in pairs:
+            raise ModelError('semantic relation must connect a distinct pair once')
+        pairs.add((source, target))
+        semantic_text(relation['text'], 'relation meaning')

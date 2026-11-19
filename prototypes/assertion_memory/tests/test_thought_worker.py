@@ -6,11 +6,14 @@ from pathlib import Path
 from prototypes.assertion_memory.model import ModelRequest
 from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.storage import MemoryStore
+from prototypes.assertion_memory.thought_engine import ThoughtEngine
 from prototypes.assertion_memory.thought_store import ThoughtStore
 from prototypes.assertion_memory.thought_worker import ThoughtWorker
 
 
 class Engine:
+    _source_key = staticmethod(ThoughtEngine._source_key)
+
     def __init__(self, thoughts):
         self.thoughts, self.store = thoughts, thoughts.store
         self.model = lambda request: '{"text":"accepted"}'
@@ -52,6 +55,8 @@ class Engine:
 
     def consolidate(self, changed, *, on_affected=None):
         self.consolidations.append([row.id for row in changed])
+        if on_affected is not None:
+            on_affected([])
         return []
 
 

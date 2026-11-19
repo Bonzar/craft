@@ -6,7 +6,8 @@ def _object(properties):
 
 
 def response_schema(task, *, support_count=None, single_thought=False, review_option_count=0,
-                    source_draft_count=None, refresh_option_count=0, reuse_option_count=0, compare_meaning=False):
+                    source_draft_count=None, refresh_option_count=0, reuse_option_count=0, compare_meaning=False,
+                    link_option_count=0):
     text = {'type':'string'}
     question = {'type':['string','null']}
     if task == 'Navigate thought graph':
@@ -49,6 +50,9 @@ def response_schema(task, *, support_count=None, single_thought=False, review_op
         return _object(fields)
     if task == 'Find useful shared thought question':
         fields = {'question':question,'text':text}
+        if link_option_count:
+            option = {'type':'integer','minimum':0,'maximum':link_option_count-1}
+            fields['relations'] = {'type':'array','items':_object({'source': option, 'target': option, 'text': text})}
         if reuse_option_count:
             fields['reuse_candidate'] = {'anyOf': [
                 {'type':'integer','minimum':0,'maximum':reuse_option_count-1}, {'type':'null'}]}
