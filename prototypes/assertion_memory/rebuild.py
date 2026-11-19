@@ -96,6 +96,8 @@ def _provider_identity(settings):
   from .mcp_server import ServiceConfig
   configured=asdict(ServiceConfig(db=str(Path(settings['db']).resolve()),**settings['worker_service']))
   configured.pop('db');configured.pop('worker_idle_seconds')
+  if configured['review_reasoning_effort'] in (None,configured['reasoning_effort']):
+   configured.pop('review_reasoning_effort')
   return _sha(_json(configured).encode())
  from .desktop import _environment
  from .runtime_config import model_identity
