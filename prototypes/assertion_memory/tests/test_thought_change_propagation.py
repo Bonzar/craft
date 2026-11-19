@@ -34,6 +34,49 @@ class ThoughtChangePropagationTest(unittest.TestCase):
             self.assertIsNone(worker.work.get(unrelated.id))
             self.assertEqual(calls,['Find useful shared thought question'])
 
+    def test_links_are_saved_before_refresh_and_overview_uses_only_linked_material(self):
+        with MemoryStore(':memory:') as memory:
+            store, queue = ThoughtStore(memory), CaptureQueue(memory)
+            event = queue.capture_event('s', 'inspection', 'The hall inspection is complete.', source='fixture')
+            new = store.publish(event.prompt, origin={'event_id': event.id, 'kind': 'source_interpretation'},
+                                bases=[{'event_id': event.id}])
+            status = store.publish('Inspection of the hall is still pending.', question='Is inspection done?')
+            detail = store.publish('The hall is the venue for Friday.')
+            unrelated = store.publish('The outdoor venue is unavailable.')
+            question = 'Can the Friday venue be used after inspection?'
+            worker = None
+
+            def model(request):
+                if request.task == 'Find useful shared thought question':
+                    self.assertFalse(memory._writing)
+                    rows = {record['text']: record for record in request.records}
+                    return json.dumps({'question': question, 'text': 'Friday venue readiness',
+                        'reuse_candidate': None, 'affected_candidates': [rows[status.text]['refresh_option']],
+                        'relations': [
+                            {'source': rows[new.text]['link_option'], 'target': rows[status.text]['link_option'],
+                             'text': 'The completed inspection changes the pending status.'},
+                            {'source': rows[new.text]['link_option'], 'target': rows[detail.text]['link_option'],
+                             'text': 'The venue thought identifies which hall was inspected.'},
+                        ]})
+                if request.task == 'Construct thought':
+                    self.assertEqual({edge['target_id'] for edge in store.links(new.id)}, {status.id, detail.id})
+                    self.assertEqual(worker.work.get(status.id)['action'], 'refresh')
+                    self.assertIsNone(worker.work.get(detail.id))
+                    from .prepared_support_helpers import drafts
+                    return json.dumps(drafts(request, ('The Friday venue passed inspection.',
+                                                       [new.text, detail.text])))
+                return json.dumps({'verdict': 'accept', 'text': 'This synthesis adds a distinct answer.',
+                                   'meaning_changed': True})
+
+            engine = ThoughtEngine(store, model)
+            engine.retrieve = lambda *args, **kwargs: [new, status, detail, unrelated]
+            worker = ThoughtWorker(queue, engine, lane='maintenance')
+            worker.enqueue_changed([new])
+            self.assertEqual(worker.run_once()['status'], 'completed')
+            overview = next(row for row in store.list_thoughts() if row.question == question)
+            self.assertEqual({basis['thought_id'] for basis in overview.bases}, {new.id, detail.id})
+            self.assertIsNone(worker.work.get(unrelated.id))
+
     def test_semantically_covered_question_reuses_bound_thought_without_generation(self):
         with MemoryStore(':memory:') as memory:
             store = ThoughtStore(memory)
