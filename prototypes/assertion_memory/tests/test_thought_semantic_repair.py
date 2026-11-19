@@ -46,12 +46,14 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             calls.append(request.task)
             if request.task == 'Construct thought':
                 self.assertIn('reporter and the participant', request.instructions)
+                self.assertIn('bind the actor to each action', request.instructions)
                 if request.repair_instructions:
                     self.assertIn('тесты проходят', request.repair_instructions.lower())
                     self.assertIn(lossy, request.repair_instructions)
                 candidate = precise if request.repair_instructions else lossy
                 return json.dumps(drafts(request, (candidate, [source])))
             self.assertIn('reporter and the participant', request.instructions)
+            self.assertIn('naming the reporter elsewhere does not pass', request.instructions)
             if request.records[-1]['text'] == lossy:
                 return json.dumps({'verdict': 'reject', 'text': 'The checker and publication scope were lost.'})
             return json.dumps(ACCEPT)
