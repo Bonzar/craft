@@ -34,6 +34,70 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertEqual([row.text for row in result],[text])
         self.assertEqual({basis['event_id'] for basis in result[0].bases},{raw.id})
 
+    def test_contextual_decision_keeps_reason_rationale_and_inherited_constraint(self):
+        _, store, queue = self.memory()
+        constraint = 'Расписание должно работать и без интернета.'
+        context = queue.capture_event('s', 'prior', constraint, source='fixture')
+        source = 'Оставим бумажное расписание, чтобы меньше менять работу стойки. Оно понятно посетителям.'
+        raw = queue.capture_event('s', 'decision', source, source='fixture')
+        lossy = 'Бумажное расписание выбрали, потому что оно понятно посетителям.'
+        precise = ('Бумажное расписание оставили, чтобы меньше менять работу стойки. '
+                   'Оно понятно посетителям. Расписание должно работать и без интернета.')
+        attempts = []
+
+        def model(request):
+            attempts.append(request.task)
+            self.assertIn('reason for choosing', request.instructions)
+            self.assertIn('qualifies or constrains the current decision', request.instructions)
+            self.assertIn('check the entire current decision again', request.instructions)
+            self.assertIn(constraint, [record_text(record) for record in request.records])
+            if request.task == 'Construct thought':
+                if request.repair_instructions:
+                    return json.dumps(drafts(request, (precise, [source, constraint])))
+                return json.dumps(drafts(request, (lossy, [source])))
+            if request.records[-1]['text'] == lossy:
+                return json.dumps({'verdict': 'reject',
+                    'text': 'The reason for choosing was replaced by a separate argument.'})
+            return json.dumps(ACCEPT)
+
+        result = ThoughtEngine(store, model).ingest(raw, [context], consolidate=False)
+        self.assertEqual([row.text for row in result], [precise])
+        self.assertEqual({basis['event_id'] for basis in result[0].bases}, {context.id, raw.id})
+        self.assertEqual(attempts, ['Construct thought', 'Verify thought'] * 2)
+
+    def test_message_clock_guides_generation_and_verification_without_dating_the_event(self):
+        from prototypes.assertion_memory.thought_engine_contract import APPLICABILITY, GENERALIZE
+        from .test_source_message_clock import producer_clock
+
+        _, store, queue = self.memory()
+        stamp = '2026-03-10T12:00:00.000000+00:00'
+        text = 'Осмотр закончили.'
+        raw = queue.capture_event('s', 'report', text, source='fixture',
+                                  metadata=producer_clock(stamp, source='fixture'))
+        reported = 'К моменту сообщения осмотр был завершён.'
+        calls = []
+
+        def check(instructions):
+            self.assertIn('when the text gives no state time', instructions)
+            self.assertIn('ordering reports of then-current states', instructions)
+            self.assertIn('does not establish the actual event time', instructions)
+
+        def model(request):
+            calls.append(request.task)
+            check(request.instructions)
+            source = next(row for row in request.records if row['role'] == 'source')
+            self.assertEqual(source['origin']['source_message_at'], stamp)
+            if request.task == 'Construct thought':
+                return json.dumps(drafts(request, (reported, [text])))
+            return json.dumps(ACCEPT)
+
+        for instructions in (APPLICABILITY, GENERALIZE):
+            check(instructions)
+        result = ThoughtEngine(store, model).ingest(raw, consolidate=False)
+        self.assertEqual([row.text for row in result], [reported])
+        self.assertNotIn('valid_at', result[0].origin)
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'])
+
     def test_review_repairs_loss_of_checker_and_scope_and_keeps_source_attribution(self):
         _, store, queue = self.memory()
         source = 'Тесты проходят. Отдельно проверяю документы и примеры для публикации.'
