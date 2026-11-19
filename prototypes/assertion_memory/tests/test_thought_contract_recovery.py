@@ -304,6 +304,18 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
         self.assertEqual([row['text'] for row in requests[5].records if row['role'] == 'draft'],
                          ['The bridge closes at night.'])
 
+    def test_required_reconciliation_fields_cannot_be_omitted(self):
+        classify = ('Find useful shared thought question', {'question': None, 'text': 'No new topic.'})
+        review = ('Verify thought', {'verdict': 'accept', 'text': 'Supported.'})
+        cases = [(classify, {'refresh_option_count': 1}, {'affected_candidates': []}),
+                 (review, {'compare_meaning': True}, {'meaning_changed': False}),
+                 (review, {'review_option_count': 1}, {'open_support': None})]
+        for (task, response), options, required in cases:
+            with self.subTest(options=options):
+                with self.assertRaises(ModelError):
+                    validate_response(task, response, **options)
+                validate_response(task, {**response, **required}, **options)
+
     def test_independent_review_validates_rejection_options_and_missing_coverage(self):
         feedback = {'verdict': 'reject', 'text': 'The draft is unsupported.',
                     'rejected_drafts': [{'draft': 0, 'text': 'The source says the opposite.'}],
