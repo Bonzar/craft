@@ -93,6 +93,18 @@ class ThoughtWorkerTest(unittest.TestCase):
             self.assertEqual(len(self.queue.list_events()), 2)
         self.assertEqual(self.worker.run_once().status, 'completed')
 
+    def test_context_respects_native_session_within_a_shared_capture_session(self):
+        foreign = self.queue.capture_event('shared', 'foreign', 'Foreign context', source='test',
+                                           metadata={'native_session_id': 'foreign'})
+        own = self.queue.capture_event('shared', 'own', 'Own context', source='test',
+                                       metadata={'native_session_id': 'chosen'})
+        target = self.queue.capture_event('shared', 'target', 'Chosen message', source='test',
+                                          metadata={'native_session_id': 'chosen'})
+        worker = ThoughtWorker(self.queue, self.engine, processing_session_ids=('chosen',))
+        self.assertNotEqual(foreign.id, own.id)
+        self.assertEqual([], [row.id for row in worker._context(foreign)])
+        self.assertEqual([own.id], [row.id for row in worker._context(target)])
+
     def test_context_budget_reports_known_omissions_and_uninspected_prefix(self):
         oldest = self.queue.capture_event('bounded', 'old', 'Older context.', source='test')
         large = self.queue.capture_event('bounded', 'large', 'A large contextual message.', source='test')

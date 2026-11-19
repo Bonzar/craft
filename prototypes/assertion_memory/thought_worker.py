@@ -163,10 +163,11 @@ class ThoughtWorker:
             cutoff = target['rowid'] if target['position'] is None else target['position']
             from .thought_source_policy import eligible_sql
             eligibility, arguments = eligible_sql('e')
+            session, session_arguments = source_predicate((canonical_session_id(event),), 'e')
             rows = c.execute(f'SELECT e.*,j.status,{column} AS context_position FROM memory_raw_events e JOIN memory_capture_jobs j ON j.event_id=e.id '
                 'LEFT JOIN memory_event_positions p ON p.event_id=e.id WHERE e.session_id=? AND e.scope=? '
-                f'AND {column}<? AND {eligibility} ORDER BY {column} DESC,e.rowid DESC LIMIT ?',
-                (event.session_id, event.scope, cutoff, *arguments, self.context_limit + 1)).fetchall()
+                f'AND {column}<? AND {session} AND {eligibility} ORDER BY {column} DESC,e.rowid DESC LIMIT ?',
+                (event.session_id, event.scope, cutoff, *session_arguments, *arguments, self.context_limit + 1)).fetchall()
         context, omitted, size = [], [], 0
         for row in rows[:self.context_limit]:
             reason = ('unverified_origin' if row['status'] == 'waiting_origin' else
