@@ -34,6 +34,36 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertEqual([row.text for row in result],[text])
         self.assertEqual({basis['event_id'] for basis in result[0].bases},{raw.id})
 
+    def test_review_repairs_loss_of_checker_and_scope_and_keeps_source_attribution(self):
+        _, store, queue = self.memory()
+        source = 'Тесты проходят. Отдельно проверяю документы и примеры для публикации.'
+        raw = queue.capture_event('fixture', 'report', source, source='fixture', actor='assistant')
+        lossy = 'Ассистент сообщил, что тесты проходят, а документы и примеры проверяются.'
+        precise = 'Ассистент сообщил, что тесты проходят и он проверяет документы и примеры для публикации.'
+        calls = []
+
+        def model(request):
+            calls.append(request.task)
+            if request.task == 'Construct thought':
+                self.assertIn('reporter and the participant', request.instructions)
+                candidate = precise if request.repair_instructions else lossy
+                return json.dumps(drafts(request, (candidate, [source])))
+            self.assertIn('reporter and the participant', request.instructions)
+            if request.records[-1]['text'] == lossy:
+                return json.dumps({'verdict': 'reject', 'text': 'The checker and publication scope were lost.'})
+            return json.dumps(ACCEPT)
+
+        result = ThoughtEngine(store, model).ingest(raw, consolidate=False)
+        self.assertEqual([row.text for row in result], [precise])
+        self.assertEqual(result[0].origin['actor'], 'assistant')
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'] * 2)
+
+    def test_source_instructions_keep_unspecified_roles_out_of_the_thought(self):
+        from prototypes.assertion_memory.thought_engine_contract import VERIFY, construction_instructions
+        for instructions in (construction_instructions(), VERIFY):
+            self.assertIn('omit unmentioned details', instructions)
+            self.assertIn('unless the question calls for the gap', instructions)
+
     def test_semantic_feedback_repairs_whole_refresh_without_dropping_peer_meaning(self):
         memory,store,queue=self.memory()
         first=store.publish('Approval is required.')
