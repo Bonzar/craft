@@ -148,9 +148,10 @@ def _node(row, current, sessions, unresolved, raw, session_id, questions):
             continue
         span = basis.get('span') or {'start': 0, 'end': len(event['prompt'])}
         refs.append({'episode_id': event['id'], **span})
-    label, title = _display_text(row)
+    named = row.metadata.get('title')
+    label, title = (named, named) if isinstance(named, str) and named.strip() else _display_text(row)
     return {'id': version_node_id(row.id, row.version), 'label': label, 'full_title': title,
-            'label_method': 'content_excerpt', 'entity_type': 'thought',
+            'label_method': 'semantic_title' if named == title else 'content_excerpt', 'entity_type': 'thought',
             'thought_ref': _reference(row), 'text': row.text, 'questions': questions,
             'kind': None, 'actor': row.origin.get('actor'), 'source': row.origin.get('source'),
             'scope': row.origin.get('scope'), 'recorded_at': row.created_at,

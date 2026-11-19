@@ -170,7 +170,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
                 ('New scenario one.',['New scenario one.']),('Earlier choice two.',['Earlier choice two.']),('New scenario two.',['New scenario two.'])))
             self.assertEqual([record_text(row) for row in request.records if row.get('role')=='source'],[raw.prompt])
             self.assertEqual(len([row for row in request.records if row.get('role')=='draft']),2)
-            return json.dumps(ACCEPT)
+            return json.dumps(dict(ACCEPT,rejected_drafts=[],missing_meaning=None))
         result=ThoughtEngine(store,model).ingest(raw,[context],consolidate=False)
         self.assertEqual({row.text for row in result},{'New scenario one.','New scenario two.'})
         self.assertTrue(all(any(basis.get('event_id')==raw.id for basis in row.bases) for row in result))

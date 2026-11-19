@@ -11,7 +11,7 @@ from prototypes.assertion_memory.thought_engine import ThoughtEngine
 from prototypes.assertion_memory.thought_engine_contract import thought_drafts, validate_response
 from prototypes.assertion_memory.thought_schema import response_schema
 from prototypes.assertion_memory.thought_store import ThoughtStore
-from prototypes.assertion_memory.thought_worker import _Replay
+from prototypes.assertion_memory.thought_worker import ThoughtWorker, _Replay
 
 
 def draft(text, support):
@@ -36,17 +36,20 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
         self.records = [{'role': 'material', 'text': self.source.text, 'origin': {'actor': 'fixture'}}]
         self.bindings = [{'thought_id': self.source.id, 'version': 1}]
 
-    def replay_engine(self, responses):
-        calls, bindings, cached = [], [], {}
+    def replay_engine(self, responses, *, cached=None):
+        calls, bindings = [], []
+        cached = {} if cached is None else cached
         def provider(request):
             calls.append(request)
             return responses.pop(0)
         replay = _Replay(provider, cached.get, lambda key, body: cached.__setitem__(key, body),
-                         lambda: None, ('query', 'fixture'))
+                         lambda: None, ('query', 'fixture'),
+                         invalidate=lambda keys: [cached.pop(key, None) for key in keys])
         def gateway(task, request, pinned):
             bindings.append(pinned)
             return replay(request)
         gateway.discard_provisional = replay.discard_provisional
+        gateway.reject_construct = replay.reject_construct
         return ThoughtEngine(self.store, provider, gateway=gateway), replay, calls, bindings, cached
 
     def test_malformed_verify_retries_only_verify_and_provider_failures_are_not_format_errors(self):
@@ -164,7 +167,9 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
         rows = [{'text': claim, 'question': None, 'support_fragments': [index]}
                 for index, claim in enumerate(('Approval is required.', 'Evacuation is the exception.'))]
         body = json.dumps({'thoughts': rows, 'needs_detail': None})
-        engine, _, calls, _, _ = self.replay_engine([body, ACCEPT])
+        engine, _, calls, _, _ = self.replay_engine([body, json.dumps({
+            'verdict': 'accept', 'text': 'Both drafts pass.',
+            'rejected_drafts': [], 'missing_meaning': None})])
         result = engine.ingest(raw, consolidate=False)
         self.assertEqual([thought.text for thought in result], [row['text'] for row in rows])
         for thought in result:
@@ -173,6 +178,115 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
             self.assertEqual(text[basis['span']['start']:basis['span']['end']].strip(), thought.text)
         self.assertIn('"thoughts":', calls[0].instructions)
         self.assertNotIn('"thought":', calls[0].instructions)
+
+    def test_source_repair_preserves_a_verified_independent_thought(self):
+        raw = CaptureQueue(self.memory).capture_event(
+            'fixture', 'raw', 'Mira approves openings. The bridge closes at night.', source='fixture')
+        accepted = 'Mira approves openings.'
+        wrong = 'The bridge closes at noon.'
+        fixed = 'The bridge closes at night.'
+        initial = json.dumps({'thoughts': [
+            {'text': accepted, 'question': None, 'support_fragments': [0]},
+            {'text': wrong, 'question': None, 'support_fragments': [1]},
+        ], 'needs_detail': None})
+        partial = json.dumps({'verdict': 'reject', 'text': 'The bridge time changed.',
+            'rejected_drafts': [{'draft': 1, 'text': 'Noon misstates night.'}], 'missing_meaning': None})
+        passed = json.dumps({'verdict': 'accept', 'text': 'The new draft preserves the time.',
+            'rejected_drafts': [], 'missing_meaning': None})
+        engine, _, calls, _, _ = self.replay_engine([initial, partial, draft(fixed, [1]), passed])
+        result = engine.ingest(raw, consolidate=False)
+        self.assertEqual([thought.text for thought in result], [accepted, fixed])
+        self.assertEqual([call.task for call in calls],
+                         ['Construct thought', 'Verify thought', 'Construct thought', 'Verify thought'])
+        self.assertEqual([row['text'] for row in calls[2].records if row['role'] == 'rejected_draft'], [wrong])
+        self.assertEqual([row['text'] for row in calls[3].records if row['role'] == 'draft'], [fixed])
+        self.assertEqual([row['text'] for row in calls[3].records if row['role'] == 'accepted_coverage'], [accepted])
+        self.assertEqual([row.bases[0]['meaning'].strip() for row in result], [accepted, fixed])
+
+    def test_source_worker_retry_reuses_accepted_review_checkpoint(self):
+        raw = CaptureQueue(self.memory).capture_event(
+            'fixture', 'raw', 'Mira approves openings. The bridge closes at night.', source='fixture')
+        initial = json.dumps({'thoughts': [
+            {'text': 'Mira approves openings.', 'question': None, 'support_fragments': [0]},
+            {'text': 'The bridge closes at noon.', 'question': None, 'support_fragments': [1]},
+        ], 'needs_detail': None})
+        partial = json.dumps({'verdict': 'reject', 'text': 'The bridge time changed.',
+            'rejected_drafts': [{'draft': 1, 'text': 'Noon misstates night.'}], 'missing_meaning': None})
+        rejected_repair = json.dumps({'verdict': 'reject', 'text': 'The repair still changed the time.',
+            'rejected_drafts': [{'draft': 0, 'text': 'Sunset does not establish night.'}], 'missing_meaning': None})
+        correct = 'The bridge closes at night.'
+        accepted_repair = json.dumps({'verdict': 'accept', 'text': 'The new draft preserves the time.',
+            'rejected_drafts': [], 'missing_meaning': None})
+        engine, _, _, _, cached = self.replay_engine(
+            [initial, partial, draft('The bridge closes at sunset.', [1]), rejected_repair])
+        with self.assertRaises(ModelError) as caught:
+            engine.ingest(raw, consolidate=False)
+        self.assertTrue(caught.exception.recoverable)
+        self.assertCountEqual(cached.values(), [initial, partial])
+        self.assertEqual(self.store.list_thoughts(), [self.source])
+
+        restarted, _, calls, _, _ = self.replay_engine([draft(correct, [1]), accepted_repair], cached=cached)
+        result = restarted.ingest(raw, consolidate=False)
+        self.assertEqual([row.text for row in result], ['Mira approves openings.', correct])
+        self.assertEqual([call.task for call in calls], ['Construct thought', 'Verify thought'])
+
+    def test_worker_publishes_accepted_thought_and_restarts_only_residual_repair(self):
+        queue = CaptureQueue(self.memory)
+        raw = queue.capture_event(
+            'fixture', 'raw', 'Mira approves openings. The bridge closes at night.', source='fixture')
+        initial = json.dumps({'thoughts': [
+            {'text': 'Mira approves openings.', 'question': None, 'support_fragments': [0]},
+            {'text': 'The bridge closes at noon.', 'question': None, 'support_fragments': [1]},
+        ], 'needs_detail': None})
+        partial = json.dumps({'verdict': 'reject', 'text': 'The bridge time changed.',
+            'rejected_drafts': [{'draft': 1, 'text': 'Noon misstates night.'}], 'missing_meaning': None})
+        rejected = json.dumps({'verdict': 'reject', 'text': 'The repair still changed the time.',
+            'rejected_drafts': [{'draft': 0, 'text': 'Sunset does not establish night.'}], 'missing_meaning': None})
+        accepted = json.dumps({'verdict': 'accept', 'text': 'The new draft preserves the time.',
+            'rejected_drafts': [], 'missing_meaning': None})
+        requests = []
+        responses = iter([initial, partial, draft('The bridge closes at sunset.', [1]), rejected,
+                          draft('The bridge closes at night.', [1]), accepted])
+
+        def model(request):
+            requests.append(request)
+            return next(responses)
+
+        engine = ThoughtEngine(self.store, model)
+        first = ThoughtWorker(queue, engine, lane='source').run_once()
+        self.assertEqual(first.status, 'pending')
+        self.assertEqual(len(first.extracted_ids), 1)
+        carried = self.store.get(first.extracted_ids[0])
+        self.assertEqual(carried.text, 'Mira approves openings.')
+        self.assertEqual(carried.bases[0]['event_id'], raw.id)
+        with self.memory.transaction(write=True) as c:
+            c.execute('DELETE FROM memory_refresh_generations')
+        queue.retry(first.id)
+        resumed = ThoughtWorker(queue, ThoughtEngine(self.store, model), lane='source').run_once()
+        self.assertEqual(resumed.status, 'completed')
+        self.assertEqual(resumed.extracted_ids[0], carried.id)
+        self.assertEqual(self.store.get(carried.id), carried)
+        raw_thoughts = [row for row in self.store.list_thoughts() if row.origin.get('event_id') == raw.id]
+        self.assertCountEqual([row.text for row in raw_thoughts],
+                              ['Mira approves openings.', 'The bridge closes at night.'])
+        self.assertEqual([call.task for call in requests[4:]], ['Construct thought', 'Verify thought'])
+        self.assertEqual([row['text'] for row in requests[4].records if row['role'] == 'rejected_draft'],
+                         ['The bridge closes at sunset.'])
+        self.assertEqual([row['text'] for row in requests[5].records if row['role'] == 'draft'],
+                         ['The bridge closes at night.'])
+
+    def test_independent_review_validates_rejection_options_and_missing_coverage(self):
+        feedback = {'verdict': 'reject', 'text': 'The draft is unsupported.',
+                    'rejected_drafts': [{'draft': 0, 'text': 'The source says the opposite.'}],
+                    'missing_meaning': None}
+        validate_response('Verify thought', feedback, source_draft_count=1)
+        missing = dict(feedback, rejected_drafts=[], missing_meaning='The opening still requires approval.')
+        validate_response('Verify thought', missing, source_draft_count=0)
+        for broken in (dict(feedback, verdict='accept'), dict(feedback, rejected_drafts=[]),
+                       dict(feedback, rejected_drafts=feedback['rejected_drafts'] * 2),
+                       dict(feedback, rejected_drafts=[{'draft': 1, 'text': 'Not offered.'}])):
+            with self.subTest(response=broken), self.assertRaises(ModelError):
+                validate_response('Verify thought', broken, source_draft_count=1)
 
     def test_raw_construction_rejects_scalar_wire_without_publishing(self):
         body = answer('Approval is required.', [0])

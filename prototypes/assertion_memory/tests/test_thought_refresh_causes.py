@@ -22,11 +22,11 @@ class ThoughtRefreshCausesTest(unittest.TestCase):
                 gateway=None,question_texts=thoughts.questions,retrieve=lambda *args,**kwargs:[whole])
             worker=ThoughtWorker(queue,engine,lane='maintenance')
             self.assertNotIn(b.id,[basis.get('thought_id') for basis in whole.bases])
-            worker.enqueue_dependents([b])
+            worker.work.request(whole,'refresh',('relevance',b.id,b.version))
             worker.work.enqueue_refresh(whole,(whole.id,whole.version))
             worker.work.enqueue_refresh(whole,(newer.id,newer.version,'retired'))
             first=worker.work.claim()
-            worker.enqueue_dependents([newer])
+            worker.work.request(whole,'refresh',('relevance',newer.id,newer.version))
             received=[]
             def refresh(engine,current,*,additional=()):
                 received.append([row.id for row in additional])

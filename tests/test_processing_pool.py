@@ -126,6 +126,53 @@ class ProcessingPoolTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'synthetic lane failure'):pool.run()
         self.assertTrue(finished.is_set());self.assertGreater(len(beats),2)
         self.assertEqual(set(beats),{threading.get_ident()});self.assertTrue(all(not t.is_alive() for t in pool.threads))
+    def test_pause_drains_an_active_sqlite_writer_without_admitting_another_turn(self):
+        from prototypes.assertion_memory.storage import MemoryStore
+        started = threading.Event()
+        pause = threading.Event()
+        source_turns = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'pause.sqlite3')
+            with MemoryStore(path) as store:
+                with store.transaction(write=True) as db:
+                    db.execute("CREATE TABLE attempt(status TEXT)")
+                    db.execute("INSERT INTO attempt VALUES ('running')")
+
+                @contextmanager
+                def factory(lane, observer):
+                    with MemoryStore(path) as local:
+                        class Worker:
+                            model = object()
+
+                            def run_once(self):
+                                if lane == 'maintenance':
+                                    return None
+                                source_turns.append(lane)
+                                started.set()
+                                if not pause.wait(2):
+                                    raise AssertionError('pause was never requested')
+                                with local.transaction(write=True) as db:
+                                    db.execute("UPDATE attempt SET status='completed'")
+                                return object()
+
+                            def seconds_until_work(self, *, with_model):
+                                return None
+                        yield Worker()
+
+                def heartbeat():
+                    if started.is_set():
+                        pause.set()
+
+                pool = ProcessingPool(factory, source_workers=1, heartbeat=heartbeat,
+                    heartbeat_seconds=.005, poll_seconds=.002, is_pausing=pause.is_set)
+                result = pool.run()
+                self.assertEqual(result['reason'], 'paused')
+                self.assertEqual(result['completed'], 1)
+                self.assertEqual(source_turns, ['source'])
+                with store.transaction() as db:
+                    self.assertEqual(db.execute('SELECT status FROM attempt').fetchone()[0], 'completed')
+                self.assertTrue(all(not thread.is_alive() for thread in pool.threads))
+
     def test_heartbeat_only_owned_registered_unexpired_tokens(self):
         db=sqlite3.connect(':memory:')
         db.executescript('CREATE TABLE memory_capture_jobs(id TEXT,status TEXT,lease_token TEXT,lease_until TEXT);CREATE TABLE memory_derived_work(scope TEXT,status TEXT,lease_token TEXT,lease_until TEXT);CREATE TABLE memory_view_name_work(view_id TEXT,status TEXT,lease_token TEXT,lease_until TEXT);')

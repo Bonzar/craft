@@ -7,7 +7,7 @@ import zlib
 from datetime import datetime,timezone
 from uuid import uuid4
 
-from .model import ModelError,format_prompt
+from .model import ModelError,ProcessingCancelled,check_processing_cancelled,format_prompt
 from .usage_context import observe_attempt_usage
 from .thought_repair_stats import RepairAccounting,ensure_schema
 
@@ -77,8 +77,10 @@ class ThoughtTrace:
             self.accounting.call_started(db,call_id,model,request,stage)
         started=time.monotonic();usage={};status='failed';response_hash=None;error=None
         try:
+            check_processing_cancelled()
             with observe_attempt_usage(usage.update):
                 result=model(request)
+            check_processing_cancelled()
             if format_prompt(request)!=wire:
                 raise ModelError('thought model input mutated during acquisition')
             body=result if isinstance(result,str) else _json(result)
@@ -88,7 +90,7 @@ class ThoughtTrace:
             return result
         except BaseException as failure:
             error=type(failure).__name__+': '+str(failure)
-            if isinstance(failure,KeyboardInterrupt) or type(failure).__name__=='CancelledError':status='interrupted'
+            if isinstance(failure,(KeyboardInterrupt,ProcessingCancelled)) or type(failure).__name__=='CancelledError':status='interrupted'
             raise
         finally:
             with self.store.transaction(write=True) as db:

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .model import format_prompt
 from .queue import _Claim, _event, LeaseLost
-from .thought_store import publication_guard
+from .thought_store import publication_guard, same_meaning_version
 from .thought_worker_queue import ThoughtWorkQueue
 from .thought_answering import can_refresh, refresh_thought
 from .thought_processing_selection import (normalize_session_ids,source_predicate,processing_cohort,
@@ -76,7 +76,8 @@ class _Replay:
 
 class ThoughtWorker:
     def __init__(self, queue, engine, *, lane='all', lock_owned=False,
-                 claim_observer=None, context_limit=8, context_characters=12000, processing_session_ids=None):
+                 claim_observer=None, context_limit=8, context_characters=12000, processing_session_ids=None,
+                 is_pausing=None):
         if engine.store is not queue.store:
             raise ValueError('thought worker and raw queue must share a MemoryStore')
         if lane not in ('all', 'source', 'maintenance') or type(lock_owned) is not bool:
@@ -89,6 +90,7 @@ class ThoughtWorker:
         self.processing_session_ids = normalize_session_ids(processing_session_ids)
         self.work = ThoughtWorkQueue(queue,self.processing_session_ids)
         self.is_paused = False
+        self.is_pausing = is_pausing
 
     @contextmanager
     def _lock(self):
@@ -123,13 +125,16 @@ class ThoughtWorker:
                 if claim is not None:
                     return self._source(claim)
             if self.lane != 'source':
-                task = self.work.claim()
+                task = self.work.claim(is_pausing=self.is_pausing)
                 if task is not None:
                     return self._consolidate(task)
         return None
 
     def _claim_source(self):
         with self.queue.store.transaction(write=True) as c:
+            # SQLite write admission may have waited past the pause request.
+            if self.is_pausing is not None and self.is_pausing():
+                return None
             now = self.queue._time()
             eligible,args = source_predicate(self.processing_session_ids,'e')
             c.execute("UPDATE memory_capture_jobs SET status='failed',lease_token=NULL,lease_until=NULL,"
@@ -230,19 +235,12 @@ class ThoughtWorker:
                     c.execute("UPDATE memory_capture_jobs SET status='completed',phase='excluded',error=?,lease_token=NULL,lease_until=NULL WHERE id=?",
                         (eligibility['policy'] + ': ' + eligibility['reason'], claim.job.id))
                 return self.queue.get(claim.job.id)
-            context = self._context(event)
+            resumed = claim.job.phase == 'partial_source'
+            context = [] if resumed else self._context(event)
             with self._processing(('source-v1', event.id, [row.id for row in context]),
                 lambda c: self.queue._assert_owned(c, claim), lambda: self.queue.renew_claim(claim),
                 self.queue._refresh_generation, lambda key, body: self.queue._save_refresh_generation(claim, key, body)) as replay:
-                changed = self.engine.ingest(event, context, consolidate=False)
-                replay.confirm()
-                with self.queue.store.transaction(write=True) as c:
-                    self.queue._assert_owned(c, claim)
-                    self.enqueue_changed(changed)
-                    c.execute("UPDATE memory_capture_jobs SET status='completed',phase='done',error=NULL,"
-                        'lease_token=NULL,lease_until=NULL,extracted_ids=?,updated_at=?,available_at=? WHERE id=?',
-                        (json.dumps([row.id for row in changed]), self.queue._time(), self.queue._time(), claim.job.id))
-                    replay.clear(c,'memory_refresh_generations')
+                self._process_source_claim(claim, event, context, replay, resumed=resumed)
             return self.queue.get(claim.job.id)
         except LeaseLost:
             return self.queue.get(claim.job.id)
@@ -253,6 +251,63 @@ class ThoughtWorker:
                 return self.queue.get(claim.job.id)
         finally:
             self._notify('released', 'source', claim.job.id, claim.token)
+
+    def _process_source_claim(self, claim, event, context, replay, *, resumed):
+        from .thought_engine import SourceDraftRepairPending
+        carried, prepared, changed, pending = [], [], [], None
+        try:
+            if resumed:
+                context, carried, feedback = self._load_source_draft_checkpoint(claim)
+                prepared = self.engine.resume_source_drafts(event, context, carried, feedback)
+            else:
+                changed = self.engine.ingest(event, context, consolidate=False)
+        except SourceDraftRepairPending as failure:
+            pending = failure
+            prepared = failure.accepted
+        with self.queue.store.transaction(write=True) as c:
+            self.queue._assert_owned(c, claim)
+            if any(self.engine.thoughts.get(row.id) != row for row in carried):
+                raise RuntimeError('An accepted source thought changed during its residual review')
+            extra = self.engine.publish_source_drafts(event, prepared, covered=carried) if prepared else []
+            changed.extend(extra)
+            ids = [row.id for row in [*carried, *changed]]
+            self.enqueue_changed(changed)
+            if pending is not None:
+                progress = {'context_ids': [row.id for row in context], 'feedback': pending.feedback,
+                            'accepted': [self.engine._basis(row) for row in [*carried, *changed]]}
+                c.execute('INSERT INTO memory_source_draft_checkpoints(job_id,progress) VALUES (?,?) '
+                          'ON CONFLICT(job_id) DO UPDATE SET progress=excluded.progress',
+                          (claim.job.id, json.dumps(progress)))
+                c.execute("UPDATE memory_capture_jobs SET phase='partial_source',extracted_ids=? WHERE id=?",
+                          (json.dumps(ids), claim.job.id))
+                self.queue._fail(claim, pending)
+            else:
+                replay.confirm()
+                c.execute("UPDATE memory_capture_jobs SET status='completed',phase='done',error=NULL,"
+                    'lease_token=NULL,lease_until=NULL,extracted_ids=?,updated_at=?,available_at=? WHERE id=?',
+                    (json.dumps(ids), self.queue._time(), self.queue._time(), claim.job.id))
+                replay.clear(c,'memory_refresh_generations')
+                if resumed:
+                    c.execute('DELETE FROM memory_source_draft_checkpoints WHERE job_id=?', (claim.job.id,))
+        for row in extra:
+            self.engine._emit('publication', thought=self.engine._basis(row), bases=row.bases)
+
+    def _load_source_draft_checkpoint(self, claim):
+        with self.queue.store.transaction() as c:
+            saved = c.execute('SELECT progress FROM memory_source_draft_checkpoints WHERE job_id=?',
+                              (claim.job.id,)).fetchone()
+        if saved is None:
+            raise RuntimeError('Pending source draft repair has no durable checkpoint')
+        checkpoint = json.loads(saved[0])
+        if [ref['thought_id'] for ref in checkpoint['accepted']] != claim.job.extracted_ids:
+            raise RuntimeError('Pending source draft repair lost its accepted thought references')
+        context = [self.queue.get_event(event_id) for event_id in checkpoint['context_ids']]
+        carried = [self.engine.thoughts.get(thought_id) for thought_id in claim.job.extracted_ids]
+        if any(row is None for row in context) or any(
+                row is None or row.version != ref['version'] or row.origin.get('event_id') != claim.job.event_id
+                for row, ref in zip(carried, checkpoint['accepted'])):
+            raise RuntimeError('A pinned source draft repair basis or accepted thought changed')
+        return context, carried, checkpoint['feedback']
 
     def enqueue_changed(self, changed):
         changed = list(changed)
@@ -265,30 +320,57 @@ class ThoughtWorker:
             while True:
                 parents = self.engine.thoughts.direct_dependents(child.id, limit=100, after_id=after_id)
                 for parent in parents:
-                    if parent.id != child.id and can_refresh(self.engine, parent):
+                    if parent.id != child.id and can_refresh(self.engine, parent) and any(
+                            basis.get('thought_id') == child.id and self._basis_changed(basis, child, retired)
+                            for basis in parent.bases):
                         self.work.enqueue_refresh(parent, cause)
                 if len(parents) < 100:
                     break
                 after_id = parents[-1].id
-            related = self.engine.retrieve(child.text, limit=10)
-            for candidate in related:
-                if candidate.id != child.id and can_refresh(self.engine, candidate):
-                    self.work.enqueue_refresh(candidate, cause)
 
-    def _refresh_additional(self, task, current):
-        from .thought_source_policy import thought_eligibility
+    def _basis_changed(self, basis, child, retired=False):
+        if retired:
+            return True
+        if basis['version'] == child.version:
+            return False
+        previous = self.engine.thoughts.get(child.id, basis['version'])
+        return not same_meaning_version(previous, child)
+
+    def _refresh_inputs(self, task, current):
         selected = {}
-        memo = getattr(self.engine.thoughts, '_source_policy_memo', {})
+        needs_refresh = False
+        versions = {(basis['thought_id'], basis['version']) for basis in current.bases if 'thought_id' in basis}
         for cause in self.work.causes(task):
-            if not isinstance(cause, list) or len(cause) < 3 or cause[0] != 'basis':
+            if not isinstance(cause, list) or len(cause) < 3:
                 continue
-            identity = cause[1]
-            if identity == current.id or identity in selected or (len(cause) > 3 and cause[3] == 'retired'):
+            kind, identity, version = cause[:3]
+            if identity == current.id:
                 continue
-            thought = self.engine.thoughts.get(identity)
-            if thought is not None and thought_eligibility(self.engine.thoughts, thought, memo=memo)['allowed']:
-                selected[identity] = thought
-        return list(selected.values())
+            if kind == 'basis':
+                child = self.engine.thoughts.get(identity)
+                for key, pinned_version in versions:
+                    if key == identity and (len(cause) > 3 or
+                            (child is not None and pinned_version < version
+                             and self._basis_changed({'version':pinned_version}, child))):
+                        needs_refresh = True
+            elif kind == 'relevance' and (identity, version) not in versions:
+                thought = self.engine.thoughts.get(identity)
+                if thought is not None and thought.version == version:
+                    selected[identity] = thought
+        return needs_refresh or bool(selected), list(selected.values())
+
+    def _generalize(self, current, task):
+        def on_affected(parents):
+            if not parents:
+                return
+            with self.queue.store.transaction(write=True) as connection:
+                self.work.owned(connection, task)
+                if self.engine.thoughts.get(current.id) != current:
+                    return
+                for parent in parents:
+                    if self.engine.thoughts.get(parent.id) == parent:
+                        self.work.request(parent, 'refresh', ('relevance', current.id, current.version))
+        return self.engine.consolidate([current], on_affected=on_affected)
 
     def _consolidate(self, task):
         with processing_cohort(task.get('processing_session_ids')):
@@ -309,17 +391,20 @@ class ThoughtWorker:
                 lambda c: self.work.owned(c, task), lambda: self.work.renew(task), self.work.cached,
                 lambda key, body: self.work.save(task, key, body)) as replay:
                 if task['action'] == 'refresh':
-                    result = refresh_thought(self.engine, current, additional=self._refresh_additional(task, current))
-                    changed = [result] if (result.id, result.text, result.metadata.get('publication')) != (
-                        current.id, current.text, current.metadata.get('publication')) else []
+                    needed, additional = self._refresh_inputs(task, current)
+                    result = refresh_thought(self.engine, current, additional=additional) if needed else current
+                    changed = [] if same_meaning_version(current, result) else [result]
                 else:
-                    changed = [row for row in self.engine.consolidate([current])
+                    changed = [row for row in self._generalize(current, task)
                         if row.id != current.id or row.version != current.version or row.text != current.text]
                 replay.confirm()
                 changed = [row for row in changed if self._published_after(row, watermark)]
                 with self.queue.store.transaction(write=True) as c:
                     self.work.owned(c, task)
-                    self.enqueue_changed(changed)
+                    if task['action'] == 'refresh':
+                        self.enqueue_dependents(changed)
+                    else:
+                        self.enqueue_changed(changed)
                     replay.clear(c,'memory_thought_generations')
                     processed = [current.version] + [row.version for row in changed if row.id == current.id]
                     if task['action'] == 'refresh' and result.id == current.id:

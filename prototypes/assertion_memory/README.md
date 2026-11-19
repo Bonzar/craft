@@ -4,6 +4,15 @@
 
 Это исследовательская реализация. Публикация исходников не означает готовность к производственной эксплуатации. Смысловая проверка и восстановление после технических сбоев ограничены; исчерпание попыток остаётся видимым сбоем и не выдаётся за отсутствие фактов. Сохранённая квитанция сообщения не подтверждает завершение извлечения или корректность ответа.
 
+## Pausing and cancelling the canonical background worker
+
+Send SIGINT or SIGTERM to the owned worker PID to stop claiming jobs and let
+active jobs save their results. SIGUSR1 requests cancellation instead. The
+worker terminates only model subprocess groups it started and returns affected
+jobs to the queue with their completed checkpoints. A remote HTTP provider may
+still take until its response or timeout. The configured processing selection
+controls whether later intake may start another worker.
+
 ## Запуск MCP
 
 Нужны Python 3.10+, SQLite с FTS5 и зависимости из `requirements-mcp.txt`. Команды выполняются из корня репозитория. Создайте отдельное окружение:

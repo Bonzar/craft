@@ -4,6 +4,7 @@ import unittest
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_store import ThoughtStore, ThoughtConflict
 from prototypes.assertion_memory.thought_engine import ThoughtEngine
+from .prepared_support_helpers import drafts
 
 
 class ThoughtPublicationConflictTest(unittest.TestCase):
@@ -42,7 +43,7 @@ class ThoughtPublicationConflictTest(unittest.TestCase):
                     calls.append(request)
                     if request.task=='Construct thought':
                         self.assertNotIn(base.text,json.dumps(request.records))
-                        return json.dumps({'thoughts':[{'text':current.text,'question':target.question,'support':[current.text]}]})
+                        return json.dumps(drafts(request,(current.text,[current.text]),question=target.question))
                     if race_again:
                         thoughts.publish('Approval changed again.',thought_id=base.id,expected_version=2)
                     return json.dumps({'verdict':'accept','text':'Fresh supplied grounds support the answer.'})

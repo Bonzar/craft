@@ -50,7 +50,7 @@ class Engine:
     def answer(self, question, explicit_ids=()):
         return self.thoughts.get(explicit_ids[0])
 
-    def consolidate(self, changed):
+    def consolidate(self, changed, *, on_affected=None):
         self.consolidations.append([row.id for row in changed])
         return []
 
@@ -130,13 +130,12 @@ class ThoughtWorkerTest(unittest.TestCase):
             bases=[{'thought_id': parent.id, 'version': 1}])
         maintenance = ThoughtWorker(self.queue, self.engine, lane='maintenance')
         maintenance.enqueue_dependents([child])
-        self.assertEqual(maintenance.run_once()['action'], 'refresh')
         self.assertIsNone(maintenance.run_once())
         changed = self.thoughts.publish('Child second.', thought_id='child', expected_version=1)
         maintenance.enqueue_dependents([changed, changed])
         result = maintenance.run_once()
         self.assertEqual(result['version'], 1)
-        self.assertEqual(result['completed_generation'], 2)
+        self.assertEqual(result['completed_generation'], 1)
         self.assertIsNone(maintenance.work.get(grandparent.id))
         maintenance.enqueue_dependents([changed])
         self.assertIsNone(maintenance.run_once())

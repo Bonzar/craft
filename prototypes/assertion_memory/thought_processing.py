@@ -1,7 +1,10 @@
 """Canonical worker lanes, retaining the existing supervisor's exclusive pause lock."""
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import signal
+import threading
 
+from .model import ProcessingCancelled, check_processing_cancelled, processing_cancellation
 from .processing_pool import ActiveClaims, ProcessingPool
 from .storage import MemoryStore
 from .queue import CaptureQueue
@@ -13,12 +16,18 @@ from .thought_worker import ThoughtWorker
 
 class TracedThoughtWorker(ThoughtWorker):
     @contextmanager
-    def _attempt(self, operation, inputs):
+    def _attempt(self, operation, inputs, cancel_claim):
         original = self.engine
         trace = ThoughtTrace(original.store, operation, inputs)
         self.engine = traced_engine(original.thoughts, original.model, original.candidates, trace)
         try:
+            check_processing_cancelled()
             yield trace
+        except ProcessingCancelled:
+            # Releasing the lease and finalizing its trace are one durable outcome.
+            with original.store.transaction(write=True) as db:
+                cancel_claim(db)
+                trace.finish('interrupted')
         except BaseException:
             trace.finish('failed')
             raise
@@ -27,7 +36,8 @@ class TracedThoughtWorker(ThoughtWorker):
 
     def _source(self, claim):
         with self._attempt('source', {'event_id': claim.job.event_id, 'job_id': claim.job.id,
-                           'attempt':claim.job.attempts,'previous_error':claim.job.error}) as trace:
+                           'attempt':claim.job.attempts,'previous_error':claim.job.error},
+                           lambda db: self._cancel_source(db, claim)) as trace:
             result = super()._source(claim)
             trace.finish('completed' if result.status == 'completed' else 'retry_required')
             return result
@@ -35,10 +45,25 @@ class TracedThoughtWorker(ThoughtWorker):
     def _consolidate(self, task):
         with self._attempt(task.get('action','consolidate'), {'thought_id': task['thought_id'],
                            'version': task['version'], 'generation': task.get('generation'),
-                           'attempt':task.get('attempts'),'previous_error':task.get('error')}) as trace:
+                           'attempt':task.get('attempts'),'previous_error':task.get('error')},
+                           lambda db: self._cancel_thought(db, task)) as trace:
             result = super()._consolidate(task)
             trace.finish('completed' if result['status'] == 'completed' else 'retry_required')
             return result
+
+
+    def _cancel_source(self, db, claim):
+        now = self.queue._time()
+        db.execute("UPDATE memory_capture_jobs SET status='pending',attempts=max(0,attempts-1),"
+                   "lease_token=NULL,lease_until=NULL,available_at=?,updated_at=? "
+                   "WHERE id=? AND status='running' AND lease_token=?",
+                   (now, now, claim.job.id, claim.token))
+
+    def _cancel_thought(self, db, task):
+        db.execute("UPDATE memory_thought_work SET status='pending',attempts=max(0,attempts-1),"
+                   "lease_token=NULL,lease_until=NULL,available_at=? "
+                   "WHERE thought_id=? AND status='running' AND lease_token=?",
+                   (self.queue._time(), task['thought_id'], task['lease_token']))
 
 
 def _recover_selected(queue, session_ids):
@@ -64,8 +89,36 @@ def _deadline(store, config):
             with_model=config.provider!='none')
 
 
+@contextmanager
+def _worker_signals():
+    """SIGINT/SIGTERM drain; SIGUSR1 also cancels outstanding model calls."""
+    pausing = False
+    cancelling = False
+
+    def request_pause(signum, frame):
+        nonlocal pausing, cancelling
+        pausing = True
+        if signum == signal.SIGUSR1:
+            cancelling = True
+
+    previous = {}
+    try:
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGUSR1):
+                previous[signum] = signal.signal(signum, request_pause)
+        yield (lambda: pausing), (lambda: cancelling)
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
 def run_pool(config, lock, idle_handoff, *, limit=0):
-    """Called only AFTER the MCP supervisor acquired db+'.worker.lock'."""
+    """Called only after the MCP supervisor acquired db+'.worker.lock'."""
+    with _worker_signals() as (is_pausing, is_cancelling):
+        return _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling)
+
+
+def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
     if config.processing_session_ids == ():
         return
     claims = ActiveClaims()
@@ -75,11 +128,12 @@ def run_pool(config, lock, idle_handoff, *, limit=0):
 
         @contextmanager
         def factory(lane, observer):
-            with MemoryStore(config.db) as local:
+            with MemoryStore(config.db) as local, processing_cancellation(is_cancelling):
                 current = config.service(local)
                 yield TracedThoughtWorker(current.queue, current.engine, lane=lane,
                                           lock_owned=True, claim_observer=observer,
-                                          processing_session_ids=config.processing_session_ids)
+                                          processing_session_ids=config.processing_session_ids,
+                                          is_pausing=is_pausing)
 
         def heartbeat():
             if claims.snapshot():
@@ -87,12 +141,12 @@ def run_pool(config, lock, idle_handoff, *, limit=0):
                     claims.renew(db)
 
         completed = 0
-        while True:
+        while not is_pausing():
             remaining = limit-completed if limit else 0
             pool = ProcessingPool(factory, source_workers=config.source_workers, limit=remaining,
-                idle_seconds=config.worker_idle_seconds, claims=claims, heartbeat=heartbeat)
+                idle_seconds=config.worker_idle_seconds, claims=claims, heartbeat=heartbeat, is_pausing=is_pausing)
             completed += pool.run()['completed']
-            if limit and completed >= limit:
+            if is_pausing() or (limit and completed >= limit):
                 return
             if idle_handoff(lock, lambda: _deadline(store,config)):
                 return

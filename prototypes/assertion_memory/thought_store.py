@@ -73,6 +73,12 @@ _SCHEMA = (
 )
 
 
+def same_meaning_version(left, right):
+    return (left is not None and right is not None and left.id == right.id
+            and left.metadata.get('meaning_version', left.version)
+            == right.metadata.get('meaning_version', right.version))
+
+
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
 

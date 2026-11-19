@@ -46,35 +46,33 @@ class ThoughtProcessingSelectionTest(unittest.TestCase):
             a,b=thoughts.publish('Y knowledge.'),thoughts.publish('X fact.')
             whole=thoughts.publish('Shared whole.',question='Shared question?',bases=[{'thought_id':a.id,'version':1}])
             other=thoughts.publish('Independent Y work.',question='Y question?')
+            descendant=thoughts.publish('Further generalization.',question='Broader question?',
+                bases=[{'thought_id':whole.id,'version':1}])
+            a=thoughts.publish('Updated Y knowledge.',thought_id=a.id,expected_version=1)
             legacy=thoughts.publish('Untyped legacy work.',question='Legacy question?')
             work=ThoughtWorkQueue(queue)
             with processing_cohort((Y,)):
-                work.enqueue_refresh(whole,(a.id,1));work.enqueue([other])
+                work.enqueue_refresh(whole,(a.id,2));work.enqueue([other])
             work.enqueue([legacy])
-            with processing_cohort((X,)):work.enqueue_refresh(whole,(b.id,1))
+            with processing_cohort((X,)):work.request(whole,'refresh',('relevance',b.id,1))
             engine=self.engine(memory,thoughts)
             worker=ThoughtWorker(queue,engine,lane='maintenance',processing_session_ids=(X,))
             task=worker.work.claim()
             self.assertEqual(task['thought_id'],whole.id)
             self.assertEqual(task['processing_session_ids'],(X,))
             def refresh(engine,current,additional=()):
-                self.assertEqual({row.id for row in additional},{a.id,b.id})
+                self.assertEqual({row.id for row in additional},{b.id})
                 return thoughts.publish('Updated shared whole.',thought_id=current.id,question=current.question,
-                    bases=[{'thought_id':a.id,'version':1},{'thought_id':b.id,'version':1}],expected_version=1)
+                    bases=[{'thought_id':a.id,'version':2},{'thought_id':b.id,'version':1}],expected_version=1)
             with patch('prototypes.assertion_memory.thought_worker.refresh_thought',side_effect=refresh):worker._consolidate(task)
             with memory.transaction() as c:
                 tags={row[0] for row in c.execute('SELECT session_id FROM memory_thought_cause_sessions WHERE thought_id=? AND cause=?',
-                    (whole.id,json.dumps(['published',whole.id,2],sort_keys=True)))}
+                    (descendant.id,json.dumps(['basis',whole.id,2],sort_keys=True)))}
             self.assertEqual(tags,{X})
-            descendant=[]
-            def consolidate(changed):
-                if changed[0].id==whole.id:
-                    descendant.append(thoughts.publish('Further generalization.',bases=[{'thought_id':whole.id,'version':2}]))
-                    return descendant
-                return []
-            engine.consolidate=consolidate
-            worker.run_once();worker.run_once()
-            self.assertEqual(worker.work.get(descendant[0].id)['status'],'completed')
+            task=worker.work.claim()
+            self.assertEqual(task['thought_id'],descendant.id)
+            self.assertEqual(task['processing_session_ids'],(X,))
+            worker.work.finish(task,descendant.version)
             self.assertEqual(work.get(other.id)['status'],'pending')
             self.assertEqual(work.get(legacy.id)['status'],'pending')
             self.assertIsNone(worker.run_once())

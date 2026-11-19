@@ -5,7 +5,8 @@ def _object(properties):
     return {'type':'object','properties':properties,'required':list(properties),'additionalProperties':False}
 
 
-def response_schema(task, *, support_count=None, single_thought=False, review_option_count=0):
+def response_schema(task, *, support_count=None, single_thought=False, review_option_count=0,
+                    source_draft_count=None, refresh_option_count=0, compare_meaning=False):
     text = {'type':'string'}
     question = {'type':['string','null']}
     if task == 'Navigate thought graph':
@@ -25,10 +26,31 @@ def response_schema(task, *, support_count=None, single_thought=False, review_op
         return _object({'thoughts':thoughts,'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
     if task == 'Check ready thought':
         return _object({'verdict':{'type':'string','enum':['ready','build','drill']},'text':text,'question':question})
-    if task == 'Verify thought' and review_option_count:
-        option = {'type':'integer','minimum':0,'maximum':review_option_count-1}
-        return _object({'verdict':{'type':'string','enum':['accept','reject','drill']}, 'text':text,
-                        'open_support':{'anyOf':[option,{'type':'null'}]}})
+    if task == 'Verify thought' and source_draft_count is not None:
+        draft = {'type':'integer','minimum':0,'maximum':max(0,source_draft_count-1)}
+        rejected = {'type':'array','items':_object({'draft':draft,'text':text}),'maxItems':source_draft_count}
+        verdicts = ['accept','reject']
+        fields = {'verdict':{'type':'string','enum':verdicts},'text':text,
+                  'rejected_drafts':rejected,'missing_meaning':question}
+        if review_option_count:
+            verdicts.append('drill')
+            option = {'type':'integer','minimum':0,'maximum':review_option_count-1}
+            fields['open_support'] = {'anyOf':[option,{'type':'null'}]}
+        return _object(fields)
+    if task == 'Verify thought' and (review_option_count or compare_meaning):
+        verdicts = ['accept','reject']
+        fields = {'verdict':{'type':'string','enum':verdicts},'text':text}
+        if review_option_count:
+            verdicts.append('drill')
+            option = {'type':'integer','minimum':0,'maximum':review_option_count-1}
+            fields['open_support'] = {'anyOf':[option,{'type':'null'}]}
+        if compare_meaning:
+            fields['meaning_changed'] = {'type':['boolean','null']}
+        return _object(fields)
     if task == 'Find useful shared thought question':
-        return _object({'question':question,'text':text})
+        fields = {'question':question,'text':text}
+        if refresh_option_count:
+            fields['affected_candidates'] = {'type':'array','items':{'type':'integer','minimum':0,
+                                                                     'maximum':refresh_option_count-1}}
+        return _object(fields)
     return _object({'verdict':{'type':'string','enum':['accept','reject']},'text':text})
