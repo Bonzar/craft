@@ -74,7 +74,7 @@ class ThoughtWholeRefreshTest(unittest.TestCase):
                 self.assertIn('ONE WHOLE thought', request.instructions)
                 return json.dumps(drafts(request,(new_text,[new_text]),question='Is the room equipment ready?'))
             self.assertIn('ALL equal', request.instructions)
-            return json.dumps(ACCEPT)
+            return json.dumps(dict(ACCEPT, meaning_changed=True))
         engine = ThoughtEngine(self.store, model)
         engine.retrieve = lambda *args, **kwargs: []
         worker = ThoughtWorker(self.queue, engine, lane='maintenance')

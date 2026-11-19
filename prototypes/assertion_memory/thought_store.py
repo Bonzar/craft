@@ -16,9 +16,9 @@ _PUBLICATION_GUARD = ContextVar('thought_publication_guard', default=None)
 
 
 @contextmanager
-def publication_guard(check):
-    """Fence leased publishers at the semantic write, after remote model work."""
-    token = _PUBLICATION_GUARD.set(check)
+def publication_guard(check, *, on_publish=None):
+    """Fence leased publishers and persist any follow-up work with the new version."""
+    token = _PUBLICATION_GUARD.set((check, on_publish))
     try:
         yield
     finally:
@@ -26,9 +26,12 @@ def publication_guard(check):
 
 
 def _check_publication(connection):
-    check = _PUBLICATION_GUARD.get()
-    if check is not None:
-        check(connection)
+    guard = _PUBLICATION_GUARD.get()
+    if guard is None:
+        return None
+    check, on_publish = guard
+    check(connection)
+    return on_publish
 
 
 class ThoughtConflict(RuntimeError):
@@ -71,6 +74,12 @@ _SCHEMA = (
     'CREATE INDEX IF NOT EXISTS memory_thought_link_source ON memory_thought_links(source_id)',
     'CREATE INDEX IF NOT EXISTS memory_thought_link_target ON memory_thought_links(target_id)',
 )
+
+
+def same_meaning_version(left, right):
+    return (left is not None and right is not None and left.id == right.id
+            and left.metadata.get('meaning_version', left.version)
+            == right.metadata.get('meaning_version', right.version))
 
 
 def _json(value):
@@ -235,7 +244,7 @@ class ThoughtStore:
         if not isinstance(bases, (list, tuple)):
             raise ValueError('bases must be a list')
         with self.store.transaction(write=True) as c:
-            _check_publication(c)
+            on_publish = _check_publication(c)
             current = self.get(thought_id)
             actual = current.version if current else 0
             if expected_version is not None and expected_version != actual:
@@ -248,6 +257,8 @@ class ThoughtStore:
                 return current
             thought = Thought(id=thought_id, version=actual + 1, created_at=datetime.now(timezone.utc).isoformat(), **material)
             self._insert(c, thought)
+            if on_publish is not None:
+                on_publish(current, thought)
             return thought
 
     def _insert(self, c, thought, *, activate=True):

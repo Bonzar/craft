@@ -8,12 +8,16 @@ import json
 import math
 import os
 import re
+import signal
 import stat
 import subprocess
 import tempfile
+import time
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -133,6 +137,80 @@ class ExtractiveModel:
         return json.dumps([dict(record) for record in request.records], ensure_ascii=False)
 
 
+_PROCESSING_CANCEL = ContextVar('memory_processing_cancel', default=None)
+_CANCEL_POLL_SECONDS = .05
+_MODEL_TERMINATION_SECONDS = 1
+
+
+class ProcessingCancelled(BaseException):
+    """Stop a processing attempt without treating it as a model or queue failure."""
+
+
+@contextmanager
+def processing_cancellation(is_cancelling):
+    token = _PROCESSING_CANCEL.set(is_cancelling)
+    try:
+        yield
+    finally:
+        _PROCESSING_CANCEL.reset(token)
+
+
+def check_processing_cancelled():
+    is_cancelling = _PROCESSING_CANCEL.get()
+    if is_cancelling is not None and is_cancelling():
+        raise ProcessingCancelled('worker cancellation requested')
+
+
+def _signal_model_group(process, signum):
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        pass  # The isolated process group already exited.
+
+
+def _terminate_model_group(process):
+    # Keep the session leader unreaped until the last group signal so its PID
+    # cannot be reused. The leader's pipes cannot tell us whether descendants
+    # with redirected streams are still alive.
+    _signal_model_group(process, signal.SIGTERM)
+    time.sleep(_MODEL_TERMINATION_SECONDS)
+    _signal_model_group(process, signal.SIGKILL)
+    process.wait()
+
+
+def _model_output_text(output):
+    # Match subprocess.run's text mode while leaving interrupted output undecoded.
+    return output.decode('utf-8').replace('\r\n', '\n').replace('\r', '\n')
+
+
+def _run_owned_model(command, prompt, timeout):
+    check_processing_cancelled()
+    deadline = None if timeout is None else time.monotonic() + timeout
+    # A partial pipe write may time out; communicate(None) then retries
+    # output without resuming stdin. Give the child a private seekable input.
+    with tempfile.TemporaryFile() as model_input:
+        model_input.write(prompt.encode('utf-8'))
+        model_input.seek(0)
+        process = subprocess.Popen(command, stdin=model_input, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+    with process:
+        try:
+            while True:
+                check_processing_cancelled()
+                remaining = _CANCEL_POLL_SECONDS if deadline is None else deadline - time.monotonic()
+                try:
+                    stdout, stderr = process.communicate(timeout=max(0, min(remaining, _CANCEL_POLL_SECONDS)))
+                    return subprocess.CompletedProcess(command, process.returncode,
+                                                       _model_output_text(stdout), _model_output_text(stderr))
+                except subprocess.TimeoutExpired:
+                    check_processing_cancelled()
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise
+        except (ProcessingCancelled, subprocess.TimeoutExpired):
+            _terminate_model_group(process)
+            raise
+
+
 class SubprocessModel:
     """Explicit command whose stdin receives the prompt and stdout is the draft."""
 
@@ -171,14 +249,11 @@ class SubprocessModel:
 
     def _generate(self, prompt, attempt) -> str:
         try:
-            result = subprocess.run(
-                self.command,
-                input=prompt,
-                capture_output=True,
-                encoding="utf-8",
-                timeout=self.timeout,
-                check=False,
-            )
+            if _PROCESSING_CANCEL.get() is not None:
+                result = _run_owned_model(self.command, prompt, self.timeout)
+            else:
+                result = subprocess.run(self.command, input=prompt, capture_output=True, encoding='utf-8',
+                                        timeout=self.timeout, check=False)
         except subprocess.TimeoutExpired as error:
             self._observe_usage(attempt, error.stdout)
             raise ModelError("model command timed out") from error

@@ -111,6 +111,41 @@ class PreparedThoughtSupportTest(unittest.TestCase):
         self.assertFalse(any('MIDDLE' in b['meaning'] for b in thought.bases))
         self.assertEqual(calls,['Construct thought','Verify thought']*2)
 
+    def test_review_resolves_selected_originals_and_can_open_nested_support(self):
+        _, store, queue = self.setup_memory()
+        observation = 'The new card flashes before the details button appears.'
+        report = 'I tested the replacement in the browser.'
+        raw = queue.capture_event('s', 'observation', observation+' Unrelated user text.', actor='user', source='fixture')
+        check = queue.capture_event('s', 'check', report, actor='assistant', source='fixture')
+        hidden = queue.capture_event('s', 'hidden', 'Unselected source.', actor='user', source='fixture')
+        raw_ref = {'event_id':raw.id,'span':{'start':0,'end':len(observation)}}
+        leaf = store.publish('The browser check was reported.', bases=[{'event_id':check.id}])
+        first = store.publish('User saw a flash.', origin={'actor':'assistant'}, bases=[raw_ref])
+        second = store.publish('The card and its verification.', origin={'actor':'assistant'},
+                               bases=[raw_ref,{'thought_id':leaf.id,'version':leaf.version}])
+        unselected = store.publish('Another candidate.', bases=[{'event_id':hidden.id}])
+        calls = []
+
+        def model(request):
+            calls.append(request.task)
+            if request.task == 'Construct thought':
+                return result(request,'User observed the flash. Assistant reported a browser test.',[0,1])
+            originals = [row for row in request.records if row.get('role') == 'original_evidence']
+            expected = [(observation,'user')] if len(calls)==2 else [(observation,'user'),(report,'assistant')]
+            self.assertEqual([(row['text'],row['origin']['role']) for row in originals], expected)
+            self.assertEqual(originals[0]['supports_fragments'],[0,1])
+            if len(calls)==2:
+                option = next(row['option'] for row in request.records if row.get('role')=='linked_evidence_option')
+                return json.dumps({'verdict':'drill','text':'Check who performed the test.','open_support':option})
+            return json.dumps(ACCEPT)
+
+        engine = ThoughtEngine(store,model)
+        candidates = [first,second,unselected]
+        thought = engine._construct([{'role':'material',**engine._content(row)} for row in candidates],
+                                    [engine._basis(row) for row in candidates],question='What happened?')[0]
+        self.assertEqual(calls,['Construct thought','Verify thought','Verify thought'])
+        self.assertEqual({b['thought_id'] for b in thought.bases},{first.id,second.id})
+
     def test_unprovided_positions_are_rejected_and_fragment_count_has_no_fixed_ceiling(self):
         memory,store,queue=self.setup_memory()
         base=store.publish(''.join(f'Condition {index}.\n' for index in range(175)))

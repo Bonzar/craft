@@ -85,8 +85,11 @@ class ThoughtWorkQueue:
                 (thought.version, generation, action, now, thought.id))
             return True
 
-    def claim(self):
+    def claim(self, *, is_pausing=None):
         with self.store.transaction(write=True) as c:
+            # SQLite write admission may have waited past the pause request.
+            if is_pausing is not None and is_pausing():
+                return None
             now = self.queue._time()
             eligible,args = maintenance_predicate(c,self.processing_session_ids,'w')
             c.execute("UPDATE memory_thought_work AS w SET status='failed',lease_token=NULL,lease_until=NULL,"

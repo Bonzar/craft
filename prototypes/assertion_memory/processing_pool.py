@@ -12,7 +12,7 @@ import time
 import logging
 import sqlite3
 
-from .storage import background_write_retry,BackgroundWriteCancelled,is_sqlite_busy
+from .storage import background_write_retry,is_sqlite_busy
 
 _LOG=logging.getLogger(__name__)
 
@@ -57,10 +57,11 @@ class ProcessingPool:
     Workers implement run_once() and seconds_until_work(with_model=...). Each
     run_once claims at most one job and reports claimed/released token ownership.
     heartbeat runs only in the calling supervisor thread, also while draining.
+    is_pausing stops new turns while admitted attempts retain write access.
     """
     def __init__(self,worker_factory,*,source_workers=2,limit=0,idle_seconds=30,
                  poll_seconds=.1,heartbeat_seconds=30,heartbeat=None,claims=None,
-                 write_retry_seconds=30,write_retry_poll_seconds=.05):
+                 write_retry_seconds=30,write_retry_poll_seconds=.05,is_pausing=None):
         if type(source_workers) is not int or not 1<=source_workers<=4:
             raise ValueError('source_workers must be between 1 and 4')
         if type(limit) is not int or limit<0:raise ValueError('limit must be nonnegative')
@@ -68,6 +69,7 @@ class ProcessingPool:
         self.factory=worker_factory;self.source_workers=source_workers;self.limit=limit
         self.idle_seconds=idle_seconds;self.poll_seconds=poll_seconds;self.heartbeat_seconds=heartbeat_seconds
         self.heartbeat=heartbeat;self.claims=claims or ActiveClaims()
+        self.is_pausing=is_pausing or (lambda: False)
         self.write_retry_seconds=write_retry_seconds;self.write_retry_poll_seconds=write_retry_poll_seconds
         self._condition=threading.Condition();self._construction=threading.Lock();self._stop=False
         self._completed=0;self._reserved=0;self._peak=0;self._errors=[]
@@ -77,7 +79,7 @@ class ProcessingPool:
 
     def _reserve(self,index):
         with self._condition:
-            while not self._stop:
+            while not self._stop and not self.is_pausing():
                 if not self.limit or self._completed+self._reserved<self.limit:
                     self._reserved+=1;self._peak=max(self._peak,self._reserved)
                     self._idle[index]=False
@@ -128,13 +130,11 @@ class ProcessingPool:
 
     def _lane(self,index,lane):
         try:
-            with background_write_retry(is_cancelled=lambda:self._stop,max_wait_seconds=self.write_retry_seconds,
+            with background_write_retry(max_wait_seconds=self.write_retry_seconds,
                     poll_seconds=self.write_retry_poll_seconds),ExitStack() as resources:
                 worker=self._open_worker(resources,index,lane)
                 if worker is None:return
                 while self._reserve(index):self._run_turn(index,worker)
-        except BackgroundWriteCancelled as error:
-            if not self._stop:self._fail_lane(index,lane,error)
         except BaseException as error:self._fail_lane(index,lane,error)
 
     def _fail_lane(self,index,lane,error):
@@ -182,6 +182,7 @@ class ProcessingPool:
                 self._beat()
                 with self._condition:
                     if self._errors:break
+                    if self.is_pausing():reason='paused';break
                     if self.limit and self._completed>=self.limit:reason='limit';break
                     idle=(self._reserved==0 and all(self._idle.values()) and not self.claims.snapshot())
                     if idle and time.monotonic()-self._last_work>=self.idle_seconds:

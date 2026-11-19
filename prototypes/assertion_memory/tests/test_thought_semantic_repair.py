@@ -51,7 +51,9 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
                 self.assertIn('Preserve the evacuation exception',request.instructions)
                 return json.dumps(drafts(request,(target.text,[first.text,second.text])))
             self.assertIn('ONE WHOLE thought',request.instructions)
-            return json.dumps(ACCEPT if second.text in request.records[-1]['text'] else {'verdict':'reject','text':'Preserve the evacuation exception.'})
+            if second.text in request.records[-1]['text']:
+                return json.dumps(dict(ACCEPT, meaning_changed=False))
+            return json.dumps({'verdict':'reject','text':'Preserve the evacuation exception.', 'meaning_changed':None})
         result=ThoughtEngine(store,model)._construct(records,bases,target=target)[0]
         self.assertEqual(result.text,target.text)
         self.assertEqual([row.task for row in calls],['Construct thought','Verify thought']*2)
@@ -170,7 +172,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
                 ('New scenario one.',['New scenario one.']),('Earlier choice two.',['Earlier choice two.']),('New scenario two.',['New scenario two.'])))
             self.assertEqual([record_text(row) for row in request.records if row.get('role')=='source'],[raw.prompt])
             self.assertEqual(len([row for row in request.records if row.get('role')=='draft']),2)
-            return json.dumps(ACCEPT)
+            return json.dumps(dict(ACCEPT,rejected_drafts=[],missing_meaning=None))
         result=ThoughtEngine(store,model).ingest(raw,[context],consolidate=False)
         self.assertEqual({row.text for row in result},{'New scenario one.','New scenario two.'})
         self.assertTrue(all(any(basis.get('event_id')==raw.id for basis in row.bases) for row in result))

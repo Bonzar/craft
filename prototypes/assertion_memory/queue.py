@@ -111,6 +111,12 @@ class CaptureQueue:
                 CREATE INDEX IF NOT EXISTS memory_capture_ready
                 ON memory_capture_jobs(status, available_at, id)
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS memory_source_draft_checkpoints (
+                    job_id TEXT PRIMARY KEY REFERENCES memory_capture_jobs(id) ON DELETE CASCADE,
+                    progress TEXT NOT NULL
+                )
+            """)
             from .source_reprocessing import schema
             schema(connection)
 

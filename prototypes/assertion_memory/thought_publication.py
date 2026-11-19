@@ -8,12 +8,20 @@ UNRESOLVED = ('Independently verified parallel alternative; compatibility with a
               'to the same question remains unresolved. Completion order selects no primary answer.')
 
 
-def _one(engine,draft,bases,origin,target,whole_refresh=None):
+def _one(engine,draft,bases,origin,target,whole_refresh=None,title=None):
     current = engine.thoughts.get(target.id) if target else None
     alternative = target is not None and current is not None and current.version!=target.version
     metadata = {'protocol':PROTOCOL,'verification':'accepted'}
+    display_title = title or (target.metadata.get('title') if whole_refresh is not None and target else None)
+    if display_title:
+        metadata['title'] = display_title
     if whole_refresh is not None and target is not None and target.metadata.get('publication'):
         metadata['publication'] = dict(target.metadata['publication'])
+    if whole_refresh is not None and target is not None and draft.get('meaning_changed') is False:
+        if not alternative and target.metadata.get('verification') == 'accepted':
+            metadata['meaning_version'] = target.metadata.get('meaning_version', target.version)
+            draft = dict(draft, text=target.text, question=target.question)
+    draft = {key: draft[key] for key in ('text', 'question')}
     if alternative:
         metadata['publication'] = {'state':'parallel_alternative','target_id':target.id,
             'prepared_target_version':target.version,'observed_target_version':current.version,
@@ -76,13 +84,13 @@ def _recoverable(error):
     return error
 
 
-def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=None):
+def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=None,title=None):
     prepared = verified
     outer_writer = engine.store._writing
     for attempt in range(2):
         try:
             with engine.store.transaction(write=True):
-                published = [_one(engine,draft,bases,origin,target,whole_refresh) for draft,bases in prepared]
+                published = [_one(engine,draft,bases,origin,target,whole_refresh,title) for draft,bases in prepared]
             break
         except ThoughtConflict as conflict:
             if attempt or outer_writer:
