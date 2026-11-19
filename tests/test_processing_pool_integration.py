@@ -203,6 +203,51 @@ else:
                 self.assertEqual(json.loads(cached[0]['response'])['thoughts'][0]['text'],
                                  'A synthetic conditional report.')
 
+    def test_cancel_terminates_owned_descendant_with_redirected_streams(self):
+        from prototypes.assertion_memory.model import (ModelRequest, ProcessingCancelled, SubprocessModel,
+                                                       processing_cancellation)
+
+        child_script = r'''
+import fcntl, signal, sys, time
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(sys.argv[1], 'a') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    Path(sys.argv[2]).touch()
+    deadline = time.monotonic() + 10
+    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:
+        time.sleep(.02)
+'''
+        model_script = r'''
+import subprocess, sys
+
+subprocess.call([sys.executable, '-c', *sys.argv[1:]], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            process_lock, ready, stop = (Path(directory) / name for name in ('lock', 'ready', 'stop'))
+            command = (sys.executable, '-c', model_script, child_script,
+                       str(process_lock), str(ready), str(stop))
+            model = SubprocessModel(command, timeout=5)
+            try:
+                with processing_cancellation(ready.exists), self.assertRaises(ProcessingCancelled):
+                    model(ModelRequest('Synthetic cancellation', [], 'Return an empty object.'))
+                with process_lock.open('a') as lock:
+                    deadline = time.monotonic() + 1
+                    while True:
+                        try:
+                            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            if time.monotonic() >= deadline:
+                                self.fail('The owned model descendant still held its process lock after cancellation')
+                            time.sleep(.02)
+            finally:
+                stop.touch()
+                with process_lock.open('a') as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+
     def test_supervisor_heartbeat_keeps_real_claims_alive_during_longer_provider_wait(self):
         from contextlib import contextmanager
         from prototypes.assertion_memory.processing_pool import ProcessingPool,ActiveClaims
