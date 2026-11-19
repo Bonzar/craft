@@ -8,7 +8,7 @@ from dataclasses import asdict, is_dataclass
 from .dialogue import source_role
 from .source_message_clock import normalize as normalize_clock, projection as clock_projection
 from .storage import _timestamp
-from .model import CandidateSearch, ModelError, ModelRequest, SemanticUnavailable, format_prompt
+from .model import CandidateSearch, ModelContextExceeded, ModelError, ModelRequest, SemanticUnavailable, format_prompt
 from .thought_source_policy import event_eligibility, thought_eligibility
 from .thought_engine_inputs import RAW_CHUNK_CHARACTERS, paragraph_chunks
 from .thought_engine_contract import (APPLICABILITY, construction_instructions, GENERALIZE, GROUNDING,
@@ -356,6 +356,10 @@ class ThoughtEngine:
                     distinct_selections.append(selection)
             repairs, selections = distinct, distinct_selections
             review = self._review_source_drafts(repairs, selections, catalog, origin, accepted)
+        except ModelContextExceeded:
+            # Initial extraction can switch to the whole-source chunk path. A
+            # resumed repair retains its accepted heads and durable checkpoint.
+            raise
         except ModelError as failure:
             pending = SourceDraftRepairPending(str(failure), [], feedback)
             pending.checkpoint_invalidated = self._reject_construct_checkpoint()
