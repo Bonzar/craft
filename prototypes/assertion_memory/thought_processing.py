@@ -95,7 +95,7 @@ class TracedThoughtWorker(ThoughtWorker):
             if is_pausing():
                 return
             drafts = generate_source_drafts(requests, self._generate_source_batch,
-                                           max_characters=MAX_EXPLICIT_BATCH_CHARACTERS)
+                                           max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True)
             if any(draft is None for draft in drafts):
                 raise ValueError('one group response did not cover every source; original jobs remain queued')
             self.source_batch = PreparedSourceGroup(requests, drafts)

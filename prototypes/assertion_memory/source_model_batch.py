@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from threading import Condition
 
-from .model import ModelContextExceeded, ModelRequest
+from .model import ModelContextExceeded, ModelError, ModelRequest
 from .thought_processing_selection import canonical_session_id
 from .thought_source_policy import event_eligibility
 
@@ -85,19 +85,27 @@ class SourceModelBatch:
             for (_, _, result), draft in zip(group, drafts, strict=True):
                 result.set_result(draft)
 
-def generate_source_drafts(group, generate, *, max_characters=MAX_BATCH_CHARACTERS):
+def generate_source_drafts(group, generate, *, max_characters=MAX_BATCH_CHARACTERS, exact=False):
     records, bindings, schemas = [], [], {}
     for index, (request, source_bindings) in enumerate(group, 1):
         source = f'source_{index}'
         records.append({'source': source, 'records': request.records})
         bindings.extend(source_bindings)
         schemas[source] = request.response_schema
-    if len(json.dumps(records, ensure_ascii=False)) > max_characters:
+    if exact:
+        records = _share_fragment_text(records)
+    characters = len(json.dumps(records, ensure_ascii=False))
+    if characters > max_characters:
+        if exact:
+            raise ModelError(f'Exact source group contains {characters} input characters, above {max_characters}')
         return [None] * len(group)
     instructions = (group[0][0].instructions + '\nApply these rules to each source independently. '
                     'Return a JSON object keyed by the supplied source names. Use only the '
                     'records of that source. Fragment numbers are local to each source. '
                     'Include every source, even if its thoughts are empty.')
+    if exact:
+        instructions += (' The first record supplies a shared text catalog. Each fragment has a '
+                         'text_index into that catalog. Read its text there and cite only its local option.')
     request = ModelRequest('Construct thoughts for multiple source messages', records, instructions,
                            usage_task='Construct thought',
                            response_schema={'type': 'object', 'properties': schemas,
@@ -105,9 +113,32 @@ def generate_source_drafts(group, generate, *, max_characters=MAX_BATCH_CHARACTE
     try:
         body, run_id = generate(request, bindings)
         results = json.loads(body)
-    except (ModelContextExceeded, json.JSONDecodeError):
+    except (ModelContextExceeded, json.JSONDecodeError) as error:
+        if exact:
+            raise ModelError(f'Exact source group provider failure: {type(error).__name__}') from error
         return [None] * len(group)
     if not isinstance(results, dict) or set(results) != set(schemas):
+        if exact:
+            received = len(results) if isinstance(results, dict) else 0
+            raise ModelError(f'Exact source group expected {len(schemas)} labeled results and received {received}')
         return [None] * len(group)
     return [SourceDraft(json.dumps(results[source], ensure_ascii=False), run_id, source)
             if isinstance(results[source], dict) else None for source in schemas]
+
+
+def _share_fragment_text(cases):
+    """Represent identical text once while preserving every local fragment option."""
+    text_ids = {}
+    shared_cases = []
+    for case in cases:
+        records = []
+        for record in case['records']:
+            fragments = record.get('fragments')
+            if fragments is not None:
+                fragments = [{'option': fragment['option'],
+                              'text_index': text_ids.setdefault(fragment['text'], len(text_ids))}
+                             for fragment in fragments]
+                record = dict(record, fragments=fragments)
+            records.append(record)
+        shared_cases.append(dict(case, records=records))
+    return [{'fragment_texts': list(text_ids)}, *shared_cases]

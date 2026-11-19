@@ -66,11 +66,14 @@ class SourceModelBatchTest(unittest.TestCase):
             tasks.append(request.task)
             if request.task == 'Construct thoughts for multiple source messages':
                 response = {}
-                for case in request.records:
+                catalog = request.records[0].get('fragment_texts')
+                cases = request.records[1:] if catalog is not None else request.records
+                for case in cases:
                     record = next(row for row in case['records'] if row['role'] == 'source')
                     fragment = record['fragments'][0]
                     response[case['source']] = {'thoughts': [{
-                        'text': fragment['text'], 'question': None, 'support_fragments': [fragment['option']],
+                        'text': (catalog[fragment['text_index']] if catalog is not None else fragment['text']),
+                        'question': None, 'support_fragments': [fragment['option']],
                     }], 'needs_detail': None}
                 return json.dumps(response)
             self.assertEqual(request.task, 'Verify thought')
