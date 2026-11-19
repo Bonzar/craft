@@ -37,6 +37,9 @@ class CaptureTest(unittest.TestCase):
         self.config = {'actor_id': 'fiction-user', 'scope': 'fiction'}
 
     def append(self, row):
+        payload = row.get('payload') if isinstance(row, dict) else None
+        if isinstance(payload, dict) and row.get('type')=='event_msg' and payload.get('type')=='task_started':
+            self.turn_id = payload['turn_id']
         with self.path.open('ab') as stream:
             stream.write((json.dumps(row, ensure_ascii=False) + '\n').encode())
 
@@ -58,6 +61,9 @@ class CaptureTest(unittest.TestCase):
     def assistant(self, text='proposal', mid='a1', channel='final'):
         self.append({'type': 'response_item', 'payload': {'type': 'message', 'id': mid, 'role': 'assistant',
             'channel': channel, 'content': [{'type': 'output_text', 'text': text}]}})
+        if channel == 'final':
+            self.append({'type':'event_msg','payload':{'type':'task_complete',
+                'turn_id':self.turn_id,'last_agent_message':text}})
 
     def poll(self):
         return self.capture.poll(self.store, 'physical', self.config)
@@ -165,12 +171,12 @@ class CaptureTest(unittest.TestCase):
         self.capture.register(self.store,self.raw)
         with patch.object(self.store,'store_artifact',side_effect=AssertionError('automatic tool artifacts are forbidden')):
             result=self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant','assistant'])
-        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','visible progress','visible final'])
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant'])
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['yes','visible final'])
         self.assertEqual(result['gaps'],[])
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM artifacts').fetchone()[0],0)
         remote=FakeRemote();coordinator=Coordinator(self.store,remote);coordinator.observe('physical',result);coordinator.tick()
-        self.assertEqual(coordinator.local('physical')['server_acked_through'],3)
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],2)
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
         self.assertTrue(all(m['status']=='acknowledged' for m in self.messages()))
         self.assertEqual(self.store.session('physical')['cursor'],self.path.stat().st_size)
@@ -682,7 +688,7 @@ class CaptureTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'history expansion'):
             reset_parser_checkpoint(self.store,'physical',expected_header_sha256=state['header_hash'],reason=REASON)
 
-    def test_native_phase_commentary_without_channel_is_visible_and_frontier_becomes_current(self):
+    def test_native_phase_commentary_is_excluded_and_frontier_becomes_current(self):
         self.turn()
         for i in range(3):
             self.append({'type':'response_item','payload':{'type':'message','role':'assistant','id':'phase-commentary-'+str(i),
@@ -691,7 +697,7 @@ class CaptureTest(unittest.TestCase):
             'phase':'final_answer','content':[{'type':'output_text','text':'Synthetic final'}]}})
         self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'one','last_agent_message':'Synthetic final'}})
         self.capture.register(self.store,self.raw);result=self.poll()
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant','assistant','assistant','assistant'])
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user','assistant'])
         self.assertIsNone(self.store.session('physical')['turn']['assistant'])
         from synthetic_memory_adapter.frontier import Coordinator
         coordinator=Coordinator(self.store,object());coordinator.observe('physical',result)
@@ -724,7 +730,7 @@ class CaptureTest(unittest.TestCase):
         coordinator=Coordinator(self.store,object());coordinator.observe('physical',result)
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
 
-    def test_phase_v2_replay_keeps_dialogue_receipts_and_adds_only_three_commentaries(self):
+    def test_phase_v2_replay_keeps_dialogue_receipts_and_excludes_commentary(self):
         from unittest.mock import patch
         from synthetic_memory_adapter.frontier import Coordinator
         from .test_assertion_memory_frontier import FakeRemote
@@ -751,10 +757,10 @@ class CaptureTest(unittest.TestCase):
         reset_parser_checkpoint(self.store,'physical',expected_header_sha256=self.store.session('physical')['header_hash'],reason=REASON)
         result=self.poll();coordinator.observe('physical',result);coordinator.tick()
         after={m['message_id']:(m['arguments'],m['receipt'],m['status']) for m in self.messages()}
-        self.assertEqual(len(after),5);self.assertTrue(all(after[key]==value for key,value in before.items()))
+        self.assertEqual(len(after),2);self.assertTrue(all(after[key]==value for key,value in before.items()))
         self.assertTrue(all(value[2]=='acknowledged' for value in after.values()))
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
-        self.assertEqual(coordinator.local('physical')['server_acked_through'],5)
-        self.assertEqual(sum(m['arguments']['role']=='assistant' for m in self.messages()),4)
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],2)
+        self.assertEqual(sum(m['arguments']['role']=='assistant' for m in self.messages()),1)
         self.assertEqual(sum(m['arguments']['role']=='tool' for m in self.messages()),0)
         self.assertIsNone(self.store.session('physical')['turn']['assistant'])

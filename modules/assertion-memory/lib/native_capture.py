@@ -202,8 +202,8 @@ def _assistant_mode(payload):
     channel,phase=payload.get('channel'),payload.get('phase')
     if channel in ('analysis','reasoning') or phase in ('analysis','reasoning'):return None
     if payload.get('recipient') not in (None,'all') or channel not in (None,'final','commentary'):return None
-    if channel=='final' or phase=='final_answer':return 'final'
     if channel=='commentary' or phase=='commentary':return 'commentary'
+    if channel=='final' or phase=='final_answer':return 'final'
     return 'pending'
 
 
@@ -214,9 +214,53 @@ def _chat_exclusion(payload):
         return None
     if payload.get('role') in ('system', 'developer', 'tool'):
         return 'non_dialogue_role_' + payload['role']
-    if payload.get('role') == 'assistant' and _assistant_mode(payload) is None:
-        return 'assistant_private_or_unproven_route'
+    if payload.get('role') == 'assistant':
+        mode = _assistant_mode(payload)
+        if mode is None:
+            return 'assistant_private_or_unproven_route'
+        if mode == 'commentary':
+            return 'assistant_intermediate_message'
     return None
+
+
+def _stage_assistant(state, row, mode, offset, position):
+    turn = state['turn']
+    if turn.get('assistant_finished'):
+        return
+    if not turn['verified']:
+        if mode == 'final':
+            state['gaps'].append('visible_assistant_before_user_proof')
+        return
+    payload = row['payload']
+    parts = payload.get('content')
+    if not isinstance(parts, list) or len(parts) != 1 or not isinstance(parts[0], dict) or parts[0].get('type') != 'output_text':
+        state['gaps'].append('unsupported_visible_assistant_schema')
+        return
+    previous = turn.get('assistant')
+    # A legacy unlabelled record can be corroborated at completion, but must not displace a final.
+    if previous and mode == 'pending' and _assistant_mode(previous['row']['payload']) == 'final':
+        return
+    turn['assistant'] = {'row': row, 'offset': offset, 'position': position}
+
+
+def _complete_assistant(store, state, config, payload):
+    turn = state['turn']
+    pending = turn.get('assistant')
+    turn['assistant'] = None
+    turn['assistant_finished'] = True
+    if not pending:
+        return 0
+    row = pending['row']
+    source = row['payload']
+    if _assistant_mode(source) not in ('final', 'pending'):
+        return 0
+    text = source['content'][0].get('text')
+    if text != payload.get('last_agent_message'):
+        if payload.get('last_agent_message'):
+            state['gaps'].append('unmatched_assistant_completion')
+        return 0
+    return int(_enqueue(store, state, row, 'assistant', text, source.get('id'),
+        pending['position'], 'assistant', config, 'assistant:' + turn['id'] + ':byte:' + str(pending['offset'])))
 
 
 def _process(store, state, meta, row, offset, position, config):
@@ -315,51 +359,24 @@ def _process(store, state, meta, row, offset, position, config):
         turn['ambiguous'] = True
         state['gaps'].append('unsupported_user_schema')
         return 0
+    event_type = payload.get('type') if row.get('type') == 'event_msg' and payload.get('turn_id') == turn['id'] else None
+    if event_type == 'turn_aborted':
+        turn['assistant'] = None
+        turn['assistant_finished'] = True
+        return 0
+    is_complete = event_type == 'task_complete'
+    mode = _assistant_mode(payload) if row.get('type') == 'response_item' else None
     boundary = (row.get('type') == 'response_item' and (payload.get('type') in
                 ('function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output')
-                or _assistant_mode(payload) in ('final','commentary'))
-                or row.get('type') == 'event_msg' and payload.get('type') == 'task_complete')
-    queued = _flush_user(store, state, config, final=payload.get('type') == 'task_complete') if boundary else 0
+                or mode in ('final', 'commentary')))
+    queued = _flush_user(store, state, config, final=is_complete) if boundary or is_complete else 0
+    if is_complete:
+        return queued + _complete_assistant(store, state, config, payload)
     exclusion = _chat_exclusion(payload) if row.get('type') == 'response_item' else None
     if exclusion:
         _exclude(state, exclusion)
-        return queued
-    if not turn['verified']:
-        if row.get('type') == 'response_item' and _assistant_mode(payload) in ('final','commentary'):
-            state['gaps'].append('visible_assistant_before_user_proof')
-        return queued
-    if row.get('type') == 'response_item':
-        kind = payload.get('type')
-        if kind == 'message' and payload.get('role') == 'assistant':
-            mode=_assistant_mode(payload)
-            if mode is None:
-                _exclude(state,'assistant_private_or_unproven_route')
-                return queued
-            parts = payload.get('content')
-            if not isinstance(parts, list) or len(parts) != 1 or not isinstance(parts[0], dict) or parts[0].get('type') != 'output_text':
-                state['gaps'].append('unsupported_visible_assistant_schema')
-                return queued
-            text = parts[0].get('text')
-            if mode == 'pending':
-                turn['assistant'] = {'row': row, 'offset': offset, 'position': position}
-            else:
-                if mode=='final' and turn.get('assistant'):
-                    turn['assistant']=None
-                    _exclude(state,'unproven_assistant_context_superseded_by_final')
-                return queued + int(_enqueue(store, state, row, 'assistant', text, payload.get('id'), position,
-                    'assistant', config, 'assistant:' + turn['id'] + ':byte:' + str(offset)))
-    if row.get('type') == 'event_msg' and payload.get('type') == 'task_complete':
-        pending = turn.get('assistant')
-        if pending and _assistant_mode(pending['row']['payload']) is None:
-            turn['assistant']=None
-            _exclude(state,'assistant_private_or_unproven_route')
-            return queued
-        if pending and pending['row']['payload']['content'][0].get('text') == payload.get('last_agent_message'):
-            assistant = pending['row']
-            turn['assistant'] = None
-            return queued + int(_enqueue(store, state, assistant, 'assistant', payload['last_agent_message'],
-                assistant['payload'].get('id'), pending['position'], 'assistant', config,
-                'assistant:' + turn['id'] + ':byte:' + str(pending['offset'])))
+    elif mode:
+        _stage_assistant(state, row, mode, offset, position)
     return queued
 
 
@@ -395,7 +412,11 @@ def poll(store, session_id, config):
                 attachment_partial_record=state['skip_partial'])
         if state['identity'] != identity or state['header_hash'] != digest or stat.st_size < state['cursor']:
             raise ValueError('Native source replaced or truncated; review required')
-        for witness in state.get('witnesses', []) + ([state['checkpoint']] if state.get('checkpoint') else []):
+        pending_assistant = (state.get('turn') or {}).get('assistant') or {}
+        pending_witness = pending_assistant.get('row', {}).get('_witness')
+        for witness in [*state.get('witnesses', []), state.get('checkpoint'), pending_witness]:
+            if witness is None:
+                continue
             stream.seek(witness['start'])
             data = stream.read(witness['end'] - witness['start'])
             if hashlib.sha256(data).hexdigest() != witness['sha256']:

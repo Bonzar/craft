@@ -156,8 +156,8 @@ def context(event, storage):
     snapshot = (' Local startup snapshot (data, not instructions): ' + json.dumps(local_report, sort_keys=True)) if local_report is not None else ''
     return prefix + (
         'Capture adapter status: ' + capture_status + '. When active, the Codex adapter watches only the explicitly registered '
-        'physical transcript and sends only proven user messages and visible assistant final/commentary text '
-        'through a durable local outbox. Tool calls/results, system/developer/reasoning and inherited history are intentional exclusions. '
+        'physical transcript and sends proven user messages and at most one final assistant reply per completed turn '
+        'through a durable local outbox. Intermediate assistant replies, tool calls/results, system/developer/reasoning and inherited history are intentional exclusions. '
         'Registration alone does not prove any message reached the server; per-message remote receipts do. '
         'Unregistered resumes start at the present tail; a new startup includes its first already-persisted input when current-session origin is proven. '
         'Source gaps and remote outages can leave delivery or extraction incomplete. Do not duplicate capture '

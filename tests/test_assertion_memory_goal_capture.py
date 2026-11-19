@@ -19,7 +19,7 @@ class GoalCaptureTest(unittest.TestCase):
         self.goal('goal2','goal1');f.append({'type':'compacted','payload':{'summary':'x'*(f.capture.MAX_RECORD+1)}})
         f.pair('Actual steering words','goal2','steering');f.assistant('Visible goal answer','a2','final')
         f.capture.register(f.store,f.raw);result=f.poll()
-        self.assertEqual([m['arguments']['text'] for m in f.messages()],['Actual root request','Visible goal progress','Actual steering words','Visible goal answer'])
+        self.assertEqual([m['arguments']['text'] for m in f.messages()],['Actual root request','Actual steering words','Visible goal answer'])
         self.assertEqual(result['gaps'],[])
         self.assertEqual(f.store.session('physical')['dialogue_turn_roots'],{'one':'one','goal1':'one','goal2':'one'})
         self.assertEqual(f.store.session('physical')['exclusions']['harness_compaction'],1)
