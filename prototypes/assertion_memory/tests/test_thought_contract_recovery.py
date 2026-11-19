@@ -179,6 +179,35 @@ class ThoughtContractRecoveryTest(unittest.TestCase):
         self.assertIn('"thoughts":', calls[0].instructions)
         self.assertNotIn('"thought":', calls[0].instructions)
 
+    def test_initial_residual_context_overflow_uses_full_source_chunk_review(self):
+        first = 'The eastern gate opens at dawn.'
+        second = 'The western gate opens at dusk.'
+        raw = CaptureQueue(self.memory).capture_event(
+            'fixture', 'long-residual', first + '\n' + 'x' * 10100 + '\n\n' + second + '\n' + 'y' * 10100,
+            source='fixture')
+        calls = []
+
+        def provider(request):
+            calls.append(request.task)
+            if request.task == 'Construct thought':
+                if any(row.get('role') == 'rejected_draft' for row in request.records):
+                    raise ModelContextExceeded('Residual prompt exceeded provider capacity')
+                source = next(row for row in request.records if row.get('role') == 'source')
+                pieces = {fragment['text'].strip(): fragment['option'] for fragment in source['fragments']}
+                drafts = [{'text': text, 'question': None, 'support_fragments': [pieces[text]]}
+                          for text in (first, second) if text in pieces]
+                return json.dumps({'thoughts': drafts, 'needs_detail': None})
+            if 'rejected_drafts' in request.response_schema['properties']:
+                return json.dumps({'verdict': 'reject', 'text': 'Check the second gate timing.',
+                    'rejected_drafts': [{'draft': 1, 'text': 'Confirm that opening is at dusk.'}],
+                    'missing_meaning': None})
+            return ACCEPT
+
+        engine = ThoughtEngine(self.store, provider)
+        published = engine.ingest(raw, consolidate=False)
+        self.assertEqual([thought.text for thought in published], [first, second])
+        self.assertEqual(calls.count('Verify source thought batch'), 1)
+
     def test_source_repair_preserves_a_verified_independent_thought(self):
         raw = CaptureQueue(self.memory).capture_event(
             'fixture', 'raw', 'Mira approves openings. The bridge closes at night.', source='fixture')
