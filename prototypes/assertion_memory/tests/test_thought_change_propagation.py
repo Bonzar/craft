@@ -34,6 +34,59 @@ class ThoughtChangePropagationTest(unittest.TestCase):
             self.assertIsNone(worker.work.get(unrelated.id))
             self.assertEqual(calls,['Find useful shared thought question'])
 
+    def test_semantically_covered_question_reuses_bound_thought_without_generation(self):
+        with MemoryStore(':memory:') as memory:
+            store = ThoughtStore(memory)
+            changed = store.publish('The north building contains classrooms.')
+            overview = store.publish('Classes take place in the north building.',
+                                     question='Where are classes held?')
+            calls = []
+
+            def model(request):
+                calls.append(request.task)
+                option = next(record['reuse_option'] for record in request.records
+                              if record['text'] == overview.text)
+                return json.dumps({'question': None, 'text': 'Already covered.',
+                                   'reuse_candidate': option})
+
+            engine = ThoughtEngine(store, model)
+            result = engine.consolidate([changed])
+            self.assertEqual(result, [overview])
+            self.assertEqual(calls, ['Find useful shared thought question'])
+            self.assertEqual(store.versions(overview.id), [overview])
+            self.assertEqual(len(store.list_thoughts()), 2)
+
+    def test_distinct_question_can_use_an_existing_overview_as_one_ground(self):
+        with MemoryStore(':memory:') as memory:
+            store = ThoughtStore(memory)
+            overview = store.publish('Rooms 214 and 216 in the north building are classrooms.',
+                                     question='Where are the classrooms?')
+            changed = store.publish('Ventilation in rooms 214 and 216 has not been checked.')
+            question = 'Can classes begin in rooms 214 and 216?'
+            calls = []
+
+            def model(request):
+                calls.append(request.task)
+                if request.task == 'Find useful shared thought question':
+                    return json.dumps({'question': question, 'text': 'Readiness of rooms 214 and 216',
+                                       'reuse_candidate': None})
+                self.assertIn('A different question may reuse', request.instructions)
+                if request.task == 'Construct thought':
+                    return json.dumps({'thought': {'question': question,
+                        'text': 'Rooms 214 and 216 are classrooms awaiting ventilation checks.',
+                        'support_fragments': [0, 1]}, 'needs_detail': None})
+                return json.dumps({'verdict': 'accept', 'text': 'The answer is scoped to readiness.'})
+
+            engine = ThoughtEngine(store, model)
+            engine.retrieve = lambda *args, **kwargs: [changed, overview]
+            result = engine.consolidate([changed])[0]
+            self.assertEqual(result.question, question)
+            self.assertNotEqual(result.id, overview.id)
+            self.assertEqual(store.versions(overview.id), [overview])
+            self.assertIn((overview.id, overview.version),
+                          [(basis['thought_id'], basis['version']) for basis in result.bases])
+            self.assertEqual(calls, ['Find useful shared thought question', 'Construct thought', 'Verify thought'])
+
     def test_relevance_is_checked_again_if_a_candidate_changes_during_review(self):
         now = datetime.now(timezone.utc)
         with MemoryStore(':memory:') as memory:

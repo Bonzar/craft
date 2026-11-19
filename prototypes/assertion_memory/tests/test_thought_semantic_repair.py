@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from prototypes.assertion_memory.model import ModelError,ModelContextExceeded
+from prototypes.assertion_memory.model import ModelError,ModelContextExceeded,format_prompt
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.thought_store import ThoughtStore
@@ -57,6 +57,12 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         result=ThoughtEngine(store,model)._construct(records,bases,target=target)[0]
         self.assertEqual(result.text,target.text)
         self.assertEqual([row.task for row in calls],['Construct thought','Verify thought']*2)
+        original, repaired = map(format_prompt, (calls[0], calls[2]))
+        evidence = json.loads(original.split('\n\n', 1)[1])
+        repaired_evidence = json.loads(repaired.split('\n\n', 1)[1])
+        self.assertTrue(repaired.startswith(original[:-1] + ','))
+        self.assertEqual(evidence['records'], repaired_evidence['records'])
+        self.assertIn('Preserve the evacuation exception', repaired_evidence['repair_instructions'])
 
     def test_restart_discards_rejected_construct_but_reuses_independent_checked_passage(self):
         with tempfile.TemporaryDirectory() as directory:
