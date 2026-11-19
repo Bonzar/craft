@@ -92,7 +92,13 @@ inside a quote, and bind the actor to each action. If X writes "I am reviewing",
 write that X is reviewing. "X reported that the review is ongoing" leaves the
 actor out. This also applies to impersonal and noun-based paraphrases.
 Keep restrictions attached to the right participant, object or action. A subset
-of materials prepared for a purpose remains that subset. Preserve separately
+of materials prepared for a purpose remains that subset. Preserve the source's
+level of specificity: a qualitative degree does not choose a measurable parameter.
+Preserve the order of events. Before writing, check which participant each
+pronoun could denote. If two mentioned things both fit, do not choose the closer
+one: describe what was observed without assigning it to either. Context resolves
+a reading only if it clarifies what this speaker meant. Another person's response,
+proposed fix or report is not proof of that reading. Preserve separately
 what each source reports and whether it describes an observation, a habit, a
 wish, a plan, an ongoing action or a completed result. A person's wish belongs
 to that person even if another person would carry out the action.
@@ -110,7 +116,11 @@ Determine the output scope in this priority order:
 - A requested question: exactly ONE answer, covering each requested aspect with
   the supplied facts or a specifically named knowledge gap.
 - Raw source extraction: retain NEW useful meaning; separate independent thoughts
-  and omit service chatter or pure repeats that add no meaning.
+  and omit service chatter or pure repeats that add no meaning. Use separate
+  drafts for independently supported observations when uncertainty in one does
+  not affect the other. If one clause contains an unresolved pronoun and
+  another clause states a definite observation, give the definite observation
+  its own draft. Keep each observation with its necessary timing and conditions.
 Only raw extraction uses the novelty test. A requested answer or whole refresh
 may preserve existing meaning. Different facets of that one requested result
 belong inside its text, not separate thoughts or an empty output.
@@ -186,7 +196,10 @@ Use the job's scope to identify the material propositions and their qualificatio
 For each, locate an equivalent meaning in the draft. For every retained action
 with a known actor, identify who does it from the draft itself. For this check,
 naming the reporter elsewhere does not pass. Reject if a supported actor can
-only be guessed from the source or from who reported the action.
+only be guessed from the source or from who reported the action. Also
+check the parameter, the referent, and the timing independently. A paraphrase
+can preserve the topic and still choose an unsupported measurement, reading or order.
+List all material differences found in one review.
 The draft is not the coverage checklist: a proposition absent from it is otherwise
 easy to overlook. Selecting
 a supporting fragment is not the same as expressing its meaning in the answer.
@@ -252,7 +265,10 @@ sound drafts out of rejected_drafts. Check coverage across the current source
 passage; express new useful source meaning absent from all sound drafts as
 missing_meaning, or null if there is none. If offered a drill, use empty rejected_drafts and null missing_meaning while
 requesting evidence. A rejected draft may need replacement
-or removal; identify which meaning still needs representation in your feedback.
+or removal. In missing_meaning include each independently supported observation
+left in a rejected draft, including supported parts of that draft. Express
+ambiguous references neutrally. Do not make the feedback itself more specific
+than the current speaker's evidence.
 An accepted_coverage record is already reviewed: count its meaning for coverage,
 do not re-evaluate it, and do not use it as evidence for the new drafts. Reject
 new drafts that repeat it. Accept exactly when rejected_drafts is [] and
@@ -261,10 +277,13 @@ missing_meaning is null. Give a semantic reason in text.
 
 REPAIR_SOURCE_DRAFTS = """
 Repair only the rejected_draft and missing_meaning records. Their review feedback
-identifies defects; it is not factual evidence. Inspect the same source fragments
-and only the context needed for the new meaning. Preserve sound new meaning within
-a rejected draft and restore missing qualifications. Omit unsupported additions.
-An accepted_coverage record is fixed, already represented meaning. Never copy,
+identifies defects; it is not factual evidence. Recheck both the rejected wording
+and the feedback against the current source and its needed context. Preserve
+every supported observation, even if the feedback focused on a different problem.
+Make a separately publishable draft for an independently supported observation
+whose truth does not depend on a disputed interpretation. For the disputed part,
+lower specificity to what all viable readings support. Retain the original timing
+and conditions. An accepted_coverage record is fixed, already represented meaning. Never copy,
 rewrite, or use it as a factual ground. Return only corrected or missing drafts.
 """
 
@@ -381,7 +400,9 @@ material qualifications, set reuse_candidate to that number and question to
 null. A new formulation of the same question is not a new purpose. Set
 reuse_candidate to null if there is no such option. If new material changes
 that same answer, prefer the affected-candidate refresh decision where offered.
-A distinct question can use a part of any overview as a ground.
+A distinct question can use a part of any overview as a ground. Similar wording
+does not make a thought reusable if it gives the current observation an unsupported
+specific parameter, referent or timeline.
 """
 
 GENERALIZE_REFRESH = """
