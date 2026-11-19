@@ -54,6 +54,7 @@ class ThoughtChangePropagationTest(unittest.TestCase):
             store, queue = ThoughtStore(memory), CaptureQueue(memory)
             child = store.publish('Blue is supported.')
             parent = store.publish('Blue is supported.',question='Is blue supported?',
+                                   metadata={'protocol':'unified-thought-v1','verification':'accepted'},
                                    bases=[{'thought_id':child.id,'version':child.version}])
             grandparent = store.publish('The blue option is available.',question='What color is available?',
                                         bases=[{'thought_id':parent.id,'version':parent.version}])
@@ -76,3 +77,24 @@ class ThoughtChangePropagationTest(unittest.TestCase):
             self.assertEqual(refreshed.bases[0]['version'],child.version)
             self.assertIsNone(worker.work.get(grandparent.id))
             self.assertTrue(engine._fresh(grandparent))
+
+    def test_automatic_overview_uses_the_prepared_short_title_not_its_body(self):
+        with MemoryStore(':memory:') as memory:
+            store = ThoughtStore(memory)
+            source = store.publish('The deck uses a short swipe.',metadata={'verification':'accepted'})
+            body = 'The deck uses a short swipe to accept a card. Other views have no swipe.'
+            title = 'Accepting cards with a swipe'
+            proposal = {'question':'How does a user accept deck cards?','text':title}
+            def model(request):
+                if request.task == 'Find useful shared thought question':
+                    return json.dumps(proposal)
+                if request.task == 'Construct thought':
+                    return json.dumps({'thought':{'question':None,'text':body,
+                                                   'support_fragments':[0]},'needs_detail':None})
+                return json.dumps({'verdict':'accept','text':'The scope is the deck.'})
+            engine = ThoughtEngine(store,model)
+            engine.retrieve = lambda *args,**kwargs: [source]
+            result = engine.consolidate([source],on_affected=lambda _:None)[0]
+            self.assertEqual(result.metadata.get('title'),title)
+            proposal['text'] = body * 2
+            self.assertEqual(engine.consolidate([source],on_affected=lambda _:None),[])
