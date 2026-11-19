@@ -1,0 +1,5 @@
+starlette==1.10.0
+uvicorn==0.54.0
+httpx==0.28.1
+numpy==2.5.4
+fastembed==0.9.1
