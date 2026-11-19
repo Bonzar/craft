@@ -49,10 +49,12 @@ class ServiceConfig:
     reasoning_effort: str | None = None
     review_reasoning_effort: str | None = None
     batch_source_construction: bool = False
+    source_event_ids: tuple[str, ...] | None = None
 
     def __post_init__(self):
         from .thought_processing_selection import normalize_session_ids
         object.__setattr__(self, 'processing_session_ids', normalize_session_ids(self.processing_session_ids))
+        object.__setattr__(self, 'source_event_ids', normalize_session_ids(self.source_event_ids))
         if not Path(self.db).is_absolute() or self.db == ':memory:':
             raise ValueError('db must be an absolute persistent SQLite path')
         if self.provider not in ('none', 'subprocess', 'local', 'codex'):
@@ -406,19 +408,27 @@ def _register_write_tools(mcp, service, launcher, background):
     @mcp.tool()
     async def memory_process(limit: int = 100, retry_job_id: str | None = None,
                              session_ids: list[str] | None = None,
-                             batch_source_construction: bool = False) -> dict:
+                             batch_source_construction: bool = False,
+                             source_event_ids: list[str] | None = None) -> dict:
         """Schedule up to 1..1000 worker attempts asynchronously. Returns immediately; poll status.
         An already-running database worker owns processing. Optionally retry one failed job by its ID.
         Optional session_ids selects exact source sessions and their causal follow-up jobs for
         this launch. It leaves the automatic selection and the worker lock in place.
         batch_source_construction shares initial draft generation among concurrent source jobs.
         Independent review, publication and follow-up jobs still use their normal processing.
+        source_event_ids instead defines one exact group of queued messages for a single
+        initial model call. Supply one source session and a limit covering all message IDs.
         """
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError('limit must be between 1 and 1000 attempts')
         worker = launcher
         if batch_source_construction and session_ids is None:
             raise ValueError('batch_source_construction requires explicit session_ids')
+        if source_event_ids is not None and (
+                not source_event_ids or len(source_event_ids) > limit
+                or len(set(source_event_ids)) != len(source_event_ids)
+                or not session_ids or len(session_ids) != 1 or retry_job_id is not None):
+            raise ValueError('source_event_ids requires a nonempty unique group from one session within limit, without retry')
         if session_ids is not None:
             from .thought_processing_selection import normalize_session_ids
             from .thought_service import ThoughtService
@@ -430,9 +440,13 @@ def _register_write_tools(mcp, service, launcher, background):
                 raise ValueError('session_ids includes a session outside startup processing selection')
             if not isinstance(service, ThoughtService):
                 raise ValueError('session processing selection requires the canonical thought runtime')
+            if source_event_ids is not None:
+                from .source_model_batch import pending_sources
+                pending_sources(service.queue, selected[0], source_event_ids)
             # An empty automatic selection can coexist with an explicit one-time request.
             worker = WorkerLauncher(replace(launcher.config, processing_session_ids=selected,
-                                            batch_source_construction=batch_source_construction))
+                                            batch_source_construction=batch_source_construction,
+                                            source_event_ids=source_event_ids))
         if retry_job_id is not None:
             if worker.config.processing_session_ids is not None:
                 from .thought_processing_selection import source_predicate

@@ -63,3 +63,17 @@ class McpProcessingFilterTest(unittest.TestCase):
         tool = self.tool(None)
         with self.assertRaisesRegex(ValueError, 'session_ids must not be empty'):
             asyncio.run(tool(session_ids=[]))
+
+    def test_group_passes_exact_event_ids_to_worker_and_rejects_cross_session_ids(self):
+        tool = self.tool()
+        chosen = self.capture('chosen')
+        other = self.capture('other')
+        with patch('prototypes.assertion_memory.mcp_server.subprocess.Popen') as spawn:
+            with self.assertRaisesRegex(ValueError, 'outside the admitted session'):
+                asyncio.run(tool(session_ids=['chosen'], source_event_ids=[other.id]))
+            spawn.assert_not_called()
+            receipt = asyncio.run(tool(session_ids=['chosen'], source_event_ids=[chosen.id]))
+        self.assertTrue(receipt['scheduled'])
+        args = spawn.call_args.args[0]
+        config = json.loads(args[args.index('--worker-config-json') + 1])
+        self.assertEqual(config['source_event_ids'], [chosen.id])

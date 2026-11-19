@@ -277,8 +277,7 @@ class ThoughtEngine:
                 if question is not None:
                     correction += QUERY_REPAIR
 
-    def _prepare_once(self, records, bases, *, question=None, origin=None,
-                      review_ambiguity=True, correction=''):
+    def _construction_material(self, records, bases, question=None):
         from .thought_support import prepare_support
         catalog=prepare_support(records,bases)
         if not catalog.fragments:
@@ -297,6 +296,18 @@ class ThoughtEngine:
             request_records = [{'role': 'question', 'text': question}, *catalog.wire]
         if is_overview:
             instructions += '\nUse overview_comparison only to detect duplication. Select grounds from linked material.'
+        return catalog, request_records, instructions, whole, is_overview
+
+    def source_construction_request(self, event, context):
+        _, _, _, records, bases = self._source_packet(event, context)
+        catalog, wire, instructions, _, _ = self._construction_material(records, bases)
+        task = 'Construct thought'
+        return ModelRequest(task, wire, instructions, usage_task=task,
+                            response_schema=response_schema(task, support_count=len(catalog.fragments))), bases
+
+    def _prepare_once(self, records, bases, *, question=None, origin=None,
+                      review_ambiguity=True, correction=''):
+        catalog, request_records, instructions, whole, is_overview = self._construction_material(records, bases, question)
         verified, selections = self._construct_drafts(catalog, request_records, instructions,
                                                        question=question, whole=whole, correction=correction)
         if len(verified) > 1 and (origin or {}).get('kind') == 'source_interpretation' and not whole:

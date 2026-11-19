@@ -43,13 +43,21 @@ class SourceModelBatchTest(unittest.TestCase):
         self.assertEqual(results, [None, None])
 
     def test_worker_publishes_and_verifies_each_source_independently(self):
+        self.check_worker_results(use_group=False)
+
+    def test_explicit_group_exceeds_lane_count_and_leaves_other_jobs_pending(self):
+        self.check_worker_results(use_group=True)
+
+    def check_worker_results(self, *, use_group):
         path = Path(self.enterContext(TemporaryDirectory())) / 'memory.sqlite3'
         store = self.enterContext(MemoryStore(path))
         queue = CaptureQueue(store)
         ThoughtStore(store)
         events = [queue.capture_event('chosen', text, text, source='fixture')
                   for text in ('Kettle boils water.', 'Oven bakes bread.')]
-        other = queue.capture_event('other', 'message', 'Other work.', source='fixture')
+        if use_group:
+            events.append(queue.capture_event('chosen', 'fridge', 'Fridge keeps food cold.', source='fixture'))
+        other = queue.capture_event('chosen' if use_group else 'other', 'message', 'Other work.', source='fixture')
         untouched = queue.get(other.id)
         tasks = []
         batch = SourceModelBatch(2)
@@ -75,11 +83,18 @@ class SourceModelBatchTest(unittest.TestCase):
                                              processing_session_ids=('chosen',), source_batch=batch)
                 return worker.run_once()
 
-        with ThreadPoolExecutor(2) as pool:
-            jobs = list(pool.map(run, range(2)))
+        if use_group:
+            engine = ThoughtEngine(ThoughtStore(store), model)
+            worker = TracedThoughtWorker(queue, engine, lock_owned=True,
+                                         processing_session_ids=('chosen',), is_pausing=lambda: False)
+            worker.process_source_group([event.id for event in events], limit=len(events))
+            jobs = [queue.get(event.id) for event in events]
+        else:
+            with ThreadPoolExecutor(2) as pool:
+                jobs = list(pool.map(run, range(2)))
         self.assertEqual({job.event_id for job in jobs}, {event.id for event in events})
         self.assertTrue(all(job.status == 'completed' for job in jobs))
-        self.assertCountEqual(tasks, ['Construct thoughts for multiple source messages', 'Verify thought', 'Verify thought'])
+        self.assertCountEqual(tasks, ['Construct thoughts for multiple source messages'] + ['Verify thought'] * len(events))
         thoughts = ThoughtStore(store)
         for event in events:
             job = queue.get(event.id)

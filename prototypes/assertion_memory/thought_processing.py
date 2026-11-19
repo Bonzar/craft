@@ -18,6 +18,12 @@ class TracedThoughtWorker(ThoughtWorker):
     def __init__(self, *args, source_batch=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.source_batch = source_batch
+        self.batch_contexts = {}
+
+    def _context(self, event):
+        if event.id in self.batch_contexts:
+            return self.batch_contexts[event.id]
+        return super()._context(event)
 
     @contextmanager
     def _attempt(self, operation, inputs, cancel_claim):
@@ -42,28 +48,13 @@ class TracedThoughtWorker(ThoughtWorker):
     def _batch_initial_construction(self, trace, fallback, inputs):
         is_initial = True
 
-        def generate(request, bindings):
-            batch_trace = ThoughtTrace(self.queue.store, 'source_model_batch',
-                                       {'source_event_ids': [row['event_id'] for row in bindings
-                                                             if 'event_id' in row]})
-            try:
-                result = batch_trace.call(self.model, request, bindings)
-            except ProcessingCancelled:
-                batch_trace.finish('interrupted')
-                raise
-            except BaseException:
-                batch_trace.finish('failed')
-                raise
-            batch_trace.finish()
-            return result, batch_trace.id
-
         def gateway(task, request, bindings):
             nonlocal is_initial
             if task == 'Construct thought' and is_initial:
                 is_initial = False
                 source_records = [row for row in request.records if row.get('role') == 'source']
                 if len(source_records) == 1 and not request.repair_instructions:
-                    draft = self.source_batch.submit(request, bindings, generate)
+                    draft = self.source_batch.submit(request, bindings, self._generate_source_batch)
                     if draft is not None:
                         trace.record('source_batch_draft', inputs=bindings, details={
                             'batch_run_id': draft.run_id, 'source': draft.source,
@@ -73,6 +64,56 @@ class TracedThoughtWorker(ThoughtWorker):
             return fallback(task, request, bindings)
 
         return gateway
+
+    def _generate_source_batch(self, request, bindings):
+        source_ids = list(self.batch_contexts) or list(dict.fromkeys(
+            row['event_id'] for row in bindings if 'event_id' in row))
+        batch_trace = ThoughtTrace(self.queue.store, 'source_model_batch',
+                                   {'source_event_ids': source_ids})
+        try:
+            result = batch_trace.call(self.model, request, bindings)
+        except ProcessingCancelled:
+            batch_trace.finish('interrupted')
+            raise
+        except BaseException:
+            batch_trace.finish('failed')
+            raise
+        batch_trace.finish()
+        return result, batch_trace.id
+
+    def process_source_group(self, event_ids, limit):
+        from .source_model_batch import (pending_sources, PreparedSourceGroup, generate_source_drafts,
+                                         MAX_EXPLICIT_BATCH_CHARACTERS)
+        if len(self.processing_session_ids or ()) != 1 or not 1 <= len(event_ids) <= limit:
+            raise ValueError('one source session and a sufficient queue attempt limit are required')
+        events = pending_sources(self.queue, self.processing_session_ids[0], event_ids)
+        is_pausing = self.is_pausing or (lambda: False)
+        self.batch_contexts = {event.id: self._context(event) for event in events}
+        try:
+            requests = [self.engine.source_construction_request(event, self.batch_contexts[event.id])
+                        for event in events]
+            if is_pausing():
+                return
+            drafts = generate_source_drafts(requests, self._generate_source_batch,
+                                           max_characters=MAX_EXPLICIT_BATCH_CHARACTERS)
+            if any(draft is None for draft in drafts):
+                raise ValueError('one group response did not cover every source; original jobs remain queued')
+            self.source_batch = PreparedSourceGroup(requests, drafts)
+            for event in events:
+                if is_pausing():
+                    return
+                claim = self._claim_source(event_id=event.id)
+                if claim is None:
+                    raise ValueError(f'queued source became unavailable: {event.id}')
+                self._source(claim)
+        finally:
+            self.source_batch = None
+            self.batch_contexts = {}
+        for _ in range(max(0, limit - len(events))):
+            task = self.work.claim(is_pausing=self.is_pausing)
+            if task is None:
+                break
+            self._consolidate(task)
 
     def _source(self, claim):
         with self._attempt('source', {'event_id': claim.job.event_id, 'job_id': claim.job.id,
@@ -169,6 +210,15 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
                     if config.batch_source_construction and config.source_workers > 1 else None)
     with MemoryStore(config.db) as store:
         queue=CaptureQueue(store)
+        if config.source_event_ids is not None:
+            if not is_pausing():
+                with processing_cancellation(is_cancelling):
+                    current = config.service(store)
+                    worker = TracedThoughtWorker(current.queue, current.engine, lock_owned=True,
+                                                 processing_session_ids=config.processing_session_ids,
+                                                 is_pausing=is_pausing)
+                    worker.process_source_group(config.source_event_ids, limit)
+            return
         _recover_selected(queue,config.processing_session_ids)
 
         @contextmanager
