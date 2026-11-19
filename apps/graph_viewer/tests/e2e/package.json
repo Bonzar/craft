@@ -1,0 +1,14 @@
+{
+  "name": "graph-viewer-independent-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:chrome": "playwright test --project=desktop-chrome",
+    "test:engines": "playwright test --project=chromium --project=firefox --project=webkit",
+    "list": "playwright test --list"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
+  }
+}

@@ -1,0 +1,29 @@
+import { DoubleSide, InstancedBufferAttribute, InstancedBufferGeometry, Mesh, NormalBlending, ShaderMaterial, SphereGeometry, Vector3 } from 'three';
+import type { Scene } from 'three';
+import type { EnvelopeBounds } from './envelopes.ts';
+import { boundedShellIndices } from './ux-policy.ts';
+import { lifecycle, opaqueTag } from './lifecycle.ts';
+const vertex=`attribute vec3 shellCenter;attribute float shellRadius;attribute vec3 shellTint;attribute float shellOpacity;attribute float shellSelected;varying vec3 vNormal;varying vec3 vView;varying vec3 vTint;varying float vOpacity;varying float vSelected;void main(){vec3 p=position*shellRadius+shellCenter;vec4 view=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*view;vNormal=normalize(normalMatrix*normal);vView=normalize(-view.xyz);vTint=shellTint;vOpacity=shellOpacity;vSelected=shellSelected;}`;
+const fragment=`varying vec3 vNormal;varying vec3 vView;varying vec3 vTint;varying float vOpacity;varying float vSelected;uniform float transition;void main(){float rim=pow(1.-abs(dot(normalize(vNormal),normalize(vView))),mix(6.,7.,vSelected));float alpha=(mix(.0006,.007,vSelected)+rim*mix(.038,.22,vSelected))*vOpacity*transition;gl_FragColor=vec4(mix(vTint,vec3(.90,.95,1.),vSelected*.85),alpha);}`;
+export class Shells {
+  private scene:Scene;private mesh:Mesh<InstancedBufferGeometry,ShaderMaterial>|null=null;private bounds:EnvelopeBounds|null=null;private slots=new Map<number,number>();private signature='';private started=0;private selectedSlots:number[]=[];private opacity:InstancedBufferAttribute|null=null;private selectedAttribute:InstancedBufferAttribute|null=null;private selectedIndex:number|null=null;private candidates:Uint32Array=new Uint32Array();private budget=6;
+  constructor(scene:Scene){this.scene=scene;}
+  setBounds(bounds:EnvelopeBounds|null):void{this.bounds=bounds;this.slots=new Map(bounds?Array.from(bounds.indices,(index,slot)=>[index,slot]):[]);this.signature='';this.candidates=new Uint32Array();this.selectedIndex=null;this.clear();lifecycle('shell-bounds',{revision:opaqueTag(bounds?.revision??''),topics:bounds?.indices.length??0});}
+  setSelected(index:number|null):void{this.selectedIndex=index!==null&&this.slots.has(index)?index:null;this.show(this.candidates,this.budget);}
+  show(indices:Uint32Array,budget=window.innerWidth<700?3:6):void{
+    this.candidates=indices;this.budget=budget;const bounded=boundedShellIndices(indices,this.selectedIndex,budget);const signature=bounded.toSorted().join(',');
+    if(signature===this.signature){this.updateSelected();return;}this.signature=signature;this.clear();const bounds=this.bounds;if(!bounds||!bounded.length)return;
+    for(const index of bounded){const slot=this.slots.get(index);if(slot!==undefined)this.selectedSlots.push(slot);}const count=this.selectedSlots.length;if(!count)return;
+    const base=new SphereGeometry(1,32,20);const geometry=new InstancedBufferGeometry();geometry.setIndex(base.getIndex());geometry.setAttribute('position',base.getAttribute('position'));geometry.setAttribute('normal',base.getAttribute('normal'));
+    const centers=new Float32Array(count*3);const radii=new Float32Array(count);const colors=new Float32Array(count*3);for(let i=0;i<count;i++){const slot=this.selectedSlots[i]??0;centers.set(bounds.centers.subarray(slot*3,slot*3+3),i*3);radii[i]=bounds.radii[slot]??1;const index=bounds.indices[slot]??0;colors.set(index%2?[.38,.5,.82]:[.35,.66,.78],i*3);}
+    this.opacity=new InstancedBufferAttribute(new Float32Array(count).fill(1),1);this.selectedAttribute=new InstancedBufferAttribute(new Float32Array(count),1);geometry.setAttribute('shellCenter',new InstancedBufferAttribute(centers,3));geometry.setAttribute('shellRadius',new InstancedBufferAttribute(radii,1));geometry.setAttribute('shellTint',new InstancedBufferAttribute(colors,3));geometry.setAttribute('shellOpacity',this.opacity);geometry.setAttribute('shellSelected',this.selectedAttribute);geometry.instanceCount=count;
+    const material=new ShaderMaterial({vertexShader:vertex,fragmentShader:fragment,uniforms:{transition:{value:0}},transparent:true,depthWrite:false,depthTest:true,side:DoubleSide,blending:NormalBlending});this.mesh=new Mesh(geometry,material);this.mesh.frustumCulled=false;this.mesh.renderOrder=-10;this.started=window.matchMedia('(prefers-reduced-motion: reduce)').matches?performance.now()-300:performance.now();this.scene.add(this.mesh);this.updateSelected();lifecycle('shell-rebuild',{count,signature:opaqueTag(signature)});
+  }
+  private updateSelected():void{if(!this.selectedAttribute||!this.bounds)return;for(let i=0;i<this.selectedSlots.length;i++)this.selectedAttribute.setX(i,this.bounds.indices[this.selectedSlots[i]??-1]===this.selectedIndex?1:0);this.selectedAttribute.needsUpdate=true;}
+  settle():void{this.started=performance.now()-300;}
+  update(camera:Vector3):void{if(!this.bounds||!this.opacity)return;const fade=this.mesh?.material.uniforms.transition;if(fade)fade.value=Math.min(1,(performance.now()-this.started)/250);for(let i=0;i<this.selectedSlots.length;i++){const slot=this.selectedSlots[i]??0;const radius=this.bounds.radii[slot]??1;const distance=Math.hypot(camera.x-(this.bounds.centers[slot*3]??0),camera.y-(this.bounds.centers[slot*3+1]??0),camera.z-(this.bounds.centers[slot*3+2]??0));this.opacity.setX(i,distance<radius?Math.max(.02,(distance/radius)**2*.16):Math.min(1,(distance-radius)/Math.max(1,radius*.2)));}this.opacity.needsUpdate=true;}
+  get indices():Uint32Array{return new Uint32Array(this.selectedSlots.map(slot=>this.bounds?.indices[slot]??0));}
+  get count():number{return this.selectedSlots.length;}
+  private clear():void{if(this.mesh){this.mesh.removeFromParent();this.mesh.geometry.dispose();this.mesh.material.dispose();this.mesh=null;}this.opacity=null;this.selectedAttribute=null;this.selectedSlots=[];}
+  dispose():void{this.clear();this.bounds=null;this.candidates=new Uint32Array();}
+}

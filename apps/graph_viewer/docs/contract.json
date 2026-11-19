@@ -1,0 +1,542 @@
+{
+  "contract_version": "1.0.1",
+  "package": "apps/graph_viewer",
+  "spec_sha256": "3f19a1ab4c2db7f838ae26a511d9e4e9978e97f7009f0b06aeceafce6fb073e6",
+  "decision": "Separate local Python service, read-only source publisher/provider, sidecar state/cache, browser TypeScript + Three.js. No modifications to assertion_memory core, its database, or existing .codex configuration.",
+  "nonnegotiable": [
+    "All eligible source assertions and edges constitute the universe; memory_query overviews are never the universe.",
+    "Exactly one physical star per assertion ID, even with many topic memberships.",
+    "Viewer never invents assertions, relationship kinds, topic names, parenthood, cancellation or truth judgments.",
+    "Geometry, packing, spatial indexes, screen-label priority and camera flight are presentation math, not semantic facts.",
+    "Source providers are replaceable; persistent bookmarks use provider namespace plus stable source ID, never binary ordinals.",
+    "No direct access to the actual campus database is required for implementation or test fixtures.",
+    "An unavailable source capability is reported explicitly and is an acceptance gap, never silently marked complete.",
+    "Current and known-then universes show known assertions, including undated statements and known future plans; graph membership must not be confused with claims being physically effective at that moment."
+  ],
+  "processes": {
+    "server": "One Python 3.12 ASGI service serves locally bundled static frontend and /api on the same origin. Bind 127.0.0.1 by default; HTTPS ingress is separate deployment configuration.",
+    "publisher": "Background task opens read-only source snapshots, maps authoritative semantics, maintains prepared binary projection/search cache and emits revision deltas. It never calls source constructors or mutating query APIs.",
+    "browser": "One WebGL2 canvas, HTML overlays/cards, small TS state store; worker for binary decode/spatial indexing if necessary. No force simulation on the main render loop.",
+    "state": "Writable viewer.sqlite3 and cache directory are separate from source DB. Store owner auth/session, bookmarks, projection caches, source revision journal and optional embedding indexes here."
+  },
+  "ownership": {
+    "backend_agent": [
+      "apps/graph_viewer/server/**",
+      "apps/graph_viewer/requirements.txt",
+      "apps/graph_viewer/tests/backend/**"
+    ],
+    "frontend_agent": [
+      "apps/graph_viewer/web/**",
+      "apps/graph_viewer/package.json",
+      "apps/graph_viewer/package-lock.json",
+      "apps/graph_viewer/tsconfig.json",
+      "apps/graph_viewer/vite.config.ts"
+    ],
+    "root_integration_qa": [
+      "apps/graph_viewer/README.md",
+      "apps/graph_viewer/tests/e2e/**",
+      "apps/graph_viewer/scripts/**",
+      "apps/graph_viewer/test-results/**"
+    ],
+    "immutable_shared_contract": "This file is the initial shared contract; coordinate changes before editing another owner's interfaces. Copy to package docs by root."
+  },
+  "source_provider": {
+    "protocol": {
+      "capabilities()": "ProviderCapabilities",
+      "revision()": "Opaque source revision including assertions, edges, view definitions/versions/checks, route revisions and publisher topic version",
+      "assertion_membership(connection, recorded_cutoff)": "Inactive assertion IDs plus an opaque JSON-safe selection token from the same pinned read transaction. Assertion-memory lazily reuses core source_revision.selection with full pinned ledger ownership and an as-of publication cutoff. JSON membership is unrestricted and never imports core.",
+      "snapshot(selector)": "Consistent immutable GraphSnapshot descriptor + complete rows; source transaction closes before layout or embeddings",
+      "node(stable_id, snapshot_id)": "NodeCard pinned to immutable text and selected perspective",
+      "edge(stable_id, snapshot_id)": "EdgeCard with both endpoints and grounded fragments",
+      "source(record_id, snapshot_id, offset, limit, context)": "SavedSourcePage",
+      "search(query, mode, snapshot_id, limit, cursor)": "SearchPage using exactly the selected snapshot's eligible IDs",
+      "changes(after_revision, selector)": "Incremental source changes or explicit reset_required"
+    },
+    "sqlite_open": "sqlite3.connect('file:' + URI-encoded resolved path + '?mode=ro', uri=True); PRAGMA query_only=ON; busy_timeout=5000. Do not use immutable=1 against a live WAL DB. Do not set journal_mode. Do not construct MemoryStore, MemoryEngine, MemoryService, CaptureQueue or CachedEmbedder: all can write schema/cache/state.",
+    "consistent_read": "BEGIN; read memory_state.version first to establish snapshot; read source watermarks and all requested source rows; COMMIT; build outside transaction. Parameterize all user inputs. Use one connection per job/request, not shared cross-thread transactions. For large snapshots use fetchmany into a temporary sidecar materialization/binary staging files, commit source read transaction before expensive geometry/index work; atomically rename prepared output. Do not create a second full Python copy during JSON serialization.",
+    "required_tables": [
+      "memory_assertions",
+      "memory_edges",
+      "memory_state"
+    ],
+    "optional_tables": [
+      "memory_extraction_runs",
+      "memory_views",
+      "memory_view_versions",
+      "memory_view_checks",
+      "memory_question_route_versions",
+      "memory_branch_reviews",
+      "memory_raw_events",
+      "memory_event_positions",
+      "memory_embedding_cache",
+      "memory_fts"
+    ],
+    "revision_detection": "memory_state alone misses view publications. A persistent read-only connection's PRAGMA data_version is a cheap wakeup; inside snapshot compare state version, max assertion/edge rowid, view-version max ID, view-check max ID, route rowid/count and definition/current-ID fingerprint. Provider must invalidate on any displayed material change, including same-size row updates. Sidecar maintains monotonic viewer revision and replay journal.",
+    "interpretation_membership": "Select source interpretation membership before counters, nodes, edges, search and topics. Missing extraction ledger retains legacy unrestricted membership; a present malformed ledger fails closed. Current/known_now use captured_at; known_then uses selector.at while ALL ledger rows through the pinned run watermark establish ownership, preventing a backdated row from leaking before introduction. Immutable raw metadata and domain status are unchanged. Preparation records source_membership_policy=source-selection-v1; private watermarks include run ownership watermark and selection fingerprint. Missing/mismatched policy or token forbids append reuse even if state/row arithmetic matches. Exact old caches stay addressable; legacy caches are marked legacy_source_membership_unchecked and never adopted as newly validated current projections.",
+    "evidence_disposition": "Source evidence._expand_evidence is the oracle for disposition semantics, but its query-snapshot valid-time membership is NOT the viewer knowledge-membership rule. Use all knowledge-eligible assertions for current/known_then; select effective replacement relations separately at selector status instant so a future-valid replacement cannot cancel its predecessor early. Import pure helpers or provide a verified compact equivalent preserving declared_kind, proposal/inference exclusions, conditional/cross-scope replacements and SCC cycle handling. Never blanket-hide every target of any supersedes edge. Keep replacement IDs and effective-time basis. Global cancellation exists only when explicitly published by provider; no guessed keyword test.",
+    "source_fields": {
+      "assertion": [
+        "assertion_id",
+        "text",
+        "actor",
+        "source",
+        "episode",
+        "valid_at",
+        "recorded_at",
+        "scope",
+        "metadata"
+      ],
+      "edge": [
+        "edge_id",
+        "from_id",
+        "to_id",
+        "kind",
+        "recorded_at",
+        "metadata.source_quote",
+        "metadata.target_quote",
+        "metadata.condition",
+        "metadata.basis"
+      ],
+      "provenance": [
+        "metadata.event_id",
+        "metadata.source_span",
+        "metadata.evidence_refs",
+        "metadata.context_event_ids",
+        "metadata.context_truncated",
+        "metadata.context_order",
+        "metadata.context_recovery",
+        "metadata.source_recorded_at",
+        "metadata.source_available_at"
+      ],
+      "time": [
+        "metadata.temporal_precision",
+        "metadata.temporal_evidence",
+        "metadata.interpretation.interpreted_at"
+      ],
+      "raw_source": "memory_raw_events.prompt is saved event body; session_id and memory_event_positions order known saved events. Never claim this is an externally complete document/transcript unless source says so."
+    },
+    "memory_budget": "On the known 8 GB host, never retain a million metadata-rich Python edge dicts or JSON objects. Stream source cursor batches into prepared sidecar rows/binary arrays; keep numeric endpoint arrays and O(N) node state in memory. Parse text/metadata once when publishing and keep card bodies/provenance on disk/on demand. Source row IDs, definitions/check watermarks and normalized time/status are enough for graph preparation. Pure evidence._expand_evidence is an oracle for fixture parity, not an obligation to materialize every full edge row at scale; production status may use source-equivalent compact algorithm with SCC cycle detection, avoiding per-edge reachability DFS."
+  },
+  "source_topic_publisher": {
+    "location": "server/providers/assertion_memory_topics.py, outside core; provider integration/publisher, not browser inference",
+    "output_authority": "source-derived projection, provenance attached per topic, label, membership and parent edge",
+    "identity": "topic:<source view_id>; retain exact source view ID as source_ref",
+    "label": "Use exact memory_views.definition.title or query. Source publisher may produce a short literal word-boundary excerpt with ellipsis; set label_method=source_title_excerpt, retain full_title. This is typographic abbreviation, not semantic summarization. No keyword cluster labels or manually named groups.",
+    "membership": "From the selected immutable memory_view_versions.snapshot.evidence assertion IDs; intersect with the selected graph's eligible IDs and expose source version/check freshness. A view can contain many nodes, and a node can belong to many views. Do not fill omitted members with lexical similarity. Source interpretation removals never substitute newly introduced IDs into an old topic. Keep its exact saved summary/citations and source version; expose freshness=stale, completeness=partial and source_topic_membership_filtered_by_revision even for a matching historical materialization.",
+    "parenthood": "For persisted memory_question_route_versions with plan.reuse_view_id null, resolve each plan.subquestions string to a dependency of that view with exact matching definition.query and scopes. Emit parent topic -> child topic with relation=subquestion and route revision provenance. Source _publish creates depends_on from these subquestions. For manually defined or unverified depends_on, retain relation=prerequisite and do not silently treat it as semantic parenthood. related_view_ids are related source indexes, not parents.",
+    "hierarchy": "Explicit subquestion edges form a DAG, not a tree; detect invalid cycles and report them. One topic can have multiple parents. Levels for label visibility derive from actual DAG depth and projected bounds. Graph source semantics remain unchanged.",
+    "intersections": "An existing published topic shared as a subquestion of multiple parents can form a cross-topic constellation. Shared assertion memberships pull its geometry near each relevant constellation. Do not create a new semantic intersection topic merely from overlap; where no source topic exists, show shared star and existing topic labels only.",
+    "history": "Known-then excludes topic definitions/route revisions/materializations first available after knowledge cutoff, including late interpretation. It does not exclude their already-known undated or future-valid assertion members. Existing definitions lack created_at; use conservative first source publication time (route recorded_at or view created_at) with uncertainty explicit. Known-now-at-date uses matching source historical membership when available. Filtering a current membership by valid_at is explicitly partial, not complete historical membership; unknown-date members follow selector.undated and have separate counts.",
+    "missing_data": "An empty/flat source can still yield a complete assertion universe but cannot satisfy real hierarchical constellation acceptance until the source publisher has actual source views/subquestion plans. The implementation supports and tests this capability with graph-native fixtures, while production status reports its readiness honestly. If full production labels are needed, a separately configured publisher may request grounded source-system overview generation outside this read-only viewer; no hidden model calls or graph mutations."
+  },
+  "temporal_selector": {
+    "mode": "current | known_then | known_now",
+    "at": "ISO-8601 instant; required for known_then/known_now; date UI converts end-of-selected-date in explicit timezone and preserves selected date separately",
+    "history": "boolean: show superseded/cancelled eligible assertions. This never bypasses source interpretation membership; withdrawn interpretations require known_then before withdrawal or an exact old revision. Default false/current; history panel defaults true. Transport can contain status-hidden slots to keep live ordinals stable; visual map and visible counts follow this flag.",
+    "current": "Knowledge-membership universe: assertion.recorded_at <= captured_at, source availability <= captured_at when published, and interpretation.interpreted_at is null or <= captured_at. Include known assertions with any valid_at: past, future or unknown. Known future plans are knowledge and are not silently omitted. Dates/kind remain explicit; display does not claim physical effectiveness now.",
+    "known_then": "Knowledge-membership universe as known at at: assertion.recorded_at <= at, metadata.source_available_at is null or <= at, and metadata.interpretation.interpreted_at is null or <= at. Do NOT impose assertion.valid_at <= at and do NOT omit unknown valid_at. Include future plans already known then. Edges require recorded_at <= at and both endpoints knowledge-eligible; topic availability also bounded. Later live semantic updates do not alter this pinned perspective.",
+    "known_now": "What latest knowledge says about the selected date: knowledge cutoff=latest captured_at; dated assertion valid_at <= at. Future-effective assertions beyond at are excluded from this date slice. Unknown valid_at cannot be assigned a date: report undated_known_count and excluded_unknown_valid_count and provide an explicit undated bucket/toggle. selector.undated=separate (default: exclude from dated scene but surface count/action), include (show alongside with unknown-date marking in card), or only (undated bucket scene). Never silently lose undated records or fabricate dates.",
+    "precision": "Keep raw valid_at plus metadata.temporal_precision; unknown precision stays unknown. Do not display normalized midnight as exact observation time. Source recorded, source available, interpretation and system recorded timestamps stay distinct.",
+    "status": "Compute status separately from knowledge-membership. Replacement effectiveness is evaluated at captured_at for current or at for either historical perspective. An otherwise source-authorized supersedes relation does not supersede its predecessor before the replacing assertion effective valid_at (and any explicitly published relation effective_at). A future-valid replacement remains a visible known assertion/plan but cannot prematurely hide its predecessor. Unknown effective time remains source-unknown; follow the source explicit relation semantics rather than inventing an effective date. Preserve all source kind/scope/condition/cycle rules. History=false only hides source-authorized superseded/cancelled assertions effective for the selected status instant. Text of an open card stays pinned while eligible live status updates.",
+    "undated": "separate | include | only; applies to known_now; current and known_then always include undated knowledge and ignore this display bucket option",
+    "availability": "source available cutoff means max(assertion.recorded_at, metadata.source_available_at if present, metadata.interpretation.interpreted_at if present). Preserve all component timestamps in cards; do not rewrite them into a fictitious common source date."
+  },
+  "wire_api": {
+    "base": "/api/v1",
+    "errors": "{error:{code,message,details?}} with meaningful HTTP status; no source paths, SQL or secrets in browser errors",
+    "auth": {
+      "POST /session": "{password:string} -> {owner:true,csrf_token:string}; server sets opaque HttpOnly SameSite=Strict Secure cookie under HTTPS",
+      "GET /session": "{authenticated:boolean,csrf_token?:string}",
+      "DELETE /session": "Revoke current session; requires CSRF token",
+      "configuration": "Single owner credential configured by environment/CLI, salted scrypt/Argon2 hash in viewer state; no shipped default password, no query-string token. Login rate limiting. All graph, source, search, stream, bookmark and cache endpoints require session. Local bootstrap may print one-time setup secret to terminal, never expose source data before setup.",
+      "boundary": "Default loopback listener. Remote use requires explicit HTTPS tunnel/reverse proxy URL with trusted forwarded headers limited to configured proxy. Same-origin browser calls, Origin check and CSRF token for writes; safe external source links rel=noopener. No public Sites upload of graph data."
+    },
+    "GET /capabilities": "{provider_id,capabilities:{full_graph,topics,topic_hierarchy,source_context,whole_saved_source,keyword_search,semantic_search,history,live},readiness:[{code,message}],limits}",
+    "GET /graph/{revision}/nodes.bin": "Node binary below; private HTTP cache, Brotli/gzip when effective",
+    "GET /graph/{revision}/edges.bin": "Edge binary below; private HTTP cache, Brotli/gzip",
+    "GET /graph/{revision}/topics": "{revision,topics:[Topic],memberships:[{topic_index,node_indices:[uint32]}],links:[{parent,child,relation,provenance}],completeness,unknowns}",
+    "GET /nodes/{stable_id}?revision=...&offset=0&limit=12000": "NodeCard; URL-encode IDs. Returns bounded initial text and explicit next cursor if long; no truncation without continuation.",
+    "GET /graph/{revision}/nodes/{ordinal}": "Same NodeCard response, resolves ordinal within exact revision; 409 expired revision means reload, never reinterpret ordinal",
+    "GET /edges/{stable_id}?revision=...": "EdgeCard; same URL encoding rule",
+    "GET /graph/{revision}/edges/{ordinal}": "Same EdgeCard; resolves immutable edge ordinal",
+    "GET /search?q=...&mode=keyword|semantic&revision=...&limit=50&cursor=...": "SearchPage; unknown mode rejected; semantic unavailability is explicit 503 capability error, never pretend lexical is semantic",
+    "GET /events?after=...&revision=...": "SSE with same-origin session cookie; events below",
+    "GET /bookmarks": "{items:[Bookmark],revision}",
+    "PUT /bookmarks/{bookmark_id}": "{object_kind:'node'|'topic',object_id,provider_id,label?,selector?}; idempotent, CSRF protected, graph untouched",
+    "DELETE /bookmarks/{bookmark_id}": "CSRF protected; deletes only owner bookmark",
+    "GET /health": "Unauthenticated minimal {ok:true}; source details and metrics require authentication",
+    "GET /graph?mode=current&history=0&at=...&undated=separate": "GraphManifest; immutable prepared complete knowledge/date universe according to selector, never partial question answer; ETag. current/known_then preserve all known undated and future-valid assertions. known_now reports unknown-date bucket/count. If preparation needed return 202 {status:\"preparing\",retry_after_ms,...} visibly; acceptance timing assumes prepared graph/index.",
+    "GET /nodes/{stable_id}/edges?revision=...&cursor=...&limit=200&visible=1": "IncidentEdgePage: all incident source edges, deterministic immutable-revision ordinal order; opaque cursor pinned to revision/node/visibility. Default limit 200, maximum 2000. visible=1 restricts to edges whose endpoints are visible under selector.history; visible=0 includes all temporal/knowledge-eligible incident edges. Continue until next_cursor null. No silent truncation. Shared graph buffers allow immediate complete selected-adjacency highlighting independently of paginated textual edge list.",
+    "GET /graph/{revision}/nodes/{ordinal}/edges?cursor=...&limit=200&visible=1": "Same IncidentEdgePage; resolve ordinal within exact revision.",
+    "GET /sources/{record_id}?revision=...&focus_start=...&focus_end=...&limit=12000&context=1": "Initial SavedSourcePage focused on the exact requested evidence span, even deep into a long source. focus_start/focus_end are optional paired Unicode-codepoint bounds validated against saved record; if present choose page offset near focus_start with bounded surrounding context, return actual offset, highlights, focus and explicit before/after continuations. If span exceeds page limit expose its continuation. Never silently open offset 0 instead of the requested fragment. Invalid/unavailable spans get explicit error/status, never guessed replacement text.",
+    "GET /sources/{record_id}?revision=...&offset=...&limit=12000&context=1": "Continuation/full-saved-source page at exact Unicode-codepoint offset. Default offset 0 only when no focused evidence span was requested; expose next_offset until complete saved source read."
+  },
+  "schemas": {
+    "GraphManifest": {
+      "schema": 1,
+      "revision": "opaque viewer snapshot revision",
+      "source_revision": "opaque source revision",
+      "provider_id": "stable provider namespace",
+      "captured_at": "ISO-8601",
+      "selector": {
+        "mode": "current|known_then|known_now",
+        "at": "ISO|null",
+        "history": false,
+        "undated": "separate"
+      },
+      "counts": {
+        "nodes": 100000,
+        "edges": 1000000,
+        "visible_nodes": 99000,
+        "visible_edges": 980000,
+        "topics": 0,
+        "eligible_before_status_filter": 100000,
+        "undated_known_count": 1000,
+        "excluded_unknown_valid_count": 0,
+        "future_valid_known_count": 500
+      },
+      "nodes": {
+        "url": "/api/v1/graph/REV/nodes.bin",
+        "format": "gv-nodes-le-v1",
+        "stride": 16,
+        "byte_length": 1600000
+      },
+      "edges": {
+        "url": "/api/v1/graph/REV/edges.bin",
+        "format": "gv-edges-le-v1",
+        "stride": 8,
+        "byte_length": 8000000
+      },
+      "topics_url": "/api/v1/graph/REV/topics",
+      "bounds": {
+        "min": [
+          -1,
+          -1,
+          -1
+        ],
+        "max": [
+          1,
+          1,
+          1
+        ]
+      },
+      "layout": {
+        "version": "source-membership-layout-v1",
+        "semantic": false,
+        "stable": true
+      },
+      "complete_graph": true,
+      "readiness": [],
+      "live_cursor": "opaque",
+      "status_at": "ISO selected effectiveness instant, separate from knowledge cutoff",
+      "knowledge_cutoff": "ISO knowledge availability cutoff"
+    },
+    "NodeCard": {
+      "id": "stable assertion ID",
+      "ordinal": 0,
+      "revision": "snapshot",
+      "text_revision": "immutable hash",
+      "text": "full text or first page",
+      "text_offset": 0,
+      "text_total": 100,
+      "next_text_offset": null,
+      "actor": {
+        "id": "source actor",
+        "display_name": null
+      },
+      "source": "source value or unknown",
+      "episode": "source episode or unknown",
+      "scope": "source scope",
+      "time": {
+        "valid_at": null,
+        "valid_precision": "unknown",
+        "recorded_at": "ISO",
+        "source_recorded_at": null,
+        "source_available_at": null,
+        "interpreted_at": null
+      },
+      "status": {
+        "disposition": "assertion|proposal|observation|decision|implementation|inference|superseded|cancelled|conflict|exception|unknown",
+        "unresolved_conflict": false,
+        "replacements": [],
+        "basis_edge_ids": [],
+        "effective_at": null,
+        "effectiveness": "effective|future|unknown"
+      },
+      "sources": [
+        {
+          "record_id": "event ID",
+          "start": 0,
+          "end": 10,
+          "offset_unit": "unicode_codepoints",
+          "available": true,
+          "context_truncated": false
+        }
+      ],
+      "topic_ids": [],
+      "incident_edges": {
+        "items": [],
+        "total": 0,
+        "visible_total": 0,
+        "next_cursor": null,
+        "url": "/api/v1/nodes/ID/edges?revision=REV&visible=1"
+      },
+      "unknowns": []
+    },
+    "EdgeCard": {
+      "id": "stable edge ID",
+      "revision": "snapshot",
+      "kind": "source relation kind",
+      "condition": null,
+      "recorded_at": "ISO",
+      "from": {
+        "id": "assertion",
+        "text": "endpoint assertion text or paged excerpt",
+        "fragment": {
+          "quote": "exact source_quote",
+          "spans": [
+            {
+              "start": 0,
+              "end": 10
+            }
+          ],
+          "offset_unit": "unicode_codepoints",
+          "status": "exact|ambiguous|missing|invalid"
+        }
+      },
+      "to": {
+        "id": "assertion",
+        "text": "endpoint assertion text or paged excerpt",
+        "fragment": {
+          "quote": "exact target_quote",
+          "spans": [],
+          "offset_unit": "unicode_codepoints",
+          "status": "missing"
+        }
+      },
+      "unknowns": []
+    },
+    "SavedSourcePage": {
+      "record_id": "stable event",
+      "text": "saved text",
+      "offset": 0,
+      "next_offset": null,
+      "total_characters": 0,
+      "offset_unit": "unicode_codepoints",
+      "saved_text_complete": true,
+      "external_source_complete": null,
+      "highlights": [],
+      "context": [],
+      "context_truncated": false,
+      "unknowns": [],
+      "focus": {
+        "start": 0,
+        "end": 10
+      },
+      "previous_offset": null,
+      "before_available": false,
+      "after_available": false
+    },
+    "Topic": {
+      "id": "topic:source-view-id",
+      "index": 0,
+      "label": "literal source title excerpt",
+      "full_title": "exact title",
+      "label_method": "source_title_excerpt",
+      "source_ref": {
+        "view_id": "id",
+        "version_id": 1,
+        "route_revision": 1
+      },
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1,
+      "depth": 0,
+      "member_count": 1,
+      "freshness": "current|stale|unknown",
+      "available_at": "ISO|null"
+    },
+    "SearchPage": {
+      "revision": "exact selected revision",
+      "mode": "keyword|semantic",
+      "query": "input",
+      "hits": [
+        {
+          "id": "stable assertion ID",
+          "ordinal": 0,
+          "score": 1,
+          "snippet": "source text",
+          "highlights": [],
+          "topic_ids": []
+        }
+      ],
+      "next_cursor": null,
+      "index_revision": "opaque"
+    },
+    "Bookmark": {
+      "id": "UUID",
+      "provider_id": "stable namespace",
+      "object_kind": "node|topic",
+      "object_id": "stable source ID",
+      "label": "optional owner label",
+      "selector": null,
+      "created_at": "ISO",
+      "availability": "available|hidden_in_slice|missing|provider_unavailable"
+    },
+    "IncidentEdgePage": {
+      "revision": "exact immutable revision",
+      "node_id": "stable assertion ID",
+      "visible_only": true,
+      "total": 0,
+      "items": [
+        {
+          "id": "stable edge ID",
+          "ordinal": 0,
+          "from_id": "stable assertion ID",
+          "to_id": "stable assertion ID",
+          "from_ordinal": 0,
+          "to_ordinal": 1,
+          "kind": "source relationship kind"
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "binary": {
+    "endianness": "little; explicit DataView conversion if platform is not little endian",
+    "nodes": "No header, exactly node_count records, 16 bytes each: x Float32 at +0, y Float32 +4, z Float32 +8, flags Uint32 +12. Row number is revision-scoped node ordinal. flags bit0=superseded, bit1=cancelled, bit2=selected-slice-unknown-status; conflicts are not map colors. Positions finite. Buffer contains all assertions eligible by the temporal selector, including status-hidden historical rows; bit0/bit1 implement history=false visibility. This enables stable append-only slots and instant status removal without graph reconstruction. Default map hides these slots and incident edges; history=true shows them.",
+    "edges": "No header, exactly edge_count records, 8 bytes each: from node ordinal Uint32 +0, to ordinal Uint32 +4. Row number is edge ordinal. Every endpoint < node_count; each source edge appears exactly once.",
+    "identity": "Stable IDs stay server-side in revision ordinal tables and arrive on card/search/bookmark lookup. Deep links resolve stable IDs to ordinal with revision. This avoids initial transfer of a million arbitrary edge IDs.",
+    "transport": "Server sends Content-Length (compressed transfer accounted separately), ETag, private cache policy, compression; no cross-origin CDN. Nodes, edges and topics fetched in parallel after manifest. Invalidate/deallocate previous arrays after successful atomic swap."
+  },
+  "layout_renderer": {
+    "layout": "Prepared deterministic server-side coordinates persisted by provider namespace+stable ID+layout version. Anchor source topics using a seeded 3D layout over explicit subquestion/related topology; place each unique assertion once at weighted barycenter of all its source memberships with deterministic jitter. Nonmember nodes use deterministic scaffold and graph-neighbor attraction; this is geometry only. Shared nodes remain one star. Cap iterations or prepare offline; never O(N^2), never browser force layout of 100k/1M at startup.",
+    "stability": "For incremental updates preserve existing coordinates; assign newcomers near existing topic/neighbor anchors and locally relax only additions. Rebuilds use stable anchors/orientation, publish new layout revision explicitly.",
+    "geometry": "Three.js Points with one shared Float32 position buffer and compact shader attributes. Three.js indexed LineSegments reuses same positions with Uint32 endpoint indices: ~1.2 MB positions + 8 MB edges plus modest attributes, no per-star Mesh/Sphere/Object3D and no per-edge objects.",
+    "draw": "Small bounded draw-call count: base stars, subdued global edges, selected adjacency, search highlight points, picking passes on demand. No live force physics, per-frame N-object traversal, bloom or transparent sphere meshes. Clamp DPR and use reduced-resolution edge layer if needed while retaining every edge; do not silently cap graph to a tiny sample.",
+    "picking": "GPU ID picking with unique ordinal colors and a small offscreen target, or a worker-created spatial index; resolve node before edge, use touch-friendly radius. Do not run a million-edge JS raycast on every mouse move. Give immediate visible touch/click feedback before network response.",
+    "navigation": "Orbit/pan/pinch controls; damped flight to selected star; reset full universe. Reduced-motion skips flight. Keep browser scroll/touch usable inside card.",
+    "labels": "Bounded pooled DOM/canvas labels, only source topics. Choose level by projected topic radius plus actual source subquestion DAG depth, fade large parents out as child labels fade in. Collision avoidance is presentation only. Maximum visible labels scales with viewport, not graph count.",
+    "selection": "Fetch selected adjacency page as required, highlight every incident visible edge through compact overlay index buffer. All other edges subdued. Conflict status only appears in card. Visible global edges use a compact filtered endpoint index generated from node status bitset; retain full edge-row ordinal mapping for picking. Do not draw lines incident to hidden historical nodes in the default map.",
+    "memory": "Do not materialize millions of JS edge objects. Keep compact typed arrays and sidecar adjacency CSR if needed. Dispose old GPU buffers and abort stale graph/card/search requests.",
+    "performance_truth": "Architecture makes targets plausible, not proved. Require measured physical-device 100k/1M runs; emulated mobile/WebKit is useful but does not certify phone Safari/Chrome or actual Safari."
+  },
+  "search": {
+    "keyword": "Read source FTS5 with selected-snapshot eligibility joined before LIMIT; or build sidecar FTS from immutable source text. Return ID/ordinal/source snippet, no generated answer.",
+    "semantic": "Warm local embedding backend matched to source cached embedding backend identity (FastEmbed multilingual model is already supported by source); reuse cached vectors read-only if compatible. Build immutable normalized NumPy float32 matrix or ANN index in sidecar; embed query using same model. Filter selected eligible rows before ranking. Do not initialize CachedEmbedder against source DB. Index and model warmup done before acceptance timing.",
+    "unavailable": "Missing model/index causes explicit capability/readiness state, not lexical fallback labelled semantic. Actual semantic test uses paraphrase with little lexical overlap, not a test-only oracle."
+  },
+  "live": {
+    "poll": "Publisher polls cheap revision at 250-500 ms, emits ready change promptly; 2 s target is measured from ready source change, not extraction start.",
+    "events": {
+      "hello": "{cursor,revision,captured_at}",
+      "delta": "{cursor,base_revision,revision,source_revision,upsert_nodes:[{id,ordinal,position,flags}],upsert_edges:[{id,ordinal,from,to}],remove_node_ordinals:[],remove_edge_ordinals:[],status_changes:[],topic_changes:[],captured_at}",
+      "reset": "{cursor,revision,reason:'history_changed|large_batch|cursor_expired|schema_changed',manifest_url}",
+      "heartbeat": "{cursor,source_available:true,last_observed_at}",
+      "unavailable": "{cursor,last_good_revision,since,message}"
+    },
+    "atomicity": "Client applies delta only if base revision matches; otherwise reload manifest. Keep last good scene during reconnect and label last successful timestamp. SSE Last-Event-ID/after resumes from bounded replay journal.",
+    "history": "known_then at fixed date stays pinned to knowledge availability (including knowledge of future/undated claims), ignores later source assertions/interpretations/topic semantics, but still reports transport availability. known_now may receive late evidence eligible for its selected date or undated bucket; current receives new knowledge regardless of valid date. Status-effectiveness transitions are separate from knowledge membership.",
+    "card_pin": "Store selected object ID + immutable text_revision + loaded text and scroll position. Live replacement updates status/link separately; never replace full card DOM or navigate automatically.",
+    "ordinal_rule": "Within an append-only provider/layout family, append new node/edge slots; do not renumber existing slots during live deltas. Temporal eligible but status-hidden nodes remain in buffers with status flags; renderer filters them from default view and edges. Manifest reports slot counts and visible counts separately. Hard deletion, different temporal selector or necessary compaction triggers reset, never ordinal reinterpretation. A large reset keeps last good scene and card while fetching replacement."
+  },
+  "ui_contract": {
+    "locale": "Russian primary copy, explicit unknown states, minimal implementation jargon",
+    "startup": "After owner login show entire current universe; overlay loading progress until complete. Never use toy/demo source automatically when configured real source fails.",
+    "desktop": "Canvas full viewport, compact top search/status, toolbar for history/bookmarks/reset, right card drawer, search results list.",
+    "phone": "Canvas full viewport with touch controls; safe-area-aware top controls; bottom card sheet with full-height expansion; wrapped long source text, scrollable card, comfortable tap targets, no hover-only actions.",
+    "deep_links": "URL object kind/id and temporal selector only; no auth secrets. On object hidden in slice show explicit reason plus history/navigation action; preserve bookmark stable object identity.",
+    "security": "Render source strings as text, not unsanitized HTML. Unicode codepoint offsets from Python require Array.from/string-codepoint conversion in JS; do not apply them directly as UTF-16 offsets when highlighting emoji."
+  },
+  "acceptance": {
+    "fixtures": "Create isolated synthetic source-contract SQLite fixtures, never actual campus DB: 100000 assertions, approx 1000000 typed directed edges, large/small topics with persisted route subquestions, shared child topic and shared assertions, long texts, emoji/codepoint offsets, missing provenance, late interpretation, unknown precision, conditional supersedes, replacement cycle, cross-scope edge, actual unresolved contradiction, explicit provider cancellation, live appended records. Clearly label synthetic fixture in UI/test reports.",
+    "feature_matrix": {
+      "space": "True perspective 3D rotation/pinch/flight; one star per source ID",
+      "entry": "Manifest slot counts equal independent knowledge/date eligibility SQL counts under the exact selector; visible counts equal effective-status filtering; no top-k restriction and no silent valid-time removal in current/known_then.",
+      "semantic_zoom": "Parent literal source topic labels give way to persisted subquestion labels",
+      "many_to_many": "Shared assertion appears once; shared child has both source parents",
+      "graph_authority": "No node/edge/topic name invented; every semantic datum has source provenance",
+      "live": "Append ready assertion and edge, observe within 2 seconds",
+      "open_node": "Touch star gives immediate feedback, flight and card",
+      "card": "Long full text reachable; actor/source/time unknown explicit",
+      "search": "Both exact and real embedding paraphrase search return source IDs",
+      "edges": "Whole-graph subdued edge layer; selected adjacency highlighted",
+      "history_default": "Eligible superseded/cancelled hidden unless history on",
+      "history_date_navigation": "Selecting date changes eligible graph/status deterministically",
+      "history_perspectives": "Known-then includes already-known undated requirements and future plans but excludes later-known/late-interpreted assertions. Known-now restricts dated claims to selected valid date and explicitly exposes unknown-date bucket/count. Future-effective replacement never prematurely supersedes old assertion.",
+      "source_context_reading": "Saved fragment/highlight/context/full saved source continuation, gaps explicit",
+      "live_during_reading": "Open text and scroll unchanged when replacement arrives; status/link visible",
+      "access_audience": "Unauthenticated data denied, one owner authorized",
+      "remote_access": "Actual HTTPS URL reachable on external mobile connection, owner-auth protected",
+      "host_availability": "Stopped host produces explicit offline/stale state; no promise of always-on",
+      "reading_editing_boundary": "No mutation route reaches source; source DB fingerprint unchanged",
+      "link_reading": "Select edge shows source type/both texts/exact quote highlights; ambiguous quote explicit",
+      "unresolved_disagreements": "Only cards warn; no conflict map color/stroke",
+      "search_navigation": "Result list snippet click flies to corresponding unique star",
+      "device_access": "URL works in required mobile/desktop browsers without app install",
+      "return_and_deep_links": "Bookmark from device A available B, stable target across revisions",
+      "scale_and_observable_usability": "Complete 100k/1M journey and recorded device/network/browser evidence"
+    },
+    "performance": {
+      "first_complete_global_map_ms": 10000,
+      "first_visible_interaction_ms": 200,
+      "minimum_orbit_zoom_fps": 30,
+      "initial_card_text_ms": 1000,
+      "first_search_results_ms": 2000,
+      "single_ready_live_change_ms": 2000
+    },
+    "conditions": "Prepared graph/index, >=10 Mbps and <=100 ms RTT. Record actual device model/browser/version/network, source size, bytes, setup/preparation time separately, first-map and frame percentile windows. No claim of phone/browser certification from desktop emulation alone.",
+    "minimum_automated": [
+      "source read-only fingerprint and failed write attempt",
+      "no unauthorized data via all endpoints including binary/SSE",
+      "CSRF/session cookie auth",
+      "source revision includes view-only change",
+      "binary exact counts/endpoints",
+      "temporal interpretation/valid-time/status matrix",
+      "source topic provenance/subquestion mapping",
+      "Unicode fragment fidelity and missing source",
+      "real semantic paraphrase retrieval",
+      "bookmark persists restart",
+      "SSE replay/reset/offline and pinned-card update",
+      "100k/1M browser startup/frame metrics",
+      "three temporal knowledge-membership/future-replacement regressions",
+      "high-degree incident-edge pagination exhaustion and exact complete highlight set",
+      "focused evidence fragment beyond first 12000 codepoints with before/after continuation"
+    ],
+    "delivery_gate": "List passed/failed/not-run by feature and real device; never report unrun internet or physical Safari checks as passed. Remote ingress setup requiring external credentials remains explicitly unfulfilled until configured and tested.",
+    "temporal_regressions": [
+      {
+        "id": "known_undated_requirement",
+        "data": "Requirement recorded on Jan 1, valid_at null, interpreted by Jan 1",
+        "expect": "Visible in current and known_then Jan 2. known_now Jan 2 reports it in undated count/bucket; not assigned Jan 2 or silently omitted."
+      },
+      {
+        "id": "known_future_plan",
+        "data": "Plan recorded/interpreted Jan 1, valid_at Mar 1",
+        "expect": "Visible as future-dated known plan in current Feb 1 and known_then Feb 1. Absent from known_now dated Feb 1 scene, because its valid date is later; no claim that it is effective Feb 1."
+      },
+      {
+        "id": "future_effective_replacement",
+        "data": "Old assertion valid Jan 1; replacing assertion known Jan 15 but valid Mar 1; valid source supersedes edge known Jan 15",
+        "expect": "At Feb 1 current/known_then both known assertions visible; old not superseded yet. At Mar 2 old is superseded and hidden by default, history reveals it. A historical Feb 1 known_now view must not use Mar 1 replacement to cancel old early."
+      }
+    ]
+  },
+  "primary_references": [
+    {
+      "url": "https://threejs.org/docs/pages/Points.html",
+      "supports": "Point cloud renderer"
+    },
+    {
+      "url": "https://threejs.org/docs/pages/LineSegments.html",
+      "supports": "Lines between vertex pairs"
+    },
+    {
+      "url": "https://threejs.org/docs/pages/BufferGeometry.html",
+      "supports": "GPU buffer geometry and draw-call grouping"
+    }
+  ]
+}
