@@ -51,7 +51,9 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
                 self.assertIn('Preserve the evacuation exception',request.instructions)
                 return json.dumps(drafts(request,(target.text,[first.text,second.text])))
             self.assertIn('ONE WHOLE thought',request.instructions)
-            return json.dumps(ACCEPT if second.text in request.records[-1]['text'] else {'verdict':'reject','text':'Preserve the evacuation exception.'})
+            if second.text in request.records[-1]['text']:
+                return json.dumps(dict(ACCEPT, meaning_changed=False))
+            return json.dumps({'verdict':'reject','text':'Preserve the evacuation exception.', 'meaning_changed':None})
         result=ThoughtEngine(store,model)._construct(records,bases,target=target)[0]
         self.assertEqual(result.text,target.text)
         self.assertEqual([row.task for row in calls],['Construct thought','Verify thought']*2)

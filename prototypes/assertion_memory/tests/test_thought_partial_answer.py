@@ -122,7 +122,7 @@ class ThoughtPartialAnswerTest(unittest.TestCase):
                                    'needs_detail': None})
             self.assertEqual(request.records[-1]['text'], text)
             self.assertIn('gap rather than an unsupported old assertion', request.instructions)
-            return ACCEPT
+            return json.dumps(dict(json.loads(ACCEPT), meaning_changed=True))
         result = ThoughtEngine(store, model)._construct([
             {'role': 'whole_refresh_scope', 'prior_content': target.text, 'questions': ['What budget?', 'Which date?']},
             {'role': 'material', 'text': source.text}],
