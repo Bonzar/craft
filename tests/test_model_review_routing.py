@@ -139,14 +139,19 @@ class ModelReviewRoutingTest(unittest.TestCase):
         from prototypes.assertion_memory.rebuild import _provider_identity,_json,_sha
         options={'provider':'codex','model':'writer','review_model':'checker','reasoning_effort':'medium'}
         settings={'db':self.db,'worker_service':options}
-        legacy=asdict(ServiceConfig(db=self.db,**options))
-        for field in ('db','worker_idle_seconds','review_reasoning_effort'):legacy.pop(field)
+        from prototypes.assertion_memory.embeddings import MULTILINGUAL_MODEL
+        legacy = dict(options, command=(), endpoint=None, timeout=None,
+                      embedding_mode='lexical', embedding_model=MULTILINGUAL_MODEL,
+                      embedding_cache=None, source_workers=2, processing_session_ids=None)
         expected=_sha(_json(legacy).encode())
         self.assertEqual(_provider_identity(settings),expected)
         same={'db':self.db,'worker_service':dict(options,review_reasoning_effort='medium')}
         self.assertEqual(_provider_identity(same),expected)
         separate={'db':self.db,'worker_service':dict(options,review_reasoning_effort='low')}
         self.assertNotEqual(_provider_identity(separate),expected)
+        selected = {'db': self.db, 'worker_service': dict(
+            options, batch_source_construction=True, source_event_ids=('selected-event',))}
+        self.assertEqual(_provider_identity(selected), expected)
 
 
 if __name__=='__main__':unittest.main()

@@ -96,6 +96,9 @@ def _provider_identity(settings):
   from .mcp_server import ServiceConfig
   configured=asdict(ServiceConfig(db=str(Path(settings['db']).resolve()),**settings['worker_service']))
   configured.pop('db');configured.pop('worker_idle_seconds')
+  # A scoped queue launch is independent of the provider used by a rebuild.
+  configured.pop('batch_source_construction')
+  configured.pop('source_event_ids')
   if configured['review_reasoning_effort'] in (None,configured['reasoning_effort']):
    configured.pop('review_reasoning_effort')
   return _sha(_json(configured).encode())
