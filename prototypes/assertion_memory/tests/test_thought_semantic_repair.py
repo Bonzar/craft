@@ -149,25 +149,31 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertEqual(calls.count('Construct thought'),1)
         self.assertEqual(calls.count('Verify thought'),3)
 
-    def test_two_semantic_rejections_are_recoverable_processing_error_not_knowledge_limit(self):
-        from prototypes.assertion_memory.model import SemanticUnavailable
+    def test_two_semantic_rejections_return_an_unaccepted_answer_with_trace(self):
         from prototypes.assertion_memory.thought_service import ThoughtService
-        memory,_,queue=self.memory()
-        raw=queue.capture_event('s','query','Only after approval.',source='fixture')
-        calls=[]
+        memory, _, queue = self.memory()
+        raw = queue.capture_event('s', 'query', 'Only after approval.', source='fixture')
+        calls = []
         def model(request):
             calls.append(request.task)
-            return json.dumps(drafts(request,('Approval is optional.',[raw.prompt]))) if request.task=='Construct thought' else json.dumps(
-                {'verdict':'reject','text':'The mandatory approval condition was dropped.'})
-        service=ThoughtService(memory,model)
-        with self.assertRaises(ModelError) as caught:
-            service.query('What approval is required?')
-        self.assertNotIsInstance(caught.exception,SemanticUnavailable)
-        self.assertTrue(caught.exception.recoverable)
-        self.assertEqual(service.thoughts.list_thoughts(),[])
-        self.assertEqual(calls,['Construct thought','Verify thought']*2)
+            if request.task == 'Construct thought':
+                return json.dumps(drafts(request, ('Approval is optional.', [raw.prompt])))
+            return json.dumps({'verdict': 'reject', 'text': 'The mandatory approval condition was dropped.'})
+
+        service = ThoughtService(memory, model)
+        result = service.query('What approval is required?')
+        self.assertFalse(result['answer_accepted'])
+        self.assertIsNone(result['answer'])
+        self.assertEqual(result['answer_error']['code'], 'semantic_review_rejected')
+        self.assertIn('Mandatory approval condition'.lower(), result['answer_error']['message'].lower())
+        self.assertNotIn('knowledge_limit', result)
+        self.assertEqual(result['completeness'], 'incomplete')
+        self.assertEqual(result['answer_continuations'], [])
+        self.assertEqual(service.thoughts.list_thoughts(), [])
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'] * 2)
         with memory.transaction() as c:
-            self.assertEqual(c.execute('SELECT status FROM memory_thought_runs').fetchone()[0],'failed')
+            self.assertEqual(c.execute('SELECT status FROM memory_thought_runs WHERE id=?',
+                                       (result['run_id'],)).fetchone()[0], 'failed')
 
     def test_context_only_repeats_are_omitted_before_full_current_source_coverage_check(self):
         memory,store,queue=self.memory()
