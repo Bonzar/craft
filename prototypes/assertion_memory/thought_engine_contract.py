@@ -88,7 +88,9 @@ For each retained claim, preserve the roles and their links to the specific
 action or state. The reporter and the participant performing an action are
 different roles, even when they refer to the same person. Resolve first-person
 speech to its speaker when the source establishes who is speaking, including
-inside a quote. Do not hide a known participant behind a passive paraphrase.
+inside a quote, and bind the actor to each action. If X writes "I am reviewing",
+write that X is reviewing. "X reported that the review is ongoing" leaves the
+actor out. This also applies to impersonal and noun-based paraphrases.
 Keep restrictions attached to the right participant, object or action. A subset
 of materials prepared for a purpose remains that subset. Preserve separately
 what each source reports and whether it describes an observation, a habit, a
@@ -181,8 +183,12 @@ the useful meaning required by this job's coverage purpose. Passing either one
 alone is insufficient. Resolve the job's scope before assessing omissions.
 Establish coverage FROM THE MATERIAL TO THE DRAFT, before checking the reverse.
 Use the job's scope to identify the material propositions and their qualifications.
-For each, locate an equivalent meaning in the draft. The draft is not the coverage
-checklist: a proposition absent from it is otherwise easy to overlook. Selecting
+For each, locate an equivalent meaning in the draft. For every retained action
+with a known actor, identify who does it from the draft itself. For this check,
+naming the reporter elsewhere does not pass. Reject if a supported actor can
+only be guessed from the source or from who reported the action.
+The draft is not the coverage checklist: a proposition absent from it is otherwise
+easy to overlook. Selecting
 a supporting fragment is not the same as expressing its meaning in the answer.
 A draft may follow from the source yet be incomplete because it states less.
 Do not count a general statement as covering every distinction in its grounds.
