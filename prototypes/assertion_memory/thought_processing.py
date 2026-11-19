@@ -15,11 +15,17 @@ from .thought_worker import ThoughtWorker
 
 
 class TracedThoughtWorker(ThoughtWorker):
+    def __init__(self, *args, source_batch=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.source_batch = source_batch
+
     @contextmanager
     def _attempt(self, operation, inputs, cancel_claim):
         original = self.engine
         trace = ThoughtTrace(original.store, operation, inputs)
         self.engine = traced_engine(original.thoughts, original.model, original.candidates, trace)
+        if operation == 'source' and self.source_batch is not None:
+            self.engine.gateway = self._batch_initial_construction(trace, self.engine.gateway, inputs)
         try:
             yield trace
         except ProcessingCancelled:
@@ -32,6 +38,41 @@ class TracedThoughtWorker(ThoughtWorker):
             raise
         finally:
             self.engine = original
+
+    def _batch_initial_construction(self, trace, fallback, inputs):
+        is_initial = True
+
+        def generate(request, bindings):
+            batch_trace = ThoughtTrace(self.queue.store, 'source_model_batch',
+                                       {'source_event_ids': [row['event_id'] for row in bindings
+                                                             if 'event_id' in row]})
+            try:
+                result = batch_trace.call(self.model, request, bindings)
+            except ProcessingCancelled:
+                batch_trace.finish('interrupted')
+                raise
+            except BaseException:
+                batch_trace.finish('failed')
+                raise
+            batch_trace.finish()
+            return result, batch_trace.id
+
+        def gateway(task, request, bindings):
+            nonlocal is_initial
+            if task == 'Construct thought' and is_initial:
+                is_initial = False
+                source_records = [row for row in request.records if row.get('role') == 'source']
+                if len(source_records) == 1 and not request.repair_instructions:
+                    draft = self.source_batch.submit(request, bindings, generate)
+                    if draft is not None:
+                        trace.record('source_batch_draft', inputs=bindings, details={
+                            'batch_run_id': draft.run_id, 'source': draft.source,
+                            'event_id': inputs['event_id'],
+                        })
+                        return draft.body
+            return fallback(task, request, bindings)
+
+        return gateway
 
     def _source(self, claim):
         with self._attempt('source', {'event_id': claim.job.event_id, 'job_id': claim.job.id,
@@ -123,6 +164,9 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
     if config.processing_session_ids == ():
         return
     claims = ActiveClaims()
+    from .source_model_batch import SourceModelBatch
+    source_batch = (SourceModelBatch(config.source_workers)
+                    if config.batch_source_construction and config.source_workers > 1 else None)
     with MemoryStore(config.db) as store:
         queue=CaptureQueue(store)
         _recover_selected(queue,config.processing_session_ids)
@@ -134,7 +178,7 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
                 yield TracedThoughtWorker(current.queue, current.engine, lane=lane,
                                           lock_owned=True, claim_observer=observer,
                                           processing_session_ids=config.processing_session_ids,
-                                          is_pausing=is_pausing)
+                                          is_pausing=is_pausing, source_batch=source_batch)
 
         def heartbeat():
             if claims.snapshot():

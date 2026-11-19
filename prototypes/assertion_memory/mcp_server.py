@@ -48,6 +48,7 @@ class ServiceConfig:
     review_model: str | None = None
     reasoning_effort: str | None = None
     review_reasoning_effort: str | None = None
+    batch_source_construction: bool = False
 
     def __post_init__(self):
         from .thought_processing_selection import normalize_session_ids
@@ -404,15 +405,20 @@ def _register_write_tools(mcp, service, launcher, background):
 
     @mcp.tool()
     async def memory_process(limit: int = 100, retry_job_id: str | None = None,
-                             session_ids: list[str] | None = None) -> dict:
+                             session_ids: list[str] | None = None,
+                             batch_source_construction: bool = False) -> dict:
         """Schedule up to 1..1000 worker attempts asynchronously. Returns immediately; poll status.
         An already-running database worker owns processing. Optionally retry one failed job by its ID.
         Optional session_ids selects exact source sessions and their causal follow-up jobs for
         this launch. It leaves the automatic selection and the worker lock in place.
+        batch_source_construction shares initial draft generation among concurrent source jobs.
+        Independent review, publication and follow-up jobs still use their normal processing.
         """
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError('limit must be between 1 and 1000 attempts')
         worker = launcher
+        if batch_source_construction and session_ids is None:
+            raise ValueError('batch_source_construction requires explicit session_ids')
         if session_ids is not None:
             from .thought_processing_selection import normalize_session_ids
             from .thought_service import ThoughtService
@@ -425,7 +431,8 @@ def _register_write_tools(mcp, service, launcher, background):
             if not isinstance(service, ThoughtService):
                 raise ValueError('session processing selection requires the canonical thought runtime')
             # An empty automatic selection can coexist with an explicit one-time request.
-            worker = WorkerLauncher(replace(launcher.config, processing_session_ids=selected))
+            worker = WorkerLauncher(replace(launcher.config, processing_session_ids=selected,
+                                            batch_source_construction=batch_source_construction))
         if retry_job_id is not None:
             if worker.config.processing_session_ids is not None:
                 from .thought_processing_selection import source_predicate
