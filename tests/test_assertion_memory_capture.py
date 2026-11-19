@@ -76,6 +76,39 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual([m['arguments']['text'] for m in messages], ['yes', 'proposal'])
         self.assertTrue(all('/session/physical/turn/one/message/' in m['arguments']['source'] for m in messages))
 
+    def test_only_completed_turn_final_is_queued_once(self):
+        self.turn('request')
+        self.capture.register(self.store, self.raw)
+        for text, phase in [('progress', 'commentary'), ('discarded final', 'final_answer'),
+                            ('delivered final', 'final_answer')]:
+            self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+                'id':text, 'phase':phase,'content':[{'type':'output_text','text':text}]}})
+        self.poll()
+        self.assertEqual([m['arguments']['text'] for m in self.messages()], ['request'])
+
+        for turn in ('another', 'one', 'one'):
+            self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':turn,
+                'last_agent_message':'delivered final'}})
+            self.poll()
+            expected = ['request'] if turn == 'another' else ['request', 'delivered final']
+            self.assertEqual([m['arguments']['text'] for m in self.messages()], expected)
+
+    def test_interrupted_final_and_commentary_only_turn_produce_no_assistant_message(self):
+        self.turn('first request')
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+            'phase':'final_answer','content':[{'type':'output_text','text':'interrupted final'}]}})
+        self.append({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':'one','reason':'interrupted'}})
+        self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'one',
+            'last_agent_message':'interrupted final'}})
+        self.turn('second request', turn='two', mid='u2')
+        self.assistant('progress only', 'a1', 'commentary')
+        self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'two',
+            'last_agent_message':'progress only'}})
+        self.capture.register(self.store, self.raw)
+        self.poll()
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],
+                         ['first request', 'second request'])
+
     def test_resume_without_registration_starts_after_existing_tail(self):
         self.turn('old')
         self.assistant('old reply')
