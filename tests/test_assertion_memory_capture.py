@@ -82,6 +82,33 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual([m['arguments']['text'] for m in messages], ['yes', 'proposal'])
         self.assertTrue(all('/session/physical/turn/one/message/' in m['arguments']['source'] for m in messages))
 
+    def test_all_user_messages_wait_for_the_confirmed_final_reply(self):
+        from synthetic_memory_adapter.frontier import Coordinator
+        from .test_assertion_memory_frontier import FakeRemote
+
+        self.turn('request')
+        self.capture.register(self.store, self.raw)
+        remote = FakeRemote()
+        coordinator = Coordinator(self.store, remote)
+        coordinator.observe('physical', self.poll())
+        self.assertEqual(coordinator.tick()['attempted'], 0)
+        self.assertEqual(self.messages(), [])
+
+        self.assistant('working on it', 'progress', 'commentary')
+        self.pair('steering', 'one', 'u2')
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+            'id':'answer','phase':'final_answer','content':[{'type':'output_text','text':'result'}]}})
+        coordinator.observe('physical', self.poll())
+        self.assertEqual(coordinator.tick()['attempted'], 0)
+        self.assertEqual(self.messages(), [])
+
+        self.append({'type':'event_msg','payload':{'type':'task_complete',
+            'turn_id':'one','last_agent_message':'result'}})
+        coordinator.observe('physical', self.poll())
+        self.assertEqual(coordinator.tick()['acknowledged'], 3)
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],
+                         ['request', 'steering', 'result'])
+
     def test_only_completed_turn_final_is_queued_once(self):
         self.turn('request')
         self.capture.register(self.store, self.raw)
