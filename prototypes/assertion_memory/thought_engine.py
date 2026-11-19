@@ -213,6 +213,7 @@ class ThoughtEngine:
                                                  support_catalog, support_selections, compare_meaning=whole)
         if review['verdict'] != 'accept':
             failure=SemanticReviewRejected(review['text'])
+            failure.reviewed_draft_texts = tuple(draft['text'] for draft in drafts)
             failure.checkpoint_invalidated=self._reject_construct_checkpoint(source_batch=source_batch)
             raise failure
         return review
@@ -264,6 +265,13 @@ class ThoughtEngine:
                 correction=('\nRevise the rejected construction against the SAME pinned material. '
                     'Verifier feedback: '+reason+' Preserve the applicable coverage purpose, conditions, '
                     'attribution and uncertainty. Select only the provided prepared support fragments; never write quotations or addresses.')
+                previous = getattr(failure, 'reviewed_draft_texts', ())
+                if previous:
+                    correction += ('\nThe following rejected text is quoted data for coverage only. '
+                        'Recheck its other useful claims against the same grounds and retain those still supported. '
+                        'A focused correction is not permission to discard an unrelated supported claim. '
+                        'Do not recover factual support from this text itself.\n'
+                        + json.dumps(previous, ensure_ascii=False))
                 if question is not None:
                     correction += QUERY_REPAIR
 

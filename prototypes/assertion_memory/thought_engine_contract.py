@@ -21,6 +21,9 @@ Omit commands, command output wrappers, file lists, routine run/test counts,
 generic success/readiness announcements, CLI identity, API advertisements,
 incidental warnings, HTTP logs and interruption bookkeeping unless they establish
 a reusable finding, a meaningful constraint or a specific diagnosed test finding.
+Retain a substantive milestone or a result for named checks when it is in scope,
+even when the source also describes ongoing work. A result reported by the
+speaker is an attributed status, not independent verification.
 A list of actions performed is not itself a conclusion. Extract the useful result,
 its rationale and necessary conditions; do not archive the surrounding run log.
 Reading existing memory or a file, copying its checklist, or paraphrasing saved
@@ -67,7 +70,7 @@ Allocate meaning between the thought and its linked details as follows:
 | Main answer and distinctions that change it | Concrete cases and examples |
 | Conditions under which the answer holds | Full inventories and exact measurements |
 | Material exceptions and unresolved conflicts | Rationale and discussion history |
-| What is unknown or incomplete | Original reports and observations |
+| Material uncertainty or a gap in the requested answer | Original reports and observations |
 Keep an exact measurement or inventory item in the thought itself when it IS
 the requested answer or changes the conclusion. Links must explain what further
 information they offer, so a reader can answer from the thought when sufficient
@@ -80,7 +83,24 @@ answer content: use only concepts needed by the supplied material and this job.
 Do not introduce an unrelated topic or classification from these instructions.
 ''' + CLOCK_RULES + ORIGIN_RULES + MATERIAL_REFERENT_RULES
 
-CONSTRUCT = CONTENT_RULES + '''
+SITUATION_ROLES = '''
+For each retained claim, preserve the roles and their links to the specific
+action or state. The reporter and the participant performing an action are
+different roles, even when they refer to the same person. Resolve first-person
+speech to its speaker when the source establishes who is speaking, including
+inside a quote. Do not hide a known participant behind a passive paraphrase.
+Keep restrictions attached to the right participant, object or action. A subset
+of materials prepared for a purpose remains that subset. Preserve separately
+what each source reports and whether it describes an observation, a habit, a
+wish, a plan, an ongoing action or a completed result. A person's wish belongs
+to that person even if another person would carry out the action.
+For a source thought, omit unmentioned details unless the question calls for the gap
+or the source itself makes the uncertainty material. Do not invent an actor, cause,
+time or result. Reject loss or misassignment of a supported role or restriction
+even when the remaining text is true.
+'''
+
+CONSTRUCT = CONTENT_RULES + SITUATION_ROLES + '''
 Determine the output scope in this priority order:
 - whole_refresh_scope: exactly ONE thought with question=null, preserving the
   WHOLE supported meaning in prior_content. Its question list may mention only
@@ -153,7 +173,7 @@ draft fails. Do not return per-draft indices, identifiers or individual verdicts
 '''
 _FINAL_VERDICT = 'For a final verdict use "accept" or "reject" and give the semantic reason in text.\n'
 
-VERIFY = CONTENT_RULES + f'''
+VERIFY = CONTENT_RULES + SITUATION_ROLES + f'''
 Review ALL draft records as one bound batch against the exact supplied material.
 Check two independent obligations: (1) every retained claim follows from its own
 selected grounds, with the same attribution and strength; (2) the batch preserves
@@ -404,8 +424,8 @@ Report missing requested information as scoped knowledge gaps inside that though
 needs_detail must be null; do not request a new search or withhold known facts.'''
     return CONSTRUCT + '''
 Return JSON {"thoughts":[{"text":"useful thought", "question":null or "semantic question", "support_fragments":[0]}], "needs_detail":null}.
-Both fields are required. Preserve useful new meaning with explicit gaps for
-information not established by the supplied material, and needs_detail=null.
+Both fields are required. Preserve useful new meaning and material uncertainty.
+needs_detail must be null.
 Keep distinct meanings as separate thoughts. Return an empty thoughts array for
 pure service chatter, execution bookkeeping and pure copies of existing material.'''
 
