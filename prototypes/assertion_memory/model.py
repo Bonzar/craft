@@ -186,19 +186,23 @@ def _model_output_text(output):
 def _run_owned_model(command, prompt, timeout):
     check_processing_cancelled()
     deadline = None if timeout is None else time.monotonic() + timeout
-    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          start_new_session=True) as process:
-        pending_input = prompt.encode('utf-8')
+    # A partial pipe write may time out; communicate(None) then retries
+    # output without resuming stdin. Give the child a private seekable input.
+    with tempfile.TemporaryFile() as model_input:
+        model_input.write(prompt.encode('utf-8'))
+        model_input.seek(0)
+        process = subprocess.Popen(command, stdin=model_input, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+    with process:
         try:
             while True:
                 check_processing_cancelled()
                 remaining = _CANCEL_POLL_SECONDS if deadline is None else deadline - time.monotonic()
                 try:
-                    stdout, stderr = process.communicate(pending_input, timeout=max(0, min(remaining, _CANCEL_POLL_SECONDS)))
+                    stdout, stderr = process.communicate(timeout=max(0, min(remaining, _CANCEL_POLL_SECONDS)))
                     return subprocess.CompletedProcess(command, process.returncode,
                                                        _model_output_text(stdout), _model_output_text(stderr))
                 except subprocess.TimeoutExpired:
-                    pending_input = None  # communicate retains its input across timeout retries.
                     check_processing_cancelled()
                     if deadline is not None and time.monotonic() >= deadline:
                         raise
