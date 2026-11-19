@@ -63,6 +63,46 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertEqual(result[0].origin['actor'], 'assistant')
         self.assertEqual(calls, ['Construct thought', 'Verify thought'] * 2)
 
+    def test_source_repair_preserves_known_observation_when_referent_is_ambiguous(self):
+        _, store, queue = self.memory()
+        gesture = 'Чтобы включить режим, рычаг нужно слишком сильно толкнуть.'
+        indicators = 'После появления второго индикатора рядом с первым он мигает.'
+        sound = 'Звук появляется после исчезновения первого индикатора.'
+        source = ' '.join((gesture, indicators, sound))
+        raw = queue.capture_event('fixture', 'panel', source, source='fixture')
+        context = queue.capture_event('fixture', 'prior', 'Я уменьшил ход рычага и убрал мигание второго индикатора.',
+                                      source='fixture', actor='assistant')
+        blink = 'После появления второго индикатора рядом с первым заметно мигание.'
+        wrong_gesture = 'Для включения режима рычаг нужно толкать слишком далеко.'
+        wrong_blink = 'Второй индикатор мигает при появлении рядом с первым.'
+        reviews = 0
+
+        def model(request):
+            nonlocal reviews
+            if request.task == 'Construct thought':
+                self.assertIn('a qualitative degree does not choose a measurable parameter', request.instructions)
+                is_repair = any(row['role'] == 'rejected_draft' for row in request.records)
+                if not is_repair:
+                    return json.dumps(drafts(request, (wrong_gesture, [gesture]),
+                                             (wrong_blink + ' ' + sound, [indicators, sound])))
+                self.assertIn('Make a separately publishable draft', request.instructions)
+                self.assertTrue(any(row['role'] == 'missing_meaning' and sound in row['text']
+                                    for row in request.records))
+                return json.dumps(drafts(request, (gesture, [gesture]), (blink, [indicators]), (sound, [sound])))
+            reviews += 1
+            if reviews == 1:
+                self.assertIn('check the parameter, the referent, and the timing independently', request.instructions)
+                return json.dumps({'verdict': 'reject', 'text': 'The observations were narrowed.',
+                    'rejected_drafts': [{'draft': 0, 'text': 'A strong push does not establish its distance.'},
+                                        {'draft': 1, 'text': 'The blinking light is ambiguous; preserve the sequence.'}],
+                    'missing_meaning': blink + ' ' + sound})
+            return json.dumps(dict(ACCEPT, rejected_drafts=[], missing_meaning=None))
+
+        result = ThoughtEngine(store, model).ingest(raw, [context], consolidate=False)
+        self.assertEqual([row.text for row in result], [gesture, blink, sound])
+        self.assertTrue(all({basis['event_id'] for basis in row.bases} == {raw.id} for row in result))
+        self.assertEqual(reviews, 2)
+
     def test_source_instructions_keep_unspecified_roles_out_of_the_thought(self):
         from prototypes.assertion_memory.thought_engine_contract import VERIFY, construction_instructions
         for instructions in (construction_instructions(), VERIFY):
