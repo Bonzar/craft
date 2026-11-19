@@ -156,6 +156,33 @@ class ThoughtPartialAnswerTest(unittest.TestCase):
                 self.assertEqual(bool(getattr(caught.exception, 'empty_ground', False)), not should_read_link)
                 self.assertEqual(calls, [])
 
+    def test_query_repairs_unsupported_parts_without_losing_supported_parts(self):
+        memory = self.memory()
+        source = 'Mira proposed enlarging the classroom. Vlad approved the revised schedule.'
+        accepted = ('Vlad approved the revised schedule. Mira proposed enlarging the classroom. '
+                    'The supplied material does not show that Vlad approved the expansion or set a budget.')
+        calls = []
+
+        def model(request):
+            calls.append(request.task)
+            if request.task == 'Construct thought':
+                text = accepted if 'For each part of the original question' in request.repair_instructions else (
+                    'Vlad approved the classroom expansion. The budget was not mentioned.')
+                return json.dumps({'thought': {'text': text, 'question': None, 'support_fragments': [0]},
+                                   'needs_detail': None})
+            if request.records[-1]['text'] == accepted:
+                return ACCEPT
+            return json.dumps({'verdict': 'reject',
+                               'text': 'Restore approval of the schedule and label expansion as a proposal.'})
+
+        service = ThoughtService(memory, model)
+        raw = service.queue.capture_event('fixture', 'approval', source, source='fixture')
+        result = service.query('What did Vlad approve about the schedule and room expansion, and at what budget?')
+        self.assertTrue(result['answer_accepted'])
+        self.assertEqual(result['answer'], accepted)
+        self.assertEqual(result['thought']['bases'][0]['event_id'], raw.id)
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'] * 2)
+
     def test_reviewer_rejection_and_provider_errors_are_not_empty_material_notices(self):
         for failure in ('reject', 'provider'):
             with self.subTest(failure=failure):
@@ -171,9 +198,15 @@ class ThoughtPartialAnswerTest(unittest.TestCase):
                     return json.dumps({'verdict': 'reject', 'text': 'The supplied material does not establish a date.'})
                 service = ThoughtService(memory, model)
                 service.queue.capture_event('fixture', 'budget', 'The budget is 120 units.', source='fixture')
-                with self.assertRaises(ModelError) as caught:
-                    service.query('What budget and date were agreed?')
-                self.assertNotIsInstance(caught.exception, SemanticUnavailable)
+                if failure == 'provider':
+                    with self.assertRaises(ModelError) as caught:
+                        service.query('What budget and date were agreed?')
+                    self.assertNotIsInstance(caught.exception, SemanticUnavailable)
+                else:
+                    result = service.query('What budget and date were agreed?')
+                    self.assertIsNone(result['answer'])
+                    self.assertNotIn('knowledge_limit', result)
+                    self.assertEqual(result['answer_error']['code'], 'semantic_review_rejected')
                 self.assertEqual(len(calls), 1 if failure == 'provider' else 4)
                 self.assertEqual(service.thoughts.list_thoughts(), [])
 

@@ -246,7 +246,7 @@ class GenericMessageClockTest(unittest.TestCase):
 
 
 class LegacyTemporalAuditTest(unittest.TestCase):
-    def test_new_protocol_withdraws_only_unsupported_absolute_date_preserving_relative_and_absolute_facts(self):
+    def test_explicit_audit_withdraws_only_unsupported_absolute_date(self):
         from prototypes.assertion_memory.query_snapshot import capture, _restore_frozen
         from prototypes.assertion_memory.tests.test_source_reprocessing import SourceReprocessingTest
         fixture = SourceReprocessingTest()
@@ -306,9 +306,13 @@ class LegacyTemporalAuditTest(unittest.TestCase):
             if request.task == 'Repair omitted source meanings':
                 return json.dumps({'assertions': [{'text': BODY, 'quote': BODY, 'kind': 'observation'}]})
             raise AssertionError(request.task)
+        # Historical sources enter reprocessing on explicit audit admission.
+        fixture.queue.request_source_audit(target.id, 'legacy relative date without a source clock')
+        fixture.queue.request_source_audit(absolute.id, 'legacy explicit absolute date')
         worker = LinkWorker(fixture.queue, fixture.engine, provider)
         for _ in range(16):
-            if worker.run_once() is None: break
+            if worker.run_once() is None:
+                break
         selected = capture(fixture.engine)
         self.assertNotIn('old-relative-date', selected.assertions)
         self.assertIn('absolute-fact', selected.assertions)
@@ -322,6 +326,9 @@ class LegacyTemporalAuditTest(unittest.TestCase):
         history = fixture.queue.extraction_history(target.id)
         self.assertEqual(len(history), 2)
         self.assertEqual(history[-1]['source_revision']['status'], 'accepted_complete')
+        absolute_history = fixture.queue.extraction_history(absolute.id)
+        self.assertEqual(len(absolute_history), 2)
+        self.assertEqual(absolute_history[-1]['source_revision']['status'], 'accepted_complete')
         with fixture.store.transaction() as db:
             self.assertEqual(db.execute('SELECT completed_at FROM memory_extraction_runs WHERE event_id=? ORDER BY id DESC LIMIT 1',
                 (target.id,)).fetchone()[0], '2026-03-16T12:00:00.000000+00:00')

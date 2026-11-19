@@ -27,9 +27,10 @@ class HarnessSourceTest(unittest.TestCase):
         f=self.f;f.turn('Actual user words',trigger='user')
         self.injection('unknown',{'type':'user'})
         self.injection('additional_content.codex_apps_open_page',{})
+        f.assistant('Actual visible answer')
         f.capture.register(f.store,f.raw);result=f.poll()
         self.assertEqual(result['gaps'],['unsupported_user_schema','unsupported_user_schema'])
-        self.assertEqual([m['arguments']['text'] for m in f.messages()],['Actual user words'])
+        self.assertEqual([m['arguments']['text'] for m in f.messages()],['Actual user words','Actual visible answer'])
 
 
 if __name__=='__main__':unittest.main()

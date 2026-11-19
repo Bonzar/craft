@@ -115,6 +115,19 @@ def _span(text, span):
     return text[start:end]
 
 
+def _same_material(current, material):
+    metadata = material['metadata']
+    version = metadata.get('meaning_version')
+    if (type(version) is int and version == current.version
+            and 'meaning_version' not in current.metadata):
+        # The absent marker already means the current version. Store it only
+        # when a new publication needs to preserve that meaning's version.
+        material = dict(material, metadata={
+            key: value for key, value in metadata.items() if key != 'meaning_version'
+        })
+    return all(getattr(current, key) == value for key, value in material.items())
+
+
 class ThoughtStore:
     """Shares MemoryStore's connection, transactions and durable raw intake.
 
@@ -253,7 +266,7 @@ class ThoughtStore:
                 raise ThoughtConflict('updating a thought requires expected_version')
             pinned = [self._pin_basis(c, basis) for basis in bases]
             material = dict(text=text, question=question, origin=origin, bases=pinned, metadata=metadata)
-            if current and all(getattr(current, key) == value for key, value in material.items()):
+            if current and _same_material(current, material):
                 return current
             thought = Thought(id=thought_id, version=actual + 1, created_at=datetime.now(timezone.utc).isoformat(), **material)
             self._insert(c, thought)

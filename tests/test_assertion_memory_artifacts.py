@@ -56,8 +56,8 @@ class ArtifactTest(unittest.TestCase):
         c=Coordinator(self.store,remote,clock=lambda:1000.0);return c
 
     def test_mixed_data_uri_keeps_text_and_binary_bytes_out_of_canonical_text(self):
-        result=self.mixed();messages=self.messages();self.assertEqual([m['arguments']['role'] for m in messages],['user','tool'])
-        args=messages[1]['arguments'];self.assertEqual(args['artifact_ids'],[AID]);projection=json.loads(args['text'])
+        result=self.mixed();messages=self.messages();self.assertEqual([m['arguments']['role'] for m in messages],['tool'])
+        args=messages[0]['arguments'];self.assertEqual(args['artifact_ids'],[AID]);projection=json.loads(args['text'])
         self.assertEqual(projection['output'][0]['text'],'All business words and exceptions remain exactly.')
         self.assertIn('only after review, except unfinished cases',projection['output'][1]['text'])
         self.assertNotIn('SYNTHETIC_CREDENTIAL_VALUE',args['text']);self.assertNotIn(base64.b64encode(PNG).decode(),args['text'])
@@ -67,23 +67,23 @@ class ArtifactTest(unittest.TestCase):
 
     def test_upload_precedes_dependent_capture_and_exact_lost_ack_replays(self):
         result=self.mixed();remote=ArtifactRemote();remote.fail_upload=True;c=self.coordinator(remote);c.observe('physical',result);c.tick()
-        tool=self.messages()[1];self.assertEqual(tool['status'],'pending')
+        tool=self.messages()[0];self.assertEqual(tool['status'],'pending')
         self.assertFalse(any(name=='memory_capture_message' and args.get('artifact_ids') for name,args in remote.calls))
         c.clock=lambda:1100.0;c.tick();uploads=[args for name,args in remote.calls if name=='memory_store_artifact']
         self.assertEqual(uploads[0],uploads[1]);self.assertEqual(remote.blobs[AID],PNG)
-        self.assertEqual(self.messages()[1]['status'],'acknowledged')
+        self.assertEqual(self.messages()[0]['status'],'acknowledged')
         names=[name for name,args in remote.calls if name=='memory_store_artifact' or name=='memory_capture_message' and args.get('artifact_ids')]
         self.assertEqual(names,['memory_store_artifact','memory_store_artifact','memory_capture_message'])
 
     def test_missing_local_blob_or_wrong_upload_receipt_never_acknowledges_message(self):
         result=self.mixed();remote=ArtifactRemote();c=self.coordinator(remote);c.observe('physical',result)
         self.store.db.execute('DELETE FROM artifacts WHERE artifact_id=?',(AID,));self.store.db.commit();c.tick()
-        self.assertEqual(self.messages()[1]['status'],'pending')
+        self.assertEqual(self.messages()[0]['status'],'pending')
         self.assertFalse(any(name=='memory_capture_message' and args.get('artifact_ids') for name,args in remote.calls))
 
     def test_unsupported_external_image_preserves_all_text_and_exposes_limit(self):
         result=self.mixed('https://external.example.invalid/private-image?credential=DO-NOT-STORE')
-        args=self.messages()[1]['arguments'];self.assertNotIn('artifact_ids',args)
+        args=self.messages()[0]['arguments'];self.assertNotIn('artifact_ids',args)
         self.assertIn('All business words and exceptions remain exactly.',args['text'])
         self.assertNotIn('DO-NOT-STORE',args['text']);self.assertIn('not_interpreted',args['text'])
         self.assertIn('external_image_not_fetched',result['manual_projection_omissions'])
@@ -106,7 +106,7 @@ class ArtifactTest(unittest.TestCase):
 
     def test_wrong_upload_receipt_keeps_dependent_message_pending(self):
         result=self.mixed();remote=ArtifactRemote();remote.wrong_upload=True;c=self.coordinator(remote);c.observe('physical',result);c.tick()
-        self.assertEqual(self.messages()[1]['status'],'pending')
+        self.assertEqual(self.messages()[0]['status'],'pending')
         self.assertIsNone(self.store.db.execute('SELECT receipt FROM artifacts WHERE artifact_id=?',(AID,)).fetchone()[0])
         self.assertFalse(any(name=='memory_capture_message' and args.get('artifact_ids') for name,args in remote.calls))
 
@@ -115,7 +115,7 @@ class ArtifactTest(unittest.TestCase):
         data=b'\x89PNG\r\n\x1a\n'+b'x'*(MAX_BYTES-8)
         result=self.mixed('data:image/png;base64,'+base64.b64encode(data).decode())
         self.assertEqual(result['gaps'],[])
-        args=self.messages()[1]['arguments'];self.assertEqual(args['artifact_ids'],['artifact-'+hashlib.sha256(data).hexdigest()])
+        args=self.messages()[0]['arguments'];self.assertEqual(args['artifact_ids'],['artifact-'+hashlib.sha256(data).hexdigest()])
         row=self.store.db.execute('SELECT data FROM artifacts WHERE artifact_id=?',(args['artifact_ids'][0],)).fetchone()
         self.assertEqual(bytes(row[0]),data)
 
@@ -128,7 +128,7 @@ class ArtifactTest(unittest.TestCase):
             with self.assertRaises(ValueError):self.manual_report(output)
         self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0],0)
         self.assertEqual(self.store.session('physical')['cursor'],cursor)
-        self.assertEqual([m['arguments']['role'] for m in self.messages()],['user'])
+        self.assertEqual([m['arguments']['role'] for m in self.messages()],[])
 
     def test_future_resume_partial_record_is_discarded_before_size_limit_with_proven_cutoff(self):
         self.path.write_bytes(self.path.read_bytes()+b'old partial record')
@@ -136,7 +136,8 @@ class ArtifactTest(unittest.TestCase):
         attached=self.store.session('physical')['attachment_start_offset']
         with self.path.open('ab') as f:f.write(b'x'*(self.capture.MAX_RECORD+5)+b'\n')
         self.turn();result=self.poll()
-        self.assertEqual(result['gaps'],[]);self.assertEqual(len(self.messages()),1)
+        self.assertEqual(result['gaps'],[]);self.assertTrue(self.store.summary('physical')['pending_turn_completion'])
+        self.assertEqual(self.messages(),[])
         state=self.store.session('physical');self.assertEqual(state['attachment_start_offset'],attached)
         self.assertEqual(state['exclusions']['pre_attachment_partial_record'],1)
 

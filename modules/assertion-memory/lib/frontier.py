@@ -61,7 +61,7 @@ class Coordinator:
         gap_count=len(state.get('gaps',[]))+int(bool(state.get('blocked')))
         if gap_count:scan='gapped'
         elif result.get('status')!='registered':scan='unknown'
-        elif result.get('backlog') or summary['pending_source_proof'] or state.get('skip_partial') or (state.get('turn') or {}).get('assistant'):
+        elif result.get('backlog') or summary['pending_source_proof'] or state.get('skip_partial') or summary['pending_turn_completion']:
             scan='catching_up'
         else:scan='current'
         if self.observed(session)>value['server_observed_seq'] or (scan,gap_count)!=(value['scan_state'],value['gap_count']):

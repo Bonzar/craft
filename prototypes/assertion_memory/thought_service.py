@@ -9,7 +9,7 @@ from .model import SemanticUnavailable
 from .service import MemoryService, _text_page, _request_usage
 from .storage import background_write_retry
 from .thought_engine import ThoughtEngine
-from .thought_engine_contract import thought_drafts
+from .thought_engine_contract import SemanticReviewRejected, thought_drafts
 from .thought_store import ThoughtStore
 from .thought_trace import ThoughtTrace
 from .usage_context import query_usage_trace
@@ -24,7 +24,8 @@ INSTRUCTIONS = ('Shared thought memory. Source interpretations and composite exp
     'memory_query centrally constructs and saves a missing answer, then returns it; an existing suitable '
     'thought may answer directly. Preserve conditions, exceptions, uncertainty and attribution. '
     'A source report is not independent confirmation of present reality. Memory paraphrases are derivative. '
-    'Check answer_accepted, knowledge_limit, pending_count, refresh_required and transport_limit separately. '
+    'Check answer_accepted, answer_error, knowledge_limit, pending_count, refresh_required and transport_limit separately. '
+    'If answer_error is present, report that completion failure and do not use the rejected draft. '
     'A parallel_alternative is independently checked against its grounds, but compatibility with '
     'another answer remains unresolved; show that limit rather than treating completion order as agreement. '
     'Follow all answer_continuations before using an incomplete answer. Exact thought versions, bases and '
@@ -86,6 +87,14 @@ class ThoughtService(MemoryService):
                 with query_replay(engine, trace, {'question': query, 'scope': scope,
                         'valid_as_of': valid_as_of, 'recorded_as_of': recorded_as_of}):
                     thought = engine.answer(query)
+            except SemanticReviewRejected as error:
+                trace.record('query_outcome', details={'answer_accepted': False,
+                    'error': 'semantic_review_rejected', 'reason': error.reason})
+                trace.finish('failed')
+                result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
+                          'answer_continuations': [], 'run_id': trace.id,
+                          'answer_error': {'code': 'semantic_review_rejected',
+                                           'message': 'Проверка не подтвердила ответ даже после исправления.'}}
             except SemanticUnavailable as error:
                 trace.record('knowledge_limit', details={'reason': str(error)})
                 trace.finish('knowledge_limit')

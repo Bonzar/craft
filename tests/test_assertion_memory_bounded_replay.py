@@ -43,7 +43,7 @@ class BoundedReplayTest(unittest.TestCase):
         from synthetic_memory_adapter.frontier import Coordinator
         remote=ArtifactRemote();coordinator=Coordinator(self.store,remote);coordinator.observe('physical',old_result);coordinator.tick()
         before={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()}
-        self.assertEqual(len(before),1)
+        self.assertEqual(len(before),0)
         repair=self.restore(saved);self.assertEqual(repair['replay_start_offset'],saved[2]);result=self.poll()
         coordinator.observe('physical',result);coordinator.tick()
         after={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()}
@@ -88,7 +88,7 @@ class BoundedReplayTest(unittest.TestCase):
         before={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()};self.assertEqual(len(before),2)
         self.restore(saved);result=self.poll();coordinator.observe('physical',result);coordinator.tick()
         after={m['message_id']:(m['arguments'],m['receipt']) for m in self.messages()}
-        self.assertEqual(len(after),5);self.assertTrue(all(after[key]==value for key,value in before.items()))
+        self.assertEqual(len(after),2);self.assertTrue(all(after[key]==value for key,value in before.items()))
         self.assertNotIn('PARENT HISTORY',json.dumps(after));self.assertNotIn('PARENT ANSWER',json.dumps(after))
         self.assertEqual(coordinator.local('physical')['scan_state'],'current')
-        self.assertEqual(coordinator.local('physical')['server_acked_through'],5)
+        self.assertEqual(coordinator.local('physical')['server_acked_through'],2)

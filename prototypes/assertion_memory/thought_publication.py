@@ -43,6 +43,17 @@ def _one(engine,draft,bases,origin,target,whole_refresh=None,title=None):
 
 
 
+def _refresh_material(engine, whole_refresh, records, bases):
+    scope, target_ref = whole_refresh
+    target = engine.thoughts.get(target_ref['thought_id'], target_ref['version'])
+    if target is None:
+        raise ThoughtConflict('The exact thought being refreshed is no longer available')
+    prior = {engine._source_key(basis) for basis in target.bases}
+    marked = [dict(record, was_prior_basis=engine._source_key(basis) in prior)
+              for record, basis in zip(records, bases)]
+    return [scope, *marked], [target_ref, *bases]
+
+
 def _fresh_material(engine,verified,origin=None,*,whole_refresh=None):
     question = verified[0][0].get('question') if len(verified)==1 else None
     current,raw_ids = {},set()
@@ -74,7 +85,7 @@ def _fresh_material(engine,verified,origin=None,*,whole_refresh=None):
         pairs.sort(key=lambda pair:pair[0]['role']!='source')
         records,bases = [record for record,_ in pairs],[basis for _,basis in pairs]
     if whole_refresh is not None:
-        records,bases = [whole_refresh[0], *records],[whole_refresh[1], *bases]
+        records,bases = _refresh_material(engine, whole_refresh, records, bases)
     return question,records,bases
 
 
@@ -84,7 +95,7 @@ def _recoverable(error):
     return error
 
 
-def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=None,title=None):
+def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=None,title=None,rebuild=True):
     prepared = verified
     outer_writer = engine.store._writing
     for attempt in range(2):
@@ -93,8 +104,8 @@ def publish(engine,verified,*,origin=None,target=None,emit=True,whole_refresh=No
                 published = [_one(engine,draft,bases,origin,target,whole_refresh,title) for draft,bases in prepared]
             break
         except ThoughtConflict as conflict:
-            if attempt or outer_writer:
-                # An owning source transaction must retry after releasing its writer.
+            if attempt or outer_writer or not rebuild:
+                # Source writes and overview comparisons must restart with their original scope.
                 raise _recoverable(conflict)
             try:
                 question,records,bases = _fresh_material(engine,prepared,origin,whole_refresh=whole_refresh)

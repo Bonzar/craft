@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from prototypes.assertion_memory.model import ModelError,ModelContextExceeded
+from prototypes.assertion_memory.model import ModelError,ModelContextExceeded,format_prompt
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.thought_store import ThoughtStore
@@ -34,6 +34,145 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertEqual([row.text for row in result],[text])
         self.assertEqual({basis['event_id'] for basis in result[0].bases},{raw.id})
 
+    def test_contextual_decision_keeps_reason_rationale_and_inherited_constraint(self):
+        _, store, queue = self.memory()
+        constraint = 'Расписание должно работать и без интернета.'
+        context = queue.capture_event('s', 'prior', constraint, source='fixture')
+        source = 'Оставим бумажное расписание, чтобы меньше менять работу стойки. Оно понятно посетителям.'
+        raw = queue.capture_event('s', 'decision', source, source='fixture')
+        lossy = 'Бумажное расписание выбрали, потому что оно понятно посетителям.'
+        precise = ('Бумажное расписание оставили, чтобы меньше менять работу стойки. '
+                   'Оно понятно посетителям. Расписание должно работать и без интернета.')
+        attempts = []
+
+        def model(request):
+            attempts.append(request.task)
+            self.assertIn('reason for choosing', request.instructions)
+            self.assertIn('qualifies or constrains the current decision', request.instructions)
+            self.assertIn('check the entire current decision again', request.instructions)
+            self.assertIn(constraint, [record_text(record) for record in request.records])
+            if request.task == 'Construct thought':
+                if request.repair_instructions:
+                    return json.dumps(drafts(request, (precise, [source, constraint])))
+                return json.dumps(drafts(request, (lossy, [source])))
+            if request.records[-1]['text'] == lossy:
+                return json.dumps({'verdict': 'reject',
+                    'text': 'The reason for choosing was replaced by a separate argument.'})
+            return json.dumps(ACCEPT)
+
+        result = ThoughtEngine(store, model).ingest(raw, [context], consolidate=False)
+        self.assertEqual([row.text for row in result], [precise])
+        self.assertEqual({basis['event_id'] for basis in result[0].bases}, {context.id, raw.id})
+        self.assertEqual(attempts, ['Construct thought', 'Verify thought'] * 2)
+
+    def test_message_clock_guides_generation_and_verification_without_dating_the_event(self):
+        from prototypes.assertion_memory.thought_engine_contract import APPLICABILITY, GENERALIZE
+        from .test_source_message_clock import producer_clock
+
+        _, store, queue = self.memory()
+        stamp = '2026-03-10T12:00:00.000000+00:00'
+        text = 'Осмотр закончили.'
+        raw = queue.capture_event('s', 'report', text, source='fixture',
+                                  metadata=producer_clock(stamp, source='fixture'))
+        reported = 'К моменту сообщения осмотр был завершён.'
+        calls = []
+
+        def check(instructions):
+            self.assertIn('when the text gives no state time', instructions)
+            self.assertIn('ordering reports of then-current states', instructions)
+            self.assertIn('does not establish the actual event time', instructions)
+
+        def model(request):
+            calls.append(request.task)
+            check(request.instructions)
+            source = next(row for row in request.records if row['role'] == 'source')
+            self.assertEqual(source['origin']['source_message_at'], stamp)
+            if request.task == 'Construct thought':
+                return json.dumps(drafts(request, (reported, [text])))
+            return json.dumps(ACCEPT)
+
+        for instructions in (APPLICABILITY, GENERALIZE):
+            check(instructions)
+        result = ThoughtEngine(store, model).ingest(raw, consolidate=False)
+        self.assertEqual([row.text for row in result], [reported])
+        self.assertNotIn('valid_at', result[0].origin)
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'])
+
+    def test_review_repairs_loss_of_checker_and_scope_and_keeps_source_attribution(self):
+        _, store, queue = self.memory()
+        source = 'Тесты проходят. Отдельно проверяю документы и примеры для публикации.'
+        raw = queue.capture_event('fixture', 'report', source, source='fixture', actor='assistant')
+        lossy = 'Ассистент сообщил, что тесты проходят, а документы и примеры проверяются.'
+        precise = 'Ассистент сообщил, что тесты проходят и он проверяет документы и примеры для публикации.'
+        calls = []
+
+        def model(request):
+            calls.append(request.task)
+            if request.task == 'Construct thought':
+                self.assertIn('reporter and the participant', request.instructions)
+                self.assertIn('bind the actor to each action', request.instructions)
+                if request.repair_instructions:
+                    self.assertIn('тесты проходят', request.repair_instructions.lower())
+                    self.assertIn(lossy, request.repair_instructions)
+                candidate = precise if request.repair_instructions else lossy
+                return json.dumps(drafts(request, (candidate, [source])))
+            self.assertIn('reporter and the participant', request.instructions)
+            self.assertIn('naming the reporter elsewhere does not pass', request.instructions)
+            if request.records[-1]['text'] == lossy:
+                return json.dumps({'verdict': 'reject', 'text': 'The checker and publication scope were lost.'})
+            return json.dumps(ACCEPT)
+
+        result = ThoughtEngine(store, model).ingest(raw, consolidate=False)
+        self.assertEqual([row.text for row in result], [precise])
+        self.assertEqual(result[0].origin['actor'], 'assistant')
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'] * 2)
+
+    def test_source_repair_preserves_known_observation_when_referent_is_ambiguous(self):
+        _, store, queue = self.memory()
+        gesture = 'Чтобы включить режим, рычаг нужно слишком сильно толкнуть.'
+        indicators = 'После появления второго индикатора рядом с первым он мигает.'
+        sound = 'Звук появляется после исчезновения первого индикатора.'
+        source = ' '.join((gesture, indicators, sound))
+        raw = queue.capture_event('fixture', 'panel', source, source='fixture')
+        context = queue.capture_event('fixture', 'prior', 'Я уменьшил ход рычага и убрал мигание второго индикатора.',
+                                      source='fixture', actor='assistant')
+        blink = 'После появления второго индикатора рядом с первым заметно мигание.'
+        wrong_gesture = 'Для включения режима рычаг нужно толкать слишком далеко.'
+        wrong_blink = 'Второй индикатор мигает при появлении рядом с первым.'
+        reviews = 0
+
+        def model(request):
+            nonlocal reviews
+            if request.task == 'Construct thought':
+                self.assertIn('a qualitative degree does not choose a measurable parameter', request.instructions)
+                is_repair = any(row['role'] == 'rejected_draft' for row in request.records)
+                if not is_repair:
+                    return json.dumps(drafts(request, (wrong_gesture, [gesture]),
+                                             (wrong_blink + ' ' + sound, [indicators, sound])))
+                self.assertIn('Make a separately publishable draft', request.instructions)
+                self.assertTrue(any(row['role'] == 'missing_meaning' and sound in row['text']
+                                    for row in request.records))
+                return json.dumps(drafts(request, (gesture, [gesture]), (blink, [indicators]), (sound, [sound])))
+            reviews += 1
+            if reviews == 1:
+                self.assertIn('check the parameter, the referent, and the timing independently', request.instructions)
+                return json.dumps({'verdict': 'reject', 'text': 'The observations were narrowed.',
+                    'rejected_drafts': [{'draft': 0, 'text': 'A strong push does not establish its distance.'},
+                                        {'draft': 1, 'text': 'The blinking light is ambiguous; preserve the sequence.'}],
+                    'missing_meaning': blink + ' ' + sound})
+            return json.dumps(dict(ACCEPT, rejected_drafts=[], missing_meaning=None))
+
+        result = ThoughtEngine(store, model).ingest(raw, [context], consolidate=False)
+        self.assertEqual([row.text for row in result], [gesture, blink, sound])
+        self.assertTrue(all({basis['event_id'] for basis in row.bases} == {raw.id} for row in result))
+        self.assertEqual(reviews, 2)
+
+    def test_source_instructions_keep_unspecified_roles_out_of_the_thought(self):
+        from prototypes.assertion_memory.thought_engine_contract import VERIFY, construction_instructions
+        for instructions in (construction_instructions(), VERIFY):
+            self.assertIn('omit unmentioned details', instructions)
+            self.assertIn('unless the question calls for the gap', instructions)
+
     def test_semantic_feedback_repairs_whole_refresh_without_dropping_peer_meaning(self):
         memory,store,queue=self.memory()
         first=store.publish('Approval is required.')
@@ -48,7 +187,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             self.assertFalse(memory._connection.in_transaction);calls.append(request)
             if request.task=='Construct thought':
                 if sum(row.task=='Construct thought' for row in calls)==1:return json.dumps(drafts(request,(first.text,[first.text])))
-                self.assertIn('Preserve the evacuation exception',request.instructions)
+                self.assertIn('Preserve the evacuation exception',request.repair_instructions)
                 return json.dumps(drafts(request,(target.text,[first.text,second.text])))
             self.assertIn('ONE WHOLE thought',request.instructions)
             if second.text in request.records[-1]['text']:
@@ -57,6 +196,12 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         result=ThoughtEngine(store,model)._construct(records,bases,target=target)[0]
         self.assertEqual(result.text,target.text)
         self.assertEqual([row.task for row in calls],['Construct thought','Verify thought']*2)
+        original, repaired = map(format_prompt, (calls[0], calls[2]))
+        evidence = json.loads(original.split('\n\n', 1)[1])
+        repaired_evidence = json.loads(repaired.split('\n\n', 1)[1])
+        self.assertTrue(repaired.startswith(original[:-1] + ','))
+        self.assertEqual(evidence['records'], repaired_evidence['records'])
+        self.assertIn('Preserve the evacuation exception', repaired_evidence['repair_instructions'])
 
     def test_restart_discards_rejected_construct_but_reuses_independent_checked_passage(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -111,7 +256,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             if request.task=='Construct thought':
                 body=record_text(request.records[0])
                 if body==text:raise ModelContextExceeded('fixture requires passages')
-                repairing='Preserve the storm exception' in request.instructions
+                repairing='Preserve the storm exception' in request.repair_instructions
                 if repairing and head in body:
                     self.assertTrue(any(tail in record_text(row) for row in request.records))
                     return json.dumps(drafts(request,('Visits are permitted except during storms.',[head,tail])))
@@ -127,7 +272,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertIn('Visits are permitted except during storms.',[row.text for row in result])
         constructions=[row for row in calls if row.task=='Construct thought' and record_text(row.records[0])!=text]
         self.assertEqual(len(constructions),4)
-        self.assertTrue(all('Preserve the storm exception' in row.instructions for row in constructions[2:]))
+        self.assertTrue(all('Preserve the storm exception' in row.repair_instructions for row in constructions[2:]))
 
     def test_malformed_verification_keeps_successful_construct_for_worker_retry(self):
         memory,store,queue=self.memory();raw=queue.capture_event('s','x','Only after approval.',source='fixture')
@@ -143,25 +288,32 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
         self.assertEqual(calls.count('Construct thought'),1)
         self.assertEqual(calls.count('Verify thought'),3)
 
-    def test_two_semantic_rejections_are_recoverable_processing_error_not_knowledge_limit(self):
-        from prototypes.assertion_memory.model import SemanticUnavailable
+    def test_two_semantic_rejections_return_an_unaccepted_answer_with_trace(self):
         from prototypes.assertion_memory.thought_service import ThoughtService
-        memory,_,queue=self.memory()
-        raw=queue.capture_event('s','query','Only after approval.',source='fixture')
-        calls=[]
+        memory, _, queue = self.memory()
+        raw = queue.capture_event('s', 'query', 'Only after approval.', source='fixture')
+        calls = []
         def model(request):
             calls.append(request.task)
-            return json.dumps(drafts(request,('Approval is optional.',[raw.prompt]))) if request.task=='Construct thought' else json.dumps(
-                {'verdict':'reject','text':'The mandatory approval condition was dropped.'})
-        service=ThoughtService(memory,model)
-        with self.assertRaises(ModelError) as caught:
-            service.query('What approval is required?')
-        self.assertNotIsInstance(caught.exception,SemanticUnavailable)
-        self.assertTrue(caught.exception.recoverable)
-        self.assertEqual(service.thoughts.list_thoughts(),[])
-        self.assertEqual(calls,['Construct thought','Verify thought']*2)
+            if request.task == 'Construct thought':
+                return json.dumps(drafts(request, ('Approval is optional.', [raw.prompt])))
+            return json.dumps({'verdict': 'reject', 'text': 'The mandatory approval condition was dropped.'})
+
+        service = ThoughtService(memory, model)
+        result = service.query('What approval is required?')
+        self.assertFalse(result['answer_accepted'])
+        self.assertIsNone(result['answer'])
+        self.assertEqual(result['answer_error']['code'], 'semantic_review_rejected')
+        trace = service.run_history(result['run_id'], section='events')
+        self.assertIn('The mandatory approval condition was dropped.', trace['content'])
+        self.assertNotIn('knowledge_limit', result)
+        self.assertEqual(result['completeness'], 'incomplete')
+        self.assertEqual(result['answer_continuations'], [])
+        self.assertEqual(service.thoughts.list_thoughts(), [])
+        self.assertEqual(calls, ['Construct thought', 'Verify thought'] * 2)
         with memory.transaction() as c:
-            self.assertEqual(c.execute('SELECT status FROM memory_thought_runs').fetchone()[0],'failed')
+            self.assertEqual(c.execute('SELECT status FROM memory_thought_runs WHERE id=?',
+                                       (result['run_id'],)).fetchone()[0], 'failed')
 
     def test_context_only_repeats_are_omitted_before_full_current_source_coverage_check(self):
         memory,store,queue=self.memory()
@@ -187,7 +339,7 @@ class ThoughtSemanticRepairTest(unittest.TestCase):
             calls.append(request.task)
             if request.task=='Construct thought':
                 if calls.count('Construct thought')==1:return json.dumps(drafts(request))
-                self.assertIn('The current reply adopts the lunch proposal',request.instructions)
+                self.assertIn('The current reply adopts the lunch proposal',request.repair_instructions)
                 return json.dumps(drafts(request,('The user agreed to lunch on weekends.',['Да',proposal.prompt])))
             return json.dumps(ACCEPT if any(row.get('role')=='draft' for row in request.records) else
                 {'verdict':'reject','text':'The current reply adopts the lunch proposal; preserve that new decision only.'})

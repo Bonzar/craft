@@ -103,7 +103,7 @@ def query_diagnostics(service,result,scope):
     health=snapshot(service,None,scope,0,100)
     processing=('errors' if health['error_count'] else 'pending' if health['pending_count'] else
                 'needs_review' if health['unresolved_count'] else 'idle')
-    incomplete=processing!='idle' or bool(result.get('knowledge_limit'))
+    incomplete=processing!='idle' or bool(result.get('knowledge_limit') or result.get('answer_error'))
     response={**health,**result,'processing_state':processing,
         'refresh_required':processing!='idle','completeness':'incomplete' if incomplete else 'available_evidence',
         'response_complete':health['response_complete'] and result.get('response_complete',True)}
