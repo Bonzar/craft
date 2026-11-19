@@ -47,6 +47,7 @@ class ServiceConfig:
     processing_session_ids: tuple[str, ...] | None = None
     review_model: str | None = None
     reasoning_effort: str | None = None
+    review_reasoning_effort: str | None = None
 
     def __post_init__(self):
         from .thought_processing_selection import normalize_session_ids
@@ -65,6 +66,11 @@ class ServiceConfig:
                 raise ValueError('review_model must be null or a nonempty model name')
             if self.provider not in ('codex','local'):
                 raise ValueError('review_model requires a provider with explicit model selection')
+        if self.review_reasoning_effort is not None:
+            if not isinstance(self.review_reasoning_effort,str) or not self.review_reasoning_effort.strip():
+                raise ValueError('review_reasoning_effort must be null or a nonempty effort name')
+            if self.provider!='codex' or self.review_model is None:
+                raise ValueError('review_reasoning_effort requires an explicit Codex review_model')
         if self.provider == 'subprocess' and (not self.command or not all(
                 isinstance(part, str) and part for part in self.command)):
             raise ValueError('subprocess provider requires a JSON command argument array')
@@ -92,7 +98,8 @@ class ServiceConfig:
     def route_profile_key(self):
         from .model_router import route_profile_key
         return route_profile_key({'kind':self.provider,'command':self.command,'endpoint':self.endpoint},
-                                 self.model,self.review_model,self.reasoning_effort)
+                                 self.model,self.review_model,self.reasoning_effort,
+                                 review_reasoning_effort=self.review_reasoning_effort)
 
     def components(self, store: MemoryStore):
         model = None
@@ -113,7 +120,8 @@ class ServiceConfig:
             from .model_router import TaskModelRouter
             if self.provider=='codex':
                 review=CodexModel(model=self.review_model,timeout=self.timeout,usage_ledger=usage,
-                                  reasoning_effort=self.reasoning_effort)
+                                  reasoning_effort=(self.review_reasoning_effort
+                                      if self.review_reasoning_effort is not None else self.reasoning_effort))
             else:
                 review=LocalOpenAIModel(self.endpoint,self.review_model,timeout=self.timeout,usage_ledger=usage)
                 review.requested_model=self.review_model
@@ -605,7 +613,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--endpoint')
     parser.add_argument('--model')
     parser.add_argument('--review-model',help='Optional explicit model for semantic verification tasks')
-    parser.add_argument('--reasoning-effort',help='Optional explicit Codex reasoning effort for both models')
+    parser.add_argument('--reasoning-effort',help='Codex writer effort; reviewer inherits unless overridden')
+    parser.add_argument('--review-reasoning-effort',help='Optional separate Codex reviewer effort')
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--embedding-mode', choices=('lexical', 'fastembed'), default='lexical')
     parser.add_argument('--embedding-model', default=MULTILINGUAL_MODEL)
@@ -632,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
                                    args.timeout, args.embedding_mode, args.embedding_model,
                                    args.embedding_cache, args.worker_idle_seconds, args.source_workers,
                                    review_model=args.review_model,reasoning_effort=args.reasoning_effort,
+                                   review_reasoning_effort=args.review_reasoning_effort,
                                    processing_session_ids=json.loads(args.processing_session_ids_json)
                                        if args.processing_session_ids_json is not None else None)
             create_server(config, background=not args.no_background).run(transport='stdio')

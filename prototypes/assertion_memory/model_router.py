@@ -21,9 +21,12 @@ REVIEW_TASKS=frozenset({
 })
 
 
-def route_profile_key(provider,primary_model,review_model=None,reasoning_effort=None):
+def route_profile_key(provider,primary_model,review_model=None,reasoning_effort=None,*,review_reasoning_effort=None):
     identity={'provider':provider,'primary_model':primary_model,
               'review_model':review_model,'reasoning_effort':reasoning_effort,'routing_policy':ROUTING_POLICY}
+    # Preserve existing replay identities when the reviewer still inherits writer effort.
+    if review_reasoning_effort is not None and review_reasoning_effort != reasoning_effort:
+        identity['review_reasoning_effort']=review_reasoning_effort
     return hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
