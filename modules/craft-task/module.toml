@@ -5,5 +5,5 @@ slug = "craft-task"
 for = ["craft-type-lock", "turn-review"]
 # Механику вызовов и общие правила записи берёт из craft-call, форму разговора —
 # из behavior, сверку перед записью — из craft-reconcile, связи «Зависит от» и
-# «Следующий шаг» — из craft-links, проверку чекбоксов и тегов — из craft-sync.
-requires = ["craft-call", "behavior", "craft-reconcile", "craft-links", "craft-sync"]
+# «Следующий шаг» — из craft-links.
+requires = ["craft-call", "behavior", "craft-reconcile", "craft-links"]
