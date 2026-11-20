@@ -66,11 +66,13 @@ python3 tools/build-cloud-probe --check /tmp/craft-cloud-dist
 - `.agents/skills/probe/SKILL.md`, копию части `skill` модуля `probe`.
 - `.codex/hooks.json` с пробами `SessionStart`, `PermissionRequest` и
   `SubagentStart`. `SessionStart` включает `source=compact`.
+- `.codex/config.toml` с явным `features.hooks = true` и второй регистрацией
+  `SessionStart` в TOML. Она помечена `--registration inline-toml`.
 - `.codex/jarvis/cloud-repo-probe.py`, собранную копию наблюдателя.
 - `cloud-dist.json`: тип сборки, source commit, runtime root и SHA256 всех
-  четырёх артефактов. Manifest не содержит даты сборки и данных среды.
+  пяти артефактов. Manifest не содержит даты сборки и данных среды.
 
-В целевой репозиторий публикуются **только эти пять файлов**. Дерево
+В целевой репозиторий публикуются **только эти шесть файлов**. Дерево
 исходников, тесты и установщик туда не копируются. Git-история dist содержит
 только публикации с SHA исходника в сообщении коммита.
 Обновление dist — новая сборка из нового source-коммита. Его источник
@@ -89,6 +91,12 @@ ID сессии, cwd, PID и время в `$JARVIS_STATE_DIR/cloud-repo-probe.j
 На старте дополнительно печатает контрольную метку в контекст. На запросе
 разрешения и старте подагента молчит и не меняет решений.
 
+У TOML-регистрации в записи и stdout есть `registration=inline-toml`.
+У исходной JSON-регистрации этого поля нет. Если загрузились обе регистрации,
+на старте ожидаются две записи. Предупреждение Codex о двух форматах в одном
+слое в этой сравнительной пробе намеренно. После выбора работающего способа
+нужно оставить одну регистрацию.
+
 Отсутствие переменной, неверное событие и ошибка записи дают код 1 и текст
 причины в stderr. Промпт, транскрипт, вход инструмента и секреты не копируются.
 Профиль, `auth.json`, журналы, бинарники и снимки Craft в dist не добавляются.
@@ -102,7 +110,7 @@ ID сессии, cwd, PID и время в `$JARVIS_STATE_DIR/cloud-repo-probe.j
    Убрать старый install script с вызовом `/workspace/craft/tools/jarvis-install`,
    в dist этого исходного пути нет. Опубликовать среду и создать **новый чат**.
    Переключать ветку скриптом или инструментом текущего чата не требуется.
-2. Сохранить `JARVIS_STATE_DIR=/workspace/craft-codex-dist/.codex/state`.
+2. Сохранить `JARVIS_STATE_DIR=/workspace/.jarvis-state`.
 3. Первым сообщением отправить запрос без ожидаемых значений меток:
 
    ```text
@@ -114,7 +122,7 @@ ID сессии, cwd, PID и время в `$JARVIS_STATE_DIR/cloud-repo-probe.j
    Затем только чтением проверь git HEAD, текущую ветку и cloud-dist.json.
    Проверь наличие в git ls-files: AGENTS.md, .agents/skills/probe/SKILL.md,
    .codex/hooks.json, .codex/jarvis/cloud-repo-probe.py, cloud-dist.json.
-   Прочитай /workspace/craft-codex-dist/.codex/state/cloud-repo-probe.jsonl,
+   Прочитай /workspace/.jarvis-state/cloud-repo-probe.jsonl,
    если он существует. Сообщи CODEX_HOME, JARVIS_STATE_DIR и cwd.
    Не запускай установщик, хуки, тесты или другой Codex. Файлы не меняй.
    ```
@@ -147,3 +155,62 @@ Git-репозиторий: первый `main`, точное дерево, ис
 повреждении и устаревшем исходнике. Это не сетевой запуск GitHub Actions.
 Синтетические события используют временные каталоги. Этот прогон не вызывает
 существующие модульные хуки и не доказывает автоматический запуск Cloud.
+
+## Следующая проба после отрицательного замера Cloud
+
+Первый реальный замер на dist `5089a44` получил правильный checkout и все
+четыре SHA256, но до инструментов не увидел правил, `probe-marker` и native
+`SessionStart`. Начальный cwd был `/workspace`, журнал отсутствовал.
+
+Следующая сборка сравнивает JSON и inline TOML. В public upstream
+`openai/codex@ce0323f2f2d3b25e82806cd555237da3db4e1897` проектный TOML
+читается через ExecutorFileSystem, а отдельный hooks.json в discovery —
+через локальный std::fs. Это причина проверить оба входа, а не доказательство
+устройства развёрнутого Cloud. Отсутствие config.toml само по себе не мешает
+обычному Codex: для существующей `.codex` создаётся и пустой config layer.
+В новой пробе явно задаётся feature и проверяется второй transport.
+
+Независимо проверяется чтение инструкций прямо из стартового `/workspace`.
+В **редакторе подготовки среды до публикации**, а не в проверочном чате,
+выполнить следующий блок. Это разовая диагностическая подготовка файла,
+установщик и hook callback она не вызывает. Чужой AGENTS.md не заменяется.
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+path = Path('/workspace/AGENTS.md')
+text = ('# Cloud workspace probe\n\n'
+        'Контрольная метка инструкций стартового каталога: '
+        '`JARVIS_WORKSPACE_RULES_V2`.\n')
+if path.is_symlink():
+    raise SystemExit('ОШИБКА: /workspace/AGENTS.md является ссылкой, файл не изменён')
+if path.exists():
+    if path.read_text() != text:
+        raise SystemExit('ОШИБКА: существующий /workspace/AGENTS.md сохранён, проба не поставлена')
+else:
+    with path.open('x') as output:
+        output.write(text)
+print('Проба стартового каталога подготовлена: /workspace/AGENTS.md')
+PY
+```
+
+Опубликовать подготовленную среду и создать новую задачу с проверочным
+промптом выше, не раскрывая ожидаемую метку в её запросе. Проверить наличие
+`/workspace/AGENTS.md` только после первого ответа без инструментов.
+В manifest новой сборки должно быть пять артефактов плюс сам manifest.
+При чтении журнала показать также поле `registration`, если оно есть.
+
+Интерпретация результатов:
+
+- Метка стартового каталога видна, а репозиторная нет: корневые инструкции
+  достигают агента, вложенный checkout не подхвачен тем же путём.
+- Появился `registration=inline-toml`: TOML-хук автоматически выполнился.
+- Появилась запись без `registration`: выполнилась исходная JSON-проба.
+- Обеих записей нет: выполнение не подтверждено. Отдельно сохранить native
+  предупреждения о config layer, feature, hook trust и запуске команды,
+  если платформа их показывает. Не доверять hook от имени проекта и не
+  подделывать trusted_hash: project config не вправе задавать user trust.
+
+Запуск нового локального app-server, ручная передача stdin callback и
+создание журнала агентом не являются этой проверкой. Каталоги профиля и
+`.codex`/`.agents` в `/workspace` при read-only mount не переопределяются.
