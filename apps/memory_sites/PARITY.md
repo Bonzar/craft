@@ -5,9 +5,15 @@ are not replaced by this branch. None of the synthetic tests access private
 memory or launch a real model. Do not enable real data, a published processing
 endpoint, or automatic cutover while a required item below is incomplete.
 
+Continue the deterministic/read-only port independently of model-provider setup.
+The private fixture release is not an export or mirror of a personal memory
+database. Provider secret creation, configuration and live calls are deferred;
+keep the existing model trial disabled until approved runtime configuration is
+intentionally supplied.
+
 | Gate | Evidence / remaining work |
 |---|---|
-| MCP inventory and input | Compare deployed `tools/list` with the original 17-tool server via `mcp_parity.py`. The current snapshot interface intentionally fails this gate. |
+| MCP inventory and input | Compare deployed `tools/list` with the original 17-tool server via `mcp_parity.py`. The private fixture route exposes two original session tool input schemas; the local RPC tests verify original capture metadata, fixture-only filtering, and no mutation. Plugin provisioning and a connected owner call are separate checks. This is not the full menu. |
 | Raw input and replay | `capture_message.mjs` matches canonical normalization, event IDs and receipt digests in selected synthetic cases. `raw_capture.mjs` and `0004_raw_capture.sql` atomically create an immutable plain-text raw event and its processing job in local tests. MCP dispatch, attachment and delivery ledgers, and hosted transaction checks remain. |
 | Original end-to-end | `test_mcp_reference_flow.py` uses the real original server and a separate worker, with a scripted model. It checks immutable/idempotent capture, scoped processing, Construct → Verify, provenance, source pagination and history. |
 | Hosted queue durability | `queue.mjs` and `0002_queue.sql` provide tested local primitives for idempotency, claims, checkpoint recovery and lease fencing. A bounded single-source provider adapter exists; remote processing and unattended recovery are not proven. |
