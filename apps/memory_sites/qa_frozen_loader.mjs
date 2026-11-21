@@ -2,7 +2,7 @@ import { createQaRevisionApi } from './qa_revision_api.mjs';
 import { createQaCardApi } from './qa_card_api.mjs';
 
 /** Local synthetic-only adapter. A real deployment needs trusted owner auth and storage. */
-export function frozenQaApi({manifest, capabilities, cards, artifacts, topics}, ownerSession, {rawTransport = false} = {}) {
+export function frozenQaApi({manifest, capabilities, cards, artifacts, topics}, ownerSession, {rawTransport = false, keywordSearch = false} = {}) {
   const snapshot = structuredClone(manifest);
   const selectors = snapshot.selector;
   if (selectors.mode !== 'current' || selectors.undated !== 'separate' ||
@@ -37,7 +37,7 @@ export function frozenQaApi({manifest, capabilities, cards, artifacts, topics}, 
   const loadRevision = revision => revision===snapshot.revision ? graph : null;
   const status = {...capabilities,capabilities:{...capabilities.capabilities,
     live:false,history:false,topics:!!topics&&capabilities.capabilities.topics,topic_hierarchy:!!topics&&capabilities.capabilities.topic_hierarchy,source_context:false,
-    whole_saved_source:false,keyword_search:false,semantic_search:false,session_filter:false}};
+    whole_saved_source:false,keyword_search:keywordSearch,semantic_search:false,session_filter:false}};
   const routeRevision=createQaRevisionApi({authorize:async r=>Boolean(await ownerSession(r)),loadRevision,
     loadCapabilities:()=>status,rawTransport,loadCurrent: selector=>selector.history===selectors.history ? snapshot : null});
   const routeCard=createQaCardApi({ownerSession,loadRevision});

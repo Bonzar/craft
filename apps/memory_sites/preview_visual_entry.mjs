@@ -18,6 +18,6 @@ const modelPreview = createModelPreviewRoute({buildProvider:createLiveSourceProv
 const mcpPreview = createPreviewMcpRoute({isOwner:request=>Boolean(request.headers.get('oai-authenticated-user-id'))});
 export default {
   async fetch(request, env) {
-    return (await mcpPreview(request,env)) ?? (await modelPreview(request,env)) ?? (await savedGraph(request,env)) ?? (await graph(request)) ?? (await permanentPreview(request,env)) ?? preview.fetch(request,env);
+    return (await mcpPreview(request,env)) ?? (await modelPreview(request,env)) ?? (await savedGraph(request,env)) ?? (await graph(request,env)) ?? (await permanentPreview(request,env)) ?? preview.fetch(request,env);
   },
 };

@@ -43,6 +43,13 @@
       "when": 1795285800000,
       "tag": "0006_live_source_commit",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795287000000,
+      "tag": "0007_thought_reuse_checks",
+      "breakpoints": true
     }
   ]
 }

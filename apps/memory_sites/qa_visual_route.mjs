@@ -1,5 +1,7 @@
 import { frozenQaApi } from './qa_frozen_loader.mjs';
 import {createQaSavedMaterialApi} from './qa_saved_material.mjs';
+import {createQaKeywordSearch} from './qa_keyword_search.mjs';
+import {createQaKeywordD1,qaKeywordUnavailable} from './qa_keyword_d1.mjs';
 
 const policy = {
   'cache-control':'private, no-store',
@@ -24,9 +26,13 @@ export function createQaVisualRoute({assets,snapshot, owner = ownerPreview}) {
   // Give the host raw graph bytes and let it negotiate wire compression.
   // Sending pre-gzipped bytes with a Content-Encoding header through
   // Workers' automatic encoder can yield a doubly encoded graph body.
-  const api = frozenQaApi({...snapshot,artifacts},r=>owner(r)?'synthetic-readonly':null,{rawTransport:true});
+  const revision = {...snapshot,artifacts};
+  const auth = r=>owner(r)?'synthetic-readonly':null;
+  const api = frozenQaApi(revision,auth,{rawTransport:true});
+  const readyApi = snapshot.keyword_index&&frozenQaApi(revision,auth,{rawTransport:true,keywordSearch:true});
+  const searchIndex = createQaKeywordD1(snapshot);
   const overview = createQaSavedMaterialApi({manifest:snapshot.manifest,topics:snapshot.topics,overviews:Object.values(snapshot.overviews??{}),ownerSession:owner});
-  return async request => {
+  return async (request,env) => {
     const {pathname:p} = new URL(request.url);
     const file = p==='/explore'||p==='/explore/' ? '/index.html' : p.startsWith('/assets/') ? p : null;
     if (!file && !p.startsWith('/api/v1/')) return null;
@@ -37,6 +43,13 @@ export function createQaVisualRoute({assets,snapshot, owner = ownerPreview}) {
       return asset ? new Response(request.method==='HEAD'?null:asset.bytes,{headers:{...policy,'content-type':asset.type}})
         : error(404,'not_found','Asset not found');
     }
+    if(snapshot.keyword_index&&p==='/api/v1/search'){
+      const index=await searchIndex(env?.DB);
+      if(!index)return qaKeywordUnavailable();
+      const search=createQaKeywordSearch({authorize:owner,loadRevision:key=>key===snapshot.manifest.revision?index:null});
+      try{return await search(request);}catch{return qaKeywordUnavailable();}
+    }
+    if(readyApi&&p==='/api/v1/capabilities'&&await searchIndex(env?.DB))return readyApi(request);
     return (await overview(request)) ?? (await api(request)) ?? error(501,'not_implemented','Not available on the synthetic snapshot');
   };
 }

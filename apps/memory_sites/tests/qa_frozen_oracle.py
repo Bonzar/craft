@@ -26,8 +26,9 @@ def build(preview_overviews=False):
             )
             source = root / "synthetic-preview-overview.json"
             source.write_text(json.dumps(material, ensure_ascii=False), encoding="utf8")
-        with TestClient(create_app(None, root, password="synthetic-test-only",
-                        source=JsonSnapshotSource(source, root), synthetic_fixture=True)) as client:
+        app = create_app(None, root, password="synthetic-test-only",
+                         source=JsonSnapshotSource(source, root), synthetic_fixture=True)
+        with TestClient(app) as client:
             login = client.post("/api/v1/session", json={"password":"synthetic-test-only"}, headers={"origin":"http://testserver"})
             login.raise_for_status()
             for _ in range(100):
@@ -63,7 +64,27 @@ def build(preview_overviews=False):
                     if card.status_code == 404: continue
                     card.raise_for_status()
                     cards.append(dict(kind=kind,card=card.json()))
-            return dict(manifest=manifest,capabilities=client.get("/api/v1/capabilities").json(),
+            graph = app.state.manager.get(revision)
+            with graph.connect() as c:
+                nodes = [list(row) for row in c.execute("SELECT ordinal,id,text,flags FROM nodes ORDER BY ordinal")]
+                search = [list(row) for row in c.execute("SELECT rowid,text FROM search ORDER BY rowid")]
+                by_index = {topic["index"]:topic for topic in topics.json()["topics"]}
+                maps = [[row["topic"]+1, by_index[row["topic"]].get("query") or by_index[row["topic"]].get("definition_title") or "",
+                         row["text"], row["topic"], row["id"]] for row in c.execute("SELECT topic,id,text FROM overviews ORDER BY topic")]
+            keyword_projection = dict(revision=revision, nodes=nodes, search=search, maps=maps)
+            keyword_cases=[]
+            def keyword(**params):
+                r=client.get('/api/v1/search',params={'revision':revision, **params})
+                keyword_cases.append([str(r.request.url).removeprefix('http://testserver'),r.status_code,r.json()])
+                return r.json()
+            first=keyword(q='маршрут',limit=1)
+            if first.get('next_cursor'):
+                keyword(q='маршрут',limit=1,cursor=first['next_cursor'])
+                keyword(q='смена',cursor=first['next_cursor'])
+            for q in ('маршрут','текст','лес','--'):
+                keyword(q=q)
+            keyword(q='маршрут',mode='semantic')
+            return dict(keyword_cases=keyword_cases,keyword_projection=keyword_projection,manifest=manifest,capabilities=client.get("/api/v1/capabilities").json(),
                         cards=cards,artifacts=artifacts,topics=topics.json(),overviews=saved)
 if __name__ == "__main__":
     print(json.dumps(build("--preview-overviews" in sys.argv[1:]),ensure_ascii=False,separators=(',',':')))
