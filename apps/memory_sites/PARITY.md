@@ -10,9 +10,9 @@ endpoint, or automatic cutover while a required item below is incomplete.
 | MCP inventory and input | Compare deployed `tools/list` with the original 17-tool server via `mcp_parity.py`. The current snapshot interface intentionally fails this gate. |
 | Raw input and replay | `capture_message.mjs` matches canonical normalization, event IDs and receipt digests in selected synthetic cases. `raw_capture.mjs` and `0004_raw_capture.sql` atomically create an immutable plain-text raw event and its processing job in local tests. MCP dispatch, attachment and delivery ledgers, and hosted transaction checks remain. |
 | Original end-to-end | `test_mcp_reference_flow.py` uses the real original server and a separate worker, with a scripted model. It checks immutable/idempotent capture, scoped processing, Construct → Verify, provenance, source pagination and history. |
-| Hosted queue durability | `queue.mjs` and `0002_queue.sql` provide tested local primitives for idempotency, claims, checkpoint recovery and lease fencing. No real model adapter or end-to-end semantic publication is wired. Verify remotely before cutover. |
+| Hosted queue durability | `queue.mjs` and `0002_queue.sql` provide tested local primitives for idempotency, claims, checkpoint recovery and lease fencing. A bounded single-source provider adapter exists; remote processing and unattended recovery are not proven. |
 | Semantic publication | The private synthetic preview includes the canonical one-source commit path (`live_source_commit.mjs`): a verified result writes a version and its basis, replay must not duplicate it, and a rejected result does not write a permanent thought. This passed local bundled-Worker tests; a hosted receipt and its matching version have not yet been observed. The multi-input, graph mutation and end-to-end provenance contracts remain open. Keep read-only calls separate from generation. |
-| Model, embeddings and review | `model_https.mjs` isolates model transport, reviewer configuration, and bounded failure handling under fake fetch. Verify canonical prompts, live HTTPS provider, independent review, and scheduling with synthetic data. Never embed local CLI credentials or claim model parity from scripted tests. |
+| Model, embeddings and review | `live_source_provider.mjs` connects the original single-source prompts and independent reviewer to the fixed Responses transport, behind trusted authorization. The local tests intercept HTTPS. Hosted key/model access, live inference and scheduling still need proof. Never embed local CLI credentials or claim behavior parity from scripted tests. |
 | Graph QA | The private preview serves the checksum-pinned QA graph UI and an immutable, invented snapshot from the original Python implementation. Graph rendering has been observed on iPhone. The saved overview fetch passes the bundled test, not yet the iPhone check. `synthetic_qa_wire.mjs` can read a verified synthetic D1 version locally. The snapshot is not a live projection; search, history, events and generated overviews must still be compared with the original. |
 | Unattended and cutover | Verify the actual intended scheduler can write, retries do not duplicate publication, and both exact QA view and full MCP work with the Mac off. Only then review the source selection, backup and import real data privately. |
 
@@ -30,6 +30,16 @@ expected permanent fixture receipt, exact linked version and basis, and no
 second version after replay. Verify the separately served graph reads that
 matching version from the same database and does not replace the snapshot or
 its saved overview. Neither fixture counts as proof of the live model or MCP.
+
+The first hosted model gate is intentionally one invented, context-free raw
+message. Use an approved server-only `OPENAI_API_KEY` and explicit, distinct
+`MEMORY_CONSTRUCT_MODEL` and `MEMORY_REVIEW_MODEL` settings. Verify the immutable
+raw row and its queue job, actual Construct and Verify success, then the exact
+receipt, published version and evidence basis. Verify replay produces no new
+versions; a failed provider call or rejected review must not mint a thought.
+Do not expose arbitrary text, transfer actual memory, or substitute a canned
+reply when runtime configuration is absent. Original native Codex CLI runtime
+and model behavior are not guaranteed by matching prompt and response schemas.
 
 Start comparisons with the current upstream reference. Some older upstream
 overview tests still assert the pre-expansion tool inventory; two upstream
