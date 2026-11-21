@@ -1,4 +1,4 @@
-# Craft Memory on Sites (migration branch)
+# Assertion Memory on Sites (migration branch)
 
 This is the first, read-first slice of a **no-Mac, no-VPS** port. Unlike
 the existing graph viewer's Sites proxy, the Worker uses hosted D1 and

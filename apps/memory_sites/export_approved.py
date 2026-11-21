@@ -176,7 +176,7 @@ def export_approved(source: Path, output: Path, scopes, *, provider_id="assertio
     output = Path(output).absolute()
     if os.path.lexists(output):
         raise FileExistsError("The export destination already exists.")
-    with tempfile.TemporaryDirectory(prefix="craft-memory-export-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="assertion-memory-export-") as temporary:
         snapshot = Path(temporary) / "snapshot.sqlite3"
         snapshot_database(Path(source), snapshot)
         canonical = capture(snapshot, provider_id)

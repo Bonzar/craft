@@ -45,7 +45,7 @@ async function mcp(req,env) {
   if (!validId||request?.jsonrpc!=="2.0"||typeof request.method!=="string") return error(-32600,"Invalid request");
   if (request.method==="notifications/initialized"&&id===undefined) return new Response(null,{status:202});
   if (request.method==="server/discover") return reply({supportedVersions:["2026-07-28"],capabilities:{tools:{}}});
-  if (request.method==="initialize") return reply({protocolVersion:"2026-07-28",serverInfo:{name:"craft-memory-sites",version:"0.1.0"},capabilities:{tools:{}}});
+  if (request.method==="initialize") return reply({protocolVersion:"2026-07-28",serverInfo:{name:"assertion-memory-sites",version:"0.1.0"},capabilities:{tools:{}}});
   if (request.method==="tools/list") return reply({tools});
   if (request.method!=="tools/call") return error(-32601,"Method not found");
   if (!owner(req,env)) return json({error:"Owner authorization required"},403);

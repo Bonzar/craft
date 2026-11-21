@@ -1,4 +1,4 @@
-"""Offline MCP tools/list compatibility gate against the original Craft server.
+"""Offline MCP tools/list compatibility gate against the original assertion-memory server in the craft repository.
 
 From repository root:
     python -m apps.memory_sites.mcp_parity --emit-original > /tmp/original-tools.json
@@ -72,7 +72,7 @@ def original_tools():
     from prototypes.assertion_memory.mcp_server import ServiceConfig, create_server
     from prototypes.assertion_memory.storage import MemoryStore
 
-    with tempfile.TemporaryDirectory(prefix="craft-memory-contract-") as directory:
+    with tempfile.TemporaryDirectory(prefix="assertion-memory-contract-") as directory:
         database = str(Path(directory) / "scratch.sqlite3")
         with MemoryStore(database) as store:
             server = create_server(ServiceConfig(db=database, provider="none"), background=False, store=store)
