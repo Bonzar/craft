@@ -1,11 +1,12 @@
 // Owner-facing, private Sites demo of the persistent synthetic slice only.
+import {sameOriginPreviewPost} from './preview_origin.mjs';
 import {getSyntheticPermanentSmoke,runSyntheticPermanentSmoke} from './synthetic_permanent_smoke.mjs';
 
 const path='/preview/permanent';
 const headers={
   'cache-control':'private, no-store',
   'x-content-type-options':'nosniff',
-  'referrer-policy':'no-referrer',
+  'referrer-policy':'same-origin',
   'content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
 };
 const esc=value=>String(value).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
@@ -23,7 +24,9 @@ export async function permanentPreview(request,env){
   if(url.pathname!==path)return null;
   if(!request.headers.get('oai-authenticated-user-id'))return plain({error:'Sign in to the private test Site'},401);
   if(request.method==='POST'){
-    if(request.headers.get('origin')!==url.origin)return plain({error:'Origin mismatch'},403);
+    if(!sameOriginPreviewPost(request))return request.headers.get('accept')?.includes('text/html')
+      ? page('<section role="status">Запрос не поступил с этой страницы. Открой проверку заново и нажми кнопку здесь.</section>',403)
+      : plain({error:'Origin mismatch'},403);
     const length=request.headers.get('content-length');
     const type=request.headers.get('content-type')?.split(';')[0];
     if((length!==null&&length!=='0')||(type&&type!=='application/x-www-form-urlencoded')){

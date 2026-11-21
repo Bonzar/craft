@@ -16,11 +16,11 @@ test('renders synthetic-only summary without touching D1 and never exposes MCP',
 });
 test('only accepts empty same-origin POST and sanitizes backend exceptions', async()=>{
   const env={get DB(){throw Error('test private backend detail')}};
-  const cross=await preview.fetch(request('/preview/run',{method:'POST',headers:{origin:'https://external.example.test'}}),env);
+  const cross=await preview.fetch(request('/preview/run',{method:'POST',headers:{origin:'https://external.example.test','oai-authenticated-user-id':'fixture'}}),env);
   assert.equal(cross.status,403);
-  const input=await preview.fetch(request('/preview/run',{method:'POST',headers:{origin:url},body:new URLSearchParams({text:'ignored'})}),env);
+  const input=await preview.fetch(request('/preview/run',{method:'POST',headers:{origin:url,'oai-authenticated-user-id':'fixture'},body:new URLSearchParams({text:'ignored'})}),env);
   assert.equal(input.status,400);
-  const safe=await preview.fetch(request('/preview/run',{method:'POST',headers:{origin:url,accept:'text/html'},body:new URLSearchParams()}),env);
+  const safe=await preview.fetch(request('/preview/run',{method:'POST',headers:{origin:url,accept:'text/html','oai-authenticated-user-id':'fixture'},body:new URLSearchParams()}),env);
   assert.equal(safe.status,503);
   assert.doesNotMatch(await safe.text(),/private backend detail/);
 });

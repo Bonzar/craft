@@ -1,6 +1,7 @@
 // Synthetic-only demonstration; use an owner-private Site with its own
 // disposable D1 binding. There is no MCP surface, free-text input, model
 // credential, or live-data loader here.
+import {sameOriginPreviewPost} from './preview_origin.mjs';
 import {runSyntheticStagingSmoke} from './synthetic_smoke.mjs';
 import {createPreviewSearch} from './preview_search.mjs';
 
@@ -13,7 +14,7 @@ const escape = v=>String(v).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const headers = {
   'cache-control':'no-store',
   'x-content-type-options':'nosniff',
-  'referrer-policy':'no-referrer',
+  'referrer-policy':'same-origin',
   'content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
 };
 const html = (markup='',status=200) => new Response(`<!doctype html>
@@ -46,7 +47,10 @@ export default {
     }
     if (url.pathname!=='/preview/run') return json({error:'Not found'},404);
     if (request.method!=='POST') return json({error:'Use POST'},405);
-    if (request.headers.get('origin')!==url.origin) return json({error:'Origin mismatch'},403);
+    if (!request.headers.get('oai-authenticated-user-id')) return json({error:'Sign in to the private test Site'},401);
+    if (!sameOriginPreviewPost(request)) return request.headers.get('accept')?.includes('text/html')
+      ? html('<section role="status">Запрос не поступил с этой страницы. Открой проверку заново и нажми кнопку здесь.</section>',403)
+      : json({error:'Origin mismatch'},403);
     // Native form has no named fields, so there is nothing that can become
     // intake. Reject requests that supply data, even though none is consumed.
     const contentType=request.headers.get('content-type')?.split(';')[0];
