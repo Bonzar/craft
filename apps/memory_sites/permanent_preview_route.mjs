@@ -16,7 +16,7 @@ const page=(markup,status=200)=>new Response(`<!doctype html><html lang="ru"><me
 <main><small>ПРИВАТНЫЙ ТЕСТ · ТОЛЬКО ВЫМЫШЛЕННЫЕ ДАННЫЕ</small>
 <h1>От реплики до записи в базе</h1><p>Генерация мысли и проверка используют заранее заданные ответы. Реальная модель не вызывается; свои записи сюда отправить нельзя.</p>
 <form method="post" action="${path}"><button type="submit">Запустить тест</button></form>
-${markup}<p><a href="/explore">Открыть тестовый граф</a> · <a href="/">К списку проверок</a></p></main></html>`,
+${markup}<p><a href="/explore">Открыть исходный QA-снимок</a> · <a href="/">К списку проверок</a></p></main></html>`,
 {status,headers:{...headers,'content-type':'text/html; charset=utf-8'}});
 
 export async function permanentPreview(request,env){
@@ -50,6 +50,6 @@ export async function permanentPreview(request,env){
     const check=await getSyntheticPermanentSmoke(env.DB);
     if(!check.ok)return page('<section role="status">Сохранённого результата пока нет.</section>');
     const text=check.thought?.text??check.accepted?.text??'Вымышленная мысль принята и сохранена.';
-    return page('<section aria-live="polite"><h2>Мысль сохранена</h2><p>'+esc(text)+'</p><p>Страница прочитала результат из постоянного хранилища. Отклонённый вариант не записан.</p></section>');
+    return page('<section aria-live="polite"><h2>Мысль сохранена</h2><p>'+esc(text)+'</p><p>Страница прочитала результат из постоянного хранилища. Отклонённый вариант не записан.</p><p><a href="/explore/saved">Посмотреть эту мысль на карте</a></p></section>');
   }catch{return page('<section role="status">Постоянное хранилище недоступно.</section>',503);}
 }

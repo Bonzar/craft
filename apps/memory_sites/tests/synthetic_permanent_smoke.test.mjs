@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {getSyntheticPermanentSmoke,runSyntheticPermanentSmoke} from '../synthetic_permanent_smoke.mjs';
 import {captureJob} from '../queue.mjs';
+import {permanentPreview} from '../permanent_preview_route.mjs';
 
 const sql=(order,folder='drizzle')=>readFileSync(new URL('../'+folder+'/'+order+'.sql',import.meta.url),'utf8');
 
@@ -65,6 +66,22 @@ test('unmarked DB does not write and existing jobs outside namespace are never c
   await captureJob(b.db,{id:'v1-untouched',kind:'source-thoughts',body:'{}',now:Date.now()-1});
   assert.equal((await runSyntheticPermanentSmoke(b.db)).ok,true);
   assert.equal(b.raw.prepare("SELECT attempts FROM memory_jobs WHERE id='v1-untouched'").get().attempts,0);
+});
+
+test('only a verified permanent receipt enables the persisted graph link',async t=>{
+  const {db}=fixture(t);
+  const url='https://example.test/preview/permanent';
+  const signed={'oai-authenticated-user-id':'fixture-owner'};
+  const open=()=>permanentPreview(new Request(url,{headers:signed}),{DB:db});
+  const before=await (await open()).text();
+  assert.match(before,/href="\/explore"/);
+  assert.doesNotMatch(before,/href="\/explore\/saved"/);
+  const post=await permanentPreview(new Request(url,{method:'POST',headers:{...signed,origin:'https://example.test'}}),{DB:db});
+  assert.equal(post.status,303);
+  assert.equal(post.headers.get('location'),'/preview/permanent');
+  const after=await (await open()).text();
+  assert.match(after,/href="\/explore"/);
+  assert.match(after,/href="\/explore\/saved"/);
 });
 
 test('simultaneous fresh runs converge to exactly one permanent thought and one rejection',async t=>{
