@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.openai/hosting.json
+.dev.vars
+.env*
+*.sqlite*
+export*.json
+__pycache__/
