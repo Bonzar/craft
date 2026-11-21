@@ -27,7 +27,12 @@ test('owner-only explorer serves unchanged bytes and a complete original synthet
   assert.equal(m.revision,snapshot.manifest.revision);
   assert.deepEqual(await (await ask(m.topics_url,login)).json(),snapshot.topics);
   for(const kind of ['nodes','edges']){
-    const bytes=Buffer.from(await (await ask(m[kind].url,login)).arrayBuffer());
-    assert.deepEqual(bytes,Buffer.from(snapshot.artifacts[kind+'.bin'].identity,'base64'));
+    for (const encoding of ['identity','gzip, deflate, br']) {
+      const reply=await ask(m[kind].url,{...login,'accept-encoding':encoding});
+      assert.equal(reply.headers.get('content-encoding'),null);
+      const bytes=Buffer.from(await reply.arrayBuffer());
+      assert.equal(bytes.byteLength,m[kind].byte_length);
+      assert.deepEqual(bytes,Buffer.from(snapshot.artifacts[kind+'.bin'].identity,'base64'));
+    }
   }
 });

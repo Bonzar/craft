@@ -20,7 +20,10 @@ export function createQaVisualRoute({assets,snapshot, owner = ownerPreview}) {
   const artifacts=Object.fromEntries(Object.entries(snapshot.artifacts).map(([p,v])=>[p,{
     identity:decode(v.identity), gzip:decode(v.gzip),
   }]));
-  const api = frozenQaApi({...snapshot,artifacts},r=>owner(r)?'synthetic-readonly':null);
+  // Give the host raw graph bytes and let it negotiate wire compression.
+  // Sending pre-gzipped bytes with a Content-Encoding header through
+  // Workers' automatic encoder can yield a doubly encoded graph body.
+  const api = frozenQaApi({...snapshot,artifacts},r=>owner(r)?'synthetic-readonly':null,{rawTransport:true});
   return async request => {
     const {pathname:p} = new URL(request.url);
     const file = p==='/explore'||p==='/explore/' ? '/index.html' : p.startsWith('/assets/') ? p : null;

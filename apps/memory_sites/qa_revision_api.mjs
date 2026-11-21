@@ -16,7 +16,7 @@ function gzipAccepted(value) {
   return false;
 }
 
-export function createQaRevisionApi({authorize, loadCurrent, loadRevision, loadCapabilities}) {
+export function createQaRevisionApi({authorize, loadCurrent, loadRevision, loadCapabilities, rawTransport = false}) {
   return async request => {
     const {pathname,searchParams} = new URL(request.url);
     const binary = pathname.match(/^\/api\/v1\/graph\/([^/]+)\/(nodes\.bin|edges\.bin)$/);
@@ -49,12 +49,12 @@ export function createQaRevisionApi({authorize, loadCurrent, loadRevision, loadC
     const graph = revision && await loadRevision(revision);
     if (!graph) return finish(error('revision_expired','Snapshot revision is unavailable; reload the graph',409));
     const name = binary[2];
-    const compressed = gzipAccepted(request.headers.get('accept-encoding') ?? '');
+    const compressed = !rawTransport && gzipAccepted(request.headers.get('accept-encoding') ?? '');
     const bytes = files.has(name) && await graph.artifact(name, compressed);
     if (!(bytes instanceof Uint8Array)) throw new Error('Missing prepared revision artifact');
     return new Response(request.method === 'HEAD' ? null : bytes,{headers:{
-      ...privacy,ETag:`"${revision}-${name}"`,Vary:'Accept-Encoding',
-      'Content-Encoding':compressed?'gzip':'identity',
+      ...privacy,ETag:`"${revision}-${name}"`,
+      ...(rawTransport ? {} : {Vary:'Accept-Encoding','Content-Encoding':compressed?'gzip':'identity'}),
       'Content-Type':'application/octet-stream','Content-Length':String(bytes.byteLength)
     }});
   };
