@@ -3,12 +3,13 @@
 // server code; never accept them, their receipt, or fragments from request flags.
 import {validateModelReply, ModelContractError} from './model_contract.mjs';
 import {createPublisher, VerificationRejected} from './publication.mjs';
-import {renewJobLease, failJob} from './queue.mjs';
+import {renewJobLease, failJob, finishJob} from './queue.mjs';
 
 const text = new TextEncoder();
 const maxBytes = 64 * 1024;
 const maxFragments = 128;
-const policyVersion = 'source-batch/v1';
+const legacyPolicy = 'source-batch/v1';
+const canonicalPolicy = 'source-single-initial/v1';
 const responseBounded = (value) => {
   if (typeof value !== 'string' || !value.isWellFormed() ||
       value.length > maxBytes || text.encode(value).byteLength > maxBytes)
@@ -47,7 +48,9 @@ function freezeFragments(rows) {
  */
 export function createVerifiedWorker({
   kind = 'source-thoughts', prepare, construct, review, clock = Date.now, leaseMs = 60_000,
+  canonicalInitialReview = false,
 } = {}) {
+  if (typeof canonicalInitialReview !== 'boolean') throw new TypeError('Invalid trusted review mode.');
   for (const fn of [prepare,construct,review,clock]) {
     if (typeof fn !== 'function') throw new TypeError('Trusted worker adapters are required.');
   }
@@ -62,32 +65,46 @@ export function createVerifiedWorker({
       await own();
       const input = Object.freeze({id:job.id,kind,source:job.payload,sourceSha256:job.payload_sha256});
       if (await hash(input.source) !== input.sourceSha256) throw new RejectedInput();
-      const prepared = await prepare(input);
+      const prepared = await prepare(input,db);
       if (prepared?.eligible !== true) throw new RejectedInput();
       const fragments = freezeFragments(prepared.fragments);
       await own();
       const candidateReply = responseBounded(await construct(Object.freeze({...input,fragments})));
       const drafts = validateModelReply('Construct thought',candidateReply,{supportCount:fragments.length});
-      if (!drafts.length || drafts.length > 128) throw new RejectedInput();
+      if ((!drafts.length && !canonicalInitialReview) || drafts.length > 128) throw new RejectedInput();
       const candidate = JSON.stringify({schema:'source-thought-candidates/v1',drafts:drafts.map(draft=>({
         text:draft.text, question:draft.question,
         support_ids:draft.support_fragments.map(index=>fragments[index].id),
       }))});
       responseBounded(candidate);
-      const publish = createPublisher({clock,verify: async (authoritative) => {
+      const verify = async authoritative => {
         if (authoritative.source !== input.source || authoritative.sourceSha256 !== input.sourceSha256 ||
             authoritative.payload !== candidate) throw new VerificationRejected();
         await own();
-        const reviewReply = responseBounded(await review(Object.freeze({...authoritative,fragments})));
-        validateModelReply('Verify thought',reviewReply,{sourceDraftCount:drafts.length});
+        const reviewInput = {...authoritative,fragments};
+        if (canonicalInitialReview) reviewInput.candidateReply = candidateReply;
+        const reviewReply = responseBounded(await review(Object.freeze(reviewInput),db));
+        const individual = !canonicalInitialReview || drafts.length > 1;
+        validateModelReply('Verify thought',reviewReply,individual ? {sourceDraftCount:drafts.length} : {});
         if (JSON.parse(reviewReply).verdict !== 'accept') throw new VerificationRejected();
-        // Commit to the exact review, candidate and offered evidence; do not
-        // duplicate their private text in the public-facing receipt.
-        const evidenceSha256 = await hash(JSON.stringify([
-          policyVersion, authoritative.sourceSha256, authoritative.payloadSha256, fragments, reviewReply,
-        ]));
-        return {verifier:'source-batch-review',policyVersion,evidenceSha256};
-      }});
+        // Commit to exact review, candidate and offered evidence; do not
+        // duplicate their private text in the returned receipt.
+        const policyVersion = canonicalInitialReview ? canonicalPolicy : legacyPolicy;
+        const evidence = [policyVersion, authoritative.sourceSha256, authoritative.payloadSha256, fragments, reviewReply];
+        if (canonicalInitialReview) evidence.push(candidateReply);
+        const evidenceSha256 = await hash(JSON.stringify(evidence));
+        return {verifier:individual ? 'source-batch-review' : 'source-initial-review',policyVersion,evidenceSha256};
+      };
+      if (!drafts.length) {
+        // Canonical zero-draft capture must be semantically reviewed, then
+        // finish without a graph record or synthetic publication artifact.
+        const receipt = await verify(Object.freeze({...input,payload:candidate,payloadSha256:await hash(candidate)}));
+        const done = await finishJob(db,{...key,now:clock(),result:JSON.stringify({
+          kind:'reviewed-empty-source',...receipt,
+        })});
+        return {status:done ? 'reviewed-empty' : 'lost'};
+      }
+      const publish = createPublisher({clock,verify});
       const result = await publish(db,{...key,payload:candidate});
       return result ? {status:'published',...result} : {status:'lost'};
     } catch (error) {
