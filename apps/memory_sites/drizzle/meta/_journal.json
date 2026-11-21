@@ -29,6 +29,13 @@
       "when": 1795283400000,
       "tag": "0004_raw_capture",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795284600000,
+      "tag": "0005_semantic_thoughts",
+      "breakpoints": true
     }
   ]
 }
