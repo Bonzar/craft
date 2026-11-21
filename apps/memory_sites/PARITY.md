@@ -8,6 +8,7 @@ endpoint, or automatic cutover while a required item below is incomplete.
 | Gate | Evidence / remaining work |
 |---|---|
 | MCP inventory and input | Compare deployed `tools/list` with the original 17-tool server via `mcp_parity.py`. The current snapshot interface intentionally fails this gate. |
+| Raw input and replay | `capture_message.mjs` matches canonical normalization, event IDs and receipt digests in selected synthetic cases. `raw_capture.mjs` and `0004_raw_capture.sql` atomically create an immutable plain-text raw event and its processing job in local tests. MCP dispatch, attachment and delivery ledgers, and hosted transaction checks remain. |
 | Original end-to-end | `test_mcp_reference_flow.py` uses the real original server and a separate worker, with a scripted model. It checks immutable/idempotent capture, scoped processing, Construct → Verify, provenance, source pagination and history. |
 | Hosted queue durability | `queue.mjs` and `0002_queue.sql` provide tested local primitives for idempotency, claims, checkpoint recovery and lease fencing. No real model adapter or end-to-end semantic publication is wired. Verify remotely before cutover. |
 | Semantic publication | `publication.mjs` and `0003_publications.sql` provide a local verification-gated, lease-fenced atomic artifact and completion. Original committed versions, scope, pagination, provenance, freshness fences, and graph mutations are not implemented by this primitive. Keep read-only calls separate from generation. |
