@@ -24,3 +24,16 @@ test('only accepts empty same-origin POST and sanitizes backend exceptions', asy
   assert.equal(safe.status,503);
   assert.doesNotMatch(await safe.text(),/private backend detail/);
 });
+
+test('page offers fixed test terms; search rejects missing sign-in and arbitrary user text', async()=>{
+  const env={get DB(){throw Error('unexpected DB')}};
+  const page=await preview.fetch(request('/'),env);
+  assert.match(await page.text(),/Поиск по вымышленному графу/);
+  const fixed=await preview.fetch(request('/preview/search?q='+encodeURIComponent('стойку')),env);
+  assert.equal(fixed.status,401);
+  const rejected=await preview.fetch(request('/preview/search?q=private-input',{
+    headers:{'oai-authenticated-user-id':'fixture'},
+  }),env);
+  assert.equal(rejected.status,400);
+  assert.doesNotMatch(await rejected.text(),/private-input/);
+});

@@ -2,6 +2,13 @@
 // disposable D1 binding. There is no MCP surface, free-text input, model
 // credential, or live-data loader here.
 import {runSyntheticStagingSmoke} from './synthetic_smoke.mjs';
+import {createPreviewSearch} from './preview_search.mjs';
+
+// Site access is deployed owner-only. Require a real signed-in visitor as
+// well, not a service credential, for the owner-facing demo search.
+const search = createPreviewSearch({owner:req=>Boolean(req.headers.get('oai-authenticated-user-id'))});
+const names = Object.freeze(['стойку','шкафчики','востоке']);
+const escape = v=>String(v).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
 
 const headers = {
   'cache-control':'no-store',
@@ -18,13 +25,24 @@ const html = (markup='',status=200) => new Response(`<!doctype html>
 <p>Этот тест записывает вымышленную реплику в облачную D1, готовит черновик и проверяет, что отклонённый черновик не сохраняется.</p>
 <section><form method="post" action="/preview/run"><button type="submit">Запустить тест</button></form>
 <p>Ответы генерации и проверки заданы заранее. Реальная модель не вызывается.</p></section>
-${markup}<small>Полноценная обработка, поиск, создание связей и перенос настоящих записей в этом выпуске не включены.</small></main></html>`,{status,headers:{...headers,'content-type':'text/html; charset=utf-8'}});
+<section><h2>Поиск по вымышленному графу</h2>
+<p>Поиск по точным словам, не поиск по смыслу. Выбери один из тестовых запросов:</p>
+<ul>${names.map(s=>`<li><a href="/preview/search?q=${encodeURIComponent(s)}">${s}</a></li>`).join('')}</ul></section>
+${markup}<small>Полноценная обработка, поиск по смыслу, создание связей и перенос настоящих записей в этом выпуске не включены.</small></main></html>`,{status,headers:{...headers,'content-type':'text/html; charset=utf-8'}});
 const json = (body,status) => Response.json(body,{status,headers});
 
 export default {
   async fetch(request,env) {
     const url=new URL(request.url);
     if (url.pathname==='/' && request.method==='GET') return html();
+    if (url.pathname==='/preview/search') {
+      if (!names.includes(url.searchParams.get('q'))) return json({error:'Use a listed synthetic keyword'},400);
+      const result=await search(request,env);
+      if (!request.headers.get('accept')?.includes('text/html') || !result.ok) return result;
+      const {hits}=await result.json();
+      const list=hits.length ? '<ul>'+hits.map(({text})=>'<li>'+escape(text)+'</li>').join('')+'</ul>' : '<p>Нет совпадений среди текущих записей.</p>';
+      return html('<section><h2>Результат поиска</h2>'+list+'</section>');
+    }
     if (url.pathname!=='/preview/run') return json({error:'Not found'},404);
     if (request.method!=='POST') return json({error:'Use POST'},405);
     if (request.headers.get('origin')!==url.origin) return json({error:'Origin mismatch'},403);
