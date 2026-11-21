@@ -22,6 +22,8 @@ test('one original synthetic revision shares gated graph, binaries and cards', a
   assert.equal(caps.capabilities.history,false);
   const m=await (await call('/api/v1/graph')).json();
   assert.deepEqual(m,frozen.manifest);
+  assert.equal((await call(m.topics_url,false)).status,401);
+  assert.deepEqual(await (await call(m.topics_url)).json(),frozen.topics);
   for (const kind of ['nodes','edges']) {
     const bytes=Buffer.from(await (await call(m[kind].url)).arrayBuffer());
     assert.deepEqual(bytes,frozen.artifacts[kind+'.bin'].identity);

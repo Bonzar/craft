@@ -2,7 +2,7 @@ import { createQaRevisionApi } from './qa_revision_api.mjs';
 import { createQaCardApi } from './qa_card_api.mjs';
 
 /** Local synthetic-only adapter. A real deployment needs trusted owner auth and storage. */
-export function frozenQaApi({manifest, capabilities, cards, artifacts}, ownerSession) {
+export function frozenQaApi({manifest, capabilities, cards, artifacts, topics}, ownerSession) {
   const snapshot = structuredClone(manifest);
   const selectors = snapshot.selector;
   if (selectors.mode !== 'current' || selectors.undated !== 'separate' ||
@@ -17,6 +17,9 @@ export function frozenQaApi({manifest, capabilities, cards, artifacts}, ownerSes
       if (map.has(key)) throw new Error('Duplicate card key');
       map.set(key,structuredClone(card));
     }
+  }
+  if (topics && (topics.revision!==snapshot.revision || !Array.isArray(topics.topics) || topics.topics.length!==snapshot.counts.topics)) {
+    throw new Error('Unexpected frozen synthetic topic revision');
   }
   const payload = new Map();
   for (const kind of ['nodes','edges']) {
@@ -33,13 +36,19 @@ export function frozenQaApi({manifest, capabilities, cards, artifacts}, ownerSes
   };
   const loadRevision = revision => revision===snapshot.revision ? graph : null;
   const status = {...capabilities,capabilities:{...capabilities.capabilities,
-    live:false,history:false,topics:false,topic_hierarchy:false,source_context:false,
+    live:false,history:false,topics:!!topics&&capabilities.capabilities.topics,topic_hierarchy:!!topics&&capabilities.capabilities.topic_hierarchy,source_context:false,
     whole_saved_source:false,keyword_search:false,semantic_search:false,session_filter:false}};
   const routeRevision=createQaRevisionApi({authorize:async r=>Boolean(await ownerSession(r)),loadRevision,
     loadCapabilities:()=>status,loadCurrent: selector=>selector.history===selectors.history ? snapshot : null});
   const routeCard=createQaCardApi({ownerSession,loadRevision});
   return async request => {
     const url=new URL(request.url);
+    if (url.pathname===snapshot.topics_url && topics) {
+      const headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'};
+      if (!await ownerSession(request)) return Response.json({error:{code:'unauthorized',message:'Authentication required'}},{status:401,headers});
+      if (request.method!=='GET') return Response.json({error:{code:'method_not_allowed',message:'Use GET'}},{status:405,headers});
+      return Response.json(topics,{headers});
+    }
     if (url.pathname==='/api/v1/graph') {
       const history=['1','true'].includes(url.searchParams.get('history'));
       if (history!==selectors.history && await ownerSession(request)) {

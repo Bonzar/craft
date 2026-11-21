@@ -22,6 +22,7 @@ const html = (markup='',status=200) => new Response(`<!doctype html>
 <style>body{font:1rem/1.55 system-ui;background:#f5f6f1;color:#152a21;margin:0}main{max-width:40rem;margin:clamp(2rem,10vw,6rem) auto;padding:0 1.25rem}h1{line-height:1.17;font-size:clamp(2rem,7vw,3.25rem);letter-spacing:-.035em}section{border:1px solid #d4dacf;border-radius:1.2rem;background:white;padding:1.25rem;margin:1.5rem 0}button{background:#164d38;color:white;font:inherit;font-weight:610;border:0;border-radius:.6rem;padding:.8rem 1rem;cursor:pointer}small{color:#4c6056}ul{padding-left:1.25rem}</style>
 <main><small>ПРИВАТНЫЙ ТЕСТ · ТОЛЬКО ВЫМЫШЛЕННЫЕ ДАННЫЕ</small>
 <h1>Проверка обработки реплики</h1>
+<p><a href="/explore">Открыть карту «Вселенная знаний»</a></p>
 <p>Этот тест записывает вымышленную реплику в облачную D1, готовит черновик и проверяет, что отклонённый черновик не сохраняется.</p>
 <section><form method="post" action="/preview/run"><button type="submit">Запустить тест</button></form>
 <p>Ответы генерации и проверки заданы заранее. Реальная модель не вызывается.</p></section>

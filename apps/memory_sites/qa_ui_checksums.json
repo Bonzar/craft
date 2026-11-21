@@ -1,0 +1,25 @@
+{
+  "schema": "assertion-memory-qa-assets/v1",
+  "files": [
+    {
+      "path": "index.html",
+      "bytes": 8629,
+      "sha256": "dd58eab38c5d0b0a3c4fdd4186a4e4bba4f1bca4eb6350476cb19940599749c1"
+    },
+    {
+      "path": "assets/graph.worker-Bex9AmBR.js",
+      "bytes": 84500,
+      "sha256": "cd903cfcd63c5ab04317322c0093d6929e089f9b448c9118c8efaa4e9eca188b"
+    },
+    {
+      "path": "assets/index-Byv8wmN9.js",
+      "bytes": 889558,
+      "sha256": "78571e6a2fdcc036a853cf979bde4d673af36321f4cfcb3f0ec8e0bbf0fadd1d"
+    },
+    {
+      "path": "assets/index-CjCAYN3m.css",
+      "bytes": 29441,
+      "sha256": "780db63fff4bd7d64818ec20b6f76eae2f40bcecb8683a8a7efe1a176f97b3c0"
+    }
+  ]
+}

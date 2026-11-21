@@ -23,6 +23,8 @@ def build():
             assert response.status_code == 200
             manifest = response.json()
             revision = manifest["revision"]
+            topics = client.get(manifest["topics_url"])
+            topics.raise_for_status()
             cards, artifacts = [], {}
             for kind in ("nodes", "edges"):
                 encodings = {}
@@ -37,6 +39,6 @@ def build():
                     card.raise_for_status()
                     cards.append(dict(kind=kind,card=card.json()))
             return dict(manifest=manifest,capabilities=client.get("/api/v1/capabilities").json(),
-                        cards=cards,artifacts=artifacts)
+                        cards=cards,artifacts=artifacts,topics=topics.json())
 if __name__ == "__main__":
-    print(json.dumps(build()))
+    print(json.dumps(build(),ensure_ascii=False,separators=(',',':')))
