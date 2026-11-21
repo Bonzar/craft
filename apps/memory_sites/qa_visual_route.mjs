@@ -1,4 +1,5 @@
 import { frozenQaApi } from './qa_frozen_loader.mjs';
+import {createQaSavedMaterialApi} from './qa_saved_material.mjs';
 
 const policy = {
   'cache-control':'private, no-store',
@@ -24,6 +25,7 @@ export function createQaVisualRoute({assets,snapshot, owner = ownerPreview}) {
   // Sending pre-gzipped bytes with a Content-Encoding header through
   // Workers' automatic encoder can yield a doubly encoded graph body.
   const api = frozenQaApi({...snapshot,artifacts},r=>owner(r)?'synthetic-readonly':null,{rawTransport:true});
+  const overview = createQaSavedMaterialApi({manifest:snapshot.manifest,topics:snapshot.topics,overviews:Object.values(snapshot.overviews??{}),ownerSession:owner});
   return async request => {
     const {pathname:p} = new URL(request.url);
     const file = p==='/explore'||p==='/explore/' ? '/index.html' : p.startsWith('/assets/') ? p : null;
@@ -35,6 +37,6 @@ export function createQaVisualRoute({assets,snapshot, owner = ownerPreview}) {
       return asset ? new Response(request.method==='HEAD'?null:asset.bytes,{headers:{...policy,'content-type':asset.type}})
         : error(404,'not_found','Asset not found');
     }
-    return (await api(request)) ?? error(501,'not_implemented','Not available on the synthetic snapshot');
+    return (await overview(request)) ?? (await api(request)) ?? error(501,'not_implemented','Not available on the synthetic snapshot');
   };
 }

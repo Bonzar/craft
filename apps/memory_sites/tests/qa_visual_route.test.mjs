@@ -6,7 +6,7 @@ import {createQaVisualRoute} from '../qa_visual_route.mjs';
 
 test('owner-only explorer serves unchanged bytes and a complete original synthetic revision', async()=>{
   const cwd=fileURLToPath(new URL('../../../',import.meta.url));
-  const snapshot=JSON.parse(execFileSync(process.env.PYTHON||'python',['-m','apps.memory_sites.tests.qa_frozen_oracle'],{
+  const snapshot=JSON.parse(execFileSync(process.env.PYTHON||'python',['-m','apps.memory_sites.tests.qa_frozen_oracle','--preview-overviews'],{
     cwd,encoding:'utf8',maxBuffer:4*1024*1024,
   }));
   const fixture='<title>Вселенная знаний</title>';
@@ -26,6 +26,10 @@ test('owner-only explorer serves unchanged bytes and a complete original synthet
   const m=await (await ask('/api/v1/graph?mode=current&history=0&undated=separate',login)).json();
   assert.equal(m.revision,snapshot.manifest.revision);
   assert.deepEqual(await (await ask(m.topics_url,login)).json(),snapshot.topics);
+  const overview='/api/v1/overviews/'+encodeURIComponent('topic:root')+'?revision='+m.revision+'&offset=0&limit=1200';
+  assert.equal((await ask(overview)).status,401);
+  assert.deepEqual(await (await ask(overview,login)).json(),snapshot.overviews['topic:root']);
+  assert.equal((await ask('/api/v1/overviews/topic%3Aplans?revision='+m.revision,login)).status,404);
   for(const kind of ['nodes','edges']){
     for (const encoding of ['identity','gzip, deflate, br']) {
       const reply=await ask(m[kind].url,{...login,'accept-encoding':encoding});
