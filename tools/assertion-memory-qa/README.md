@@ -66,3 +66,68 @@ automatic deployment to the VM.
 A future automatic deploy may use a narrowly scoped artifact-pull identity on the
 dedicated tenant; do not install a general self-hosted GitHub runner against
 untrusted PR code on the user's VM.
+
+## Same-VM TEST → PRODUCTION release branch
+
+The existing manual QA pull above is a separate legacy path. The release branch
+`codex/assertion-memory-release` uses **Assertion Memory CI and Release**:
+
+1. A reviewed push to that exact branch in `Bonzar/craft` builds **once** on a
+   GitHub-hosted Linux runner. CI tests Graph/MCP on fictional data. The archive
+   contains code/assets only, not the real or fictional SQLite runtime files.
+2. `Deploy TEST` runs automatically after green build. It downloads the build's
+   immutable GitHub artifact by ID, verifies run/SHA and ZIP digest, then verifies
+   the inner release digest and sends those exact bytes through a pinned,
+   restricted SSH command. A green job must include an actual activation and
+   successful isolated TEST smoke receipt from the VM.
+3. `Promote to PRODUCTION` waits on that green TEST job and on a human approval
+   in GitHub for this run. Verify the TEST receipt's revision and digest before
+   approving or rejecting. A second check via GitHub's approval-history API
+   rejects production even if someone forgot to configure the reviewer rule.
+   The job downloads the same artifact ID and compares its revision and digest
+   with the successful TEST receipt. It never builds anything. If a promotion
+   is stale or the artifact expired, push/review a fresh candidate instead.
+4. Branch-only push events support this before merging any workflow to the default
+   branch. Pull requests, legacy branches, and an ordinary manual workflow
+   dispatch cannot deploy either tier. Re-running failed jobs alone after a new
+   run attempt can leave only a prior-attempt artifact; that fails closed. Re-run
+   all jobs for a fresh artifact with a new TEST receipt and production approval.
+
+### Provision explicitly in both environments before enabling
+
+Create GitHub Environments `assertion-memory-test` and
+`assertion-memory-production`. Permit deployment only from the exact reviewed
+release branch and protect that branch from arbitrary direct pushes, especially
+changes to the workflows/deployment scripts. TEST needs no reviewer; configure a
+real required reviewer for production and prevent administrator protection
+bypass where available. If the repository plan does not support required
+reviewers for that environment, production remains unavailable. An API failure
+or missing human approval is never treated as success.
+
+Set these independently in **each environment** (not shared repo defaults):
+
+| Name | Scope/type | Meaning |
+| --- | --- | --- |
+| `ASSERTION_MEMORY_DEPLOY_ENABLED` | Variable | Set to `true` only when the target-specific VM gate, service units, health and rollback are provisioned. |
+| `ASSERTION_MEMORY_SSH_HOST` | Variable | Verified VM DNS name or IPv4. |
+| `ASSERTION_MEMORY_SSH_PORT` | Variable | Explicit port; no implicit production target. |
+| `ASSERTION_MEMORY_SSH_USER` | Variable | `assertion-test-deploy` or `assertion-production-deploy`, exactly. |
+| `ASSERTION_MEMORY_DEPLOY_KEY` | Secret | Separate, rotatable key accepted only by that user's fixed command. No root/admin key and no reused personal login. |
+| `ASSERTION_MEMORY_SSH_HOST_PIN` | Secret | One independently verified Ed25519 known_hosts line (host, or `[host]:port` for non-22). Never discover or autoaccept it in CI. |
+
+VM provisioner must enforce two restricted accounts/keys, separate TEST and
+PRODUCTION release trees/config/data, and a target-specific forced command
+`deploy-release ENV GIT_SHA TAR_SHA256` (archive via standard input). No GitHub
+generic self-hosted runner, shell, forwarding, PTY or production credentials for
+TEST. It must validate its own environment, archive, digest and (for
+production) the durable corresponding green TEST receipt before activation.
+Production also requires the host-side activator to open its exact SHA/digest
+gate for that release; a GitHub approval alone does not replace this check.
+It must return exactly one JSON object:
+`{"status":"ok","environment":"test|production","revision":"<40 lowercase hex>","sha256":"<64 lowercase hex>"}`
+only after activation and smoke; a merely staged release or a failed health
+check must never be reported as activated. The VM owns atomic activation,
+rollback and protection of the existing primary database; the CI sender has no
+shell or DB access. If keys, host pin, GitHub protection, VM gate, or receiver
+are absent, deployment is blocked by design. CI jobs for the two tiers are
+separately serialized, without cancellation of an active transfer.

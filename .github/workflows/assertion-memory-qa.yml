@@ -1,4 +1,4 @@
-name: Assertion Memory QA
+name: Assertion Memory CI and Release
 
 on:
   pull_request:
@@ -8,20 +8,19 @@ on:
       - "apps/graph_viewer/**"
       - "tools/assertion-memory-qa/**"
   push:
-    branches: ["codex/assertion-memory-ci-qa", "codex/assertion-memory-codex-availability"]
+    branches: ["codex/assertion-memory-ci-qa", "codex/assertion-memory-codex-availability", "codex/assertion-memory-release"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: assertion-memory-qa-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      zip_sha256: ${{ steps.artifact.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -61,14 +60,17 @@ jobs:
           export PYTHONPATH="$PWD"
           python tools/assertion-memory-qa/synthetic_fixture.py "$RUNNER_TEMP/memory-fictional.sqlite3"
           python tools/assertion-memory-qa/smoke_local.py "$RUNNER_TEMP/memory-fictional.sqlite3"
+      - name: Test release/approval fail-closed checks
+        run: python tools/assertion-memory-qa/test-release-ci.py
       - name: Build narrow, data-free release
         run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: assertion-memory-qa-${{ github.sha }}
+          name: assertion-memory-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/qa-release/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
   approve-qa-release:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/assertion-memory-ci-qa'
     name: Approve pull to isolated QA
@@ -88,3 +90,96 @@ jobs:
             exit 1
           fi
           printf 'QA artifact approved for %s. This job does not modify the VM; use the documented operator pull.\n' "$REVISION" >> "$GITHUB_STEP_SUMMARY"
+  deploy-test:
+    name: Deploy TEST
+    if: github.event_name == 'push' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/codex/assertion-memory-release'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    environment: assertion-memory-test
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: assertion-memory-deploy-test
+      cancel-in-progress: false
+    outputs:
+      revision: ${{ steps.send.outputs.revision }}
+      sha256: ${{ steps.send.outputs.sha256 }}
+      artifact_id: ${{ steps.send.outputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
+      - id: resolve
+        name: Download and verify the exact immutable build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          ARTIFACT_ZIP_SHA256: ${{ needs.build.outputs.zip_sha256 }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: python tools/assertion-memory-qa/release-ci.py download
+      - id: send
+        name: Activate and smoke-check via pinned restricted connection
+        env:
+          RELEASE_ENABLED: ${{ vars.ASSERTION_MEMORY_DEPLOY_ENABLED }}
+          RELEASE_USER: ${{ vars.ASSERTION_MEMORY_SSH_USER }}
+          RELEASE_HOST: ${{ vars.ASSERTION_MEMORY_SSH_HOST }}
+          RELEASE_PORT: ${{ vars.ASSERTION_MEMORY_SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}
+          SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_ARCHIVE_SHA256: ${{ steps.resolve.outputs.release_sha256 }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: tools/assertion-memory-qa/send-release.sh test
+  deploy-production:
+    name: Promote to PRODUCTION
+    if: github.event_name == 'push' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/codex/assertion-memory-release'
+    needs: [build, deploy-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    environment: assertion-memory-production
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: assertion-memory-deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
+      - name: Fail closed unless a human approved this protected environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/assertion-memory-qa/release-ci.py approval
+      - id: resolve
+        name: Download and verify the exact immutable build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          ARTIFACT_ZIP_SHA256: ${{ needs.build.outputs.zip_sha256 }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: python tools/assertion-memory-qa/release-ci.py download
+      - id: send
+        name: Activate and smoke-check via pinned restricted connection
+        env:
+          RELEASE_ENABLED: ${{ vars.ASSERTION_MEMORY_DEPLOY_ENABLED }}
+          RELEASE_USER: ${{ vars.ASSERTION_MEMORY_SSH_USER }}
+          RELEASE_HOST: ${{ vars.ASSERTION_MEMORY_SSH_HOST }}
+          RELEASE_PORT: ${{ vars.ASSERTION_MEMORY_SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}
+          SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_ARCHIVE_SHA256: ${{ steps.resolve.outputs.release_sha256 }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+          TESTED_ARTIFACT_ID: ${{ needs.deploy-test.outputs.artifact_id }}
+          TESTED_REVISION: ${{ needs.deploy-test.outputs.revision }}
+          TESTED_SHA256: ${{ needs.deploy-test.outputs.sha256 }}
+        run: tools/assertion-memory-qa/send-release.sh production
