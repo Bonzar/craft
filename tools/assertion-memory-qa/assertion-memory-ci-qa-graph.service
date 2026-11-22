@@ -1,0 +1,15 @@
+[Unit]
+Description=Assertion Memory isolated fictional QA
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=%h/.local/share/assertion-memory-ci-qa/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+ExecStart=%h/.local/share/assertion-memory-ci-qa/current/venv/bin/python -m apps.graph_viewer.server --source %h/.local/share/assertion-memory-ci-qa/current/private/fictional.sqlite3 --state-dir %h/.local/share/assertion-memory-ci-qa/current/private/graph-state --password-file %h/.local/share/assertion-memory-ci-qa/current/private/graph-password --static-dir %h/.local/share/assertion-memory-ci-qa/current/apps/graph_viewer/web/dist --port 8891 --synthetic-fixture
+
+[Install]
+WantedBy=default.target

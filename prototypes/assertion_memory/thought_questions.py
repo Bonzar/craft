@@ -2,7 +2,6 @@
 from __future__ import annotations
 import json
 from datetime import datetime,timezone
-from .model import Candidate
 from .storage import _timestamp
 
 
@@ -79,40 +78,3 @@ def decode_index_questions(value):
             return [value]
         if isinstance(parsed,list) and all(isinstance(item,str) for item in parsed):return parsed
     return [value]
-
-
-def rank(candidates,query,entries,limit):
-    corpus,owners={},{}
-    for key,row in entries.items():
-        values=[('text',row['text']),*[('question',text) for text in row['questions']]]
-        for index,(kind,text) in enumerate(values):
-            if not text:continue
-            address=json.dumps([key,index],separators=(',',':'))
-            corpus[address]=text; owners[address]=(key,kind,text)
-    ranked=candidates.rank_relevance(query,corpus,limit=len(corpus))
-    best={}
-    for item in ranked:
-        key,kind,text=owners[item.id]
-        if key not in best or item.score>best[key][0].score:
-            best[key]=(Candidate(key,item.score,item.method),{'kind':kind,'text':text})
-    ordered=sorted(best.values(),key=lambda item:(-item[0].score,item[0].id))[:limit]
-    return [item for item,_ in ordered],{item.id:match for item,match in ordered}
-
-
-def retrieve(engine,question,explicit_ids,limit,exclude_ids):
-    index=getattr(engine.thoughts,'index_entries',None)
-    entries={row['id']:row for row in index()} if index else {
-        row.id:{'id':row.id,'version':row.version,'text':row.text,'questions':engine.question_texts(row)}
-        for row in engine.thoughts.list_thoughts()}
-    ranked,matches=rank(engine.candidates,question,{key:row for key,row in entries.items() if key not in exclude_ids},limit)
-    selected=list(dict.fromkeys([row.id for row in ranked]+list(explicit_ids)))
-    from .thought_source_policy import thought_eligibility
-    memo=getattr(engine.thoughts,'_source_policy_memo',{})
-    result=[]
-    for key in selected:
-        thought=engine.thoughts.get(key) if key in entries else None
-        if thought is not None and thought_eligibility(engine.thoughts,thought,memo=memo)['allowed']:result.append(thought)
-    engine._emit('retrieval',question=question,candidates=[{'thought_id':row.id,'version':entries[row.id]['version'],
-        'score':row.score,'method':row.method,'matched_input':matches[row.id]} for row in ranked],
-        selected=[engine._basis(row) for row in result],explicit_ids=list(explicit_ids))
-    return result

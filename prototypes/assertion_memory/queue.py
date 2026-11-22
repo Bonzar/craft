@@ -720,7 +720,8 @@ class CaptureQueue:
     def _fail(self, claim: _Claim, error: Exception) -> Job:
         with self.store.transaction(write=True) as connection:
             self._assert_owned(connection, claim)
-            exhausted = claim.job.attempts >= self._max_attempts
+            from .model import ModelProviderUnavailable
+            exhausted = isinstance(error, ModelProviderUnavailable) or claim.job.attempts >= self._max_attempts
             connection.execute("""
                 UPDATE memory_capture_jobs
                 SET status = ?, error = ?, lease_token = NULL, lease_until = NULL,

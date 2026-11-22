@@ -966,7 +966,7 @@ class MemoryService:
                 job = None
         if job is None:
             raise ValueError('unknown job or event ID in requested scope')
-        return asdict(job)
+        return _status_model_error(asdict(job))
 
     def _status_counts(self, connection, scope, *, selection=None) -> dict:
         base, parameters = selection if selection is not None else _status_selection(scope)
@@ -1021,7 +1021,7 @@ class MemoryService:
             owner=item.pop('proposal_scope')
             item['proposal']=(proposal if isinstance(owner,str) and owner.strip() else {'revision':digest(proposal)})
             safe_unresolved.append(item)
-        pages = {'pending_jobs':[dict(row) for row in pending],'errors':[dict(row) for row in errors],
+        pages = {'pending_jobs':[dict(row) for row in pending],'errors':[_status_model_error(dict(row)) for row in errors],
                  'unresolved':safe_unresolved}
         totals = {'pending_jobs':counts['pending_count'],'errors':counts['error_count'],
                   'unresolved':counts['unresolved_count']}
@@ -1032,6 +1032,14 @@ class MemoryService:
         pages['pagination'] = {name:{'offset':offset,'limit':limit,'total':total,
             'next_offset':offset+limit if offset+limit<total else None} for name,total in totals.items()}
         return pages
+
+
+def _status_model_error(item):
+    from .model import persisted_model_error_code
+    code = persisted_model_error_code(item.get('error'))
+    if code:
+        item['error_code'] = code
+    return item
 
 
 def _status_selection(scope):

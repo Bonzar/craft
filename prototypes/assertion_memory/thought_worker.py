@@ -15,6 +15,7 @@ from .queue import _Claim, _event, LeaseLost
 from .thought_store import ThoughtConflict, publication_guard, same_meaning_version
 from .thought_worker_queue import ThoughtWorkQueue
 from .thought_answering import can_refresh, refresh_thought
+from .source_extraction import CanonicalSourceExtractor, SourceExtractorFactory
 from .thought_processing_selection import (normalize_session_ids,source_predicate,processing_cohort,
     canonical_session_id,processing_deadline)
 
@@ -77,7 +78,7 @@ class _Replay:
 class ThoughtWorker:
     def __init__(self, queue, engine, *, lane='all', lock_owned=False,
                  claim_observer=None, context_limit=8, context_characters=12000, processing_session_ids=None,
-                 is_pausing=None):
+                 is_pausing=None, source_extractor_factory: SourceExtractorFactory = CanonicalSourceExtractor):
         if engine.store is not queue.store:
             raise ValueError('thought worker and raw queue must share a MemoryStore')
         if lane not in ('all', 'source', 'maintenance') or type(lock_owned) is not bool:
@@ -91,6 +92,7 @@ class ThoughtWorker:
         self.work = ThoughtWorkQueue(queue,self.processing_session_ids)
         self.is_paused = False
         self.is_pausing = is_pausing
+        self.source_extractor_factory = source_extractor_factory
 
     @contextmanager
     def _lock(self):
@@ -262,9 +264,18 @@ class ThoughtWorker:
         try:
             if resumed:
                 context, carried, feedback = self._load_source_draft_checkpoint(claim)
-                prepared = self.engine.resume_source_drafts(event, context, carried, feedback)
+                extractor = self.source_extractor_factory(self.engine)
+                prepared = extractor.resume(event, context, carried, feedback)
             else:
-                changed = self.engine.ingest(event, context, consolidate=False)
+                _, event_id, origin, _, _ = self.engine._source_packet(event)
+                changed = self.engine.reusable_source_thoughts(event_id, origin)
+                if not changed:
+                    extractor = self.source_extractor_factory(self.engine)
+                    drafts = extractor.extract(event, context)
+                    # Preserve original ordinary publication guard, transaction
+                    # and bounded stale-proof rebuild outside the completion
+                    # writer. Residual repair still publishes inside it below.
+                    changed = self.engine._publish(drafts, origin=origin)
         except SourceDraftRepairPending as failure:
             pending = failure
             prepared = failure.accepted

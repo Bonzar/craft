@@ -31,15 +31,15 @@ class ModelProfileReplayTest(unittest.TestCase):
                 queue=CaptureQueue(memory);store=ThoughtStore(memory);engine=Engine(store)
                 provider=Provider('a'*64);engine.model=provider
                 event=queue.capture_event('s','m','Only after approval.',source='fixture')
-                original=engine.ingest
-                def fail_after_consumed(event,context=(),*,consolidate=False):
+                original=engine._prepare_source
+                def fail_after_consumed(records,bases,text,origin):
                     for task in ('fixture','later-step'):
-                        request=ModelRequest(task,[{'text':event.prompt}]);engine.gateway(task,request,({'event_id':event.id},))
+                        request=ModelRequest(task,[{'text':text}]);engine.gateway(task,request,tuple(bases[:1]))
                     raise RuntimeError('interrupted after first step consumed')
-                engine.ingest=fail_after_consumed
+                engine._prepare_source=fail_after_consumed
                 self.assertEqual(ThoughtWorker(queue,engine,lane='source').run_once().status,'pending')
                 if change:provider.route_profile_key='b'*64
-                engine.ingest=original;queue.retry(event.id)
+                engine._prepare_source=original;queue.retry(event.id)
                 self.assertEqual(ThoughtWorker(queue,engine,lane='source').run_once().status,'completed')
                 self.assertEqual(len(provider.requests),2)
                 reused=[row for row in engine.events if row['stage']=='model_step_reused']
