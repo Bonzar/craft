@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 import zipfile
 
 TOOLS=Path(__file__).resolve().parent
@@ -17,6 +18,23 @@ INNER=b'fictional bytes only'
 DIGEST=hashlib.sha256(INNER).hexdigest()
 
 class ReleaseTest(unittest.TestCase):
+    def test_accepts_punctuated_opaque_bearer_without_putting_it_in_argv(self):
+        fictional = 'ghs_example-opaque.jwt~more+parts/even_more=='
+        with patch.dict(os.environ, GH_TOKEN=fictional), patch.object(
+                release_ci.subprocess, 'run',
+                return_value=subprocess.CompletedProcess([], 0, stdout=b'{}')) as curl:
+            self.assertEqual(release_ci.api('/repos/Bonzar/craft/actions/artifacts/123'), {})
+            argv=curl.call_args.args[0]
+            self.assertNotIn(fictional,' '.join(argv))
+            self.assertEqual(curl.call_args.kwargs['input'],
+                             f'header = "Authorization: Bearer {fictional}"\n'.encode())
+        for invalid in ('safe"\nurl = "wrong', 'safe\\continuation', 'spaces in token', 'new\rline'):
+            with self.subTest(invalid=invalid), patch.dict(os.environ, GH_TOKEN=invalid), patch.object(
+                    release_ci.subprocess, 'run') as curl:
+                with self.assertRaises(ValueError):
+                    release_ci.api('/repos/Bonzar/craft/actions/artifacts/123')
+                curl.assert_not_called()
+
     def test_approval_fails_closed_without_human_approval_for_prod(self):
         target={'name':'assertion-memory-production'}
         approved=lambda env,person='User',state='approved': {'state':state,'user':{'type':person},'environments':[env]}

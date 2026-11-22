@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from prototypes.assertion_memory.mcp_server import ServiceConfig
 from prototypes.assertion_memory.model import (
-    CodexModel, ModelError, ModelProviderUnavailable, ModelRequest,
+    CodexModel, ModelError, ModelProviderUnavailable, ModelRequest, persisted_model_error_code,
 )
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_processing import TracedThoughtWorker
@@ -92,9 +92,12 @@ class CodexProviderAvailabilityTest(unittest.TestCase):
             CodexModel(model='fake',binary=str(self.tmp/'missing-codex'))(self.request)
         with patch('subprocess.run', side_effect=subprocess.TimeoutExpired(
                 ['codex'], 1, stderr=PRIVATE_DIAGNOSTIC)):
-            with self.assertRaises(ModelProviderUnavailable) as failure:
+            with self.assertRaisesRegex(ModelProviderUnavailable,'timed out') as failure:
                 self.model(self.request)
             self.assertNotIn(PRIVATE_DIAGNOSTIC,str(failure.exception))
+            marker=f'ModelProviderUnavailable: {failure.exception}'
+            self.assertEqual(persisted_model_error_code(marker),'model_provider_unavailable')
+            self.assertIsNone(persisted_model_error_code(marker+' extra content'))
         for mode,pattern in [('validation','exited with code 2'),('bad-json','invalid event stream')]:
             with self.subTest(mode=mode), patch.dict(os.environ,FAKE_CODEX_MODE=mode):
                 with self.assertRaisesRegex(ModelError,pattern) as failure:

@@ -145,6 +145,10 @@ class ModelReviewRoutingTest(unittest.TestCase):
                       embedding_cache=None, source_workers=2, processing_session_ids=None)
         expected=_sha(_json(legacy).encode())
         self.assertEqual(_provider_identity(settings),expected)
+        explicit_unbounded = {'db':self.db, 'worker_service':dict(options,codex_job_timeout=None)}
+        self.assertEqual(_provider_identity(explicit_unbounded),expected)
+        bounded = {'db':self.db, 'worker_service':dict(options,codex_job_timeout=180)}
+        self.assertNotEqual(_provider_identity(bounded),expected)
         same={'db':self.db,'worker_service':dict(options,review_reasoning_effort='medium')}
         self.assertEqual(_provider_identity(same),expected)
         separate={'db':self.db,'worker_service':dict(options,review_reasoning_effort='low')}

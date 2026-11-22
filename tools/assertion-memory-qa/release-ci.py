@@ -24,7 +24,9 @@ def api(path, dest=None):
     if not token or '\r' in token or '\n' in token:
         raise ValueError('GitHub Actions read token missing')
     # Do not place token in argv; default curl drops Authorization on cross-host redirects.
-    if not re.fullmatch(r'[a-zA-Z0-9_]+', token):
+    # Actions installation tokens are opaque. Accept the RFC 6750 b64token
+    # grammar, but not quotes, backslashes or whitespace in curl's config.
+    if not re.fullmatch(r'[A-Za-z0-9._~+/\-]+=*', token):
         raise ValueError('Unsupported GitHub token format')
     config = f'header = "Authorization: Bearer {token}"\n'
     args = ['curl','-q','--config','-','--silent','--show-error','--fail',
