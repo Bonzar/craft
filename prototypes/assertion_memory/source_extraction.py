@@ -7,6 +7,7 @@ thought identities, renew the claim, or schedule downstream work.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,6 +29,30 @@ class SourceExtractor(Protocol):
 
 class SourceExtractorFactory(Protocol):
     def __call__(self, engine: ThoughtEngine) -> SourceExtractor: ...
+
+
+class SourceLeaseCheck(Protocol):
+    def ensure_active(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class SourceExtractionRequest:
+    """Immutable routing identity and a check, not authority to read arbitrary data.
+
+    Only trusted in-process host factories receive this object. The lease check
+    is connection-thread-bound; an out-of-process reader must use a separately
+    constrained host bridge, not serialize this capability or the engine.
+    """
+    event_id: str
+    scope: str
+    capture_session_id: str
+    canonical_session_id: str
+    lease: SourceLeaseCheck
+
+
+class ClaimBoundSourceExtractorFactory(Protocol):
+    """Host composition hook; do not hand its engine/request to the model."""
+    def __call__(self, engine: ThoughtEngine, request: SourceExtractionRequest) -> SourceExtractor: ...
 
 
 class CanonicalSourceExtractor:

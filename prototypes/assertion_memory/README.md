@@ -205,3 +205,24 @@ python -m prototypes.assertion_memory.server_operations restore \
 Воспроизводимые проверки и границы приёмки описаны в `VERIFICATION.md`. `WORK_CHECKLIST.md` содержит направления дальнейшей работы, а не заявление о завершённости.
 
 Прежний CLI `python -m prototypes.assertion_memory --help` сохраняет операции с утверждениями, связями и обзорами старого движка. Он полезен для изолированных демонстраций и совместимости; его `ask` не следует считать заменой новому MCP-пути мыслей. Пример вымышленных данных — `tests/fixtures/clone_scenarios.json` внутри этого пакета. Всегда выбирайте отдельную демонстрационную базу через `--db`.
+
+### Trusted source-extractor composition seam
+
+The canonical source extractor stays the default. An in-process trusted host
+may pass `claim_bound_source_extractor_factory` to `ThoughtWorker` instead of a
+custom regular extractor factory. It receives the active engine and immutable
+`SourceExtractionRequest` containing the exact source event, capture and
+canonical session IDs, scope, and an attempt-local lease check. The check is
+valid only on the connection-owning thread and expires when extraction returns
+or fails. It grants no read API, credential, or publication operation.
+Configured extractors must return canonically verified drafts; the original
+worker still performs guarded publication and durable job completion.
+
+This seam does not enable a continuing model session, register MCP tools, or
+load a search backend. A future host integration must bind any ongoing session
+to the actual claim, authorize exact history and graph evidence in narrow
+read-only tools, and reuse the existing ready semantic service rather than
+load another model or index. If the worker and search owner are separate
+processes, this requires an explicitly authorized host-side IPC boundary, not
+passing the in-process lease-check object to the model. No configuration
+setting enables these future behaviors.
