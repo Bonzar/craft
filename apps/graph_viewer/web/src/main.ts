@@ -8,7 +8,7 @@ import type { LodResult } from './lod.ts';
 import { canReuseSnapshot } from './reset-policy.ts';
 import { LifecycleTrace, lifecycle, opaqueTag } from './lifecycle.ts';
 import type { LifecycleFields } from './lifecycle.ts';
-import { sourceObjectAccess, sourceTransport } from './source-access.ts';
+import { sourceObjectAccess, sourceReadinessNotice, sourceTransport } from './source-access.ts';
 import { sameSliceContext, contextForSelector } from './slice-context.ts';
 import type { SliceContext } from './slice-context.ts';
 import { SnapshotRecovery } from './recovery.ts';
@@ -149,7 +149,7 @@ class Viewer {
   private renderCapabilities():void{if(!this.capabilities)return;clearTimeout(this.capabilityTimer);const caps=this.capabilities;if(!caps.capabilities.semantic_search&&this.authenticated)this.capabilityTimer=window.setTimeout(()=>this.run(async()=>{this.capabilities=await get('/capabilities',capabilitiesSchema);this.renderCapabilities();}),15000);byId('semantic-mode',HTMLInputElement).disabled=!caps.capabilities.semantic_search;byId('semantic-mode',HTMLInputElement).closest('label')?.setAttribute('title',caps.capabilities.semantic_search?'Поиск по смыслу':'Поиск по смыслу недоступен: модель или индекс не готовы');if(!caps.capabilities.semantic_search&&document.querySelector<HTMLInputElement>('input[name="search-mode"]:checked')?.value==='semantic'){const keyword=document.querySelector<HTMLInputElement>('input[name="search-mode"][value="keyword"]');if(keyword)keyword.checked=true;}
     if(this.manifest&&caps.provider_id===this.manifest.provider_id&&!caps.capabilities.live)this.startLive();
     const fixture=caps.readiness.find(item=>item.code==='synthetic_fixture');const fixtureLabel=byId('fixture-label',HTMLElement);fixtureLabel.hidden=!fixture;if(fixture)fixtureLabel.textContent='Синтетический контрольный набор';
-    const labels:Record<string,string>={semantic_unavailable:'Поиск по смыслу пока недоступен.',semantic_preparing:'Поиск по смыслу готовится.',global_cancellation:'Отмена утверждений показана только по явным отметкам источника.'};const limitations=caps.readiness.filter(item=>item.code!=='synthetic_fixture');const message=limitations.map(item=>labels[item.code]??'Часть возможностей источника пока недоступна.').join(' ');if(message&&message!==this.capabilityNotice){this.capabilityNotice=message;this.notice(message);}if(!caps.capabilities.topics&&this.capabilityNotice!=='no-topics'){this.capabilityNotice='no-topics';this.notice('Источник пока не предоставляет темы. Все утверждения показаны без подписей созвездий.');}}
+    const message=sourceReadinessNotice(caps.readiness);if(message&&message!==this.capabilityNotice){this.capabilityNotice=message;this.notice(message);}if(!caps.capabilities.topics&&this.capabilityNotice!=='no-topics'){this.capabilityNotice='no-topics';this.notice('Источник пока не предоставляет темы. Все утверждения показаны без подписей созвездий.');}}
   private async picked(picked:Pick|null):Promise<void>{
     if(!this.contextReady()||!picked||!this.manifest||picked.revision!==this.manifest.revision||picked.generation!==this.scene?.projection?.generation)return;
     if(picked.kind==='node')await this.openOrdinal(picked.ordinal);
