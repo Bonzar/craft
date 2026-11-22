@@ -140,6 +140,15 @@ class TracedThoughtWorker(ThoughtWorker):
             if claims:
                 self._process_claimed_group(claims, renewal, active_claims)
         except Exception as failure:
+            from .model import ModelProviderUnavailable
+            if isinstance(failure, ModelProviderUnavailable):
+                from .queue import LeaseLost
+                for claim in claims:
+                    try:
+                        self.queue._fail(claim, failure)
+                    except LeaseLost:
+                        pass
+                return False
             error = f'{type(failure).__name__}: {failure}'[:1000]
             raise
         finally:

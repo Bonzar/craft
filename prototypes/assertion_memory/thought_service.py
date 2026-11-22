@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import asdict
 
-from .model import SemanticUnavailable
+from .model import ModelProviderUnavailable, SemanticUnavailable
 from .service import MemoryService, _text_page, _request_usage
 from .storage import background_write_retry
 from .thought_engine import ThoughtEngine
@@ -95,6 +95,12 @@ class ThoughtService(MemoryService):
                           'answer_continuations': [], 'run_id': trace.id,
                           'answer_error': {'code': 'semantic_review_rejected',
                                            'message': 'Проверка не подтвердила ответ даже после исправления.'}}
+            except ModelProviderUnavailable as error:
+                trace.record('query_outcome', details={'answer_accepted': False, 'error': error.code})
+                trace.finish('failed')
+                result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
+                          'answer_continuations': [], 'run_id': trace.id,
+                          'answer_error': {'code': error.code, 'message': 'Модель Codex недоступна.'}}
             except SemanticUnavailable as error:
                 trace.record('knowledge_limit', details={'reason': str(error)})
                 trace.finish('knowledge_limit')

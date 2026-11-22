@@ -8,7 +8,7 @@ on:
       - "apps/graph_viewer/**"
       - "tools/assertion-memory-qa/**"
   push:
-    branches: ["codex/assertion-memory-ci-qa"]
+    branches: ["codex/assertion-memory-ci-qa", "codex/assertion-memory-codex-availability"]
   workflow_dispatch:
 
 permissions:
@@ -53,7 +53,8 @@ jobs:
             prototypes.assertion_memory.native_intake_test \
             prototypes.assertion_memory.desktop_fast_test \
             prototypes.assertion_memory.tests.test_manual_release \
-            prototypes.assertion_memory.tests.test_backup_recovery
+            prototypes.assertion_memory.tests.test_backup_recovery \
+            prototypes.assertion_memory.tests.test_codex_availability
       - name: Test fictional database, graph and authenticated MCP
         shell: bash
         run: |

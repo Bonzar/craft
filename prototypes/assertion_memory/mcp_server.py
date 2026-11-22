@@ -50,6 +50,7 @@ class ServiceConfig:
     review_reasoning_effort: str | None = None
     batch_source_construction: bool = False
     source_event_ids: tuple[str, ...] | None = None
+    codex_job_timeout: float | None = None
 
     def __post_init__(self):
         from .thought_processing_selection import normalize_session_ids
@@ -84,10 +85,16 @@ class ServiceConfig:
             raise ValueError('local provider requires endpoint and model')
         if self.timeout is not None and not 0 < self.timeout <= 600:
             raise ValueError('timeout must be null or positive and bounded')
+        if self.codex_job_timeout is not None:
+            if self.provider != 'codex':
+                raise ValueError('codex_job_timeout requires the Codex provider')
+            if (type(self.codex_job_timeout) not in (int, float)
+                    or not 0 < self.codex_job_timeout <= 600):
+                raise ValueError('codex_job_timeout must be greater than zero and at most 600 seconds')
         if self.provider == 'codex':
-            # Normal server generation has no wall deadline; make the effective
-            # policy visible in startup/worker JSON, including older numeric configs.
-            object.__setattr__(self, 'timeout', None)
+            # Preserve the legacy unbounded default. A dedicated per-service
+            # setting lets a deployed Codex worker bound generation and review.
+            object.__setattr__(self, 'timeout', self.codex_job_timeout)
         if not 0 < self.worker_idle_seconds <= 3600:
             raise ValueError('worker idle must be positive and bounded')
         if type(self.source_workers) is not int or not 1 <= self.source_workers <= 4:
