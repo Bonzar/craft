@@ -15,7 +15,8 @@ from .queue import _Claim, _event, LeaseLost
 from .thought_store import ThoughtConflict, publication_guard, same_meaning_version
 from .thought_worker_queue import ThoughtWorkQueue
 from .thought_answering import can_refresh, refresh_thought
-from .source_extraction import CanonicalSourceExtractor, SourceExtractorFactory
+from .source_extraction import (CanonicalSourceExtractor, SourceExtractorFactory,
+    ClaimBoundSourceExtractorFactory, SourceExtractionRequest)
 from .thought_processing_selection import (normalize_session_ids,source_predicate,processing_cohort,
     canonical_session_id,processing_deadline)
 
@@ -75,10 +76,30 @@ class _Replay:
         connection.execute('DELETE FROM '+table+' WHERE request_key LIKE ?', (self.prefix+'%',))
 
 
+class _SourceAttemptLease:
+    """In-process check only; cannot renew, publish, or return a database handle."""
+    def __init__(self, queue, claim):
+        import threading
+        self._owner = threading.get_ident()
+        self._queue, self._claim = queue, claim
+        self._open = True
+
+    def ensure_active(self):
+        import threading
+        if not self._open or self._owner != threading.get_ident():
+            raise LeaseLost('source extraction capability closed or on the wrong thread')
+        with self._queue.store.transaction() as db:
+            self._queue._assert_owned(db, self._claim)
+
+    def close(self):
+        self._open = False
+
+
 class ThoughtWorker:
     def __init__(self, queue, engine, *, lane='all', lock_owned=False,
                  claim_observer=None, context_limit=8, context_characters=12000, processing_session_ids=None,
-                 is_pausing=None, source_extractor_factory: SourceExtractorFactory = CanonicalSourceExtractor):
+                 is_pausing=None, source_extractor_factory: SourceExtractorFactory = CanonicalSourceExtractor,
+                 claim_bound_source_extractor_factory: ClaimBoundSourceExtractorFactory | None = None):
         if engine.store is not queue.store:
             raise ValueError('thought worker and raw queue must share a MemoryStore')
         if lane not in ('all', 'source', 'maintenance') or type(lock_owned) is not bool:
@@ -92,7 +113,12 @@ class ThoughtWorker:
         self.work = ThoughtWorkQueue(queue,self.processing_session_ids)
         self.is_paused = False
         self.is_pausing = is_pausing
+        if (claim_bound_source_extractor_factory is not None and
+                (not callable(claim_bound_source_extractor_factory) or
+                 source_extractor_factory is not CanonicalSourceExtractor)):
+            raise ValueError('provide exactly one custom source extractor factory')
         self.source_extractor_factory = source_extractor_factory
+        self.claim_bound_source_extractor_factory = claim_bound_source_extractor_factory
 
     @contextmanager
     def _lock(self):
@@ -258,20 +284,38 @@ class ThoughtWorker:
         finally:
             self._notify('released', 'source', claim.job.id, claim.token)
 
+    @contextmanager
+    def _source_extractor(self, event, claim):
+        bind = self.claim_bound_source_extractor_factory
+        if bind is None:
+            yield self.source_extractor_factory(self.engine)
+            return
+        if claim.job.event_id != event.id:
+            raise LeaseLost('source extraction request does not belong to this claim')
+        lease = _SourceAttemptLease(self.queue, claim)
+        try:
+            lease.ensure_active()
+            request = SourceExtractionRequest(event.id, event.scope, event.session_id,
+                                              canonical_session_id(event), lease)
+            yield bind(self.engine, request)
+            lease.ensure_active()
+        finally:
+            lease.close()
+
     def _process_source_claim(self, claim, event, context, replay, *, resumed):
         from .thought_engine import SourceDraftRepairPending
         carried, prepared, changed, pending = [], [], [], None
         try:
             if resumed:
                 context, carried, feedback = self._load_source_draft_checkpoint(claim)
-                extractor = self.source_extractor_factory(self.engine)
-                prepared = extractor.resume(event, context, carried, feedback)
+                with self._source_extractor(event, claim) as extractor:
+                    prepared = extractor.resume(event, context, carried, feedback)
             else:
                 _, event_id, origin, _, _ = self.engine._source_packet(event)
                 changed = self.engine.reusable_source_thoughts(event_id, origin)
                 if not changed:
-                    extractor = self.source_extractor_factory(self.engine)
-                    drafts = extractor.extract(event, context)
+                    with self._source_extractor(event, claim) as extractor:
+                        drafts = extractor.extract(event, context)
                     # Preserve original ordinary publication guard, transaction
                     # and bounded stale-proof rebuild outside the completion
                     # writer. Residual repair still publishes inside it below.
