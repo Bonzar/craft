@@ -14,7 +14,7 @@ class ThoughtSelection:
     Missing valid time is deliberately unknown, matching MemoryStore's API.
     """
     def __init__(self, thoughts, *, scope=None, scopes=None, valid_as_of=None,
-                 recorded_as_of=None, max_snapshot_versions=10000, thought_ids=None):
+                 recorded_as_of=None, max_snapshot_versions=10000, thought_ids=None, lexical_retrieval=None):
         if scope is not None and scopes is not None:
             raise ValueError('use scope or scopes, not both')
         values = scopes if scopes is not None else (scope,) if scope is not None else None
@@ -26,6 +26,11 @@ class ThoughtSelection:
         if type(max_snapshot_versions) is not int or max_snapshot_versions < 1:
             raise ValueError('snapshot version budget must be positive')
         self.thoughts, self.store = thoughts, thoughts.store
+        if lexical_retrieval is None:
+            from .model import CandidateSearch
+            from .thought_retrieval import ThoughtRetrieval
+            lexical_retrieval = ThoughtRetrieval(CandidateSearch())
+        self._lexical_retrieval = lexical_retrieval
         self.context = {'scopes': sorted(set(values)) if values is not None else None,
             'valid_as_of': _timestamp(valid_as_of) if valid_as_of is not None else None,
             'recorded_as_of': _timestamp(recorded_as_of) if recorded_as_of is not None else None}
@@ -199,10 +204,8 @@ class ThoughtSelection:
         return self.thoughts.versions(thought_id)
 
     def search_text(self, query, limit=10):
-        from .model import CandidateSearch
-        from .thought_questions import rank
         entries={row['id']:row for row in self.index_entries()}
-        ranked,_=rank(CandidateSearch(),query,entries,limit)
+        ranked,_=self._lexical_retrieval.rank_entries(query,entries,limit)
         return [self._selected[row.id] for row in ranked]
 
     def links(self, thought_id=None):

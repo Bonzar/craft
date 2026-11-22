@@ -23,13 +23,22 @@ class Engine:
     def _emit(self, stage, **payload):
         self.events.append({'stage': stage, **payload})
 
-    def ingest(self, event, context=(), *, consolidate=True):
-        assert consolidate is False
+    _raw_origin = staticmethod(ThoughtEngine._raw_origin)
+    _model_origin = staticmethod(ThoughtEngine._model_origin)
+    _source_packet = ThoughtEngine._source_packet
+
+    def reusable_source_thoughts(self, event_id, origin):
+        return []
+
+    def _prepare_source(self, records, bases, text, origin):
         self.calls += 1
-        request = ModelRequest('fixture', [{'text': event.prompt}])
-        self.gateway(request.task, request, ({'event_id': event.id},)) if self.gateway else self.model(request)
-        return [self.thoughts.publish(event.prompt, thought_id='from-' + event.id,
-            bases=[{'event_id': event.id}])]
+        request = ModelRequest('fixture', [{'text': text}])
+        self.gateway(request.task, request, tuple(bases[:1])) if self.gateway else self.model(request)
+        return [({'text':text},bases[:1])]
+
+    def _publish(self, drafts, *, origin):
+        return [self.thoughts.publish(draft['text'], thought_id='from-' + origin['event_id'], bases=bases)
+                for draft,bases in drafts]
 
     def question_texts(self, thought):
         return self.thoughts.questions(thought)
@@ -203,16 +212,16 @@ class ThoughtWorkerTest(unittest.TestCase):
     def test_engine_failure_retries_and_reuses_accepted_model_reply(self):
         calls = []
         self.engine.model = lambda request: calls.append(request) or '{}'
-        original = self.engine.ingest
-        def fail_after_response(event, context=(), *, consolidate=False):
-            first = ModelRequest('fixture', [{'text': event.prompt}])
-            second = ModelRequest('later-step', [{'text': event.prompt}])
-            self.engine.gateway(first.task, first, ({'event_id': event.id},))
-            self.engine.gateway(second.task, second, ({'event_id': event.id},))
+        original = self.engine._prepare_source
+        def fail_after_response(records, bases, text, origin):
+            first = ModelRequest('fixture', [{'text': text}])
+            second = ModelRequest('later-step', [{'text': text}])
+            self.engine.gateway(first.task, first, tuple(bases[:1]))
+            self.engine.gateway(second.task, second, tuple(bases[:1]))
             raise RuntimeError('after consumed step')
-        self.engine.ingest = fail_after_response
+        self.engine._prepare_source = fail_after_response
         self.assertEqual(self.worker.run_once().status, 'pending')
-        self.engine.ingest = original
+        self.engine._prepare_source = original
         self.queue.retry(self.event.id)
         self.assertEqual(self.worker.run_once().status, 'completed')
         self.assertEqual(len(calls), 2)

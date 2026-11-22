@@ -29,8 +29,9 @@ class ThoughtProcessingSelectionTest(unittest.TestCase):
                 c.execute("UPDATE memory_capture_jobs SET status='running',lease_token='other',lease_until='2000-01-01',attempts=99 WHERE id=?",(wrong.id,))
             with memory.transaction(write=True) as c:queue._scheduler_schema(c)
             before=queue.get(wrong.id)
-            engine=self.engine(memory,thoughts)
-            engine.ingest=lambda event,context,consolidate=False:[thoughts.publish(event.prompt)]
+            from prototypes.assertion_memory.tests.test_thought_worker import Engine
+            engine=Engine(thoughts)
+            engine._prepare_source=lambda records,bases,text,origin:[({'text':text},bases[:1])]
             self.assertIsNone(ThoughtWorker(queue,engine,processing_session_ids=()).run_once())
             worker=ThoughtWorker(queue,engine,lane='source',processing_session_ids=(X,))
             self.assertEqual({worker.run_once().event_id,worker.run_once().event_id},{chosen.id,fallback.id})

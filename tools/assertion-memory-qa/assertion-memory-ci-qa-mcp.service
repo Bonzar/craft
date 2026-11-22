@@ -1,0 +1,15 @@
+[Unit]
+Description=Assertion Memory isolated fictional QA
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=%h/.local/share/assertion-memory-ci-qa/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+ExecStart=%h/.local/share/assertion-memory-ci-qa/current/venv/bin/python -m prototypes.assertion_memory.http_server --config %h/.local/share/assertion-memory-ci-qa/current/private/http.json
+
+[Install]
+WantedBy=default.target

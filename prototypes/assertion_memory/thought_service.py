@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import asdict
 
-from .model import SemanticUnavailable
+from .model import ModelProviderUnavailable, SemanticUnavailable
 from .service import MemoryService, _text_page, _request_usage
 from .storage import background_write_retry
 from .thought_engine import ThoughtEngine
@@ -35,9 +35,9 @@ INSTRUCTIONS = ('Shared thought memory. Source interpretations and composite exp
 
 
 class ThoughtService(MemoryService):
-    def __init__(self, store, model=None, candidates=None, *, processing_session_ids=None):
+    def __init__(self, store, model=None, candidates=None, *, processing_session_ids=None, retrieval=None):
         thoughts = ThoughtStore(store)
-        super().__init__(store, ThoughtEngine(thoughts, model, candidates))
+        super().__init__(store, ThoughtEngine(thoughts, model, candidates, retrieval=retrieval))
         self.thoughts = thoughts
         from .thought_worker_queue import ThoughtWorkQueue
         self.processing_session_ids = normalize_session_ids(processing_session_ids)
@@ -81,7 +81,8 @@ class ThoughtService(MemoryService):
             with self.store.transaction() as db:
                 prior_version = db.execute('SELECT coalesce(max(rowid),0) FROM memory_thought_versions').fetchone()[0]
             trace = ThoughtTrace(self.store, 'query', {'question': query, 'request_session_id': request_session_id})
-            engine = traced_engine(selection, self.engine.model, self.engine.candidates, trace)
+            engine = traced_engine(selection, self.engine.model, self.engine.candidates, trace,
+                                   retrieval=self.engine.retrieval)
             try:
                 from .thought_query_replay import query_replay
                 with query_replay(engine, trace, {'question': query, 'scope': scope,
@@ -95,6 +96,12 @@ class ThoughtService(MemoryService):
                           'answer_continuations': [], 'run_id': trace.id,
                           'answer_error': {'code': 'semantic_review_rejected',
                                            'message': 'Проверка не подтвердила ответ даже после исправления.'}}
+            except ModelProviderUnavailable as error:
+                trace.record('query_outcome', details={'answer_accepted': False, 'error': error.code})
+                trace.finish('failed')
+                result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
+                          'answer_continuations': [], 'run_id': trace.id,
+                          'answer_error': {'code': error.code, 'message': 'Модель Codex недоступна.'}}
             except SemanticUnavailable as error:
                 trace.record('knowledge_limit', details={'reason': str(error)})
                 trace.finish('knowledge_limit')
@@ -292,7 +299,7 @@ def thought_descriptor(thought, questions):
             'publication': thought.metadata.get('publication')}
 
 
-def traced_engine(thoughts, model, candidates, trace):
+def traced_engine(thoughts, model, candidates, trace, *, retrieval=None):
     trace.bind_model(model)
     def event(value):
         fields = dict(value)
@@ -311,5 +318,5 @@ def traced_engine(thoughts, model, candidates, trace):
         trace.record(stage, inputs=fields.pop('bindings', ()),
                      candidates=fields.pop('candidates', ()), selected=fields.pop('selected', ()),
                      details=fields)
-    return ThoughtEngine(thoughts, model, candidates, event,
+    return ThoughtEngine(thoughts, model, candidates, event, retrieval=retrieval,
         gateway=lambda task, request, bindings: trace.call(model, request, bindings, stage=task))

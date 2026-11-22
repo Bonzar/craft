@@ -43,11 +43,13 @@ def empty_material(reason):
 
 
 class ThoughtEngine:
-    def __init__(self, thought_store, model, candidates=None, trace=None, *, gateway=None):
+    def __init__(self, thought_store, model, candidates=None, trace=None, *, gateway=None, retrieval=None):
         self.thoughts = thought_store
         self.store = thought_store.store
         self.model = model
         self.candidates = candidates or CandidateSearch()
+        from .thought_retrieval import ThoughtRetrieval
+        self.retrieval = retrieval if retrieval is not None else ThoughtRetrieval(self.candidates)
         self.trace = trace
         self.gateway = gateway
         with self.store.transaction(write=True) as connection:
@@ -144,8 +146,11 @@ class ThoughtEngine:
         question = semantic_text(question, 'question')
         if type(limit) is not int or limit < 1 or limit > MAX_THOUGHTS:
             raise ValueError('thought retrieval limit must be between one and ten')
-        from .thought_questions import retrieve
-        return retrieve(self, question, explicit_ids, limit, exclude_ids)
+        result = self.retrieval.search(self.thoughts, question, explicit_ids, limit, exclude_ids,
+                                       question_texts=self.question_texts)
+        self._emit('retrieval', question=question, candidates=list(result.candidates),
+                   selected=[self._basis(row) for row in result.thoughts], explicit_ids=list(result.explicit_ids))
+        return list(result.thoughts)
 
     @staticmethod
     def _frontier(candidates, thought_id=None, raw_records=(), raw_bases=()):
@@ -582,12 +587,15 @@ class ThoughtEngine:
                 result.append(row)
         return result
 
+    def reusable_source_thoughts(self, event_id, origin):
+        return [row for row in self._source_heads(event_id, origin)
+                if row.metadata.get('protocol') == PROTOCOL]
+
     def ingest(self, event, context=(), *, consolidate=True):
         if not event_eligibility(event)['allowed']:
             return []
         text, event_id, origin, records, bases = self._source_packet(event, context)
-        existing = [row for row in self._source_heads(event_id, origin)
-                    if row.metadata.get('protocol') == PROTOCOL]
+        existing = self.reusable_source_thoughts(event_id, origin)
         created = existing or self._publish(self._prepare_source(records, bases, text, origin), origin=origin)
         if consolidate and created:
             self.consolidate(created)
