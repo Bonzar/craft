@@ -1,0 +1,89 @@
+name: Assertion Memory QA
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/assertion-memory-qa.yml"
+      - "prototypes/assertion_memory/**"
+      - "apps/graph_viewer/**"
+      - "tools/assertion-memory-qa/**"
+  push:
+    branches: ["codex/assertion-memory-ci-qa"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assertion-memory-qa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Install pinned lexical-only QA requirements
+        shell: bash
+        run: |
+          grep -v '^fastembed==' apps/graph_viewer/requirements.txt > "$RUNNER_TEMP/graph-lexical.txt"
+          python -m pip install --disable-pip-version-check --only-binary=:all: -r prototypes/assertion_memory/requirements-mcp.txt -r "$RUNNER_TEMP/graph-lexical.txt"
+      - name: Build and test graph frontend
+        working-directory: apps/graph_viewer
+        run: |
+          npm ci --no-audit --no-fund
+          npm run lint
+          npm test
+          npm run build
+      - name: Test documented offline Python memory contracts
+        run: |
+          python -m unittest \
+            prototypes.assertion_memory.tests.test_thought_store \
+            tests.test_thought_service \
+            tests.test_thought_provider_contract \
+            prototypes.assertion_memory.native_intake_test \
+            prototypes.assertion_memory.desktop_fast_test \
+            prototypes.assertion_memory.tests.test_manual_release \
+            prototypes.assertion_memory.tests.test_backup_recovery
+      - name: Test fictional database, graph and authenticated MCP
+        shell: bash
+        run: |
+          export PYTHONPATH="$PWD"
+          python tools/assertion-memory-qa/synthetic_fixture.py "$RUNNER_TEMP/memory-fictional.sqlite3"
+          python tools/assertion-memory-qa/smoke_local.py "$RUNNER_TEMP/memory-fictional.sqlite3"
+      - name: Build narrow, data-free release
+        run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assertion-memory-qa-${{ github.sha }}
+          path: ${{ runner.temp }}/qa-release/*
+          if-no-files-found: error
+          retention-days: 7
+  approve-qa-release:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/assertion-memory-ci-qa'
+    name: Approve pull to isolated QA
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: assertion-memory-qa
+    steps:
+      - name: Require an explicitly enabled QA environment
+        shell: bash
+        env:
+          QA_ENABLED: ${{ vars.ASSERTION_MEMORY_QA_ENABLED }}
+          REVISION: ${{ github.sha }}
+        run: |
+          if [[ "$QA_ENABLED" != "true" ]]; then
+            echo "::error::QA is not provisioned. Configure environment assertion-memory-qa, allowed branch, and approval before setting environment variable ASSERTION_MEMORY_QA_ENABLED=true."
+            exit 1
+          fi
+          printf 'QA artifact approved for %s. This job does not modify the VM; use the documented operator pull.\n' "$REVISION" >> "$GITHUB_STEP_SUMMARY"
