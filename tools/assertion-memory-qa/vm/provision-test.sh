@@ -285,6 +285,8 @@ NoNewPrivileges=yes
 Restart=on-failure
 ExecStart=%h/current/venv/bin/python -B -m prototypes.assertion_memory.http_server --config %h/state/http.json
 UNIT
+# Root-owned files must still be readable to the unprivileged user manager.
+chmod 0644 "$root/.config/systemd/user/"*.service
 # No production systemd service, data, port, DNS, or nginx modifications.
 loginctl enable-linger "$name"
 id=$(id -u "$name")
