@@ -61,7 +61,7 @@ class VisualGate(unittest.TestCase):
                     proof if uploaded_proof is None else uploaded_proof))
             zip_bytes = evidence.getvalue()
             records[base+'/actions/workflows/'+visual.WORKFLOW_FILE] = {'id': 41}
-            records[run_path] = dict(id=10, workflow_id=41, event='workflow_dispatch',
+            records[run_path] = dict(id=10, workflow_id=41, event=env['GITHUB_EVENT_NAME'],
                 path='.github/workflows/'+visual.WORKFLOW_FILE, head_branch='main',
                 head_sha='d'*40, run_attempt=1, status='in_progress',
                 repository={'full_name':visual.REPO}, head_repository={'full_name':visual.REPO})
@@ -100,6 +100,40 @@ class VisualGate(unittest.TestCase):
                     with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'TEST-proven'):
                         visual.resolve(get, dict(env, VISUAL_DOWNLOAD=str(root/f'different-{n}'),
                             NATIVE_VISUAL_TEST_PROOF=json.dumps(dict(proof, **{key:'other'}))))
+
+    def test_github_release_completion_uses_only_first_attempt_original(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            env, idn, artifact, archive, proof = self.fixture(root)
+            env['GITHUB_EVENT_NAME'] = 'workflow_run'
+            event = Path(env['GITHUB_EVENT_PATH'])
+            run = dict(id=4, head_branch=idn[0], head_sha=idn[1],
+                       path='.github/workflows/'+visual.lifecycle.WORKFLOW,
+                       event='release', status='completed', conclusion='success',
+                       run_attempt=1, repository={'full_name':visual.REPO},
+                       head_repository={'full_name':visual.REPO})
+            event.write_text(json.dumps(dict(action='completed', workflow_run=run)))
+            _, get = self.runner(env, idn, artifact, archive)
+            with patch.object(visual.lifecycle,'identify',return_value=idn), \
+                 patch.object(visual.lifecycle,'build_identity',return_value=artifact):
+                self.assertEqual(visual.resolve(get,env), proof)
+                env.update(VISUAL_ENV='prod', VISUAL_DOWNLOAD=str(root/'auto-prod'),
+                           NATIVE_VISUAL_TEST_PROOF=json.dumps(proof))
+                _, get = self.runner(env, idn, artifact, archive, proof)
+                self.assertEqual(visual.resolve(get,env), proof)
+                failures = [
+                    ('id', 5, 'canonical original build'),
+                    ('head_sha', '6'*40, 'canonical original build'),
+                    ('run_attempt', 2, 'original successful visual Release build event'),
+                    ('head_branch', 'assertion-memory-v1.0.0', 'original successful visual Release build event'),
+                    ('event', 'pull_request', 'original successful visual Release build event'),
+                    ('path', '.github/workflows/assertion-memory-base.yml', 'original successful visual Release build event'),
+                    ('head_repository', {'full_name':'other/craft'}, 'original successful visual Release build event'),
+                ]
+                for key, val, reason in failures:
+                    event.write_text(json.dumps(dict(action='completed', workflow_run=dict(run, **{key:val}))))
+                    with self.subTest(key=key), self.assertRaisesRegex(ValueError, reason):
+                        visual.resolve(get,env)
 
     def test_prod_rejects_caller_proof_without_independent_verified_test(self):
         with tempfile.TemporaryDirectory() as td:
