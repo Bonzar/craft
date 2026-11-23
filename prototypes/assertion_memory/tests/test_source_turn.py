@@ -70,10 +70,46 @@ for row in sys.stdin:
    b=query(a['next_cursor'])
    assert b['history_status']=='history_end' and b['next_cursor'] is None
   assert not any('DO NOT DISCLOSE' in r['text'] for r in [*a['messages'],*b['messages']])
+  if kind in ('session-context','session-forged'):
+   foreign=rpc('older_dialogue',{'session_id':'context-chat','start_date':'2024-06-02','end_date':'2024-06-03'})['result']['structuredContent']
+   assert [m['text'] for m in foreign['messages']]==[f'Chronological item {i}' for i in range(1,9)],foreign
+   token=foreign['next_cursor']
+   assert foreign['history_status']=='more' and token
+   assert 'error' in rpc('older_dialogue',{'cursor':token,'session_id':'foreign-scope'})
+   last=rpc('older_dialogue',{'cursor':token})['result']['structuredContent']
+   assert [m['text'] for m in last['messages']]==['Chronological item 9'],last
+   assert all('ref' not in m and m['evidence_eligible'] is False for m in foreign['messages']+last['messages'])
+   assert last['history_status']=='history_end' and not last['next_cursor']
+   assert 'error' in rpc('older_dialogue',{'cursor':token})
+   assert 'error' in rpc('older_dialogue',{'session_id':'foreign-scope'})
+   assert 'error' in rpc('older_dialogue',{'session_id':'unknown-session'})
+   local=rpc('older_dialogue',{'session_id':'current','start_date':'2024-06-02','end_date':'2024-06-03'})['result']['structuredContent']
+   implicit=rpc('older_dialogue',{'start_date':'2024-06-02','end_date':'2024-06-03'})['result']['structuredContent']
+   assert [r['text'] for r in local['messages']]==['Оля Н. раньше любила хорроры. 🧩'],local
+   assert [r['text'] for r in implicit['messages']]==[local['messages'][0]['text']]
+   assert local['messages'][0]['evidence_eligible'] and 'ref' in local['messages'][0]
+  elif kind!='cross-navigation':
+   assert 'error' in rpc('older_dialogue',{'session_id':'context-chat'})
   ref=next((r['ref'] for r in b['messages'] if 'Оля Н.' in r['text']),None)
-  if kind=='navigation':
+  if kind in ('navigation','cross-navigation'):
    assert 'error' in rpc('thoughts_from_source',{'ref':ref})
    search=rpc('semantic_search',{'query':'билеты'})['result']['structuredContent']
+   if kind=='cross-navigation':
+    assert 'session_id="current"' in p['input'][0]['text']
+    other,= [item for item in search['thoughts'] if 'чужой диалог' in item['text'].lower()]
+    assert 'ref' not in other and other['source_access']=='unavailable_outside_current_dialogue'
+    assert 'error' in rpc('thought_sources',{'ref':other['text']})
+    assert all('запрещён' not in item['text'] and 'будущее' not in item['text'] for item in search['thoughts'])
+    current=rpc('semantic_search',{'query':'билеты','session_id':'current'})['result']['structuredContent']
+    assert [item['text'] for item in current['thoughts']]==['Билеты на хоррор.']
+    selected=rpc('semantic_search',{'query':'билеты','session_id':'other-dialogue'})['result']['structuredContent']
+    assert [item['text'] for item in selected['thoughts']]==[other['text']]
+    inaccessible=rpc('semantic_search',{'query':'билеты','session_id':'foreign-scope'})['result']['structuredContent']
+    assert inaccessible['thoughts']==[]
+    search=current
+   else:
+    inaccessible=rpc('semantic_search',{'query':'билеты','session_id':'other-dialogue'})['result']['structuredContent']
+    assert inaccessible['thoughts']==[]
    found,=search['thoughts']
    assert found['text']=='Билеты на хоррор.' and found['version']==1 and found['ref']
    assert 'error' in rpc('thought_sources',{'ref':ref})
@@ -85,6 +121,8 @@ for row in sys.stdin:
    ref=exact['ref']
   proposal={'status':'proposal','text':'Оля Н. больше не любит хорроры.','supports':[primary['primary_ref'],ref]}
   if kind=='bad':proposal['supports'][1]='forged-ref'
+  if kind=='session-context':proposal['supports'][1]=local['messages'][0]['ref']
+  if kind=='session-forged':proposal['supports'][1]=foreign['messages'][0]['text']
   if kind in ('unresolved','budget'):proposal={'status':'unresolved','text':None,'supports':[]}
   relay.terminate(); relay.wait(2)
   send({'method':'item/completed','params':{'threadId':'fiction-thread','turnId':'fiction-turn',
@@ -105,30 +143,50 @@ class SourceTurnTest(unittest.TestCase):
             code=Path(tmp)/'fixture.py'; code.write_text(FIXTURE)
             queue=CaptureQueue(memory);thoughts=ThoughtStore(memory)
             prior=queue.capture_event('dialogue','earlier','Оля Н. раньше любила хорроры. 🧩',
-                                      source='fixture',scope='scope',position=1)
+                                      source='fixture',scope='scope',position=1,recorded_at='2024-06-02T10:00:00Z')
             for n in range(2,12):
                 queue.capture_event('dialogue',str(n),f'Context number {n}.',source='fixture',scope='scope',position=n)
             queue.capture_event('dialogue','private','DO NOT DISCLOSE',source='fixture',scope='scope',position=13,
                                 metadata={'visibility':'private','subagent_id':'internal','recipient':'worker'})
             queue.capture_event('dialogue','other','DO NOT DISCLOSE',source='fixture',scope='other',position=14)
+            if kind in ('session-context','session-forged'):
+                for n in range(12):
+                    stamp='2024-06-02T12:00:00Z' if 1<=n<=9 else ('2024-06-01T00:00:00Z' if n==0 else '2024-06-03T00:00:00Z')
+                    queue.capture_event('capture-extra','test-'+str(n),f'Chronological item {n}',source='fixture',
+                        scope='scope',position=n+1,recorded_at=stamp,metadata={'native_session_id':'context-chat'})
+                queue.capture_event('capture-extra','secret','Private chat context',source='fixture',scope='scope',position=20,
+                    recorded_at='2024-06-02T12:01:00Z',metadata={'native_session_id':'context-chat','visibility':'private'})
+            foreign=queue.capture_event('other-dialogue','seed','Foreign synthetic raw event',
+                                         source='fixture',scope='scope',position=1)
+            outside=queue.capture_event('foreign-scope','seed','Another scope raw event',
+                                         source='fixture',scope='unauthorized',position=1)
             source=queue.capture_event('dialogue','target','Теперь она больше не любит этот жанр.',
                                        source='fixture',scope='scope',position=20)
+            equal_later=queue.capture_event('other-dialogue','equal','Equal timestamp but inserted after primary.',
+                                            source='fixture',scope='scope',position=3,recorded_at=source.recorded_at)
+            future=queue.capture_event('future-dialogue','seed','Future synthetic raw event',
+                                       source='fixture',scope='scope',position=1,recorded_at='2099-01-01T00:00:00Z')
+            hidden=queue.capture_event('other-dialogue','private','Private synthetic raw event',
+                                       source='fixture',scope='scope',position=2,metadata={'visibility':'private'})
             calls=[]
             def verifier(request):
                 calls.append(request.task)
                 self.assertEqual(request.task,'Verify thought') # no legacy Construct or generation helper
-                self.assertIn(prior.prompt[:-2] if kind=='navigation' else prior.prompt,[''.join(f['text'] for f in r.get('fragments',[])) for r in request.records])
+                self.assertIn(prior.prompt[:-2] if kind in ('navigation','cross-navigation') else prior.prompt,[''.join(f['text'] for f in r.get('fragments',[])) for r in request.records])
                 if revoke:
                     with memory.transaction(write=True) as db:
                         db.execute("UPDATE memory_capture_jobs SET lease_token='replaced' WHERE id=?",(source.id,))
                 return json.dumps({'verdict':'accept','text':'Synthetic check accepted.'})
             engine=ThoughtEngine(thoughts,verifier,retrieval=retrieval)
             fixtures=[]
-            if kind=='navigation':
+            if kind in ('navigation','cross-navigation'):
                 for event,summary in (
                     (prior,'Билеты на хоррор.'),
-                    (queue.capture_event('other-dialogue','seed','bilet',source='fixture',scope='scope',position=1),
-                     'Forbidden cross-dialogue result'),
+                    (foreign,'Билеты: чужой диалог.'),
+                    (outside,'Билеты: запрещённая область.'),
+                    (future,'Билеты: будущее.'),
+                    (equal_later,'Билеты: будущее по порядку при том же времени.'),
+                    (hidden,'Билеты: запрещённая приватная запись.'),
                 ):
                     fixtures.append(thoughts.publish(summary,origin=engine._source_packet(event)[2],
                                     bases=[{'event_id':event.id,'span':{'start':0,'end':len(event.prompt)-2}}],
@@ -138,19 +196,21 @@ class SourceTurnTest(unittest.TestCase):
                                 metadata={'verification':'accepted'}).id)
             with memory.transaction(write=True) as db:queue._scheduler_schema(db)
             extras=(str(memory.path),*confined) if confined is not None else ()
-            config=SourceTurnConfig((sys.executable,str(code),kind,*extras),enabled=True)
+            from ..turn_source.navigation import OwnerScopeGrant
+            grant=OwnerScopeGrant(Path(memory.path),'scope') if kind in ('cross-navigation','session-context','session-forged') else None
+            config=SourceTurnConfig((sys.executable,str(code),kind,*extras),enabled=True,owner_scope=grant)
             factory=(SourceTurnFactory._for_protocol_fixture(config) if confined is None
                      else SourceTurnFactory._for_confined_test(config))
             worker=ThoughtWorker(queue,engine,lane='source',claim_bound_source_extractor_factory=factory)
             job=worker._source(worker._claim_source(event_id=source.id))
             saved=[row for row in thoughts.list_thoughts() if row.id not in fixtures]
-            if kind in ('normal','navigation') and not revoke:
+            if kind in ('normal','navigation','cross-navigation','session-context') and not revoke:
                 self.assertEqual(job.status,'completed',job.error)
                 result,=saved
                 self.assertEqual(job.extracted_ids,[result.id])
                 self.assertEqual({b['event_id'] for b in result.bases},{prior.id,source.id})
                 self.assertTrue(all('content_hash' in basis for basis in result.bases))
-                if kind=='navigation':
+                if kind in ('navigation','cross-navigation'):
                     spans=[b['span'] for b in result.bases if b['event_id']==prior.id]
                     self.assertEqual(''.join(prior.prompt[s['start']:s['end']] for s in spans),prior.prompt[:-2])
                     self.assertEqual(min(s['start'] for s in spans),0)
@@ -177,6 +237,76 @@ class SourceTurnTest(unittest.TestCase):
         self.assertEqual((job.status,verification),('completed',['Verify thought']))
         self.assertIs(calls[0][0],shared)
         self.assertEqual([(query,rows) for _,query,rows in calls],[('билеты',['Билеты на хоррор.'])])
+
+    def test_authorized_chronological_dialogue_has_no_foreign_proof(self):
+        job,calls=self.attempt('session-context')
+        self.assertEqual((job.status,calls),('completed',['Verify thought']))
+        job,calls=self.attempt('session-forged')
+        self.assertEqual((job.extracted_ids,calls),([],[]))
+        self.assertIn('Unissued evidence reference',job.error)
+
+    def test_cross_dialogue_frozen_watermark_hides_late_backdated_event(self):
+        from ..turn_source.reader import EarlierDialogue
+        from ..turn_source.navigation import OwnerScopeGrant
+        from ..turn_source.session_dialogue import SessionDialogue
+        with tempfile.TemporaryDirectory() as tmp,MemoryStore(Path(tmp)/'fixture.sqlite') as memory:
+            queue=CaptureQueue(memory); engine=ThoughtEngine(ThoughtStore(memory),lambda _:None)
+            queue.capture_event('elsewhere','safe','Already visible.',source='fixture',scope='scope',
+                                recorded_at='2024-01-02')
+            primary=queue.capture_event('dialogue','primary','Check the other chat.',source='fixture',scope='scope',
+                                        recorded_at='2024-01-03')
+            waiting=queue.capture_event('elsewhere','waiting','Awaiting admission at attempt start.',
+                                       source='fixture',scope='scope',recorded_at='2024-01-02',await_origin=True)
+            unpositioned=queue.capture_event('elsewhere','reposition','Position pending on saved source.',
+                                             source='fixture',scope='scope',recorded_at='2024-01-02')
+            private=queue.capture_event('elsewhere','private','Private tail.',source='fixture',scope='scope',
+                                        recorded_at='2024-01-01',metadata={'visibility':'private'})
+            with memory.transaction(write=True) as db:queue._scheduler_schema(db)
+            factory=SourceTurnFactory._for_protocol_fixture(SourceTurnConfig((sys.executable,),enabled=True))
+            worker=ThoughtWorker(queue,engine,lane='source',claim_bound_source_extractor_factory=factory)
+            claim=worker._claim_source(event_id=primary.id)
+            with worker._source_extractor(primary,claim) as extractor:
+                reader=EarlierDialogue(memory.path,extractor.request,primary,freeze_membership=True)
+                self.addCleanup(reader.close)
+                dialogue=SessionDialogue(reader,OwnerScopeGrant(Path(memory.path),'scope'))
+                with memory.transaction(write=True) as db:
+                    old=db.execute('SELECT rowid FROM memory_raw_events WHERE id=?',(private.id,)).fetchone()[0]
+                    db.execute('DELETE FROM memory_capture_jobs WHERE event_id=?',(private.id,))
+                    db.execute('DELETE FROM memory_raw_events WHERE id=?',(private.id,))
+                late=queue.capture_event('elsewhere','late','Backdated but not part of the attempt.',
+                                         source='fixture',scope='scope',recorded_at='2024-01-01')
+                with memory.transaction() as db:
+                    self.assertEqual(db.execute('SELECT rowid FROM memory_raw_events WHERE id=?',(late.id,)).fetchone()[0],old)
+                self.assertEqual(queue.capture_event('elsewhere','waiting',waiting.prompt,source='fixture',
+                                 scope='scope',recorded_at=waiting.recorded_at).id,waiting.id)
+                self.assertEqual(queue.capture_event('elsewhere','reposition',unpositioned.prompt,source='fixture',
+                                 scope='scope',recorded_at=unpositioned.recorded_at,position=10).id,unpositioned.id)
+                with memory.transaction() as db:
+                    self.assertNotEqual(db.execute('SELECT status FROM memory_capture_jobs WHERE event_id=?',
+                                                   (waiting.id,)).fetchone()[0],'waiting_origin')
+                    self.assertEqual(db.execute('SELECT position FROM memory_event_positions WHERE event_id=?',
+                                                (unpositioned.id,)).fetchone()[0],10)
+                page=dialogue.read({'session_id':'elsewhere'})
+                self.assertEqual([row['text'] for row in page['messages']],['Already visible.'])
+                from contextlib import contextmanager
+                real=reader.snapshot
+                snapshots=iter((False,True))
+                @contextmanager
+                def invalidate_on_final_snapshot():
+                    if next(snapshots):
+                        with memory.transaction(write=True) as db:
+                            db.execute("UPDATE memory_capture_jobs SET status='waiting_origin' WHERE event_id IN "
+                                       "(SELECT id FROM memory_raw_events WHERE turn_id='safe')")
+                    with real() as db:
+                        yield db
+                from ..turn_source.reader import SourceReadDenied
+                with patch.object(reader,'snapshot',invalidate_on_final_snapshot):
+                    with self.assertRaisesRegex(SourceReadDenied,'changed during navigation'):
+                        dialogue.read({'session_id':'elsewhere'})
+
+    def test_cross_dialogue_search_is_scoped_and_foreign_thought_has_no_raw_receipt(self):
+        job,verification=self.attempt('cross-navigation')
+        self.assertEqual((job.status,verification),('completed',['Verify thought']))
 
     def test_forged_receipt_or_lost_lease_cannot_publish(self):
         job,calls=self.attempt('bad')

@@ -4,6 +4,7 @@ from pathlib import Path
 from hashlib import sha256
 import secrets
 import sqlite3
+from threading import RLock
 
 from ..dialogue import source_role
 from ..thought_processing_selection import canonical_session_id
@@ -23,7 +24,7 @@ class EarlierDialogue:
     MAX_BYTES=256_000
     MAX_REFS=128
 
-    def __init__(self,path,request,primary):
+    def __init__(self,path,request,primary,*,freeze_membership=False):
         self.path=Path(path).resolve(strict=True)
         self.request=request
         self.primary=primary
@@ -33,7 +34,20 @@ class EarlierDialogue:
         self.calls=0
         self.bytes_read=len(primary.prompt.encode())
         self.cursor,self.bound,self.started=None,None,False
-        with self.snapshot() as db:
+        self._anchor_lock=RLock()
+        self._anchor=None
+        try:
+            self._initialize(freeze_membership)
+        except BaseException:
+            self.close()
+            raise
+
+    def _initialize(self,freeze_membership):
+        if freeze_membership:
+            self._anchor=self._connection()
+        manager=self.snapshot() if self._anchor is None else self._admission()
+        request,primary=self.request,self.primary
+        with manager as db:
             target=self.row(db,primary.id)
             if (_event(target)!=primary or not self.visible(primary)
                     or (primary.id,primary.scope,primary.session_id,canonical_session_id(primary))
@@ -48,12 +62,53 @@ class EarlierDialogue:
             self.ensure_order(db,target)
         self.primary_ref=self.offer(primary.id,0,len(primary.prompt),primary.prompt,self.primary_order)
 
+    def _connection(self):
+        db=sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=2,check_same_thread=False)
+        db.row_factory=sqlite3.Row
+        db.execute('PRAGMA query_only=ON')
+        db.execute('BEGIN')
+        return db
+
+    @contextmanager
+    def _admission(self):
+        self.request.lease.check_reader_snapshot(self._anchor,self.path)
+        yield self._anchor
+
+    def close(self):
+        with self._anchor_lock:
+            if self._anchor is not None:
+                self._anchor.close()
+                self._anchor=None
+
+    def admitted_raw(self,row):
+        return self._anchor is None or self.frozen_raw(row)
+
+    def admitted_thought(self,thought,hash_value):
+        return self._anchor is None or self.frozen_thought(thought,hash_value)
+
+    def frozen_raw(self,row):
+        with self._anchor_lock:
+            if self._anchor is None:
+                return False
+            fields=self._anchor.execute('SELECT r.*,r.rowid AS ordinal,p.position,j.status '
+                'FROM memory_raw_events r LEFT JOIN memory_event_positions p ON p.event_id=r.id '
+                'JOIN memory_capture_jobs j ON j.event_id=r.id WHERE r.id=?',(row['id'],)).fetchone()
+            # Original waiting-origin rows were not admitted. Normal lease/job
+            # progress after admission is allowed; position and raw bytes are not.
+            return (fields is not None and fields['status']!='waiting_origin'
+                    and all(fields[name]==row[name] for name in fields.keys() if name!='status'))
+
+    def frozen_thought(self,thought,hash_value):
+        with self._anchor_lock:
+            if self._anchor is None:
+                return False
+            row=self._anchor.execute('SELECT content_hash FROM memory_thought_versions WHERE thought_id=? AND version=?',
+                                     (thought.id,thought.version)).fetchone()
+            return row is not None and row['content_hash']==hash_value
+
     @contextmanager
     def snapshot(self):
-        with closing(sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=2)) as db:
-            db.row_factory=sqlite3.Row
-            db.execute('PRAGMA query_only=ON')
-            db.execute('BEGIN')
+        with closing(self._connection()) as db:
             self.request.lease.check_reader_snapshot(db,self.path)
             if self.primary_order is not None:
                 self.ensure_order(db,self.row(db,self.primary.id))
@@ -98,6 +153,14 @@ class EarlierDialogue:
         if row is None:raise SourceReadDenied('Source is not available')
         return row
 
+    @property
+    def chronological_cutoff(self):
+        # Queue capture normalizes recorded timestamps to UTC microseconds.
+        return self.primary.recorded_at,self.ordinal
+
+    def earlier_chronological(self, timestamp, ordinal):
+        return (timestamp,ordinal)<self.chronological_cutoff and ordinal<=self.highwater
+
     def authorized(self,row,event):
         position=row['ordinal'] if self.column=='r.rowid' else row['position']
         return (row['ordinal']<=self.highwater and row['status']!='waiting_origin' and self.visible(event)
@@ -133,7 +196,7 @@ class EarlierDialogue:
                 if remaining<=0 or len(results)>=self.PAGE:break
                 event=_event(row)
                 self.bound=(row['pos'],row['ordinal'],None);examined+=1
-                if not self.authorized(row,event):continue
+                if not self.authorized(row,event) or not self.admitted_raw(row):continue
                 end=cut[2] if cut[2] is not None and cut[1]==row['ordinal'] else len(event.prompt)
                 if end<=0:continue
                 start=max(0,end-remaining)
@@ -166,7 +229,7 @@ class EarlierDialogue:
             event_id,start,end,digest,order=self.refs[ref]
             row=self.row(db,event_id); event=_event(row)
             if ((row['ordinal'],row['position'])!=order or not self.authorized(row,event)
-                    or not 0<=start<end<=len(event.prompt)):
+                    or not self.admitted_raw(row) or not 0<=start<end<=len(event.prompt)):
                 raise SourceReadDenied('Exact evidence no longer available')
             role='source' if event_id==self.primary.id else 'context'
             span={'start':start,'end':end}
