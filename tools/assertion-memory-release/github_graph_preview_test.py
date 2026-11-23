@@ -20,7 +20,7 @@ class Graph(unittest.TestCase):
         p=g.PRODUCTS[0] if visual else g.PRODUCTS[1]
         tag=p.tag_prefix+'v0.1.0'
         run=dict(id=int(self.run_id),event='release',status='completed',conclusion='success',workflow_id=8,
-                 path='.github/workflows/'+p.workflow,run_attempt=1,head_sha=self.sha,
+                 path='.github/workflows/'+p.workflow,run_attempt=1,head_sha=self.sha,head_branch=tag,
                  repository={'id':g.REPO_ID},head_repository={'id':g.REPO_ID})
         name=p.artifact_prefix+self.rid+'-'+self.sha
         item=dict(id=int(self.artifact_id),name=name,expired=False,size_in_bytes=100,digest='sha256:'+'b'*64,
@@ -59,6 +59,17 @@ class Graph(unittest.TestCase):
             with self.subTest(key=key),self.assertRaises((ValueError,KeyError)):
                 g.from_completed_build(get,run)
             obj[key]=old
+
+    def test_rejects_event_and_canonical_tag_mismatch(self):
+        tag,run,item,published,data,get=self.fixture()
+        wrong=dict(run,head_branch=tag+'-unexpected')
+        with self.assertRaisesRegex(ValueError,'event tag'):
+            g.from_completed_build(get,wrong)
+        data[f'/actions/runs/{self.run_id}']=wrong
+        with self.assertRaisesRegex(ValueError,'original release build'):
+            g.from_completed_build(get,run)
+        with self.assertRaisesRegex(ValueError,'original release build'):
+            g.from_tag(get,tag)
 
     def test_rejects_ambiguous_artifact_or_non_main_revision(self):
         tag,run,item,published,data,get=self.fixture()

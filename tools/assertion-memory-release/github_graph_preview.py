@@ -135,7 +135,7 @@ def release_by_id(get, release_id):
     return release_id,tag,product,release_commit(get,tag)
 
 
-def run_ok(get, run_id, product, revision):
+def run_ok(get, run_id, product, revision, tag):
     run_id=exact(ID,run_id)
     canonical=get(ROOT+'/actions/runs/'+run_id)
     workflow=get(ROOT+'/actions/workflows/'+product.workflow)
@@ -143,7 +143,7 @@ def run_ok(get, run_id, product, revision):
             or canonical.get('path')!='.github/workflows/'+product.workflow
             or canonical.get('event')!='release' or canonical.get('run_attempt')!=1
             or canonical.get('status')!='completed' or canonical.get('conclusion')!='success'
-            or canonical.get('head_sha')!=revision
+            or canonical.get('head_sha')!=revision or canonical.get('head_branch')!=tag
             or (canonical.get('repository') or {}).get('id')!=REPO_ID
             or (canonical.get('head_repository') or {}).get('id')!=REPO_ID):
         raise Reject('Not the successful original release build')
@@ -168,7 +168,7 @@ def result_of(get, release_id, tag, product, revision, artifact, expected_run=No
             or origin.get('head_repository_id')!=REPO_ID
             or (expected_run is not None and run_id!=expected_run)):
         raise Reject('Artifact origin does not match the immutable release')
-    run_ok(get,run_id,product,revision)
+    run_ok(get,run_id,product,revision,tag)
     return dict(tag=tag,revision=revision,release_id=release_id,build_run_id=run_id,
                 artifact_id=exact(ID,str(artifact.get('id',''))),
                 archive_sha=exact('sha256:'+DIGEST,artifact.get('digest',''))[7:])
@@ -203,6 +203,8 @@ def from_completed_build(get, run):
     rid,tag,actual,source=release_by_id(get,release_id)
     if supplied!=actual or source!=revision:
         raise Reject('Release namespace or source revision mismatch')
+    if run.get('head_branch')!=tag:
+        raise Reject('Release event tag does not match the immutable release')
     return result_of(get,rid,tag,actual,source,artifact,expected_run=run_id)
 
 

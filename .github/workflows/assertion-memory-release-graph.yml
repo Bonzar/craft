@@ -14,7 +14,7 @@ on:
       - ".github/workflows/assertion-memory-release-graph.yml"
       - "tools/assertion-memory-release/github_graph_preview*"
 permissions: {}
-run-name: "Release graph · ${{ inputs.tag || github.event.workflow_run.display_title || 'offline checks' }} · preview"
+run-name: "Release graph · ${{ inputs.tag || github.event.workflow_run.head_branch || 'offline checks' }} · preview"
 jobs:
   preview-checks:
     if: github.event_name == 'pull_request'
