@@ -1,0 +1,86 @@
+name: Assertion Memory · Release graph
+on:
+  workflow_run:
+    workflows: ["Assertion Memory Base Release", "Assertion Memory Visual Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published immutable base or visual tag (preview only)
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/assertion-memory-release-graph.yml"
+      - "tools/assertion-memory-release/github_graph_preview*"
+permissions: {}
+run-name: "Release graph · ${{ inputs.tag || github.event.workflow_run.display_title || 'offline checks' }} · preview"
+jobs:
+  preview-checks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: python3 tools/assertion-memory-release/github_graph_preview_test.py
+  release:
+    name: Verify release and original build
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success'))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.resolve.outputs.artifact_id }}
+      archive_sha: ${{ steps.resolve.outputs.archive_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: resolve
+        name: Resolve immutable version tag without numeric IDs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_TAG: ${{ inputs.tag }}
+        run: python3 tools/assertion-memory-release/github_graph_preview.py resolve
+  test:
+    name: TEST preview · verify archive bytes
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      verified_sha: ${{ steps.verify.outputs.verified_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: verify
+        name: Hash the same original archived build (no activation or smoke)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.release.outputs.artifact_id }}
+          ARCHIVE_SHA: ${{ needs.release.outputs.archive_sha }}
+        run: python3 tools/assertion-memory-release/github_graph_preview.py hash
+  prod:
+    name: PROD preview · same artifact, no deploy
+    needs: [release, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Compare TEST-preview hash (no environment or credentials)
+        env:
+          ARCHIVE_SHA: ${{ needs.release.outputs.archive_sha }}
+          VERIFIED_SHA: ${{ needs.test.outputs.verified_sha }}
+        run: python3 tools/assertion-memory-release/github_graph_preview.py compare
