@@ -9,13 +9,14 @@ export interface GraphPatch {
   remove_edge_ordinals: number[]; status_changes: { ordinal: number; flags: number }[];
 }
 const DELETED = 0x80000000;
+const SESSION_EXCLUDED = 4;
 
 export function filterVisibility(graph: GraphData, history: boolean): void {
   const count = graph.flags.length;
   graph.visible = new Float32Array(count);
   for (let index = 0; index < count; index++) {
     const flags = graph.flags[index] ?? 0;
-    graph.visible[index] = (flags & DELETED) === 0 && (history || (flags & 3) === 0) ? 1 : 0;
+    graph.visible[index] = (flags & (DELETED | SESSION_EXCLUDED)) === 0 && (history || (flags & 3) === 0) ? 1 : 0;
   }
   const endpoints = new Uint32Array(graph.edges.length);
   const ordinals = new Uint32Array(graph.edges.length / 2);
@@ -96,7 +97,7 @@ export function patchGraph(current:GraphData,patch:GraphPatch,history:boolean):G
   for(const item of patch.upsert_edges){graph.edges[item.ordinal*2]=item.from;graph.edges[item.ordinal*2+1]=item.to;graph.edgeActive[item.ordinal]=1;}
   for(const ordinal of patch.remove_node_ordinals)graph.flags[ordinal]=DELETED;
   for(const ordinal of patch.remove_edge_ordinals)graph.edgeActive[ordinal]=0;
-  for(const item of patch.status_changes)graph.flags[item.ordinal]=item.flags;
+  for(const item of patch.status_changes)graph.flags[item.ordinal]=(graph.flags[item.ordinal]??0)&DELETED?(item.flags|DELETED)>>>0:item.flags;
   filterVisibility(graph,history);
   return graph;
 }

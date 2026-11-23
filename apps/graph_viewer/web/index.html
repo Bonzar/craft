@@ -16,25 +16,35 @@
       </form>
       <div class="connection"><span id="live-dot" class="live-dot"></span><span id="connection-status" role="status">Подключение</span></div>
     </header>
-    <nav class="toolbar" aria-label="Управление вселенной"><button id="history-toggle" aria-label="История" aria-expanded="false">◷ <span>История</span></button><button id="bookmarks-toggle" aria-label="Закладки" aria-expanded="false">☆ <span>Закладки</span></button><button id="expand-all" aria-label="Все звёзды" aria-pressed="false">✧ <span>Все звёзды</span></button><button id="reset" aria-label="Вся вселенная">⌖ <span>Вся вселенная</span></button></nav>
-    <section id="history-panel" class="floating-panel history-panel" aria-label="История вселенной" hidden>
-      <div class="panel-heading"><h2>История</h2><button id="history-close" class="icon" aria-label="Закрыть историю">×</button></div>
+    <nav class="toolbar" aria-label="Управление вселенной"><button id="history-toggle" aria-label="Фильтры" aria-expanded="false"><svg class="toolbar-filter-icon" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2.5 3.5h15l-6 7v5l-3 1v-6z"/></svg> <span>Фильтры</span></button><button id="bookmarks-toggle" aria-label="Закладки" aria-expanded="false">☆ <span>Закладки</span></button><button id="expand-all" aria-label="Все звёзды" aria-pressed="false">✧ <span>Все звёзды</span></button><button id="layout-toggle" aria-label="Раскладка по связям" aria-pressed="false">⇄ <span>По связям</span></button><button id="topics-toggle" aria-label="Темы источника">☷ <span>Темы</span></button><button id="reset" aria-label="Общий вид">⌖ <span>Общий вид</span></button></nav>
+    <section id="history-panel" class="floating-panel history-panel" aria-label="Фильтры вселенной" hidden>
+      <div class="panel-heading"><h2>Фильтры</h2><button id="history-close" class="icon" aria-label="Закрыть фильтры">×</button></div>
       <form id="history-form">
+        <label>Найти сессию<input id="session-filter-query" type="search" placeholder="Название или дата" autocomplete="off"></label>
+        <label>Сессия<select id="session-filter"><option value="">Все сессии</option></select></label>
+        <p id="session-filter-selected" class="note" hidden></p>
+        <p id="session-origin-note" class="note" hidden></p>
+        <label>Результаты обработки<select id="session-run"><option value="">Последние завершённые результаты</option></select></label>
+        <p id="session-run-note" class="note"></p>
+        <p id="session-filter-status" class="note" role="status" aria-live="polite"></p>
+        <button id="session-filter-more" type="button" hidden>Ещё сессии</button>
         <label>Перспектива<select id="history-mode"><option value="current">Всё, что известно сейчас</option><option value="known_then">Что система знала тогда</option><option value="known_now">Что мы сейчас знаем о той дате</option></select></label>
         <label>Дата<input id="history-date" type="date" required></label>
         <label>Часовой пояс<select id="history-zone"><option value="Europe/Moscow">Москва · Europe/Moscow</option><option value="UTC">UTC</option></select></label>
         <p class="note">До конца выбранного дня в указанном часовом поясе.</p>
         <label class="checkbox"><input id="show-history" type="checkbox"> Показывать заменённые и отменённые</label>
+        <p id="source-status-limitation" class="note" hidden></p>
         <label id="undated-label">Сведения без даты события<select id="undated-mode"><option value="separate">Отдельно от датированного среза</option><option value="include">Показать вместе</option><option value="only">Только сведения без даты</option></select></label>
         <p id="history-explanation" class="note"></p><p id="undated-count" class="note"></p>
-        <button type="submit" class="primary">Показать вселенную</button>
+        <button type="submit" class="primary">Применить фильтры</button>
+        <button id="filters-reset" type="button">Сбросить фильтры</button>
       </form>
     </section>
     <section id="bookmarks-panel" class="floating-panel bookmarks-panel" aria-label="Личные закладки" hidden><div class="panel-heading"><h2>Закладки</h2><button id="bookmarks-close" class="icon" aria-label="Закрыть закладки">×</button></div><div id="bookmarks-list"></div><p class="note">Синхронизируются между вашими устройствами.</p></section>
     <section id="search-results" class="floating-panel results-panel" aria-label="Результаты поиска" hidden><div class="panel-heading"><h2 id="search-heading">Результаты</h2><button id="search-close" class="icon" aria-label="Закрыть результаты поиска">×</button></div><div id="search-state" role="status"></div><div id="search-list"></div></section>
     <aside id="reader" class="reader" hidden></aside>
     <div id="loading" class="loading-overlay" role="status"><div class="loading-orbit" aria-hidden="true">✦</div><h1>Открываем вселенную</h1><p id="loading-detail">Подключаемся к источнику</p><button id="load-retry" hidden>Повторить</button></div>
-    <footer class="map-footer"><div><span id="universe-counts">Вся доступная вселенная</span><span id="representation-counts"></span><span id="slice-label">Сейчас</span><button id="undated-open" hidden></button><span id="fixture-label" hidden></span></div><p>Вращайте · приближайте · выбирайте звёзды</p><p id="metric-legend">Размер и свет — связи в кадре; кольцо — свёрнутое созвездие.</p></footer>
+    <footer class="map-footer"><div><span id="universe-counts">Вся доступная вселенная</span><span id="representation-counts"></span><span id="slice-label">Сейчас</span><button id="undated-open" hidden></button><span id="fixture-label" hidden></span></div><p>Вращайте · приближайте · выбирайте звёзды</p><p id="metric-legend">Размер и свет — связи; круги — группы содержимого.</p></footer>
     <div class="zoom-controls" aria-label="Масштаб"><button id="zoom-in" aria-label="Приблизить">+</button><button id="zoom-out" aria-label="Отдалить">−</button></div>
     <div id="feedback" class="pick-feedback" hidden aria-hidden="true"></div>
     <div id="notice" role="alert" hidden><span id="notice-text"></span><button id="notice-close" aria-label="Скрыть сообщение">×</button></div>
