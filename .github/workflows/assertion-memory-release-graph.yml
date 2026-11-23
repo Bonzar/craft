@@ -14,7 +14,7 @@ on:
       - ".github/workflows/assertion-memory-release-graph.yml"
       - "tools/assertion-memory-release/github_graph_preview*"
 permissions: {}
-run-name: "Release graph · ${{ inputs.tag || github.event.workflow_run.head_branch || 'offline checks' }} · preview"
+run-name: "Release graph · ${{ inputs.tag || github.event.workflow_run.head_branch || 'offline checks' }} "
 jobs:
   preview-checks:
     if: github.event_name == 'pull_request'
@@ -26,6 +26,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 tools/assertion-memory-release/github_graph_preview_test.py
+      - run: python3 tools/assertion-memory-qa/test_native_test_policy.py
   release:
     name: Verify release and original build
     if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success'))
@@ -34,6 +35,10 @@ jobs:
       actions: read
       contents: read
     outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      release_id: ${{ steps.resolve.outputs.release_id }}
+      build_run_id: ${{ steps.resolve.outputs.build_run_id }}
       artifact_id: ${{ steps.resolve.outputs.artifact_id }}
       archive_sha: ${{ steps.resolve.outputs.archive_sha }}
     steps:
@@ -48,7 +53,7 @@ jobs:
           SELECTED_TAG: ${{ inputs.tag }}
         run: python3 tools/assertion-memory-release/github_graph_preview.py resolve
   test:
-    name: TEST preview · verify archive bytes
+    name: Verify exact release bytes
     needs: release
     runs-on: ubuntu-latest
     permissions:
@@ -84,3 +89,65 @@ jobs:
           ARCHIVE_SHA: ${{ needs.release.outputs.archive_sha }}
           VERIFIED_SHA: ${{ needs.test.outputs.verified_sha }}
         run: python3 tools/assertion-memory-release/github_graph_preview.py compare
+
+  native-base-test:
+    name: Deploy base TEST · original immutable archive
+    needs: [release, test]
+    if: github.event_name == 'workflow_run' && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_BASE_TEST == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    environment: assertion-memory-native-base-test
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: assertion-memory-deploy-test
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
+      - id: resolve
+        name: Download and verify the exact immutable build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.release.outputs.release_id }}
+          GRAPH_RELEASE_ID: ${{ needs.release.outputs.release_id }}
+          GRAPH_TAG: ${{ needs.release.outputs.tag }}
+          GRAPH_REVISION: ${{ needs.release.outputs.revision }}
+          GRAPH_ARTIFACT_ID: ${{ needs.release.outputs.artifact_id }}
+          GRAPH_BUILD_RUN_ID: ${{ needs.release.outputs.build_run_id }}
+          GRAPH_ARCHIVE_SHA: ${{ needs.release.outputs.archive_sha }}
+          GRAPH_VERIFIED_SHA: ${{ needs.test.outputs.verified_sha }}
+          NATIVE_TEST_ENV_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_BASE_TEST_ENV_READY }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: python tools/assertion-memory-qa/lifecycle.py native-test
+      - id: send
+        name: Activate and smoke-check via pinned restricted connection
+        env:
+          NATIVE_TEST_ENV_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_BASE_TEST_ENV_READY }}
+          RELEASE_ENABLED: ${{ vars.ASSERTION_MEMORY_DEPLOY_ENABLED }}
+          RELEASE_USER: ${{ vars.ASSERTION_MEMORY_SSH_USER }}
+          RELEASE_HOST: ${{ vars.ASSERTION_MEMORY_SSH_HOST }}
+          RELEASE_PORT: ${{ vars.ASSERTION_MEMORY_SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}
+          SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}
+          ARTIFACT_ID: ${{ steps.resolve.outputs.artifact_id }}
+          RELEASE_REVISION: ${{ steps.resolve.outputs.revision }}
+          RELEASE_ARCHIVE_SHA256: ${{ steps.resolve.outputs.release_sha256 }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: tools/assertion-memory-qa/send-release.sh test
+
+      - name: Preserve native TEST evidence (not accepted by legacy PROD)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assertion-memory-native-base-test-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/assertion-memory-payload/identity.json
+            ${{ runner.temp }}/assertion-memory-payload/receiver-receipt.json
+          if-no-files-found: error
+          retention-days: 90
