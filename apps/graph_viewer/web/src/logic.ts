@@ -1,6 +1,6 @@
 export type Mode = 'current' | 'known_then' | 'known_now';
 export type Undated = 'separate' | 'include' | 'only';
-export interface Selector { mode: Mode; at: string | null; history: boolean; undated: Undated }
+export interface Selector { mode: Mode; at: string | null; history: boolean; undated: Undated; session_id?: string | null; run_id?: string | null; output_snapshot_id?: number | null }
 export interface Span { start: number; end: number }
 export interface TextSegment { text: string; marked: boolean }
 

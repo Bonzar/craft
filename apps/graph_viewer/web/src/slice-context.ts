@@ -4,7 +4,7 @@ export interface SliceContext {selector:Selector;day:string;zone:string}
 function instant(value:string|null):string|null{if(value===null)return null;const time=Date.parse(value);return Number.isFinite(time)?new Date(time).toISOString():value;}
 export function sameSliceContext(left:SliceContext,right:SliceContext):boolean{
   const a=left.selector,b=right.selector;
-  return a.mode===b.mode&&instant(a.at)===instant(b.at)&&a.history===b.history&&a.undated===b.undated&&left.day===right.day&&left.zone===right.zone;
+  return a.mode===b.mode&&instant(a.at)===instant(b.at)&&a.history===b.history&&a.undated===b.undated&&(a.session_id??null)===(b.session_id??null)&&(a.run_id??null)===(b.run_id??null)&&(a.output_snapshot_id??null)===(b.output_snapshot_id??null)&&left.day===right.day&&left.zone===right.zone;
 }
 export function contextForSelector(previous:SliceContext,selector:Selector):SliceContext{
   if(selector.mode==='current'||!selector.at)return{selector:{...selector},day:previous.day,zone:previous.zone};

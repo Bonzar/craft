@@ -17,6 +17,11 @@ test('a fresh delta worker preserves deleted edge slots while accepted worker ca
     await request(accepted,{kind:'load',nodes,edges,nodeCount:3,edgeCount:2,history:false,topics,revision:'old'});
     const oldLod=await request(accepted,{kind:'lod',request:{revision:'old',generation:1,collapsed_topic_indices:new Uint32Array(),force_reveal_ordinals:new Uint32Array()}});
     assert.ok(oldLod.lod);
+    const candidate=oldLod.candidate as {token:number;base_token:number|null};
+    assert.equal(candidate.base_token,null);
+    assert.equal((await request(accepted,{kind:'screen-connectivity',request:{revision:'old',lod_generation:1}})).error,'Expired connectivity query');
+    const ack=await request(accepted,{kind:'accept-lod',token:candidate.token});
+    assert.equal(ack.accepted_token,candidate.token);assert.equal(ack.revision,'old');assert.equal(ack.generation,1);
     const graph=patchGraph(decodeGraph(nodes,edges,3,2,false),{...blank,remove_edge_ordinals:[0]},false);
     const reply=await request(staged,{kind:'load-patch',graph,patch:{...blank,remove_node_ordinals:[2]},history:false,topics,revision:'new'});
     assert.equal(reply.error,undefined);
