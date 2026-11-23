@@ -331,7 +331,9 @@ class ThoughtWorker:
                     # Preserve original ordinary publication guard, transaction
                     # and bounded stale-proof rebuild outside the completion
                     # writer. Residual repair still publishes inside it below.
-                    changed = self.engine._publish(drafts, origin=origin)
+                    changed = (self.engine._publish(drafts, origin=origin, rebuild=False)
+                               if self.claim_bound_source_extractor_factory is not None
+                               else self.engine._publish(drafts, origin=origin))
         except SourceDraftRepairPending as failure:
             pending = failure
             prepared = failure.accepted

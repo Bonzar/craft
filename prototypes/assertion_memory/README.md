@@ -323,3 +323,5 @@ accepts nor searches for credentials, and it permits no outbound provider
 traffic. Production remains on its existing extractor. A live launcher needs
 a separately verified provider/auth transport that does not grant the agent
 general filesystem or network access.
+
+Source-turn token accounting, issued reference semantics, retained resource guards, and offline test limits: [BUDGET_AND_REFERENCES.md](turn_source/BUDGET_AND_REFERENCES.md).

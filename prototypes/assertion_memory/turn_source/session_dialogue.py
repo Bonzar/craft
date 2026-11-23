@@ -22,6 +22,7 @@ class SessionPage:
 class SessionDialogue:
     def __init__(self, reader, grant):
         self.reader, self.grant = reader, grant
+        reader.owner_scope=grant
         self.cursors = {}
 
     def owns_cursor(self, token):
@@ -30,6 +31,7 @@ class SessionDialogue:
     def _charge(self):
         self.reader.calls += 1
         if self.reader.calls > self.reader.MAX_PAGES:
+            self.reader.budget_exhausted=True
             raise SourceReadDenied('Attempt history call budget exhausted')
 
     @staticmethod
@@ -76,6 +78,7 @@ class SessionDialogue:
             if not state.local and state.boundary is None and not self._eligible_dialogue(db,view,clauses,parameters,state.session):
                 raise SourceReadDenied('Other dialogue is not authorized')
             if not self.reader.can_read_page(include_current=True):
+                self.reader.budget_exhausted=True
                 return {'messages':[],'next_cursor':None,'history_status':'attempt_budget_exhausted'}
             self.reader.pages+=1
             if state.start is not None: clauses.append('r.recorded_at>=?'); parameters.append(state.start)
@@ -106,8 +109,8 @@ class SessionDialogue:
                 excerpt=event.prompt[start:end]
                 item={'text':excerpt,'role':event.actor,'recorded_at':event.recorded_at,
                       'complete_message':(start,end)==(0,len(event.prompt)),'evidence_eligible':state.local}
-                if state.local:
-                    item['ref']=self.reader.offer(event.id,start,end,excerpt,(row['ordinal'],row['position']))
+                item['ref']=self.reader.offer(event.id,start,end,excerpt,(row['ordinal'],row['position']),
+                    context_session=None if state.local else state.session)
                 if not state.local:
                     recheck.append((event.id,row['ordinal'],row['position'],start,end,
                                     sha256(excerpt.encode()).digest()))
@@ -135,6 +138,7 @@ class SessionDialogue:
                         raise SourceReadDenied('Other dialogue changed during navigation')
         more=split or examined<len(rows)
         status=('more' if self.reader.can_read_page() else 'attempt_budget_exhausted') if more else 'history_end'
+        self.reader.budget_exhausted |= status=='attempt_budget_exhausted'
         token=secrets.token_urlsafe(18) if status=='more' else None
         if token is not None:
             self.cursors[token]=replace(state,boundary=boundary)

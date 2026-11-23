@@ -176,7 +176,7 @@ def persist(engine,db,spec,snapshot,audit,check_id):
     queue=SimpleNamespace(store=engine.store)
     origin=_origin(engine,spec,snapshot,audit,check_id)
     receipts=[]
-    for declaration in declarations[:8]:
+    for declaration in declarations:
         if origin is None:
             receipts.append({'status':'unavailable_origin','scheduled':False}); continue
         event_id=declaration['event_id']

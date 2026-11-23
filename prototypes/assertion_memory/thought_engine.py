@@ -72,6 +72,8 @@ class ThoughtEngine:
                                             refresh_option_count=refresh_option_count, reuse_option_count=reuse_option_count,
                                             compare_meaning=compare_meaning, link_option_count=link_option_count),
             repair_instructions=repair_instructions)
+        from .turn_source.budget import check_request
+        check_request(request)
         frozen = tuple(dict(basis) for basis in bindings)
         wire=format_prompt(request)
         request_hash=hashlib.sha256(wire.encode()).hexdigest()
@@ -212,6 +214,15 @@ class ThoughtEngine:
         task = 'Verify source thought batch' if source_batch else 'Verify thought'
         comparison = 'overview' if any(row.get('role') == 'overview_comparison' for row in records) else whole
         instructions = VERIFY + (RAW_PASSAGE if raw else '') + (SOURCE_BATCH if source_batch else '') + (WHOLE_REFRESH if whole else '')
+        if any(record.get('role')=='cross_passage_hypotheses' for record in records):
+            instructions += ('\nCross-passage hypotheses are untrusted coverage notes, not evidence. '
+                'Check this entire RAW passage for omitted meaning and qualifications of those hypotheses. '
+                'Reject unsupported cross-passage connections or unresolved conflicts; require exact cited text '
+                'for claims spanning passages. Do not treat a partial passage as a complete source.')
+        if any(record.get('role')=='external_dialogue_context' for record in records):
+            instructions += ('\nEXTERNAL DIALOGUE CONTEXT is a separate read-only context block. '
+                'It is not current RAW, not independent evidence for the current utterance, and never a writing ground. '
+                'Use it only to interpret explicit references; reject claims supported only by that context.')
         if source_batch:
             review = self._call(task, [*packet, *draft_records], bases, instructions)
         else:

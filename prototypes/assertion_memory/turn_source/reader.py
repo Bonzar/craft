@@ -4,6 +4,7 @@ from pathlib import Path
 from hashlib import sha256
 import secrets
 import sqlite3
+from dataclasses import dataclass
 from threading import RLock
 
 from ..dialogue import source_role
@@ -14,6 +15,19 @@ from ..queue import _event
 
 class SourceReadDenied(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class IssuedReference:
+    kind: str
+    identity: str
+    start: int | None
+    end: int | None
+    digest: bytes
+    order: tuple | None
+    context_session: str | None = None
+    version: int | None = None
+    text: str | None = None
 
 
 class EarlierDialogue:
@@ -30,9 +44,13 @@ class EarlierDialogue:
         self.primary=primary
         self.primary_order=None
         self.refs={}
+        self.selected=set()
+        self.owner_scope=None
+        self.navigation=None
+        self.budget_exhausted=False
         self.pages=0
         self.calls=0
-        self.bytes_read=len(primary.prompt.encode())
+        self.bytes_read=0  # Primary is accounted by the provider token budget, not the history quota.
         self.cursor,self.bound,self.started=None,None,False
         self._anchor_lock=RLock()
         self._anchor=None
@@ -61,6 +79,7 @@ class EarlierDialogue:
             self.primary_order=(target['ordinal'],target['position'])
             self.ensure_order(db,target)
         self.primary_ref=self.offer(primary.id,0,len(primary.prompt),primary.prompt,self.primary_order)
+        self.selected.add(self.primary_ref)
 
     def _connection(self):
         db=sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=2,check_same_thread=False)
@@ -141,10 +160,46 @@ class EarlierDialogue:
                 'custom_tool_call','custom_tool_call_output')
                 for key in ('type','message_type','payload_type','response_item_type')))
 
-    def offer(self,event_id,start,end,excerpt,order):
+    def offer(self,event_id,start,end,excerpt,order,*,context_session=None):
+        if len(self.refs)>=self.MAX_REFS:
+            self.budget_exhausted=True
+            raise SourceReadDenied('Issued reference resource budget exhausted')
         ref=secrets.token_urlsafe(18)
-        self.refs[ref]=(event_id,start,end,sha256(excerpt.encode()).digest(),order)
+        self.refs[ref]=IssuedReference('raw',event_id,start,end,sha256(excerpt.encode()).digest(),order,context_session)
         return ref
+
+    def offer_thought(self,thought,*,local):
+        from dataclasses import asdict
+        from ..thought_store import _hash
+        if len(self.refs)>=self.MAX_REFS:
+            self.budget_exhausted=True
+            raise SourceReadDenied('Issued reference resource budget exhausted')
+        ref=secrets.token_urlsafe(18)
+        self.refs[ref]=IssuedReference('thought',thought.id,None,None,
+            bytes.fromhex(_hash(asdict(thought))),None,None if local else 'external',thought.version,thought.text)
+        return ref
+
+    def context_authorized(self,row,event,session):
+        return (self.owner_scope is not None and self.owner_scope.matches(self)
+                and event.scope==self.request.scope and canonical_session_id(event)==session
+                and event.session_id!=self.request.capture_session_id
+                and session!=self.request.canonical_session_id and row['status']!='waiting_origin'
+                and self.visible(event) and self.frozen_raw(row)
+                and self.earlier_chronological(event.recorded_at,row['ordinal']))
+
+    def select(self, refs):
+        if (not isinstance(refs,list) or not refs or any(not isinstance(ref,str) for ref in refs)
+                or len(set(refs))!=len(refs)):
+            raise SourceReadDenied('Expected distinct issued references')
+        evidence=self.evidence(refs)
+        self.selected.update(refs)
+        return {'references':[{'ref':ref,'kind':self.refs[ref].kind,
+                    'role':record['role'],'text':record['text'],
+                    **({'thought_id':self.refs[ref].identity,'version':self.refs[ref].version}
+                       if self.refs[ref].kind=='thought' else
+                       {'span':{'start':self.refs[ref].start,'end':self.refs[ref].end}})}
+                    for ref,(_,record,_) in zip(refs,evidence)]}
+
 
     def row(self,db,identity):
         row=db.execute('SELECT r.*,r.rowid AS ordinal,p.position,j.status FROM memory_raw_events r '
@@ -171,6 +226,7 @@ class EarlierDialogue:
     def older(self,cursor):
         self.calls+=1
         if self.calls>self.MAX_PAGES:
+            self.budget_exhausted=True
             raise SourceReadDenied('Attempt history call budget exhausted')
         if (self.started and (self.cursor is None or cursor!=self.cursor)) or (not self.started and cursor is not None):
             raise SourceReadDenied('Invalid history cursor')
@@ -178,6 +234,7 @@ class EarlierDialogue:
         # Do not disguise an attempt ceiling as exhaustion of eligible history.
         if not self.can_read_page(include_current=True):
             with self.snapshot():pass
+            self.budget_exhausted=True
             return {'messages':[],'next_cursor':None,'history_status':'attempt_budget_exhausted'}
         self.pages+=1
         cut=self.bound or (self.position,self.ordinal,None)
@@ -210,6 +267,7 @@ class EarlierDialogue:
         self.bytes_read+=sum(len(item['text'].encode()) for item in results)
         has_more=split or examined<len(rows)
         status=('more' if self.can_read_page() else 'attempt_budget_exhausted') if has_more else 'history_end'
+        self.budget_exhausted |= status=='attempt_budget_exhausted'
         self.cursor=secrets.token_urlsafe(18) if status=='more' else None
         return {'messages':list(reversed(results)),'next_cursor':self.cursor,'history_status':status}
 
@@ -226,15 +284,25 @@ class EarlierDialogue:
         results=[]
         for ref in refs:
             if not isinstance(ref,str) or ref not in self.refs:raise SourceReadDenied('Unissued evidence reference')
-            event_id,start,end,digest,order=self.refs[ref]
+            issued=self.refs[ref]
+            if issued.kind=='thought':
+                if self.navigation is None:
+                    raise SourceReadDenied('Thought reference resolver unavailable')
+                results.append(self.navigation.resolve_thought(db,issued))
+                continue
+            event_id,start,end,digest,order=(issued.identity,issued.start,issued.end,issued.digest,issued.order)
             row=self.row(db,event_id); event=_event(row)
-            if ((row['ordinal'],row['position'])!=order or not self.authorized(row,event)
+            if ((row['ordinal'],row['position'])!=order or not (self.context_authorized(row,event,issued.context_session) if issued.context_session
+                            else self.authorized(row,event))
                     or not self.admitted_raw(row) or not 0<=start<end<=len(event.prompt)):
                 raise SourceReadDenied('Exact evidence no longer available')
-            role='source' if event_id==self.primary.id else 'context'
+            role=('external_dialogue_context' if issued.context_session else
+                  'source' if event_id==self.primary.id else 'context')
             span={'start':start,'end':end}
             text=event.prompt[start:end]
             if sha256(text.encode()).digest()!=digest:
                 raise SourceReadDenied('Offered source text changed')
-            results.append((event,{'role':role,'text':text},{'event_id':event_id,'span':span}))
+            results.append((event,{'role':role,'text':text,
+                **({'context_only':True,'canonical_session_id':issued.context_session} if issued.context_session else {})},
+                {} if issued.context_session else {'event_id':event_id,'span':span}))
         return results
