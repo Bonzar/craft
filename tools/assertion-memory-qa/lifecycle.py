@@ -216,7 +216,7 @@ def main():
             raise ValueError('Release event and current immutable release differ')
     elif mode in ('test', 'native-test', 'production', 'production-pinned-proof'):
         if mode == 'native-test':
-            native_test_policy.require_native_test(os.environ)
+            native_test_policy.check_approval(ci.api, os.environ)
         else:
             workflow_sha = dispatch_context(os.environ)
             if os.environ.get('GITHUB_JOB') != ('deploy-test' if mode == 'test' else 'deploy-production'):

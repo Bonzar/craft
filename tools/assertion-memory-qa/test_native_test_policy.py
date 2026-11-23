@@ -1,4 +1,7 @@
 import unittest
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "assertion-memory-release"))
 import native_test_policy as policy
 
 class TestNativeTestPolicy(unittest.TestCase):
@@ -21,6 +24,40 @@ class TestNativeTestPolicy(unittest.TestCase):
         for key in verified:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 policy.match_original(dict(verified, **{key: 'wrong'}), '1', tag, rev, identity)
+
+    def test_approval_requires_configured_environment_and_human_for_exact_run(self):
+        env = dict(GITHUB_REPOSITORY='Bonzar/craft', GITHUB_WORKFLOW_REF=policy.REF,
+                   GITHUB_EVENT_NAME='workflow_run', GITHUB_REF='refs/heads/main',
+                   GITHUB_REF_PROTECTED='true', GITHUB_RUN_ATTEMPT='1',
+                   GITHUB_JOB='native-base-test', NATIVE_TEST_ENV_READY='true',
+                   GITHUB_SHA='a'*40, GITHUB_RUN_ID='12', NATIVE_TEST_ENV_ID='45',
+                   NATIVE_TEST_REVIEWER_ID='67')
+        name = 'assertion-memory-native-base-test'
+        prefix = '/environments/' + name
+        state = {prefix: {'name': name, 'id': 45, 'deployment_branch_policy':
+                    {'protected_branches': False, 'custom_branch_policies': True},
+                    'protection_rules': [{'type': 'required_reviewers', 'reviewers':
+                        [{'type': 'User', 'reviewer': {'id': 67}}]}]},
+                 '/branches/main': {'protected': True},
+                 prefix+'/deployment-branch-policies?per_page=2':
+                    {'total_count': 1, 'branch_policies': [{'type': 'branch', 'name': 'main'}]},
+                 '/actions/runs/12/approvals': [{'state': 'approved',
+                    'user': {'type': 'User', 'id': 67}, 'environments': [{'name': name, 'id': 45}]}]}
+        def get(path):
+            return state[path.removeprefix('/repos/Bonzar/craft')]
+        policy.check_approval(get, env)
+        cases = [(state[prefix], 'id', 44), (state[prefix], 'protection_rules', []),
+                 (state['/branches/main'], 'protected', False),
+                 (state[prefix+'/deployment-branch-policies?per_page=2'], 'branch_policies',
+                  [{'type': 'tag', 'name': 'main'}]),
+                 (state['/actions/runs/12/approvals'][0], 'state', 'rejected'),
+                 (state['/actions/runs/12/approvals'][0]['user'], 'id', 68)]
+        for entry, key, value in cases:
+            original = entry[key]
+            entry[key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                policy.check_approval(get, env)
+            entry[key] = original
 
 if __name__ == '__main__':
     unittest.main()

@@ -17,3 +17,12 @@ ASSERTION_MEMORY_NATIVE_BASE_TEST=true. Leave both flags unset while in review.
 A readiness variable is not proof of reviewer settings; verify them separately.
 Never set the opt-in before creating the dedicated Environment: GitHub can
 otherwise create an absent Environment without approval rules.
+
+Before readiness, set the Environment-only numeric ID and approved reviewer ID
+(`ASSERTION_MEMORY_NATIVE_BASE_TEST_ENV_ID` and
+`ASSERTION_MEMORY_NATIVE_BASE_TEST_REVIEWER_ID`). The workflow reads back
+Environment configuration, exact branch policy, protected main, and the
+reviewer approval on the exact Actions run; missing API authorization fails
+closed before retrieval/activation. The actual runtime permission of the
+standard Actions read token must be qualified without exposing SSH secrets
+before turning on the opt-in. This PR does not add a second credential.

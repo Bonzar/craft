@@ -13,6 +13,10 @@ on:
     paths:
       - ".github/workflows/assertion-memory-release-graph.yml"
       - "tools/assertion-memory-release/github_graph_preview*"
+      - "tools/assertion-memory-release/native_test_policy.py"
+      - "tools/assertion-memory-qa/test_native_test_policy.py"
+      - "tools/assertion-memory-qa/lifecycle.py"
+      - "tools/assertion-memory-qa/send_test_release.py"
 permissions: {}
 run-name: "Release graph · ${{ inputs.tag || github.event.workflow_run.head_branch || 'offline checks' }} "
 jobs:
@@ -115,6 +119,8 @@ jobs:
         name: Download and verify the exact immutable build artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          NATIVE_TEST_ENV_ID: ${{ vars.ASSERTION_MEMORY_NATIVE_BASE_TEST_ENV_ID }}
+          NATIVE_TEST_REVIEWER_ID: ${{ vars.ASSERTION_MEMORY_NATIVE_BASE_TEST_REVIEWER_ID }}
           RELEASE_ID: ${{ needs.release.outputs.release_id }}
           GRAPH_RELEASE_ID: ${{ needs.release.outputs.release_id }}
           GRAPH_TAG: ${{ needs.release.outputs.tag }}
