@@ -15,6 +15,11 @@ def main():
         or d['GITHUB_REF']!='refs/heads/main' or d['GITHUB_RUN_ATTEMPT']!='1'
         or d['GITHUB_EVENT_NAME']!='workflow_dispatch' or d.get('VISUAL_DEPLOY_ENABLED')!='true'):
         raise ValueError('untrusted_visual_workflow')
+    deploy(d)
+
+
+def deploy(d):
+    mode=d['VISUAL_ENV']
     rev,sha,manifest=d['VISUAL_REVISION'],d['VISUAL_SHA'],d['VISUAL_DIGEST']
     command=f'deploy-visual {mode} {rev} {sha}'
     if not COMMAND.fullmatch(command) or not re.fullmatch('[0-9a-f]{64}',manifest):
