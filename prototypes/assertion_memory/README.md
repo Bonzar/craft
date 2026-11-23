@@ -242,9 +242,9 @@ the exact raw IDs and byte-matched Unicode spans selected by opaque receipts.
 The original worker retains verification and guarded publication.
 
 This is **not registered** in the default worker, config file or MCP endpoints.
-This fixture can navigate from an offered earlier source to direct verified
-thoughts based only on earlier visible raw events in that dialogue. Its
-`semantic_search` calls the same already-injected canonical ThoughtRetrieval
+The model can read earlier visible dialogue, search verified source thoughts,
+and open exact raw proof from those thoughts. Reverse raw-to-thought lookup is
+not a model tool. `semantic_search` calls the same already-injected canonical ThoughtRetrieval
 to rank a bounded corpus of those eligible sources; no second ranker, answer
 generation, graph-wide completeness or graph-viewer cross-process sharing is
 implied. Search and derived thoughts are navigational hints, not proof tokens. Each
@@ -274,3 +274,24 @@ uses a deterministic fake subprocess; set `ASSERTION_OFFLINE_CODEX_CLI` to an
 absolute installed CLI path only to additionally check the real offline
 app-server handshake and thread-scoped tool inventory. That test does not
 start a provider turn or use credentials.
+
+#### Separate Linux TEST jail (synthetic only)
+
+Set `ASSERTION_OFFLINE_OS_JAIL=1` when running
+`python -m unittest prototypes.assertion_memory.tests.test_source_turn` to
+exercise the explicit, disabled-by-default confined TEST composition. It uses
+the installed Linux `unshare`, `bwrap`, and `/usr/bin/python3`, with working
+unprivileged Linux namespaces, and deliberately runs only a trusted Python
+protocol fixture. The test creates a disposable synthetic database and mounts
+neither it nor the host home, workspace, or environment. The child can see
+system runtime files, its one fixture, the two relay modules and its per-attempt
+temporary broker. MCP reads go back to the host, which retains the original
+lease and data policy. The child has a separate network and PID namespace; a
+live host loopback TCP listener is deliberately unreachable. If namespace
+setup or launch fails, no unconfined fallback is attempted.
+
+This is not a TEST service activation or provider configuration. It neither
+accepts nor searches for credentials, and it permits no outbound provider
+traffic. Production remains on its existing extractor. A live launcher needs
+a separately verified provider/auth transport that does not grant the agent
+general filesystem or network access.
