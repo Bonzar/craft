@@ -19,7 +19,7 @@ permissions: {}
 jobs:
   deploy:
     name: Activate visual artifact
-    if: github.repository == 'Bonzar/craft' && github.workflow_ref == 'Bonzar/craft/.github/workflows/assertion-memory-release-graph.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == '1' && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && (inputs.stage == 'test' || inputs.stage == 'prod')
+    if: github.repository == 'Bonzar/craft' && github.workflow_ref == 'Bonzar/craft/.github/workflows/assertion-memory-release-graph.yml@refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run') && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == '1' && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && (inputs.stage == 'test' || inputs.stage == 'prod')
     runs-on: ubuntu-latest
     timeout-minutes: 13
     environment: assertion-memory-native-visual-${{ inputs.stage }}
