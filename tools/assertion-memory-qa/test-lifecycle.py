@@ -1,4 +1,6 @@
+import re
 import unittest
+from pathlib import Path
 
 from lifecycle import ROOT, WORKFLOW, find_artifact, identify, verify_receipt
 
@@ -28,6 +30,28 @@ class LifecycleTest(unittest.TestCase):
         self.release = release
         self.artifact = artifact
         self.run = run
+
+    def test_workflow_release_filter_separates_base_and_visual_refs(self):
+        workflow = Path(__file__).resolve().parents[2] / '.github/workflows' / WORKFLOW
+        line, = (line for line in workflow.read_text().splitlines()
+                 if "if:" in line and "startsWith(github.ref," in line)
+        clause = r"(!?)startsWith\(github\.ref, '([^']+)'\)"
+        self.assertRegex(line, clause + r" && " + clause)
+        conditions = re.findall(clause, line)
+        def matches(ref):
+            return all(ref.lower().startswith(prefix.lower()) != bool(negate)
+                       for negate, prefix in conditions)
+        self.assertTrue(matches('refs/tags/assertion-memory-v0.1.1'))
+        self.assertFalse(matches('refs/tags/assertion-memory-visual-v0.1.0'))
+        self.assertFalse(matches('refs/tags/unrelated-v0.1.0'))
+        graph = workflow.with_name('assertion-memory-release-graph.yml')
+        gate, = (line for line in graph.read_text().splitlines()
+                 if "if:" in line and "ASSERTION_MEMORY_NATIVE_BASE_TEST == " in line)
+        clause = clause.replace(r'github\.ref', r'needs\.release\.outputs\.tag')
+        self.assertRegex(gate, clause + r" && " + clause)
+        conditions = re.findall(clause, gate)
+        self.assertTrue(matches('assertion-memory-v0.1.1'))
+        self.assertFalse(matches('assertion-memory-visual-v0.1.0'))
 
     def test_original_release_and_artifact(self):
         self.assertEqual(identify(self.data.__getitem__, RELEASE),(TAG,SHA))
