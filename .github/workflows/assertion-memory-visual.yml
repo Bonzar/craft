@@ -6,19 +6,24 @@ on:
     paths:
       - ".github/workflows/assertion-memory-visual.yml"
       - "tools/assertion-memory-visual/**"
-      - "apps/graph_viewer/**"
   workflow_dispatch:
     inputs:
-      release_id:
-        description: Numeric ID of the published immutable visual release to activate in TEST
+      action:
+        type: choice
+        options: [test, prod]
         required: true
+      release_id:
         type: string
+        description: ID of the published immutable visual release
+        required: true
+      test_run_id:
+        type: string
+        description: Successful visual TEST run ID (PROD only)
 permissions: {}
 jobs:
   build:
     if: github.repository == 'Bonzar/craft' && (github.event_name == 'pull_request' || (github.event_name == 'release' && github.run_attempt == '1' && startsWith(github.ref, 'refs/tags/assertion-memory-visual-v')))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -30,25 +35,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VISUAL_RELEASE_ID: ${{ github.event.release.id }}
         run: python3 -B tools/assertion-memory-visual/lifecycle.py build
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24
-      - working-directory: apps/graph_viewer
-        run: |
-          npm ci --no-audit --no-fund
-          npm test
-          GRAPH_VIEWER_VISUAL_RELEASE=1 npm run build
       - run: |
           python3 -B tools/assertion-memory-visual/test_asset_origin.py
+          python3 -B tools/assertion-memory-visual/test_signer.py
           python3 -B tools/assertion-memory-visual/test_lifecycle.py
           node --test tools/assertion-memory-visual/sites-shell.test.mjs
           mkdir "$RUNNER_TEMP/visual"
-          python3 -B tools/assertion-memory-visual/package.py apps/graph_viewer/web/dist "$RUNNER_TEMP/visual/visual.tar" > "$RUNNER_TEMP/build-receipt.json"
+          node tools/assertion-memory-visual/build-archive.mjs tools/assertion-memory-visual "$RUNNER_TEMP/visual/visual.tar" > "$RUNNER_TEMP/build-receipt.json"
           python3 - "$RUNNER_TEMP" <<'PY'
           import json,os,pathlib,sys
-          temp=pathlib.Path(sys.argv[1]);receipt=json.loads((temp/'build-receipt.json').read_bytes())
-          receipt['source_commit']=os.environ['GITHUB_SHA']
-          (temp/'visual/receipt.json').write_text(json.dumps(receipt))
+          root=pathlib.Path(sys.argv[1]); input=json.loads((root/'build-receipt.json').read_bytes())
+          receipt=dict(source_commit=os.environ['GITHUB_SHA'],archive_sha256=input['archive_sha256'],
+                       archive_bytes=input['bytes'],release_digest=input['release'])
+          (root/'visual/receipt.json').write_text(json.dumps(receipt))
           PY
       - if: github.event_name == 'release'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -57,90 +56,68 @@ jobs:
           path: "${{ runner.temp }}/visual/*"
           if-no-files-found: error
           retention-days: 90
-  test:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && vars.ASSERTION_MEMORY_VISUAL_READY == 'true'
-    environment: assertion-memory-visual-test
+  deploy:
+    name: Deploy visual ${{ inputs.action == 'test' && 'TEST' || 'PROD' }}
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && (inputs.action == 'test' || inputs.action == 'prod')
+    environment: assertion-memory-visual-${{ inputs.action }}
     runs-on: ubuntu-latest
-    timeout-minutes: 8
     concurrency:
-      group: assertion-memory-visual-test
+      group: assertion-memory-visual-${{ inputs.action }}
       cancel-in-progress: false
     permissions:
       actions: read
       contents: read
-    outputs:
-      revision: ${{ steps.artifact.outputs.revision }}
-      artifact_id: ${{ steps.artifact.outputs.artifact_id }}
-      sha256: ${{ steps.artifact.outputs.sha256 }}
-      release: ${{ steps.artifact.outputs.release }}
+    env:
+      VISUAL_ENV: ${{ inputs.action }}
+      VISUAL_RELEASE_ID: ${{ inputs.release_id }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - env:
+          ACTOR_ID: ${{ github.actor_id }}
+          AUTHORIZED_ID: ${{ vars.VISUAL_DEPLOY_ACTOR_ID }}
+        run: |
+          [[ "$AUTHORIZED_ID" =~ ^[1-9][0-9]*$ && "$ACTOR_ID" == "$AUTHORIZED_ID" ]]
+          echo "VISUAL_DOWNLOAD=$RUNNER_TEMP/visual" >> "$GITHUB_ENV"
       - id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          VISUAL_RELEASE_ID: ${{ inputs.release_id }}
-          VISUAL_DOWNLOAD: ${{ runner.temp }}/visual
-        run: python3 -B tools/assertion-memory-visual/lifecycle.py test
+          VISUAL_TEST_RUN_ID: ${{ inputs.test_run_id }}
+        run: python3 -B tools/assertion-memory-visual/lifecycle.py "$VISUAL_ENV"
       - env:
-          VISUAL_DOWNLOAD: ${{ runner.temp }}/visual
           VISUAL_SHA: ${{ steps.artifact.outputs.sha256 }}
           VISUAL_DIGEST: ${{ steps.artifact.outputs.release }}
           VISUAL_DEPLOY_ENABLED: ${{ vars.VISUAL_DEPLOY_ENABLED }}
           VISUAL_HOST: ${{ vars.VISUAL_HOST }}
           VISUAL_PORT: ${{ vars.VISUAL_PORT }}
           VISUAL_SSH_KEY: ${{ secrets.VISUAL_SSH_KEY }}
+          VISUAL_SIGNING_KEY: ${{ secrets.VISUAL_SIGNING_KEY }}
           VISUAL_HOST_PIN: ${{ secrets.VISUAL_HOST_PIN }}
-        run: tools/assertion-memory-visual/send.sh test
+        run: tools/assertion-memory-visual/send.sh "$VISUAL_ENV"
       - env:
-          VISUAL_DOWNLOAD: ${{ runner.temp }}/visual
-          VISUAL_ENV: test
           VISUAL_DIGEST: ${{ steps.artifact.outputs.release }}
           VISUAL_GATEWAY_HOST: ${{ vars.VISUAL_GATEWAY_HOST }}
           VISUAL_GATEWAY_TOKEN: ${{ secrets.VISUAL_GATEWAY_TOKEN }}
         run: python3 -B tools/assertion-memory-visual/smoke.py
-  prod:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && vars.ASSERTION_MEMORY_VISUAL_READY == 'true'
-    needs: test
-    environment: assertion-memory-visual-prod
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    concurrency:
-      group: assertion-memory-visual-prod
-      cancel-in-progress: false
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - id: artifact
+      - if: inputs.action == 'test'
         env:
-          GH_TOKEN: ${{ github.token }}
-          VISUAL_RELEASE_ID: ${{ inputs.release_id }}
-          VISUAL_DOWNLOAD: ${{ runner.temp }}/visual
-          VISUAL_PROD_APPROVER_ID: ${{ vars.VISUAL_PROD_APPROVER_ID }}
-          VISUAL_TEST_REVISION: ${{ needs.test.outputs.revision }}
-          VISUAL_TEST_ARTIFACT_ID: ${{ needs.test.outputs.artifact_id }}
-          VISUAL_TEST_SHA256: ${{ needs.test.outputs.sha256 }}
-          VISUAL_TEST_RELEASE: ${{ needs.test.outputs.release }}
-        run: python3 -B tools/assertion-memory-visual/lifecycle.py prod
-      - env:
-          VISUAL_DOWNLOAD: ${{ runner.temp }}/visual
+          VISUAL_REVISION: ${{ steps.artifact.outputs.revision }}
+          VISUAL_ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
           VISUAL_SHA: ${{ steps.artifact.outputs.sha256 }}
           VISUAL_DIGEST: ${{ steps.artifact.outputs.release }}
-          VISUAL_DEPLOY_ENABLED: ${{ vars.VISUAL_DEPLOY_ENABLED }}
-          VISUAL_HOST: ${{ vars.VISUAL_HOST }}
-          VISUAL_PORT: ${{ vars.VISUAL_PORT }}
-          VISUAL_SSH_KEY: ${{ secrets.VISUAL_SSH_KEY }}
-          VISUAL_HOST_PIN: ${{ secrets.VISUAL_HOST_PIN }}
-        run: tools/assertion-memory-visual/send.sh prod
-      - env:
-          VISUAL_DOWNLOAD: ${{ runner.temp }}/visual
-          VISUAL_ENV: prod
-          VISUAL_DIGEST: ${{ steps.artifact.outputs.release }}
-          VISUAL_GATEWAY_HOST: ${{ vars.VISUAL_GATEWAY_HOST }}
-          VISUAL_GATEWAY_TOKEN: ${{ secrets.VISUAL_GATEWAY_TOKEN }}
-        run: python3 -B tools/assertion-memory-visual/smoke.py
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib
+          d=os.environ
+          receipt=dict(revision=d['VISUAL_REVISION'],artifact_id=d['VISUAL_ARTIFACT_ID'],sha256=d['VISUAL_SHA'],
+                       release=d['VISUAL_DIGEST'],test_run_id=d['GITHUB_RUN_ID'],release_id=d['VISUAL_RELEASE_ID'])
+          (pathlib.Path(d['RUNNER_TEMP'])/'test-proof.json').write_text(json.dumps(receipt))
+          PY
+      - if: inputs.action == 'test'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: visual-test-proof-${{ github.run_id }}
+          path: "${{ runner.temp }}/test-proof.json"
+          if-no-files-found: error
+          retention-days: 90

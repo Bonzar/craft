@@ -1,67 +1,52 @@
-# Independent assertion-memory visual releases
+# Assertion Memory Visual
 
-This candidate builds the Graph Viewer from **the selected public main commit**. It does not
-copy any private hosted export. The exact currently deployed native bundle is a newer separately
-built renderer and cannot be reproduced from this main branch. The release pipeline verifies
-the checked-in viewer, not native visual parity, a physical phone, or database behavior.
+The source fixture is the four pinned compiled assets from the existing private QA v2
+Site; it is not the original editable frontend package. Packaging rewrites only the
+HTML asset and Worker paths to be version-relative, matching the earlier approved seed.
+No personal graph records, tokens, or live environment identity are part of the archive.
+The UI and workflow contain no deployment configuration or data. It is the backend and Sites, not the UI binary, that enforce graph privacy.
 
-## Release process
-1. Publish an immutable GitHub release tagged `assertion-memory-visual-vX.Y.Z`, selecting a protected
-   main commit that contains this workflow and the relative Vite build flag. Its original run
-   publishes one artifact from that commit. Verify the artifact ID, source SHA, TAR digest and
-   manifest digest as audit evidence. Reruns and duplicate original artifacts fail closed.
-2. Dispatch the visual workflow on main using that release ID to start TEST. It verifies the
-   original successful release workflow, GitHub artifact digest and TAR receipt, transfers
-   exactly that TAR to a scope-specific restricted VM receiver and checks the gateway returns
-   all four approved bytes. This is not an owner-visible rendered/browser test.
-3. Only after TEST succeeds, approve the protected PROD job for that same run. It independently
-   resolves that original artifact, requires matching TEST outputs and the required workflow
-   review, then sends the same TAR to a different receiver account and verifies the PROD visual
-   gateway. No database migration, restart or data is part of this release. A later release
-   does not mutate an existing release directory; previous versions remain for rollback.
-   A network smoke failure after the atomic switch stops the workflow and requires operator
-   reconciliation or restoration of an independently approved previous release; the candidate
-   does not claim network-aware automatic rollback.
+`node tools/assertion-memory-visual/build-archive.mjs tools/assertion-memory-visual NEW_OUTPUT.tar` builds the same deployable QA archive
+reproducibly. The original QA import produces archive SHA256
+`0834ce7351ca874a23081dd0742b20f2a56f331454d2ef6f61f4073a7296d23d` and visual release
+manifest SHA256 `82b9cf02fcd309ddda61e6f7af8ee5197ab3877e625066bbf846aec5532fc4e4`.
+Later source edits require updating the manifest and create a different release.
 
-## Provisioning intentionally off
-Do not set repository `ASSERTION_MEMORY_VISUAL_READY=true` until the visual-only environments,
-trusted reviewer and receivers are verified and deployment separately approved. Use distinct
-`assertion-memory-visual-test` and `assertion-memory-visual-prod` environments and never reuse the base
-deploy identities. Each grants only the distinct forced-command `assertion-visual-<mode>-deploy`
-key with no PTY/forwarding, pre-pinned host key and corresponding visual asset smoke token.
-Set the configured required visual production reviewer and do not allow bypass. Missing provisioning,
-missing receipt, wrong environment, untrusted origin, changed artifact and absent approval all fail.
-Run the root-owned `receive.py <mode>` as that environment's writer; root must independently set
-the exact approved TAR SHA in its own non-group-writable config approval file. The same workflow/
-SSH key must not administer the approval file. The simple independent gate means the candidate is not
-yet literal three clicks without provisioning an independent approval/attestation mechanism.
+After one-time provisioning:
+1. Publish an immutable GitHub tag `assertion-memory-visual-vX.Y.Z` on a reviewed commit
+   in the protected main of Bonzar/craft. The workflow packages once.
+2. Run **test** with the release ID. It downloads the original artifact, verifies
+   metadata/bytes, activates TEST through the visual-only receiver, verifies graph-independent
+   asset smoke and emits immutable proof (release ID, exact source/artifact/hash, TEST run ID).
+3. Run **prod** with that release ID and its successful TEST run ID. The resolver compares
+   artifact identity and bytes to TEST proof before the workflow receives deployment/signing
+   credentials. It does not build again. Changes require a new release. Retain build and TEST
+   receipt artifacts for the intended promotion/rollback window, currently 90 days.
 
-Run `asset-origin.py <mode> <port>` behind the existing authorized TLS ingress, as a separate
-read-only account with only that environment's release tree and one systemd credential
-`asset-token`. Use explicit loopback ports and fixed TEST/PROD POST routes only. No new public
-listener. Verify end-to-end TLS identity and exact body/MIME (no redirects, no gateway cache).
-Use native owner-only Sites with the generic `visualShell(mode, graph)` adapter and the existing
-read-only graph handler. Each Site has a distinct verified host, its own dedicated asset key, a
-verified gateway hostname and separate graph credentials. Native project IDs, manifests, native
-Sites versions and runtime config do not belong in this repository. Anti-spoofing of identity headers
-depends on the native owner-only boundary; none are forwarded. The browser sees only its own origin
-with private/no-store responses and a version digest which pins HTML/CSS/JS and lazy Web Worker.
-Protect source and its CI equivalently to graph read access: shipped same-origin JS can use the
-owner's read-only graph session. Never upload an arbitrary JS archive from workflow inputs.
+Before any live use, provision and verify both GitHub environments with main-only deployment
+restrictions and no other main deploy workflows; gate production to the authorized caller/owner.
+Enable immutable releases on this repository, require reviewed protected main, and pin production
+provenance to the expected repository. Branch and execution controls must be verified against the actual account
+before declaring the deployment authorized.
 
-Settings and secrets are documentation-only here; dashboard, VM, Sites, Gateway and PROD behavior
-were not changed by this code candidate. Main has a different renderer from the private Site;
-do not switch TEST or PROD until previewed and accepted. Local tests cover source-token boundaries,
-release provenance validation, temporary filesystem and token-only HTTP, not live services.
+Use **separate** visual TEST and PROD accounts, isolated forced login/shell ignoring user startup
+files, restricted SSH keys, root-owned receiver and `/etc/assertion-memory-visual/<scope>/allowed-signers`,
+each with a separate deployment signing key `visual-<scope>`. Never reuse base keys, enable
+forwarding or interactive login. The VM verifies the signed scope and archive SHA using its
+independently root-pinned public signing key, then verifies archive/member hashes. GitHub environment
+secrets are scoped SSH key, host pin, signing key, and corresponding visual gateway token. Never
+write them to Git, artifacts, or logs. The signed archive is retained immutable. This candidate
+needs live verification of archive retention/rollback, provisioned trust and network; smoke failure
+after activation is surfaced, not automatically rolled back.
 
-## Verified renderer gap
-The main-source public renderer limits ordinary assertion stars to screen-space point
-sprites (12–20 CSS pixels); it does not contain the newer native solid-world node shader.
-Consequently the mobile world-radius cap from the private release has no public counterpart
-to patch, and matching current bounds is not evidence that the newer controls or renderer
-were reproduced. The public-source readiness banner now independently suppresses informational
-codes and de-duplicates warnings, while preserving actionable warnings and the existing
-snapshot/fixture indicators. The current native export additionally exposes session filters,
-session-run controls, a topic toggle and a dedicated source-limitation indicator that this
-historical GitHub viewer does not render. Treat its versioned source build as an infra test
-only until the maintained newer source is located and independently tested.
+A one-time owner-private Sites shell deployment per environment preserves the existing graph relay and
+owner gate. Only exact TLS ingress routes lead to the loopback read-only asset listener; the shell
+passes a dedicated scope token to that route. Ongoing builds switch VM visual pointers, not Sites,
+so no private Sites deployment credential is required in GitHub. Check exact original QA rendering
+and authenticated graph integration on TEST before authorizing PROD setup.
+
+Not provisioned: protected CI environment policy,
+SSH/verification identities, restricted TEST asset receiver/origin and Gateway route, Sites TEST
+shell and credential, owner graph acceptance, PROD counterpart, and actual GitHub TEST/PROD runs.
+
+Bundled Three.js r187 is distributed under MIT; see THREE-LICENSE.txt.

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import subprocess
 import tarfile
 import tempfile
 
@@ -83,6 +84,31 @@ def install(root, approved, archive_bytes):
     return release
 
 
+def signed_archive(signers, mode, digest_string, stream):
+    stat = signers.stat()
+    if signers.is_symlink() or not signers.is_file() or stat.st_uid != 0 or stat.st_mode & 0o022:
+        raise ValueError('untrusted signing policy')
+    return _verify_signed_archive(signers, mode, digest_string, stream)
+
+
+def _verify_signed_archive(signers, mode, digest_string, stream):
+    signature_length = stream.readline(7)
+    if not re.fullmatch(rb'[1-9][0-9]{0,3}\n', signature_length):
+        raise ValueError('invalid signature framing')
+    signature = stream.read(int(signature_length))
+    if len(signature) != int(signature_length):
+        raise ValueError('truncated signature')
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'archive.sig'
+        path.write_bytes(signature)
+        message = f'assertion-memory-visual-v1 {mode} {digest_string}\n'.encode('ascii')
+        result = subprocess.run(['/usr/bin/ssh-keygen', '-Y', 'verify', '-f', str(signers),
+                                 '-I', f'visual-{mode}', '-n', 'assertion-memory-visual', '-s', str(path)],
+                                input=message, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    if result.returncode:
+        raise ValueError('archive signature rejected')
+    return stream.read(ARCHIVE_LIMIT + 1)
+
 def main():
     import pwd
     args = sys.argv[1:]
@@ -92,14 +118,12 @@ def main():
     if pwd.getpwuid(os.getuid()).pw_name != f'assertion-visual-{mode}-deploy':
         raise ValueError('wrong receiver account')
     match = re.fullmatch(r'deploy-visual (test|prod) ([0-9a-f]{64})', os.environ.get('SSH_ORIGINAL_COMMAND', ''))
-    approval = CONFIG / mode / 'approved-archive-sha256'
-    st = approval.stat()
-    if (not match or match[1] != mode or approval.is_symlink() or st.st_uid != 0 or st.st_mode & 0o022):
-        raise ValueError('missing independent authorization')
-    approved = approval.read_text(encoding='ascii').strip()
-    if not hmac.compare_digest(match[2], approved):
-        raise ValueError('unapproved release')
-    result = install(ROOT / mode, approved, sys.stdin.buffer.read(ARCHIVE_LIMIT + 1))
+    signers = CONFIG / mode / 'allowed-signers'
+    if not match or match[1] != mode:
+        raise ValueError('command_denied')
+    approved = match[2]
+    payload = signed_archive(signers, mode, approved, sys.stdin.buffer)
+    result = install(ROOT / mode, approved, payload)
     print(json.dumps({'environment': mode, 'archive_sha256': approved, 'release': result}))
 
 if __name__ == '__main__':
