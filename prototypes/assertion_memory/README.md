@@ -242,9 +242,9 @@ the exact raw IDs and byte-matched Unicode spans selected by opaque receipts.
 The original worker retains verification and guarded publication.
 
 This is **not registered** in the default worker, config file or MCP endpoints.
-This fixture can navigate from an offered earlier source to direct verified
-thoughts based only on earlier visible raw events in that dialogue. Its
-`semantic_search` calls the same already-injected canonical ThoughtRetrieval
+The model can read earlier visible dialogue, search verified source thoughts,
+and open exact raw proof from those thoughts. Reverse raw-to-thought lookup is
+not a model tool. `semantic_search` calls the same already-injected canonical ThoughtRetrieval
 to rank a bounded corpus of those eligible sources; no second ranker, answer
 generation, graph-wide completeness or graph-viewer cross-process sharing is
 implied. Search and derived thoughts are navigational hints, not proof tokens. Each

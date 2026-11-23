@@ -21,7 +21,7 @@ from pathlib import Path
 home=Path(os.environ['CODEX_HOME'])
 config=tomllib.loads((home/'config.toml').read_text())
 mcp=config['mcp_servers']['source_job']
-assert mcp['enabled_tools']==['older_dialogue','thoughts_from_source','semantic_search','thought_sources'] and mcp['required']
+assert mcp['enabled_tools']==['older_dialogue','semantic_search','thought_sources'] and mcp['required']
 assert not (home/'auth.json').exists()
 kind=sys.argv[1]
 if len(sys.argv)>2:
@@ -72,14 +72,10 @@ for row in sys.stdin:
   assert not any('DO NOT DISCLOSE' in r['text'] for r in [*a['messages'],*b['messages']])
   ref=next((r['ref'] for r in b['messages'] if 'Оля Н.' in r['text']),None)
   if kind=='navigation':
-   assert 'error' in rpc('thoughts_from_source',{'ref':'forged'})
-   assert 'error' in rpc('thoughts_from_source',{'ref':primary['primary_ref']})
-   direct=rpc('thoughts_from_source',{'ref':ref})['result']['structuredContent']
-   match,=direct['thoughts']
-   assert match['text']=='Билеты на хоррор.' and match['version']==1 and match['ref']
+   assert 'error' in rpc('thoughts_from_source',{'ref':ref})
    search=rpc('semantic_search',{'query':'билеты'})['result']['structuredContent']
    found,=search['thoughts']
-   assert found['text']==match['text'] and found['version']==match['version']
+   assert found['text']=='Билеты на хоррор.' and found['version']==1 and found['ref']
    assert 'error' in rpc('thought_sources',{'ref':ref})
    assert 'error' in rpc('thought_sources',{'ref':'forged'})
    sources=rpc('thought_sources',{'ref':found['ref']})['result']['structuredContent']
@@ -215,6 +211,7 @@ class SourceTurnTest(unittest.TestCase):
             self.assertTrue(result['thread']['ephemeral'])
             self.assertEqual(result['thread']['modelProvider'],'abi_offline')
             self.assertEqual(result['sandbox'],{'type':'readOnly','networkAccess':False})
+            self.assertEqual(set(mcp.tools),{'older_dialogue','semantic_search','thought_sources'})
             ContinuingSourceExtractor.check_registry(wire,result['thread']['id'],mcp.tools)
         finally:wire.close()
 

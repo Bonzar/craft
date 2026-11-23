@@ -22,12 +22,11 @@ class ClaimNavigation:
         self.charged = 0
         self.thought_refs = {}
 
-    def _authorized_source(self, db, row, origin_id=None):
+    def _authorized_source(self, db, row):
         thought = Thought(**decode_payload(row['payload']))
         event_id = thought.origin.get('event_id')
         if (thought.origin.get('kind') != 'source_interpretation'
                 or event_id == self.reader.primary.id or not isinstance(event_id, str)
-                or origin_id is not None and event_id != origin_id
                 or thought.metadata.get('verification') != 'accepted'
                 or thought.metadata.get('selection_context')
                 or len(thought.text) > 4_000 or not 1 <= len(thought.bases) <= 12
@@ -51,20 +50,16 @@ class ClaimNavigation:
                 return None
         return thought
 
-    def _rows(self, db, event_id=None):
-        # Select only current published families; the SQL basis filter works
-        # for compressed and uncompressed payloads. Validate every raw basis
-        # before exposing a thought or giving text to the host ranker.
-        predicate = (" AND EXISTS(SELECT 1 FROM json_each(v.payload,'$.bases') "
-                     "WHERE json_extract(value,'$.event_id')=?)") if event_id is not None else ''
+    def _rows(self, db):
+        # Validate every raw basis before exposing text to the host ranker.
         rows = db.execute('SELECT v.payload,v.content_hash FROM memory_thoughts h '
             'JOIN memory_thought_versions v ON v.thought_id=h.id AND v.version=h.current_version '
-            'WHERE v.rowid<=?'+predicate+' ORDER BY v.rowid DESC LIMIT ?',
-            (self.reader.thought_watermark, *((event_id,) if event_id is not None else ()), self.MAX_CANDIDATES+1)).fetchall()
+            'WHERE v.rowid<=? ORDER BY v.rowid DESC LIMIT ?',
+            (self.reader.thought_watermark,self.MAX_CANDIDATES+1)).fetchall()
         candidates = []
         limited = len(rows) > self.MAX_CANDIDATES
         for row in rows[:self.MAX_CANDIDATES]:
-            thought = self._authorized_source(db, row, event_id)
+            thought = self._authorized_source(db, row)
             if thought is not None:
                 candidates.append(thought)
         return candidates, limited
@@ -112,38 +107,25 @@ class ClaimNavigation:
             raise SourceReadDenied('Navigation attempt budget exhausted')
         if name == 'thought_sources' and set(args)=={'ref'} and isinstance(args['ref'],str):
             return self._sources(args['ref'])
+        if name != 'semantic_search' or not set(args) <= {'query','limit'} or self.retrieval is None:
+            raise SourceReadDenied('Invalid navigation request')
+        query, maximum = args.get('query'), args.get('limit',5)
+        if not isinstance(query,str) or not 1 <= len(query.strip()) <= 1000 or type(maximum) is not int or not 1<=maximum<=5:
+            raise SourceReadDenied('Invalid semantic search request')
         with self.reader.snapshot() as db:
-            if name == 'thoughts_from_source' and set(args) == {'ref'} and isinstance(args['ref'], str):
-                ref = args['ref']
-                raw = self.reader.evidence_in(db,[ref])[0][0]
-                if raw.id == self.reader.primary.id:
-                    raise SourceReadDenied('Current source is not earlier dialogue')
-                candidates, limited = self._rows(db, raw.id)
-                maximum = 5
-            elif name == 'semantic_search' and set(args) <= {'query','limit'} and self.retrieval is not None:
-                query, maximum = args.get('query'), args.get('limit',5)
-                if not isinstance(query,str) or not 1 <= len(query.strip()) <= 1000 or type(maximum) is not int or not 1<=maximum<=5:
-                    raise SourceReadDenied('Invalid semantic search request')
-                candidates, limited = self._rows(db)
-            else:
-                raise SourceReadDenied('Invalid navigation request')
-        if name == 'semantic_search':
-            entries = {}
-            for row in candidates:
-                charge = len(row.text.encode())
-                if self.charged + charge > self.MAX_BYTES:
-                    limited = True
-                    break
-                self.charged += charge
-                entries[row.id] = {'text':row.text,'questions':[]}
-            ranked, _ = self.retrieval.rank_entries(query, entries, maximum) if entries else ([],{})
-            lookup={row.id:row for row in candidates}
-            candidates=[lookup[item.id] for item in ranked]
-        if name == 'thought_sources' and set(args)=={'ref'} and isinstance(args['ref'],str):
-            return self._sources(args['ref'])
+            candidates, limited = self._rows(db)
+        entries = {}
+        for row in candidates:
+            charge = len(row.text.encode())
+            if self.charged + charge > self.MAX_BYTES:
+                limited = True
+                break
+            self.charged += charge
+            entries[row.id] = {'text':row.text,'questions':[]}
+        ranked, _ = self.retrieval.rank_entries(query, entries, maximum) if entries else ([],{})
+        lookup={row.id:row for row in candidates}
+        candidates=[lookup[item.id] for item in ranked]
         with self.reader.snapshot() as db:
-            if name == 'thoughts_from_source':
-                self.reader.evidence_in(db,[ref])
             for thought in candidates[:maximum]:
                 if self._current(db,thought.id,thought.version) != thought:
                     raise SourceReadDenied('Authorized thought changed during navigation')
