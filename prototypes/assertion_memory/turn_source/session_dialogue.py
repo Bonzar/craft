@@ -22,6 +22,7 @@ class SessionPage:
 class SessionDialogue:
     def __init__(self, reader, grant):
         self.reader, self.grant = reader, grant
+        reader.owner_scope=grant
         self.cursors = {}
 
     def owns_cursor(self, token):
@@ -29,8 +30,6 @@ class SessionDialogue:
 
     def _charge(self):
         self.reader.calls += 1
-        if self.reader.calls > self.reader.MAX_PAGES:
-            raise SourceReadDenied('Attempt history call budget exhausted')
 
     @staticmethod
     def _date(value):
@@ -57,7 +56,7 @@ class SessionDialogue:
             if start is not None and end is not None and start>=end:
                 raise SourceReadDenied('Invalid date range')
             state=SessionPage(session,start,end,local=session==self.reader.request.canonical_session_id)
-        if not state.local and (self.grant is None or not self.grant.matches(self.reader)):
+        if not state.local and (not self.reader.grant_matches(self.grant)):
             raise SourceReadDenied('Other dialogue is not authorized')
 
         session,args=source_predicate((state.session,),'r')
@@ -75,8 +74,6 @@ class SessionDialogue:
         with self.reader.snapshot() as db:
             if not state.local and state.boundary is None and not self._eligible_dialogue(db,view,clauses,parameters,state.session):
                 raise SourceReadDenied('Other dialogue is not authorized')
-            if not self.reader.can_read_page(include_current=True):
-                return {'messages':[],'next_cursor':None,'history_status':'attempt_budget_exhausted'}
             self.reader.pages+=1
             if state.start is not None: clauses.append('r.recorded_at>=?'); parameters.append(state.start)
             if state.end is not None: clauses.append('r.recorded_at<?'); parameters.append(state.end)
@@ -106,8 +103,8 @@ class SessionDialogue:
                 excerpt=event.prompt[start:end]
                 item={'text':excerpt,'role':event.actor,'recorded_at':event.recorded_at,
                       'complete_message':(start,end)==(0,len(event.prompt)),'evidence_eligible':state.local}
-                if state.local:
-                    item['ref']=self.reader.offer(event.id,start,end,excerpt,(row['ordinal'],row['position']))
+                item['ref']=self.reader.offer(event.id,start,end,excerpt,(row['ordinal'],row['position']),
+                    context_session=None if state.local else state.session)
                 if not state.local:
                     recheck.append((event.id,row['ordinal'],row['position'],start,end,
                                     sha256(excerpt.encode()).digest()))
@@ -122,7 +119,7 @@ class SessionDialogue:
             if state.local:
                 self.reader.evidence_in(db,[row['ref'] for row in messages])
             else:
-                if not self.grant.matches(self.reader):
+                if not self.reader.grant_matches(self.grant):
                     raise SourceReadDenied('Other dialogue authorization changed')
                 for identifier,ordinal,position,start,end,digest in recheck:
                     row=self.reader.row(db,identifier); event=_event(row)
@@ -134,16 +131,16 @@ class SessionDialogue:
                             or sha256(event.prompt[start:end].encode()).digest()!=digest):
                         raise SourceReadDenied('Other dialogue changed during navigation')
         more=split or examined<len(rows)
-        status=('more' if self.reader.can_read_page() else 'attempt_budget_exhausted') if more else 'history_end'
+        status='more' if more else 'history_end'
         token=secrets.token_urlsafe(18) if status=='more' else None
         if token is not None:
             self.cursors[token]=replace(state,boundary=boundary)
         return {'messages':messages,'next_cursor':token,'history_status':status}
 
     def _eligible_dialogue(self, db, view, clauses, parameters, session):
-        # Bounded proof of at least one visible authorized raw event. A hidden,
+        # Prove at least one visible authorized raw event, without a scan cutoff. A hidden,
         # unavailable, or unproved session receives the same generic denial.
         positioned=view.replace(' WHERE ',' LEFT JOIN memory_event_positions p ON p.event_id=r.id WHERE ')
         rows=db.execute('SELECT r.*,r.rowid AS ordinal,p.position,j.status'+positioned+' AND '.join(clauses)
-            +' ORDER BY r.recorded_at,r.rowid LIMIT ?',(*parameters,self.reader.SCAN)).fetchall()
+            +' ORDER BY r.recorded_at,r.rowid',parameters)
         return any(self.reader.visible(_event(row)) and canonical_session_id(_event(row))==session and self.reader.frozen_raw(row) for row in rows)

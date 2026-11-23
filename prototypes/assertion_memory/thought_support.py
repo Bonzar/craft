@@ -31,12 +31,13 @@ class PreparedSupport:
         self.fragments=[];self.wire=[]
         for index,(record,basis) in enumerate(zip(records,bases)):
             text=record.get('text')
-            eligible=(isinstance(text,str) and record.get('role') not in ('question','whole_refresh_scope')
+            eligible=(isinstance(text,str) and record.get('role') not in ('question','whole_refresh_scope','external_dialogue_context')
                 and isinstance(basis,dict) and ('event_id' in basis or ('thought_id' in basis and 'version' in basis)))
             if not eligible:
                 self.wire.append(dict(record));continue
             fragments=[]
-            for start,end in _spans(text):
+            spans=[(0,len(text))] if record.get('whole_reference') else _spans(text)
+            for start,end in spans:
                 fragment=Fragment(len(self.fragments),index,start,end,text[start:end])
                 if not fragment.text.strip() and fragments:
                     previous=self.fragments.pop();fragments.pop()
@@ -49,6 +50,8 @@ class PreparedSupport:
 
     def _basis(self,fragment):
         basis=dict(self.bases[fragment.record_index])
+        if self.records[fragment.record_index].get('whole_reference'):
+            return basis
         offset=basis.get('span',{}).get('start',0)
         basis.pop('content_hash',None)  # The publisher hashes this newly selected exact span.
         return dict(basis,span={'start':offset+fragment.start,'end':offset+fragment.end},meaning=fragment.text)

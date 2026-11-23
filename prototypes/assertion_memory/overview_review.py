@@ -45,7 +45,7 @@ def _revision_feedback(verdict,ledger):
         rows=verdict.get(channel,[])
         selected=[]
         if isinstance(rows,list):
-            for row in rows[:16]:
+            for row in rows:
                 if (not isinstance(row,dict) or not isinstance(row.get(keys[0]),str)
                         or type(row.get(keys[1])) is not second_type):continue
                 identity=tuple(row[key] for key in keys)

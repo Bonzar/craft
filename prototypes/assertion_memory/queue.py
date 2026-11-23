@@ -119,6 +119,8 @@ class CaptureQueue:
             """)
             from .source_reprocessing import schema
             schema(connection)
+            from .source_admission import install
+            install(connection)
 
     def _scheduler_schema(self, connection) -> None:
         connection.execute("CREATE TABLE IF NOT EXISTS memory_queue_schedule "
@@ -717,11 +719,11 @@ class CaptureQueue:
             finish_relations(connection,claim,now,waiting_model=bool(connection.execute('SELECT waiting_model FROM memory_capture_jobs WHERE id=?',(claim.job.id,)).fetchone()[0]))
             return self.get(claim.job.id)
 
-    def _fail(self, claim: _Claim, error: Exception) -> Job:
+    def _fail(self, claim: _Claim, error: Exception, *, retry_without_limit=False) -> Job:
         with self.store.transaction(write=True) as connection:
             self._assert_owned(connection, claim)
             from .model import ModelProviderUnavailable
-            exhausted = isinstance(error, ModelProviderUnavailable) or claim.job.attempts >= self._max_attempts
+            exhausted = isinstance(error, ModelProviderUnavailable) or (not retry_without_limit and claim.job.attempts >= self._max_attempts)
             connection.execute("""
                 UPDATE memory_capture_jobs
                 SET status = ?, error = ?, lease_token = NULL, lease_until = NULL,

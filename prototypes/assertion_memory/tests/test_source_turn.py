@@ -21,7 +21,7 @@ from pathlib import Path
 home=Path(os.environ['CODEX_HOME'])
 config=tomllib.loads((home/'config.toml').read_text())
 mcp=config['mcp_servers']['source_job']
-assert mcp['enabled_tools']==['older_dialogue','semantic_search','thought_sources'] and mcp['required']
+assert mcp['enabled_tools']==['select_references','older_dialogue','semantic_search','thought_sources'] and mcp['required']
 assert not (home/'auth.json').exists()
 kind=sys.argv[1]
 if len(sys.argv)>2:
@@ -54,6 +54,7 @@ for row in sys.stdin:
   assert p['threadId']=='fiction-thread' and p['outputSchema']['required']==['status','text','supports']
   send({'id':i,'result':{'turn':{'id':'fiction-turn'}}})
   primary=json.loads(p['input'][0]['text'].split('Primary packet: ',1)[1])
+  if kind=='long':assert len(primary['primary_text'])>24000 and primary['primary_text'].endswith('TAIL🧩')
   relay=subprocess.Popen([mcp['command'],*mcp['args']],text=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE)
   def rpc(name,args):
    relay.stdin.write(json.dumps({'id':1,'jsonrpc':'2.0','method':'tools/call','params':{'name':name,'arguments':args}})+'\n')
@@ -62,13 +63,9 @@ for row in sys.stdin:
   def query(cursor=None):
    return rpc('older_dialogue',{} if cursor is None else {'cursor':cursor})['result']['structuredContent']
   a=query()
-  if kind=='budget':
-   assert a['history_status']=='attempt_budget_exhausted' and a['next_cursor'] is None and len(a['messages'])==8
-   b={'messages':[]}
-  else:
-   assert a['history_status']=='more'
-   b=query(a['next_cursor'])
-   assert b['history_status']=='history_end' and b['next_cursor'] is None
+  assert a['history_status']=='more'
+  b=query(a['next_cursor'])
+  assert b['history_status']=='history_end' and b['next_cursor'] is None
   assert not any('DO NOT DISCLOSE' in r['text'] for r in [*a['messages'],*b['messages']])
   if kind in ('session-context','session-forged'):
    foreign=rpc('older_dialogue',{'session_id':'context-chat','start_date':'2024-06-02','end_date':'2024-06-03'})['result']['structuredContent']
@@ -78,7 +75,7 @@ for row in sys.stdin:
    assert 'error' in rpc('older_dialogue',{'cursor':token,'session_id':'foreign-scope'})
    last=rpc('older_dialogue',{'cursor':token})['result']['structuredContent']
    assert [m['text'] for m in last['messages']]==['Chronological item 9'],last
-   assert all('ref' not in m and m['evidence_eligible'] is False for m in foreign['messages']+last['messages'])
+   assert all('ref' in m and m['evidence_eligible'] is False for m in foreign['messages']+last['messages'])
    assert last['history_status']=='history_end' and not last['next_cursor']
    assert 'error' in rpc('older_dialogue',{'cursor':token})
    assert 'error' in rpc('older_dialogue',{'session_id':'foreign-scope'})
@@ -97,7 +94,7 @@ for row in sys.stdin:
    if kind=='cross-navigation':
     assert 'session_id="current"' in p['input'][0]['text']
     other,= [item for item in search['thoughts'] if 'чужой диалог' in item['text'].lower()]
-    assert 'ref' not in other and other['source_access']=='unavailable_outside_current_dialogue'
+    assert 'ref' in other and other['evidence_eligible'] is False
     assert 'error' in rpc('thought_sources',{'ref':other['text']})
     assert all('запрещён' not in item['text'] and 'будущее' not in item['text'] for item in search['thoughts'])
     current=rpc('semantic_search',{'query':'билеты','session_id':'current'})['result']['structuredContent']
@@ -123,7 +120,9 @@ for row in sys.stdin:
   if kind=='bad':proposal['supports'][1]='forged-ref'
   if kind=='session-context':proposal['supports'][1]=local['messages'][0]['ref']
   if kind=='session-forged':proposal['supports'][1]=foreign['messages'][0]['text']
-  if kind in ('unresolved','budget'):proposal={'status':'unresolved','text':None,'supports':[]}
+  if kind not in ('bad','session-forged'):
+   assert 'result' in rpc('select_references',{'refs':proposal['supports']})
+  if kind=='unresolved':proposal={'status':'unresolved','text':None,'supports':[]}
   relay.terminate(); relay.wait(2)
   send({'method':'item/completed','params':{'threadId':'fiction-thread','turnId':'fiction-turn',
     'item':{'id':'message','type':'agentMessage','phase':('unknown' if kind=='unknown-phase' else 'final_answer'),'text':json.dumps(proposal,ensure_ascii=False)}}})
@@ -138,7 +137,7 @@ class SourceTurnTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"OS-isolated launcher"):
             SourceTurnFactory(SourceTurnConfig((sys.executable,),enabled=True))
 
-    def attempt(self,kind,*,revoke=False,retrieval=None,confined=None):
+    def attempt(self,kind,*,revoke=False,retrieval=None,confined=None,prompt=None):
         with tempfile.TemporaryDirectory() as tmp,MemoryStore(Path(tmp)/'fixture.sqlite') as memory:
             code=Path(tmp)/'fixture.py'; code.write_text(FIXTURE)
             queue=CaptureQueue(memory);thoughts=ThoughtStore(memory)
@@ -160,7 +159,7 @@ class SourceTurnTest(unittest.TestCase):
                                          source='fixture',scope='scope',position=1)
             outside=queue.capture_event('foreign-scope','seed','Another scope raw event',
                                          source='fixture',scope='unauthorized',position=1)
-            source=queue.capture_event('dialogue','target','Теперь она больше не любит этот жанр.',
+            source=queue.capture_event('dialogue','target',prompt or 'Теперь она больше не любит этот жанр.',
                                        source='fixture',scope='scope',position=20)
             equal_later=queue.capture_event('other-dialogue','equal','Equal timestamp but inserted after primary.',
                                             source='fixture',scope='scope',position=3,recorded_at=source.recorded_at)
@@ -204,7 +203,7 @@ class SourceTurnTest(unittest.TestCase):
             worker=ThoughtWorker(queue,engine,lane='source',claim_bound_source_extractor_factory=factory)
             job=worker._source(worker._claim_source(event_id=source.id))
             saved=[row for row in thoughts.list_thoughts() if row.id not in fixtures]
-            if kind in ('normal','navigation','cross-navigation','session-context') and not revoke:
+            if kind in ('normal','long','navigation','cross-navigation','session-context') and not revoke:
                 self.assertEqual(job.status,'completed',job.error)
                 result,=saved
                 self.assertEqual(job.extracted_ids,[result.id])
@@ -243,7 +242,7 @@ class SourceTurnTest(unittest.TestCase):
         self.assertEqual((job.status,calls),('completed',['Verify thought']))
         job,calls=self.attempt('session-forged')
         self.assertEqual((job.extracted_ids,calls),([],[]))
-        self.assertIn('Unissued evidence reference',job.error)
+        self.assertIn('ProtectedContextError',job.error)
 
     def test_cross_dialogue_frozen_watermark_hides_late_backdated_event(self):
         from ..turn_source.reader import EarlierDialogue
@@ -316,9 +315,10 @@ class SourceTurnTest(unittest.TestCase):
         self.assertEqual(calls,['Verify thought'])
         self.assertEqual(job.extracted_ids,[])
 
-    def test_unresolved_finishes_without_writing_a_thought(self):
+    def test_unresolved_remains_pending_without_writing_a_thought(self):
         job,calls=self.attempt('unresolved')
-        self.assertEqual((job.status,job.extracted_ids,calls),('completed',[],[]),job.error)
+        self.assertNotEqual(job.status,'completed',job.error)
+        self.assertEqual((job.extracted_ids,calls),([],[]))
     @unittest.skipUnless(os.environ.get('ASSERTION_OFFLINE_CODEX_CLI'),
                          'Requires an explicitly selected installed Codex CLI, no model turn')
     def test_installed_cli_offline_registry_handshake(self):
@@ -341,7 +341,7 @@ class SourceTurnTest(unittest.TestCase):
             self.assertTrue(result['thread']['ephemeral'])
             self.assertEqual(result['thread']['modelProvider'],'abi_offline')
             self.assertEqual(result['sandbox'],{'type':'readOnly','networkAccess':False})
-            self.assertEqual(set(mcp.tools),{'older_dialogue','semantic_search','thought_sources'})
+            self.assertEqual(set(mcp.tools),{'select_references','older_dialogue','semantic_search','thought_sources'})
             ContinuingSourceExtractor.check_registry(wire,result['thread']['id'],mcp.tools)
         finally:wire.close()
 
@@ -391,13 +391,6 @@ class SourceTurnTest(unittest.TestCase):
         self.assertIn('synthetic launcher refused',job.error)
         self.assertEqual((job.extracted_ids,verified),([],[]))
 
-    def test_attempt_ceiling_is_not_history_end(self):
-        from ..turn_source.reader import EarlierDialogue
-        for cap,limit in [('MAX_PAGES',1),('MAX_REFS',9),('MAX_BYTES',48100)]:
-            with self.subTest(cap=cap),patch.object(EarlierDialogue,cap,limit):
-                job,calls=self.attempt('budget')
-                self.assertEqual((job.status,job.extracted_ids,calls),('completed',[],[]),job.error)
-
     def test_unknown_agent_message_phase_cannot_publish(self):
         job,calls=self.attempt('unknown-phase')
         self.assertEqual((job.extracted_ids,calls),([],[]))
@@ -408,6 +401,11 @@ class SourceTurnTest(unittest.TestCase):
             job,calls=self.attempt(kind)
             self.assertEqual((job.extracted_ids,calls),([],[]))
             self.assertRegex(job.error,'(inventory|unavailable)')
+
+    def test_long_primary_through_real_stdio_fake_process(self):
+        job,calls=self.attempt('long',prompt='Synthetic source. '*1700+'TAIL🧩')
+        self.assertEqual(job.status,'completed',job.error)
+        self.assertEqual(calls,['Verify thought'])
 
 
 if __name__=='__main__':unittest.main()

@@ -240,7 +240,8 @@ def _reviewed(engine, topic, records, sources, edges, boundary, phase):
                 'presentation': _presentation(caption, text, verdict, proof) if phase == 'final' else None}
         feedback = [reason, *issues]
         # Feedback is bounded independently of the rejected model's verbosity.
-        feedback = [item[:500] for item in feedback[:8]]
+        # Preserve reviewer constraints; the request budget below fails explicitly.
+        feedback = list(feedback)
     error = ModelError('thematic map independent review unresolved; required map remains pending')
     # Keep bounded independent verdicts and request/text hashes for operational
     # diagnosis. Do not attach source packets, raw messages or candidate prose.

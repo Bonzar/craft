@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from .model import ModelError,ProcessingCancelled,check_processing_cancelled,format_prompt
 from .usage_context import observe_attempt_usage
+from .diagnostic_privacy import restricted, redact, ProtectedContextError, diagnostic_hash
 from .thought_repair_stats import RepairAccounting,ensure_schema
 
 
@@ -51,6 +52,10 @@ class ThoughtTrace:
     def record(self,stage,inputs=(),candidates=(),selected=(),outputs=(),details=None):
         details=dict(details or {})
         data={'inputs':inputs,'candidates':candidates,'selected':selected,'outputs':outputs,'details':details}
+        if restricted():
+            inputs=candidates=selected=outputs=()
+            details=redact(details)
+            data={'inputs':[],'candidates':[],'selected':[],'outputs':[],'details':details}
         with self.store.transaction(write=True) as db:
             if stage=='publication':details['construction_call_id']=self.accounting.publication_origin(db,details)
             result=db.execute('INSERT INTO memory_thought_trace_events(run_id,stage,data,recorded_at) VALUES(?,?,?,?)',
@@ -60,13 +65,16 @@ class ThoughtTrace:
 
     def _payload(self,db,body):
         key=hashlib.sha256(body.encode()).hexdigest()
+        if restricted():
+            body=_json(dict(redact(body),original_sha256=key))
+            key=diagnostic_hash(key)
         db.execute('INSERT OR IGNORE INTO memory_thought_model_payloads VALUES(?,?,?)',
             (key,zlib.compress(body.encode()),len(body)))
         return key
 
     def call(self,model,request,bindings=(),stage=None):
         wire=format_prompt(request);call_id=str(uuid4());stage=stage or request.task
-        bound=_json(bindings)
+        bound=_json([] if restricted() else bindings)
         if not self.accounting.meta:self.bind_model(model)
         with self.store.transaction(write=True) as db:
             request_hash=self._payload(db,wire)
@@ -89,10 +97,14 @@ class ThoughtTrace:
             status='succeeded'
             return result
         except BaseException as failure:
-            error=type(failure).__name__+': '+str(failure)
+            error=(str(ProtectedContextError()) if restricted() else type(failure).__name__+': '+str(failure))
             if isinstance(failure,(KeyboardInterrupt,ProcessingCancelled)) or type(failure).__name__=='CancelledError':status='interrupted'
             raise
         finally:
+            if restricted():
+                usage={key:value for key,value in usage.items() if key in
+                    ('input_tokens','output_tokens','cached_input_tokens','reasoning_output_tokens')
+                    and type(value) in (int,float)}
             with self.store.transaction(write=True) as db:
                 db.execute('UPDATE memory_thought_model_calls SET response_hash=?,status=?,finished_at=?,'
                     'duration_ms=?,usage=?,error=?,actual_model=? WHERE id=?',

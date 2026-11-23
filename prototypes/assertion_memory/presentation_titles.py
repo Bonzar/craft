@@ -26,7 +26,9 @@ def model_projection(context):
  keys=('purpose','target_version_id','semantic_content_sha256','input_definition_sha256',
        'caption_policy','summary','summary_complete','summary_sha256')
  result={key:context[key] for key in keys if key in context}
- if 'summary' in result:result['summary']=result['summary'][:MAX_NAMING_SUMMARY_CHARACTERS]
+ if 'summary' in result:
+  result['summary_complete']=bool(result.get('summary_complete',True)) and len(result['summary'])<=MAX_NAMING_SUMMARY_CHARACTERS
+  result['summary']=result['summary'][:MAX_NAMING_SUMMARY_CHARACTERS]
  result.update(question=question[:8000],question_complete=len(question)<=8000,
      question_sha256=sha(question),context_sha256=_digest(context),input_fingerprint=_digest(context),
      reference_manifest_sha256=_digest(context['references']),reference_count=len(context['references']))

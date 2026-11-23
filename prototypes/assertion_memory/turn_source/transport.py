@@ -12,8 +12,7 @@ import threading
 import time
 
 MAX_FRAME=1_048_576
-MAX_RECEIVE_BYTES=8_388_608
-MAX_RECEIVE_FRAMES=2048
+MAX_PENDING_BYTES=8_388_608  # Outstanding notifications awaiting consumption, not lifetime traffic.
 
 
 def encode(message):
@@ -30,7 +29,7 @@ def read_frame(stream):
 
 
 class StdioTransport:
-    def __init__(self, command, *, timeout=30, cancelled=lambda:False, allow_spawn=False, offline_test_process=None):
+    def __init__(self, command, *, timeout=None, cancelled=lambda:False, allow_spawn=False, offline_test_process=None):
         # Construction does not invoke a provider. Explicitly enabling the test
         # constructor is required even if the supplied subprocess is synthetic.
         if not allow_spawn:
@@ -40,14 +39,16 @@ class StdioTransport:
         self.cancelled=cancelled
         self.offline_test_process=offline_test_process
         self.messages=deque()
+        self.pending_bytes=0
         self.incoming=bytearray()
         self.request_id=0
         self.counter=0
         self.received_bytes=0
         self.closed=False
+        self.broker_failed=False
         if not self.command or not Path(self.command[0]).is_absolute():
             raise ValueError('A trusted absolute executable is required')
-        if type(timeout) not in (int,float) or not 0 < timeout <= 300:
+        if timeout is not None and (type(timeout) not in (int,float) or not 0 < timeout < float("inf")):
             raise ValueError('Invalid turn deadline')
         self.tools=['older_dialogue']
 
@@ -59,7 +60,7 @@ class StdioTransport:
         home=root/'home';home.mkdir(mode=0o700)
         runtime=root/'run';runtime.mkdir(mode=0o700)
         bridge=root/'bridge';bridge.mkdir(mode=0o700)
-        self.deadline=time.monotonic()+self.seconds
+        self.deadline=None if self.seconds is None else time.monotonic()+self.seconds
         for name in ('request','response'):
             os.mkfifo(bridge/name,0o600)
         self.mcp_in=os.open(bridge/'request',os.O_RDWR|os.O_NONBLOCK)
@@ -88,24 +89,26 @@ class StdioTransport:
         try:
             with selectors.DefaultSelector() as sel:
                 sel.register(self.mcp_in,selectors.EVENT_READ)
-                while not self.closed and not self.cancelled() and time.monotonic()<self.deadline:
+                while not self.closed and not self.cancelled() and (self.deadline is None or time.monotonic()<self.deadline):
                     if not sel.select(.05):continue
                     pending.extend(os.read(self.mcp_in,65536))
                     while b'\n' in pending:
                         line,_,pending=pending.partition(b'\n')
-                        if len(line)>=MAX_FRAME:return
+                        if len(line)>=MAX_FRAME:raise ValueError('MCP frame exceeds limit')
                         message=json.loads(line)
-                        response=dispatch(message) if isinstance(message,dict) else None
+                        if not isinstance(message,dict):raise ValueError('MCP frame must be an object')
+                        response=dispatch(message)
                         if response is None:continue
                         result=memoryview(encode(response))
-                        if len(result)>MAX_FRAME:return
+                        if len(result)>MAX_FRAME:raise ValueError('MCP response exceeds frame limit')
                         while result and not self.closed:
                             self._wait(self.mcp_out,selectors.EVENT_WRITE)
                             try:result=result[os.write(self.mcp_out,result):]
                             except BlockingIOError:continue
-                    if len(pending)>=MAX_FRAME:return
-        except (ValueError,OSError,RuntimeError):
-            pass
+                    if len(pending)>=MAX_FRAME:raise ValueError('MCP frame exceeds limit')
+        except Exception:
+            # Do not copy dispatch/model material into transport diagnostics.
+            self.broker_failed=True
         finally:
             os.close(self.mcp_in)
             os.close(self.mcp_out)
@@ -115,7 +118,8 @@ class StdioTransport:
             sel.register(file,event)
             while True:
                 if self.closed or self.cancelled():raise RuntimeError('Generation cancelled')
-                remaining=self.deadline-time.monotonic()
+                if self.broker_failed:raise RuntimeError('Source MCP broker failed')
+                remaining=.08 if self.deadline is None else self.deadline-time.monotonic()
                 if remaining<=0:raise TimeoutError('Turn deadline expired')
                 if sel.select(min(.08,remaining)):return
 
@@ -130,8 +134,8 @@ class StdioTransport:
 
     def _receive(self):
         self.counter+=1
-        if self.counter>MAX_RECEIVE_FRAMES:raise RuntimeError('App-server frame resource budget exhausted')
         while True:
+            if self.broker_failed:raise RuntimeError('Source MCP broker failed')
             newline=self.incoming.find(b'\n')
             if newline>=0:
                 if newline>=MAX_FRAME:raise ValueError('App-server frame exceeds limit')
@@ -147,8 +151,6 @@ class StdioTransport:
             except BlockingIOError:continue
             if not received:raise EOFError('App-server exited before replying')
             self.received_bytes+=len(received)
-            if self.received_bytes>MAX_RECEIVE_BYTES:
-                raise RuntimeError('App-server byte resource budget exhausted')
             self.incoming.extend(received)
 
     def notify(self,method,params):
@@ -172,14 +174,23 @@ class StdioTransport:
             message=self._receive()
             if 'method' in message:
                 notification=self._notification(message)
-                if notification is not None:self.messages.append(notification)
+                if notification is not None:
+                    size=len(encode(message))
+                    if self.pending_bytes+size>MAX_PENDING_BYTES:
+                        raise RuntimeError('Unconsumed app-server notification buffer exhausted')
+                    self.pending_bytes+=size
+                    self.messages.append((notification,size))
                 continue
             if type(message.get('id')) is not int or message['id']!=rid or 'result' not in message:
                 raise RuntimeError('App-server rejected request or replied out of order')
             return message['result']
 
     def events(self):
-        while self.messages:yield self.messages.popleft()
+        while self.messages:
+            if self.broker_failed:raise RuntimeError('Source MCP broker failed')
+            notification,size=self.messages.popleft()
+            self.pending_bytes-=size
+            yield notification
         while True:
             notification=self._notification(self._receive())
             if notification is not None:yield notification

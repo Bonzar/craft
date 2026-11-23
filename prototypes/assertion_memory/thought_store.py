@@ -145,6 +145,8 @@ class ThoughtStore:
                 connection.execute(statement)
             from .thought_questions import ensure_schema
             ensure_schema(connection)
+            from .source_admission import install
+            install(connection, thoughts=True)
 
     def get(self, thought_id, version=None, *, include_ineligible=False):
         _text(thought_id, 'thought_id')
