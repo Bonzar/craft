@@ -7,7 +7,11 @@ from urllib.parse import quote
 
 WORKFLOW = '.github/workflows/assertion-memory-base.yml'
 SOURCE = 'tools/assertion-memory-qa'
-EXACT = (f'{SOURCE}/lifecycle.py',f'{SOURCE}/release-ci.py',f'{SOURCE}/send-release.sh')
+EXACT = (
+    f'{SOURCE}/lifecycle.py', f'{SOURCE}/release-ci.py', f'{SOURCE}/send-release.sh',
+    f'{SOURCE}/send_test_release.py', 'tools/assertion-memory-release/ssh_transport.py',
+    'tools/assertion-memory-release/receipt_proof.py',
+)
 PROD_KEY = b'\n  deploy-production:\n'
 
 

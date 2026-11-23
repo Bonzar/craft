@@ -1,6 +1,5 @@
 """Verify trusted immutable visual release metadata and its single build ZIP."""
 import hashlib
-from importlib.machinery import SourceFileLoader
 import json
 import os
 from pathlib import Path
@@ -8,7 +7,10 @@ import sys
 from urllib.parse import quote
 import zipfile
 
-ci = SourceFileLoader('release_ci', str(Path(__file__).parents[1] / 'assertion-memory-qa' / 'release-ci.py')).load_module()
+import release_ci as ci
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'assertion-memory-release'))
+import receipt_proof
+
 ROOT = '/repos/' + ci.REPO
 WORKFLOW = 'assertion-memory-visual.yml'
 TOKEN = r'[1-9][0-9]{0,19}'
@@ -79,6 +81,18 @@ def promote(expected, received):
         raise ValueError('PROD must receive exact verified TEST artifact and digest')
 
 
+def test_receipt(get,test_run_id,release_id,expected,destination,*,workflow_sha):
+    run_id=ci.safe(TOKEN,test_run_id)
+    _,receipt=receipt_proof.verify(get,repo=ci.REPO,workflow=WORKFLOW,
+        run_id=run_id,control_sha=workflow_sha,job_name='Deploy visual TEST',
+        required_steps=('Activate exact visual archive','Smoke exact visual ingress','Persist verified visual TEST receipt'),
+        artifact_name=f'visual-test-proof-{run_id}',filename='test-proof.json',
+        output=destination,max_zip=4096,max_json=1024)
+    if receipt != {**expected,'test_run_id':run_id,'release_id':release_id,'workflow_sha':workflow_sha}:
+        raise ValueError('Visual PROD payload differs from the TEST-approved artifact')
+
+
+
 def main():
     mode, = sys.argv[1:]
     if os.environ['GITHUB_REPOSITORY'] != ci.REPO or os.environ['GITHUB_RUN_ATTEMPT'] != '1':
@@ -100,15 +114,7 @@ def main():
     sha, release = unpack(archive,folder,rev)
     values={'revision':rev,'artifact_id':aid,'sha256':sha,'release':release}
     if mode=='prod':
-        run_id=ci.safe(TOKEN,os.environ['GITHUB_RUN_ID'])
-        reviews=ci.api(f'{ROOT}/actions/runs/{run_id}/approvals')
-        reviewer=ci.safe(TOKEN,os.environ['VISUAL_PROD_APPROVER_ID'])
-        if not any(str((rec.get('user') or {}).get('id')) == reviewer
-                   and rec.get('state') == 'approved'
-                   and any(e.get('name')=='assertion-memory-visual-prod' for e in rec.get('environments',[]))
-                   for rec in reviews):
-            raise ValueError('Missing required visual PROD review')
-        promote(values,{key:os.environ.get('VISUAL_TEST_'+key.upper()) for key in values})
+        test_receipt(ci.api,os.environ['VISUAL_TEST_RUN_ID'],rid,values,folder,workflow_sha=os.environ['GITHUB_SHA'])
     with Path(os.environ['GITHUB_OUTPUT']).open('a',encoding='utf8') as out:
         for key,value in values.items(): out.write(f'{key}={value}\n')
 

@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
-from lifecycle import identify, locate, promote, unpack, ROOT, WORKFLOW
+from lifecycle import identify, locate, promote, unpack, test_receipt, ROOT, WORKFLOW
 from package import build
 
 
@@ -57,6 +57,62 @@ class VisualReleaseTest(unittest.TestCase):
             html.write_text(pinned.replace('./assets','/assets',1))
             with self.assertRaisesRegex(ValueError,'within'):
                 build(src,root/'unversioned.tar')
+
+
+    def test_prod_requires_same_private_run_and_authentic_test_receipt(self):
+        rev='a'*40
+        expected={'revision':rev,'artifact_id':'10','sha256':'d'*64,'release':'e'*64}
+        control='c'*40
+        receipt={**expected,'test_run_id':'30','release_id':'7','workflow_sha':control}
+        run={'id':30,'workflow_id':8,'event':'workflow_dispatch','conclusion':'success','run_attempt':1,
+             'head_branch':'main','head_repository':{'full_name':'Bonzar/craft'},'repository':{'full_name':'Bonzar/craft'},
+             'head_sha':control,'status':'completed','path':'.github/workflows/'+WORKFLOW}
+        job={'name':'Deploy visual TEST','run_id':30,'head_sha':control,'status':'completed','conclusion':'success',
+             'steps':[{'name':name,'status':'completed','conclusion':'success'} for name in
+                   ('Activate exact visual archive','Smoke exact visual ingress','Persist verified visual TEST receipt')]}
+        with tempfile.TemporaryDirectory() as folder:
+            dir=Path(folder)
+            zipped=dir/'sample.zip'
+            with zipfile.ZipFile(zipped,'w') as z:
+                z.writestr('test-proof.json',json.dumps(receipt))
+            wire=zipped.read_bytes()
+            artifact={'id':31,'name':'visual-test-proof-30','expired':False,'size_in_bytes':len(wire),
+                      'digest':'sha256:'+hashlib.sha256(wire).hexdigest(), 'workflow_run':{'id':30,'head_sha':control}}
+            data={f'{ROOT}/actions/workflows/{WORKFLOW}':{'id':8},f'{ROOT}/actions/runs/30':run,
+                  f'{ROOT}/actions/runs/30/attempts/1/jobs?per_page=100':{'total_count':1,'jobs':[job]},
+                  f'{ROOT}/actions/runs/30/artifacts?per_page=100':
+                      {'total_count':1,'artifacts':[artifact]}}
+            def get(url, output=None):
+                if output is None: return data[url]
+                self.assertEqual(url, f'{ROOT}/actions/artifacts/31/zip')
+                output.write_bytes(wire)
+            test_receipt(get,'30','7',expected,dir,workflow_sha=control)
+            with self.assertRaisesRegex(ValueError,'differs'):
+                test_receipt(get,'30','7',{**expected,'sha256':'a'*64},dir,workflow_sha=control)
+            job['name']='Deploy visual PROD'
+            with self.assertRaisesRegex(ValueError,'TEST job'):
+                test_receipt(get,'30','7',expected,dir,workflow_sha=control)
+            job['name']='Deploy visual TEST'
+            run['head_branch']='other'
+            with self.assertRaisesRegex(ValueError,'on main'):
+                test_receipt(get,'30','7',expected,dir,workflow_sha=control)
+            run['head_branch']='main'
+            run['head_sha']='0'*40
+            with self.assertRaisesRegex(ValueError,'exact successful workflow'):
+                test_receipt(get,'30','7',expected,dir,workflow_sha=control)
+            run['head_sha']=control
+            for step in job['steps']:
+                step['conclusion']='skipped'
+                with self.assertRaisesRegex(ValueError,'not successful'):
+                    test_receipt(get,'30','7',expected,dir,workflow_sha=control)
+                step['conclusion']='success'
+            artifact['workflow_run']['head_sha']='0'*40
+            with self.assertRaisesRegex(ValueError,'artifact provenance'):
+                test_receipt(get,'30','7',expected,dir,workflow_sha=control)
+            artifact['workflow_run']['head_sha']=control
+            artifact['digest']='sha256:'+'1'*64
+            with self.assertRaisesRegex(ValueError,'ZIP digest'):
+                test_receipt(get,'30','7',expected,dir,workflow_sha=control)
 
 
 if __name__=='__main__': unittest.main()

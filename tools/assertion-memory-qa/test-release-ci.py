@@ -1,5 +1,8 @@
 """Offline release transport checks; no external HTTPS or real SSH."""
 import hashlib
+import json
+from types import SimpleNamespace
+import send_test_release
 import importlib.util
 import os
 from pathlib import Path
@@ -85,42 +88,41 @@ class ReleaseTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             d=Path(tmp)
             (d/'release.tar.gz').write_bytes(INNER)
-            log=d/'commands'
-            ssh=d/'ssh'
-            ssh.write_text("""#!/usr/bin/env python3
-import json, os, pathlib, sys
-command=sys.argv[-1]
-with open(os.environ['FAKE_LOG'],'a') as f: f.write(command+'\\n')
-if command in ('receiver-probe','id'):
-    if os.environ.get('FAKE_UNRESTRICTED'): sys.exit(0)
-    print('{"status":"rejected","error":"command_denied"}')
-    sys.exit(1)
-print(json.dumps(dict(status='ok',environment='test',revision=os.environ['DEPLOY_REVISION'],sha256=os.environ['RELEASE_ARCHIVE_SHA256'])))
-""")
-            ssh.chmod(0o700)
-            keygen=d/'ssh-keygen'
-            keygen.write_text('#!/bin/sh\nexit 0\n')
-            keygen.chmod(0o700)
-            env=dict(os.environ,PATH=f'{d}:{os.environ["PATH"]}',FAKE_LOG=str(log),
-                     RELEASE_ENABLED='true',RELEASE_USER='assertion-test-deploy',
+            env=dict(RELEASE_ENABLED='true',RELEASE_USER='assertion-test-deploy',
                      RELEASE_HOST='qa.example.test',RELEASE_PORT='22',GITHUB_REPOSITORY='Bonzar/craft',
                      GITHUB_REF='refs/heads/main',GITHUB_SHA=REVISION,
-                     GITHUB_WORKFLOW_REF='Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main',
-                     GITHUB_RUN_ATTEMPT='1',RELEASE_REVISION=REVISION,GITHUB_EVENT_NAME='workflow_dispatch',
+                     GITHUB_WORKFLOW_REF=send_test_release.BASE,GITHUB_RUN_ATTEMPT='1',
+                     RELEASE_REVISION=REVISION,GITHUB_EVENT_NAME='workflow_dispatch',
                      RELEASE_ARCHIVE_SHA256=DIGEST,ARTIFACT_ID='123',RELEASE_DOWNLOAD_DIR=str(d),
-                     SSH_PRIVATE_KEY='fictional',SSH_HOST_PIN='qa.example.test ssh-ed25519 fictional',
-                     TESTED_ARTIFACT_ID='123',TESTED_REVISION=REVISION,TESTED_SHA256=DIGEST,
+                     SSH_PRIVATE_KEY='fictional',SSH_HOST_PIN='qa.example.test ssh-ed25519 '+'A'*68,
                      GITHUB_OUTPUT=str(d/'output'))
-            result=subprocess.run([TOOLS/'send-release.sh','test'],env={**env,'FAKE_UNRESTRICTED':'1'},text=True,capture_output=True)
-            self.assertNotEqual(result.returncode,0)
-            self.assertIn('archive was not sent',result.stderr)
-            self.assertEqual(log.read_text().splitlines(),['receiver-probe'])
-            self.assertFalse((d/'receiver-receipt.json').exists())
-            log.unlink()
-            result=subprocess.run([TOOLS/'send-release.sh','test'],env=env,text=True,capture_output=True)
-            self.assertEqual(result.returncode,0,result.stderr)
-            self.assertEqual(log.read_text().splitlines(),['receiver-probe','id',f'deploy-release test {REVISION} {DIGEST}'])
-            self.assertTrue((d/'receiver-receipt.json').is_file())
+            commands=[]
+            denied=False
+            def run(args, *, stdin, stdout, **options):
+                self.assertEqual(args[0],'/usr/bin/ssh')
+                self.assertIn('assertion-test-deploy@qa.example.test',args)
+                self.assertNotIn('SSH_PRIVATE_KEY',options['env'])
+                command=args[-1]
+                commands.append(command)
+                if command in ('receiver-probe','id'):
+                    if denied:
+                        return SimpleNamespace(returncode=0)
+                    stdout.write(send_test_release.ssh_transport.DENIED)
+                    return SimpleNamespace(returncode=1)
+                self.assertEqual(stdin.read(),INNER)
+                stdout.write(json.dumps(dict(status='ok',environment='test',revision=REVISION,sha256=DIGEST)).encode())
+                return SimpleNamespace(returncode=0)
+            with patch.object(send_test_release.ssh_transport.subprocess,'run',side_effect=run):
+                denied=True
+                with self.assertRaisesRegex(ValueError,'preflight'):
+                    send_test_release.send(env)
+                self.assertEqual(commands,['receiver-probe'])
+                self.assertFalse((d/'receiver-receipt.json').exists())
+                commands.clear()
+                denied=False
+                send_test_release.send(env)
+                self.assertEqual(commands,['receiver-probe','id',f'deploy-release test {REVISION} {DIGEST}'])
+                self.assertTrue((d/'receiver-receipt.json').is_file())
 
 if __name__=='__main__':
     unittest.main()
