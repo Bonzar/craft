@@ -1,5 +1,7 @@
 import unittest
 import sys
+import json
+from tempfile import TemporaryDirectory
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "assertion-memory-release"))
 import native_test_policy as policy
@@ -58,6 +60,25 @@ class TestNativeTestPolicy(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 policy.check_approval(get, env)
             entry[key] = original
+
+    def test_manual_replay_requires_explicit_request_and_same_exact_base_tag(self):
+        with TemporaryDirectory() as root:
+            payload = Path(root) / 'event.json'
+            tag = 'assertion-memory-v0.1.1'
+            env = dict(GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_EVENT_PATH=str(payload), GRAPH_TAG=tag)
+            for allowed in (True, 'true'):
+                payload.write_text(json.dumps({'inputs': {'tag': tag, 'deploy_base_test': allowed}}))
+                policy.require_trigger(env)
+            for visual in (True, 'true', 'unexpected', 0):
+                payload.write_text(json.dumps({'inputs': {'tag': tag, 'deploy_base_test': True,
+                                                          'deploy_visual': visual}}))
+                with self.subTest(visual=visual), self.assertRaises(ValueError):
+                    policy.require_trigger(env)
+            for intent, mark in ((False, tag), ('false', tag), ('true', 'assertion-memory-v0.1.0'),
+                                 ('true', 'assertion-memory-visual-v0.1.0'), ('true', tag+'extra')):
+                payload.write_text(json.dumps({'inputs': {'tag': mark, 'deploy_base_test': intent}}))
+                with self.subTest(intent=intent, tag=mark), self.assertRaises(ValueError):
+                    policy.require_trigger(env)
 
 if __name__ == '__main__':
     unittest.main()
