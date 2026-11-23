@@ -40,7 +40,7 @@ def identify(get, release_id):
     return tag, revision
 
 
-def locate(get, release_id, revision):
+def build_identity(get, release_id, revision):
     name = f'assertion-memory-visual-{release_id}-{revision}'
     result = get(f'{ROOT}/actions/artifacts?name={name}&per_page=2')
     if result.get('total_count') != 1 or len(result.get('artifacts', [])) != 1:
@@ -57,6 +57,11 @@ def locate(get, release_id, revision):
             or run.get('conclusion') != 'success' or run.get('run_attempt') != 1 or run.get('head_sha') != revision
             or (run.get('head_repository') or {}).get('full_name') != ci.REPO):
         raise ValueError('Not the trusted original visual release build')
+    return aid, digest, str(run["id"])
+
+
+def locate(get, release_id, revision):
+    aid, digest, _ = build_identity(get, release_id, revision)
     return aid, digest
 
 
@@ -93,6 +98,16 @@ def test_receipt(get,test_run_id,release_id,expected,destination,*,workflow_sha)
 
 
 
+def download(get,folder,rev,aid,digest):
+    folder.mkdir(mode=0o700)
+    archive=folder/'download.zip'
+    get(f'{ROOT}/actions/artifacts/{aid}/zip',archive)
+    if archive.stat().st_size > 6_000_000 or hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+        raise ValueError('GitHub visual ZIP digest mismatch')
+    sha, release = unpack(archive,folder,rev)
+    return {'revision':rev,'artifact_id':aid,'sha256':sha,'release':release}
+
+
 def main():
     mode, = sys.argv[1:]
     if os.environ['GITHUB_REPOSITORY'] != ci.REPO or os.environ['GITHUB_RUN_ATTEMPT'] != '1':
@@ -106,13 +121,8 @@ def main():
     if mode not in ('test','prod') or os.environ['GITHUB_EVENT_NAME'] != 'workflow_dispatch' or os.environ['GITHUB_REF'] != 'refs/heads/main':
         raise ValueError('Deploy visual on main only')
     aid,digest=locate(ci.api,rid,rev)
-    folder=Path(os.environ['VISUAL_DOWNLOAD']); folder.mkdir(mode=0o700)
-    archive=folder/'download.zip'
-    ci.api(f'{ROOT}/actions/artifacts/{aid}/zip',archive)
-    if archive.stat().st_size > 6_000_000 or hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
-        raise ValueError('GitHub visual ZIP digest mismatch')
-    sha, release = unpack(archive,folder,rev)
-    values={'revision':rev,'artifact_id':aid,'sha256':sha,'release':release}
+    folder=Path(os.environ['VISUAL_DOWNLOAD'])
+    values=download(ci.api,folder,rev,aid,digest)
     if mode=='prod':
         test_receipt(ci.api,os.environ['VISUAL_TEST_RUN_ID'],rid,values,folder,workflow_sha=os.environ['GITHUB_SHA'])
     with Path(os.environ['GITHUB_OUTPUT']).open('a',encoding='utf8') as out:
