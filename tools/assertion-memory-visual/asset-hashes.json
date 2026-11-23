@@ -1,0 +1,22 @@
+[
+  {
+    "url": "/assets/graph.worker-Bex9AmBR.js",
+    "bytes": 84500,
+    "sha256": "cd903cfcd63c5ab04317322c0093d6929e089f9b448c9118c8efaa4e9eca188b"
+  },
+  {
+    "url": "/assets/index-Byv8wmN9.js",
+    "bytes": 890187,
+    "sha256": "9a0cef2d67103909cd18a81d37aadeb62659622e2f21f56225b43d5fff0b791d"
+  },
+  {
+    "url": "/assets/index-CjCAYN3m.css",
+    "bytes": 29441,
+    "sha256": "780db63fff4bd7d64818ec20b6f76eae2f40bcecb8683a8a7efe1a176f97b3c0"
+  },
+  {
+    "url": "/index.html",
+    "bytes": 8629,
+    "sha256": "dd58eab38c5d0b0a3c4fdd4186a4e4bba4f1bca4eb6350476cb19940599749c1"
+  }
+]

@@ -8,7 +8,7 @@ mode="${1:?}"
 [[ "${VISUAL_DEPLOY_ENABLED:-}" == true ]] || { echo 'Visual receiver is not enabled' >&2; exit 1; }
 [[ "${VISUAL_HOST:-}" =~ ^[0-9A-Za-z][0-9A-Za-z.-]{0,252}$ && "${VISUAL_PORT:-}" =~ ^[1-9][0-9]{0,4}$ && "$VISUAL_PORT" -le 65535 ]]
 [[ "${VISUAL_SHA:-}" =~ ^[a-f0-9]{64}$ && "${VISUAL_DIGEST:-}" =~ ^[a-f0-9]{64}$ ]]
-[[ -n "${VISUAL_SSH_KEY:-}" && -n "${VISUAL_HOST_PIN:-}" ]]
+[[ -n "${VISUAL_SSH_KEY:-}" && -n "${VISUAL_HOST_PIN:-}" && -n "${VISUAL_SIGNING_KEY:-}" ]]
 artifact="${VISUAL_DOWNLOAD:?}/visual.tar"
 test "$(sha256sum < "$artifact" | cut -d ' ' -f1)" = "$VISUAL_SHA"
 temp="$(mktemp -d)"
@@ -19,13 +19,21 @@ host_field="$VISUAL_HOST"
 [[ "$VISUAL_PORT" == 22 ]] || host_field="[$VISUAL_HOST]:$VISUAL_PORT"
 awk -v host="$host_field" 'NF!=3||$1!=host||$2!="ssh-ed25519"{exit 1} END{if(NR!=1) exit 1}' "$temp/known_hosts"
 ssh-keygen -lf "$temp/known_hosts" >/dev/null
-unset VISUAL_SSH_KEY VISUAL_HOST_PIN SSH_AUTH_SOCK
+printf '%s\n' "$VISUAL_SIGNING_KEY" > "$temp/signing-key"
+unset VISUAL_SSH_KEY VISUAL_SIGNING_KEY VISUAL_HOST_PIN SSH_AUTH_SOCK
+printf 'assertion-memory-visual-v1 %s %s\n' "$mode" "$VISUAL_SHA" > "$temp/approval"
+ssh-keygen -Y sign -f "$temp/signing-key" -n assertion-memory-visual "$temp/approval" >/dev/null 2>&1
+{
+    wc -c < "$temp/approval.sig" | tr -d ' '
+    cat "$temp/approval.sig" "$artifact"
+} > "$temp/payload"
+
 if ! timeout 50 ssh -F /dev/null -T -p "$VISUAL_PORT" \
     -i "$temp/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
     -o HostKeyAlgorithms=ssh-ed25519 -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile="$temp/known_hosts" \
     -o ControlMaster=no -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \
     -o ConnectTimeout=10 -- "assertion-visual-${mode}-deploy@$VISUAL_HOST" \
-    "deploy-visual $mode $VISUAL_SHA" < "$artifact" > "$temp/receipt" 2> "$temp/error"; then
+    "deploy-visual $mode $VISUAL_SHA" < "$temp/payload" > "$temp/receipt" 2> "$temp/error"; then
     echo 'Restricted visual receiver did not activate; inspect authorized VM status' >&2
     exit 1
 fi

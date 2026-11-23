@@ -1,6 +1,5 @@
 """Verify trusted immutable visual release metadata and its single build ZIP."""
 import hashlib
-from importlib.machinery import SourceFileLoader
 import json
 import os
 from pathlib import Path
@@ -8,7 +7,7 @@ import sys
 from urllib.parse import quote
 import zipfile
 
-ci = SourceFileLoader('release_ci', str(Path(__file__).parents[1] / 'assertion-memory-qa' / 'release-ci.py')).load_module()
+import release_ci as ci
 ROOT = '/repos/' + ci.REPO
 WORKFLOW = 'assertion-memory-visual.yml'
 TOKEN = r'[1-9][0-9]{0,19}'
@@ -79,6 +78,41 @@ def promote(expected, received):
         raise ValueError('PROD must receive exact verified TEST artifact and digest')
 
 
+def test_receipt(get, test_run_id, release_id, expected, destination, *, unpack_receipt):
+    run_id = ci.safe(TOKEN, test_run_id)
+    workflow = get(f'{ROOT}/actions/workflows/{WORKFLOW}')
+    run = get(f'{ROOT}/actions/runs/{run_id}')
+    if (str(run.get('id')) != run_id or run.get('workflow_id') != workflow['id']
+            or run.get('path') != '.github/workflows/' + WORKFLOW
+            or run.get('event') != 'workflow_dispatch' or run.get('head_branch') != 'main'
+            or run.get('run_attempt') != 1 or run.get('conclusion') != 'success'
+            or (run.get('head_repository') or {}).get('full_name') != ci.REPO):
+        raise ValueError('Not a successful original visual TEST run on main')
+    jobs = get(f'{ROOT}/actions/runs/{run_id}/attempts/1/jobs?per_page=100')
+    matches = [job for job in jobs['jobs'] if job['name'] == 'Deploy visual TEST']
+    if len(matches) != 1 or matches[0]['conclusion'] != 'success':
+        raise ValueError('Protected visual TEST job did not succeed')
+    artifacts = get(f'{ROOT}/actions/runs/{run_id}/artifacts?name=visual-test-proof-{run_id}&per_page=2')
+    if artifacts.get('total_count') != 1 or len(artifacts['artifacts']) != 1:
+        raise ValueError('Must identify exactly one TEST receipt from that run')
+    artifact, = artifacts['artifacts']
+    if (artifact.get('expired') is not False or artifact.get('name') != f'visual-test-proof-{run_id}'
+            or not 0 < artifact.get('size_in_bytes', 0) <= 4096):
+        raise ValueError('Visual TEST receipt missing or invalid')
+    aid = ci.safe(TOKEN, str(artifact['id']))
+    digest = ci.safe('sha256:'+DIGEST, artifact['digest'])[7:]
+    zpath = destination / 'test-proof.zip'
+    get(f'{ROOT}/actions/artifacts/{aid}/zip', zpath)
+    if zpath.stat().st_size > 4096 or hashlib.sha256(zpath.read_bytes()).hexdigest() != digest:
+        raise ValueError('Visual TEST receipt ZIP digest mismatch')
+    with zipfile.ZipFile(zpath) as z:
+        if z.namelist() != ['test-proof.json'] or z.getinfo('test-proof.json').file_size > 1024:
+            raise ValueError('Unexpected visual test proof content')
+        receipt = unpack_receipt(z.read('test-proof.json'))
+    if receipt != {**expected, 'test_run_id': run_id, 'release_id': release_id}:
+        raise ValueError('Visual PROD payload differs from the TEST-approved artifact')
+
+
 def main():
     mode, = sys.argv[1:]
     if os.environ['GITHUB_REPOSITORY'] != ci.REPO or os.environ['GITHUB_RUN_ATTEMPT'] != '1':
@@ -100,15 +134,7 @@ def main():
     sha, release = unpack(archive,folder,rev)
     values={'revision':rev,'artifact_id':aid,'sha256':sha,'release':release}
     if mode=='prod':
-        run_id=ci.safe(TOKEN,os.environ['GITHUB_RUN_ID'])
-        reviews=ci.api(f'{ROOT}/actions/runs/{run_id}/approvals')
-        reviewer=ci.safe(TOKEN,os.environ['VISUAL_PROD_APPROVER_ID'])
-        if not any(str((rec.get('user') or {}).get('id')) == reviewer
-                   and rec.get('state') == 'approved'
-                   and any(e.get('name')=='assertion-memory-visual-prod' for e in rec.get('environments',[]))
-                   for rec in reviews):
-            raise ValueError('Missing required visual PROD review')
-        promote(values,{key:os.environ.get('VISUAL_TEST_'+key.upper()) for key in values})
+        test_receipt(ci.api, os.environ['VISUAL_TEST_RUN_ID'], rid, values, folder, unpack_receipt=json.loads)
     with Path(os.environ['GITHUB_OUTPUT']).open('a',encoding='utf8') as out:
         for key,value in values.items(): out.write(f'{key}={value}\n')
 
