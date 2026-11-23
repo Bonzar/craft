@@ -9,6 +9,10 @@ on:
         description: Existing published immutable base or visual tag (preview only)
         type: string
         required: true
+      rehearse_test_approval:
+        description: Wait for a TEST approval, then simulate activation (no deploy)
+        type: boolean
+        default: false
   pull_request:
     paths:
       - ".github/workflows/assertion-memory-release-graph.yml"
@@ -34,6 +38,7 @@ jobs:
       actions: read
       contents: read
     outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
       artifact_id: ${{ steps.resolve.outputs.artifact_id }}
       archive_sha: ${{ steps.resolve.outputs.archive_sha }}
     steps:
@@ -84,3 +89,26 @@ jobs:
           ARCHIVE_SHA: ${{ needs.release.outputs.archive_sha }}
           VERIFIED_SHA: ${{ needs.test.outputs.verified_sha }}
         run: python3 tools/assertion-memory-release/github_graph_preview.py compare
+
+  rehearse-test-approval:
+    name: TEST approval rehearsal · no deploy
+    needs: [release, test]
+    if: github.event_name == 'workflow_dispatch' && inputs.rehearse_test_approval && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && startsWith(needs.release.outputs.tag, 'assertion-memory-v')
+    environment: assertion-memory-native-test-rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Record simulated approval for the exact verified archive
+        env:
+          REHEARSAL_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_REHEARSAL_READY }}
+          EXPECTED_SHA: ${{ needs.release.outputs.archive_sha }}
+          VERIFIED_SHA: ${{ needs.test.outputs.verified_sha }}
+        run: |
+          set -eu
+          if [ "$REHEARSAL_READY" != true ]; then
+            echo "::error::Rehearsal environment has not been configured and verified."
+            exit 1
+          fi
+          test -n "$EXPECTED_SHA" && test "$EXPECTED_SHA" = "$VERIFIED_SHA"
+          printf '%s\n' '### TEST approval rehearsal' 'Approval completed for the verified archive. No files or services were deployed.' >> "$GITHUB_STEP_SUMMARY"
