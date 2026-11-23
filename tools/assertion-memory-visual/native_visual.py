@@ -20,7 +20,7 @@ DIGEST = lifecycle.DIGEST
 def require_context(env):
     if any(env.get(name) != expected for name, expected in {
             'GITHUB_REPOSITORY': REPO, 'GITHUB_WORKFLOW_REF': WORKFLOW_REF,
-            'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/main',
+            'GITHUB_REF': 'refs/heads/main',
             'GITHUB_REF_PROTECTED': 'true', 'GITHUB_RUN_ATTEMPT': '1',
             'GITHUB_JOB': 'deploy', 'NATIVE_VISUAL_READY': 'true'}.items()):
         raise ValueError('Untrusted or disabled native visual workflow')
@@ -29,14 +29,34 @@ def require_context(env):
     tag = lifecycle.ci.safe(lifecycle.TAG, env['GRAPH_TAG'])
     with Path(env['GITHUB_EVENT_PATH']).open(encoding='utf8') as source:
         event = json.load(source)
-    inputs = event.get('inputs') or {}
-    if (inputs.get('tag') != tag or inputs.get('deploy_visual') not in ('true', True)
-            or inputs.get('deploy_base_test') not in (None, '', 'false', False)):
-        raise ValueError('Native visual needs explicit, exact existing-tag intent')
+    event_name = env.get('GITHUB_EVENT_NAME')
+    if event_name == 'workflow_dispatch':
+        inputs = event.get('inputs') or {}
+        visual, base = inputs.get('deploy_visual'), inputs.get('deploy_base_test')
+        if (inputs.get('tag') != tag or not (visual is True or visual == 'true')
+                or not (base is None or base is False or base in ('', 'false'))):
+            raise ValueError('Native visual needs explicit, exact existing-tag intent')
+    elif event_name == 'workflow_run':
+        release_event(event, tag)
+    else:
+        raise ValueError('Unexpected native visual trigger')
     mode = env['VISUAL_ENV']
     if mode not in ('test', 'prod'):
         raise ValueError('Unexpected visual stage')
     return mode
+
+
+def release_event(event, tag):
+    run = event.get('workflow_run') or {}
+    if (event.get('action') != 'completed' or run.get('head_branch') != tag
+            or run.get('event') != 'release' or run.get('status') != 'completed'
+            or run.get('conclusion') != 'success' or run.get('run_attempt') != 1
+            or (run.get('repository') or {}).get('full_name') != REPO
+            or (run.get('head_repository') or {}).get('full_name') != REPO
+            or run.get('path') != '.github/workflows/' + lifecycle.WORKFLOW):
+        raise ValueError('Expected original successful visual Release build event')
+    return (lifecycle.ci.safe(ID, str(run.get('id', ''))),
+            lifecycle.ci.safe(SHA, run.get('head_sha', '')))
 
 
 def check_approval(get, env, mode):
@@ -95,7 +115,7 @@ def verify_same_run_test(get, env, expected, folder):
     wf = get(root + '/actions/workflows/' + WORKFLOW_FILE)
     if (str(run.get('id')) != run_id or run.get('workflow_id') != wf.get('id')
             or not wf.get('id') or run.get('path') != '.github/workflows/' + WORKFLOW_FILE
-            or run.get('event') != 'workflow_dispatch' or run.get('head_branch') != 'main'
+            or run.get('event') != env['GITHUB_EVENT_NAME'] or run.get('head_branch') != 'main'
             or run.get('head_sha') != control_sha or run.get('run_attempt') != 1
             or run.get('status') != 'in_progress'
             or (run.get('repository') or {}).get('full_name') != REPO
@@ -148,6 +168,10 @@ def resolve(get, env):
     release_id = lifecycle.ci.safe(ID, env['GRAPH_RELEASE_ID'])
     tag, rev = lifecycle.identify(get, release_id)
     aid, digest, original_run = lifecycle.build_identity(get, release_id, rev)
+    if env['GITHUB_EVENT_NAME'] == 'workflow_run':
+        event = json.loads(Path(env['GITHUB_EVENT_PATH']).read_bytes())
+        if release_event(event, tag) != (original_run, rev):
+            raise ValueError('Visual Release event differs from canonical original build')
     graph = {'TAG': tag, 'REVISION': rev, 'ARTIFACT_ID': aid,
              'ARCHIVE_SHA': digest, 'VERIFIED_SHA': digest, 'BUILD_RUN_ID': original_run}
     if any(env.get('GRAPH_' + key) != val for key, val in graph.items()):
