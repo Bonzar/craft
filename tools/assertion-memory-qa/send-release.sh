@@ -3,11 +3,18 @@ set -euo pipefail
 umask 077
 target="${1:?test or production required}"
 [[ "$target" == test || "$target" == production ]]
+# Deliberately non-operational until the independently administered host proof
+# bridge is integrated and reviewed. Readiness alone can never enable transport.
+if [[ "$target" == production ]]; then
+  echo 'PROD transport disabled: exact host proof bridge is not integrated.' >&2
+  exit 1
+fi
 [[ "$GITHUB_REPOSITORY" == Bonzar/craft ]]
 if [[ "${GITHUB_WORKFLOW_REF:-}" == Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main ]]; then
   [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_RUN_ATTEMPT" == 1 ]]
   revision="${RELEASE_REVISION:?missing release revision}"
 else
+  [[ "$target" == test ]] || { echo "PROD requires the main manual workflow." >&2; exit 1; }
   [[ "$GITHUB_REF" == refs/heads/codex/assertion-memory-release && "$GITHUB_EVENT_NAME" == push ]]
   revision="$GITHUB_SHA"
 fi
@@ -41,17 +48,17 @@ ssh_route=(ssh -F /dev/null -p "$RELEASE_PORT"\
   -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
 )
 destination="$RELEASE_USER@$RELEASE_HOST"
-if [[ "$target" == test && "${GITHUB_WORKFLOW_REF:-}" == Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main ]]; then
+if [[ "${GITHUB_WORKFLOW_REF:-}" == Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main ]]; then
   printf '%s\n' '{"status":"rejected","error":"command_denied"}' > "$tmp/denied"
   for probe in receiver-probe id; do
     status=0
     timeout 25 "${ssh_route[@]}" -T -- "$destination" "$probe" </dev/null > "$tmp/probe" 2> "$tmp/probe-error" || status=$?
     if [[ "$status" != 1 ]] || ! cmp -s "$tmp/probe" "$tmp/denied"; then
-      echo 'Scoped TEST receiver preflight failed; archive was not sent.' >&2
+      echo "Scoped $target receiver preflight failed; archive was not sent." >&2
       exit 1
     fi
   done
-  echo 'Scoped TEST receiver authenticated and rejected both non-release commands.'
+  echo "Scoped $target receiver authenticated and rejected both non-release commands."
 fi
 if ! timeout 570 "${ssh_route[@]}" -T -- "$destination" \
   "deploy-release $target $DEPLOY_REVISION $RELEASE_ARCHIVE_SHA256" < "$file" > "$tmp/receipt" 2> "$tmp/ssh-errors"; then
@@ -68,6 +75,9 @@ expected={'status':'ok','environment':sys.argv[2],'revision':os.environ['DEPLOY_
           'sha256':os.environ['RELEASE_ARCHIVE_SHA256']}
 if value!=expected:
     raise SystemExit('VM did not confirm activated and verified release')
+# Keep the exact validated receiver response for the subsequent durable receipt.
+receipt_path=pathlib.Path(os.environ['RELEASE_DOWNLOAD_DIR'])/'receiver-receipt.json'
+receipt_path.write_text(json.dumps(value, sort_keys=True)+'\n')
 print('Activated and verified:',expected['environment'],expected['revision'],expected['sha256'])
 with open(os.environ['GITHUB_OUTPUT'],'a') as target:
     target.write('revision='+expected['revision']+'\n')

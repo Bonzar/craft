@@ -67,17 +67,60 @@ class ReleaseTest(unittest.TestCase):
             env=dict(os.environ, PATH=f'{d}:{os.environ["PATH"]}',
                      RELEASE_ENABLED='true', RELEASE_USER='assertion-production-deploy',
                      RELEASE_HOST='qa.example.test', RELEASE_PORT='22', GITHUB_REPOSITORY='Bonzar/craft',
-                     GITHUB_REF='refs/heads/codex/assertion-memory-release',GITHUB_SHA=REVISION,
-                     GITHUB_EVENT_NAME='push', RELEASE_ARCHIVE_SHA256=DIGEST, ARTIFACT_ID='123',
+                     GITHUB_REF='refs/heads/main',GITHUB_SHA=REVISION,
+                     GITHUB_WORKFLOW_REF='Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main',
+                     GITHUB_RUN_ATTEMPT='1',RELEASE_REVISION=REVISION,
+                     GITHUB_EVENT_NAME='workflow_dispatch', RELEASE_ARCHIVE_SHA256=DIGEST, ARTIFACT_ID='123',
                      RELEASE_DOWNLOAD_DIR=str(d), SSH_PRIVATE_KEY='not-a-credential',SSH_HOST_PIN='not-a-pin',
                      TESTED_ARTIFACT_ID='123', TESTED_REVISION=REVISION,TESTED_SHA256='0'*64)
-            for override, expected in [({},'exact green TEST artifact'),({'RELEASE_ENABLED':''},'not provisioned'),
-                                       ({'SSH_PRIVATE_KEY':''},'credentials')]:
+            for override in ({}, {'PRODUCTION_READY':'true','HOST_PROOF':'true'},
+                             {'RELEASE_ENABLED':''}, {'SSH_PRIVATE_KEY':''}):
                 r=subprocess.run([TOOLS/'send-release.sh','production'],env={**env,**override},
                                  text=True,capture_output=True)
                 self.assertNotEqual(r.returncode,0)
-                self.assertIn(expected,r.stderr)
+                self.assertIn('host proof bridge is not integrated',r.stderr)
                 self.assertFalse(marker.exists())
+
+    def test_test_sender_requires_restricted_preflight_and_persists_receiver_receipt(self):
+        with TemporaryDirectory() as tmp:
+            d=Path(tmp)
+            (d/'release.tar.gz').write_bytes(INNER)
+            log=d/'commands'
+            ssh=d/'ssh'
+            ssh.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys
+command=sys.argv[-1]
+with open(os.environ['FAKE_LOG'],'a') as f: f.write(command+'\\n')
+if command in ('receiver-probe','id'):
+    if os.environ.get('FAKE_UNRESTRICTED'): sys.exit(0)
+    print('{"status":"rejected","error":"command_denied"}')
+    sys.exit(1)
+print(json.dumps(dict(status='ok',environment='test',revision=os.environ['DEPLOY_REVISION'],sha256=os.environ['RELEASE_ARCHIVE_SHA256'])))
+""")
+            ssh.chmod(0o700)
+            keygen=d/'ssh-keygen'
+            keygen.write_text('#!/bin/sh\nexit 0\n')
+            keygen.chmod(0o700)
+            env=dict(os.environ,PATH=f'{d}:{os.environ["PATH"]}',FAKE_LOG=str(log),
+                     RELEASE_ENABLED='true',RELEASE_USER='assertion-test-deploy',
+                     RELEASE_HOST='qa.example.test',RELEASE_PORT='22',GITHUB_REPOSITORY='Bonzar/craft',
+                     GITHUB_REF='refs/heads/main',GITHUB_SHA=REVISION,
+                     GITHUB_WORKFLOW_REF='Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main',
+                     GITHUB_RUN_ATTEMPT='1',RELEASE_REVISION=REVISION,GITHUB_EVENT_NAME='workflow_dispatch',
+                     RELEASE_ARCHIVE_SHA256=DIGEST,ARTIFACT_ID='123',RELEASE_DOWNLOAD_DIR=str(d),
+                     SSH_PRIVATE_KEY='fictional',SSH_HOST_PIN='qa.example.test ssh-ed25519 fictional',
+                     TESTED_ARTIFACT_ID='123',TESTED_REVISION=REVISION,TESTED_SHA256=DIGEST,
+                     GITHUB_OUTPUT=str(d/'output'))
+            result=subprocess.run([TOOLS/'send-release.sh','test'],env={**env,'FAKE_UNRESTRICTED':'1'},text=True,capture_output=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('archive was not sent',result.stderr)
+            self.assertEqual(log.read_text().splitlines(),['receiver-probe'])
+            self.assertFalse((d/'receiver-receipt.json').exists())
+            log.unlink()
+            result=subprocess.run([TOOLS/'send-release.sh','test'],env=env,text=True,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(log.read_text().splitlines(),['receiver-probe','id',f'deploy-release test {REVISION} {DIGEST}'])
+            self.assertTrue((d/'receiver-receipt.json').is_file())
 
 if __name__=='__main__':
     unittest.main()
