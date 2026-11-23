@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'assertion-memory-release'))
 import ssh_transport
+import native_test_policy
 
 BASE='Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main'
 
@@ -15,7 +16,11 @@ BASE='Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main'
 def send(env=os.environ):
     if env['GITHUB_REPOSITORY']!='Bonzar/craft' or env.get('RELEASE_ENABLED')!='true':
         raise ValueError('Incorrect repository or unprovisioned deployment')
-    if env.get('GITHUB_WORKFLOW_REF')==BASE:
+    workflow = env.get('GITHUB_WORKFLOW_REF')
+    if workflow == native_test_policy.REF:
+        native_test_policy.require_native_test(env)
+        revision = env['RELEASE_REVISION']
+    elif workflow == BASE:
         if (env['GITHUB_REF'],env['GITHUB_EVENT_NAME'],env['GITHUB_RUN_ATTEMPT'])!=('refs/heads/main','workflow_dispatch','1'):
             raise ValueError('Incorrect TEST dispatch')
         revision=env['RELEASE_REVISION']
@@ -37,7 +42,7 @@ def send(env=os.environ):
         with ssh_transport.route(host=env['RELEASE_HOST'],port=env['RELEASE_PORT'],
                   account='assertion-test-deploy',host_pin=env['SSH_HOST_PIN'],
                   key=env['SSH_PRIVATE_KEY'],runtime_dir=env.get('RUNNER_TEMP')) as route:
-            if env.get('GITHUB_WORKFLOW_REF')==BASE:
+            if workflow in (BASE, native_test_policy.REF):
                 ssh_transport.preflight(route)
             code,wire=ssh_transport.exchange(route,f'deploy-release test {revision} {digest}',payload=payload,limit=2048)
     expected=dict(status='ok',environment='test',revision=revision,sha256=digest)

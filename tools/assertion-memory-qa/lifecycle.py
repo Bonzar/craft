@@ -10,6 +10,7 @@ from importlib.machinery import SourceFileLoader
 
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'assertion-memory-release'))
 import receipt_proof
+import native_test_policy
 
 ci = SourceFileLoader('release_ci', str(Path(__file__).with_name('release-ci.py'))).load_module()
 ROOT = '/repos/' + ci.REPO
@@ -213,11 +214,16 @@ def main():
                 or str((event.get('release') or {}).get('id')) != release_id
                 or os.environ['GITHUB_SHA'] != revision or os.environ['GITHUB_REF'] != 'refs/tags/' + tag):
             raise ValueError('Release event and current immutable release differ')
-    elif mode in ('test', 'production', 'production-pinned-proof'):
-        workflow_sha = dispatch_context(os.environ)
-        if os.environ.get('GITHUB_JOB') != ('deploy-test' if mode == 'test' else 'deploy-production'):
-            raise ValueError('Unexpected deployment job')
+    elif mode in ('test', 'native-test', 'production', 'production-pinned-proof'):
+        if mode == 'native-test':
+            native_test_policy.check_approval(ci.api, os.environ)
+        else:
+            workflow_sha = dispatch_context(os.environ)
+            if os.environ.get('GITHUB_JOB') != ('deploy-test' if mode == 'test' else 'deploy-production'):
+                raise ValueError('Unexpected deployment job')
         identity = build_identity(ci.api, release_id, revision)
+        if mode == 'native-test':
+            native_test_policy.match_original(os.environ, release_id, tag, revision, identity)
         artifact_id, digest = identity['artifact_id'], identity['zip_sha256']
         if mode == 'production':
             authorize_production(ci.api, os.environ)
