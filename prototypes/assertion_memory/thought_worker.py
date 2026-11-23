@@ -11,6 +11,7 @@ from time import sleep
 from uuid import uuid4
 
 from .model import format_prompt
+from .diagnostic_privacy import diagnostic_scope, restricted, ProtectedContextError
 from .queue import _Claim, _event, LeaseLost
 from .thought_store import ThoughtConflict, publication_guard, same_meaning_version
 from .thought_worker_queue import ThoughtWorkQueue
@@ -31,6 +32,11 @@ class _Replay:
         self.prefix = 'thought-replay:' + hashlib.sha256(json.dumps(identity[:2],sort_keys=True).encode()).hexdigest() + ':'
 
     def __call__(self, request):
+        if restricted():
+            # Never persist/reuse model bodies influenced by foreign context.
+            self.pending=None
+            self.renew()
+            return self.provider(request)
         key = self.prefix + hashlib.sha256(json.dumps(
             [self.identity, format_prompt(request), request.cache_context], sort_keys=True).encode()).hexdigest()
         if self.pending is not None and self.pending[0] == key:
@@ -66,6 +72,9 @@ class _Replay:
         self.pending = None
 
     def confirm(self):
+        if restricted():
+            self.pending=None
+            return
         if self.pending is not None:
             self.save(*self.pending)
             self.pending = None
@@ -180,10 +189,11 @@ class ThoughtWorker:
             if event_id is not None:
                 eligible += ' AND e.id=?'
                 args = [*args, event_id]
-            c.execute("UPDATE memory_capture_jobs SET status='failed',lease_token=NULL,lease_until=NULL,"
-                "error='Thought source lease expired too many times' WHERE event_id IS NOT NULL "
-                "AND status='running' AND lease_until<=? AND attempts>=? AND EXISTS(SELECT 1 FROM memory_raw_events e "
-                'WHERE e.id=memory_capture_jobs.event_id AND '+eligible+')',(now,self.queue._max_attempts,*args))
+            if self.claim_bound_source_extractor_factory is None:
+                c.execute("UPDATE memory_capture_jobs SET status='failed',lease_token=NULL,lease_until=NULL,"
+                    "error='Thought source lease expired too many times' WHERE event_id IS NOT NULL "
+                    "AND status='running' AND lease_until<=? AND attempts>=? AND EXISTS(SELECT 1 FROM memory_raw_events e "
+                    'WHERE e.id=memory_capture_jobs.event_id AND '+eligible+')',(now,self.queue._max_attempts,*args))
             row = c.execute("SELECT j.id FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id "
                 "WHERE ((j.status='pending' AND j.available_at<=?) OR (j.status='running' AND j.lease_until<=?) "
                 "OR j.status='waiting_model') AND "+eligible+" ORDER BY j.available_at,j.id LIMIT 1",(now,now,*args)).fetchone()
@@ -264,7 +274,7 @@ class ThoughtWorker:
     def _source(self, claim):
         event = self.queue.get_event(claim.job.event_id)
         sessions = (canonical_session_id(event),) if event is not None else None
-        with processing_cohort(sessions):
+        with processing_cohort(sessions), diagnostic_scope():
             return self._source_owned(claim)
 
     def _source_owned(self, claim):
@@ -280,7 +290,7 @@ class ThoughtWorker:
                         (eligibility['policy'] + ': ' + eligibility['reason'], claim.job.id))
                 return self.queue.get(claim.job.id)
             resumed = claim.job.phase == 'partial_source'
-            context = [] if resumed else self._context(event)
+            context = [] if resumed or self.claim_bound_source_extractor_factory is not None else self._context(event)
             with self._processing(('source-v1', event.id, [row.id for row in context]),
                 lambda c: self.queue._assert_owned(c, claim), lambda: self.queue.renew_claim(claim),
                 self.queue._refresh_generation, lambda key, body: self.queue._save_refresh_generation(claim, key, body)) as replay:
@@ -290,7 +300,8 @@ class ThoughtWorker:
             return self.queue.get(claim.job.id)
         except Exception as error:
             try:
-                return self.queue._fail(claim, error)
+                return self.queue._fail(claim, ProtectedContextError() if restricted() else error,
+                    retry_without_limit=self.claim_bound_source_extractor_factory is not None)
             except LeaseLost:
                 return self.queue.get(claim.job.id)
         finally:
@@ -328,13 +339,20 @@ class ThoughtWorker:
                 if not changed:
                     with self._source_extractor(event, claim) as extractor:
                         drafts = extractor.extract(event, context)
-                    # Preserve original ordinary publication guard, transaction
-                    # and bounded stale-proof rebuild outside the completion
-                    # writer. Residual repair still publishes inside it below.
-                    changed = (self.engine._publish(drafts, origin=origin, rebuild=False)
-                               if self.claim_bound_source_extractor_factory is not None
-                               else self.engine._publish(drafts, origin=origin))
+                    if self.claim_bound_source_extractor_factory is not None:
+                        preflight=getattr(extractor,'publication_preflight',None)
+                        if preflight is not None:preflight()
+                        check=getattr(extractor,'publication_check',None)
+                        def final_check(db):
+                            self.queue._assert_owned(db,claim)
+                            if check is not None:check(db)
+                        with publication_guard(final_check):
+                            changed=self.engine._publish(drafts,origin=origin,rebuild=False)
+                    else:
+                        changed=self.engine._publish(drafts,origin=origin)
         except SourceDraftRepairPending as failure:
+            if restricted():
+                raise ProtectedContextError() from None
             pending = failure
             prepared = failure.accepted
         with self.queue.store.transaction(write=True) as c:
@@ -353,7 +371,8 @@ class ThoughtWorker:
                           (claim.job.id, json.dumps(progress)))
                 c.execute("UPDATE memory_capture_jobs SET phase='partial_source',extracted_ids=? WHERE id=?",
                           (json.dumps(ids), claim.job.id))
-                self.queue._fail(claim, pending)
+                self.queue._fail(claim, pending,
+                    retry_without_limit=self.claim_bound_source_extractor_factory is not None)
             else:
                 replay.confirm()
                 c.execute("UPDATE memory_capture_jobs SET status='completed',phase='done',error=NULL,"

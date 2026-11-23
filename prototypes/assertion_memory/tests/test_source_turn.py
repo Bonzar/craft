@@ -63,13 +63,9 @@ for row in sys.stdin:
   def query(cursor=None):
    return rpc('older_dialogue',{} if cursor is None else {'cursor':cursor})['result']['structuredContent']
   a=query()
-  if kind=='budget':
-   assert a['history_status']=='attempt_budget_exhausted' and a['next_cursor'] is None and len(a['messages'])==8
-   b={'messages':[]}
-  else:
-   assert a['history_status']=='more'
-   b=query(a['next_cursor'])
-   assert b['history_status']=='history_end' and b['next_cursor'] is None
+  assert a['history_status']=='more'
+  b=query(a['next_cursor'])
+  assert b['history_status']=='history_end' and b['next_cursor'] is None
   assert not any('DO NOT DISCLOSE' in r['text'] for r in [*a['messages'],*b['messages']])
   if kind in ('session-context','session-forged'):
    foreign=rpc('older_dialogue',{'session_id':'context-chat','start_date':'2024-06-02','end_date':'2024-06-03'})['result']['structuredContent']
@@ -126,7 +122,7 @@ for row in sys.stdin:
   if kind=='session-forged':proposal['supports'][1]=foreign['messages'][0]['text']
   if kind not in ('bad','session-forged'):
    assert 'result' in rpc('select_references',{'refs':proposal['supports']})
-  if kind in ('unresolved','budget'):proposal={'status':'unresolved','text':None,'supports':[]}
+  if kind=='unresolved':proposal={'status':'unresolved','text':None,'supports':[]}
   relay.terminate(); relay.wait(2)
   send({'method':'item/completed','params':{'threadId':'fiction-thread','turnId':'fiction-turn',
     'item':{'id':'message','type':'agentMessage','phase':('unknown' if kind=='unknown-phase' else 'final_answer'),'text':json.dumps(proposal,ensure_ascii=False)}}})
@@ -246,7 +242,7 @@ class SourceTurnTest(unittest.TestCase):
         self.assertEqual((job.status,calls),('completed',['Verify thought']))
         job,calls=self.attempt('session-forged')
         self.assertEqual((job.extracted_ids,calls),([],[]))
-        self.assertIn('Verified primary and exact shown evidence',job.error)
+        self.assertIn('ProtectedContextError',job.error)
 
     def test_cross_dialogue_frozen_watermark_hides_late_backdated_event(self):
         from ..turn_source.reader import EarlierDialogue
@@ -394,14 +390,6 @@ class SourceTurnTest(unittest.TestCase):
         spawn.assert_called_once()
         self.assertIn('synthetic launcher refused',job.error)
         self.assertEqual((job.extracted_ids,verified),([],[]))
-
-    def test_attempt_ceiling_is_not_history_end(self):
-        from ..turn_source.reader import EarlierDialogue
-        for cap,limit in [('MAX_PAGES',1),('MAX_REFS',9),('MAX_BYTES',48100)]:
-            with self.subTest(cap=cap),patch.object(EarlierDialogue,cap,limit):
-                job,calls=self.attempt('budget')
-                self.assertNotEqual(job.status,'completed',job.error)
-        self.assertEqual((job.extracted_ids,calls),([],[]))
 
     def test_unknown_agent_message_phase_cannot_publish(self):
         job,calls=self.attempt('unknown-phase')

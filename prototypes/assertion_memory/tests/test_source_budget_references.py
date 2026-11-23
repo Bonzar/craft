@@ -75,6 +75,7 @@ class BudgetReferencesTest(unittest.TestCase):
         self.assertEqual(job.status,'completed',job.error)
         count=len(shown)//2
         self.assertGreater(count,1)
+        self.assertEqual(len(job.extracted_ids),count)  # Different drafts are not semantically merged.
         self.assertEqual(''.join(text for _,text,_ in shown[:count]),event.prompt)
         self.assertEqual(shown[count][2][-1]['global_span']['end'],len(event.prompt))
         self.assertEqual(len(self.requests),3*count)

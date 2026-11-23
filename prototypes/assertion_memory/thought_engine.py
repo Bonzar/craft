@@ -59,7 +59,8 @@ class ThoughtEngine:
 
     def _emit(self, stage, **payload):
         if self.trace is not None:
-            self.trace({'stage': stage, **payload})
+            from .diagnostic_privacy import restricted, redact
+            self.trace({'stage': stage, **(redact(payload) if restricted() else payload)})
 
     def _call(self, task, records, bindings, instructions, *, support_count=None, single_thought=False,
               review_option_count=0, source_draft_count=None, refresh_option_count=0, reuse_option_count=0,

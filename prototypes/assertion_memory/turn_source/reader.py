@@ -3,9 +3,11 @@ from contextlib import contextmanager, closing
 from pathlib import Path
 from hashlib import sha256
 import secrets
+import os
 import sqlite3
 from dataclasses import dataclass
-from threading import RLock
+from contextvars import ContextVar
+from ..source_admission import stamp, unchanged
 
 from ..dialogue import source_role
 from ..thought_processing_selection import canonical_session_id
@@ -34,15 +36,14 @@ class EarlierDialogue:
     PAGE=8
     CHARS=12_000
     SCAN=32
-    MAX_PAGES=16
-    MAX_BYTES=256_000
-    MAX_REFS=128
 
     def __init__(self,path,request,primary,*,freeze_membership=False):
         self.path=Path(path).resolve(strict=True)
         self.request=request
         self.primary=primary
         self.primary_order=None
+        from ..diagnostic_privacy import current_scope
+        self.diagnostic_scope=current_scope()
         self.refs={}
         self.selected=set()
         self.owner_scope=None
@@ -50,22 +51,28 @@ class EarlierDialogue:
         self.budget_exhausted=False
         self.pages=0
         self.calls=0
-        self.bytes_read=0  # Primary is accounted by the provider token budget, not the history quota.
+        self.bytes_read=0  # Telemetry only; provider tokens are accounted separately.
         self.cursor,self.bound,self.started=None,None,False
-        self._anchor_lock=RLock()
-        self._anchor=None
+        self._anchor=None  # Compatibility marker: never holds a connection.
+        self._closed=False
+        self._read_db=ContextVar("source_read_db",default=None)
+        self._publishing=ContextVar("source_publication",default=False)
+        self.watermark=None
+        self.instance=None
+        self._identity_fd=os.open(self.path,os.O_RDONLY)
         try:
+            stat=os.fstat(self._identity_fd)
+            self._identity=(stat.st_dev,stat.st_ino)
             self._initialize(freeze_membership)
         except BaseException:
             self.close()
             raise
 
     def _initialize(self,freeze_membership):
-        if freeze_membership:
-            self._anchor=self._connection()
-        manager=self.snapshot() if self._anchor is None else self._admission()
+        manager=self.snapshot()
         request,primary=self.request,self.primary
         with manager as db:
+            self.watermark,self.instance=stamp(db)
             target=self.row(db,primary.id)
             if (_event(target)!=primary or not self.visible(primary)
                     or (primary.id,primary.scope,primary.session_id,canonical_session_id(primary))
@@ -88,54 +95,81 @@ class EarlierDialogue:
         db.execute('BEGIN')
         return db
 
-    @contextmanager
-    def _admission(self):
-        self.request.lease.check_reader_snapshot(self._anchor,self.path)
-        yield self._anchor
-
     def close(self):
-        with self._anchor_lock:
-            if self._anchor is not None:
-                self._anchor.close()
-                self._anchor=None
+        # All read transactions are already closed before returning to a model.
+        self._closed=True
+        # A plain fd pins the inode against reuse; it holds no SQLite transaction
+        # or WAL read mark. Release it before the publication writer is entered.
+        if self._identity_fd is not None:
+            os.close(self._identity_fd)
+            self._identity_fd=None
 
     def admitted_raw(self,row):
-        return self._anchor is None or self.frozen_raw(row)
+        return self.frozen_raw(row)
 
     def admitted_thought(self,thought,hash_value):
-        return self._anchor is None or self.frozen_thought(thought,hash_value)
+        return self.frozen_thought(thought,hash_value)
 
     def frozen_raw(self,row):
-        with self._anchor_lock:
-            if self._anchor is None:
-                return False
-            fields=self._anchor.execute('SELECT r.*,r.rowid AS ordinal,p.position,j.status '
-                'FROM memory_raw_events r LEFT JOIN memory_event_positions p ON p.event_id=r.id '
-                'JOIN memory_capture_jobs j ON j.event_id=r.id WHERE r.id=?',(row['id'],)).fetchone()
-            # Original waiting-origin rows were not admitted. Normal lease/job
-            # progress after admission is allowed; position and raw bytes are not.
-            return (fields is not None and fields['status']!='waiting_origin'
-                    and all(fields[name]==row[name] for name in fields.keys() if name!='status'))
+        db=self._read_db.get()
+        return (db is not None and row['status']!='waiting_origin'
+                and unchanged(db,self.watermark,'raw',row['id']))
 
     def frozen_thought(self,thought,hash_value):
-        with self._anchor_lock:
-            if self._anchor is None:
-                return False
-            row=self._anchor.execute('SELECT content_hash FROM memory_thought_versions WHERE thought_id=? AND version=?',
-                                     (thought.id,thought.version)).fetchone()
-            return row is not None and row['content_hash']==hash_value
+        db=self._read_db.get()
+        return (db is not None and unchanged(db,self.watermark,'version',thought.id,thought.version)
+                and unchanged(db,self.watermark,'head',thought.id))
+
+    def grant_matches(self,grant):
+        if grant is None:return False
+        if self._publishing.get():
+            # The writer's DB instance is checked below. No path/stat IO under
+            # its write lock; preflight already checked the live path identity.
+            return (grant.database==self.path and grant.scope==self.request.scope
+                    and grant._identity==self._identity)
+        return grant.matches(self)
 
     @contextmanager
-    def snapshot(self):
-        with closing(self._connection()) as db:
-            self.request.lease.check_reader_snapshot(db,self.path)
+    def reading_in(self,db):
+        token=self._read_db.set(db)
+        try:
+            if self.instance is not None and stamp(db)[1]!=self.instance:
+                raise SourceReadDenied('Source database instance changed')
             if self.primary_order is not None:
                 self.ensure_order(db,self.row(db,self.primary.id))
             yield db
+        finally:self._read_db.reset(token)
+
+    @contextmanager
+    def snapshot(self):
+        if self._closed:raise SourceReadDenied('Source reader is closed')
+        self._check_path_identity()
+        with closing(self._connection()) as db:
+            self._check_path_identity()
+            self.request.lease.check_reader_snapshot(db,self.path)
+            with self.reading_in(db):yield db
+
+    def _check_path_identity(self):
+        stat=self.path.stat()
+        if (stat.st_dev,stat.st_ino)!=self._identity:
+            raise SourceReadDenied('Source database path changed')
+
+    def publication_preflight(self):
+        self._check_path_identity()
+        if any(self.refs[ref].context_session is not None for ref in self.selected):
+            if not self.grant_matches(self.owner_scope):
+                raise SourceReadDenied('Other dialogue authorization changed')
+
+    def publication_check(self,db):
+        token=self._publishing.set(True)
+        try:
+            with self.reading_in(db):
+                self.evidence_in(db,tuple(self.selected))
+        finally:self._publishing.reset(token)
 
     def ensure_order(self,db,target):
         if ((_event(target)!=self.primary or not self.visible(self.primary)
-                or target['status']=='waiting_origin')
+                or target['status']=='waiting_origin' or not self.admitted_raw(target))
                 or (target['ordinal'],target['position'])!=self.primary_order):
             raise SourceReadDenied('Primary dialogue order or eligibility changed')
         # A captured explicitly positioned message and an unpositioned primary
@@ -161,26 +195,24 @@ class EarlierDialogue:
                 for key in ('type','message_type','payload_type','response_item_type')))
 
     def offer(self,event_id,start,end,excerpt,order,*,context_session=None):
-        if len(self.refs)>=self.MAX_REFS:
-            self.budget_exhausted=True
-            raise SourceReadDenied('Issued reference resource budget exhausted')
+        if context_session and self.diagnostic_scope is not None:
+            self.diagnostic_scope.restricted=True
         ref=secrets.token_urlsafe(18)
         self.refs[ref]=IssuedReference('raw',event_id,start,end,sha256(excerpt.encode()).digest(),order,context_session)
         return ref
 
     def offer_thought(self,thought,*,local):
+        if not local and self.diagnostic_scope is not None:
+            self.diagnostic_scope.restricted=True
         from dataclasses import asdict
         from ..thought_store import _hash
-        if len(self.refs)>=self.MAX_REFS:
-            self.budget_exhausted=True
-            raise SourceReadDenied('Issued reference resource budget exhausted')
         ref=secrets.token_urlsafe(18)
         self.refs[ref]=IssuedReference('thought',thought.id,None,None,
             bytes.fromhex(_hash(asdict(thought))),None,None if local else 'external',thought.version,thought.text)
         return ref
 
     def context_authorized(self,row,event,session):
-        return (self.owner_scope is not None and self.owner_scope.matches(self)
+        return (self.grant_matches(self.owner_scope)
                 and event.scope==self.request.scope and canonical_session_id(event)==session
                 and event.session_id!=self.request.capture_session_id
                 and session!=self.request.canonical_session_id and row['status']!='waiting_origin'
@@ -225,17 +257,8 @@ class EarlierDialogue:
 
     def older(self,cursor):
         self.calls+=1
-        if self.calls>self.MAX_PAGES:
-            self.budget_exhausted=True
-            raise SourceReadDenied('Attempt history call budget exhausted')
         if (self.started and (self.cursor is None or cursor!=self.cursor)) or (not self.started and cursor is not None):
             raise SourceReadDenied('Invalid history cursor')
-        # Reserve a complete worst-case page (UTF-8 can encode in four bytes).
-        # Do not disguise an attempt ceiling as exhaustion of eligible history.
-        if not self.can_read_page(include_current=True):
-            with self.snapshot():pass
-            self.budget_exhausted=True
-            return {'messages':[],'next_cursor':None,'history_status':'attempt_budget_exhausted'}
         self.pages+=1
         cut=self.bound or (self.position,self.ordinal,None)
         column=self.column
@@ -266,15 +289,9 @@ class EarlierDialogue:
         self.started=True
         self.bytes_read+=sum(len(item['text'].encode()) for item in results)
         has_more=split or examined<len(rows)
-        status=('more' if self.can_read_page() else 'attempt_budget_exhausted') if has_more else 'history_end'
-        self.budget_exhausted |= status=='attempt_budget_exhausted'
+        status='more' if has_more else 'history_end'
         self.cursor=secrets.token_urlsafe(18) if status=='more' else None
         return {'messages':list(reversed(results)),'next_cursor':self.cursor,'history_status':status}
-
-    def can_read_page(self,*,include_current=False):
-        charged=self.calls-int(include_current)
-        return (max(self.pages,charged)<self.MAX_PAGES and self.bytes_read+4*self.CHARS<=self.MAX_BYTES
-                and len(self.refs)+self.PAGE<=self.MAX_REFS)
 
     def evidence(self,refs):
         with self.snapshot() as db:

@@ -16,6 +16,7 @@ from pathlib import Path
 from uuid import uuid4
 from datetime import datetime, timezone
 from .backup import snapshot_database
+from . import rebuild_admission as admission
 
 from .source_reprocessing import PROTOCOL as SOURCE_POLICY
 from .background_overviews import REGISTRY_PROTOCOL, AUTOMATIC_LEAF_SCHEDULING_PROTOCOL
@@ -177,7 +178,8 @@ def _fence(state,operation=None):
  with _read(paths['baseline_db']) as baseline,_read(paths['stage_db']) as stage:
   if _namespace(baseline)!=state['namespace'] or _namespace(stage)!=state['namespace']:raise ValueError('stage namespace divergence')
   for table in _tables(baseline):
-   if table not in OPERATIONAL and table!='memory_question_routes':_prefix_equal(baseline,stage,table)
+   if table not in OPERATIONAL and table not in admission.TABLES and table!='memory_question_routes':_prefix_equal(baseline,stage,table)
+  admission.stage_lineage(state,baseline,stage)
   _stage_routes(state,baseline,stage)
  return _profile(state)
 
@@ -201,11 +203,19 @@ def start(config,workdir,*,operation_id=None):
    _plain_path(path)
    if path.exists():raise ValueError('operation path already exists')
   if source.stat().st_nlink!=1:raise ValueError('source path alias fence')
+  with _read(source) as live:admission.validate(live)
   snapshot_database(source,baseline);baseline.chmod(0o600);snapshot_database(baseline,stage);stage.chmod(0o600)
+  with closing(sqlite3.connect(stage,isolation_level=None)) as staged:
+   staged.execute('BEGIN IMMEDIATE')
+   try:
+    admission_contract=admission.fork(staged)
+    staged.execute('COMMIT')
+   except BaseException:
+    staged.execute('ROLLBACK');raise
   with _read(baseline) as c:
    scopes=[r[0] for r in c.execute('SELECT DISTINCT scope FROM memory_raw_events ORDER BY scope')]
    raw=c.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0];namespace=_namespace(c)
-  state={'schema':1,'operation_id':identity,'phase':'source','created_at':now(),'config':str(config),'config_sha256':_sha(config.read_bytes()),'provider_identity':_provider_identity(settings),'source_db':str(source),'baseline_db':str(baseline),'stage_db':str(stage),'operation_root':str(root),'root_identity':_file_identity(root),'file_identities':{key:_file_identity(path) for key,path in (('source_db',source),('baseline_db',baseline),('stage_db',stage))},'baseline_sha256':_sha(baseline.read_bytes()),'namespace':namespace,'policies':POLICIES,'estimate':{**estimate,'scopes':scopes,'raw_events':raw,'stage_bytes':baseline.stat().st_size},'source':{},'limitations':['Full operation is explicitly authorized, never automatic.','DerivedWorkQueue still hydrates a whole frozen generation; 100k end-to-end delta scaling is not established.'],'derive_requested':False,'relation_cursor':0,'view_cursor':0,'name_frontier':None,'naming_requested':False,'updated_at':now()}
+  state={'schema':1,'admission':admission_contract,'operation_id':identity,'phase':'source','created_at':now(),'config':str(config),'config_sha256':_sha(config.read_bytes()),'provider_identity':_provider_identity(settings),'source_db':str(source),'baseline_db':str(baseline),'stage_db':str(stage),'operation_root':str(root),'root_identity':_file_identity(root),'file_identities':{key:_file_identity(path) for key,path in (('source_db',source),('baseline_db',baseline),('stage_db',stage))},'baseline_sha256':_sha(baseline.read_bytes()),'namespace':namespace,'policies':POLICIES,'estimate':{**estimate,'scopes':scopes,'raw_events':raw,'stage_bytes':baseline.stat().st_size},'source':{},'limitations':['Full operation is explicitly authorized, never automatic.','DerivedWorkQueue still hydrates a whole frozen generation; 100k end-to-end delta scaling is not established.'],'derive_requested':False,'relation_cursor':0,'view_cursor':0,'name_frontier':None,'naming_requested':False,'updated_at':now()}
   _fence(state,op);_write(op,state);return op
 
 def _profile(state):
@@ -325,6 +335,7 @@ def _live_guard(state,live):
   base_tables=set(_tables(baseline));live_tables=set(_tables(live))
   if live_tables!=base_tables:raise ValueError('durable table divergence')
   for table in sorted(base_tables):
+   if table in admission.TABLES:continue
    if table in RAW:_prefix_equal(baseline,live,table)
    elif table=='memory_capture_jobs':
     for row in _rows(baseline,table):
@@ -333,6 +344,7 @@ def _live_guard(state,live):
    elif table=='memory_source_context_changes':
     _prefix_equal(baseline,live,table) # New capture context markers are allowed.
    else:_prefix_equal(baseline,live,table,exact=True)
+  admission.lineage(baseline,live,live=True)
 
 def _catchup(operation):
  from .storage import MemoryStore
@@ -524,8 +536,9 @@ def _validate(operation):
    if c.execute('PRAGMA integrity_check').fetchall()[0][0]!='ok' or c.execute('PRAGMA foreign_key_check').fetchone():issues.append('integrity')
    with _read(state['baseline_db']) as baseline:
     for table in _tables(baseline):
-     if table in OPERATIONAL:continue
+     if table in OPERATIONAL or table in admission.TABLES:continue
      if table!='memory_question_routes':_prefix_equal(baseline,c,table,allow_editorial_binding=table=='memory_view_names')
+    admission.stage_lineage(state,baseline,c)
     _stage_routes(state,baseline,c)
     # Mutable current pointer/definitions may legitimately change; IDs survive.
     for row in baseline.execute('SELECT id FROM memory_views') if 'memory_views' in _tables(baseline) else ():
@@ -593,11 +606,20 @@ def cutover(operation,*,writer_pids=None,profile_sha256=None):
   previous=status(op);_fence(previous,op)
   if previous['phase'] in ('published','completed'):return previous
   if previous['phase']=='cutover' and ledger_digest(previous['source_db'])==ledger_digest(previous['stage_db']):
+   with _read(previous['stage_db']) as stage,_read(previous['source_db']) as target:
+    admission.lineage(stage,target)
    previous['phase']='published';_write(op,previous);return previous
   state=_validate(op)
   if state['phase']!='ready' or state['issues']:raise ValueError('stage is not ready')
   if profile_sha256!=state['config_sha256']:raise ValueError('barrier profile divergence')
   if raw_digest(state['source_db'])!=raw_digest(state['stage_db']):raise ValueError('raw frontier divergence; catch up before barrier')
+  with _read(state['source_db']) as live,closing(sqlite3.connect(state['stage_db'],isolation_level=None)) as stage:
+   stage.execute('BEGIN IMMEDIATE')
+   try:
+    admission.prepare_publication(state,live,stage)
+    stage.execute('COMMIT')
+   except BaseException:
+    stage.execute('ROLLBACK');raise
   source=Path(state['source_db']);backup=op.parent/'precutover.sqlite3'
   if not backup.exists():snapshot_database(source,backup);backup.chmod(0o600)
   elif ledger_digest(source)!=ledger_digest(backup):raise ValueError('precutover backup divergence')
@@ -610,6 +632,8 @@ def cutover(operation,*,writer_pids=None,profile_sha256=None):
    if ledger_digest(candidate)!=ledger_digest(state['stage_db']):raise ValueError('stale publication candidate')
   else:snapshot_database(Path(state['stage_db']),candidate)
   candidate.chmod(0o600)
+  with _read(state['stage_db']) as stage,_read(candidate) as target:
+   admission.lineage(stage,target)
   if ledger_digest(source)!=ledger_digest(backup) or raw_digest(backup)!=raw_digest(state['stage_db']):raise ValueError('final writer frontier divergence')
   state['phase']='cutover';state['precutover_db']=str(backup);state['published_raw']=raw_digest(source);state['publication_identity']=_file_identity(candidate);_write(op,state)
   os.replace(candidate,source)
@@ -633,7 +657,8 @@ def confirm(operation,*,verification):
    if target.execute('PRAGMA integrity_check').fetchone()[0]!='ok' or target.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('postflip integrity')
    if _namespace(target)!=state['namespace']:raise ValueError('postflip namespace divergence')
    for table in _tables(stage):
-    if table not in OPERATIONAL and table!='memory_question_routes':_prefix_equal(stage,target,table)
+    if table not in OPERATIONAL and table not in admission.TABLES and table!='memory_question_routes':_prefix_equal(stage,target,table)
+   admission.lineage(stage,target)
    _published_routes(state,stage,target)
   state['phase']='completed';state['completed_at']=now();state['verification_sha256']=_sha(Path(verification).read_bytes());_write(op,state);return state
 

@@ -177,14 +177,17 @@ class TracedThoughtWorker(ThoughtWorker):
         events = [self.queue.get_event(claim.job.event_id) for claim in claims]
         try:
             check_processing_cancelled()
-            self.batch_contexts = {event.id: self._context(event) for event in events}
-            requests = [self.engine.source_construction_request(event, self.batch_contexts[event.id])
-                        for event in events]
-            drafts = generate_source_drafts(requests, self._generate_source_batch,
-                                           max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True)
-            if any(draft is None for draft in drafts):
-                raise ValueError('one group response did not cover every source; original jobs remain queued')
-            self.source_batch = PreparedSourceGroup(requests, drafts)
+            # Claim-bound extractors own their paginated context and source windows;
+            # do not run the legacy bounded batch constructor before them.
+            if self.claim_bound_source_extractor_factory is None:
+                self.batch_contexts = {event.id: self._context(event) for event in events}
+                requests = [self.engine.source_construction_request(event, self.batch_contexts[event.id])
+                            for event in events]
+                drafts = generate_source_drafts(requests, self._generate_source_batch,
+                                               max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True)
+                if any(draft is None for draft in drafts):
+                    raise ValueError('one group response did not cover every source; original jobs remain queued')
+                self.source_batch = PreparedSourceGroup(requests, drafts)
             for claim in claims:
                 check_processing_cancelled()
                 if renewal.done():
@@ -206,7 +209,10 @@ class TracedThoughtWorker(ThoughtWorker):
 
     def _source(self, claim):
         with self._attempt('source', {'event_id': claim.job.event_id, 'job_id': claim.job.id,
-                           'attempt':claim.job.attempts,'previous_error':claim.job.error},
+                           'attempt':claim.job.attempts,'previous_error':(
+                               'Prior claim-bound source error details redacted'
+                               if self.claim_bound_source_extractor_factory is not None and claim.job.error
+                               else claim.job.error)},
                            lambda db: self._cancel_source(db, claim)) as trace:
             check_processing_cancelled()
             result = super()._source(claim)

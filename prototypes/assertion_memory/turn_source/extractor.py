@@ -27,11 +27,11 @@ TOOL_FIELDS={
                        {'cursor':{'type':'string'},'session_id':{'type':'string'},
                         'start_date':{'type':'string','description':'Inclusive UTC ISO date/time.'},
                         'end_date':{'type':'string','description':'Exclusive UTC ISO date/time.'}}, []),
-    'semantic_search': ('Rank bounded authorized direct source thoughts, without generating an answer.',
-                        {'query':{'type':'string'},'limit':{'type':'integer'},
-                         'session_id':{'type':'string','description':'Optional canonical session; use current for this dialogue.'}}, ['query']),
-    'thought_sources': ('Read exact permitted raw basis spans of an offered thought; other-dialogue results remain context only.',
-                        {'ref':{'type':'string'}}, ['ref']),
+    'semantic_search': ('Page ranked authorized direct source thoughts. Continue with cursor alone.',
+                        {'cursor':{'type':'string'},'query':{'type':'string'},'limit':{'type':'integer'},
+                         'session_id':{'type':'string','description':'Optional canonical session; use current for this dialogue.'}}, []),
+    'thought_sources': ('Read exact permitted raw basis spans of an offered thought; other-dialogue results remain context only. Continue with cursor alone.',
+                        {'ref':{'type':'string'},'cursor':{'type':'string'}}, []),
 }
 
 
@@ -98,7 +98,7 @@ class SourceMCP:
 class SourceTurnConfig:
     """Explicit trusted process command; not a serializable service setting."""
     command: tuple[str,...]
-    timeout: float = 60
+    timeout: float | None = None
     enabled: bool = False
     owner_scope: OwnerScopeGrant | None = None
     budget: TokenBudget | None = None
@@ -108,7 +108,8 @@ class SourceTurnConfig:
             raise ValueError('Continuing source extraction is disabled')
         if (not self.command or not Path(self.command[0]).is_absolute()
                 or any(not isinstance(part,str) or not part for part in self.command)
-                or not 0 < self.timeout <= 300):
+                or (self.timeout is not None and (type(self.timeout) not in (int,float)
+                    or not 0 < self.timeout < float("inf")))):
             raise ValueError('Invalid source-turn host configuration')
 
 
@@ -230,15 +231,32 @@ class ContinuingSourceExtractor:
             raise SourceReadDenied('Required read-only source tool is unavailable')
 
     def extract(self,event,context):
+        from ..diagnostic_privacy import diagnostic_scope, restricted, ProtectedContextError
+        with diagnostic_scope():
+            try:
+                return self._extract_attempt(event,context)
+            except Exception:
+                if restricted():
+                    raise ProtectedContextError() from None
+                raise
+
+    def _extract_attempt(self,event,context):
         if self.config.budget is None:
             raise SourceBudgetExceeded('Provider context window and tokenizer are required')
         self.request.lease.ensure_active()
         reader=EarlierDialogue(self.engine.store.path,self.request,event,freeze_membership=True)
+        self._publication_reader=reader
         try:
             with using_budget(self.config.budget):
                 return self._extract_windows(event,reader)
         finally:
             reader.close()
+
+    def publication_preflight(self):
+        self._publication_reader.publication_preflight()
+
+    def publication_check(self,db):
+        self._publication_reader.publication_check(db)
 
     def _extract_windows(self,event,reader):
         budget=self.config.budget
@@ -253,8 +271,6 @@ class ContinuingSourceExtractor:
                <= budget.capacity and frame_fits(event.prompt))
         windows=[(0,len(event.prompt),event.prompt)] if whole else list(
             budget.chunks(event.prompt,overhead=overhead,measure=material_cost))
-        if len(windows)>64:
-            raise SourceBudgetExceeded('Source requires more than 64 windows; no partial publication')
         if not whole:
             reader.refs.pop(reader.primary_ref)
             reader.selected.clear()
@@ -293,7 +309,19 @@ class ContinuingSourceExtractor:
         # Recheck every selected receipt after the last independent review.
         reader.evidence(list(reader.selected))
         self.request.lease.ensure_active()
-        return prepared
+        # Exact duplicates only. Preserve all distinct, already verified bases.
+        merged={}
+        for draft,bases in prepared:
+            key=(draft['text'],draft.get('question'))
+            if key not in merged:
+                merged[key]=(draft,[])
+            target=merged[key][1]
+            known={json.dumps(basis,sort_keys=True) for basis in target}
+            for basis in bases:
+                encoded=json.dumps(basis,sort_keys=True)
+                if encoded not in known:
+                    target.append(basis);known.add(encoded)
+        return list(merged.values())
 
     def _extract_with_reader(self,event,reader):
         proposal=self._turn(reader)
