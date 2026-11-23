@@ -1,8 +1,10 @@
 """Gate release-graph visual deployment without changing legacy dispatches."""
+import hashlib
 import json
 import os
 from pathlib import Path
 import sys
+import zipfile
 
 import lifecycle
 
@@ -69,6 +71,77 @@ def check_approval(get, env, mode):
         raise ValueError('No exact authorized visual approval for this run/stage')
 
 
+
+TEST_JOB = 'Deploy visual TEST / Activate visual artifact'
+TEST_STEPS = (
+    'Verify exact immutable visual archive and stage approval',
+    'Activate exact visual archive',
+    'Smoke exact visual ingress',
+    'Record exact native visual TEST identity',
+    'Preserve visual TEST evidence',
+    'Publish same-run visual TEST proof for PROD',
+)
+WORKFLOW_FILE = 'assertion-memory-release-graph.yml'
+RECEIPT_FILE = 'native-test-proof.json'
+
+
+def verify_same_run_test(get, env, expected, folder):
+    # PROD is running in this same first attempt. Only the TEST job must have
+    # finished; assuming the enclosing workflow has completed would deadlock.
+    run_id, control_sha = env['GITHUB_RUN_ID'], env['GITHUB_SHA']
+    root = lifecycle.ROOT
+    run_path = root + '/actions/runs/' + run_id
+    run = get(run_path)
+    wf = get(root + '/actions/workflows/' + WORKFLOW_FILE)
+    if (str(run.get('id')) != run_id or run.get('workflow_id') != wf.get('id')
+            or not wf.get('id') or run.get('path') != '.github/workflows/' + WORKFLOW_FILE
+            or run.get('event') != 'workflow_dispatch' or run.get('head_branch') != 'main'
+            or run.get('head_sha') != control_sha or run.get('run_attempt') != 1
+            or run.get('status') != 'in_progress'
+            or (run.get('repository') or {}).get('full_name') != REPO
+            or (run.get('head_repository') or {}).get('full_name') != REPO):
+        raise ValueError('Wrong native visual control run or attempt')
+    response = get(run_path + '/attempts/1/jobs?per_page=100')
+    jobs = response.get('jobs', [])
+    if response.get('total_count') != len(jobs) or len(jobs) > 100:
+        raise ValueError('Incomplete native visual jobs')
+    matches = [job for job in jobs if job.get('name') == TEST_JOB]
+    if (len(matches) != 1 or str(matches[0].get('run_id')) != run_id
+            or matches[0].get('head_sha') != control_sha
+            or matches[0].get('status') != 'completed' or matches[0].get('conclusion') != 'success'):
+        raise ValueError('Exact native visual TEST job did not succeed')
+    for name in TEST_STEPS:
+        matching = [step for step in matches[0].get('steps', []) if step.get('name') == name]
+        if (len(matching) != 1 or matching[0].get('status') != 'completed'
+                or matching[0].get('conclusion') != 'success'):
+            raise ValueError('Native visual TEST did not verify, activate, smoke and publish evidence')
+    response = get(run_path + '/artifacts?per_page=100')
+    artifacts = response.get('artifacts', [])
+    if response.get('total_count') != len(artifacts) or len(artifacts) > 100:
+        raise ValueError('Incomplete native visual artifact list')
+    name = f'assertion-memory-native-visual-test-{run_id}-attempt-1'
+    matches = [entry for entry in artifacts if entry.get('name') == name]
+    if len(matches) != 1:
+        raise ValueError('Expected exactly one native visual TEST evidence artifact')
+    item = matches[0]
+    origin = item.get('workflow_run') or {}
+    if (item.get('expired') is not False or str(origin.get('id')) != run_id
+            or origin.get('head_sha') != control_sha or not 0 < item.get('size_in_bytes', 0) <= 8192):
+        raise ValueError('Wrong native visual TEST evidence origin')
+    aid = lifecycle.ci.safe(ID, str(item.get('id', '')))
+    digest = lifecycle.ci.safe('sha256:' + DIGEST, item.get('digest', ''))[7:]
+    archive_path = folder/'native-test-proof.zip'
+    get(root + '/actions/artifacts/' + aid + '/zip', archive_path)
+    with archive_path.open('rb') as source:
+        if archive_path.stat().st_size > 8192 or hashlib.file_digest(source, 'sha256').hexdigest() != digest:
+            raise ValueError('Native visual TEST evidence ZIP digest mismatch')
+    with zipfile.ZipFile(archive_path) as archive:
+        if archive.namelist() != [RECEIPT_FILE] or archive.getinfo(RECEIPT_FILE).file_size > 4096:
+            raise ValueError('Unexpected native visual TEST evidence ZIP content')
+        if json.loads(archive.read(RECEIPT_FILE)) != expected:
+            raise ValueError('Uploaded native visual TEST evidence differs from exact archive')
+
+
 def resolve(get, env):
     mode = require_context(env)
     check_approval(get, env, mode)
@@ -81,13 +154,15 @@ def resolve(get, env):
         raise ValueError('Original visual archive differs from verified release graph')
     folder = Path(env['VISUAL_DOWNLOAD'])
     values = lifecycle.download(get, folder, rev, aid, digest)
-    # The workflow supplies this exclusively from needs.native-visual-test after
-    # activation, live ingress smoke and evidence upload in this same run.
+    # Build the expected proof independently in each stage; the caller output
+    # and the exact GitHub TEST evidence must both match it before PROD may send.
     proof = {**values, 'tag': tag, 'release_id': release_id, 'zip_sha256': digest,
              'build_run_id': original_run, 'test_run_id': env['GITHUB_RUN_ID'],
              'workflow_sha': env['GITHUB_SHA'], 'attempt': '1'}
-    if mode == 'prod' and json.loads(env['NATIVE_VISUAL_TEST_PROOF']) != proof:
-        raise ValueError('Native visual PROD must use the exact TEST-proven archive')
+    if mode == 'prod':
+        if json.loads(env['NATIVE_VISUAL_TEST_PROOF']) != proof:
+            raise ValueError('Native visual PROD must use the exact TEST-proven archive')
+        verify_same_run_test(get, env, proof, folder)
     return proof
 
 
@@ -110,7 +185,7 @@ def main():
     elif action == 'receipt':
         if require_context(env) != 'test':
             raise ValueError('Only native visual TEST writes a TEST receipt')
-        with (Path(env['VISUAL_DOWNLOAD'])/'native-test-proof.json').open('x',encoding='utf8') as out:
+        with (Path(env['VISUAL_DOWNLOAD'])/RECEIPT_FILE).open('x',encoding='utf8') as out:
             json.dump(json.loads(env['NATIVE_VISUAL_TEST_PROOF']), out, sort_keys=True)
     else:
         raise ValueError('Unknown native visual action')
