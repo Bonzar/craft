@@ -1,4 +1,4 @@
-# Assertion Memory release lifecycle (proposed, local only)
+# Assertion Memory release lifecycle
 
 1. In **Releases → Draft a new release**, select a **new** tag
    `assertion-memory-vMAJOR.MINOR.PATCH` and target the chosen full commit
@@ -10,25 +10,38 @@
    Run workflow**, choose **main**, paste the numeric GitHub **release ID**,
    and run once. This initiates TEST; there is no separate build action.
    The release build card’s run name shows its release ID. IDs are
-   stable identity, tags label versions, and Action run IDs are not inputs.
-3. After the receiver replies it activated and smoke-tested TEST, open
-   **Review deployments → assertion-memory-production → Approve and deploy**
-   on that exact run. This is the sole promotion action. Protected PROD runs
-   reverify the release and download and hash the same artifact, and compare
-   release ID, artifact ID, full SHA, and inner archive SHA-256 with the
-   actual successful VM TEST receipt. No rebuild happens here. No PR or
-   push triggers this workflow’s deployment jobs.
-4. To roll back, select an older still-retained immutable release ID at step 2.
-   Verify it in TEST again and approve its own run in step 3. Avoid approving
-   stale runs accidentally; check release ID in the run title. Skipping TEST,
-   rerunning old approvals, or retargeting a release is unsupported.
+   stable identity; tags label versions. Keep the successful TEST run ID for promotion.
+3. TEST saves a `test-receipt.json` artifact **only after** the restricted receiver
+   confirms activation and smoke success. Wait for the entire TEST run to finish
+   successfully. Open **Run workflow** again on **main**, explicitly choose
+   **production**, enter the same release ID and the successful **TEST run ID**.
+   Approve **assertion-memory-production** under **Review deployments** in this
+   new promotion run. Approval by the required reviewer is checked again in code.
+4. Promotion validates the TEST workflow ID/path, repository, main ref, first
+   attempt, completed successful run/job, activation and receipt-upload steps,
+   immutable receipt artifact provenance and ZIP digest. The receipt binds the
+   release ID, original build run/attempt, artifact ID, release SHA, build ZIP
+   digest and inner archive digest. Its environment must be TEST. The downloaded
+   original build must match every field. PROD has no build step.
+5. TEST and PROD must use the **same workflow commit on main**. If main advances,
+   perform a fresh TEST of the same release on the new main commit. This deliberately
+   binds the TEST job's protected environment configuration to the reviewed code
+   executing PROD. It never rebuilds or changes the selected release artifact.
+6. To roll back, select an older still-retained immutable release ID at step 2,
+   then explicitly promote its new green TEST run. Missing, expired or mismatched
+   receipts fail closed. The old transport-only TEST run `45170496615` has no
+   durable receipt and cannot authorize promotion; perform a new TEST after merge.
+
+A receipt is retained for 90 days (subject to repository policy), not indefinitely.
+No push, PR, release publication or TEST completion automatically deploys PROD.
+Both receivers must reject non-release commands before any archive is transmitted.
 
 ## Required before end-to-end
 
 - This new workflow must be registered on the default branch (assumed
   `main`) before native Run workflow is visible. This branch does **not**
-  put it there. Only releases of commits with these workflow/build files
-  and compatible receiver payload are supported: this does not retroactively
+  put it there. Original builds must already contain compatible release/build files
+  and receiver payload; the newer control workflow can promote those retained artifacts: this does not retroactively
   make arbitrary historical main commits releasable. Do not enable the older pilot branch automatic deploy settings;
   this main integration excludes its workflow entirely.
 - The deployment jobs are skipped until repository variable
@@ -56,3 +69,12 @@
   receiver/port/systemd/data migration qualification or known smoke
   coverage. GitHub Actions deployment concurrency is not a FIFO; resolve
   pending runs deliberately. No rollout/approval is performed by this patch.
+
+## Qualification still required
+
+This change does not provision the physical PROD receiver, keys, host pin,
+activation gate or protected environment. Those must be independently verified
+before dispatch. The code is not a claim of production readiness. Repository
+configuration and TEST infrastructure are unchanged by this patch. The PROD
+credential must remain restricted to `assertion-production-deploy` and the exact
+production receiver; an admin credential is not a substitute.

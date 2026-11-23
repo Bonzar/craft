@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Deployment action (production promotion is not available in this workflow)'
+        description: 'Explicit deployment action; production requires a green TEST run receipt'
         type: choice
-        options: [test]
+        options: [test, production]
         default: test
         required: true
       release_id:
@@ -23,9 +23,14 @@ on:
         type: string
         required: true
 
+      test_run_id:
+        description: 'For production only: successful TEST run ID from this same main commit'
+        type: string
+        required: false
+
 permissions: {}
 
-run-name: "Assertion memory • ${{ github.event_name }} • release ${{ inputs.release_id || github.event.release.id }}"
+run-name: "Assertion memory • ${{ inputs.action || github.event_name }} • release ${{ inputs.release_id || github.event.release.id }}"
 
 jobs:
   build:
@@ -92,6 +97,7 @@ jobs:
         run: |
           python tools/assertion-memory-qa/test-release-ci.py
           python tools/assertion-memory-qa/test-lifecycle.py
+          python tools/assertion-memory-qa/test-promotion.py
       - name: Test receiver recovery and embedded installer parity
         run: |
           bash -n tools/assertion-memory-qa/vm/provision-test.sh
@@ -151,3 +157,58 @@ jobs:
           RELEASE_ARCHIVE_SHA256: ${{ steps.resolve.outputs.release_sha256 }}
           RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
         run: tools/assertion-memory-qa/send-release.sh test
+
+      - name: Record exact activated TEST identity
+        env:
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: python tools/assertion-memory-qa/lifecycle.py receipt
+      - name: Persist verified TEST receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assertion-memory-test-receipt-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/assertion-memory-payload/test-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+  deploy-production:
+    name: Promote exact TEST archive to PROD
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'production' && inputs.test_run_id != '' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && vars.ASSERTION_MEMORY_BASE_DEPLOY_READY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    environment: assertion-memory-production
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: assertion-memory-deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
+      - id: resolve
+        name: Verify approval, green TEST receipt and exact original archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          TEST_RUN_ID: ${{ inputs.test_run_id }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: python tools/assertion-memory-qa/lifecycle.py production
+      - name: Promote through restricted PROD receiver
+        env:
+          RELEASE_ENABLED: ${{ vars.ASSERTION_MEMORY_DEPLOY_ENABLED }}
+          RELEASE_USER: ${{ vars.ASSERTION_MEMORY_SSH_USER }}
+          RELEASE_HOST: ${{ vars.ASSERTION_MEMORY_SSH_HOST }}
+          RELEASE_PORT: ${{ vars.ASSERTION_MEMORY_SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}
+          SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}
+          ARTIFACT_ID: ${{ steps.resolve.outputs.artifact_id }}
+          RELEASE_REVISION: ${{ steps.resolve.outputs.revision }}
+          RELEASE_ARCHIVE_SHA256: ${{ steps.resolve.outputs.release_sha256 }}
+          TESTED_ARTIFACT_ID: ${{ steps.resolve.outputs.tested_artifact_id }}
+          TESTED_REVISION: ${{ steps.resolve.outputs.tested_revision }}
+          TESTED_SHA256: ${{ steps.resolve.outputs.tested_sha256 }}
+          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
+        run: tools/assertion-memory-qa/send-release.sh production
