@@ -50,6 +50,17 @@ def manifest(root, release):
     return directory, parsed
 
 
+def current_release(root):
+    """Read the shared journal receiver's atomic pointer, without following it."""
+    target = Path(os.readlink(root / 'current'))
+    if target.parent not in (Path('releases'), root.absolute() / 'releases'):
+        raise ValueError('current escaped this visual environment')
+    key = target.name
+    if not HEX.fullmatch(key):
+        raise ValueError('invalid visual release identity')
+    return key
+
+
 def make_server(root, token, port=8829, *, environment='test'):
     if environment not in ('test', 'prod') or not HEX.fullmatch(token):
         raise ValueError('invalid dedicated TEST token')
@@ -126,7 +137,7 @@ def make_server(root, token, port=8829, *, environment='test'):
                 return self.respond(400)
             try:
                 if set(value) == {'op'} and value['op'] == 'current':
-                    rel = read_small(root / 'current', 66).decode('ascii').strip()
+                    rel = current_release(root)
                     manifest(root, rel)
                     return self.respond(200, json.dumps({'digest': rel}, separators=(',', ':')).encode(), 'application/json')
                 release, name = value.get('digest'), value.get('name')

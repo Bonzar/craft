@@ -14,7 +14,12 @@ commit cannot authorize a newer control commit; test the same immutable bytes
 again, without release rebuild. No legacy allow-activation file is consulted
 by the new receiver. Keep the old generic production receiver unreachable.
 
-Host setup requires an established scoped admin session; do not run anything
+Host setup requires an established scoped admin session; install the same
+reviewed root-owned shared modules as TEST under /etc/assertion-release/shared.
+Do not reinstall TEST or place a second copy of receiver/core code under PROD.
+Then stage only the policy/identity entrypoints for each scope. Second-party
+verification is required before applying the live host upgrade;
+ do not run anything
 until the TEST and visual work owners clear shared host access. Start with
 host-preflight.sh using real connection addresses and compare expected
 trusted host fingerprint. Stage root-owned immutable code in

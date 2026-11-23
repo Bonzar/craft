@@ -6,7 +6,6 @@ import sqlite3
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from prod_runner import operate
 from receive_authorized import activate_exact
@@ -62,10 +61,9 @@ class CompleteBridge(unittest.TestCase):
             if archive:
                 body+=archive.read()
                 if tamper: body+=b'x'
-            with patch('receive_authorized.trusted_regular',return_value=True):
-                return handle(command,io.BytesIO(body),
-                    lambda rev,sha,f: activate_exact(rev,sha,f,root=self.production,config=self.config,hook=hook),
-                    authorize=exchange)
+            return handle(command,io.BytesIO(body),
+                lambda rev,sha,f: activate_exact(rev,sha,f,root=self.production,config=self.config,hook=hook),
+                authorize=exchange)
         return send
 
     def publish(self, sh, pair):

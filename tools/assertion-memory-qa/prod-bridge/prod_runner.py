@@ -3,16 +3,16 @@ from dataclasses import asdict
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
-import re
-import shutil
-import subprocess
-import tempfile
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, build_opener, ProxyHandler
 
 from authorizer import NoRedirect
 from reusable_proof import CALLER, DIGEST, ENVIRONMENT, Intent, Policy, audience, obj, plain, require
+
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'assertion-memory-release'))
+import ssh_transport
 
 # As documented runner endpoint; do not send the bearer to caller-supplied hosts.
 REQUEST_HOST='pipelines.actions.githubusercontent.com'
@@ -54,54 +54,12 @@ def operate(ssh, policy, intent, archive_path, *, get_token=mint):
 
 
 def exchange_factory(route):
-    def ssh(command, envelope, archive):
-        with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as output:
-            frame=json.dumps(envelope,separators=(',',':')).encode('ascii')+b'\n'
-            require(len(frame)<=20_000,'Authorization envelope too large')
-            # A temporary file containing a JWT is unlinked and private.
-            # Linux runner uses its ephemeral private RUNNER_TEMP for both descriptors.
-            source.write(frame)
-            if archive is not None:
-                shutil.copyfileobj(archive,source,length=1<<20)
-            source.seek(0)
-            result=subprocess.run([*route,command],stdin=source,stdout=output,stderr=subprocess.DEVNULL,
-                                  timeout=570 if archive else 25,check=False,env={"PATH":"/usr/bin:/bin","LC_ALL":"C"})
-            output.seek(0)
-            wire=output.read(513)
-            require(result.returncode==0 and len(wire)<=512 and wire.endswith(b'\n'),'Restricted PROD connection failed')
-            return obj(wire)
+    def ssh(command,envelope,archive):
+        frame=json.dumps(envelope,separators=(',',':')).encode('ascii')+b'\n'
+        code,wire=ssh_transport.exchange(route,command,envelope=frame,payload=archive,limit=512)
+        require(code==0 and wire.endswith(b'\n'),'Restricted PROD connection failed')
+        return obj(wire)
     return ssh
-
-
-def guarded_route(env, temp):
-    host=env['RELEASE_HOST']
-    port=env['RELEASE_PORT']
-    require(plain(r'[a-z0-9][a-z0-9.-]{0,252}',host) and '..' not in host
-            and plain(r'[1-9][0-9]{0,4}',port) and int(port)<=65535,'Invalid protected host configuration')
-    host_entry=host if port=='22' else f'[{host}]:{port}'
-    pin=env['SSH_HOST_PIN']
-    require(plain(r'ssh-ed25519 [A-Za-z0-9+/=]{60,120}',pin),'Invalid host pin')
-    key=temp/'id'
-    descriptor=os.open(key,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-    with os.fdopen(descriptor,'w',encoding='ascii') as handle:
-        handle.write(env['SSH_PRIVATE_KEY'].strip()+'\n')
-    known=temp/'known_hosts'
-    known.write_text(host_entry+' '+pin+'\n',encoding='ascii')
-    return ['/usr/bin/ssh','-F','/dev/null','-T','-p',port,'-i',str(key),
-            '-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes',
-            '-o','HostKeyAlgorithms=ssh-ed25519','-o','ControlMaster=no','-o','ClearAllForwardings=yes',
-            '-o','PasswordAuthentication=no','-o','KbdInteractiveAuthentication=no',
-            '-o','UserKnownHostsFile='+str(known),'-o','GlobalKnownHostsFile=/dev/null',
-            '-o','ConnectTimeout=10','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=4',
-            '--','assertion-production-deploy@'+host]
-
-
-def preflight(route):
-    expected=b'{"status":"rejected","error":"command_denied"}\n'
-    for command in ('receiver-probe','id'):
-        reply=subprocess.run([*route,command],stdin=subprocess.DEVNULL,capture_output=True,
-                             check=False,timeout=25,env={'PATH':'/usr/bin:/bin','LC_ALL':'C'})
-        require(reply.returncode==1 and reply.stdout==expected,'Scoped production receiver preflight failed')
 
 
 def main(env=os.environ):
@@ -114,9 +72,10 @@ def main(env=os.environ):
     require(intent.run_id==env.get('GITHUB_RUN_ID'),'Authorized input is not for the current dispatch')
     policy=Policy(env['GITHUB_REPOSITORY_ID'],env['AUDITED_REUSABLE_SHA'],env['PROD_VM_ID'],
                   env['PROD_OIDC_SUBJECT'],env['PROD_ENVIRONMENT_NODE_ID'],frozenset({env['GITHUB_ACTOR_ID']}))
-    with tempfile.TemporaryDirectory(prefix='scoped-release-',dir=env['RUNNER_TEMP']) as temp:
-        route=guarded_route(env,Path(temp))
-        preflight(route)
+    with ssh_transport.route(host=env['RELEASE_HOST'],port=env['RELEASE_PORT'],
+             account='assertion-production-deploy',host_pin=env['SSH_HOST_PIN'],
+             key=env['SSH_PRIVATE_KEY'],runtime_dir=env['RUNNER_TEMP']) as route:
+        ssh_transport.preflight(route)
         receipt=operate(exchange_factory(route),policy,intent,path/'release.tar.gz')
     print('Activated and verified production:',receipt['revision'],receipt['sha256'])
 

@@ -2,11 +2,14 @@
 import hashlib
 import json
 import os
-import zipfile
+import sys
 from pathlib import Path
 from urllib.parse import quote
 
 from importlib.machinery import SourceFileLoader
+
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'assertion-memory-release'))
+import receipt_proof
 
 ci = SourceFileLoader('release_ci', str(Path(__file__).with_name('release-ci.py'))).load_module()
 ROOT = '/repos/' + ci.REPO
@@ -124,54 +127,10 @@ def read_test_receipt(get, run_id, workflow_sha, expected, output):
     Requiring equal control commits binds environment/job configuration to the
     code executing promotion. A later main commit needs a fresh TEST, never a build.
     """
-    ci.safe(ID, run_id)
-    ci.safe(SHA, workflow_sha)
-    run = get(f'{ROOT}/actions/runs/{run_id}')
-    workflow = get(f'{ROOT}/actions/workflows/{WORKFLOW}')
-    if (str(run.get('id')) != run_id or run.get('workflow_id') != workflow['id']
-            or run.get('path') != '.github/workflows/' + WORKFLOW
-            or run.get('event') != 'workflow_dispatch' or run.get('head_branch') != 'main'
-            or run.get('head_sha') != workflow_sha or run.get('run_attempt') != 1
-            or run.get('status') != 'completed' or run.get('conclusion') != 'success'
-            or (run.get('repository') or {}).get('full_name') != ci.REPO
-            or (run.get('head_repository') or {}).get('full_name') != ci.REPO):
-        raise ValueError('Source TEST run is not the exact successful main workflow/attempt')
-    result = get(f'{ROOT}/actions/runs/{run_id}/attempts/1/jobs?per_page=100')
-    jobs = result.get('jobs', [])
-    if result.get('total_count') != len(jobs) or len(jobs) > 100:
-        raise ValueError('Incomplete TEST jobs response')
-    matches = [job for job in jobs if job.get('name') == 'Deploy TEST']
-    if len(matches) != 1:
-        raise ValueError('Expected exactly one TEST job')
-    job = matches[0]
-    if (str(job.get('run_id')) != run_id or job.get('head_sha') != workflow_sha
-            or job.get('status') != 'completed' or job.get('conclusion') != 'success'):
-        raise ValueError('TEST job did not complete successfully')
-    for name in (SEND_STEP, UPLOAD_STEP):
-        steps = [step for step in job.get('steps', []) if step.get('name') == name]
-        if len(steps) != 1 or steps[0].get('conclusion') != 'success' or steps[0].get('status') != 'completed':
-            raise ValueError('TEST activation or receipt upload was not successful')
-    result = get(f'{ROOT}/actions/runs/{run_id}/artifacts?per_page=100')
-    # This dispatch only emits one artifact; build and PROD jobs are skipped.
-    if result.get('total_count') != 1 or len(result.get('artifacts', [])) != 1:
-        raise ValueError('Expected exactly one durable TEST receipt artifact')
-    artifact = result['artifacts'][0]
-    origin = artifact.get('workflow_run') or {}
-    if (artifact.get('name') != receipt_name(run_id) or artifact.get('expired') is not False
-            or str(origin.get('id')) != run_id or origin.get('head_sha') != workflow_sha
-            or not 0 < artifact.get('size_in_bytes', 0) <= 16384):
-        raise ValueError('TEST receipt artifact provenance mismatch')
-    artifact_id = ci.safe(ID, str(artifact['id']))
-    digest = ci.safe(r'sha256:' + DIGEST, artifact['digest'])[7:]
-    archive = output / 'test-receipt.zip'
-    get(f'{ROOT}/actions/artifacts/{artifact_id}/zip', archive)
-    with archive.open('rb') as f:
-        if hashlib.file_digest(f, 'sha256').hexdigest() != digest:
-            raise ValueError('TEST receipt ZIP digest mismatch')
-    with zipfile.ZipFile(archive) as z:
-        if z.namelist() != ['test-receipt.json'] or z.getinfo('test-receipt.json').file_size > 8192:
-            raise ValueError('Unexpected TEST receipt ZIP contents')
-        observed = json.loads(z.read('test-receipt.json'))
+    artifact_id, observed = receipt_proof.verify(get,repo=ci.REPO,workflow=WORKFLOW,
+        run_id=run_id,control_sha=workflow_sha,job_name='Deploy TEST',
+        required_steps=(SEND_STEP,UPLOAD_STEP),artifact_name=receipt_name(run_id),
+        filename='test-receipt.json',output=output,max_zip=16384,max_json=8192)
     required = {**expected, **receipt_context(run_id, workflow_sha)}
     if observed != required:
         raise ValueError('Production must match the activated and smoke-tested TEST receipt')

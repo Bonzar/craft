@@ -7,6 +7,7 @@ on:
       - "prototypes/assertion_memory/**"
       - "apps/graph_viewer/**"
       - "tools/assertion-memory-qa/**"
+      - "tools/assertion-memory-release/**"
       - "tests/test_model_*.py"
   release:
     types: [published]
@@ -98,10 +99,13 @@ jobs:
           python tools/assertion-memory-qa/test-release-ci.py
           python tools/assertion-memory-qa/test-lifecycle.py
           python tools/assertion-memory-qa/test-promotion.py
-      - name: Test receiver recovery and embedded installer parity
+      - name: Test shared receiver and scoped adapter recovery
         run: |
           bash -n tools/assertion-memory-qa/vm/provision-test.sh
+          bash -n tools/assertion-memory-release/adopt-live-base-test.sh
+          python tools/assertion-memory-release/test_adopt_live_base_test.py
           python -m unittest discover -s tools/assertion-memory-qa/vm -p test_receiver.py
+          PYTHONPATH=tools/assertion-memory-release python -m unittest discover -s tools/assertion-memory-qa/prod-bridge
       - name: Build narrow, data-free release
         run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"
       - if: github.event_name == 'release'

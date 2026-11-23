@@ -36,7 +36,7 @@ class OriginTest(unittest.TestCase):
         self.directory = self.root / 'releases' / self.release
         (self.directory/'assets').mkdir(parents=True)
         (self.directory/'manifest.json').write_bytes(self.manifest)
-        (self.root/'current').write_text(self.release+'\n')
+        (self.root/'current').symlink_to(self.directory)
         for name, data in ORIGINAL.items():
             (self.directory/name).write_bytes(data)
         self.server = origin.make_server(self.root,TOKEN,port=0)
@@ -97,6 +97,20 @@ class OriginTest(unittest.TestCase):
         self.assertEqual(request('index.html'),404)
         (self.directory/'manifest.json').write_bytes(self.manifest+b' ')
         self.assertEqual(self.request()[0],404)
+
+    def test_atomic_link_in_scope_only_and_pinned_asset_survives(self):
+        current = self.root/'current'
+        fixed_asset=json.dumps({'op':'asset','name':'index.html','digest':self.release})
+        current.unlink()
+        current.write_text(self.release+'\n')  # legacy preview format is not a valid shared pointer
+        self.assertEqual(self.request()[0],404)
+        current.unlink()
+        current.symlink_to(Path('/tmp/another-scope/releases')/self.release)
+        self.assertEqual(self.request()[0],404)
+        self.assertEqual(self.request(value=fixed_asset)[0],200)
+        current.unlink()
+        current.symlink_to(Path('releases')/self.release)
+        self.assertEqual(self.request()[0],200)
 
 
 if __name__ == '__main__':

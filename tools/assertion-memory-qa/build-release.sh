@@ -29,3 +29,15 @@ name="assertion-memory-qa-$sha.tar.gz"
 # Stable file order and metadata independent of build runner UID.
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -C "$stage" -cf - . | gzip -n > "$dest/$name"
 (cd "$dest"; sha256sum "$name" > "$name.sha256")
+# Qualify through the shared receiver without rewriting the immutable bytes.
+PYTHONPATH="$root/tools/assertion-memory-release" python3 - "$dest/$name" "$sha" <<'PYQUAL'
+from hashlib import file_digest
+from pathlib import Path
+import sys
+from assembly import inspect
+from base_payload import SPEC,validate
+path,revision=Path(sys.argv[1]),sys.argv[2]
+with path.open('rb') as archive:
+    digest=file_digest(archive,'sha256').hexdigest()
+inspect(path,digest,spec=SPEC,validate=lambda p:validate(p,revision,digest))
+PYQUAL
