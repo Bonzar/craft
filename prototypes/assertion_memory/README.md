@@ -244,10 +244,38 @@ The original worker retains verification and guarded publication.
 This is **not registered** in the default worker, config file or MCP endpoints.
 The model can read earlier visible dialogue, search verified source thoughts,
 and open exact raw proof from those thoughts. Reverse raw-to-thought lookup is
-not a model tool. `semantic_search` calls the same already-injected canonical ThoughtRetrieval
+not a model tool. For an unclear reference in the current utterance the model
+is directed to `semantic_search(session_id="current")`, then to history and
+exact sources for evidence. `semantic_search` calls the same already-injected
+canonical ThoughtRetrieval
 to rank a bounded corpus of those eligible sources; no second ranker, answer
 generation, graph-wide completeness or graph-viewer cross-process sharing is
-implied. Search and derived thoughts are navigational hints, not proof tokens. Each
+implied. Unconfigured search only sees the current dialogue. A trusted
+composition may explicitly grant an independently verified single-owner scope
+in its dedicated database; omitted filter then covers eligible thoughts across
+that scope, while a session filter can only narrow. This is an assertion by
+trusted host composition, not proof of ownership from database row labels.
+Other-dialogue search results carry no raw excerpt, source token or thought
+token. Separately, `older_dialogue(session_id=..., start_date=..., end_date=...)`
+reads an explicitly requested authorized dialogue as context only, ordered by
+recorded UTC instant then insertion order, with an opaque one-use cursor.
+Dates are optional inclusive start/exclusive end. Explicit `session_id="current"`
+or dates without a selector use that same chronological path for the current
+dialogue with normal evidence tokens; an unqualified call retains the earlier
+look-back mode. Other sessions require the trusted owner scope and return no
+raw proof tokens. Pages share the existing history call and byte budgets and do
+not read beyond attempt admission or beyond the primary source's time and
+insertion order. Because SQLite can recycle rowids after retention deletion,
+the worker holds a read-only WAL admission snapshot for the bounded model
+attempt, checks membership against it, and separately checks current lease,
+visibility, admission status, original positions, identities and exact raw
+bytes before disclosure. The held WAL snapshot can temporarily delay
+checkpoint reclamation during an active attempt. It drops the
+admission snapshot before the separate verifier call.
+Scope/canonical session prefilter precedes the bounded candidate scan; exact
+raw visibility and proof validation precede ranking. The current scan can
+miss older eligible candidates and does not certify that a thought is absent.
+Search and derived thoughts are navigational hints, not proof tokens. Each
 offered thought reference is opaque and tied to one exact active version.
 `thought_sources` can open its authorized raw spans only; it rechecks the
 version, lease, eligibility and source bytes, then issues raw excerpt proof
