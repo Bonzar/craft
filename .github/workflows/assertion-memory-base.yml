@@ -86,6 +86,10 @@ jobs:
         run: |
           python tools/assertion-memory-qa/test-release-ci.py
           python tools/assertion-memory-qa/test-lifecycle.py
+      - name: Test receiver recovery and embedded installer parity
+        run: |
+          bash -n tools/assertion-memory-qa/vm/provision-test.sh
+          python -m unittest discover -s tools/assertion-memory-qa/vm -p test_receiver.py
       - name: Build narrow, data-free release
         run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"
       - if: github.event_name == 'release'
