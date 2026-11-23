@@ -34,6 +34,8 @@ class SourceExtractorFactory(Protocol):
 class SourceLeaseCheck(Protocol):
     def ensure_active(self) -> None: ...
 
+    def check_reader_snapshot(self, db, path) -> None: ...
+
 
 @dataclass(frozen=True)
 class SourceExtractionRequest:

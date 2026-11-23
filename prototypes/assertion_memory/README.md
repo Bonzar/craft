@@ -226,3 +226,51 @@ load another model or index. If the worker and search owner are separate
 processes, this requires an explicitly authorized host-side IPC boundary, not
 passing the in-process lease-check object to the model. No configuration
 setting enables these future behaviors.
+
+#### Experimental one-turn raw dialogue adapter (protocol fixtures only)
+
+`turn_source.extractor.SourceTurnFactory` rejects live construction: an
+OS-isolated subprocess launcher is not yet provided. Its private fixture
+constructor exercises composition and the protocol with fictional data only. The app-server uses an isolated temporary app home without
+ambient auth, one ephemeral, read-only thread with no execution environment,
+and one structured turn. It verifies the thread's exact ordinary MCP allowlist
+before requesting a proposal, using unfiltered thread server inventory and
+exact detailed tool inventory. The separate MCP relay reads no databases;
+host-side reads verify the running source claim and return only bounded,
+visible, earlier messages in its exact dialogue/scope. The verifier receives
+the exact raw IDs and byte-matched Unicode spans selected by opaque receipts.
+The original worker retains verification and guarded publication.
+
+This is **not registered** in the default worker, config file or MCP endpoints.
+This fixture can navigate from an offered earlier source to direct verified
+thoughts based only on earlier visible raw events in that dialogue. Its
+`semantic_search` calls the same already-injected canonical ThoughtRetrieval
+to rank a bounded corpus of those eligible sources; no second ranker, answer
+generation, graph-wide completeness or graph-viewer cross-process sharing is
+implied. Search and derived thoughts are navigational hints, not proof tokens. Each
+offered thought reference is opaque and tied to one exact active version.
+`thought_sources` can open its authorized raw spans only; it rechecks the
+version, lease, eligibility and source bytes, then issues raw excerpt proof
+tokens for the original verifier.
+The fixture does not enable provider authentication. Thread tool restrictions and a scrubbed app-home do
+not sandbox the app-server process itself. Do not run it on production data or
+with credentials until the process has enforced filesystem/network isolation.
+Each fixture attempt reserves at most 16 pages, 256,000 UTF-8 evidence bytes
+(including primary), and 128 retained evidence refs. It distinguishes
+`attempt_budget_exhausted` from `history_end`; reached ceilings do not assert
+absence of older messages. Mixed unpositioned/positioned history is rejected,
+and the primary order is rechecked before pages and evidence. No legacy
+partial checkpoint can enter the fixture extractor. The app-server deadline
+covers the subprocess attempt, not the separate existing canonical verifier.
+The protocol exchanges only literal visible user/assistant roles (not supplied
+actor labels) and accepts only an explicit final-answer item. Fictional tests
+prove authorization-bound reads and evidence identity, not resistance to
+semantic prompt injection, verifier accuracy, or live intake authentication. Raw dialogue only is in
+this slice, with one validated proposal or unresolved; a primary message over
+24,000 characters is rejected rather than silently truncated.
+
+Tests: `python -m unittest prototypes.assertion_memory.tests.test_source_turn`
+uses a deterministic fake subprocess; set `ASSERTION_OFFLINE_CODEX_CLI` to an
+absolute installed CLI path only to additionally check the real offline
+app-server handshake and thread-scoped tool inventory. That test does not
+start a provider turn or use credentials.

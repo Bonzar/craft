@@ -91,6 +91,18 @@ class _SourceAttemptLease:
         with self._queue.store.transaction() as db:
             self._queue._assert_owned(db, self._claim)
 
+    def check_reader_snapshot(self, db, path):
+        """Trusted holder-side check for a separate query-only connection."""
+        from pathlib import Path
+        if (not self._open or self._queue.store.path == ':memory:' or
+                Path(path).resolve() != Path(self._queue.store.path).resolve()):
+            raise LeaseLost('source extraction reader is outside its source store')
+        self._queue._assert_owned(db, self._claim)
+        source=db.execute('SELECT event_id,status FROM memory_capture_jobs WHERE id=?',
+                          (self._claim.job.id,)).fetchone()
+        if source is None or source[0]!=self._claim.job.event_id or source[1]!='running':
+            raise LeaseLost('source extraction no longer owns a running source')
+
     def close(self):
         self._open = False
 
