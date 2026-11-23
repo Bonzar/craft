@@ -1,0 +1,21 @@
+[Unit]
+Description=Scoped assertion memory production authorization service
+Requires=assertion-memory-prod-auth.socket
+After=assertion-memory-prod-auth.socket
+[Service]
+User=assertion-release-auth
+Group=assertion-release-auth
+ExecStart=/usr/bin/python3 -I -B /etc/assertion-release/production/authorization-entry.py
+StateDirectory=assertion-release-auth
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=

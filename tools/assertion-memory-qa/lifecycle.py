@@ -175,12 +175,13 @@ def read_test_receipt(get, run_id, workflow_sha, expected, output):
     required = {**expected, **receipt_context(run_id, workflow_sha)}
     if observed != required:
         raise ValueError('Production must match the activated and smoke-tested TEST receipt')
+    (output / 'test-receipt-id').write_text(artifact_id+'\n')
     return observed
 
 
 
-def authorize_production(get, env):
-    """Read the allowlist ONLY from the protected PROD environment, never repo vars."""
+def verify_production_dispatch(get, env):
+    """Verify first explicit manual promotion through the protected caller."""
     workflow_sha = dispatch_context(env)
     if env.get('PRODUCTION_READY') != 'true':
         raise ValueError('Independent PROD readiness is disabled')
@@ -201,6 +202,12 @@ def authorize_production(get, env):
     if (event.get('inputs') or {}) != {'action': 'production', 'release_id': env['RELEASE_ID'],
                                       'test_run_id': env['TEST_RUN_ID']}:
         raise ValueError('PROD requires explicit matching production dispatch inputs')
+    return actor
+
+
+def authorize_production(get, env):
+    """Read the allowlist ONLY from the protected PROD environment, never repo vars."""
+    actor = verify_production_dispatch(get, env)
     environment_path = f'{ROOT}/environments/assertion-memory-production'
     environment = get(environment_path)
     if (environment.get('name') != 'assertion-memory-production'
@@ -247,7 +254,7 @@ def main():
                 or str((event.get('release') or {}).get('id')) != release_id
                 or os.environ['GITHUB_SHA'] != revision or os.environ['GITHUB_REF'] != 'refs/tags/' + tag):
             raise ValueError('Release event and current immutable release differ')
-    elif mode in ('test', 'production'):
+    elif mode in ('test', 'production', 'production-pinned-proof'):
         workflow_sha = dispatch_context(os.environ)
         if os.environ.get('GITHUB_JOB') != ('deploy-test' if mode == 'test' else 'deploy-production'):
             raise ValueError('Unexpected deployment job')
@@ -255,6 +262,13 @@ def main():
         artifact_id, digest = identity['artifact_id'], identity['zip_sha256']
         if mode == 'production':
             authorize_production(ci.api, os.environ)
+        elif mode == 'production-pinned-proof':
+            # Only the immutable reviewed reusable job calls this mode. It has
+            # already verified the executed TEST workflow/source identities.
+            # Independently, the host will verify exact reusable job claims,
+            # environment identity, actor allowlist, intent and fresh nonce.
+            ci.safe(SHA, os.environ.get('AUDITED_REUSABLE_SHA', ''))
+            verify_production_dispatch(ci.api, os.environ)
         path = Path(os.environ['RELEASE_DOWNLOAD_DIR'])
         path.mkdir(mode=0o700)
         archive = path / 'github.zip'
@@ -264,10 +278,16 @@ def main():
                 raise ValueError('GitHub archive digest mismatch')
         inner = ci.unpack_zip(archive, path, revision)
         identity.update(release_id=release_id, revision=revision, sha256=inner)
-        if mode == 'production':
+        if mode in ('production', 'production-pinned-proof'):
             receipt = read_test_receipt(ci.api, os.environ['TEST_RUN_ID'], workflow_sha, identity, path)
             outputs.update(tested_artifact_id=receipt['artifact_id'],
                            tested_revision=receipt['revision'], tested_sha256=receipt['sha256'])
+            intent = {'run_id': ci.safe(ID, os.environ['GITHUB_RUN_ID']),
+                      'test_run_id': receipt['test_run_id'],
+                      'test_receipt_id': ci.safe(ID, (path/'test-receipt-id').read_text().strip()),
+                      **{key: identity[key] for key in
+                         ('release_id','build_run_id','artifact_id','revision','sha256')}}
+            (path / 'prod-intent.json').write_text(json.dumps(intent, sort_keys=True)+'\n')
         else:
             (path / 'identity.json').write_text(json.dumps(identity, sort_keys=True) + '\n')
         outputs.update(artifact_id=artifact_id, release_sha256=inner, release_id=release_id)
