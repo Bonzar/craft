@@ -33,13 +33,27 @@ ssh-keygen -lf "$tmp/known_hosts" >/dev/null
 # Never run in repo checkout's SSH context. Accept no forwarding, shell, auth agent,
 # ambient config or key; never disable host verification or learn host identity at deploy.
 unset SSH_PRIVATE_KEY SSH_AUTH_SOCK SSH_HOST_PIN
-if ! timeout 570 ssh -F /dev/null -T -p "$RELEASE_PORT" \
+ssh_route=(ssh -F /dev/null -p "$RELEASE_PORT"\
   -i "$tmp/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
   -o UserKnownHostsFile="$tmp/known_hosts" -o GlobalKnownHostsFile=/dev/null \
   -o HostKeyAlgorithms=ssh-ed25519 -o ControlMaster=no -o ClearAllForwardings=yes \
   -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \
-  -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-  -- "$RELEASE_USER@$RELEASE_HOST" \
+  -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4
+)
+destination="$RELEASE_USER@$RELEASE_HOST"
+if [[ "$target" == test && "${GITHUB_WORKFLOW_REF:-}" == Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main ]]; then
+  printf '%s\n' '{"status":"rejected","error":"command_denied"}' > "$tmp/denied"
+  for probe in receiver-probe id; do
+    status=0
+    timeout 25 "${ssh_route[@]}" -T -- "$destination" "$probe" </dev/null > "$tmp/probe" 2> "$tmp/probe-error" || status=$?
+    if [[ "$status" != 1 ]] || ! cmp -s "$tmp/probe" "$tmp/denied"; then
+      echo 'Scoped TEST receiver preflight failed; archive was not sent.' >&2
+      exit 1
+    fi
+  done
+  echo 'Scoped TEST receiver authenticated and rejected both non-release commands.'
+fi
+if ! timeout 570 "${ssh_route[@]}" -T -- "$destination" \
   "deploy-release $target $DEPLOY_REVISION $RELEASE_ARCHIVE_SHA256" < "$file" > "$tmp/receipt" 2> "$tmp/ssh-errors"; then
   echo 'Restricted deployment command failed; inspect trusted VM release logs.' >&2
   exit 1
