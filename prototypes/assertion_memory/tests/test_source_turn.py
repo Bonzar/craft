@@ -24,6 +24,18 @@ mcp=config['mcp_servers']['source_job']
 assert mcp['enabled_tools']==['older_dialogue','thoughts_from_source','semantic_search','thought_sources'] and mcp['required']
 assert not (home/'auth.json').exists()
 kind=sys.argv[1]
+if len(sys.argv)>2:
+ import socket
+ assert not Path(sys.argv[2]).exists(), 'host DB exposed'
+ assert not Path(sys.argv[3]).exists(), 'parent cwd/secret exposed'
+ assert 'OUTSIDE_SENTINEL' not in os.environ
+ assert os.readlink('/proc/self/ns/net')!=sys.argv[4]
+ assert os.readlink('/proc/self/ns/pid')!=sys.argv[5]
+ assert not Path('/home/agent').exists(), 'host home exposed'
+ try:
+  with socket.create_connection(('127.0.0.1',int(sys.argv[6])),timeout=.1): pass
+ except OSError: pass
+ else: raise AssertionError('accessible host-network port')
 def send(msg):print(json.dumps(msg,ensure_ascii=False),flush=True)
 for row in sys.stdin:
  m=json.loads(row);p=m.get('params',{});i=m.get('id')
@@ -92,7 +104,7 @@ class SourceTurnTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"OS-isolated launcher"):
             SourceTurnFactory(SourceTurnConfig((sys.executable,),enabled=True))
 
-    def attempt(self,kind,*,revoke=False,retrieval=None):
+    def attempt(self,kind,*,revoke=False,retrieval=None,confined=None):
         with tempfile.TemporaryDirectory() as tmp,MemoryStore(Path(tmp)/'fixture.sqlite') as memory:
             code=Path(tmp)/'fixture.py'; code.write_text(FIXTURE)
             queue=CaptureQueue(memory);thoughts=ThoughtStore(memory)
@@ -129,7 +141,10 @@ class SourceTurnTest(unittest.TestCase):
                                 origin={'kind':'inference'},bases=[{'thought_id':fixtures[0],'version':1}],
                                 metadata={'verification':'accepted'}).id)
             with memory.transaction(write=True) as db:queue._scheduler_schema(db)
-            factory=SourceTurnFactory._for_protocol_fixture(SourceTurnConfig((sys.executable,str(code),kind),enabled=True))
+            extras=(str(memory.path),*confined) if confined is not None else ()
+            config=SourceTurnConfig((sys.executable,str(code),kind,*extras),enabled=True)
+            factory=(SourceTurnFactory._for_protocol_fixture(config) if confined is None
+                     else SourceTurnFactory._for_confined_test(config))
             worker=ThoughtWorker(queue,engine,lane='source',claim_bound_source_extractor_factory=factory)
             job=worker._source(worker._claim_source(event_id=source.id))
             saved=[row for row in thoughts.list_thoughts() if row.id not in fixtures]
@@ -229,6 +244,25 @@ class SourceTurnTest(unittest.TestCase):
                     reader.evidence([reader.primary_ref])
                 with self.assertRaisesRegex(SourceReadDenied,'legacy partial'):
                     extractor.resume(primary,None,[],{})
+
+    @unittest.skipUnless(os.getenv('ASSERTION_OFFLINE_OS_JAIL')=='1','Explicit Linux sandbox integration test')
+    def test_os_confined_process_only_uses_claim_broker(self):
+        import socket
+        with tempfile.TemporaryDirectory() as tmp, socket.socket() as host:
+            host.bind(('127.0.0.1',0));host.listen()
+            marker=Path(tmp)/'host-secret';marker.write_text('fixture-only')
+            args=(str(marker),os.readlink('/proc/self/ns/net'),os.readlink('/proc/self/ns/pid'),str(host.getsockname()[1]))
+            with patch.dict(os.environ,{'OUTSIDE_SENTINEL':'do not inherit'}):
+                job,verified=self.attempt('navigation',confined=args)
+            self.assertEqual((job.status,verified),('completed',['Verify thought']))
+
+    def test_offline_jail_failure_does_not_fall_back_to_open_process(self):
+        from ..turn_source.offline_test_process import OfflineTestProcess
+        with patch.object(OfflineTestProcess,'spawn',side_effect=OSError('synthetic launcher refused')) as spawn:
+            job,verified=self.attempt('unresolved',confined=())
+        spawn.assert_called_once()
+        self.assertIn('synthetic launcher refused',job.error)
+        self.assertEqual((job.extracted_ids,verified),([],[]))
 
     def test_attempt_ceiling_is_not_history_end(self):
         from ..turn_source.reader import EarlierDialogue

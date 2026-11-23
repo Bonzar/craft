@@ -30,7 +30,7 @@ def read_frame(stream):
 
 
 class StdioTransport:
-    def __init__(self, command, *, timeout=30, cancelled=lambda:False, allow_spawn=False):
+    def __init__(self, command, *, timeout=30, cancelled=lambda:False, allow_spawn=False, offline_test_process=None):
         # Construction does not invoke a provider. Explicitly enabling the test
         # constructor is required even if the supplied subprocess is synthetic.
         if not allow_spawn:
@@ -38,6 +38,7 @@ class StdioTransport:
         self.command=tuple(command)
         self.seconds=timeout
         self.cancelled=cancelled
+        self.offline_test_process=offline_test_process
         self.messages=deque()
         self.incoming=bytearray()
         self.request_id=0
@@ -65,7 +66,7 @@ class StdioTransport:
         self.mcp_out=os.open(bridge/'response',os.O_RDWR|os.O_NONBLOCK)
         self.server_thread=threading.Thread(target=self._serve,args=(dispatch,),daemon=True)
         self.server_thread.start()
-        py=str(Path(sys.executable).resolve())
+        py='/usr/bin/python3' if self.offline_test_process is not None else str(Path(sys.executable).resolve())
         relay=str(Path(__file__).with_name('mcp_relay.py').resolve())
         config=('analytics.enabled = false\n[features]\nshell_tool=false\nhooks=false\nplugins=false\napps=false\n'
             '[mcp_servers.source_job]\nrequired = true\ncommand = '+json.dumps(py)+'\nargs = '+json.dumps([relay,str(bridge)])+
@@ -73,8 +74,12 @@ class StdioTransport:
         (home/'config.toml').write_text(config)
         env={'CODEX_HOME':str(home),'HOME':str(home),'PATH':'/usr/local/bin:/usr/bin:/bin','LANG':'C.UTF-8',
              'XDG_RUNTIME_DIR':str(runtime),'XDG_CONFIG_HOME':str(home),'TMPDIR':str(root)}
-        self.process=subprocess.Popen(self.command,cwd=self.cwd,env=env,start_new_session=True,
-            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
+        if self.offline_test_process is None:
+            self.process=subprocess.Popen(self.command,cwd=self.cwd,env=env,start_new_session=True,
+                stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
+        else:
+            self.process=self.offline_test_process.spawn(self.command,cwd=self.cwd,env=env,
+                                                         broker_root=root,relay=relay)
         os.set_blocking(self.process.stdout.fileno(),False)
         os.set_blocking(self.process.stdin.fileno(),False)
 

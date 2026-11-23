@@ -91,19 +91,29 @@ class SourceTurnFactory:
         instance=object.__new__(cls)
         instance.config=config
         instance.cancelled=cancelled
+        instance.offline_test_process=None
+        return instance
+
+    @classmethod
+    def _for_confined_test(cls,config,*,cancelled=lambda:False):
+        from .offline_test_process import OfflineTestProcess
+        instance=cls._for_protocol_fixture(config,cancelled=cancelled)
+        instance.offline_test_process=OfflineTestProcess()
         return instance
 
     def __call__(self,engine,request):
-        return ContinuingSourceExtractor(engine,request,self.config,self.cancelled)
+        return ContinuingSourceExtractor(engine,request,self.config,self.cancelled,self.offline_test_process)
 
 
 class ContinuingSourceExtractor:
-    def __init__(self,engine,request,config,cancelled):
+    def __init__(self,engine,request,config,cancelled,offline_test_process=None):
         self.engine,self.request,self.config=engine,request,config
         self.cancelled=cancelled
+        self.offline_test_process=offline_test_process
 
     def _turn(self,reader):
-        wire=StdioTransport(self.config.command,timeout=self.config.timeout,cancelled=self.cancelled,allow_spawn=True)
+        wire=StdioTransport(self.config.command,timeout=self.config.timeout,cancelled=self.cancelled,allow_spawn=True,
+                            offline_test_process=self.offline_test_process)
         try:
             service=SourceMCP(reader,ClaimNavigation(reader,self.engine.retrieval))
             wire.tools=list(service.tools)
