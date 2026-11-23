@@ -11,6 +11,7 @@ EXACT = (
     f'{SOURCE}/lifecycle.py', f'{SOURCE}/release-ci.py', f'{SOURCE}/send-release.sh',
     f'{SOURCE}/send_test_release.py', 'tools/assertion-memory-release/ssh_transport.py',
     'tools/assertion-memory-release/receipt_proof.py',
+    'tools/assertion-memory-release/native_test_policy.py',
 )
 PROD_KEY = b'\n  deploy-production:\n'
 
@@ -26,7 +27,7 @@ def exact_caller(reusable_sha):
     if not re.fullmatch('[0-9a-f]{40}',reusable_sha):
         raise ValueError('Missing immutable reusable workflow SHA')
     return f"""    name: Promote exact TEST archive to PROD
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'production' && inputs.test_run_id != '' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'production' && inputs.test_run_id != '' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && github.ref_protected && vars.ASSERTION_MEMORY_PROD_BRIDGE_CALLER_READY == 'true'
     permissions:
       contents: read
       actions: read

@@ -4,7 +4,11 @@ An original immutable base build completion can enter a real TEST deploy in
 the same native release graph. The deploy uses the existing resolver, archive
 unpacker, restricted TEST sender/receiver and concurrency group. The native
 evidence is deliberately not a legacy PROD receipt. Visual and PROD deployment
-are unchanged; a manual graph preview does not deploy.
+are unchanged; a manual graph preview does not deploy by default. To replay a previously
+published immutable base version, select tag on main and explicitly check
+`Request TEST deployment of the existing base tag`; this enters exactly the
+same independent TEST configuration/approval verification after archive
+qualification. No new build or tag is created.
 
 Before enabling, independently verify protected main, workflow change controls,
 and the dedicated assertion-memory-native-base-test Environment (main only,

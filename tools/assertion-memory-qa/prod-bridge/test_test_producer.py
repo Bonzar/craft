@@ -23,6 +23,13 @@ class Producer(unittest.TestCase):
                 path=route.removeprefix('/repos/Bonzar/craft/contents/').split('?')[0]
                 return dict(path=path,type='file',encoding='base64',content=base64.b64encode(actual[path]).decode())
             verify(get,'/repos/Bonzar/craft',sha,reusable,p)
+            for guard in (b"&& github.ref_protected", b"&& vars.ASSERTION_MEMORY_PROD_BRIDGE_CALLER_READY == 'true'"):
+                saved=actual[WORKFLOW]
+                self.assertIn(guard,saved)
+                actual[WORKFLOW]=saved.replace(guard,b'')
+                with self.assertRaisesRegex(ValueError,'audited'):
+                    verify(get,'/repos/Bonzar/craft',sha,reusable,p)
+                actual[WORKFLOW]=saved
             for name in (WORKFLOW,*EXACT):
                 saved=actual[name]; actual[name]+=b'\n# modified'
                 with self.assertRaisesRegex(ValueError,'audited'):
