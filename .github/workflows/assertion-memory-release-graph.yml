@@ -97,7 +97,7 @@ jobs:
   native-base-test:
     name: Deploy base TEST · original immutable archive
     needs: [release, test]
-    if: github.event_name == 'workflow_run' && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_BASE_TEST == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-v')
+    if: github.event_name == 'workflow_run' && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_BASE_TEST == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-v') && !startsWith(needs.release.outputs.tag, 'assertion-memory-visual-')
     runs-on: ubuntu-latest
     timeout-minutes: 13
     environment: assertion-memory-native-base-test
