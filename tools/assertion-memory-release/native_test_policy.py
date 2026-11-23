@@ -1,4 +1,6 @@
 """Base TEST graph authorization and exact build binding."""
+import json
+from pathlib import Path
 import re
 
 REF = 'Bonzar/craft/.github/workflows/assertion-memory-release-graph.yml@refs/heads/main'
@@ -6,13 +8,14 @@ REF = 'Bonzar/craft/.github/workflows/assertion-memory-release-graph.yml@refs/he
 
 def require_native_test(env):
     expected = {'GITHUB_REPOSITORY': 'Bonzar/craft', 'GITHUB_WORKFLOW_REF': REF,
-                'GITHUB_EVENT_NAME': 'workflow_run', 'GITHUB_REF': 'refs/heads/main',
+                'GITHUB_REF': 'refs/heads/main',
                 'GITHUB_REF_PROTECTED': 'true', 'GITHUB_RUN_ATTEMPT': '1',
                 'GITHUB_JOB': 'native-base-test', 'NATIVE_TEST_ENV_READY': 'true'}
     if any(env.get(key) != value for key, value in expected.items()):
         raise ValueError('Unexpected or disabled native TEST context')
     if not re.fullmatch('[0-9a-f]{40}', env.get('GITHUB_SHA', '')):
         raise ValueError('Invalid native TEST control revision')
+    require_trigger(env)
 
 
 def match_original(env, release_id, tag, revision, identity):
@@ -64,3 +67,23 @@ def check_approval(get, env):
             (matched[0].get('user') or {}).get('type') != 'User' or
             str((matched[0].get('user') or {}).get('id')) != reviewer):
         raise ValueError('No exact authorized native TEST approval')
+
+
+
+def require_trigger(env):
+    event = env.get('GITHUB_EVENT_NAME')
+    if event == 'workflow_run':
+        return
+    if event != 'workflow_dispatch':
+        raise ValueError('Unsupported native TEST trigger')
+    payload = json.loads(Path(env['GITHUB_EVENT_PATH']).read_bytes())
+    inputs = payload.get('inputs') or {}
+    intent = inputs.get('deploy_base_test')
+    tag = inputs.get('tag')
+    visual = inputs.get('deploy_visual')
+    if ((intent is not True and intent != 'true') or
+            (visual is not None and visual is not False and visual != 'false') or
+            not isinstance(tag, str) or
+            not re.fullmatch(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?', tag)
+            or tag != env.get('GRAPH_TAG')):
+        raise ValueError('Native TEST requires an explicit matching base tag deployment request')
