@@ -178,9 +178,61 @@ def read_test_receipt(get, run_id, workflow_sha, expected, output):
     return observed
 
 
+
+def authorize_production(get, env):
+    """Read the allowlist ONLY from the protected PROD environment, never repo vars."""
+    workflow_sha = dispatch_context(env)
+    if env.get('PRODUCTION_READY') != 'true':
+        raise ValueError('Independent PROD readiness is disabled')
+    if env.get('GITHUB_REF_PROTECTED') != 'true' or env.get('GITHUB_JOB') != 'deploy-production':
+        raise ValueError('PROD requires the protected main branch and production job')
+    actor = ci.safe(ID, env.get('GITHUB_ACTOR_ID', ''))
+    run_id = ci.safe(ID, env['GITHUB_RUN_ID'])
+    run = get(f'{ROOT}/actions/runs/{run_id}')
+    if (str(run.get('id')) != run_id or str((run.get('actor') or {}).get('id')) != actor
+            or str((run.get('triggering_actor') or {}).get('id')) != actor
+            or run.get('event') != 'workflow_dispatch' or run.get('run_attempt') != 1
+            or run.get('head_branch') != 'main' or run.get('head_sha') != workflow_sha
+            or run.get('path') != '.github/workflows/' + WORKFLOW
+            or (run.get('repository') or {}).get('full_name') != ci.REPO
+            or (run.get('head_repository') or {}).get('full_name') != ci.REPO):
+        raise ValueError('PROD actor or authenticated dispatch provenance mismatch')
+    event = json.loads(Path(env['GITHUB_EVENT_PATH']).read_bytes())
+    if (event.get('inputs') or {}) != {'action': 'production', 'release_id': env['RELEASE_ID'],
+                                      'test_run_id': env['TEST_RUN_ID']}:
+        raise ValueError('PROD requires explicit matching production dispatch inputs')
+    environment_path = f'{ROOT}/environments/assertion-memory-production'
+    environment = get(environment_path)
+    if (environment.get('name') != 'assertion-memory-production'
+            or environment.get('deployment_branch_policy') !=
+            {'protected_branches': False, 'custom_branch_policies': True}):
+        raise ValueError('PROD environment must be explicitly branch scoped')
+    policies = get(environment_path + '/deployment-branch-policies?per_page=100')
+    rules = policies.get('branch_policies', [])
+    if (policies.get('total_count') != 1 or len(rules) != 1
+            or rules[0].get('name') != 'main' or rules[0].get('type') != 'branch'):
+        raise ValueError('PROD environment must allow only the main branch, no tags')
+    config = get(environment_path + '/variables/ASSERTION_MEMORY_PROD_ACTOR_IDS')
+    if config.get('name') != 'ASSERTION_MEMORY_PROD_ACTOR_IDS':
+        raise ValueError('Missing environment-only PROD actor allowlist')
+    value = ci.safe(r'[1-9][0-9]{0,19}(?:,[1-9][0-9]{0,19}){0,49}', config.get('value', ''))
+    actors = value.split(',')
+    if len(set(actors)) != len(actors) or actor not in actors:
+        raise ValueError('PROD actor is not in the strict environment allowlist')
+    return actor
+
+
+def require_host_proof():
+    # No flag, receipt file, caller-supplied boolean or SSH credential can satisfy
+    # this placeholder. Integration requires separately reviewed authorization code.
+    raise ValueError('PROD transport disabled: exact host proof bridge is not integrated')
+
+
 def main():
     import sys
     mode, = sys.argv[1:]
+    if mode == 'host-proof':
+        require_host_proof()
     if mode == 'receipt':
         write_test_receipt(os.environ)
         return
@@ -202,11 +254,7 @@ def main():
         identity = build_identity(ci.api, release_id, revision)
         artifact_id, digest = identity['artifact_id'], identity['zip_sha256']
         if mode == 'production':
-            run = ci.safe(ID, os.environ['GITHUB_RUN_ID'])
-            history = ci.api(f'{ROOT}/actions/runs/{run}/approvals')
-            if not any((entry.get('user') or {}).get('id') == 61428612
-                       and ci.tested_approval([entry]) for entry in history):
-                raise ValueError('Missing approval from required production reviewer')
+            authorize_production(ci.api, os.environ)
         path = Path(os.environ['RELEASE_DOWNLOAD_DIR'])
         path.mkdir(mode=0o700)
         archive = path / 'github.zip'

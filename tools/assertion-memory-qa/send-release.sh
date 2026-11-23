@@ -3,6 +3,12 @@ set -euo pipefail
 umask 077
 target="${1:?test or production required}"
 [[ "$target" == test || "$target" == production ]]
+# Deliberately non-operational until the independently administered host proof
+# bridge is integrated and reviewed. Readiness alone can never enable transport.
+if [[ "$target" == production ]]; then
+  echo 'PROD transport disabled: exact host proof bridge is not integrated.' >&2
+  exit 1
+fi
 [[ "$GITHUB_REPOSITORY" == Bonzar/craft ]]
 if [[ "${GITHUB_WORKFLOW_REF:-}" == Bonzar/craft/.github/workflows/assertion-memory-base.yml@refs/heads/main ]]; then
   [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_RUN_ATTEMPT" == 1 ]]

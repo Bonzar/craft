@@ -167,35 +167,106 @@ class PromotionTest(unittest.TestCase):
                  GITHUB_WORKFLOW_REF=lc.WORKFLOW_REF,GITHUB_SHA=SHA,
                  GITHUB_JOB='deploy-production',GITHUB_RUN_ID='61',RELEASE_ID='42',
                  TEST_RUN_ID='51',RELEASE_DOWNLOAD_DIR=str(payload_dir),GITHUB_OUTPUT=str(github_output))
-        approvals=[{'state':'approved','user':{'id':61428612,'type':'User'},
-                    'environments':[{'name':'assertion-memory-production'}]}]
         def api(route,dest=None):
-            if route.endswith('/61/approvals'): return approvals
             if route.endswith('/43/zip'):
                 dest.write_bytes(build_bytes)
                 return
             return self.get(route,dest)
         with patch.dict(os.environ,env,clear=True), patch.object(sys,'argv',['lifecycle.py','production']), \
                 patch.object(lc,'identify',return_value=('assertion-memory-v1.2.3',IDENTITY['revision'])), \
-                patch.object(lc,'build_identity',return_value=build_identity), patch.object(lc.ci,'api',side_effect=api):
+                patch.object(lc,'build_identity',return_value=build_identity), patch.object(lc.ci,'api',side_effect=api), \
+                patch.object(lc,'authorize_production',return_value='77'):
             lc.main()
         self.assertEqual((payload_dir/'release.tar.gz').read_bytes(),PAYLOAD)
         outputs=github_output.read_text()
         self.assertIn('tested_artifact_id=43\n',outputs)
         self.assertIn('tested_sha256='+DIGEST+'\n',outputs)
         github_output.unlink()
-        # Missing/wrong environment/reviewer approval must fail before downloading.
-        for invalid in [[], [{'state':'approved','user':{'id':61428612,'type':'User'},
-                               'environments':[{'name':'assertion-memory-test'}]}],
-                        [{'state':'approved','user':{'id':999,'type':'User'},
-                          'environments':[{'name':'assertion-memory-production'}]}]]:
-            approvals[:]=invalid
-            with patch.dict(os.environ,env,clear=True), patch.object(sys,'argv',['lifecycle.py','production']), \
-                    patch.object(lc,'identify',return_value=('assertion-memory-v1.2.3',IDENTITY['revision'])), \
-                    patch.object(lc,'build_identity',return_value=build_identity), patch.object(lc.ci,'api',side_effect=api), \
-                    self.assertRaisesRegex(ValueError,'approval'):
-                lc.main()
-            self.assertFalse(github_output.exists())
+
+
+class ProductionAuthorizationTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        event=Path(self.tmp.name)/'event.json'
+        event.write_text(json.dumps({'inputs':{'action':'production','release_id':'42','test_run_id':'51'}}))
+        self.env=dict(GITHUB_REPOSITORY=lc.ci.REPO,GITHUB_RUN_ATTEMPT='1',
+                      GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_REF='refs/heads/main',
+                      GITHUB_REF_PROTECTED='true',GITHUB_WORKFLOW_REF=lc.WORKFLOW_REF,GITHUB_SHA=SHA,
+                      GITHUB_JOB='deploy-production',GITHUB_RUN_ID='61',GITHUB_ACTOR_ID='77',
+                      RELEASE_ID='42',TEST_RUN_ID='51',PRODUCTION_READY='true',GITHUB_EVENT_PATH=str(event))
+        self.run=dict(id=61,actor={'id':77},triggering_actor={'id':77},event='workflow_dispatch',
+                      run_attempt=1,head_branch='main',head_sha=SHA,path='.github/workflows/'+lc.WORKFLOW,
+                      repository={'full_name':lc.ci.REPO},head_repository={'full_name':lc.ci.REPO})
+        self.config=dict(name='ASSERTION_MEMORY_PROD_ACTOR_IDS',value='77,88')
+        self.environment=dict(name='assertion-memory-production',deployment_branch_policy={
+            'protected_branches':False,'custom_branch_policies':True})
+        self.policies=dict(total_count=1,branch_policies=[{'name':'main','type':'branch'}])
+        base=lc.ROOT+'/environments/assertion-memory-production'
+        self.data={lc.ROOT+'/actions/runs/61':self.run,base:self.environment,
+                   base+'/deployment-branch-policies?per_page=100':self.policies,
+                   base+'/variables/ASSERTION_MEMORY_PROD_ACTOR_IDS':self.config}
+
+    def auth(self):
+        return lc.authorize_production(self.data.__getitem__,self.env)
+
+    def test_permitted_authenticated_actor_without_hardcoded_owner(self):
+        self.assertEqual(self.auth(),'77')
+
+    def test_missing_malformed_duplicate_or_unknown_actor_allowlist(self):
+        for value in ['', ' ', '0', '77,', '77, 88', '77,77', '077', '*', '99', '77\n']:
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                self.config['value']=value
+                self.auth()
+        self.config.clear()
+        with self.assertRaises(ValueError): self.auth()
+
+    def test_disabled_prod_independent_of_test_readiness(self):
+        for value in ['', 'false', 'TRUE']:
+            self.env.update(PRODUCTION_READY=value,ASSERTION_MEMORY_BASE_DEPLOY_READY='true')
+            with patch.object(lc.ci,'api') as get,self.assertRaisesRegex(ValueError,'readiness'):
+                lc.authorize_production(get,self.env)
+            get.assert_not_called()
+
+    def test_invalid_actor_dispatch_attempt_ref_or_branch_protection(self):
+        for key,value in dict(GITHUB_ACTOR_ID='',GITHUB_REF='refs/heads/other',
+                              GITHUB_REF_PROTECTED='false',GITHUB_RUN_ATTEMPT='2',
+                              GITHUB_EVENT_NAME='push',GITHUB_JOB='deploy-test').items():
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                lc.authorize_production(self.data.__getitem__,{**self.env,key:value})
+        for key,value in dict(actor={'id':99},triggering_actor={'id':99},head_sha='b'*40,
+                              event='push',run_attempt=2,head_branch='other').items():
+            old=self.run[key]; self.run[key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError): self.auth()
+            self.run[key]=old
+        Path(self.env['GITHUB_EVENT_PATH']).write_text(json.dumps({'inputs':{'action':'test'}}))
+        with self.assertRaisesRegex(ValueError,'explicit'): self.auth()
+
+    def test_missing_environment_read_access_and_wrong_branch_policy_fail_closed(self):
+        with self.assertRaises(PermissionError):
+            lc.authorize_production(lambda path: (_ for _ in ()).throw(PermissionError('Forbidden')),self.env)
+        for policy in [None,{'protected_branches':True,'custom_branch_policies':False}]:
+            self.environment['deployment_branch_policy']=policy
+            with self.assertRaises(ValueError): self.auth()
+        self.environment['deployment_branch_policy']={'protected_branches':False,'custom_branch_policies':True}
+        self.policies['branch_policies'][0]['type']='tag'
+        with self.assertRaises(ValueError): self.auth()
+
+    def test_readiness_and_caller_flags_cannot_satisfy_missing_host_proof(self):
+        with patch.dict(os.environ,PRODUCTION_READY='true',HOST_PROOF='true'), \
+                self.assertRaisesRegex(ValueError,'host proof bridge is not integrated'):
+            lc.require_host_proof()
+
+
+    def test_prod_workflow_has_no_transport_credentials_or_oidc_permission(self):
+        workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/assertion-memory-base.yml').read_text()
+        prod=workflow.split('  deploy-production:',1)[1]
+        self.assertNotIn('ASSERTION_MEMORY_BASE_DEPLOY_READY',prod)
+        self.assertIn('PRODUCTION_READY: ${{ vars.ASSERTION_MEMORY_PROD_READY }}',prod)
+        self.assertIn('environment: assertion-memory-production',prod)
+        self.assertIn('lifecycle.py host-proof',prod)
+        for forbidden in ('secrets.', 'send-release.sh', 'id-token:', 'SSH_PRIVATE_KEY'):
+            self.assertNotIn(forbidden,prod)
 
 
 if __name__ == '__main__':

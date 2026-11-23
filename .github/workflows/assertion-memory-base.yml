@@ -170,8 +170,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
   deploy-production:
-    name: Promote exact TEST archive to PROD
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'production' && inputs.test_run_id != '' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && vars.ASSERTION_MEMORY_BASE_DEPLOY_READY == 'true'
+    name: Verify PROD promotion only (transport disabled)
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'production' && inputs.test_run_id != '' && github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.run_attempt == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 13
     environment: assertion-memory-production
@@ -189,26 +189,13 @@ jobs:
         with:
           python-version: "3.12"
       - id: resolve
-        name: Verify approval, green TEST receipt and exact original archive
+        name: Verify authorized dispatch, green TEST receipt and original archive
         env:
+          PRODUCTION_READY: ${{ vars.ASSERTION_MEMORY_PROD_READY }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ inputs.release_id }}
           TEST_RUN_ID: ${{ inputs.test_run_id }}
           RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
         run: python tools/assertion-memory-qa/lifecycle.py production
-      - name: Promote through restricted PROD receiver
-        env:
-          RELEASE_ENABLED: ${{ vars.ASSERTION_MEMORY_DEPLOY_ENABLED }}
-          RELEASE_USER: ${{ vars.ASSERTION_MEMORY_SSH_USER }}
-          RELEASE_HOST: ${{ vars.ASSERTION_MEMORY_SSH_HOST }}
-          RELEASE_PORT: ${{ vars.ASSERTION_MEMORY_SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}
-          SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}
-          ARTIFACT_ID: ${{ steps.resolve.outputs.artifact_id }}
-          RELEASE_REVISION: ${{ steps.resolve.outputs.revision }}
-          RELEASE_ARCHIVE_SHA256: ${{ steps.resolve.outputs.release_sha256 }}
-          TESTED_ARTIFACT_ID: ${{ steps.resolve.outputs.tested_artifact_id }}
-          TESTED_REVISION: ${{ steps.resolve.outputs.tested_revision }}
-          TESTED_SHA256: ${{ steps.resolve.outputs.tested_sha256 }}
-          RELEASE_DOWNLOAD_DIR: ${{ runner.temp }}/assertion-memory-payload
-        run: tools/assertion-memory-qa/send-release.sh production
+      - name: Block transport until exact host proof bridge is integrated
+        run: python tools/assertion-memory-qa/lifecycle.py host-proof
