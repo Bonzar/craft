@@ -6,7 +6,9 @@ neither release authentication nor the immutable artifact. There are no credenti
 
 * The operator prepares an exact candidate Nginx config, freezes writes and
   verifies the only legacy holders are the known base/graph/adapter units.
-  Arm the transient local watchdog before draining. The transition holds a
+  Arm the transient ten-minute watchdog, then `freeze-exact-ingress`
+  renders only the exact MCP and graph locations HTTP 503. Verify both
+  external 503 responses before draining. Abort if other routes change. The transition holds a
   shared kernel lock, verifies the physical DB inode, stops the legacy services,
   and publishes a short-lived boot-local permit with generation and inode.
 * The authorized release service hook invokes only
@@ -32,6 +34,8 @@ neither release authentication nor the immutable artifact. There are no credenti
   initialize/tools/read and the exact new Sites gateway behavior without real
   payload export before settling. The operator unfreezes writes only last.
 * The watchdog revokes the permit before stopping new and restoring legacy.
+  Untouched armed rollback never stops or transfers custody from legacy.
+  A recorded freeze restores verified old ingress only, keeping services.
   It refuses to overwrite unknown nginx bytes or to start old against a
   replaced SQLite inode. Hold a separate recovery console. The watchdog
   survives an agent/receiver failure but not a VM reboot; journal remains on
@@ -52,3 +56,14 @@ descriptor-based exact UID/GID transition and restore and refusal while a
 separate process holds the fixture. Real Linux/systemd watchdog, external
 authenticated readback and projected per-service control restrictions still
 require separate integration checks.
+
+## Later release hooks
+
+Only root writes `/var/lib/assertion-base-prod-status/settled.json` after
+authenticated readback and durable commit of the transition. Exact schema
+`{"version":1,"state":"settled","inode":[dev,ino]}`; marker 0644, directory
+0755, both root-owned. A timer after durable settlement completes the marker,
+never reverts the live phase. Later authorized receiver hooks use
+`receiver-restart-after-settlement` for both restart and restore, not a separate
+unfenced systemctl path. After VM reboot the root-owned /run fence must be
+recreated with trusted local boot configuration before those hooks can run.

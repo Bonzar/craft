@@ -5,7 +5,7 @@ g=importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
 class Guard(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        d=pathlib.Path(self.tmp.name); self.v={'inode':[1,42],'old_nginx':g.digest(b'old'),'new_nginx':g.digest(b'new'),'old_nginx_mode':0o644,'phase':'armed'}
+        d=pathlib.Path(self.tmp.name); self.v={'inode':[1,42],'old_nginx':g.digest(b'old'),'new_nginx':g.digest(b'new'),'frozen_nginx':g.digest(b'frozen'),'old_nginx_mode':0o644,'phase':'armed'}
         self.calls=[]; self.saved=None; self.contents={d/'approved-candidate.nginx':b'new',d/'baseline.nginx':b'old',d/'ingress':b'old'}; (d/'ingress').touch()
         self.live={**dict.fromkeys(g.OLD,True),**dict.fromkeys(g.NEW,False),g.SITES:True,g.NEW_SITES:False,g.TIMER+'.timer':True}
         for k,v in dict(STATE=d,INGRESS=d/'ingress',inode=lambda:[1,42],active=self.live.__getitem__,safe_bytes=self.contents.__getitem__,custody=lambda *args,**kw:self.calls.append(('custody',args[1])),exact_owner=lambda name:(name,name),publish_permit=lambda v:self.calls.append('publish'),revoke_permit=lambda:None,verify_database_access=self.access,write=self.write,units=self.units,replace_file=self.replace,clear=lambda:self.calls.append('clear'),run=lambda a:self.calls.append(tuple(a))).items():
@@ -17,10 +17,13 @@ class Guard(unittest.TestCase):
         self.calls.append(('access',account,writable))
     def write(self,v):
         self.saved=v
+    def frozen(self):
+        self.contents[g.INGRESS]=b'frozen'
+        return {**self.v,'phase':'frozen'}
     def activate_via_github(self):
         self.live.update(dict.fromkeys(g.NEW,True)); self.live[g.NEW_SITES]=True; self.calls.append('github-started-new')
     def test_split_never_starts_candidate(self):
-        g.drain(self.v); self.assertEqual(self.saved['phase'],'drained')
+        g.drain(self.frozen()); self.assertEqual(self.saved['phase'],'drained')
         self.assertFalse(any(self.live[u] for u in g.NEW+g.OLD))
         self.assertNotIn(('start',g.NEW),self.calls)
         with self.assertRaisesRegex(RuntimeError,'unit state'): g.switch(self.saved)
@@ -28,7 +31,7 @@ class Guard(unittest.TestCase):
         self.assertEqual(self.contents[g.INGRESS],b'new')
         self.assertNotIn(('start',g.NEW),self.calls); self.assertNotIn('clear',self.calls)
     def test_first_failure_restores_old_and_route(self):
-        g.drain(self.v); self.activate_via_github(); g.switch(self.saved)
+        g.drain(self.frozen()); self.activate_via_github(); g.switch(self.saved)
         from types import SimpleNamespace
         with patch.object(pathlib.Path,'lstat',return_value=SimpleNamespace(st_gid=0)):
             g.rollback(self.saved)
@@ -45,18 +48,52 @@ class Guard(unittest.TestCase):
         self.assertNotIn(('start',g.OLD),self.calls); self.assertNotIn('clear',self.calls)
     def test_timer_must_be_active(self):
         self.live[g.TIMER+'.timer']=False
-        with self.assertRaisesRegex(RuntimeError,'timer is not active'): g.drain(self.v)
+        with self.assertRaisesRegex(RuntimeError,'timer is not active'): g.drain(self.frozen())
         self.assertEqual(self.calls,[])
     def test_new_uid_cannot_reopen_after_acl_change(self):
-        g.drain(self.v); self.activate_via_github()
+        g.drain(self.frozen()); self.activate_via_github()
         with patch.object(g,'verify_database_access',side_effect=RuntimeError('legacy UID permission')),self.assertRaisesRegex(RuntimeError,'permission'):
             g.switch(self.saved)
-        self.assertEqual(self.contents[g.INGRESS],b'old')
+        self.assertEqual(self.contents[g.INGRESS],b'frozen')
         self.assertFalse(self.live[g.SITES]); self.assertNotIn('clear',self.calls)
     def test_sites_reader_stopped_blocks_switch(self):
-        g.drain(self.v); self.activate_via_github(); self.live[g.NEW_SITES]=False
+        g.drain(self.frozen()); self.activate_via_github(); self.live[g.NEW_SITES]=False
         with self.assertRaisesRegex(RuntimeError,'Sites reader'): g.switch(self.saved)
+        self.assertEqual(self.contents[g.INGRESS],b'frozen')
+    def test_untouched_armed_rollback_leaves_legacy_running(self):
+        g.rollback(self.v)
         self.assertEqual(self.contents[g.INGRESS],b'old')
+        self.assertTrue(all(self.live[u] for u in g.OLD+(g.SITES,)))
+        self.assertEqual(self.calls,[('custody',(g.LEGACY_ACCOUNT,g.LEGACY_ACCOUNT)),'clear'])
+    def test_freeze_pending_rollback_only_restores_known_nginx(self):
+        from types import SimpleNamespace
+        self.frozen()
+        with patch.object(pathlib.Path,'lstat',return_value=SimpleNamespace(st_gid=0)):
+            g.rollback({**self.v,'phase':'freeze_pending'})
+        self.assertEqual(self.contents[g.INGRESS],b'old')
+        self.assertNotIn(('stop',g.NEW),self.calls)
+        self.assertNotIn(('start',g.OLD),self.calls)
+    def test_refuse_to_drain_unfrozen(self):
+        with self.assertRaisesRegex(RuntimeError,'freeze missing'):
+            g.drain({**self.v,'phase':'frozen'})
+        self.assertEqual(self.calls,[])
+    def test_freeze_only_touches_exact_scoped_upstreams(self):
+        actual=(b'server {\n    location = /mcp {\n        proxy_pass http://127.0.0.1:8803;\n    }\n'
+                b'    location = /memory-graph-read {\n        proxy_pass http://127.0.0.1:8818;\n    }\n'
+                b'    location = /not-in-scope {\n        proxy_pass http://127.0.0.1:8803;\n    }\n}\n')
+        frozen=g.maintenance_config(actual)
+        self.assertEqual(frozen.count(b'return 503;'),2)
+        self.assertEqual(frozen.count(b'127.0.0.1:8803;'),1)
+        self.assertEqual(frozen.split(b'    location = /not-in-scope')[1],actual.split(b'    location = /not-in-scope')[1])
+        with self.assertRaisesRegex(RuntimeError,'one exact'):
+            g.maintenance_config(actual.replace(b'location = /mcp',b'location /mcp'))
+    def test_fallback_after_durable_settlement_finishes_not_rolls_back(self):
+        self.live.update(dict.fromkeys(g.OLD,False)); self.live.update(dict.fromkeys(g.NEW,True))
+        self.live[g.SITES]=False; self.live[g.NEW_SITES]=True
+        self.contents[g.INGRESS]=b'new'
+        with patch.object(g,'put_settled',side_effect=lambda v:self.calls.append('settled-marker')):
+            g.rollback({**self.v,'phase':'settled'})
+        self.assertEqual(self.calls,['settled-marker','clear'])
 class ReceiverFence(unittest.TestCase):
     def exercise(self,permit,expect_error=None):
         import json
@@ -83,6 +120,14 @@ class ReceiverFence(unittest.TestCase):
         self.exercise({'generation':'a'*32,'expiry':90_000_000_000,'inode':[1,43]},'inode changed')
     def test_fresh_exact_start_is_non_root_fixed_units(self):
         self.exercise({'generation':'a'*32,'expiry':90_000_000_000,'inode':[1,42]})
+    def test_settled_restart_never_starts_when_permit_exists(self):
+        d=tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup); p=pathlib.Path(d.name)
+        (p/'permit.json').touch()
+        fd=tempfile.TemporaryFile(); self.addCleanup(fd.close)
+        with patch.object(g,'FENCE',p),patch.object(g,'receiver_identity'),patch.object(g,'fence_lock',return_value=fd), \
+             patch.object(g,'verify_settled'),patch.object(g,'run') as run:
+            with self.assertRaisesRegex(RuntimeError,'permit'): g.receive_restart_after_settlement()
+            run.assert_not_called()
 class CustodyFiles(unittest.TestCase):
     def setUp(self):
         tmp=tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup); self.d=pathlib.Path(tmp.name)
