@@ -1,0 +1,125 @@
+name: No deploy reusable claim witness
+on: workflow_call
+permissions: {}
+jobs:
+  witness:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/codex/assertion-base-prod-oidc-witness' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      id-token: write
+    steps:
+      - name: Verify only exact signed claim form
+        shell: bash
+        run: |
+          python3 -I -B - <<'PYEND'
+          """No-host OIDC witness: no deploy environment, no SSH, no output of URL/token."""
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import ssl
+          import sys
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import parse_qsl, quote, urlencode, urlsplit
+          from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+          SUFFIX='.actions.githubusercontent.com'
+          LEGACY_HOST='pipelines.actions.githubusercontent.com'
+          AUD='urn:assertion-memory:configured-local-call-diagnostic:v1:not-valid-for-production'
+          HOST=re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?')
+          JWT=re.compile(r'[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
+
+          class RejectRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*args,**kw):
+                  raise ValueError('redirect')
+
+          def verified_claims(token, opener):
+              def decode(value):
+                  return base64.urlsafe_b64decode(value+'='*(-len(value)%4))
+              h,b,s=token.split('.')
+              header=json.loads(decode(h))
+              if header.get('alg')!='RS256' or not header.get('kid'):
+                  raise ValueError()
+              issuer='https://token.actions.githubusercontent.com'
+              jwks=issuer+'/.well-known/jwks'
+              with opener(Request(jwks,headers={'Accept':'application/json'}),timeout=5) as reply:
+                  if reply.status!=200 or reply.geturl()!=jwks: raise ValueError()
+                  raw=reply.read(64_001)
+              if len(raw)>64_000: raise ValueError()
+              keys=[k for k in json.loads(raw)['keys'] if k.get('kid')==header['kid']]
+              if len(keys)!=1 or keys[0].get('kty')!='RSA': raise ValueError()
+              n,e=(int.from_bytes(decode(keys[0][f]),'big') for f in ('n','e'))
+              if not 2048<=n.bit_length()<=4096 or e!=65537: raise ValueError()
+              width=(n.bit_length()+7)//8
+              signature=decode(s)
+              if len(signature)!=width or int.from_bytes(signature,'big')>=n: raise ValueError()
+              block=pow(int.from_bytes(signature,'big'),e,n).to_bytes(width,'big')
+              # OpenID RS256 is RSASSA-PKCS1-v1_5 with SHA-256 DigestInfo.
+              info=bytes.fromhex('3031300d060960864801650304020105000420')+hashlib.sha256((h+'.'+b).encode()).digest()
+              if block!=bytes((0,1))+bytes((255,))*(width-len(info)-3)+bytes((0,))+info: raise ValueError()
+              claim=json.loads(decode(b))
+              if claim.get('iss')!=issuer or claim.get('aud')!=AUD: raise ValueError()
+              return claim
+
+          def witness(env=os.environ, opener=None):
+              url=env.get('ACTIONS_ID_TOKEN_REQUEST_URL','')
+              secret=env.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN','')
+              if not url or not secret:
+                  return 'runner-env-missing'
+              try: u=urlsplit(url)
+              except ValueError: return 'url-malformed'
+              suffix_ok=u.netloc.endswith(SUFFIX) and HOST.fullmatch(u.netloc.removesuffix(SUFFIX))
+              if u.scheme!='https' or not suffix_ok or not u.path.startswith('/') or u.fragment or not u.query:
+                  return 'url-untrusted'
+              # Preserve runtime-supplied opaque query bytes exactly (official toolkit appends).
+              query=parse_qsl(u.query,keep_blank_values=True,max_num_fields=64)
+              if any(name=='audience' for name,value in query):
+                  return 'audience-already-present'
+              origin=('exact-original-host' if u.netloc==LEGACY_HOST else
+                      'github-pipelines-family' if u.netloc.startswith('pipelines') else 'github-actions-other')
+              get=opener or build_opener(ProxyHandler({}),RejectRedirect()).open
+              canonical='query-rewrite' if urlencode(query)!=u.query else 'query-unchanged'
+              origin+=':'+canonical
+              url=url+'&audience='+quote(AUD,safe='')
+              try:
+                  req=Request(url,headers={'Authorization':'Bearer '+secret,'Accept':'application/json'})
+                  with get(req,timeout=8) as reply:
+                      if reply.status!=200 or reply.geturl()!=url: return origin+':response-origin'
+                      data=reply.read(20_001)
+              except HTTPError as e:
+                  code=str(e.code) if e.code in {400,401,403,404,429,500,502,503,504} else 'other'
+                  e.close()
+                  return origin+':http-'+code
+              except (URLError,TimeoutError,ssl.SSLError):
+                  return origin+':network-timeout-or-tls'
+              except Exception:
+                  return origin+':request-rejected'
+              if len(data)>20_000: return origin+':response-oversize'
+              try: token=json.loads(data)['value']
+              except Exception: return origin+':response-json'
+              if not isinstance(token,str) or len(token)>16_384 or not JWT.fullmatch(token):
+                  return origin+':response-token-shape'
+              try:
+                  claim=verified_claims(token,get)
+                  sha=env.get('GITHUB_SHA','')
+                  ref=env.get('GITHUB_REF','')
+                  expected='Bonzar/craft/.github/workflows/assertion-local-call-oidc-child.yml'
+                  child=claim.get('job_workflow_ref')
+                  form='commit' if child==expected+'@'+sha else 'branch' if child==expected+'@'+ref else 'other'
+                  print('Local reusable claim witness: ref='+form
+                        +':child-sha-match='+str(claim.get('job_workflow_sha')==sha).lower()
+                        +':caller-sha-match='+str(claim.get('workflow_sha')==sha).lower())
+                  if form=='other' or claim.get('job_workflow_sha')!=sha:
+                      return origin+':unexpected-local-reusable-claim'
+              except Exception:
+                  return origin+':signed-timing-unavailable'
+              return origin+':mint-pass'
+
+          if __name__=='__main__':
+              try: result=witness()
+              except Exception: result='internal-probe-failure'
+              print('OIDC witness: '+result)
+              sys.exit(0 if result.endswith(':mint-pass') else 1)
+          PYEND
