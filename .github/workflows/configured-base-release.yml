@@ -27,7 +27,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: ./.github/workflows/configured-release-reusable.yml
+    uses: Bonzar/craft/.github/workflows/configured-release-reusable.yml@f5762eb17accb045babf1b95e24e93151903af1c
     secrets:
       RELEASE_SSH_HOST_PIN: ${{ secrets.RELEASE_SSH_HOST_PIN }}
       RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
