@@ -145,6 +145,7 @@ class VisualGate(unittest.TestCase):
             jobs = records[src+'/attempts/1/jobs?per_page=100']
             saved = records[src+'/artifacts?per_page=100']
             rec = saved['artifacts'][0]
+            steps = {step['name']: step for step in jobs['jobs'][0]['steps']}
             with patch.object(visual.lifecycle,'identify',return_value=idn), \
                  patch.object(visual.lifecycle,'build_identity',return_value=artifact):
                 failures = [
@@ -152,8 +153,8 @@ class VisualGate(unittest.TestCase):
                     (records[src], 'head_sha', '1'*40, 'control run or attempt'),
                     (jobs['jobs'][0], 'name', 'Promote exact visual TEST to PROD', 'TEST job'),
                     (jobs['jobs'][0], 'conclusion', 'failure', 'TEST job'),
-                    (jobs['jobs'][0]['steps'][2], 'conclusion', 'skipped', 'did not verify'),
-                    (jobs['jobs'][0]['steps'][4], 'conclusion', 'failure', 'did not verify'),
+                    (steps['Smoke exact visual ingress'], 'conclusion', 'skipped', 'did not verify'),
+                    (steps['Preserve visual TEST evidence'], 'conclusion', 'failure', 'did not verify'),
                     (rec['workflow_run'], 'id', 99, 'evidence origin'),
                     (rec['workflow_run'], 'head_sha', '1'*40, 'evidence origin'),
                     (saved, 'total_count', 2, 'Incomplete'),
@@ -189,6 +190,36 @@ class VisualGate(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'exact existing-tag intent'):
                     visual.resolve(get,env)
                 identify.assert_not_called()
+
+    def test_credentials_missing_or_invalid_are_rejected_without_values(self):
+        keys = ('VISUAL_HOST_PIN', 'VISUAL_SSH_KEY', 'VISUAL_SIGNING_KEY', 'VISUAL_GATEWAY_TOKEN')
+        sample = {key: 'a'*64 for key in keys}
+        visual.require_credentials(sample)
+        for key in keys:
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'Missing scoped visual credential: '+key):
+                visual.require_credentials(dict(sample, **{key:' '}))
+        with self.assertRaisesRegex(ValueError, 'Invalid release identifier'):
+            visual.require_credentials(dict(sample, VISUAL_GATEWAY_TOKEN='not-hex'))
+
+    def test_reusable_stage_declares_and_both_callers_map_exact_secret_names(self):
+        root = Path(__file__).resolve().parents[2]/'.github/workflows'
+        called = (root/'assertion-memory-native-visual.yml').read_text()
+        graph = (root/'assertion-memory-release-graph.yml').read_text()
+        expected = tuple('ASSERTION_MEMORY_NATIVE_VISUAL_'+x for x in
+                         ('HOST_PIN','SSH_KEY','SIGNING_KEY','GATEWAY_TOKEN'))
+        declared = called.split('    secrets:\n', 1)[1].split('    inputs:\n', 1)[0]
+        self.assertEqual(declared.splitlines(),
+                         ['      '+name+': {required: true}' for name in expected])
+        for job in ('native-visual-test','native-visual-prod'):
+            chunk = graph.split('  '+job+':\n', 1)[1]
+            mapped = chunk.split('    secrets:\n', 1)[1].split('    with:\n', 1)[0]
+            self.assertEqual(mapped.splitlines(),
+                             ['      '+name+': ${{ secrets.'+name+' }}' for name in expected])
+        self.assertLess(called.index('Verify exact immutable visual archive and stage approval'),
+                        called.index('Verify scoped visual credential presence'))
+        self.assertLess(called.index('Verify scoped visual credential presence'),
+                        called.index('Activate exact visual archive', called.index('steps:')))
+        self.assertIn('environment: assertion-memory-native-visual-${{ inputs.stage }}', called)
 
     def test_graph_or_zip_substitution_fails(self):
         with tempfile.TemporaryDirectory() as td:

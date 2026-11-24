@@ -95,6 +95,7 @@ def check_approval(get, env, mode):
 TEST_JOB = 'Deploy visual TEST / Activate visual artifact'
 TEST_STEPS = (
     'Verify exact immutable visual archive and stage approval',
+    'Verify scoped visual credential presence',
     'Activate exact visual archive',
     'Smoke exact visual ingress',
     'Record exact native visual TEST identity',
@@ -190,6 +191,16 @@ def resolve(get, env):
     return proof
 
 
+def require_credentials(env):
+    # Do not print or pass any secret to a command here. The subsequent
+    # activation/smoke steps receive only their own credentials.
+    for name in ('VISUAL_HOST_PIN', 'VISUAL_SSH_KEY',
+                 'VISUAL_SIGNING_KEY', 'VISUAL_GATEWAY_TOKEN'):
+        if not env.get(name, '').strip():
+            raise ValueError('Missing scoped visual credential: ' + name)
+    lifecycle.ci.safe(DIGEST, env['VISUAL_GATEWAY_TOKEN'])
+
+
 def main():
     action, = sys.argv[1:]
     env = os.environ
@@ -200,6 +211,9 @@ def main():
         with Path(env['GITHUB_OUTPUT']).open('a', encoding='utf8') as out:
             for key, value in values.items():
                 out.write(f'{key}={value}\n')
+    elif action == 'preflight':
+        require_context(env)
+        require_credentials(env)
     elif action == 'send':
         require_context(env)
         if env.get('VISUAL_DEPLOY_ENABLED') != 'true':
