@@ -66,21 +66,22 @@ def mint(aud, *, env=os.environ):
     return stage('github-oidc-issuance-response',parse)
 
 
-def operate(ssh, policy, intent, archive_path, *, get_token=mint):
+def operate(ssh, policy, intent, archive_path, *, get_token=mint, trace=None):
+    run_stage=trace if trace is not None else lambda name, fn: fn()
     with archive_path.open('rb') as archive:
         require(hashlib.file_digest(archive,'sha256').hexdigest()==intent.sha256,'Archive damaged or switched')
         archive.seek(0)
-        challenge=stage('host-challenge-transport',lambda: ssh(
+        challenge=run_stage('host-challenge-transport',lambda: ssh(
             'authorize-release production',{'intent':asdict(intent)},None))
-        stage('host-challenge-response',lambda: require(
+        run_stage('host-challenge-response',lambda: require(
             challenge.keys()=={'status','nonce'} and challenge['status']=='ok'
             and plain(DIGEST,challenge['nonce']),'Invalid production challenge'))
         nonce=challenge['nonce']
-        token=stage('github-oidc-issuance',lambda: get_token(audience(policy,intent,nonce)))
-        receipt=stage('host-activation-transport',lambda: ssh(
+        token=run_stage('github-oidc-issuance',lambda: get_token(audience(policy,intent,nonce)))
+        receipt=run_stage('host-activation-transport',lambda: ssh(
             f'deploy-release production {intent.revision} {intent.sha256}',
             {'intent':asdict(intent),'nonce':nonce,'token':token},archive))
-    stage('host-activation-receipt',lambda: require(
+    run_stage('host-activation-receipt',lambda: require(
         receipt=={'status':'ok','environment':'production','revision':intent.revision,'sha256':intent.sha256},
         'Host did not activate and smoke-check exact PROD bytes'))
     return receipt
@@ -109,7 +110,7 @@ def main(env=os.environ):
              account='assertion-production-deploy',host_pin=env['SSH_HOST_PIN'],
              key=env['SSH_PRIVATE_KEY'],runtime_dir=env['RUNNER_TEMP']) as route:
         stage('ssh-restricted-probes',lambda: ssh_transport.preflight(route))
-        receipt=operate(exchange_factory(route),policy,intent,path/'release.tar.gz')
+        receipt=operate(exchange_factory(route),policy,intent,path/'release.tar.gz',trace=stage)
     print('Activated and verified production:',receipt['revision'],receipt['sha256'])
 
 
