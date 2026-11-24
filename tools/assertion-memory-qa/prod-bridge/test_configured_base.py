@@ -43,6 +43,25 @@ class BaseProvider(TestCase):
           root+'/actions/workflows/assertion-memory-base.yml':{'id':25},
         }
         self.assertEqual(b.original(data.__getitem__,self.stage('test'),asdict(self.release)),self.release)
+        normal_env={'GITHUB_REPOSITORY':b.REPO,'GITHUB_REF':b.MAIN,'GITHUB_REF_PROTECTED':'true',
+                    'GITHUB_WORKFLOW_REF':BASE.caller,'GITHUB_EVENT_NAME':'workflow_run','GITHUB_RUN_ATTEMPT':'1',
+                    'GITHUB_JOB':'test','PROFILE':'base','GRAPH_TAG':self.tag,'GITHUB_RUN_ID':self.run_id,'GITHUB_SHA':self.control_sha}
+        event={'action':'completed','workflow_run':data[root+'/actions/runs/23']}
+        data[root+'/actions/runs/23/artifacts?per_page=2']=data[root+'/actions/artifacts?per_page=2&name='+product.artifact_prefix+'22-'+self.revision]
+        automatic=b.control(BASE,normal_env,'test',event)
+        self.assertEqual(automatic.upstream,b.Upstream('23',self.tag,self.revision))
+        self.assertEqual(b.original(data.__getitem__,automatic,asdict(self.release)),self.release)
+        self.assertEqual(b.build_selection(data.__getitem__,[BASE],normal_env|{'GITHUB_JOB':'build'},event),
+                         (BASE,self.release))
+        manual=normal_env|{'GITHUB_JOB':'build','GITHUB_EVENT_NAME':'workflow_dispatch'}
+        self.assertEqual(b.build_selection(data.__getitem__,[BASE],manual,{'inputs':{'profile':'base','tag':self.tag}}),
+                         (BASE,self.release))
+
+        for key,val in (('event','pull_request'),('conclusion','failure'),('run_attempt',2),
+                        ('path','.github/workflows/visual.yml'),('head_branch','main')):
+            foreign=event|{'workflow_run':event['workflow_run']|{key:val}}
+            with self.assertRaises(ValueError): b.control(BASE,normal_env,'test',foreign)
+
         for update in ({'tag':'assertion-memory-visual-v0.1.0'}, {'archive_sha':'e'*64}, {'artifact_id':'42'}):
             with self.subTest(update=update),self.assertRaises(ValueError):
                 b.original(data.__getitem__,self.stage('test'),asdict(self.release)|update)
