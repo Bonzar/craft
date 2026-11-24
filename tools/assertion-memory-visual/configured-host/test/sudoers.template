@@ -1,4 +1,0 @@
-Cmnd_Alias ASSERTION_CONFIGURED_VISUAL_TEST_RECV = /usr/bin/python3 -I -B /etc/assertion-memory-visual/configured-test/receive.py
-Defaults:assertion-cfg-vis-test-deploy env_reset, !setenv, env_keep += "SSH_ORIGINAL_COMMAND"
-Defaults!ASSERTION_CONFIGURED_VISUAL_TEST_RECV !use_pty, !log_input, !log_output
-assertion-cfg-vis-test-deploy ALL=(assertion-visual-test-deploy) NOPASSWD: NOSETENV: ASSERTION_CONFIGURED_VISUAL_TEST_RECV

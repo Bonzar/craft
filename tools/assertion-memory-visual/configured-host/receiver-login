@@ -1,0 +1,35 @@
+#!/usr/bin/python3 -I
+"""Fixed sshd entry point, choose only exact authenticated account's stage."""
+import os
+import pwd
+import sys
+
+POLICY = '/etc/assertion-memory-visual/configured'
+
+def arguments(stage):
+    return ('/usr/bin/sudo', '-n', '-u', f'assertion-visual-{stage}-deploy', '--',
+            '/usr/bin/python3', '-I', '-B', f'{POLICY}/receive.py', stage)
+
+
+def main():
+    if os.getuid() == 0 or os.getuid() != os.geteuid():
+        return 126
+    account = pwd.getpwuid(os.getuid())
+    keys = {f'assertion-cfg-vis-{stage}-deploy': stage for stage in ('test', 'prod')}
+    stage = keys.get(account.pw_name)
+    if stage is None or account.pw_dir != '/var/empty/' + account.pw_name:
+        return 126
+    args = arguments(stage)
+    if sys.argv[1:] != ['-c', ' '.join(args)]:
+        return 126
+    original = os.environ.get('SSH_ORIGINAL_COMMAND', '')
+    if len(original) > 160:
+        return 126
+    os.umask(0o027)
+    os.chdir(account.pw_dir)
+    os.execve(args[0], args, {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LANG':'C.UTF-8',
+                             'HOME':account.pw_dir,'SSH_ORIGINAL_COMMAND':original})
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
