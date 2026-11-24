@@ -122,8 +122,10 @@ def verify(token, issuer_keys, policy, intent, nonce, now):
             and plain(SHA,claims.get('workflow_sha')) and claims.get('sha')==claims['workflow_sha'],
             'Unexpected workflow identity or release audience')
     iat,nbf,exp=(claims.get(k) for k in ('iat','nbf','exp'))
+    # GitHub backdates nbf by up to 10 minutes. This allowance does not
+    # extend token age or validity: iat recency and expiration remain bounded.
     require(all(type(v) is int for v in (iat,nbf,exp))
-            and now-300<=iat<=now+15 and iat-60<=nbf<=now+15 and now<exp and 0<exp-iat<=600,
+            and now-300<=iat<=now+15 and iat-600<=nbf<=now+15 and now<exp and 0<exp-iat<=600,
             'Expired or invalid token timing')
 
 

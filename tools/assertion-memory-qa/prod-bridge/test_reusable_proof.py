@@ -65,6 +65,30 @@ class TestReusableProof(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'audience'):
             self.check(nonce='e'*64)
 
+    def test_documented_github_nbf_backdating_does_not_extend_validity(self):
+        for nbf in (2000,1940,1939,1400):
+            with self.subTest(nbf=nbf):
+                self.check(nbf=nbf)
+        for now, updates in (
+            (2000,{'nbf':1399}),
+            (2000,{'nbf':2016}),
+            (2000,{'iat':2016,'nbf':2000}),
+            (2301,{'nbf':1400,'exp':2600}),
+            (2000,{'nbf':1400,'exp':2601}),
+            (2300,{'nbf':1400}),
+        ):
+            with self.subTest(now=now,updates=updates),self.assertRaisesRegex(ValueError,'timing'):
+                self.check(now=now,**updates)
+
+        with self.assertRaisesRegex(ValueError,'audience'):
+            self.check(nbf=1400,aud='different')
+        from cryptography.exceptions import InvalidSignature
+        payload=self.token(nbf=1400).split('.')
+        signature=base64.urlsafe_b64decode(payload[2]+'='*(-len(payload[2])%4))
+        payload[2]=b64(bytes([signature[0]^1])+signature[1:])
+        with self.assertRaises(InvalidSignature):
+            v.verify('.'.join(payload),self.jwks,self.policy,self.intent,self.nonce,2000)
+
     def test_deny_expired_or_untrusted_key_location(self):
         with self.assertRaisesRegex(ValueError,'timing'):
             self.check(now=2300)
