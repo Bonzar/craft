@@ -227,5 +227,56 @@ class ThoughtWorkerTest(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
+class ImmutableWorkerLaunchTest(unittest.TestCase):
+    def test_worker_and_nested_python_leave_release_bytes_untouched(self):
+        import os
+        import subprocess
+        from unittest.mock import patch
+        from prototypes.assertion_memory import mcp_server
+
+        real_popen = subprocess.Popen
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'release'
+            state = Path(temp) / 'state'
+            state.mkdir()
+            pkg = root / 'prototypes' / 'assertion_memory'
+            nested = pkg / 'turn_source'
+            nested.mkdir(parents=True)
+            for directory in (pkg.parent, pkg, nested):
+                (directory / '__init__.py').write_text('')
+            (nested / 'fixture.py').write_text('VALUE = 2\n')
+            entry = pkg / 'mcp_server.py'
+            entry.write_text(
+                'import subprocess, sys\n'
+                'from .turn_source.fixture import VALUE\n'
+                'assert VALUE == 2 and sys.dont_write_bytecode\n'
+                'subprocess.run([sys.executable, "-c", '
+                '"from prototypes.assertion_memory.turn_source.fixture import VALUE; '
+                'import sys; assert VALUE == 2 and sys.dont_write_bytecode"], check=True)\n'
+            )
+            baseline = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            children = []
+
+            def launch(argv, **kwargs):
+                self.assertEqual(argv[1:3], ['-B', '-m'])
+                self.assertEqual(kwargs['env']['PYTHONDONTWRITEBYTECODE'], '1')
+                child = real_popen(argv, **kwargs)
+                children.append(child)
+                return child
+
+            config = mcp_server.ServiceConfig(db=str(state / 'fixture.sqlite3'),
+                                              provider='codex', model='fictional')
+            with (patch.object(mcp_server, '__file__', str(entry)),
+                  patch.object(mcp_server, '_eligible_processing_work', return_value=True),
+                  patch.object(mcp_server.subprocess, 'Popen', side_effect=launch),
+                  patch.dict(os.environ, {'PYTHONDONTWRITEBYTECODE': '0'})):
+                for _ in range(2):
+                    self.assertTrue(mcp_server.WorkerLauncher(config).start()['scheduled'])
+                    self.assertEqual(children[-1].wait(timeout=10), 0)
+                    self.assertEqual({p.relative_to(root):p.read_bytes()
+                                      for p in root.rglob('*') if p.is_file()}, baseline)
+                    self.assertFalse(list(root.rglob('__pycache__')))
+
+
 if __name__ == '__main__':
     unittest.main()
