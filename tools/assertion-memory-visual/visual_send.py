@@ -4,7 +4,10 @@ import os
 from pathlib import Path
 import re
 from ssh_transport import route, preflight, exchange
-from visual_auth import COMMAND, sign
+if __package__:
+    from .visual_auth import COMMAND, sign
+else:
+    from visual_auth import COMMAND, sign
 
 
 def main():
@@ -35,7 +38,10 @@ def deploy(d, *, lane="legacy"):
     envelope=sign(command,d['VISUAL_SIGNING_KEY'],directory=tmp)
     expected={'environment':mode,'revision':rev,'archive_sha256':sha,'release':manifest}
     if lane == 'configured':
-        from configured_visual_route import route as scoped_route
+        if __package__:
+            from .configured_visual_route import route as scoped_route
+        else:
+            from configured_visual_route import route as scoped_route
         account_prefix = 'assertion-configured-visual'
     else:
         scoped_route = route

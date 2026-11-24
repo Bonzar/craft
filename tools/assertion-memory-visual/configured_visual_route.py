@@ -4,8 +4,8 @@ from contextlib import contextmanager
 from ssh_transport import route as _existing_route
 
 _ACCOUNTS = {
-    "assertion-configured-visual-test-deploy": "assertion-visual-test-deploy",
-    "assertion-configured-visual-prod-deploy": "assertion-visual-prod-deploy",
+    "assertion-cfg-vis-test-deploy": "assertion-visual-test-deploy",
+    "assertion-cfg-vis-prod-deploy": "assertion-visual-prod-deploy",
 }
 
 

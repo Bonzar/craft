@@ -1,0 +1,13 @@
+Match User assertion-cfg-vis-test-deploy
+    AuthenticationMethods publickey
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AuthorizedKeysCommand none
+    AuthorizedKeysFile /etc/ssh/assertion-visual/configured-test.authorized_keys
+    ForceCommand /usr/bin/sudo -n -u assertion-visual-test-deploy -- /usr/bin/python3 -I -B /etc/assertion-memory-visual/configured-test/receive.py
+    DisableForwarding yes
+    PermitTTY no
+    X11Forwarding no
+    PermitUserRC no
+Match all

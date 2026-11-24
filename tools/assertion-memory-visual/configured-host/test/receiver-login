@@ -1,0 +1,30 @@
+#!/usr/bin/python3 -I
+"""Accept exactly sshd's configured TEST command, no arbitrary shell."""
+import os
+import pwd
+import sys
+
+ACCOUNT = 'assertion-cfg-vis-test-deploy'
+HOME = '/var/empty/assertion-cfg-vis-test-deploy'
+ARGS = ('/usr/bin/sudo','-n','-u','assertion-visual-test-deploy','--',
+        '/usr/bin/python3','-I','-B','/etc/assertion-memory-visual/configured-test/receive.py')
+FORCED = ' '.join(ARGS)
+
+
+def main():
+    if sys.argv[1:] != ['-c', FORCED] or os.getuid() == 0 or os.getuid() != os.geteuid():
+        return 126
+    account = pwd.getpwuid(os.getuid())
+    if (account.pw_name, account.pw_dir) != (ACCOUNT, HOME):
+        return 126
+    original = os.environ.get('SSH_ORIGINAL_COMMAND', '')
+    if len(original) > 160:
+        return 126
+    os.umask(0o027)
+    os.chdir(HOME)
+    os.execve(ARGS[0], ARGS, {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LANG':'C.UTF-8',
+                              'HOME':HOME,'SSH_ORIGINAL_COMMAND':original})
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

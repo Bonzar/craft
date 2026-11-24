@@ -5,11 +5,29 @@ same-run receipt and stage scheduling. No GitHub API is called here.
 """
 from dataclasses import dataclass
 from pathlib import Path
+import importlib
+from importlib.machinery import ModuleSpec
+import sys
+from types import ModuleType
 from configured_provider_checks import Content, Profile, ReceiptLayout, Target
 
-import lifecycle
-import smoke
-import visual_send
+_PACKAGE = "_assertion_configured_visual_ops"
+_DIRECTORY = Path(__file__).resolve().parent
+
+
+def _operation(name):
+    # The trusted package is bound to this checked-out control module's own
+    # directory. No project/tag data or bare import chooses an implementation.
+    module = sys.modules.get(_PACKAGE)
+    if module is None:
+        module = ModuleType(_PACKAGE)
+        module.__path__ = [str(_DIRECTORY)]
+        module.__spec__ = ModuleSpec(_PACKAGE, loader=None, is_package=True)
+        module.__spec__.submodule_search_locations = module.__path__
+        module = sys.modules.setdefault(_PACKAGE, module)
+    if getattr(module, "__path__", None) != [str(_DIRECTORY)]:
+        raise ValueError("Wrong configured Visual package directory")
+    return importlib.import_module(f"{_PACKAGE}.{name}")
 
 
 @dataclass(frozen=True)
@@ -26,9 +44,9 @@ PROFILE = Profile(
     control_workflow="configured-release.yml",
     reusable_workflow="configured-release-reusable.yml",
     test=Target("configured-release-visual-test", "test",
-                "assertion-configured-visual-test-deploy", "deploy-visual"),
+                "assertion-cfg-vis-test-deploy", "deploy-visual"),
     prod=Target("configured-release-visual-prod", "prod",
-                "assertion-configured-visual-prod-deploy", "deploy-visual"),
+                "assertion-cfg-vis-prod-deploy", "deploy-visual"),
     receipt=ReceiptLayout(archive_key="archive_sha256", manifest_key="release"),
 )
 TARGETS = {"test": PROFILE.test, "prod": PROFILE.prod}
@@ -37,7 +55,7 @@ TARGETS = {"test": PROFILE.test, "prod": PROFILE.prod}
 def unpack_verified(archive, directory, revision):
     """Validate Visual's inner archive format; common owns outer ZIP bytes."""
     folder = Path(directory)
-    payload_sha, release_digest = lifecycle.unpack(Path(archive), folder, revision)
+    payload_sha, release_digest = _operation("lifecycle").unpack(Path(archive), folder, revision)
     return Payload(folder, revision, payload_sha, release_digest)
 
 
@@ -51,7 +69,7 @@ def activate(stage, payload, transport):
     # shared environment dict. This compile-time binding rejects wrong routes.
     if transport["account"] != target.receiver_account:
         raise ValueError("Wrong configured Visual transport identity")
-    return visual_send.deploy({
+    return _operation("visual_send").deploy({
         "VISUAL_ENV": stage,
         "VISUAL_DOWNLOAD": str(payload.directory),
         "VISUAL_REVISION": payload.revision,
@@ -68,7 +86,7 @@ def activate(stage, payload, transport):
 
 def verify_smoke(stage, payload, target):
     TARGETS[stage]
-    smoke.main({
+    _operation("smoke").main({
         "VISUAL_ENV": stage,
         "VISUAL_DOWNLOAD": str(payload.directory),
         "VISUAL_DIGEST": payload.release_digest,
