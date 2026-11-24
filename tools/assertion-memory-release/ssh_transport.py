@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 BASE_ENV={'PATH':'/usr/bin:/bin','LC_ALL':'C'}
-ACCOUNT=re.compile(r'assertion-(?:test|production|visual-test|visual-prod)-deploy\Z')
+ACCOUNT=re.compile(r'assertion-(?:test|production|visual-test|visual-prod|configured-visual-test|configured-visual-prod)-deploy\Z')
 DENIED=b'{"status":"rejected","error":"command_denied"}\n'
 
 
@@ -62,3 +62,4 @@ def preflight(route):
     for command in ('receiver-probe','id'):
         if exchange(route,command,limit=512)!=(1,DENIED):
             raise ValueError('scoped_receiver_preflight_failed')
+

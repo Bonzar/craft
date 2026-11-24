@@ -43,6 +43,7 @@ def deploy(d, *, lane="legacy"):
     if status!=0 or body!=json.dumps(expected,separators=(',',':')).encode()+b'\n':
         raise ValueError('visual_receiver_failed_or_receipt_mismatch')
     print('Authorized shared receiver returned exact visual release identity')
+    return expected
 
 
 if __name__=='__main__':
