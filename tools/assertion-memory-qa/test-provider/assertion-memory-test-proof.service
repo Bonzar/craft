@@ -1,0 +1,35 @@
+[Unit]
+Description=Read-only Assertion Memory TEST release proof
+After=network.target
+
+[Service]
+Type=simple
+User=assertion-test-deploy
+Group=assertion-test-deploy
+ExecStart=/usr/bin/python3 -I -B /etc/assertion-release/test-proof/provider.py
+LoadCredential=test_bearer_sha256:/etc/assertion-release/test-proof/test_bearer_sha256
+LoadCredential=test_release_identity:/etc/assertion-release/test-proof/test_release_identity
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+RestrictSUIDSGID=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadOnlyPaths=/srv/assertion-release/test/state
+InaccessiblePaths=-/etc/assertion-release/production -/srv/assertion-release/production -/var/lib/assertion-memory
+InaccessiblePaths=-/srv/assertion-release/test/state/mcp-token -/srv/assertion-release/test/state/graph-password
+TimeoutStopSec=10s
+Restart=on-failure
+RestartSec=2s
