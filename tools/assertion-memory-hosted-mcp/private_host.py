@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fcntl
 from hashlib import sha256
+import hmac
 import json
 import os
 from pathlib import Path
@@ -99,10 +100,14 @@ def configured(stage,root,config_dir):
     return caps,read,effect
 
 
-def effect_lock(app,root,stage):
+def effect_lock(app,root,stage,effect_token):
     """Writes may never straddle activation. Catalog/health never takes this lock."""
     async def locked(scope,receive,send):
         if scope.get('type')!='http' or scope.get('path')!=f'/memory-mcp-{stage}-effects':
+            return await app(scope,receive,send)
+        headers=[value for key,value in scope.get('headers',()) if key.lower()==b'authorization']
+        if (effect_token is None or len(headers)!=1 or not hmac.compare_digest(
+                headers[0],('Bearer '+effect_token).encode('ascii'))):
             return await app(scope,receive,send)
         fd=None
         try:
@@ -165,5 +170,5 @@ def factory(stage,root,config_dir,legacy_token):
             raise ValueError('Private database not the canonical lane database')
         operations=create_operations(config,store,background=background,service=service)
         app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations)
-        return frozenset(paths),effect_lock(app,root,stage)
+        return frozenset(paths),effect_lock(app,root,stage,effect)
     return mount
