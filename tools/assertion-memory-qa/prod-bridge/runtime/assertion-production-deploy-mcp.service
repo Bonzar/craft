@@ -1,0 +1,16 @@
+[Unit]
+Description=Scoped immutable Assertion Memory production MCP
+ConditionUser=assertion-production-deploy
+
+[Service]
+Type=simple
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+WorkingDirectory=/srv/assertion-release/production/current
+ExecStart=/srv/assertion-release/production/current/venv/bin/python -B -m prototypes.assertion_memory.http_server --config /srv/assertion-release/production/state/http.json
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

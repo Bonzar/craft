@@ -1,0 +1,17 @@
+[Unit]
+Description=Scoped immutable Assertion Memory production graph
+ConditionUser=assertion-production-deploy
+
+[Service]
+Type=simple
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+EnvironmentFile=/etc/assertion-release/production/app-runtime.env
+WorkingDirectory=/srv/assertion-release/production/current
+ExecStart=/srv/assertion-release/production/current/venv/bin/python -B -m apps.graph_viewer.server --host 127.0.0.1 --port 8901 --source ${PROD_CANONICAL_DB} --state-dir /srv/assertion-release/production/state/graph-state --password-file /srv/assertion-release/production/state/graph-password --static-dir /srv/assertion-release/production/current/apps/graph_viewer/web/dist
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
