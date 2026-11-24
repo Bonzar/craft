@@ -1,11 +1,12 @@
 """One common hosted MCP ASGI relay. Bind an independently attested environment profile at boot."""
-import asyncio, hmac, json, re
+import asyncio, hashlib, hmac, json, re
 from copy import deepcopy
 from jsonschema import Draft202012Validator
 from policy import EFFECTS, QUERY, authorized, digest
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 MAX_REQUEST, MAX_RESPONSE = 100_000, 131_072
+MACHINE_MAX = 4 * 1024 * 1024
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 RID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 TAG = re.compile(r"assertion-memory-v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?\Z")
@@ -53,7 +54,14 @@ def make_forward(profile, backend_token):
             return parse(raw)
     return forward
 
-def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *, effect_token=None, operations=None):
+def machine_authorized(header, digests):
+    if re.fullmatch(rb'Bearer [0-9a-f]{64}',header) is None:
+        return False
+    candidate=hashlib.sha256(header[7:]).hexdigest()
+    return any([hmac.compare_digest(candidate,expected) for expected in digests])
+
+
+def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *, effect_token=None, operations=None, machine_digests=()):
     profile,catalog=deepcopy(profile),deepcopy(catalog)
     lane=profile.get('lane')
     caps=profile.get('enabled_capabilities',())
@@ -76,6 +84,23 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
     if type(effects_only) is not bool or effects_only and not effects:raise ValueError('invalid listener split')
     routes={} if effects_only else {f'/memory-mcp-{lane}-tools':("baseline_read",gateway_token)}
     if effects:routes[f'/memory-mcp-{lane}-effects']=("intake_process",effect_token)
+    if (type(machine_digests) is not tuple or len(machine_digests)>16
+            or any(not isinstance(t,str) or not HEX.fullmatch(t) for t in machine_digests)
+            or len(set(machine_digests))!=len(machine_digests)
+            or any(hashlib.sha256(t.encode('ascii')).hexdigest() in machine_digests
+                   for t in (gateway_token,effect_token) if isinstance(t,str))
+            or machine_digests and operations is None):
+        raise ValueError('invalid machine credentials')
+    if machine_digests: routes[f'/memory-api-{lane}']=('machine',None)
+    machine_schemas={name:{**row['canonicalInputSchema'],'additionalProperties':False}
+                     for name,row in manifest.items()} if machine_digests else {}
+    machine_validators={name:Draft202012Validator(schema) for name,schema in machine_schemas.items()}
+    machine_descriptors=[{"name":name,"description":manifest[name].get("description",name),
+                          "inputSchema":schema,
+                          "annotations":{"readOnlyHint":manifest[name].get("readOnlyHint") is True,
+                                         "destructiveHint":False,"openWorldHint":False}}
+                         for name,schema in sorted(machine_schemas.items())]
+    machine_digest=digest(machine_descriptors)
     compiled={(cap,n):Draft202012Validator(projection) for n,t in manifest.items()
                for cap,projection in t['capability_projections'].items() if cap in caps}
     if not isinstance(gateway_token, str) or not HEX.fullmatch(gateway_token):
@@ -118,9 +143,10 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     return
         if scope["type"] != "http": return
 
+        machine=scope.get('path')==f'/memory-api-{lane}' and bool(machine_digests)
         async def reply(status, data):
             raw=json.dumps(data, separators=(",",":"), ensure_ascii=True).encode()
-            if len(raw)>MAX_RESPONSE:
+            if len(raw)>(MACHINE_MAX if machine else MAX_RESPONSE):
                 status,raw=502,b'{"error":"unavailable"}'
             await send({"type":"http.response.start","status":status,"headers":[
                 (b"content-type",b"application/json"),(b"cache-control",b"private, no-store")]})
@@ -131,9 +157,12 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
         def header(name):
             return [v for k,v in scope.get("headers",()) if k.lower()==name]
         capability,secret=routes[scope["path"]]
-        expected=b"Bearer " + secret.encode()
         auth=header(b"authorization")
-        if len(auth)!=1 or not hmac.compare_digest(auth[0],expected):
+        if machine:
+            allowed=len(auth)==1 and machine_authorized(auth[0],machine_digests)
+        else:
+            allowed=len(auth)==1 and hmac.compare_digest(auth[0],b'Bearer '+secret.encode('ascii'))
+        if not allowed:
             return await reply(401, {"error":"unauthorized"})
         if header(b"content-type")!=[b"application/json"]:
             return await reply(415, {"error":"unsupported"})
@@ -145,7 +174,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     event=await receive()
                     if event["type"]!="http.request": raise ValueError()
                     raw.extend(event.get("body",b""))
-                    if len(raw)>MAX_REQUEST: raise ValueError()
+                    if len(raw)>(MACHINE_MAX if machine else MAX_REQUEST): raise ValueError()
                     if not event.get("more_body"): break
             b=parse(raw)
             basic={"request_id","operation","arguments"}
@@ -159,7 +188,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
             if discovery:
                 if args or set(b)!=basic: raise ValueError()
             else:
-                if strict_catalog and "expected" not in b: raise ValueError()
+                if (strict_catalog or machine) and "expected" not in b: raise ValueError()
                 if "expected" in b and (type(expected_identity) is not dict
                         or set(expected_identity)!={"release","generation","catalog_sha256"}
                         or not all(isinstance(v,str) for v in expected_identity.values())
@@ -167,10 +196,13 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                         or not all(HEX.fullmatch(expected_identity[k]) for k in ("generation","catalog_sha256"))):
                     raise ValueError()
                 if name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
-                if (capability,name) not in compiled or not authorized(profile,catalog,lane,name,capability) or                    not compiled[(capability,name)].is_valid(args): raise ValueError()
+                if machine:
+                    if name not in machine_validators or not machine_validators[name].is_valid(args): raise ValueError()
+                elif (capability,name) not in compiled or not authorized(profile,catalog,lane,name,capability) or                    not compiled[(capability,name)].is_valid(args): raise ValueError()
         except Exception:
             return await reply(400, {"error":"invalid_request"})
-        limiter=gate if discovery else query_gate if capability=="generate" else effect_gate if capability=="intake_process" else gate
+        limiter=(gate if discovery else query_gate if name==QUERY and machine or capability=="generate" else
+                 effect_gate if machine and manifest[name].get("readOnlyHint") is not True or capability=="intake_process" else gate)
         if limiter.locked(): return await reply(503, {"error":"unavailable"})
         try:
             async with limiter:
@@ -181,11 +213,11 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     not HEX.fullmatch(generation): raise ValueError()
                 if release!=profile.get("base_release"): raise ValueError()
                 receipt={"release":release,"generation":generation,
-                         "catalog_sha256":read_digest if capability=="baseline_read" else catalog["catalog_sha256"]}
+                         "catalog_sha256":machine_digest if machine else read_digest if capability=="baseline_read" else catalog["catalog_sha256"]}
                 if discovery:
                     if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
                     return await reply(200, {"environment":lane,"request_id":rid,**receipt,
-                                             "capability":capability,"tools":route_tools[capability]})
+                                             "capability":capability,"tools":machine_descriptors if machine else route_tools[capability]})
                 if expected_identity is not None and expected_identity!=receipt:
                     return await reply(409, {"error":"stale_catalog"})
                 if operations is None:
