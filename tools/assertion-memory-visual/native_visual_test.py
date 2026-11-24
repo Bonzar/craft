@@ -39,6 +39,42 @@ class VisualGate(unittest.TestCase):
                      tag=tag, test_run_id='10', workflow_sha='d'*40, attempt='1')
         return env, (tag, revision), ('3', digest, '4'), archive, proof
 
+    def test_configured_context_cannot_inherit_legacy_control(self):
+        with tempfile.TemporaryDirectory() as root:
+            env, _, _, _, _ = self.fixture(Path(root))
+            policy = visual.CONFIGURED_VISUAL
+            self.assertEqual(visual.require_context(env), 'test')
+            with self.assertRaises(ValueError):
+                visual.require_context(env, policy)
+            env.update(GITHUB_WORKFLOW_REF=policy.workflow_ref, GITHUB_JOB='test')
+            with self.assertRaises(ValueError):
+                visual.require_context(env, policy)
+            Path(env['GITHUB_EVENT_PATH']).write_text(json.dumps(dict(inputs={
+                'tag': env['GRAPH_TAG'], 'profile': 'visual'})))
+            self.assertEqual(visual.require_context(env, policy), 'test')
+            with self.assertRaises(ValueError):
+                visual.require_context(env)
+            with self.assertRaises(ValueError):
+                visual.require_context(dict(env, GITHUB_JOB='prod'), policy)
+            with self.assertRaises(ValueError):
+                visual.require_context(dict(env, GITHUB_RUN_ATTEMPT='2'), policy)
+
+    def test_legacy_run_evidence_cannot_satisfy_configured_policy(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            env, _, _, _, proof = self.fixture(folder)
+            base = visual.lifecycle.ROOT
+            records = {
+                base+'/actions/runs/10': dict(id=10, workflow_id=41, event='workflow_dispatch',
+                    path='.github/workflows/'+visual.WORKFLOW_FILE, head_branch='main',
+                    head_sha=env['GITHUB_SHA'], run_attempt=1, status='in_progress',
+                    repository={'full_name':visual.REPO}, head_repository={'full_name':visual.REPO}),
+                base+'/actions/workflows/configured-release.yml': {'id':42},
+            }
+            with self.assertRaisesRegex(ValueError, 'Wrong native visual control run'):
+                visual.verify_same_run_test(records.__getitem__, env, proof, folder,
+                                            visual.CONFIGURED_VISUAL)
+
     def runner(self, env, identity, artifact, archive, proof=None, *, uploaded_proof=None):
         name = 'assertion-memory-native-visual-' + env['VISUAL_ENV']
         pre = visual.lifecycle.ROOT + '/environments/' + name
