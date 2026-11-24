@@ -209,10 +209,12 @@ class WorkerLauncher:
         # acquire the same lock and launch its own worker, preserving idle handoff.
         if not _eligible_processing_work(self.config):
             return {'scheduled':False,'reason':'no work eligible for startup processing selection'}
-        args = [sys.executable, '-m', 'prototypes.assertion_memory.mcp_server', '--worker-config-json',
+        args = [sys.executable, '-B', '-m', 'prototypes.assertion_memory.mcp_server', '--worker-config-json',
                 json.dumps(asdict(self.config)), '--worker-limit', str(limit or 0)]
         root = Path(__file__).resolve().parents[2]
         env = dict(os.environ)
+        # The release is immutable; grandchildren must inherit the same rule.
+        env['PYTHONDONTWRITEBYTECODE'] = '1'
         env['PYTHONPATH'] = str(root) + os.pathsep + env.get('PYTHONPATH', '')
         log_path = self.config.db + '.worker.log'
         with open(log_path, 'ab', buffering=0) as log:
