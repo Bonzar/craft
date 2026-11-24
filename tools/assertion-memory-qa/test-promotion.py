@@ -258,14 +258,17 @@ class ProductionAuthorizationTest(unittest.TestCase):
             lc.require_host_proof()
 
 
-    def test_prod_workflow_has_no_transport_credentials_or_oidc_permission(self):
+    def test_prod_workflow_calls_only_the_audited_pin(self):
         workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/assertion-memory-base.yml').read_text()
         prod=workflow.split('  deploy-production:',1)[1]
-        self.assertNotIn('ASSERTION_MEMORY_BASE_DEPLOY_READY',prod)
-        self.assertIn('PRODUCTION_READY: ${{ vars.ASSERTION_MEMORY_PROD_READY }}',prod)
-        self.assertIn('environment: assertion-memory-production',prod)
-        self.assertIn('lifecycle.py host-proof',prod)
-        for forbidden in ('secrets.', 'send-release.sh', 'id-token:', 'SSH_PRIVATE_KEY'):
+        self.assertIn("github.event_name == 'workflow_dispatch'",prod)
+        self.assertIn("inputs.action == 'production'",prod)
+        self.assertIn("github.run_attempt == '1'",prod)
+        self.assertIn('github.ref_protected',prod)
+        self.assertIn("vars.ASSERTION_MEMORY_PROD_BRIDGE_CALLER_READY == 'true'",prod)
+        self.assertIn('id-token: write',prod)
+        self.assertIn('uses: Bonzar/craft/.github/workflows/assertion-memory-authorize-promotion.yml@6a0286c846bf6e7448d88be57db881d9460d7f1d',prod)
+        for forbidden in ('secrets.', 'send-release.sh', 'SSH_PRIVATE_KEY', 'secrets:', 'steps:'):
             self.assertNotIn(forbidden,prod)
 
 
