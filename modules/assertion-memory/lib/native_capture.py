@@ -49,7 +49,25 @@ def _header(stream, raw):
     return header, meta
 
 
-def register(store, raw):
+def check_fresh_header(header, meta, cutover):
+    from datetime import datetime, timezone
+    try:
+        row=json.loads(header)
+        started=datetime.fromisoformat(row['timestamp'].replace('Z','+00:00'))
+        threshold=datetime.fromisoformat(cutover.replace('Z','+00:00'))
+        if started.utcoffset() is None or threshold.utcoffset() is None or not threshold <= started <= datetime.now(timezone.utc):
+            raise ValueError
+        if any(meta.get(key) is not None for key in FORK_KEYS):
+            raise ValueError
+    except (TypeError,ValueError,KeyError,AttributeError,OverflowError):
+        raise ValueError('Unverified fresh session') from None
+
+
+def register(store, raw, *, fresh_since=None):
+    fresh = fresh_since is not None
+    if fresh and raw.get('source') != 'startup':
+        raise ValueError('Only an original startup may register')
+
     if not all(isinstance(raw.get(key), str) and raw[key].strip() for key in ('session_id', 'cwd', 'transcript_path')):
         raise ValueError('Persistent physical session identity/path required')
     path = Path(raw['transcript_path'])
@@ -58,6 +76,8 @@ def register(store, raw):
     if len(raw['session_id']) > 256:
         raise ValueError('Physical session identity exceeds supported bound')
     old = store.session(raw['session_id'])
+    if old and fresh:
+        raise ValueError('Session already registered')
     if old:
         if old['path'] != str(path) or Path(old['cwd']).resolve() != Path(raw['cwd']).resolve():
             raise ValueError('Registered physical session path/cwd changed; review required')
@@ -65,11 +85,17 @@ def register(store, raw):
     state = {'session_id': raw['session_id'], 'path': str(path), 'cwd': raw['cwd'],
         'registration_source': raw.get('source'), 'cursor': 0, 'line': 0, 'current': None,
         'turn': None, 'identity': None, 'header_hash': None, 'skip_partial': False, 'gaps': [], 'witnesses': [], 'checkpoint': None, 'fork_requires_current_session_proof': False}
+    if fresh and not path.is_file():
+        raise ValueError('Missing new session header')
     if path.exists():
         with path.open('rb') as stream:
             try: header, meta = _header(stream, raw)
             except PendingSource:
+                if fresh: raise
                 return store.register_session(state)
+            if fresh:
+                check_fresh_header(header, meta, fresh_since)
+                state['verified_fresh_since']=fresh_since
             stat = os.fstat(stream.fileno())
             state.update(identity=[stat.st_dev, stat.st_ino], header_hash=hashlib.sha256(header).hexdigest(),
                 fork_requires_current_session_proof=any(meta.get(key) is not None for key in FORK_KEYS))
