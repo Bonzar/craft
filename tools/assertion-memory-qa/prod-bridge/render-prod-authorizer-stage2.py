@@ -1,4 +1,3 @@
-/Users/bonzar
 """Render only private files for review; never installs or reloads services."""
 import base64
 import json
