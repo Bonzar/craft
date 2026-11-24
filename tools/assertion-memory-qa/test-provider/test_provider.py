@@ -2,6 +2,7 @@ from http.client import HTTPConnection
 import hashlib
 import shutil
 import json
+import os
 from pathlib import Path
 import sqlite3
 import socket
@@ -78,6 +79,32 @@ assert not missing.with_name(missing.name+'-wal').exists()
         serial = iter((('one',),('two',)))
         with self.assertRaises(ValueError):
             p.proof(RELEASE,'tag',snapshot=lambda _:next(serial),exists=lambda _:True)
+
+    def test_fixed_unit_membership_rejects_stale_ambiguous_or_aliased_candidate(self):
+        uid = os.getuid()
+        if uid == 0:
+            self.skipTest('expected unprivileged TEST uid')
+        with TemporaryDirectory() as t:
+            cgroot, procroot = (Path(t)/n for n in ('cgroups','proc'))
+            group = f'/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/assertion-test-deploy-graph.service'
+            unit = cgroot/group[1:]
+            unit.mkdir(parents=True)
+            proc = procroot/'4242'
+            proc.mkdir(parents=True)
+            (unit/'cgroup.procs').write_text('4242\n')
+            (proc/'cgroup').write_text('0::'+group+'\n')
+            get = lambda: p.unit_process('graph', uid, cgroup_root=cgroot, proc_root=procroot)
+            self.assertEqual(get(),(4242,proc))
+            (proc/'cgroup').write_text('0::'+group.replace('-graph','-mcp')+'\n')
+            with self.assertRaises(ValueError): get()
+            (proc/'cgroup').write_text('0::'+group+'\n')
+            (unit/'cgroup.procs').write_text('4242\n4243\n')
+            with self.assertRaises(ValueError): get()
+            (unit/'cgroup.procs').write_text('4242\n')
+            moved=unit.with_name('other.service')
+            unit.rename(moved)
+            unit.symlink_to(moved)
+            with self.assertRaises(ValueError): get()
 
     def test_listener_cannot_be_substituted(self):
         current = Path('/proc')/str(__import__('os').getpid())

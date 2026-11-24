@@ -16,7 +16,8 @@ boolean synthetic marker. No fixture content is returned.
    TEST release. Do not map a fabricated tag onto the legacy synthetic DB.
 2. Require actual currently running `assertion-test-deploy-graph.service`
    and `assertion-test-deploy-mcp.service`, at 127.0.0.1:8891 and :8893. The
-   provider validates the real PIDs, release cwd, exact argv, listener
+   provider validates each exact unified TEST cgroup and its single member,
+   release cwd, exact argv, listener
    process/loopback port, TEST MCP config DB and fixed TEST SQLite inode on
    both sides of a consistent read. Use the same isolated TEST SQLite as
    Graph+MCP. If a legitimate release changes their argv, validate the
@@ -31,7 +32,8 @@ boolean synthetic marker. No fixture content is returned.
    NoNewPrivileges, empty capability bounding set, ProtectSystem=strict,
    ProtectHome=yes, PrivateTmp, and read-only TEST data access sufficient to
    read the existing WAL/SHM. Preserve read-only access to the same-user proc
-   and existing systemd user manager needed for attestation. If kernel policy
+   and exact TEST cgroups needed for attestation. The provider does not use
+   the user systemd manager bus. If kernel policy
    blocks this under the actual unit, fail closed and design a fixed
    privileged-side attester; do not run the request handler as root, grant
    ptrace capabilities, or change permissions at runtime.
@@ -80,7 +82,9 @@ A normal consistent SQLite read can take shared / WAL read locks. The contract
 is *no DB, WAL or SHM content writes/creation by this process*, not lock-free
 reading. The read transaction is short lived with a 300 ms busy timeout.
 Local Linux same-UID subprocess isolation allowed reading sibling `cwd`, `fd`
-and `net/tcp` without adding privileges. Live VM policies may differ; the
+and `net/tcp` without adding privileges. An untrusted environment variable
+or request cannot alter the cgroup path. Empty, multi-PID, unexpected, or
+changing membership is rejected rather than guessed. Live VM policies may differ; the
 root-owned service should still have no capabilities. If the VM returns
 EACCES, preserve the kernel policy and report 503 while a fixed trusted
 attestation alternative is reviewed.

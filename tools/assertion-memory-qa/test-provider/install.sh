@@ -8,7 +8,7 @@ usage(){ echo "usage: $0 --check | --stage"; exit 64; }
 mode=$1
 [[ $mode == --check || $mode == --stage ]] || usage
 origin=$(dirname -- "$(realpath -e -- "$0")")
-provider_sha=2d1e150c5c2664e38c18cfa4ac8dd094e81252afbae8ebac569e8263e36faa9a
+provider_sha=e15961f93508ce58c78872ef062bb38675f8208e3dc6a37052f30760713968b7
 unit_sha=268a4cf2fbf860d039031a5036c3a4d5ac0202ad45dbf4c8481efe44b9fc5e99
 unit=assertion-memory-test-proof.service
 conf=/etc/assertion-release/test-proof

@@ -9,7 +9,6 @@ import re
 import socket
 import sqlite3
 import stat
-import subprocess
 
 ROOT = Path('/srv/assertion-release/test')
 DB = ROOT / 'state/fictional.sqlite3'
@@ -80,6 +79,25 @@ def require_readonly_db_mount(path):
             raise ValueError
 
 
+def unit_process(name, uid, *, cgroup_root=Path('/sys/fs/cgroup'), proc_root=Path('/proc')):
+    # Read bounded kernel process membership for the exact TEST user unit.
+    # No D-Bus socket, broad /proc scan, or permission changes.
+    if name not in PORTS or uid <= 0:
+        raise ValueError
+    group = f'/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/assertion-test-deploy-{name}.service'
+    unit = cgroup_root / group[1:]
+    if unit.resolve(strict=True) != unit:
+        raise ValueError
+    rows = read(unit / 'cgroup.procs', 128).decode('ascii').splitlines()
+    if len(rows) != 1 or not re.fullmatch('[1-9][0-9]{0,9}', rows[0]) or int(rows[0]) <= 1:
+        raise ValueError
+    pid = int(rows[0])
+    proc = proc_root / rows[0]
+    if proc.stat().st_uid != uid or read(proc / 'cgroup', 512).decode('ascii') != '0::' + group + '\n':
+        raise ValueError
+    return pid, proc
+
+
 def live_snapshot(release):
     # The root-supplied immutable artifact identity is not an assertion of liveness.
     # Require both actual release-scope services and their expected inputs independently.
@@ -93,15 +111,7 @@ def live_snapshot(release):
         raise ValueError
     token = []
     for name, port in PORTS.items():
-        text = subprocess.check_output(['/usr/bin/systemctl', '--user', 'show',
-            '--property=MainPID,ActiveState', 'assertion-test-deploy-' + name + '.service'],
-            text=True, timeout=1, stderr=subprocess.DEVNULL,
-            env={'PATH':'/usr/bin:/bin', 'XDG_RUNTIME_DIR':f'/run/user/{os.getuid()}', 'LANG':'C.UTF-8'})
-        state = dict(line.split('=', 1) for line in text.splitlines())
-        pid = int(state['MainPID'])
-        if pid <= 1 or state['ActiveState'] != 'active':
-            raise ValueError
-        proc = Path('/proc') / str(pid)
+        pid, proc = unit_process(name, os.getuid())
         st = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
         if proc.stat().st_uid != os.getuid() or (proc / 'cwd').resolve(strict=True) != release:
             raise ValueError
@@ -203,7 +213,7 @@ def handler(secret_hash, get_proof):
             try:
                 response = get_proof()
             except (ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, RuntimeError,
-                    subprocess.SubprocessError, sqlite3.Error):
+                    sqlite3.Error):
                 return self.reply(503, {'error':'test_unavailable'})
             return self.reply(200, response)
 
