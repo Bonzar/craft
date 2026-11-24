@@ -10,6 +10,11 @@ on:
       test_run_id:
         required: true
         type: string
+    secrets:
+      ASSERTION_MEMORY_DEPLOY_KEY:
+        required: true
+      ASSERTION_MEMORY_SSH_HOST_PIN:
+        required: true
 permissions: {}
 jobs:
   deploy-production:

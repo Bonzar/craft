@@ -30,6 +30,20 @@ class Producer(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'audited'):
                     verify(get,'/repos/Bonzar/craft',sha,reusable,p)
                 actual[WORKFLOW]=saved
+            exact=actual[WORKFLOW]
+            key=b"      ASSERTION_MEMORY_DEPLOY_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}\n"
+            pin=b"      ASSERTION_MEMORY_SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}\n"
+            self.assertIn(key,exact)
+            self.assertIn(pin,exact)
+            drift=(exact.replace(key,b''),exact.replace(pin,b''),
+                   exact.replace(key,b"      ASSERTION_MEMORY_DEPLOY_KEY: ${{ secrets.WRONG }}\n"),
+                   exact.replace(b'    secrets:\n'+key+pin,b'    secrets: inherit\n'),
+                   exact + b"      UNRELATED: ${{ secrets.UNRELATED }}\n")
+            for mutated in drift:
+                actual[WORKFLOW]=mutated
+                with self.assertRaisesRegex(ValueError,'audited'):
+                    verify(get,'/repos/Bonzar/craft',sha,reusable,p)
+            actual[WORKFLOW]=exact
             for name in (WORKFLOW,*EXACT):
                 saved=actual[name]; actual[name]+=b'\n# modified'
                 with self.assertRaisesRegex(ValueError,'audited'):

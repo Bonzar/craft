@@ -36,6 +36,9 @@ def exact_caller(reusable_sha):
     with:
       release_id: ${{{{ inputs.release_id }}}}
       test_run_id: ${{{{ inputs.test_run_id }}}}
+    secrets:
+      ASSERTION_MEMORY_DEPLOY_KEY: ${{{{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}}}
+      ASSERTION_MEMORY_SSH_HOST_PIN: ${{{{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}}}
 """.encode('utf-8')
 
 
