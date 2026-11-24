@@ -54,11 +54,20 @@ in every response. Worker checks it against its own fixed profile.
    baseline_read (effective profile and backend parameter validation).
 3. Through the approved systemd credential facility pass read-profile.json
    (lane=test, canonical_mcp_port=8893, baseline_read only, digest and tag),
-   exact catalog.json, pinned test_release_identity and two independent
+   exact catalog.json, pinned test_release_identity, test_cgroup_identity, and two independent
    credentials (gateway-bearer, test-canonical-bearer). Route only the TEST
    path to loopback proxy and forward only x-memory-mcp-test-read-auth to
    Authorization; publish new routing only after review. Do not grant
    access to the canonical socket outside its existing firewall/auth.
+   The TEST-only test_cgroup_identity contains exactly graph and mcp string keys,
+   each the unique scoped in-use cgroup v2 path independently obtained by the
+   operator using systemctl --user show --property=ControlGroup --value outside
+   the relay, never from a request. The relay uses no systemctl or D-Bus. It
+   verifies cgroup mount read-only and fixed exact systemd user/role, obtains
+   process IDs from kernel cgroup.procs, then verifies exact membership and the
+   process that owns the scoped socket. Helper processes do not qualify. Keep
+   ProtectHome=yes and ProtectControlGroups=yes; if evidence cannot be obtained,
+   stop rather than broadening permissions.
 4. At site entry, use makeHostedRelay with exact TEST profile origin and
    route, then withHostedMcp wrapping unchanged legacy handler. Use the
    existing matchesEnrolledOwner D1-only function with exact origin/path,

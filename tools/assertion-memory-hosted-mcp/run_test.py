@@ -6,7 +6,7 @@ from policy import digest
 from vm_relay import make_app, make_forward, parse
 # Supply this exact reviewed module from the already qualified TEST fixture provider,
 # in the root-owned Python bundle and pinned by the release operator. No PROD module.
-from test_fixture_provider import ROOT, expected_identity, live_snapshot
+from test_fixture_provider import ROOT, expected_cgroups, expected_identity, live_snapshot
 
 def fixed_read(path, limit):
  with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW),'rb') as f:
@@ -24,13 +24,14 @@ def main():
   digest(catalog['catalog'])!=profile.get('catalog_sha256') or catalog.get('catalog_sha256')!=profile.get('catalog_sha256'):
   raise SystemExit('not an attested TEST relay configuration')
  tag,release=expected_identity(fixed_read(c/'test_release_identity',512))
+ cgroups=expected_cgroups(fixed_read(c/'test_cgroup_identity',2048),os.getuid())
  if tag!=profile.get('base_release'):raise SystemExit('not the selected TEST release')
  inbound=fixed_read(c/'gateway-bearer',4096).decode('ascii').strip()
  backend=fixed_read(c/'test-canonical-bearer',4096).decode('ascii').strip()
  if inbound==backend:raise SystemExit('distinct credentials are required')
  def active():
   marker=ROOT/'current'; start=marker.lstat()
-  evidence=live_snapshot(release) # already verified TEST authoritative loopback and DB config
+  evidence=live_snapshot(release,cgroups) # already verified TEST authoritative loopback and DB config
   end=marker.lstat()
   generation=lambda st:(st.st_dev,st.st_ino,st.st_ctime_ns,st.st_mtime_ns)
   if generation(start)!=generation(end):raise ValueError('activation changed')
