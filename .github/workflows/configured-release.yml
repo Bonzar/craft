@@ -1,0 +1,26 @@
+name: Project Release
+on:
+  workflow_run:
+    workflows: ['Assertion Memory Base Release', 'Assertion Memory Visual Release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      profile: {type: choice, options: [base, visual], required: true}
+      tag: {type: string, required: true}
+permissions: {}
+jobs:
+  configured:
+    if: >-
+      github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main'
+      && github.ref_protected && github.run_attempt == '1'
+      && (github.event_name == 'workflow_dispatch'
+          || (vars.PROJECT_RELEASE_AUTO == 'true'
+              && github.event.workflow_run.event == 'release'
+              && github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.run_attempt == 1
+              && github.event.workflow_run.head_repository.full_name == github.repository))
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/configured-release-reusable.yml

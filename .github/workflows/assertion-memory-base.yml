@@ -1,14 +1,6 @@
 name: Assertion Memory Base Release
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/assertion-memory-base.yml"
-      - "prototypes/assertion_memory/**"
-      - "apps/graph_viewer/**"
-      - "tools/assertion-memory-qa/**"
-      - "tools/assertion-memory-release/**"
-      - "tests/test_model_*.py"
   release:
     types: [published]
   workflow_dispatch:
@@ -35,7 +27,7 @@ run-name: "Assertion memory • ${{ inputs.action || github.event_name }} • re
 
 jobs:
   build:
-    if: github.repository == 'Bonzar/craft' && (github.event_name == 'pull_request' || (github.event_name == 'release' && github.run_attempt == '1' && startsWith(github.ref, 'refs/tags/assertion-memory-v') && !startsWith(github.ref, 'refs/tags/assertion-memory-visual-')))
+    if: github.repository == 'Bonzar/craft' && (github.event_name == 'release' && github.run_attempt == '1' && startsWith(github.ref, 'refs/tags/assertion-memory-v') && !startsWith(github.ref, 'refs/tags/assertion-memory-visual-'))
     permissions:
       contents: read
     runs-on: ubuntu-latest

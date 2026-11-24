@@ -8,10 +8,10 @@ from pathlib import Path
 import urllib.request
 
 
-def main():
-    host = os.environ['VISUAL_GATEWAY_HOST']
-    token = os.environ['VISUAL_GATEWAY_TOKEN']
-    mode, expected = os.environ['VISUAL_ENV'], os.environ['VISUAL_DIGEST']
+def main(env=os.environ):
+    host = env['VISUAL_GATEWAY_HOST']
+    token = env['VISUAL_GATEWAY_TOKEN']
+    mode, expected = env['VISUAL_ENV'], env['VISUAL_DIGEST']
     label = r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
     if not re.fullmatch(label+r'\.'+label+r'\.apigw\.yandexcloud\.net', host):
         raise ValueError('Invalid fixed HTTPS gateway hostname')
@@ -30,7 +30,7 @@ def main():
     mime,data=call({'op':'current'})
     if mime!='application/json' or len(data)>512 or json.loads(data)!={'digest':expected}:
         raise ValueError('Gateway serves a different visual release')
-    archive=Path(os.environ['VISUAL_DOWNLOAD'])/'visual.tar'
+    archive=Path(env['VISUAL_DOWNLOAD'])/'visual.tar'
     with tarfile.open(archive,mode='r:') as tar:
         manifest=tar.extractfile('manifest.json').read(1025)
         if len(manifest)>1024 or hashlib.sha256(manifest).hexdigest()!=expected:

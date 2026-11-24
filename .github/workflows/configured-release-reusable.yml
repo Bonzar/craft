@@ -1,0 +1,179 @@
+name: Configured Release
+on:
+  workflow_call:
+permissions: {}
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      profile: ${{ steps.resolve.outputs.profile }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      release_id: ${{ steps.resolve.outputs.release_id }}
+      build_run_id: ${{ steps.resolve.outputs.build_run_id }}
+      artifact_id: ${{ steps.resolve.outputs.artifact_id }}
+      archive_sha: ${{ steps.resolve.outputs.archive_sha }}
+      test_environment: ${{ steps.resolve.outputs.test_environment }}
+      prod_environment: ${{ steps.resolve.outputs.prod_environment }}
+      test_concurrency: ${{ steps.resolve.outputs.test_concurrency }}
+      prod_concurrency: ${{ steps.resolve.outputs.prod_concurrency }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: resolve
+        name: Resolve original immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_REF_PROTECTED: ${{ github.ref_protected }}
+        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py build
+  test:
+    name: TEST
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ needs.build.outputs.test_environment }}
+    concurrency:
+      group: ${{ needs.build.outputs.test_concurrency }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      proof: ${{ steps.proof.outputs.proof }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact artifact and stage approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_REF_PROTECTED: ${{ github.ref_protected }}
+          RELEASE_BUILD_PROFILE: ${{ needs.build.outputs.profile }}
+          RELEASE_BUILD_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_BUILD_REVISION: ${{ needs.build.outputs.revision }}
+          RELEASE_BUILD_RELEASE_ID: ${{ needs.build.outputs.release_id }}
+          RELEASE_BUILD_BUILD_RUN_ID: ${{ needs.build.outputs.build_run_id }}
+          RELEASE_BUILD_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_BUILD_ARCHIVE_SHA: ${{ needs.build.outputs.archive_sha }}
+          RELEASE_BUILD_TEST_ENVIRONMENT: ${{ needs.build.outputs.test_environment }}
+          RELEASE_BUILD_PROD_ENVIRONMENT: ${{ needs.build.outputs.prod_environment }}
+          RELEASE_BUILD_TEST_CONCURRENCY: ${{ needs.build.outputs.test_concurrency }}
+          RELEASE_BUILD_PROD_CONCURRENCY: ${{ needs.build.outputs.prod_concurrency }}
+          RELEASE_ENABLE: ${{ vars.RELEASE_ENABLE }}
+          RELEASE_ENVIRONMENT_ID: ${{ vars.RELEASE_ENVIRONMENT_ID }}
+          RELEASE_REVIEWER_ID: ${{ vars.RELEASE_REVIEWER_ID }}
+        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py verify test
+      - name: Activate and smoke exact archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_REF_PROTECTED: ${{ github.ref_protected }}
+          RELEASE_BUILD_PROFILE: ${{ needs.build.outputs.profile }}
+          RELEASE_BUILD_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_BUILD_REVISION: ${{ needs.build.outputs.revision }}
+          RELEASE_BUILD_RELEASE_ID: ${{ needs.build.outputs.release_id }}
+          RELEASE_BUILD_BUILD_RUN_ID: ${{ needs.build.outputs.build_run_id }}
+          RELEASE_BUILD_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_BUILD_ARCHIVE_SHA: ${{ needs.build.outputs.archive_sha }}
+          RELEASE_BUILD_TEST_ENVIRONMENT: ${{ needs.build.outputs.test_environment }}
+          RELEASE_BUILD_PROD_ENVIRONMENT: ${{ needs.build.outputs.prod_environment }}
+          RELEASE_BUILD_TEST_CONCURRENCY: ${{ needs.build.outputs.test_concurrency }}
+          RELEASE_BUILD_PROD_CONCURRENCY: ${{ needs.build.outputs.prod_concurrency }}
+          RELEASE_ENABLE: ${{ vars.RELEASE_ENABLE }}
+          RELEASE_ENVIRONMENT_ID: ${{ vars.RELEASE_ENVIRONMENT_ID }}
+          RELEASE_REVIEWER_ID: ${{ vars.RELEASE_REVIEWER_ID }}
+          RELEASE_SSH_HOST: ${{ vars.RELEASE_SSH_HOST }}
+          RELEASE_SSH_PORT: ${{ vars.RELEASE_SSH_PORT }}
+          RELEASE_GATEWAY_HOST: ${{ vars.RELEASE_GATEWAY_HOST }}
+          RELEASE_VM_ID: ${{ vars.RELEASE_VM_ID }}
+          RELEASE_ENV_NODE_ID: ${{ vars.RELEASE_ENV_NODE_ID }}
+          RELEASE_SSH_HOST_PIN: ${{ secrets.RELEASE_SSH_HOST_PIN }}
+          RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_GATEWAY_TOKEN: ${{ secrets.RELEASE_GATEWAY_TOKEN }}
+        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy test
+      - name: Preserve TEST evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: configured-release-test-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/configured-release/configured-test-proof.json
+          if-no-files-found: error
+      - id: proof
+        name: Publish same-run TEST proof
+        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py proof
+  prod:
+    name: PROD
+    needs: [build, test]
+    if: ${{ vars.PROJECT_RELEASE_PROD == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ needs.build.outputs.prod_environment }}
+    concurrency:
+      group: ${{ needs.build.outputs.prod_concurrency }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact artifact and stage approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_REF_PROTECTED: ${{ github.ref_protected }}
+          RELEASE_BUILD_PROFILE: ${{ needs.build.outputs.profile }}
+          RELEASE_BUILD_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_BUILD_REVISION: ${{ needs.build.outputs.revision }}
+          RELEASE_BUILD_RELEASE_ID: ${{ needs.build.outputs.release_id }}
+          RELEASE_BUILD_BUILD_RUN_ID: ${{ needs.build.outputs.build_run_id }}
+          RELEASE_BUILD_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_BUILD_ARCHIVE_SHA: ${{ needs.build.outputs.archive_sha }}
+          RELEASE_BUILD_TEST_ENVIRONMENT: ${{ needs.build.outputs.test_environment }}
+          RELEASE_BUILD_PROD_ENVIRONMENT: ${{ needs.build.outputs.prod_environment }}
+          RELEASE_BUILD_TEST_CONCURRENCY: ${{ needs.build.outputs.test_concurrency }}
+          RELEASE_BUILD_PROD_CONCURRENCY: ${{ needs.build.outputs.prod_concurrency }}
+          RELEASE_TEST_PROOF: ${{ needs.test.outputs.proof }}
+          RELEASE_ENABLE: ${{ vars.RELEASE_ENABLE }}
+          RELEASE_ENVIRONMENT_ID: ${{ vars.RELEASE_ENVIRONMENT_ID }}
+          RELEASE_REVIEWER_ID: ${{ vars.RELEASE_REVIEWER_ID }}
+        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py verify prod
+      - name: Activate and smoke exact archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_REF_PROTECTED: ${{ github.ref_protected }}
+          RELEASE_BUILD_PROFILE: ${{ needs.build.outputs.profile }}
+          RELEASE_BUILD_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_BUILD_REVISION: ${{ needs.build.outputs.revision }}
+          RELEASE_BUILD_RELEASE_ID: ${{ needs.build.outputs.release_id }}
+          RELEASE_BUILD_BUILD_RUN_ID: ${{ needs.build.outputs.build_run_id }}
+          RELEASE_BUILD_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          RELEASE_BUILD_ARCHIVE_SHA: ${{ needs.build.outputs.archive_sha }}
+          RELEASE_BUILD_TEST_ENVIRONMENT: ${{ needs.build.outputs.test_environment }}
+          RELEASE_BUILD_PROD_ENVIRONMENT: ${{ needs.build.outputs.prod_environment }}
+          RELEASE_BUILD_TEST_CONCURRENCY: ${{ needs.build.outputs.test_concurrency }}
+          RELEASE_BUILD_PROD_CONCURRENCY: ${{ needs.build.outputs.prod_concurrency }}
+          RELEASE_TEST_PROOF: ${{ needs.test.outputs.proof }}
+          RELEASE_ENABLE: ${{ vars.RELEASE_ENABLE }}
+          RELEASE_ENVIRONMENT_ID: ${{ vars.RELEASE_ENVIRONMENT_ID }}
+          RELEASE_REVIEWER_ID: ${{ vars.RELEASE_REVIEWER_ID }}
+          RELEASE_SSH_HOST: ${{ vars.RELEASE_SSH_HOST }}
+          RELEASE_SSH_PORT: ${{ vars.RELEASE_SSH_PORT }}
+          RELEASE_GATEWAY_HOST: ${{ vars.RELEASE_GATEWAY_HOST }}
+          RELEASE_VM_ID: ${{ vars.RELEASE_VM_ID }}
+          RELEASE_ENV_NODE_ID: ${{ vars.RELEASE_ENV_NODE_ID }}
+          RELEASE_SSH_HOST_PIN: ${{ secrets.RELEASE_SSH_HOST_PIN }}
+          RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_GATEWAY_TOKEN: ${{ secrets.RELEASE_GATEWAY_TOKEN }}
+        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy prod
