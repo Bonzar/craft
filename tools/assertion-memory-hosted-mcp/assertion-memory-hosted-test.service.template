@@ -1,0 +1,32 @@
+[Unit]
+Description=Assertion Memory TEST-only hosted MCP read relay
+After=network.target
+
+[Service]
+Type=simple
+User=assertion-test-deploy
+WorkingDirectory=/opt/assertion-hosted-mcp-test
+# Operator replaces the executable with the verified fixed immutable TEST release's Python, never current.
+ExecStart=@VERIFIED_IMMUTABLE_TEST_PYTHON@ -B /opt/assertion-hosted-mcp-test/run_test.py
+LoadCredential=read-profile.json:/etc/assertion-hosted-mcp-test/read-profile.json
+LoadCredential=catalog.json:/etc/assertion-hosted-mcp-test/catalog.json
+LoadCredential=test_release_identity:/etc/assertion-hosted-mcp-test/test_release_identity
+LoadCredential=test_cgroup_identity:/etc/assertion-hosted-mcp-test/test_cgroup_identity
+LoadCredential=gateway-bearer:/etc/assertion-hosted-mcp-test/gateway-bearer
+LoadCredential=test-canonical-bearer:/etc/assertion-hosted-mcp-test/test-canonical-bearer
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ReadOnlyPaths=/srv/assertion-release/test/state
+InaccessiblePaths=-/srv/assertion-release/production
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
+Restart=on-failure
+
+# Deliberately no automatic boot enablement during qualification.

@@ -1,0 +1,989 @@
+{
+  "catalog": {
+    "version": 1,
+    "canonical_revision": "f6e76c92752ece77318286d2c1d63ed5d4f95b84",
+    "canonical_schema_hash": "72876b3d45b9665911c973e5620ff5aa229f2bcdc9bc0fc7d562167f67e76c84",
+    "tools": {
+      "memory_artifact": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "artifact_id": {
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "include_content": {
+              "default": false,
+              "title": "Include Content",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "artifact_id"
+          ],
+          "title": "memory_artifactArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_capture_message": {
+        "classification": "ingest",
+        "canonicalInputSchema": {
+          "properties": {
+            "actor_id": {
+              "title": "Actor Id",
+              "type": "string"
+            },
+            "artifact_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Ids"
+            },
+            "delivery": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Delivery"
+            },
+            "message_id": {
+              "title": "Message Id",
+              "type": "string"
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Position"
+            },
+            "role": {
+              "enum": [
+                "user",
+                "assistant",
+                "tool"
+              ],
+              "title": "Role",
+              "type": "string"
+            },
+            "scope": {
+              "default": "default",
+              "title": "Scope",
+              "type": "string"
+            },
+            "session_id": {
+              "title": "Session Id",
+              "type": "string"
+            },
+            "source": {
+              "title": "Source",
+              "type": "string"
+            },
+            "source_message_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Message At"
+            },
+            "source_message_clock_basis": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Message Clock Basis"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            },
+            "timezone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Timezone"
+            }
+          },
+          "required": [
+            "session_id",
+            "message_id",
+            "actor_id",
+            "role",
+            "text",
+            "source"
+          ],
+          "title": "memory_capture_messageArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": false
+      },
+      "memory_history": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "limit": {
+              "default": 6000,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "name_watermark": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name Watermark"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "presentation_cutoff": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Presentation Cutoff"
+            },
+            "section": {
+              "default": "overview",
+              "enum": [
+                "overview",
+                "summary",
+                "evidence",
+                "edges",
+                "metadata",
+                "versions",
+                "routes",
+                "checks"
+              ],
+              "title": "Section",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snapshot Id"
+            },
+            "version_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Version Id"
+            },
+            "view_id": {
+              "title": "View Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "view_id"
+          ],
+          "title": "memory_historyArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_ingest_register": {
+        "classification": "ingest",
+        "canonicalInputSchema": {
+          "properties": {
+            "producer_id": {
+              "title": "Producer Id",
+              "type": "string"
+            },
+            "replace_epoch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Replace Epoch"
+            },
+            "session_id": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "producer_id",
+            "session_id"
+          ],
+          "title": "memory_ingest_registerArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": false
+      },
+      "memory_ingest_report": {
+        "classification": "ingest",
+        "canonicalInputSchema": {
+          "properties": {
+            "epoch": {
+              "title": "Epoch",
+              "type": "string"
+            },
+            "gap_count": {
+              "title": "Gap Count",
+              "type": "integer"
+            },
+            "lifecycle": {
+              "default": "active",
+              "enum": [
+                "active",
+                "closed"
+              ],
+              "title": "Lifecycle",
+              "type": "string"
+            },
+            "observed_seq": {
+              "title": "Observed Seq",
+              "type": "integer"
+            },
+            "report_seq": {
+              "title": "Report Seq",
+              "type": "integer"
+            },
+            "scan_state": {
+              "enum": [
+                "current",
+                "catching_up",
+                "gapped",
+                "unknown"
+              ],
+              "title": "Scan State",
+              "type": "string"
+            },
+            "stream_id": {
+              "title": "Stream Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stream_id",
+            "epoch",
+            "report_seq",
+            "observed_seq",
+            "scan_state",
+            "gap_count"
+          ],
+          "title": "memory_ingest_reportArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": false
+      },
+      "memory_model_call": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "call_id": {
+              "title": "Call Id",
+              "type": "string"
+            },
+            "limit": {
+              "default": 6000,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "section": {
+              "default": "overview",
+              "enum": [
+                "overview",
+                "request",
+                "response"
+              ],
+              "title": "Section",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id"
+          ],
+          "title": "memory_model_callArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_process": {
+        "classification": "process",
+        "canonicalInputSchema": {
+          "properties": {
+            "batch_source_construction": {
+              "default": false,
+              "title": "Batch Source Construction",
+              "type": "boolean"
+            },
+            "limit": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "retry_job_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retry Job Id"
+            },
+            "session_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Ids"
+            },
+            "source_event_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Event Ids"
+            }
+          },
+          "title": "memory_processArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": false
+      },
+      "memory_provenance": {
+        "classification": "baseline_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "record_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Record Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "record_ids"
+          ],
+          "title": "memory_provenanceArguments",
+          "type": "object"
+        },
+        "capability_projections": {
+          "baseline_read": {
+            "properties": {
+              "record_ids": {
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "pattern": "^[^\\u0000-\\u001f]+$"
+                },
+                "title": "Record Ids",
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100
+              }
+            },
+            "required": [
+              "record_ids"
+            ],
+            "title": "memory_provenanceArguments",
+            "type": "object",
+            "additionalProperties": false
+          }
+        },
+        "readOnlyHint": true
+      },
+      "memory_query": {
+        "classification": "generate",
+        "canonicalInputSchema": {
+          "properties": {
+            "query": {
+              "title": "Query",
+              "type": "string"
+            },
+            "recorded_as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Recorded As Of"
+            },
+            "request_session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Session Id"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "valid_as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid As Of"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "title": "memory_queryArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": false
+      },
+      "memory_run_event": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "event_id": {
+              "title": "Event Id",
+              "type": "integer"
+            },
+            "limit": {
+              "default": 6000,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event_id"
+          ],
+          "title": "memory_run_eventArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_run_history": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "limit": {
+              "default": 6000,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "string"
+            },
+            "section": {
+              "default": "run",
+              "enum": [
+                "run",
+                "causes",
+                "events"
+              ],
+              "title": "Section",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snapshot Id"
+            }
+          },
+          "required": [
+            "run_id"
+          ],
+          "title": "memory_run_historyArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_session_messages": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "limit": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "message_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Message Id"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "session_id": {
+              "title": "Session Id",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snapshot Id"
+            },
+            "turn_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Turn Id"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "title": "memory_session_messagesArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_session_outputs": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "limit": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "session_id": {
+              "title": "Session Id",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snapshot Id"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "title": "memory_session_outputsArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_sessions": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "limit": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snapshot Id"
+            }
+          },
+          "title": "memory_sessionsArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_source": {
+        "classification": "sensitive_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "end": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End"
+            },
+            "limit": {
+              "default": 6000,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "record_id": {
+              "title": "Record Id",
+              "type": "string"
+            },
+            "section": {
+              "default": "overview",
+              "enum": [
+                "overview",
+                "text",
+                "metadata",
+                "references",
+                "edges",
+                "extraction_history"
+              ],
+              "title": "Section",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Snapshot Id"
+            },
+            "start": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start"
+            }
+          },
+          "required": [
+            "record_id"
+          ],
+          "title": "memory_sourceArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": true
+      },
+      "memory_status": {
+        "classification": "baseline_read",
+        "canonicalInputSchema": {
+          "properties": {
+            "catalog_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Catalog Id"
+            },
+            "event_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Id"
+            },
+            "limit": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "section": {
+              "default": "overview",
+              "enum": [
+                "overview",
+                "job",
+                "derived_overview",
+                "derived_overviews",
+                "navigation_catalog",
+                "view_names",
+                "model_usage",
+                "transport",
+                "policy_coverage"
+              ],
+              "title": "Section",
+              "type": "string"
+            }
+          },
+          "title": "memory_statusArguments",
+          "type": "object"
+        },
+        "capability_projections": {
+          "baseline_read": {
+            "properties": {
+              "section": {
+                "default": "overview",
+                "enum": [
+                  "overview",
+                  "transport"
+                ],
+                "title": "Section",
+                "type": "string"
+              },
+              "offset": {
+                "default": 0,
+                "title": "Offset",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              },
+              "limit": {
+                "default": 100,
+                "title": "Limit",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              }
+            },
+            "title": "memory_statusArguments",
+            "type": "object",
+            "additionalProperties": false
+          }
+        },
+        "readOnlyHint": true
+      },
+      "memory_store_artifact": {
+        "classification": "ingest",
+        "canonicalInputSchema": {
+          "properties": {
+            "data_base64": {
+              "title": "Data Base64",
+              "type": "string"
+            },
+            "mime_type": {
+              "title": "Mime Type",
+              "type": "string"
+            },
+            "sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sha256"
+            }
+          },
+          "required": [
+            "data_base64",
+            "mime_type"
+          ],
+          "title": "memory_store_artifactArguments",
+          "type": "object"
+        },
+        "capability_projections": {},
+        "readOnlyHint": false
+      }
+    }
+  },
+  "catalog_sha256": "0315d8a2e1ffe977d9c99bbf39f65aef5523adb929d9d3fe5260dca8e45bb151"
+}
