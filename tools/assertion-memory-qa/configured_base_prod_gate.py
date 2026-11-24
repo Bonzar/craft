@@ -1,6 +1,7 @@
 """Configured Base PROD: separate gate; existing PROD writer only after authorization."""
 from dataclasses import asdict, dataclass
 import hmac
+import hashlib
 import json
 import re
 import secrets
@@ -9,6 +10,8 @@ import time
 from reusable_proof import DIGEST, ID, ISSUER, OWNER_ID, REF, REPOSITORY, SHA, b64u, obj, plain, require
 from configured_base import BASE
 from configured_provider_checks import Content, Original, Promotion, signed_audience
+
+WRAPPER=REPOSITORY+'/.github/workflows/configured-base-release.yml@refs/heads/main'
 
 def intent_document(promotion):
     require(promotion.profile is BASE, 'Expected fixed Base profile')
@@ -28,24 +31,34 @@ class Policy:
     subject: str
     environment_node_id: str
     actor_ids: frozenset
+    mode: str='pilot'
 
     def __post_init__(self):
-        require(plain(ID,self.repository_id) and plain(SHA,self.control_sha)
+        require(self.mode in ('pilot','pinned_wrapper') and plain(ID,self.repository_id) and plain(SHA,self.control_sha)
                 and self.subject.endswith(':environment:'+BASE.prod.environment)
                 and type(self.actor_ids) is frozenset and bool(self.actor_ids)
                 and all(plain(ID,x) for x in self.actor_ids),'Invalid PROD policy')
 
 def audience(policy,promotion,nonce):
-    require(promotion.profile is BASE and promotion.control_sha==policy.control_sha,'Unreviewed control commit')
+    require(promotion.profile is BASE and plain(DIGEST,nonce)
+            and (policy.mode=='pinned_wrapper' or promotion.control_sha==policy.control_sha),'Unreviewed control commit')
+    if policy.mode=='pinned_wrapper':
+        wire=json.dumps({'schema':2,'stage':'prod','profile':'base','attempt':1,'caller':WRAPPER,
+              'child':BASE.reusable_path+'@'+policy.control_sha,'intent':intent_document(promotion),
+              'environment':BASE.prod.environment,'vm':policy.vm_id,'environment_node_id':policy.environment_node_id,
+              'repository_id':policy.repository_id,'nonce':nonce},
+              sort_keys=True,separators=(',',':')).encode('ascii')
+        return 'urn:assertion-memory:configured:base:promote:v2:'+hashlib.sha256(wire).hexdigest()
     return signed_audience(promotion,vm_id=policy.vm_id,environment_node_id=policy.environment_node_id,
                            reusable_sha=policy.control_sha,nonce=nonce)
 
 def claims_policy(claims,policy,promotion,nonce,now):
     expected={'iss':ISSUER,'aud':audience(policy,promotion,nonce),'sub':policy.subject,
               'repository':REPOSITORY,'repository_id':policy.repository_id,'repository_owner':'Bonzar',
-              'repository_owner_id':str(OWNER_ID),'workflow_ref':BASE.caller,'workflow_sha':policy.control_sha,
-              'job_workflow_ref':BASE.reusable_path+'@'+REF,'job_workflow_sha':policy.control_sha,
-              'sha':policy.control_sha,'ref':REF,'ref_type':'branch','environment':BASE.prod.environment,
+              'repository_owner_id':str(OWNER_ID),'workflow_ref':WRAPPER if policy.mode=='pinned_wrapper' else BASE.caller,
+              'workflow_sha':promotion.control_sha,
+              'job_workflow_ref':BASE.reusable_path+'@'+(policy.control_sha if policy.mode=='pinned_wrapper' else REF),'job_workflow_sha':policy.control_sha,
+              'sha':promotion.control_sha,'ref':REF,'ref_type':'branch','environment':BASE.prod.environment,
               'environment_node_id':policy.environment_node_id,'event_name':promotion.trigger,
               'run_attempt':'1','run_id':promotion.run_id,'runner_environment':'github-hosted'}
     require(all(claims.get(k)==v for k,v in expected.items()) and claims.get('actor_id') in policy.actor_ids,

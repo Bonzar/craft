@@ -14,7 +14,7 @@ sys.path.insert(0,str(here/'prod-bridge'))
 sys.path.insert(0,str(here/'configured-base'))
 sys.path.insert(0,str(here.parent/'assertion-memory-release'))
 from configured_base import BASE
-from configured_base_test_gate import Intent, Policy, RECEIVER, audience, obj, plain
+from configured_base_test_gate import CALLER, WRAPPER, Intent, Policy, RECEIVER, audience, obj, plain
 from prod_runner import mint
 import ssh_transport
 
@@ -59,8 +59,13 @@ def activate(ctrl,release,content,payload_dir,promotion,env):
     intent=bind(ctrl,release,content)
     if promotion is not None or env.get('CONFIGURED_BASE_TEST_READY')!='true':
         raise ValueError('Configured TEST operation is not provisioned')
-    policy=Policy(env['CONFIGURED_BASE_REUSABLE_SHA'],env['CONFIGURED_BASE_ENV_NODE_ID'],env['CONFIGURED_BASE_VM_ID'])
-    if policy.reusable_sha!=intent.control_sha:
+    caller=env.get('GITHUB_WORKFLOW_REF')
+    if caller not in (CALLER,WRAPPER):
+        raise ValueError('Untrusted configured Base TEST caller')
+    mode='pinned_wrapper' if caller==WRAPPER else 'pilot'
+    policy=Policy(env['CONFIGURED_BASE_REUSABLE_SHA'],env['CONFIGURED_BASE_ENV_NODE_ID'],env['CONFIGURED_BASE_VM_ID'],mode=mode)
+    actual=env.get('CONFIGURED_RELEASE_CODE_SHA') if mode=='pinned_wrapper' else intent.control_sha
+    if policy.reusable_sha!=actual:
         raise ValueError('Configured local reusable SHA is not exact protected control')
     path=Path(payload_dir)/'release.tar.gz'
     with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as payload:
