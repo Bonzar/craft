@@ -1,0 +1,26 @@
+name: Assertion Memory Release Graph PR
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/assertion-memory-release-graph-pr.yml"
+      - ".github/workflows/assertion-memory-release-graph.yml"
+      - ".github/workflows/assertion-memory-native-visual.yml"
+      - "tools/assertion-memory-visual/native_visual*.py"
+      - "tools/assertion-memory-release/github_graph_preview*"
+      - "tools/assertion-memory-release/native_test_policy.py"
+      - "tools/assertion-memory-qa/test_native_test_policy.py"
+      - "tools/assertion-memory-qa/lifecycle.py"
+      - "tools/assertion-memory-qa/send_test_release.py"
+permissions: {}
+jobs:
+  preview-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: python3 tools/assertion-memory-release/github_graph_preview_test.py
+      - run: python3 tools/assertion-memory-qa/test_native_test_policy.py

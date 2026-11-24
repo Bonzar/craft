@@ -2,11 +2,6 @@ name: Assertion Memory Visual Release
 on:
   release:
     types: [published]
-  pull_request:
-    paths:
-      - ".github/workflows/assertion-memory-visual.yml"
-      - "tools/assertion-memory-visual/**"
-      - "tools/assertion-memory-release/**"
   workflow_dispatch:
     inputs:
       action:
@@ -23,7 +18,7 @@ on:
 permissions: {}
 jobs:
   build:
-    if: github.repository == 'Bonzar/craft' && (github.event_name == 'pull_request' || (github.event_name == 'release' && github.run_attempt == '1' && startsWith(github.ref, 'refs/tags/assertion-memory-visual-v')))
+    if: github.repository == 'Bonzar/craft' && github.event_name == 'release' && github.run_attempt == '1' && startsWith(github.ref, 'refs/tags/assertion-memory-visual-v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
