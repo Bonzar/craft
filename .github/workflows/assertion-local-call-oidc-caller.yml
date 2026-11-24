@@ -1,0 +1,12 @@
+name: No deploy caller for reusable claim witness
+on:
+  push:
+    branches: ['codex/assertion-base-prod-oidc-witness']
+    paths: ['.github/workflows/assertion-local-call-oidc-caller.yml', '.github/workflows/assertion-local-call-oidc-child.yml']
+permissions: {}
+jobs:
+  witness:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/codex/assertion-base-prod-oidc-witness' && github.run_attempt == '1'
+    permissions:
+      id-token: write
+    uses: ./.github/workflows/assertion-local-call-oidc-child.yml
