@@ -1,0 +1,121 @@
+"""TEST-only SQLite initialization and read-only live smoke; never feeds data."""
+import argparse
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import sqlite3
+from tempfile import TemporaryDirectory
+import time
+
+import httpx
+
+
+STATE = Path('/srv/assertion-release/test/state')
+TOOLS = {'memory_capture_message', 'memory_process', 'memory_query', 'memory_status', 'memory_history'}
+TABLES = ('memory_raw_events', 'memory_capture_jobs', 'memory_thoughts')
+
+
+def require(value, label):
+    if not value:
+        raise ValueError(label)
+
+
+def initialize(state):
+    from prototypes.assertion_memory.mcp_server import ServiceConfig
+    from prototypes.assertion_memory.storage import MemoryStore
+    path = state/'fictional.sqlite3'
+    require(not path.is_symlink(), 'TEST database path is a symlink')
+    if path.is_file():
+        return
+    require(not path.exists() and not any((state/(path.name+s)).exists() or
+            (state/(path.name+s)).is_symlink() for s in ('-wal','-shm')), 'Unexpected TEST database remnants')
+    with TemporaryDirectory(dir=state, prefix='.unseeded-') as root:
+        fresh = Path(root)/path.name
+        with MemoryStore(str(fresh)) as store:
+            ServiceConfig(db=str(fresh), provider='none', processing_session_ids=[]).service(store)
+        with sqlite3.connect(fresh.as_uri()+'?mode=ro', uri=True) as check:
+            require(check.execute('PRAGMA quick_check').fetchone()==('ok',),'TEST SQLite check failed')
+            for table in TABLES:
+                require(check.execute(f'SELECT count(*) FROM {table}').fetchone()==(0,),
+                        'New TEST database was not empty')
+        os.chmod(fresh,0o600)
+        os.link(fresh,path)  # completed, no-overwrite publication on this filesystem
+
+
+def mcp(client, token):
+    common={'accept':'application/json, text/event-stream','mcp-protocol-version':'2025-11-25'}
+    def call(method, params, auth=True):
+        headers=common | ({'authorization':'Bearer '+token} if auth else {})
+        return client.post('/memory/mcp',headers=headers,json={
+            'jsonrpc':'2.0','id':1,'method':method,'params':params})
+    require(call('tools/list',{},False).status_code==401,'TEST MCP auth probe failed')
+    response=call('tools/list',{})
+    response.raise_for_status()
+    tools={x['name'] for x in response.json()['result']['tools']}
+    require(TOOLS <= tools,'Missing canonical TEST tools')
+    response=call('tools/call',{'name':'memory_status','arguments':{'section':'overview','limit':1}})
+    response.raise_for_status()
+    result=response.json()['result']
+    require(not result.get('isError'),'TEST canonical database status unavailable')
+    value=result.get('structuredContent') or json.loads(result['content'][0]['text'])
+    require(value.get('storage')=='unified-thought-v1' and
+            all(type(value.get(k)) is int and value[k]>=0 for k in (
+                'raw_pending_count','pending_count','error_count','thought_count')),
+            'TEST canonical database status invalid')
+
+
+def graph(client, password, *, deadline_seconds=15):
+    require(client.get('/api/v1/graph').status_code==401,'TEST graph auth probe failed')
+    require(client.get('/').status_code==200,'TEST graph index unavailable')
+    client.post('/api/v1/session',json={'password':password}).raise_for_status()
+    deadline=time.monotonic()+deadline_seconds
+    while True:
+        response=client.get('/api/v1/graph')
+        if response.status_code!=202 or time.monotonic()>=deadline:
+            break
+        time.sleep(.1)
+    require(response.status_code==200,'TEST graph manifest unavailable')
+    manifest=response.json()
+    ref=manifest.get('revision')
+    require(isinstance(ref,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',ref)
+            and manifest.get('schema')==1 and manifest.get('complete_graph') is True
+            and manifest.get('layout',{}).get('stable') is True, 'TEST graph manifest invalid')
+    for key,stride in (('nodes',16),('edges',8)):
+        count=manifest['counts'][key]
+        descriptor=manifest[key]
+        url=f'/api/v1/graph/{ref}/{key}.bin'
+        require(type(count) is int and count>=0 and descriptor.get('url')==url and
+                descriptor.get('stride')==stride and descriptor.get('byte_length')==count*stride,
+                'TEST graph layout descriptor invalid')
+        with client.stream('GET',url,headers={'accept-encoding':'identity'}) as buffer:
+            require(buffer.status_code==200 and 'application/octet-stream' in buffer.headers.get('content-type',''),
+                    'TEST graph buffer unavailable')
+            total=0
+            for part in buffer.iter_bytes():
+                total+=len(part)
+                require(total<=count*stride,'TEST graph buffer exceeds layout')
+            require(total==count*stride,'TEST graph buffer does not match layout')
+
+
+def smoke(state):
+    with httpx.Client(base_url='http://localhost:8893', trust_env=False, timeout=3) as client:
+        mcp(client,(state/'mcp-token').read_text().strip())
+    with httpx.Client(base_url='http://localhost:8891', trust_env=False, timeout=3) as client:
+        graph(client,(state/'graph-password').read_text().strip())
+    print('Authenticated TEST MCP schema and graph layout healthy; no data or model requests.')
+
+
+def main():
+    p=argparse.ArgumentParser()
+    p.add_argument('action',choices=('initialize','smoke'))
+    p.add_argument('state',type=Path)
+    args=p.parse_args()
+    require(args.state==STATE and args.state.resolve(strict=True)==STATE
+            and pwd.getpwuid(os.getuid()).pw_name=='assertion-test-deploy','Wrong TEST service identity')
+    {'initialize':initialize,'smoke':smoke}[args.action](STATE)
+
+
+if __name__=='__main__':
+    main()
