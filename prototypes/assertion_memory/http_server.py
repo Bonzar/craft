@@ -49,8 +49,9 @@ def load_token(path: Path | None = None, *, env_var: str | None = None) -> str:
 
 
 class AuthenticatedMemoryApp:
-    def __init__(self, app, token):
+    def __init__(self, app, token, neutral=None):
         self.app = app
+        self.neutral = neutral
         self.expected = ('Bearer ' + token).encode('ascii')
 
     @asynccontextmanager
@@ -61,6 +62,8 @@ class AuthenticatedMemoryApp:
     async def __call__(self, scope, receive, send):
         if scope['type'] == 'http':
             path=scope.get('path','')
+            if self.neutral is not None and path in self.neutral[0]:
+                return await self.neutral[1](scope, receive, send)
             if path==PUBLIC_PREFIX or path.startswith(PUBLIC_PREFIX+'/'):
                 scope={**scope,'path':path[len(PUBLIC_PREFIX):] or '/'}
                 raw=scope.get('raw_path',b'')
@@ -80,7 +83,7 @@ async def _error_response(status,code,scope,receive,send):
 
 
 def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port=8793, background=True,
-                    additional_hosts=()):
+                    additional_hosts=(), neutral_factory=None):
     from mcp.server.transport_security import TransportSecuritySettings
     if (not isinstance(token, str) or len(token) < MIN_TOKEN_LENGTH
             or not token.isascii() or any(x.isspace() for x in token)):
@@ -99,7 +102,18 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
     # rather than each request, owns the shared connection and worker launch.
     store = MemoryStore(config.db)
     try:
-        server = create_server(config, background=background, store=store, start_on_session=False)
+        service = config.service(store) if neutral_factory is not None else None
+        server = create_server(config, background=background, store=store, start_on_session=False,
+                               service=service)
+        neutral = (neutral_factory(config, store, service, background)
+                   if neutral_factory is not None else None)
+        if neutral is not None:
+            routes, handler = neutral
+            if not isinstance(routes, frozenset) or not callable(handler) or not any(
+                routes in ({f'/memory-mcp-{lane}-tools'},
+                           {f'/memory-mcp-{lane}-tools', f'/memory-mcp-{lane}-effects'})
+                for lane in ('test','prod')):
+                raise ValueError('Invalid neutral path binding')
     except BaseException:
         store.close()
         raise
@@ -125,7 +139,7 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
     from starlette.routing import Mount
     app = Starlette(routes=[Mount('/',app=inner)],lifespan=lifespan)
     app.router.redirect_slashes=False
-    return AuthenticatedMemoryApp(app,token)
+    return AuthenticatedMemoryApp(app,token,neutral)
 
 
 def main(argv=None):
@@ -141,8 +155,10 @@ def main(argv=None):
     token_file=value.get('token_file')
     token=load_token(Path(token_file) if token_file else None,
         env_var=value.get('token_env_var',TOKEN_ENV_VAR if not token_file else None))
+    from .private_http_binding import configured_neutral_factory
+    neutral_factory = configured_neutral_factory(args.config, token)
     app = create_http_app(ServiceConfig(**value['service']), token, value['public_host'], port=port,
-                          additional_hosts=value.get('additional_hosts', ()))
+                          additional_hosts=value.get('additional_hosts', ()), neutral_factory=neutral_factory)
     import uvicorn
     uvicorn.run(app, host='127.0.0.1', port=port, access_log=False, log_level='warning')
 

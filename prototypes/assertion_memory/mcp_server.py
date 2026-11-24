@@ -294,14 +294,16 @@ def run_worker(config: ServiceConfig, limit: int = 0) -> None:
 
 
 def create_server(config: ServiceConfig, *, background: bool = True, store: MemoryStore | None = None,
-                  start_on_session: bool = True):
+                  start_on_session: bool = True, service=None):
     from mcp.server.fastmcp import FastMCP
 
     if store is not None and Path(store.path).resolve() != Path(config.db).resolve():
         raise ValueError('caller-owned store must match the configured database')
+    if service is not None and (store is None or service.store is not store):
+        raise ValueError('Injected service must use the caller-owned store')
     owns_store = store is None
     store = store if store is not None else MemoryStore(config.db)
-    service = config.service(store)
+    service = config.service(store) if service is None else service
     launcher = WorkerLauncher(config)
 
     @asynccontextmanager

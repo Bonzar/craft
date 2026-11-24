@@ -15,7 +15,7 @@ mkdir -p "$stage"
 hosted_runtime=(
   tools/assertion-memory-hosted-mcp/policy.py
   tools/assertion-memory-hosted-mcp/vm_relay.py
-  tools/assertion-memory-hosted-mcp/worker.mjs
+  tools/assertion-memory-hosted-mcp/private_host.py
   tools/assertion-memory-hosted-mcp/compile_functional_release.py
 )
 git archive "$sha" -- prototypes/assertion_memory apps/graph_viewer "${hosted_runtime[@]}" | tar -x -C "$stage"
@@ -29,6 +29,15 @@ grep -v '^fastembed==' "$stage/requirements-graph-original.txt" > "$stage/requir
 test -s "$root/apps/graph_viewer/web/dist/index.html"
 cp -R "$root/apps/graph_viewer/web/dist" "$stage/apps/graph_viewer/web/"
 printf '%s\n' "$sha" > "$stage/REVISION"
+# Only the already-verified GitHub Releases job can attach a canonical tag;
+# PR/archive validation intentionally cannot produce an activatable HTTP identity.
+if [[ "${GITHUB_EVENT_NAME:-}" == release ]]; then
+  tag="${GITHUB_REF_NAME:?Base release tag required}"
+  [[ "$GITHUB_REF" == "refs/tags/$tag" ]]
+  [[ "$tag" =~ ^assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]{1,30})?$ ]]
+  [[ "$(git rev-parse --verify "refs/tags/$tag^{commit}")" == "$sha" ]]
+  printf '%s\n' "$tag" > "$stage/BASE_RELEASE_TAG"
+fi
 # Registered transport schema is compiled from this exact staged candidate.
 (cd "$stage"; python3 -B -m prototypes.assertion_memory.release_catalog \
   --revision "$sha" --output "$stage/mcp-tool-schema.json")

@@ -46,13 +46,15 @@ class OperationRegistry:
         value = operation.handler(**{name: getattr(parsed, name) for name in model.model_fields})
         return await value if isawaitable(value) else value
 
-def create_operations(config, store, *, background=False):
+def create_operations(config, store, *, background=False, service=None):
     # Transitional imports of shared declarations: this never creates FastMCP or a listener.
     # The legacy binary-artifact handler is not authorized on the hosted HTTP policy.
     from .mcp_server import WorkerLauncher, _register_read_tools, _register_write_tools
     if Path(store.path).resolve() != Path(config.db).resolve():
         raise ValueError("Caller-owned store must match configured database")
-    service = config.service(store)
+    if service is not None and service.store is not store:
+        raise ValueError('Injected operations service must use the caller-owned store')
+    service = config.service(store) if service is None else service
     launcher = WorkerLauncher(config)
     registry = OperationRegistry()
     _register_write_tools(registry, service, launcher, background)
