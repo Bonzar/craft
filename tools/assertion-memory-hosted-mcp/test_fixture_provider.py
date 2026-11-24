@@ -82,10 +82,10 @@ def process_in_unit(proc, cgroup_path):
     return read(proc/'cgroup',4096).decode('ascii').splitlines()==['0::'+cgroup_path]
 
 
-def listener_evidence(role, port, release, cgroup_path, uid):
+def listener_evidence(role, port, release, cgroup_path, uid, *, graph_fixture_flag=True):
     expected=(['-B','-m','apps.graph_viewer.server','--source',str(DB),
       '--state-dir',str(ROOT/'state/graph-state'),'--password-file',str(ROOT/'state/graph-password'),
-      '--static-dir',str(ROOT/'current/apps/graph_viewer/web/dist'),'--port','8891','--synthetic-fixture']
+      '--static-dir',str(ROOT/'current/apps/graph_viewer/web/dist'),'--port','8891']+(['--synthetic-fixture'] if graph_fixture_flag else [])
       if role=='graph' else ['-B','-m','prototypes.assertion_memory.http_server','--config',str(MCP_CONFIG)])
     command=[str(ROOT/'current/venv/bin/python'),*expected,'']
     found=[]
@@ -134,7 +134,23 @@ def require_readonly_db_mount(path):
             raise ValueError
 
 
-def live_snapshot(release,cgroups):
+def expected_real_database(data):
+    value=json.loads(data,object_pairs_hook=pairs)
+    if type(value) is not dict or set(value)!={'device','inode','graph_fixture_flag'}:
+        raise ValueError('invalid real TEST pin shape')
+    if (type(value['device']) is not int or value['device']<0 or type(value['inode']) is not int
+            or value['inode']<1 or type(value['graph_fixture_flag']) is not bool):
+        raise ValueError('invalid real TEST pin')
+    return value
+
+
+def verify_real_database_file(meta,pin,uid):
+    if (not stat.S_ISREG(meta.st_mode) or meta.st_nlink!=1 or meta.st_uid!=uid or meta.st_mode&0o022
+            or (meta.st_dev,meta.st_ino)!=(pin['device'],pin['inode'])):
+        raise ValueError('real TEST database identity changed')
+
+
+def live_snapshot(release,cgroups,*,real_pin=None):
     uid=os.getuid()
     if uid==0 or pwd.getpwuid(uid).pw_name!='assertion-test-deploy':
         raise ValueError('not the scoped TEST service account')
@@ -145,12 +161,18 @@ def live_snapshot(release,cgroups):
             or release.resolve(strict=True) != release or DB.resolve(strict=True) != DB
             or not stat.S_ISREG(DB.stat().st_mode)):
         raise ValueError
+    db=DB.lstat()
+    if real_pin is not None:verify_real_database_file(db,real_pin,uid)
     require_readonly_db_mount(DB)
     cfg = json.loads(read(MCP_CONFIG, 4096), object_pairs_hook=pairs)
     if cfg.get('port') != PORTS['mcp'] or cfg.get('public_host') != 'localhost' or cfg.get('service', {}).get('db') != str(DB):
         raise ValueError
-    token=[listener_evidence(role,port,release,cgroups[role],uid) for role,port in PORTS.items()]
-    db = DB.stat()
+    graph_flag=True if real_pin is None else real_pin['graph_fixture_flag']
+    token=[listener_evidence(role,port,release,cgroups[role],uid,graph_fixture_flag=graph_flag)
+           for role,port in PORTS.items()]
+    after=DB.lstat()
+    if real_pin is not None:verify_real_database_file(after,real_pin,uid)
+    if (db.st_dev,db.st_ino)!=(after.st_dev,after.st_ino):raise ValueError('TEST database changed')
     return (*token, db.st_dev, db.st_ino)
 
 
