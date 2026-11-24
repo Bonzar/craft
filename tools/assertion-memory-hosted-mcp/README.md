@@ -42,13 +42,16 @@ in every response. Worker checks it against its own fixed profile.
    port 8832 (preflight: free; otherwise stop). This runner invokes the same
    common VM adapter as all future profiles, and rejects a non-TEST profile,
    different actual MCP port, wrong catalogue digest or nonexistent release.
-   Supply the exact previously reviewed TEST fixture provider as the local
-   root-owned test_fixture_provider module; pin and compare its approved hash.
-   The runner reuses only expected_identity/live_snapshot, NOT its DB queries.
-   Run in the same qualified read-only mount/service-inspection boundary as that
-   provider; do not weaken it to make it start. It requires the existing TEST
-   provider to be able to prove the exact PID/listener/config/DB binding and
-   fails closed if evidence or required permissions are unavailable.
+   Bundle the included root-owned test_fixture_provider.py (scoped process and
+   immutable release evidence only; no SQLite connections or fixture data).
+   Render assertion-memory-hosted-test.service.template by replacing exactly
+   @VERIFIED_IMMUTABLE_TEST_PYTHON@ with the root-owned exact TEST release
+   interpreter path. Before starting check systemd-analyze verify and run
+   test_fixture_provider_test.py. Old units remain untouched. The adapter's
+   mount must be kernel read-only; this says nothing about the canonical TEST
+   process's own mount or privileges. The canonical backend may legitimately
+   write its separate TEST state. The request handler still only relays
+   baseline_read (effective profile and backend parameter validation).
 3. Through the approved systemd credential facility pass read-profile.json
    (lane=test, canonical_mcp_port=8893, baseline_read only, digest and tag),
    exact catalog.json, pinned test_release_identity and two independent
