@@ -97,6 +97,7 @@ class ProviderEntry(TestCase):
             release=Original(ctx.tag,'b'*40,'12','13','14','c'*64)
             content=Content(hashlib.sha256(wire).hexdigest())
             env={'CONFIGURED_BASE_TEST_READY':'true','CONFIGURED_BASE_REUSABLE_SHA':'a'*40,
+                 'GITHUB_WORKFLOW_REF':p.BASE.caller,
                  'CONFIGURED_BASE_ENV_NODE_ID':'EN_SAFE','CONFIGURED_BASE_VM_ID':'fiction'}
             receipt={'status':'ok','environment':'test','revision':release.revision,'sha256':content.sha256}
             def exchange(argv,packet,payload):

@@ -8,7 +8,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'assertion-memory-r
 from prod_runner import exchange_factory, mint
 import ssh_transport
 from reusable_proof import require
-from configured_base_prod_gate import BASE, Policy, audience, intent_document, permit
+from configured_base_prod_gate import BASE, WRAPPER, Policy, audience, intent_document, permit
 
 def operate(exchange, policy, promotion, path, *, get_token=mint):
     doc=intent_document(promotion)
@@ -28,10 +28,14 @@ def activate(ctrl,release,content,payload,promotion,env):
     require(ctrl.profile is BASE and ctrl.stage=='prod' and promotion is not None
             and (ctrl.run,ctrl.control_sha,ctrl.trigger)==(promotion.run_id,promotion.control_sha,promotion.trigger)
             and (release,content)==(promotion.release,promotion.content),'Common PROD proof required')
+    caller=env.get('GITHUB_WORKFLOW_REF')
+    require(caller in (BASE.caller,WRAPPER),'Untrusted configured Base PROD caller')
+    mode='pinned_wrapper' if caller==WRAPPER else 'pilot'
     policy=Policy(env['GITHUB_REPOSITORY_ID'],env['RELEASE_APPROVED_CONTROL_SHA'],env['RELEASE_VM_ID'],
                   env['RELEASE_OIDC_SUBJECT'],env['RELEASE_ENVIRONMENT_NODE_ID'],
-                  frozenset({env['GITHUB_ACTOR_ID']}))
-    require(policy.control_sha==ctrl.control_sha,'Unaudited reusable workflow commit')
+                  frozenset({env['GITHUB_ACTOR_ID']}),mode=mode)
+    actual=env.get('CONFIGURED_RELEASE_CODE_SHA') if mode=='pinned_wrapper' else ctrl.control_sha
+    require(policy.control_sha==actual,'Unaudited reusable workflow commit')
     with route(env) as argv:
         return operate(exchange_factory(argv),policy,promotion,payload/'release.tar.gz',
                        get_token=lambda aud:mint(aud,env=env))
