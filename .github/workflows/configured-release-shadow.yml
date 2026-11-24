@@ -1,0 +1,68 @@
+name: Configured release · shared shadow stages
+on:
+  workflow_call:
+    inputs:
+      profile: {type: string, required: true}
+      tag: {type: string, required: true}
+permissions: {}
+jobs:
+  build:
+    name: BUILD · no deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      proof: ${{ steps.attest.outputs.proof }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - id: attest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE: ${{ inputs.profile }}
+          TAG: ${{ inputs.tag }}
+        run: PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-release/experimental/configured_release_shadow.py build "$PROFILE" "$TAG"
+  test:
+    name: TEST · no deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build]
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      proof: ${{ steps.attest.outputs.proof }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - id: attest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE: ${{ inputs.profile }}
+          TAG: ${{ inputs.tag }}
+          BUILD_PROOF: ${{ needs.build.outputs.proof }}
+        run: PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-release/experimental/configured_release_shadow.py test "$PROFILE" "$TAG"
+  prod:
+    name: PROD · no deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build, test]
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - id: attest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE: ${{ inputs.profile }}
+          TAG: ${{ inputs.tag }}
+          BUILD_PROOF: ${{ needs.build.outputs.proof }}
+          TEST_PROOF: ${{ needs.test.outputs.proof }}
+        run: PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-release/experimental/configured_release_shadow.py prod "$PROFILE" "$TAG"
