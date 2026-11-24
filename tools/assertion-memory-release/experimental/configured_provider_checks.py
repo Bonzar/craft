@@ -96,6 +96,22 @@ class Original:
 
 
 @dataclass(frozen=True)
+class Upstream:
+    run_id: str
+    tag: str
+    revision: str
+
+    def __post_init__(self):
+        expect(field(ID,self.run_id) and field(SHA,self.revision)
+               and bool(canonical.product_of_tag(self.tag)),'Untrusted original release run')
+
+    def canonical_event(self):
+        # This is a compact pointer only; canonical.from_completed_build
+        # rechecks all source metadata from GitHub before returning evidence.
+        return dict(id=self.run_id,head_branch=self.tag,head_sha=self.revision,event='release',conclusion='success')
+
+
+@dataclass(frozen=True)
 class Control:
     stage: str
     run: str
@@ -103,10 +119,15 @@ class Control:
     tag: str
 
     profile: Profile
+    trigger: str='workflow_dispatch'
+    upstream: Upstream | None=None
 
     def __post_init__(self):
         expect(self.stage in ('test','prod') and field(ID,self.run) and field(SHA,self.control_sha)
-               and canonical.product_of_tag(self.tag).workflow==self.profile.original_workflow,
+               and canonical.product_of_tag(self.tag).workflow==self.profile.original_workflow
+               and ((self.trigger=='workflow_dispatch' and self.upstream is None)
+                    or (self.trigger=='workflow_run' and isinstance(self.upstream,Upstream)
+                        and self.upstream.tag==self.tag and self.upstream.run_id!=self.run)),
                'Invalid configured release control context')
 
     @property
@@ -114,15 +135,63 @@ class Control:
         return self.profile.test if self.stage=='test' else self.profile.prod
 
 
-def control(profile,env,stage,event):
-    expect(stage in ('test','prod') and all(env.get(k)==v for k,v in {
+def runtime(profile,env,stage):
+    expect(all(env.get(k)==v for k,v in {
         'GITHUB_REPOSITORY':REPO,'GITHUB_REF':MAIN,'GITHUB_REF_PROTECTED':'true',
-        'GITHUB_WORKFLOW_REF':profile.caller,'GITHUB_EVENT_NAME':'workflow_dispatch',
-        'GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':stage,'PROFILE':profile.name,
+        'GITHUB_WORKFLOW_REF':profile.caller,
+        'GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':stage,
     }.items()),'Untrusted configured release stage')
+    expect(field(ID,env.get('GITHUB_RUN_ID')) and field(SHA,env.get('GITHUB_SHA')),
+           'Untrusted configured control identity')
+
+
+def upstream_of(profile,event,tag):
+    expect(event.get('action')=='completed','Untrusted release trigger')
+    upstream=event.get('workflow_run') or {}
+    expect(upstream.get('path')=='.github/workflows/'+profile.original_workflow
+           and upstream.get('event')=='release' and upstream.get('status')=='completed'
+           and upstream.get('conclusion')=='success' and upstream.get('run_attempt')==1
+           and all((upstream.get(k) or {}).get('id')==canonical.REPO_ID for k in ('repository','head_repository'))
+           and upstream.get('head_branch')==tag,'Automatic release must originate in exact first successful Release build')
+    return Upstream(str(upstream.get('id','')),tag,upstream.get('head_sha'))
+
+
+def build_selection(get,profiles,env,event):
+    trigger=env.get('GITHUB_EVENT_NAME')
+    if trigger=='workflow_run':
+        pointer=event.get('workflow_run') or {}
+        choices=[p for p in profiles if pointer.get('path')=='.github/workflows/'+p.original_workflow]
+        expect(len(choices)==1,'Release build does not select exactly one profile')
+        profile=choices[0]
+        runtime(profile,env,'build')
+        src=upstream_of(profile,event,pointer.get('head_branch'))
+        expect(src.run_id!=env['GITHUB_RUN_ID'],'Original build must be an independent run')
+        artifact=Original(**canonical.from_completed_build(get,src.canonical_event()))
+        return profile,artifact
+    expect(trigger=='workflow_dispatch','Untrusted release trigger')
+    picks=event.get('inputs')
+    expect(type(picks) is dict and set(picks)=={'profile','tag'},'Invalid explicit replay selection')
+    choices=[p for p in profiles if picks['profile']==p.name]
+    expect(len(choices)==1 and canonical.product_of_tag(picks['tag']).workflow==choices[0].original_workflow,
+           'Invalid explicit release profile')
+    profile=choices[0]
+    runtime(profile,env,'build')
+    artifact=Original(**canonical.from_tag(get,picks['tag']))
+    expect(artifact.build_run_id!=env['GITHUB_RUN_ID'],'Original build must be an independent run')
+    return profile,artifact
+
+
+def control(profile,env,stage,event):
+    expect(stage in ('test','prod') and env.get('PROFILE')==profile.name,'Untrusted configured project')
+    runtime(profile,env,stage)
     tag=env.get('GRAPH_TAG')
-    expect(event.get('inputs')=={'profile':profile.name,'tag':tag},'Wrong explicit release selection')
-    return Control(stage,env['GITHUB_RUN_ID'],env['GITHUB_SHA'],tag,profile)
+    trigger=env.get('GITHUB_EVENT_NAME')
+    if trigger=='workflow_dispatch':
+        expect(event.get('inputs')=={'profile':profile.name,'tag':tag},'Wrong explicit release selection')
+        return Control(stage,env['GITHUB_RUN_ID'],env['GITHUB_SHA'],tag,profile)
+    expect(trigger=='workflow_run','Untrusted release trigger')
+    source=upstream_of(profile,event,tag)
+    return Control(stage,env['GITHUB_RUN_ID'],env['GITHUB_SHA'],tag,profile,trigger,source)
 
 
 def original(get,ctx,build):
@@ -131,7 +200,8 @@ def original(get,ctx,build):
     expect(candidate.tag==ctx.tag and candidate.build_run_id!=ctx.run,
            'Invalid original build on this run')
     # Re-resolve published release, original run and ZIP metadata independently.
-    resolved=Original(**canonical.from_tag(get,ctx.tag))
+    resolved=Original(**(canonical.from_completed_build(get,ctx.upstream.canonical_event())
+                         if ctx.upstream else canonical.from_tag(get,ctx.tag)))
     expect(resolved==candidate,'Configured build evidence disagrees with GitHub')
     return resolved
 
@@ -182,7 +252,7 @@ def expected_test(ctx,release,content):
     expect((content.manifest_sha256 is not None)==(ctx.profile.receipt.manifest_key is not None)
            and ctx.tag==release.tag and ctx.run!=release.build_run_id,'Invalid TEST content scope')
     return {'schema':1,'profile':ctx.profile.name,'workflow_ref':ctx.profile.caller,'control_sha':ctx.control_sha,
-            'run_id':ctx.run,'run_attempt':'1','environment':ctx.profile.test.environment,
+            'run_id':ctx.run,'run_attempt':'1','trigger':ctx.trigger,'environment':ctx.profile.test.environment,
             'payload_sha256':content.sha256,'manifest_sha256':content.manifest_sha256,**asdict(release)}
 
 
@@ -232,7 +302,7 @@ def verify_same_run_test(get,ctx,output):
     wf=get(root+'/actions/workflows/'+ctx.profile.control_workflow)
     expect(str(run.get('id'))==ctx.run and wf.get('id') and run.get('workflow_id')==wf['id']
            and run.get('path')=='.github/workflows/'+ctx.profile.control_workflow
-           and run.get('event')=='workflow_dispatch' and run.get('head_branch')=='main'
+           and run.get('event')==ctx.trigger and run.get('head_branch')=='main'
            and run.get('head_sha')==ctx.control_sha and run.get('run_attempt')==1
            and run.get('status')=='in_progress'
            and all((run.get(k) or {}).get('id')==canonical.REPO_ID for k in ('repository','head_repository')),
@@ -283,11 +353,12 @@ class Promotion:
     run_id: str
     test_receipt_id: str
     content: Content
+    trigger: str
 
     def __post_init__(self):
         expect(field(SHA,self.control_sha) and field(ID,self.run_id)
                and field(ID,self.test_receipt_id) and self.run_id!=self.release.build_run_id
-               and isinstance(self.content,Content),'Invalid configured promotion')
+               and isinstance(self.content,Content) and self.trigger in ('workflow_run','workflow_dispatch'),'Invalid configured promotion')
 
 
 def candidate_promotion(ctx,release,content,job_output,get,output):
@@ -295,7 +366,7 @@ def candidate_promotion(ctx,release,content,job_output,get,output):
     expected=expected_test(ctx,release,content)
     receipt_id,receipt=verify_same_run_test(get,ctx,output)
     expect(json_object(job_output)==receipt==expected,'Configured same-run TEST proof mismatch')
-    return Promotion(ctx.profile,release,ctx.control_sha,ctx.run,receipt_id,content)
+    return Promotion(ctx.profile,release,ctx.control_sha,ctx.run,receipt_id,content,ctx.trigger)
 
 
 def signed_audience(promotion,*,vm_id,environment_node_id,reusable_sha,nonce):
