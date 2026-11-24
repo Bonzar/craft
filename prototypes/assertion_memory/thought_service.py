@@ -64,6 +64,26 @@ class ThoughtService(MemoryService):
             result['pending_count'] = self._pending_count()
         return result
 
+    def search(self, query, scope=None, session_id=None, limit=10):
+        """Return current stored candidate thoughts, without an answer or writes."""
+        if not isinstance(query, str) or not query.strip() or len(query) > 8000:
+            raise ValueError('query must contain between 1 and 8000 characters')
+        if type(limit) is not int or not 1 <= limit <= 10:
+            raise ValueError('thought search limit must be between one and ten')
+        if session_id is not None:
+            session_id, = normalize_session_ids((session_id,))
+        from .embeddings import read_only_embeddings
+        from .thought_selection import ThoughtSelection
+        projection = (self.thoughts if scope is None and session_id is None else
+                      ThoughtSelection(self.thoughts, scope=scope, session_id=session_id, current_only=True))
+        with read_only_embeddings():
+            found = self.engine.retrieval.search(projection, query, (), limit, (),
+                                                 question_texts=projection.questions)
+        return {'matches': [{'thought_id': row.id, 'version': row.version, 'preview': row.text[:700],
+                             'preview_truncated': len(row.text) > 700}
+                            for row in found.thoughts],
+                'scope': scope, 'session_id': session_id}
+
     def query(self, query, scope=None, valid_as_of=None, recorded_as_of=None, *, request_session_id=None):
         sessions = () if request_session_id is None else normalize_session_ids((request_session_id,))
         with processing_cohort(sessions):

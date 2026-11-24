@@ -110,11 +110,12 @@ class MCPServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(initialized.serverInfo.name, "assertion-memory")
             listing = await claude.list_tools()
             tools = {tool.name:tool for tool in listing.tools}
-            self.assertEqual(set(tools), {"memory_capture_message", "memory_query", "memory_source",
+            self.assertEqual(set(tools), {"memory_capture_message", "memory_query", "memory_search", "memory_source",
                                          "memory_history", "memory_status", "memory_process", "memory_ingest_register",
                                          "memory_ingest_report", "memory_store_artifact", "memory_artifact",
                                          "memory_model_call", "memory_sessions", "memory_session_messages",
                                          "memory_provenance", "memory_session_outputs", "memory_run_history", "memory_run_event"})
+            self.assertIn("session_id", tools["memory_search"].inputSchema["properties"])
             schema = tools["memory_capture_message"].inputSchema
             self.assertNotIn("kind", schema["properties"])
             for tool in tools.values():

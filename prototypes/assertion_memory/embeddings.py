@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import struct
 from collections.abc import Sequence
@@ -14,6 +16,18 @@ from .storage import MemoryStore
 _BATCH_SIZE = 64
 _LOOKUP_SIZE = 400
 MULTILINGUAL_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+
+_persist_embeddings = ContextVar('persist_embeddings', default=True)
+
+
+@contextmanager
+def read_only_embeddings():
+    token = _persist_embeddings.set(False)
+    try:
+        yield
+    finally:
+        _persist_embeddings.reset(token)
 
 
 class FastEmbedModel:
@@ -65,12 +79,15 @@ class CachedEmbedder:
             batch = missing[offset:offset + _BATCH_SIZE]
             vectors = _embedding_vectors(self.backend([text_by_key[key] for key in batch]), len(batch))
             packed = {key: struct.pack(f"<{len(vector)}f", *vector) for key, vector in zip(batch, vectors)}
-            with self.store.transaction(write=True) as connection:
-                connection.executemany(
-                    "INSERT OR IGNORE INTO memory_embedding_cache VALUES (?, ?, ?)",
-                    [(self.identity, key, blob) for key, blob in packed.items()],
-                )
-            stored.update(self._load(batch))
+            if _persist_embeddings.get():
+                with self.store.transaction(write=True) as connection:
+                    connection.executemany(
+                        "INSERT OR IGNORE INTO memory_embedding_cache VALUES (?, ?, ?)",
+                        [(self.identity, key, blob) for key, blob in packed.items()],
+                    )
+                stored.update(self._load(batch))
+            else:
+                stored.update(packed)
         return _embedding_vectors(
             [struct.unpack(f"<{len(stored[key]) // 4}f", stored[key]) for key in keys], len(keys),
         )

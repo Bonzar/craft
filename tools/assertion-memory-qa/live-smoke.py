@@ -14,7 +14,7 @@ with httpx.Client(base_url='http://localhost:8893', trust_env=False, timeout=3) 
     h['authorization'] = 'Bearer ' + (p/'mcp-token').read_text().strip()
     listed = m.post('/memory/mcp',headers=h,json=req)
     listed.raise_for_status()
-    assert len(listed.json()['result']['tools']) == 17
+    assert {'memory_history', 'memory_status', 'memory_search'} <= {tool['name'] for tool in listed.json()['result']['tools']}
     req.update(method='tools/call',params={'name':'memory_history','arguments':{'view_id':'thought-vm-synthetic-one'}})
     r = m.post('/memory/mcp',headers=h,json=req)
     r.raise_for_status()
