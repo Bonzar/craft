@@ -9,7 +9,10 @@
   Fixed public inputs: CONFIGURED_BASE_HOST, CONFIGURED_BASE_PORT,
   CONFIGURED_BASE_VM_ID, CONFIGURED_BASE_ENV_NODE_ID,
   CONFIGURED_BASE_REUSABLE_SHA, CONFIGURED_BASE_TEST_READY and RUNNER_TEMP.
-  Reusable actual job SHA must be checked against root-owned policy/pin.
+  Local same-repository reusable call claims must report the exact trusted
+  workflow path at refs/heads/main plus the same caller/reusable commit SHA
+  independently pinned in root-owned policy. This witnessed relative-call
+  mode deliberately does not accept a different ref form.
 - SSH user `assertion-cfg-base-test-deploy` is not a TEST owner/member and must
   never have a standard shell, generic sudo or writable route/config. Root
   creates one dedicated key entry and exact forced restricted command:

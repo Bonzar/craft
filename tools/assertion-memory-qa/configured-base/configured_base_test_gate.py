@@ -55,7 +55,7 @@ class Policy:
 
 
 def audience(policy,intent,nonce):
-    require(plain(DIGEST,nonce),'Invalid configured TEST nonce')
+    require(plain(DIGEST,nonce) and policy.reusable_sha==intent.control_sha,'Invalid configured TEST control pin or nonce')
     wire=json.dumps({'schema':1,'stage':'test','profile':'base','attempt':1,
           'intent':asdict(intent),'environment':ENV,**asdict(policy),'nonce':nonce},
           sort_keys=True,separators=(',',':')).encode('ascii')
@@ -86,7 +86,7 @@ def verify(token,keys,policy,intent,nonce,now):
         'workflow_ref':CALLER,'workflow_sha':intent.control_sha,'sha':intent.control_sha,
         'ref':'refs/heads/main','ref_type':'branch','run_attempt':'1','run_id':intent.run,
         'event_name':intent.trigger,'runner_environment':'github-hosted',
-        'job_workflow_ref':REUSABLE+'@'+policy.reusable_sha,'job_workflow_sha':policy.reusable_sha}
+        'job_workflow_ref':REUSABLE+'@refs/heads/main','job_workflow_sha':policy.reusable_sha}
     require(all(claims.get(k)==v for k,v in allowed.items()),'Wrong configured Base TEST claim')
     iat,nbf,exp=(claims.get(k) for k in ('iat','nbf','exp'))
     require(all(type(v) is int for v in (iat,nbf,exp))

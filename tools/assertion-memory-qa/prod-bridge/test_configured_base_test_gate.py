@@ -26,7 +26,7 @@ class ConfiguredHost(TestCase):
         self.key=cls.key
         self.jwks=cls.jwks
         self.intent=g.Intent('1','a'*40,'workflow_run','assertion-memory-v0.1.1','2','3','4','b'*40,'c'*64)
-        self.policy=g.Policy('d'*40,'EN_TEST_ONLY','synthetic-vm')
+        self.policy=g.Policy('a'*40,'EN_TEST_ONLY','synthetic-vm')
         self.db=sqlite3.connect(':memory:')
         self.addCleanup(self.db.close)
         self.ledger=g.Ledger(self.db)
@@ -41,7 +41,7 @@ class ConfiguredHost(TestCase):
              repository_id=p.repository_id,repository_owner='Bonzar',repository_owner_id=str(g.OWNER_ID),
              workflow_ref=g.CALLER,workflow_sha=i.control_sha,sha=i.control_sha,ref='refs/heads/main',
              ref_type='branch',run_attempt='1',run_id=i.run,event_name=i.trigger,runner_environment='github-hosted',
-             job_workflow_ref=g.REUSABLE+'@'+p.reusable_sha,job_workflow_sha=p.reusable_sha,iat=2000,nbf=1400,exp=2300)
+             job_workflow_ref=g.REUSABLE+'@refs/heads/main',job_workflow_sha=p.reusable_sha,iat=2000,nbf=1400,exp=2300)
 
     def token(self,nonce,**update):
         payload=self.claims(nonce)|update
@@ -61,6 +61,7 @@ class ConfiguredHost(TestCase):
         for claim,replacement in (
             ('environment','assertion-memory-test'),('workflow_ref','legacy'),
             ('event_name','workflow_dispatch'),('job_workflow_sha','f'*40),
+            ('job_workflow_ref',g.REUSABLE+'@'+self.policy.reusable_sha),
             ('environment_node_id','wrong-id'),('workflow_sha','7'*40),
             ('aud','wrong-purpose'),('nbf',1399),('run_attempt','2'),
         ):
@@ -95,7 +96,7 @@ class ProviderEntry(TestCase):
             foreign=Control('prod','11','a'*40,'assertion-memory-v0.1.1',p.BASE)
             release=Original(ctx.tag,'b'*40,'12','13','14','c'*64)
             content=Content(hashlib.sha256(wire).hexdigest())
-            env={'CONFIGURED_BASE_TEST_READY':'true','CONFIGURED_BASE_REUSABLE_SHA':'d'*40,
+            env={'CONFIGURED_BASE_TEST_READY':'true','CONFIGURED_BASE_REUSABLE_SHA':'a'*40,
                  'CONFIGURED_BASE_ENV_NODE_ID':'EN_SAFE','CONFIGURED_BASE_VM_ID':'fiction'}
             receipt={'status':'ok','environment':'test','revision':release.revision,'sha256':content.sha256}
             def exchange(argv,packet,payload):

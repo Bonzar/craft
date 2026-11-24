@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import asdict
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,8 @@ def activate(ctrl,release,content,payload_dir,promotion,env):
     if promotion is not None or env.get('CONFIGURED_BASE_TEST_READY')!='true':
         raise ValueError('Configured TEST operation is not provisioned')
     policy=Policy(env['CONFIGURED_BASE_REUSABLE_SHA'],env['CONFIGURED_BASE_ENV_NODE_ID'],env['CONFIGURED_BASE_VM_ID'])
+    if policy.reusable_sha!=intent.control_sha:
+        raise ValueError('Configured local reusable SHA is not exact protected control')
     path=Path(payload_dir)/'release.tar.gz'
     with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as payload:
         meta=os.fstat(payload.fileno())
@@ -91,5 +94,8 @@ def smoke(ctrl,release,content,payload_dir,env):
 
 
 def unpack(archive,directory,revision):
-    from lifecycle import ci
+    # Exact Base artifact decoder, never a caller's/Visual's lifecycle import.
+    spec=importlib.util.spec_from_file_location('_configured_base_release_ci',here/'release-ci.py')
+    ci=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ci)
     return ci.unpack_zip(archive,directory,revision)
