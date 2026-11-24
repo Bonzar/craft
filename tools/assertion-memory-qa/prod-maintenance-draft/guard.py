@@ -27,7 +27,15 @@ FENCE=Path('/run/assertion-base-prod-transition')
 SITES='memory-site-graph.service'
 NEW_SITES='assertion-memory-prod-site-graph.service'
 TIMER='assertion-base-prod-fallback'
-SECONDS=180
+SECONDS=600
+SQLITE_PROBE=(
+    "from pathlib import Path; import sqlite3,sys; "
+    "uri=Path(sys.argv[1]).as_uri()+'?mode=ro'; "
+    "with_conn=sqlite3.connect(uri,uri=True); "
+    "with_conn.execute('PRAGMA query_only=ON'); "
+    "with_conn.execute('SELECT count(*) FROM sqlite_schema').fetchone(); "
+    "with_conn.close()"
+)
 ENV={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'}
 
 def require(ok,msg):
@@ -67,8 +75,7 @@ def verify_database_access(account,writable):
         for path in (DB.parent,DB,*[p for p in (Path(str(DB)+'-wal'),Path(str(DB)+'-shm')) if p.exists()]):
             run([*identity,'/usr/bin/test','-w',str(path)])
         run([*identity,'/usr/bin/test','-x',str(DB.parent)])
-    run([*identity,'/usr/bin/sqlite3','-batch','-readonly',str(DB),
-         'PRAGMA query_only=ON; SELECT count(*) FROM sqlite_schema;'])
+    run([*identity,'/usr/bin/python3','-I','-B','-c',SQLITE_PROBE,str(DB)],timeout=8)
 
 def exact_owner(account):
     entry=pwd.getpwnam(account)

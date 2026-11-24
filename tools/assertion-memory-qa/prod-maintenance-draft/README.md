@@ -41,3 +41,14 @@ neither release authentication nor the immutable artifact. There are no credenti
 Run `python3 -B test_guard.py` for mock local tests. These do not validate host
 unit dependencies, ingress configuration, cutover fencing integration or a
 live rollback. No installation commands should be run as part of code review.
+
+## Sterile Linux ownership round-trip
+
+Run `python3 -B test_linux_custody.py` **only inside a disposable Linux
+container or VM as root**. It owns a newly created temporary fixture only;
+it does not install a service, invoke systemd, mutate Nginx, or read any real
+SQLite file. The test aborts if proc inspection is restricted. It exercises
+descriptor-based exact UID/GID transition and restore and refusal while a
+separate process holds the fixture. Real Linux/systemd watchdog, external
+authenticated readback and projected per-service control restrictions still
+require separate integration checks.

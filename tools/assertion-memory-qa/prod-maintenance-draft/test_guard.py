@@ -133,4 +133,16 @@ class CustodyFiles(unittest.TestCase):
              patch.object(g.os,'fchown') as change:
             with self.assertRaisesRegex(RuntimeError,'ACL'): g.custody(self.v,target)
             change.assert_not_called()
+    def test_stdlib_probe_is_readonly_and_never_creates_missing_db(self):
+        import sqlite3,subprocess,sys
+        self.db.unlink()
+        with sqlite3.connect(self.db) as db: db.execute('CREATE TABLE t(x)')
+        cmd=lambda path:[sys.executable,'-I','-B','-c',g.SQLITE_PROBE,str(path)]
+        before=self.db.read_bytes()
+        good=subprocess.run(cmd(self.db),capture_output=True)
+        self.assertEqual((good.returncode,good.stdout), (0,b''))
+        self.assertEqual(self.db.read_bytes(),before)
+        missing=self.d/'does-not-exist.db'
+        bad=subprocess.run(cmd(missing),capture_output=True)
+        self.assertNotEqual(bad.returncode,0); self.assertFalse(missing.exists())
 if __name__=='__main__': unittest.main()
