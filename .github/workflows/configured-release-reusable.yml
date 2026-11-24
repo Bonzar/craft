@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 0a09f131ff6b7c6a7b55398818645aeeae1c6d4c
+          ref: f6481d47b5487f86e465621f220cd95b5f0d45c9
           persist-credentials: false
       - id: resolve
         name: Resolve original immutable release
@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 0a09f131ff6b7c6a7b55398818645aeeae1c6d4c
+          ref: f6481d47b5487f86e465621f220cd95b5f0d45c9
           persist-credentials: false
       - name: Verify exact artifact and stage approval
         env:
@@ -132,7 +132,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 0a09f131ff6b7c6a7b55398818645aeeae1c6d4c
+          ref: f6481d47b5487f86e465621f220cd95b5f0d45c9
           persist-credentials: false
       - name: Verify exact artifact and stage approval
         env:
