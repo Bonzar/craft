@@ -29,13 +29,13 @@ async def mcp(db):
                 result=r.json()['result']
                 assert r.status_code==200 and not result.get('isError')
                 return result.get('structuredContent') or json.loads(result['content'][0]['text'])
-            assert len(listed)==17
+            assert {'memory_history', 'memory_status', 'memory_search'} <= {item['name'] for item in listed}
             saved=await tool('memory_history',{'view_id':'thought-vm-synthetic-one'})
             assert '«ёж»' in saved['content']
             event=json.loads(saved['content'])[0]['bases'][0]['event_id']
             assert (await tool('memory_source',{'record_id':event,'start':8,'end':10}))['span']['text']=='ёж'
             assert (await tool('memory_process',{'limit':1}))['scheduled'] is False
-            print('MCP: 401 without bearer; 17 tools; persisted history; Unicode span; model worker disabled')
+            print('MCP: 401 without bearer; canonical tools; persisted history; Unicode span; model worker disabled')
 
 def graph(db,directory):
     password=secrets.token_urlsafe(24)

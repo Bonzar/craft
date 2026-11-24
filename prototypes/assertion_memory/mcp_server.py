@@ -472,6 +472,17 @@ def _register_write_tools(mcp, service, launcher, background):
 
 def _register_read_tools(mcp, service, config, launcher=None):
     _register_source_tools(mcp,service)
+    from .thought_service import ThoughtService
+    if isinstance(service, ThoughtService):
+        @mcp.tool()
+        async def memory_search(query: str, scope: str | None = None,
+                                session_id: str | None = None, limit: int = 10) -> dict:
+            """Find current stored thoughts by content and related questions using the configured
+            ranker. Optional exact source session and scope filters narrow candidates before ranking.
+            Returns previews and immutable thought/version IDs. Never generates an answer,
+            publishes thoughts, schedules processing or writes embeddings to the database."""
+            return service.search(query, scope=scope, session_id=session_id, limit=limit)
+
     @mcp.tool()
     async def memory_query(
         query: str, scope: str | None = None, valid_as_of: str | None = None,

@@ -14,7 +14,8 @@ class ThoughtSelection:
     Missing valid time is deliberately unknown, matching MemoryStore's API.
     """
     def __init__(self, thoughts, *, scope=None, scopes=None, valid_as_of=None,
-                 recorded_as_of=None, max_snapshot_versions=10000, thought_ids=None, lexical_retrieval=None):
+                 recorded_as_of=None, max_snapshot_versions=10000, thought_ids=None, lexical_retrieval=None,
+                 session_id=None, current_only=False):
         if scope is not None and scopes is not None:
             raise ValueError('use scope or scopes, not both')
         values = scopes if scopes is not None else (scope,) if scope is not None else None
@@ -25,6 +26,7 @@ class ThoughtSelection:
             raise ValueError('scopes must contain nonempty text')
         if type(max_snapshot_versions) is not int or max_snapshot_versions < 1:
             raise ValueError('snapshot version budget must be positive')
+        self._session_id = session_id
         self.thoughts, self.store = thoughts, thoughts.store
         if lexical_retrieval is None:
             from .model import CandidateSearch
@@ -52,12 +54,15 @@ class ThoughtSelection:
             consumed = 0
             for head in heads:
                 self._observed_heads[head.id] = head.version
-                rows = c.execute('SELECT payload FROM memory_thought_versions WHERE thought_id=? '
-                    'ORDER BY version DESC LIMIT ?', (head.id, max_snapshot_versions - consumed + 1)).fetchall()
-                consumed += len(rows)
-                if consumed > max_snapshot_versions:
-                    raise ValueError('canonical selection exceeds the explicit snapshot version budget')
-                versions = [Thought(**decode_payload(row[0])) for row in rows]
+                if current_only:
+                    versions = [head]
+                else:
+                    rows = c.execute('SELECT payload FROM memory_thought_versions WHERE thought_id=? '
+                        'ORDER BY version DESC LIMIT ?', (head.id, max_snapshot_versions - consumed + 1)).fetchall()
+                    consumed += len(rows)
+                    if consumed > max_snapshot_versions:
+                        raise ValueError('canonical selection exceeds the explicit snapshot version budget')
+                    versions = [Thought(**decode_payload(row[0])) for row in rows]
                 self._nodes.update({(row.id, row.version): row for row in versions})
                 for candidate in versions:
                     if self._eligible(candidate, c):
@@ -77,12 +82,16 @@ class ThoughtSelection:
 
     def _raw_attributes(self, c, basis):
         exists = c.execute("SELECT 1 FROM sqlite_master WHERE name='memory_raw_events'").fetchone()
-        row = c.execute('SELECT scope,metadata FROM memory_raw_events WHERE id=?', (basis['event_id'],)).fetchone() if exists else None
+        row = c.execute('SELECT scope,metadata,session_id FROM memory_raw_events WHERE id=?', (basis['event_id'],)).fetchone() if exists else None
         if row is None:
-            return set(), None
+            return set(), None, set()
         metadata = json.loads(row['metadata'])
         valid = metadata.get('valid_at')
-        return {row['scope']}, _timestamp(valid) if valid is not None else None
+        sessions = set()
+        if self._session_id is not None:
+            from .thought_processing_selection import canonical_session_id
+            sessions = {row['session_id'], canonical_session_id({'session_id':row['session_id'],'metadata':metadata})}
+        return {row['scope']}, _timestamp(valid) if valid is not None else None, sessions
 
     def _derived_attributes(self, thought, c):
         """Iterative postorder traversal supports any finite stored version depth."""
@@ -94,7 +103,7 @@ class ThoughtSelection:
                 continue
             node = self._node(key)
             if node is None:
-                self._attributes[key] = (set(), None)
+                self._attributes[key] = (set(), None, set())
                 continue
             children = [(basis['thought_id'], basis['version']) for basis in node.bases if 'thought_id' in basis]
             if not expanded:
@@ -105,25 +114,34 @@ class ThoughtSelection:
                 pending.extend((child, False) for child in children if child not in self._attributes)
                 continue
             visiting.discard(key)
-            scopes, times = set(), []
+            scopes, times, sessions = set(), [], set()
+            origin_session = node.origin.get('session_id')
+            if self._session_id is not None and isinstance(origin_session, str) and origin_session:
+                sessions.add(origin_session)
             own_scope = node.origin.get('scope')
             if isinstance(own_scope, str) and own_scope:
                 scopes.add(own_scope)
             for child in children:
-                child_scopes, valid = self._attributes[child]
+                child_scopes, valid, child_sessions = self._attributes[child]
+                sessions.update(child_sessions)
                 scopes.update(child_scopes)
                 times.append(valid)
-            for basis in node.bases:
-                if 'event_id' in basis:
-                    raw_scopes, valid = self._raw_attributes(c, basis)
-                    scopes.update(raw_scopes)
-                    times.append(valid)
+            event_ids = {basis['event_id'] for basis in node.bases if 'event_id' in basis}
+            for event_id in event_ids:
+                raw_scopes, valid, session = self._raw_attributes(c, {'event_id': event_id})
+                scopes.update(raw_scopes)
+                times.append(valid)
+                sessions.update(session)
+            origin_event = node.origin.get('event_id')
+            if self._session_id is not None and origin_event and origin_event not in event_ids:
+                _, _, session = self._raw_attributes(c, {'event_id': origin_event})
+                sessions.update(session)
             own_valid = node.origin.get('valid_at', node.metadata.get('valid_at'))
             if own_valid is not None:
                 valid = _timestamp(own_valid)
             else:
                 valid = max(times) if times and all(value is not None for value in times) else None
-            self._attributes[key] = scopes, valid
+            self._attributes[key] = scopes, valid, sessions
         return self._attributes[root]
 
     def _eligible(self, thought, c):
@@ -138,7 +156,9 @@ class ThoughtSelection:
             clocks = [thought.created_at, thought.origin.get('recorded_at')]
             if any(value and _timestamp(value) > cutoff for value in clocks):
                 return False
-        scopes, valid = self._derived_attributes(thought, c)
+        scopes, valid, sessions = self._derived_attributes(thought, c)
+        if self._session_id is not None and self._session_id not in sessions:
+            return False
         wanted = self.context['scopes']
         if wanted is not None and (not scopes or not scopes.issubset(set(wanted))):
             return False
