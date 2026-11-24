@@ -23,6 +23,12 @@ grep -v '^fastembed==' "$stage/requirements-graph-original.txt" > "$stage/requir
 test -s "$root/apps/graph_viewer/web/dist/index.html"
 cp -R "$root/apps/graph_viewer/web/dist" "$stage/apps/graph_viewer/web/"
 printf '%s\n' "$sha" > "$stage/REVISION"
+# Registered transport schema is compiled from this exact staged candidate.
+mapfile -t mcp_sdk < <(sed -n 's/^mcp==\([0-9][0-9.]*\)$/\1/p' "$stage/prototypes/assertion_memory/requirements-mcp.txt")
+[[ ${#mcp_sdk[@]} == 1 ]]
+(cd "$stage"; python3 -B -m prototypes.assertion_memory.release_catalog \
+  --revision "$sha" --sdk "${mcp_sdk[0]}" --output "$stage/mcp-tool-schema.json")
+test -s "$stage/mcp-tool-schema.json"
 printf '%s\n' 'assertion-memory-synthetic-qa-v1' > "$stage/QA_PROFILE"
 (cd "$stage"; find . -type l | grep . && exit 1; test -z "$(find . -type f \( -name '*.sqlite*' -o -name '*.db' -o -name '*.pem' -o -name '*.key' -o -name '*.env' \))"; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$work/manifest"; mv "$work/manifest" SHA256SUMS)
 name="assertion-memory-qa-$sha.tar.gz"
