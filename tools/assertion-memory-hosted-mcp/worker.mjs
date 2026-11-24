@@ -23,7 +23,7 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
  if(!['test','prod'].includes(cfg.lane)||typeof verifyOwner!=='function'||!SHA.test(cfg.catalog_sha256)||
   cfg.catalog_sha256!==shared.catalog_sha256||!TAG.test(cfg.base_release)||
   !Array.isArray(cfg.enabled_capabilities)||new Set(cfg.enabled_capabilities).size!==cfg.enabled_capabilities.length||
-  !cfg.enabled_capabilities.includes('baseline_read')||!cfg.enabled_capabilities.every(x=>x==='baseline_read'||(cfg.lane==='test'&&x==='intake_process')))throw rej('Invalid build profile');
+  !cfg.enabled_capabilities.includes('baseline_read')||!cfg.enabled_capabilities.every(x=>x==='baseline_read'||x==='intake_process'))throw rej('Invalid build profile');
  const site=new URL(cfg.site_origin),gateway=new URL(cfg.gateway_url);
  if(site.protocol!=='https:'||site.origin!==cfg.site_origin||!site.hostname.endsWith('.chatgpt.site')||site.port||
   gateway.protocol!=='https:'||!/^([a-z0-9-]+\.){2}apigw\.yandexcloud\.net$/.test(gateway.hostname)||
@@ -33,19 +33,22 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
   cfg.credential_var!=='HOSTED_MEMORY_'+cfg.lane.toUpperCase()+'_READ_TOKEN')throw rej('Invalid runtime binding');
  const policy=shared.catalog.tools;
  const effectOn=cfg.enabled_capabilities.includes('intake_process');
- const effectFlag='HOSTED_MEMORY_TEST_EFFECTS_ENABLED', effectVar='HOSTED_MEMORY_TEST_EFFECTS_TOKEN';
+ const prefix='HOSTED_MEMORY_'+cfg.lane.toUpperCase(),
+       otherPrefix='HOSTED_MEMORY_'+(cfg.lane==='test'?'PROD':'TEST'),
+       effectFlag=prefix+'_EFFECTS_ENABLED',effectVar=prefix+'_EFFECTS_TOKEN',
+       foreignEffect=otherPrefix+'_EFFECTS_TOKEN',foreignRead=otherPrefix+'_READ_TOKEN';
  let effectGateway;
  if(effectOn){
   if(!SHA.test(cfg.read_catalog_sha256)||cfg.read_catalog_sha256===cfg.catalog_sha256)throw rej('Invalid original read catalog');
   effectGateway=new URL(cfg.effect_gateway_url);
-  if(effectGateway.href!==gateway.origin+'/memory-mcp-test-effects'||
+  if(effectGateway.href!==gateway.origin+'/memory-mcp-'+cfg.lane+'-effects'||
     [...EFFECTS].some(n=>!policy[n]?.capability_projections?.intake_process)||
     Object.entries(policy).some(([n,m])=>m.capability_projections?.intake_process&&!EFFECTS.has(n)))throw rej('Invalid effect profile');
  } else if(cfg.effect_gateway_url!==undefined)throw rej('Invalid effect profile');
  const effectEnabled=env=>effectOn&&env?.[effectFlag]==='true'&&
    typeof env[effectVar]==='string'&&SHA.test(env[effectVar])&&
    typeof env[cfg.credential_var]==='string'&&SHA.test(env[cfg.credential_var])&&
-   env[effectVar]!==env[cfg.credential_var]&&env.HOSTED_MEMORY_PROD_EFFECTS_TOKEN===undefined;
+   env[effectVar]!==env[cfg.credential_var]&&env[foreignEffect]===undefined&&env[foreignRead]===undefined;
  const readEnabled=env=>env?.[cfg.rollout_flag]==='true';
  const enabled=env=>readEnabled(env)||effectEnabled(env);
  const capability=(name,env)=>EFFECTS.has(name)&&effectEnabled(env)?'intake_process':
@@ -60,7 +63,7 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
     const cap=capability(name,env),read=cap==='baseline_read';
     if(names.has(name))throw rej('Legacy catalog collision');
     return {name,description:cfg.tool_descriptions?.[name]??(read?'Read a bounded canonical memory result.':
-      (name==='memory_capture_message'?'Durably capture an owner-authorized source message in TEST.':'Schedule existing canonical TEST processing.')),
+      (name==='memory_capture_message'?'Durably capture an owner-authorized source message in this environment.':'Schedule existing canonical processing in this environment.')),
      inputSchema:structuredClone(p.capability_projections[cap]),annotations:{readOnlyHint:read,destructiveHint:false,openWorldHint:false}};
    });
    return [...legacy,...current];
@@ -72,9 +75,9 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
    const cap=capability(name,env); if(!cap||!object(args))return fail();
    const effect=cap==='intake_process';
    try {
-    const u=new URL(req.url),token=env[effect?effectVar:cfg.credential_var],other='HOSTED_MEMORY_'+(cfg.lane==='test'?'PROD':'TEST')+'_READ_TOKEN';
+    const u=new URL(req.url),token=env[effect?effectVar:cfg.credential_var];
     if(u.origin!==site.origin||u.pathname!=='/mcp'||u.search||req.method!=='POST'||
-       req.headers.get('sec-fetch-site')==='cross-site'||typeof token!=='string'||!SHA.test(token)||env[other]!==undefined||env.HOSTED_MEMORY_PROD_EFFECTS_TOKEN!==undefined||
+       req.headers.get('sec-fetch-site')==='cross-site'||typeof token!=='string'||!SHA.test(token)||env[foreignRead]!==undefined||env[foreignEffect]!==undefined||
        (effect&&(token===env[cfg.credential_var]||!(typeof env[cfg.credential_var]==='string'&&SHA.test(env[cfg.credential_var]))))||
        await verifyOwner(req,env,cfg.lane)!==true)return fail('Owner authorization required.');
     const ref=uuid();

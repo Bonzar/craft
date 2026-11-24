@@ -25,5 +25,15 @@ assert.equal((await relay.call('memory_process',{},req,on)).isError,true);
 assert.equal((await relay.call('memory_process',{},req,{...on,proof:true,HOSTED_MEMORY_TEST_EFFECTS_TOKEN:e.HOSTED_MEMORY_TEST_READ_TOKEN})).isError,true);
 assert.equal((await relay.call('memory_query',{},req,{...on,proof:true})).isError,true);
 assert.equal(calls,0);
-assert.throws(()=>makeHostedRelay({profile:{...p,lane:'prod'},catalog,verifyOwner:()=>true}));
+const prodProfile={...p,lane:'prod',gateway_url:gw+'/memory-mcp-prod-tools',effect_gateway_url:gw+'/memory-mcp-prod-effects',
+  credential_var:'HOSTED_MEMORY_PROD_READ_TOKEN',rollout_flag:'HOSTED_MEMORY_PROD_READ_ENABLED'};
+const prod=makeHostedRelay({profile:prodProfile,catalog,verifyOwner:(_,env)=>env.proof===true,
+ fetcher:()=>{calls++;throw Error('no network');}});
+const prodEnv={HOSTED_MEMORY_PROD_READ_ENABLED:'true',HOSTED_MEMORY_PROD_READ_TOKEN:'c'.repeat(64),
+  HOSTED_MEMORY_PROD_EFFECTS_ENABLED:'true',HOSTED_MEMORY_PROD_EFFECTS_TOKEN:'d'.repeat(64)};
+assert.deepEqual(prod.catalog([],prodEnv).filter(t=>!t.annotations.readOnlyHint).map(t=>t.name).sort(),
+                relay.catalog([],on).filter(t=>!t.annotations.readOnlyHint).map(t=>t.name).sort());
+assert.equal((await prod.call('memory_process',{},req,{...prodEnv,proof:true,HOSTED_MEMORY_TEST_EFFECTS_TOKEN:'b'.repeat(64)})).isError,true);
+assert.equal((await prod.call('memory_query',{},req,{...prodEnv,proof:true})).isError,true);
+assert.equal(calls,0);
 console.log('Owner gate, effect flag, strict capability set, and split secret tests passed');

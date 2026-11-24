@@ -26,7 +26,7 @@ def encoded(v):
  return json.dumps(v, ensure_ascii=True, sort_keys=True, separators=(",",":")).encode("ascii")
 def digest(v):
  return hashlib.sha256(encoded(v)).hexdigest()
-def compile_catalog(schema_doc, authority, *, include_test_effects=False):
+def compile_catalog(schema_doc, authority, *, include_effects=False):
  """authority must be established by CI against an exact release, not by operator/gateway input."""
  if type(schema_doc) is not dict or schema_doc.get("revision")!=authority["revision"] or \
     schema_doc.get("module_sha256")!=authority["module_sha256"] or schema_doc.get("runtime_mcp_sdk")!=authority["sdk"]:
@@ -54,7 +54,7 @@ def compile_catalog(schema_doc, authority, *, include_test_effects=False):
    schema["properties"]={k:{**schema["properties"][k],**v} for k,v in NARROW[name].items()}
   schema["additionalProperties"]=False
   projection={"baseline_read":schema} if name in NARROW else {}
-  if include_test_effects and name in EFFECTS:
+  if include_effects and name in EFFECTS:
    projection["intake_process"]=schema
   entries[name]={"classification":classification,"canonicalInputSchema":pristine,"capability_projections":projection,"readOnlyHint":classification in READ}
  document={"version":1,"canonical_revision":authority["revision"],"canonical_schema_hash":digest(schemas),"tools":entries}
@@ -67,5 +67,5 @@ def authorized(profile, catalog, lane, operation, credential_capability):
     digest(catalog.get("catalog"))!=catalog.get("catalog_sha256")): return False
  entry=catalog.get("catalog",{}).get("tools",{}).get(operation)
  if not entry or credential_capability not in entry.get("capability_projections",{}): return False
- if credential_capability=="intake_process" and (lane!="test" or operation not in EFFECTS):return False
+ if credential_capability=="intake_process" and operation not in EFFECTS:return False
  return credential_capability in profile.get("enabled_capabilities",())

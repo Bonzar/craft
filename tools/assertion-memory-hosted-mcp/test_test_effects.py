@@ -14,7 +14,7 @@ def catalogs():
     schemas={n:v['canonicalInputSchema'] for n,v in x['tools'].items()}
     source={'revision':authority['revision'],'module_sha256':authority['module_sha256'],
             'runtime_mcp_sdk':authority['sdk'],'tools':schemas}
-    return base,compile_catalog(source,authority),compile_catalog(source,authority,include_test_effects=True)
+    return base,compile_catalog(source,authority),compile_catalog(source,authority,include_effects=True)
 
 class Effects(TestCase):
     def setUp(self):
@@ -53,8 +53,29 @@ class Effects(TestCase):
             self.assertEqual(await status('/memory-mcp-test-effects',self.effect,'memory_capture_message'),400)
         asyncio.run(test())
         self.assertEqual(self.call_count,0)
-    def test_prod_and_reused_credential_cannot_start(self):
-        with self.assertRaises(ValueError):make_app(self.profile|{'lane':'prod'},self.new,self.read,
-            self.not_called,self.not_called,effect_token=self.effect)
+    def test_reused_credential_cannot_start(self):
         with self.assertRaises(ValueError):make_app(self.profile,self.new,self.read,
             self.not_called,self.not_called,effect_token=self.read)
+
+    def test_symmetric_profiles_reject_foreign_routes_no_upstream(self):
+        async def verify():
+            for lane,other,own,foreign in [('test','prod','b'*64,'d'*64),('prod','test','d'*64,'b'*64)]:
+                profile=self.profile|{'lane':lane,'effects_only':True}
+                app=make_app(profile,self.new,self.read,self.not_called,self.not_called,effect_token=own)
+                self.assertTrue(authorized(profile,self.new,lane,'memory_process','intake_process'))
+                self.assertFalse(authorized(profile,self.new,other,'memory_process','intake_process'))
+                async def status(scope_lane,token,tool):
+                    got=[]
+                    async def send(payload):got.append(payload)
+                    async def receive():return {'type':'http.request','body':json.dumps({
+                        'request_id':'aaaaaaaa-bbbb-4ccc-addd-eeeeeeeeeeee','operation':tool,'arguments':{}}).encode()}
+                    await app({'type':'http','method':'POST','path':'/memory-mcp-'+scope_lane,
+                               'headers':[(b'content-type',b'application/json'),
+                                          (b'authorization',('Bearer '+token).encode())]},receive,send)
+                    return got[0]['status']
+                self.assertEqual(await status(other+'-effects',own,'memory_process'),404)
+                self.assertEqual(await status(lane+'-effects',foreign,'memory_process'),401)
+                self.assertEqual(await status(lane+'-tools',self.read,'memory_status'),404)
+                self.assertEqual(await status(lane+'-effects',own,'memory_query'),400)
+            self.assertEqual(self.call_count,0)
+        asyncio.run(verify())

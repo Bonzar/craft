@@ -18,7 +18,7 @@ def catalog():
       'sdk':'1.30.0','module_sha256':'4eea4c6bf55be51fa972c54ee5fb0a259b5b5766acbd69676e1e6804566fa11c'}
     s={'revision':a['revision'],'module_sha256':a['module_sha256'],'runtime_mcp_sdk':a['sdk'],
        'tools':{name:tool['canonicalInputSchema'] for name,tool in base['tools'].items()}}
-    new=compile_catalog(s,a,include_test_effects=True)
+    new=compile_catalog(s,a,include_effects=True)
     if old['catalog_sha256']!=OLD or new['catalog_sha256']!=NEW:
         raise ValueError('unexpected catalog identity')
     return new

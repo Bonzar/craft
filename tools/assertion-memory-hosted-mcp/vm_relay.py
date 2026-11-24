@@ -57,7 +57,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
     manifest=catalog['catalog']['tools']
     effects="intake_process" in caps
     if (lane not in ('test','prod') or set(caps) not in ({"baseline_read"},{"baseline_read","intake_process"})
-            or len(caps)!=len(set(caps)) or effects!=(effect_token is not None) or effects and lane!='test'):
+            or len(caps)!=len(set(caps)) or effects!=(effect_token is not None)):
         raise ValueError('invalid profile')
     if effects and (not isinstance(effect_token,str) or not HEX.fullmatch(effect_token) or effect_token==gateway_token
             or {name for name,meta in manifest.items() if 'intake_process' in meta.get('capability_projections',{})}!=EFFECTS):
