@@ -81,3 +81,38 @@ class Gate(unittest.TestCase):
         self.assertEqual(operate(exchange,self.policy,self.p,path,get_token=mint),permit(self.p))
         with self.assertRaises(ValueError):operate(exchange,self.policy,self.p,path,get_token=mint)
         self.assertEqual(calls,['challenge','confirm'])
+
+    def test_exact_transport_envelope_and_scoped_route(self):
+        from contextlib import contextmanager
+        from unittest.mock import Mock,patch
+        from configured_base_prod_provider import operate, route
+        from prod_runner import exchange_factory
+        import ssh_transport
+        from pathlib import Path
+        host='example.test'; scoped='assertion-cfg-base-prod-deploy@'+host
+        env={'RELEASE_SSH_HOST':host,'RELEASE_SSH_PORT':'22','RELEASE_SSH_HOST_PIN':'pin',
+             'RELEASE_SSH_KEY':'key','RUNNER_TEMP':'/unused'}
+        @contextmanager
+        def builder(**kw):
+            self.assertEqual(kw,{'host':host,'port':'22','account':'assertion-production-deploy',
+                                'host_pin':'pin','key':'key','runtime_dir':'/unused'})
+            yield ['/usr/bin/ssh','-T','--','assertion-production-deploy@'+host]
+        seen=[]; nonce='f'*64
+        def wire(argv,command,*,envelope,payload,limit):
+            self.assertEqual(argv,['/usr/bin/ssh','-T','--',scoped])
+            self.assertEqual((command,limit),('configured-prod-receive',512))
+            self.assertTrue(envelope.endswith(b'\n'))
+            d=obj(envelope)
+            self.assertEqual(d['intent'],intent_document(self.p))
+            self.assertEqual(envelope,json.dumps(d,separators=(',',':')).encode('ascii')+b'\n')
+            seen.append(d['op'])
+            result={'status':'ok','nonce':nonce}
+            if payload is not None:
+                self.assertEqual((d['token'],d['nonce'],payload.read()),('issued',nonce,b'archive'))
+                result=permit(self.p)
+            return 0,json.dumps(result).encode('ascii')+b'\n'
+        archive=Mock()
+        archive.open.return_value=io.BytesIO(b'archive')
+        with patch.object(ssh_transport,'route',builder),patch.object(ssh_transport,'exchange',wire),route(env) as argv:
+            self.assertEqual(operate(exchange_factory(argv),self.policy,self.p,archive,get_token=lambda _: 'issued'),permit(self.p))
+        self.assertEqual(seen,['challenge','confirm'])

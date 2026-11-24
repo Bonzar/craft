@@ -1,10 +1,12 @@
 """Configured Base PROD runner; receives an already checked Common Promotion."""
 import hashlib
 from pathlib import Path
-import tempfile
+from contextlib import contextmanager
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent/'prod-bridge'))
-from prod_runner import exchange_factory, guarded_route, mint
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'assertion-memory-release'))
+from prod_runner import exchange_factory, mint
+import ssh_transport
 from reusable_proof import require
 from configured_base_prod_gate import BASE, Policy, audience, intent_document, permit
 
@@ -30,10 +32,20 @@ def activate(ctrl,release,content,payload,promotion,env):
                   env['RELEASE_OIDC_SUBJECT'],env['RELEASE_ENVIRONMENT_NODE_ID'],
                   frozenset({env['GITHUB_ACTOR_ID']}))
     require(policy.control_sha==ctrl.control_sha,'Unaudited reusable workflow commit')
-    aliases={'RELEASE_HOST':env['RELEASE_SSH_HOST'],'RELEASE_PORT':env['RELEASE_SSH_PORT'],
-             'SSH_HOST_PIN':env['RELEASE_SSH_HOST_PIN'],'SSH_PRIVATE_KEY':env['RELEASE_SSH_KEY']}
-    with tempfile.TemporaryDirectory(prefix='configured-base-prod-',dir=env['RUNNER_TEMP']) as work:
-        route=guarded_route(aliases,Path(work))
-        require(route[-1]=='assertion-production-deploy@'+aliases['RELEASE_HOST'],'Legacy host pinning contract drift')
-        route[-1]=BASE.prod.receiver_account+'@'+aliases['RELEASE_HOST']
-        return operate(exchange_factory(route),policy,promotion,payload/'release.tar.gz')
+    with route(env) as argv:
+        return operate(exchange_factory(argv),policy,promotion,payload/'release.tar.gz',
+                       get_token=lambda aud:mint(aud,env=env))
+
+@contextmanager
+def route(env):
+    shape='assertion-production-deploy'
+    account='assertion-cfg-base-prod-deploy'
+    if BASE.prod.receiver_account!=account:
+        raise ValueError('Configured PROD account contract changed')
+    host=env['RELEASE_SSH_HOST']
+    with ssh_transport.route(host=host,port=env['RELEASE_SSH_PORT'],account=shape,
+            host_pin=env['RELEASE_SSH_HOST_PIN'],key=env['RELEASE_SSH_KEY'],
+            runtime_dir=env['RUNNER_TEMP']) as argv:
+        if argv[0]!='/usr/bin/ssh' or argv[-2:]!=['--',shape+'@'+host]:
+            raise ValueError('Invalid local SSH arguments')
+        yield [*argv[:-1],account+'@'+host]
