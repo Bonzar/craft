@@ -66,7 +66,7 @@ def load_registry():
 
 
 def build(env,event,get,profiles,ops):
-    profile, original = common.build_selection(get,profiles,env,event)
+    profile, original = common.build_selection(get,profiles.values(),env,event)
     d=asdict(original)
     d.update(profile=profile.name,test_environment=profile.test.environment,
              prod_environment=profile.prod.environment)
