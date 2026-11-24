@@ -180,7 +180,10 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: Bonzar/craft/.github/workflows/assertion-memory-authorize-promotion.yml@6a0286c846bf6e7448d88be57db881d9460d7f1d
+    uses: Bonzar/craft/.github/workflows/assertion-memory-authorize-promotion.yml@a3afb72811483ddef20eb6371213e64bf9505424
     with:
       release_id: ${{ inputs.release_id }}
       test_run_id: ${{ inputs.test_run_id }}
+    secrets:
+      ASSERTION_MEMORY_DEPLOY_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}
+      ASSERTION_MEMORY_SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}
