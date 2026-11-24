@@ -25,9 +25,9 @@ PROFILE = Profile(
     original_workflow="assertion-memory-visual.yml",
     control_workflow="configured-release.yml",
     reusable_workflow="configured-release-reusable.yml",
-    test=Target("configured-release-visual-test", "configured-visual-test",
+    test=Target("configured-release-visual-test", "test",
                 "assertion-configured-visual-test-deploy", "deploy-visual"),
-    prod=Target("configured-release-visual-prod", "configured-visual-prod",
+    prod=Target("configured-release-visual-prod", "prod",
                 "assertion-configured-visual-prod-deploy", "deploy-visual"),
     receipt=ReceiptLayout(archive_key="archive_sha256", manifest_key="release"),
 )

@@ -34,8 +34,13 @@ def deploy(d, *, lane="legacy"):
     tmp=d['RUNNER_TEMP']
     envelope=sign(command,d['VISUAL_SIGNING_KEY'],directory=tmp)
     expected={'environment':mode,'revision':rev,'archive_sha256':sha,'release':manifest}
-    account_prefix = 'assertion-visual' if lane == 'legacy' else 'assertion-configured-visual'
-    with route(host=host,port=port,account=f'{account_prefix}-{mode}-deploy',host_pin=pin,
+    if lane == 'configured':
+        from configured_visual_route import route as scoped_route
+        account_prefix = 'assertion-configured-visual'
+    else:
+        scoped_route = route
+        account_prefix = 'assertion-visual'
+    with scoped_route(host=host,port=port,account=f'{account_prefix}-{mode}-deploy',host_pin=pin,
                 key=d['VISUAL_SSH_KEY'],runtime_dir=tmp) as to:
         preflight(to)
         with (Path(d['VISUAL_DOWNLOAD'])/'visual.tar').open('rb') as archive:

@@ -24,12 +24,24 @@ class VisualOperations(TestCase):
             self.assertEqual(sender.call_args.kwargs, {'lane':'configured'})
             self.assertEqual(receipt,{'environment':'test','revision':'a'*40,'archive_sha256':'b'*64,'release':'c'*64})
 
-    def test_transport_account_allowlist_is_exact(self):
+    def test_configured_route_reuses_pinned_builder_without_legacy_edits(self):
+        from configured_visual_route import route
         from ssh_transport import ACCOUNT
-        for suffix in ("test", "prod"):
-            self.assertIsNotNone(ACCOUNT.fullmatch(f"assertion-configured-visual-{suffix}-deploy"))
-        for suffix in ("qa", "test-prod", "production"):
-            self.assertIsNone(ACCOUNT.fullmatch(f"assertion-configured-visual-{suffix}-deploy"))
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as tmp:
+            options=dict(host="example.invalid",port="22",host_pin="ssh-ed25519 "+"A"*68,
+                         key="fixture-only",runtime_dir=tmp)
+            for stage in ("test", "prod"):
+                name=f"assertion-configured-visual-{stage}-deploy"
+                self.assertIsNone(ACCOUNT.fullmatch(name))
+                with route(account=name, **options) as argv:
+                    self.assertEqual(argv[-2:], ["--",name+"@example.invalid"])
+                    self.assertIn("StrictHostKeyChecking=yes",argv)
+                    self.assertIn("ClearAllForwardings=yes",argv)
+            for name in ("assertion-configured-visual-qa-deploy", "assertion-visual-test-deploy"):
+                with self.assertRaises(ValueError):
+                    with route(account=name, **options):
+                        self.fail("wrong account was admitted")
 
     def test_gateway_smoke_uses_matching_stage(self):
         p = profile.Payload(Path('/fresh'),'a'*40,'b'*64,'c'*64)
