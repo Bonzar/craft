@@ -1,0 +1,5 @@
+# Guarded live ingress input
+
+The guard config is not assumed to be globally settled or guessed from port counts. Capture exact private LIVE, guard baseline, approved and frozen bytes under the existing fence without mutating any witness. The independently reviewed JSON must give SHA-256 of each as live, baseline, approved and frozen, plus live_prod_routes with exact keys /mcp and /memory-graph-read and explicitly known mode baseline or approved. Assign mode only after reviewing each named PROD location block and external no-body readback. Any old port outside the two named blocks must be independently identified and accepted in exact LIVE reviewed bytes, not changed.
+
+Run python -B stage_nginx_guarded_test_effects.py --live ... --guard-baseline ... --guard-approved ... --guard-frozen ... --review ... --new-stage-dir ... . If the current guard holds an active pending/permit or recovery process, stop independently; the pure planner never modifies guard files or contacts nginx. Protect separate before-image, validate with nginx -t in private namespace, and require that no other PROD path or old host states change. Unknown/frozen named modes fail closed.
