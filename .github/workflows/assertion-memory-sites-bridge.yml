@@ -1,0 +1,57 @@
+name: Build Sites MCP Bridge Release
+on:
+  release:
+    types: [published]
+permissions: {}
+jobs:
+  package:
+    if: github.repository == 'Bonzar/craft' && github.run_attempt == '1' && startsWith(github.ref, 'refs/tags/assertion-memory-sites-v')
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Verify selected release commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: Verify thin recorder and bundle entry points
+        working-directory: tools/assertion-memory-hosted-mcp/sites-dynamic
+        run: |
+          node --test test_worker.mjs
+          python3 -B -m unittest test_release_package
+      - name: Build one immutable two-profile bridge bundle
+        env:
+          TEST_PROJECT_HASH: ${{ vars.MEMORY_TEST_SITE_PROJECT_SHA256 }}
+          TEST_ORIGIN_HASH: ${{ vars.MEMORY_TEST_SITE_ORIGIN_SHA256 }}
+          TEST_ACL_HASH: ${{ vars.MEMORY_TEST_SITE_ACCESS_SHA256 }}
+          PROD_PROJECT_HASH: ${{ vars.MEMORY_PROD_SITE_PROJECT_SHA256 }}
+          PROD_ORIGIN_HASH: ${{ vars.MEMORY_PROD_SITE_ORIGIN_SHA256 }}
+          PROD_ACL_HASH: ${{ vars.MEMORY_PROD_SITE_ACCESS_SHA256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sites-bridge-release"
+          python3 -B - <<'PY'
+          import json,os,pathlib
+          for lane in ('test','prod'):
+              args=lane.upper()
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/(lane+'.json')
+              p.write_text(json.dumps({'lane':lane,'owner_only':True,'include_effects':True,
+                 'effects_timeout_ms':8000,'project_id_sha256':os.environ[args+'_PROJECT_HASH'],
+                 'site_origin_sha256':os.environ[args+'_ORIGIN_HASH'],
+                 'access_identity_sha256':os.environ[args+'_ACL_HASH']}))
+          PY
+          base="tools/assertion-memory-hosted-mcp/sites-dynamic"
+          python3 -B "$base/package_release.py" --tag "$GITHUB_REF_NAME" --source-sha "$GITHUB_SHA" \
+            --worker "$base/worker.mjs" --test-profile "$RUNNER_TEMP/test.json" --prod-profile "$RUNNER_TEMP/prod.json" \
+            --output "$RUNNER_TEMP/sites-bridge-release/source.tar.gz" > "$RUNNER_TEMP/sites-bridge-release/build-evidence.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sites-mcp-bridge-archive
+          path: ${{ runner.temp }}/sites-bridge-release/
+          if-no-files-found: error
