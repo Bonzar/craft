@@ -130,6 +130,17 @@ def effect_lock(app,root,stage,effect_token):
     return locked
 
 
+def require_scoped_database(stage,root,value):
+    expected={
+        'test':root/'state'/'fictional.sqlite3',
+        'prod':Path('/var/lib/assertion-memory/memory.sqlite3'),
+    }.get(stage)
+    if expected is None or type(value) is not str or value!=str(expected):
+        raise ValueError('Private database not the canonical lane database')
+    if expected.resolve(strict=True)!=expected or not expected.is_file():
+        raise ValueError('Canonical lane database must be an exact regular file')
+
+
 def factory(stage,root,config_dir,legacy_token):
     from compile_functional_release import compile_release
     from policy import digest
@@ -165,9 +176,7 @@ def factory(stage,root,config_dir,legacy_token):
         paths.add(f'/memory-mcp-{stage}-effects')
 
     def mount(config,store,service,background):
-        db=Path(config.db)
-        if db.parent!=root/'state' or db.resolve(strict=True)!=db:
-            raise ValueError('Private database not the canonical lane database')
+        require_scoped_database(stage,root,config.db)
         operations=create_operations(config,store,background=background,service=service)
         app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations)
         return frozenset(paths),effect_lock(app,root,stage,effect)
