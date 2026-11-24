@@ -1,3 +1,6 @@
+import hashlib
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase,main
 from unittest.mock import patch
 from urllib.error import URLError
@@ -69,5 +72,16 @@ class IssuanceTests(TestCase):
             opener.return_value.open.return_value=Malformed()
             with self.assertRaisesRegex(runner.ProtectedStageError,'^github-oidc-issuance-response$'):
                 runner.mint(self.aud,env=self.env())
+
+    def test_transport_enum_is_only_protected_entrypoint_behavior(self):
+        archive=b'synthetic'
+        intent=runner.Intent('1','2','3','4','5','6','a'*40,hashlib.sha256(archive).hexdigest())
+        with TemporaryDirectory() as root:
+            path=Path(root)/'archive';path.write_bytes(archive)
+            def refuse(*args): raise ValueError('legacy denial retained')
+            with self.assertRaisesRegex(ValueError,'^legacy denial retained$'):
+                runner.operate(refuse,object(),intent,path)
+            with self.assertRaisesRegex(runner.ProtectedStageError,'^host-challenge-transport$'):
+                runner.operate(refuse,object(),intent,path,trace=runner.stage)
 
 if __name__=='__main__': main()
