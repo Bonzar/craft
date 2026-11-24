@@ -44,6 +44,15 @@ class Profile:
         return REPO+'/.github/workflows/'+self.control_workflow+'@'+MAIN
 
     @property
+    def separate_workflow(self):
+        expect(self.name in ('base','visual'),'Unknown configured project')
+        return 'configured-'+self.name+'-release.yml'
+
+    @property
+    def separate_caller(self):
+        return REPO+'/.github/workflows/'+self.separate_workflow+'@'+MAIN
+
+    @property
     def reusable_path(self):
         return REPO+'/.github/workflows/'+self.reusable_workflow
 
@@ -121,9 +130,10 @@ class Control:
     profile: Profile
     trigger: str='workflow_dispatch'
     upstream: Upstream | None=None
+    separate_entry: bool=False
 
     def __post_init__(self):
-        expect(self.stage in ('test','prod') and field(ID,self.run) and field(SHA,self.control_sha)
+        expect(type(self.separate_entry) is bool and self.stage in ('test','prod') and field(ID,self.run) and field(SHA,self.control_sha)
                and canonical.product_of_tag(self.tag).workflow==self.profile.original_workflow
                and ((self.trigger=='workflow_dispatch' and self.upstream is None)
                     or (self.trigger=='workflow_run' and isinstance(self.upstream,Upstream)
@@ -131,18 +141,28 @@ class Control:
                'Invalid configured release control context')
 
     @property
+    def workflow(self):
+        return self.profile.separate_workflow if self.separate_entry else self.profile.control_workflow
+
+    @property
+    def caller(self):
+        return self.profile.separate_caller if self.separate_entry else self.profile.caller
+
+    @property
     def target(self):
         return self.profile.test if self.stage=='test' else self.profile.prod
 
 
 def runtime(profile,env,stage):
+    caller=env.get('GITHUB_WORKFLOW_REF')
+    expect(caller in (profile.caller,profile.separate_caller),'Untrusted configured caller')
     expect(all(env.get(k)==v for k,v in {
         'GITHUB_REPOSITORY':REPO,'GITHUB_REF':MAIN,'GITHUB_REF_PROTECTED':'true',
-        'GITHUB_WORKFLOW_REF':profile.caller,
         'GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':stage,
     }.items()),'Untrusted configured release stage')
     expect(field(ID,env.get('GITHUB_RUN_ID')) and field(SHA,env.get('GITHUB_SHA')),
            'Untrusted configured control identity')
+    return caller==profile.separate_caller
 
 
 def upstream_of(profile,event,tag):
@@ -170,8 +190,9 @@ def build_selection(get,profiles,env,event):
         return profile,artifact
     expect(trigger=='workflow_dispatch','Untrusted release trigger')
     picks=event.get('inputs')
-    expect(type(picks) is dict and set(picks)=={'profile','tag'},'Invalid explicit replay selection')
-    choices=[p for p in profiles if picks['profile']==p.name]
+    expect(type(picks) is dict and set(picks) in ({'profile','tag'},{'tag'}),'Invalid explicit replay selection')
+    choices=[p for p in profiles if ((set(picks)=={'tag'} and env.get('GITHUB_WORKFLOW_REF')==p.separate_caller)
+                                    or (set(picks)=={'profile','tag'} and picks['profile']==p.name and env.get('GITHUB_WORKFLOW_REF')==p.caller))]
     expect(len(choices)==1 and canonical.product_of_tag(picks['tag']).workflow==choices[0].original_workflow,
            'Invalid explicit release profile')
     profile=choices[0]
@@ -183,15 +204,16 @@ def build_selection(get,profiles,env,event):
 
 def control(profile,env,stage,event):
     expect(stage in ('test','prod') and env.get('PROFILE')==profile.name,'Untrusted configured project')
-    runtime(profile,env,stage)
+    separate=runtime(profile,env,stage)
     tag=env.get('GRAPH_TAG')
     trigger=env.get('GITHUB_EVENT_NAME')
     if trigger=='workflow_dispatch':
-        expect(event.get('inputs')=={'profile':profile.name,'tag':tag},'Wrong explicit release selection')
-        return Control(stage,env['GITHUB_RUN_ID'],env['GITHUB_SHA'],tag,profile)
+        expected={'tag':tag} if separate else {'profile':profile.name,'tag':tag}
+        expect(event.get('inputs')==expected,'Wrong explicit release selection')
+        return Control(stage,env['GITHUB_RUN_ID'],env['GITHUB_SHA'],tag,profile,separate_entry=separate)
     expect(trigger=='workflow_run','Untrusted release trigger')
     source=upstream_of(profile,event,tag)
-    return Control(stage,env['GITHUB_RUN_ID'],env['GITHUB_SHA'],tag,profile,trigger,source)
+    return Control(stage,env['GITHUB_RUN_ID'],env['GITHUB_SHA'],tag,profile,trigger,source,separate)
 
 
 def original(get,ctx,build):
@@ -251,7 +273,7 @@ class Content:
 def expected_test(ctx,release,content):
     expect((content.manifest_sha256 is not None)==(ctx.profile.receipt.manifest_key is not None)
            and ctx.tag==release.tag and ctx.run!=release.build_run_id,'Invalid TEST content scope')
-    return {'schema':1,'profile':ctx.profile.name,'workflow_ref':ctx.profile.caller,'control_sha':ctx.control_sha,
+    return {'schema':1,'profile':ctx.profile.name,'workflow_ref':ctx.caller,'control_sha':ctx.control_sha,
             'run_id':ctx.run,'run_attempt':'1','trigger':ctx.trigger,'environment':ctx.profile.test.environment,
             'payload_sha256':content.sha256,'manifest_sha256':content.manifest_sha256,**asdict(release)}
 
@@ -299,9 +321,9 @@ def verify_same_run_test(get,ctx,output):
     root=canonical.ROOT
     path=f'{root}/actions/runs/{ctx.run}'
     run=get(path)
-    wf=get(root+'/actions/workflows/'+ctx.profile.control_workflow)
+    wf=get(root+'/actions/workflows/'+ctx.workflow)
     expect(str(run.get('id'))==ctx.run and wf.get('id') and run.get('workflow_id')==wf['id']
-           and run.get('path')=='.github/workflows/'+ctx.profile.control_workflow
+           and run.get('path')=='.github/workflows/'+ctx.workflow
            and run.get('event')==ctx.trigger and run.get('head_branch')=='main'
            and run.get('head_sha')==ctx.control_sha and run.get('run_attempt')==1
            and run.get('status')=='in_progress'
@@ -380,3 +402,4 @@ def signed_audience(promotion,*,vm_id,environment_node_id,reusable_sha,nonce):
                      'vm':vm_id,'reusable':promotion.profile.reusable_path+'@'+reusable_sha,'nonce':nonce},
                     sort_keys=True,separators=(',',':')).encode('ascii')
     return 'urn:assertion-memory:configured:'+promotion.profile.name+':promote:v1:'+hashlib.sha256(wire).hexdigest()
+
