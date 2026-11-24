@@ -177,6 +177,12 @@ jobs:
       contents: read
       actions: read
     uses: ./.github/workflows/assertion-memory-native-visual.yml
+    # Environment-only secrets need named mappings at the reusable call site.
+    secrets:
+      ASSERTION_MEMORY_NATIVE_VISUAL_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_HOST_PIN }}
+      ASSERTION_MEMORY_NATIVE_VISUAL_SSH_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SSH_KEY }}
+      ASSERTION_MEMORY_NATIVE_VISUAL_SIGNING_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SIGNING_KEY }}
+      ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_TOKEN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_TOKEN }}
     with:
       stage: test
       tag: ${{ needs.release.outputs.tag }}
@@ -195,6 +201,12 @@ jobs:
       contents: read
       actions: read
     uses: ./.github/workflows/assertion-memory-native-visual.yml
+    # Environment-only secrets need named mappings at the reusable call site.
+    secrets:
+      ASSERTION_MEMORY_NATIVE_VISUAL_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_HOST_PIN }}
+      ASSERTION_MEMORY_NATIVE_VISUAL_SSH_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SSH_KEY }}
+      ASSERTION_MEMORY_NATIVE_VISUAL_SIGNING_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SIGNING_KEY }}
+      ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_TOKEN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_TOKEN }}
     with:
       stage: prod
       tag: ${{ needs.release.outputs.tag }}
