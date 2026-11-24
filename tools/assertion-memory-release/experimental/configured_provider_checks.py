@@ -300,13 +300,19 @@ def verify_approval(get,ctx,env_id,reviewer_id):
            and live.get('can_admins_bypass') is False
            and live.get('deployment_branch_policy')=={'protected_branches':False,'custom_branch_policies':True}
            and get(root+'/branches/main').get('protected') is True,'Wrong protected release environment')
-    rules=[r for r in live.get('protection_rules',[]) if r.get('type')=='required_reviewers']
-    expect(len(rules)==1 and [(i.get('type'),str((i.get('reviewer') or {}).get('id')))
-            for i in rules[0].get('reviewers',[])]==[('User',reviewer_id)],'Wrong release reviewer')
+    protections=live.get('protection_rules')
+    expect(type(protections) is list,'Missing release protection details')
+    rules=[r for r in protections if r.get('type')=='required_reviewers']
     policy=get(path+'/deployment-branch-policies?per_page=2')
     expect(policy.get('total_count')==1 and
            [(r.get('type'),r.get('name')) for r in policy.get('branch_policies',[])]==[('branch','main')],
            'Deployment environment must be main-only')
+    # Only the distinct protected TEST wrapper may run without a reviewer,
+    # and only once its actual Environment has been explicitly configured so.
+    if ctx.separate_entry and ctx.stage=='test' and not rules:
+        return True
+    expect(len(rules)==1 and [(i.get('type'),str((i.get('reviewer') or {}).get('id')))
+            for i in rules[0].get('reviewers',[])]==[('User',reviewer_id)],'Wrong release reviewer')
     reviews=get(f'{root}/actions/runs/{ctx.run}/approvals')
     expect(type(reviews) is list and len(reviews)<=100,'Incomplete approval history')
     matches=[r for r in reviews if any(t.get('name')==name and str(t.get('id'))==env_id for t in r.get('environments',[]))]

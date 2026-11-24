@@ -86,7 +86,7 @@ jobs:
   native-base-test:
     name: Deploy base TEST · original immutable archive
     needs: [release, test]
-    if: (github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.deploy_base_test && !inputs.deploy_visual)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_BASE_TEST == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-v') && !startsWith(needs.release.outputs.tag, 'assertion-memory-visual-')
+    if: ((github.event_name == 'workflow_run' && vars.PROJECT_RELEASE_BASE_ENTRY != 'true') || (github.event_name == 'workflow_dispatch' && inputs.deploy_base_test && !inputs.deploy_visual)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_BASE_TEST == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-v') && !startsWith(needs.release.outputs.tag, 'assertion-memory-visual-')
     runs-on: ubuntu-latest
     timeout-minutes: 13
     environment: assertion-memory-native-base-test
@@ -151,7 +151,7 @@ jobs:
   native-visual-test:
     name: Deploy visual TEST
     needs: [release, test]
-    if: ((github.event_name == 'workflow_run' && github.event.workflow_run.path == '.github/workflows/assertion-memory-visual.yml') || (github.event_name == 'workflow_dispatch' && inputs.deploy_visual && !inputs.deploy_base_test)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-visual-v')
+    if: ((github.event_name == 'workflow_run' && github.event.workflow_run.path == '.github/workflows/assertion-memory-visual.yml' && vars.PROJECT_RELEASE_VISUAL_ENTRY != 'true') || (github.event_name == 'workflow_dispatch' && inputs.deploy_visual && !inputs.deploy_base_test)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-visual-v')
     permissions:
       contents: read
       actions: read
@@ -175,7 +175,7 @@ jobs:
   native-visual-prod:
     name: Promote exact visual TEST to PROD
     needs: [release, test, native-visual-test]
-    if: ((github.event_name == 'workflow_run' && github.event.workflow_run.path == '.github/workflows/assertion-memory-visual.yml') || (github.event_name == 'workflow_dispatch' && inputs.deploy_visual && !inputs.deploy_base_test)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && needs.native-visual-test.result == 'success' && needs.native-visual-test.outputs.test_proof != ''
+    if: ((github.event_name == 'workflow_run' && github.event.workflow_run.path == '.github/workflows/assertion-memory-visual.yml' && vars.PROJECT_RELEASE_VISUAL_ENTRY != 'true') || (github.event_name == 'workflow_dispatch' && inputs.deploy_visual && !inputs.deploy_base_test)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && needs.native-visual-test.result == 'success' && needs.native-visual-test.outputs.test_proof != ''
     permissions:
       contents: read
       actions: read

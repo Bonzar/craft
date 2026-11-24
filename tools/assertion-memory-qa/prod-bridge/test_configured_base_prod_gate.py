@@ -32,13 +32,13 @@ class Gate(unittest.TestCase):
           'job_workflow_ref':BASE.reusable_path+'@'+REF,'job_workflow_sha':q.control_sha,'sha':q.control_sha,
           'ref':REF,'ref_type':'branch','environment':BASE.prod.environment,'environment_node_id':q.environment_node_id,
           'event_name':p.trigger,'run_attempt':'1','run_id':p.run_id,'runner_environment':'github-hosted','actor_id':'8',
-          'iat':100,'nbf':99,'exp':150}
-        claims_policy(claims,q,p,n,110)
+          'iat':1000,'nbf':910,'exp':1050}
+        claims_policy(claims,q,p,n,1010)
         self.assert_real_signature(claims,q,p,n)
         for key,value in {'workflow_ref':'old','job_workflow_ref':BASE.reusable_path+'@'+q.control_sha,
             'job_workflow_sha':'a'*40,'workflow_sha':'a'*40,'sha':'a'*40,'event_name':'workflow_dispatch',
             'run_attempt':'2','run_id':'9','environment':'production','actor_id':'9'}.items():
-            with self.subTest(key=key),self.assertRaises(ValueError):claims_policy(claims|{key:value},q,p,n,110)
+            with self.subTest(key=key),self.assertRaises(ValueError):claims_policy(claims|{key:value},q,p,n,1010)
 
     def assert_real_signature(self,claims,q,p,n):
         import base64
@@ -55,11 +55,13 @@ class Gate(unittest.TestCase):
             msg=(hdr+'.'+bdy).encode('ascii')
             return msg.decode()+'.'+enc(key.sign(msg,padding.PKCS1v15(),hashes.SHA256()))
         gate=Ledger(sqlite3.connect(':memory:'))
-        nonce=gate.issue(q,p,110)['nonce']
+        nonce=gate.issue(q,p,1010)['nonce']
         bound=claims|{'aud':audience(q,p,nonce)}
         with self.assertRaises(ValueError):
-            gate.confirm(q,p,nonce,sign(bound|{'job_workflow_sha':'a'*40}),keys,111)
-        self.assertEqual(gate.confirm(q,p,nonce,sign(bound),keys,111),permit(p))
+            gate.confirm(q,p,nonce,sign(bound|{'job_workflow_sha':'a'*40}),keys,1011)
+        with self.assertRaises(ValueError):
+            gate.confirm(q,p,nonce,sign(bound|{'nbf':399}),keys,1011)
+        self.assertEqual(gate.confirm(q,p,nonce,sign(bound),keys,1011),permit(p))
 
     def test_provider_uses_same_intent_and_binds_bytes(self):
         from configured_base_prod_provider import operate

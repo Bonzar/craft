@@ -15,6 +15,8 @@ jobs:
       && github.ref_protected && github.run_attempt == '1'
       && (github.event_name == 'workflow_dispatch'
           || (vars.PROJECT_RELEASE_AUTO == 'true'
+              && ((github.event.workflow_run.path == '.github/workflows/assertion-memory-base.yml' && vars.PROJECT_RELEASE_BASE_ENTRY != 'true')
+                  || (github.event.workflow_run.path == '.github/workflows/assertion-memory-visual.yml' && vars.PROJECT_RELEASE_VISUAL_ENTRY != 'true'))
               && github.event.workflow_run.event == 'release'
               && github.event.workflow_run.conclusion == 'success'
               && github.event.workflow_run.run_attempt == 1

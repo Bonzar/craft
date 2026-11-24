@@ -1,6 +1,7 @@
 """Approved workspace composition; adding a project never adds a workflow job."""
 import importlib.util
 import json
+import re
 import sys
 
 
@@ -17,7 +18,11 @@ def registry(root, ops):
         spec.loader.exec_module(module)
         return module.ci.unpack_zip(source,output,revision)
 
-    def base_env(env):
+    def base_env(ctrl,env):
+        pin=(env.get('CONFIGURED_RELEASE_CODE_SHA','') if ctrl.separate_entry
+             else env['GITHUB_SHA'])
+        if not re.fullmatch('[a-f0-9]{40}',pin):
+            raise ValueError('Missing scoped configured base runtime pin')
         return {**env,
             'CONFIGURED_BASE_HOST':env['RELEASE_SSH_HOST'],
             'CONFIGURED_BASE_PORT':env['RELEASE_SSH_PORT'],
@@ -25,14 +30,14 @@ def registry(root, ops):
             'CONFIGURED_BASE_SSH_KEY':env['RELEASE_SSH_KEY'],
             'CONFIGURED_BASE_VM_ID':env['RELEASE_VM_ID'],
             'CONFIGURED_BASE_ENV_NODE_ID':env['RELEASE_ENV_NODE_ID'],
-            'CONFIGURED_BASE_REUSABLE_SHA':env['GITHUB_SHA'],
+            'CONFIGURED_BASE_REUSABLE_SHA':pin,
             'CONFIGURED_BASE_TEST_READY':env['RELEASE_ENABLE'],
         }
 
     def base_activate(ctrl,release,content,payload,promotion,env):
         if ctrl.stage=='test':
             import configured_base_test_provider as base
-            return base.activate(ctrl,release,content,payload,promotion,base_env(env))
+            return base.activate(ctrl,release,content,payload,promotion,base_env(ctrl,env))
         import configured_base_prod_provider as base
         source={**env,'RELEASE_ENVIRONMENT_NODE_ID':env['RELEASE_ENV_NODE_ID']}
         receipt=base.activate(ctrl,release,content,payload,promotion,source)
@@ -43,7 +48,7 @@ def registry(root, ops):
     def base_smoke(ctrl,release,content,payload,env):
         if ctrl.stage=='test':
             import configured_base_test_provider as base
-            return base.smoke(ctrl,release,content,payload,base_env(env))
+            return base.smoke(ctrl,release,content,payload,base_env(ctrl,env))
         # The existing canonical PROD writer already checks process/graph/MCP
         # before acknowledging; do not invoke the TEST command on PROD.
         got=json.loads((payload/'configured-base-prod-receiver.json').read_text(encoding='ascii'))

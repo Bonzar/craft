@@ -31,7 +31,7 @@ def main():
             or stat.S_IMODE(state.st_mode)!=0o700 or STATE.resolve()!=STATE):
         raise ValueError('Unexpected configured TEST nonce state')
     config=root_file(CONFIG/'policy.json')
-    if set(config)!={'reusable_sha','environment_node_id','vm_id','repository_id'}:
+    if set(config)-{'mode'}!={'reusable_sha','environment_node_id','vm_id','repository_id'}:
         raise ValueError('Unexpected configured TEST policy')
     policy=Policy(**config)
     import base_payload

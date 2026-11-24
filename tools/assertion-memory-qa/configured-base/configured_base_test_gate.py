@@ -15,6 +15,7 @@ SHA=r'[a-f0-9]{40}'
 DIGEST=r'[a-f0-9]{64}'
 ENV='configured-release-base-test'
 CALLER=REPOSITORY+'/.github/workflows/configured-release.yml@refs/heads/main'
+WRAPPER=REPOSITORY+'/.github/workflows/configured-base-release.yml@refs/heads/main'
 REUSABLE=REPOSITORY+'/.github/workflows/configured-release-reusable.yml'
 RECEIVER='configured-base-test'
 MAX_FRAME=20_000
@@ -47,17 +48,26 @@ class Policy:
     environment_node_id: str
     vm_id: str
     repository_id: str='1260097465'
+    mode: str='pilot'
 
     def __post_init__(self):
-        require(self.repository_id=='1260097465' and plain(SHA,self.reusable_sha)
+        require(self.mode in ('pilot','pinned_wrapper') and self.repository_id=='1260097465' and plain(SHA,self.reusable_sha)
                 and plain(r'[A-Za-z0-9_=-]{4,180}',self.environment_node_id)
                 and plain(r'[A-Za-z0-9.-]{1,128}',self.vm_id),'Invalid configured TEST trust policy')
 
 
 def audience(policy,intent,nonce):
-    require(plain(DIGEST,nonce) and policy.reusable_sha==intent.control_sha,'Invalid configured TEST control pin or nonce')
+    require(plain(DIGEST,nonce) and (policy.mode=='pinned_wrapper' or policy.reusable_sha==intent.control_sha),'Invalid configured TEST control pin or nonce')
+    raw=asdict(policy)
+    mode=raw.pop('mode')
+    if mode=='pinned_wrapper':
+        wire=json.dumps({'schema':2,'stage':'test','profile':'base','attempt':1,
+              'caller':WRAPPER,'child':REUSABLE+'@'+policy.reusable_sha,
+              'intent':asdict(intent),'environment':ENV,**raw,'nonce':nonce},
+              sort_keys=True,separators=(',',':')).encode('ascii')
+        return 'urn:assertion-memory:configured:base:test:v2:'+hashlib.sha256(wire).hexdigest()
     wire=json.dumps({'schema':1,'stage':'test','profile':'base','attempt':1,
-          'intent':asdict(intent),'environment':ENV,**asdict(policy),'nonce':nonce},
+          'intent':asdict(intent),'environment':ENV,**raw,'nonce':nonce},
           sort_keys=True,separators=(',',':')).encode('ascii')
     return 'urn:assertion-memory:configured:base:test:v1:'+hashlib.sha256(wire).hexdigest()
 
@@ -83,10 +93,10 @@ def verify(token,keys,policy,intent,nonce,now):
         'sub':'repo:'+REPOSITORY+':environment:'+ENV,'environment':ENV,
         'environment_node_id':policy.environment_node_id,'repository':REPOSITORY,
         'repository_id':policy.repository_id,'repository_owner':'Bonzar','repository_owner_id':str(OWNER_ID),
-        'workflow_ref':CALLER,'workflow_sha':intent.control_sha,'sha':intent.control_sha,
+        'workflow_ref':WRAPPER if policy.mode=='pinned_wrapper' else CALLER,'workflow_sha':intent.control_sha,'sha':intent.control_sha,
         'ref':'refs/heads/main','ref_type':'branch','run_attempt':'1','run_id':intent.run,
         'event_name':intent.trigger,'runner_environment':'github-hosted',
-        'job_workflow_ref':REUSABLE+'@refs/heads/main','job_workflow_sha':policy.reusable_sha}
+        'job_workflow_ref':REUSABLE+'@'+(policy.reusable_sha if policy.mode=='pinned_wrapper' else 'refs/heads/main'),'job_workflow_sha':policy.reusable_sha}
     require(all(claims.get(k)==v for k,v in allowed.items()),'Wrong configured Base TEST claim')
     iat,nbf,exp=(claims.get(k) for k in ('iat','nbf','exp'))
     require(all(type(v) is int for v in (iat,nbf,exp))
