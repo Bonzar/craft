@@ -1,6 +1,11 @@
 name: Assertion Memory · Native visual stage
 on:
   workflow_call:
+    secrets:
+      ASSERTION_MEMORY_NATIVE_VISUAL_HOST_PIN: {required: true}
+      ASSERTION_MEMORY_NATIVE_VISUAL_SSH_KEY: {required: true}
+      ASSERTION_MEMORY_NATIVE_VISUAL_SIGNING_KEY: {required: true}
+      ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_TOKEN: {required: true}
     inputs:
       stage: {type: string, required: true}
       tag: {type: string, required: true}
@@ -56,6 +61,14 @@ jobs:
           GRAPH_VERIFIED_SHA: ${{ inputs.verified_sha }}
           NATIVE_VISUAL_TEST_PROOF: ${{ inputs.test_proof }}
         run: python3 -B tools/assertion-memory-visual/native_visual.py resolve
+      - name: Verify scoped visual credential presence
+        env:
+          NATIVE_VISUAL_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_READY }}
+          VISUAL_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_HOST_PIN }}
+          VISUAL_SSH_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SSH_KEY }}
+          VISUAL_SIGNING_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SIGNING_KEY }}
+          VISUAL_GATEWAY_TOKEN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_TOKEN }}
+        run: python3 -B tools/assertion-memory-visual/native_visual.py preflight
       - name: Activate exact visual archive
         env:
           VISUAL_REVISION: ${{ steps.artifact.outputs.revision }}
