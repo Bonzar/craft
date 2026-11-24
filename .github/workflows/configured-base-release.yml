@@ -1,0 +1,35 @@
+name: Base Release
+run-name: Base Release · ${{ inputs.tag || github.event.workflow_run.head_branch }}
+on:
+  workflow_run:
+    workflows: ['Assertion Memory Base Release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag: {type: string, required: true}
+permissions: {}
+jobs:
+  configured:
+    if: >-
+      github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main'
+      && github.ref_protected && github.run_attempt == '1'
+      && vars.PROJECT_RELEASE_BASE_ENTRY == 'true'
+      && (github.event_name == 'workflow_dispatch'
+          || (vars.PROJECT_RELEASE_AUTO == 'true'
+              && github.event.workflow_run.event == 'release'
+              && github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.run_attempt == 1
+              && github.event.workflow_run.path == '.github/workflows/assertion-memory-base.yml'
+              && startsWith(github.event.workflow_run.head_branch, 'assertion-memory-v')
+              && !startsWith(github.event.workflow_run.head_branch, 'assertion-memory-visual-v')
+              && github.event.workflow_run.head_repository.full_name == github.repository))
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/configured-release-reusable.yml
+    secrets:
+      RELEASE_SSH_HOST_PIN: ${{ secrets.RELEASE_SSH_HOST_PIN }}
+      RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
+      RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+      RELEASE_GATEWAY_TOKEN: ${{ secrets.RELEASE_GATEWAY_TOKEN }}
