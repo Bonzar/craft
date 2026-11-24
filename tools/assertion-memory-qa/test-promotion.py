@@ -267,7 +267,7 @@ class ProductionAuthorizationTest(unittest.TestCase):
         self.assertIn('github.ref_protected',prod)
         self.assertIn("vars.ASSERTION_MEMORY_PROD_BRIDGE_CALLER_READY == 'true'",prod)
         self.assertIn('id-token: write',prod)
-        self.assertIn('uses: Bonzar/craft/.github/workflows/assertion-memory-authorize-promotion.yml@a3afb72811483ddef20eb6371213e64bf9505424',prod)
+        self.assertIn('uses: Bonzar/craft/.github/workflows/assertion-memory-authorize-promotion.yml@ab594ec51e1db5fb65d8c63d07d56e9c4fa32d7b',prod)
         self.assertEqual(
             [line.strip() for line in prod.splitlines() if '${{ secrets.' in line],
             ['ASSERTION_MEMORY_DEPLOY_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}',
