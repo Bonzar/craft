@@ -20,8 +20,10 @@ class Export(unittest.TestCase):
             self.assertEqual(catalog.encoded(first),catalog.encoded(second))
             self.assertEqual(first['revision'],rev)
             self.assertEqual(first['schema_sha256'],catalog.sha(first['tools']))
-            self.assertEqual(first['module_sha256'],
-                hashlib.sha256(Path(catalog.mcp_server.__file__).read_bytes()).hexdigest())
+            modules = (catalog.mcp_server, catalog.operation_registry)
+            self.assertEqual(first['module_sha256'], catalog.sha({module.__name__:
+                hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest() for module in modules}))
+            self.assertEqual(first['runtime_operation_registry'], 'base-typed-operations-v1')
             token='release-only-token-at-least-32-bytes'
             app=create_http_app(ServiceConfig(db=db,provider='none',processing_session_ids=[]),
                                 token,'memory.example',background=False)
