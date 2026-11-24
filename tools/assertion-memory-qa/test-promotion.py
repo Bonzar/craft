@@ -267,8 +267,12 @@ class ProductionAuthorizationTest(unittest.TestCase):
         self.assertIn('github.ref_protected',prod)
         self.assertIn("vars.ASSERTION_MEMORY_PROD_BRIDGE_CALLER_READY == 'true'",prod)
         self.assertIn('id-token: write',prod)
-        self.assertIn('uses: Bonzar/craft/.github/workflows/assertion-memory-authorize-promotion.yml@6a0286c846bf6e7448d88be57db881d9460d7f1d',prod)
-        for forbidden in ('secrets.', 'send-release.sh', 'SSH_PRIVATE_KEY', 'secrets:', 'steps:'):
+        self.assertIn('uses: Bonzar/craft/.github/workflows/assertion-memory-authorize-promotion.yml@a3afb72811483ddef20eb6371213e64bf9505424',prod)
+        self.assertEqual(
+            [line.strip() for line in prod.splitlines() if '${{ secrets.' in line],
+            ['ASSERTION_MEMORY_DEPLOY_KEY: ${{ secrets.ASSERTION_MEMORY_DEPLOY_KEY }}',
+             'ASSERTION_MEMORY_SSH_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_SSH_HOST_PIN }}'])
+        for forbidden in ('secrets: inherit', 'send-release.sh', 'SSH_PRIVATE_KEY', 'steps:'):
             self.assertNotIn(forbidden,prod)
 
 
