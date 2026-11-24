@@ -1,0 +1,11 @@
+[Unit]
+Description=Configured Base PROD release authorization socket
+[Socket]
+ListenStream=/run/assertion-configured-base-prod-auth/production.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=assertion-production-deploy
+DirectoryMode=0755
+RemoveOnStop=yes
+[Install]
+WantedBy=sockets.target

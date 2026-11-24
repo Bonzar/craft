@@ -1,0 +1,14 @@
+[Unit]
+Description=Configured Base PROD release proof (separate from legacy authorization)
+[Service]
+User=assertion-cfg-prod-auth
+Group=assertion-cfg-prod-auth
+ExecStart=/usr/bin/python3 -I -B /etc/assertion-release/configured-base-prod/authorizer-entry.py
+StateDirectory=assertion-configured-base-prod-auth
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
