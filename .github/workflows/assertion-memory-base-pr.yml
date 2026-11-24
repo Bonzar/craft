@@ -1,0 +1,83 @@
+name: Assertion Memory Base PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/assertion-memory-base-pr.yml"
+      - ".github/workflows/assertion-memory-base.yml"
+      - ".github/workflows/assertion-memory-authorize-promotion.yml"
+      - "prototypes/assertion_memory/**"
+      - "apps/graph_viewer/**"
+      - "tools/assertion-memory-qa/**"
+      - "tools/assertion-memory-release/**"
+      - "tests/test_model_*.py"
+
+permissions: {}
+
+jobs:
+  build:
+    if: github.repository == 'Bonzar/craft'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Install pinned lexical-only QA requirements
+        shell: bash
+        run: |
+          grep -v '^fastembed==' apps/graph_viewer/requirements.txt > "$RUNNER_TEMP/graph-lexical.txt"
+          python -m pip install --disable-pip-version-check --only-binary=:all: -r prototypes/assertion_memory/requirements-mcp.txt -r "$RUNNER_TEMP/graph-lexical.txt"
+      - name: Build and test graph frontend
+        working-directory: apps/graph_viewer
+        run: |
+          npm ci --no-audit --no-fund
+          npm run lint
+          npm test
+          npm run build
+      - name: Test documented offline Python memory contracts
+        run: |
+          python -m unittest \
+            prototypes.assertion_memory.tests.test_thought_store \
+            tests.test_thought_service \
+            tests.test_thought_provider_contract \
+            prototypes.assertion_memory.native_intake_test \
+            prototypes.assertion_memory.desktop_fast_test \
+            prototypes.assertion_memory.tests.test_manual_release \
+            prototypes.assertion_memory.tests.test_backup_recovery \
+            prototypes.assertion_memory.tests.test_codex_availability \
+            prototypes.assertion_memory.tests.test_thought_search_boundary \
+            prototypes.assertion_memory.tests.test_source_lifecycle_boundary \
+            prototypes.assertion_memory.tests.test_thought_processing_selection \
+            prototypes.assertion_memory.tests.test_thought_worker \
+            tests.test_model_profile_replay \
+            tests.test_model_review_routing
+      - name: Test fictional database, graph and authenticated MCP
+        shell: bash
+        run: |
+          export PYTHONPATH="$PWD"
+          python tools/assertion-memory-qa/synthetic_fixture.py "$RUNNER_TEMP/memory-fictional.sqlite3"
+          python tools/assertion-memory-qa/smoke_local.py "$RUNNER_TEMP/memory-fictional.sqlite3"
+      - name: Test release/approval fail-closed checks
+        run: |
+          python tools/assertion-memory-qa/test-release-ci.py
+          python tools/assertion-memory-qa/test-lifecycle.py
+          python tools/assertion-memory-qa/test-promotion.py
+      - name: Test shared receiver and scoped adapter recovery
+        run: |
+          bash -n tools/assertion-memory-qa/vm/provision-test.sh
+          bash -n tools/assertion-memory-release/adopt-live-base-test.sh
+          python tools/assertion-memory-release/test_adopt_live_base_test.py
+          python -m unittest discover -s tools/assertion-memory-qa/vm -p test_receiver.py
+          PYTHONPATH=tools/assertion-memory-release python -m unittest discover -s tools/assertion-memory-qa/prod-bridge
+      - name: Build narrow, data-free release
+        run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"

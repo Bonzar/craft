@@ -7,7 +7,10 @@ import sys
 from urllib.parse import quote
 import zipfile
 
-import release_ci as ci
+if __package__:
+    from . import release_ci as ci
+else:
+    import release_ci as ci
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'assertion-memory-release'))
 import receipt_proof
 

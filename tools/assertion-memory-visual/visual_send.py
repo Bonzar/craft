@@ -4,7 +4,10 @@ import os
 from pathlib import Path
 import re
 from ssh_transport import route, preflight, exchange
-from visual_auth import COMMAND, sign
+if __package__:
+    from .visual_auth import COMMAND, sign
+else:
+    from visual_auth import COMMAND, sign
 
 
 def main():
@@ -18,7 +21,9 @@ def main():
     deploy(d)
 
 
-def deploy(d):
+def deploy(d, *, lane="legacy"):
+    if lane not in {"legacy", "configured"}:
+        raise ValueError("invalid_visual_transport_lane")
     mode=d['VISUAL_ENV']
     rev,sha,manifest=d['VISUAL_REVISION'],d['VISUAL_SHA'],d['VISUAL_DIGEST']
     command=f'deploy-visual {mode} {rev} {sha}'
@@ -32,7 +37,16 @@ def deploy(d):
     tmp=d['RUNNER_TEMP']
     envelope=sign(command,d['VISUAL_SIGNING_KEY'],directory=tmp)
     expected={'environment':mode,'revision':rev,'archive_sha256':sha,'release':manifest}
-    with route(host=host,port=port,account=f'assertion-visual-{mode}-deploy',host_pin=pin,
+    if lane == 'configured':
+        if __package__:
+            from .configured_visual_route import route as scoped_route
+        else:
+            from configured_visual_route import route as scoped_route
+        account_prefix = 'assertion-cfg-vis'
+    else:
+        scoped_route = route
+        account_prefix = 'assertion-visual'
+    with scoped_route(host=host,port=port,account=f'{account_prefix}-{mode}-deploy',host_pin=pin,
                 key=d['VISUAL_SSH_KEY'],runtime_dir=tmp) as to:
         preflight(to)
         with (Path(d['VISUAL_DOWNLOAD'])/'visual.tar').open('rb') as archive:
@@ -40,6 +54,7 @@ def deploy(d):
     if status!=0 or body!=json.dumps(expected,separators=(',',':')).encode()+b'\n':
         raise ValueError('visual_receiver_failed_or_receipt_mismatch')
     print('Authorized shared receiver returned exact visual release identity')
+    return expected
 
 
 if __name__=='__main__':
