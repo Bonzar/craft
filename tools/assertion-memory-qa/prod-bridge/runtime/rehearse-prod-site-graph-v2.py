@@ -103,6 +103,10 @@ def main():
             need(not p.is_symlink())
             os.chown(p,acct.pw_uid,acct.pw_gid,follow_symlinks=False)
             p.chmod(0o700 if p.is_dir() else 0o600)
+        for name in ('sites-digest','sites-paired-digest'):
+            sidecar=root/'adapter'/name
+            os.chown(sidecar,0,acct.pw_gid,follow_symlinks=False)
+            sidecar.chmod(0o640)
         launch='set -eu; ip link set lo up; exec runuser -u "$1" -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME="$2" PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -B "$2/runner.py" --child'
         return sp.run(['/usr/bin/unshare','--net','--pid','--fork','--kill-child','/bin/sh','-c',launch,
                        'sh',USER,str(root)],cwd=root,stdin=DEVNULL,stderr=DEVNULL,timeout=100).returncode
