@@ -52,7 +52,7 @@ def claims_policy(claims,policy,promotion,nonce,now):
             'Unexpected configured PROD claim')
     iat,nbf,exp=(claims.get(k) for k in ('iat','nbf','exp'))
     require(all(type(v) is int for v in (iat,nbf,exp)) and now-300<=iat<=now+15
-            and iat-60<=nbf<=now+15 and now<exp and 0<exp-iat<=600,'Expired configured PROD token')
+            and iat-600<=nbf<=now+15 and now<exp and 0<exp-iat<=600,'Expired configured PROD token')
 
 def verify(token,issuer_keys,policy,promotion,nonce,now):
     from cryptography.hazmat.primitives import hashes
