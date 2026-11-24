@@ -42,7 +42,7 @@ def deploy(d, *, lane="legacy"):
             from .configured_visual_route import route as scoped_route
         else:
             from configured_visual_route import route as scoped_route
-        account_prefix = 'assertion-configured-visual'
+        account_prefix = 'assertion-cfg-vis'
     else:
         scoped_route = route
         account_prefix = 'assertion-visual'

@@ -43,6 +43,29 @@ class VisualOperations(TestCase):
                     with route(account=name, **options):
                         self.fail("wrong account was admitted")
 
+    def test_sender_and_profile_use_same_exact_account(self):
+        from contextlib import contextmanager
+        from tempfile import TemporaryDirectory
+        import json
+        sender = profile._operation("visual_send")
+        scoped = profile._operation("configured_visual_route")
+        with TemporaryDirectory() as tmp:
+            (Path(tmp)/"visual.tar").write_bytes(b"fixture")
+            for stage in ("test","prod"):
+                receipt = dict(environment=stage,revision="a"*40,archive_sha256="b"*64,release="c"*64)
+                seen = []
+                @contextmanager
+                def route(**kwargs):
+                    seen.append(kwargs["account"])
+                    yield ["ssh-fixture"]
+                with (patch.object(scoped,"route",route), patch.object(sender,"preflight"),
+                      patch.object(sender,"sign",return_value=b"fake"),
+                      patch.object(sender,"exchange",return_value=(0,json.dumps(receipt,separators=(",",":")).encode()+b"\n"))):
+                    sender.deploy(dict(VISUAL_ENV=stage,VISUAL_REVISION="a"*40,VISUAL_SHA="b"*64,
+                        VISUAL_DIGEST="c"*64,VISUAL_HOST="example.invalid",VISUAL_PORT="22",VISUAL_HOST_PIN="example.invalid pin",
+                        RUNNER_TEMP=tmp,VISUAL_SIGNING_KEY="fixture",VISUAL_SSH_KEY="fixture",VISUAL_DOWNLOAD=tmp),lane="configured")
+                self.assertEqual(seen,[profile.TARGETS[stage].receiver_account])
+
     def test_gateway_smoke_uses_matching_stage(self):
         p = profile.Payload(Path('/fresh'),'a'*40,'b'*64,'c'*64)
         with patch.object(profile._operation('smoke'),'main') as call:
