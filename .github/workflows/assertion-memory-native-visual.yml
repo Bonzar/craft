@@ -1,0 +1,97 @@
+name: Assertion Memory · Native visual stage
+on:
+  workflow_call:
+    inputs:
+      stage: {type: string, required: true}
+      tag: {type: string, required: true}
+      revision: {type: string, required: true}
+      release_id: {type: string, required: true}
+      build_run_id: {type: string, required: true}
+      artifact_id: {type: string, required: true}
+      archive_sha: {type: string, required: true}
+      verified_sha: {type: string, required: true}
+      test_proof: {type: string, required: false, default: ''}
+    outputs:
+      test_proof:
+        description: Same-run TEST identity, available only after activation, smoke, and evidence upload
+        value: ${{ jobs.deploy.outputs.test_proof }}
+permissions: {}
+jobs:
+  deploy:
+    name: Activate visual artifact
+    if: github.repository == 'Bonzar/craft' && github.workflow_ref == 'Bonzar/craft/.github/workflows/assertion-memory-release-graph.yml@refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run') && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == '1' && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && (inputs.stage == 'test' || inputs.stage == 'prod')
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    environment: assertion-memory-native-visual-${{ inputs.stage }}
+    concurrency:
+      group: assertion-memory-visual-${{ inputs.stage }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    env:
+      VISUAL_ENV: ${{ inputs.stage }}
+      GRAPH_TAG: ${{ inputs.tag }}
+    outputs:
+      test_proof: ${{ steps.receipt.outputs.proof }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set runner-local visual artifact directory
+        run: printf 'VISUAL_DOWNLOAD=%s/native-visual\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - id: artifact
+        name: Verify exact immutable visual archive and stage approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_VISUAL_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_READY }}
+          NATIVE_VISUAL_ENV_ID: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_ENV_ID }}
+          NATIVE_VISUAL_REVIEWER_ID: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_REVIEWER_ID }}
+          GRAPH_RELEASE_ID: ${{ inputs.release_id }}
+          GRAPH_REVISION: ${{ inputs.revision }}
+          GRAPH_BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          GRAPH_ARTIFACT_ID: ${{ inputs.artifact_id }}
+          GRAPH_ARCHIVE_SHA: ${{ inputs.archive_sha }}
+          GRAPH_VERIFIED_SHA: ${{ inputs.verified_sha }}
+          NATIVE_VISUAL_TEST_PROOF: ${{ inputs.test_proof }}
+        run: python3 -B tools/assertion-memory-visual/native_visual.py resolve
+      - name: Activate exact visual archive
+        env:
+          VISUAL_REVISION: ${{ steps.artifact.outputs.revision }}
+          NATIVE_VISUAL_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_READY }}
+          VISUAL_SHA: ${{ steps.artifact.outputs.sha256 }}
+          VISUAL_DIGEST: ${{ steps.artifact.outputs.release }}
+          VISUAL_DEPLOY_ENABLED: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_DEPLOY_ENABLED }}
+          VISUAL_HOST: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_HOST }}
+          VISUAL_PORT: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_PORT }}
+          VISUAL_HOST_PIN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_HOST_PIN }}
+          VISUAL_SSH_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SSH_KEY }}
+          VISUAL_SIGNING_KEY: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_SIGNING_KEY }}
+        run: PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/native_visual.py send
+      - name: Smoke exact visual ingress
+        env:
+          VISUAL_DIGEST: ${{ steps.artifact.outputs.release }}
+          VISUAL_GATEWAY_HOST: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_HOST }}
+          VISUAL_GATEWAY_TOKEN: ${{ secrets.ASSERTION_MEMORY_NATIVE_VISUAL_GATEWAY_TOKEN }}
+        run: python3 -B tools/assertion-memory-visual/smoke.py
+      - if: inputs.stage == 'test'
+        name: Record exact native visual TEST identity
+        env:
+          NATIVE_VISUAL_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_VISUAL_READY }}
+          NATIVE_VISUAL_TEST_PROOF: ${{ steps.artifact.outputs.proof }}
+        run: python3 -B tools/assertion-memory-visual/native_visual.py receipt
+      - if: inputs.stage == 'test'
+        name: Preserve visual TEST evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assertion-memory-native-visual-test-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-visual/native-test-proof.json
+          if-no-files-found: error
+          retention-days: 90
+      - id: receipt
+        if: inputs.stage == 'test'
+        name: Publish same-run visual TEST proof for PROD
+        env:
+          NATIVE_VISUAL_TEST_PROOF: ${{ steps.artifact.outputs.proof }}
+        run: printf 'proof=%s\n' "$NATIVE_VISUAL_TEST_PROOF" >> "$GITHUB_OUTPUT"

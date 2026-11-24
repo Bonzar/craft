@@ -6,12 +6,22 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing published immutable base or visual tag (preview only)
+        description: Existing published immutable base or visual version tag
         type: string
         required: true
+      deploy_base_test:
+        description: Request TEST deployment of the existing base tag (approval required)
+        type: boolean
+        default: false
+      deploy_visual:
+        description: Request TEST then separate PROD approval for the existing visual tag
+        type: boolean
+        default: false
   pull_request:
     paths:
       - ".github/workflows/assertion-memory-release-graph.yml"
+      - ".github/workflows/assertion-memory-native-visual.yml"
+      - "tools/assertion-memory-visual/native_visual*.py"
       - "tools/assertion-memory-release/github_graph_preview*"
       - "tools/assertion-memory-release/native_test_policy.py"
       - "tools/assertion-memory-qa/test_native_test_policy.py"
@@ -97,7 +107,7 @@ jobs:
   native-base-test:
     name: Deploy base TEST · original immutable archive
     needs: [release, test]
-    if: github.event_name == 'workflow_run' && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_BASE_TEST == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-v') && !startsWith(needs.release.outputs.tag, 'assertion-memory-visual-')
+    if: (github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.deploy_base_test && !inputs.deploy_visual)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_BASE_TEST == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-v') && !startsWith(needs.release.outputs.tag, 'assertion-memory-visual-')
     runs-on: ubuntu-latest
     timeout-minutes: 13
     environment: assertion-memory-native-base-test
@@ -135,6 +145,7 @@ jobs:
       - id: send
         name: Activate and smoke-check via pinned restricted connection
         env:
+          GRAPH_TAG: ${{ needs.release.outputs.tag }}
           NATIVE_TEST_ENV_READY: ${{ vars.ASSERTION_MEMORY_NATIVE_BASE_TEST_ENV_READY }}
           RELEASE_ENABLED: ${{ vars.ASSERTION_MEMORY_DEPLOY_ENABLED }}
           RELEASE_USER: ${{ vars.ASSERTION_MEMORY_SSH_USER }}
@@ -157,3 +168,40 @@ jobs:
             ${{ runner.temp }}/assertion-memory-payload/receiver-receipt.json
           if-no-files-found: error
           retention-days: 90
+
+  native-visual-test:
+    name: Deploy visual TEST
+    needs: [release, test]
+    if: ((github.event_name == 'workflow_run' && github.event.workflow_run.path == '.github/workflows/assertion-memory-visual.yml') || (github.event_name == 'workflow_dispatch' && inputs.deploy_visual && !inputs.deploy_base_test)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && startsWith(needs.release.outputs.tag, 'assertion-memory-visual-v')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/assertion-memory-native-visual.yml
+    with:
+      stage: test
+      tag: ${{ needs.release.outputs.tag }}
+      revision: ${{ needs.release.outputs.revision }}
+      release_id: ${{ needs.release.outputs.release_id }}
+      build_run_id: ${{ needs.release.outputs.build_run_id }}
+      artifact_id: ${{ needs.release.outputs.artifact_id }}
+      archive_sha: ${{ needs.release.outputs.archive_sha }}
+      verified_sha: ${{ needs.test.outputs.verified_sha }}
+
+  native-visual-prod:
+    name: Promote exact visual TEST to PROD
+    needs: [release, test, native-visual-test]
+    if: ((github.event_name == 'workflow_run' && github.event.workflow_run.path == '.github/workflows/assertion-memory-visual.yml') || (github.event_name == 'workflow_dispatch' && inputs.deploy_visual && !inputs.deploy_base_test)) && github.ref_protected && vars.ASSERTION_MEMORY_NATIVE_VISUAL == 'true' && needs.native-visual-test.result == 'success' && needs.native-visual-test.outputs.test_proof != ''
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/assertion-memory-native-visual.yml
+    with:
+      stage: prod
+      tag: ${{ needs.release.outputs.tag }}
+      revision: ${{ needs.release.outputs.revision }}
+      release_id: ${{ needs.release.outputs.release_id }}
+      build_run_id: ${{ needs.release.outputs.build_run_id }}
+      artifact_id: ${{ needs.release.outputs.artifact_id }}
+      archive_sha: ${{ needs.release.outputs.archive_sha }}
+      verified_sha: ${{ needs.test.outputs.verified_sha }}
+      test_proof: ${{ needs.native-visual-test.outputs.test_proof }}
