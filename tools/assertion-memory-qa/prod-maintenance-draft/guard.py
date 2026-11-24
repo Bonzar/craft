@@ -1,5 +1,6 @@
 #!/usr/bin/python3 -I
 """Root-operated base cutover guard; deliberately does not edit ingress or SQLite."""
+from contextlib import ExitStack, contextmanager
 import fcntl
 import hashlib
 import pwd
@@ -68,6 +69,95 @@ def verify_database_access(account,writable):
         run([*identity,'/usr/bin/test','-x',str(DB.parent)])
     run([*identity,'/usr/bin/sqlite3','-batch','-readonly',str(DB),
          'PRAGMA query_only=ON; SELECT count(*) FROM sqlite_schema;'])
+
+def exact_owner(account):
+    entry=pwd.getpwnam(account)
+    require(entry.pw_uid>0 and entry.pw_gid>0,'unexpected custody account')
+    return (entry.pw_uid,entry.pw_gid)
+
+@contextmanager
+def custody_objects(v):
+    """Hold actual inodes open; no path-following, arbitrary paths or SQLite I/O."""
+    with ExitStack() as close:
+        dfd=os.open(DB.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        close.callback(os.close,dfd)
+        ds=os.fstat(dfd)
+        require([ds.st_dev,ds.st_ino]==v['directory'] and
+                stat.S_ISDIR(ds.st_mode) and stat.S_IMODE(ds.st_mode)==0o700,'database directory drift')
+        objects=[(dfd,ds)]; roles={}
+        for suffix in ('','-wal','-shm'):
+            try:
+                fd=os.open(DB.name+suffix,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW,dir_fd=dfd)
+            except FileNotFoundError:
+                require(bool(suffix),'canonical SQLite file missing')
+                continue
+            close.callback(os.close,fd)
+            st=os.fstat(fd)
+            require(stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode)==0o600 and st.st_nlink==1 and
+                    st.st_dev==ds.st_dev,'unexpected SQLite sidecar type/mode/device')
+            if not suffix:
+                require([st.st_dev,st.st_ino]==v['inode'],'canonical SQLite inode drift')
+            objects.append((fd,st)); roles[suffix]=(st.st_dev,st.st_ino)
+        def recheck():
+            ds2=DB.parent.lstat()
+            require((ds2.st_dev,ds2.st_ino)==(ds.st_dev,ds.st_ino),'directory path replaced')
+            present={}
+            for suffix in ('','-wal','-shm'):
+                try: st=os.stat(DB.name+suffix,dir_fd=dfd,follow_symlinks=False)
+                except FileNotFoundError: continue
+                present[suffix]=(st.st_dev,st.st_ino)
+            require(present==roles,'SQLite pathname set changed during custody handoff')
+        recheck()
+        yield objects
+        recheck()
+
+def assert_unheld(objects):
+    want={(s.st_dev,s.st_ino) for _,s in objects}
+    require(Path('/proc/self/fd').is_dir(),'Linux process fd inspection required')
+    own=os.getpid()
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdecimal() or int(proc.name)==own: continue
+        try:
+            for fd in (proc/'fd').iterdir():
+                try: st=fd.stat()
+                except FileNotFoundError: continue
+                require((st.st_dev,st.st_ino) not in want,
+                        f'unquiesced SQLite holder pid {proc.name}')
+            with (proc/'maps').open(encoding='ascii',errors='replace') as maps:
+                for line in maps:
+                    fields=line.split(maxsplit=5)
+                    if len(fields)<5 or not fields[4].isdecimal() or int(fields[4])==0: continue
+                    major,minor=(int(x,16) for x in fields[3].split(':'))
+                    require((os.makedev(major,minor),int(fields[4])) not in want,
+                            f'unquiesced SQLite mapping pid {proc.name}')
+        except (FileNotFoundError,ProcessLookupError): continue
+
+def no_extended_acl(fd):
+    attrs=os.listxattr(fd)
+    require(not {'system.posix_acl_access','system.posix_acl_default'}.intersection(attrs),
+            'extended SQLite ACL present; refusing ownership handoff')
+
+def custody(v,destination,*,inspect=False):
+    old,new=exact_owner(LEGACY_ACCOUNT),exact_owner(ACCOUNT)
+    require(old[0]!=new[0] and old[1]!=new[1],'distinct custody identities required')
+    require(destination in (old,new),'unexpected custody destination')
+    with custody_objects(v) as objects:
+        for fd,s in objects:
+            no_extended_acl(fd)
+            owner=(s.st_uid,s.st_gid)
+            require(owner==old if inspect else owner in (old,new),'unexpected SQLite owner')
+        if inspect: return
+        assert_unheld(objects)
+        for fd,st in reversed(objects):
+            if (st.st_uid,st.st_gid)!=destination:
+                os.fchown(fd,*destination)
+            now=os.fstat(fd)
+            require((now.st_uid,now.st_gid)==destination and
+                    (now.st_dev,now.st_ino)==(st.st_dev,st.st_ino) and
+                    stat.S_IMODE(now.st_mode)==stat.S_IMODE(st.st_mode),'custody check failed')
+            no_extended_acl(fd)
+            os.fsync(fd)
+        assert_unheld(objects)
 
 def safe_bytes(p):
     fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
@@ -174,8 +264,8 @@ def read():
     with os.fdopen(fd,'rb') as f:
         s=os.fstat(f.fileno()); require(stat.S_ISREG(s.st_mode) and s.st_uid==0 and stat.S_IMODE(s.st_mode)==0o600 and s.st_size<1024,'unsafe journal')
         v=json.load(f)
-    require(set(v)=={'token','inode','old_nginx','new_nginx','old_nginx_mode','phase','deadline'} and type(v['token']) is str and len(v['token'])==32
-            and isinstance(v['inode'],list) and len(v['inode'])==2 and all(type(x) is int for x in v['inode']),
+    require(set(v)=={'token','inode','old_nginx','new_nginx','old_nginx_mode','phase','deadline','directory'} and type(v['token']) is str and len(v['token'])==32
+            and all(isinstance(v[k],list) and len(v[k])==2 and all(type(x) is int for x in v[k]) for k in ('inode','directory')),
             'unexpected journal')
     require(all(re.fullmatch('[a-f0-9]{64}',v[k]) for k in ('old_nginx','new_nginx')) and
             type(v['old_nginx_mode']) is int and v['old_nginx_mode'] in (0o600,0o640,0o644), 'invalid journal ingress scope')
@@ -210,8 +300,10 @@ def arm():
     require(mode in (0o600,0o640,0o644) and INGRESS.lstat().st_gid==0,'unexpected ingress mode/group')
     run(['/usr/sbin/nginx','-t'])
     replace_file(STATE/'baseline.nginx',baseline,0o600)
-    v={'token':secrets.token_hex(16),'inode':inode(),'old_nginx':digest(baseline),
-       'new_nginx':digest(candidate),'old_nginx_mode':mode,'phase':'armed','deadline':time.monotonic_ns()+SECONDS*1_000_000_000}; write(v)
+    parent=DB.parent.lstat()
+    v={'token':secrets.token_hex(16),'inode':inode(),'directory':[parent.st_dev,parent.st_ino],'old_nginx':digest(baseline),
+       'new_nginx':digest(candidate),'old_nginx_mode':mode,'phase':'armed','deadline':time.monotonic_ns()+SECONDS*1_000_000_000}
+    custody(v,exact_owner(LEGACY_ACCOUNT),inspect=True); write(v)
     try:
         run(['/usr/bin/systemd-run','--collect','--quiet','--unit='+TIMER,
              '--on-active='+str(SECONDS)+'s','--timer-property=AccuracySec=1s',
@@ -237,6 +329,7 @@ def drain(v):
     stable(False,False)
     require(not active(SITES),'old adapter did not drain')
     exclusive_inode(v['inode'])
+    custody(v,exact_owner(ACCOUNT))
     write({**v,'phase':'drained'}); publish_permit(v)
     print('legacy units drained; no new writer started; do not change ingress yet')
 
@@ -269,6 +362,7 @@ def rollback(v):
     units('stop',NEW)
     require(not active(NEW_SITES) and not any(active(u) for u in NEW),'new units still active; refusing old restart')
     exclusive_inode(v['inode'])
+    custody(v,exact_owner(LEGACY_ACCOUNT))
     verify_database_access(LEGACY_ACCOUNT,True)
     units('start',OLD)
     stable(True,False)

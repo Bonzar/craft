@@ -8,7 +8,7 @@ class Guard(unittest.TestCase):
         d=pathlib.Path(self.tmp.name); self.v={'inode':[1,42],'old_nginx':g.digest(b'old'),'new_nginx':g.digest(b'new'),'old_nginx_mode':0o644,'phase':'armed'}
         self.calls=[]; self.saved=None; self.contents={d/'approved-candidate.nginx':b'new',d/'baseline.nginx':b'old',d/'ingress':b'old'}; (d/'ingress').touch()
         self.live={**dict.fromkeys(g.OLD,True),**dict.fromkeys(g.NEW,False),g.SITES:True,g.NEW_SITES:False,g.TIMER+'.timer':True}
-        for k,v in dict(STATE=d,INGRESS=d/'ingress',inode=lambda:[1,42],active=self.live.__getitem__,safe_bytes=self.contents.__getitem__,publish_permit=lambda v:self.calls.append('publish'),revoke_permit=lambda:None,verify_database_access=self.access,write=self.write,units=self.units,replace_file=self.replace,clear=lambda:self.calls.append('clear'),run=lambda a:self.calls.append(tuple(a))).items():
+        for k,v in dict(STATE=d,INGRESS=d/'ingress',inode=lambda:[1,42],active=self.live.__getitem__,safe_bytes=self.contents.__getitem__,custody=lambda *args,**kw:self.calls.append(('custody',args[1])),exact_owner=lambda name:(name,name),publish_permit=lambda v:self.calls.append('publish'),revoke_permit=lambda:None,verify_database_access=self.access,write=self.write,units=self.units,replace_file=self.replace,clear=lambda:self.calls.append('clear'),run=lambda a:self.calls.append(tuple(a))).items():
             pt=patch.object(g,k,v);pt.start();self.addCleanup(pt.stop)
     def units(self,action,names):
         self.calls.append((action,names)); self.live.update(dict.fromkeys(names,action=='start'))
@@ -83,4 +83,54 @@ class ReceiverFence(unittest.TestCase):
         self.exercise({'generation':'a'*32,'expiry':90_000_000_000,'inode':[1,43]},'inode changed')
     def test_fresh_exact_start_is_non_root_fixed_units(self):
         self.exercise({'generation':'a'*32,'expiry':90_000_000_000,'inode':[1,42]})
+class CustodyFiles(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup); self.d=pathlib.Path(tmp.name)
+        self.d.chmod(0o700); self.db=self.d/'memory.sqlite3'; self.write(self.db)
+        for attr,val in {'DB':self.db}.items():
+            p=patch.object(g,attr,val);p.start();self.addCleanup(p.stop)
+        self.v={'directory':[self.d.stat().st_dev,self.d.stat().st_ino],'inode':[self.db.stat().st_dev,self.db.stat().st_ino]}
+    def write(self,p):
+        p.write_bytes(b'synthetic, do not write'); p.chmod(0o600)
+    def test_sidecars_disappear_and_reappear(self):
+        wal=self.d/(self.db.name+'-wal'); shm=self.d/(self.db.name+'-shm')
+        self.write(wal)
+        with g.custody_objects(self.v) as a: self.assertEqual(len(a),3)
+        wal.unlink(); self.write(shm)
+        with g.custody_objects(self.v) as a:
+            self.assertEqual(len(a),3); self.assertEqual(a[-1][1].st_ino,shm.stat().st_ino)
+        self.assertEqual(self.v['inode'][1],self.db.stat().st_ino)
+    def test_symlink_sidecar_denied(self):
+        (self.d/(self.db.name+'-wal')).symlink_to(self.db)
+        with self.assertRaises(OSError):
+            with g.custody_objects(self.v): pass
+    def test_unknown_holder_prohibits_all_changes(self):
+        from types import SimpleNamespace
+        import os
+        cur=(os.getuid(),os.getgid())
+        target=(cur[0]+1,cur[1]+1)
+        with patch.object(g,'exact_owner',side_effect=lambda x:cur if x==g.LEGACY_ACCOUNT else target), \
+             patch.object(g,'no_extended_acl',return_value=None), \
+             patch.object(g,'assert_unheld',side_effect=RuntimeError('unquiesced holder')), \
+             patch.object(g.os,'fchown') as change:
+            with self.assertRaisesRegex(RuntimeError,'unquiesced'): g.custody(self.v,target)
+            change.assert_not_called()
+    def test_appearance_during_handoff_rejected(self):
+        with self.assertRaisesRegex(RuntimeError,'pathname set changed'):
+            with g.custody_objects(self.v): self.write(self.d/(self.db.name+'-wal'))
+    def test_swapping_sidecar_path_identities_denied(self):
+        wal=self.d/(self.db.name+'-wal'); shm=self.d/(self.db.name+'-shm'); tmp=self.d/'tmp'
+        self.write(wal); self.write(shm)
+        with self.assertRaisesRegex(RuntimeError,'pathname set changed'):
+            with g.custody_objects(self.v):
+                wal.rename(tmp); shm.rename(wal); tmp.rename(shm)
+    def test_extended_acl_fails_without_fchown(self):
+        from unittest.mock import create_autospec
+        import os
+        cur=(os.getuid(),os.getgid()); target=(cur[0]+1,cur[1]+1)
+        with patch.object(g,'exact_owner',side_effect=lambda x:cur if x==g.LEGACY_ACCOUNT else target), \
+             patch.object(g.os,'listxattr',return_value=['system.posix_acl_access'],create=True), \
+             patch.object(g.os,'fchown') as change:
+            with self.assertRaisesRegex(RuntimeError,'ACL'): g.custody(self.v,target)
+            change.assert_not_called()
 if __name__=='__main__': unittest.main()

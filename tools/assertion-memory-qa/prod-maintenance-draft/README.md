@@ -15,12 +15,15 @@ neither release authentication nor the immutable artifact. There are no credenti
   a root shell or artifact as root. It holds the same local lock across
   permit/deadline/inode checks, startup and the postcheck. A second ordinary
   unfenced hook route to start the same first-release units is forbidden.
-* Keep the transitional legacy write permission available for rollback in
-  this prototype. It does not change SQLite ownership/ACLs. If a separate
-  model transfers custody, it must journal and restore physical DB/WAL/SHM
-  permissions before legacy restart, under the same lock; until implemented
-  and exercised, **do not use this prototype for an ownership transfer**.
-  Do not copy, delete, replace or chmod the SQLite files here.
+* Custody enters only after the old services stop and both descriptor and
+  mapping checks report no holder. The guard only changes UID/GID of the exact
+  confirmed-directory inode and canonical database plus currently present WAL
+  and SHM, opened without following links. Modes stay 0700/0600; extra ACLs
+  fail closed. The canonical directory/database device+inode are recorded
+  before draining. A later recreated sidecar under its exact fixed name is
+  eligible on rollback; a concurrent path substitution is not. Revocation
+  and stopping the new base and adapter precede reverse custody. No copies,
+  SQLite checkpoint, unlink, recursion, group expansion or ACL grants occur.
 * The new adapter is a separate operator-provisioned readonly service with
   isolated writable cache and no write access to the canonical DB directory.
   Stop the legacy adapter before starting it. Confirm the new adapter,
