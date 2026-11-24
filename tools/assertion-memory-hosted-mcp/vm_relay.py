@@ -53,7 +53,7 @@ def make_forward(profile, backend_token):
             return parse(raw)
     return forward
 
-def make_app(profile, catalog, gateway_token, read_live_release, forward, *, effect_token=None):
+def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *, effect_token=None, operations=None):
     profile,catalog=deepcopy(profile),deepcopy(catalog)
     lane=profile.get('lane')
     caps=profile.get('enabled_capabilities',())
@@ -80,8 +80,30 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
                for cap,projection in t['capability_projections'].items() if cap in caps}
     if not isinstance(gateway_token, str) or not HEX.fullmatch(gateway_token):
         raise ValueError("invalid gateway credential")
-    if not callable(read_live_release) or not callable(forward):
+    if operations is not None:
+        if forward is not None: raise ValueError("Ambiguous operation dispatch")
+        declared=operations.descriptors()
+        if set(declared)!=set(manifest) or any(
+                declared[name]["inputSchema"]!=entry["canonicalInputSchema"]
+                or declared[name]["description"]!=entry.get("description") for name,entry in manifest.items()):
+            raise ValueError("Live operation descriptors differ from release catalog")
+    if not callable(read_live_release) or (operations is None and not callable(forward)):
         raise ValueError("missing host authority")
+    strict_catalog=profile.get("require_catalog_identity",False)
+    if type(strict_catalog) is not bool: raise ValueError("invalid catalog identity enforcement")
+    def descriptors(route_capability):
+        discovery_caps=(route_capability,"generate") if route_capability=="intake_process" and "generate" in caps else (route_capability,)
+        tools=[]
+        for name,row in sorted(manifest.items()):
+            for cap in discovery_caps:
+                if authorized(profile,catalog,lane,name,cap):
+                    read=cap=="baseline_read"
+                    tools.append({"name":name,"description":row.get("description",name),
+                                  "inputSchema":row["capability_projections"][cap],
+                                  "annotations":{"readOnlyHint":read,"destructiveHint":False,"openWorldHint":False}})
+        return tools
+    route_tools={cap:descriptors(cap) for cap,_ in routes.values()}
+
     gate = asyncio.Semaphore(12)
     effect_gate = asyncio.Semaphore(1)
     query_gate = asyncio.Semaphore(1)
@@ -126,17 +148,29 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
                     if len(raw)>MAX_REQUEST: raise ValueError()
                     if not event.get("more_body"): break
             b=parse(raw)
-            if type(b) is not dict or set(b)!={"request_id","operation","arguments"}:
+            basic={"request_id","operation","arguments"}
+            if type(b) is not dict or set(b) not in (basic,basic|{"expected"}):
                 raise ValueError()
             rid,name,args=b["request_id"],b["operation"],b["arguments"]
-            if name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
-            if not isinstance(rid,str) or not RID.fullmatch(rid) or not isinstance(name,str) or type(args) is not dict or \
-                (capability,name) not in compiled or not authorized(profile,catalog,lane,name,capability) or \
-                not compiled[(capability,name)].is_valid(args):
+            if not isinstance(rid,str) or not RID.fullmatch(rid) or not isinstance(name,str) or type(args) is not dict:
                 raise ValueError()
+            discovery=name=="catalog"
+            expected_identity=b.get("expected")
+            if discovery:
+                if args or set(b)!=basic: raise ValueError()
+            else:
+                if strict_catalog and "expected" not in b: raise ValueError()
+                if "expected" in b and (type(expected_identity) is not dict
+                        or set(expected_identity)!={"release","generation","catalog_sha256"}
+                        or not all(isinstance(v,str) for v in expected_identity.values())
+                        or not TAG.fullmatch(expected_identity["release"])
+                        or not all(HEX.fullmatch(expected_identity[k]) for k in ("generation","catalog_sha256"))):
+                    raise ValueError()
+                if name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
+                if (capability,name) not in compiled or not authorized(profile,catalog,lane,name,capability) or                    not compiled[(capability,name)].is_valid(args): raise ValueError()
         except Exception:
             return await reply(400, {"error":"invalid_request"})
-        limiter=query_gate if capability=="generate" else effect_gate if capability=="intake_process" else gate
+        limiter=gate if discovery else query_gate if capability=="generate" else effect_gate if capability=="intake_process" else gate
         if limiter.locked(): return await reply(503, {"error":"unavailable"})
         try:
             async with limiter:
@@ -146,11 +180,28 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
                 if not isinstance(release,str) or not TAG.fullmatch(release) or not isinstance(generation,str) or \
                     not HEX.fullmatch(generation): raise ValueError()
                 if release!=profile.get("base_release"): raise ValueError()
-                response=await asyncio.to_thread(forward,rid,name,args)
+                receipt={"release":release,"generation":generation,
+                         "catalog_sha256":read_digest if capability=="baseline_read" else catalog["catalog_sha256"]}
+                if discovery:
+                    if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
+                    return await reply(200, {"environment":lane,"request_id":rid,**receipt,
+                                             "capability":capability,"tools":route_tools[capability]})
+                if expected_identity is not None and expected_identity!=receipt:
+                    return await reply(409, {"error":"stale_catalog"})
+                if operations is None:
+                    response=await asyncio.to_thread(forward,rid,name,args)
+                else:
+                    value=await operations.invoke(name,args)
+                    if type(value) is not dict: raise ValueError()
+                    json.dumps(value,separators=(",",":"),ensure_ascii=True,allow_nan=False)
                 if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
-            if type(response) is not dict or response.get("jsonrpc")!="2.0" or response.get("id")!=rid or \
-                "error" in response: raise ValueError()
-            result=response.get("result")
+            if operations is not None:
+                return await reply(200,{"environment":lane,"request_id":rid,**receipt,
+                                        "status":"ok","result":value})
+            if operations is None:
+                if type(response) is not dict or response.get("jsonrpc")!="2.0" or response.get("id")!=rid or \
+                    "error" in response: raise ValueError()
+                result=response.get("result")
             if type(result) is not dict or result.get("isError") is True: raise ValueError()
             content=result.get("content")
             if type(content) is not list or not 0<len(content)<=5 or any(
@@ -158,7 +209,8 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
                 not isinstance(v["text"],str) for v in content): raise ValueError()
             out={"content":content}
             if type(result.get("structuredContent")) is dict: out["structuredContent"]=result["structuredContent"]
-            return await reply(200, {"environment":lane,"release":release,"request_id":rid,"catalog_sha256":catalog["catalog_sha256"] if capability!="baseline_read" else read_digest,"result":out})
+            if expected_identity is None: receipt.pop("generation")
+            return await reply(200, {"environment":lane,"request_id":rid,**receipt,"result":out})
         except Exception:
             return await reply(502, {"error":"unavailable"})
     return app

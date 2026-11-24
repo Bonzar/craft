@@ -22,8 +22,8 @@ def read(path):
     return json.loads(raw,object_pairs_hook=unique)
 
 def compile_release(doc, pins, *, effects):
-    if (doc.get('version')!=1 or doc.get('schema_sha256')!=pins['schema_sha256']
-            or pins['sdk']!='1.30.0' or set(doc.get('descriptions',{}))!=set(doc.get('tools',{}))):
+    if (doc.get('version')!=2 or doc.get('schema_sha256')!=pins['schema_sha256']
+            or pins['registry']!='base-typed-operations-v1' or set(doc.get('descriptions',{}))!=set(doc.get('tools',{}))):
         raise ValueError('missing approved manifest identity')
     return compile_catalog(doc,pins,require_functional=True,include_effects=effects)
 
@@ -38,7 +38,7 @@ def main():
     a=p.parse_args()
     for value,n in ((a.revision,40),(a.module_sha256,64),(a.schema_sha256,64)):
         if not re.fullmatch('[0-9a-f]{'+str(n)+'}',value):raise ValueError('invalid approved pin')
-    pins=dict(revision=a.revision,module_sha256=a.module_sha256,schema_sha256=a.schema_sha256,sdk='1.30.0')
+    pins=dict(revision=a.revision,module_sha256=a.module_sha256,schema_sha256=a.schema_sha256,registry='base-typed-operations-v1')
     result=compile_release(read(a.schema_file),pins,effects=a.mode=='full')
     with os.fdopen(os.open(a.output,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600),'wb') as out:
         out.write(json.dumps(result,sort_keys=True,ensure_ascii=True,separators=(',',':')).encode()+b'\n')

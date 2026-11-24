@@ -31,7 +31,9 @@ def digest(v):
 def compile_catalog(schema_doc, authority, *, include_effects=False, require_functional=False):
  """authority must be established by CI against an exact release, not by operator/gateway input."""
  if type(schema_doc) is not dict or schema_doc.get("revision")!=authority["revision"] or \
-    schema_doc.get("module_sha256")!=authority["module_sha256"] or schema_doc.get("runtime_mcp_sdk")!=authority["sdk"]:
+    schema_doc.get("module_sha256")!=authority["module_sha256"] or (
+      schema_doc.get("runtime_operation_registry")!=authority["registry"] if "registry" in authority
+      else schema_doc.get("runtime_mcp_sdk")!=authority["sdk"]):
   raise ValueError("Untrusted release schema metadata")
  schemas=schema_doc.get("tools")
  expected=set(OPERATIONS)
@@ -40,6 +42,10 @@ def compile_catalog(schema_doc, authority, *, include_effects=False, require_fun
   raise ValueError("Unclassified canonical schema drift")
  if digest(schemas)!=authority["schema_sha256"]:
   raise ValueError("Release schema digest mismatch")
+ descriptions=schema_doc.get("descriptions")
+ if descriptions is not None and (type(descriptions) is not dict or set(descriptions)!=expected
+    or any(type(value) is not str or not 0<=len(value)<=4096 for value in descriptions.values())):
+  raise ValueError("Invalid canonical descriptions")
  entries={}
  classes=OPERATIONS|({SEARCH:'baseline_read'} if require_functional else {})
  for name, classification in sorted(classes.items()):
@@ -66,6 +72,7 @@ def compile_catalog(schema_doc, authority, *, include_effects=False, require_fun
   if include_effects and name in EFFECTS:
    projection["intake_process"]=schema
   entries[name]={"classification":classification,"canonicalInputSchema":pristine,"capability_projections":projection,"readOnlyHint":classification in READ}
+  if descriptions is not None: entries[name]["description"]=descriptions[name]
  document={"version":1,"canonical_revision":authority["revision"],"canonical_schema_hash":digest(schemas),"tools":entries}
  return {"catalog":document,"catalog_sha256":digest(document)}
 
