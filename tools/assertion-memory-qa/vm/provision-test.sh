@@ -23,7 +23,7 @@ fi
 runtime_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 shared_source="$runtime_source/../../assertion-memory-release"
 shared_target=/etc/assertion-release/shared
-for file in "$runtime_source/receive.py" "$runtime_source/test-service-hook.sh" "$shared_source/release_core.py" "$shared_source/base_payload.py"; do
+for file in "$runtime_source/receive.py" "$runtime_source/test-service-hook.sh" "$runtime_source/test-health.py" "$shared_source/release_core.py" "$shared_source/base_payload.py"; do
   [[ -f "$file" && ! -L "$file" ]]
 done
 if [[ -e "$shared_target" || -L "$shared_target" ]]; then
@@ -39,6 +39,7 @@ install -d -m 0700 -o "$name" -g "$name" "$root" "$root/releases" "$root/state"
 install -d -m 0755 "$config"
 install -o root -g root -m 0644 -- "$runtime_source/receive.py" "$config/receive.py"
 install -o root -g root -m 0644 -- "$runtime_source/test-service-hook.sh" "$config/service-hook.sh"
+install -o root -g root -m 0644 -- "$runtime_source/test-health.py" "$config/test-health.py"
 if [[ ! -d "$shared_target" ]]; then
   install -d -o root -g root -m 0755 -- "$shared_target"
   for file in release_core.py base_payload.py; do
@@ -65,18 +66,18 @@ PYTHON
 chown -R "$name:$name" "$root/state"
 cat > "$root/.config/systemd/user/assertion-test-deploy-graph.service" <<'UNIT'
 [Unit]
-Description=Assertion Memory TEST graph (isolated synthetic database)
+Description=Assertion Memory TEST graph (isolated TEST database)
 [Service]
 Type=simple
 UMask=0077
 WorkingDirectory=%h/current
 NoNewPrivileges=yes
 Restart=on-failure
-ExecStart=%h/current/venv/bin/python -B -m apps.graph_viewer.server --source %h/state/fictional.sqlite3 --state-dir %h/state/graph-state --password-file %h/state/graph-password --static-dir %h/current/apps/graph_viewer/web/dist --port 8891 --synthetic-fixture
+ExecStart=%h/current/venv/bin/python -B -m apps.graph_viewer.server --source %h/state/fictional.sqlite3 --state-dir %h/state/graph-state --password-file %h/state/graph-password --static-dir %h/current/apps/graph_viewer/web/dist --port 8891
 UNIT
 cat > "$root/.config/systemd/user/assertion-test-deploy-mcp.service" <<'UNIT'
 [Unit]
-Description=Assertion Memory TEST MCP (isolated synthetic database)
+Description=Assertion Memory TEST MCP (isolated TEST database)
 [Service]
 Type=simple
 UMask=0077
