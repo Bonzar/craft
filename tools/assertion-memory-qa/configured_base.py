@@ -10,7 +10,7 @@ BASE=Profile(
     original_workflow='assertion-memory-base.yml',
     control_workflow='configured-release.yml',
     reusable_workflow='configured-release-reusable.yml',
-    test=Target('configured-release-base-test','test','assertion-configured-base-test-deploy','deploy-release'),
-    prod=Target('configured-release-base-prod','production','assertion-configured-base-prod-deploy','deploy-release'),
+    test=Target('configured-release-base-test','test','assertion-cfg-base-test-deploy','configured-base-test'),
+    prod=Target('configured-release-base-prod','production','assertion-cfg-base-prod-deploy','deploy-release'),
     receipt=ReceiptLayout(archive_key='sha256',status_key='status'),
 )
