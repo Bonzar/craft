@@ -24,3 +24,8 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/configured-release-reusable.yml
+    secrets:
+      RELEASE_SSH_HOST_PIN: ${{ secrets.RELEASE_SSH_HOST_PIN }}
+      RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
+      RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+      RELEASE_GATEWAY_TOKEN: ${{ secrets.RELEASE_GATEWAY_TOKEN }}
