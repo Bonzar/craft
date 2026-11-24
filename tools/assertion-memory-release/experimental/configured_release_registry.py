@@ -16,6 +16,28 @@ def registry(root, ops):
         spec.loader.exec_module(module)
         return module.ci.unpack_zip(source,output,revision)
 
+    def base_env(env):
+        return {**env,
+            'CONFIGURED_BASE_HOST':env['RELEASE_SSH_HOST'],
+            'CONFIGURED_BASE_PORT':env['RELEASE_SSH_PORT'],
+            'CONFIGURED_BASE_SSH_HOST_PIN':env['RELEASE_SSH_HOST_PIN'],
+            'CONFIGURED_BASE_SSH_KEY':env['RELEASE_SSH_KEY'],
+            'CONFIGURED_BASE_VM_ID':env['RELEASE_VM_ID'],
+            'CONFIGURED_BASE_ENV_NODE_ID':env['RELEASE_ENV_NODE_ID'],
+            'CONFIGURED_BASE_REUSABLE_SHA':env['GITHUB_SHA'],
+            'CONFIGURED_BASE_TEST_READY':env['RELEASE_ENABLE'],
+        }
+
+    def base_activate(ctrl,release,content,payload,promotion,env):
+        if ctrl.stage!='test':
+            raise ValueError('Configured Base PROD is not provisioned')
+        import configured_base_test_provider as base
+        return base.activate(ctrl,release,content,payload,promotion,base_env(env))
+
+    def base_smoke(ctrl,release,content,payload,env):
+        import configured_base_test_provider as base
+        return base.smoke(ctrl,release,content,payload,base_env(env))
+
     def visual_unpack(source,output,revision):
         return visual.content(visual.unpack_verified(source,output,revision))
 
@@ -34,8 +56,8 @@ def registry(root, ops):
 
     profiles={'base':BASE,'visual':visual.PROFILE}
     operations={
-        'base':ops('release.tar.gz',base_unpack,None,None,
-                   ('assertion-memory-test','assertion-memory-production')),
+        'base':ops('release.tar.gz',base_unpack,base_activate,base_smoke,
+                   ('assertion-memory-deploy-test','assertion-memory-deploy-production')),
         'visual':ops('visual.tar',visual_unpack,visual_activate,visual_smoke,
                      ('assertion-memory-visual-test','assertion-memory-visual-prod')),
     }

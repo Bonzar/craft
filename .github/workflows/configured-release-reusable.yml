@@ -93,6 +93,8 @@ jobs:
           RELEASE_SSH_HOST: ${{ vars.RELEASE_SSH_HOST }}
           RELEASE_SSH_PORT: ${{ vars.RELEASE_SSH_PORT }}
           RELEASE_GATEWAY_HOST: ${{ vars.RELEASE_GATEWAY_HOST }}
+          RELEASE_VM_ID: ${{ vars.RELEASE_VM_ID }}
+          RELEASE_ENV_NODE_ID: ${{ vars.RELEASE_ENV_NODE_ID }}
           RELEASE_SSH_HOST_PIN: ${{ secrets.RELEASE_SSH_HOST_PIN }}
           RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -110,6 +112,7 @@ jobs:
   prod:
     name: PROD
     needs: [build, test]
+    if: ${{ vars.PROJECT_RELEASE_PROD == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: ${{ needs.build.outputs.prod_environment }}
@@ -167,6 +170,8 @@ jobs:
           RELEASE_SSH_HOST: ${{ vars.RELEASE_SSH_HOST }}
           RELEASE_SSH_PORT: ${{ vars.RELEASE_SSH_PORT }}
           RELEASE_GATEWAY_HOST: ${{ vars.RELEASE_GATEWAY_HOST }}
+          RELEASE_VM_ID: ${{ vars.RELEASE_VM_ID }}
+          RELEASE_ENV_NODE_ID: ${{ vars.RELEASE_ENV_NODE_ID }}
           RELEASE_SSH_HOST_PIN: ${{ secrets.RELEASE_SSH_HOST_PIN }}
           RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
