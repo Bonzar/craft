@@ -1,6 +1,11 @@
 name: Configured Release
 on:
   workflow_call:
+    secrets:
+      RELEASE_SSH_HOST_PIN: {required: true}
+      RELEASE_SSH_KEY: {required: true}
+      RELEASE_SIGNING_KEY: {required: true}
+      RELEASE_GATEWAY_TOKEN: {required: true}
 permissions: {}
 jobs:
   build:
