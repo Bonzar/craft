@@ -14,6 +14,7 @@ OPERATIONS={
  "memory_source":"sensitive_read", "memory_status":"baseline_read",
  "memory_store_artifact":"ingest",
 }
+EFFECTS=frozenset(('memory_capture_message','memory_process'))
 READ=frozenset(("baseline_read","sensitive_read"))
 # Shared host narrowing that reflects the approved two-call TEST slice.
 # One source for both worker metadata and upstream validator; no separate copies.
@@ -25,7 +26,7 @@ def encoded(v):
  return json.dumps(v, ensure_ascii=True, sort_keys=True, separators=(",",":")).encode("ascii")
 def digest(v):
  return hashlib.sha256(encoded(v)).hexdigest()
-def compile_catalog(schema_doc, authority):
+def compile_catalog(schema_doc, authority, *, include_test_effects=False):
  """authority must be established by CI against an exact release, not by operator/gateway input."""
  if type(schema_doc) is not dict or schema_doc.get("revision")!=authority["revision"] or \
     schema_doc.get("module_sha256")!=authority["module_sha256"] or schema_doc.get("runtime_mcp_sdk")!=authority["sdk"]:
@@ -53,6 +54,8 @@ def compile_catalog(schema_doc, authority):
    schema["properties"]={k:{**schema["properties"][k],**v} for k,v in NARROW[name].items()}
   schema["additionalProperties"]=False
   projection={"baseline_read":schema} if name in NARROW else {}
+  if include_test_effects and name in EFFECTS:
+   projection["intake_process"]=schema
   entries[name]={"classification":classification,"canonicalInputSchema":pristine,"capability_projections":projection,"readOnlyHint":classification in READ}
  document={"version":1,"canonical_revision":authority["revision"],"canonical_schema_hash":digest(schemas),"tools":entries}
  return {"catalog":document,"catalog_sha256":digest(document)}
@@ -63,5 +66,6 @@ def authorized(profile, catalog, lane, operation, credential_capability):
     or profile.get("catalog_sha256")!=catalog.get("catalog_sha256") or
     digest(catalog.get("catalog"))!=catalog.get("catalog_sha256")): return False
  entry=catalog.get("catalog",{}).get("tools",{}).get(operation)
- if not entry or entry["classification"]!=credential_capability: return False
+ if not entry or credential_capability not in entry.get("capability_projections",{}): return False
+ if credential_capability=="intake_process" and (lane!="test" or operation not in EFFECTS):return False
  return credential_capability in profile.get("enabled_capabilities",())

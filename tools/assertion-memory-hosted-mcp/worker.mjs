@@ -1,4 +1,5 @@
 // Common Sites Worker transport; lane is fixed by the deployment, never by a request.
+const EFFECTS=new Set(['memory_capture_message','memory_process']);
 const SHA=/^[0-9a-f]{64}$/;
 const TAG=/^assertion-memory-v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,30})?$/;
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
@@ -21,7 +22,8 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
  const cfg=structuredClone(profile), shared=structuredClone(catalog);
  if(!['test','prod'].includes(cfg.lane)||typeof verifyOwner!=='function'||!SHA.test(cfg.catalog_sha256)||
   cfg.catalog_sha256!==shared.catalog_sha256||!TAG.test(cfg.base_release)||
-  !Array.isArray(cfg.enabled_capabilities)||!cfg.enabled_capabilities.every(x=>x==='baseline_read'))throw rej('Invalid build profile');
+  !Array.isArray(cfg.enabled_capabilities)||new Set(cfg.enabled_capabilities).size!==cfg.enabled_capabilities.length||
+  !cfg.enabled_capabilities.includes('baseline_read')||!cfg.enabled_capabilities.every(x=>x==='baseline_read'||(cfg.lane==='test'&&x==='intake_process')))throw rej('Invalid build profile');
  const site=new URL(cfg.site_origin),gateway=new URL(cfg.gateway_url);
  if(site.protocol!=='https:'||site.origin!==cfg.site_origin||!site.hostname.endsWith('.chatgpt.site')||site.port||
   gateway.protocol!=='https:'||!/^([a-z0-9-]+\.){2}apigw\.yandexcloud\.net$/.test(gateway.hostname)||
@@ -30,17 +32,35 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
  if(cfg.rollout_flag!=='HOSTED_MEMORY_'+cfg.lane.toUpperCase()+'_READ_ENABLED'||
   cfg.credential_var!=='HOSTED_MEMORY_'+cfg.lane.toUpperCase()+'_READ_TOKEN')throw rej('Invalid runtime binding');
  const policy=shared.catalog.tools;
- const enabled=(env)=>env?.[cfg.rollout_flag]==='true'&&cfg.enabled_capabilities.includes('baseline_read');
+ const effectOn=cfg.enabled_capabilities.includes('intake_process');
+ const effectFlag='HOSTED_MEMORY_TEST_EFFECTS_ENABLED', effectVar='HOSTED_MEMORY_TEST_EFFECTS_TOKEN';
+ let effectGateway;
+ if(effectOn){
+  effectGateway=new URL(cfg.effect_gateway_url);
+  if(effectGateway.href!==gateway.origin+'/memory-mcp-test-effects'||
+    [...EFFECTS].some(n=>!policy[n]?.capability_projections?.intake_process)||
+    Object.entries(policy).some(([n,m])=>m.capability_projections?.intake_process&&!EFFECTS.has(n)))throw rej('Invalid effect profile');
+ } else if(cfg.effect_gateway_url!==undefined)throw rej('Invalid effect profile');
+ const effectEnabled=env=>effectOn&&env?.[effectFlag]==='true'&&
+   typeof env[effectVar]==='string'&&SHA.test(env[effectVar])&&
+   typeof env[cfg.credential_var]==='string'&&SHA.test(env[cfg.credential_var])&&
+   env[effectVar]!==env[cfg.credential_var]&&env.HOSTED_MEMORY_PROD_EFFECTS_TOKEN===undefined;
+ const readEnabled=env=>env?.[cfg.rollout_flag]==='true';
+ const enabled=env=>readEnabled(env)||effectEnabled(env);
+ const capability=(name,env)=>EFFECTS.has(name)&&effectEnabled(env)?'intake_process':
+   (policy[name]?.classification==='baseline_read'&&readEnabled(env)?'baseline_read':null);
  return Object.freeze({
   enabled,
   catalog(legacy,env){
    if(!Array.isArray(legacy))throw rej('Invalid legacy catalog');
    const names=new Set(legacy.map(x=>x?.name));
    if(!enabled(env))return [...legacy];
-   const current=Object.entries(policy).filter(([,p])=>p.classification==='baseline_read').map(([name,p])=>{
+   const current=Object.entries(policy).filter(([n])=>capability(n,env)).map(([name,p])=>{
+    const cap=capability(name,env),read=cap==='baseline_read';
     if(names.has(name))throw rej('Legacy catalog collision');
-    return {name,description:cfg.tool_descriptions?.[name]??'Read a bounded canonical memory result.',
-     inputSchema:structuredClone(p.capability_projections.baseline_read),annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false}};
+    return {name,description:cfg.tool_descriptions?.[name]??(read?'Read a bounded canonical memory result.':
+      (name==='memory_capture_message'?'Durably capture an owner-authorized source message in TEST.':'Schedule existing canonical TEST processing.')),
+     inputSchema:structuredClone(p.capability_projections[cap]),annotations:{readOnlyHint:read,destructiveHint:false,openWorldHint:false}};
    });
    return [...legacy,...current];
   },
@@ -48,19 +68,21 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
    // Exact trusted legacy descriptors are allowed to continue handling their own methods.
    if(legacyNames.includes(name))return null;
    if(!Object.hasOwn(policy,name))return null;
-   if(!enabled(env)||policy[name].classification!=='baseline_read'||!object(args))return fail();
+   const cap=capability(name,env); if(!cap||!object(args))return fail();
+   const effect=cap==='intake_process';
    try {
-    const u=new URL(req.url),token=env[cfg.credential_var],other='HOSTED_MEMORY_'+(cfg.lane==='test'?'PROD':'TEST')+'_READ_TOKEN';
+    const u=new URL(req.url),token=env[effect?effectVar:cfg.credential_var],other='HOSTED_MEMORY_'+(cfg.lane==='test'?'PROD':'TEST')+'_READ_TOKEN';
     if(u.origin!==site.origin||u.pathname!=='/mcp'||u.search||req.method!=='POST'||
-       req.headers.get('sec-fetch-site')==='cross-site'||typeof token!=='string'||!SHA.test(token)||env[other]!==undefined||
+       req.headers.get('sec-fetch-site')==='cross-site'||typeof token!=='string'||!SHA.test(token)||env[other]!==undefined||env.HOSTED_MEMORY_PROD_EFFECTS_TOKEN!==undefined||
+       (effect&&(token===env[cfg.credential_var]||!(typeof env[cfg.credential_var]==='string'&&SHA.test(env[cfg.credential_var]))))||
        await verifyOwner(req,env,cfg.lane)!==true)return fail('Owner authorization required.');
     const ref=uuid();
     if(!UUID.test(ref))return fail();
     const body=JSON.stringify({request_id:ref,operation:name,arguments:args});
     if(new TextEncoder().encode(body).length>100000)return fail();
-    const res=await limited(await fetcher(gateway.href,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(8000),
+    const res=await limited(await fetcher((effect?effectGateway:gateway).href,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(8000),
       headers:{'content-type':'application/json',accept:'application/json',
-       ['x-memory-mcp-'+cfg.lane+'-read-auth']:'Bearer '+token},body}));
+       ['x-memory-mcp-'+cfg.lane+(effect?'-effects-auth':'-read-auth')]:'Bearer '+token},body}));
     if(!permitted(res,['environment','release','request_id','catalog_sha256','result'])||
      res.environment!==cfg.lane||res.release!==cfg.base_release||res.catalog_sha256!==cfg.catalog_sha256||res.request_id!==ref||
      !permitted(res.result,['content','structuredContent'])||!Array.isArray(res.result.content)||res.result.content.length<1||

@@ -2,7 +2,7 @@
 import asyncio, hmac, json, re
 from copy import deepcopy
 from jsonschema import Draft202012Validator
-from policy import authorized
+from policy import EFFECTS, authorized
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 MAX_REQUEST, MAX_RESPONSE = 100_000, 131_072
@@ -50,20 +50,28 @@ def make_forward(profile, backend_token):
             return parse(raw)
     return forward
 
-def make_app(profile, catalog, gateway_token, read_live_release, forward):
+def make_app(profile, catalog, gateway_token, read_live_release, forward, *, effect_token=None):
     profile,catalog=deepcopy(profile),deepcopy(catalog)
     lane=profile.get('lane')
-    if lane not in ('test','prod') or any(x!='baseline_read' for x in profile.get('enabled_capabilities',())):
+    caps=profile.get('enabled_capabilities',())
+    manifest=catalog['catalog']['tools']
+    effects="intake_process" in caps
+    if (lane not in ('test','prod') or set(caps) not in ({"baseline_read"},{"baseline_read","intake_process"})
+            or len(caps)!=len(set(caps)) or effects!=(effect_token is not None) or effects and lane!='test'):
         raise ValueError('invalid profile')
-    path=f'/memory-mcp-{lane}-tools'
-    compiled={n:Draft202012Validator(t['capability_projections']['baseline_read']) for n,t in catalog['catalog']['tools'].items()
-              if t['classification']=='baseline_read'}
+    if effects and (not isinstance(effect_token,str) or not HEX.fullmatch(effect_token) or effect_token==gateway_token
+            or {name for name,meta in manifest.items() if 'intake_process' in meta.get('capability_projections',{})}!=EFFECTS):
+        raise ValueError('invalid effect authority')
+    routes={f'/memory-mcp-{lane}-tools':("baseline_read",gateway_token)}
+    if effects:routes[f'/memory-mcp-{lane}-effects']=("intake_process",effect_token)
+    compiled={(cap,n):Draft202012Validator(projection) for n,t in manifest.items()
+               for cap,projection in t['capability_projections'].items() if cap in caps}
     if not isinstance(gateway_token, str) or not HEX.fullmatch(gateway_token):
         raise ValueError("invalid gateway credential")
     if not callable(read_live_release) or not callable(forward):
         raise ValueError("missing host authority")
-    expected = b"Bearer " + gateway_token.encode()
     gate = asyncio.Semaphore(12)
+    effect_gate = asyncio.Semaphore(1)
 
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -83,10 +91,12 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward):
                 (b"content-type",b"application/json"),(b"cache-control",b"private, no-store")]})
             await send({"type":"http.response.body","body":raw})
 
-        if scope.get("path")!=path or scope.get("method")!="POST" or scope.get("query_string"):
+        if scope.get("path") not in routes or scope.get("method")!="POST" or scope.get("query_string"):
             return await reply(404, {"error":"not_found"})
         def header(name):
             return [v for k,v in scope.get("headers",()) if k.lower()==name]
+        capability,secret=routes[scope["path"]]
+        expected=b"Bearer " + secret.encode()
         auth=header(b"authorization")
         if len(auth)!=1 or not hmac.compare_digest(auth[0],expected):
             return await reply(401, {"error":"unauthorized"})
@@ -107,13 +117,15 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward):
                 raise ValueError()
             rid,name,args=b["request_id"],b["operation"],b["arguments"]
             if not isinstance(rid,str) or not RID.fullmatch(rid) or not isinstance(name,str) or type(args) is not dict or \
-                name not in compiled or not authorized(profile,catalog,lane,name,"baseline_read") or not compiled[name].is_valid(args):
+                (capability,name) not in compiled or not authorized(profile,catalog,lane,name,capability) or \
+                not compiled[(capability,name)].is_valid(args):
                 raise ValueError()
         except Exception:
             return await reply(400, {"error":"invalid_request"})
-        if gate.locked(): return await reply(503, {"error":"unavailable"})
+        limiter=effect_gate if capability=="intake_process" else gate
+        if limiter.locked(): return await reply(503, {"error":"unavailable"})
         try:
-            async with gate:
+            async with limiter:
                 identity=await asyncio.to_thread(read_live_release)
                 if type(identity) is not tuple or len(identity)!=2: raise ValueError()
                 release, generation = identity

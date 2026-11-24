@@ -20,7 +20,7 @@ def main():
  profile=parse(fixed_read(c/'read-profile.json',4096))
  catalog=parse(fixed_read(c/'catalog.json',100000))
  if profile.get('lane')!='test' or profile.get('canonical_mcp_port')!=8893 or \
-  str(ROOT)!='/srv/assertion-release/test' or profile.get('enabled_capabilities')!=['baseline_read'] or \
+  str(ROOT)!='/srv/assertion-release/test' or profile.get('enabled_capabilities') not in (['baseline_read'],['baseline_read','intake_process']) or \
   digest(catalog['catalog'])!=profile.get('catalog_sha256') or catalog.get('catalog_sha256')!=profile.get('catalog_sha256'):
   raise SystemExit('not an attested TEST relay configuration')
  tag,release=expected_identity(fixed_read(c/'test_release_identity',512))
@@ -31,6 +31,9 @@ def main():
  if tag!=profile.get('base_release'):raise SystemExit('not the selected TEST release')
  inbound=fixed_read(c/'gateway-bearer',4096).decode('ascii').strip()
  backend=fixed_read(c/'test-canonical-bearer',4096).decode('ascii').strip()
+ effect=fixed_read(c/'test-effects-bearer',4096).decode('ascii').strip() if 'intake_process' in profile['enabled_capabilities'] else None
+ if effect is not None and (mode!='real' or effect in (inbound,backend)):
+  raise SystemExit('intake/proc requires exclusive credentials and real isolated TEST')
  if inbound==backend:raise SystemExit('distinct credentials are required')
  def active():
   marker=ROOT/'current'; start=marker.lstat()
@@ -40,6 +43,6 @@ def main():
   if generation(start)!=generation(end):raise ValueError('activation changed')
   return tag,hashlib.sha256(json.dumps([generation(end),evidence],separators=(',',':')).encode()).hexdigest()
  active()
- app=make_app(profile,catalog,inbound,active,make_forward(profile,backend))
+ app=make_app(profile,catalog,inbound,active,make_forward(profile,backend),effect_token=effect)
  uvicorn.run(app,host='127.0.0.1',port=8832,access_log=False,proxy_headers=False,log_level='warning')
 if __name__=='__main__':main()
