@@ -3,6 +3,9 @@ set -euo pipefail
 umask 077
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
+# This runs in PR validation and in the original immutable Release build;
+# no deployment workflow/legacy signed producer prelude changes.
+python3 -B -m unittest prototypes.assertion_memory.dual_http_test.Dual.test_personal_machine_full_registry_independent_of_sites_key
 sha="$(git rev-parse --verify HEAD)"
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
 dest="${1:?absolute output directory required}"

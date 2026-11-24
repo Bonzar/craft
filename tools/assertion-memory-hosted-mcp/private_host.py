@@ -78,7 +78,7 @@ def configured(stage,root,config_dir):
     raw=read_regular(config_dir/'private-operations.json',12_000,owner=0)
     value=json.loads(raw)
     required={'capabilities','read_token_file','effect_token_file'}
-    if type(value) is not dict or set(value)!=required:
+    if type(value) is not dict or set(value) not in (required,required|{'machine_clients'}):
         raise ValueError('Unexpected private operations configuration')
     caps=value['capabilities']
     if caps not in [['baseline_read'],['baseline_read','intake_process'],
@@ -97,17 +97,31 @@ def configured(stage,root,config_dir):
     if (effect is not None and effect==read
             or effect is None and value['effect_token_file'] is not None):
         raise ValueError('Invalid separation of private credentials')
-    return caps,read,effect
+    clients=value.get('machine_clients',{})
+    if (type(clients) is not dict or len(clients)>16
+            or any(not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,31}',n) or
+                   type(digest) is not str or not HEX.fullmatch(digest) for n,digest in clients.items())):
+        raise ValueError('Invalid machine client registry')
+    machine=tuple(clients.values())
+    if len(set(machine))!=len(machine):
+        raise ValueError('Machine credentials must be distinct')
+    return caps,read,effect,machine
 
 
-def effect_lock(app,root,stage,effect_token):
+def effect_lock(app,root,stage,effect_token,machine_digests=()):
     """Writes may never straddle activation. Catalog/health never takes this lock."""
     async def locked(scope,receive,send):
-        if scope.get('type')!='http' or scope.get('path')!=f'/memory-mcp-{stage}-effects':
+        path=scope.get('path')
+        if scope.get('type')!='http' or path not in (f'/memory-mcp-{stage}-effects',f'/memory-api-{stage}'):
             return await app(scope,receive,send)
         headers=[value for key,value in scope.get('headers',()) if key.lower()==b'authorization']
-        if (effect_token is None or len(headers)!=1 or not hmac.compare_digest(
-                headers[0],('Bearer '+effect_token).encode('ascii'))):
+        if path==f'/memory-api-{stage}':
+            from vm_relay import machine_authorized
+            authorized=len(headers)==1 and machine_authorized(headers[0],machine_digests)
+        else:
+            authorized=(effect_token is not None and len(headers)==1 and
+                        hmac.compare_digest(headers[0],('Bearer '+effect_token).encode('ascii')))
+        if not authorized:
             return await app(scope,receive,send)
         fd=None
         try:
@@ -155,8 +169,8 @@ def factory(stage,root,config_dir,legacy_token):
         raise ValueError('Tag/source pointer mismatch')
     source=json.loads(files['mcp-tool-schema.json'])
     pins=catalog_pins(revision,files,source)
-    caps,read,effect=configured(stage,root,config_dir)
-    if legacy_token in (read,effect):
+    caps,read,effect,machine=configured(stage,root,config_dir)
+    if legacy_token in (read,effect) or sha256(legacy_token.encode('ascii')).hexdigest() in machine:
         raise ValueError('Legacy credential cannot authorize private operations')
     catalog=compile_release(source,pins,effects=effect is not None)
     profile={'lane':stage,'base_release':tag,'enabled_capabilities':caps,
@@ -172,12 +186,14 @@ def factory(stage,root,config_dir,legacy_token):
         return tag,generation
 
     paths={f'/memory-mcp-{stage}-tools'}
+    if machine:
+        paths.add(f'/memory-api-{stage}')
     if effect is not None:
         paths.add(f'/memory-mcp-{stage}-effects')
 
     def mount(config,store,service,background):
         require_scoped_database(stage,root,config.db)
         operations=create_operations(config,store,background=background,service=service)
-        app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations)
-        return frozenset(paths),effect_lock(app,root,stage,effect)
+        app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations,machine_digests=machine)
+        return frozenset(paths),effect_lock(app,root,stage,effect,machine)
     return mount

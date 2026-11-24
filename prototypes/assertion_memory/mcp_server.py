@@ -618,7 +618,7 @@ def _register_source_tools(mcp,service):
         content for authorized on-demand inspection. Bytes have not been interpreted by this service;
         technical hashes/metadata establish no depicted fact or user approval. No model work."""
         value=service.artifact(artifact_id,include_content=include_content)
-        if not include_content:return value
+        if not include_content or getattr(mcp,'neutral_results',False):return value
         from mcp.types import CallToolResult,TextContent,ImageContent
         data=value.pop('data_base64')
         return CallToolResult(structuredContent=value,content=[

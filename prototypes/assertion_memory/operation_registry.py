@@ -13,6 +13,8 @@ class Operation:
     description: str
 
 class OperationRegistry:
+    neutral_results = True
+
     def __init__(self):
         self._operations = {}
 

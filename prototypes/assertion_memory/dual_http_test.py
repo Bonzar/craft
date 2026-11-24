@@ -79,5 +79,59 @@ class Dual(TestCase):
             asyncio.run(test(str(Path(folder)/'empty.sqlite3')))
 
 
+    def test_personal_machine_full_registry_independent_of_sites_key(self):
+        import sys
+        from hashlib import sha256
+        from uuid import uuid4
+        from .release_catalog import export
+        tool_root=Path(__file__).resolve().parents[2]/'tools/assertion-memory-hosted-mcp'
+
+        async def test(db):
+            with patch.object(sys,'path',[str(tool_root),*sys.path]):
+                from compile_functional_release import compile_release
+                from vm_relay import make_app
+            release='assertion-memory-v9.9.9'
+            canonical=await export('a'*40)
+            pins={k:canonical[k] for k in ('revision','module_sha256','schema_sha256')}
+            pins['registry']='base-typed-operations-v1'
+            catalog=compile_release(canonical,pins,effects=False)
+            profile={'lane':'test','base_release':release,'enabled_capabilities':['baseline_read'],
+                     'catalog_sha256':catalog['catalog_sha256'],'require_catalog_identity':True}
+            sites,machine,second,legacy=('b'*64,'c'*64,'d'*64,'e'*64)
+            def neutral(config,store,service,background):
+                ops=create_operations(config,store,background=background,service=service)
+                return frozenset(('/memory-api-test','/memory-mcp-test-tools')),make_app(
+                    profile,catalog,sites,lambda: (release,'f'*64),operations=ops,machine_digests=tuple(sha256(key.encode('ascii')).hexdigest() for key in (machine,second)))
+            app=create_http_app(ServiceConfig(db=db,provider='none',processing_session_ids=[]),
+                                legacy,'memory.example',background=False,neutral_factory=neutral)
+            async with app.lifespan(), AsyncClient(transport=ASGITransport(app=app),
+                                                  base_url='https://memory.example') as client:
+                async def send(key, operation='catalog', arguments=None, expected=None, path='/memory-api-test'):
+                    body={'request_id':str(uuid4()),'operation':operation,'arguments':arguments or {}}
+                    if expected is not None:body['expected']=expected
+                    return await client.post(path,headers={'Authorization':'Bearer '+key},json=body)
+                for key in (sites,legacy,'0'*64):
+                    self.assertEqual((await send(key)).status_code,401)
+                self.assertEqual((await send(machine,path='/memory-api-prod')).status_code,401)
+                self.assertEqual((await send(machine,path='/memory-mcp-test-tools')).status_code,401)
+                read=(await send(sites,path='/memory-mcp-test-tools')).json()
+                self.assertNotIn('memory_history',{t['name'] for t in read['tools']})
+                value=(await send(machine)).json()
+                self.assertEqual(value['capability'],'machine')
+                self.assertEqual({t['name'] for t in value['tools']},set(canonical['tools']))
+                self.assertEqual((await send(second)).json()['tools'],value['tools'])
+                expected={key:value[key] for key in ('release','generation','catalog_sha256')}
+                for op,args in [('unknown',{}),('memory_status',{'section':2})]:
+                    self.assertEqual((await send(machine,op,args,expected)).status_code,400)
+                self.assertEqual((await send(machine,'memory_status')).status_code,400)
+                self.assertEqual((await send(machine,'memory_status',expected=expected|{'generation':'0'*64})).status_code,409)
+                ok=await send(machine,'memory_status',expected=expected)
+                self.assertEqual(ok.status_code,200)
+                self.assertEqual(ok.json()['status'],'ok')
+                self.assertIsInstance(ok.json()['result'],dict)
+        with tempfile.TemporaryDirectory() as folder:
+            asyncio.run(test(str(Path(folder)/'empty.sqlite3')))
+
+
 if __name__=='__main__':
     main()

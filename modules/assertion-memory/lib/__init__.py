@@ -96,10 +96,15 @@ def context(event, storage):
     capture_status = 'not_configured'
     local_report = None
     capture = binding.get('capture', {})
+    machine = binding.get('connection',{}).get('transport') == 'private_base_http'
     if event.event == 'session-end':
         if capture.get('enabled') and event.harness == 'codex':
             from .outbox import set_watching
-            root = Path(capture['state_dir']) / binding['endpoint_sha256']
+            if machine:
+                from .fresh_policy import verify_machine_binding
+                root=verify_machine_binding(binding)
+            else:
+                root = Path(capture['state_dir']) / binding['endpoint_sha256']
             set_watching(root, event.session_id, False)
         return ''
     if capture.get('enabled'):
@@ -111,17 +116,23 @@ def context(event, storage):
             try:
                 from .outbox import Outbox
                 from .native_capture import register
-                root = Path(capture['state_dir']) / binding['endpoint_sha256']
+                if machine:
+                    if event.event != 'session-start' or event.raw.get('source') != 'startup':
+                        return ''
+                    from .fresh_policy import verify_machine_binding
+                    root=verify_machine_binding(binding)
+                else:
+                    root = Path(capture['state_dir']) / binding['endpoint_sha256']
                 store = Outbox(root / 'outbox.sqlite3')
                 try:
-                    registered = register(store, dict(event.raw))
+                    registered = register(store, dict(event.raw), fresh_since=capture['fresh_since'] if machine else None)
                     store.set_watching(event.session_id, True)
                     local_report = store.summary(event.session_id)
                 finally: store.close()
                 capture_status = 'blocked_source' if registered.get('blocked') else 'registered_local_outbox'
                 # Use the same resolver as both transports, including the pinned dotenv.
                 from .headers import token
-                try: has_auth_environment=bool(token(binding['connection']))
+                try: has_auth_environment=machine or bool(token(binding['connection']))
                 except (OSError, ValueError): has_auth_environment=False
                 if not registered.get('blocked') and not has_auth_environment:capture_status='auth_environment_missing'
                 if not registered.get('blocked') and has_auth_environment:
