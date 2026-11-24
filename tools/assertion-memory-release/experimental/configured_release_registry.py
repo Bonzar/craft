@@ -1,5 +1,6 @@
 """Approved workspace composition; adding a project never adds a workflow job."""
 import importlib.util
+import json
 import sys
 
 
@@ -29,14 +30,26 @@ def registry(root, ops):
         }
 
     def base_activate(ctrl,release,content,payload,promotion,env):
-        if ctrl.stage!='test':
-            raise ValueError('Configured Base PROD is not provisioned')
-        import configured_base_test_provider as base
-        return base.activate(ctrl,release,content,payload,promotion,base_env(env))
+        if ctrl.stage=='test':
+            import configured_base_test_provider as base
+            return base.activate(ctrl,release,content,payload,promotion,base_env(env))
+        import configured_base_prod_provider as base
+        source={**env,'RELEASE_ENVIRONMENT_NODE_ID':env['RELEASE_ENV_NODE_ID']}
+        receipt=base.activate(ctrl,release,content,payload,promotion,source)
+        with (payload/'configured-base-prod-receiver.json').open('x',encoding='ascii') as out:
+            json.dump(receipt,out,sort_keys=True,separators=(',',':'))
+        return receipt
 
     def base_smoke(ctrl,release,content,payload,env):
-        import configured_base_test_provider as base
-        return base.smoke(ctrl,release,content,payload,base_env(env))
+        if ctrl.stage=='test':
+            import configured_base_test_provider as base
+            return base.smoke(ctrl,release,content,payload,base_env(env))
+        # The existing canonical PROD writer already checks process/graph/MCP
+        # before acknowledging; do not invoke the TEST command on PROD.
+        got=json.loads((payload/'configured-base-prod-receiver.json').read_text(encoding='ascii'))
+        expected={'status':'ok','environment':'production','sha256':content.sha256,'revision':release.revision}
+        if got!=expected:
+            raise ValueError('Authenticated PROD smoke receipt not verified')
 
     def visual_unpack(source,output,revision):
         return visual.content(visual.unpack_verified(source,output,revision))
