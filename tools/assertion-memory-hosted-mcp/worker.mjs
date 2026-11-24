@@ -1,5 +1,6 @@
 // Common Sites Worker transport; lane is fixed by the deployment, never by a request.
 const EFFECTS=new Set(['memory_capture_message','memory_process']);
+const QUERY='memory_query';
 const SHA=/^[0-9a-f]{64}$/;
 const TAG=/^assertion-memory-v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,30})?$/;
 const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
@@ -23,7 +24,7 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
  if(!['test','prod'].includes(cfg.lane)||typeof verifyOwner!=='function'||!SHA.test(cfg.catalog_sha256)||
   cfg.catalog_sha256!==shared.catalog_sha256||!TAG.test(cfg.base_release)||
   !Array.isArray(cfg.enabled_capabilities)||new Set(cfg.enabled_capabilities).size!==cfg.enabled_capabilities.length||
-  !cfg.enabled_capabilities.includes('baseline_read')||!cfg.enabled_capabilities.every(x=>x==='baseline_read'||x==='intake_process'))throw rej('Invalid build profile');
+  !cfg.enabled_capabilities.includes('baseline_read')||!cfg.enabled_capabilities.every(x=>x==='baseline_read'||x==='intake_process'||x==='generate'))throw rej('Invalid build profile');
  const site=new URL(cfg.site_origin),gateway=new URL(cfg.gateway_url);
  if(site.protocol!=='https:'||site.origin!==cfg.site_origin||!site.hostname.endsWith('.chatgpt.site')||site.port||
   gateway.protocol!=='https:'||!/^([a-z0-9-]+\.){2}apigw\.yandexcloud\.net$/.test(gateway.hostname)||
@@ -35,8 +36,11 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
  const effectOn=cfg.enabled_capabilities.includes('intake_process');
  const prefix='HOSTED_MEMORY_'+cfg.lane.toUpperCase(),
        otherPrefix='HOSTED_MEMORY_'+(cfg.lane==='test'?'PROD':'TEST'),
-       effectFlag=prefix+'_EFFECTS_ENABLED',effectVar=prefix+'_EFFECTS_TOKEN',
+       effectFlag=prefix+'_EFFECTS_ENABLED',effectVar=prefix+'_EFFECTS_TOKEN',genFlag=prefix+'_GENERATE_ENABLED',
        foreignEffect=otherPrefix+'_EFFECTS_TOKEN',foreignRead=otherPrefix+'_READ_TOKEN';
+ const gen=cfg.enabled_capabilities.includes('generate');
+ if(gen&&(!effectOn||!policy[QUERY]?.capability_projections?.generate||
+   !Number.isSafeInteger(cfg.query_timeout_ms)||cfg.query_timeout_ms<11000||cfg.query_timeout_ms>250000))throw rej('Invalid generation profile');
  let effectGateway;
  if(effectOn){
   if(!SHA.test(cfg.read_catalog_sha256)||cfg.read_catalog_sha256===cfg.catalog_sha256)throw rej('Invalid original read catalog');
@@ -51,7 +55,8 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
    env[effectVar]!==env[cfg.credential_var]&&env[foreignEffect]===undefined&&env[foreignRead]===undefined;
  const readEnabled=env=>env?.[cfg.rollout_flag]==='true';
  const enabled=env=>readEnabled(env)||effectEnabled(env);
- const capability=(name,env)=>EFFECTS.has(name)&&effectEnabled(env)?'intake_process':
+ const capability=(name,env)=>name===QUERY&&gen&&effectEnabled(env)&&env[genFlag]==='true'?'generate':
+   EFFECTS.has(name)&&effectEnabled(env)?'intake_process':
    (policy[name]?.classification==='baseline_read'&&readEnabled(env)?'baseline_read':null);
  return Object.freeze({
   enabled,
@@ -63,7 +68,8 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
     const cap=capability(name,env),read=cap==='baseline_read';
     if(names.has(name))throw rej('Legacy catalog collision');
     return {name,description:cfg.tool_descriptions?.[name]??(read?'Read a bounded canonical memory result.':
-      (name==='memory_capture_message'?'Durably capture an owner-authorized source message in this environment.':'Schedule existing canonical processing in this environment.')),
+      (cap==='generate'?'Generate and persist the canonical memory answer if needed.':
+       (name==='memory_capture_message'?'Durably capture an owner-authorized source message in this environment.':'Schedule existing canonical processing in this environment.'))),
      inputSchema:structuredClone(p.capability_projections[cap]),annotations:{readOnlyHint:read,destructiveHint:false,openWorldHint:false}};
    });
    return [...legacy,...current];
@@ -73,7 +79,7 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
    if(legacyNames.includes(name))return null;
    if(!Object.hasOwn(policy,name))return null;
    const cap=capability(name,env); if(!cap||!object(args))return fail();
-   const effect=cap==='intake_process';
+   const effect=cap!=='baseline_read';
    try {
     const u=new URL(req.url),token=env[effect?effectVar:cfg.credential_var];
     if(u.origin!==site.origin||u.pathname!=='/mcp'||u.search||req.method!=='POST'||
@@ -84,7 +90,7 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
     if(!UUID.test(ref))return fail();
     const body=JSON.stringify({request_id:ref,operation:name,arguments:args});
     if(new TextEncoder().encode(body).length>100000)return fail();
-    const res=await limited(await fetcher((effect?effectGateway:gateway).href,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(8000),
+    const res=await limited(await fetcher((effect?effectGateway:gateway).href,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(cap==='generate'?cfg.query_timeout_ms:8000),
       headers:{'content-type':'application/json',accept:'application/json',
        ['x-memory-mcp-'+cfg.lane+(effect?'-effects-auth':'-read-auth')]:'Bearer '+token},body}));
     if(!permitted(res,['environment','release','request_id','catalog_sha256','result'])||

@@ -15,6 +15,8 @@ OPERATIONS={
  "memory_store_artifact":"ingest",
 }
 EFFECTS=frozenset(('memory_capture_message','memory_process'))
+QUERY="memory_query"
+SEARCH="memory_search"
 READ=frozenset(("baseline_read","sensitive_read"))
 # Shared host narrowing that reflects the approved two-call TEST slice.
 # One source for both worker metadata and upstream validator; no separate copies.
@@ -26,18 +28,21 @@ def encoded(v):
  return json.dumps(v, ensure_ascii=True, sort_keys=True, separators=(",",":")).encode("ascii")
 def digest(v):
  return hashlib.sha256(encoded(v)).hexdigest()
-def compile_catalog(schema_doc, authority, *, include_effects=False):
+def compile_catalog(schema_doc, authority, *, include_effects=False, require_functional=False):
  """authority must be established by CI against an exact release, not by operator/gateway input."""
  if type(schema_doc) is not dict or schema_doc.get("revision")!=authority["revision"] or \
     schema_doc.get("module_sha256")!=authority["module_sha256"] or schema_doc.get("runtime_mcp_sdk")!=authority["sdk"]:
   raise ValueError("Untrusted release schema metadata")
  schemas=schema_doc.get("tools")
- if type(schemas) is not dict or set(schemas)!=set(OPERATIONS):
+ expected=set(OPERATIONS)
+ if require_functional:expected.add(SEARCH)
+ if type(schemas) is not dict or set(schemas)!=expected:
   raise ValueError("Unclassified canonical schema drift")
  if digest(schemas)!=authority["schema_sha256"]:
   raise ValueError("Release schema digest mismatch")
  entries={}
- for name, classification in sorted(OPERATIONS.items()):
+ classes=OPERATIONS|({SEARCH:'baseline_read'} if require_functional else {})
+ for name, classification in sorted(classes.items()):
   pristine=deepcopy(schemas[name])
   schema=deepcopy(pristine)
   if schema.get("type")!="object" or not isinstance(schema.get("properties"),dict):
@@ -54,6 +59,10 @@ def compile_catalog(schema_doc, authority, *, include_effects=False):
    schema["properties"]={k:{**schema["properties"][k],**v} for k,v in NARROW[name].items()}
   schema["additionalProperties"]=False
   projection={"baseline_read":schema} if name in NARROW else {}
+  if require_functional and name==SEARCH:
+   projection["baseline_read"]=schema
+  if require_functional and include_effects and name==QUERY:
+   projection["generate"]=schema
   if include_effects and name in EFFECTS:
    projection["intake_process"]=schema
   entries[name]={"classification":classification,"canonicalInputSchema":pristine,"capability_projections":projection,"readOnlyHint":classification in READ}
@@ -67,5 +76,6 @@ def authorized(profile, catalog, lane, operation, credential_capability):
     digest(catalog.get("catalog"))!=catalog.get("catalog_sha256")): return False
  entry=catalog.get("catalog",{}).get("tools",{}).get(operation)
  if not entry or credential_capability not in entry.get("capability_projections",{}): return False
+ if credential_capability=="generate" and operation!=QUERY:return False
  if credential_capability=="intake_process" and operation not in EFFECTS:return False
  return credential_capability in profile.get("enabled_capabilities",())

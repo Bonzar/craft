@@ -2,7 +2,7 @@
 import asyncio, hmac, json, re
 from copy import deepcopy
 from jsonschema import Draft202012Validator
-from policy import EFFECTS, authorized, digest
+from policy import EFFECTS, QUERY, authorized, digest
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 MAX_REQUEST, MAX_RESPONSE = 100_000, 131_072
@@ -35,13 +35,16 @@ def make_forward(profile, backend_token):
         32 <= len(backend_token) <= 4096 or any(x.isspace() for x in backend_token):
         raise ValueError("invalid backend credential")
     opener = build_opener(ProxyHandler({}), NoRedirect())
+    query_timeout=profile.get('query_timeout_seconds')
+    if 'generate' in profile.get('enabled_capabilities',()) and (type(query_timeout) is not int or not 10<=query_timeout<=240):
+        raise ValueError('unverified query timeout')
     def forward(rid, name, args):
         wire = json.dumps({"jsonrpc":"2.0","id":rid,"method":"tools/call",
                           "params":{"name":name,"arguments":args}}, separators=(",",":")).encode()
         req = Request(upstream, method="POST", data=wire, headers={
             "Authorization": "Bearer " + backend_token, "Content-Type":"application/json",
             "Accept":"application/json, text/event-stream", "MCP-Protocol-Version":"2025-11-25"})
-        with opener.open(req, timeout=5) as resp:
+        with opener.open(req, timeout=query_timeout if name==QUERY and query_timeout else 5) as resp:
             if resp.status != 200 or resp.headers.get_content_type() != "application/json":
                 raise ValueError("unexpected upstream transport")
             raw = resp.read(MAX_RESPONSE + 1)
@@ -56,14 +59,16 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
     caps=profile.get('enabled_capabilities',())
     manifest=catalog['catalog']['tools']
     effects="intake_process" in caps
-    if (lane not in ('test','prod') or set(caps) not in ({"baseline_read"},{"baseline_read","intake_process"})
+    if (lane not in ('test','prod') or set(caps) not in ({"baseline_read"},{"baseline_read","intake_process"},{"baseline_read","intake_process","generate"})
             or len(caps)!=len(set(caps)) or effects!=(effect_token is not None)):
         raise ValueError('invalid profile')
     if effects and (not isinstance(effect_token,str) or not HEX.fullmatch(effect_token) or effect_token==gateway_token
             or {name for name,meta in manifest.items() if 'intake_process' in meta.get('capability_projections',{})}!=EFFECTS):
         raise ValueError('invalid effect authority')
     read_catalog=deepcopy(catalog['catalog'])
-    for row in read_catalog['tools'].values():row['capability_projections'].pop('intake_process',None)
+    for row in read_catalog['tools'].values():
+        row['capability_projections'].pop('intake_process',None)
+        row['capability_projections'].pop('generate',None)
     read_digest=digest(read_catalog)
     expected_read=profile.get('read_catalog_sha256',catalog['catalog_sha256'])
     if read_digest!=expected_read:raise ValueError('invalid baseline read catalog')
@@ -79,6 +84,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
         raise ValueError("missing host authority")
     gate = asyncio.Semaphore(12)
     effect_gate = asyncio.Semaphore(1)
+    query_gate = asyncio.Semaphore(1)
 
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -123,13 +129,14 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
             if type(b) is not dict or set(b)!={"request_id","operation","arguments"}:
                 raise ValueError()
             rid,name,args=b["request_id"],b["operation"],b["arguments"]
+            if name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
             if not isinstance(rid,str) or not RID.fullmatch(rid) or not isinstance(name,str) or type(args) is not dict or \
                 (capability,name) not in compiled or not authorized(profile,catalog,lane,name,capability) or \
                 not compiled[(capability,name)].is_valid(args):
                 raise ValueError()
         except Exception:
             return await reply(400, {"error":"invalid_request"})
-        limiter=effect_gate if capability=="intake_process" else gate
+        limiter=query_gate if capability=="generate" else effect_gate if capability=="intake_process" else gate
         if limiter.locked(): return await reply(503, {"error":"unavailable"})
         try:
             async with limiter:
@@ -151,7 +158,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
                 not isinstance(v["text"],str) for v in content): raise ValueError()
             out={"content":content}
             if type(result.get("structuredContent")) is dict: out["structuredContent"]=result["structuredContent"]
-            return await reply(200, {"environment":lane,"release":release,"request_id":rid,"catalog_sha256":catalog["catalog_sha256"] if capability=="intake_process" else read_digest,"result":out})
+            return await reply(200, {"environment":lane,"release":release,"request_id":rid,"catalog_sha256":catalog["catalog_sha256"] if capability!="baseline_read" else read_digest,"result":out})
         except Exception:
             return await reply(502, {"error":"unavailable"})
     return app
