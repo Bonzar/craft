@@ -1,0 +1,25 @@
+name: Configured Release
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        options: [visual]
+        required: true
+      tag: {type: string, required: true}
+permissions: {}
+jobs:
+  configured:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == '1'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/configured-release-reusable.yml
+    with:
+      profile: ${{ inputs.profile }}
+      tag: ${{ inputs.tag }}
+    secrets:
+      CONFIGURED_VISUAL_HOST_PIN: ${{ secrets.CONFIGURED_VISUAL_HOST_PIN }}
+      CONFIGURED_VISUAL_SSH_KEY: ${{ secrets.CONFIGURED_VISUAL_SSH_KEY }}
+      CONFIGURED_VISUAL_SIGNING_KEY: ${{ secrets.CONFIGURED_VISUAL_SIGNING_KEY }}
+      CONFIGURED_VISUAL_GATEWAY_TOKEN: ${{ secrets.CONFIGURED_VISUAL_GATEWAY_TOKEN }}

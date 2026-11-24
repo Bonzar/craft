@@ -1,0 +1,19 @@
+name: Configured release · read-only migration proof
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/configured-release-shadow-caller.yml"
+      - ".github/workflows/configured-release-shadow.yml"
+      - "tools/assertion-memory-release/experimental/**"
+permissions: {}
+jobs:
+  shadow:
+    if: github.repository == 'Bonzar/craft' && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/configured-release-shadow.yml
+    with:
+      profile: visual
+      tag: assertion-memory-visual-v0.1.0

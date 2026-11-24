@@ -1,4 +1,5 @@
 """Gate release-graph visual deployment without changing legacy dispatches."""
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -17,12 +18,38 @@ SHA = lifecycle.SHA
 DIGEST = lifecycle.DIGEST
 
 
-def require_context(env):
+@dataclass(frozen=True)
+class ControlPolicy:
+    filename: str
+    test_runtime_job: str
+    prod_runtime_job: str
+    test_job: str
+    environment_prefix: str
+    artifact_prefix: str
+    profile: str | None = None
+
+    @property
+    def workflow_ref(self):
+        return REPO + '/.github/workflows/' + self.filename + '@refs/heads/main'
+
+
+LEGACY = ControlPolicy('assertion-memory-release-graph.yml', 'deploy', 'deploy',
+                       'Deploy visual TEST / Activate visual artifact',
+                       'assertion-memory-native-visual-', 'assertion-memory-native-visual-test-')
+CONFIGURED_VISUAL = ControlPolicy('configured-release.yml', 'test', 'prod',
+                                  'configured / TEST', 'configured-release-visual-',
+                                  'configured-release-visual-test-', 'visual')
+
+
+def require_context(env, policy=LEGACY):
+    job = {'test': policy.test_runtime_job, 'prod': policy.prod_runtime_job}.get(env.get('VISUAL_ENV'))
+    if job is None:
+        raise ValueError('Unexpected visual stage')
     if any(env.get(name) != expected for name, expected in {
-            'GITHUB_REPOSITORY': REPO, 'GITHUB_WORKFLOW_REF': WORKFLOW_REF,
+            'GITHUB_REPOSITORY': REPO, 'GITHUB_WORKFLOW_REF': policy.workflow_ref,
             'GITHUB_REF': 'refs/heads/main',
             'GITHUB_REF_PROTECTED': 'true', 'GITHUB_RUN_ATTEMPT': '1',
-            'GITHUB_JOB': 'deploy', 'NATIVE_VISUAL_READY': 'true'}.items()):
+            'GITHUB_JOB': job, 'NATIVE_VISUAL_READY': 'true'}.items()):
         raise ValueError('Untrusted or disabled native visual workflow')
     lifecycle.ci.safe(SHA, env['GITHUB_SHA'])
     lifecycle.ci.safe(ID, env['GITHUB_RUN_ID'])
@@ -30,7 +57,11 @@ def require_context(env):
     with Path(env['GITHUB_EVENT_PATH']).open(encoding='utf8') as source:
         event = json.load(source)
     event_name = env.get('GITHUB_EVENT_NAME')
-    if event_name == 'workflow_dispatch':
+    if policy.profile is not None:
+        if (event_name != 'workflow_dispatch'
+                or event.get('inputs') != {'tag': tag, 'profile': policy.profile}):
+            raise ValueError('Configured visual needs exact profile and tag intent')
+    elif event_name == 'workflow_dispatch':
         inputs = event.get('inputs') or {}
         visual, base = inputs.get('deploy_visual'), inputs.get('deploy_base_test')
         if (inputs.get('tag') != tag or not (visual is True or visual == 'true')
@@ -59,10 +90,10 @@ def release_event(event, tag):
             lifecycle.ci.safe(SHA, run.get('head_sha', '')))
 
 
-def check_approval(get, env, mode):
+def check_approval(get, env, mode, policy=LEGACY):
     environment_id = lifecycle.ci.safe(ID, env['NATIVE_VISUAL_ENV_ID'])
     reviewer_id = lifecycle.ci.safe(ID, env['NATIVE_VISUAL_REVIEWER_ID'])
-    name = 'assertion-memory-native-visual-' + mode
+    name = policy.environment_prefix + mode
     path = lifecycle.ROOT + '/environments/' + name
     settings = get(path)
     if (settings.get('name') != name or str(settings.get('id')) != environment_id
@@ -106,16 +137,16 @@ WORKFLOW_FILE = 'assertion-memory-release-graph.yml'
 RECEIPT_FILE = 'native-test-proof.json'
 
 
-def verify_same_run_test(get, env, expected, folder):
+def verify_same_run_test(get, env, expected, folder, policy=LEGACY):
     # PROD is running in this same first attempt. Only the TEST job must have
     # finished; assuming the enclosing workflow has completed would deadlock.
     run_id, control_sha = env['GITHUB_RUN_ID'], env['GITHUB_SHA']
     root = lifecycle.ROOT
     run_path = root + '/actions/runs/' + run_id
     run = get(run_path)
-    wf = get(root + '/actions/workflows/' + WORKFLOW_FILE)
+    wf = get(root + '/actions/workflows/' + policy.filename)
     if (str(run.get('id')) != run_id or run.get('workflow_id') != wf.get('id')
-            or not wf.get('id') or run.get('path') != '.github/workflows/' + WORKFLOW_FILE
+            or not wf.get('id') or run.get('path') != '.github/workflows/' + policy.filename
             or run.get('event') != env['GITHUB_EVENT_NAME'] or run.get('head_branch') != 'main'
             or run.get('head_sha') != control_sha or run.get('run_attempt') != 1
             or run.get('status') != 'in_progress'
@@ -126,7 +157,7 @@ def verify_same_run_test(get, env, expected, folder):
     jobs = response.get('jobs', [])
     if response.get('total_count') != len(jobs) or len(jobs) > 100:
         raise ValueError('Incomplete native visual jobs')
-    matches = [job for job in jobs if job.get('name') == TEST_JOB]
+    matches = [job for job in jobs if job.get('name') == policy.test_job]
     if (len(matches) != 1 or str(matches[0].get('run_id')) != run_id
             or matches[0].get('head_sha') != control_sha
             or matches[0].get('status') != 'completed' or matches[0].get('conclusion') != 'success'):
@@ -140,7 +171,7 @@ def verify_same_run_test(get, env, expected, folder):
     artifacts = response.get('artifacts', [])
     if response.get('total_count') != len(artifacts) or len(artifacts) > 100:
         raise ValueError('Incomplete native visual artifact list')
-    name = f'assertion-memory-native-visual-test-{run_id}-attempt-1'
+    name = f'{policy.artifact_prefix}{run_id}-attempt-1'
     matches = [entry for entry in artifacts if entry.get('name') == name]
     if len(matches) != 1:
         raise ValueError('Expected exactly one native visual TEST evidence artifact')
@@ -163,9 +194,9 @@ def verify_same_run_test(get, env, expected, folder):
             raise ValueError('Uploaded native visual TEST evidence differs from exact archive')
 
 
-def resolve(get, env):
-    mode = require_context(env)
-    check_approval(get, env, mode)
+def resolve(get, env, policy=LEGACY):
+    mode = require_context(env, policy)
+    check_approval(get, env, mode, policy)
     release_id = lifecycle.ci.safe(ID, env['GRAPH_RELEASE_ID'])
     tag, rev = lifecycle.identify(get, release_id)
     aid, digest, original_run = lifecycle.build_identity(get, release_id, rev)
@@ -184,10 +215,12 @@ def resolve(get, env):
     proof = {**values, 'tag': tag, 'release_id': release_id, 'zip_sha256': digest,
              'build_run_id': original_run, 'test_run_id': env['GITHUB_RUN_ID'],
              'workflow_sha': env['GITHUB_SHA'], 'attempt': '1'}
+    if policy.profile is not None:
+        proof.update(profile=policy.profile, control_workflow=policy.filename)
     if mode == 'prod':
         if json.loads(env['NATIVE_VISUAL_TEST_PROOF']) != proof:
             raise ValueError('Native visual PROD must use the exact TEST-proven archive')
-        verify_same_run_test(get, env, proof, folder)
+        verify_same_run_test(get, env, proof, folder, policy)
     return proof
 
 
