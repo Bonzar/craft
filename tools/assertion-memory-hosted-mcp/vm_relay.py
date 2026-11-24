@@ -2,7 +2,7 @@
 import asyncio, hmac, json, re
 from copy import deepcopy
 from jsonschema import Draft202012Validator
-from policy import EFFECTS, authorized
+from policy import EFFECTS, authorized, digest
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 MAX_REQUEST, MAX_RESPONSE = 100_000, 131_072
@@ -62,7 +62,14 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
     if effects and (not isinstance(effect_token,str) or not HEX.fullmatch(effect_token) or effect_token==gateway_token
             or {name for name,meta in manifest.items() if 'intake_process' in meta.get('capability_projections',{})}!=EFFECTS):
         raise ValueError('invalid effect authority')
-    routes={f'/memory-mcp-{lane}-tools':("baseline_read",gateway_token)}
+    read_catalog=deepcopy(catalog['catalog'])
+    for row in read_catalog['tools'].values():row['capability_projections'].pop('intake_process',None)
+    read_digest=digest(read_catalog)
+    expected_read=profile.get('read_catalog_sha256',catalog['catalog_sha256'])
+    if read_digest!=expected_read:raise ValueError('invalid baseline read catalog')
+    effects_only=profile.get('effects_only',False)
+    if type(effects_only) is not bool or effects_only and not effects:raise ValueError('invalid listener split')
+    routes={} if effects_only else {f'/memory-mcp-{lane}-tools':("baseline_read",gateway_token)}
     if effects:routes[f'/memory-mcp-{lane}-effects']=("intake_process",effect_token)
     compiled={(cap,n):Draft202012Validator(projection) for n,t in manifest.items()
                for cap,projection in t['capability_projections'].items() if cap in caps}
@@ -144,7 +151,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward, *, eff
                 not isinstance(v["text"],str) for v in content): raise ValueError()
             out={"content":content}
             if type(result.get("structuredContent")) is dict: out["structuredContent"]=result["structuredContent"]
-            return await reply(200, {"environment":lane,"release":release,"request_id":rid,"catalog_sha256":catalog["catalog_sha256"],"result":out})
+            return await reply(200, {"environment":lane,"release":release,"request_id":rid,"catalog_sha256":catalog["catalog_sha256"] if capability=="intake_process" else read_digest,"result":out})
         except Exception:
             return await reply(502, {"error":"unavailable"})
     return app

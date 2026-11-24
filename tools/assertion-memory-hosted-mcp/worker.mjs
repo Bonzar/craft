@@ -36,6 +36,7 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
  const effectFlag='HOSTED_MEMORY_TEST_EFFECTS_ENABLED', effectVar='HOSTED_MEMORY_TEST_EFFECTS_TOKEN';
  let effectGateway;
  if(effectOn){
+  if(!SHA.test(cfg.read_catalog_sha256)||cfg.read_catalog_sha256===cfg.catalog_sha256)throw rej('Invalid original read catalog');
   effectGateway=new URL(cfg.effect_gateway_url);
   if(effectGateway.href!==gateway.origin+'/memory-mcp-test-effects'||
     [...EFFECTS].some(n=>!policy[n]?.capability_projections?.intake_process)||
@@ -84,7 +85,7 @@ export function makeHostedRelay({profile,catalog,verifyOwner,fetcher=(...a)=>glo
       headers:{'content-type':'application/json',accept:'application/json',
        ['x-memory-mcp-'+cfg.lane+(effect?'-effects-auth':'-read-auth')]:'Bearer '+token},body}));
     if(!permitted(res,['environment','release','request_id','catalog_sha256','result'])||
-     res.environment!==cfg.lane||res.release!==cfg.base_release||res.catalog_sha256!==cfg.catalog_sha256||res.request_id!==ref||
+     res.environment!==cfg.lane||res.release!==cfg.base_release||res.catalog_sha256!==(effect?cfg.catalog_sha256:(cfg.read_catalog_sha256??cfg.catalog_sha256))||res.request_id!==ref||
      !permitted(res.result,['content','structuredContent'])||!Array.isArray(res.result.content)||res.result.content.length<1||
      res.result.content.length>5||!res.result.content.every(x=>permitted(x,['type','text'])&&x.type==='text'&&typeof x.text==='string'))return fail();
     return {content:res.result.content,...(object(res.result.structuredContent)?{structuredContent:res.result.structuredContent}:{})};

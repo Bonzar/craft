@@ -31,7 +31,7 @@ def patch(raw):
         lambda m:m.group(0)+"\n effect_gateway_url:'"+m.group(1)+"/memory-mcp-test-effects',",src,flags=re.M)
     if count!=1:raise ValueError('fixed TEST gateway origin unavailable')
     pairs={
-      "catalog_sha256:'"+OLD+"'":"catalog_sha256:'"+NEW+"'",
+      "catalog_sha256:'"+OLD+"'":"catalog_sha256:'"+NEW+"',\n read_catalog_sha256:'"+OLD+"'",
       "enabled_capabilities:['baseline_read']":"enabled_capabilities:['baseline_read','intake_process']",
       "'MEMORY_VISUAL_PROD_TOKEN'].some":"'MEMORY_VISUAL_PROD_TOKEN','HOSTED_MEMORY_PROD_EFFECTS_TOKEN'].some",
       "env[k]!==undefined&&env[k]===env.HOSTED_MEMORY_TEST_READ_TOKEN)":

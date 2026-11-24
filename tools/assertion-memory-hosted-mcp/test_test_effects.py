@@ -20,7 +20,7 @@ class Effects(TestCase):
     def setUp(self):
         self.base,self.old,self.new=catalogs()
         self.profile={'lane':'test','base_release':'assertion-memory-v0.1.1',
-                      'catalog_sha256':self.new['catalog_sha256'],'enabled_capabilities':['baseline_read','intake_process']}
+                      'catalog_sha256':self.new['catalog_sha256'],'read_catalog_sha256':self.old['catalog_sha256'],'enabled_capabilities':['baseline_read','intake_process']}
         self.read='a'*64;self.effect='b'*64;self.call_count=0
     def not_called(self,*a):
         self.call_count+=1

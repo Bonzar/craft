@@ -32,7 +32,7 @@ def main():
  inbound=fixed_read(c/'gateway-bearer',4096).decode('ascii').strip()
  backend=fixed_read(c/'test-canonical-bearer',4096).decode('ascii').strip()
  effect=fixed_read(c/'test-effects-bearer',4096).decode('ascii').strip() if 'intake_process' in profile['enabled_capabilities'] else None
- if effect is not None and (mode!='real' or effect in (inbound,backend)):
+ if effect is not None and (mode!='real' or profile.get('effects_only') is not True or effect in (inbound,backend)):
   raise SystemExit('intake/proc requires exclusive credentials and real isolated TEST')
  if inbound==backend:raise SystemExit('distinct credentials are required')
  def active():
@@ -44,5 +44,5 @@ def main():
   return tag,hashlib.sha256(json.dumps([generation(end),evidence],separators=(',',':')).encode()).hexdigest()
  active()
  app=make_app(profile,catalog,inbound,active,make_forward(profile,backend),effect_token=effect)
- uvicorn.run(app,host='127.0.0.1',port=8832,access_log=False,proxy_headers=False,log_level='warning')
+ uvicorn.run(app,host='127.0.0.1',port=(8834 if effect is not None else 8832),access_log=False,proxy_headers=False,log_level='warning')
 if __name__=='__main__':main()
