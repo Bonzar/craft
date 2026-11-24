@@ -1,19 +1,19 @@
-"""Export the exact canonical FastMCP catalog without reading application data."""
+"""Export the exact Base operation registry without reading application data."""
 from __future__ import annotations
 
 import argparse
 import asyncio
 import hashlib
-from importlib.metadata import version
 import json
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
 
-from . import mcp_server
+from . import mcp_server, operation_registry
 from .storage import MemoryStore
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+OPERATION_REGISTRY = 'base-typed-operations-v1'
 
 
 def encoded(value):
@@ -32,33 +32,29 @@ async def export(revision):
         db = str(Path(temp)/'blank.sqlite3')
         with MemoryStore(db) as store:
             config = mcp_server.ServiceConfig(db=db, provider='none', processing_session_ids=[])
-            server = mcp_server.create_server(config, background=False, store=store, start_on_session=False)
-            listing = await server.list_tools()
+            listing = operation_registry.create_operations(config, store).descriptors()
     tools, descriptions = {}, {}
-    for entry in listing:
-        name, schema = entry.name, entry.inputSchema
+    for name, entry in listing.items():
+        schema = entry['inputSchema']
         if (not re.fullmatch(r'memory_[a-z0-9_]{1,80}', name) or name in tools
                 or type(schema) is not dict or schema.get('type') != 'object'):
-            raise ValueError('Unexpected canonical MCP descriptor')
+            raise ValueError('Unexpected canonical operation descriptor')
         tools[name] = schema
-        descriptions[name] = entry.description or ''
+        descriptions[name] = entry['description']
     if not tools:
         raise ValueError('Empty canonical MCP catalog')
     return {'version': SCHEMA_VERSION, 'revision': revision,
-            'module_sha256': hashlib.sha256(Path(mcp_server.__file__).read_bytes()).hexdigest(),
-            'runtime_mcp_sdk': version('mcp'), 'schema_sha256': sha(tools),
+            'module_sha256': sha({module.__name__: hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
+                                  for module in (mcp_server, operation_registry)}),
+            'runtime_operation_registry': OPERATION_REGISTRY, 'schema_sha256': sha(tools),
             'tools': tools, 'descriptions': descriptions}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--revision', required=True)
-    parser.add_argument('--sdk', required=True,
-                        help='Exact MCP SDK version from the packed requirements')
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
-    if version('mcp') != args.sdk:
-        parser.error('Installed MCP SDK differs from release requirement')
     payload = encoded(asyncio.run(export(args.revision))) + b'\n'
     # New candidate only: never truncate a file or touch a DB selected by user.
     with args.output.open('xb') as output:
