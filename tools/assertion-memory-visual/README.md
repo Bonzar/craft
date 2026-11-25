@@ -14,12 +14,24 @@ and PROD must reference the exact successful visual TEST receipt.
 
 The VM uses one shared release implementation for staging, digest/manifest
 qualification, atomic `current` symlink, synchronous origin smoke and
-rollback. The visual adapter allows only the four declared assets and
-manifest; all retained versions are under `releases/<manifest-sha256>`.
-Clients already pinned to prior releases keep their versioned URLs. This
-does not make Github's workflow artifact retention unlimited or claim
-automatic rollback for a separate ingress or Sites failure after the
-receiver has returned.
+rollback. The visual adapter allows only the four declared built assets plus
+the manifest, not source or Git history. The previous candidate is retained
+only until a successful activation journal commit, which is necessary for
+automatic rollback during that transaction. Under the same deployment lock,
+post-commit housekeeping removes only verified, inactive digest directories.
+It does not delete other state paths or unknown/malformed directory entries.
+A warning if housekeeping cannot finish is **not** proof of current-only;
+verify the lane's retained releases separately. After successful cleanup,
+recover an older release from its immutable GitHub package using TEST → PROD,
+not a local history or pointer edit. This does not make Actions artifacts
+permanent or imply after-commit automatic rollback for external Sites failures.
+
+The visual origin serves only the current manifest and its exact matching
+assets, and returns 410 for requests for an inactive digest. Sites redirects
+only an authenticated, versioned HTML document GET to `/visual`, preserving
+its query. An expired path never serves different release bytes under the old
+digest. Stale JS/CSS/workers receive an error and no redirect; an already-open
+older document can recover by reloading or opening `/visual`.
 
 Install shared code once at `/etc/assertion-release/shared`; configure
 independent root-owned visual scope entrypoints, fixed restricted shell and
@@ -243,3 +255,23 @@ secrets in UI requests. Database reset is a separate capability; explicit
 typed single-use confirmation and an independently verified stop/drain
 supervisor are prerequisites. Never expose either through this pause API or
 the Graph read bridge.
+
+
+### Current-only rollout prerequisites
+
+This change relies on the shared receiver's under-lock `after_committed`
+hook. Install the qualified shared policy/product reader and reviewed
+stage-specific native file transform together in TEST first; there is no
+automatic native Site publication. Verify the source and native deployment
+ID, current manifest and byte hashes, a stale document following `/visual`,
+and rejection of stale JavaScript/CSS/Worker paths. Before considering PROD,
+verify from an authorized host read that its TEST scope has exactly one
+valid current archive and the other lane/application state was untouched.
+The current manifest endpoint alone cannot prove local cleanup.
+
+Do not remove the only copy of a rollback artifact. The current original
+GitHub Actions Visual artifact is time-limited, not an indefinitely durable
+GitHub Release asset. Before retiring release generations that are expected to
+remain restorable, prove each required immutable package can still be recovered
+through the standard TEST → PROD verifier; arrange release-asset retention or
+a reviewed, byte-verified same-tag rebuild path when Actions retention expires.

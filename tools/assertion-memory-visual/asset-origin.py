@@ -145,12 +145,18 @@ def make_server(root, token, port=8829, *, environment='test'):
                         or not isinstance(release, str) or not HEX.fullmatch(release)
                         or not isinstance(name, str) or not ITEM.fullmatch(name)):
                     return self.respond(400)
-                directory, files = manifest(root, release)
+                active = current_release(root)
+                directory, files = manifest(root, active)
+                if release != active:
+                    # Only a qualified current manifest can indicate a retired digest.
+                    return self.respond(410)
                 if name not in files:
                     return self.respond(404)
                 asset = read_small(directory / name, LIMIT)
                 if digest(asset) != files[name]:
                     return self.respond(404)
+                if current_release(root) != release:
+                    return self.respond(410)
                 return self.respond(200, asset, MIME[Path(name).suffix])
             except (ValueError, OSError, RecursionError):
                 return self.respond(404)

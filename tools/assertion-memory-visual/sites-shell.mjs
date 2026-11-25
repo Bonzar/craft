@@ -16,7 +16,7 @@ async function owner(req,env,url) {
   const id=req.headers.get('oai-authenticated-user-id')||'';
   const email=req.headers.get('oai-authenticated-user-email')?.trim().toLowerCase()||'';
   const origin=req.headers.get('origin');
-  const entry=(url.pathname==='/'||(env.MEMORY_GRAPH_MODE==='test'&&latestAlias(url.pathname))||/^\/visual\/[a-f0-9]{64}\/$/.test(url.pathname))&&req.method==='GET'&&req.headers.get('sec-fetch-mode')==='navigate'&&req.headers.get('sec-fetch-dest')==='document';
+  const entry=(url.pathname==='/'||latestAlias(url.pathname)||/^\/visual\/[a-f0-9]{64}\/$/.test(url.pathname))&&req.method==='GET'&&req.headers.get('sec-fetch-mode')==='navigate'&&req.headers.get('sec-fetch-dest')==='document';
   if(!id||id.length>512||!email||email.length>512||!hex.test(env.MEMORY_GRAPH_OWNER_EMAIL_SHA256||'')
      ||(req.headers.get('sec-fetch-site')==='cross-site'&&!entry)||(origin!==null&&origin!==url.origin))return false;
   const hashed=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(email))),b=>b.toString(16).padStart(2,'0')).join('');
@@ -56,7 +56,7 @@ export function visualShell(mode, graph, fetcher=fetch){
     const path=url.pathname;
     const match=path.match(/^\/visual\/([a-f0-9]{64})\/(.*)$/);
     const name=match&&(match[2]||'index.html');
-    const current=path==='/'||(mode==='test'&&latestAlias(path));
+    const current=path==='/'||latestAlias(path);
     if(!current&&(!match||!item.test(name)||(match[2]&&url.search)))return res(404);
     const relay=body=>fetcher(gateway,{method:'POST',redirect:'error',signal:req.signal,headers:{
       'content-type':'application/json','x-memory-visual-auth':'Bearer '+token,
@@ -71,6 +71,11 @@ export function visualShell(mode, graph, fetcher=fetch){
       }
       const type=name.endsWith('.html')?'text/html':name.endsWith('.css')?'text/css':'text/javascript';
       const remote=await relay({op:'asset',digest:match[1],name});
+      if(remote.status===410){
+        await remote.body?.cancel();
+        if(name==='index.html'&&req.method==='GET')return res(302,null,{location:'/visual'+url.search});
+        return res(404); // Never point a named JS/CSS/worker at another digest.
+      }
       if(remote.status===404){await remote.body?.cancel();return res(404);}
       if(remote.status!==200||remote.headers.get('content-type')!==type){await remote.body?.cancel();throw Error('invalid response');}
       if(req.method==='HEAD'){await remote.body?.cancel();return res(200,null,{'content-type':type+'; charset=utf-8'});}

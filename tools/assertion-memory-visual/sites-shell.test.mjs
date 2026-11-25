@@ -106,3 +106,29 @@ test('stage or source drift cannot generate an approved native route',async()=>{
   for(const lane of [undefined,'PROD','both',''])assert.throws(()=>addNativeVisualAlias(Buffer.from('foreign'),lane),/Explicit native visual stage/);
   assert.throws(()=>addNativeVisualAlias(Buffer.from('foreign'),'prod'),/Unexpected native visual source/);
 });
+test('only retired versioned documents recover to the stable visual alias',async()=>{
+  const old='e'.repeat(64);
+  const shell=visualShell('test',{},async (_url,opts)=>{
+    const command=JSON.parse(opts.body);
+    if(command.op==='current')return Response.json({digest});
+    return new Response(null,{status:command.digest===old?410:404});
+  });
+  const doc=await shell.fetch(req('/visual/'+old+'/?foo=%2F&foo=x'),env);
+  assert.equal(doc.status,302);
+  assert.equal(doc.headers.get('location'),'/visual?foo=%2F&foo=x');
+  assert.match(doc.headers.get('cache-control'),/no-store/);
+  for(const file of ['assets/index-a.js','assets/index-a.css','assets/graph.worker-a.js']){
+    const asset=await shell.fetch(req('/visual/'+old+'/'+file),env);
+    assert.equal(asset.status,404);
+    assert.equal(asset.headers.get('location'),null);
+    assert.equal(await asset.text(),'');
+  }
+  assert.equal((await shell.fetch(req('/visual/'+old+'/',false),env)).status,403);
+  assert.equal((await shell.fetch(req('/visual/'+digest+'/'),env)).status,404);
+});
+test('native retired document adapter cannot alter an unrelated or unspecified stage source',async()=>{
+  const {addRetiredDocumentRecovery}=await import('./native-visual-retired-document.mjs');
+  const unrelated=Buffer.from('unreviewed source');
+  for(const lane of ['test','prod'])assert.throws(()=>addRetiredDocumentRecovery(unrelated,lane),/Unexpected native visual source/);
+  assert.throws(()=>addRetiredDocumentRecovery(unrelated,'__proto__'),/Exact visual stage required/);
+});
