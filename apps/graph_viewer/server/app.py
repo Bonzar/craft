@@ -1,6 +1,7 @@
 """Same-origin ASGI service, with authorization on every private route."""
 import asyncio
 from contextlib import asynccontextmanager
+import re
 import json
 from pathlib import Path
 from starlette.applications import Starlette
@@ -158,6 +159,18 @@ async def bookmark(request):
 
 async def events(request):
     manager=request.app.state.manager
+    if 'channel' in request.query_params:
+        if list(request.query_params.multi_items()) != [('channel','dashboard')]:
+            raise APIError('invalid_dashboard','Unknown event channel')
+        dashboard=request.app.state.queue_dashboard
+        if dashboard is None or dashboard.streams.locked():
+            raise APIError('queue_unavailable','Dashboard stream is unavailable',503)
+        if request.method=='HEAD':
+            return Response(media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
+        from .queue_dashboard import dashboard_events
+        return StreamingResponse(dashboard_events(request,manager,dashboard),
+                                 media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
+
     after=parse_replay_cursor(request)
     revision=request.query_params.get('revision')
     graph=manager.get(revision) if revision else None
@@ -175,6 +188,24 @@ async def events(request):
 
 
 async def capabilities(request):
+    if 'queue_status' in request.query_params:
+        q = request.query_params
+        if (set(q)-{'queue_status','limit','offset'} or any(len(q.getlist(k)) != 1 for k in q)
+                or q['queue_status'] != '1'):
+            raise APIError('invalid_dashboard','Invalid queue status request')
+        values = (q.get('limit','50'),q.get('offset','0'))
+        if not all(re.fullmatch(r'0|[1-9][0-9]{0,6}',v) for v in values):
+            raise APIError('invalid_dashboard','Invalid queue status page')
+        limit, offset = map(int,values)
+        if not 1<=limit<=100 or offset>1_000_000:
+            raise APIError('invalid_dashboard','Invalid queue status page')
+        dashboard = request.app.state.queue_dashboard
+        if dashboard is None:
+            raise APIError('queue_unavailable','Queue status is not configured',503)
+        try:
+            return JSONResponse(await asyncio.to_thread(dashboard.snapshot,limit=limit,offset=offset))
+        except Exception:
+            raise APIError('queue_unavailable','Queue status is temporarily unavailable',503) from None
     value=request.app.state.manager.source.capabilities()
     value['capabilities']['session_filter']=True
     if any(hasattr(g,'semantic_matrix') for g in request.app.state.manager.graphs.values()):
@@ -214,7 +245,7 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=()):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None):
     static_dir=validate_static_directory(
         static_dir,state_dir,source_path,bridge_read_token_file,
         getattr(source,'source_path',None),getattr(source,'path',None))
@@ -224,8 +255,15 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     @asynccontextmanager
     async def lifespan(app):
         await manager.start()
-        yield
-        await manager.stop()
+        dashboard_task = (asyncio.create_task(queue_dashboard.watch(manager.emit))
+                          if queue_dashboard is not None else None)
+        try:
+            yield
+        finally:
+            if dashboard_task is not None:
+                dashboard_task.cancel()
+                await asyncio.gather(dashboard_task,return_exceptions=True)
+            await manager.stop()
     async def handle_error(request,error):
         return error_response(error)
     async def unavailable(request,error):
@@ -240,6 +278,7 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     app.state.bridge_read_service=bridge_read_service
     app.state.synthetic_fixture=synthetic_fixture
     app.state.owner=owner; app.state.manager=manager
+    app.state.queue_dashboard=queue_dashboard
     app.state.static_dir=static_dir
     return app
 
