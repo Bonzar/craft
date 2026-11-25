@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -208,8 +209,14 @@ def prepare(payload, release, root, hook, retained):
         sync_dir(release.parent)
 
 
-def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None):
-    """Call after lane-specific authentication. Interpret only validated product artifacts."""
+def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,
+           after_committed=None):
+    """Deploy a validated artifact after lane-specific authentication.
+
+    An optional after_committed(root, release) runs under the existing lock
+    once activation is healthy and its journal has been durably cleared. It
+    is not a transaction or rollback hook; its failure cannot undo activation.
+    """
     root=Path(root)
     if not root.is_absolute() or root.is_symlink() or (root/'releases').is_symlink():
         raise ValueError('untrusted_release_root')
@@ -230,4 +237,9 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
             target=root/'releases'/release_id
             prepare(staged,target,root,dispatch,retained)
             activate(root,target,None,runner)
+            if after_committed is not None:
+                try:
+                    after_committed(root,target)
+                except Exception:
+                    logging.getLogger(__name__).warning('release_post_commit_housekeeping_incomplete')
     return release_id

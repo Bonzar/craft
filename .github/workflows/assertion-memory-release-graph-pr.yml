@@ -9,6 +9,8 @@ on:
       - "tools/assertion-memory-visual/native_visual*.py"
       - "tools/assertion-memory-release/github_graph_preview*"
       - "tools/assertion-memory-release/native_test_policy.py"
+      - "tools/assertion-memory-release/release_core.py"
+      - "tools/assertion-memory-release/test_release_post_commit.py"
       - "tools/assertion-memory-qa/test_native_test_policy.py"
       - "tools/assertion-memory-qa/lifecycle.py"
       - "tools/assertion-memory-qa/send_test_release.py"
@@ -24,3 +26,4 @@ jobs:
           persist-credentials: false
       - run: python3 tools/assertion-memory-release/github_graph_preview_test.py
       - run: python3 tools/assertion-memory-qa/test_native_test_policy.py
+      - run: python3 tools/assertion-memory-release/test_release_post_commit.py
