@@ -99,3 +99,10 @@ test('native alias source transform fails closed on drift and never silently mod
   assert.notEqual(INPUT_SHA256,OUTPUT_SHA256);
   assert.throws(()=>addNativeTestVisualAlias(Buffer.from('another published checkout')),/Unexpected native visual source/);
 });
+test('stage or source drift cannot generate an approved native route',async()=>{
+  const {addNativeVisualAlias,OUTPUT_SHA256,PROD_OUTPUT_SHA256}=await import('./native-test-visual-alias.mjs');
+  assert.match(PROD_OUTPUT_SHA256,/^[0-9a-f]{64}$/);
+  assert.notEqual(OUTPUT_SHA256,PROD_OUTPUT_SHA256);
+  for(const lane of [undefined,'PROD','both',''])assert.throws(()=>addNativeVisualAlias(Buffer.from('foreign'),lane),/Explicit native visual stage/);
+  assert.throws(()=>addNativeVisualAlias(Buffer.from('foreign'),'prod'),/Unexpected native visual source/);
+});
