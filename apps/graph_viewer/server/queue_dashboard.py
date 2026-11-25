@@ -109,6 +109,9 @@ class HostedQueueDashboard:
                 conn.rollback()
         if self.metadata()!=fields:
             raise ValueError('Hosted dashboard configuration changed')
+        # Nonsecret release identity for the exact serving-reader smoke.
+        if 'generation' in fields:
+            result['release_generation'] = fields['generation']
         return result
 
     async def watch(self, publisher):
