@@ -6,9 +6,14 @@ import {versionableBundle} from './bundle.mjs';
 import {stageAssets,hash} from './store.mjs';
 const [src,out,...extra]=process.argv.slice(2);
 if(!src||!out||extra.length)throw Error('Usage: build-archive EXACT_UI_ROOT NEW_ARCHIVE_TAR');
+let tag=null;
+if(process.env.GITHUB_EVENT_NAME==='release'){
+  tag=process.env.GITHUB_REF_NAME;
+  if(!tag||process.env.GITHUB_REF!=='refs/tags/'+tag)throw Error('Expected exact Visual release ref');
+}
 const root=await mkdtemp(join(tmpdir(),'visual-archive-'));
 try{
-  const files=await versionableBundle(resolve(src));
+  const files=await versionableBundle(resolve(src),tag);
   const release=await stageAssets(root,files);
   execFileSync('python3',['-c',`
 import io, pathlib, sys, tarfile
