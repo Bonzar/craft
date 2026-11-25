@@ -18,7 +18,10 @@ HEX = re.compile(r'[a-f0-9]{64}\Z')
 TAG = re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?\Z')
 PROTECTED = ('BASE_RELEASE_TAG','REVISION','mcp-tool-schema.json',
              'prototypes/assertion_memory/operation_registry.py',
-             'prototypes/assertion_memory/mcp_server.py')
+             'prototypes/assertion_memory/mcp_server.py',
+             'tools/assertion-memory-hosted-mcp/admin_operations.py',
+             'tools/assertion-memory-hosted-mcp/visual_admin_service.py',
+             'tools/assertion-memory-hosted-mcp/visual_status.py')
 
 
 def read_regular(path, limit, *, owner=None, private=False):

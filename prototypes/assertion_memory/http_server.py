@@ -113,7 +113,8 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
             routes, handler = neutral
             if not isinstance(routes, frozenset) or not callable(handler) or not any(
                 f'/memory-mcp-{lane}-tools' in routes
-                and routes <= {f'/memory-mcp-{lane}-tools',f'/memory-mcp-{lane}-effects',f'/memory-api-{lane}'}
+                and routes <= {f'/memory-mcp-{lane}-tools',f'/memory-mcp-{lane}-effects',
+                               f'/memory-api-{lane}',f'/memory-visual-{lane}-admin'}
                 for lane in ('test','prod')):
                 raise ValueError('Invalid neutral path binding')
     except BaseException:

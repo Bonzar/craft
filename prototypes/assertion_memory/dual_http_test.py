@@ -80,6 +80,45 @@ class Dual(TestCase):
             asyncio.run(test(str(Path(folder)/'empty.sqlite3')))
 
 
+    def test_optional_visual_status_mount_stays_lane_bound_and_outside_mcp(self):
+        import sys
+        tool_root = Path(__file__).resolve().parents[2]/'tools/assertion-memory-hosted-mcp'
+        with patch.object(sys, 'path', [str(tool_root), *sys.path]):
+            from visual_status import mount_visual_status
+        legacy, status, owner = 'a'*64, 'b'*64, 'c'*64
+        tag = 'assertion-memory-v1.2.3'
+        async def test(folder):
+            db = str(folder/'memory.sqlite3')
+            lock = folder/'deploy.lock'
+            lock.touch(mode=0o600)
+            cfg = ServiceConfig(db=db, provider='none', processing_session_ids=[])
+            scoped_path = '/memory-visual-test-admin'
+            def factory(admin_path):
+                def neutral(config,store,service,background):
+                    scoped = mount_visual_status(config=config, stage='test',
+                        owner_hash=owner, token=status, deploy_lock=lock,
+                        live_identity=lambda:(tag,'d'*64), interactive_enabled=False)
+                    return frozenset(('/memory-mcp-test-tools', admin_path)), scoped
+                return neutral
+            with self.assertRaisesRegex(ValueError, 'Invalid neutral path binding'):
+                create_http_app(cfg, legacy, 'memory.example', background=False,
+                                neutral_factory=factory('/memory-visual-prod-admin'))
+            app = create_http_app(cfg, legacy, 'memory.example', background=False,
+                                  neutral_factory=factory(scoped_path))
+            body = {'request_id':'36c69c38-89bd-444e-85eb-b27bb671f4da', 'environment':'test',
+                    'action':'status', 'actor':owner, 'arguments':{'limit':10,'offset':0}}
+            async with app.lifespan(), AsyncClient(transport=ASGITransport(app=app),
+                                                  base_url='https://memory.example') as c:
+                good = await c.post(scoped_path, headers={'authorization':'Bearer '+status}, json=body)
+                self.assertEqual(good.status_code, 200)
+                self.assertEqual(good.json()['result']['release_version'], tag)
+                status_at_mcp = await c.post('/memory/mcp', headers={'authorization':'Bearer '+status}, json=body)
+                self.assertEqual(status_at_mcp.status_code, 401)
+                legacy_at_status = await c.post(scoped_path, headers={'authorization':'Bearer '+legacy}, json=body)
+                self.assertEqual(legacy_at_status.status_code, 403)
+        with tempfile.TemporaryDirectory() as folder:
+            asyncio.run(test(Path(folder)))
+
     def test_personal_machine_full_registry_independent_of_sites_key(self):
         import sys
         from hashlib import sha256
