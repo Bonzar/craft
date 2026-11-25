@@ -140,3 +140,57 @@ write capabilities. Deploy the Base release (source verified via
 `current`) before restarting the existing Sites-facing unit. No edits to the
 wrapper source are needed. Native dashboard query and streaming smoke checks
 are still mandatory.
+
+### Stable TEST Sites visual link
+
+The owner-only TEST aliases `/visual` and `/visual/` should redirect to
+the current visual manifest digest on the same Site, with the original
+query and no caching. They do not serve the pinned fallback as "latest";
+failure of the current-pointer origin means unavailable. Existing root,
+pinned history URLs, and PROD behavior are unchanged.
+
+The native TEST Site router is not built or published by the Visual TAR
+installer. `native-test-visual-alias.mjs` is the exact reviewed source
+transformation for the v25 private `visual-pair-shell.mjs`. It detects
+preimage and output drift and writes a new file, with no network calls.
+The private full Site source is not checked into this repository.
+
+To make this a release-controlled native stage, package the tracked adapter
+from the same immutable GitHub Visual release commit as a separately
+named companion (not another release or an alternate UI archive). Record
+its SHA-256, exact source revision, and upload ID in the authorized release
+evidence. The existing native release operator stages this artifact against
+the verified private TEST project, comparing the native checkout and
+published version before changing anything. An operator-controlled native
+publication must be recorded as part of that Visual release, preserving
+the existing project, plugin, audience, owner, environment and other files.
+No present workflow publishes native Site routers automatically.
+
+For the one explicitly approved rollout, emit the deterministic companion
+from the exact GitHub Visual tag commit that the build already verifies:
+
+```sh
+revision=$(git rev-parse --verify "refs/tags/${VISUAL_RELEASE_TAG}^{commit}")
+test "$revision" = "$VERIFIED_VISUAL_BUILD_REVISION" || exit 1
+git archive --format=tar --output=assertion-memory-visual-native-test-alias.tar   "$revision" tools/assertion-memory-visual/native-test-visual-alias.mjs
+sha256sum assertion-memory-visual-native-test-alias.tar
+tar -tf assertion-memory-visual-native-test-alias.tar
+```
+
+Run this only in the selected original Visual build or its approved,
+same-commit release evidence stage. If uploading in Actions, use exactly
+`assertion-memory-visual-native-test-alias`, with no overwrite; retain the
+artifact ID and TAR SHA with the exact build run and revision. Do not use the
+companion as the VM Visual archive, and do not add this output to routine
+Visual releases. If the existing release gate cannot supply the companion
+provenance, stop instead of substituting a later build or publishing a loose
+file. The existing native publication still requires an approved operator
+and proof from the original private site.
+
+After the release-controlled publication, prove both alias paths through the
+existing authenticated TEST Site, no redirect following before comparing:
+302, same-origin `/visual/<expected digest>/`, exact original query,
+`x-memory-visual-digest` matching the Visual TEST receipt, no fallback
+marker, no-store, and matching bytes at the target. Check that unrelated MCP
+and graph routing is unchanged, a retained historical URL still pins the
+old release, and unauthorized requests do not reach the asset gateway.

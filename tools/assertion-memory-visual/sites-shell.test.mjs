@@ -56,3 +56,46 @@ test('owner visual shell forwards existing endpoints without buffering the deleg
   assert.equal((await reader.read()).done,true);
   assert.deepEqual(requests,[basePath,'/api/v1/events?channel=dashboard']);
 });
+test('stable visual aliases select the current archive, preserve queries and stay owner-only',async()=>{
+  const historical='b'.repeat(64);
+  const calls=[];
+  let available=true;
+  const shell=visualShell('test',{},async (_url,opts)=>{
+    const command=JSON.parse(opts.body);calls.push(command);
+    if(!available)return new Response(null,{status:503});
+    return command.op==='current'?Response.json({digest}):new Response('historical',{headers:{'content-type':'text/html'}});
+  });
+  assert.equal((await shell.fetch(req('/visual',false),env)).status,403);
+  assert.equal((await shell.fetch(req('/visual//'),env)).status,404);
+  assert.equal(calls.length,0);
+  const query='?focus=%2F&node=1&node=2';
+  for(const url of ['/visual','/visual/']){
+    const ownerLink=req(url+query);
+    ownerLink.headers.set('sec-fetch-site','cross-site');
+    ownerLink.headers.set('sec-fetch-mode','navigate');
+    ownerLink.headers.set('sec-fetch-dest','document');
+    const response=await shell.fetch(ownerLink,env);
+    assert.equal(response.status,302);
+    assert.equal(response.headers.get('location'),'/visual/'+digest+'/'+query);
+    assert.equal(response.headers.get('x-memory-visual-digest'),digest);
+    assert.match(response.headers.get('cache-control'),/no-store/);
+  }
+  assert.deepEqual(calls,[{op:'current'},{op:'current'}]);
+  const old=await shell.fetch(req('/visual/'+historical+'/'),env);
+  assert.equal(await old.text(),'historical');
+  assert.deepEqual(calls.at(-1),{op:'asset',digest:historical,name:'index.html'});
+  available=false;
+  for(const url of ['/visual','/visual/']){
+    const unavailable=await shell.fetch(req(url),env);
+    assert.equal(unavailable.status,502);
+    assert.equal(unavailable.headers.get('location'),null);
+    assert.equal(unavailable.headers.get('x-memory-visual-digest'),null);
+  }
+});
+test('native alias source transform fails closed on drift and never silently modifies another source',async()=>{
+  const {addNativeTestVisualAlias,INPUT_SHA256,OUTPUT_SHA256}=await import('./native-test-visual-alias.mjs');
+  assert.match(INPUT_SHA256,/^[0-9a-f]{64}$/);
+  assert.match(OUTPUT_SHA256,/^[0-9a-f]{64}$/);
+  assert.notEqual(INPUT_SHA256,OUTPUT_SHA256);
+  assert.throws(()=>addNativeTestVisualAlias(Buffer.from('another published checkout')),/Unexpected native visual source/);
+});
