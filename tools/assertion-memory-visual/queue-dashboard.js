@@ -14,7 +14,7 @@
   const states={running:'В работе',ready:'Ожидает',waiting_origin:'Ждёт источник',delayed:'Отложено',paused:'Приостановлено',expired:'Исчерпаны попытки',active:'Активна',unavailable:'Недоступна',disabled:'Выключена'};
   const phases={extract:'Извлечение',audit:'Проверка',link:'Связывание',refresh:'Перепроверка вывода',consolidate:'Поиск связей',partial_source:'Частично сохранённый источник',query:'Ответ на вопрос'};
   let stream,timer,loading=false,dirty=false,generation=0,lastSignal=0, fetchAbort;
-  let control, ownerReady=false, ownerCheck, inFlight=false, controlEpoch=0;
+  let control, ownerReady=false, ownerCheck, inFlight=false, controlEpoch=0, nativeReady=false, probedRevision=null;
   const rev=value=>typeof value==='string'&&/^[0-9a-f]{32}$/.test(value);
   const snapshotControl=(stage,value)=>['test','prod'].includes(stage)&&value&&
     typeof value.paused==='boolean'&&rev(value.revision)&&typeof value.can_change==='boolean'
@@ -85,7 +85,7 @@
   }
   function drawControl(){
     controlPanel.hidden=!control;
-    controlButton.hidden=!control?.canChange||!ownerReady;
+    controlButton.hidden=!(control?.canChange&&ownerReady||control?.stage==='test'&&nativeReady);
     controlButton.disabled=controlButton.hidden||inFlight;
     if(!control)return;
     const stage=control.stage.toUpperCase();
@@ -100,12 +100,32 @@
     return value?.authenticated===true&&typeof value.csrf_token==='string'&&
       /^[A-Za-z0-9_-]{20,160}$/.test(value.csrf_token)?value.csrf_token:null;
   }
+  async function prepareNative(before){
+    if(before.stage!=='test')return null;
+    const response=await fetch('/api/v1/processing/pause/prepare',{
+      method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',
+      headers:{accept:'application/json','content-type':'application/json'},body:'{}'
+    });
+    if(response.status!==200||!response.headers.get('content-type')?.includes('application/json'))return null;
+    const value=await response.json();
+    return value?.stage==='test'&&value.paused===before.paused&&value.revision===before.revision&&
+      typeof value.csrf_token==='string'&&/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(value.csrf_token)?value.csrf_token:null;
+  }
   function acceptControl(data){
     const current=generation, lane=data?.stage;
     const next=snapshotControl(lane,data?.processing_control);
     if(control?.stage!==next?.stage||!next?.canChange){ownerReady=false;ownerCheck=null;}
+    if(control?.revision!==next?.revision||next?.stage!=='test'||next?.canChange)nativeReady=false;
     control=next;
     drawControl();
+    if(next?.stage==='test'&&!next.canChange&&probedRevision!==next.revision){
+      probedRevision=next.revision;
+      void prepareNative(next).then(token=>{
+        if(generation===current&&panel.open&&control?.revision===next.revision&&!control.canChange){
+          nativeReady=Boolean(token);drawControl();
+        }
+      }).catch(()=>{});
+    }
     if(next?.canChange&&!ownerReady&&!ownerCheck){
       const check=csrf().then(token=>{
         if(generation===current&&panel.open&&control?.stage===lane&&control.canChange){
@@ -116,15 +136,16 @@
     }
   }
   controlButton.addEventListener('click',async()=>{
-    if(!panel.open||inFlight||!ownerReady||!control?.canChange)return;
+    if(!panel.open||inFlight||!(control?.canChange&&ownerReady||control?.stage==='test'&&nativeReady))return;
     const current=generation, before=control, next=!before.paused;
     inFlight=true;controlEpoch++;drawControl();
     controlFeedback.textContent='Сохраняем настройку…';
     try{
-      const token=await csrf();
+      const native=!before.canChange;
+      const token=await (native?prepareNative(before):csrf());
       if(generation!==current||!panel.open)return;
-      if(!token){ownerReady=false;throw Error();}
-      if(control?.revision!==before.revision||control?.stage!==before.stage||!control?.canChange){
+      if(!token){ownerReady=false;nativeReady=false;throw Error();}
+      if(control?.revision!==before.revision||control?.stage!==before.stage||control?.canChange!==before.canChange){
         controlFeedback.textContent='Состояние изменилось. Проверьте его перед повтором.';
         return;
       }
@@ -135,20 +156,20 @@
       });
       if(generation!==current||!panel.open)return;
       if(result.status===409){
-        ownerReady=false;
+        ownerReady=false;nativeReady=false;
         controlFeedback.textContent='Состояние изменилось. Загружаем актуальное.';
         return;
       }
-      if(result.status===401||result.status===403)ownerReady=false;
+      if(result.status===401||result.status===403){ownerReady=false;nativeReady=false;}
       if(result.status!==200||!result.headers.get('content-type')?.includes('application/json'))throw Error();
       const value=await result.json();
       if(generation!==current||!panel.open)return;
       if(value?.stage!==before.stage||value.paused!==next||!rev(value.revision)||value.revision===before.revision)throw Error();
-      control={stage:value.stage,paused:value.paused,revision:value.revision,canChange:true};
+      control={stage:value.stage,paused:value.paused,revision:value.revision,canChange:before.canChange};
       controlFeedback.textContent=value.paused?'Пауза включена.':'Пауза снята.';
     }catch{
       if(generation===current&&panel.open){
-        ownerReady=false;
+        ownerReady=false;nativeReady=false;
         controlFeedback.textContent='Не удалось подтвердить изменение. Проверяем актуальное состояние.';
       }
     }finally{
@@ -204,7 +225,7 @@
     panel.showModal();
     offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
     status.textContent='Подключаемся…';lastSignal=0;
-    control=null;ownerReady=false;ownerCheck=null;controlFeedback.textContent='';drawControl();
+    control=null;ownerReady=false;ownerCheck=null;nativeReady=false;probedRevision=null;controlFeedback.textContent='';drawControl();
     if(typeof EventSource!=='undefined'){
       stream=new EventSource('/api/v1/events?channel=dashboard',{withCredentials:true});
       const received=()=>{lastSignal=Date.now();void refresh();};
