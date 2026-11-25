@@ -217,6 +217,7 @@ class QueueDashboardTest(unittest.TestCase):
             with self.dash.control_lock.open('rb') as lock:
                 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 self.assertEqual(cli.put(url,headers=h,json=req).status_code,503)
+                self.assertFalse(cli.get(read,headers=h).json()['processing_control']['can_change'])
             r=cli.put(url,headers=h,json=req)
             self.assertEqual(r.status_code,200,r.text)
             revision=r.json()['revision']
