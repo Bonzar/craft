@@ -56,9 +56,10 @@ endpoint, owner-only private Site rollout and native inventory verification.
 
 ## Release and native receipt
 
-Tag type: `assertion-memory-sites-vX.Y.Z`. The source CI jobs package one artifact
-from the selected GitHub release commit reachable from main, without Sites
-write credentials. It contains exactly one shared Worker, two hashed config
+The existing Base tag `assertion-memory-vX.Y.Z` also packages the Sites
+bridge as a companion artifact in the original Base build. There is no
+separate Sites release tag or workflow. The build uses the same trusted,
+immutable commit reachable from main, without Sites write credentials. It contains exactly one shared Worker, two hashed config
 envelopes and a file manifest. Hash inputs are the exact existing private Site
 project ID, its origin, and canonical approved access identity; the public
 artifact must not contain the unhashed IDs, owner values, private source,

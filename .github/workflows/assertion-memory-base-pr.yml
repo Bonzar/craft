@@ -6,7 +6,6 @@ on:
     paths:
       - ".github/workflows/assertion-memory-base-pr.yml"
       - ".github/workflows/assertion-memory-base.yml"
-      - ".github/workflows/assertion-memory-sites-bridge.yml"
       - ".github/workflows/assertion-memory-authorize-promotion.yml"
       - "prototypes/assertion_memory/**"
       - "apps/graph_viewer/**"

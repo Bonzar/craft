@@ -13,7 +13,7 @@ import tarfile
 FORMAT=1
 HEX=re.compile(r'[a-f0-9]{64}')
 SHA=re.compile(r'[a-f0-9]{40}')
-TAG=re.compile(r'assertion-memory-sites-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?')
+TAG=re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?')
 LANES=('test','prod')
 PIN_KEYS={'project_id_sha256','site_origin_sha256','access_identity_sha256'}
 CONFIG_KEYS={'lane','owner_only','include_effects','effects_timeout_ms',*PIN_KEYS}
