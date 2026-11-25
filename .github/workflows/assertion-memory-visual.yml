@@ -33,6 +33,7 @@ jobs:
         run: python3 -B tools/assertion-memory-visual/lifecycle.py build
       - run: |
           python3 -B tools/assertion-memory-visual/test_asset_origin.py
+          python3 -B tools/assertion-memory-visual/test_runtime_companion.py
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_common_transport_adapter.py
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_visual_policy.py
           python3 -B tools/assertion-memory-visual/test_lifecycle.py
@@ -55,6 +56,22 @@ jobs:
         with:
           name: assertion-memory-visual-${{ github.event.release.id }}-${{ github.sha }}
           path: "${{ runner.temp }}/visual/*"
+          if-no-files-found: error
+          retention-days: 90
+      - name: Build immutable Visual TEST runtime companion
+        env:
+          VISUAL_RELEASE_ID: ${{ github.event.release.id }}
+        run: |
+          sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive_sha256"])' "$RUNNER_TEMP/build-receipt.json")"
+          python3 -B tools/assertion-memory-visual/runtime_companion.py \
+            --tag "${GITHUB_REF#refs/tags/}" --revision "$GITHUB_SHA" \
+            --release-id "$VISUAL_RELEASE_ID" --build-run-id "$GITHUB_RUN_ID" \
+            --static-sha "$sha" --out "$RUNNER_TEMP/visual-runtime"
+      - name: Persist immutable Visual TEST runtime companion
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assertion-memory-visual-runtime-${{ github.event.release.id }}-${{ github.sha }}
+          path: "${{ runner.temp }}/visual-runtime/*"
           if-no-files-found: error
           retention-days: 90
   deploy:

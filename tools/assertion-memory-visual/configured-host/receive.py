@@ -49,9 +49,18 @@ def main():
         sys.path[:0] = [str(CORE), str(product)]
         from visual_auth import COMMAND, verify_frame
         from visual_policy import deploy_verified
-        reply = receive(stage, os.environ.get('SSH_ORIGINAL_COMMAND',''), sys.stdin.buffer,
-                        verify=verify_frame, deploy=deploy_verified, command_pattern=COMMAND,
-                        signers=policy/'allowed-signers', state=ROOT/stage)
+        command=os.environ.get('SSH_ORIGINAL_COMMAND','')
+        if command.startswith('deploy-visual-runtime '):
+            if stage!='test':
+                raise ValueError('command_denied')
+            for name in ('runtime_host.py','runtime_receive.py','runtime_companion.py','runtime_joint.py','runtime_switch.py'):
+                trusted(product/name,stat.S_ISREG)
+            from runtime_host import receive as receive_runtime
+            reply=receive_runtime(command,sys.stdin.buffer)
+        else:
+            reply = receive(stage, command, sys.stdin.buffer,
+                            verify=verify_frame, deploy=deploy_verified, command_pattern=COMMAND,
+                            signers=policy/'allowed-signers', state=ROOT/stage)
     except ValueError as err:
         if str(err) == 'command_denied':
             print('{"status":"rejected","error":"command_denied"}')

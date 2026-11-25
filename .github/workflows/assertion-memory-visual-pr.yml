@@ -23,6 +23,7 @@ jobs:
           persist-credentials: false
       - run: |
           python3 -B tools/assertion-memory-visual/test_asset_origin.py
+          python3 -B tools/assertion-memory-visual/test_runtime_companion.py
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_common_transport_adapter.py
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_visual_policy.py
           python3 -B tools/assertion-memory-visual/test_lifecycle.py

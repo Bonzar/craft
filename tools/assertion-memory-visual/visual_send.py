@@ -21,7 +21,7 @@ def main():
     deploy(d)
 
 
-def deploy(d, *, lane="legacy"):
+def deploy(d, *, lane="legacy", runtime=None):
     if lane not in {"legacy", "configured"}:
         raise ValueError("invalid_visual_transport_lane")
     mode=d['VISUAL_ENV']
@@ -35,8 +35,24 @@ def deploy(d, *, lane="legacy"):
     if scope!=host_field or not sep:
         raise ValueError('invalid_visual_host_pin')
     tmp=d['RUNNER_TEMP']
-    envelope=sign(command,d['VISUAL_SIGNING_KEY'],directory=tmp)
+    envelope=sign(command,d['VISUAL_SIGNING_KEY'],directory=tmp) if runtime is None else b''
     expected={'environment':mode,'revision':rev,'archive_sha256':sha,'release':manifest}
+    runtime_claim=None
+    if runtime is not None:
+        if mode!='test' or lane!='configured':
+            raise ValueError('Only configured Visual TEST accepts joint runtime release')
+        if __package__:
+            from . import runtime_companion, runtime_receive
+        else:
+            import runtime_companion, runtime_receive
+        descriptor,runtime_digest,path=runtime
+        if descriptor['revision']!=rev or descriptor['static_sha']!=sha:
+            raise ValueError('Wrong staged Visual paired identity')
+        raw=path.read_bytes()
+        runtime_companion.verify(raw,descriptor,runtime_digest)
+        signature=runtime_companion.sign(descriptor,runtime_digest,d['VISUAL_SIGNING_KEY'])
+        command,joint=runtime_receive.assemble(descriptor,raw,signature,(Path(d['VISUAL_DOWNLOAD'])/'visual.tar').read_bytes())
+        runtime_claim={**expected,'runtime_sha256':runtime_digest}
     if lane == 'configured':
         if __package__:
             from .configured_visual_route import route as scoped_route
@@ -49,9 +65,12 @@ def deploy(d, *, lane="legacy"):
     with scoped_route(host=host,port=port,account=f'{account_prefix}-{mode}-deploy',host_pin=pin,
                 key=d['VISUAL_SSH_KEY'],runtime_dir=tmp) as to:
         preflight(to)
-        with (Path(d['VISUAL_DOWNLOAD'])/'visual.tar').open('rb') as archive:
-            status,body=exchange(to,command,envelope=envelope,payload=archive,timeout=60,limit=1024)
-    if status!=0 or body!=json.dumps(expected,separators=(',',':')).encode()+b'\n':
+        if runtime_claim is None:
+            with (Path(d['VISUAL_DOWNLOAD'])/'visual.tar').open('rb') as archive:
+                status,body=exchange(to,command,envelope=envelope,payload=archive,timeout=60,limit=1024)
+        else:
+            status,body=exchange(to,command,payload=joint,timeout=70,limit=1024)
+    if status!=0 or body!=json.dumps(runtime_claim or expected,separators=(',',':')).encode()+b'\n':
         raise ValueError('visual_receiver_failed_or_receipt_mismatch')
     print('Authorized shared receiver returned exact visual release identity')
     return expected
