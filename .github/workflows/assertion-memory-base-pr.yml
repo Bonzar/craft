@@ -84,6 +84,7 @@ jobs:
           bash -n tools/assertion-memory-release/adopt-live-base-test.sh
           python tools/assertion-memory-release/test_adopt_live_base_test.py
           python -m unittest discover -s tools/assertion-memory-qa/vm -p test_receiver.py
+          python -m unittest discover -s tools/assertion-memory-release -p test_base_retention.py
           PYTHONPATH=tools/assertion-memory-release python -m unittest discover -s tools/assertion-memory-qa/prod-bridge
       - name: Verify actual Base HTTP to unchanged Sites MCP contract
         run: |

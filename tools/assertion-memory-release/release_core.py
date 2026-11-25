@@ -212,6 +212,8 @@ def prepare(payload, release, root, hook, retained):
 
 def prune_inactive_base(root, active, prove_inactive):
     """Only Base payloads, under the caller's lane activation lock; no state paths."""
+    if root.resolve(strict=True)!=root:
+        raise ValueError('retention_noncanonical_root')
     if not shutil.rmtree.avoids_symlink_attacks:
         raise ValueError('retention_requires_safe_rmtree')
     if current_target(root)!=str(active) or checked_release(root,active.name)!=active:
