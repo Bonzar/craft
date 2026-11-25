@@ -217,6 +217,8 @@ class QueueDashboardTest(unittest.TestCase):
                     self.assertEqual(answer.json()['stage'],'prod')
                     self.assertEqual(answer.json()['release_generation'],gen)
                     self.assertNotIn('DO NOT LEAK',answer.text)
+                    policy.unlink()
+                    self.assertEqual(c.get(path,headers=h).status_code,503)
 
     def test_prod_dashboard_uses_shared_lane_fence_not_write_or_replace(self):
         parent=self.root/'root-transition'

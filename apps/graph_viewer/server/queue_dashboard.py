@@ -114,12 +114,13 @@ def configured_for_legacy_reader(source_path, *, env=None):
     try:
         if stage not in ('test','prod') or path!=str(dashboard_projection.projection_path(stage)):
             raise ValueError('Wrong scoped dashboard configuration')
-        activation = _test_activation if stage=='test' else lambda: _active_reader_release('prod')
+        def activation():
+            reader_uid=dashboard.publisher_uid if stage=='test' else _prod_reader_uid(PROD_READER_POLICY)
+            if os.getuid()!=reader_uid or os.geteuid()!=reader_uid:
+                raise ValueError('Graph reader UID does not match the authorized scope')
+            return _test_activation() if stage=='test' else _active_reader_release('prod')
         dashboard = HostedQueueDashboard(stage,path,source_path,activation=activation,
                         read_fence=_prod_read_fence if stage=='prod' else None)
-        reader_uid = dashboard.publisher_uid if stage=='test' else _prod_reader_uid(PROD_READER_POLICY)
-        if os.getuid()!=reader_uid or os.geteuid()!=reader_uid:
-            raise ValueError('Graph reader UID does not match the authorized scope')
         activation()
         return dashboard
     except (OSError, ValueError, KeyError, TypeError):
