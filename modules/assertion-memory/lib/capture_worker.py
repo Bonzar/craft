@@ -21,6 +21,8 @@ def run(binding, state, *, once=False, binding_path=None):
     capture = {**binding['capture'],'credential_env_var':binding.get('connection',{}).get('bearer_token_env_var')}
     root = Path(state)
     machine = binding['connection'].get('transport') == 'private_base_http'
+    if capture.get('capture_batch') and not machine:
+        return 2
     if machine:
         from lib.fresh_policy import verify_machine_binding
         if not binding['capture'].get('enabled') or root != verify_machine_binding(binding): return 2

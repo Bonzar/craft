@@ -34,7 +34,9 @@ class Export(unittest.TestCase):
                     'mcp-protocol-version':'2025-11-25'},json={'jsonrpc':'2.0','id':1,'method':'tools/list','params':{}})
                 self.assertEqual(r.status_code,200)
                 actual={entry['name']:entry['inputSchema'] for entry in r.json()['result']['tools']}
-            self.assertEqual(actual,first['tools'])
+            # A machine-only transport operation is deliberately absent from legacy MCP.
+            self.assertIn('memory_capture_batch',first['tools'])
+            self.assertEqual(actual,{n:s for n,s in first['tools'].items() if n!='memory_capture_batch'})
             self.assertIn('memory_query',actual)
         with TemporaryDirectory() as d:
             asyncio.run(check(str(Path(d)/'empty.sqlite3')))

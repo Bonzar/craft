@@ -8,7 +8,7 @@ from .test_assertion_memory_capture import load_capture
 
 class FakeRemote:
     def __init__(self):
-        self.calls=[];self.streams={};self.receipts={};self.fail_report=False;self.fail_capture=False;self.missing_delivery=False
+        self.calls=[];self.streams={};self.receipts={};self.fail_report=False;self.fail_capture=False;self.missing_delivery=False;self.fail_batch=False
     def call(self,name,args):
         self.calls.append((name,json.loads(json.dumps(args))))
         if name=='memory_ingest_register':
@@ -17,6 +17,13 @@ class FakeRemote:
                 self.streams[key]={'stream_id':'stream-'+key,'epoch':'epoch-'+key,'report_seq':0,
                     'observed_seq':0,'acked_through':0,'scan_state':'unknown','gap_count':0,'lifecycle':'active'}
             return dict(self.streams[key])
+        if name=='memory_capture_batch':
+            boundary=len(self.calls)
+            receipts=[self.call('memory_capture_message',row) for row in args['messages']]
+            # Simulated service commits raw rows inside this single transport operation.
+            del self.calls[boundary:]
+            if self.fail_batch:self.fail_batch=False;raise OSError('lost atomic ACK')
+            return {'batch_id':args['batch_id'],'receipts':receipts}
         stream=next(s for s in self.streams.values() if s['stream_id']==args.get('stream_id',args.get('delivery',{}).get('stream_id')))
         if name=='memory_ingest_report':
             if args['report_seq'] < stream['report_seq']: raise ValueError('old report')
@@ -78,6 +85,29 @@ class FrontierTest(unittest.TestCase):
         self.assertEqual(calls[0],calls[1])
         self.assertEqual(len(self.remote.receipts),1)
         self.assertEqual(self.store.messages('physical')[0]['status'],'acknowledged')
+
+    def test_capture_batch_is_one_call_and_lost_ack_replays_exact_members(self):
+        ids=['user-fixture','assistant-fixture']
+        marker={'id':'b'*64,'message_ids':ids}
+        with self.store.db:
+            for ordinal,mid in enumerate(ids):
+                role='user' if ordinal==0 else 'assistant'
+                self.store.enqueue({'session_id':'physical','message_id':mid,'actor_id':role,
+                    'role':role,'text':'fixture '+mid,'source':'fiction://'+mid,
+                    '_capture_batch':marker},local_position=ordinal)
+        # Even a scan budget of one must not split the atomically staged group.
+        self.remote.fail_batch=True
+        self.coordinator.tick(limit=1)
+        self.assertTrue(all(m['status']=='pending' for m in self.store.messages('physical')))
+        self.now+=65
+        self.coordinator.tick(limit=1)
+        calls=[args for name,args in self.remote.calls if name=='memory_capture_batch']
+        self.assertEqual(calls[0],calls[1])
+        self.assertEqual([row['message_id'] for row in calls[0]['messages']],ids)
+        self.assertTrue(all('_capture_batch' not in row for row in calls[0]['messages']))
+        self.assertFalse(any(name=='memory_capture_message' for name,_ in self.remote.calls))
+        self.assertEqual(len(self.remote.receipts),2)
+        self.assertTrue(all(m['status']=='acknowledged' for m in self.store.messages('physical')))
 
     def test_missing_delivery_receipt_never_acknowledges_local_raw_message(self):
         self.enqueue();self.remote.missing_delivery=True;self.tick()

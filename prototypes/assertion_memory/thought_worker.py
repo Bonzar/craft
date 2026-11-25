@@ -180,13 +180,18 @@ class ThoughtWorker:
                     return self._consolidate(task)
         return None
 
-    def _claim_source(self, *, event_id=None):
+    def _claim_source(self, *, event_id=None, capture_batch_id=None):
         with self.queue.store.transaction(write=True) as c:
             # SQLite write admission may have waited past the pause request.
             if processing_paused(c) or (self.is_pausing is not None and self.is_pausing()):
                 return None
             now = self.queue._time()
             eligible,args = source_predicate(self.processing_session_ids,'e')
+            if capture_batch_id is None:
+                eligible += " AND json_extract(e.metadata,'$.capture_batch_id') IS NULL"
+            else:
+                eligible += " AND json_extract(e.metadata,'$.capture_batch_id')=?"
+                args = [*args,capture_batch_id]
             if event_id is not None:
                 eligible += ' AND e.id=?'
                 args = [*args, event_id]

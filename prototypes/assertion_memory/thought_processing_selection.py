@@ -82,20 +82,23 @@ def pending_cohort(db,task,allowed):
     return values if values else None
 
 
-def processing_deadline(db,session_ids,*,now,with_model=True,lane='all'):
+def processing_deadline(db,session_ids,*,now,with_model=True,lane='all',include_batches=False):
     """Read-only scheduler probe; never build engines, migrate schema, or load bodies."""
     if lane not in ('all','source','maintenance'):raise ValueError('unknown processing lane')
     ids=normalize_session_ids(session_ids)
     if ids==() or not with_model or processing_paused(db):return None
     if ids is FRESH_MAC_ONLY:
+        from .capture_batch import needs_wake
         from .fresh_processing import ensure_selector
+        if include_batches and lane != 'maintenance' and needs_wake(db):return now
         if not ensure_selector(db):return None
     deadlines=[]
     if lane!='maintenance' and _exists(db,'memory_raw_events') and _exists(db,'memory_capture_jobs'):
         where,args=source_predicate(ids)
         deadlines.append(db.execute("SELECT min(CASE j.status WHEN 'running' THEN j.lease_until WHEN 'waiting_model' THEN ? ELSE j.available_at END) "
             'FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id '
-            "WHERE j.status IN ('pending','running','waiting_model') AND "+where,[now,*args]).fetchone()[0])
+            "WHERE j.status IN ('pending','running','waiting_model') "
+            "AND json_extract(e.metadata,'$.capture_batch_id') IS NULL AND "+where,[now,*args]).fetchone()[0])
     if lane!='source' and _exists(db,'memory_thought_work'):
         where,args=maintenance_predicate(db,ids)
         deadlines.append(db.execute("SELECT min(CASE w.status WHEN 'running' THEN w.lease_until ELSE w.available_at END) "

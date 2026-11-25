@@ -3,7 +3,7 @@ import asyncio, hashlib, hmac, json, re
 from copy import deepcopy
 from time import monotonic
 from jsonschema import Draft202012Validator
-from policy import EFFECTS, QUERY, authorized, digest
+from policy import BATCH, EFFECTS, QUERY, authorized, digest
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 MAX_REQUEST, MAX_RESPONSE = 100_000, 131_072
@@ -110,7 +110,9 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                           "annotations":{"readOnlyHint":manifest[name].get("readOnlyHint") is True,
                                          "destructiveHint":False,"openWorldHint":False}}
                          for name,schema in sorted(canonical_schemas.items())]
-    machine_digest=digest(canonical_descriptors)
+    general_machine_descriptors=[row for row in canonical_descriptors if row["name"]!=BATCH]
+    fresh_machine_digest=digest(canonical_descriptors)
+    general_machine_digest=digest(general_machine_descriptors)
     compiled={(cap,n):Draft202012Validator(projection) for n,t in manifest.items()
                for cap,projection in t['capability_projections'].items() if cap in caps}
     if not isinstance(gateway_token, str) or not HEX.fullmatch(gateway_token):
@@ -142,7 +144,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
         # Same canonical operation descriptions/schema as the machine API. The
         # already authenticated transport routes still separate reads and writes.
         route_tools={cap:[d for d in canonical_descriptors
-                          if d['annotations']['readOnlyHint']==(cap=='baseline_read')]
+                          if d['name']!=BATCH and d['annotations']['readOnlyHint']==(cap=='baseline_read')]
                      for cap in ('baseline_read','intake_process')}
     full_digests={cap:digest(items) for cap,items in route_tools.items()} if full_sites else {}
 
@@ -191,6 +193,8 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
             allowed=len(auth)==1 and hmac.compare_digest(auth[0],b'Bearer '+secret.encode('ascii'))
         if not allowed:
             return await reply(401, {"error":"unauthorized"})
+        fresh_mac = (machine and fresh_mac_digest is not None
+                     and machine_authorized(auth[0],(fresh_mac_digest,)))
         if header(b"content-type")!=[b"application/json"]:
             return await reply(415, {"error":"unsupported"})
         # Handle only strict small JSON, and reject requests before invoking FastMCP.
@@ -223,6 +227,8 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                         or not all(HEX.fullmatch(expected_identity[k]) for k in ("generation","catalog_sha256"))):
                     raise ValueError()
                 if not full_sites and name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
+                if name==BATCH and not fresh_mac:
+                    raise ValueError()
                 if machine or full_sites:
                     if name not in canonical_validators or not canonical_validators[name].is_valid(args):
                         raise ValueError()
@@ -245,20 +251,18 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     not HEX.fullmatch(generation): raise ValueError()
                 if release!=profile.get("base_release"): raise ValueError()
                 receipt={"release":release,"generation":generation,
-                         "catalog_sha256":machine_digest if machine else full_digests[capability] if full_sites else
+                         "catalog_sha256":(fresh_machine_digest if fresh_mac else general_machine_digest) if machine else full_digests[capability] if full_sites else
                              read_digest if capability=="baseline_read" else catalog["catalog_sha256"]}
                 if discovery:
                     if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
                     return await reply(200, {"environment":lane,"request_id":rid,**receipt,
-                                             "capability":capability,"tools":canonical_descriptors if machine else route_tools[capability]})
+                                             "capability":capability,"tools":(canonical_descriptors if fresh_mac else general_machine_descriptors) if machine else route_tools[capability]})
                 if expected_identity is not None and expected_identity!=receipt:
                     return await reply(409, {"error":"stale_catalog"})
                 if operations is None:
                     response=await asyncio.to_thread(forward,rid,name,args)
                 else:
-                    if (machine and fresh_mac_digest is not None
-                            and name in ("memory_ingest_register", "memory_capture_message")
-                            and machine_authorized(auth[0], (fresh_mac_digest,))):
+                    if fresh_mac and name in ("memory_ingest_register", "memory_capture_message", BATCH):
                         from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
                         with authenticated_fresh_mac():
                             value=await operations.invoke(name,args)

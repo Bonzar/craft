@@ -48,6 +48,7 @@ class MemoryService:
         source: str, scope: str = 'default',
         *, source_message_at: str | None = None, source_message_clock_basis: dict | None = None,
         timezone: str | None = None, delivery: dict | None = None, artifact_ids: list[str] | None = None,
+        _capture_batch_id: str | None = None,
     ) -> dict:
         fields = (session_id, message_id, actor_id, text, source, scope)
         if not all(isinstance(value, str) and value.strip() for value in fields):
@@ -64,7 +65,7 @@ class MemoryService:
         payload = json.dumps([*fields, role, position], ensure_ascii=False)
         fingerprint = _payload_fingerprint(payload)
         from .source_message_clock import normalize, replay, FIELDS
-        metadata = {}
+        metadata = {'capture_batch_id':_capture_batch_id} if _capture_batch_id else {}
         if source_message_at is not None:
             basis = (source_message_clock_basis if source_message_clock_basis is not None else
                 {'kind': 'producer', 'field': 'source_message_at',
@@ -107,6 +108,8 @@ class MemoryService:
                 if previous_fingerprint != replay_fingerprint:
                     raise ValueError('message identity already has different immutable content or provenance')
                 event = self.queue.get_event(previous['event_id'])
+                if event.metadata.get('capture_batch_id') != _capture_batch_id:
+                    raise ValueError('individual and batch capture provenance differ')
                 if event.metadata.get('artifact_refs',[]) != metadata.get('artifact_refs',[]):
                     raise ValueError('message identity already has different immutable artifact references')
                 replay(event.metadata, metadata, allow_omitted=True, source=source)
@@ -136,7 +139,8 @@ class MemoryService:
             from .ingest_streams import record_delivery
             delivered = record_delivery(connection, delivery, event.id, session_id)
             from .fresh_processing import admit_event
-            admit_event(connection, event.id, session_id, delivered, created=previous is None)
+            if _capture_batch_id is None:
+                admit_event(connection, event.id, session_id, delivered, created=previous is None)
         return {'event': _event_descriptor(event), 'job': _job_descriptor(self.queue.get(event.id)),
                 'pending_count': self._pending_count(), **({'delivery': delivered} if delivery is not None else {})}
 

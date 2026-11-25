@@ -195,7 +195,7 @@ def _eligible_processing_work(config):
         connection.execute('PRAGMA query_only=ON')
         connection.execute('BEGIN')
         now=datetime.now(timezone.utc).isoformat(timespec='microseconds')
-        return processing_deadline(connection,_processing_selector(config),now=now,with_model=True) is not None
+        return processing_deadline(connection,_processing_selector(config),now=now,with_model=True,include_batches=True) is not None
     finally:
         connection.close()
 
@@ -435,6 +435,20 @@ def _register_write_tools(mcp, service, launcher, background):
         if background:
             value['processing'] = launcher.start()
         return value
+
+    if getattr(mcp,'neutral_results',False):
+        @mcp.tool()
+        async def memory_capture_batch(batch_id: str, messages: list[dict]) -> dict:
+            """Atomically accept one complete generic ordered raw batch and schedule initial group processing.
+            Stable batch_id is a caller SHA-256 identifier, never inferred from timestamps. Message
+            bodies, roles and individual delivery receipts remain separate and immutable. This
+            machine operation does not wait for future members or know what occasion they represent.
+            """
+            from .capture_batch import capture
+            value = capture(service,batch_id,messages)
+            if background:
+                value['processing'] = launcher.start()
+            return value
 
     @mcp.tool()
     async def memory_process(limit: int = 100, retry_job_id: str | None = None,

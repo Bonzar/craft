@@ -176,7 +176,7 @@ def _candidate(row, session, turn, *, human=False):
     return None
 
 
-def _enqueue(store, state, row, role, text, provider_id, position, actor, config, locator, *, artifact_ids=None, proof=None):
+def _enqueue(store, state, row, role, text, provider_id, position, actor, config, locator, *, artifact_ids=None, proof=None, deferred=False):
     if not isinstance(text, str) or not text.strip(): return False
     turn = state['turn']['id']
     provider = ('codex:' + role + ':' + turn + ':' + provider_id) if isinstance(provider_id, str) and provider_id else None
@@ -195,6 +195,8 @@ def _enqueue(store, state, row, role, text, provider_id, position, actor, config
                 arguments['source_message_clock_basis'] = {'kind': 'producer', 'field': 'timestamp',
                     'value': timestamp, 'source': source, 'message_id': mid}
         except ValueError: pass
+    if deferred:
+        return arguments,position
     if role == 'user':
         active = state['turn']
         if active.get('assistant_finished'):
@@ -295,11 +297,17 @@ def _complete_assistant(store, state, config, payload):
         if _assistant_mode(source) in ('final', 'pending') and isinstance(text, str) and text.strip():
             if text == payload.get('last_agent_message'):
                 # The whole turn becomes eligible for delivery in the polling transaction.
-                queued = sum(store.enqueue(args, local_position=position)
-                             for args, position in sorted(messages, key=lambda entry: entry[1]))
                 turn_id = state['turn']['id']
-                return queued + int(_enqueue(store, state, row, 'assistant', text, source.get('id'),
-                    pending['position'], 'assistant', config, 'assistant:' + turn_id + ':byte:' + str(pending['offset'])))
+                assistant = _enqueue(store, state, row, 'assistant', text, source.get('id'),
+                    pending['position'], 'assistant', config,
+                    'assistant:' + turn_id + ':byte:' + str(pending['offset']), deferred=True)
+                members = sorted([*messages, assistant], key=lambda entry: entry[1])
+                if config.get('capture_batch'):
+                    member_ids = [args['message_id'] for args,_ in members]
+                    payload = json.dumps([state['session_id'], member_ids],ensure_ascii=True,separators=(',',':'))
+                    marker = {'id': hashlib.sha256(payload.encode('ascii')).hexdigest(), 'message_ids': member_ids}
+                    members = [(args | {'_capture_batch': marker}, position) for args,position in members]
+                return sum(store.enqueue(args,local_position=position) for args,position in members)
             if payload.get('last_agent_message'):
                 state['gaps'].append('unmatched_assistant_completion')
     if messages:

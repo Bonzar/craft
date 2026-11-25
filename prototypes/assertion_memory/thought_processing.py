@@ -46,6 +46,7 @@ class TracedThoughtWorker(ThoughtWorker):
         super().__init__(*args, **kwargs)
         self.source_batch = source_batch
         self.batch_contexts = {}
+        self.capture_batch_id = None
 
     def _context(self, event):
         if event.id in self.batch_contexts:
@@ -88,6 +89,8 @@ class TracedThoughtWorker(ThoughtWorker):
                             'event_id': inputs['event_id'],
                         })
                         return draft.body
+            if task=='Construct thought' and self.capture_batch_id is not None:
+                raise ValueError('batch already consumed its sole source generation')
             return fallback(task, request, bindings)
 
         return gateway
@@ -96,7 +99,8 @@ class TracedThoughtWorker(ThoughtWorker):
         source_ids = list(self.batch_contexts) or list(dict.fromkeys(
             row['event_id'] for row in bindings if 'event_id' in row))
         batch_trace = ThoughtTrace(self.queue.store, 'source_model_batch',
-                                   {'source_event_ids': source_ids})
+                                   {'source_event_ids': source_ids,
+                                    **({'capture_batch_id':self.capture_batch_id} if self.capture_batch_id else {})})
         try:
             result = batch_trace.call(self.model, request, bindings)
         except ProcessingCancelled:
@@ -108,7 +112,7 @@ class TracedThoughtWorker(ThoughtWorker):
         batch_trace.finish()
         return result, batch_trace.id
 
-    def process_source_group(self, event_ids, limit):
+    def process_source_group(self, event_ids, limit, *, capture_batch_id=None):
         from .thought_worker_queue import track_group_followups
         if (len(self.processing_session_ids or ()) != 1 or not 1 <= len(event_ids) <= limit
                 or len(set(event_ids)) != len(event_ids)):
@@ -122,6 +126,9 @@ class TracedThoughtWorker(ThoughtWorker):
                 previous_observer(event, kind, identity, token)
 
         self.claim_observer = observe
+        if capture_batch_id is not None and self.claim_bound_source_extractor_factory is not None:
+            raise ValueError('configured claim-bound extractor has no whole-batch construction capability')
+        self.capture_batch_id=capture_batch_id
         try:
             with (background_write_retry(), track_group_followups(self) as work,
                   _keep_group_claims(self.queue, active_claims) as renewal):
@@ -130,6 +137,7 @@ class TracedThoughtWorker(ThoughtWorker):
         except ProcessingCancelled:
             return
         finally:
+            self.capture_batch_id=None
             self.claim_observer = previous_observer
 
     def _run_source_group(self, event_ids, renewal, active_claims):
@@ -163,8 +171,9 @@ class TracedThoughtWorker(ThoughtWorker):
         with self.queue.store.transaction(write=True) as c:
             if processing_paused(c) or (self.is_pausing and self.is_pausing()):
                 return []
-            events = pending_sources(self.queue, self.processing_session_ids[0], event_ids)
-            claims = [self._claim_source(event_id=event.id) for event in events]
+            events = pending_sources(self.queue, self.processing_session_ids[0], event_ids,
+                                     capture_batch_id=self.capture_batch_id)
+            claims = [self._claim_source(event_id=event.id,capture_batch_id=self.capture_batch_id) for event in events]
             if any(claim is None for claim in claims):
                 if self.is_pausing and self.is_pausing():
                     # Roll back any partial admission before returning to the supervisor.
@@ -252,7 +261,8 @@ def _recover_selected(queue, session_ids):
         predicate,arguments=source_predicate(session_ids,'e')
         db.execute("UPDATE memory_capture_jobs SET status='pending',lease_token=NULL,lease_until=NULL,"
             "available_at=?,updated_at=? WHERE status='running' AND event_id IN "
-            f'(SELECT e.id FROM memory_raw_events e WHERE {predicate})',(now,now,*arguments))
+            f"(SELECT e.id FROM memory_raw_events e WHERE json_extract(e.metadata,'$.capture_batch_id') IS NULL AND {predicate})",
+            (now,now,*arguments))
         exists=db.execute("SELECT 1 FROM sqlite_master WHERE name='memory_thought_work'").fetchone()
         if session_ids is not None and exists:
             predicate,arguments=maintenance_predicate(db,session_ids,'w')
@@ -266,7 +276,7 @@ def _deadline(store, config):
         from .mcp_server import _processing_selector
         return processing_deadline(db,_processing_selector(config),
             now=datetime.now(timezone.utc).isoformat(timespec='microseconds'),
-            with_model=config.provider!='none')
+            with_model=config.provider!='none',include_batches=True)
 
 
 @contextmanager
@@ -321,6 +331,10 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
                     worker.process_source_group(config.source_event_ids, limit)
             return
         _recover_selected(queue,selector)
+        if config.auto_process_fresh_mac and not limit:
+            from .capture_batch import fence_interrupted
+            with store.transaction(write=True) as db:
+                fence_interrupted(db)
 
         @contextmanager
         def factory(lane, observer):
@@ -338,9 +352,15 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
 
         completed = 0
         while not is_pausing():
+            if config.auto_process_fresh_mac and not limit:
+                from .capture_batch import run_next
+                with processing_cancellation(is_cancelling):
+                    if run_next(config,store,is_pausing):
+                        continue
             remaining = limit-completed if limit else 0
             pool = ProcessingPool(factory, source_workers=config.source_workers, limit=remaining,
-                idle_seconds=config.worker_idle_seconds, claims=claims, heartbeat=heartbeat, is_pausing=is_pausing)
+                idle_seconds=min(config.worker_idle_seconds,1.0) if config.auto_process_fresh_mac else config.worker_idle_seconds,
+                claims=claims, heartbeat=heartbeat, is_pausing=is_pausing)
             completed += pool.run()['completed']
             if is_pausing() or (limit and completed >= limit):
                 return
