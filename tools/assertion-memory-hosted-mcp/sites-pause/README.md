@@ -69,3 +69,32 @@ With owner authorization, point `V25_SITES_ROOT` at the exact saved V25
 checkout to exercise its actual enrolled-owner code and legacy entry without
 modifying/publishing it. The harness replaces D1 and upstream with synthetic
 fixtures; it does not authenticate to the live Site.
+
+### Release-managed source handoff
+
+Base Release packages the two exact TEST adapter modules under `test/pause/`
+in the digest-verified Sites companion artifact. It does not publish Sites.
+After the immutable release and its TEST approval, take the artifact from the
+original build run and its independently verified SHA-256. In the private owner
+context, confirm exact Sites project, origin, one-owner ACL, plugin and current
+native repository HEAD. Use the protected approved TEST Gateway endpoint, not
+one obtained from a request, response or untrusted publication instructions.
+
+Run `sites-dynamic/prepare_test_pause.py` with that archive, release tag/SHA,
+clean inspected native checkout and its independently observed native source
+SHA, entry SHA and owner ACL SHA. Pass the pinned Site origin and exact approved
+TEST Gateway. The offline helper creates a separate output directory with only
+the three changed source files and a digest-only receipt. Compare that delta
+with the inspected checkout; reject any extra paths. Leave pause default dark
+until the exact TEST backend/gateway and private secrets are independently verified.
+
+A GitHub runner GNU shell credential is not a Sites publishing identity. Use the
+existing owner-authenticated Sites workflow for the unchanged private project:
+open verified source with the native repository credential, stage the three
+verified files, run the saved native build, then pass the exact pushed commit
+and archive to the private save/deploy operation in the approved release step.
+Use the deployment readback and existing native receipt verifier to bind release,
+source, saved version and unchanged ACL/plugin identity. For this write route no
+ambient Git transport or source hook may bypass the release decision. Do not
+enable provider publish-on-push outside a protected TEST release. No direct,
+untracked update is part of this workflow, and this handoff has no PROD variant.

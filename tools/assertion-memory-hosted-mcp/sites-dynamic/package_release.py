@@ -11,6 +11,8 @@ import subprocess
 import tarfile
 
 FORMAT=1
+PAUSE_FORMAT=2
+PAUSE_MODULES=('native-pause.mjs','v25-bind.mjs')
 HEX=re.compile(r'[a-f0-9]{64}')
 SHA=re.compile(r'[a-f0-9]{40}')
 TAG=re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?')
@@ -48,7 +50,7 @@ def envelope(lane,profile):
         raise ValueError('invalid private profile')
     return wire(profile)
 
-def build(tag,revision,worker,profiles):
+def build(tag,revision,worker,profiles,*,test_pause=None):
     if not valid(TAG,tag) or not valid(SHA,revision) or type(worker) is not bytes or not 0<len(worker)<50000:
         raise ValueError('invalid release source')
     if set(profiles)!=set(LANES):
@@ -58,7 +60,14 @@ def build(tag,revision,worker,profiles):
         files[f'profiles/{lane}.json']=envelope(lane,profiles[lane])
     if any(profiles['test'][k]==profiles['prod'][k] for k in ('project_id_sha256','site_origin_sha256')):
         raise ValueError('environment overlap')
-    manifest={'version':FORMAT,'tag':tag,'source_sha':revision,
+    format_version=FORMAT
+    if test_pause is not None:
+        if set(test_pause)!=set(PAUSE_MODULES) or any(
+                type(raw) is not bytes or not 0<len(raw)<50000 for raw in test_pause.values()):
+            raise ValueError('invalid TEST pause source')
+        files.update({'test/pause/'+name:raw for name,raw in test_pause.items()})
+        format_version=PAUSE_FORMAT
+    manifest={'version':format_version,'tag':tag,'source_sha':revision,
               'files':{n:digest(b) for n,b in sorted(files.items())}}
     files['manifest.json']=wire(manifest)
     buffer=io.BytesIO()
@@ -75,18 +84,25 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     for n in ('test-profile','prod-profile','worker','output'):
         p.add_argument('--'+n,type=Path,required=True)
+    p.add_argument('--test-pause-dir',type=Path);
     p.add_argument('--tag',required=True);p.add_argument('--source-sha',required=True)
     args=p.parse_args()
     revision=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
     if revision!=args.source_sha:
         raise ValueError('checkout differs from immutable selected GitHub release')
-    rel=subprocess.check_output(['git','ls-files','--full-name','--',str(args.worker)],text=True).strip()
-    if not rel or '\n' in rel or args.worker.is_symlink():
-        raise ValueError('expected one tracked Worker')
-    worker=args.worker.read_bytes()
-    original=subprocess.check_output(['git','show',revision+':'+rel])
-    if worker!=original:raise ValueError('modified Worker after checkout')
-    out,manifest=build(args.tag,revision,worker,{'test':read_doc(args.test_profile),'prod':read_doc(args.prod_profile)})
+    def tracked_bytes(path):
+        rel=subprocess.check_output(['git','ls-files','--full-name','--',str(path)],text=True).strip()
+        if not rel or '\n' in rel or path.is_symlink() or not path.is_file():
+            raise ValueError('expected one tracked source')
+        raw=path.read_bytes()
+        if raw!=subprocess.check_output(['git','show',revision+':'+rel]):
+            raise ValueError('modified source after checkout')
+        return raw
+    pause = None
+    if args.test_pause_dir is not None:
+        pause={name:tracked_bytes(args.test_pause_dir/name) for name in PAUSE_MODULES}
+    out,manifest=build(args.tag,revision,tracked_bytes(args.worker),
+        {'test':read_doc(args.test_profile),'prod':read_doc(args.prod_profile)},test_pause=pause)
     with args.output.open('xb') as f:f.write(out)
     print(wire({'archive_sha256':digest(out),'manifest':manifest}).decode(),end='')
 if __name__=='__main__':main()

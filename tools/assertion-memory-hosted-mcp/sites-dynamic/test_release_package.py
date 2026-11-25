@@ -41,3 +41,38 @@ class ReleasePackage(unittest.TestCase):
                     'plugin_id_sha256_after':'0'*64,'native_status':'pending','lane':'prod'}.items():
             with self.subTest(key=k),self.assertRaises(ValueError):
                 validate(self.bundle,h,r|{k:v})
+
+    def test_release_pause_companion_only_composes_pinned_test_entry(self):
+        from prepare_test_pause import ANCHOR,ENTRY,prepare
+        origin='https://preview.synthetic.chatgpt.site'
+        pid='synthetic-project'
+        scopes=self.profiles|{'test':self.profiles['test']|{
+            'project_id_sha256':digest(pid.encode()),'site_origin_sha256':digest(origin.encode())}}
+        pause={'native-pause.mjs':b'export const test=1;', 'v25-bind.mjs':b'export const bind=1;'}
+        bundle,manifest=build(self.tag,self.src,self.code,scopes,test_pause=pause)
+        self.assertEqual(manifest['version'],2)
+        self.assertEqual(build(self.tag,self.src,self.code,scopes,test_pause=pause)[0],bundle)
+        with tarfile.open(fileobj=io.BytesIO(bundle),mode='r:gz') as tar:
+            self.assertFalse(any(p.startswith('prod/') for p in tar.getnames()))
+            for filename,raw in pause.items():
+                self.assertEqual(tar.extractfile('test/pause/'+filename).read(),raw)
+        entry=b"// keep existing source bytes\n"+ANCHOR+b"\n"
+        opts=dict(archive_sha256=digest(bundle),tag=self.tag,release_sha=self.src,
+            observed_acl_sha256=scopes['test']['access_identity_sha256'],
+            observed_entry_sha256=digest(entry),hosting_bytes=json.dumps({'project_id':pid}).encode(),
+            entry_bytes=entry,origin=origin,
+            gateway='https://synthetic.z1.apigw.yandexcloud.net/memory-visual-test-pause')
+        got=prepare(bundle,**opts)
+        self.assertEqual({k:v for k,v in got.items() if k!=ENTRY},pause)
+        self.assertIn(b'keep existing source bytes',got[ENTRY])
+        self.assertIn(b"withinEnrolledOwner: matchesEnrolledOwner",got[ENTRY])
+        self.assertNotIn(pid.encode(),got[ENTRY])
+        for k,v in {'archive_sha256':'1'*64,'tag':'assertion-memory-v0.1.7','release_sha':'2'*40,
+                    'observed_acl_sha256':'3'*64,'observed_entry_sha256':'4'*64,
+                    'hosting_bytes':b'{"project_id":"foreign"}','origin':'https://other.synthetic.chatgpt.site',
+                    'gateway':'https://synthetic.z1.apigw.yandexcloud.net/memory-visual-prod-pause',
+                    'entry_bytes':entry+ANCHOR}.items():
+            with self.subTest(key=k),self.assertRaises(ValueError):
+                prepare(bundle,**(opts|{k:v}))
+        with self.assertRaises(ValueError):
+            build(self.tag,self.src,self.code,scopes,test_pause=pause|{'foreign.mjs':b'x'})
