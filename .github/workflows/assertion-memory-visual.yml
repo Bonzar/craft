@@ -37,7 +37,7 @@ jobs:
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_visual_policy.py
           python3 -B tools/assertion-memory-visual/test_lifecycle.py
           python3 -B tools/assertion-memory-visual/native_visual_test.py
-          node --test tools/assertion-memory-visual/sites-shell.test.mjs
+          node --test tools/assertion-memory-visual/sites-shell.test.mjs tools/assertion-memory-visual/admin-panel.test.mjs
           mkdir "$RUNNER_TEMP/visual"
           node tools/assertion-memory-visual/build-archive.mjs tools/assertion-memory-visual "$RUNNER_TEMP/visual/visual.tar" > "$RUNNER_TEMP/build-receipt.json"
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/visual_assemble.py "$RUNNER_TEMP/visual/visual.tar" "$RUNNER_TEMP/build-receipt.json"

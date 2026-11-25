@@ -1,0 +1,18 @@
+#memory-admin{position:fixed;z-index:20;inset:auto 16px max(14px,env(safe-area-inset-bottom));width:min(460px,calc(100% - 32px));max-height:80dvh;overflow:auto;color:#e8f0ff;background:#101a30;border:1px solid #415576;border-radius:14px;box-shadow:0 6px 26px #0009}
+#memory-admin summary{cursor:pointer;padding:9px 13px;font-size:14px}
+#admin-badge{margin-left:7px;color:#c2d3ee}
+.memory-admin-body,#admin-device form,#admin-reset form{padding:0 14px 14px}
+#memory-admin h2,#admin-device h2,#admin-reset h2{font-size:1rem;margin:12px 0 6px}
+#memory-admin h3{font-size:.94rem;margin:9px 0 3px}
+#memory-admin p,#admin-device p,#admin-reset p{margin:6px 0;overflow-wrap:anywhere}
+#memory-admin ol,#memory-admin ul{padding-inline-start:25px;margin:5px 0;overflow-wrap:anywhere}
+#memory-admin li{padding:3px 0}
+#memory-admin button,#admin-device button,#admin-reset button{min-height:36px;padding:5px 9px}
+.memory-admin-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+#admin-reset-open,#admin-reset-submit{color:#ffb8b5;border-color:#c26a70}
+#admin-device,#admin-reset{box-sizing:border-box;padding:0;margin:auto;width:min(435px,calc(100% - 24px));max-height:85dvh;color:#e8f0ff;background:#101a30;border:1px solid #415576;border-radius:14px}
+#admin-device::backdrop,#admin-reset::backdrop{background:#050916b8}
+#admin-device label,#admin-reset label{display:grid;gap:5px;margin-top:10px}
+#admin-device input,#admin-reset input{min-width:0;width:100%;box-sizing:border-box;padding:9px;background:#080f21;color:inherit;border:1px solid #647695;border-radius:6px;font:inherit}
+#admin-reset-phrase{white-space:pre-wrap;overflow-wrap:anywhere}
+#layout-toggle[hidden],#topics-toggle[hidden]{display:none!important}

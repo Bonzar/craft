@@ -1,0 +1,35 @@
+<details id="memory-admin">
+  <summary><span>База</span> <span id="admin-badge">Проверяем…</span></summary>
+  <div class="memory-admin-body">
+    <p id="admin-status" role="status"></p>
+    <button id="admin-refresh" type="button">Обновить</button>
+    <section aria-labelledby="admin-queues-heading">
+      <h2 id="admin-queues-heading">Очереди обработки</h2>
+      <div id="admin-queues"></div>
+    </section>
+    <div class="memory-admin-actions">
+      <button id="admin-device-open" type="button" disabled>Авторизовать устройство</button>
+      <button id="admin-reset-open" type="button" disabled>Очистить базу</button>
+    </div>
+  </div>
+</details>
+<dialog id="admin-device" aria-labelledby="admin-device-title">
+  <form id="admin-device-form">
+    <h2 id="admin-device-title">Авторизация устройства</h2>
+    <p>Устройство создаёт и хранит свой ключ. Сюда вводится только его SHA-256 отпечаток, не сам ключ.</p>
+    <label>Название устройства<input id="admin-device-name" required maxlength="80" autocomplete="off"></label>
+    <label>SHA-256 отпечаток<input id="admin-device-fingerprint" required pattern="[a-f0-9]{64}" minlength="64" maxlength="64" autocomplete="off" spellcheck="false" autocapitalize="off"></label>
+    <p id="admin-device-status" role="status"></p>
+    <div class="memory-admin-actions"><button type="button" data-close>Закрыть</button><button id="admin-device-submit" type="submit">Авторизовать</button></div>
+  </form>
+</dialog>
+<dialog id="admin-reset" aria-labelledby="admin-reset-title">
+  <form id="admin-reset-form">
+    <h2 id="admin-reset-title">Очистить базу</h2>
+    <p id="admin-reset-warning"></p>
+    <p><code id="admin-reset-phrase"></code></p>
+    <label>Введите фразу подтверждения<input id="admin-reset-input" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="160" disabled></label>
+    <p id="admin-reset-status" role="status"></p>
+    <div class="memory-admin-actions"><button type="button" data-close>Закрыть</button><button id="admin-reset-submit" type="submit" disabled>Очистить без копии</button></div>
+  </form>
+</dialog>
