@@ -203,7 +203,8 @@ def factory(stage,root,config_dir,legacy_token):
         require_scoped_database(stage,root,config.db)
         if config.auto_process_fresh_mac and (stage != 'prod' or personal_mac is None):
             raise ValueError('fresh Mac processing requires the configured production Mac credential')
-        from prototypes.assertion_memory import query_timing as timing
+        from prototypes.assertion_memory import genai_traces, query_timing as timing
+        genai_traces.configure(stage)
         from prototypes.assertion_memory.mcp_server import WorkerLauncher, _query_with_connection
         from prototypes.assertion_memory.query_jobs import QueryJobs
         from prototypes.assertion_memory.storage import MemoryStore
