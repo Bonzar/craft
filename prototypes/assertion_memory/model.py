@@ -335,12 +335,26 @@ class SubprocessModel:
     def _observe_cli_signals(stdout, stderr):
         if not timing.active():
             return
+        def text(value):
+            if isinstance(value, bytes):
+                return value.decode('utf-8', errors='replace')
+            return value if isinstance(value, str) else ''
+
+        # Timed-out subprocess output may be bytes or absent, even in text mode.
+        # Never let best-effort observation change the provider's response/error.
+        try:
+            SubprocessModel._scan_cli_signals(text(stdout), text(stderr))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _scan_cli_signals(stdout, stderr):
         # Buffered CLI protocol: only fixed enums and counts, not console payloads.
         # A successfully completed CLI can still have retried its connection.
         if _codex_unavailable(stdout, stderr):
             timing.emit('provider_retry_signal', 'connection_signal')
         retry_re = re.compile(r'^reconnect(?:ing| attempt)\b|^retrying(?: request| connection| stream)\b', re.IGNORECASE)
-        retries = 0
+        retries = sum(bool(retry_re.match(line.lstrip())) for line in stderr.splitlines())
         for line in stdout.splitlines():
             try:
                 event = json.loads(line)
@@ -362,6 +376,7 @@ class SubprocessModel:
         except subprocess.TimeoutExpired as error:
             self._observe_usage(attempt, error.stdout)
             if self.usage_protocol == "codex":
+                self._observe_cli_signals(error.stdout, error.stderr)
                 raise ModelProviderUnavailable(timed_out=True) from None
             raise ModelError("model command timed out") from error
         except (OSError, UnicodeError) as error:

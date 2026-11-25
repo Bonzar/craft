@@ -62,22 +62,32 @@ class QueryTimingTest(unittest.TestCase):
         marker = 'AUTH_SECRET_AND_RAW_COMMAND_NOT_FOR_LOGGING'
         logs = []
         with patch.object(timing,'_write_line',logs.append), timing.bind(trace_id='a'*32):
-            SubprocessModel._observe_cli_signals(
-                json.dumps({'type':'error','message':'Reconnecting '+marker}),
-                'connection refused '+marker)
-            error = subprocess.TimeoutExpired([marker], 3, output=marker)
+            # Keep a complete retry event followed by truncated UTF-8/JSON.
+            partial = json.dumps({'type':'error','message':'Reconnecting '+marker}).encode()
+            error = subprocess.TimeoutExpired([marker], 3,
+                output=partial + b'\n{"type":"error","message":"\xff',
+                stderr=('connection refused '+marker).encode() + b'\nretrying request')
             model = SubprocessModel([marker], usage_protocol='codex')
             with patch.object(model,'_run_command',side_effect=error):
-                with self.assertRaises(ModelProviderUnavailable):
+                with self.assertRaisesRegex(ModelProviderUnavailable,'Codex timed out'):
                     model._generate(marker,None)
             timing.emit(marker, 'failed')
             timing.emit('provider_cli', marker)
         self.assertNotIn(marker.encode(), b''.join(logs))
         rows = [json.loads(log) for log in logs]
         self.assertEqual([(r['stage'],r['status']) for r in rows], [
-            ('provider_retry_signal','connection_signal'),('provider_retry_signal','retry_signal'),
-            ('provider_cli','start'),('provider_cli','timeout')])
-        self.assertEqual(rows[1]['signal_count'],1)
+            ('provider_cli','start'),('provider_cli','timeout'),
+            ('provider_retry_signal','connection_signal'),('provider_retry_signal','retry_signal')])
+        self.assertEqual(rows[3]['signal_count'],2)
+
+    def test_telemetry_scanner_cannot_break_a_successful_response(self):
+        model = SubprocessModel(['fixture'], usage_protocol='codex')
+        complete = subprocess.CompletedProcess(['fixture'], 0, 'answer', '')
+        with timing.bind(trace_id='b'*32), patch.object(timing,'_write_line'), \
+                patch.object(model,'_run_command',return_value=complete), \
+                patch.object(SubprocessModel,'_scan_cli_signals',side_effect=ValueError('broken observation')) as scanner:
+            self.assertEqual(model._generate('question',None),'answer')
+            scanner.assert_called_once_with('answer','')
 
     def test_worker_submission_and_execution_use_same_job_identifier(self):
         async def run():
