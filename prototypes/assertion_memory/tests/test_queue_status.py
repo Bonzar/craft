@@ -7,6 +7,7 @@ import json
 import sqlite3
 import unittest
 
+from prototypes.assertion_memory import thought_processing_selection
 from prototypes.assertion_memory.query_jobs import QueryJobs
 from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory.queue_status import build_queue_status
@@ -128,6 +129,26 @@ class QueueStatusTest(unittest.TestCase):
                          [('current',None),('c',1),('a',2),('b',3)])
         self.assertNotIn('PRIVATE',json.dumps(result))
         self.assertEqual([self.jobs._claim()[0] for _ in range(3)],['c','a','b'])
+
+    @unittest.skipUnless(hasattr(thought_processing_selection, 'FRESH_MAC_ONLY'),
+                         'fresh Mac processing is not present in this release')
+    def test_fresh_mac_matches_opt_in_source_selector_and_pauses_maintenance(self):
+        options = dict(processing_session_ids=[], auto_process_fresh_mac=True)
+        self.source('eligible','pending')
+        self.source('excluded','pending')
+        self.maintenance('pending','pending')
+        self.assertTrue(all(row['status']=='paused' for row in self.lane('source',**options)['items']))
+        with self.store.transaction(write=True) as db:
+            from prototypes.assertion_memory.fresh_processing import _schema
+            _schema(db)
+            db.execute("INSERT INTO memory_fresh_mac_events VALUES ('e-eligible')")
+        self.assertEqual([(r['id'],r['status']) for r in self.lane('source',**options)['items']],
+                         [('eligible','ready'),('excluded','paused')])
+        fresh = ThoughtWorker(self.queue,SimpleNamespace(store=self.store,model=object()),
+            processing_session_ids=thought_processing_selection.FRESH_MAC_ONLY)
+        self.assertEqual(fresh._claim_source().job.id,'eligible')
+        self.assertIsNone(fresh._claim_source())
+        self.assertEqual(self.lane('maintenance',**options)['items'][0]['status'],'paused')
 
     def test_paused_missing_schema_and_invalid_page_are_safe(self):
         self.source('a','pending')
