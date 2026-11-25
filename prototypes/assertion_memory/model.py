@@ -25,7 +25,7 @@ from urllib.error import URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-from . import query_timing as timing
+from . import genai_traces, query_timing as timing
 from .model_usage import UsageLedger, usage_attempt
 
 
@@ -440,6 +440,7 @@ class CodexModel(SubprocessModel):
     def __call__(self, request: ModelRequest) -> str:
         if not self.isolated:
             return super().__call__(request)
+        genai_traces.mark_codex(self.requested_model)
         with timing.span('provider_setup'):
             prompt = format_prompt(request)
             scratch = _semantic_working_directory()

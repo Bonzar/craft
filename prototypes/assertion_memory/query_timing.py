@@ -7,6 +7,8 @@ import os
 import re
 from time import monotonic
 
+from . import genai_traces
+
 _CONTEXT = ContextVar('query_timing', default={})
 _ID = re.compile(r'(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\Z')
 STAGES = frozenset(('submission', 'ready_probe', 'queue_wait', 'job_total', 'result_persist',
@@ -59,6 +61,10 @@ def emit(stage, status, duration_ms=None, *, signal_count=None):
     context = _CONTEXT.get()
     if 'trace_id' not in context or stage not in STAGES or status not in _STATUSES:
         return
+    if stage == 'query_outcome':
+        genai_traces.outcome(status)
+    elif stage == 'provider_retry_signal':
+        genai_traces.provider_signal(status, signal_count)
     event = {'event': 'memory_query_timing', 'schema_version': 1, **context, 'stage': stage, 'status': status}
     if type(duration_ms) is int and 0 <= duration_ms < 2**53:
         event['duration_ms'] = duration_ms
@@ -72,12 +78,17 @@ def emit(stage, status, duration_ms=None, *, signal_count=None):
         pass  # Telemetry is best effort and must not turn a valid result into a failure.
 
 
+def begin_otel(stage, *, queue_wait_ms=None):
+    return genai_traces.begin(stage, _CONTEXT.get(), queue_wait_ms=queue_wait_ms)
+
+
 @contextmanager
 def span(stage, *, start=False):
     if not active():
         yield
         return
     begun = monotonic()
+    otel = begin_otel(stage)
     status = 'ok'
     if start:
         emit(stage, 'start')
@@ -96,6 +107,7 @@ def span(stage, *, start=False):
                   else 'miss' if name == 'SemanticUnavailable' else 'failed')
         raise
     finally:
+        genai_traces.end(otel, status)
         emit(stage, status, elapsed(begun))
 
 

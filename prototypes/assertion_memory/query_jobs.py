@@ -11,7 +11,7 @@ import threading
 import time
 from uuid import uuid4
 
-from . import query_timing as timing
+from . import genai_traces, query_timing as timing
 
 ID = re.compile(r'[a-zA-Z0-9_-]{1,100}\Z')
 
@@ -88,12 +88,14 @@ class QueryJobs:
                     continue
                 key, arguments, created = claim
                 with timing.bind(trace_id=key):
-                    timing.emit('queue_wait', 'ok', max(0, round((time.time() - created)*1000)))
-                    self._execute(key, arguments)
+                    queue_wait_ms = max(0, round((time.time() - created)*1000))
+                    timing.emit('queue_wait', 'ok', queue_wait_ms)
+                    self._execute(key, arguments, queue_wait_ms=queue_wait_ms)
             except sqlite3.OperationalError:
                 self.stop.wait(0.15)
 
-    def _execute(self, key, arguments):
+    def _execute(self, key, arguments, *, queue_wait_ms):
+        otel = timing.begin_otel('job_total', queue_wait_ms=queue_wait_ms)
         started = time.monotonic()
         state = 'failed'
         timing.emit('job_total', 'start')
@@ -123,7 +125,9 @@ class QueryJobs:
                         state = 'interrupted'
                         return
         finally:
-            timing.emit('job_total', 'ok' if state == 'completed' else state, timing.elapsed(started))
+            outcome = 'ok' if state == 'completed' else state
+            genai_traces.end(otel, outcome)
+            timing.emit('job_total', outcome, timing.elapsed(started))
 
     @staticmethod
     def _wire(obj):

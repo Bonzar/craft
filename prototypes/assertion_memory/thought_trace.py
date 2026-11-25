@@ -7,7 +7,7 @@ import zlib
 from datetime import datetime,timezone
 from uuid import uuid4
 
-from . import query_timing as timing
+from . import genai_traces, query_timing as timing
 from .model import ModelError,ProcessingCancelled,check_processing_cancelled,format_prompt
 from .usage_context import observe_attempt_usage
 from .diagnostic_privacy import restricted, redact, ProtectedContextError, diagnostic_hash
@@ -93,7 +93,10 @@ class ThoughtTrace:
         try:
             check_processing_cancelled()
             with timing.span('provider_attempt', start=True), observe_attempt_usage(usage.update):
-                result=model(request)
+                try:
+                    result=model(request)
+                finally:
+                    genai_traces.observe_usage(usage)
             check_processing_cancelled()
             if format_prompt(request)!=wire:
                 raise ModelError('thought model input mutated during acquisition')

@@ -52,6 +52,7 @@ jobs:
             tests.test_thought_service \
             prototypes.assertion_memory.query_jobs_test \
             prototypes.assertion_memory.tests.test_query_timing \
+            prototypes.assertion_memory.tests.test_genai_traces \
             prototypes.assertion_memory.tests.test_thought_query_graph \
             tests.test_thought_provider_contract \
             prototypes.assertion_memory.native_intake_test \
