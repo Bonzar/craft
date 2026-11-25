@@ -1,4 +1,5 @@
 import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
 from pathlib import Path
@@ -111,6 +112,76 @@ class OriginTest(unittest.TestCase):
         current.unlink()
         current.symlink_to(Path('releases')/self.release)
         self.assertEqual(self.request()[0],200)
+
+
+    def test_queue_via_two_real_loopback_http_servers(self):
+        observed = []
+        queue_token = '3' * 64
+        snapshot = {'stage':'test', 'release_version':'assertion-memory-v0.1.16',
+                    'release_generation':'4'*64, 'global_order':False,
+                    'snapshot_at':'2026-11-25T20:00:00+00:00',
+                    'queues':[], 'processing_control':{'paused':False,'revision':'5'*32,'can_change':False}}
+
+        class Base(BaseHTTPRequestHandler):
+            def log_message(self, *_): pass
+            def do_GET(self):
+                observed.append((self.path, dict(self.headers.items())))
+                self.send_response(snapshot.pop('_status',200))
+                self.send_header('Content-Type','application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(snapshot).encode())
+
+        def start(server):
+            Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            return server
+
+        base=start(ThreadingHTTPServer(('127.0.0.1',0),Base))
+        addr='http://127.0.0.1:'+str(base.server_port)
+        queue={'op':'queue_status','limit':50,'offset':55}
+        ask=lambda **kwargs:self.request(value=json.dumps(queue),**kwargs)
+        self.assertEqual(ask()[0],404) # dark
+        self.server=start(origin.make_server(self.root,TOKEN,port=0,queue_origin=addr,queue_token=queue_token))
+        self.assertEqual(ask(token=None)[0],401)
+        queue.update(limit=True)
+        self.assertEqual(ask()[0],400)
+        queue.update(limit=51)
+        self.assertEqual(ask()[0],400)
+        queue.update(limit=50,stage='test')
+        self.assertEqual(ask()[0],400)
+        del queue['stage']
+        self.assertEqual(observed,[])
+        code,hdr,body=ask()
+        self.assertEqual((code,hdr['Content-Type']),(200,'application/json'))
+        self.assertEqual(json.loads(body),{**snapshot,'capabilities':{'live':False},'readiness':[]})
+        [(path,headers)]=observed
+        self.assertEqual(path,'/api/v1/queue-status?limit=50&offset=55')
+        self.assertEqual(headers['Authorization'],'Bearer '+queue_token)
+        self.assertNotIn(TOKEN,str(headers))
+        self.assertNotIn('Cookie',headers)
+        snapshot.update(stage='prod')
+        self.assertEqual(ask()[0],503)
+        snapshot.update(stage='test',_status=302)
+        self.assertEqual(ask()[0],503)
+        snapshot['processing_control']['can_change']=True
+        self.assertEqual(ask()[0],503)
+        snapshot['processing_control']['can_change']=False
+        snapshot['queues']=[dict(id='source',status='active',ordering='available_at_then_id',
+                                 total=56,next_offset=None,items=[dict(
+                                     id='fixture',status='ready',phase='extract',position=56,
+                                     available_at='2026-11-25T20:00:00+00:00')])]
+        self.assertEqual(ask()[0],200)
+        snapshot['queues'][0]['items'][0]['unexpected_content']='not part of the contract'
+        self.assertEqual(ask()[0],503)
+        self.assertEqual(self.request()[0],200) # legacy asset unaffected
+        for bad in ('https://127.0.0.1:100','http://localhost:100','http://127.0.0.1:100/path'):
+            with self.assertRaises(ValueError):
+                origin.make_server(self.root,TOKEN,port=0,queue_origin=bad,queue_token=queue_token)
+        with self.assertRaises(ValueError):
+            origin.make_server(self.root,TOKEN,port=0,queue_origin=addr,queue_token=TOKEN)
+        with self.assertRaises(ValueError):
+            origin.make_server(self.root,TOKEN,port=0,environment='prod',queue_origin=addr,queue_token=queue_token)
 
 
 if __name__ == '__main__':
