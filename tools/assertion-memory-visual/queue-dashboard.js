@@ -18,7 +18,7 @@
   const rev=value=>typeof value==='string'&&/^[0-9a-f]{32}$/.test(value);
   const snapshotControl=(stage,value)=>['test','prod'].includes(stage)&&value&&
     typeof value.paused==='boolean'&&rev(value.revision)&&typeof value.can_change==='boolean'
-    ? {stage,paused:value.paused,revision:value.revision,canChange:value.can_change}:null;
+    ? {stage,paused:value.paused,revision:value.revision,canChange:value.can_change,prepareAllowed:stage==='test'}:null;
   const offsets=new Map(), rendered=new Map(), lanes=new Map();
   const element=(tag,txt='',name)=>{const e=document.createElement(tag);if(name)e.className=name;if(txt)e.textContent=txt;return e;};
   const labels=(values,k,fallback)=>Object.hasOwn(values,k)?values[k]:fallback;
@@ -85,7 +85,7 @@
   }
   function drawControl(){
     controlPanel.hidden=!control;
-    controlButton.hidden=!(control?.canChange&&ownerReady||control?.stage==='test'&&nativeReady);
+    controlButton.hidden=!(control?.canChange&&ownerReady||control?.prepareAllowed&&nativeReady);
     controlButton.disabled=controlButton.hidden||inFlight;
     if(!control)return;
     const stage=control.stage.toUpperCase();
@@ -101,27 +101,30 @@
       /^[A-Za-z0-9_-]{20,160}$/.test(value.csrf_token)?value.csrf_token:null;
   }
   async function prepareNative(before){
-    if(before.stage!=='test')return null;
+    if(!before.prepareAllowed)return null;
     const response=await fetch('/api/v1/processing/pause/prepare',{
       method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',
       headers:{accept:'application/json','content-type':'application/json'},body:'{}'
     });
     if(response.status!==200||!response.headers.get('content-type')?.includes('application/json'))return null;
     const value=await response.json();
-    return value?.stage==='test'&&value.paused===before.paused&&value.revision===before.revision&&
+    return value?.stage===before.stage&&value.paused===before.paused&&value.revision===before.revision&&
       typeof value.csrf_token==='string'&&/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(value.csrf_token)?value.csrf_token:null;
   }
   function acceptControl(data){
     const current=generation, lane=data?.stage;
     const next=snapshotControl(lane,data?.processing_control);
+    if(next&&data?.capabilities?.standalone_pause===true)next.prepareAllowed=true;
     if(control?.stage!==next?.stage||!next?.canChange){ownerReady=false;ownerCheck=null;}
-    if(control?.revision!==next?.revision||next?.stage!=='test'||next?.canChange)nativeReady=false;
+    if(control?.stage!==next?.stage||control?.revision!==next?.revision||!next?.prepareAllowed||next?.canChange)nativeReady=false;
     control=next;
     drawControl();
-    if(next?.stage==='test'&&!next.canChange&&probedRevision!==next.revision){
-      probedRevision=next.revision;
+    const probe=next?.prepareAllowed&&!next.canChange?next.stage+':'+next.revision:null;
+    const startProbe=probe&&probe!==probedRevision;
+    probedRevision=probe;
+    if(startProbe){
       void prepareNative(next).then(token=>{
-        if(generation===current&&panel.open&&control?.revision===next.revision&&!control.canChange){
+        if(generation===current&&panel.open&&control?.stage===next.stage&&control.revision===next.revision&&control.prepareAllowed&&!control.canChange){
           nativeReady=Boolean(token);drawControl();
         }
       }).catch(()=>{});
@@ -136,7 +139,7 @@
     }
   }
   controlButton.addEventListener('click',async()=>{
-    if(!panel.open||inFlight||!(control?.canChange&&ownerReady||control?.stage==='test'&&nativeReady))return;
+    if(!panel.open||inFlight||!(control?.canChange&&ownerReady||control?.prepareAllowed&&nativeReady))return;
     const current=generation, before=control, next=!before.paused;
     inFlight=true;controlEpoch++;drawControl();
     controlFeedback.textContent='Сохраняем настройку…';
@@ -145,7 +148,7 @@
       const token=await (native?prepareNative(before):csrf());
       if(generation!==current||!panel.open)return;
       if(!token){ownerReady=false;nativeReady=false;throw Error();}
-      if(control?.revision!==before.revision||control?.stage!==before.stage||control?.canChange!==before.canChange){
+      if(control?.revision!==before.revision||control?.stage!==before.stage||control?.canChange!==before.canChange||control?.prepareAllowed!==before.prepareAllowed){
         controlFeedback.textContent='Состояние изменилось. Проверьте его перед повтором.';
         return;
       }
@@ -165,7 +168,7 @@
       const value=await result.json();
       if(generation!==current||!panel.open)return;
       if(value?.stage!==before.stage||value.paused!==next||!rev(value.revision)||value.revision===before.revision)throw Error();
-      control={stage:value.stage,paused:value.paused,revision:value.revision,canChange:before.canChange};
+      control={stage:value.stage,paused:value.paused,revision:value.revision,canChange:before.canChange,prepareAllowed:before.prepareAllowed};
       controlFeedback.textContent=value.paused?'Пауза включена.':'Пауза снята.';
     }catch{
       if(generation===current&&panel.open){

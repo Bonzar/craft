@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -57,7 +57,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,capabilities:{standalone_pause:standalone},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
@@ -190,4 +190,24 @@ test('native prepare does not grant control on foreign lane or mismatched revisi
   assert.ok(!prod.urls.includes('/api/v1/processing/pause/prepare'));
   await test.controlButton.listeners.click();
   assert.equal(test.mutations.length,0);
+});
+
+test('standalone PROD pause requires capability and matching confirmed prepare',async()=>{
+  const ncsrf='1650000000.'+'d'.repeat(64);
+  const control={paused:false,revision:original,can_change:false};
+  const prepare=({paused,revision})=>Response.json({stage:'prod',paused,revision,csrf_token:ncsrf});
+  const good=harness({stage:'prod',standalone:true,control,prepare});
+  const off=harness({stage:'prod',control,prepare});
+  const foreign=harness({stage:'prod',standalone:true,control,
+    prepare:()=>Response.json({stage:'test',paused:false,revision:original,csrf_token:ncsrf})});
+  await Promise.all([good.open(),off.open(),foreign.open()]);
+  assert.equal(good.controlButton.hidden,false);
+  assert.equal(off.controlButton.hidden,true);
+  assert.equal(foreign.controlButton.hidden,true);
+  assert.ok(!off.urls.includes('/api/v1/processing/pause/prepare'));
+  await good.controlButton.listeners.click();
+  await good.delay();
+  assert.deepEqual(good.mutations,[{method:'PUT',token:ncsrf,
+    payload:{stage:'prod',paused:true,expected_revision:original}}]);
+  assert.match(good.text(good.container.items[0]),/Вопросы 0 Активна/);
 });

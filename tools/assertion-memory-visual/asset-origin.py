@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
+import time
 import stat
 from threading import BoundedSemaphore
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -155,6 +157,7 @@ GRAPH_RE = re.compile(r'/api/v1/(?:capabilities|graph|search|events|bookmarks|'
     r'(?:nodes|edges|sources|overviews)/[A-Za-z0-9:/_@.-]+)\Z')
 GRAPH_LIMIT = 32_000_000
 STANDALONE_AUTH = 'X-Memory-Visual-Owner-Ingress'
+PAUSE_OWNER_AUTH = 'X-Memory-Visual-Pause-Owner-Ingress'
 
 
 def standalone_config(origin, ingress, graph_origin, graph_key):
@@ -180,7 +183,76 @@ def path_and_query(raw):
     return path,parsed.query
 
 
-def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None, runtime_health=None, standalone=None):
+BROWSER_PAUSE = '/api/v1/processing/pause'
+BASE_PAUSE = '/api/v1/queue-pause'
+REVISION = re.compile(r'[0-9a-f]{32}\Z')
+
+
+def pause_state(value, stage):
+    if (type(value) is not dict or set(value) != {'stage','paused','revision'}
+            or value['stage'] != stage or type(value['paused']) is not bool
+            or type(value['revision']) is not str or not REVISION.fullmatch(value['revision'])):
+        raise ValueError('invalid Base pause state')
+    return value
+
+
+def pause_client(origin, read_key, write_key, signer, *, stage):
+    """Consume only the dedicated loopback REST surface, never the Graph/MCP bearer."""
+    address = BASE_ORIGIN.fullmatch(origin)
+    if (not address or int(address[1]) > 65535 or not callable(signer)
+            or any(type(k) is not str or not HEX.fullmatch(k) for k in (read_key,write_key))
+            or read_key == write_key):
+        raise ValueError('invalid Base pause transport')
+    def call(method, command=None):
+        body = None
+        headers = {'Accept':'application/json','Connection':'close',
+                   'Authorization':'Bearer '+(read_key if method=='GET' else write_key)}
+        if method == 'PUT':
+            body = json.dumps(command, separators=(',',':')).encode('ascii')
+            proof = signer(body, command['expected_revision'])
+            if type(proof) is not dict or set(proof) != {
+                'X-Memory-Pause-Owner','X-Memory-Pause-Issued-At','X-Memory-Pause-Expires-At',
+                'X-Memory-Pause-Nonce','X-Memory-Pause-Signature'
+            } or any(type(v) is not str or not re.fullmatch(r'[0-9a-f]{1,64}',v) for v in proof.values()):
+                raise ValueError('invalid trusted signer response')
+            headers.update(proof)
+            headers['Content-Type'] = 'application/json'
+        conn = HTTPConnection('127.0.0.1', int(address[1]), timeout=4)
+        try:
+            conn.request(method, BASE_PAUSE, body=body, headers=headers)
+            rsp = conn.getresponse()
+            if method == 'PUT' and rsp.status == 409:
+                return None
+            if (rsp.status != 200 or rsp.headers.get_content_type() != 'application/json'
+                    or rsp.headers.get('Content-Encoding') is not None):
+                raise ValueError('Base pause unavailable')
+            raw = rsp.read(1025)
+            if len(raw) > 1024:
+                raise ValueError('invalid Base pause response')
+            return pause_state(unique_json(raw), stage)
+        finally:
+            conn.close()
+    return call
+
+
+def pause_signer(stage, owner, secret, *, clock=time.time):
+    """Service-only signer: supplied to handlers guarded by the dedicated verified owner ingress."""
+    if (stage not in ('test','prod') or type(owner) is not str or not HEX.fullmatch(owner)
+            or type(secret) is not bytes or len(secret) != 32):
+        raise ValueError('invalid pause signer')
+    def sign(body, revision):
+        iat = int(clock())
+        expires = iat+15
+        nonce = secrets.token_hex(16)
+        message = ('\n'.join(('memory-queue-pause-v1','PUT',BASE_PAUSE,stage,
+                   digest(body),owner,revision,str(iat),str(expires),nonce))+'\n').encode('ascii')
+        return dict(zip(('X-Memory-Pause-Owner','X-Memory-Pause-Issued-At','X-Memory-Pause-Expires-At',
+                         'X-Memory-Pause-Nonce','X-Memory-Pause-Signature'),
+                        (owner,str(iat),str(expires),nonce,hmac.digest(secret,message,'sha256').hex())))
+    return sign
+
+
+def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None, runtime_health=None, standalone=None, pause=None, clock=time.time):
     if environment not in ('test', 'prod') or not HEX.fullmatch(token):
         raise ValueError('invalid dedicated TEST token')
 
@@ -199,6 +271,21 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
         keys=[v for v in (token,queue_token,edge_key,graph_key,runtime_health[1] if runtime_health else None) if v]
         if len(keys)!=len(set(keys)) or fetch_queue is None:
             raise ValueError('Standalone Visual requires independent complete authorities')
+    if pause is not None:
+        if standalone is None:
+            raise ValueError('pause requires verified standalone owner ingress')
+        origin,read_key,write_key,csrf_key,pause_ingress,owner,proof_key = pause
+        if (origin != queue_origin or type(csrf_key) is not bytes or len(csrf_key)!=32
+                or type(proof_key) is not bytes or len(proof_key)!=32
+                or type(pause_ingress) is not str or not HEX.fullmatch(pause_ingress)
+                or len(set(keys+[read_key,write_key,csrf_key.hex(),pause_ingress,proof_key.hex()]))!=len(keys)+5):
+            raise ValueError('pause requires distinct local authorities')
+        pause_call = pause_client(origin,read_key,write_key,
+                                  pause_signer(environment,owner,proof_key,clock=clock),stage=environment)
+        def csrf_token(revision, expiry):
+            msg = f'visual-pause-v1\n{environment}\n{public_origin}\n{revision}\n{expiry}'.encode('ascii')
+            return f'{expiry}.'+hmac.digest(csrf_key,msg,'sha256').hex()
+
     route = f'/memory-visual-{environment}-read'
 
     class Handler(BaseHTTPRequestHandler):
@@ -254,9 +341,6 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 return self.respond(403)
             if origins and origins!=[public_origin]:
                 return self.respond(403)
-            if self.command not in ('GET','HEAD') or self.headers.get_all('Transfer-Encoding') or any(
-                    n!='0' for n in self.headers.get_all('Content-Length',[])):
-                return self.respond(405)
             safe={'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
                   'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Strict-Transport-Security':'max-age=31536000'}
             try:
@@ -266,6 +350,13 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             try:
                 if self.headers.get('Sec-Fetch-Site')=='cross-site' and path.startswith('/api/'):
                     return self.respond(403)
+                if pause is not None and path in (BROWSER_PAUSE,BROWSER_PAUSE+'/prepare'):
+                    if raw != path or query:
+                        return self.respond(404)
+                    return self.pause_request(path,safe)
+                if self.command not in ('GET','HEAD') or self.headers.get_all('Transfer-Encoding') or any(
+                        n!='0' for n in self.headers.get_all('Content-Length',[])):
+                    return self.respond(405)
                 if path in ('/','/visual','/visual/'):
                     release=current_release(root)
                     manifest(root,release)
@@ -282,7 +373,12 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                         l,o=q.get('limit',['50'])[0],q.get('offset',['0'])[0]
                         if any(not re.fullmatch(r'(?:0|[1-9][0-9]{0,6})',v) for v in (l,o)) or not 1<=int(l)<=50 or int(o)>1_000_000:
                             return self.respond(400)
-                        return self.respond(200,fetch_queue(int(l),int(o)),'application/json',headers=safe)
+                        payload = fetch_queue(int(l),int(o))
+                        if self.has_pause_owner():
+                            view = unique_json(payload)
+                            view['capabilities']['standalone_pause'] = True
+                            payload = json.dumps(view,separators=(',',':')).encode()
+                        return self.respond(200,payload,'application/json',headers=safe)
                 if GRAPH_RE.fullmatch(path):
                     return self.graph(raw,safe)
                 match=re.fullmatch(r'/visual/([a-f0-9]{64})/(.*)',path)
@@ -300,6 +396,60 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 return self.respond(404)
             except Exception:
                 return self.respond(503)
+
+        def has_pause_owner(self):
+            proofs = self.headers.get_all(PAUSE_OWNER_AUTH,[])
+            return pause is not None and len(proofs)==1 and hmac.compare_digest(proofs[0],pause_ingress)
+
+        def pause_request(self,path,safe):
+            if not self.has_pause_owner():
+                return self.respond(403)
+            prepare = path.endswith('/prepare')
+            if self.command != ('POST' if prepare else 'PUT'):
+                return self.respond(405)
+            if self.headers.get_all('Origin',[]) != [public_origin]:
+                return self.respond(403)
+            lengths = self.headers.get_all('Content-Length',[])
+            if (self.headers.get_all('Transfer-Encoding') or len(lengths)!=1
+                    or not re.fullmatch(r'[1-9][0-9]{0,2}',lengths[0])):
+                return self.respond(400)
+            if self.headers.get_all('Content-Type',[]) != ['application/json']:
+                return self.respond(415)
+            try:
+                raw = self.rfile.read(int(lengths[0]))
+                if len(raw)!=int(lengths[0]):
+                    return self.respond(400)
+                request = unique_json(raw)
+            except (ValueError, OSError, RecursionError):
+                return self.respond(400)
+            def reply(status,value):
+                return self.respond(status,json.dumps(value,separators=(',',':')).encode(),
+                                    'application/json',headers=safe)
+            if prepare:
+                if type(request) is not dict or request:
+                    return self.respond(400)
+                state = pause_call('GET')
+                return reply(200,{**state,'csrf_token':csrf_token(state['revision'],int(clock())+30)})
+            if (type(request) is not dict or set(request)!={'stage','paused','expected_revision'}
+                    or type(request['paused']) is not bool or type(request['expected_revision']) is not str
+                    or not REVISION.fullmatch(request['expected_revision'])):
+                return self.respond(400)
+            if request['stage']!=environment:
+                return reply(409,{'error':'queue_control_changed'})
+            revision = request['expected_revision']
+            tokens = self.headers.get_all('X-CSRF-Token',[])
+            proof = re.fullmatch(r'([0-9]{1,12})\.[0-9a-f]{64}',tokens[0]) if len(tokens)==1 else None
+            if not proof:
+                return self.respond(403)
+            expiry, now = int(proof[1]), int(clock())
+            if not now < expiry <= now+30 or not hmac.compare_digest(tokens[0],csrf_token(revision,expiry)):
+                return self.respond(403)
+            result = pause_call('PUT',{'paused':request['paused'],'expected_revision':revision})
+            if result is None:
+                return reply(409,{'error':'queue_control_changed'})
+            if result['paused'] is not request['paused'] or result['revision']==revision:
+                return self.respond(503)
+            return reply(200,result)
 
         def graph(self, raw, safe):
             # The browser's Origin/Authorization/Cookie/Sites claims never leave Visual.
@@ -343,7 +493,7 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             raw = self.requestline.split()
             if standalone is not None and len(raw)==3 and self.headers.get_all('Host',[])==[public_host]:
                 return self.standalone(raw[1])
-            if self.headers.get_all(STANDALONE_AUTH,[]):
+            if self.headers.get_all(STANDALONE_AUTH,[]) or self.headers.get_all(PAUSE_OWNER_AUTH,[]):
                 return self.respond(421)
             if runtime_health is not None and len(raw)==3 and raw[1]=='/__visual-runtime-health':
                 if self.command!='GET' or self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length'):
@@ -454,6 +604,22 @@ if __name__ == '__main__':
     health_path=credential.with_name('runtime-health-token')
     health=(digest(read_small(Path(__file__).resolve(strict=True),64_000)),
             read_small(health_path,66).decode('ascii').strip()) if health_path.is_file() else None
+    enabled=os.environ.get('MEMORY_VISUAL_STANDALONE_PAUSE','0')
+    if enabled not in ('0','1') or enabled=='1' and standalone is None:
+        raise SystemExit('invalid standalone pause opt-in')
+    pause=None
+    if enabled=='1':
+        if queue_origin != ('http://127.0.0.1:8893' if mode=='test' else 'http://127.0.0.1:8903'):
+            raise SystemExit('standalone pause requires the exact lane Base listener')
+        def load_pause(name):
+            val=read_small(credential.with_name('pause-'+name),66).decode('ascii').strip()
+            if not HEX.fullmatch(val):
+                raise ValueError('invalid standalone pause credential')
+            return val
+        pause=(queue_origin,load_pause('read-token'),load_pause('write-token'),
+               bytes.fromhex(load_pause('csrf-key')),load_pause('owner-ingress-token'),
+               load_pause('owner-digest'),bytes.fromhex(load_pause('proof-key')))
     with make_server(ROOT / mode, secret, int(port), environment=mode,
-                     queue_origin=queue_origin, queue_token=queue_secret, runtime_health=health, standalone=standalone) as server:
+                     queue_origin=queue_origin, queue_token=queue_secret, runtime_health=health,
+                     standalone=standalone,pause=pause) as server:
         server.serve_forever()
