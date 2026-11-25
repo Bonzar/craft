@@ -11,7 +11,11 @@ from apps.graph_viewer.server.app import create_app
 from prototypes.assertion_memory.http_server import create_http_app
 from prototypes.assertion_memory.mcp_server import ServiceConfig
 
-ROOT=Path(__file__).resolve().parents[2]
+HERE=Path(__file__).resolve().parent
+# In a release the PROD hook invokes this root-level script; in CI it is
+# invoked from the QA tools directory. Never fall back to the checkout from
+# an incomplete release, which would hide missing packaged assets.
+ROOT=HERE if (HERE/"REVISION").is_file() else HERE.parents[1]
 async def mcp(db):
     token=secrets.token_urlsafe(32)
     app=create_http_app(ServiceConfig(db=str(db),provider='none',processing_session_ids=[]),token,'memory.example')
