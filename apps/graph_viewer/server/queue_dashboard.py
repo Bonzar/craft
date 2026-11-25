@@ -133,6 +133,13 @@ class HostedQueueDashboard:
         finally:
             os.close(fd)
 
+    def can_change_pause(self):
+        try:
+            with self.release_lease():
+                return True
+        except (OSError, ValueError):
+            return False
+
     def set_pause(self, *, stage, paused, expected_revision):
         if stage != self.stage:
             raise processing_control.Conflict('Wrong deployment stage')

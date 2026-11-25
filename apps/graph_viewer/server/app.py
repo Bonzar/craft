@@ -213,8 +213,10 @@ async def capabilities(request):
             status = await asyncio.to_thread(dashboard.snapshot,limit=limit,offset=offset)
             control=status.get('processing_control')
             if control is not None:
-                control['can_change']=(request.app.state.queue_control and
-                                       request.app.state.owner.session(request) is not None)
+                owner_control=(request.app.state.queue_control and
+                               request.app.state.owner.session(request) is not None)
+                control['can_change']=(owner_control and
+                                       await asyncio.to_thread(dashboard.can_change_pause))
             # Published native Sites treats all capabilities responses alike:
             # these fixed fields are required before it applies transport policy.
             return JSONResponse({**status,'capabilities':{'live':True},'readiness':[]})
