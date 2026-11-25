@@ -1,4 +1,4 @@
-"""Scoped TEST-only queue reads on the existing Base HTTP listener."""
+"""Lane-scoped read-only queue reads on the existing Base HTTP listener."""
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +22,13 @@ PATH='/api/v1/queue-status'
 TEST_ROOT=Path('/srv/assertion-release/test')
 TEST_CONFIG=Path('/etc/assertion-release/test')
 TEST_ACCOUNT='assertion-test-deploy'
+PROD_ROOT=Path('/srv/assertion-release/production')
+PROD_CONFIG=Path('/etc/assertion-release/production')
+PROD_ACCOUNT='assertion-production-deploy'
+PROD_DATABASE=Path('/var/lib/assertion-memory/memory.sqlite3')
+PROD_HTTP_CONFIG=PROD_ROOT/'state'/'http.json'
+PROD_PORT=8903
+POLICY='queue-read-rest-v1.json'
 HEX=re.compile(r'[a-f0-9]{64}\Z')
 RELEASE=re.compile(r'([a-f0-9]{40})-([a-f0-9]{64})\Z')
 TAG=re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?\Z')
@@ -55,7 +62,7 @@ def exact_database(db):
     return info.st_dev,info.st_ino
 
 
-def snapshot(config, *, identity, database, interactive_enabled, limit, offset):
+def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False):
     tag,generation=identity()
     before=exact_database(database)
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=1)) as db:
@@ -64,16 +71,18 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset):
         db.set_progress_handler(lambda:time.monotonic()>=deadline,2000)
         db.execute('BEGIN')
         try:
-            data=build_queue_status(db,stage='test',release_version=tag,
+            data=build_queue_status(db,stage=lane,release_version=tag,
                  processing_session_ids=config.processing_session_ids,
                  model_configured=config.provider!='none',interactive_enabled=interactive_enabled,
-                 auto_process_fresh_mac=False,limit=limit,offset=offset)
+                 auto_process_fresh_mac=(lane=='prod' and config.auto_process_fresh_mac),limit=limit,offset=offset)
         finally:
             db.set_progress_handler(None,0)
             db.rollback()
     if exact_database(database)!=before or identity()!=(tag,generation):
         raise ValueError('TEST release or database changed')
     data['release_generation']=generation
+    if (can_change() if callable(can_change) else can_change):
+        data['processing_control']['can_change']=True
     return data
 
 
@@ -145,7 +154,7 @@ def _checked_file(path,limit,*,owner=None):
     return data
 
 
-def _identity(root):
+def _identity(root, lane='test'):
     current=root/'current'
     path=current.resolve(strict=True)
     match=RELEASE.fullmatch(path.name)
@@ -164,40 +173,68 @@ def _identity(root):
                      ('prototypes/assertion_memory/queue_rest.py',_checked_file(Path(__file__).resolve(),32768))):
         if manifest.count(sha256(raw).hexdigest()+'  ./'+name)!=1:
             raise ValueError('Unverified TEST release manifest')
-    return (tag_text,release_generation(rev,archive,tag_text,'test'))
+    return (tag_text,release_generation(rev,archive,tag_text,lane))
+
+
+def _policy(file, lane, *, strict=False):
+    if strict:
+        try:
+            file.lstat()
+        except FileNotFoundError:
+            return None
+    elif not os.path.lexists(file):
+        return None
+    parent=file.parent.lstat()
+    if (file.resolve(strict=True)!=file or not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid!=0 or parent.st_mode&0o022):
+        raise ValueError('Unverified lane queue REST switch')
+    policy=json.loads(_checked_file(file,512,owner=0))
+    if (type(policy) is not dict or set(policy)!={'version','lane','key_sha256'}
+            or type(policy['version']) is not int or policy['version']!=1 or policy['lane']!=lane
+            or type(policy['key_sha256']) is not str or not HEX.fullmatch(policy['key_sha256'])):
+        raise ValueError('Invalid lane queue REST policy')
+    return policy['key_sha256']
 
 
 def _configured_queue_rest(config_path, port, legacy_token):
-    """No production binding, authorization, config, or listener changes."""
-    if (os.getuid()==0 or os.getuid()!=os.geteuid() or
-            pwd.getpwuid(os.getuid()).pw_name!=TEST_ACCOUNT or
-            Path(config_path)!=TEST_ROOT/'state'/'http.json'):
+    if os.getuid()==0 or os.getuid()!=os.geteuid():
         return None
-    file=TEST_CONFIG/'queue-read-rest-v1.json'
-    if not os.path.lexists(file):
+    user=pwd.getpwuid(os.getuid()).pw_name
+    if user==TEST_ACCOUNT and Path(config_path)==TEST_ROOT/'state'/'http.json':
+        lane, root, config_dir, db = 'test', TEST_ROOT, TEST_CONFIG, TEST_ROOT/'state'/'fictional.sqlite3'
+    elif user==PROD_ACCOUNT and port==PROD_PORT and Path(config_path)==PROD_HTTP_CONFIG:
+        lane, root, config_dir, db = 'prod', PROD_ROOT, PROD_CONFIG, PROD_DATABASE
+    else:
         return None
-    parent=file.parent.lstat()
-    if file.resolve(strict=True)!=file or parent.st_uid!=0 or parent.st_mode&0o022:
-        raise ValueError('Unverified TEST queue REST switch')
-    policy=json.loads(_checked_file(file,512,owner=0))
-    if (type(policy) is not dict or set(policy)!={'version','lane','key_sha256'}
-            or type(policy['version']) is not int or policy['version']!=1 or policy['lane']!='test'
-            or not isinstance(policy['key_sha256'],str) or not HEX.fullmatch(policy['key_sha256'])
-            or hmac.compare_digest(policy['key_sha256'],sha256(legacy_token.encode('ascii')).hexdigest())):
-        raise ValueError('Invalid TEST queue REST policy')
-    established=_identity(TEST_ROOT)
+    file=config_dir/POLICY
+    fingerprint=_policy(file,lane,strict=(lane=='prod'))
+    if fingerprint is None:
+        return None
+    if hmac.compare_digest(fingerprint,sha256(legacy_token.encode('ascii')).hexdigest()):
+        raise ValueError('Reused lane queue REST authority')
+    established=_identity(root,lane)
+
     def identity():
-        if (TEST_ROOT/'current').resolve(strict=True)!=Path(__file__).resolve().parents[2]:
-            raise ValueError('TEST queue REST release changed')
+        if (root/'current').resolve(strict=True)!=Path(__file__).resolve().parents[2]:
+            raise ValueError('Queue REST release changed')
+        if lane=='prod':
+            # Reject an accidental shared key without giving PROD a TEST DB
+            # path. Root-managed policy fingerprints are not bearer secrets.
+            test_fingerprint=_policy(TEST_CONFIG/POLICY,'test',strict=True)
+            if (_policy(file,lane,strict=True)!=fingerprint or test_fingerprint is not None
+                    and hmac.compare_digest(fingerprint,test_fingerprint)):
+                raise ValueError('Reused or rotated lane queue REST authority')
         return established
-    def bind(config, interactive_enabled):
-        db=TEST_ROOT/'state'/'fictional.sqlite3'
-        if Path(config.db)!=db or config.auto_process_fresh_mac:
-            logging.getLogger(__name__).warning('test_queue_rest_database_unavailable')
+
+    if lane=='prod':
+        identity()
+    def bind(config, interactive_enabled, *, can_change=False):
+        if Path(config.db)!=db or lane=='test' and config.auto_process_fresh_mac:
+            logging.getLogger(__name__).warning('queue_rest_database_unavailable')
             return None
-        return make_queue_rest(fingerprint=policy['key_sha256'],port=port,
+        return make_queue_rest(fingerprint=fingerprint,port=port,
             project=lambda **page_:snapshot(config,identity=identity,database=db,
-                interactive_enabled=interactive_enabled,**page_))
+                interactive_enabled=interactive_enabled,lane=lane,can_change=can_change,**page_))
     return bind
 
 
@@ -206,5 +243,5 @@ def configured_queue_rest(config_path, port, legacy_token):
         return _configured_queue_rest(config_path,port,legacy_token)
     except (OSError,ValueError,UnicodeError):
         # Invalid optional activation must not take the existing Base API down.
-        logging.getLogger(__name__).warning('test_queue_rest_activation_unavailable')
+        logging.getLogger(__name__).warning('queue_rest_activation_unavailable')
         return None
