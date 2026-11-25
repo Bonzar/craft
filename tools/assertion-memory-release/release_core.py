@@ -210,6 +210,33 @@ def prepare(payload, release, root, hook, retained):
         sync_dir(release.parent)
 
 
+def inventory_base_releases(root, active):
+    """Classify direct children without deleting the unknown or using them as authority."""
+    releases=root/'releases'
+    groups={'active':0,'eligible_pending_host_proof':0,'unprepared':0,'unknown':0,'unsafe':0}
+    fd=os.open(releases,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        parent=os.fstat(fd)
+        if not os.path.samestat(parent,releases.lstat()):
+            raise ValueError('retention_release_directory_changed')
+        for name in os.listdir(fd):
+            data=os.stat(name,dir_fd=fd,follow_symlinks=False)
+            if not stat.S_ISDIR(data.st_mode) or data.st_uid!=os.geteuid() or data.st_dev!=parent.st_dev:
+                group='unsafe'
+            elif name==active.name:
+                group='active'
+            elif not re.fullmatch(r'[a-f0-9]{40}-[a-f0-9]{64}',name):
+                group='unknown'
+            elif not is_prepared(releases/name):
+                group='unprepared'
+            else:
+                group='eligible_pending_host_proof'
+            groups[group]+=1
+    finally:
+        os.close(fd)
+    return {**groups,'current_only':groups['active']==1 and sum(groups.values())==1}
+
+
 def prune_inactive_base(root, active, prove_inactive):
     """Only Base payloads, under the caller's lane activation lock; no state paths."""
     if root.resolve(strict=True)!=root:
@@ -246,13 +273,16 @@ def prune_inactive_base(root, active, prove_inactive):
         os.fsync(fd)
     finally:
         os.close(fd)
+    return inventory_base_releases(root,active)
 
 
 def _try_base_retention(root, active, prove):
     if prove is None or active is None:
         return
     try:
-        prune_inactive_base(root,Path(active),prove)
+        report=prune_inactive_base(root,Path(active),prove)
+        if not report['current_only']:
+            logging.getLogger(__name__).warning('base_release_retention_noncurrent_entries_remain')
     except Exception:
         # A committed healthy runtime must not be reported as rolled back.
         logging.getLogger(__name__).warning('base_release_retention_incomplete')

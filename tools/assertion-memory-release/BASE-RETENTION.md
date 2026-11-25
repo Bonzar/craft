@@ -36,3 +36,35 @@ unguarded retention sweep. Unexpected identity, unavailable process proof or an
 I/O error retains leftovers and emits a bounded diagnostic; never fabricate a
 rollback after a committed healthy activation. A future deploy retries eligible
 leftovers with fresh proof. Visual uses no retention callback.
+
+## First rollout inventory and reconciliation
+
+In each lane separately, run `inventory_base_releases(root, active)` under the
+same existing deploy mutex, with the active pointer verified from the settled
+guard. This is a dry run: report the active, eligible (pending host proof),
+unprepared, unknown and unsafe counts. Even a proof-approved sweep may leave
+unknown/unsafe entries; `current_only` is false in that case. It covers the
+release directory, not the whole machine; do not claim server-wide
+current-only until the external runtime inventory has also been verified.
+
+Before activation, cross-check the exact already-serving Sites Graph process,
+systemd unit+fragment identity, process cwd, imports and interpreter binding.
+PROD currently has a separate fixed wrapper under
+`/opt/assertion-memory-prod-site-graph` and independently installed runtime
+source may reside under `/opt`. Find it from explicit unit configuration and
+live process evidence, not directory naming. First point the **same** unit
+(with existing guard and unchanged DB/path/auth) at the current artifact using
+reviewed release-controlled configuration, qualify the existing owner Sites
+read entry point, and prove restart binding. Only then separately classify the
+old executable/source tree for explicitly reviewed retirement. The automatic
+Base sweep never touches `/opt` or these historical directories. Keep a minimal
+external wrapper/config if still referenced or required; it is not a second app
+build and must not vendor application code after canonical migration.
+
+Crash before commit: existing journal restores and smokes the prior release
+before any pruning. Crash after commit: the current symlink stays committed;
+next normal deployment reconciles prepared eligible noncurrent leftovers
+under the same proof/lock. Interrupted filesystem removal may leave an
+unprepared residue; classify and report it rather than guessing. A later
+operator can reconcile only that exact residue after separate provenance,
+inactivity and mount verification; no broad age/name sweep.
