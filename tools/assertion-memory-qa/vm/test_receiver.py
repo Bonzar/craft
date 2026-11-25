@@ -47,6 +47,39 @@ class Test(unittest.TestCase):
         self.assertEqual([action for action,_ in self.calls],['prepare','restart','smoke']) # staging alone is not TEST preparation
         self.assertEqual((self.root/'current').resolve(),self.root/'releases'/f'{REV}-{sha}')
 
+    def test_shared_base_retention_old_tag_redeploy(self):
+        from base_payload import deploy as base_deploy
+        old_sha,old=archive()
+        new_sha,new=archive([('./notice.txt',b'new')])
+        old_blob,new_blob=old.getvalue(),new.getvalue()
+        old_path=self.root/'releases'/f'{REV}-{old_sha}'
+        new_path=self.root/'releases'/f'{REV}-{new_sha}'
+        def deploy_blob(sha, blob, fail=False):
+            def hook(action, path):
+                self.hook(None,action,path)
+                if fail and path==new_path and action=='smoke':
+                    raise RuntimeError('smoke')
+            def proof(active, stale):
+                self.calls.append(('prune',stale))
+                assert self.calls[-2]==('smoke',active)
+                return True
+            return base_deploy(io.BytesIO(blob),REV,sha,root=self.root.resolve(),
+                               config=self.config,hook=hook,prove_inactive=proof)
+        # macOS uses /var as an alias; compare canonical paths in this test.
+        self.root=self.root.resolve()
+        old_path=self.root/'releases'/old_path.name
+        new_path=self.root/'releases'/new_path.name
+        deploy_blob(old_sha,old_blob)
+        with self.assertRaisesRegex(RuntimeError,'smoke'):
+            deploy_blob(new_sha,new_blob,fail=True)
+        self.assertEqual((self.root/'current').resolve(),old_path)
+        self.assertFalse(new_path.exists())
+        deploy_blob(new_sha,new_blob)
+        self.assertFalse(old_path.exists())
+        deploy_blob(old_sha,old_blob)
+        self.assertEqual((self.root/'current').resolve(),old_path)
+        self.assertFalse(new_path.exists())
+
     def test_process_dies_during_prepare_then_same_archive_restarts_cleanly(self):
         old,_=self.execute()
         current=self.root/'current'
