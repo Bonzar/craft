@@ -23,6 +23,7 @@ class StandalonePause(fixture.OriginTest):
         host=f'visual-{lane}.example.test'
         origin='https://'+host
         state=dict(stage=lane,paused=False,revision='a'*32)
+        sessions=dict(stage=lane,revision='d'*32,selected_session_ids=[],sessions=[{'id':'synthetic','queued':1,'eligible':True}])
         calls=[]
         now=[1770000000]
         ready=[True]
@@ -45,6 +46,7 @@ class StandalonePause(fixture.OriginTest):
                         'queues':[],'processing_control':{'paused':state['paused'],
                         'revision':state['revision'],'can_change':ready[0]}})
                 assert self.headers['Authorization']=='Bearer '+read
+                if self.path=='/api/v1/queue-sessions':return self.reply(200,sessions)
                 assert self.path=='/api/v1/queue-pause'
                 self.reply(200,state)
 
@@ -58,11 +60,16 @@ class StandalonePause(fixture.OriginTest):
                 wire=self.rfile.read(int(self.headers['Content-Length']))
                 args=json.loads(wire)
                 nonce=self.headers['X-Memory-Pause-Nonce']
-                mac='\n'.join(('memory-queue-pause-v1','PUT','/api/v1/queue-pause',lane,
+                mac='\n'.join(('memory-queue-pause-v1','PUT',self.path,lane,
                     hashlib.sha256(wire).hexdigest(),actor,args['expected_revision'],str(now[0]),
                     str(now[0]+15),nonce))+'\n'
                 assert hmac.compare_digest(self.headers['X-Memory-Pause-Signature'],
                      hmac.digest(secret,mac.encode('ascii'),'sha256').hex())
+                if self.path=='/api/v1/queue-sessions':
+                    assert set(args)=={'selected_session_ids','expected_revision'}
+                    if args['expected_revision']!=sessions['revision']:return self.reply(409,{})
+                    sessions.update(revision='e'*32,selected_session_ids=args['selected_session_ids'])
+                    return self.reply(200,sessions)
                 assert set(args)=={'paused','expected_revision'}
                 if args['expected_revision']!=state['revision']:
                     return self.reply(409,{})
@@ -134,3 +141,22 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(request('PUT',path,before,extra={'X-CSRF-Token':prepare['csrf_token']})[0],200)
         self.assertFalse(state['paused'])
         self.assertEqual({path for _,path in calls},{'/api/v1/queue-pause'})
+        calls.clear()
+        select='/api/v1/processing/sessions'
+        if lane=='prod':
+            self.assertEqual(request('POST',select+'/prepare',{})[0],404)
+            self.assertEqual(calls,[])
+            return
+        self.assertEqual(request('POST',select+'/prepare',{},proof=None)[0],403)
+        self.assertEqual(request('POST',select+'/prepare',{},sent_origin='https://wrong.example.test')[0],403)
+        self.assertEqual(calls,[])
+        code,view=request('POST',select+'/prepare',{})
+        self.assertEqual(code,200)
+        body=dict(stage='test',selected_session_ids=['synthetic'],expected_revision=view['revision'])
+        self.assertEqual(request('PUT',select,body)[0],403)
+        cross=fixture.origin.hmac.digest(b'c'*32,f'visual-pause-v1\ntest\n{origin}\n{view["revision"]}\n{now[0]+30}'.encode(),'sha256').hex()
+        self.assertEqual(request('PUT',select,body,extra={'X-CSRF-Token':f'{now[0]+30}.'+cross})[0],403)
+        self.assertEqual(request('PUT',select,body,extra={'X-CSRF-Token':view['csrf_token']})[0],200)
+        self.assertEqual(sessions['selected_session_ids'],['synthetic'])
+        self.assertEqual(request('PUT',select,body,extra={'X-CSRF-Token':view['csrf_token']})[0],409)
+        self.assertTrue(all(p=='/api/v1/queue-sessions' for _,p in calls))

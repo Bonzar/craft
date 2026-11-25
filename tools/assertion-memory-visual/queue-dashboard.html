@@ -18,6 +18,13 @@
       </div>
       <button id="queue-processing-toggle" type="button" hidden disabled></button>
     </section>
+    <details id="queue-session-policy" class="queue-processing" hidden>
+      <summary>Какие сессии обрабатывать автоматически</summary>
+      <p>Выберите сессии TEST. Это меняет обработку очереди, а не только список на экране. Если ничего не выбрано, новые задачи реплик не запускаются автоматически.</p>
+      <p id="queue-session-feedback" role="status"></p>
+      <div id="queue-session-options" role="group" aria-label="Сессии TEST"></div>
+      <button id="queue-session-save" type="button" disabled>Применить выбор</button>
+    </details>
     <div class="queue-items"></div>
   </div>
   <span class="queue-copy-status sr-only" role="status"></span>

@@ -159,6 +159,11 @@ class ModelReviewRoutingTest(unittest.TestCase):
         idle = {'db':self.db,'worker_service':dict(options,processing_session_ids=[])}
         fresh = {'db':self.db,'worker_service':dict(options,processing_session_ids=[],auto_process_fresh_mac=True)}
         self.assertEqual(_provider_identity(fresh),_provider_identity(idle))
+        # A supervisor revision is queue admission metadata, not model identity.
+        cohort = {'db':self.db,'worker_service':dict(options,processing_session_ids=['fixture-session'])}
+        watched = {'db':self.db,'worker_service':dict(cohort['worker_service'],queue_sessions_revision='a'*32)}
+        self.assertEqual(_provider_identity(watched),_provider_identity(cohort))
+        self.assertNotEqual(_provider_identity(watched),_provider_identity(idle))
 
 
 if __name__=='__main__':unittest.main()

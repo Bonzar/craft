@@ -295,7 +295,9 @@ def _worker_signals():
 def run_pool(config, lock, idle_handoff, *, limit=0):
     """Called only after the MCP supervisor acquired db+'.worker.lock'."""
     with _worker_signals() as (is_pausing, is_cancelling):
-        return _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling)
+        from .queue_session_control import worker_selection_changed
+        return _run_pool(config, lock, idle_handoff, limit,
+                         lambda: is_pausing() or worker_selection_changed(config), is_cancelling)
 
 
 def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
@@ -344,3 +346,4 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
                 return
             if idle_handoff(lock, lambda: _deadline(store,config)):
                 return
+

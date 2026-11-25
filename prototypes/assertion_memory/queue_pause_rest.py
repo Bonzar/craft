@@ -23,7 +23,11 @@ def unique(items):
 
 def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                           write_sha256=None, actor_sha256=None, verify_owner=None, prepare=None,
-                          change=None, port=None):
+                          change=None, port=None, path=PATH):
+    from .queue_session_control import PATH as SESSIONS, normalize
+    session_mode=path==SESSIONS and stage=='test'
+    if path!=PATH and not session_mode:
+        return None
     if stage not in ('test','prod') or enabled is not True:
         return None
     if (type(port) is not int or not 1 <= port <= 65535 or not callable(prepare)
@@ -43,8 +47,8 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
             await send({'type': 'http.response.body', 'body': wire})
 
 
-        if (scope.get('type') != 'http' or scope.get('path') != PATH
-                or scope.get('raw_path', PATH.encode()) != PATH.encode() or scope.get('query_string')):
+        if (scope.get('type') != 'http' or scope.get('path') != path
+                or scope.get('raw_path', path.encode()) != path.encode() or scope.get('query_string')):
             return await reply(404, {'error': 'not_found'})
         method = scope.get('method')
         if method not in ('GET', 'PUT'):
@@ -77,15 +81,20 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                 async with asyncio.timeout(3):
                     while True:
                         event = await receive()
-                        if event.get('type') != 'http.request' or len(body)+len(event.get('body', b'')) > 1024:
+                        if event.get('type') != 'http.request' or len(body)+len(event.get('body', b'')) > (16_384 if session_mode else 1024):
                             raise ValueError()
                         body.extend(event.get('body', b''))
                         if not event.get('more_body'):
                             break
                 request = json.loads(body, object_pairs_hook=unique)
-                if (type(request) is not dict or set(request) != {'paused', 'expected_revision'}
-                        or type(request['paused']) is not bool or type(request['expected_revision']) is not str
+                field='selected_session_ids' if session_mode else 'paused'
+                if (type(request) is not dict or set(request) != {field, 'expected_revision'}
+                        or type(request['expected_revision']) is not str
                         or not REVISION.fullmatch(request['expected_revision'])):
+                    raise ValueError()
+                if session_mode:
+                    normalize(request[field])
+                elif type(request[field]) is not bool:
                     raise ValueError()
                 args = {'stage': stage, **request}
             except (TimeoutError, ValueError, UnicodeError):
@@ -100,21 +109,25 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
             except Exception:
                 return await reply(403, {'error': 'owner_required'})
             if (type(proof) is not ProvenOwner
-                    or not hmac.compare_digest(proof.owner, actor_sha256)):
+                    or proof.path!=path or not hmac.compare_digest(proof.owner, actor_sha256)):
                 return await reply(403, {'error': 'owner_required'})
             args['proof'] = proof
         try:
             state = await asyncio.to_thread(prepare if method == 'GET' else change, **args)
-            if (type(state) is not dict or set(state) != {'stage', 'paused', 'revision'}
-                    or state['stage'] != stage or type(state['paused']) is not bool
+            required={'stage','revision','selected_session_ids','sessions'} if session_mode else {'stage','revision','paused'}
+            if (type(state) is not dict or set(state) != required
+                    or state['stage'] != stage or not session_mode and type(state['paused']) is not bool
                     or type(state['revision']) is not str or not REVISION.fullmatch(state['revision'])):
                 raise ValueError()
         except ProofRejected:
             return await reply(403, {'error': 'owner_required'})
         except Conflict:
             return await reply(409, {'error': 'queue_control_changed'})
+        except ValueError:
+            return await reply(400 if session_mode else 503, {'error':'invalid_request' if session_mode else 'pause_unavailable'})
         except Exception:
             return await reply(503, {'error': 'pause_unavailable'})
         return await reply(200, state)
 
     return handler
+

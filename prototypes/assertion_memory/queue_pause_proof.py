@@ -29,10 +29,11 @@ class ProvenOwner:
     expires_at: int
     nonce: str
     lane: str = 'test'
+    path: str = PATH
 
 
 def canonical(body, p):
-    return ('\n'.join(('memory-queue-pause-v1', 'PUT', PATH, p.lane,
+    return ('\n'.join(('memory-queue-pause-v1', 'PUT', p.path, p.lane,
                       sha256(body).hexdigest(), p.owner, p.revision,
                       str(p.issued_at), str(p.expires_at), p.nonce))+'\n').encode('ascii')
 
@@ -41,13 +42,14 @@ def _fresh(p, now):
     return p.expires_at == p.issued_at + TTL and p.issued_at <= now < p.expires_at
 
 
-def make_owner_verifier(secret, owner, *, lane='test', clock=time.time):
-    if (lane not in ('test','prod') or type(secret) is not bytes or len(secret) != 32
+def make_owner_verifier(secret, owner, *, lane='test', path=PATH, clock=time.time):
+    from .queue_session_control import PATH as SESSIONS
+    if ((path!=PATH and (path!=SESSIONS or lane!='test')) or lane not in ('test','prod') or type(secret) is not bytes or len(secret) != 32
             or type(owner) is not str or not HEX.fullmatch(owner)):
         raise ValueError('Invalid TEST owner proof authority')
 
     async def verify(scope, body, revision):
-        if scope.get('method') != 'PUT' or scope.get('path') != PATH or not REVISION.fullmatch(revision):
+        if scope.get('method') != 'PUT' or scope.get('path') != path or not REVISION.fullmatch(revision):
             raise ProofRejected()
         headers = []
         for key in ENVELOPE:
@@ -63,7 +65,7 @@ def make_owner_verifier(secret, owner, *, lane='test', clock=time.time):
                 or not UNIX.fullmatch(issued) or not UNIX.fullmatch(expires)
                 or not NONCE.fullmatch(nonce) or not HEX.fullmatch(sig)):
             raise ProofRejected()
-        proof = ProvenOwner(who, revision, int(issued), int(expires), nonce, lane)
+        proof = ProvenOwner(who, revision, int(issued), int(expires), nonce, lane, path)
         if not _fresh(proof, int(clock())) or not hmac.compare_digest(
                 hmac.digest(secret, canonical(body, proof), 'sha256').hex(), sig):
             raise ProofRejected()
@@ -71,9 +73,9 @@ def make_owner_verifier(secret, owner, *, lane='test', clock=time.time):
     return verify
 
 
-def apply_once(db, *, stage, paused, expected_revision, proof, clock=time.time):
+def reserve_once(db, *, stage, expected_revision, proof, path=PATH, clock=time.time):
     """Caller must hold BEGIN IMMEDIATE and commit only after successful result."""
-    if (stage not in ('test','prod') or type(proof) is not ProvenOwner or proof.lane != stage or not db.in_transaction
+    if (stage not in ('test','prod') or type(proof) is not ProvenOwner or proof.lane != stage or proof.path != path or not db.in_transaction
             or proof.revision != expected_revision or not _fresh(proof, int(clock()))):
         raise ProofRejected()
     db.execute('CREATE TABLE IF NOT EXISTS memory_queue_pause_nonce '
@@ -84,5 +86,9 @@ def apply_once(db, *, stage, paused, expected_revision, proof, clock=time.time):
                       'ON CONFLICT(nonce) DO NOTHING', (proof.nonce, proof.expires_at))
     if used.rowcount != 1:
         raise ProofRejected()
+
+def apply_once(db, *, stage, paused, expected_revision, proof, clock=time.time):
+    reserve_once(db,stage=stage,expected_revision=expected_revision,proof=proof,clock=clock)
     state, revision = set_control(db, paused=paused, expected_revision=expected_revision)
     return dict(stage=stage, paused=state, revision=revision)
+
