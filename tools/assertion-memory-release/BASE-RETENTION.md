@@ -94,3 +94,27 @@ to the old tree. Acknowledge with only `assertion-base-test-retention-v1 OK`
 plus newline and close; any other result retains the old tree.
 The scanner proves and does not remove anything. Kill or unavailable scanner
 means healthy release still succeeds but cleanup remains incomplete.
+
+The fixed root gate candidate is `tools/assertion-memory-qa/vm/retention_authority.py`
+and its matching systemd socket/service files. Do not activate them until the TEST
+inventory identifies all live services and the root owner has reviewed and
+hashed actual effective fragments, all drop-ins, and the exact root-owned
+Sites Graph wrapper. Provision `retention-inventory-v1.json` as a protected
+root-only file: version 1, exact live numeric UID, the three named unit cgroups,
+and SHA-256 of their root-owned fragments, every effective drop-in, and wrapper.
+Available guard behavior is conservative: inaccessible/changed process identity,
+a new TEST user service, an occupied previous path, a stale-loaded or
+not demonstrably current unit, an extra mount of the same filesystem,
+an unknown mount, or a missing current launch binding means denial.
+
+In particular a pathname containing only `current` in argv/PYTHONPATH is
+not proof of what was imported before symlink activation. Canonical TEST
+service launchers must advertise an immutable physical release binding and
+qualification must restart/check the existing Sites-facing graph too. The
+older standard TEST service hook restarts only its two user units; this is
+not enough to arm retention until production release-managed activation
+also qualifies existing Sites-facing graph in the same critical section.
+The candidate also depends on the exact installed Linux systemd version
+supporting `systemctl --user --machine=assertion-test-deploy@.host show`,
+and host-complete root proc visibility (including sockets and mount namespaces).
+These are deployment acceptance checks, not things to assume from Mac tests.

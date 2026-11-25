@@ -1,0 +1,10 @@
+[Unit]
+Description=Private Base TEST inactive runtime authority socket
+
+[Socket]
+ListenStream=/run/assertion-base-test-retention/authority.sock
+DirectoryMode=0755
+SocketUser=root
+SocketGroup=assertion-test-deploy
+SocketMode=0660
+RemoveOnStop=true

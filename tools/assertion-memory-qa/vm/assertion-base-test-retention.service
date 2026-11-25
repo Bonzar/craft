@@ -1,0 +1,12 @@
+[Unit]
+Description=Read-only Base TEST inactive runtime authority
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -B /etc/assertion-release/test/retention_authority.py
+NoNewPrivileges=yes
+# The proof requires host proc and mount visibility. Do not add a private
+# mount namespace, ProtectProc, or filesystem bind mounts without re-review.
+RestrictAddressFamilies=AF_UNIX
