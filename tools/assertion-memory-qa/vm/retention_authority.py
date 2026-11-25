@@ -83,20 +83,24 @@ def authority_inventory(uid):
               '/etc/systemd/user/assertion-test-deploy-mcp.service',
               '/opt/assertion-memory-site-test-graph/start.py'}
     need(required<=pins.keys())
+    active_units={}
     for name,group in units.items():
         argv=['/usr/bin/systemctl']
         if name!='memory-site-test-graph.service':
             argv.extend(['--user','--machine='+ACCOUNT+'@.host'])
-        argv.extend(['show','--property=FragmentPath,DropInPaths,ControlGroup,ActiveState','--',name])
+        argv.extend(['show','--property=FragmentPath,DropInPaths,ControlGroup,ActiveState,MainPID','--',name])
         result=subprocess.run(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
                               timeout=2,check=True,env={'PATH':'/usr/bin:/bin','LANG':'C'})
         lines=result.stdout.decode().splitlines()
-        need(len(lines)==4)
+        need(len(lines)==5)
         actual=dict(line.split('=',1) for line in lines)
-        need(set(actual)=={'FragmentPath','DropInPaths','ControlGroup','ActiveState'})
+        need(set(actual)=={'FragmentPath','DropInPaths','ControlGroup','ActiveState','MainPID'})
         need(actual['ActiveState']=='active' and actual['ControlGroup']==group)
         need(all(f in pins for f in [actual['FragmentPath'],*actual['DropInPaths'].split()]))
-    return units
+        need(re.fullmatch(r'[1-9][0-9]{0,9}',actual['MainPID']))
+        active_units[name]=(group,actual['MainPID'])
+    need(len({pid for _,pid in active_units.values()})==len(active_units))
+    return active_units
 
 
 def check_lock(root, fd):
@@ -194,9 +198,12 @@ def processes(proc, root, active, stale, units, uid):
                     suffix=group[len(b'0::'+test_manager):]
                     if b'.service' in suffix:
                         need(any(group==b'0::'+cg.encode() or group.startswith(b'0::'+cg.encode()+b'/')
-                                 for cg in units.values()))
-        for name,cgroup in units.items():
-            if (b'0::'+cgroup.encode()) in cgroups and (now in cmd or now in realm or any(within(now,x) for x in paths)):
+                                 for cg,_ in units.values()))
+        for name,(cgroup,main_pid) in units.items():
+            if p.name==main_pid:
+                need((b'0::'+cgroup.encode()) in cgroups)
+                need(within(now,paths[0]) or b'PYTHONPATH='+now in realm.split(b'\0')
+                     or any(within(now,part) for part in cmd.split(b'\0')))
                 need(re.search(rb'^Uid:\s+'+str(uid).encode()+rb'\s+'+str(uid).encode()+rb'\s',status,re.M))
                 member.add(name)
     need(member==UNIT_NAMES and listed_pids(proc)==initial)
