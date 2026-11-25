@@ -186,7 +186,8 @@ def factory(stage,root,config_dir,legacy_token):
     if effect is not None:
         without=compile_release(source,pins,effects=False)
         profile['read_catalog_sha256']=without['catalog_sha256']
-    generation=digest({'revision':revision,'archive':archive,'tag':tag,'lane':stage})
+    from prototypes.assertion_memory.dashboard_projection import release_generation
+    generation=release_generation(revision,archive,tag,stage)
 
     def live_identity():
         if active(root)!=(release,revision,archive):

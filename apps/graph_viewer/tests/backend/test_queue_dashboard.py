@@ -94,6 +94,66 @@ class QueueDashboardTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'No live scheduler publisher'):
                 owned.metadata()
 
+    def test_legacy_create_app_binds_only_verified_test_unit_and_release(self):
+        run=self.root/'projection'
+        directory=run/'test'
+        directory.mkdir(parents=True)
+        directory.chmod(0o750)
+        scoped=self.root/'deploy'
+        revision,archive='3'*40,'4'*64
+        active=scoped/'releases'/(revision+'-'+archive)
+        active.mkdir(parents=True)
+        (scoped/'current').symlink_to(active,target_is_directory=True)
+        env={
+            queue_dashboard.DASHBOARD_STAGE_ENV:'test',
+            queue_dashboard.DASHBOARD_PATH_ENV:str(directory/'scheduler.json'),
+        }
+        good_uid=os.getuid()
+        cfg=SimpleNamespace(db=str(self.path),provider='codex',processing_session_ids=('session',),
+                            auto_process_fresh_mac=False)
+        web=dict(password='synthetic-owner-strong',public_origin=ORIGIN,
+                 allowed_proxy_hosts=[GATEWAY],bridge_read_token_file=self.key)
+        headers={'origin':ORIGIN,'authorization':'Bearer '+'c'*64}
+        endpoint='/api/v1/capabilities?queue_status=1'
+        with patch.object(dashboard_projection,'RUN',run), \
+             patch.object(queue_dashboard,'TEST_DEPLOY_ROOT',scoped), \
+             patch.object(queue_dashboard,'SCOPES',{'test':('assertion-test-deploy',self.path)}), \
+             patch.object(queue_dashboard,'LOADED_RELEASE',active), \
+             patch.object(queue_dashboard.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=good_uid)):
+            self.assertIsNone(queue_dashboard.configured_for_legacy_test_reader(self.path,env={}))
+            self.assertIsNone(queue_dashboard.configured_for_legacy_test_reader(self.path,env={
+                **env,queue_dashboard.DASHBOARD_STAGE_ENV:'prod'}))
+            self.assertIsNone(queue_dashboard.configured_for_legacy_test_reader(self.path,env={
+                **env,queue_dashboard.DASHBOARD_PATH_ENV:'/var/private/config.json'}))
+            self.assertIsNone(queue_dashboard.configured_for_legacy_test_reader(self.root/'opposite',env=env))
+            with patch.object(queue_dashboard.os,'geteuid',return_value=good_uid+1):
+                self.assertIsNone(queue_dashboard.configured_for_legacy_test_reader(self.path,env=env))
+            with patch.object(queue_dashboard,'LOADED_RELEASE',Path('/opt/untrusted')):
+                self.assertIsNone(queue_dashboard.configured_for_legacy_test_reader(self.path,env=env))
+            self.seed()
+            with patch.dict(os.environ,env,clear=False):
+                # The actual Sites wrapper doesn't pass a queue_dashboard argument.
+                app=create_app(self.path,self.root/'web',**web)
+            self.assertIsNotNone(app.state.queue_dashboard)
+            generation=dashboard_projection.release_generation(revision,archive,TAG,'test')
+            with TestClient(app,base_url='https://'+GATEWAY) as c:
+                self.assertEqual(c.get(endpoint,headers=headers).status_code,503)
+                self.assertEqual(c.get(endpoint).status_code,401)
+                with dashboard_projection.publish(stage='test',config=cfg,release=TAG,
+                        generation='f'*64,interactive_enabled=True):
+                    self.assertEqual(c.get(endpoint,headers=headers).status_code,503)
+                with dashboard_projection.publish(stage='test',config=cfg,release=TAG,
+                        generation=generation,interactive_enabled=True):
+                    r=c.get(endpoint,headers=headers)
+                    self.assertEqual(r.status_code,200,r.text)
+                    self.assertEqual(r.json()['release_version'],TAG)
+                    self.assertEqual(r.json()['queues'][0]['items'][0]['position'],1)
+                    (scoped/'current').unlink()
+                    next_release = scoped/'releases'/('5'*40+'-'+'6'*64)
+                    next_release.mkdir()
+                    (scoped/'current').symlink_to(next_release)
+                    self.assertEqual(c.get(endpoint,headers=headers).status_code,503)
+
     def test_owner_scope_and_actual_scheduler_rows_through_existing_path(self):
         self.seed()
         app=create_app(self.path,self.root/'graph',password='synthetic-owner-strong',public_origin=ORIGIN,

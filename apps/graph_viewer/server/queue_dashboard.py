@@ -1,6 +1,7 @@
 """Read-only status through the existing owner-authenticated Graph web service."""
 from __future__ import annotations
 import asyncio
+import logging
 from contextlib import closing
 import os
 from pathlib import Path
@@ -19,6 +20,12 @@ SCOPES = {
     'prod': ('assertion-production-deploy', Path('/var/lib/assertion-memory/memory.sqlite3')),
 }
 CURSOR = re.compile(r'(test|prod):[0-9a-f]{16}:[0-9]{1,15}\Z')
+TEST_DEPLOY_ROOT = Path('/srv/assertion-release/test')
+# Resolve the physical module once; `current` may point elsewhere later.
+LOADED_RELEASE = Path(__file__).resolve().parents[3]
+RELEASE_DIR = re.compile(r'([0-9a-f]{40})-([0-9a-f]{64})\Z')
+DASHBOARD_STAGE_ENV = 'ASSERTION_MEMORY_QUEUE_DASHBOARD_STAGE'
+DASHBOARD_PATH_ENV = 'ASSERTION_MEMORY_QUEUE_DASHBOARD_PROJECTION'
 
 
 def _connect(db):
@@ -33,20 +40,58 @@ def _connect(db):
     return connection
 
 
+def _test_activation():
+    root = TEST_DEPLOY_ROOT
+    current = (root/'current').resolve(strict=True)
+    match = RELEASE_DIR.fullmatch(current.name)
+    if (root.resolve(strict=True)!=root or (root/'releases').is_symlink()
+            or current.parent!=root/'releases' or current!=LOADED_RELEASE or match is None):
+        raise ValueError('Graph reader must run the current TEST release')
+    return match.groups()
+
+
+def configured_for_legacy_test_reader(source_path, *, env=None):
+    env = os.environ if env is None else env
+    stage, path = env.get(DASHBOARD_STAGE_ENV), env.get(DASHBOARD_PATH_ENV)
+    if stage is None and path is None:
+        return None
+    try:
+        if stage!='test' or path!=str(dashboard_projection.projection_path('test')):
+            raise ValueError('Wrong TEST dashboard configuration')
+        dashboard = HostedQueueDashboard(stage,path,source_path,activation=_test_activation)
+        if os.getuid()!=dashboard.publisher_uid or os.geteuid()!=dashboard.publisher_uid:
+            raise ValueError('Graph reader UID does not match the TEST scope')
+        _test_activation()
+        return dashboard
+    except (OSError, ValueError, KeyError, TypeError):
+        # No env data or paths are logged. Bad optional configuration cannot
+        # turn off the existing Graph service or change its auth.
+        logging.getLogger(__name__).warning('test_dashboard_activation_unavailable')
+        return None
+
+
 class HostedQueueDashboard:
-    def __init__(self, stage, config, source):
+    def __init__(self, stage, config, source, *, activation=None):
         if stage not in SCOPES:
             raise ValueError('Unrecognized hosted dashboard lane')
         account, canonical = SCOPES[stage]
         if Path(config) != dashboard_projection.projection_path(stage) or Path(source) != canonical:
             raise ValueError('Expected canonical lane projection and database')
         self.stage, self.db = stage, canonical
+        self.config = Path(config)
+        self.activation = activation
         self.publisher_uid = pwd.getpwnam(account).pw_uid
         self.epoch = secrets.token_hex(8)
         self.streams = asyncio.Semaphore(8)
 
     def metadata(self):
-        return dashboard_projection.read(stage=self.stage,database=self.db,uid=self.publisher_uid)
+        data = dashboard_projection.read(stage=self.stage,database=self.db,uid=self.publisher_uid)
+        if self.activation is not None:
+            revision, archive = self.activation()
+            expected = dashboard_projection.release_generation(revision,archive,data['release_version'],self.stage)
+            if data['generation']!=expected:
+                raise ValueError('Scheduler projection is not from current TEST release')
+        return data
 
     def snapshot(self, *, limit, offset):
         fields = self.metadata()
