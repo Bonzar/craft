@@ -13,6 +13,48 @@ def navigation(action, quote):
 
 
 class ThoughtQueryGraphTest(unittest.TestCase):
+    def test_ready_does_not_hide_a_gap_only_stated_in_checker_explanation(self):
+        from .test_thought_engine import ScriptedModel
+        from prototypes.assertion_memory.model import ModelError
+        from prototypes.assertion_memory.thought_engine_contract import validate_response
+        from prototypes.assertion_memory.thought_query import _Frame, _frontier, _load
+        import hashlib
+
+        text = 'The club chose the 19:40 show. Vlad bought tickets for Lena and confirmed a different show.'
+        question = 'What show did the club choose, and did Vlad confirm that exact show?'
+        gap = 'Did Vlad personally confirm the club show at 19:40?'
+        with self.assertRaises(ModelError):
+            validate_response('Check ready thought', {'verdict':'ready','question':gap,'text':'This is missing.'})
+        model = ScriptedModel(navigation('focus',text),
+            {'verdict':'lookup','question':gap,'text':'The candidate does not establish the requested confirmation.'})
+        with MemoryStore(':memory:') as memory:
+            service = ThoughtService(memory,model)
+            candidate = service.thoughts.publish(text, question=question, metadata={'verification':'accepted'})
+            with patch.object(service.engine, 'retrieve', return_value=[candidate]):
+                frame = _Frame(question)
+                _load(service.engine, frame)
+                original_sha256 = hashlib.sha256
+                def old_hash(body):
+                    return original_sha256(body.replace(b'central-graph-answer-v2', b'central-graph-answer-v1'))
+                with patch('prototypes.assertion_memory.thought_query.hashlib.sha256', side_effect=old_hash):
+                    old_frontier = _frontier(service.engine, frame, candidate)
+                service.engine._save_check(candidate, question, old_frontier)
+                self.assertIsNone(service.ready_query(question))
+            with patch('prototypes.assertion_memory.thought_engine.ThoughtEngine.retrieve',
+                       side_effect=[[candidate],[]]) as retrieve:
+                result = service.query(question)
+            self.assertTrue(result['partial_answer'])
+            self.assertFalse(result['answer_accepted'])
+            self.assertEqual(result['answer'],text)
+            self.assertEqual(result['missing_question'],gap)
+            self.assertEqual(retrieve.call_args.args,(gap,))
+            self.assertEqual([r.task for r in model.requests],['Navigate thought graph','Check ready thought'])
+            instructions = model.requests[-1].instructions
+            self.assertIn('discarding your explanation', instructions)
+            self.assertIn('return lookup', instructions)
+            self.assertNotIn('An honest scoped gap can be ready', instructions)
+            self.assertNotIn('or start another search', instructions)
+
     def test_gap_not_found_returns_the_existing_thought_as_partial_without_construction(self):
         from .test_thought_engine import ScriptedModel
         text = 'The group chose the 19:40 showing.'
