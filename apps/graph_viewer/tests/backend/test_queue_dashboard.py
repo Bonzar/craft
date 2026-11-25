@@ -2,12 +2,15 @@
 import asyncio
 from collections import deque
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 from starlette.testclient import TestClient
 from apps.graph_viewer.server.app import create_app
+from apps.graph_viewer.server import queue_dashboard
 from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard, dashboard_events, decode_cursor
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_service import ThoughtService
@@ -50,6 +53,41 @@ class QueueDashboardTest(unittest.TestCase):
                 ('e','scope','turn','DO NOT LEAK body','user','test','scope',time,'{"native_session_id":"session"}'))
             db.execute('INSERT INTO memory_capture_jobs (id,event_id,status,phase,updated_at,available_at)'
                 ' VALUES (?,?,?,?,?,?)',('job','e','pending','extract',time,time))
+
+    def test_metadata_is_attested_to_active_exact_lane_release_and_scheduler(self):
+        scope = self.root/'test'
+        state=scope/'state'
+        state.mkdir(parents=True)
+        release=scope/'releases'/('a'*40+'-'+'b'*64)
+        release.mkdir(parents=True)
+        tag=(TAG+'\n').encode('ascii')
+        (release/'BASE_RELEASE_TAG').write_bytes(tag)
+        (release/'REVISION').write_text('a'*40+'\n')
+        manifest=release/'SHA256SUMS'
+        manifest.write_text(hashlib.sha256(tag).hexdigest()+'  ./BASE_RELEASE_TAG\n')
+        (scope/'current').symlink_to(release,target_is_directory=True)
+        cfg=state/'http.json'
+        cfg.write_text(json.dumps({'service':{'db':str(self.path),'provider':'codex',
+            'processing_session_ids':[], 'auto_process_fresh_mac':True}}))
+        actual=queue_dashboard._small
+
+        def read(path, limit, **kw):
+            if path == Path('/etc/assertion-release/test/private-operations.json'):
+                self.assertEqual(kw,{'owner':0})
+                return b'{"capabilities":["baseline_read","intake_process"]}'
+            return actual(path, limit, **kw)
+        with patch.object(queue_dashboard,'SCOPES',{'test':(scope,self.path)}), \
+                patch.object(queue_dashboard,'__file__',str(release/'apps/graph_viewer/server/queue_dashboard.py')), \
+                patch.object(queue_dashboard,'_small',read):
+            value=HostedQueueDashboard('test',cfg,self.path)
+            self.assertEqual(value.metadata(),{'stage':'test','release_version':TAG,
+                'processing_session_ids':[],'auto_process_fresh_mac':True,
+                'model_configured':True,'interactive_enabled':True})
+            self.assertRaises(ValueError,HostedQueueDashboard,'prod',cfg,self.path)
+            self.assertRaises(ValueError,HostedQueueDashboard,'test',cfg,Path('/tmp/opposite.sqlite3'))
+            manifest.write_bytes(b'not the exact tag sha\n')
+            with self.assertRaisesRegex(ValueError,'Unverified release identity'):
+                value.metadata()
 
     def test_owner_scope_and_actual_scheduler_rows_through_existing_path(self):
         self.seed()
