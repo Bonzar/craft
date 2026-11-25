@@ -3,7 +3,8 @@
 This is independent of the existing journal timing export. It sends standard
 [OTLP/HTTP JSON](https://opentelemetry.io/docs/specs/otlp/#json-protobuf-encoding) spans
 to a **lane-local collector**, not directly to Monium. Hosting, cloud destination,
-credentials, and transport to Monium belong to the collector/operator.
+credentials, and transport to Monium belong to the collector/operator. See the
+[collector configuration and validation runbook](monium-trace-collector/README.md).
 
 ## TEST opt-in
 

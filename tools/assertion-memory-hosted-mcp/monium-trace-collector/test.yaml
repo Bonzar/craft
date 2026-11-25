@@ -1,0 +1,12 @@
+receivers:
+  otlp/lane:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:14318
+
+processors:
+  filter/lane:
+    error_mode: propagate
+    trace_conditions:
+      - 'resource.attributes["service.name"] != "assertion-memory-test"'
+      - 'resource.attributes["deployment.environment.name"] != "test"'

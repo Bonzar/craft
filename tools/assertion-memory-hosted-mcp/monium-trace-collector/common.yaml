@@ -1,0 +1,65 @@
+# Combined with exactly one lane overlay. The missing filter/lane is fail-closed.
+receivers:
+  otlp/lane:
+    protocols:
+      http:
+        max_request_body_size: 1048576
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 64
+    spike_limit_mib: 16
+  filter/shape:
+    error_mode: propagate
+    trace_conditions:
+      - 'scope.name != "assertion_memory.query_timing"'
+      - 'not IsMatch(span.name, "^(openai[.]chat|memory_query[.](submission|ready_probe|queue_wait|job_total|result_persist|query_total|release_lease|service_setup|snapshot|search|raw_search|answer|answer_payload|diagnostics|usage_accounting|provider_attempt|provider_setup|provider_cli|provider_network_wait|provider_response_read|provider_decode|provider_retry_signal|trace_request_write|trace_response_write|navigation|draft_generation|readiness_check|answer_verification|other_model|gap_search|answer_neighborhood|model_contract_validation|query_outcome|vm_http_submission))$")'
+      - 'Len(span.links) > 0'
+      - 'spanevent.name == spanevent.name'
+  transform/metadata_only:
+    error_mode: propagate
+    trace_statements:
+      - 'keep_keys(resource.attributes, ["service.name", "deployment.environment.name"])'
+      - 'keep_keys(scope.attributes, [])'
+      - 'set(scope.version, "")'
+      - 'set(span.status.message, "")'
+      - 'set(span.trace_state, "")'
+      - 'keep_keys(span.attributes, ["memory.stage", "memory.outcome", "memory.queue_wait_ms", "memory.run_id", "memory.call_id", "memory.model_phase", "memory.provider_connection_signal", "memory.provider_retry_signals", "gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.system", "gen_ai.request.model", "gen_ai.response.model", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.reasoning.output_tokens"])'
+  batch:
+    timeout: 2s
+    send_batch_size: 32
+    send_batch_max_size: 64
+
+exporters:
+  otlphttp/monium:
+    traces_endpoint: https://ingest.monium.yandex.cloud/otlp/v1/traces
+    headers:
+      Authorization: 'Application-Key ${env:MONIUM_TRACES_APPLICATION_KEY}'
+      x-monium-project: '${env:MONIUM_TRACES_PROJECT}'
+    tls:
+      insecure: false
+      insecure_skip_verify: false
+    timeout: 5s
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 8s
+      max_elapsed_time: 30s
+    sending_queue:
+      enabled: true
+      queue_size: 32
+      num_consumers: 1
+
+service:
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp/lane]
+      processors: [memory_limiter, filter/lane, filter/shape, transform/metadata_only, batch]
+      exporters: [otlphttp/monium]
