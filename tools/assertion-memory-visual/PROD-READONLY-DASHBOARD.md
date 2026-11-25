@@ -70,3 +70,55 @@ authorization and wrong origin; do not inspect or log queued message content.
 The current published V25-style native graph transport may poll rather than
 stream. Verify actual live forwarding before claiming updates work. No
 write, cleanup, or restart is part of this change.
+
+### Verified production mismatch and migration boundary
+
+The operator identified the active PROD Graph as
+`assertion-memory-prod-site-graph.service`, existing user/group
+`assertion-production-deploy` (live effective UID 986 at inspection), with
+the existing root-owned wrapper importing `apps.graph_viewer.server.app`
+and `bridge_auth` normally. It opens the canonical production database, but
+the serving process had **no** active Base release path on `PYTHONPATH`
+and survived the most recent Base release. The layout was historically
+staged with independent Graph source under `/opt/assertion-memory-qa/source`;
+do not change a policy file to make the independent code appear canonical.
+The existing root transition fence was observed regular, root-owned, 0644,
+single-link and empty. This verification is not an activation.
+
+Q: what must the actual production release controller do after qualification?
+
+1. Use a reviewed root-owned unit drop-in for the **same** Graph service
+   setting `PYTHONPATH=/srv/assertion-release/production/current` and the
+   above two nonsecret dashboard values. No edits to the existing wrapper,
+   token files, service principal, bind port, gateway, read-only DB mount,
+   existing systemd transition guard or Sites project. Keep the current
+   interpreter if the exact released Graph dependencies run under it;
+   `/proc/<pid>/exe` pointing to system Python is not sufficient to tell
+   whether a venv was used, so verify argv and runtime dependency imports.
+   If that interpreter cannot import the released package, retain the old
+   service and qualify a canonical existing release venv separately rather
+   than editing the wrapper.
+2. Include a restart of this exact existing Graph unit in the approved PROD
+   release transition. Do not restart it while its root ExecCondition would
+   reject the activation. Start only after the root controller validates the
+   new canonical inode and reaches its clean/settled state. Never bypass or
+   delete its transition guard, and do not add a broad deploy-user restart
+   capability. The current GitHub Base receipt alone does not prove this step:
+   no reviewed source-bound restart of the actual serving Graph has yet been
+   identified. Require the same canonical restart/probe on future releases
+   and the retained rollback version; otherwise its old process can drift.
+3. After the shared fence is again available, verify the new serving process
+   still uses UID 986 (recheck actual system UID), canonical release source,
+   original authenticated route and unchanged DB inode. The approved owner
+   check via the same PROD Site/Gateway must return the exact immutable Base
+   generation independently recomputed from the release receipt. Monitor
+   ordinary owner Graph and MCP health; on mismatch keep queue disabled,
+   preserve or restore the previous reviewed service configuration, and
+   use the approved transition's rollback path, never reroute directly.
+
+The optional saved-native harness
+`PROD_SITES_CHECKOUT=… node --test tools/assertion-memory-visual/test_prod_dashboard_sites.mjs`
+exercised the actual saved PROD composited Worker with a synthetic owner and
+upstream. It verified exact query forward/response identity and rejected
+anonymous and PUT callers. It did not contact the live PROD Site or authorize
+a deployment; the real owner-authenticated smoke in step 3 is separate.
