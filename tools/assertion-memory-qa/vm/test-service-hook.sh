@@ -13,7 +13,6 @@ if [[ -e "$gate_config" || -L "$gate_config" ]]; then
   [[ -f "$gate_config" && ! -L "$gate_config" && $(stat -c '%u:%a:%h' -- "$gate_config") == 0:644:1 ]]
   [[ -f "$gate" && ! -L "$gate" && $(stat -c '%u:%a:%h' -- "$gate") == 0:644:1 ]]
   canonical=true
-  units=(assertion-test-deploy-mcp.service)
 fi
 case "$1" in
 prepare)

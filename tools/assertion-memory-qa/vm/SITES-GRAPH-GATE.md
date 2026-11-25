@@ -14,9 +14,10 @@ transaction restarts the same 8819 unit after Base. It accepts the activation
 only when the existing authenticated TEST Graph Gateway returns the exact
 active Base tag and canonical release generation for its queue projection.
 Rollback restores the old pointer, restarts the same units and repeats the
-same smoke on the restored release. With the gate enabled, the receiver
-does not restart or use 8891 as a release success surrogate. Retire that
-redundant local graph independently once its consumers are checked.
+same smoke on the restored release. Keep restarting both existing TEST user
+units initially so no still-configured service can use an obsolete runtime.
+The 8891 service is not used as a release success surrogate; actual 8819 is
+still required. Retire redundant 8891 separately after proving its consumers.
 
 ## Deploy prerequisites (no live changes applied)
 
@@ -71,3 +72,31 @@ verify it resolves to the exact expected Visual digest, and compare the served
 index and JS hashes to that Visual archive. The VM asset-only smoke cannot
 detect cached/bypassed native Site routing. Old pinned URLs intentionally retain
 old bytes, so bookmarks for current UI use the stable entry URL.
+
+
+## Make the running 8819 generation unambiguous
+
+Review a drop-in for the same existing 8819 unit. Preserve User/Group,
+WorkingDirectory, host/port, credential environment, unit guards, and
+all current runtime/auth inputs. After checking its existing command has
+no additional arguments, provision the reviewed launcher root-owned 0755 at
+`/etc/assertion-release/test/test-sites-graph-launch.py`, then override
+only ExecStart:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/python3 -I -B /etc/assertion-release/test/test-sites-graph-launch.py
+```
+
+It starts the same root-pinned `/opt/assertion-memory-site-test-graph/start.py`
+as the unprivileged TEST user, but invokes the interpreter via the physical
+current release and sets PYTHONPATH to that same immutable directory.
+No shell, credentials, new ingress, or permission changes. Never add
+runtime arguments not confirmed from the exact existing unit; if the
+current service cannot match this exact command shape, stop for review.
+The two user service launchers must also expose their physical loaded
+release via cwd, argv or PYTHONPATH. Verify that from actual live units,
+then verify direct TEST Gateway queue identity on approved upgrade **and**
+restoration before arming retention. No manual service restart/pruning
+substitute for a green release and existing owner Sites read acceptance.
