@@ -203,7 +203,10 @@ async def capabilities(request):
         if dashboard is None:
             raise APIError('queue_unavailable','Queue status is not configured',503)
         try:
-            return JSONResponse(await asyncio.to_thread(dashboard.snapshot,limit=limit,offset=offset))
+            status = await asyncio.to_thread(dashboard.snapshot,limit=limit,offset=offset)
+            # Published native Sites treats all capabilities responses alike:
+            # these fixed fields are required before it applies transport policy.
+            return JSONResponse({**status,'capabilities':{'live':True},'readiness':[]})
         except Exception:
             raise APIError('queue_unavailable','Queue status is temporarily unavailable',503) from None
     value=request.app.state.manager.source.capabilities()
