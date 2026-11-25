@@ -10,6 +10,14 @@
   </header>
   <div class="queue-body">
     <p class="queue-caption">Очереди обрабатываются независимо. Номер указан только для задач, у которых есть место в очереди.</p>
+    <section id="queue-processing" class="queue-processing" aria-label="Обработка базы" hidden>
+      <div>
+        <h2 id="queue-processing-state"></h2>
+        <p>Пауза не запускает новые задачи для реплик, связей и пересчёта. Уже начатые задачи продолжаются. Очередь вопросов не затрагивается.</p>
+        <p id="queue-processing-feedback" role="status"></p>
+      </div>
+      <button id="queue-processing-toggle" type="button" hidden disabled></button>
+    </section>
     <div class="queue-items"></div>
   </div>
   <span class="queue-copy-status sr-only" role="status"></span>
