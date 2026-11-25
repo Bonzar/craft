@@ -1,4 +1,4 @@
-"""Experimental bound TEST Visual receiver envelope. No privileged operations."""
+"""Experimental bound Visual receiver envelope. No privileged operations."""
 from hashlib import sha256
 from io import BytesIO
 import json
@@ -11,7 +11,7 @@ if __package__:
 else:
     from runtime_companion import MAX_ZIP, identity, verify_signed, wire
 
-COMMAND=re.compile(r'deploy-visual-runtime test ([a-f0-9]{40})')
+COMMAND=re.compile(r'deploy-visual-runtime (test|prod) ([a-f0-9]{40})')
 MAX_STATIC=5_000_000
 
 
@@ -35,8 +35,8 @@ def length(source, maximum, size=10):
 def receive(stage, command, source, *, signers, private_workspace, activate):
     """Validate both payloads completely, then call the preinstalled scoped transaction."""
     m=COMMAND.fullmatch(command)
-    if stage!='test' or not m or not callable(activate):
-        raise ValueError('TEST Visual joint receiver not provisioned')
+    if not m or stage!=m[1] or not callable(activate):
+        raise ValueError('Visual joint receiver not provisioned')
     signed_raw=read_exact(source,length(source,4096))
     proof=read_exact(source,length(source,4096))
     try:
@@ -44,13 +44,13 @@ def receive(stage, command, source, *, signers, private_workspace, activate):
         expected=identity(**fields)
     except (TypeError, ValueError, UnicodeError) as e:
         raise ValueError('Invalid signed Visual descriptor') from e
-    rev=m[1]
+    rev=m[2]
     static_sha=expected['static_sha']
     if wire(expected)!=signed_raw or expected['revision']!=rev:
         raise ValueError('Visual command is not the signed release')
     runtime=read_exact(source,length(source,MAX_ZIP))
     runtime_sha=sha256(runtime).hexdigest()
-    files=verify_signed(runtime,expected,runtime_sha,proof,signers)
+    files=verify_signed(runtime,expected,runtime_sha,proof,signers,stage=stage)
     n=length(source,MAX_STATIC)
     with TemporaryDirectory(dir=private_workspace,prefix='.joint-visual-') as d:
         archive=Path(d)/'visual.tar'
@@ -66,11 +66,11 @@ def receive(stage, command, source, *, signers, private_workspace, activate):
         return activate(expected,archive,runtime_sha,files)
 
 
-def assemble(expected, runtime_raw, signature, static_raw):
-    """Runner framing; its transport can only select the exact TEST receiver command."""
+def assemble(expected, runtime_raw, signature, static_raw, *, stage='test'):
+    """Runner framing; its transport can only select the exact scoped receiver command."""
     revision=expected['revision']
     static_sha=sha256(static_raw).hexdigest()
-    command=f'deploy-visual-runtime test {revision}'
+    command=f'deploy-visual-runtime {stage} {revision}'
     if static_sha!=expected['static_sha'] or not COMMAND.fullmatch(command):
         raise ValueError('Mismatched Visual sender identity')
     chunks=(wire(expected),signature,runtime_raw,static_raw)

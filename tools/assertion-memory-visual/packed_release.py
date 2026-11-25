@@ -80,6 +80,11 @@ def runtime_witness(ctrl,original,content,aid,provider_sha,package_sha,companion
             'manifest_sha256':content.manifest_sha256,'original':asdict(original)}
 
 
+def require_matching_witness(raw,witness):
+    if raw!=runtime.wire(witness):
+        raise ValueError('Exact packed Visual TEST witness mismatch')
+
+
 def cli(env=os.environ,argv=None):
     argv=list(sys.argv[1:] if argv is None else argv)
     if len(argv)!=2 or argv[0] not in ('verify','deploy') or argv[1] not in ('test','prod'):
@@ -134,11 +139,7 @@ def cli(env=os.environ,argv=None):
         name=f'visual-packed-test-{ctrl.run}-attempt-1'
         aid=named(get,f'{gh.ROOT}/actions/runs/{ctrl.run}/artifacts',name)
         raw,_=download(get,gh.ROOT,folder,aid,name,ctrl.control_sha,ctrl.run,PROOF,8192)
-        if raw!=runtime.wire(witness):
-            raise ValueError('Exact packed Visual TEST witness mismatch')
-        # Current installed joint protocol and signer/health paths remain TEST-only.
-        # Do not ship a PROD static fallback or mark this lane successful.
-        raise ValueError('Scoped PROD Visual paired receiver is not provisioned')
+        require_matching_witness(raw,witness)
 
     (payload/'visual.tar').write_bytes(static)
     rpath=payload/'runtime.zip'
@@ -147,11 +148,12 @@ def cli(env=os.environ,argv=None):
        'port':env['RELEASE_SSH_PORT'],'host_pin':env['RELEASE_SSH_HOST_PIN'],'ssh_key':env['RELEASE_SSH_KEY'],
        'signing_key':env['RELEASE_SIGNING_KEY'],'runner_temp':env['RUNNER_TEMP']}
     v=visual.Payload(payload,original.revision,static_sha,manifest)
-    receipt=visual.activate('test',v,transport,runtime=(binding,witness['runtime_sha256'],rpath))
-    visual.verify_smoke('test',v,{k:env['RELEASE_'+k.upper()] for k in ('gateway_host','gateway_token')})
-    proof=common.seal_test(ctrl,original,content,receipt)
-    (folder/common.TEST_RECEIPT).write_bytes(runtime.wire(proof))
-    (folder/PROOF).write_bytes(runtime.wire(witness))
+    receipt=visual.activate(stage,v,transport,runtime=(binding,witness['runtime_sha256'],rpath))
+    visual.verify_smoke(stage,v,{k:env['RELEASE_'+k.upper()] for k in ('gateway_host','gateway_token')})
+    if stage=='test':
+        proof=common.seal_test(ctrl,original,content,receipt)
+        (folder/common.TEST_RECEIPT).write_bytes(runtime.wire(proof))
+        (folder/PROOF).write_bytes(runtime.wire(witness))
 
 
 if __name__=='__main__':
@@ -159,6 +161,4 @@ if __name__=='__main__':
         cli()
     except (ValueError,OSError,KeyError,TypeError) as e:
         # Do not emit raw server/upstream exceptions.
-        if str(e)=='Scoped PROD Visual paired receiver is not provisioned':
-            raise SystemExit(str(e)) from None
         raise SystemExit('Visual packed release stopped: '+type(e).__name__) from None

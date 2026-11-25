@@ -13,6 +13,11 @@ class PackedRelease(TestCase):
         self.assertFalse(p.mode('test',None))
         self.assertFalse(p.mode('prod','false','false'))
         self.assertTrue(p.mode('prod','true','true'))
+        proof={'runtime_sha256':'a'*64,'lane':'test'}
+        p.require_matching_witness(p.runtime.wire(proof),proof)
+        for absent_or_stale in (b'',p.runtime.wire({**proof,'runtime_sha256':'b'*64})):
+            with self.assertRaises(ValueError):
+                p.require_matching_witness(absent_or_stale,proof)
         for triple in [('prod','false','true'),('prod','true','false'),('prod','true',None),('test','invalid',None)]:
             with self.assertRaises(ValueError):
                 p.mode(*triple)

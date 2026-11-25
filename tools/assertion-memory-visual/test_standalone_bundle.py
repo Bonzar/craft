@@ -7,7 +7,7 @@ class TestCombinedBundle(TestCase):
     def test_exact_same_original_build_for_frontend_and_backend(self):
         static=b'synthetic static TAR'
         ident=runtime.identity('assertion-memory-visual-v0.1.6','a'*40,'112','456',runtime.digest(static))
-        companion=runtime.build(ident,{x:x.encode() for x in runtime.RUNTIME_FILES})
+        companion=runtime.build(ident,{x:x.encode() for x in runtime.RUNTIME_FILES},packed=True)
         raw=bundle.build(ident,static,companion)
         self.assertEqual(raw,bundle.build(ident,static,companion))
         self.assertEqual(bundle.verify(raw,ident,runtime.digest(raw)),(static,companion))

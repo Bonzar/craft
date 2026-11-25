@@ -18,7 +18,7 @@ def receipt(expected, static, companion):
     if type(static) is not bytes or not 0<len(static)<=MAX_STATIC or runtime.digest(static)!=expected['static_sha']:
         raise ValueError('Combined Visual static bytes mismatch')
     companion_sha=runtime.digest(companion)
-    runtime.verify(companion,expected,companion_sha)
+    runtime.verify(companion,expected,companion_sha,stage='prod')
     return runtime.wire({'schema':SCHEMA,'identity':expected,'runtime_sha256':companion_sha})
 
 
@@ -87,7 +87,9 @@ def main():
     static=x.static.read_bytes()
     sha=json.loads(x.static_receipt.read_text())['archive_sha256']
     exp=runtime.identity(x.tag,x.revision,x.release_id,x.build_run_id,sha)
-    raw=build(exp,static,x.runtime.read_bytes())
+    legacy=x.runtime.read_bytes()
+    members=runtime.verify(legacy,exp,runtime.digest(legacy))
+    raw=build(exp,static,runtime.build(exp,members,packed=True))
     x.out.mkdir(mode=0o700)
     (x.out/'visual-release.zip').write_bytes(raw)
 

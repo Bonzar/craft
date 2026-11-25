@@ -1,4 +1,4 @@
-"""Source-only TEST Visual runtime companion. No signing key or host access."""
+"""Source-only Visual runtime companion. No signing key or host access."""
 import argparse
 from hashlib import sha256
 from io import BytesIO
@@ -11,6 +11,8 @@ import zipfile
 
 RUNTIME_FILES = ('asset-origin.py', 'sites-shell.mjs')
 SCOPE = 'visual-runtime-test-v1'
+PACKED_SCOPE = 'visual-runtime-package-v2'
+SCOPES = {'test': SCOPE, 'prod': 'visual-runtime-prod-v1'}
 TAG = re.compile(r'assertion-memory-visual-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?')
 SHA = re.compile(r'[a-f0-9]{40}')
 DIGEST = re.compile(r'[a-f0-9]{64}')
@@ -39,54 +41,56 @@ def artifact_name(expected):
     return f"assertion-memory-visual-runtime-{expected['release_id']}-{expected['revision']}"
 
 
-def signing_message(expected, archive_sha):
-    """A distinct TEST namespace/message; does not grant the legacy receiver authority."""
+def signing_message(expected, archive_sha, *, stage='test'):
+    """A lane-specific namespace/message; does not grant the legacy receiver authority."""
     identity(**expected)
     if type(archive_sha) is not str or not DIGEST.fullmatch(archive_sha):
         raise ValueError('Invalid runtime digest')
-    return SCOPE.encode()+b' '+wire({**expected,'runtime_sha':archive_sha})
+    if stage not in SCOPES:
+        raise ValueError('Invalid signer stage')
+    return SCOPES[stage].encode()+b' '+wire({**expected,'runtime_sha':archive_sha})
 
 
 
-def sign(expected, archive_sha, signing_key):
-    """Use only the existing protected TEST Visual signing key on the runner."""
-    message=signing_message(expected,archive_sha)
+def sign(expected, archive_sha, signing_key, *, stage='test'):
+    """Use only the existing protected Visual signing key on the runner."""
+    message=signing_message(expected,archive_sha,stage=stage)
     with TemporaryDirectory(prefix='visual-runtime-sign-') as tmp:
         key=Path(tmp)/'identity'
         proof=Path(tmp)/'manifest'
         key.touch(mode=0o600)
         key.write_text(signing_key.strip()+'\n',encoding='ascii')
         proof.write_bytes(message)
-        subprocess.run(['/usr/bin/ssh-keygen','-Y','sign','-f',str(key),'-n',SCOPE,str(proof)],
+        subprocess.run(['/usr/bin/ssh-keygen','-Y','sign','-f',str(key),'-n',SCOPES[stage],str(proof)],
                        check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
         signature=proof.with_suffix('.sig').read_bytes()
     if not 0<len(signature)<=4096:
-        raise ValueError('Invalid TEST Visual signature size')
+        raise ValueError('Invalid Visual signature size')
     return signature
 
 
-def verify_signed(raw, expected, archive_sha, signature, signers):
-    """Receiver invokes with its already pinned root-owned TEST Visual signer policy."""
+def verify_signed(raw, expected, archive_sha, signature, signers, *, stage='test'):
+    """Receiver invokes with its already pinned root-owned Visual signer policy."""
     if type(signature) is not bytes or not 0<len(signature)<=4096:
-        raise ValueError('Invalid TEST Visual signature size')
-    message=signing_message(expected,archive_sha)
+        raise ValueError('Invalid Visual signature size')
+    message=signing_message(expected,archive_sha,stage=stage)
     with TemporaryDirectory(prefix='visual-runtime-proof-') as tmp:
         proof=Path(tmp)/'signature'
         proof.write_bytes(signature)
-        result=subprocess.run(['/usr/bin/ssh-keygen','-Y','verify','-f',str(signers),'-I','visual-test',
-                               '-n',SCOPE,'-s',str(proof)],input=message,stdout=subprocess.DEVNULL,
+        result=subprocess.run(['/usr/bin/ssh-keygen','-Y','verify','-f',str(signers),'-I','visual-'+stage,
+                               '-n',SCOPES[stage],'-s',str(proof)],input=message,stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL,timeout=10)
     if result.returncode:
-        raise ValueError('Untrusted TEST Visual runtime signature')
-    return verify(raw,expected,archive_sha)
+        raise ValueError('Untrusted Visual runtime signature')
+    return verify(raw,expected,archive_sha,stage=stage)
 
 
-def build(expected, files):
+def build(expected, files, *, packed=False):
     identity(**expected)
     if set(files) != set(RUNTIME_FILES) or any(type(v) is not bytes or not 0<len(v)<=MAX_FILE
                                                for v in files.values()):
         raise ValueError('Invalid Visual runtime members')
-    receipt={'scope':SCOPE, 'identity':expected, 'files':{name:digest(data) for name,data in files.items()}}
+    receipt={'scope':PACKED_SCOPE if packed else SCOPE, 'identity':expected, 'files':{name:digest(data) for name,data in files.items()}}
     out=BytesIO()
     with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
         for name,data in sorted({**files,'receipt.json':wire(receipt)}.items()):
@@ -97,8 +101,8 @@ def build(expected, files):
     return out.getvalue()
 
 
-def verify(raw, expected, archive_sha):
-    signing_message(expected,archive_sha)
+def verify(raw, expected, archive_sha, *, stage='test'):
+    signing_message(expected,archive_sha,stage=stage)
     if type(raw) is not bytes or not 0<len(raw)<=MAX_ZIP or digest(raw)!=archive_sha:
         raise ValueError('Wrong Visual runtime archive')
     try:
@@ -114,7 +118,8 @@ def verify(raw, expected, archive_sha):
             receipt=z.read('receipt.json')
     except (zipfile.BadZipFile, KeyError, RuntimeError) as e:
         raise ValueError('Invalid runtime archive') from e
-    if receipt!=wire({'scope':SCOPE,'identity':expected,'files':{k:digest(v) for k,v in files.items()}}):
+    allowed=(PACKED_SCOPE,SCOPE) if stage=='test' else (PACKED_SCOPE,)
+    if receipt not in tuple(wire({'scope':scope,'identity':expected,'files':{k:digest(v) for k,v in files.items()}}) for scope in allowed):
         raise ValueError('Runtime content or producer identity mismatch')
     return files
 
