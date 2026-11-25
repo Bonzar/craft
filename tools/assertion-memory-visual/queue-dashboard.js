@@ -5,11 +5,20 @@
   const status=panel.querySelector('.queue-meta');
   const container=panel.querySelector('.queue-items');
   const copyStatus=panel.querySelector('.queue-copy-status');
+  const controlPanel=panel.querySelector('#queue-processing');
+  const controlButton=panel.querySelector('#queue-processing-toggle');
+  const controlState=panel.querySelector('#queue-processing-state');
+  const controlFeedback=panel.querySelector('#queue-processing-feedback');
   const names={source:'Реплики',maintenance:'Связи и пересчёт',interactive:'Вопросы'};
   const ordered=['interactive','source','maintenance'];
   const states={running:'В работе',ready:'Ожидает',waiting_origin:'Ждёт источник',delayed:'Отложено',paused:'Приостановлено',expired:'Исчерпаны попытки',active:'Активна',unavailable:'Недоступна',disabled:'Выключена'};
   const phases={extract:'Извлечение',audit:'Проверка',link:'Связывание',refresh:'Перепроверка вывода',consolidate:'Поиск связей',partial_source:'Частично сохранённый источник',query:'Ответ на вопрос'};
   let stream,timer,loading=false,dirty=false,generation=0,lastSignal=0, fetchAbort;
+  let control, ownerReady=false, ownerCheck, inFlight=false, controlEpoch=0;
+  const rev=value=>typeof value==='string'&&/^[0-9a-f]{32}$/.test(value);
+  const snapshotControl=(stage,value)=>['test','prod'].includes(stage)&&value&&
+    typeof value.paused==='boolean'&&rev(value.revision)&&typeof value.can_change==='boolean'
+    ? {stage,paused:value.paused,revision:value.revision,canChange:value.can_change}:null;
   const offsets=new Map(), rendered=new Map(), lanes=new Map();
   const element=(tag,txt='',name)=>{const e=document.createElement(tag);if(name)e.className=name;if(txt)e.textContent=txt;return e;};
   const labels=(values,k,fallback)=>Object.hasOwn(values,k)?values[k]:fallback;
@@ -74,6 +83,79 @@
     if(restored)restored.focus();
     rendered.set(id,{signature,cards});
   }
+  function drawControl(){
+    controlPanel.hidden=!control;
+    controlButton.hidden=!control?.canChange||!ownerReady;
+    controlButton.disabled=controlButton.hidden||inFlight;
+    if(!control)return;
+    const stage=control.stage.toUpperCase();
+    controlState.textContent=stage+' · '+(control.paused?'Обработка на паузе':'Обработка не на паузе');
+    controlButton.textContent=control.paused?'Возобновить обработку':'Приостановить обработку';
+  }
+  async function csrf(){
+    const response=await fetch('/api/v1/session',{cache:'no-store',credentials:'same-origin',redirect:'error',
+      headers:{accept:'application/json'}});
+    if(response.status!==200||!response.headers.get('content-type')?.includes('application/json'))return null;
+    const value=await response.json();
+    return value?.authenticated===true&&typeof value.csrf_token==='string'&&
+      /^[A-Za-z0-9_-]{20,160}$/.test(value.csrf_token)?value.csrf_token:null;
+  }
+  function acceptControl(data){
+    const current=generation, lane=data?.stage;
+    const next=snapshotControl(lane,data?.processing_control);
+    if(control?.stage!==next?.stage||!next?.canChange){ownerReady=false;ownerCheck=null;}
+    control=next;
+    drawControl();
+    if(next?.canChange&&!ownerReady&&!ownerCheck){
+      const check=csrf().then(token=>{
+        if(generation===current&&panel.open&&control?.stage===lane&&control.canChange){
+          ownerReady=Boolean(token);drawControl();
+        }
+      }).catch(()=>{}).finally(()=>{if(ownerCheck===check)ownerCheck=null;});
+      ownerCheck=check;
+    }
+  }
+  controlButton.addEventListener('click',async()=>{
+    if(!panel.open||inFlight||!ownerReady||!control?.canChange)return;
+    const current=generation, before=control, next=!before.paused;
+    inFlight=true;controlEpoch++;drawControl();
+    controlFeedback.textContent='Сохраняем настройку…';
+    try{
+      const token=await csrf();
+      if(generation!==current||!panel.open)return;
+      if(!token){ownerReady=false;throw Error();}
+      if(control?.revision!==before.revision||control?.stage!==before.stage||!control?.canChange){
+        controlFeedback.textContent='Состояние изменилось. Проверьте его перед повтором.';
+        return;
+      }
+      const result=await fetch('/api/v1/processing/pause',{
+        method:'PUT',credentials:'same-origin',redirect:'error',cache:'no-store',
+        headers:{accept:'application/json','content-type':'application/json','x-csrf-token':token},
+        body:JSON.stringify({stage:before.stage,paused:next,expected_revision:before.revision})
+      });
+      if(generation!==current||!panel.open)return;
+      if(result.status===409){
+        ownerReady=false;
+        controlFeedback.textContent='Состояние изменилось. Загружаем актуальное.';
+        return;
+      }
+      if(result.status===401||result.status===403)ownerReady=false;
+      if(result.status!==200||!result.headers.get('content-type')?.includes('application/json'))throw Error();
+      const value=await result.json();
+      if(generation!==current||!panel.open)return;
+      if(value?.stage!==before.stage||value.paused!==next||!rev(value.revision)||value.revision===before.revision)throw Error();
+      control={stage:value.stage,paused:value.paused,revision:value.revision,canChange:true};
+      controlFeedback.textContent=value.paused?'Пауза включена.':'Пауза снята.';
+    }catch{
+      if(generation===current&&panel.open){
+        ownerReady=false;
+        controlFeedback.textContent='Не удалось подтвердить изменение. Проверяем актуальное состояние.';
+      }
+    }finally{
+      inFlight=false;controlEpoch++;
+      if(panel.open){drawControl();void refresh();}
+    }
+  });
   async function snapshot(offset,signal){
     const result=await fetch('/api/v1/capabilities?queue_status=1&limit=50&offset='+offset,
       {cache:'no-store',credentials:'same-origin',redirect:'error',signal,headers:{accept:'application/json'}});
@@ -86,7 +168,7 @@
     if(!panel.open)return;
     if(loading){dirty=true;return;}
     loading=true;
-    const current=generation, requested=new Map(offsets);
+    const current=generation, requested=new Map(offsets), epoch=controlEpoch;
     const abort=new AbortController();
     fetchAbort=abort;
     try{
@@ -97,6 +179,7 @@
       const version=typeof base.release_version==='string'&&base.release_version?' · База '+base.release_version:'';
       const label=base.stage.toUpperCase()+version;
       if(status.textContent!==label)status.textContent=label;
+      if(!inFlight&&epoch===controlEpoch)acceptControl(base);
       for(const id of ordered){
         const offset=requested.get(id)??0;
         if((offsets.get(id)??0)===offset)render(id,pages.get(offset).queues.find(q=>q?.id===id),offset);
@@ -105,6 +188,7 @@
       if(panel.open&&current===generation){
         const label=rendered.size?'Не удалось обновить. Показаны последние полученные данные.':'Не удалось загрузить очереди.';
         if(status.textContent!==label)status.textContent=label;
+        if(!inFlight&&epoch===controlEpoch)acceptControl(null);
       }
     }finally{
       loading=false;fetchAbort=null;
@@ -120,6 +204,7 @@
     panel.showModal();
     offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
     status.textContent='Подключаемся…';lastSignal=0;
+    control=null;ownerReady=false;ownerCheck=null;controlFeedback.textContent='';drawControl();
     if(typeof EventSource!=='undefined'){
       stream=new EventSource('/api/v1/events?channel=dashboard',{withCredentials:true});
       const received=()=>{lastSignal=Date.now();void refresh();};
