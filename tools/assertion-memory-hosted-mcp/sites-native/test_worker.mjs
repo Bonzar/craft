@@ -59,3 +59,21 @@ test('profiles are compile-time narrow data, not URL routing or secrets',()=>{
  assert.throws(()=>canonicalProfile({...mk('prod'),siteOrigin:'http://prod.example.chatgpt.site'}));
  assert.throws(()=>nativeSite(mk('prod'),{legacy:{fetch(){}},pause(){}}));
 });
+
+test('TEST enrollment adapter reads only the existing D1 binding, rejects env fallback', async()=>{
+  const {matchesEnrolledTestOwner}=await import('./test-owner.mjs');
+  let reads=0;
+  const req=new Request(mk('test').siteOrigin+'/mcp',{headers});
+  const env={MEMORY_MCP_TEST_OWNER_BINDING:'d1',DB:{prepare(sql){
+    assert.match(sql,/^SELECT owner_sha256 FROM memory_test_owner_binding/);
+    return {bind(scope,marker){
+      assert.equal(scope,'assertion-memory-preview:TEST:owner-v1');
+      assert.equal(marker,'private-synthetic-assertion-smoke/v1');
+      return {first:async()=>{reads++;return {owner_sha256:sha(scope+'\0'+id)};}};
+    }};
+  }}};
+  assert.equal(await matchesEnrolledTestOwner(req,env),true);
+  assert.equal(await matchesEnrolledTestOwner(req,{...env,MEMORY_MCP_TEST_OWNER_SHA256:'a'.repeat(64)}),false);
+  assert.equal(await matchesEnrolledTestOwner(new Request(req,{headers:{'oai-authenticated-user-id':'staging-principal-other'}}),env),false);
+  assert.equal(reads,1);
+});

@@ -31,12 +31,12 @@ the candidate. Tests use synthetic configuration only.
 - Explicitly preserve or retire the remaining legacy MCP discovery/fixture
   behavior. The candidate builds composition around an explicit trusted
   `legacy` adapter and verified TEST D1 owner adapter; it does not import these
-  modules from a live remote at build time. Review them separately as source
+  modules from a live remote at build time. The existing TEST enrollment now has a tracked read adapter preserving the existing D1 checks, without copying rows; its legacy enrollment form remains a separate source adapter. Review remaining adapters as source
   assets, regenerate wholly fictional fixtures from tracked fixture definitions
   or retire them with approval. Do not copy database rows or unpublished
   content. Until this is complete this is **not** a drop-in native deployment.
-- Generate the optional static fallback from the exact verified Visual archive
-  instead of copying the embedded native generated module. Bind it by digest;
+- Generate the optional static fallback with `generate_fallback.py` from the exact
+  verified Visual archive instead of copying the embedded native generated module. Bind it by digest;
   the stable alias must still fail rather than silently returning a fallback.
 - Freeze before/after native owner ACL and plugin identity, build from the exact
   immutable release, push generated build source via supported owner-private
