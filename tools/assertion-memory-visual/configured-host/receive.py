@@ -53,7 +53,7 @@ def main():
         if command.startswith('deploy-visual-runtime '):
             if not command.startswith('deploy-visual-runtime '+stage+' '):
                 raise ValueError('command_denied')
-            for name in ('runtime_host.py','runtime_receive.py','runtime_companion.py','runtime_joint.py','runtime_switch.py'):
+            for name in ('runtime_host.py','runtime_receive.py','runtime_companion.py','runtime_joint.py','runtime_switch.py','runtime_bootstrap.py'):
                 trusted(product/name,stat.S_ISREG)
             from runtime_host import receive as receive_runtime
             reply=receive_runtime(stage,command,sys.stdin.buffer)

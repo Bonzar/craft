@@ -176,3 +176,13 @@ review and are not applied by this patch:
 
 This source does not configure, restart or enable a live service. The
 default legacy release command remains unchanged in both environments.
+
+
+The root-owned legacy bootstrap policy may authorize a single signed PROD
+pair from the exact pinned old static and script hashes. With it armed, the
+current release lock protects an optional copy of the intact old script as
+rollback, a durable pair journal, and conversion of that journal to a consumed
+seal only after modern runtime health. Legacy proof uses the existing fixed
+old service, existing scoped authenticated asset read, and a newly started
+matching process. Old health never counts as a deployed new runtime. Without
+approved existing scoped legacy health access, do not arm the policy.
