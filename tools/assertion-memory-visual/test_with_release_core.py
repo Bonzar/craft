@@ -13,8 +13,8 @@ import release_core
 from visual_policy import deploy_verified, make_hook
 
 ROOT=Path(__file__).resolve().parent
-SEED_SHA='db79e9c8cd82b11785eec1748fc8d83a62e1ff164d8ceb479a3961640f28286b'
-SEED_ID='05feb01bbd2a1720de20e663c733b9d2ca77742ce132f53d9f77cb06976b4fe4'
+SEED_SHA='be67aa9ecd76b4c75b5b9861896703ed4ea0fb0a180363b3107f617e9ad4f19a'
+SEED_ID='6db549fe3ef5bfa80d78adbd2e4341237ef4579d6ce0a5f6a79c17b0b718597c'
 
 
 def hash_bytes(raw):
@@ -49,7 +49,7 @@ class IntegrationTest(unittest.TestCase):
             result=subprocess.run(['node',str(ROOT/'build-archive.mjs'),str(ROOT),str(cls.seed)],
                                   check=True,capture_output=True,text=True)
             receipt=json.loads(result.stdout)
-        if receipt!={'archive_sha256':SEED_SHA,'release':SEED_ID,'bytes':1024000}:
+        if receipt!={'archive_sha256':SEED_SHA,'release':SEED_ID,'bytes':1034240}:
             raise AssertionError('Visual assembler changed reviewed exact bytes')
     def setUp(self):
         t=tempfile.TemporaryDirectory()

@@ -1,5 +1,5 @@
 import {readFile} from 'node:fs/promises';
-const [queueHtml, queueScript]=await Promise.all(['queue-dashboard.html','queue-dashboard.js'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
+const [queueHtml, queueScript, queueCss]=await Promise.all(['queue-dashboard.html','queue-dashboard.js','queue-dashboard.css'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
 // The pinned bundle still owns the Connections renderer and worker.
 const TAG = /^assertion-memory-visual-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?$/;
 function once(input, from, to) {
@@ -16,7 +16,7 @@ export function patchVisual({html,script,css,releaseTag=null}) {
   }
   html=once(html,'</body>',queueHtml+'\n</body>');
   script+='\n'+queueScript;
-  css+='\n#visual-queue{position:fixed;top:78px;right:12px;z-index:4;max-height:74vh;max-width:min(92vw,390px);overflow:auto;background:#131a2b;color:#e6eafa;border:1px solid #526086;border-radius:8px;padding:8px 12px;font:13px system-ui} #visual-queue *{overflow-wrap:anywhere} #visual-queue summary{cursor:pointer}';
+  css+='\n'+queueCss;
   css+='\n#layout-toggle[hidden],#topics-toggle[hidden]{display:none!important}\n'+
     '.visual-release-version{position:fixed;bottom:12px;left:12px;z-index:3;background:#101728;color:#e6eafa;border:1px solid #526086;border-radius:7px;padding:5px 8px;font:12px system-ui;pointer-events:none}';
   return {html,script,css};
