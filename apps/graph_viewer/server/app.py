@@ -250,8 +250,8 @@ def validate_static_directory(static_dir, *private_paths):
 
 def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None):
     if queue_dashboard is None:
-        from .queue_dashboard import configured_for_legacy_test_reader
-        queue_dashboard = configured_for_legacy_test_reader(source_path)
+        from .queue_dashboard import configured_for_legacy_reader
+        queue_dashboard = configured_for_legacy_reader(source_path)
     static_dir=validate_static_directory(
         static_dir,state_dir,source_path,bridge_read_token_file,getattr(queue_dashboard,'config',None),
         getattr(source,'source_path',None),getattr(source,'path',None))
