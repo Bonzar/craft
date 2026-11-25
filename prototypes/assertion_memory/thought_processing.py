@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import signal
 import threading
 
+from .processing_control import paused as processing_paused
 from .model import ProcessingCancelled, check_processing_cancelled, processing_cancellation
 from .processing_pool import ActiveClaims, ProcessingPool
 from .storage import MemoryStore, background_write_retry
@@ -159,8 +160,8 @@ class TracedThoughtWorker(ThoughtWorker):
 
     def _claim_source_group(self, event_ids):
         from .source_model_batch import pending_sources
-        with self.queue.store.transaction(write=True):
-            if self.is_pausing and self.is_pausing():
+        with self.queue.store.transaction(write=True) as c:
+            if processing_paused(c) or (self.is_pausing and self.is_pausing()):
                 return []
             events = pending_sources(self.queue, self.processing_session_ids[0], event_ids)
             claims = [self._claim_source(event_id=event.id) for event in events]

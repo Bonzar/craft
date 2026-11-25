@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import json
 import re
+from .processing_control import paused as processing_paused
 from .session_api import _SOURCE_SESSION
 
 FRESH_MAC_ONLY = object()
@@ -85,7 +86,7 @@ def processing_deadline(db,session_ids,*,now,with_model=True,lane='all'):
     """Read-only scheduler probe; never build engines, migrate schema, or load bodies."""
     if lane not in ('all','source','maintenance'):raise ValueError('unknown processing lane')
     ids=normalize_session_ids(session_ids)
-    if ids==() or not with_model:return None
+    if ids==() or not with_model or processing_paused(db):return None
     if ids is FRESH_MAC_ONLY:
         from .fresh_processing import ensure_selector
         if not ensure_selector(db):return None

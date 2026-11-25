@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from . import thought_processing_selection
+from .processing_control import read_control
 from .thought_processing_selection import (
     maintenance_predicate,
     normalize_session_ids,
@@ -73,9 +74,11 @@ def build_queue_status(connection, *, release_version, stage, processing_session
     fresh_selector = getattr(thought_processing_selection, 'FRESH_MAC_ONLY', None)
     if auto_process_fresh_mac and fresh_selector is None:
         raise ValueError('fresh Mac auto-processing is not in this release')
-    processing = 'unavailable' if not model_configured else 'paused' if ids == () else 'active'
+    globally_paused, revision = read_control(connection)
+    processing = 'paused' if globally_paused else ('unavailable' if not model_configured else
+                                                    'paused' if ids == () else 'active')
     allowed = processing == 'active'
-    source_mode = ('active' if model_configured else 'unavailable') if auto_process_fresh_mac else processing
+    source_mode = ('active' if model_configured else 'unavailable') if auto_process_fresh_mac and not globally_paused else processing
     page = dict(limit=limit, offset=offset)
     queues = []
     if queue_id in (None, 'source'):
@@ -130,4 +133,5 @@ def build_queue_status(connection, *, release_version, stage, processing_session
             status=('active' if exists else 'unavailable') if interactive_enabled else 'disabled',
             ordering='created_then_id', exists=exists, epoch=True, **page))
     return dict(release_version=release_version, stage=stage, global_order=False,
-                snapshot_at=stamp, queues=queues)
+                snapshot_at=stamp, queues=queues,
+                processing_control={'paused':globally_paused,'revision':revision,'can_change':False})
