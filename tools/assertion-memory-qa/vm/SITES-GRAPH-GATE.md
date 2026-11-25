@@ -114,7 +114,8 @@ credential. A distinct, root-enabled marker shape is available:
 It qualifies the **local candidate**, not the user-observed delivery. It
 asserts the real 8819 systemd MainPID, TEST Unix UID, exact immutable venv
 command and PYTHONPATH, exact existing stage/projection environment, PID
-ownership of the sole 127.0.0.1:8819 listen socket, and an authentication
+ownership of the sole TCP :8819 listen socket across IPv4/IPv6 in its network
+namespace (which must be 127.0.0.1:8819), and an authentication
 denial on the actual local wrapper with no credentials. Then, as the
 already-authorized TEST Unix service account, it uses the same released
 Graph queue dashboard read method and canonical DB/projection paths to

@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from hashlib import sha256
 from importlib.util import spec_from_file_location, module_from_spec
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -83,13 +84,66 @@ class GateTests(unittest.TestCase):
             with self.subTest(other=other), self.assertRaises(ValueError):
                 gate.service_command(other)
 
-    def test_actual_loopback_socket_has_exact_pid_and_address(self):
+    def socket_tables(self):
         header=b'  sl local_address rem_address st tx_queue tr tm retrnsmt uid timeout inode\n'
         row=b'   0: 0100007F:2273 00000000:0000 0A 00:00 00:00 00 994 0 342123 \n'
-        self.assertTrue(gate.exact_listener(header+row,{b'socket:[342123]'}))
-        self.assertFalse(gate.exact_listener(header+row,{b'socket:[342124]'}))
-        self.assertFalse(gate.exact_listener(header+row+row,{b'socket:[342123]'}))
-        self.assertFalse(gate.exact_listener(header+row.replace(b'0100007F',b'00000000'),{b'socket:[342123]'}))
+        return header,row
+
+    def test_actual_loopback_socket_has_exact_pid_address_and_is_sole_in_both_families(self):
+        header,row=self.socket_tables()
+        v6=b'   1: 00000000000000000000000000000000:2273 00000000000000000000000000000000:0000 0A 00:00 00:00 00 994 0 342124\n'
+        live={b'socket:[342123]'}
+        self.assertTrue(gate.exact_listener(header+row,header,live))
+        self.assertTrue(gate.exact_listener(header+row,header+v6.replace(b':2273',b':2222'),live))
+        self.assertTrue(gate.exact_listener(header+row,header+v6.replace(b' 0A ',b' 01 '),live))
+        self.assertFalse(gate.exact_listener(header+row,header,{b'socket:[342124]'}))
+        self.assertFalse(gate.exact_listener(header+row+row,header,live))
+        self.assertFalse(gate.exact_listener(header+row+row.replace(b'0100007F',b'00000000'),header,live))
+        self.assertFalse(gate.exact_listener(header+row+row.replace(b'0100007F',b'0200007F'),header,live))
+        self.assertFalse(gate.exact_listener(header+row,header+v6,live))
+        self.assertFalse(gate.exact_listener(header+row,b'',live))
+        self.assertFalse(gate.exact_listener(header+row,header+b'malformed\n',live))
+
+    def test_serving_identity_checks_exact_physical_process(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name).resolve()
+            release=self.release(root)
+            venv=release/'venv'/'bin'
+            venv.mkdir(parents=True)
+            executable=venv/'python'
+            executable.symlink_to(Path(os.sys.executable).resolve())
+            proc_root=root/'fake-proc'
+            pid=proc_root/'77'
+            (pid/'net').mkdir(parents=True)
+            (pid/'fd').mkdir()
+            (pid/'fd'/'15').symlink_to('socket:[342123]')
+            (pid/'exe').symlink_to(executable.resolve())
+            (pid/'stat').write_bytes(b'77 (python) S '+b'0 '*18+b'1234 0\n')
+            header,row=self.socket_tables()
+            (pid/'net'/'tcp').write_bytes(header+row)
+            (pid/'net'/'tcp6').write_bytes(header)
+            args=b'\0'.join([os.fsencode(executable),b'-s',b'-B',os.fsencode(gate.WRAPPER),b''])
+            env=lambda physical: b'\0'.join(os.fsencode(f'{k}={v}') for k,v in {**gate.LOCAL_ENV,'PYTHONPATH':physical}.items())
+            (pid/'cmdline').write_bytes(args)
+            (pid/'environ').write_bytes(env(release))
+            def read_unit(command,**_):
+                self.assertEqual(command[-1],gate.UNIT)
+                return SimpleNamespace(stdout=f'MainPID=77\nActiveState=active\nUser={gate.ACCOUNT}\n'.encode())
+            def identity():
+                return gate.serving_identity(release,proc_root=proc_root,read_unit=read_unit)
+            self.assertEqual(identity(),('77',b'1234'))
+            (pid/'environ').write_bytes(env(root/'current'))
+            with self.assertRaisesRegex(ValueError,'process_scope'):
+                identity()
+            (pid/'environ').write_bytes(env(release))
+            (pid/'cmdline').write_bytes(args.replace(os.fsencode(release),os.fsencode(root/'current')))
+            with self.assertRaisesRegex(ValueError,'graph_process'):
+                identity()
+            (pid/'cmdline').write_bytes(args)
+            (pid/'net'/'tcp6').unlink()
+            with self.assertRaises(FileNotFoundError):
+                identity()
 
     def test_local_network_request_requires_real_read_route_denial(self):
         from urllib.error import HTTPError

@@ -109,23 +109,37 @@ LOCAL_ENV = {
 }
 
 
-def exact_listener(tcp, fd_links):
-    records=(line.split() for line in tcp.splitlines()[1:])
-    # 127.0.0.1:8819, TCP LISTEN. Require the exact serving PID's FD.
-    matches=[r[9] for r in records if len(r)>9 and r[1]==b'0100007F:2273' and r[3]==b'0A']
-    return len(matches)==1 and b'socket:['+matches[0]+b']' in fd_links
+def exact_listener(tcp, tcp6, fd_links):
+    matches=[]
+    for family, data in ((4,tcp),(6,tcp6)):
+        lines=data.splitlines()
+        if not lines or not {b'local_address',b'st'}<=set(lines[0].split()):
+            return False
+        address_width=8 if family==4 else 32
+        for line in lines[1:]:
+            row=line.split()
+            if (len(row)<10 or not re.fullmatch(rb'[0-9A-F]{'+str(address_width).encode()+rb'}:[0-9A-F]{4}',row[1])
+                    or not re.fullmatch(rb'[0-9A-F]{2}',row[3]) or not row[9].isdigit()):
+                return False
+            if row[3]==b'0A' and row[1].endswith(b':2273'):
+                matches.append((family,row[1],row[9]))
+    return (len(matches)==1 and matches[0][:2]==(4,b'0100007F:2273')
+            and b'socket:['+matches[0][2]+b']' in fd_links)
 
 
-def serving_identity(release):
-    r=subprocess.run(['/usr/bin/systemctl','show','--property=MainPID,ActiveState,User','--',UNIT],
+def serving_identity(release, *, proc_root=Path('/proc'), read_unit=subprocess.run):
+    r=read_unit(['/usr/bin/systemctl','show','--property=MainPID,ActiveState,User','--',UNIT],
                      env={'PATH':'/usr/bin:/bin'},check=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
                      stdin=subprocess.DEVNULL,timeout=3)
-    v=dict(line.split('=',1) for line in r.stdout.decode('ascii').splitlines())
+    rows=r.stdout.decode('ascii').splitlines()
+    if len(rows)!=3:
+        raise ValueError('unverified_sites_graph_unit_fields')
+    v=dict(line.split('=',1) for line in rows)
     if (set(v)!={'MainPID','ActiveState','User'} or v['ActiveState']!='active' or v['User']!=ACCOUNT
             or not re.fullmatch(r'[1-9][0-9]{0,9}',v['MainPID'])):
         raise ValueError('wrong_sites_graph_unit')
     pid=v['MainPID']
-    proc=Path('/proc')/pid
+    proc=proc_root/pid
     argv=(proc/'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
     interpreter=release/'venv'/'bin'/'python'
     if (proc.stat().st_uid!=os.getuid() or Path(os.readlink(proc/'exe'))!=interpreter.resolve(strict=True)
@@ -137,9 +151,12 @@ def serving_identity(release):
         if [x for x in env if x.startswith(key)]!=[key+os.fsencode(raw)]:
             raise ValueError('wrong_sites_graph_process_scope')
     links={os.fsencode(os.readlink(p)) for p in (proc/'fd').iterdir()}
-    if not exact_listener((proc/'net'/'tcp').read_bytes(),links):
+    if not exact_listener((proc/'net'/'tcp').read_bytes(),(proc/'net'/'tcp6').read_bytes(),links):
         raise ValueError('wrong_sites_graph_loopback_server')
-    stat_fields=(proc/'stat').read_bytes().rsplit(b')',1)[1].split()
+    prefix,separator,suffix=(proc/'stat').read_bytes().rpartition(b')')
+    stat_fields=suffix.split()
+    if not separator or not prefix.startswith(pid.encode()+b' (') or len(stat_fields)<20 or not stat_fields[19].isdigit():
+        raise ValueError('unverified_sites_graph_process_start')
     return pid,stat_fields[19]
 
 
