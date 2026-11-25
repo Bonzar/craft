@@ -31,7 +31,8 @@ def configured_neutral_factory(config_path, legacy_token):
     if not expected.is_file() or expected.is_symlink():
         raise ValueError('Private operation binding has no verified release launcher')
     sys.path.insert(0,str(directory))
-    for name in ('private_host','compile_functional_release','policy','vm_relay'):
+    for name in ('admin_operations','visual_admin_service','visual_status',
+                 'private_host','compile_functional_release','policy','vm_relay'):
         module=importlib.import_module(name)
         if Path(module.__file__).resolve()!=directory/(name+'.py'):
             raise ValueError('Wrong private operation source identity')

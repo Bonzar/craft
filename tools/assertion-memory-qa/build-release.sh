@@ -19,6 +19,9 @@ hosted_runtime=(
   tools/assertion-memory-hosted-mcp/policy.py
   tools/assertion-memory-hosted-mcp/vm_relay.py
   tools/assertion-memory-hosted-mcp/private_host.py
+  tools/assertion-memory-hosted-mcp/admin_operations.py
+  tools/assertion-memory-hosted-mcp/visual_admin_service.py
+  tools/assertion-memory-hosted-mcp/visual_status.py
   tools/assertion-memory-hosted-mcp/compile_functional_release.py
 )
 git archive "$sha" -- prototypes/assertion_memory apps/graph_viewer "${hosted_runtime[@]}" | tar -x -C "$stage"
@@ -68,7 +71,7 @@ def qualify(staged):
     prefix = PurePosixPath("tools/assertion-memory-hosted-mcp")
     manifest = read_manifest(staged)
     actual = {name for name in manifest if prefix in name.parents}
-    if len(expected) != 4 or actual != expected:
+    if len(expected) != 7 or actual != expected:
         raise ValueError("hosted_runtime_membership")
     for name in expected:
         committed = subprocess.check_output(["git", "show", f"{revision}:{name}"])

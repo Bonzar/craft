@@ -18,7 +18,10 @@ HEX = re.compile(r'[a-f0-9]{64}\Z')
 TAG = re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?\Z')
 PROTECTED = ('BASE_RELEASE_TAG','REVISION','mcp-tool-schema.json',
              'prototypes/assertion_memory/operation_registry.py',
-             'prototypes/assertion_memory/mcp_server.py')
+             'prototypes/assertion_memory/mcp_server.py',
+             'tools/assertion-memory-hosted-mcp/admin_operations.py',
+             'tools/assertion-memory-hosted-mcp/visual_admin_service.py',
+             'tools/assertion-memory-hosted-mcp/visual_status.py')
 
 
 def read_regular(path, limit, *, owner=None, private=False):
@@ -193,7 +196,21 @@ def factory(stage,root,config_dir,legacy_token):
             raise ValueError('Private process is no longer the active release')
         return tag,generation
 
+    # The queue/status surface is independently owner-authenticated and read-only.
+    # A missing or bad optional status configuration never affects existing tools.
+    from visual_status import configured as visual_configured, mount_visual_status
+    try:
+        visual = visual_configured(
+            config_dir, root, read_regular=read_regular,
+            reserved={sha256(value.encode('ascii')).hexdigest()
+                      for value in (legacy_token, read, effect) if value is not None} | set(machine))
+    except (ValueError, OSError):
+        visual = None
+
     paths={f'/memory-mcp-{stage}-tools'}
+    visual_path = f'/memory-visual-{stage}-admin'
+    if visual is not None:
+        paths.add(visual_path)
     if machine:
         paths.add(f'/memory-api-{stage}')
     if effect is not None:
@@ -238,6 +255,18 @@ def factory(stage,root,config_dir,legacy_token):
         app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations,machine_digests=machine,
             fresh_mac_digest=personal_mac if config.auto_process_fresh_mac else None)
         handler = effect_lock(app,root,stage,effect,machine)
+        if visual is not None:
+            owner_hash, visual_token = visual
+            visual_status = mount_visual_status(
+                config=config, stage=stage, owner_hash=owner_hash, token=visual_token,
+                deploy_lock=root/'deploy.lock', live_identity=live_identity,
+                interactive_enabled=jobs is not None and config.provider != 'none')
+            memory_handler = handler
+
+            async def handler(scope, receive, send):
+                if scope.get('type') == 'http' and scope.get('path') == visual_path:
+                    return await visual_status(scope, receive, send)
+                return await memory_handler(scope, receive, send)
         handler.query_jobs = jobs
         return frozenset(paths),handler
     return mount

@@ -37,11 +37,14 @@ jobs:
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_visual_policy.py
           python3 -B tools/assertion-memory-visual/test_lifecycle.py
           python3 -B tools/assertion-memory-visual/native_visual_test.py
-          node --test tools/assertion-memory-visual/sites-shell.test.mjs
+          node --test tools/assertion-memory-visual/sites-shell.test.mjs tools/assertion-memory-visual/admin-panel.test.mjs
           mkdir "$RUNNER_TEMP/visual"
           node tools/assertion-memory-visual/build-archive.mjs tools/assertion-memory-visual "$RUNNER_TEMP/visual/visual.tar" > "$RUNNER_TEMP/build-receipt.json"
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/visual_assemble.py "$RUNNER_TEMP/visual/visual.tar" "$RUNNER_TEMP/build-receipt.json"
-          VISUAL_SEED_PATH="$RUNNER_TEMP/visual/visual.tar" VISUAL_SEED_RECEIPT="$RUNNER_TEMP/build-receipt.json" PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_with_release_core.py
+          # Receiver regression uses a deterministic untagged seed. The actual
+          # tagged release archive above is qualified independently and uploaded.
+          GITHUB_EVENT_NAME=pull_request node tools/assertion-memory-visual/build-archive.mjs tools/assertion-memory-visual "$RUNNER_TEMP/untagged.tar" > "$RUNNER_TEMP/untagged-receipt.json"
+          VISUAL_SEED_PATH="$RUNNER_TEMP/untagged.tar" VISUAL_SEED_RECEIPT="$RUNNER_TEMP/untagged-receipt.json" PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_with_release_core.py
           python3 - "$RUNNER_TEMP" <<'PY'
           import json,os,pathlib,sys
           root=pathlib.Path(sys.argv[1]); input=json.loads((root/'build-receipt.json').read_bytes())
