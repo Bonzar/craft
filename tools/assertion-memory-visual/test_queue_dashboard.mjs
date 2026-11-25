@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,observe=false}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -21,9 +21,10 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
   const launcher=new Element('button'),closer=new Element('button'),copyStatus=new Element();
   const controlPanel=new Element(), controlButton=new Element('button'), controlState=new Element(), controlFeedback=new Element();
   const sessionPanel=new Element('details'),sessionOptions=new Element(),sessionFeedback=new Element(),sessionSave=new Element('button');
+  const itemFeedback=new Element(),removed=[];
   const sessionWrites=[];
   const mutations=[];
-  const mapping={'#queue-session-policy':sessionPanel,'#queue-session-options':sessionOptions,'#queue-session-feedback':sessionFeedback,'#queue-session-save':sessionSave,'#queue-processing':controlPanel,'#queue-processing-toggle':controlButton,
+  const mapping={'#queue-item-feedback':itemFeedback,'#queue-session-policy':sessionPanel,'#queue-session-options':sessionOptions,'#queue-session-feedback':sessionFeedback,'#queue-session-save':sessionSave,'#queue-processing':controlPanel,'#queue-processing-toggle':controlButton,
     '#queue-processing-state':controlState,'#queue-processing-feedback':controlFeedback,'#visual-queue':panel,'#visual-queue-open':launcher,'.queue-meta':status,
     '.queue-items':container,'.queue-copy-status':copyStatus,'#visual-queue-close':closer};
   const doc={querySelector:k=>mapping[k],createElement:t=>new Element(t)};
@@ -38,12 +39,36 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     addEventListener(event,callback){this.listeners[event]=callback;}
     close(){this.closed=true;}
   }
-  runInNewContext(script,{document:doc,EventSource,AbortController,addEventListener(){},
+  let observed,targets;
+  class IO{
+    constructor(callback){observed=callback;targets=new Set();}
+    observe(e){targets.add(e);}
+    unobserve(e){targets.delete(e);}
+    disconnect(){targets.clear();}
+  }
+  runInNewContext(script,{document:doc,EventSource,AbortController,...(observe?{IntersectionObserver:IO}:{}),addEventListener(){},
     navigator:{clipboard:{writeText:async id=>writes.push(id)}},
     setInterval:fn=>{scheduled=fn;return 1;},clearInterval(){scheduled=null;},
     fetch:async (url,options)=>{
       assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
       urls.push(url);
+      if(url==='/api/v1/processing/items/source-preview/prepare'){
+        assert.equal(options.method,'POST');return Response.json({stage:'test',csrf_token:'123.'+'a'.repeat(64)});
+      }
+      if(url==='/api/v1/processing/items/source-preview'){
+        assert.equal(options.method,'PUT');const body=JSON.parse(options.body);
+        return Response.json({stage:'test',queue_id:'source',item_id:body.item_id,source_role:'user',source_preview:'<script>текст</script>'});
+      }
+      if(url==='/api/v1/processing/items/remove/prepare'){
+        assert.equal(options.method,'POST');
+        return Response.json({stage:'test',csrf_token:'123.'+'a'.repeat(64)});
+      }
+      if(url==='/api/v1/processing/items/remove'){
+        assert.equal(options.method,'PUT');
+        assert.equal(options.headers['x-csrf-token'],'123.'+'a'.repeat(64));
+        const args=JSON.parse(options.body);removed.push(args);
+        return Response.json({stage:'test',queue_id:args.queue_id,item_id:args.item_id,removed:true,effect:args.queue_id==='source'?'source_and_queue':'queue_only'});
+      }
       if(url==='/api/v1/processing/sessions/prepare'){
         assert.equal(options.method,'POST');
         return sessionPolicy?Response.json({...sessionPolicy,csrf_token:'123.'+'a'.repeat(64)}):Response.json({}, {status:404});
@@ -75,7 +100,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
   return {doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
-    controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
+    controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,itemFeedback,removed,intersect:()=>observed([...targets].map(target=>({target,isIntersecting:true}))),timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
 }
 
 test('full-screen modal has three labeled lanes, card chips and real positions',async()=>{
@@ -130,9 +155,9 @@ test('paging one lane does not advance other lanes or reorder their cards',async
   await h.delay();
   assert.match(h.text(h.container.items[1]),/№ 51/);
   assert.match(h.text(h.container.items[2]),/Приостановлено/);
-  assert.equal(h.urls.length,3);
+  assert.equal(h.urls.filter(url=>url.startsWith('/api/v1/capabilities')).length,3);
   assert.match(h.urls.at(-1),/offset=50$/);
-  assert.ok(h.urls.every(url=>url.startsWith('/api/v1/capabilities?queue_status=1')));
+  assert.ok(h.urls.filter(url=>!url.endsWith('/processing/sessions/prepare')).every(url=>url.startsWith('/api/v1/capabilities?queue_status=1')));
 });
 
 
@@ -148,7 +173,7 @@ test('pause state can be read without CSRF but pseudo-session never enables muta
   const unknown=harness({control:{paused:false,revision:'unproven',can_change:true},session:{authenticated:true,csrf_token:csrf}});
   await unknown.open();
   assert.equal(unknown.controlPanel.hidden,true);
-  assert.equal(unknown.urls.length,1);
+  assert.deepEqual(unknown.urls.filter(url=>!url.endsWith('/processing/sessions/prepare')).length,1);
 });
 
 test('pause and resume set explicit stage and revision with current owner CSRF',async()=>{
@@ -248,4 +273,73 @@ test('PROD dashboard does not try TEST scheduler management',async()=>{
   const h=harness({stage:'prod',standalone:true});await h.open();
   assert.equal(h.sessionPanel.hidden,true);
   assert.ok(!h.urls.some(url=>url.includes('/processing/sessions')));
+});
+
+
+const ownerPolicy=()=>({stage:'test',revision:'b'.repeat(32),selected_session_ids:[],sessions:[]});
+
+test('source plain excerpt and deletion require item-specific confirmation',async()=>{
+  const h=harness({sessionPolicy:ownerPolicy()});h.setData([{id:'source',status:'active',total:2,items:[
+    {id:'ordinary',status:'ready',phase:'extract',preview_revision:'c'.repeat(32),remove_revision:'a'.repeat(32)},
+    {id:'running',status:'running',phase:'extract',remove_revision:'b'.repeat(32)}]}]);
+  await h.open();
+  const cards=h.container.items[1].items[2].items;
+  const action=(card,label)=>h.find(card,e=>e.tag==='button'&&e.textContent===label);
+  assert.ok(!h.urls.some(url=>url.includes('/source-preview')));
+  await action(cards[0],'Показать текст реплики').listeners.click();
+  assert.match(h.text(cards[0]),/Ты:.*<script>текст<\/script>/);
+  await h.signal();
+  assert.equal(h.urls.filter(url=>url.includes('/source-preview')).length,2);
+  assert.equal(action(cards[1],'Удалить реплику и задачу'),undefined);
+  action(cards[0],'Удалить реплику и задачу').listeners.click();
+  assert.equal(h.removed.length,0);
+  action(cards[0],'Отмена').listeners.click();
+  assert.equal(h.removed.length,0);
+  action(cards[0],'Удалить реплику и задачу').listeners.click();
+  await action(cards[0],'Подтвердить удаление').listeners.click();
+  assert.deepEqual(h.removed,[{stage:'test',queue_id:'source',item_id:'ordinary',expected_revision:'a'.repeat(32)}]);
+  assert.match(h.itemFeedback.textContent,/Исходный чат не изменён/);
+});
+
+
+test('maintenance removal confirms queue only and published source cannot be removed',async()=>{
+  const h=harness({sessionPolicy:ownerPolicy()});h.setData([
+    {id:'source',status:'active',total:1,items:[{id:'scoped',status:'ready',phase:'audit',remove_revision:'a'.repeat(32)}]},
+    {id:'maintenance',status:'active',total:1,items:[{id:'maint',status:'ready',phase:'refresh',remove_revision:'b'.repeat(32)}]}]);
+  await h.open();
+  const action=(card,label)=>h.find(card,e=>e.tag==='button'&&e.textContent===label);
+  assert.equal(action(h.container.items[1],'Удалить реплику и задачу'),undefined);
+  action(h.container.items[2],'Удалить из очереди').listeners.click();
+  assert.match(h.text(h.container.items[2]),/Удалить только задачу из очереди/);
+  await action(h.container.items[2],'Подтвердить удаление').listeners.click();
+  assert.deepEqual(h.removed,[{stage:'test',queue_id:'maintenance',item_id:'maint',expected_revision:'b'.repeat(32)}]);
+  assert.match(h.itemFeedback.textContent,/Реплики и граф не изменены/);
+});
+
+
+test('viewport preview reads are serialized, capped and not repeated by refresh',async()=>{
+  const h=harness({observe:true,sessionPolicy:ownerPolicy()});h.setData([{id:'source',status:'active',total:8,items:Array.from({length:8},(_,idx)=>({
+    id:'job'+idx,status:'ready',phase:'extract',preview_revision:String(idx).repeat(32)
+  }))}]);
+  await h.open();
+  assert.ok(!h.urls.some(url=>url.includes('/source-preview')));
+  h.intersect();
+  for(let i=0;i<10;i++)await h.delay();
+  assert.equal(h.urls.filter(url=>url.endsWith('/source-preview')).length,6);
+  await h.signal();
+  h.intersect();
+  await h.delay();
+  assert.equal(h.urls.filter(url=>url.endsWith('/source-preview')).length,6);
+  const extra=h.find(h.container,e=>e.textContent==='Показать текст реплики');
+  await extra.listeners.click();
+  assert.equal(h.urls.filter(url=>url.endsWith('/source-preview')).length,7);
+});
+
+test('native TEST fallback probes once without a advertised standalone capability; no owner proof means no item controls', async()=>{
+ const h=harness({observe:true});
+ h.setData([{id:'source',status:'active',total:1,items:[{id:'x',status:'ready',phase:'extract',remove_revision:'b'.repeat(32),preview_revision:'c'.repeat(32)}]}]);
+ await h.open();await h.signal();
+ assert.equal(h.urls.filter(x=>x.endsWith('/processing/sessions/prepare')).length,1);
+ assert.equal(h.sessionPanel.hidden,true);
+ assert.doesNotMatch(h.text(h.container),/Удалить реплику|Показать текст/);
 });

@@ -20,6 +20,7 @@ from .storage import MemoryStore
 from .queue_rest import PATH as QUEUE_REST_PATH
 from .queue_pause_rest import PATH as QUEUE_PAUSE_PATH
 from .queue_session_control import PATH as QUEUE_SESSIONS_PATH
+from .queue_item_removal import PATH as QUEUE_REMOVE_PATH, PREVIEW_PATH as QUEUE_PREVIEW_PATH
 
 MIN_TOKEN_LENGTH = 32
 TOKEN_ENV_VAR = 'ASSERTION_MEMORY_TOKEN'
@@ -67,6 +68,11 @@ class AuthenticatedMemoryApp:
     async def __call__(self, scope, receive, send):
         if scope['type'] == 'http':
             path=scope.get('path','')
+            if path in (QUEUE_REMOVE_PATH,QUEUE_PREVIEW_PATH):
+                handler=getattr(self.queue_pause,'queue_item_routes',{}).get(path)
+                if handler is None:
+                    return await _error_response(404,'not found',scope,receive,send)
+                return await handler(scope,receive,send)
             if path==QUEUE_SESSIONS_PATH:
                 handler=getattr(self.queue_pause,'queue_session_route',None)
                 if handler is None:
@@ -136,14 +142,15 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                 for lane in ('test','prod')):
                 raise ValueError('Invalid neutral path binding')
         queue_pause=queue_pause_factory(config) if queue_pause_factory is not None else None
+        controller=queue_pause or (neutral[1] if neutral is not None else None)
         interactive=neutral is not None and getattr(neutral[1],'query_jobs',None) is not None
         if queue_rest_factory is None:
             queue_rest=None
-        elif queue_pause is None:
+        elif getattr(controller,'queue_pause_ready',None) is None:
             queue_rest=queue_rest_factory(config,interactive)
         else:
-            queue_rest=queue_rest_factory(config,interactive,can_change=getattr(queue_pause,'queue_pause_ready',False),
-                **({'session_control':True} if getattr(queue_pause,'queue_session_route',None) is not None else {}))
+            queue_rest=queue_rest_factory(config,interactive,can_change=getattr(controller,'queue_pause_ready',False),
+                **({'session_control':True} if getattr(controller,'queue_session_route',None) is not None else {}))
     except BaseException:
         store.close()
         raise
@@ -165,7 +172,7 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                 if background:
                     from .processing_control import restart_on_resume
                     await stack.enter_async_context(restart_on_resume(config.db,WorkerLauncher(config).start))
-                    if (session_watch:=getattr(queue_pause,'queue_session_lifespan',None)) is not None:
+                    if (session_watch:=getattr(controller,'queue_session_lifespan',None)) is not None:
                         await stack.enter_async_context(session_watch())
                 if background and config.auto_process_fresh_mac:
                     from .fresh_processing import reconcile_fresh_mac

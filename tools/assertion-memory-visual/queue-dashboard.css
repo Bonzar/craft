@@ -43,3 +43,4 @@ body:has(#login:not([hidden])) #visual-queue-open{display:none}
 .queue-session-choice{display:flex;gap:.55rem;align-items:baseline;overflow-wrap:anywhere;margin:.35rem 0}
 #queue-session-policy summary{cursor:pointer;font-weight:600}
 #queue-session-options{max-height:22rem;overflow:auto;margin:.5rem 0}
+.queue-source-preview{margin:.4rem 0;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}

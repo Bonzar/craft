@@ -13,8 +13,35 @@
   const sessionOptions=panel.querySelector('#queue-session-options');
   const sessionFeedback=panel.querySelector('#queue-session-feedback');
   const sessionSave=panel.querySelector('#queue-session-save');
+  const itemFeedback=panel.querySelector('#queue-item-feedback');
+  const deleting=new Set(), previews=new Map(), previewPending=new Set(), previewJobs=new Map();
+  const autoSeen=new Set(), visiblePreviews=new Map();
+  let previewObserver;
+  const maxAutoPreviews=6;
+  function drainPreviews(){
+    if(previewPending.size||!panel.open)return;
+    while(visiblePreviews.size&&autoSeen.size<maxAutoPreviews){
+      const [target,entry]=visiblePreviews.entries().next().value;
+      visiblePreviews.delete(target);
+      if(target.isConnected===false||previewJobs.get(target)!==entry||autoSeen.has(entry.key)||previews.has(entry.key))continue;
+      autoSeen.add(entry.key);void entry.run();return;
+    }
+  }
+  function watchPreview(target){
+    if(typeof IntersectionObserver==='undefined')return;
+    previewObserver??=new IntersectionObserver(entries=>{
+      for(const e of entries){
+        const job=previewJobs.get(e.target);
+        if(e.isIntersecting&&job){visiblePreviews.set(e.target,job);}
+        else visiblePreviews.delete(e.target);
+      }
+      drainPreviews();
+    },{threshold:0.15});
+    previewObserver.observe(target);
+  }
   const hold={global_pause:'Глобальная пауза',session_excluded:'Сессия не выбрана для автообработки',incomplete_source:'Ожидает полного источника'};
-  let sessionsState, sessionsDraft=new Set(), sessionsBusy=false, sessionsProbe=false;
+  let sessionsState, sessionsDraft=new Set(), sessionsBusy=false, sessionsProbe=false, nativeProbeTried=false;
+  let controlsReady=false;
   const names={source:'Реплики',maintenance:'Связи и пересчёт',interactive:'Вопросы'};
   const ordered=['interactive','source','maintenance'];
   const states={running:'В работе',ready:'Ожидает',waiting_origin:'Ждёт источник',delayed:'Отложено',paused:'Приостановлено',expired:'Исчерпаны попытки',active:'Активна',unavailable:'Недоступна',disabled:'Выключена'};
@@ -31,7 +58,7 @@
   const action=(title,fn)=>{const e=element('button',title);e.type='button';e.addEventListener('click',fn);return e;};
   const shorten=id=>id.length>19?id.slice(0,9)+'…'+id.slice(-6):id;
   const move=(id,n)=>{offsets.set(id,n);void refresh();};
-  function card(item,previous){
+  function card(item,previous,queueId){
     const root=element('article','','queue-card');
     const row=element('div','','queue-card-top');
     const chip=element('span',labels(states,item.status,'Состояние неизвестно'),'queue-chip');
@@ -50,7 +77,81 @@
       catch {copyStatus.textContent='Копирование недоступно. ID можно выделить в карточке.';}
     });
     detail.append(summary,raw,copy);
+    if(controlsReady&&itemFeedback&&['source','maintenance'].includes(queueId)&&rev(item.remove_revision)&&item.status!=='running'&&(queueId!=='source'||item.phase==='extract')){
+      const change=element('div','','queue-remove-action');
+      const key=queueId+':'+item.id;
+      const source=queueId==='source';
+      const effect=source?'source_and_queue':'queue_only';
+      const begin=action(source?'Удалить реплику и задачу':'Удалить из очереди',()=>{
+        if(deleting.has(key))return;
+        const commit=action('Подтвердить удаление',async()=>{
+          if(deleting.has(key)||!panel.open)return;
+          const current=generation;deleting.add(key);commit.disabled=true;
+          itemFeedback.textContent='Удаляем задачу из очереди…';
+          const body={stage:'test',queue_id:queueId,item_id:item.id,expected_revision:item.remove_revision};
+          const route='/api/v1/processing/items/remove';
+          try{
+            const proof=await sessionRequest(route+'/prepare','POST',body);
+            if(current!==generation||!panel.open)return;
+            if(proof?.stage!=='test'||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
+            const value=await sessionRequest(route,'PUT',body,proof.csrf_token);
+            if(current!==generation||!panel.open)return;
+            if(!value){
+              itemFeedback.textContent='Задача уже изменилась, выполняется или отсутствует. Обновляем очередь.';
+              return;
+            }
+            if(value.stage!=='test'||value.queue_id!==queueId||value.item_id!==item.id||value.removed!==true||value.effect!==effect)throw Error();
+            itemFeedback.textContent=source?'Задача и сохранённая реплика удалены из базы. Исходный чат не изменён.':'Задача удалена из очереди. Реплики и граф не изменены.';
+          }catch{if(current===generation&&panel.open)itemFeedback.textContent='Удаление не подтверждено. Проверьте обновлённую очередь.';}
+          finally{
+            deleting.delete(key);
+            if(current===generation&&panel.open){change.replaceChildren(begin);void refresh();}
+          }
+        });
+        const cancel=action('Отмена',()=>{change.replaceChildren(begin);begin.focus();});
+        change.replaceChildren(element('p',source?'Удалить задачу и реплику из базы памяти? Сообщение в исходном чате останется.':'Удалить только задачу из очереди? Реплики и граф останутся.'),commit,cancel);
+        commit.focus();
+      });
+      change.append(begin);detail.append(change);
+    }
     root.append(row,title);
+    if(controlsReady&&queueId==='source'&&rev(item.preview_revision)){
+      const excerpt=element('p','','queue-source-preview');
+      const previewKey=JSON.stringify([item.id,item.preview_revision]);
+      const show=value=>{
+        const role=labels({user:'Ты',assistant:'Ассистент',tool:'Инструмент',system:'Система',developer:'Разработчик'},value.source_role,'');
+        excerpt.replaceChildren(...(role?[element('strong',role+': ')]:[]),element('span',value.source_preview));
+      };
+      const load=async()=>{
+        if(previewPending.size||previewPending.has(previewKey)||!panel.open)return;
+        const current=generation;
+        const body={stage:'test',queue_id:'source',item_id:item.id,expected_revision:item.preview_revision};
+        const route='/api/v1/processing/items/source-preview';
+        previewPending.add(previewKey);open.disabled=true;
+        try{
+          const proof=await sessionRequest(route+'/prepare','POST',body);
+          if(current!==generation||!panel.open)return;
+          if(proof?.stage!=='test'||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
+          const value=await sessionRequest(route,'PUT',body,proof.csrf_token);
+          if(current!==generation||!panel.open)return;
+          if(value?.stage!=='test'||value.queue_id!=='source'||value.item_id!==item.id||
+             typeof value.source_preview!=='string'||!value.source_preview.trim()||Array.from(value.source_preview).length>240)throw Error();
+          if(previews.size>=50)previews.delete(previews.keys().next().value);
+          previews.set(previewKey,value);show(value);
+        }catch{
+          if(current===generation&&panel.open){
+            excerpt.replaceChildren(element('span','Текст недоступен. '),open);
+          }
+        }finally{previewPending.delete(previewKey);open.disabled=false;drainPreviews();}
+      };
+      const open=action('Показать текст реплики',load);
+      if(previews.has(previewKey))show(previews.get(previewKey));else{
+        excerpt.append(open);
+        previewJobs.set(root,{key:previewKey,run:load});
+        watchPreview(root);
+      }
+      root.append(excerpt);
+    }
     if(Object.hasOwn(hold,item.hold_reason))root.append(element('p',hold[item.hold_reason],'queue-lane-status'));
     if(typeof item.session_id==='string'&&item.session_id)detail.append(element('p','Сессия: '+item.session_id));
     root.append(detail);
@@ -62,9 +163,12 @@
       target=element('section','','queue-lane');target.setAttribute('aria-label',names[id]);
       lanes.set(id,target);container.append(target);
     }
-    const signature=JSON.stringify([queue,offset]);
+    const signature=JSON.stringify([queue,offset,controlsReady]);
     if(rendered.get(id)?.signature===signature)return;
     const previous=rendered.get(id)?.cards;
+    for(const view of previous?.values()??[]){
+      previewObserver?.unobserve(view.root);previewJobs.delete(view.root);visiblePreviews.delete(view.root);
+    }
     const active=document.activeElement;
     let restored;
     const cards=new Map();
@@ -76,7 +180,7 @@
     const grid=element('div','','queue-cards');
     const items=Array.isArray(queue?.items)?queue.items.filter(x=>x&&typeof x.id==='string'&&x.id):[];
     for(const item of items){
-      const before=previous?.get(item.id),view=card(item,before);
+      const before=previous?.get(item.id),view=card(item,before,id);
       if(before?.summary===active)restored=view.summary;
       if(before?.copy===active)restored=view.copy;
       cards.set(item.id,view);grid.append(view.root);
@@ -137,7 +241,7 @@
     if(!response.ok||!response.headers.get('content-type')?.includes('application/json'))throw Error();
     return response.json();
   }
-  async function loadSessions(){
+  async function loadSessions(advertised=false){
     if(!sessionsPanel||sessionsBusy||sessionsProbe)return;
     sessionsProbe=true;
     const current=generation;
@@ -145,7 +249,8 @@
       const value=await sessionRequest(sessionUrl+'/prepare','POST',{});
       if(current!==generation||!panel.open)return;
       useSessions(value);sessionsPanel.hidden=false;
-    }catch{if(current===generation&&panel.open){sessionsPanel.hidden=false;sessionFeedback.textContent='Настройка сессий недоступна. Очередь не изменена.';}}
+      if(!controlsReady){controlsReady=true;void refresh();}
+    }catch{if(advertised&&current===generation&&panel.open){sessionsPanel.hidden=false;sessionFeedback.textContent='Настройка сессий недоступна. Очередь не изменена.';}}
     finally{if(current===generation)sessionsProbe=false;}
   }
   sessionsPanel?.addEventListener('toggle',()=>{if(sessionsPanel.open&&sameSessions())void loadSessions();});
@@ -294,7 +399,10 @@
       const label=base.stage.toUpperCase()+version;
       if(status.textContent!==label)status.textContent=label;
       if(!inFlight&&epoch===controlEpoch)acceptControl(base);
-      if(base.stage==='test'&&base.capabilities?.standalone_queue_sessions===true&&!sessionsState)void loadSessions();
+      if(base.stage==='test'&&!nativeProbeTried&&!sessionsState){
+        nativeProbeTried=true;
+        void loadSessions(base.capabilities?.standalone_queue_sessions===true);
+      }
       for(const id of ordered){
         const offset=requested.get(id)??0;
         if((offsets.get(id)??0)===offset)render(id,pages.get(offset).queues.find(q=>q?.id===id),offset);
@@ -311,14 +419,16 @@
     }
   }
   function stop(){
-    generation++;dirty=false;fetchAbort?.abort();stream?.close();stream=null;
+    generation++;previews.clear();previewObserver?.disconnect();previewObserver=null;
+    autoSeen.clear();previewJobs.clear();visiblePreviews.clear();dirty=false;fetchAbort?.abort();stream?.close();stream=null;
     if(timer)clearInterval(timer);timer=null;
   }
   launcher.addEventListener('click',()=>{
     if(panel.open)return;
     panel.showModal();
     offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
-    sessionsState=null;sessionsDraft=new Set();sessionsBusy=false;sessionsProbe=false;
+    sessionsState=null;sessionsDraft=new Set();sessionsBusy=false;sessionsProbe=false;nativeProbeTried=false;controlsReady=false;
+    if(itemFeedback)itemFeedback.textContent='';
     if(sessionsPanel){sessionsPanel.hidden=true;sessionsPanel.open=false;sessionFeedback.textContent='';}
     status.textContent='Подключаемся…';lastSignal=0;
     control=null;ownerReady=false;ownerCheck=null;nativeReady=false;probedRevision=null;controlFeedback.textContent='';drawControl();

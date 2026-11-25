@@ -101,7 +101,9 @@ def snapshot_queues(queues, limit, offset):
             return False
         ids.add(q['id'])
         for row in q['items']:
-            if (not isinstance(row, dict) or set(row) - {'hold_reason','session_id'} != {'id','status','phase','position','available_at'}
+            if (not isinstance(row, dict) or set(row) - {'hold_reason','session_id','remove_revision','preview_revision'} != {'id','status','phase','position','available_at'}
+                    or (row.get('remove_revision') is not None and (q['id'] not in ('source','maintenance') or type(row['remove_revision']) is not str or not REVISION.fullmatch(row['remove_revision'])))
+                    or (row.get('preview_revision') is not None and (q['id']!='source' or type(row['preview_revision']) is not str or not REVISION.fullmatch(row['preview_revision'])))
                     or row.get('hold_reason') not in (None,'global_pause','session_excluded','incomplete_source')
                     or (row.get('session_id') is not None and not session_identifier(row['session_id']))
                     or not isinstance(row['id'], str) or not 1 <= len(row['id']) <= 512
@@ -155,6 +157,10 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
                 for q in value['queues']:
                     for row in q['items']:
                         row.pop('session_id',None)
+                        # TEST legacy dashboard carries opaque optimistic-revision hints only.
+                        # Exact owner controls separately gate any read of text or state change.
+                        if stage!='test':
+                            for k in ('remove_revision','preview_revision'): row.pop(k,None)
             # Local Base readiness never grants direct browser writes or a
             # mutation capability on the legacy Sites transport.
             ctl['can_change']=False
@@ -204,6 +210,34 @@ REVISION = re.compile(r'[0-9a-f]{32}\Z')
 
 BROWSER_SESSIONS = '/api/v1/processing/sessions'
 BASE_SESSIONS = '/api/v1/queue-sessions'
+BROWSER_REMOVE = '/api/v1/processing/items/remove'
+BASE_REMOVE = '/api/v1/queue-items/remove'
+BROWSER_PREVIEW = '/api/v1/processing/items/source-preview'
+BASE_PREVIEW = '/api/v1/queue-items/source-preview'
+
+
+def preview_receipt(value, stage):
+    if (type(value) is not dict or set(value)!={'stage','queue_id','item_id','source_preview','source_role'}
+            or value['stage']!=stage or value['queue_id']!='source' or not removal_identity(value)
+            or type(value['source_preview']) is not str or not 0<len(value['source_preview'])<=240
+            or value['source_role'] not in (None,'user','assistant','system','developer','tool')):
+        raise ValueError('invalid Base source preview')
+    return value
+
+
+
+def removal_identity(value):
+    return (value.get('queue_id') in ('source','maintenance') and type(value.get('item_id')) is str
+            and 0<len(value['item_id'])<=512 and not any(ord(c)<32 or ord(c)==127 or 0xD800<=ord(c)<=0xDFFF for c in value['item_id']))
+
+
+def removal_receipt(value, stage):
+    if (type(value) is not dict or set(value)!={'stage','queue_id','item_id','removed','effect'} or
+            value['stage']!=stage or value['removed'] is not True or not removal_identity(value) or
+            value['effect']!=('source_and_queue' if value['queue_id']=='source' else 'queue_only')):
+        raise ValueError('invalid Base removal receipt')
+    return value
+
 
 
 def session_identifier(value):
@@ -327,6 +361,12 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             sessions_call = pause_client(origin,read_key,write_key,
                 pause_signer(environment,owner,proof_key,clock=clock,route=BASE_SESSIONS),
                 stage=environment,route=BASE_SESSIONS,validate=sessions_state,max_bytes=524288)
+            remove_call = pause_client(origin,read_key,write_key,
+                pause_signer(environment,owner,proof_key,clock=clock,route=BASE_REMOVE),
+                stage=environment,route=BASE_REMOVE,validate=removal_receipt,max_bytes=4096)
+            preview_call = pause_client(origin,read_key,write_key,
+                pause_signer(environment,owner,proof_key,clock=clock,route=BASE_PREVIEW),
+                stage=environment,route=BASE_PREVIEW,validate=preview_receipt,max_bytes=4096)
         def csrf_token(revision, expiry, kind='pause'):
             msg = f'visual-{kind}-v1\n{environment}\n{public_origin}\n{revision}\n{expiry}'.encode('ascii')
             return f'{expiry}.'+hmac.digest(csrf_key,msg,'sha256').hex()
@@ -395,6 +435,10 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             try:
                 if self.headers.get('Sec-Fetch-Site')=='cross-site' and path.startswith('/api/'):
                     return self.respond(403)
+                if path in (BROWSER_REMOVE,BROWSER_REMOVE+'/prepare',BROWSER_PREVIEW,BROWSER_PREVIEW+'/prepare'):
+                    if environment!='test' or pause is None or raw != path or query:
+                        return self.respond(404)
+                    return self.remove_request(path,safe,preview=path in (BROWSER_PREVIEW,BROWSER_PREVIEW+'/prepare'))
                 if path in (BROWSER_SESSIONS,BROWSER_SESSIONS+'/prepare'):
                     if environment!='test' or pause is None or raw != path or query:
                         return self.respond(404)
@@ -498,6 +542,48 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 return reply(409,{'error':'queue_control_changed'})
             if (set(result[operation])!=set(request[operation]) if sessions else result[operation] is not request[operation]) or result['revision']==revision:
                 return self.respond(503)
+            return reply(200,result)
+
+        def remove_request(self,path,safe,preview=False):
+            if not self.has_pause_owner() or self.headers.get_all('Origin',[]) != [public_origin]:
+                return self.respond(403)
+            prepare=path.endswith('/prepare')
+            if self.command != ('POST' if prepare else 'PUT'):
+                return self.respond(405)
+            lengths=self.headers.get_all('Content-Length',[])
+            if self.headers.get_all('Transfer-Encoding') or len(lengths)!=1 or not re.fullmatch(r'[1-9][0-9]{0,3}',lengths[0]) or int(lengths[0])>4096:
+                return self.respond(400)
+            if self.headers.get_all('Content-Type',[])!=['application/json']:
+                return self.respond(415)
+            try:
+                request=unique_json(self.rfile.read(int(lengths[0])))
+            except (ValueError,OSError,RecursionError):
+                return self.respond(400)
+            if (type(request) is not dict or set(request)!={'stage','queue_id','item_id','expected_revision'} or
+                    not removal_identity(request) or type(request['expected_revision']) is not str or
+                    not REVISION.fullmatch(request['expected_revision'])):
+                return self.respond(400)
+            def reply(status,value):
+                return self.respond(status,json.dumps(value,separators=(',',':')).encode(),'application/json',headers=safe)
+            if request['stage']!=environment:
+                return reply(409,{'error':'queue_item_changed'})
+            if preview and request['queue_id']!='source':return self.respond(400)
+            kind='preview' if preview else 'remove'
+            call=preview_call if preview else remove_call
+            command={k:request[k] for k in ('queue_id','item_id','expected_revision')}
+            bound=digest(json.dumps(command,separators=(',',':')).encode('ascii'))
+            if prepare:
+                return reply(200,{'stage':environment,'csrf_token':csrf_token(bound,int(clock())+30,kind)})
+            tokens=self.headers.get_all('X-CSRF-Token',[])
+            token=re.fullmatch(r'([0-9]{1,12})\.[0-9a-f]{64}',tokens[0]) if len(tokens)==1 else None
+            if not token:
+                return self.respond(403)
+            expiry,now=int(token[1]),int(clock())
+            if not now < expiry <= now+30 or not hmac.compare_digest(tokens[0],csrf_token(bound,expiry,kind)):
+                return self.respond(403)
+            result=call('PUT',command)
+            if result is None:return reply(409,{'error':'queue_item_changed'})
+            if any(result[k]!=command[k] for k in ('queue_id','item_id')):return self.respond(503)
             return reply(200,result)
 
         def graph(self, raw, safe):

@@ -34,6 +34,15 @@ function setup(real,host=fixtureHost,carrier=false){
    assert.equal(o.headers[header],'Bearer '+'b'.repeat(64));
    const b=JSON.parse(o.body);
    assert.equal(b.actor,hash('native-queue-pause-test-v1\0'+id));
+   if(b.action==='sessions_prepare'){
+     assert.deepEqual(b.arguments,{});
+     return Response.json({stage:'test',revision:rev,selected_session_ids:[],sessions:[{id:'some-session',queued:1,eligible:true}]});
+   }
+   if(b.action==='sessions_set')return Response.json({stage:'test',revision:'8'.repeat(32),selected_session_ids:b.arguments.selected_session_ids,sessions:[]});
+   if(b.action==='item_preview')return Response.json({stage:'test',queue_id:'source',item_id:b.arguments.item_id,
+     source_preview:'synthetic <text>',source_role:'user'});
+   if(b.action==='item_remove')return Response.json({stage:'test',queue_id:b.arguments.queue_id,item_id:b.arguments.item_id,
+     removed:true,effect:b.arguments.queue_id==='source'?'source_and_queue':'queue_only'});
    if(b.action==='prepare')assert.deepEqual(b.arguments,{});
    else {assert.equal(b.action,'set');assert.equal(b.arguments.expected_revision,rev);}
    return Response.json({stage:'test',paused:b.action==='set',revision:rev});
@@ -133,4 +142,34 @@ test('existing TEST transport preserves a dedicated pause bearer and rejects eff
                             {cookie,'x-csrf-token':p.csrf_token}),env);
  assert.equal(res.status,200);
  assert.equal(f.hits(),2);
+});
+
+
+test('native TEST owner controls use only the existing carrier and exact action-scoped proof',async()=>{
+ const f=setup(async req=>req.headers.get('oai-authenticated-user-id')===id,fixtureHost,true);
+ const env={...f.env,MEMORY_TEST_QUEUE_CONTROL_ENABLED:'true',MEMORY_TEST_PAUSE_CARRIER:'effects',
+   HOSTED_MEMORY_TEST_EFFECTS_TOKEN:'d'.repeat(64)};
+ const selection='/api/v1/processing/sessions', preview='/api/v1/processing/items/source-preview', deletion='/api/v1/processing/items/remove';
+ const body={stage:'test',queue_id:'source',item_id:'job',expected_revision:rev};
+ assert.equal((await f.fetch(f.req(preview+'/prepare',body),{...env,MEMORY_TEST_QUEUE_CONTROL_ENABLED:'false'})).status,404);
+ assert.equal((await f.fetch(f.req(preview+'/prepare',body),{...env,MEMORY_GRAPH_MODE:'prod'})).status,404);
+ assert.equal((await f.fetch(f.req(preview+'/prepare',body,{'oai-authenticated-user-id':'foreign'}),env)).status,403);
+ assert.equal((await f.fetch(f.req(preview+'/prepare',body,{origin:'https://evil.test'}),env)).status,403);
+ assert.equal((await f.fetch(f.req(preview,body),env)).status,403);
+ assert.equal(f.hits(),0);
+ const ask=async (url,value)=>(await f.fetch(f.req(url+'/prepare',value),env)).json();
+ const previewProof={'x-csrf-token':(await ask(preview,body)).csrf_token};
+ assert.equal(f.hits(),0);
+ assert.equal((await f.fetch(f.req(deletion,body,previewProof),env)).status,403);
+ assert.equal((await f.fetch(f.req(preview,{...body,item_id:'other'},previewProof),env)).status,403);
+ const text=await f.fetch(f.req(preview,body,previewProof),env);
+ assert.equal((await text.json()).source_preview,'synthetic <text>');
+ const deleteProof={'x-csrf-token':(await ask(deletion,body)).csrf_token};
+ assert.equal((await (await f.fetch(f.req(deletion,body,deleteProof),env)).json()).effect,'source_and_queue');
+ const state=await ask(selection,{});
+ assert.deepEqual(state.selected_session_ids,[]);
+ const saved=await f.fetch(f.req(selection,{stage:'test',selected_session_ids:['some-session'],expected_revision:state.revision},
+     {'x-csrf-token':state.csrf_token}),env);
+ assert.deepEqual((await saved.json()).selected_session_ids,['some-session']);
+ assert.equal(f.hits(),4);
 });

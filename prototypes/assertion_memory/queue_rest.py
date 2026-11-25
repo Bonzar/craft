@@ -83,6 +83,9 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
                 from .queue_session_control import annotate_source, annotate_maintenance
                 annotate_source(db,data,selected)
                 annotate_maintenance(db,data,selected)
+                if (can_change() if callable(can_change) else can_change):
+                    from .queue_item_removal import annotate
+                    annotate(db,data)
         finally:
             db.set_progress_handler(None,0)
             db.rollback()
