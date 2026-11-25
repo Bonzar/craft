@@ -107,6 +107,8 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                                service=service)
         neutral = (neutral_factory(config, store, service, background)
                    if neutral_factory is not None else None)
+        if config.auto_process_fresh_mac and (neutral is None or '/memory-api-prod' not in neutral[0]):
+            raise ValueError('fresh Mac automatic processing requires the production machine route')
         if neutral is not None:
             routes, handler = neutral
             if not isinstance(routes, frozenset) or not callable(handler) or not any(
@@ -132,6 +134,9 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                 WorkerLauncher(config).start()
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(inner.router.lifespan_context(inner))
+                if background and config.auto_process_fresh_mac:
+                    from .fresh_processing import reconcile_fresh_mac
+                    await stack.enter_async_context(reconcile_fresh_mac(WorkerLauncher(config).start))
                 if neutral is not None and (jobs := getattr(neutral[1], 'query_jobs', None)) is not None:
                     await stack.enter_async_context(jobs.lifespan())
                 yield

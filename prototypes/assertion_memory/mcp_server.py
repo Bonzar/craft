@@ -51,11 +51,15 @@ class ServiceConfig:
     batch_source_construction: bool = False
     source_event_ids: tuple[str, ...] | None = None
     codex_job_timeout: float | None = None
+    auto_process_fresh_mac: bool = False
 
     def __post_init__(self):
         from .thought_processing_selection import normalize_session_ids
         object.__setattr__(self, 'processing_session_ids', normalize_session_ids(self.processing_session_ids))
         object.__setattr__(self, 'source_event_ids', normalize_session_ids(self.source_event_ids))
+        if (type(self.auto_process_fresh_mac) is not bool or self.auto_process_fresh_mac
+                and (self.processing_session_ids != () or self.source_event_ids is not None)):
+            raise ValueError('fresh Mac processing requires an empty legacy automatic selection')
         if not Path(self.db).is_absolute() or self.db == ':memory:':
             raise ValueError('db must be an absolute persistent SQLite path')
         if self.provider not in ('none', 'subprocess', 'local', 'codex'):
@@ -164,11 +168,16 @@ class ServiceConfig:
         return MemoryService(store, self.engine(store))
 
 
+def _processing_selector(config):
+    from .thought_processing_selection import FRESH_MAC_ONLY
+    return FRESH_MAC_ONLY if config.auto_process_fresh_mac else config.processing_session_ids
+
+
 def _eligible_processing_work(config):
     """Model-free read probe; capture from an unselected session cannot wake work."""
     if config.processing_session_ids is None:
         return True
-    if not config.processing_session_ids or not Path(config.db).is_file():
+    if _processing_selector(config) == () or not Path(config.db).is_file():
         return False
     from .thought_processing_selection import processing_deadline
     uri='file:'+quote(str(Path(config.db).resolve()),safe='/')+'?mode=ro'
@@ -178,7 +187,7 @@ def _eligible_processing_work(config):
         connection.execute('PRAGMA query_only=ON')
         connection.execute('BEGIN')
         now=datetime.now(timezone.utc).isoformat(timespec='microseconds')
-        return processing_deadline(connection,config.processing_session_ids,now=now,with_model=True) is not None
+        return processing_deadline(connection,_processing_selector(config),now=now,with_model=True) is not None
     finally:
         connection.close()
 
@@ -244,7 +253,7 @@ def _idle_handoff(lock, next_deadline):
 def run_worker(config: ServiceConfig, limit: int = 0) -> None:
     if type(limit) is not int or limit < 0:
         raise ValueError('worker limit must be a nonnegative shared attempt budget')
-    if config.processing_session_ids == ():
+    if config.processing_session_ids == () and (not config.auto_process_fresh_mac or not _eligible_processing_work(config)):
         return
     with open(config.db + '.worker.lock', 'a') as lock:
         try:
@@ -457,7 +466,7 @@ def _register_write_tools(mcp, service, launcher, background):
             # An empty automatic selection can coexist with an explicit one-time request.
             worker = WorkerLauncher(replace(launcher.config, processing_session_ids=selected,
                                             batch_source_construction=batch_source_construction,
-                                            source_event_ids=source_event_ids))
+                                            source_event_ids=source_event_ids, auto_process_fresh_mac=False))
         if retry_job_id is not None:
             if worker.config.processing_session_ids is not None:
                 from .thought_processing_selection import source_predicate

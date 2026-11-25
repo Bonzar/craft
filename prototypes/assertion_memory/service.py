@@ -135,6 +135,8 @@ class MemoryService:
                                    (session_id, message_id, receipt_value, event.id))
             from .ingest_streams import record_delivery
             delivered = record_delivery(connection, delivery, event.id, session_id)
+            from .fresh_processing import admit_event
+            admit_event(connection, event.id, session_id, delivered, created=previous is None)
         return {'event': _event_descriptor(event), 'job': _job_descriptor(self.queue.get(event.id)),
                 'pending_count': self._pending_count(), **({'delivery': delivered} if delivery is not None else {})}
 
@@ -151,7 +153,12 @@ class MemoryService:
     def ingest_register(self, producer_id, session_id, *, replace_epoch=None):
         from .ingest_streams import register
         with self.store.transaction(write=True) as connection:
-            return register(connection, producer_id, session_id, replace_epoch=replace_epoch)
+            from .fresh_processing import before_register, admit_stream
+            allowed = before_register(connection, producer_id, session_id, replace_epoch)
+            result = register(connection, producer_id, session_id, replace_epoch=replace_epoch)
+            if allowed:
+                admit_stream(connection, result)
+            return result
 
     def ingest_report(self, stream_id, epoch, report_seq, observed_seq, scan_state, gap_count, *, lifecycle='active'):
         from .ingest_streams import report

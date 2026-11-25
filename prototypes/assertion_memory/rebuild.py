@@ -100,6 +100,7 @@ def _provider_identity(settings):
   # A scoped queue launch is independent of the provider used by a rebuild.
   configured.pop('batch_source_construction')
   configured.pop('source_event_ids')
+  configured.pop('auto_process_fresh_mac')
   # The normalized timeout already carries any effective Codex limit.
   configured.pop('codex_job_timeout')
   if configured['review_reasoning_effort'] in (None,configured['reasoning_effort']):

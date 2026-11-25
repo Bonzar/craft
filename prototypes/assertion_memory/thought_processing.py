@@ -262,7 +262,8 @@ def _recover_selected(queue, session_ids):
 
 def _deadline(store, config):
     with store.transaction() as db:
-        return processing_deadline(db,config.processing_session_ids,
+        from .mcp_server import _processing_selector
+        return processing_deadline(db,_processing_selector(config),
             now=datetime.now(timezone.utc).isoformat(timespec='microseconds'),
             with_model=config.provider!='none')
 
@@ -297,7 +298,9 @@ def run_pool(config, lock, idle_handoff, *, limit=0):
 
 
 def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
-    if config.processing_session_ids == ():
+    from .mcp_server import _processing_selector
+    selector = _processing_selector(config)
+    if selector == ():
         return
     claims = ActiveClaims()
     from .source_model_batch import SourceModelBatch
@@ -314,7 +317,7 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
                                                  is_pausing=is_pausing)
                     worker.process_source_group(config.source_event_ids, limit)
             return
-        _recover_selected(queue,config.processing_session_ids)
+        _recover_selected(queue,selector)
 
         @contextmanager
         def factory(lane, observer):
@@ -322,7 +325,7 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
                 current = config.service(local)
                 yield TracedThoughtWorker(current.queue, current.engine, lane=lane,
                                           lock_owned=True, claim_observer=observer,
-                                          processing_session_ids=config.processing_session_ids,
+                                          processing_session_ids=selector,
                                           is_pausing=is_pausing, source_batch=source_batch)
 
         def heartbeat():

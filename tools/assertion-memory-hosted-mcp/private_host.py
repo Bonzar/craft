@@ -105,7 +105,7 @@ def configured(stage,root,config_dir):
     machine=tuple(clients.values())
     if len(set(machine))!=len(machine):
         raise ValueError('Machine credentials must be distinct')
-    return caps,read,effect,machine
+    return caps,read,effect,machine,clients.get("personal-mac")
 
 
 def effect_lock(app,root,stage,effect_token,machine_digests=()):
@@ -177,7 +177,7 @@ def factory(stage,root,config_dir,legacy_token):
         raise ValueError('Tag/source pointer mismatch')
     source=json.loads(files['mcp-tool-schema.json'])
     pins=catalog_pins(revision,files,source)
-    caps,read,effect,machine=configured(stage,root,config_dir)
+    caps,read,effect,machine,personal_mac=configured(stage,root,config_dir)
     if legacy_token in (read,effect) or sha256(legacy_token.encode('ascii')).hexdigest() in machine:
         raise ValueError('Legacy credential cannot authorize private operations')
     catalog=compile_release(source,pins,effects=effect is not None)
@@ -201,6 +201,8 @@ def factory(stage,root,config_dir,legacy_token):
 
     def mount(config,store,service,background):
         require_scoped_database(stage,root,config.db)
+        if config.auto_process_fresh_mac and (stage != 'prod' or personal_mac is None):
+            raise ValueError('fresh Mac processing requires the configured production Mac credential')
         from prototypes.assertion_memory import query_timing as timing
         from prototypes.assertion_memory.mcp_server import WorkerLauncher, _query_with_connection
         from prototypes.assertion_memory.query_jobs import QueryJobs
@@ -232,7 +234,8 @@ def factory(stage,root,config_dir,legacy_token):
 
         jobs = QueryJobs(config.db,query_locked,ready_query) if profile['durable_query_jobs'] else None
         operations=create_operations(config,store,background=background,service=service,query_jobs=jobs)
-        app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations,machine_digests=machine)
+        app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations,machine_digests=machine,
+            fresh_mac_digest=personal_mac if config.auto_process_fresh_mac else None)
         handler = effect_lock(app,root,stage,effect,machine)
         handler.query_jobs = jobs
         return frozenset(paths),handler

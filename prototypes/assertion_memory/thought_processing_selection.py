@@ -5,11 +5,13 @@ import json
 import re
 from .session_api import _SOURCE_SESSION
 
+FRESH_MAC_ONLY = object()
+
 _COHORT=ContextVar('thought_processing_cohort',default=None)
 
 
 def normalize_session_ids(values):
-    if values is None:return None
+    if values is None or values is FRESH_MAC_ONLY:return values
     if not isinstance(values,(tuple,list)) or any(not isinstance(value,str) or not value.strip() for value in values):
         raise ValueError('processing_session_ids must be null or nonempty session ID strings')
     return tuple(dict.fromkeys(values))
@@ -46,6 +48,8 @@ def source_predicate(session_ids,alias='e'):
     ids=normalize_session_ids(session_ids)
     if ids is None:return '1',[]
     if not ids:return '0',[]
+    if ids is FRESH_MAC_ONLY:
+        return _alias(alias)+'.id IN (SELECT event_id FROM memory_fresh_mac_events)',[]
     source=_SOURCE_SESSION.replace('e.',_alias(alias)+'.')
     return source+' IN (SELECT value FROM json_each(?))',[json.dumps(ids)]
 
@@ -55,6 +59,9 @@ def maintenance_predicate(db,session_ids,alias='w'):
     if ids is None:return '1',[]
     if not ids or not _exists(db,'memory_thought_cause_sessions'):return '0',[]
     alias=_alias(alias)
+    # Existing maintenance coalesces causes and a caller can report a query-session
+    # claim. Do not schedule that broader queue from merely trusted raw delivery.
+    if ids is FRESH_MAC_ONLY:return '0',[]
     return ('EXISTS(SELECT 1 FROM memory_thought_work_causes pc JOIN memory_thought_cause_sessions ps '
         'ON ps.thought_id=pc.thought_id AND ps.cause=pc.cause WHERE pc.thought_id='+alias+'.thought_id '
         'AND pc.generation>'+alias+'.completed_generation AND ps.session_id IN (SELECT value FROM json_each(?)))'),[json.dumps(ids)]
@@ -63,6 +70,7 @@ def maintenance_predicate(db,session_ids,alias='w'):
 def pending_cohort(db,task,allowed):
     if not _exists(db,'memory_thought_cause_sessions'):return None
     ids=normalize_session_ids(allowed)
+    if ids is FRESH_MAC_ONLY:return ()
     clause=' AND ps.session_id IN (SELECT value FROM json_each(?))' if ids is not None else ''
     args=[task['thought_id'],task['completed_generation'],task['generation']]
     if ids is not None:args.append(json.dumps(ids))
@@ -78,6 +86,9 @@ def processing_deadline(db,session_ids,*,now,with_model=True,lane='all'):
     if lane not in ('all','source','maintenance'):raise ValueError('unknown processing lane')
     ids=normalize_session_ids(session_ids)
     if ids==() or not with_model:return None
+    if ids is FRESH_MAC_ONLY:
+        from .fresh_processing import ensure_selector
+        if not ensure_selector(db):return None
     deadlines=[]
     if lane!='maintenance' and _exists(db,'memory_raw_events') and _exists(db,'memory_capture_jobs'):
         where,args=source_predicate(ids)
