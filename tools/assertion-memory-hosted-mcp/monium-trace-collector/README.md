@@ -37,8 +37,18 @@ selection and removal of synthetic sensitive attributes, not cloud ingestion.
 Use dedicated, unprivileged accounts `assertion-otel-test` and
 `assertion-otel-prod` (the latter only at PROD rollout), without login shells.
 Install the verified executable at `/usr/local/bin/otelcol-contrib`, root-owned
-and not writable by services. Install approved files into root-controlled
-paths:
+and not writable by services. The approved Base archive contains these exact
+non-secret operator files under
+`tools/assertion-memory-hosted-mcp/monium-trace-collector/`, covered by the
+archive's verified SHA-256 and file manifest. Verify the original archive
+bytes and file manifest independently before root copies these files;
+do not point the root-managed collector at the mutable TEST user release
+symlink or let TEST user-owned paths provide executable root config.
+The Base receiver stages and qualifies the assets but deliberately only has
+authority to restart its own graph/MCP user units. It does not install or
+automatically activate system collectors or manage their credentials.
+
+Install verified files into root-controlled paths:
 
 | Repo file | Host path |
 |---|---|
@@ -68,7 +78,15 @@ After approval, reload systemd units and start only
 `assertion-monium-traces@test.service`. Check its listener is
 `127.0.0.1:14318`. Follow the [Base TEST opt-in](../MONIUM-GENAI-TRACES.md)
 and verify one fictional query with a model call lands only in the TEST
-project. PROD is not enabled by this procedure. Its later rollout has a
+project. For the repository's standard canonical TEST user unit, the
+non-secret opt-in belongs in the root-owned user-manager drop-in
+`/etc/systemd/user/assertion-test-deploy-mcp.service.d/50-monium-traces.conf`.
+Verify the actual TEST unit name/fragment first, reload its user manager,
+then let a normal TEST release restart the MCP unit. The drop-in and the
+independent collector configuration are outside the release's `current`
+symlink, so an ordinary deploy/rollback does not overwrite them. No change
+to the application archive after signing, production unit, or data paths
+is needed. PROD is not enabled by this procedure. Its later rollout has a
 separate `prod-traces.env`, project, key, service and port `24318`.
 
 Rollback: remove the Base TEST opt-in, restart that service normally, then
