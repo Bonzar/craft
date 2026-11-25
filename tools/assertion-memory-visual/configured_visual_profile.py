@@ -63,7 +63,7 @@ def content(payload):
     return Content(payload.payload_sha, payload.release_digest)
 
 
-def activate(stage, payload, transport):
+def activate(stage, payload, transport, runtime=None):
     target = TARGETS[stage]
     # Non-application stage dispatch supplies scoped configuration, never a
     # shared environment dict. This compile-time binding rejects wrong routes.
@@ -81,7 +81,7 @@ def activate(stage, payload, transport):
         "VISUAL_SSH_KEY": transport["ssh_key"],
         "VISUAL_SIGNING_KEY": transport["signing_key"],
         "RUNNER_TEMP": transport["runner_temp"],
-    }, lane="configured")
+    }, lane="configured", **({"runtime": runtime} if runtime is not None else {}))
 
 
 def verify_smoke(stage, payload, target):
@@ -93,3 +93,8 @@ def verify_smoke(stage, payload, target):
         "VISUAL_GATEWAY_HOST": target["gateway_host"],
         "VISUAL_GATEWAY_TOKEN": target["gateway_token"],
     })
+
+
+def stage_required_runtime(stage, setting, *, get, original, static_sha, destination):
+    return _operation("runtime_consumer").stage_test_if_required(
+        stage, setting, get=get, original=original, static_sha=static_sha, destination=destination)

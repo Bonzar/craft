@@ -148,7 +148,7 @@ def queue_client(origin, key):
     return fetch
 
 
-def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None):
+def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None, runtime_health=None):
     if environment not in ('test', 'prod') or not HEX.fullmatch(token):
         raise ValueError('invalid dedicated TEST token')
 
@@ -158,6 +158,10 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
         fetch_queue = queue_client(queue_origin, queue_token)
     else:
         fetch_queue = None
+    if runtime_health is not None:
+        proof,key=runtime_health
+        if environment!='test' or not HEX.fullmatch(proof) or not HEX.fullmatch(key) or key in (token,queue_token):
+            raise ValueError('Invalid Visual TEST health authority')
     route = f'/memory-visual-{environment}-read'
 
     class Handler(BaseHTTPRequestHandler):
@@ -205,6 +209,20 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
 
         def dispatch(self):
             raw = self.requestline.split()
+            if runtime_health is not None and len(raw)==3 and raw[1]=='/__visual-runtime-health':
+                if self.command!='GET' or self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length'):
+                    return self.respond(404)
+                headers=self.headers.get_all('Authorization',[])
+                if len(headers)!=1 or not hmac.compare_digest(headers[0], 'Bearer '+runtime_health[1]):
+                    return self.respond(401)
+                try:
+                    current=current_release(root)
+                    manifest(root,current)
+                    queue_ready=fetch_queue is not None and bool(fetch_queue(1,0))
+                    return self.respond(200,json.dumps({'stage':'test','runtime_entry_sha':runtime_health[0],
+                        'static_digest':current,'queue_ready':queue_ready},separators=(',',':')).encode(),'application/json')
+                except Exception:
+                    return self.respond(503)
             if len(raw) != 3 or raw[1] != route or self.command != 'POST':
                 return self.respond(404)
             auth = self.headers.get_all('Authorization', [])
@@ -293,6 +311,9 @@ if __name__ == '__main__':
     queue_origin = os.environ.get('MEMORY_VISUAL_TEST_BASE_ORIGIN')
     queue_secret = (read_small(credential.with_name('queue-base-token'), 66).decode('ascii').strip()
                     if queue_origin else None)
+    health_path=credential.with_name('runtime-health-token')
+    health=(digest(read_small(Path(__file__).resolve(strict=True),64_000)),
+            read_small(health_path,66).decode('ascii').strip()) if health_path.is_file() else None
     with make_server(ROOT / mode, secret, int(port), environment=mode,
-                     queue_origin=queue_origin, queue_token=queue_secret) as server:
+                     queue_origin=queue_origin, queue_token=queue_secret, runtime_health=health) as server:
         server.serve_forever()

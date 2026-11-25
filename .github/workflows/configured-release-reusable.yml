@@ -104,6 +104,7 @@ jobs:
           RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           RELEASE_GATEWAY_TOKEN: ${{ secrets.RELEASE_GATEWAY_TOKEN }}
+          VISUAL_TEST_RUNTIME_REQUIRED: ${{ vars.VISUAL_TEST_RUNTIME_REQUIRED }}
         run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy test
       - name: Preserve TEST evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

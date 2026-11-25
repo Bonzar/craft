@@ -60,13 +60,22 @@ def registry(root, ops):
         return visual.content(visual.unpack_verified(source,output,revision))
 
     def visual_activate(ctrl,release,content,payload,promotion,env):
+        runtime=env.get('VISUAL_TEST_RUNTIME_REQUIRED')
+        staged=None
+        if ctrl.stage=='test' and runtime not in (None,'','false'):
+            from configured_release_run import github_get
+            scratch=payload/'verified-visual-runtime'
+            descriptor,sha=visual.stage_required_runtime(ctrl.stage,runtime,get=github_get(env['GH_TOKEN']),
+                                                         original=release,static_sha=content.sha256,destination=scratch)
+            staged=(descriptor,sha,scratch/'runtime.zip')
         transport={
             'host':env['RELEASE_SSH_HOST'],'port':env['RELEASE_SSH_PORT'],
             'host_pin':env['RELEASE_SSH_HOST_PIN'],'ssh_key':env['RELEASE_SSH_KEY'],
             'signing_key':env['RELEASE_SIGNING_KEY'],'runner_temp':env['RUNNER_TEMP'],
             'account':ctrl.target.receiver_account,
         }
-        return visual.activate(ctrl.stage,visual.Payload(payload,release.revision,content.sha256,content.manifest_sha256),transport)
+        return visual.activate(ctrl.stage,visual.Payload(payload,release.revision,content.sha256,content.manifest_sha256),
+                               transport, **({'runtime':staged} if staged is not None else {}))
 
     def visual_smoke(ctrl,release,content,payload,env):
         gateway={k:env['RELEASE_'+k.upper()] for k in ('gateway_host','gateway_token')}

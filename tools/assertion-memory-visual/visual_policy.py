@@ -103,5 +103,12 @@ def archive_spec():
 def deploy_verified(stream, expected_sha, *, root):
     """Apply the product adapter after caller verifies its environment/signature authority."""
     import release_core
-    return release_core.deploy(stream, expected_sha, root=Path(root), spec=archive_spec(),
-        validate=validate, hook=make_hook(root), retained=retained)
+    root=Path(root)
+    hook=make_hook(root)
+    def locked(_fd):
+        import os
+        if root.name=='test' and os.path.lexists(root/'runtime'/'.visual-runtime-joint-transition'):
+            raise ValueError('Unsettled TEST Visual joint transition')
+        return hook
+    return release_core.deploy(stream, expected_sha, root=root, spec=archive_spec(),
+        validate=validate, hook=hook, retained=retained, hook_factory=locked)

@@ -142,7 +142,9 @@ class OriginTest(unittest.TestCase):
         queue={'op':'queue_status','limit':50,'offset':55}
         ask=lambda **kwargs:self.request(value=json.dumps(queue),**kwargs)
         self.assertEqual(ask()[0],404) # dark
-        self.server=start(origin.make_server(self.root,TOKEN,port=0,queue_origin=addr,queue_token=queue_token))
+        health_key='7'*64
+        self.server=start(origin.make_server(self.root,TOKEN,port=0,queue_origin=addr,queue_token=queue_token,
+                                            runtime_health=('8'*64,health_key)))
         self.assertEqual(ask(token=None)[0],401)
         queue.update(limit=True)
         self.assertEqual(ask()[0],400)
@@ -172,6 +174,23 @@ class OriginTest(unittest.TestCase):
                                      id='fixture',status='ready',phase='extract',position=56,
                                      available_at='2026-11-25T20:00:00+00:00')])]
         self.assertEqual(ask()[0],200)
+        preserved=snapshot['queues']
+        snapshot['queues']=[]
+        cli=http.client.HTTPConnection(*self.server.server_address)
+        with self.subTest('runtime health is local and independently authorized'):
+            try:
+                cli.request('GET','/__visual-runtime-health',headers={'Authorization':'Bearer '+TOKEN})
+                response=cli.getresponse()
+                self.assertEqual(response.status,401)
+                response.read()
+                cli.request('GET','/__visual-runtime-health',headers={'Authorization':'Bearer '+health_key})
+                response=cli.getresponse()
+                self.assertEqual(response.status,200)
+                self.assertEqual(json.loads(response.read()),{'stage':'test','runtime_entry_sha':'8'*64,
+                     'static_digest':self.release,'queue_ready':True})
+            finally:
+                cli.close()
+        snapshot['queues']=preserved
         snapshot['queues'][0]['items'][0]['unexpected_content']='not part of the contract'
         self.assertEqual(ask()[0],503)
         self.assertEqual(self.request()[0],200) # legacy asset unaffected
