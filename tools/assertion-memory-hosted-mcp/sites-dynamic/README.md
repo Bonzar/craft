@@ -90,17 +90,18 @@ types or names, separately verify native plugin inventory refresh; server
 
 ## Switching the private Sites to the full Base catalog
 
-Once the matching Base release is active, the existing root-owned lane profile
-can set `sites_full_catalog: true` in its private operations configuration.
-This requires both existing scoped credentials and the typed Base registry.
-Neither the Sites identity/access list nor existing machine credentials change.
+The matching Base release widens the catalog automatically for the owner-only
+Sites lanes already provisioned with both route credentials. A read-only lane
+without an authenticated effects route stays narrow. No persistent host
+configuration changes are required. The Sites identity/access list and
+existing machine credentials do not change.
 The VM serves the same canonical descriptors as the machine catalog, partitioned
 by read-only annotation across the two existing endpoints. Sites does not name
 or describe any method. The two endpoints still authorize their own credentials
 and invocations using their respective catalog digests. Absent the flag, the
 previous five-tool rollout remains unchanged.
 
-Roll out TEST first. After enabling the full flag, compare authenticated native
+Roll out TEST first. After deploying Base, compare authenticated native
 `tools/list` to the Base registry, check a source and its snapshot, and invoke
 `memory_query` using only fictional data. Verify both a saved answer and a
 request requiring model work; don't infer that generation works from discovery.
@@ -111,4 +112,4 @@ is intentionally bounded and does not promise the machine endpoint's large
 binary transfer allowance; use the machine API for large artifacts. Check that
 the native client's published inventory refreshes, through the existing Sites
 release process if needed. Promote the exact Base/Sites artifacts only after
-those TEST checks. Roll back the opt-in (or the Base release) if necessary.
+those TEST checks. Roll back the Base release to restore the prior catalog.
