@@ -7,6 +7,7 @@ import zlib
 from datetime import datetime,timezone
 from uuid import uuid4
 
+from . import query_timing as timing
 from .model import ModelError,ProcessingCancelled,check_processing_cancelled,format_prompt
 from .usage_context import observe_attempt_usage
 from .diagnostic_privacy import restricted, redact, ProtectedContextError, diagnostic_hash
@@ -74,9 +75,14 @@ class ThoughtTrace:
 
     def call(self,model,request,bindings=(),stage=None):
         wire=format_prompt(request);call_id=str(uuid4());stage=stage or request.task
+        model_phase = timing.model_stage(stage)
+        with timing.bind(run_id=self.id, call_id=call_id, model_phase=model_phase), timing.span(model_phase, start=True):
+            return self._call(model, request, bindings, stage, wire, call_id)
+
+    def _call(self,model,request,bindings,stage,wire,call_id):
         bound=_json([] if restricted() else bindings)
         if not self.accounting.meta:self.bind_model(model)
-        with self.store.transaction(write=True) as db:
+        with timing.span('trace_request_write'), self.store.transaction(write=True) as db:
             request_hash=self._payload(db,wire)
             self._request_hash=request_hash
             db.execute('INSERT INTO memory_thought_model_calls '
@@ -86,13 +92,13 @@ class ThoughtTrace:
         started=time.monotonic();usage={};status='failed';response_hash=None;error=None
         try:
             check_processing_cancelled()
-            with observe_attempt_usage(usage.update):
+            with timing.span('provider_attempt', start=True), observe_attempt_usage(usage.update):
                 result=model(request)
             check_processing_cancelled()
             if format_prompt(request)!=wire:
                 raise ModelError('thought model input mutated during acquisition')
             body=result if isinstance(result,str) else _json(result)
-            with self.store.transaction(write=True) as db:
+            with timing.span('trace_response_write'), self.store.transaction(write=True) as db:
                 response_hash=self._payload(db,body)
             status='succeeded'
             return result

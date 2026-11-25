@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from . import query_timing as timing
 from .model import ModelError, SemanticUnavailable
 from .thought_engine import ThoughtDetailNeeded, empty_material
 from .thought_engine_contract import CONTENT_RULES, exact_fields, semantic_text
@@ -75,6 +76,7 @@ def _record(engine, thought, *, role, full=False, option=None):
     return {'role': 'neighbor_option', **content}
 
 
+@timing.timed('answer_neighborhood')
 def _material(engine, question, selected, neighborhood, additional):
     records, bindings, full_keys = {}, {}, {_key(row) for row in (selected, *additional)}
     catalogs = [neighborhood(engine, row, question) for row in (selected, *additional)]
@@ -124,6 +126,7 @@ def support_fingerprint(records, bindings):
     return hashlib.sha256(json.dumps(sorted(pairs), ensure_ascii=False).encode()).hexdigest()
 
 
+@timing.timed('gap_search')
 def _lookup_gap(engine, question, gap, bindings):
     excluded = {basis['thought_id'] for basis in bindings if 'thought_id' in basis}
     rows = engine.retrieve(gap, limit=5, exclude_ids=excluded)

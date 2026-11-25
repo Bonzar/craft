@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict
+from uuid import uuid4
 
+from . import query_timing as timing
 from .model import ModelProviderUnavailable, SemanticUnavailable
 from .service import MemoryService, _text_page, _request_usage
 from .storage import background_write_retry
@@ -101,6 +103,7 @@ class ThoughtService(MemoryService):
                 return None
             return query_diagnostics(self, self._answer_payload(thought, scope, valid_as_of, recorded_as_of), scope)
 
+    @timing.timed('answer_payload')
     def _answer_payload(self, thought, scope, valid_as_of, recorded_as_of):
         page = self.source(thought.id, section='text', snapshot_id=thought.version)
         return {'answer': page['content'], 'thought': thought_descriptor(thought, self.engine.question_texts(thought)),
@@ -112,78 +115,85 @@ class ThoughtService(MemoryService):
 
     def query(self, query, scope=None, valid_as_of=None, recorded_as_of=None, *, request_session_id=None):
         sessions = () if request_session_id is None else normalize_session_ids((request_session_id,))
-        with processing_cohort(sessions):
-            return self._query(query, scope, valid_as_of, recorded_as_of, request_session_id=request_session_id)
+        with timing.bind(trace_id=None if timing.active() else uuid4().hex), processing_cohort(sessions):
+            with timing.span('query_total', start=True):
+                return self._query(query, scope, valid_as_of, recorded_as_of, request_session_id=request_session_id)
 
     def _query(self, query, scope=None, valid_as_of=None, recorded_as_of=None, *, request_session_id=None):
         if not isinstance(query, str) or not query.strip() or len(query) > 8000:
             raise ValueError('query must contain between 1 and 8000 characters')
         from .thought_selection import ThoughtSelection
-        selection = (ThoughtSelection(self.thoughts, scope=scope, valid_as_of=valid_as_of,
-                     recorded_as_of=recorded_as_of) if any(value is not None for value in
-                     (scope, valid_as_of, recorded_as_of)) else self.thoughts)
+        with timing.span('snapshot'):
+            selection = (ThoughtSelection(self.thoughts, scope=scope, valid_as_of=valid_as_of,
+                         recorded_as_of=recorded_as_of) if any(value is not None for value in
+                         (scope, valid_as_of, recorded_as_of)) else self.thoughts)
         started = time.monotonic()
         with background_write_retry(), query_usage_trace() as usage_id:
             with self.store.transaction() as db:
                 prior_version = db.execute('SELECT coalesce(max(rowid),0) FROM memory_thought_versions').fetchone()[0]
             trace = ThoughtTrace(self.store, 'query', {'question': query, 'request_session_id': request_session_id})
-            engine = traced_engine(selection, self.engine.model, self.engine.candidates, trace,
-                                   retrieval=self.engine.retrieval)
-            try:
-                from .thought_query_replay import query_replay
-                with query_replay(engine, trace, {'question': query, 'scope': scope,
-                        'valid_as_of': valid_as_of, 'recorded_as_of': recorded_as_of}):
-                    thought = engine.answer(query)
-            except SemanticReviewRejected as error:
-                trace.record('query_outcome', details={'answer_accepted': False,
-                    'error': 'semantic_review_rejected', 'reason': error.reason})
-                trace.finish('failed')
-                result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
-                          'answer_continuations': [], 'run_id': trace.id,
-                          'answer_error': {'code': 'semantic_review_rejected',
-                                           'message': 'Проверка не подтвердила ответ даже после исправления.'}}
-            except ModelProviderUnavailable as error:
-                trace.record('query_outcome', details={'answer_accepted': False, 'error': error.code})
-                trace.finish('failed')
-                result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
-                          'answer_continuations': [], 'run_id': trace.id,
-                          'answer_error': {'code': error.code, 'message': 'Модель Codex недоступна.'}}
-            except PartialMemoryAnswer as partial:
-                trace.record('query_outcome', details={'answer_accepted':False, 'partial_answer':True,
-                    'missing_question':partial.missing_question,'thought_id':partial.thought.id})
-                trace.finish('knowledge_limit')
-                result = self._answer_payload(partial.thought,scope,valid_as_of,recorded_as_of)
-                result.update(answer_accepted=False,partial_answer=True,run_id=trace.id,
-                    knowledge_limit='В проверенных материалах нет подтверждения для части вопроса.',
-                    missing_question=partial.missing_question)
-            except SemanticUnavailable as error:
-                trace.record('knowledge_limit', details={'reason': str(error)})
-                trace.finish('knowledge_limit')
-                result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
-                          'knowledge_limit': str(error), 'run_id': trace.id}
-                if getattr(error, 'empty_ground', False):
-                    result.update(answer=EMPTY_RETRIEVED_MATERIAL_NOTICE, answer_continuations=[],
-                        answer_metadata={'notice':{'purpose':'knowledge_limit_notice', 'scope':'retrieved_material',
-                            'text':EMPTY_RETRIEVED_MATERIAL_NOTICE, 'notice_payload_complete':True}})
-            except BaseException:
-                trace.finish('failed')
-                raise
-            else:
-                with self.store.transaction() as db:
-                    published = db.execute('SELECT rowid FROM memory_thought_versions WHERE thought_id=? AND version=?',
-                                           (thought.id,thought.version)).fetchone()[0] > prior_version
-                if published and not thought.metadata.get('selection_context'):
-                    self.work.enqueue([thought])
-                trace.record('query_outcome',details={'answer_accepted':True,'thought':{'thought_id':thought.id,'version':thought.version},'published':published})
-                trace.finish()
-                result = {**self._answer_payload(thought, scope, valid_as_of, recorded_as_of), 'run_id': trace.id}
-                if engine._is_parallel_alternative(thought):
-                    result['knowledge_limit'] = ('Сохранён параллельно подготовленный проверенный вариант. '
-                        'Его совместимость с другим ответом на тот же вопрос ещё не установлена; '
-                        'порядок завершения не определяет, какой вариант верен.')
-        result['request_usage']=_request_usage(self.store.path,usage_id,round((time.monotonic()-started)*1000))
-        from .thought_status import query_diagnostics
-        return query_diagnostics(self,result,scope)
+            with timing.bind(run_id=trace.id):
+                engine = traced_engine(selection, self.engine.model, self.engine.candidates, trace,
+                                       retrieval=self.engine.retrieval)
+                try:
+                    from .thought_query_replay import query_replay
+                    with timing.span('answer'), query_replay(engine, trace, {'question': query, 'scope': scope,
+                            'valid_as_of': valid_as_of, 'recorded_as_of': recorded_as_of}):
+                        thought = engine.answer(query)
+                except SemanticReviewRejected as error:
+                    trace.record('query_outcome', details={'answer_accepted': False,
+                        'error': 'semantic_review_rejected', 'reason': error.reason})
+                    trace.finish('failed')
+                    result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
+                              'answer_continuations': [], 'run_id': trace.id,
+                              'answer_error': {'code': 'semantic_review_rejected',
+                                               'message': 'Проверка не подтвердила ответ даже после исправления.'}}
+                except ModelProviderUnavailable as error:
+                    trace.record('query_outcome', details={'answer_accepted': False, 'error': error.code})
+                    trace.finish('failed')
+                    result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
+                              'answer_continuations': [], 'run_id': trace.id,
+                              'answer_error': {'code': error.code, 'message': 'Модель Codex недоступна.'}}
+                except PartialMemoryAnswer as partial:
+                    trace.record('query_outcome', details={'answer_accepted':False, 'partial_answer':True,
+                        'missing_question':partial.missing_question,'thought_id':partial.thought.id})
+                    trace.finish('knowledge_limit')
+                    result = self._answer_payload(partial.thought,scope,valid_as_of,recorded_as_of)
+                    result.update(answer_accepted=False,partial_answer=True,run_id=trace.id,
+                        knowledge_limit='В проверенных материалах нет подтверждения для части вопроса.',
+                        missing_question=partial.missing_question)
+                except SemanticUnavailable as error:
+                    trace.record('knowledge_limit', details={'reason': str(error)})
+                    trace.finish('knowledge_limit')
+                    result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
+                              'knowledge_limit': str(error), 'run_id': trace.id}
+                    if getattr(error, 'empty_ground', False):
+                        result.update(answer=EMPTY_RETRIEVED_MATERIAL_NOTICE, answer_continuations=[],
+                            answer_metadata={'notice':{'purpose':'knowledge_limit_notice', 'scope':'retrieved_material',
+                                'text':EMPTY_RETRIEVED_MATERIAL_NOTICE, 'notice_payload_complete':True}})
+                except BaseException:
+                    trace.finish('failed')
+                    raise
+                else:
+                    with self.store.transaction() as db:
+                        published = db.execute('SELECT rowid FROM memory_thought_versions WHERE thought_id=? AND version=?',
+                                               (thought.id,thought.version)).fetchone()[0] > prior_version
+                    if published and not thought.metadata.get('selection_context'):
+                        self.work.enqueue([thought])
+                    trace.record('query_outcome',details={'answer_accepted':True,'thought':{'thought_id':thought.id,'version':thought.version},'published':published})
+                    trace.finish()
+                    result = {**self._answer_payload(thought, scope, valid_as_of, recorded_as_of), 'run_id': trace.id}
+                    if engine._is_parallel_alternative(thought):
+                        result['knowledge_limit'] = ('Сохранён параллельно подготовленный проверенный вариант. '
+                            'Его совместимость с другим ответом на тот же вопрос ещё не установлена; '
+                            'порядок завершения не определяет, какой вариант верен.')
+        with timing.bind(run_id=trace.id):
+            with timing.span('usage_accounting'):
+                result['request_usage']=_request_usage(self.store.path,usage_id,round((time.monotonic()-started)*1000))
+            timing.emit('query_outcome', 'partial' if result.get('partial_answer') else
+                        'failed' if result.get('answer_error') else 'ok' if result.get('answer_accepted') else 'miss')
+            from .thought_status import query_diagnostics
+            return query_diagnostics(self,result,scope)
 
     def source(self, record_id, start=None, end=None, *, section='overview', offset=0, limit=6000, snapshot_id=None):
         thought = self.thoughts.get(record_id, snapshot_id)
