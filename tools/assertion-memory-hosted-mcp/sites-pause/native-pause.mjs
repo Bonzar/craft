@@ -25,18 +25,22 @@ export function makeTestPause({origin,gateway,owner,fetcher=(...a)=>fetch(...a),
  return async (req,env)=>{
   const u=new URL(req.url), prepare=u.pathname===PATH+'/prepare';
   if(!prepare&&u.pathname!==PATH)return null;
-  if(env.MEMORY_TEST_PAUSE_ENABLED!=='true'||env.MEMORY_GRAPH_MODE!=='test'||u.origin!==origin||u.search)return fail(404,'not_found');
+  const live=env.MEMORY_TEST_PAUSE_ENABLED==='true', attest=env.MEMORY_TEST_PAUSE_OWNER_ATTEST_ONLY==='true';
+  if(live===attest||(attest&&!prepare)||env.MEMORY_GRAPH_MODE!=='test'||u.origin!==origin||u.search)return fail(404,'not_found');
   if(req.method!==(prepare?'POST':'PUT'))return fail(405,'invalid_method');
   if(req.headers.get('origin')!==origin||req.headers.get('sec-fetch-site')!=='same-origin')return fail(403,'origin_denied');
   if(!jsonType(req.headers))return fail(415,'invalid_request');
-  const upstream=env.MEMORY_TEST_PAUSE_UPSTREAM_KEY,csrf=env.MEMORY_TEST_PAUSE_CSRF_KEY;
-  if(!HEX.test(upstream??'')||!HEX.test(csrf??'')||upstream===csrf||
-     Object.entries(env).some(([k,v])=>!['MEMORY_TEST_PAUSE_UPSTREAM_KEY','MEMORY_TEST_PAUSE_CSRF_KEY'].includes(k)&&/(?:_KEY|_TOKEN)$/.test(k)&&(v===upstream||v===csrf)))return fail(503,'pause_unavailable');
   let actor,body;
   try{actor=await owner(req,env);}catch{return fail(403,'owner_required');}
   if(typeof actor!=='string'||!HEX.test(actor))return fail(403,'owner_required');
   try{body=await json(req,512);}catch{return fail(400,'invalid_request');}
   if(prepare?!exact(body,[]):(!exact(body,['stage','paused','expected_revision'])||body.stage!=='test'||typeof body.paused!=='boolean'||typeof body.expected_revision!=='string'||!REV.test(body.expected_revision)))return fail(400,'invalid_request');
+  // Bootstrap the static Base owner pin from the same actual owner proof as live
+  // writes. This short-lived mode returns no CSRF cookie and never calls Base.
+  if(attest)return out(200,{stage:'test',owner_sha256:actor});
+  const upstream=env.MEMORY_TEST_PAUSE_UPSTREAM_KEY,csrf=env.MEMORY_TEST_PAUSE_CSRF_KEY;
+  if(!HEX.test(upstream??'')||!HEX.test(csrf??'')||upstream===csrf||
+     Object.entries(env).some(([k,v])=>!['MEMORY_TEST_PAUSE_UPSTREAM_KEY','MEMORY_TEST_PAUSE_CSRF_KEY'].includes(k)&&/(?:_KEY|_TOKEN)$/.test(k)&&(v===upstream||v===csrf)))return fail(503,'pause_unavailable');
   const s=Math.floor(now()/1000), identity=['queue-pause-csrf-v1',origin,actor];
   if(!prepare){
    const raw=req.headers.get('cookie')??'';

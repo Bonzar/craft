@@ -24,24 +24,29 @@ hosted_runtime=(
 # Only exact non-secret operator files, not arbitrary contents of the hosted
 # tree or a runtime key/config directory. The receiver does not execute them.
 monium_operator_assets=(
-  tools/assertion-memory-hosted-mcp/MONIUM-GENAI-TRACES.md
-  tools/assertion-memory-hosted-mcp/monium-trace-collector/README.md
   tools/assertion-memory-hosted-mcp/monium-trace-collector/assertion-monium-traces@.service
   tools/assertion-memory-hosted-mcp/monium-trace-collector/common.yaml
   tools/assertion-memory-hosted-mcp/monium-trace-collector/test.yaml
   tools/assertion-memory-hosted-mcp/monium-trace-collector/prod.yaml
-  tools/assertion-memory-hosted-mcp/monium-trace-collector/smoke.py
 )
 hosted_release_files=("${hosted_runtime[@]}" "${monium_operator_assets[@]}")
-git archive "$sha" -- prototypes/assertion_memory apps/graph_viewer "${hosted_release_files[@]}" | tar -x -C "$stage"
-# These exact helpers are CI-generated or copied from the QA-only tools directory.
-install -m 600 "$root/tools/assertion-memory-qa/smoke_local.py" "$stage/smoke_local.py"
-sed -i 's/resolve().parents\[2\]/resolve().parent/' "$stage/smoke_local.py"
-install -m 600 "$root/tools/assertion-memory-qa/synthetic_fixture.py" "$stage/synthetic_fixture.py"
-install -m 600 "$root/tools/assertion-memory-qa/live-smoke.py" "$stage/live-smoke.py"
-install -m 600 "$root/apps/graph_viewer/requirements.txt" "$stage/requirements-graph-original.txt"
-grep -v '^fastembed==' "$stage/requirements-graph-original.txt" > "$stage/requirements-graph-lexical.txt"
+# Committed application modules, not the repository/test/web source trees.
+# Pin the two dependency lists explicitly and retain the legacy QA graph server.
+application_runtime=(
+  prototypes/assertion_memory/requirements-mcp.txt
+  prototypes/assertion_memory/requirements-runtime.txt
+)
+while IFS= read -r -d '' path; do
+  case "$path" in
+    */tests/*|*/test_*|*_test.py|*/experiments/*|*/offline_test_process.py) ;;
+    *.py) application_runtime+=("$path") ;;
+  esac
+done < <(git ls-tree -rz --name-only "$sha" -- prototypes/assertion_memory apps/graph_viewer/server)
+committed_runtime=("${application_runtime[@]}" "${hosted_release_files[@]}")
+git archive "$sha" -- "${committed_runtime[@]}" | tar -x -C "$stage"
+git show "$sha:apps/graph_viewer/requirements.txt" | grep -v '^fastembed==' > "$stage/requirements-graph-lexical.txt"
 test -s "$root/apps/graph_viewer/web/dist/index.html"
+mkdir -p "$stage/apps/graph_viewer/web"
 cp -R "$root/apps/graph_viewer/web/dist" "$stage/apps/graph_viewer/web/"
 printf '%s\n' "$sha" > "$stage/REVISION"
 # Only the already-verified GitHub Releases job can attach a canonical tag;
@@ -64,7 +69,7 @@ name="assertion-memory-qa-$sha.tar.gz"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -C "$stage" -cf - . | gzip -n > "$dest/$name"
 (cd "$dest"; sha256sum "$name" > "$name.sha256")
 # Qualify through the shared receiver without rewriting the immutable bytes.
-PYTHONPATH="$root/tools/assertion-memory-release" python3 - "$dest/$name" "$sha" "${hosted_release_files[@]}" <<'PYQUAL'
+PYTHONPATH="$root/tools/assertion-memory-release" python3 - "$dest/$name" "$sha" "${committed_runtime[@]}" <<'PYQUAL'
 from hashlib import file_digest
 from pathlib import Path, PurePosixPath
 import subprocess
@@ -77,15 +82,20 @@ with path.open('rb') as archive:
 def qualify(staged):
     key = validate(staged, revision, digest)
     expected = {PurePosixPath(name) for name in sys.argv[3:]}
-    prefix = PurePosixPath("tools/assertion-memory-hosted-mcp")
-    manifest = read_manifest(staged)
-    actual = {name for name in manifest if prefix in name.parents}
-    if len(expected) != len(sys.argv[3:]) or actual != expected:
-        raise ValueError("hosted_release_membership")
+    required = {PurePosixPath(name) for name in (
+        "REVISION", "QA_PROFILE", "mcp-tool-schema.json", "requirements-graph-lexical.txt"
+    )}
+    if (staged / "BASE_RELEASE_TAG").is_file():
+        required.add(PurePosixPath("BASE_RELEASE_TAG"))
+    prefix = PurePosixPath("apps/graph_viewer/web/dist")
+    actual = set(read_manifest(staged))
+    dist = {name for name in actual if prefix in name.parents and name.suffix != ".map"}
+    if len(expected) != len(sys.argv[3:]) or actual != expected | required | dist:
+        raise ValueError("base_runtime_membership")
     for name in expected:
         committed = subprocess.check_output(["git", "show", f"{revision}:{name}"])
         if committed != (staged / name).read_bytes():
-            raise ValueError("hosted_release_source_mismatch")
+            raise ValueError("base_runtime_source_mismatch")
     return key
 inspect(path, digest, spec=SPEC, validate=qualify)
 PYQUAL
