@@ -47,7 +47,7 @@ class BaseProvider(TestCase):
                     'GITHUB_WORKFLOW_REF':BASE.caller,'GITHUB_EVENT_NAME':'workflow_run','GITHUB_RUN_ATTEMPT':'1',
                     'GITHUB_JOB':'test','PROFILE':'base','GRAPH_TAG':self.tag,'GITHUB_RUN_ID':self.run_id,'GITHUB_SHA':self.control_sha}
         event={'action':'completed','workflow_run':data[root+'/actions/runs/23']}
-        data[root+'/actions/runs/23/artifacts?per_page=2']=data[root+'/actions/artifacts?per_page=2&name='+product.artifact_prefix+'22-'+self.revision]
+        data[root+'/actions/runs/23/artifacts?per_page=2&name='+product.artifact_prefix+'22-'+self.revision]=data[root+'/actions/artifacts?per_page=2&name='+product.artifact_prefix+'22-'+self.revision]
         automatic=b.control(BASE,normal_env,'test',event)
         self.assertEqual(automatic.upstream,b.Upstream('23',self.tag,self.revision))
         self.assertEqual(b.original(data.__getitem__,automatic,asdict(self.release)),self.release)
