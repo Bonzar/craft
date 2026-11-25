@@ -2,6 +2,7 @@
 from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 import fcntl
+from hashlib import sha256
 import json
 import logging
 import os
@@ -16,6 +17,11 @@ HEX = re.compile(r'[0-9a-f]{64}\Z')
 LIMIT = 32 * 1024
 KEYS = frozenset(('stage','release_version','generation','device','inode','processing_session_ids',
                   'auto_process_fresh_mac','model_configured','interactive_enabled'))
+
+
+def release_generation(revision, archive, tag, stage):
+    data={'revision':revision,'archive':archive,'tag':tag,'lane':stage}
+    return sha256(json.dumps(data,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode('ascii')).hexdigest()
 
 
 def projection_path(stage):

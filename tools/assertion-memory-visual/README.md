@@ -117,3 +117,26 @@ polling while resolving streaming support; do not add a direct public origin.
 The regular owner web session still provides exact-origin and CSRF security
 for its own mutations; the graph read bearer cannot enroll devices or clear
 the database. Those operations need their real independent backend wiring.
+
+### Sites-facing TEST graph reader
+
+The existing Sites wrapper at `/opt/assertion-memory-site-test-graph/start.py`
+imports the release-managed Graph web service without CLI dashboard options.
+For this verified TEST-only reader, its systemd unit may set only the two
+nonsecret options below in a reviewed drop-in:
+
+```ini
+[Service]
+Environment=ASSERTION_MEMORY_QUEUE_DASHBOARD_STAGE=test
+Environment=ASSERTION_MEMORY_QUEUE_DASHBOARD_PROJECTION=/run/assertion-memory-dashboard/test/scheduler.json
+```
+
+The fallback requires the actual and effective `assertion-test-deploy` UID,
+the exact canonical TEST source, exact projection path and live active Base
+release source. It stays dark for PROD, mismatched releases, unknown identities
+and invalid settings without disrupting ordinary graph requests. The runtime
+projection remains independent of Graph and never exposes configuration or
+write capabilities. Deploy the Base release (source verified via
+`current`) before restarting the existing Sites-facing unit. No edits to the
+wrapper source are needed. Native dashboard query and streaming smoke checks
+are still mandatory.
