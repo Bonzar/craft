@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 
+from .capture_batch import active_member
 from .processing_control import Conflict
 from .queue_session_control import _exists
 
@@ -57,7 +58,8 @@ def annotate(db,data):
             continue
         for item in queue['items']:
             row=_state(db,q,item['id'])
-            if (rev:=revision(row,q,item['id'])) is not None:
+            if (not (q=='source' and active_member(db,item['id']))
+                    and (rev:=revision(row,q,item['id'])) is not None):
                 item['remove_revision']=rev
             if q=='source' and (preview:=preview_revision(row,item['id'])) is not None:
                 item['preview_revision']=preview
@@ -115,6 +117,8 @@ def remove(db,*,stage,queue_id,item_id,expected_revision,now):
     if stage!='test' or not db.in_transaction:
         raise ValueError('Invalid TEST queue transaction')
     check_request(queue_id,item_id)
+    if queue_id=='source' and active_member(db,item_id):
+        raise Conflict('Active raw batch cannot be removed one item at a time')
     row=_state(db,queue_id,item_id)
     current=revision(row,queue_id,item_id)
     if current is None or current!=expected_revision:

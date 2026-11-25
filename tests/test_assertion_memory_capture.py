@@ -82,6 +82,23 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual([m['arguments']['text'] for m in messages], ['yes', 'proposal'])
         self.assertTrue(all('/session/physical/turn/one/message/' in m['arguments']['source'] for m in messages))
 
+    def test_complete_turn_seals_exact_members_and_retains_individual_records(self):
+        self.config['capture_batch'] = True
+        self.turn('first')
+        self.pair('second',mid='u2')
+        self.capture.register(self.store,self.raw)
+        self.poll()
+        self.assertEqual(self.messages(),[])
+        self.assistant('final')
+        self.assertEqual(self.poll()['queued'],3)
+        args=[m['arguments'] for m in self.messages()]
+        marker=args[0]['_capture_batch']
+        self.assertRegex(marker['id'],r'^[0-9a-f]{64}$')
+        self.assertEqual(marker['message_ids'],[m['message_id'] for m in args])
+        self.assertEqual([m['role'] for m in args],['user','user','assistant'])
+        self.assertEqual([m['_capture_batch'] for m in args],[marker]*3)
+        self.assertEqual(self.poll()['queued'],0)
+
     def test_all_user_messages_wait_for_the_confirmed_final_reply(self):
         from synthetic_memory_adapter.frontier import Coordinator
         from .test_assertion_memory_frontier import FakeRemote

@@ -20,6 +20,10 @@ def authenticated_fresh_mac():
         _AUTH.reset(token)
 
 
+def is_authenticated_fresh_mac():
+    return _AUTH.get()
+
+
 def _schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS memory_fresh_mac_streams ('
                'session_id TEXT PRIMARY KEY, stream_id TEXT UNIQUE NOT NULL)')

@@ -61,3 +61,29 @@ For rollback, disable the flag via the normal approved configuration path.
 This does not delete raw receipts, thoughts, or previously committed admissions.
 A running worker must be drained by the standard release lifecycle before
 replacing its configuration; never interrupt the database writer in-place.
+
+## Atomically processing a complete source batch
+
+The Base machine catalog advertises `memory_capture_batch` only to the
+configured fresh Mac credential. Other clients and legacy MCP keep
+`memory_capture_message` unchanged. The batch is an ordered list of ordinary
+raw messages from one authenticated stream; Base does not interpret the
+occasion or wait for another member. The stable batch ID and exact raw
+members commit in one transaction, with individually identifiable receipts.
+
+Roll out Base first. On the Mac, opt-in at a fresh collector cutover with
+`capture.capture_batch: true` in the installed machine binding. Follow the
+existing immutable module install and fresh cutover procedure above; do not
+switch an active old/outbox cohort in place or replay pending old entries.
+Native capture sends a complete batch only after its local completion proof.
+Dropped acknowledgements retry the same batch and cannot duplicate raw
+events or enqueue a second draft. Keep the ordinary PROD automatic
+selection empty and the existing owner-authorized fresh-Mac mode enabled.
+
+The normal shared worker runs one group construction for the exact batch
+and may verify evidence separately per source. It does not silently fall
+back to individual construction. If dispatch is interrupted or verification
+fails, raw records stay present and the batch requires operator review;
+there is no automatic second construction. A different injected extractor
+without a group constructor also fails closed. This release does not
+enable batch capture on the Mac on its own.

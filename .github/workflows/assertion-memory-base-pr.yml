@@ -64,6 +64,7 @@ jobs:
             prototypes.assertion_memory.tests.test_source_lifecycle_boundary \
             prototypes.assertion_memory.tests.test_thought_processing_selection \
             prototypes.assertion_memory.tests.test_fresh_mac_processing \
+            prototypes.assertion_memory.tests.test_capture_batch \
             prototypes.assertion_memory.tests.test_thought_worker \
             tests.test_model_profile_replay \
             tests.test_model_review_routing

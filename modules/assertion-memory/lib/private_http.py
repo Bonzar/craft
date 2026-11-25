@@ -48,7 +48,7 @@ class MachineClient:
         if expected is not None and proof!=expected:raise ValueError('release changed')
         return received,proof
     def call(self,name,arguments):
-        if name not in {'memory_ingest_register','memory_ingest_report','memory_store_artifact','memory_capture_message'}:
+        if name not in {'memory_ingest_register','memory_ingest_report','memory_store_artifact','memory_capture_message','memory_capture_batch'}:
             raise TransportError('Operation outside the Mac collector')
         try:
             token=self.credential()

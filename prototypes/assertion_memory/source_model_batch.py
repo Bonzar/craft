@@ -13,7 +13,7 @@ MAX_BATCH_CHARACTERS = 48000
 MAX_EXPLICIT_BATCH_CHARACTERS = 256000
 
 
-def pending_sources(queue, session_id, event_ids):
+def pending_sources(queue, session_id, event_ids, *, capture_batch_id=None):
     events = []
     now = queue._time()
     for event_id in event_ids:
@@ -21,10 +21,14 @@ def pending_sources(queue, session_id, event_ids):
         job = queue.get(event_id)
         if event is None or canonical_session_id(event) != session_id or not event_eligibility(event)['allowed']:
             raise ValueError(f'source event is outside the admitted session: {event_id}')
+        if event.metadata.get('capture_batch_id') != capture_batch_id:
+            raise ValueError('source event belongs to a different capture dispatch mode')
         if (job is None or job.event_id != event_id or job.phase != 'extract'
                 or job.extracted_ids or not _is_ready(queue, job, now)):
             raise ValueError(f'source event is not ready for initial generation: {event_id}')
         events.append(event)
+    if capture_batch_id is not None:
+        return events  # exact producer order, not adjacent clocks
     return sorted(events, key=lambda event: (
         event.metadata.get('source_message_at') or event.recorded_at, event.id))
 

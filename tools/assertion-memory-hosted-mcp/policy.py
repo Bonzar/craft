@@ -15,6 +15,7 @@ OPERATIONS={
  "memory_store_artifact":"ingest",
 }
 EFFECTS=frozenset(('memory_capture_message','memory_process'))
+BATCH="memory_capture_batch"
 QUERY="memory_query"
 SEARCH="memory_search"
 READ=frozenset(("baseline_read","sensitive_read"))
@@ -38,6 +39,7 @@ def compile_catalog(schema_doc, authority, *, include_effects=False, require_fun
  schemas=schema_doc.get("tools")
  expected=set(OPERATIONS)
  if require_functional:expected.add(SEARCH)
+ if require_functional and isinstance(schemas,dict) and BATCH in schemas:expected.add(BATCH)
  if type(schemas) is not dict or set(schemas)!=expected:
   raise ValueError("Unclassified canonical schema drift")
  if digest(schemas)!=authority["schema_sha256"]:
@@ -48,6 +50,7 @@ def compile_catalog(schema_doc, authority, *, include_effects=False, require_fun
   raise ValueError("Invalid canonical descriptions")
  entries={}
  classes=OPERATIONS|({SEARCH:'baseline_read'} if require_functional else {})
+ if BATCH in expected:classes[BATCH]='ingest'
  for name, classification in sorted(classes.items()):
   pristine=deepcopy(schemas[name])
   schema=deepcopy(pristine)

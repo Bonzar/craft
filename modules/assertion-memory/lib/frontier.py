@@ -111,8 +111,9 @@ class Coordinator:
         if pending['report_seq']!=value['report_seq'] or snapshot!=value['last_snapshot']:
             self._report(value,force=True)
 
-    def _capture(self,value,row):
+    def _prepare_capture(self,value,row):
         arguments=json.loads(row['arguments'])
+        arguments.pop('_capture_batch',None)
         for aid in arguments.get('artifact_ids',[]):
             artifact=self.db.execute('SELECT * FROM artifacts WHERE artifact_id=?',(aid,)).fetchone()
             if artifact is None:raise ValueError('Missing local attachment bytes; message remains pending')
@@ -127,7 +128,10 @@ class Coordinator:
                     with self.db:self.db.execute('UPDATE artifacts SET attempts=attempts+1,error=? WHERE artifact_id=?',(type(failure).__name__,aid))
                     raise
         delivery={'stream_id':value['stream_id'],'epoch':value['epoch'],'seq':row['seq']}
-        receipt=self.client.call('memory_capture_message',{**arguments,'delivery':delivery})
+        return {**arguments,'delivery':delivery}
+
+    def _record_capture(self,value,row,receipt):
+        arguments=json.loads(row['arguments'])
         event=receipt.get('event',{}) if isinstance(receipt,dict) else {}
         mid=event.get('message_id') or event.get('metadata',{}).get('message_id')
         if (not event.get('id') or event.get('session_id')!=arguments['session_id']
@@ -135,12 +139,35 @@ class Coordinator:
         remote=receipt.get('delivery')
         self._accept(value,remote)
         if remote['observed_seq']<row['seq']:raise ValueError('Delivery receipt lacks observed membership')
+        self.db.execute('UPDATE delivery_sequences SET receipt=? WHERE session_id=? AND message_id=?',
+            (_dump(receipt),arguments['session_id'],arguments['message_id']))
+        self.db.execute("UPDATE messages SET status='acknowledged',attempts=attempts+1,error=NULL,receipt=? WHERE session_id=? AND message_id=?",
+            (_dump(receipt),arguments['session_id'],arguments['message_id']))
+        self._save(value)
+
+    def _capture(self,value,row):
+        receipt=self.client.call('memory_capture_message',self._prepare_capture(value,row))
         with self.db:
-            self.db.execute('UPDATE delivery_sequences SET receipt=? WHERE session_id=? AND message_id=?',
-                (_dump(receipt),arguments['session_id'],arguments['message_id']))
-            self.db.execute("UPDATE messages SET status='acknowledged',attempts=attempts+1,error=NULL,receipt=? WHERE session_id=? AND message_id=?",
-                (_dump(receipt),arguments['session_id'],arguments['message_id']))
-            self._save(value)
+            self._record_capture(value,row,receipt)
+
+    def _capture_batch(self,value,row,marker):
+        members=marker['message_ids']
+        stored=self.db.execute('SELECT m.*,d.seq FROM messages m JOIN delivery_sequences d USING(session_id,message_id) '
+            'WHERE m.session_id=? AND d.seq>=? ORDER BY d.seq LIMIT ?',
+            (value['session_id'],row['seq'],len(members))).fetchall()
+        if [m['message_id'] for m in stored]!=members or any(
+                json.loads(m['arguments']).get('_capture_batch')!=marker for m in stored):
+            raise ValueError('Complete local batch membership could not be proved')
+        receipt=self.client.call('memory_capture_batch',{'batch_id':marker['id'],
+            'messages':[self._prepare_capture(value,member) for member in stored]})
+        if (not isinstance(receipt,dict) or receipt.get('batch_id')!=marker['id']
+                or not isinstance(receipt.get('receipts'),list) or len(receipt['receipts'])!=len(stored)):
+            raise ValueError('Unmatched atomic batch receipt')
+        # Confirm all individual acknowledgements or none; retry exactly this batch on lost response.
+        with self.db:
+            for member,response in zip(stored,receipt['receipts'],strict=True):
+                self._record_capture(value,member,response)
+        return len(stored)
 
     def tick(self,limit=100):
         result={'attempted':0,'acknowledged':0,'stream_errors':0}
@@ -159,14 +186,24 @@ class Coordinator:
                 rows=self.db.execute('SELECT m.*,d.seq FROM messages m JOIN delivery_sequences d USING(session_id,message_id) '
                     'WHERE m.session_id=? AND d.receipt IS NULL ORDER BY d.seq LIMIT ?',
                     (value['session_id'],limit-result['attempted'])).fetchall()
+                through=0
                 for row in rows:
-                    result['attempted']+=1
-                    try:self._capture(value,row)
+                    if row['seq']<=through:continue
+                    try:
+                        marker=json.loads(row['arguments']).get('_capture_batch')
+                        if marker is None:
+                            count=1
+                            result['attempted']+=count
+                            self._capture(value,row)
+                        else:
+                            count=len(marker['message_ids'])
+                            result['attempted']+=count
+                            through=row['seq']+self._capture_batch(value,row,marker)-1
                     except Exception:
                         with self.db:self.db.execute('UPDATE messages SET attempts=attempts+1,error=? WHERE session_id=? AND message_id=?',
                             ('DeliveryReceiptError',row['session_id'],row['message_id']))
                         raise
-                    result['acknowledged']+=1
+                    result['acknowledged']+=count
                 value.update(error=None,delay=1,retry_at=0)
                 with self.db:self._save(value)
             except Exception as failure:
