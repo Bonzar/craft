@@ -214,7 +214,12 @@ class ThoughtQueryGraphTest(unittest.TestCase):
             service = ThoughtService(memory, model)
             thought = service.thoughts.publish(text, question=question,
                 metadata={'verification': 'accepted', 'protocol': 'unified-thought-v1'})
+            self.assertIsNone(service.ready_query(question))
             first = service.query(question)
+            direct = service.ready_query(question)
+            self.assertEqual(direct['answer'],first['answer'])
+            self.assertEqual(direct['view_id'],first['view_id'])
+            self.assertEqual(direct['completeness'],first['completeness'])
             repeat = service.query(question)
             self.assertEqual(first['thought']['id'], thought.id)
             self.assertEqual(repeat['version_id'], first['version_id'])

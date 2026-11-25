@@ -182,6 +182,7 @@ def factory(stage,root,config_dir,legacy_token):
         raise ValueError('Legacy credential cannot authorize private operations')
     catalog=compile_release(source,pins,effects=effect is not None)
     profile=private_sites_profile(stage,tag,caps,catalog)
+    profile['durable_query_jobs'] = profile['sites_full_catalog']
     if effect is not None:
         without=compile_release(source,pins,effects=False)
         profile['read_catalog_sha256']=without['catalog_sha256']
@@ -200,7 +201,37 @@ def factory(stage,root,config_dir,legacy_token):
 
     def mount(config,store,service,background):
         require_scoped_database(stage,root,config.db)
-        operations=create_operations(config,store,background=background,service=service)
+        from prototypes.assertion_memory.mcp_server import WorkerLauncher, _query_with_connection
+        from prototypes.assertion_memory.query_jobs import QueryJobs
+        from prototypes.assertion_memory.storage import MemoryStore
+
+        def query_locked(**args):
+            # The HTTP connection no longer owns this lock while generation runs.
+            live_identity()
+            fd = os.open(root/'deploy.lock', os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+                    raise ValueError('Untrusted release lock')
+                fcntl.flock(fd,fcntl.LOCK_SH | fcntl.LOCK_NB)
+                live_identity()
+                try:
+                    return _query_with_connection(config,**args)
+                finally:
+                    if background:
+                        WorkerLauncher(config).start()
+            finally:
+                os.close(fd)
+
+        def ready_query(**args):
+            live_identity()
+            with MemoryStore(config.db) as own:
+                return config.service(own).ready_query(**args)
+
+        jobs = QueryJobs(config.db,query_locked,ready_query) if profile['durable_query_jobs'] else None
+        operations=create_operations(config,store,background=background,service=service,query_jobs=jobs)
         app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations,machine_digests=machine)
-        return frozenset(paths),effect_lock(app,root,stage,effect,machine)
+        handler = effect_lock(app,root,stage,effect,machine)
+        handler.query_jobs = jobs
+        return frozenset(paths),handler
     return mount

@@ -117,3 +117,14 @@ binary transfer allowance; use the machine API for large artifacts. Check that
 the native client's published inventory refreshes, through the existing Sites
 release process if needed. Promote the exact Base/Sites artifacts only after
 those TEST checks. Roll back the Base release to restore the prior catalog.
+
+For interactive questions, call `memory_query` with a unique
+`query_request_id` when a lost submission might need to be recovered.
+Read `query_state` before acting. For `queued` or `running`, wait at least
+`query_poll_after_ms` then call the same method with only `query_job_id`.
+Do not submit the question again. `completed` is a transport/job state,
+not proof that the answer was accepted. The query lane owns one generation
+slot independently of the capture worker. The legacy direct MCP endpoint
+continues to accept synchronous queries; its old clients do not need to
+supply job fields. A crashed worker returns a failed preserved receipt
+rather than silently running a possibly published query twice.
