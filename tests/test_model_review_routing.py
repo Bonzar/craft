@@ -156,6 +156,9 @@ class ModelReviewRoutingTest(unittest.TestCase):
         selected = {'db': self.db, 'worker_service': dict(
             options, batch_source_construction=True, source_event_ids=('selected-event',))}
         self.assertEqual(_provider_identity(selected), expected)
+        idle = {'db':self.db,'worker_service':dict(options,processing_session_ids=[])}
+        fresh = {'db':self.db,'worker_service':dict(options,processing_session_ids=[],auto_process_fresh_mac=True)}
+        self.assertEqual(_provider_identity(fresh),_provider_identity(idle))
 
 
 if __name__=='__main__':unittest.main()
