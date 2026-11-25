@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from . import thought_processing_selection
 from .processing_control import read_control
+from .queue_owner_actions import priority as owner_priority
 from .thought_processing_selection import (
     maintenance_predicate,
     normalize_session_ids,
@@ -31,10 +32,10 @@ def _page(db, select, args, *, queue_id, status, ordering, limit, offset, exists
     result['total'] = db.execute(query + 'SELECT count(*) FROM snapshot', args).fetchone()[0]
     order = (" ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'ready' THEN 1 "
              "WHEN 'delayed' THEN 2 WHEN 'waiting_origin' THEN 3 WHEN 'paused' THEN 4 ELSE 5 END,"
-             " available,id")
+             " priority DESC,available,id")
     rows = db.execute(query +
         "SELECT id,status,phase,available,"
-        "CASE WHEN status='ready' THEN row_number() OVER (PARTITION BY status ORDER BY available,id) END "
+        "CASE WHEN status='ready' THEN row_number() OVER (PARTITION BY status ORDER BY priority DESC,available,id) END "
         "FROM snapshot" + order + ' LIMIT ? OFFSET ?', (*args, limit, offset))
     result['items'] = [
         dict(id=id_, status=state, phase=phase, position=position,
@@ -90,6 +91,7 @@ def build_queue_status(connection, *, release_version, stage, processing_session
         else:
             selected, args = source_predicate(ids, 'e')
         exists = _has(connection, 'memory_capture_jobs', 'memory_raw_events')
+        priority=owner_priority(connection,'source','j.id','j.updated_at','j.status')
         queues.append(_page(connection, f"""
             SELECT j.id, CASE
                 WHEN j.status='waiting_origin' THEN 'waiting_origin'
@@ -100,14 +102,15 @@ def build_queue_status(connection, *, release_version, stage, processing_session
                 ELSE 'delayed' END AS status,
                 CASE WHEN j.phase IN ('extract','audit','link','refresh','done') THEN j.phase
                      ELSE 'source' END AS phase,
-                j.available_at AS available
+                j.available_at AS available,{priority} AS priority
             FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id
             WHERE j.status IN ('pending','running','waiting_model','waiting_origin')
         """, (stamp, source_mode == 'active', *args, source_expires_exhausted, max_attempts, stamp),
-            queue_id='source', status=source_mode, ordering='available_at_then_id',
+            queue_id='source', status=source_mode, ordering=('available_at_then_id' if priority=='CAST(0 AS INTEGER)' else 'owner_priority_then_available_at_then_id'),
             exists=exists, **page))
     if queue_id in (None, 'maintenance'):
         selected, args = maintenance_predicate(connection, ids, 'w')
+        priority=owner_priority(connection,'maintenance','w.thought_id','w.desired_generation','w.status')
         queues.append(_page(connection, f"""
             SELECT w.thought_id AS id, CASE
                 WHEN w.status='running' AND (w.lease_until>? OR w.lease_until IS NULL) THEN 'running'
@@ -117,17 +120,17 @@ def build_queue_status(connection, *, release_version, stage, processing_session
                 ELSE 'delayed' END AS status,
                 CASE WHEN w.action IN ('refresh','consolidate') THEN w.action
                      ELSE 'maintenance' END AS phase,
-                w.available_at AS available
+                w.available_at AS available,{priority} AS priority
             FROM memory_thought_work w WHERE w.status IN ('pending','running')
         """, (stamp, allowed, *args, max_attempts, stamp),
-            queue_id='maintenance', status=processing, ordering='available_at_then_id',
+            queue_id='maintenance', status=processing, ordering=('available_at_then_id' if priority=='CAST(0 AS INTEGER)' else 'owner_priority_then_available_at_then_id'),
             exists=_has(connection, 'memory_thought_work'), **page))
     if queue_id in (None, 'interactive'):
         exists = _has(connection, 'memory_interactive_queries')
         queues.append(_page(connection, """
             SELECT id, CASE WHEN state='running' AND ? THEN 'running'
                 WHEN ? THEN 'ready' ELSE 'paused' END AS status,
-                'query' AS phase, created AS available
+                'query' AS phase, created AS available,0 AS priority
             FROM memory_interactive_queries WHERE state IN ('queued','running')
         """, (interactive_enabled, interactive_enabled), queue_id='interactive',
             status=('active' if exists else 'unavailable') if interactive_enabled else 'disabled',

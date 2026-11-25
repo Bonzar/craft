@@ -11,6 +11,7 @@ from time import sleep
 from uuid import uuid4
 
 from .processing_control import paused as processing_paused
+from .queue_owner_actions import priority as owner_priority, consume_priority
 from .model import format_prompt
 from .diagnostic_privacy import diagnostic_scope, restricted, ProtectedContextError
 from .queue import _Claim, _event, LeaseLost
@@ -195,15 +196,17 @@ class ThoughtWorker:
                     "error='Thought source lease expired too many times' WHERE event_id IS NOT NULL "
                     "AND status='running' AND lease_until<=? AND attempts>=? AND EXISTS(SELECT 1 FROM memory_raw_events e "
                     'WHERE e.id=memory_capture_jobs.event_id AND '+eligible+')',(now,self.queue._max_attempts,*args))
+            priority = owner_priority(c,'source','j.id','j.updated_at','j.status')
             row = c.execute("SELECT j.id FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id "
                 "WHERE ((j.status='pending' AND j.available_at<=?) OR (j.status='running' AND j.lease_until<=?) "
-                "OR j.status='waiting_model') AND "+eligible+" ORDER BY j.available_at,j.id LIMIT 1",(now,now,*args)).fetchone()
+                "OR j.status='waiting_model') AND "+eligible+f" ORDER BY {priority} DESC,j.available_at,j.id LIMIT 1",(now,now,*args)).fetchone()
             if row is None:
                 return None
             token = uuid4().hex
             c.execute("UPDATE memory_capture_jobs SET status='running',attempts=attempts+1,"
                 "lease_token=?,lease_until=?,updated_at=? WHERE id=?",
                 (token, self.queue._time(self.queue._lease_seconds), now, row[0]))
+            consume_priority(c,'source',row[0])
             return _Claim(self.queue.get(row[0]), token)
 
     def _context(self, event):

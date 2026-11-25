@@ -12,6 +12,7 @@ from prototypes.assertion_memory import thought_processing_selection
 from prototypes.assertion_memory.query_jobs import QueryJobs
 from prototypes.assertion_memory.queue import CaptureQueue
 from prototypes.assertion_memory import processing_control
+from prototypes.assertion_memory.queue_owner_actions import QueueOwnerActions, Conflict
 from prototypes.assertion_memory.queue_status import build_queue_status
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_worker import ThoughtWorker
@@ -153,6 +154,106 @@ class QueueStatusTest(unittest.TestCase):
                     await asyncio.sleep(.05)
                 self.assertEqual(calls,['launch'])
         asyncio.run(scenario())
+
+    def owner_actions(self, actor='a'*64):
+        return QueueOwnerActions(self.queue,stage='test',owner_hash=actor,session_ids=('selected',),
+                                 clock=lambda:NOW.timestamp())
+
+    def test_take_respects_pause_scope_and_claims_exact_priority(self):
+        controller=self.owner_actions()
+        self.source('a','pending')
+        self.source('b','pending')
+        self.source('blocked','pending',session='other')
+        self.source('delayed','pending',time=FUTURE)
+        self.maintenance('c','pending')
+        self.maintenance('d','pending')
+        for id_ in ('blocked','delayed','missing'):
+            with self.assertRaises(Conflict):controller.take({'queue':'source','id':id_})
+        receipt=controller.take({'queue':'source','id':'b'})
+        self.assertEqual(receipt['status'],'prioritized')
+        controller.take({'queue':'maintenance','id':'d'})
+        with self.store.transaction(write=True) as db:
+            _, rev=processing_control.set_control(db,paused=True,expected_revision=processing_control.INITIAL)
+        self.assertIsNone(self.worker._claim_source())
+        with self.assertRaises(Conflict):controller.take({'queue':'source','id':'a'})
+        with self.store.transaction(write=True) as db:
+            processing_control.set_control(db,paused=False,expected_revision=rev)
+        source=self.lane('source')['items']
+        self.assertEqual([(r['id'],r['position']) for r in source if r['position']], [('b',1),('a',2)])
+        self.assertEqual(self.worker._claim_source().job.id,'b')
+        self.assertEqual(self.worker._claim_source().job.id,'a')
+        self.assertEqual(self.worker.work.claim()['thought_id'],'d')
+        self.assertEqual(self.worker.work.claim()['thought_id'],'c')
+
+    def test_batch_enqueue_is_atomic_and_only_requeues_existing_work(self):
+        controller=self.owner_actions()
+        self.source('a','failed',attempts=3)
+        self.source('later','pending',time=FUTURE)
+        self.source('outside','failed',session='other')
+        self.maintenance('m','failed',attempts=3)
+        a={'queue':'source','id':'a'}
+        later={'queue':'source','id':'later'}
+        m={'queue':'maintenance','id':'m'}
+        with self.assertRaises(Conflict):controller.batch_enqueue([a,{'queue':'source','id':'outside'}])
+        self.assertEqual(self.queue.get('a').status,'failed')
+        queued=controller.batch_enqueue([a,later,m])
+        self.assertEqual(queued['queued'],[m,a])
+        self.assertEqual(queued['already_pending'],1)
+        self.assertEqual(controller.batch_enqueue([a,later,m])['queued'],[])
+        self.assertEqual(next(i for i in self.lane('source')['items'] if i['id']=='later')['status'],'delayed')
+        self.assertEqual(self.worker._claim_source().job.id,'a')
+        self.assertEqual(self.worker.work.claim()['thought_id'],'m')
+
+    def test_cancellation_is_typed_scoped_atomic_and_preserves_source_and_audit(self):
+        a={'queue':'source','id':'a'}
+        b={'queue':'source','id':'b'}
+        self.source('a','pending')
+        self.source('b','pending')
+        self.maintenance('v','pending')
+        controller=self.owner_actions()
+        prepared=controller.prepare_cancel([a])
+        token=prepared['confirmation_id']
+        for selected,phrase,actor in (([b],prepared['phrase'],controller),
+                                      ([a],'ОТМЕНИТЬ PROD',controller),
+                                      ([a],prepared['phrase'],self.owner_actions('b'*64))):
+            with self.assertRaises(Conflict):
+                actor.cancel(selected,confirmation_id=token,confirmation=phrase)
+        with self.assertRaises(Conflict):
+            controller.prepare_cancel([a,{'queue':'maintenance','id':'v'}])
+        self.assertEqual(controller.cancel([a],confirmation_id=token,confirmation=prepared['phrase']),
+                         {'stage':'test','cancelled':1})
+        with self.assertRaises(Conflict):
+            controller.cancel([a],confirmation_id=token,confirmation=prepared['phrase'])
+        with self.store.transaction() as db:
+            self.assertEqual(db.execute("SELECT status FROM memory_capture_jobs WHERE id='a'").fetchone()[0],'cancelled')
+            self.assertIsNotNone(db.execute("SELECT id FROM memory_raw_events WHERE id='e-a'").fetchone())
+            self.assertEqual(tuple(db.execute('SELECT operation,actor,queue,job_id FROM memory_queue_owner_audit').fetchone()),
+                             ('cancelled','a'*64,'source','a'))
+        self.assertEqual(self.worker._claim_source().job.id,'b')
+
+    def test_expired_cancel_and_draft_receipts_are_safe(self):
+        item={'queue':'source','id':'a'}
+        self.source('a','pending')
+        controller=self.owner_actions()
+        proof=controller.prepare_cancel([item])
+        controller.clock=lambda:NOW.timestamp()+90
+        with self.assertRaises(Conflict):
+            controller.cancel([item],confirmation_id=proof['confirmation_id'],confirmation=proof['phrase'])
+        with self.store.transaction(write=True) as db:
+            db.execute("INSERT INTO memory_source_draft_checkpoints VALUES ('a','{}')")
+        with self.assertRaises(Conflict):
+            controller.prepare_cancel([item])
+        self.assertEqual(self.queue.get('a').status,'pending')
+
+    def test_claimed_after_prepare_cannot_be_cancelled(self):
+        controller=self.owner_actions()
+        row={'queue':'source','id':'a'}
+        self.source('a','pending')
+        prepared=controller.prepare_cancel([row])
+        self.assertEqual(self.worker._claim_source().job.id,'a')
+        with self.assertRaises(Conflict):
+            controller.cancel([row],confirmation_id=prepared['confirmation_id'],confirmation=prepared['phrase'])
+        self.assertEqual(self.queue.get('a').status,'running')
 
     def test_interactive_order_and_pagination_match_claim(self):
         self.interactive('b','queued',2)

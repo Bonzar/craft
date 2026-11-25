@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import json
 from uuid import uuid4
 from .processing_control import paused as processing_paused
+from .queue_owner_actions import priority as owner_priority, consume_priority
 from .queue import LeaseLost
 from .thought_processing_selection import normalize_session_ids,current_cohort,maintenance_predicate,pending_cohort
 
@@ -100,8 +101,9 @@ class ThoughtWorkQueue:
             c.execute("UPDATE memory_thought_work AS w SET status='failed',lease_token=NULL,lease_until=NULL,"
                 "error='Thought lease expired too many times' WHERE w.status='running' AND w.lease_until<=? AND w.attempts>=? AND "+eligible,
                 (now,self.queue._max_attempts,*args))
+            priority = owner_priority(c,'maintenance','w.thought_id','w.desired_generation','w.status')
             row = c.execute("SELECT w.* FROM memory_thought_work w WHERE ((w.status='pending' AND w.available_at<=?) "
-                "OR (w.status='running' AND w.lease_until<=?)) AND "+eligible+" ORDER BY w.available_at,w.thought_id LIMIT 1",(now,now,*args)).fetchone()
+                "OR (w.status='running' AND w.lease_until<=?)) AND "+eligible+f" ORDER BY {priority} DESC,w.available_at,w.thought_id LIMIT 1",(now,now,*args)).fetchone()
             if row is None:
                 return None
             task = dict(row)
@@ -112,6 +114,7 @@ class ThoughtWorkQueue:
             task['attempts'] += 1
             c.execute("UPDATE memory_thought_work SET status='running',lease_token=?,lease_until=?,attempts=?,claimed_generation=? WHERE thought_id=?",
                 (task['lease_token'], self.queue._time(self.queue._lease_seconds), task['attempts'], task['generation'], task['thought_id']))
+            consume_priority(c,'maintenance',task['thought_id'])
             return task
 
     def causes(self, task):
