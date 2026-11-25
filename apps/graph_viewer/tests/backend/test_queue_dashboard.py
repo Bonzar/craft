@@ -1,5 +1,6 @@
 """Existing authenticated capabilities bridge and bounded live queue behavior."""
 import asyncio
+import fcntl
 import os
 from collections import deque
 from pathlib import Path
@@ -26,6 +27,9 @@ class FixtureDash(HostedQueueDashboard):
         self.stage='test'
         self.streams=asyncio.Semaphore(8)
         self.epoch='d'*16
+        self.control_lock=path.parent/'deploy.lock'
+        self.control_lock.touch(mode=0o600)
+        self.publisher_uid=os.getuid()
 
     def metadata(self):
         return {'stage':self.stage,'release_version':TAG,'model_configured':True,
@@ -183,6 +187,49 @@ class QueueDashboardTest(unittest.TestCase):
             with self.store.transaction(write=True) as db:
                 db.execute("UPDATE memory_capture_jobs SET status='completed'")
             self.assertEqual(cli.get(path,headers=h).json()['queues'][0]['items'],[])
+
+    def test_pause_mutation_is_explicit_same_origin_owner_cookie_only(self):
+        self.seed()
+        opts={'password':'synthetic-owner-strong','public_origin':ORIGIN,'allowed_proxy_hosts':[GATEWAY],
+              'bridge_read_token_file':self.key,'queue_dashboard':self.dash}
+        auth={'origin':ORIGIN,'authorization':'Bearer '+'c'*64}
+        url='/api/v1/processing/pause'
+        read='/api/v1/capabilities?queue_status=1'
+        req={'stage':'test','paused':True,'expected_revision':'0'*32}
+        disabled=create_app(self.path,self.root/'disabled',**opts)
+        with TestClient(disabled,base_url=ORIGIN) as cli:
+            login=cli.post('/api/v1/session',headers={'origin':ORIGIN},json={'password':opts['password']}).json()
+            h={'origin':ORIGIN,'x-csrf-token':login['csrf_token']}
+            self.assertFalse(cli.get(read,headers=h).json()['processing_control']['can_change'])
+            self.assertEqual(cli.put(url,headers=h,json=req).status_code,503)
+        enabled=create_app(self.path,self.root/'enabled',queue_control=True,**opts)
+        with TestClient(enabled,base_url=ORIGIN) as cli:
+            self.assertFalse(cli.get(read,headers=auth).json()['processing_control']['can_change'])
+            self.assertEqual(cli.put(url,headers=auth,json=req).status_code,401)
+            login=cli.post('/api/v1/session',headers={'origin':ORIGIN},json={'password':opts['password']}).json()
+            h={'origin':ORIGIN,'x-csrf-token':login['csrf_token']}
+            self.assertEqual(cli.put(url,headers={'origin':ORIGIN},json=req).status_code,403)
+            self.assertEqual(cli.put(url,headers={**h,'origin':'https://wrong.test'},json=req).status_code,403)
+            self.assertEqual(cli.put(url,headers=h,json={**req,'stage':'prod'}).status_code,409)
+            self.assertEqual(cli.put(url,headers=h,json={**req,'paused':'true'}).status_code,400)
+            self.assertEqual(cli.put(url,headers={**h,'content-type':'application/json'},
+                content='{"stage":"prod","stage":"test","paused":true,"expected_revision":"'+'0'*32+'"}').status_code,400)
+            with self.dash.control_lock.open('rb') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                self.assertEqual(cli.put(url,headers=h,json=req).status_code,503)
+            r=cli.put(url,headers=h,json=req)
+            self.assertEqual(r.status_code,200,r.text)
+            revision=r.json()['revision']
+            self.assertTrue(r.json()['paused'])
+            self.assertEqual(cli.put(url,headers=h,json={**req,'paused':False}).status_code,409)
+            status=cli.get(read,headers=h).json()
+            self.assertEqual(status['processing_control'],{'paused':True,'revision':revision,'can_change':True})
+            self.assertIsNone(status['queues'][0]['items'][0]['position'])
+            self.assertEqual(status['queues'][0]['items'][0]['status'],'paused')
+            r=cli.put(url,headers=h,json={**req,'expected_revision':revision,'paused':False})
+            self.assertEqual(r.status_code,200,r.text)
+            self.assertFalse(r.json()['paused'])
+            self.assertEqual(cli.get(read,headers=h).json()['queues'][0]['items'][0]['position'],1)
 
     def test_signal_emitted_from_real_sqlite_commit_without_content(self):
         async def run():

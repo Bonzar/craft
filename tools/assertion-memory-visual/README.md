@@ -202,3 +202,44 @@ only a PROD alias in the existing PROD source; it does not enable a
 cross-lane alias, modify the already deployed TEST version, or confer
 permission to push or publish. Verify the exact private PROD source
 preimage and owner ACL/MCP identity separately before staging.
+
+
+### Background processing pause (standard TEST owner web backend)
+
+Pause is a separate durable setting in the canonical SQLite file. It does not
+change session allowlists, enrollment, raw intake or interactive question
+processing. Source capture still enters the queue. Every new source and
+maintenance claim checks the setting in its own SQLite write transaction;
+work already claimed keeps its lease and may finish. Resuming wakes the Base
+worker without waiting for another capture. Queue snapshots truthfully show
+paused rows without a forecast position, and existing running rows retain
+their phase. A pre-feature Base rollback cannot enforce this new setting;
+do not advertise pause on such a rollback.
+
+A standard authorised owner web app can opt in via `--queue-control` together
+with exact canonical TEST status configuration. This requires the existing
+owner session/password verification, same origin, valid CSRF token and active
+TEST release lease. It is **off** for every default/native Sites/PROD startup.
+The existing Graph read bearer and published Sites pseudo-session intentionally
+never authorize mutation.
+
+- Read: existing dashboard status includes
+  `processing_control:{paused,revision,can_change}`. `can_change` is only true
+  for a real owner cookie and explicitly enabled standard TEST backend.
+- Write: `PUT /api/v1/processing/pause`, JSON exact
+  `{stage:"test",paused:boolean,expected_revision:"32 lowercase hex"}`,
+  with existing `x-csrf-token` and owner cookie. Success is
+  `{stage,paused,revision}`. A stale revision or wrong stage returns 409
+  (fetch status again); unavailable release lease returns 503. No query,
+  message or administrative SQL API has been added.
+- Native Sites V25 is read-only: display the pause state, not a working
+  control. Only wire a future purpose-built owner mutation adapter after
+  preserving the account owner proof and exact lane/Origin/CSRF semantics,
+  without extending the existing read-only graph credential.
+
+Device enrollment still needs a release-managed, owner-only enrollment
+adapter with a per-device revocable fingerprint registry and no raw bearer
+secrets in UI requests. Database reset is a separate capability; explicit
+typed single-use confirmation and an independently verified stop/drain
+supervisor are prerequisites. Never expose either through this pause API or
+the Graph read bridge.
