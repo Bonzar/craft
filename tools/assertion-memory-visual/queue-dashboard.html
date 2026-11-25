@@ -1,6 +1,16 @@
-<details id="visual-queue">
-  <summary>Очереди обработки</summary>
-  <p role="status">Проверяем…</p>
-  <p>Порядок показан отдельно для каждой очереди. Работа выполняется параллельно.</p>
-  <div class="queue-items"></div>
-</details>
+<button id="visual-queue-open" type="button" aria-haspopup="dialog" aria-controls="visual-queue"><span aria-hidden="true">▤</span> Очереди</button>
+<dialog id="visual-queue" aria-labelledby="visual-queue-heading">
+  <header class="queue-top">
+    <div>
+      <p class="queue-eyebrow">УПРАВЛЕНИЕ БАЗОЙ</p>
+      <h1 id="visual-queue-heading">Очереди обработки</h1>
+      <p class="queue-meta" role="status">Подключаемся…</p>
+    </div>
+    <button id="visual-queue-close" type="button" autofocus>← К графу</button>
+  </header>
+  <div class="queue-body">
+    <p class="queue-caption">Очереди обрабатываются независимо. Номер указан только для задач, у которых есть место в очереди.</p>
+    <div class="queue-items"></div>
+  </div>
+  <span class="queue-copy-status sr-only" role="status"></span>
+</dialog>
