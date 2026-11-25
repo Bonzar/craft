@@ -25,6 +25,7 @@ class StandalonePause(fixture.OriginTest):
         state=dict(stage=lane,paused=False,revision='a'*32)
         calls=[]
         now=[1770000000]
+        ready=[True]
 
         class Base(BaseHTTPRequestHandler):
             def log_message(self,*_): pass
@@ -37,6 +38,12 @@ class StandalonePause(fixture.OriginTest):
 
             def do_GET(self):
                 calls.append((self.command,self.path))
+                if self.path.startswith('/api/v1/queue-status?'):
+                    assert self.headers['Authorization']=='Bearer '+queue
+                    return self.reply(200,{'stage':lane,'release_version':'assertion-memory-v0.1.16',
+                        'release_generation':'e'*64,'snapshot_at':'2026-11-25T21:00:00Z','global_order':False,
+                        'queues':[],'processing_control':{'paused':state['paused'],
+                        'revision':state['revision'],'can_change':ready[0]}})
                 assert self.headers['Authorization']=='Bearer '+read
                 assert self.path=='/api/v1/queue-pause'
                 self.reply(200,state)
@@ -83,7 +90,7 @@ class StandalonePause(fixture.OriginTest):
             if proof:
                 headers['X-Memory-Visual-Pause-Owner-Ingress']=proof
             try:
-                conn.request(method,path,json.dumps(data),headers=headers)
+                conn.request(method,path,None if data is None else json.dumps(data),headers=headers)
                 r=conn.getresponse()
                 raw=r.read()
                 return r.status,json.loads(raw) if raw else None
@@ -98,6 +105,14 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(request('POST',path+'/prepare',{},extra={'Sec-Fetch-Site':'cross-site'})[0],403)
         self.assertEqual(request('POST',path+'/prepare',{},proof=None)[0],403)
         self.assertEqual(calls,[])
+        status_path='/api/v1/capabilities?queue_status=1'
+        for base_ready,marker in [(True,pause_edge),(False,pause_edge),(True,None)]:
+            ready[0]=base_ready
+            code,view=request('GET',status_path,None,proof=marker)
+            self.assertEqual(code,200)
+            self.assertIs(view['processing_control']['can_change'],False)
+            self.assertEqual('standalone_pause' in view['capabilities'],bool(base_ready and marker))
+        calls.clear()
         code,prepare=request('POST',path+'/prepare',{})
         self.assertEqual(code,200)
         self.assertEqual(set(prepare),{'stage','paused','revision','csrf_token'})

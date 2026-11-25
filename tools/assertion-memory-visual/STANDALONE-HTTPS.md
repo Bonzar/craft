@@ -6,8 +6,9 @@ the same runtime code for TEST and PROD, with distinct protected ports and
 credentials. It consumes the queue from that lane's local REST Base, and
 uses only the lane's separately authenticated local Graph HTTP reader for
 legacy graph/search/SSE. No raw Base SQLite file or protocol code is opened
-by Visual. This is the read-only slice; old private Sites routes and MCP
-are untouched, and Visual gains no pause/reset/enrollment write authority.
+by Visual. The default remains read-only; old private Sites routes and MCP are
+untouched. Optional pause authority is documented separately below. Reset
+and enrollment are not supported.
 
 ## One artifact
 
