@@ -140,3 +140,30 @@ write capabilities. Deploy the Base release (source verified via
 `current`) before restarting the existing Sites-facing unit. No edits to the
 wrapper source are needed. Native dashboard query and streaming smoke checks
 are still mandatory.
+
+
+### User-facing Sites release verification
+
+The configured Visual deployment currently verifies the VM gateway only.
+That check must not be described as confirming what Sites serves. Users
+should open the stage's existing Sites root; URLs with a manifest digest
+intentionally remain tied to the historical release.
+
+`sites_smoke.verify_sites_release(lane, archive, manifest_sha256, get)`
+adds an independent check from the actual Sites origin. It requires a
+trusted, stage-authorized no-redirect authenticated GET transport.
+`scoped_sites_get(lane, approved_auth_headers)` is a transport constructor
+for a future approved Sites credential; it does not discover or generate
+credentials. Never reuse a VM/gateway token, synthesize owner identity headers,
+or transfer a personal browser session to CI. A successful authenticated
+response from the existing Site must be demonstrated before wiring the
+check into the release. This module is not currently called by deployment.
+
+After such authorization, invoke the check in configured release verification
+**after** gateway smoke and **before** emitting same-run TEST proof, and
+apply the same check after PROD activation once PROD transport is approved.
+Fail the user-visible verification on an auth failure, mismatched digest
+or asset, pinned fallback, degraded result, or pointer changes during
+verification. Do not treat a missing credential as verified or enable automatic
+rollback for this independent probe without a reviewed host rollback contract.
+This check verifies exact HTTP asset identity, not WebGL behavior or graph data.
