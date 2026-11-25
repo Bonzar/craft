@@ -194,3 +194,11 @@ existing authenticated TEST Site, no redirect following before comparing:
 marker, no-store, and matching bytes at the target. Check that unrelated MCP
 and graph routing is unchanged, a retained historical URL still pins the
 old release, and unauthorized requests do not reach the asset gateway.
+
+For a separately authorized PROD rollout after verified TEST, use the
+same reviewed native source adapter with explicit third argument `prod`.
+Its expected output digest differs from the TEST output. This creates
+only a PROD alias in the existing PROD source; it does not enable a
+cross-lane alias, modify the already deployed TEST version, or confer
+permission to push or publish. Verify the exact private PROD source
+preimage and owner ACL/MCP identity separately before staging.
