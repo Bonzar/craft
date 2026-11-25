@@ -132,7 +132,7 @@ jobs:
                   raise SystemExit('Missing verified Sites scope fields: '+','.join(names))
               p=pathlib.Path(os.environ['RUNNER_TEMP'])/(lane+'.json')
               p.write_text(json.dumps({'lane':lane,'owner_only':True,'include_effects':True,
-                 'effects_timeout_ms':120000,'project_id_sha256':os.environ[args+'_PROJECT_HASH'],
+                 'effects_timeout_ms':10000,'project_id_sha256':os.environ[args+'_PROJECT_HASH'],
                  'site_origin_sha256':os.environ[args+'_ORIGIN_HASH'],
                  'access_identity_sha256':os.environ[args+'_ACL_HASH']}))
           PY

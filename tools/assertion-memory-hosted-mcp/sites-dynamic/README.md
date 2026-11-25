@@ -106,9 +106,12 @@ Roll out TEST first. After deploying Base, compare authenticated native
 `tools/list` to the Base registry, check a source and its snapshot, and invoke
 `memory_query` using only fictional data. Verify both a saved answer and a
 request requiring model work; don't infer that generation works from discovery.
-The Sites release profile allows up to 120 seconds for an effect request.
-Confirm the effective Gateway, reverse-proxy and client deadline too. A timed
-out query must not be retried automatically. The current Sites JSON envelope
+The Sites release profile budgets up to 10 seconds per effect request. This
+is a transport deadline only, not a generation limit. Before promoting an
+interactive query rollout, verify that slow requests have a durable receipt
+and can be checked later without restarting generation. The synchronous query
+path alone does not meet that requirement. Confirm effective Gateway,
+reverse-proxy and client deadlines; timed-out writes must not be retried blindly. The current Sites JSON envelope
 is intentionally bounded and does not promise the machine endpoint's large
 binary transfer allowance; use the machine API for large artifacts. Check that
 the native client's published inventory refreshes, through the existing Sites
