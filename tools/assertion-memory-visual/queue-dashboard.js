@@ -9,6 +9,12 @@
   const controlButton=panel.querySelector('#queue-processing-toggle');
   const controlState=panel.querySelector('#queue-processing-state');
   const controlFeedback=panel.querySelector('#queue-processing-feedback');
+  const sessionsPanel=panel.querySelector('#queue-session-policy');
+  const sessionOptions=panel.querySelector('#queue-session-options');
+  const sessionFeedback=panel.querySelector('#queue-session-feedback');
+  const sessionSave=panel.querySelector('#queue-session-save');
+  const hold={global_pause:'Глобальная пауза',session_excluded:'Сессия не выбрана для автообработки',incomplete_source:'Ожидает полного источника'};
+  let sessionsState, sessionsDraft=new Set(), sessionsBusy=false, sessionsProbe=false;
   const names={source:'Реплики',maintenance:'Связи и пересчёт',interactive:'Вопросы'};
   const ordered=['interactive','source','maintenance'];
   const states={running:'В работе',ready:'Ожидает',waiting_origin:'Ждёт источник',delayed:'Отложено',paused:'Приостановлено',expired:'Исчерпаны попытки',active:'Активна',unavailable:'Недоступна',disabled:'Выключена'};
@@ -44,7 +50,10 @@
       catch {copyStatus.textContent='Копирование недоступно. ID можно выделить в карточке.';}
     });
     detail.append(summary,raw,copy);
-    root.append(row,title,detail);
+    root.append(row,title);
+    if(Object.hasOwn(hold,item.hold_reason))root.append(element('p',hold[item.hold_reason],'queue-lane-status'));
+    if(typeof item.session_id==='string'&&item.session_id)detail.append(element('p','Сессия: '+item.session_id));
+    root.append(detail);
     return {root,details:detail,summary,copy};
   }
   function render(id,queue,offset){
@@ -83,6 +92,87 @@
     if(restored)restored.focus();
     rendered.set(id,{signature,cards});
   }
+  const sessionUrl='/api/v1/processing/sessions';
+  function parseSessions(value){
+    if(value?.stage!=='test'||!rev(value.revision)||!Array.isArray(value.sessions)||!Array.isArray(value.selected_session_ids)||
+       value.selected_session_ids.length>50||!value.selected_session_ids.every(id=>typeof id==='string')||
+       !value.sessions.every(x=>x&&typeof x.id==='string'&&Number.isSafeInteger(x.queued)&&x.queued>=0&&typeof x.eligible==='boolean'))throw Error();
+    return value;
+  }
+  function drawSessions(){
+    if(!sessionsPanel)return;
+    const rows=[...(sessionsState?.sessions??[])];
+    const present=new Set(rows.map(x=>x.id));
+    for(const id of sessionsDraft)if(!present.has(id))rows.push({id,queued:0,eligible:false});
+    sessionOptions.replaceChildren();
+    for(const item of rows){
+      const label=element('label','','queue-session-choice');
+      const box=element('input');box.type='checkbox';box.checked=sessionsDraft.has(item.id);
+      box.disabled=sessionsBusy||(!item.eligible&&!box.checked);
+      box.addEventListener('change',()=>{
+        if(box.checked&&sessionsDraft.size>=50){
+          box.checked=false;sessionFeedback.textContent='Можно выбрать не больше 50 сессий.';return;
+        }
+        if(box.checked)sessionsDraft.add(item.id);else sessionsDraft.delete(item.id);
+        sessionSave.disabled=sessionsBusy||sameSessions();
+      });
+      label.append(box,element('span',item.id+' · задач: '+item.queued+(!item.eligible?' · новых подходящих задач нет':'')));
+      sessionOptions.append(label);
+    }
+    if(!rows.length)sessionOptions.append(element('p','Сессий с задачами пока нет.'));
+    sessionSave.disabled=sessionsBusy||!sessionsState||sameSessions();
+  }
+  const sameSessions=()=>sessionsState?.selected_session_ids.length===sessionsDraft.size&&
+    sessionsState.selected_session_ids.every(x=>sessionsDraft.has(x));
+  function useSessions(value){
+    sessionsState=parseSessions(value);
+    sessionsDraft=new Set(value.selected_session_ids);
+    drawSessions();
+  }
+  async function sessionRequest(path,method,body,token){
+    const response=await fetch(path,{method,credentials:'same-origin',redirect:'error',cache:'no-store',
+      headers:{accept:'application/json','content-type':'application/json',...(token?{'x-csrf-token':token}:{})},
+      body:JSON.stringify(body)});
+    if(response.status===409)return null;
+    if(!response.ok||!response.headers.get('content-type')?.includes('application/json'))throw Error();
+    return response.json();
+  }
+  async function loadSessions(){
+    if(!sessionsPanel||sessionsBusy||sessionsProbe)return;
+    sessionsProbe=true;
+    const current=generation;
+    try{
+      const value=await sessionRequest(sessionUrl+'/prepare','POST',{});
+      if(current!==generation||!panel.open)return;
+      useSessions(value);sessionsPanel.hidden=false;
+    }catch{if(current===generation&&panel.open){sessionsPanel.hidden=false;sessionFeedback.textContent='Настройка сессий недоступна. Очередь не изменена.';}}
+    finally{if(current===generation)sessionsProbe=false;}
+  }
+  sessionsPanel?.addEventListener('toggle',()=>{if(sessionsPanel.open&&sameSessions())void loadSessions();});
+  sessionSave?.addEventListener('click',async()=>{
+    if(sessionsBusy||!sessionsState||sameSessions())return;
+    const current=generation,before=sessionsState,selection=[...sessionsDraft];sessionsBusy=true;drawSessions();
+    sessionFeedback.textContent='Сохраняем выбор…';
+    try{
+      const proof=parseSessions(await sessionRequest(sessionUrl+'/prepare','POST',{}));
+      if(current!==generation||!panel.open)return;
+      if(proof.revision!==before.revision){
+        useSessions(proof);sessionFeedback.textContent='Выбор уже изменился. Проверьте новый список и выберите заново.';return;
+      }
+      if(typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
+      const done=await sessionRequest(sessionUrl,'PUT',{stage:'test',selected_session_ids:selection,expected_revision:before.revision},proof.csrf_token);
+      if(current!==generation||!panel.open)return;
+      if(!done){
+        const refreshed=await sessionRequest(sessionUrl+'/prepare','POST',{});
+        if(current!==generation||!panel.open)return;
+        useSessions(refreshed);
+        sessionFeedback.textContent='Выбор уже изменился. Проверьте новый список и выберите заново.';return;
+      }
+      useSessions(done);
+      sessionFeedback.textContent='Выбор сохранён.';
+    }catch{if(current===generation&&panel.open)sessionFeedback.textContent='Сохранение не подтверждено. Проверьте список перед повтором.';}
+    finally{if(current===generation&&panel.open){sessionsBusy=false;drawSessions();void refresh();}}
+  });
   function drawControl(){
     controlPanel.hidden=!control;
     controlButton.hidden=!(control?.canChange&&ownerReady||control?.prepareAllowed&&nativeReady);
@@ -204,6 +294,7 @@
       const label=base.stage.toUpperCase()+version;
       if(status.textContent!==label)status.textContent=label;
       if(!inFlight&&epoch===controlEpoch)acceptControl(base);
+      if(base.stage==='test'&&base.capabilities?.standalone_queue_sessions===true&&!sessionsState)void loadSessions();
       for(const id of ordered){
         const offset=requested.get(id)??0;
         if((offsets.get(id)??0)===offset)render(id,pages.get(offset).queues.find(q=>q?.id===id),offset);
@@ -227,6 +318,8 @@
     if(panel.open)return;
     panel.showModal();
     offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
+    sessionsState=null;sessionsDraft=new Set();sessionsBusy=false;sessionsProbe=false;
+    if(sessionsPanel){sessionsPanel.hidden=true;sessionsPanel.open=false;sessionFeedback.textContent='';}
     status.textContent='Подключаемся…';lastSignal=0;
     control=null;ownerReady=false;ownerCheck=null;nativeReady=false;probedRevision=null;controlFeedback.textContent='';drawControl();
     if(typeof EventSource!=='undefined'){

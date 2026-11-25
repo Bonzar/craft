@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -20,8 +20,10 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
   const panel=new Element('dialog'),status=new Element(),container=new Element();
   const launcher=new Element('button'),closer=new Element('button'),copyStatus=new Element();
   const controlPanel=new Element(), controlButton=new Element('button'), controlState=new Element(), controlFeedback=new Element();
+  const sessionPanel=new Element('details'),sessionOptions=new Element(),sessionFeedback=new Element(),sessionSave=new Element('button');
+  const sessionWrites=[];
   const mutations=[];
-  const mapping={'#queue-processing':controlPanel,'#queue-processing-toggle':controlButton,
+  const mapping={'#queue-session-policy':sessionPanel,'#queue-session-options':sessionOptions,'#queue-session-feedback':sessionFeedback,'#queue-session-save':sessionSave,'#queue-processing':controlPanel,'#queue-processing-toggle':controlButton,
     '#queue-processing-state':controlState,'#queue-processing-feedback':controlFeedback,'#visual-queue':panel,'#visual-queue-open':launcher,'.queue-meta':status,
     '.queue-items':container,'.queue-copy-status':copyStatus,'#visual-queue-close':closer};
   const doc={querySelector:k=>mapping[k],createElement:t=>new Element(t)};
@@ -42,6 +44,17 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     fetch:async (url,options)=>{
       assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
       urls.push(url);
+      if(url==='/api/v1/processing/sessions/prepare'){
+        assert.equal(options.method,'POST');
+        return sessionPolicy?Response.json({...sessionPolicy,csrf_token:'123.'+'a'.repeat(64)}):Response.json({}, {status:404});
+      }
+      if(url==='/api/v1/processing/sessions'){
+        const payload=JSON.parse(options.body);
+        sessionWrites.push({payload,token:options.headers['x-csrf-token']});
+        assert.equal(options.method,'PUT');
+        sessionPolicy={...sessionPolicy,revision:'c'.repeat(32),selected_session_ids:payload.selected_session_ids};
+        return Response.json(sessionPolicy);
+      }
       if(url==='/api/v1/session')return Response.json(session);
       if(url==='/api/v1/processing/pause/prepare'){
         assert.equal(options.method,'POST');
@@ -57,12 +70,12 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,capabilities:{standalone_pause:standalone},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
   return {doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
-    controlPanel,controlButton,controlState,controlFeedback,mutations,timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
+    controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
 }
 
 test('full-screen modal has three labeled lanes, card chips and real positions',async()=>{
@@ -210,4 +223,29 @@ test('standalone PROD pause requires capability and matching confirmed prepare',
   assert.deepEqual(good.mutations,[{method:'PUT',token:ncsrf,
     payload:{stage:'prod',paused:true,expected_revision:original}}]);
   assert.match(good.text(good.container.items[0]),/Вопросы 0 Активна/);
+});
+
+
+test('queue editor changes exact TEST scheduler selection and displays held reason',async()=>{
+  const opt={standalone:true,sessionPolicy:{stage:'test',revision:'b'.repeat(32),selected_session_ids:[],sessions:[{id:'session-one',queued:2,eligible:true},{id:'unavailable',queued:0,eligible:false}]}};
+  const h=harness(opt);h.setData([{id:'source',status:'active',total:1,items:[{id:'job',status:'ready',phase:'extract',hold_reason:'session_excluded',session_id:'session-one'}]}]);
+  await h.open();await h.delay();
+  assert.equal(h.sessionPanel.hidden,false);
+  const box=h.sessionOptions.items[0].items[0];
+  assert.equal(box.checked,false);
+  assert.equal(h.sessionOptions.items[1].items[0].disabled,true);
+  assert.match(h.text(h.container),/Сессия не выбрана для автообработки/);
+  box.checked=true;box.listeners.change();
+  assert.equal(h.sessionSave.disabled,false);
+  await h.sessionSave.listeners.click();
+  assert.equal(h.sessionWrites.length,1);
+  assert.deepEqual(h.sessionWrites[0].payload,{stage:'test',selected_session_ids:['session-one'],expected_revision:'b'.repeat(32)});
+  assert.equal(h.sessionWrites[0].token,'123.'+'a'.repeat(64));
+  assert.equal(h.sessionFeedback.textContent,'Выбор сохранён.');
+});
+
+test('PROD dashboard does not try TEST scheduler management',async()=>{
+  const h=harness({stage:'prod',standalone:true});await h.open();
+  assert.equal(h.sessionPanel.hidden,true);
+  assert.ok(!h.urls.some(url=>url.includes('/processing/sessions')));
 });

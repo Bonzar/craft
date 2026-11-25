@@ -101,7 +101,9 @@ def snapshot_queues(queues, limit, offset):
             return False
         ids.add(q['id'])
         for row in q['items']:
-            if (not isinstance(row, dict) or set(row) != {'id','status','phase','position','available_at'}
+            if (not isinstance(row, dict) or set(row) - {'hold_reason','session_id'} != {'id','status','phase','position','available_at'}
+                    or row.get('hold_reason') not in (None,'global_pause','session_excluded','incomplete_source')
+                    or (row.get('session_id') is not None and not session_identifier(row['session_id']))
                     or not isinstance(row['id'], str) or not 1 <= len(row['id']) <= 512
                     or any(not isinstance(row[k], str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',row[k])
                            for k in ('status','phase'))
@@ -147,6 +149,12 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
             capabilities={'live':False}
             if disclose_pause and ctl['can_change']:
                 capabilities['standalone_pause']=True
+            if disclose_pause and stage=='test':
+                capabilities['standalone_queue_sessions']=True
+            if not disclose_pause:
+                for q in value['queues']:
+                    for row in q['items']:
+                        row.pop('session_id',None)
             # Local Base readiness never grants direct browser writes or a
             # mutation capability on the legacy Sites transport.
             ctl['can_change']=False
@@ -194,6 +202,32 @@ BASE_PAUSE = '/api/v1/queue-pause'
 REVISION = re.compile(r'[0-9a-f]{32}\Z')
 
 
+BROWSER_SESSIONS = '/api/v1/processing/sessions'
+BASE_SESSIONS = '/api/v1/queue-sessions'
+
+
+def session_identifier(value):
+    return type(value) is str and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}',value) is not None
+
+
+def selected_ids(value):
+    return type(value) is list and len(value)<=50 and all(session_identifier(v) for v in value) and len(set(value))==len(value)
+
+
+def sessions_state(value, stage):
+    if (type(value) is not dict or set(value)!={'stage','revision','selected_session_ids','sessions'}
+            or value['stage']!=stage or not isinstance(value['revision'],str) or not REVISION.fullmatch(value['revision'])
+            or not selected_ids(value['selected_session_ids']) or type(value['sessions']) is not list or len(value['sessions'])>150):
+        raise ValueError('invalid Base session policy')
+    seen=set()
+    for row in value['sessions']:
+        if (type(row) is not dict or set(row)!={'id','queued','eligible'} or not session_identifier(row['id'])
+                or row['id'] in seen or type(row['queued']) is not int or row['queued']<0 or type(row['eligible']) is not bool):
+            raise ValueError('invalid Base session choice')
+        seen.add(row['id'])
+    return value
+
+
 def pause_state(value, stage):
     if (type(value) is not dict or set(value) != {'stage','paused','revision'}
             or value['stage'] != stage or type(value['paused']) is not bool
@@ -202,7 +236,7 @@ def pause_state(value, stage):
     return value
 
 
-def pause_client(origin, read_key, write_key, signer, *, stage):
+def pause_client(origin, read_key, write_key, signer, *, stage, route=BASE_PAUSE, validate=pause_state, max_bytes=1024):
     """Consume only the dedicated loopback REST surface, never the Graph/MCP bearer."""
     address = BASE_ORIGIN.fullmatch(origin)
     if (not address or int(address[1]) > 65535 or not callable(signer)
@@ -225,23 +259,23 @@ def pause_client(origin, read_key, write_key, signer, *, stage):
             headers['Content-Type'] = 'application/json'
         conn = HTTPConnection('127.0.0.1', int(address[1]), timeout=4)
         try:
-            conn.request(method, BASE_PAUSE, body=body, headers=headers)
+            conn.request(method, route, body=body, headers=headers)
             rsp = conn.getresponse()
             if method == 'PUT' and rsp.status == 409:
                 return None
             if (rsp.status != 200 or rsp.headers.get_content_type() != 'application/json'
                     or rsp.headers.get('Content-Encoding') is not None):
                 raise ValueError('Base pause unavailable')
-            raw = rsp.read(1025)
-            if len(raw) > 1024:
+            raw = rsp.read(max_bytes+1)
+            if len(raw) > max_bytes:
                 raise ValueError('invalid Base pause response')
-            return pause_state(unique_json(raw), stage)
+            return validate(unique_json(raw), stage)
         finally:
             conn.close()
     return call
 
 
-def pause_signer(stage, owner, secret, *, clock=time.time):
+def pause_signer(stage, owner, secret, *, clock=time.time, route=BASE_PAUSE):
     """Service-only signer: supplied to handlers guarded by the dedicated verified owner ingress."""
     if (stage not in ('test','prod') or type(owner) is not str or not HEX.fullmatch(owner)
             or type(secret) is not bytes or len(secret) != 32):
@@ -250,7 +284,7 @@ def pause_signer(stage, owner, secret, *, clock=time.time):
         iat = int(clock())
         expires = iat+15
         nonce = secrets.token_hex(16)
-        message = ('\n'.join(('memory-queue-pause-v1','PUT',BASE_PAUSE,stage,
+        message = ('\n'.join(('memory-queue-pause-v1','PUT',route,stage,
                    digest(body),owner,revision,str(iat),str(expires),nonce))+'\n').encode('ascii')
         return dict(zip(('X-Memory-Pause-Owner','X-Memory-Pause-Issued-At','X-Memory-Pause-Expires-At',
                          'X-Memory-Pause-Nonce','X-Memory-Pause-Signature'),
@@ -289,8 +323,12 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
         fetch_owner_queue = queue_client(queue_origin,queue_token,stage=environment,disclose_pause=True)
         pause_call = pause_client(origin,read_key,write_key,
                                   pause_signer(environment,owner,proof_key,clock=clock),stage=environment)
-        def csrf_token(revision, expiry):
-            msg = f'visual-pause-v1\n{environment}\n{public_origin}\n{revision}\n{expiry}'.encode('ascii')
+        if environment=='test':
+            sessions_call = pause_client(origin,read_key,write_key,
+                pause_signer(environment,owner,proof_key,clock=clock,route=BASE_SESSIONS),
+                stage=environment,route=BASE_SESSIONS,validate=sessions_state,max_bytes=524288)
+        def csrf_token(revision, expiry, kind='pause'):
+            msg = f'visual-{kind}-v1\n{environment}\n{public_origin}\n{revision}\n{expiry}'.encode('ascii')
             return f'{expiry}.'+hmac.digest(csrf_key,msg,'sha256').hex()
 
     route = f'/memory-visual-{environment}-read'
@@ -357,6 +395,10 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             try:
                 if self.headers.get('Sec-Fetch-Site')=='cross-site' and path.startswith('/api/'):
                     return self.respond(403)
+                if path in (BROWSER_SESSIONS,BROWSER_SESSIONS+'/prepare'):
+                    if environment!='test' or pause is None or raw != path or query:
+                        return self.respond(404)
+                    return self.pause_request(path,safe, sessions=True)
                 if pause is not None and path in (BROWSER_PAUSE,BROWSER_PAUSE+'/prepare'):
                     if raw != path or query:
                         return self.respond(404)
@@ -404,17 +446,19 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             proofs = self.headers.get_all(PAUSE_OWNER_AUTH,[])
             return pause is not None and len(proofs)==1 and hmac.compare_digest(proofs[0],pause_ingress)
 
-        def pause_request(self,path,safe):
+        def pause_request(self,path,safe,sessions=False):
             if not self.has_pause_owner():
                 return self.respond(403)
             prepare = path.endswith('/prepare')
+            call = sessions_call if sessions else pause_call
+            kind = 'sessions' if sessions else 'pause'
             if self.command != ('POST' if prepare else 'PUT'):
                 return self.respond(405)
             if self.headers.get_all('Origin',[]) != [public_origin]:
                 return self.respond(403)
             lengths = self.headers.get_all('Content-Length',[])
             if (self.headers.get_all('Transfer-Encoding') or len(lengths)!=1
-                    or not re.fullmatch(r'[1-9][0-9]{0,2}',lengths[0])):
+                    or not re.fullmatch(r'[1-9][0-9]{0,4}' if sessions else r'[1-9][0-9]{0,2}',lengths[0])):
                 return self.respond(400)
             if self.headers.get_all('Content-Type',[]) != ['application/json']:
                 return self.respond(415)
@@ -431,11 +475,12 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             if prepare:
                 if type(request) is not dict or request:
                     return self.respond(400)
-                state = pause_call('GET')
-                return reply(200,{**state,'csrf_token':csrf_token(state['revision'],int(clock())+30)})
-            if (type(request) is not dict or set(request)!={'stage','paused','expected_revision'}
-                    or type(request['paused']) is not bool or type(request['expected_revision']) is not str
-                    or not REVISION.fullmatch(request['expected_revision'])):
+                state = call('GET')
+                return reply(200,{**state,'csrf_token':csrf_token(state['revision'],int(clock())+30,kind)})
+            fields={'stage','expected_revision','selected_session_ids' if sessions else 'paused'}
+            if (type(request) is not dict or set(request)!=fields
+                    or (not selected_ids(request['selected_session_ids']) if sessions else type(request['paused']) is not bool)
+                    or type(request['expected_revision']) is not str or not REVISION.fullmatch(request['expected_revision'])):
                 return self.respond(400)
             if request['stage']!=environment:
                 return reply(409,{'error':'queue_control_changed'})
@@ -445,12 +490,13 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             if not proof:
                 return self.respond(403)
             expiry, now = int(proof[1]), int(clock())
-            if not now < expiry <= now+30 or not hmac.compare_digest(tokens[0],csrf_token(revision,expiry)):
+            if not now < expiry <= now+30 or not hmac.compare_digest(tokens[0],csrf_token(revision,expiry,kind)):
                 return self.respond(403)
-            result = pause_call('PUT',{'paused':request['paused'],'expected_revision':revision})
+            operation='selected_session_ids' if sessions else 'paused'
+            result = call('PUT',{operation:request[operation],'expected_revision':revision})
             if result is None:
                 return reply(409,{'error':'queue_control_changed'})
-            if result['paused'] is not request['paused'] or result['revision']==revision:
+            if (set(result[operation])!=set(request[operation]) if sessions else result[operation] is not request[operation]) or result['revision']==revision:
                 return self.respond(503)
             return reply(200,result)
 

@@ -40,3 +40,6 @@ body:has(#login:not([hidden])) #visual-queue-open{display:none}
 #queue-processing-toggle{flex:none}
 #queue-processing-toggle:disabled{opacity:.65;cursor:wait}
 @media(max-width:560px){.queue-processing{align-items:flex-start;flex-direction:column}}
+.queue-session-choice{display:flex;gap:.55rem;align-items:baseline;overflow-wrap:anywhere;margin:.35rem 0}
+#queue-session-policy summary{cursor:pointer;font-weight:600}
+#queue-session-options{max-height:22rem;overflow:auto;margin:.5rem 0}

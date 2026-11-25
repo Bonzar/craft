@@ -45,6 +45,7 @@ class ServiceConfig:
     worker_idle_seconds: float = 30
     source_workers: int = 2
     processing_session_ids: tuple[str, ...] | None = None
+    queue_sessions_revision: str | None = None
     review_model: str | None = None
     reasoning_effort: str | None = None
     review_reasoning_effort: str | None = None
@@ -56,6 +57,13 @@ class ServiceConfig:
     def __post_init__(self):
         from .thought_processing_selection import normalize_session_ids
         object.__setattr__(self, 'processing_session_ids', normalize_session_ids(self.processing_session_ids))
+        if self.queue_sessions_revision is not None:
+            from .processing_control import REVISION, INITIAL
+            if (type(self.queue_sessions_revision) is not str
+                    or not REVISION.fullmatch(self.queue_sessions_revision)
+                    or self.queue_sessions_revision==INITIAL or not self.processing_session_ids
+                    or self.auto_process_fresh_mac or self.source_event_ids is not None):
+                raise ValueError('Invalid queue session worker selection')
         object.__setattr__(self, 'source_event_ids', normalize_session_ids(self.source_event_ids))
         if (type(self.auto_process_fresh_mac) is not bool or self.auto_process_fresh_mac
                 and (self.processing_session_ids != () or self.source_event_ids is not None)):
@@ -254,6 +262,9 @@ def run_worker(config: ServiceConfig, limit: int = 0) -> None:
     if type(limit) is not int or limit < 0:
         raise ValueError('worker limit must be a nonnegative shared attempt budget')
     if config.processing_session_ids == () and (not config.auto_process_fresh_mac or not _eligible_processing_work(config)):
+        return
+    from .queue_session_control import worker_selection_changed
+    if worker_selection_changed(config):
         return
     with open(config.db + '.worker.lock', 'a') as lock:
         try:
@@ -738,3 +749,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+

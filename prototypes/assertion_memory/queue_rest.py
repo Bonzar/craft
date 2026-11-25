@@ -62,7 +62,7 @@ def exact_database(db):
     return info.st_dev,info.st_ino
 
 
-def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False):
+def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False):
     tag,generation=identity()
     before=exact_database(database)
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=1)) as db:
@@ -71,10 +71,18 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
         db.set_progress_handler(lambda:time.monotonic()>=deadline,2000)
         db.execute('BEGIN')
         try:
+            selected=config.processing_session_ids
+            if session_control and lane=='test':
+                from .queue_session_control import read
+                selected,_=read(db,selected)
             data=build_queue_status(db,stage=lane,release_version=tag,
-                 processing_session_ids=config.processing_session_ids,
+                 processing_session_ids=selected,
                  model_configured=config.provider!='none',interactive_enabled=interactive_enabled,
                  auto_process_fresh_mac=(lane=='prod' and config.auto_process_fresh_mac),limit=limit,offset=offset)
+            if lane=='test':
+                from .queue_session_control import annotate_source, annotate_maintenance
+                annotate_source(db,data,selected)
+                annotate_maintenance(db,data,selected)
         finally:
             db.set_progress_handler(None,0)
             db.rollback()
@@ -228,13 +236,13 @@ def _configured_queue_rest(config_path, port, legacy_token):
 
     if lane=='prod':
         identity()
-    def bind(config, interactive_enabled, *, can_change=False):
+    def bind(config, interactive_enabled, *, can_change=False,session_control=False):
         if Path(config.db)!=db or lane=='test' and config.auto_process_fresh_mac:
             logging.getLogger(__name__).warning('queue_rest_database_unavailable')
             return None
         return make_queue_rest(fingerprint=fingerprint,port=port,
             project=lambda **page_:snapshot(config,identity=identity,database=db,
-                interactive_enabled=interactive_enabled,lane=lane,can_change=can_change,**page_))
+                interactive_enabled=interactive_enabled,lane=lane,can_change=can_change,session_control=session_control,**page_))
     return bind
 
 
@@ -245,3 +253,4 @@ def configured_queue_rest(config_path, port, legacy_token):
         # Invalid optional activation must not take the existing Base API down.
         logging.getLogger(__name__).warning('queue_rest_activation_unavailable')
         return None
+
