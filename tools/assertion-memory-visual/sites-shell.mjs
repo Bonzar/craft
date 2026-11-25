@@ -1,4 +1,5 @@
 // Owner-private native Worker. Supply environment bindings and existing same-origin graph relay.
+import {makeVisualAdminRelay} from './admin-relay.mjs';
 const dnsLabel = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
 const siteHost = new RegExp('^'+dnsLabel+'\\.'+dnsLabel+'\\.chatgpt\\.site$');
 const gatewayHost = new RegExp('^'+dnsLabel+'\\.'+dnsLabel+'\\.apigw\\.yandexcloud\\.net$');
@@ -38,11 +39,14 @@ async function bounded(response,limit){
 }
 export function visualShell(mode, graph, fetcher=fetch){
   if(mode!=='test'&&mode!=='prod')throw Error('Unsupported visual scope');
+  const admin=makeVisualAdminRelay(mode,fetcher);
   return {async fetch(req,env){
     const url=new URL(req.url);
     const res=(status,body=null,extra={})=>new Response(req.method==='HEAD'?null:body,{status,headers:{...SAFE,...extra}});
     if(url.protocol!=='https:'||!siteHost.test(env.MEMORY_GRAPH_SITE_HOST||'')||url.hostname!==env.MEMORY_GRAPH_SITE_HOST||url.port||url.username||url.password||env.MEMORY_GRAPH_MODE!==mode)return res(421);
     if(!await owner(req,env,url))return res(403);
+    const administration=await admin(req,env,url);
+    if(administration)return administration;
     if(req.method!=='GET'&&req.method!=='HEAD')return res(405);
     if(url.pathname.startsWith('/api/'))return graph.fetch(req,env);
     const isTest=mode==='test';
