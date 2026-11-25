@@ -2,7 +2,8 @@
 from __future__ import annotations
 import asyncio
 import logging
-from contextlib import closing
+from contextlib import closing, contextmanager
+import fcntl
 import os
 from pathlib import Path
 import secrets
@@ -13,7 +14,7 @@ import stat
 import time
 
 from prototypes.assertion_memory.queue_status import build_queue_status
-from prototypes.assertion_memory import dashboard_projection
+from prototypes.assertion_memory import dashboard_projection, processing_control
 
 SCOPES = {
     'test': ('assertion-test-deploy', Path('/srv/assertion-release/test/state/fictional.sqlite3')),
@@ -71,7 +72,7 @@ def configured_for_legacy_test_reader(source_path, *, env=None):
 
 
 class HostedQueueDashboard:
-    def __init__(self, stage, config, source, *, activation=None):
+    def __init__(self, stage, config, source, *, activation=None, control_lock=None):
         if stage not in SCOPES:
             raise ValueError('Unrecognized hosted dashboard lane')
         account, canonical = SCOPES[stage]
@@ -80,6 +81,7 @@ class HostedQueueDashboard:
         self.stage, self.db = stage, canonical
         self.config = Path(config)
         self.activation = activation
+        self.control_lock = control_lock
         self.publisher_uid = pwd.getpwnam(account).pw_uid
         self.epoch = secrets.token_hex(8)
         self.streams = asyncio.Semaphore(8)
@@ -113,6 +115,48 @@ class HostedQueueDashboard:
         if 'generation' in fields:
             result['release_generation'] = fields['generation']
         return result
+
+    @contextmanager
+    def release_lease(self):
+        if self.control_lock is None:
+            raise ValueError('Queue control release lease unavailable')
+        fd=os.open(self.control_lock,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NONBLOCK)
+        try:
+            f=os.fstat(fd)
+            if (not stat.S_ISREG(f.st_mode) or f.st_uid!=self.publisher_uid
+                    or f.st_nlink!=1 or f.st_mode&0o077):
+                raise ValueError('Untrusted queue control release lease')
+            fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB)
+            if not os.path.samestat(f,self.control_lock.lstat()):
+                raise ValueError('Queue control release lease changed')
+            yield
+        finally:
+            os.close(fd)
+
+    def set_pause(self, *, stage, paused, expected_revision):
+        if stage != self.stage:
+            raise processing_control.Conflict('Wrong deployment stage')
+        with self.release_lease():
+            return self._set_pause(stage, paused, expected_revision)
+
+    def _set_pause(self, stage, paused, expected_revision):
+        identity=self.metadata()
+        if self.db.resolve(strict=True)!=self.db:
+            raise ValueError('Wrong canonical queue database')
+        with closing(sqlite3.connect(self.db.as_uri()+'?mode=rw',uri=True,
+                                     isolation_level=None,timeout=2)) as db:
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                if self.metadata()!=identity:
+                    raise processing_control.Conflict('Deployment release changed')
+                paused,revision=processing_control.set_control(db,paused=paused,expected_revision=expected_revision)
+                if self.metadata()!=identity:
+                    raise processing_control.Conflict('Deployment release changed')
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+        return {'stage':stage,'paused':paused,'revision':revision}
 
     async def watch(self, publisher):
         # One short PRAGMA per process at a bounded cadence. Never opens a

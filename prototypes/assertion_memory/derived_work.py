@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from .processing_control import paused as processing_paused
 from .query_snapshot import QuerySnapshot, capture, _restore_frozen, FrozenRelationFrontierChanged
 
 
@@ -154,6 +155,8 @@ class DerivedWorkQueue:
 
     def claim(self, engine, *, with_model, refresh_fairness=False):
         with self.store.transaction(write=True) as connection:
+            if processing_paused(connection):
+                return None
             self._prepare(connection,engine)
             now = self._time()
             if not with_model:

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
+from .processing_control import paused as processing_paused
 from .capture import CaptureInput, RawEvent, declared_kind
 from .storage import Assertion, MemoryStore, _timestamp
 
@@ -424,6 +425,8 @@ class CaptureQueue:
     def _claim(self, *, with_model: bool, source_first: bool = False, source_batch_limit: int = 32, maintenance_only: bool = False, maintenance_phase: str | None = None, lane: str = 'all') -> _Claim | None:
         lane_filter = _lane_filter(lane)
         with self.store.transaction(write=True) as connection:
+            if processing_paused(connection):
+                return None
             now = self._time()
             fairness = False
             ordering = "available_at, id"

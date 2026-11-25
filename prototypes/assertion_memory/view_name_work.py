@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from .processing_control import paused as processing_paused
 from .view_names import (PROTOCOL, REVIEW_FORMAT_POLICY, NameReviewContractError, NameProviderUnavailable,
     NameReviewRejected, _definition_sha, _digest, _context, _json, _title, candidate_key,
     append, prepare, review, target, BINDING_POLICY, _normal_record)
@@ -137,6 +138,8 @@ class NameWorkQueue:
     def claim(self, engine, *, with_model):
         now=self._time()
         with self.store.transaction(write=True) as c:
+            if processing_paused(c):
+                return None
             if not with_model:
                 c.execute("UPDATE memory_view_name_work SET status='waiting_model',error_kind='unavailable',"
                     "error='No configured naming provider',updated_at=? WHERE status IN ('pending','retry')",(now,))
