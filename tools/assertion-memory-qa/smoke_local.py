@@ -37,10 +37,10 @@ async def mcp(db):
             assert (await tool('memory_process',{'limit':1}))['scheduled'] is False
             print('MCP: 401 without bearer; canonical tools; persisted history; Unicode span; model worker disabled')
 
-def graph(db,directory):
+def graph(db,directory,static_dir):
     password=secrets.token_urlsafe(24)
     app=create_app(db,directory,password=password,synthetic_fixture=True,
-                   static_dir=ROOT/'apps/graph_viewer/web/dist')
+                   static_dir=static_dir)
     with TestClient(app) as client:
         assert client.get('/api/v1/graph').status_code==401
         assert client.get('/').status_code==200
@@ -60,6 +60,7 @@ def graph(db,directory):
 if __name__=='__main__':
     import sys
     db=Path(sys.argv[1]).resolve()
+    static_dir=Path(sys.argv[2]).resolve() if len(sys.argv)>2 else ROOT/"apps/graph_viewer/web/dist"
     asyncio.run(mcp(db))
     with TemporaryDirectory(prefix='craft-vm-viewer-') as d:
-        graph(db,Path(d))
+        graph(db,Path(d),static_dir)

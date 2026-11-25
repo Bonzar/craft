@@ -30,8 +30,8 @@ mkdir -m 700 "$release/private"
 (
   cd "$release"
   export PYTHONPATH="$release"
-  "$python" synthetic_fixture.py "$release/private/fictional.sqlite3"
-  "$python" smoke_local.py "$release/private/fictional.sqlite3"
+  "$python" "$here/synthetic_fixture.py" "$release/private/fictional.sqlite3"
+  "$python" "$here/smoke_local.py" "$release/private/fictional.sqlite3" "$release/apps/graph_viewer/web/dist"
 )
 "$python" - "$release/private" <<'PY'
 import json, pathlib, secrets, sys
@@ -60,7 +60,7 @@ systemctl --user stop "${units[@]}"
 if ! link_to "releases/$3"; then rollback; exit 1; fi
 if ! systemctl --user start "${units[@]}"; then rollback; exit 1; fi
 for attempt in 1 2 3 4 5; do
-  if "$python" "$release/live-smoke.py" "$release/private" >"$release/private/live-smoke.log" 2>&1; then
+  if "$python" "$here/live-smoke.py" "$release/private" >"$release/private/live-smoke.log" 2>&1; then
     cat "$release/private/live-smoke.log"
     printf 'QA active: %s\n' "$3"
     exit 0
