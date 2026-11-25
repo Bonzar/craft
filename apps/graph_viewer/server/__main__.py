@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--queue-status-config',type=Path,
                         help='Optional canonical lane-local Base scheduler projection (no secrets)')
     parser.add_argument('--queue-status-stage',choices=['test','prod'])
+    parser.add_argument('--queue-control',action='store_true',help='Enable owner-session-only processing pause on the standard web app')
     parser.add_argument('--static-dir',type=Path,default=Path(__file__).resolve().parents[1]/'web'/'dist')
     args=parser.parse_args()
     try:
@@ -46,13 +47,21 @@ def main():
     queue_dashboard=None
     if bool(args.queue_status_config)!=bool(args.queue_status_stage):
         parser.error('queue status config and stage must be explicitly paired')
+    if args.queue_control and (args.queue_status_config is None or args.queue_status_stage!='test'):
+        parser.error('queue control requires the explicit standard TEST owner web app')
     if args.queue_status_config is not None:
-        from .queue_dashboard import HostedQueueDashboard
+        from .queue_dashboard import HostedQueueDashboard, _test_activation, TEST_DEPLOY_ROOT
         try:
-            queue_dashboard=HostedQueueDashboard(args.queue_status_stage,args.queue_status_config,args.source)
+            queue_dashboard=HostedQueueDashboard(args.queue_status_stage,args.queue_status_config,args.source,
+                activation=_test_activation if args.queue_control else None,
+                control_lock=TEST_DEPLOY_ROOT/'deploy.lock' if args.queue_control else None)
+            if args.queue_control:
+                if os.getuid()!=queue_dashboard.publisher_uid or os.geteuid()!=queue_dashboard.publisher_uid:
+                    raise ValueError('Queue control requires the canonical TEST account')
+                _test_activation()
         except (ValueError, KeyError) as error:
             parser.error(str(error))
-    app=create_app(args.source,args.state_dir,password=password,provider_id=args.provider_id,static_dir=args.static_dir,semantic_model=model,synthetic_fixture=args.synthetic_fixture,public_origin=args.public_origin,allowed_proxy_hosts=args.allowed_proxy_host,bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard)
+    app=create_app(args.source,args.state_dir,password=password,provider_id=args.provider_id,static_dir=args.static_dir,semantic_model=model,synthetic_fixture=args.synthetic_fixture,public_origin=args.public_origin,allowed_proxy_hosts=args.allowed_proxy_host,bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard,queue_control=args.queue_control)
     uvicorn.run(app,host=args.host,port=args.port,access_log=False,proxy_headers=False,server_header=False)
 
 

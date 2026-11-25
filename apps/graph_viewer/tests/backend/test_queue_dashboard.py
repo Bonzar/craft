@@ -1,5 +1,8 @@
 """Existing authenticated capabilities bridge and bounded live queue behavior."""
 import asyncio
+import fcntl
+import json
+from contextlib import nullcontext
 import os
 from collections import deque
 from pathlib import Path
@@ -26,6 +29,9 @@ class FixtureDash(HostedQueueDashboard):
         self.stage='test'
         self.streams=asyncio.Semaphore(8)
         self.epoch='d'*16
+        self.control_lock=path.parent/'deploy.lock'
+        self.control_lock.touch(mode=0o600)
+        self.publisher_uid=os.getuid()
 
     def metadata(self):
         return {'stage':self.stage,'release_version':TAG,'model_configured':True,
@@ -157,6 +163,83 @@ class QueueDashboardTest(unittest.TestCase):
                     (scoped/'current').symlink_to(next_release)
                     self.assertEqual(c.get(endpoint,headers=headers).status_code,503)
 
+    def test_prod_reader_uses_separate_root_pinned_uid_and_current_scope(self):
+        run=self.root/'projection'
+        directory=run/'prod'
+        directory.mkdir(parents=True,mode=0o750)
+        directory.chmod(0o750)
+        scoped=self.root/'production'
+        revision,archive='3'*40,'4'*64
+        active=scoped/'releases'/(revision+'-'+archive)
+        active.mkdir(parents=True)
+        (scoped/'current').symlink_to(active,target_is_directory=True)
+        uid=os.getuid()
+        policy=self.root/'policy.json'
+        policy.write_text(json.dumps({'stage':'prod','account':'existing-graph','uid':uid}))
+        policy.chmod(0o644)
+        stagekey=queue_dashboard.DASHBOARD_STAGE_ENV
+        pathkey=queue_dashboard.DASHBOARD_PATH_ENV
+        env={stagekey:'prod',pathkey:str(directory/'scheduler.json')}
+        graph_cfg={'password':'synthetic-owner-strong','public_origin':ORIGIN,
+                   'allowed_proxy_hosts':[GATEWAY],'bridge_read_token_file':self.key}
+        h={'origin':ORIGIN,'authorization':'Bearer '+'c'*64}
+        source=SimpleNamespace(db=str(self.path),provider='codex',
+            processing_session_ids=('session',),auto_process_fresh_mac=False)
+        self.seed()
+        tested_policy=queue_dashboard._prod_reader_uid
+        with patch.object(queue_dashboard.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=uid)), \
+             patch.object(dashboard_projection,'RUN',run), \
+             patch.object(queue_dashboard,'PROD_READER_POLICY',policy), \
+             patch.object(queue_dashboard,'_prod_reader_uid',side_effect=lambda p:tested_policy(p,policy_owner=uid)), \
+             patch.object(queue_dashboard,'PROD_DEPLOY_ROOT',scoped), \
+             patch.object(queue_dashboard,'SCOPES',{'prod':('publisher',self.path)}), \
+             patch.object(queue_dashboard,'LOADED_RELEASE',active), \
+             patch.object(queue_dashboard,'_prod_read_fence',nullcontext):
+            self.assertEqual(tested_policy(policy,policy_owner=uid),uid)
+            policy.chmod(0o664)
+            self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.path,env=env))
+            policy.chmod(0o644)
+            self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.path,env={
+                **env,pathkey:str(run/'test'/'scheduler.json')}))
+            self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.root/'other',env=env))
+            with patch.object(queue_dashboard.os,'geteuid',return_value=uid+1):
+                self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.path,env=env))
+            with patch.dict(os.environ,env,clear=False):
+                app=create_app(self.path,self.root/'web-prod',**graph_cfg)
+            self.assertEqual(app.state.queue_dashboard.stage,'prod')
+            path='/api/v1/capabilities?queue_status=1'
+            gen=dashboard_projection.release_generation(revision,archive,TAG,'prod')
+            with TestClient(app,base_url='https://'+GATEWAY) as c:
+                self.assertEqual(c.get(path,headers=h).status_code,503)
+                self.assertEqual(c.get(path).status_code,401)
+                self.assertEqual(c.put('/api/v1/processing/pause',headers=h,json={}).status_code,401)
+                with dashboard_projection.publish(stage='prod',config=source,release=TAG,
+                    generation=gen,interactive_enabled=True):
+                    answer=c.get(path,headers=h)
+                    self.assertEqual(answer.status_code,200,answer.text)
+                    self.assertEqual(answer.json()['stage'],'prod')
+                    self.assertEqual(answer.json()['release_generation'],gen)
+                    self.assertNotIn('DO NOT LEAK',answer.text)
+                    policy.unlink()
+                    self.assertEqual(c.get(path,headers=h).status_code,503)
+
+    def test_prod_dashboard_uses_shared_lane_fence_not_write_or_replace(self):
+        parent=self.root/'root-transition'
+        parent.mkdir(mode=0o755)
+        parent.chmod(0o755)
+        fence=parent/'fence.lock'
+        fence.touch(mode=0o644)
+        fence.chmod(0o644)
+        with queue_dashboard._prod_read_fence(fence,owner=os.getuid()):
+            with fence.open('rb') as f:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        fence.unlink()
+        with self.assertRaises(FileNotFoundError):
+            with queue_dashboard._prod_read_fence(fence,owner=os.getuid()):
+                pass
+        self.assertFalse(fence.exists())
+
     def test_owner_scope_and_actual_scheduler_rows_through_existing_path(self):
         self.seed()
         app=create_app(self.path,self.root/'graph',password='synthetic-owner-strong',public_origin=ORIGIN,
@@ -183,6 +266,50 @@ class QueueDashboardTest(unittest.TestCase):
             with self.store.transaction(write=True) as db:
                 db.execute("UPDATE memory_capture_jobs SET status='completed'")
             self.assertEqual(cli.get(path,headers=h).json()['queues'][0]['items'],[])
+
+    def test_pause_mutation_is_explicit_same_origin_owner_cookie_only(self):
+        self.seed()
+        opts={'password':'synthetic-owner-strong','public_origin':ORIGIN,'allowed_proxy_hosts':[GATEWAY],
+              'bridge_read_token_file':self.key,'queue_dashboard':self.dash}
+        auth={'origin':ORIGIN,'authorization':'Bearer '+'c'*64}
+        url='/api/v1/processing/pause'
+        read='/api/v1/capabilities?queue_status=1'
+        req={'stage':'test','paused':True,'expected_revision':'0'*32}
+        disabled=create_app(self.path,self.root/'disabled',**opts)
+        with TestClient(disabled,base_url=ORIGIN) as cli:
+            login=cli.post('/api/v1/session',headers={'origin':ORIGIN},json={'password':opts['password']}).json()
+            h={'origin':ORIGIN,'x-csrf-token':login['csrf_token']}
+            self.assertFalse(cli.get(read,headers=h).json()['processing_control']['can_change'])
+            self.assertEqual(cli.put(url,headers=h,json=req).status_code,503)
+        enabled=create_app(self.path,self.root/'enabled',queue_control=True,**opts)
+        with TestClient(enabled,base_url=ORIGIN) as cli:
+            self.assertFalse(cli.get(read,headers=auth).json()['processing_control']['can_change'])
+            self.assertEqual(cli.put(url,headers=auth,json=req).status_code,401)
+            login=cli.post('/api/v1/session',headers={'origin':ORIGIN},json={'password':opts['password']}).json()
+            h={'origin':ORIGIN,'x-csrf-token':login['csrf_token']}
+            self.assertEqual(cli.put(url,headers={'origin':ORIGIN},json=req).status_code,403)
+            self.assertEqual(cli.put(url,headers={**h,'origin':'https://wrong.test'},json=req).status_code,403)
+            self.assertEqual(cli.put(url,headers=h,json={**req,'stage':'prod'}).status_code,409)
+            self.assertEqual(cli.put(url,headers=h,json={**req,'paused':'true'}).status_code,400)
+            self.assertEqual(cli.put(url,headers={**h,'content-type':'application/json'},
+                content='{"stage":"prod","stage":"test","paused":true,"expected_revision":"'+'0'*32+'"}').status_code,400)
+            with self.dash.control_lock.open('rb') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                self.assertEqual(cli.put(url,headers=h,json=req).status_code,503)
+                self.assertFalse(cli.get(read,headers=h).json()['processing_control']['can_change'])
+            r=cli.put(url,headers=h,json=req)
+            self.assertEqual(r.status_code,200,r.text)
+            revision=r.json()['revision']
+            self.assertTrue(r.json()['paused'])
+            self.assertEqual(cli.put(url,headers=h,json={**req,'paused':False}).status_code,409)
+            status=cli.get(read,headers=h).json()
+            self.assertEqual(status['processing_control'],{'paused':True,'revision':revision,'can_change':True})
+            self.assertIsNone(status['queues'][0]['items'][0]['position'])
+            self.assertEqual(status['queues'][0]['items'][0]['status'],'paused')
+            r=cli.put(url,headers=h,json={**req,'expected_revision':revision,'paused':False})
+            self.assertEqual(r.status_code,200,r.text)
+            self.assertFalse(r.json()['paused'])
+            self.assertEqual(cli.get(read,headers=h).json()['queues'][0]['items'][0]['position'],1)
 
     def test_signal_emitted_from_real_sqlite_commit_without_content(self):
         async def run():

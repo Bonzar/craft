@@ -194,7 +194,15 @@ def factory(stage,root,config_dir,legacy_token):
             raise ValueError('Private process is no longer the active release')
         return tag,generation
 
+    from prototypes.assertion_memory import native_pause
+    try:
+        native_pause_config=native_pause.configured(stage,root,config_dir,read_regular=read_regular,
+            reserved=set(machine)|{sha256(v.encode('ascii')).hexdigest() for v in (legacy_token,read,effect) if v is not None})
+    except (OSError,ValueError,UnicodeError):
+        native_pause_config=None
     paths={f'/memory-mcp-{stage}-tools'}
+    if native_pause_config is not None:
+        paths.add(native_pause.PATH)
     if machine:
         paths.add(f'/memory-api-{stage}')
     if effect is not None:
@@ -239,6 +247,22 @@ def factory(stage,root,config_dir,legacy_token):
         app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations,machine_digests=machine,
             fresh_mac_digest=personal_mac if config.auto_process_fresh_mac else None)
         handler = effect_lock(app,root,stage,effect,machine)
+        if native_pause_config is not None:
+            from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard
+            from prototypes.assertion_memory.dashboard_projection import projection_path
+            def active_pause_release():
+                live_identity()
+                return revision,archive
+            control=HostedQueueDashboard(stage,projection_path(stage),config.db,
+                                         activation=active_pause_release,control_lock=root/'deploy.lock')
+            owner, token = native_pause_config
+            pause_app=native_pause.make_native_pause(actor=owner,token=token,
+                                                   prepare=control.read_pause,change=control.set_pause)
+            private_handler=handler
+            async def handler(scope,receive,send):
+                if scope.get('type')=='http' and scope.get('path')==native_pause.PATH:
+                    return await pause_app(scope,receive,send)
+                return await private_handler(scope,receive,send)
         handler.query_jobs = jobs
         from prototypes.assertion_memory.dashboard_projection import publish
         handler.queue_dashboard_projection = lambda: publish(
