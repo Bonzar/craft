@@ -95,6 +95,10 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
     full_sites=profile.get('sites_full_catalog',False)
     if type(full_sites) is not bool or full_sites and (operations is None or not effects or effects_only):
         raise ValueError('Full Sites catalog requires the typed registry and both authenticated routes')
+    durable_queries=profile.get('durable_query_jobs',False)
+    if type(durable_queries) is not bool or durable_queries and not full_sites:
+        raise ValueError('Durable interactive queries require the full typed Sites profile')
+
     canonical_schemas={name:{**row['canonicalInputSchema'],'additionalProperties':False}
                        for name,row in manifest.items()} if machine_digests or full_sites else {}
     canonical_validators={name:Draft202012Validator(schema) for name,schema in canonical_schemas.items()}
@@ -216,7 +220,8 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
             return await reply(400, {"error":"invalid_request"})
         query_call = (name == QUERY and (machine or full_sites)) or capability == "generate"
         is_effect = (machine and manifest.get(name, {}).get("readOnlyHint") is not True) or capability == "intake_process"
-        limiter = gate if discovery else query_gate if query_call else effect_gate if is_effect else gate
+        limiter = (gate if discovery or query_call and durable_queries else
+                   query_gate if query_call else effect_gate if is_effect else gate)
         if limiter.locked(): return await reply(503, {"error":"unavailable"})
         try:
             async with limiter:

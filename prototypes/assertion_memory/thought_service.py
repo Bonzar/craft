@@ -84,6 +84,31 @@ class ThoughtService(MemoryService):
                             for row in found.thoughts],
                 'scope': scope, 'session_id': session_id}
 
+    def ready_query(self, query, scope=None, valid_as_of=None, recorded_as_of=None, *, request_session_id=None):
+        """Serve an already checked result without invoking model navigation."""
+        from .thought_query import reuse_without_generation
+        from .thought_selection import ThoughtSelection
+        from .thought_status import query_diagnostics
+        sessions = () if request_session_id is None else normalize_session_ids((request_session_id,))
+        with processing_cohort(sessions):
+            selection = (ThoughtSelection(self.thoughts, scope=scope, valid_as_of=valid_as_of,
+                         recorded_as_of=recorded_as_of) if any(value is not None for value in
+                         (scope, valid_as_of, recorded_as_of)) else self.thoughts)
+            engine = ThoughtEngine(selection, None, self.engine.candidates, retrieval=self.engine.retrieval)
+            thought = reuse_without_generation(engine, query)
+            if thought is None:
+                return None
+            return query_diagnostics(self, self._answer_payload(thought, scope, valid_as_of, recorded_as_of), scope)
+
+    def _answer_payload(self, thought, scope, valid_as_of, recorded_as_of):
+        page = self.source(thought.id, section='text', snapshot_id=thought.version)
+        return {'answer': page['content'], 'thought': thought_descriptor(thought, self.engine.question_texts(thought)),
+                'answer_accepted': True, 'answer_payload_complete': page['response_complete'],
+                'answer_continuations': [page['continuation']] if page['continuation'] else [],
+                'version_id': thought.version, 'view_id': thought.id,
+                'query_snapshot': {'scope': scope, 'valid_as_of': valid_as_of,
+                                   'recorded_as_of': recorded_as_of}}
+
     def query(self, query, scope=None, valid_as_of=None, recorded_as_of=None, *, request_session_id=None):
         sessions = () if request_session_id is None else normalize_session_ids((request_session_id,))
         with processing_cohort(sessions):
@@ -142,14 +167,7 @@ class ThoughtService(MemoryService):
                     self.work.enqueue([thought])
                 trace.record('query_outcome',details={'answer_accepted':True,'thought':{'thought_id':thought.id,'version':thought.version},'published':published})
                 trace.finish()
-                page = self.source(thought.id, section='text', snapshot_id=thought.version)
-                result = {'answer': page['content'], 'thought': thought_descriptor(thought, self.engine.question_texts(thought)), 'run_id': trace.id,
-                          'answer_accepted': True, 'answer_payload_complete': True,
-                          'answer_continuations': [page['continuation']] if page['continuation'] else [],
-                          'version_id': thought.version, 'view_id': thought.id,
-                          'query_snapshot': {'scope': scope, 'valid_as_of': valid_as_of,
-                                             'recorded_as_of': recorded_as_of}}
-                result['answer_payload_complete'] = page['response_complete']
+                result = {**self._answer_payload(thought, scope, valid_as_of, recorded_as_of), 'run_id': trace.id}
                 if engine._is_parallel_alternative(thought):
                     result['knowledge_limit'] = ('Сохранён параллельно подготовленный проверенный вариант. '
                         'Его совместимость с другим ответом на тот же вопрос ещё не установлена; '

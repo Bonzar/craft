@@ -133,5 +133,75 @@ class Dual(TestCase):
             asyncio.run(test(str(Path(folder)/'empty.sqlite3')))
 
 
+    def test_http_interactive_job_can_be_polled_via_canonical_operation(self):
+        import sys
+        from threading import Event
+        from uuid import uuid4
+        from .query_jobs import QueryJobs
+        from .release_catalog import export
+        tool_root=Path(__file__).resolve().parents[2]/'tools/assertion-memory-hosted-mcp'
+
+        async def test(db):
+            with patch.object(sys,'path',[str(tool_root),*sys.path]):
+                from compile_functional_release import compile_release
+                from vm_relay import make_app
+            release='assertion-memory-v9.9.9'
+            canonical=await export('a'*40)
+            pins={k:canonical[k] for k in ('revision','module_sha256','schema_sha256')}
+            pins['registry']='base-typed-operations-v1'
+            catalog=compile_release(canonical,pins,effects=True)
+            profile={'lane':'test','base_release':release,'enabled_capabilities':['baseline_read','intake_process'],
+                     'catalog_sha256':catalog['catalog_sha256'],'require_catalog_identity':True,
+                     'read_catalog_sha256':compile_release(canonical,pins,effects=False)['catalog_sha256'],
+                     'sites_full_catalog':True,'durable_query_jobs':True}
+            entered,proceed=Event(),Event()
+            calls=[]
+            def run(**arguments):
+                calls.append(arguments['query'])
+                entered.set()
+                if not proceed.wait(3):
+                    raise RuntimeError('fixture wait expired')
+                return {'answer':'Сеанс в 19:30.','answer_accepted':True}
+            jobs=QueryJobs(db,run,lambda **_:None,wait_seconds=0.10)
+            def neutral(config,store,service,background):
+                ops=create_operations(config,store,service=service,query_jobs=jobs)
+                app=make_app(profile,catalog,'b'*64,lambda:(release,'f'*64),
+                             operations=ops,effect_token='c'*64)
+                app.query_jobs=jobs
+                return frozenset(('/memory-mcp-test-tools','/memory-mcp-test-effects')),app
+            app=create_http_app(ServiceConfig(db=db,provider='none'),'e'*64,'memory.example',
+                                background=False,neutral_factory=neutral)
+            async with app.lifespan(), AsyncClient(transport=ASGITransport(app=app),
+                                                  base_url='https://memory.example') as client:
+                path='/memory-mcp-test-effects'
+                headers={'Authorization':'Bearer '+'c'*64}
+                async def send(operation,arguments,expected=None):
+                    body={'request_id':str(uuid4()),'operation':operation,'arguments':arguments}
+                    if expected is not None:body['expected']=expected
+                    r=await client.post(path,headers=headers,json=body)
+                    self.assertEqual(r.status_code,200,r.text)
+                    return r.json()
+                cat=await send('catalog',{})
+                expected={key:cat[key] for key in ('release','generation','catalog_sha256')}
+                try:
+                    first=(await send('memory_query',{'query':'Когда сеанс?','query_request_id':'fixture'},expected))['result']
+                    self.assertIn(first['query_state'],('queued','running'))
+                    self.assertTrue(await asyncio.to_thread(entered.wait,1))
+                    key=first['query_job_id']
+                    pending=(await send('memory_query',{'query_job_id':key},expected))['result']
+                    self.assertEqual(pending['query_state'],'running')
+                finally:
+                    proceed.set()
+                for _ in range(30):
+                    result=(await send('memory_query',{'query_job_id':key},expected))['result']
+                    if result['query_state']=='completed':
+                        break
+                    await asyncio.sleep(0.03)
+                self.assertEqual(result['answer'],'Сеанс в 19:30.')
+                self.assertEqual(calls,['Когда сеанс?'])
+        with tempfile.TemporaryDirectory() as folder:
+            asyncio.run(test(str(Path(folder)/'empty.sqlite3')))
+
+
 if __name__=='__main__':
     main()

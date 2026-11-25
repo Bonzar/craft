@@ -11,7 +11,7 @@ def profile(lane,letter):
             'access_identity_sha256':digest(('acl-'+lane).encode())}
 class ReleasePackage(unittest.TestCase):
     def setUp(self):
-        self.tag='assertion-memory-sites-v0.1.0'
+        self.tag='assertion-memory-v0.1.6'
         self.src='9'*40
         self.code=b'export default 42;'
         self.profiles={'test':profile('test','a'),'prod':profile('prod','b')}

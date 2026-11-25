@@ -39,10 +39,12 @@ def _frontier(engine, frame, selected):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def _locate(engine, frame):
-    if frame.guidance is None:
-        frame.initial = engine.retrieve(frame.question, frame.explicit)
-        frame.raw = engine._pending_raw_material(frame.question)
+def _load(engine, frame):
+    frame.initial = engine.retrieve(frame.question, frame.explicit)
+    frame.raw = engine._pending_raw_material(frame.question)
+
+
+def _checked_candidate(engine, frame):
     cached_candidates = [row for row in frame.initial if frame.question in engine.question_texts(row)
         and row.metadata.get('verification') == 'accepted' and not engine._is_parallel_alternative(row)
         and engine._fresh(row)]
@@ -51,6 +53,21 @@ def _locate(engine, frame):
         if engine._checked(cached, frame.question, frame.frontier, allow_unrecorded=False):
             engine._emit('reuse', thought=engine._basis(cached), reason='checked question and unchanged graph neighborhood')
             return cached
+    return None
+
+
+def reuse_without_generation(engine, question):
+    frame = _Frame(semantic_text(question, 'question'))
+    _load(engine, frame)
+    return _checked_candidate(engine, frame)
+
+
+def _locate(engine, frame):
+    if frame.guidance is None:
+        _load(engine, frame)
+    cached = _checked_candidate(engine, frame)
+    if cached is not None:
+        return cached
     frame.initialized = True
     if not frame.initial and frame.raw[0]:
         frame.frontier = _frontier(engine, frame, None)

@@ -48,7 +48,7 @@ class OperationRegistry:
         value = operation.handler(**{name: getattr(parsed, name) for name in model.model_fields})
         return await value if isawaitable(value) else value
 
-def create_operations(config, store, *, background=False, service=None):
+def create_operations(config, store, *, background=False, service=None, query_jobs=None):
     # Transitional imports of shared declarations: this never creates FastMCP or a listener.
     # The legacy binary-artifact handler is not authorized on the hosted HTTP policy.
     from .mcp_server import WorkerLauncher, _register_read_tools, _register_write_tools
@@ -60,5 +60,5 @@ def create_operations(config, store, *, background=False, service=None):
     launcher = WorkerLauncher(config)
     registry = OperationRegistry()
     _register_write_tools(registry, service, launcher, background)
-    _register_read_tools(registry, service, config, launcher if background else None)
+    _register_read_tools(registry, service, config, launcher if background else None, query_jobs=query_jobs)
     return registry

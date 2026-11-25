@@ -68,6 +68,7 @@ jobs:
           python -m unittest \
             prototypes.assertion_memory.tests.test_thought_store \
             tests.test_thought_service \
+            prototypes.assertion_memory.query_jobs_test \
             tests.test_thought_provider_contract \
             prototypes.assertion_memory.native_intake_test \
             prototypes.assertion_memory.desktop_fast_test \
@@ -106,6 +107,45 @@ jobs:
         with:
           name: assertion-memory-base-release-${{ github.event.release.id }}-${{ github.sha }}
           path: ${{ runner.temp }}/qa-release/*
+          if-no-files-found: error
+          retention-days: 90
+      - name: Verify thin recorder and bundle entry points
+        working-directory: tools/assertion-memory-hosted-mcp/sites-dynamic
+        run: |
+          node --test test_worker.mjs
+          python3 -B -m unittest test_release_package
+      - name: Build one immutable two-profile bridge bundle
+        env:
+          TEST_PROJECT_HASH: ${{ vars.MEMORY_TEST_SITE_PROJECT_SHA256 }}
+          TEST_ORIGIN_HASH: ${{ vars.MEMORY_TEST_SITE_ORIGIN_SHA256 }}
+          TEST_ACL_HASH: ${{ vars.MEMORY_TEST_SITE_ACCESS_SHA256 }}
+          PROD_PROJECT_HASH: ${{ vars.MEMORY_PROD_SITE_PROJECT_SHA256 }}
+          PROD_ORIGIN_HASH: ${{ vars.MEMORY_PROD_SITE_ORIGIN_SHA256 }}
+          PROD_ACL_HASH: ${{ vars.MEMORY_PROD_SITE_ACCESS_SHA256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sites-bridge-release"
+          python3 -B - <<'PY'
+          import json,os,pathlib,re
+          for lane in ('test','prod'):
+              args=lane.upper()
+              names=[args+'_'+key for key in ('PROJECT_HASH','ORIGIN_HASH','ACL_HASH')]
+              if not all(re.fullmatch(r'[0-9a-f]{64}',os.environ.get(key,'')) for key in names):
+                  raise SystemExit('Missing verified Sites scope fields: '+','.join(names))
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/(lane+'.json')
+              p.write_text(json.dumps({'lane':lane,'owner_only':True,'include_effects':True,
+                 'effects_timeout_ms':10000,'project_id_sha256':os.environ[args+'_PROJECT_HASH'],
+                 'site_origin_sha256':os.environ[args+'_ORIGIN_HASH'],
+                 'access_identity_sha256':os.environ[args+'_ACL_HASH']}))
+          PY
+          base="tools/assertion-memory-hosted-mcp/sites-dynamic"
+          python3 -B "$base/package_release.py" --tag "$GITHUB_REF_NAME" --source-sha "$GITHUB_SHA" \
+            --worker "$base/worker.mjs" --test-profile "$RUNNER_TEMP/test.json" --prod-profile "$RUNNER_TEMP/prod.json" \
+            --output "$RUNNER_TEMP/sites-bridge-release/source.tar.gz" > "$RUNNER_TEMP/sites-bridge-release/build-evidence.json"
+      - id: sites_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sites-mcp-bridge-${{ github.event.release.id }}-${{ github.sha }}
+          path: ${{ runner.temp }}/sites-bridge-release/
           if-no-files-found: error
           retention-days: 90
   deploy-test:

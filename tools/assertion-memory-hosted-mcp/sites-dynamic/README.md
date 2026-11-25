@@ -56,9 +56,10 @@ endpoint, owner-only private Site rollout and native inventory verification.
 
 ## Release and native receipt
 
-Tag type: `assertion-memory-sites-vX.Y.Z`. The source CI jobs package one artifact
-from the selected GitHub release commit reachable from main, without Sites
-write credentials. It contains exactly one shared Worker, two hashed config
+The existing Base tag `assertion-memory-vX.Y.Z` also packages the Sites
+bridge as a companion artifact in the original Base build. There is no
+separate Sites release tag or workflow. The build uses the same trusted,
+immutable commit reachable from main, without Sites write credentials. It contains exactly one shared Worker, two hashed config
 envelopes and a file manifest. Hash inputs are the exact existing private Site
 project ID, its origin, and canonical approved access identity; the public
 artifact must not contain the unhashed IDs, owner values, private source,
@@ -105,11 +106,25 @@ Roll out TEST first. After deploying Base, compare authenticated native
 `tools/list` to the Base registry, check a source and its snapshot, and invoke
 `memory_query` using only fictional data. Verify both a saved answer and a
 request requiring model work; don't infer that generation works from discovery.
-The Sites release profile allows up to 120 seconds for an effect request.
-Confirm the effective Gateway, reverse-proxy and client deadline too. A timed
-out query must not be retried automatically. The current Sites JSON envelope
+The Sites release profile budgets up to 10 seconds per effect request. This
+is a transport deadline only, not a generation limit. Before promoting an
+interactive query rollout, verify that slow requests have a durable receipt
+and can be checked later without restarting generation. The synchronous query
+path alone does not meet that requirement. Confirm effective Gateway,
+reverse-proxy and client deadlines; timed-out writes must not be retried blindly. The current Sites JSON envelope
 is intentionally bounded and does not promise the machine endpoint's large
 binary transfer allowance; use the machine API for large artifacts. Check that
 the native client's published inventory refreshes, through the existing Sites
 release process if needed. Promote the exact Base/Sites artifacts only after
 those TEST checks. Roll back the Base release to restore the prior catalog.
+
+For interactive questions, call `memory_query` with a unique
+`query_request_id` when a lost submission might need to be recovered.
+Read `query_state` before acting. For `queued` or `running`, wait at least
+`query_poll_after_ms` then call the same method with only `query_job_id`.
+Do not submit the question again. `completed` is a transport/job state,
+not proof that the answer was accepted. The query lane owns one generation
+slot independently of the capture worker. The legacy direct MCP endpoint
+continues to accept synchronous queries; its old clients do not need to
+supply job fields. A crashed worker returns a failed preserved receipt
+rather than silently running a possibly published query twice.

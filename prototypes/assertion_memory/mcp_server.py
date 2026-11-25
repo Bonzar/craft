@@ -474,7 +474,7 @@ def _register_write_tools(mcp, service, launcher, background):
 
 
 
-def _register_read_tools(mcp, service, config, launcher=None):
+def _register_read_tools(mcp, service, config, launcher=None, query_jobs=None):
     _register_source_tools(mcp,service)
     from .thought_service import ThoughtService
     if isinstance(service, ThoughtService):
@@ -489,8 +489,9 @@ def _register_read_tools(mcp, service, config, launcher=None):
 
     @mcp.tool()
     async def memory_query(
-        query: str, scope: str | None = None, valid_as_of: str | None = None,
+        query: str | None = None, scope: str | None = None, valid_as_of: str | None = None,
         recorded_as_of: str | None = None, request_session_id: str | None = None,
+        query_job_id: str | None = None, query_request_id: str | None = None,
     ) -> dict:
         """Answer from a versioned evidence view. Omitted/null scope searches every known scope in this
         connected database; an explicit scope restricts retrieval to that exact scope. Optional inclusive
@@ -515,7 +516,16 @@ def _register_read_tools(mcp, service, config, launcher=None):
         The same query/scope retains summary history. Optional request_session_id is an explicit
         caller-session claim for execution history, never source authentication, factual proof or user approval.
         Omit it when the actual current caller session is unknown.
+        For a hosted interactive query, supply an optional unique query_request_id to retry
+        a lost submission safely. If query_state is queued or running, call this tool again
+        with only query_job_id. Never re-submit a pending query or present it as an answer.
         """
+        if query_jobs is not None:
+            return await query_jobs(query=query, scope=scope, valid_as_of=valid_as_of,
+                                    recorded_as_of=recorded_as_of, request_session_id=request_session_id,
+                                    query_job_id=query_job_id, query_request_id=query_request_id)
+        if query_job_id is not None or query_request_id is not None or query is None:
+            raise ValueError('This endpoint requires a query and does not support interactive job arguments')
         try:
             return await asyncio.to_thread(_query_with_connection, config, query, scope,
                                            valid_as_of, recorded_as_of, request_session_id)

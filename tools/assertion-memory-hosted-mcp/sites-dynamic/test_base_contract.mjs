@@ -87,7 +87,8 @@ for(const lane of ['test','prod'])test(lane+' closed Sites sees the full canonic
  assert.equal(new Set(tools.map(x=>x.name)).size,18);
  const query=tools.find(x=>x.name==='memory_query');
  assert.equal(query.annotations.readOnlyHint,false);
- assert.equal(query.inputSchema.properties.query.type,'string');
+ assert.ok(query.inputSchema.properties.query.anyOf.some(x=>x.type==='string'));
+ assert.ok(query.inputSchema.properties.query_job_id.anyOf.some(x=>x.type==='string'));
  assert.equal((await limited('tools/list',{})).result.tools.length,5);
  assert.equal((await limited('tools/call',{name:'memory_query',arguments:{query:'Фильм?'}})).error.code,-32602);
  const r=await full('tools/call',{name:'memory_source',arguments:{record_id:'fictional-choice',section:'text'}});

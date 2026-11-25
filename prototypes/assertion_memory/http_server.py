@@ -12,7 +12,7 @@ import os
 import stat
 import re
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from .mcp_server import ServiceConfig, WorkerLauncher, create_server
@@ -130,7 +130,10 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
         try:
             if background:
                 WorkerLauncher(config).start()
-            async with inner.router.lifespan_context(inner):
+            async with AsyncExitStack() as stack:
+                await stack.enter_async_context(inner.router.lifespan_context(inner))
+                if neutral is not None and (jobs := getattr(neutral[1], 'query_jobs', None)) is not None:
+                    await stack.enter_async_context(jobs.lifespan())
                 yield
         finally:
             store.close()
