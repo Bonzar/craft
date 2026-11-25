@@ -136,6 +136,23 @@ jobs:
           else
             python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy test
           fi
+      - name: Normalize packed TEST receipt for protected output
+        if: steps.packmode.outputs.active == 'true'
+        run: |
+          python3 -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ['RUNNER_TEMP']) / 'configured-release/configured-test-proof.json'
+          wire = path.read_bytes()
+          body, lf = wire[:-1], wire[-1:]
+          if lf != b'\n' or b'\n' in body or b'\r' in body:
+              raise ValueError('Expected a single terminal LF on the packed TEST receipt')
+          if not isinstance(json.loads(body.decode('ascii')), dict):
+              raise ValueError('Expected a JSON object for the packed TEST receipt')
+          path.write_bytes(body)
+          PY
       - name: Preserve TEST evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
