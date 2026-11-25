@@ -18,6 +18,7 @@ from pathlib import Path
 from .mcp_server import ServiceConfig, WorkerLauncher, create_server
 from .storage import MemoryStore
 from .queue_rest import PATH as QUEUE_REST_PATH
+from .queue_pause_rest import PATH as QUEUE_PAUSE_PATH
 
 MIN_TOKEN_LENGTH = 32
 TOKEN_ENV_VAR = 'ASSERTION_MEMORY_TOKEN'
@@ -50,10 +51,11 @@ def load_token(path: Path | None = None, *, env_var: str | None = None) -> str:
 
 
 class AuthenticatedMemoryApp:
-    def __init__(self, app, token, neutral=None, queue_rest=None):
+    def __init__(self, app, token, neutral=None, queue_rest=None, queue_pause=None):
         self.app = app
         self.neutral = neutral
         self.queue_rest = queue_rest
+        self.queue_pause = queue_pause
         self.expected = ('Bearer ' + token).encode('ascii')
 
     @asynccontextmanager
@@ -64,6 +66,10 @@ class AuthenticatedMemoryApp:
     async def __call__(self, scope, receive, send):
         if scope['type'] == 'http':
             path=scope.get('path','')
+            if path == QUEUE_PAUSE_PATH:
+                if self.queue_pause is None:
+                    return await _error_response(404,'not found',scope,receive,send)
+                return await self.queue_pause(scope,receive,send)
             if path==QUEUE_REST_PATH:
                 if self.queue_rest is None:
                     return await _error_response(404,'not found',scope,receive,send)
@@ -190,3 +196,4 @@ def main(argv=None):
 
 if __name__ == '__main__':
     main()
+
