@@ -151,3 +151,33 @@ protected operator channel, remove the attestation flag and configure Base
 using that digest; only after independently verifying the ingress and separate
 bindings enable live pause. Do not reuse an ACL UUID or log a raw identity.
 This mode does not support PROD.
+
+### Offline ingress qualification
+
+`ingress_candidate.py` prepares only a reviewed TEST gateway operation and one
+exact nginx server-location fragment. It parses the current validated Gateway
+spec **as JSON**, requires the independently verified TEST TLS origin to match
+the existing exact TEST effects upstream, then adds only `POST` on the pause
+path. If the actual saved Gateway uses a different upstream path, an overlapping
+generic route, or a different listener, stop and review those exact bindings;
+do not guess. The original spec is not edited. The nginx fragment pins the
+193-base deployment's documented TEST neutral loopback port (8893) and must
+be validated against the real TEST unit before use. It ignores ambient client
+headers, maps only the dedicated bearer header to internal Authorization,
+limits bodies to 1 KiB, does not cache or retry writes, and adds no other
+location. See [Gateway HTTP integration](https://yandex.cloud/en/docs/api-gateway/concepts/extensions/http).
+The Gateway does not forward arbitrary query parameters; nginx and Base also
+reject queries that reach either directly.
+
+The generator and focused tests do not provision, reload or publish. Do not
+install the fragment in an unreviewed shared/default/PROD TLS server, and do
+not bypass any PROD fallback/transition fence when staging a shared nginx
+configuration. Before live changes, verify exact active Base TEST artifact and
+service/port, obtain a protected backup of the current Gateway spec and exact
+nginx configuration, prove the delta is additive, and run actual `nginx -t`
+in isolated staging. Keep pause off in Sites while nginx/Gateway are validated.
+Uncredentialed and malformed dedicated-header requests must fail without any
+backend operation; wrong paths or methods must never reach the write handler.
+Only after the real owner attestation and separate credentials are configured
+may a read-only authenticated prepare be used for verification. Never log
+request bodies, incoming credentials or a platform identity in this process.
