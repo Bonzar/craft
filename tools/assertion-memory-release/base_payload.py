@@ -6,6 +6,9 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import stat
+import json
+import socket
+import struct
 
 from release_core import ArchiveSpec, deploy as common_deploy
 
@@ -111,6 +114,58 @@ def validate_retained(incoming,release):
         raise ValueError('retained_release_changed')
 
 
+TEST_RETENTION_ROOT=Path('/srv/assertion-release/test')
+TEST_RETENTION_CONFIG=Path('/etc/assertion-release/test')
+TEST_RETENTION_SOCKET=Path('/run/assertion-base-test-retention/authority.sock')
+TEST_RETENTION_NAME=re.compile(r'[a-f0-9]{40}-[a-f0-9]{64}\Z')
+
+
+def test_retention_authority(root, config):
+    """Default off, only an authenticated host root gate can attest TEST inactivity."""
+    if Path(root)!=TEST_RETENTION_ROOT or Path(config)!=TEST_RETENTION_CONFIG:
+        return None
+    enabled=TEST_RETENTION_CONFIG/'enable-host-retention-v1'
+    try:
+        marker=enabled.lstat()
+    except FileNotFoundError:
+        return None
+    if (enabled.resolve(strict=True)!=enabled or marker.st_uid!=0 or marker.st_gid!=0
+            or not stat.S_ISREG(marker.st_mode) or stat.S_IMODE(marker.st_mode)!=0o644
+            or marker.st_nlink!=1 or marker.st_size!=0):
+        raise ValueError('unsafe_test_retention_switch')
+
+    def bind(lock_fd):
+        def proof(active,inactive):
+            endpoint=TEST_RETENTION_SOCKET
+            parent=endpoint.parent.lstat()
+            entry=endpoint.lstat()
+            if (endpoint.parent.resolve(strict=True)!=endpoint.parent or parent.st_uid!=0
+                    or not stat.S_ISDIR(parent.st_mode) or parent.st_mode&0o022
+                    or entry.st_uid!=0 or not stat.S_ISSOCK(entry.st_mode)):
+                return False
+            names=(active.name,inactive.name)
+            if (names[0]==names[1] or not all(TEST_RETENTION_NAME.fullmatch(n) for n in names)
+                    or any(p.parent!=TEST_RETENTION_ROOT/'releases' for p in (active,inactive))):
+                return False
+            request=json.dumps({'version':1,'lane':'test','active':names[0],'inactive':names[1]},
+                               separators=(',',':')).encode('ascii')+b'\n'
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as conn:
+                conn.settimeout(5)
+                conn.connect(str(endpoint))
+                _,uid,_=struct.unpack('3i',conn.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+                if uid!=0:
+                    return False
+                # A duplicate of the actual current lock, never an untrusted pathname.
+                written=conn.sendmsg([request],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,struct.pack('i',lock_fd))])
+                if written!=len(request):
+                    return False
+                conn.shutdown(socket.SHUT_WR)
+                with conn.makefile('rb') as response:
+                    return response.read(64)==b'assertion-base-test-retention-v1 OK\n'
+        return proof
+    return bind
+
+
 def deploy(stream, revision, digest, *, root, config, hook=None, prove_inactive=None):
     if not re.fullmatch(r'[0-9a-f]{40}',revision):
         raise ValueError('invalid_release_revision')
@@ -123,5 +178,6 @@ def deploy(stream, revision, digest, *, root, config, hook=None, prove_inactive=
             raise ValueError('untrusted_hook')
         def factory(fd):
             return lambda action,release: run_hook(checked_hook,action,release,lock_fd=fd)
+    authority=None if hook is not None or prove_inactive is not None else test_retention_authority(root,config)
     return common_deploy(stream,digest,root=root,spec=SPEC,
-        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,prove_inactive=prove_inactive)
+        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,prove_inactive=prove_inactive,retention_factory=authority)

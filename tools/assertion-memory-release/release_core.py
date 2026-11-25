@@ -289,7 +289,7 @@ def _try_base_retention(root, active, prove):
 
 
 
-def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,prove_inactive=None,after_committed=None):
+def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,prove_inactive=None,after_committed=None,retention_factory=None):
     """Call after lane-specific authentication. Interpret only validated product artifacts."""
     root=Path(root)
     if not root.is_absolute() or root.is_symlink() or (root/'releases').is_symlink():
@@ -298,6 +298,10 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
     fd=os.open(lockpath,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     with os.fdopen(fd,'rb+') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
+        if retention_factory is not None:
+            if prove_inactive is not None:
+                raise ValueError('ambiguous_retention_authority')
+            prove_inactive=retention_factory(lock.fileno())
         dispatch=hook if hook_factory is None else hook_factory(lock.fileno())
         if dispatch is None:
             raise ValueError('missing_release_hook')

@@ -68,3 +68,29 @@ under the same proof/lock. Interrupted filesystem removal may leave an
 unprepared residue; classify and report it rather than guessing. A later
 operator can reconcile only that exact residue after separate provenance,
 inactivity and mount verification; no broad age/name sweep.
+
+### TEST receiver wiring (default off)
+
+The real TEST Base receiver reaches the shared Base payload path automatically.
+It only binds the scanner if the root-created empty regular 0644
+`/etc/assertion-release/test/enable-host-retention-v1` exists. No test
+provisioner creates it. PROD never looks for this flag or socket. Install and
+review the root scanner **before** creating the TEST marker. No old release
+is deleted when the socket/proof is missing.
+
+The dedicated local scanner protocol uses
+`/run/assertion-base-test-retention/authority.sock` in a root-owned
+non-writable-to-clients directory, with connect rights only to TEST deploy.
+The client requires root peer credentials. It sends one bounded JSON record
+(`version=1,lane=test,active,inactive`, the last fields exact distinct immutable
+Base names) plus one SCM_RIGHTS FD of the held existing deployment lock. The
+scanner must identify the connecting actual TEST UID using SO_PEERCRED, read
+exactly one record and FD, require exact lock inode, and prove exclusive
+ownership of the forwarded open description and lock conflict on a separate
+independently opened FD. It must also verify the current symlink, completed
+qualification, absence of a pending activation, exact candidate identity,
+complete service/process and mount inventory, and absence of startup paths
+to the old tree. Acknowledge with only `assertion-base-test-retention-v1 OK`
+plus newline and close; any other result retains the old tree.
+The scanner proves and does not remove anything. Kill or unavailable scanner
+means healthy release still succeeds but cleanup remains incomplete.
