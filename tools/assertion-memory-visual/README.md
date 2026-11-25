@@ -243,3 +243,36 @@ secrets in UI requests. Database reset is a separate capability; explicit
 typed single-use confirmation and an independently verified stop/drain
 supervisor are prerequisites. Never expose either through this pause API or
 the Graph read bridge.
+
+### Replaying an old Visual release without VM history
+
+Use the existing **Visual Release** entry in GitHub Actions on protected
+`main`, with the exact immutable tag (for example
+`assertion-memory-visual-v0.1.2`). It resolves the original Release build
+and downloads its archive from GitHub into a fresh runner; it does not use
+the VM as the source of the old package. TEST must pass for this run before
+approving PROD. PROD binds to the same run, revision, original archive ID,
+ZIP SHA, payload SHA and manifest digest. Do not retag the old bytes, copy
+an old directory onto the VM, or publish a substitute build under the tag.
+
+For the current resolver an immutable GitHub Release tag is not enough:
+the original build uploaded an Actions artifact retained for 90 days.
+Missing/expired artifacts or changed bytes stop the run before activation;
+an old build on the VM is never a fallback used by this path. Do not prune
+the last restorable copy of any rollback point that must be kept until its
+GitHub replay is proven over the required retention period.
+
+A durable extension should follow the protected current-builder pattern:
+an old tag is inputs only, not a workflow or executable builder authority.
+Run a reviewed recipe from protected main in a separate no-runtime-secret
+build job, package only pinned Visual UI assets, and require an immutable,
+independently retained original payload/manifest proof before recognizing
+the result as byte-identical. Old tag tooling and this package recipe have
+changed over time. Do not imply the current builder can reproduce every
+tag without a revalidated recipe/proof, or use a GitHub Release's source
+ZIP as if it were the original UI TAR. Until durable bytes/proof and its
+standard controller verification exist, refusal after expiry is deliberate.
+
+`test_configured_visual_replay.py` exercises the standard configure/resolve/
+unpack bindings with independent artifact-only temp runners, plus exact
+relayed payload validation and fail-closed expiry/missing/changed cases.
