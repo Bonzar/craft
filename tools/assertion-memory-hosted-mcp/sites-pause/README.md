@@ -98,3 +98,39 @@ source, saved version and unchanged ACL/plugin identity. For this write route no
 ambient Git transport or source hook may bypass the release decision. Do not
 enable provider publish-on-push outside a protected TEST release. No direct,
 untracked update is part of this workflow, and this handoff has no PROD variant.
+
+### Protected native TEST completion gate
+
+The original Base and Visual TEST jobs prove their own VM work; they do not
+attest that the native Sites browser path accepts writes. Do not mark native
+pause green from those jobs or from saved-source tests. The suggested
+continuation is the TEST-only GitHub workflow **Verify native Sites TEST pause
+evidence**. It never deploys, reads a Sites secret or approves PROD.
+It stays unavailable until the dedicated main-only non-bypassable GitHub
+environment has the verified reviewer configured. Submit evidence only after
+the original immutable Base and Visual source pair has deployed to TEST; native
+owner publication/readback and the actual same-origin browser checks have
+succeeded. Native auth is obtained just in time through the supported owner
+connector; no refresh/deployment credential is stored in GitHub.
+
+The owner/publisher captures nonsecret evidence: native published source SHA,
+SHA-256 of deployment ID and saved version ID, readback project/ACL/plugin
+hashes, exact companion archive SHA, actual TEST Base release generation from
+the dashboard and Visual manifest digest from the stable visual entry.
+Record the exact UTC observation time and browser response statuses and
+revision/boolean pairs for initial prepare/read, a verified toggle and readback,
+and a verified restoration and readback, plus denials for missing owner and
+bad CSRF. Keep tokens, headers, screenshots and session identity out of the
+receipt. Run the toggle only when it is safe to suspend and restore TEST and
+the workspace has no unrelated jobs that restoring could wake; otherwise do
+not mark the feature verified. The authorized human reviewer independently
+compares the authenticated native provider and browser observations against the
+submitted receipt before approving the GitHub environment job.
+
+Automated gate checks cover both scoped GitHub TEST activation/smoke receipts,
+original release/artifact identity and exact companion; the native provider
+observation itself is operator-attested, not an authenticated provider API
+call by Actions. A failed/dark route, rollback, old evidence or missing approval
+must leave native pause unverified. No automatic provider webhook for
+owner-only Sites publication is granted by the documented connector; do not
+add a generic GitHub webhook secret or native API emulation to work around it.
