@@ -11,11 +11,12 @@ const SAFE={
   'content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
 };
 const LIMIT=2400000;
+const latestAlias=path=>path==='/visual'||path==='/visual/';
 async function owner(req,env,url) {
   const id=req.headers.get('oai-authenticated-user-id')||'';
   const email=req.headers.get('oai-authenticated-user-email')?.trim().toLowerCase()||'';
   const origin=req.headers.get('origin');
-  const entry=(url.pathname==='/'||/^\/visual\/[a-f0-9]{64}\/$/.test(url.pathname))&&req.method==='GET'&&req.headers.get('sec-fetch-mode')==='navigate'&&req.headers.get('sec-fetch-dest')==='document';
+  const entry=(url.pathname==='/'||(env.MEMORY_GRAPH_MODE==='test'&&latestAlias(url.pathname))||/^\/visual\/[a-f0-9]{64}\/$/.test(url.pathname))&&req.method==='GET'&&req.headers.get('sec-fetch-mode')==='navigate'&&req.headers.get('sec-fetch-dest')==='document';
   if(!id||id.length>512||!email||email.length>512||!hex.test(env.MEMORY_GRAPH_OWNER_EMAIL_SHA256||'')
      ||(req.headers.get('sec-fetch-site')==='cross-site'&&!entry)||(origin!==null&&origin!==url.origin))return false;
   const hashed=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(email))),b=>b.toString(16).padStart(2,'0')).join('');
@@ -55,17 +56,18 @@ export function visualShell(mode, graph, fetcher=fetch){
     const path=url.pathname;
     const match=path.match(/^\/visual\/([a-f0-9]{64})\/(.*)$/);
     const name=match&&(match[2]||'index.html');
-    if(path!=='/'&&(!match||!item.test(name)||(match[2]&&url.search)))return res(404);
+    const current=path==='/'||(mode==='test'&&latestAlias(path));
+    if(!current&&(!match||!item.test(name)||(match[2]&&url.search)))return res(404);
     const relay=body=>fetcher(gateway,{method:'POST',redirect:'error',signal:req.signal,headers:{
       'content-type':'application/json','x-memory-visual-auth':'Bearer '+token,
     },body:JSON.stringify(body)});
     try{
-      if(path==='/'){
+      if(current){
         const remote=await relay({op:'current'});
         if(remote.status!==200||remote.headers.get('content-type')!=='application/json')throw Error('invalid pointer');
         const data=JSON.parse(new TextDecoder().decode(await bounded(remote,512)));
         if(Object.keys(data).join(',')!=='digest'||typeof data.digest!=='string'||!hex.test(data.digest))throw Error('invalid digest');
-        return res(302,null,{location:'/visual/'+data.digest+'/'+url.search});
+        return res(302,null,{location:'/visual/'+data.digest+'/'+url.search,'x-memory-visual-digest':data.digest});
       }
       const type=name.endsWith('.html')?'text/html':name.endsWith('.css')?'text/css':'text/javascript';
       const remote=await relay({op:'asset',digest:match[1],name});
