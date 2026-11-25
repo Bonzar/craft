@@ -30,7 +30,7 @@ class Graph(unittest.TestCase):
         data={
             f'/actions/runs/{self.run_id}':run,
             f'/actions/workflows/{p.workflow}':{'id':8},
-            f'/actions/runs/{self.run_id}/artifacts?per_page=2':categorized,
+            f'/actions/runs/{self.run_id}/artifacts?per_page=2&name='+name:categorized,
             '/actions/artifacts?per_page=2&name='+name:categorized,
             '/releases/tags/'+tag:published,
             '/releases/'+self.rid:published,
@@ -47,6 +47,25 @@ class Graph(unittest.TestCase):
             self.assertEqual(manual,dict(tag=tag,revision=self.sha,release_id=self.rid,build_run_id=self.run_id,
                                         artifact_id=self.artifact_id,archive_sha='b'*64))
 
+    def test_automatic_base_ignores_an_unrelated_sites_archive_in_the_same_run(self):
+        tag,run,item,_,data,_=self.fixture()
+        route=f'/actions/runs/{self.run_id}/artifacts'
+        data[route+'?per_page=2']={'total_count':2,'artifacts':[
+            dict(item,id=99,name='assertion-memory-native-sites-release'),item,
+        ]}
+        get=lambda path:data[path.removeprefix(g.ROOT)]
+        self.assertEqual(g.from_completed_build(get,run),g.from_tag(get,tag))
+
+    def test_other_archive_cannot_be_used_when_expected_name_is_absent_or_wrong(self):
+        tag,run,item,_,data,get=self.fixture()
+        route=f'/actions/runs/{self.run_id}/artifacts?per_page=2&name='+item['name']
+        data[route]={'total_count':0,'artifacts':[]}
+        with self.assertRaisesRegex(ValueError,'exactly one'):
+            g.from_completed_build(get,run)
+        data[route]={'total_count':1,'artifacts':[dict(item,name='assertion-memory-native-sites-release')]}
+        with self.assertRaisesRegex(ValueError,'origin'):
+            g.from_completed_build(get,run)
+
     def test_rejects_untrusted_source_and_version_drift(self):
         tag,run,item,published,data,get=self.fixture()
         variants=[(run,'event','pull_request'),(run,'path','.github/workflows/unrelated.yml'),
@@ -62,8 +81,8 @@ class Graph(unittest.TestCase):
 
     def test_rejects_event_and_canonical_tag_mismatch(self):
         tag,run,item,published,data,get=self.fixture()
-        wrong=dict(run,head_branch=tag+'-unexpected')
-        with self.assertRaisesRegex(ValueError,'event tag'):
+        wrong=dict(run,head_branch=tag+'+unexpected')
+        with self.assertRaisesRegex(ValueError,'release version tag'):
             g.from_completed_build(get,wrong)
         data[f'/actions/runs/{self.run_id}']=wrong
         with self.assertRaisesRegex(ValueError,'original release build'):
@@ -73,7 +92,7 @@ class Graph(unittest.TestCase):
 
     def test_rejects_ambiguous_artifact_or_non_main_revision(self):
         tag,run,item,published,data,get=self.fixture()
-        artifacts=data[f'/actions/runs/{self.run_id}/artifacts?per_page=2']
+        artifacts=data[f'/actions/runs/{self.run_id}/artifacts?per_page=2&name='+item['name']]
         artifacts['total_count']=2
         with self.assertRaisesRegex(ValueError,'exactly one'):
             g.from_completed_build(get,run)
