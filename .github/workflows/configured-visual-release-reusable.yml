@@ -53,10 +53,28 @@ jobs:
       id-token: write
     outputs:
       proof: ${{ steps.proof.outputs.proof }}
+      packed: ${{ steps.packmode.outputs.active }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: 761244dadbe24db613fe0da48ac8d51f319b32b0
+          persist-credentials: false
+      - id: packmode
+        name: Select protected Visual artifact format
+        env:
+          REQUEST_PACKED: ${{ vars.VISUAL_PACKAGED_RELEASE_REQUIRED }}
+        run: |
+          case "$REQUEST_PACKED" in
+            true) chosen=true ;;
+            false|'') chosen=false ;;
+            *) exit 1 ;;
+          esac
+          echo "active=$chosen" >>"$GITHUB_OUTPUT"
+      - if: steps.packmode.outputs.active == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: c3f9d3b8d9c237d78813454356da4e58c05cbf2b
+          path: .visual-packed-controller
           persist-credentials: false
       - name: Verify exact artifact and stage approval
         env:
@@ -76,7 +94,13 @@ jobs:
           RELEASE_ENABLE: ${{ vars.RELEASE_ENABLE }}
           RELEASE_ENVIRONMENT_ID: ${{ vars.RELEASE_ENVIRONMENT_ID }}
           RELEASE_REVIEWER_ID: ${{ vars.RELEASE_REVIEWER_ID }}
-        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py verify test
+          VISUAL_PACKAGED_RELEASE_REQUIRED: ${{ steps.packmode.outputs.active }}
+        run: |
+          if [[ "$VISUAL_PACKAGED_RELEASE_REQUIRED" == true ]]; then
+            python3 -B .visual-packed-controller/tools/assertion-memory-visual/packed_release.py verify test
+          else
+            python3 -B tools/assertion-memory-release/experimental/configured_release_run.py verify test
+          fi
       - name: Activate and smoke exact archive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -105,12 +129,25 @@ jobs:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           RELEASE_GATEWAY_TOKEN: ${{ secrets.RELEASE_GATEWAY_TOKEN }}
           VISUAL_TEST_RUNTIME_REQUIRED: ${{ vars.VISUAL_TEST_RUNTIME_REQUIRED }}
-        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy test
+          VISUAL_PACKAGED_RELEASE_REQUIRED: ${{ steps.packmode.outputs.active }}
+        run: |
+          if [[ "$VISUAL_PACKAGED_RELEASE_REQUIRED" == true ]]; then
+            python3 -B .visual-packed-controller/tools/assertion-memory-visual/packed_release.py deploy test
+          else
+            python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy test
+          fi
       - name: Preserve TEST evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: configured-release-test-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/configured-release/configured-test-proof.json
+          if-no-files-found: error
+      - name: Preserve packed Visual TEST evidence
+        if: steps.packmode.outputs.active == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: visual-packed-test-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/configured-release/visual-packed-test-proof.json
           if-no-files-found: error
       - id: proof
         name: Publish same-run TEST proof
@@ -134,6 +171,25 @@ jobs:
         with:
           ref: 761244dadbe24db613fe0da48ac8d51f319b32b0
           persist-credentials: false
+      - id: packmode
+        name: Select protected Visual artifact format
+        env:
+          REQUEST_PACKED: ${{ vars.VISUAL_PACKAGED_RELEASE_REQUIRED }}
+          TEST_PACKED: ${{ needs.test.outputs.packed }}
+        run: |
+          case "$REQUEST_PACKED" in
+            true) chosen=true ;;
+            false|'') chosen=false ;;
+            *) exit 1 ;;
+          esac
+          [[ "$chosen" == "$TEST_PACKED" ]]
+          echo "active=$chosen" >>"$GITHUB_OUTPUT"
+      - if: steps.packmode.outputs.active == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: c3f9d3b8d9c237d78813454356da4e58c05cbf2b
+          path: .visual-packed-controller
+          persist-credentials: false
       - name: Verify exact artifact and stage approval
         env:
           GH_TOKEN: ${{ github.token }}
@@ -153,7 +209,14 @@ jobs:
           RELEASE_ENABLE: ${{ vars.RELEASE_ENABLE }}
           RELEASE_ENVIRONMENT_ID: ${{ vars.RELEASE_ENVIRONMENT_ID }}
           RELEASE_REVIEWER_ID: ${{ vars.RELEASE_REVIEWER_ID }}
-        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py verify prod
+          VISUAL_PACKAGED_RELEASE_REQUIRED: ${{ steps.packmode.outputs.active }}
+          VISUAL_TEST_PACKAGED_RELEASE: ${{ needs.test.outputs.packed }}
+        run: |
+          if [[ "$VISUAL_PACKAGED_RELEASE_REQUIRED" == true ]]; then
+            python3 -B .visual-packed-controller/tools/assertion-memory-visual/packed_release.py verify prod
+          else
+            python3 -B tools/assertion-memory-release/experimental/configured_release_run.py verify prod
+          fi
       - name: Activate and smoke exact archive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,4 +245,11 @@ jobs:
           RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           RELEASE_GATEWAY_TOKEN: ${{ secrets.RELEASE_GATEWAY_TOKEN }}
-        run: python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy prod
+          VISUAL_PACKAGED_RELEASE_REQUIRED: ${{ steps.packmode.outputs.active }}
+          VISUAL_TEST_PACKAGED_RELEASE: ${{ needs.test.outputs.packed }}
+        run: |
+          if [[ "$VISUAL_PACKAGED_RELEASE_REQUIRED" == true ]]; then
+            python3 -B .visual-packed-controller/tools/assertion-memory-visual/packed_release.py deploy prod
+          else
+            python3 -B tools/assertion-memory-release/experimental/configured_release_run.py deploy prod
+          fi
