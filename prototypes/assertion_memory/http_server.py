@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .mcp_server import ServiceConfig, WorkerLauncher, create_server
 from .storage import MemoryStore
+from .queue_rest import PATH as QUEUE_REST_PATH
 
 MIN_TOKEN_LENGTH = 32
 TOKEN_ENV_VAR = 'ASSERTION_MEMORY_TOKEN'
@@ -49,9 +50,10 @@ def load_token(path: Path | None = None, *, env_var: str | None = None) -> str:
 
 
 class AuthenticatedMemoryApp:
-    def __init__(self, app, token, neutral=None):
+    def __init__(self, app, token, neutral=None, queue_rest=None):
         self.app = app
         self.neutral = neutral
+        self.queue_rest = queue_rest
         self.expected = ('Bearer ' + token).encode('ascii')
 
     @asynccontextmanager
@@ -62,6 +64,10 @@ class AuthenticatedMemoryApp:
     async def __call__(self, scope, receive, send):
         if scope['type'] == 'http':
             path=scope.get('path','')
+            if path==QUEUE_REST_PATH:
+                if self.queue_rest is None:
+                    return await _error_response(404,'not found',scope,receive,send)
+                return await self.queue_rest(scope,receive,send)
             if self.neutral is not None and path in self.neutral[0]:
                 return await self.neutral[1](scope, receive, send)
             if path==PUBLIC_PREFIX or path.startswith(PUBLIC_PREFIX+'/'):
@@ -83,7 +89,7 @@ async def _error_response(status,code,scope,receive,send):
 
 
 def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port=8793, background=True,
-                    additional_hosts=(), neutral_factory=None):
+                    additional_hosts=(), neutral_factory=None, queue_rest_factory=None):
     from mcp.server.transport_security import TransportSecuritySettings
     if (not isinstance(token, str) or len(token) < MIN_TOKEN_LENGTH
             or not token.isascii() or any(x.isspace() for x in token)):
@@ -117,6 +123,8 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                                | ({'/memory-visual-test-pause'} if lane=='test' else set()))
                 for lane in ('test','prod')):
                 raise ValueError('Invalid neutral path binding')
+        queue_rest=(queue_rest_factory(config,neutral is not None and getattr(neutral[1],'query_jobs',None) is not None)
+                    if queue_rest_factory is not None else None)
     except BaseException:
         store.close()
         raise
@@ -153,7 +161,7 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
     from starlette.routing import Mount
     app = Starlette(routes=[Mount('/',app=inner)],lifespan=lifespan)
     app.router.redirect_slashes=False
-    return AuthenticatedMemoryApp(app,token,neutral)
+    return AuthenticatedMemoryApp(app,token,neutral,queue_rest)
 
 
 def main(argv=None):
@@ -171,8 +179,11 @@ def main(argv=None):
         env_var=value.get('token_env_var',TOKEN_ENV_VAR if not token_file else None))
     from .private_http_binding import configured_neutral_factory
     neutral_factory = configured_neutral_factory(args.config, token)
+    from .queue_rest import configured_queue_rest
+    queue_rest_factory=configured_queue_rest(args.config,port,token)
     app = create_http_app(ServiceConfig(**value['service']), token, value['public_host'], port=port,
-                          additional_hosts=value.get('additional_hosts', ()), neutral_factory=neutral_factory)
+                          additional_hosts=value.get('additional_hosts', ()), neutral_factory=neutral_factory,
+                          queue_rest_factory=queue_rest_factory)
     import uvicorn
     uvicorn.run(app, host='127.0.0.1', port=port, access_log=False, log_level='warning')
 
