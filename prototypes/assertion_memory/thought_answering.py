@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .model import ModelError
+from .model import ModelError, SemanticUnavailable
 from .thought_engine import ThoughtDetailNeeded, empty_material
 from .thought_engine_contract import APPLICABILITY, exact_fields, semantic_text
 
@@ -17,13 +17,33 @@ its remaining content has NOT been read. It cannot establish missing facts or
 absence of exceptions. Known qualifications/conflicts are supplied immediately.
 Return ready only if the candidate itself already answers the original question
 with all material conditions and conflicts accounted for. A potentially material
-incomplete linked neighbor permits drill to read that known location. Missing
-requested information without a known unread linked location requires no drill:
-return build with the supplied facts and explicit gaps, or ready if the candidate
-already preserves both. Never ask another search to discover an unavailable fact.
+incomplete linked neighbor permits drill to read that known location. If the
+candidate answers a concrete part but a specific premise or fact remains
+unconfirmed, return lookup with a focused, searchable question for that gap.
+Use build with question=null only when existing visible evidence supports a
+materially fuller answer. Do not build just to repeat the candidate and note
+lack of confirmation.
 Only text fields are eligible support quotations; descriptions are routing hints.
 Never introduce source IDs, node aliases, indices or addresses in your response.
 '''
+
+
+GAP_READINESS = READINESS + '''
+The bounded independent lookup is now finished; do not request another search.
+The missing question is labeled gap_question. Inspect only fully opened text and
+raw quotations. Choose build with question=null ONLY if the additional evidence
+actually resolves that gap. Otherwise choose partial with the exact unresolved
+question, even if the new text is topically similar. Missing evidence does not
+establish that the underlying fact is false. Do not put new facts in your reason.
+'''
+
+
+class PartialMemoryAnswer(SemanticUnavailable):
+    # The selected thought supports part of the question, not a new thought.
+    def __init__(self, thought, missing_question):
+        self.thought = thought
+        self.missing_question = missing_question
+        super().__init__('The checked material does not confirm part of the question.')
 
 
 def _key(thought):
@@ -97,8 +117,23 @@ def support_fingerprint(records, bindings):
     return hashlib.sha256(json.dumps(sorted(pairs), ensure_ascii=False).encode()).hexdigest()
 
 
+def _lookup_gap(engine, question, gap, bindings):
+    excluded = {basis['thought_id'] for basis in bindings if 'thought_id' in basis}
+    rows = engine.retrieve(gap, limit=5, exclude_ids=excluded)
+    candidates = [row for row in rows if row.id not in excluded and engine._fresh(row)
+                  and row.metadata.get('verification') != 'legacy_unverified'
+                  and not engine._is_parallel_alternative(row)]
+    fresh_records = [_record(engine, row, role='gap_evidence', full=True) for row in candidates]
+    fresh_bases = [engine._basis(row) for row in candidates]
+    raw_records, raw_bases = engine._pending_raw_material(gap, existing=bindings)
+    fresh_records, fresh_bases = engine._merge_material(fresh_records,fresh_bases,raw_records,raw_bases)
+    engine._emit('answer_gap_lookup', question=question, bindings=fresh_bases,
+                 details={'missing_question':gap,'additional_candidates':len(fresh_bases)})
+    return fresh_records, fresh_bases
+
+
 def answer_selected(engine, question, selected, *, neighborhood, additional=(), seen_packets=None,
-                    raw_material=((), ())):
+                    raw_material=((), ()), allow_partial=False):
     """Use one selected location; navigation owns any subsequent missing question.
 
     The caller may retain seen_packets across navigation/resume calls. There is
@@ -127,8 +162,23 @@ def answer_selected(engine, question, selected, *, neighborhood, additional=(), 
             return selected
         if decision.get('verdict') == 'drill':
             raise _missing(semantic_text(decision.get('question'), 'missing question'), reason, fingerprint)
-        if decision.get('verdict') != 'build':
-            raise ModelError('answer readiness requires ready, build or drill')
+        lookup = decision['verdict'] in ('lookup','partial') or (
+            decision['verdict'] == 'build' and decision.get('question') is not None)
+        if lookup and allow_partial and selected.metadata.get('verification') == 'accepted':
+            gap = semantic_text(decision.get('question'), 'missing question')
+            fresh_records,fresh_bases = _lookup_gap(engine,question,gap,bindings)
+            if not fresh_records:
+                raise PartialMemoryAnswer(selected,gap)
+            records,bindings = engine._merge_material(records,bindings,fresh_records,fresh_bases)
+            check = engine._call('Check ready thought',
+                [{'role':'question','text':question},{'role':'gap_question','text':gap},*records],
+                bindings,GAP_READINESS)
+            if check['verdict'] != 'build' or check['question'] is not None:
+                raise PartialMemoryAnswer(selected,gap)
+        elif lookup and decision['verdict'] != 'build':
+            raise _missing(semantic_text(decision.get('question'), 'missing question'),reason,fingerprint)
+        elif decision['verdict'] != 'build':
+            raise ModelError('invalid answer readiness outcome')
     if not any(record.get('text') for record in records):
         reason = 'The selected descriptions have no admitted full source content'
         opened = {_key(row) for row in (selected, *additional)}

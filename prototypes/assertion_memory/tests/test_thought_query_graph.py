@@ -13,6 +13,63 @@ def navigation(action, quote):
 
 
 class ThoughtQueryGraphTest(unittest.TestCase):
+    def test_gap_not_found_returns_the_existing_thought_as_partial_without_construction(self):
+        from .test_thought_engine import ScriptedModel
+        text = 'The group chose the 19:40 showing.'
+        gap = 'Did Vlad personally confirm the choice?'
+        model = ScriptedModel(navigation('focus',text),
+            {'verdict':'build','question':gap,'text':'The group decision does not prove Vlad took part.'})
+        with MemoryStore(':memory:') as memory:
+            service = ThoughtService(memory,model)
+            thought = service.thoughts.publish(text,metadata={'verification':'accepted'})
+            with patch('prototypes.assertion_memory.thought_engine.ThoughtEngine.retrieve',
+                       side_effect=[[thought],[]]) as retrieve:
+                result=service.query('Which showing did Vlad and the group choose?')
+            self.assertEqual(retrieve.call_args.args,(gap,))
+            self.assertEqual(retrieve.call_args.kwargs['exclude_ids'],{thought.id})
+            self.assertEqual(result['answer'],text)
+            self.assertEqual(result['view_id'],thought.id)
+            self.assertFalse(result['answer_accepted'])
+            self.assertTrue(result['partial_answer'])
+            self.assertEqual(result['completeness'],'incomplete')
+            self.assertEqual(result['missing_question'],gap)
+            self.assertEqual(len(service.thoughts.list_thoughts()),1)
+            self.assertEqual([r.task for r in model.requests],['Navigate thought graph','Check ready thought'])
+
+    def test_gap_uses_independent_support_only_if_it_resolves_the_gap(self):
+        from .test_thought_engine import ScriptedModel, ACCEPT
+        text = 'The group chose the 19:40 showing.'
+        gap = 'Did Vlad personally confirm the choice?'
+        confirmation = 'Vlad said: I confirm the 19:40 showing.'
+        evidence={'verification':'accepted'}
+        for supported in (False,True):
+            with self.subTest(supported=supported), MemoryStore(':memory:') as memory:
+                surrounding = confirmation if supported else 'The theatre seats 60 people.'
+                model = ScriptedModel(navigation('focus',text),
+                    {'verdict':'lookup','question':gap,'text':'Check who confirmed the choice.'},
+                    {'verdict':'build' if supported else 'partial','question':None if supported else gap,
+                     'text':'The opened source is checked.'},
+                    *([{'thought':{'text':text+' '+confirmation,'question':None,'support_fragments':[0,1]},
+                        'needs_detail':None},ACCEPT] if supported else []))
+                service = ThoughtService(memory,model)
+                candidate=service.thoughts.publish(text,metadata=evidence)
+                independent=service.thoughts.publish(surrounding,metadata=evidence)
+                with patch('prototypes.assertion_memory.thought_engine.ThoughtEngine.retrieve',
+                           side_effect=[[candidate],[independent]]):
+                    result=service.query('Which showing did Vlad and the group choose?')
+                packet=model.requests[2].records
+                self.assertTrue(any(r.get('role')=='gap_question' and r.get('text')==gap for r in packet))
+                self.assertTrue(any(r.get('role')=='gap_evidence' and r.get('text')==surrounding for r in packet))
+                self.assertEqual(result['answer_accepted'],supported)
+                self.assertEqual(len(service.thoughts.list_thoughts()),3 if supported else 2)
+                if supported:
+                    self.assertEqual(result['answer'],text+' '+confirmation)
+                    self.assertEqual({b['thought_id'] for b in result['thought']['bases']},{candidate.id,independent.id})
+                else:
+                    self.assertTrue(result['partial_answer'])
+                    self.assertEqual(result['answer'],text)
+                    self.assertEqual(len(model.requests),3)
+
     def test_unknown_graph_route_does_not_discard_already_found_pending_source(self):
         from prototypes.assertion_memory.tests.test_thought_engine import ScriptedModel, ACCEPT
         model = ScriptedModel({'action': 'unknown', 'quote': None, 'question': None,

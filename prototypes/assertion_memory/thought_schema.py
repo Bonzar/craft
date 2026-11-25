@@ -26,7 +26,7 @@ def response_schema(task, *, support_count=None, single_thought=False, review_op
             thoughts['maxItems'] = 0
         return _object({'thoughts':thoughts,'needs_detail':{'anyOf':[detail,{'type':'null'}]}})
     if task == 'Check ready thought':
-        return _object({'verdict':{'type':'string','enum':['ready','build','drill']},'text':text,'question':question})
+        return _object({'verdict':{'type':'string','enum':['ready','build','drill','lookup','partial']},'text':text,'question':question})
     if task == 'Verify thought' and source_draft_count is not None:
         draft = {'type':'integer','minimum':0,'maximum':max(0,source_draft_count-1)}
         rejected = {'type':'array','items':_object({'draft':draft,'text':text}),'maxItems':source_draft_count}
