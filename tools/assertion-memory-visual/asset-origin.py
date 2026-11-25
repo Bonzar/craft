@@ -112,7 +112,7 @@ def snapshot_queues(queues, limit, offset):
     return True
 
 
-def queue_client(origin, key, *, stage='test'):
+def queue_client(origin, key, *, stage='test', disclose_pause=False):
     address = BASE_ORIGIN.fullmatch(origin)
     if stage not in ('test','prod') or not address or int(address[1]) > 65535 or not HEX.fullmatch(key):
         raise ValueError('invalid local TEST Base settings')
@@ -141,10 +141,16 @@ def queue_client(origin, key, *, stage='test'):
                     or not isinstance(value['snapshot_at'], str) or len(value['snapshot_at']) > 64
                     or value['global_order'] is not False or not snapshot_queues(value['queues'],limit,offset)
                     or not isinstance(ctl, dict) or set(ctl) != {'paused', 'revision', 'can_change'}
-                    or type(ctl['paused']) is not bool or ctl['can_change'] is not False
+                    or type(ctl['paused']) is not bool or type(ctl['can_change']) is not bool
                     or not isinstance(ctl['revision'], str) or not re.fullmatch(r'[0-9a-f]{32}',ctl['revision'])):
                 raise ValueError('invalid TEST Base queue page')
-            return json.dumps({**value, 'capabilities': {'live': False}, 'readiness': []},
+            capabilities={'live':False}
+            if disclose_pause and ctl['can_change']:
+                capabilities['standalone_pause']=True
+            # Local Base readiness never grants direct browser writes or a
+            # mutation capability on the legacy Sites transport.
+            ctl['can_change']=False
+            return json.dumps({**value, 'capabilities': capabilities, 'readiness': []},
                               allow_nan=False, separators=(',', ':')).encode('utf-8')
         finally:
             http.close()
@@ -280,6 +286,7 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 or type(pause_ingress) is not str or not HEX.fullmatch(pause_ingress)
                 or len(set(keys+[read_key,write_key,csrf_key.hex(),pause_ingress,proof_key.hex()]))!=len(keys)+5):
             raise ValueError('pause requires distinct local authorities')
+        fetch_owner_queue = queue_client(queue_origin,queue_token,stage=environment,disclose_pause=True)
         pause_call = pause_client(origin,read_key,write_key,
                                   pause_signer(environment,owner,proof_key,clock=clock),stage=environment)
         def csrf_token(revision, expiry):
@@ -373,12 +380,8 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                         l,o=q.get('limit',['50'])[0],q.get('offset',['0'])[0]
                         if any(not re.fullmatch(r'(?:0|[1-9][0-9]{0,6})',v) for v in (l,o)) or not 1<=int(l)<=50 or int(o)>1_000_000:
                             return self.respond(400)
-                        payload = fetch_queue(int(l),int(o))
-                        if self.has_pause_owner():
-                            view = unique_json(payload)
-                            view['capabilities']['standalone_pause'] = True
-                            payload = json.dumps(view,separators=(',',':')).encode()
-                        return self.respond(200,payload,'application/json',headers=safe)
+                        fetch = fetch_owner_queue if self.has_pause_owner() else fetch_queue
+                        return self.respond(200,fetch(int(l),int(o)),'application/json',headers=safe)
                 if GRAPH_RE.fullmatch(path):
                     return self.graph(raw,safe)
                 match=re.fullmatch(r'/visual/([a-f0-9]{64})/(.*)',path)
