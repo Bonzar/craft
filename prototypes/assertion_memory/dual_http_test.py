@@ -1,5 +1,6 @@
 """Existing HTTP startup and health can coexist with one neutral tool service."""
 import asyncio
+import json
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import tempfile
@@ -137,7 +138,9 @@ class Dual(TestCase):
         import sys
         from threading import Event
         from uuid import uuid4
+        from . import query_timing as timing
         from .query_jobs import QueryJobs
+        telemetry = []
         from .release_catalog import export
         tool_root=Path(__file__).resolve().parents[2]/'tools/assertion-memory-hosted-mcp'
 
@@ -199,7 +202,12 @@ class Dual(TestCase):
                     await asyncio.sleep(0.03)
                 self.assertEqual(result['answer'],'Сеанс в 19:30.')
                 self.assertEqual(calls,['Когда сеанс?'])
-        with tempfile.TemporaryDirectory() as folder:
+                submitted = [json.loads(line) for line in telemetry if b'"stage":"vm_http_submission"' in line]
+                self.assertEqual(len(submitted),1) # The repeated polls do not produce telemetry rows.
+                self.assertEqual(submitted[0]['trace_id'],key)
+                self.assertEqual(submitted[0]['status'],'ok')
+                self.assertGreaterEqual(submitted[0]['duration_ms'],0)
+        with tempfile.TemporaryDirectory() as folder, patch.object(timing,'_write_line',telemetry.append):
             asyncio.run(test(str(Path(folder)/'empty.sqlite3')))
 
 

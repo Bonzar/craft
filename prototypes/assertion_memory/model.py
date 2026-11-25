@@ -25,6 +25,7 @@ from urllib.error import URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from . import query_timing as timing
 from .model_usage import UsageLedger, usage_attempt
 
 
@@ -330,16 +331,52 @@ class SubprocessModel:
                 return
         attempt.observe(output, self.usage_protocol)
 
+    @staticmethod
+    def _observe_cli_signals(stdout, stderr):
+        if not timing.active():
+            return
+        def text(value):
+            if isinstance(value, bytes):
+                return value.decode('utf-8', errors='replace')
+            return value if isinstance(value, str) else ''
+
+        # Timed-out subprocess output may be bytes or absent, even in text mode.
+        # Never let best-effort observation change the provider's response/error.
+        try:
+            SubprocessModel._scan_cli_signals(text(stdout), text(stderr))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _scan_cli_signals(stdout, stderr):
+        # Buffered CLI protocol: only fixed enums and counts, not console payloads.
+        # A successfully completed CLI can still have retried its connection.
+        if _codex_unavailable(stdout, stderr):
+            timing.emit('provider_retry_signal', 'connection_signal')
+        retry_re = re.compile(r'^reconnect(?:ing| attempt)\b|^retrying(?: request| connection| stream)\b', re.IGNORECASE)
+        retries = sum(bool(retry_re.match(line.lstrip())) for line in stderr.splitlines())
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get('type') not in ('error','turn.failed','warning'):
+                continue
+            detail = event.get('error', event)
+            message = detail.get('message') if isinstance(detail, dict) else None
+            if isinstance(message, str) and retry_re.match(message.lstrip()):
+                retries += 1
+        if retries:
+            timing.emit('provider_retry_signal', 'retry_signal', signal_count=retries)
+
     def _generate(self, prompt, attempt) -> str:
         try:
-            if _PROCESSING_CANCEL.get() is not None:
-                result = _run_owned_model(self.command, prompt, self.timeout)
-            else:
-                result = subprocess.run(self.command, input=prompt, capture_output=True, encoding='utf-8',
-                                        timeout=self.timeout, check=False)
+            with timing.span('provider_cli', start=True):
+                result = self._run_command(prompt)
         except subprocess.TimeoutExpired as error:
             self._observe_usage(attempt, error.stdout)
             if self.usage_protocol == "codex":
+                self._observe_cli_signals(error.stdout, error.stderr)
                 raise ModelProviderUnavailable(timed_out=True) from None
             raise ModelError("model command timed out") from error
         except (OSError, UnicodeError) as error:
@@ -347,6 +384,8 @@ class SubprocessModel:
                 raise ModelProviderUnavailable() from None
             raise ModelError("model command could not produce UTF-8 output") from error
         self._observe_usage(attempt, result.stdout)
+        if self.usage_protocol == 'codex':
+            self._observe_cli_signals(result.stdout, result.stderr)
         if self.usage_protocol == 'codex' and _context_error(result.stdout):
             raise ModelContextExceeded('provider reported that its actual context capacity was exceeded')
         if self.usage_protocol == 'codex' and _codex_unavailable(result.stdout, result.stderr):
@@ -357,6 +396,12 @@ class SubprocessModel:
         if result.returncode:
             raise ModelError(f"model command exited with code {result.returncode}")
         return _draft_text(result.stdout)
+
+    def _run_command(self, prompt):
+        if _PROCESSING_CANCEL.get() is not None:
+            return _run_owned_model(self.command, prompt, self.timeout)
+        return subprocess.run(self.command, input=prompt, capture_output=True, encoding='utf-8',
+                              timeout=self.timeout, check=False)
 
 
 class CodexModel(SubprocessModel):
@@ -395,24 +440,27 @@ class CodexModel(SubprocessModel):
     def __call__(self, request: ModelRequest) -> str:
         if not self.isolated:
             return super().__call__(request)
-        prompt = format_prompt(request)
-        scratch=_semantic_working_directory()
+        with timing.span('provider_setup'):
+            prompt = format_prompt(request)
+            scratch = _semantic_working_directory()
         with usage_attempt(self.usage_ledger, task=request.usage_task or request.task, provider='codex',
                            model=self.requested_model, request_chars=len(prompt),
                            selection_basis='explicit_model' if self.requested_model else 'provider_default') as attempt:
-            command = self.command
-            base = _semantic_runtime_file(scratch,'worker-instructions',SEMANTIC_BASE_INSTRUCTIONS.encode())
-            command = (*command,'-c','model_instructions_file='+json.dumps(str(base)))
-            if request.response_schema is not None:
-                body = json.dumps(request.response_schema,sort_keys=True,separators=(',',':')).encode()
-                path = _semantic_runtime_file(scratch,'response-schema',body)
-                command = (*command,'--output-schema',str(path))
-            runner = SubprocessModel((*command, "-C", scratch, "-"), self.timeout,
-                                     usage_ledger=self.usage_ledger, usage_protocol='codex')
+            with timing.span('provider_setup'):
+                command = self.command
+                base = _semantic_runtime_file(scratch,'worker-instructions',SEMANTIC_BASE_INSTRUCTIONS.encode())
+                command = (*command,'-c','model_instructions_file='+json.dumps(str(base)))
+                if request.response_schema is not None:
+                    body = json.dumps(request.response_schema,sort_keys=True,separators=(',',':')).encode()
+                    path = _semantic_runtime_file(scratch,'response-schema',body)
+                    command = (*command,'--output-schema',str(path))
+                runner = SubprocessModel((*command, "-C", scratch, "-"), self.timeout,
+                                         usage_ledger=self.usage_ledger, usage_protocol='codex')
             output = runner._generate(prompt, attempt)
-            response = self._completed_response(output)
-            attempt.output_chars = len(response)
-            return response
+            with timing.span('provider_decode'):
+                response = self._completed_response(output)
+                attempt.output_chars = len(response)
+                return response
 
     @staticmethod
     def _completed_response(output):
@@ -471,8 +519,10 @@ class _LocalOpenAIEndpoint:
             self.endpoint, body, {"Content-Type": "application/json"}, method="POST"
         )
         try:
-            with self._opener.open(http_request, timeout=self.timeout) as response:
-                return json.load(response)
+            with timing.span('provider_network_wait', start=True):
+                response = self._opener.open(http_request, timeout=self.timeout)
+            with response as body, timing.span('provider_response_read'):
+                return json.load(body)
         except (URLError, OSError, ValueError) as error:
             raise ModelError("local endpoint request failed or returned invalid JSON") from error
 

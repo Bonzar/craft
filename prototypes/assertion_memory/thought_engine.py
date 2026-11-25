@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import asdict, is_dataclass
 
+from . import query_timing as timing
 from .dialogue import source_role
 from .source_message_clock import normalize as normalize_clock, projection as clock_projection
 from .storage import _timestamp
@@ -86,11 +87,12 @@ class ThoughtEngine:
             if not isinstance(body, str):
                 raise TypeError('thought model must return serialized JSON text')
             try:
-                result = object_response(body)
-                validate_response(task, result, support_count=support_count,single_thought=single_thought,
-                                  review_option_count=review_option_count,source_draft_count=source_draft_count,
-                                  refresh_option_count=refresh_option_count, reuse_option_count=reuse_option_count,
-                                  compare_meaning=compare_meaning, link_option_count=link_option_count)
+                with timing.span('model_contract_validation'):
+                    result = object_response(body)
+                    validate_response(task, result, support_count=support_count,single_thought=single_thought,
+                                      review_option_count=review_option_count,source_draft_count=source_draft_count,
+                                      refresh_option_count=refresh_option_count, reuse_option_count=reuse_option_count,
+                                      compare_meaning=compare_meaning, link_option_count=link_option_count)
             except ModelError as malformed:
                 self._discard_provisional()
                 self._emit('model_contract_repair', task=task, attempt=attempt + 1, reason=str(malformed),
@@ -145,6 +147,7 @@ class ThoughtEngine:
                 'details': [basis['meaning'] for basis in thought.bases
                             if 'thought_id' in basis and basis.get('meaning')]}
 
+    @timing.timed('search')
     def retrieve(self, question, explicit_ids=(), limit=10, *, exclude_ids=()):
         question = semantic_text(question, 'question')
         if type(limit) is not int or limit < 1 or limit > MAX_THOUGHTS:
@@ -714,6 +717,7 @@ class ThoughtEngine:
         valid = raw.get('metadata', {}).get('valid_at')
         return cutoff is None or (valid is not None and _timestamp(valid) <= cutoff)
 
+    @timing.timed('raw_search')
     def _pending_raw_material(self, question, existing=()):
         excluded = {basis.get('event_id') for basis in existing if 'event_id' in basis}
         with self.store.transaction() as connection:

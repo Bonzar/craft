@@ -201,6 +201,7 @@ def factory(stage,root,config_dir,legacy_token):
 
     def mount(config,store,service,background):
         require_scoped_database(stage,root,config.db)
+        from prototypes.assertion_memory import query_timing as timing
         from prototypes.assertion_memory.mcp_server import WorkerLauncher, _query_with_connection
         from prototypes.assertion_memory.query_jobs import QueryJobs
         from prototypes.assertion_memory.storage import MemoryStore
@@ -210,11 +211,12 @@ def factory(stage,root,config_dir,legacy_token):
             live_identity()
             fd = os.open(root/'deploy.lock', os.O_RDONLY | os.O_NOFOLLOW)
             try:
-                info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
-                    raise ValueError('Untrusted release lock')
-                fcntl.flock(fd,fcntl.LOCK_SH | fcntl.LOCK_NB)
-                live_identity()
+                with timing.span('release_lease'):
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+                        raise ValueError('Untrusted release lock')
+                    fcntl.flock(fd,fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    live_identity()
                 try:
                     return _query_with_connection(config,**args)
                 finally:
