@@ -195,6 +195,44 @@ class QueueStatusTest(unittest.TestCase):
         self.assertIsNone(fresh._claim_source())
         self.assertEqual(self.lane('maintenance',**options)['items'][0]['status'],'paused')
 
+    def test_filters_use_full_queue_real_positions_and_only_opaque_ids(self):
+        self.source('first','pending')
+        self.source('second-match','pending')
+        self.source('third-match','pending')
+        self.source('private-captured','pending',session='other')
+        filtered = self.status(queue_id='source', phase='extract', status='ready',
+                               session_id='selected', q='MATCH', limit=1)
+        self.assertTrue(filtered['queue_filters'])
+        self.assertEqual(filtered['applied_filters'],['phase','q','queue','session_id','status'])
+        lane = filtered['queues'][0]
+        self.assertEqual((lane['total'],lane['unfiltered_total'],lane['next_offset']),(2,4,1))
+        self.assertEqual((lane['items'][0]['id'],lane['items'][0]['position']),('second-match',2))
+        later = self.lane('source',q='match',limit=1,offset=1)
+        self.assertEqual((later['items'][0]['id'],later['items'][0]['position']),('third-match',3))
+        self.assertIsNone(later['next_offset'])
+        for q in ('PRIVATE PROMPT','%','_',"' OR 1=1 --"):
+            self.assertEqual(self.lane('source',q=q)['total'],0)
+        for options in ({'phase':'unknown'},{'status':'active'},{'q':'x'*129},{'session_id':' '},
+                        {'q':'\n'},{'session_id':'x'*257}):
+            with self.assertRaises(ValueError):
+                self.status(**options)
+
+    def test_session_filter_uses_only_authoritative_unfinished_cause(self):
+        self.source('source-id','pending')
+        self.maintenance('mixed','pending',session='other')
+        self.maintenance('expired-cause','pending')
+        with self.store.transaction(write=True) as db:
+            db.execute("INSERT INTO memory_thought_cause_sessions VALUES ('mixed','cause','selected')")
+            db.execute("UPDATE memory_thought_work SET completed_generation=1 WHERE thought_id='expired-cause'")
+        self.interactive('private-query-id','queued',1)
+        selected = self.status(session_id='selected')['queues']
+        self.assertEqual([lane['total'] for lane in selected],[1,1,0])
+        self.assertEqual(selected[1]['items'][0]['id'],'mixed')
+        other = self.status(session_id='other')['queues']
+        self.assertEqual([lane['total'] for lane in other],[0,1,0])
+        self.assertNotIn('selected',json.dumps(selected))
+        self.assertNotIn('other',json.dumps(other))
+
     def test_paused_missing_schema_and_invalid_page_are_safe(self):
         self.source('a','pending')
         self.assertEqual(self.lane('source',processing_session_ids=[])['items'][0]['status'],'paused')

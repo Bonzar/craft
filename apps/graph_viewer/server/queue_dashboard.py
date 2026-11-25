@@ -95,7 +95,7 @@ class HostedQueueDashboard:
                 raise ValueError('Scheduler projection is not from current TEST release')
         return data
 
-    def snapshot(self, *, limit, offset):
+    def snapshot(self, *, limit, offset, **filters):
         fields = self.metadata()
         with closing(_connect(self.db)) as conn:
             conn.execute('BEGIN')
@@ -104,7 +104,7 @@ class HostedQueueDashboard:
             try:
                 status_keys=('stage','release_version','processing_session_ids',
                     'auto_process_fresh_mac','model_configured','interactive_enabled')
-                result=build_queue_status(conn,limit=limit,offset=offset,
+                result=build_queue_status(conn,limit=limit,offset=offset,**filters,
                                           **{k:fields[k] for k in status_keys})
             finally:
                 conn.set_progress_handler(None,0)

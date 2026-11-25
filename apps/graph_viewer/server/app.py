@@ -17,6 +17,7 @@ from .manager import GraphManager,manifest_url,parse_replay_cursor
 from .providers.canonical_thoughts import source_for_path
 from . import cards
 from .search import search
+from prototypes.assertion_memory.queue_status import QUEUE_FILTER_KEYS, validate_queue_filters
 
 
 class Boundary(BaseHTTPMiddleware):
@@ -197,7 +198,7 @@ async def events(request):
 async def capabilities(request):
     if 'queue_status' in request.query_params:
         q = request.query_params
-        if (set(q)-{'queue_status','limit','offset'} or any(len(q.getlist(k)) != 1 for k in q)
+        if (set(q)-({'queue_status','limit','offset'} | QUEUE_FILTER_KEYS) or any(len(q.getlist(k)) != 1 for k in q)
                 or q['queue_status'] != '1'):
             raise APIError('invalid_dashboard','Invalid queue status request')
         values = (q.get('limit','50'),q.get('offset','0'))
@@ -206,11 +207,18 @@ async def capabilities(request):
         limit, offset = map(int,values)
         if not 1<=limit<=100 or offset>1_000_000:
             raise APIError('invalid_dashboard','Invalid queue status page')
+        filters = {name:q[name] for name in QUEUE_FILTER_KEYS if name in q}
+        try:
+            validate_queue_filters(**filters)
+        except ValueError:
+            raise APIError('invalid_dashboard','Invalid queue status filter') from None
+        if 'queue' in filters:
+            filters['queue_id'] = filters.pop('queue')
         dashboard = request.app.state.queue_dashboard
         if dashboard is None:
             raise APIError('queue_unavailable','Queue status is not configured',503)
         try:
-            status = await asyncio.to_thread(dashboard.snapshot,limit=limit,offset=offset)
+            status = await asyncio.to_thread(dashboard.snapshot,limit=limit,offset=offset,**filters)
             control=status.get('processing_control')
             if control is not None:
                 owner_control=(request.app.state.queue_control and
