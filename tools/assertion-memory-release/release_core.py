@@ -257,7 +257,7 @@ def _try_base_retention(root, active, prove):
 
 
 
-def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,prove_inactive=None):
+def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,prove_inactive=None,after_committed=None):
     """Call after lane-specific authentication. Interpret only validated product artifacts."""
     root=Path(root)
     if not root.is_absolute() or root.is_symlink() or (root/'releases').is_symlink():
@@ -291,4 +291,9 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
                     _try_base_retention(root,active,prove_inactive)
                 raise
             _try_base_retention(root,target,prove_inactive)
+            if after_committed is not None:
+                try:
+                    after_committed(root,target)
+                except Exception:
+                    logging.getLogger(__name__).warning('release_post_commit_housekeeping_incomplete')
     return release_id
