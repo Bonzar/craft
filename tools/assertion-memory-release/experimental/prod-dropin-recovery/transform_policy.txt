@@ -3,6 +3,8 @@ MCP_MONIUM_PIN = MCP_DROPIN_PIN.with_name('mcp-monium-traces.sha256')
 
 
 def trusted_unit_dropins(unit, raw):
+    import hmac
+
     if unit != UNITS[0]:
         if raw in ('',None):
             return
