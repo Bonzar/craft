@@ -82,3 +82,42 @@ class GateTests(unittest.TestCase):
         for other in ('enable','reload','start','edit','restart memory-site-prod-graph.service'):
             with self.subTest(other=other), self.assertRaises(ValueError):
                 gate.service_command(other)
+
+    def test_actual_loopback_socket_has_exact_pid_and_address(self):
+        header=b'  sl local_address rem_address st tx_queue tr tm retrnsmt uid timeout inode\n'
+        row=b'   0: 0100007F:2273 00000000:0000 0A 00:00 00:00 00 994 0 342123 \n'
+        self.assertTrue(gate.exact_listener(header+row,{b'socket:[342123]'}))
+        self.assertFalse(gate.exact_listener(header+row,{b'socket:[342124]'}))
+        self.assertFalse(gate.exact_listener(header+row+row,{b'socket:[342123]'}))
+        self.assertFalse(gate.exact_listener(header+row.replace(b'0100007F',b'00000000'),{b'socket:[342123]'}))
+
+    def test_local_network_request_requires_real_read_route_denial(self):
+        from urllib.error import HTTPError
+        for code in (401,403,404,405,500):
+            def fake(req,timeout):
+                self.assertEqual(req.full_url,'http://127.0.0.1:8819'+gate.PATH)
+                self.assertIsNone(req.get_header('Authorization'))
+                self.assertIsNone(req.get_header('X-memory-graph-auth'))
+                self.assertEqual(json.loads(req.data),{'path':gate.QUEUE})
+                raise HTTPError(req.full_url,code,'fixture',None,None)
+            if code in (401,403):
+                gate.local_wrapper_denial(fake)
+            else:
+                with self.assertRaises(ValueError):
+                    gate.local_wrapper_denial(fake)
+
+    def test_local_projection_wrong_generation_or_pid_restart_cannot_pass(self):
+        generation='f'*64
+        expected=(TAG,generation)
+        value={'stage':'test','release_version':TAG,'release_generation':generation,'global_order':False,
+               'queue_ids':['source','maintenance','interactive']}
+        gate.local_qualification('/synthetic',expected,identity=lambda _:('1',b'102'),
+                                 denial=lambda:None,project=lambda _:value)
+        for change in ({'stage':'prod'},{'release_generation':'e'*64},{'queue_ids':[]},{'text':'private'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                gate.local_qualification('/synthetic',expected,identity=lambda _:('1',b'102'),
+                                         denial=lambda:None,project=lambda _:{**value,**change})
+        ids=iter((('1',b'102'),('2',b'103')))
+        with self.assertRaises(ValueError):
+            gate.local_qualification('/synthetic',expected,identity=lambda _:next(ids),denial=lambda:None,
+                                     project=lambda _:value)
