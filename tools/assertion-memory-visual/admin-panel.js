@@ -8,13 +8,13 @@
   const integer = value => Number.isSafeInteger(value) && value >= 0;
   let stage, capabilities = {}, request = 0, changing = false;
   let reset, resetting = false, enrollment = false, expiry;
-  const requests = async (path, data) => {
+  const requests = async (path, data, completed = false) => {
     const r = await fetch('/visual/admin/' + path, {
       credentials:'same-origin', redirect:'error', cache:'no-store',
       headers: {accept:'application/json', ...(data === undefined ? {} : {'content-type':'application/json'})},
       ...(data === undefined ? {} : {method:'POST', body:JSON.stringify(data)})
     });
-    if (!r.ok) throw Error('admin request failed');
+    if (!r.ok || (completed && ![200,201,204].includes(r.status))) throw Error('admin request failed');
     if (r.status === 204) return null;
     if (!/^application\/json(?:\s*;|$)/i.test(r.headers.get('content-type') || '')) throw Error('admin response type');
     return r.json();
@@ -122,7 +122,7 @@
     enrollment = true; by('device-submit').disabled = true;
     text('device-status','Авторизуем устройство…');
     try {
-      await requests('devices',{name,fingerprint});
+      await requests('devices',{name,fingerprint},true);
       by('device-form').reset();
       text('device-status','Устройство авторизовано в ' + stage + '.');
     } catch { text('device-status','Не удалось подтвердить авторизацию. Проверьте состояние перед повтором.'); }
@@ -163,7 +163,7 @@
     resetting = true; clearTimeout(expiry); enableReset(); resetInput.disabled = true;
     text('reset-status','Очищаем базу…');
     try {
-      await requests('reset',{confirmation_id:reset.id,confirmation:resetInput.value});
+      await requests('reset',{confirmation_id:reset.id,confirmation:resetInput.value},true);
       location.replace('/'); // Resolve the current visual and discard the displayed graph snapshot.
     } catch { text('reset-status','Не удалось подтвердить очистку. Обновите статус базы, прежде чем повторять.'); }
     finally { resetting = false; reset = null; resetInput.value = ''; enableReset(); }
