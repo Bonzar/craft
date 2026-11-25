@@ -1,5 +1,6 @@
-"""TEST-only HTTP transport for immutable visual assets; no DB or outbound access."""
+"""Loopback Visual origin for immutable assets and optional TEST Base queue reads."""
 from hashlib import sha256
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 import json
@@ -61,10 +62,102 @@ def current_release(root):
     return key
 
 
-def make_server(root, token, port=8829, *, environment='test'):
+QUEUE_LIMIT = 256_000
+BASE_ORIGIN = re.compile(r'http://127\.0\.0\.1:([1-9][0-9]{0,4})\Z')
+SNAPSHOT_KEYS = {'stage', 'release_version', 'release_generation', 'global_order',
+                 'snapshot_at', 'queues', 'processing_control'}
+
+
+def unique_json(body):
+    def unique(pairs):
+        result = {}
+        for k, v in pairs:
+            if k in result:
+                raise ValueError('duplicate field')
+            result[k] = v
+        return result
+    def reject_constant(_):
+        raise ValueError('non-JSON value')
+    return json.loads(body.decode('utf-8'), object_pairs_hook=unique, parse_constant=reject_constant)
+
+
+
+def snapshot_queues(queues, limit, offset):
+    if not isinstance(queues, list) or len(queues) > 16:
+        return False
+    ids = set()
+    for q in queues:
+        if (not isinstance(q, dict) or set(q) != {'id','status','ordering','total','next_offset','items'}
+                or any(not isinstance(q[k], str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',q[k])
+                       for k in ('id','status','ordering'))
+                or q['id'] in ids or type(q['total']) is not int or q['total'] < 0
+                or type(q['next_offset']) not in (int, type(None))
+                or q['next_offset'] != (offset+limit if offset+limit < q['total'] else None)
+                or not isinstance(q['items'], list)
+                or len(q['items']) != max(0, min(limit,q['total']-offset))):
+            return False
+        ids.add(q['id'])
+        for row in q['items']:
+            if (not isinstance(row, dict) or set(row) != {'id','status','phase','position','available_at'}
+                    or not isinstance(row['id'], str) or not 1 <= len(row['id']) <= 512
+                    or any(not isinstance(row[k], str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',row[k])
+                           for k in ('status','phase'))
+                    or (row['position'] is not None and (type(row['position']) is not int or row['position'] < 1))
+                    or (row['available_at'] is not None and
+                        (not isinstance(row['available_at'], str) or len(row['available_at']) > 64))):
+                return False
+    return True
+
+
+def queue_client(origin, key):
+    address = BASE_ORIGIN.fullmatch(origin)
+    if not address or int(address[1]) > 65535 or not HEX.fullmatch(key):
+        raise ValueError('invalid local TEST Base settings')
+    def fetch(limit, offset):
+        if (type(limit) is not int or not 1 <= limit <= 50 or
+                type(offset) is not int or not 0 <= offset <= 1_000_000):
+            raise ValueError('invalid page')
+        http = HTTPConnection('127.0.0.1', int(address[1]), timeout=3)
+        try:
+            http.request('GET', f'/api/v1/queue-status?limit={limit}&offset={offset}',
+                         headers={'Authorization': 'Bearer '+key, 'Accept': 'application/json',
+                                  'Connection': 'close'})
+            response = http.getresponse()
+            if (response.status != 200 or response.headers.get_content_type() != 'application/json'
+                    or response.headers.get('Content-Encoding') is not None):
+                raise ValueError('Base queue unavailable')
+            raw = response.read(QUEUE_LIMIT+1)
+            if len(raw) > QUEUE_LIMIT:
+                raise ValueError('Base queue page too large')
+            value = unique_json(raw)
+            ctl = value.get('processing_control') if isinstance(value, dict) else None
+            if (not isinstance(value, dict) or set(value) != SNAPSHOT_KEYS or value['stage'] != 'test'
+                    or not isinstance(value['release_version'], str)
+                    or not re.fullmatch(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?', value['release_version'])
+                    or not isinstance(value['release_generation'], str) or not HEX.fullmatch(value['release_generation'])
+                    or not isinstance(value['snapshot_at'], str) or len(value['snapshot_at']) > 64
+                    or value['global_order'] is not False or not snapshot_queues(value['queues'],limit,offset)
+                    or not isinstance(ctl, dict) or set(ctl) != {'paused', 'revision', 'can_change'}
+                    or type(ctl['paused']) is not bool or ctl['can_change'] is not False
+                    or not isinstance(ctl['revision'], str) or not re.fullmatch(r'[0-9a-f]{32}',ctl['revision'])):
+                raise ValueError('invalid TEST Base queue page')
+            return json.dumps({**value, 'capabilities': {'live': False}, 'readiness': []},
+                              allow_nan=False, separators=(',', ':')).encode('utf-8')
+        finally:
+            http.close()
+    return fetch
+
+
+def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None):
     if environment not in ('test', 'prod') or not HEX.fullmatch(token):
         raise ValueError('invalid dedicated TEST token')
 
+    if queue_origin is not None or queue_token is not None:
+        if environment != 'test' or not queue_origin or not queue_token or token == queue_token:
+            raise ValueError('TEST queue requires separate complete authority')
+        fetch_queue = queue_client(queue_origin, queue_token)
+    else:
+        fetch_queue = None
     route = f'/memory-visual-{environment}-read'
 
     class Handler(BaseHTTPRequestHandler):
@@ -130,11 +223,24 @@ def make_server(root, token, port=8829, *, environment='test'):
                 body = self.rfile.read(length)
                 if len(body) != length:
                     return self.respond(400)
-                value = json.loads(body)
+                value = unique_json(body)
             except (ValueError, OSError, RecursionError):
                 return self.respond(404)
             if not isinstance(value, dict):
                 return self.respond(400)
+            if value.get('op') == 'queue_status':
+                if fetch_queue is None:
+                    return self.respond(404)
+                if set(value) != {'op', 'limit', 'offset'}:
+                    return self.respond(400)
+                limit, offset = value['limit'], value['offset']
+                if (type(limit) is not int or not 1 <= limit <= 50 or
+                        type(offset) is not int or not 0 <= offset <= 1_000_000):
+                    return self.respond(400)
+                try:
+                    return self.respond(200, fetch_queue(limit, offset), 'application/json')
+                except Exception:
+                    return self.respond(503)
             try:
                 if set(value) == {'op'} and value['op'] == 'current':
                     rel = current_release(root)
@@ -184,5 +290,9 @@ if __name__ == '__main__':
         raise SystemExit('invalid isolated service settings')
     credential = Path(os.environ['CREDENTIALS_DIRECTORY']) / 'asset-token'
     secret = read_small(credential, 66).decode('ascii').strip()
-    with make_server(ROOT / mode, secret, int(port), environment=mode) as server:
+    queue_origin = os.environ.get('MEMORY_VISUAL_TEST_BASE_ORIGIN')
+    queue_secret = (read_small(credential.with_name('queue-base-token'), 66).decode('ascii').strip()
+                    if queue_origin else None)
+    with make_server(ROOT / mode, secret, int(port), environment=mode,
+                     queue_origin=queue_origin, queue_token=queue_secret) as server:
         server.serve_forever()

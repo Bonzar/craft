@@ -106,3 +106,30 @@ test('stage or source drift cannot generate an approved native route',async()=>{
   for(const lane of [undefined,'PROD','both',''])assert.throws(()=>addNativeVisualAlias(Buffer.from('foreign'),lane),/Explicit native visual stage/);
   assert.throws(()=>addNativeVisualAlias(Buffer.from('foreign'),'prod'),/Unexpected native visual source/);
 });
+
+test('owner TEST queue reads through Visual-only transport, exact page and no stale fallback',async()=>{
+  const calls=[];
+  const live={...env,MEMORY_VISUAL_TEST_QUEUE_REST:'true'};
+  let upstream={stage:'test',global_order:false,processing_control:{can_change:false},
+                queues:[],capabilities:{live:false},readiness:[]};
+  const graph={fetch:async()=>new Response('legacy')};
+  const shell=visualShell('test',graph,async(url,opts)=>{
+    calls.push(JSON.parse(opts.body));
+    assert.equal(url,'https://'+gateway+'/memory-visual-test-read');
+    assert.deepEqual(opts.headers,{'content-type':'application/json','x-memory-visual-auth':'Bearer '+assetToken});
+    return Response.json(upstream);
+  });
+  const path='/api/v1/capabilities?queue_status=1';
+  assert.equal((await shell.fetch(req(path,false),live)).status,403);
+  assert.equal(await (await shell.fetch(req(path),env)).text(),'legacy');
+  for(const q of ['&limit=51','&limit=1&limit=2','&offset=-1','&stage=prod']){
+    assert.equal((await shell.fetch(req(path+q),live)).status,400);
+  }
+  assert.equal(calls.length,0);
+  assert.equal((await shell.fetch(req(path),live)).status,200);
+  assert.equal((await shell.fetch(req(path+'&limit=13&offset=240'),live)).status,200);
+  assert.deepEqual(calls,[{op:'queue_status',limit:50,offset:0},{op:'queue_status',limit:13,offset:240}]);
+  upstream={...upstream,stage:'prod'};
+  assert.equal((await shell.fetch(req(path),live)).status,503);
+  assert.equal(await (await shell.fetch(req('/api/v1/capabilities'),live)).text(),'legacy');
+});

@@ -276,3 +276,35 @@ standard controller verification exist, refusal after expiry is deliberate.
 `test_configured_visual_replay.py` exercises the standard configure/resolve/
 unpack bindings with independent artifact-only temp runners, plus exact
 relayed payload validation and fail-closed expiry/missing/changed cases.
+
+## TEST queue REST migration (default off)
+
+The Visual origin can carry the existing owner-authenticated queue page
+without importing Base Python code or opening SQLite. The owner-checked
+Sites shell maps the existing GET to a fixed `queue_status` operation on the
+existing TEST Visual transport. The Visual runtime calls a configured local
+Base HTTP origin at `GET /api/v1/queue-status?limit=50&offset=0`; each page
+has a 1–50 limit and offset 0–1,000,000. Its systemd credential
+`queue-base-token` is dedicated to this read and is distinct from
+`asset-token`. Browser/Sites headers never become the Base credential.
+The origin is loopback HTTP only in this phase; separation across hosts
+requires an explicitly approved private HTTPS transport, not a public route.
+
+The TEST Visual unit must supply `MEMORY_VISUAL_TEST_BASE_ORIGIN` and mount
+the service credential before the TEST Sites owner publisher enables
+`MEMORY_VISUAL_TEST_QUEUE_REST=true`. Once enabled, the exact capabilities
+page fails unavailable on bad/unavailable Base data; it never silently reads
+the old Graph queue path. Ordinary capabilities, Graph reads/event streams,
+and PROD are unchanged. The first phase transfers no mutation authority.
+The Sites native paired shell must call `testQueueRead` inside its existing
+owner/scope check using the already authorized TEST asset transport; do not
+replace the owner boundary or publish this reference shell as a whole.
+
+The current signed TAR intentionally holds four web files plus its
+manifest. Installing the origin runtime is a separate existing host concern;
+do not add executable files to the web TAR. An independent Visual rollout
+needs an explicitly digest-pinned runtime companion from that exact Visual
+build, a scoped activation/rollback hook for the existing TEST Visual origin
+service, and an owner-authenticated browser check. No new listener, public
+Base endpoint, or Base release restart should be necessary for Visual-only
+changes after the internal Base read endpoint exists.

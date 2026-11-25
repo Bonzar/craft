@@ -37,6 +37,31 @@ async function bounded(response,limit){
   for(const chunk of chunks){data.set(chunk,offset);offset+=chunk.length;}
   return data;
 }
+// Called after the existing Visual owner/scope boundary; null preserves all
+// unrelated paths and makes a dark rollout byte-for-byte compatible.
+export async function testQueueRead(req,url,env,mode,relay,res){
+  if(mode!=='test'||env.MEMORY_VISUAL_TEST_QUEUE_REST!=='true'||
+     url.pathname!=='/api/v1/capabilities'||!url.searchParams.has('queue_status'))return null;
+  if(req.method!=='GET')return res(405);
+  const q=url.searchParams;
+  if([...q.keys()].some(k=>!['queue_status','limit','offset'].includes(k)||q.getAll(k).length!==1)||
+     q.get('queue_status')!=='1')return res(400);
+  const parse=(v,max)=>/^(?:0|[1-9][0-9]{0,6})$/.test(v)&&Number(v)<=max?Number(v):null;
+  const limit=parse(q.get('limit')??'50',50),offset=parse(q.get('offset')??'0',1_000_000);
+  if(!limit||offset===null)return res(400);
+  try{
+    const out=await relay({op:'queue_status',limit,offset});
+    if(out.status!==200||!/^application\/json(?:;|$)/i.test(out.headers.get('content-type')??'')){
+      await out.body?.cancel();return res(503);
+    }
+    const body=await bounded(out,256000);
+    const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(body));
+    if(data?.stage!=='test'||data.processing_control?.can_change!==false||data.global_order!==false||
+       data.capabilities?.live!==false||!Array.isArray(data.readiness)||!Array.isArray(data.queues))return res(503);
+    return res(200,body,{'content-type':'application/json; charset=utf-8'});
+  }catch{return res(503);}
+}
+
 export function visualShell(mode, graph, fetcher=fetch){
   if(mode!=='test'&&mode!=='prod')throw Error('Unsupported visual scope');
   return {async fetch(req,env){
@@ -45,7 +70,9 @@ export function visualShell(mode, graph, fetcher=fetch){
     if(url.protocol!=='https:'||!siteHost.test(env.MEMORY_GRAPH_SITE_HOST||'')||url.hostname!==env.MEMORY_GRAPH_SITE_HOST||url.port||url.username||url.password||env.MEMORY_GRAPH_MODE!==mode)return res(421);
     if(!await owner(req,env,url))return res(403);
     if(req.method!=='GET'&&req.method!=='HEAD')return res(405);
-    if(url.pathname.startsWith('/api/'))return graph.fetch(req,env);
+    const queueRoute=mode==='test'&&env.MEMORY_VISUAL_TEST_QUEUE_REST==='true'&&
+      url.pathname==='/api/v1/capabilities'&&url.searchParams.has('queue_status');
+    if(url.pathname.startsWith('/api/')&&!queueRoute)return graph.fetch(req,env);
     const isTest=mode==='test';
     const token=env[isTest?'MEMORY_VISUAL_TEST_TOKEN':'MEMORY_VISUAL_PROD_TOKEN'];
     const graphToken=env[isTest?'MEMORY_GRAPH_TEST_TOKEN':'MEMORY_GRAPH_PROD_TOKEN'];
@@ -53,14 +80,15 @@ export function visualShell(mode, graph, fetcher=fetch){
     const upstream=env.MEMORY_VISUAL_GATEWAY_HOST||'';
     if(!hex.test(token||'')||token===graphToken||opposite!==undefined||!gatewayHost.test(upstream))return res(503);
     const gateway='https://'+upstream+routes[mode];
+    const relay=body=>fetcher(gateway,{method:'POST',redirect:'error',signal:req.signal,headers:{
+      'content-type':'application/json','x-memory-visual-auth':'Bearer '+token,
+    },body:JSON.stringify(body)});
+    if(queueRoute)return testQueueRead(req,url,env,mode,relay,res);
     const path=url.pathname;
     const match=path.match(/^\/visual\/([a-f0-9]{64})\/(.*)$/);
     const name=match&&(match[2]||'index.html');
     const current=path==='/'||(mode==='test'&&latestAlias(path));
     if(!current&&(!match||!item.test(name)||(match[2]&&url.search)))return res(404);
-    const relay=body=>fetcher(gateway,{method:'POST',redirect:'error',signal:req.signal,headers:{
-      'content-type':'application/json','x-memory-visual-auth':'Bearer '+token,
-    },body:JSON.stringify(body)});
     try{
       if(current){
         const remote=await relay({op:'current'});
