@@ -12,6 +12,30 @@ PATH = '/memory-visual-test-pause'
 HEX = re.compile(r'[0-9a-f]{64}\Z')
 
 
+EFFECTS_CARRIER = '/memory-mcp-test-effects'
+
+
+def via_test_effects(existing, pause, *, stage, pause_token, effect_token):
+    """Share only the existing TEST transport; never share authorization."""
+    if (stage != 'test' or type(pause_token) is not str or type(effect_token) is not str
+            or not HEX.fullmatch(pause_token) or not HEX.fullmatch(effect_token)
+            or hmac.compare_digest(pause_token,effect_token)):
+        return existing
+    expected = b'Bearer ' + pause_token.encode('ascii')
+
+    async def carrier(scope, receive, send):
+        if scope.get('type')=='http' and scope.get('path')==EFFECTS_CARRIER:
+            # Read normalized ASGI header names, not a payload marker. The pause
+            # app independently requires exactly one Authorization header; a
+            # duplicate containing our credential must not fall into effects.
+            messages = [value for name,value in scope.get('headers',()) if name.lower()==b'authorization']
+            if any(hmac.compare_digest(value,expected) for value in messages):
+                return await pause({**scope,'path':PATH,'raw_path':PATH.encode('ascii')},receive,send)
+        return await existing(scope,receive,send)
+
+    return carrier
+
+
 def configured(stage, root, config_dir, *, read_regular, reserved):
     # Explicit current TEST only. Neither missing nor invalid data affects MCP.
     source=config_dir/'native-pause.json'

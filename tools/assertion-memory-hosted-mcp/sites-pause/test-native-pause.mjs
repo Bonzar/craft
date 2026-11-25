@@ -14,7 +14,7 @@ const id='real-test-owner-fixture-109', email='fictional@example.test';
 const path='/api/v1/processing/pause', rev='9'.repeat(32);
 const baseEnv={MEMORY_GRAPH_MODE:'test',MEMORY_TEST_PAUSE_ENABLED:'true',MEMORY_MCP_TEST_OWNER_BINDING:'d1',
  MEMORY_GRAPH_OWNER_EMAIL_SHA256:hash(email),MEMORY_TEST_PAUSE_UPSTREAM_KEY:'b'.repeat(64),MEMORY_TEST_PAUSE_CSRF_KEY:'c'.repeat(64)};
-function setup(real,host=fixtureHost){
+function setup(real,host=fixtureHost,carrier=false){
  let hits=0, env={...baseEnv};
  env.DB={prepare(sql){
    assert.match(sql,/memory_test_owner_binding/);
@@ -27,9 +27,11 @@ function setup(real,host=fixtureHost){
  const native=attachTestPause({origin:host,gateway,withinEnrolledOwner:real,
      legacy:{fetch:async()=>new Response('unchanged legacy')},fetcher:async(url,o)=>{
    hits++;
-   assert.equal(url,gateway);assert.equal(o.redirect,'manual');
-   assert.deepEqual(Object.keys(o.headers).sort(),['content-type','x-memory-test-pause-auth']);
-   assert.equal(o.headers['x-memory-test-pause-auth'],'Bearer '+'b'.repeat(64));
+   const target=carrier?new URL('/memory-mcp-test-effects',gateway).href:gateway;
+   const header=carrier?'x-memory-mcp-test-effects-auth':'x-memory-test-pause-auth';
+   assert.equal(url,target);assert.equal(o.redirect,'manual');
+   assert.deepEqual(Object.keys(o.headers).sort(),['content-type',header]);
+   assert.equal(o.headers[header],'Bearer '+'b'.repeat(64));
    const b=JSON.parse(o.body);
    assert.equal(b.actor,hash('native-queue-pause-test-v1\0'+id));
    if(b.action==='prepare')assert.deepEqual(b.arguments,{});
@@ -111,4 +113,24 @@ test('TEST owner pin attestation is mutually exclusive with writes and never rea
  assert.equal((await f.fetch(f.req(url,{}, {'oai-authenticated-user-id':'alien'}),env)).status,403);
  assert.equal((await f.fetch(f.req(url,{unexpected:true}),env)).status,400);
  assert.equal(f.hits(),0);
+});
+
+test('existing TEST transport preserves a dedicated pause bearer and rejects effects-key reuse',async()=>{
+ const f=setup(async req=>req.headers.get('oai-authenticated-user-id')===id,fixtureHost,true);
+ const env={...f.env,MEMORY_TEST_PAUSE_CARRIER:'effects',HOSTED_MEMORY_TEST_EFFECTS_TOKEN:'d'.repeat(64)};
+ for(const patch of [{HOSTED_MEMORY_TEST_EFFECTS_TOKEN:env.MEMORY_TEST_PAUSE_UPSTREAM_KEY},
+                     {HOSTED_MEMORY_TEST_EFFECTS_TOKEN:undefined},
+                     {HOSTED_MEMORY_TEST_EFFECTS_TOKEN:'malformed'},
+                     {MEMORY_TEST_PAUSE_CARRIER:'prod'}]){
+   assert.equal((await f.fetch(f.req(path+'/prepare',{}),{...env,...patch})).status,503);
+ }
+ assert.equal(f.hits(),0);
+ const prepare=await f.fetch(f.req(path+'/prepare',{}),env);
+ assert.equal(prepare.status,200);
+ const p=await prepare.json();
+ const cookie=prepare.headers.get('set-cookie').split(';')[0];
+ const res=await f.fetch(f.req(path,{stage:'test',paused:true,expected_revision:p.revision},
+                            {cookie,'x-csrf-token':p.csrf_token}),env);
+ assert.equal(res.status,200);
+ assert.equal(f.hits(),2);
 });

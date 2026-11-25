@@ -38,6 +38,14 @@ export function makeTestPause({origin,gateway,owner,fetcher=(...a)=>fetch(...a),
   // Bootstrap the static Base owner pin from the same actual owner proof as live
   // writes. This short-lived mode returns no CSRF cookie and never calls Base.
   if(attest)return out(200,{stage:'test',owner_sha256:actor});
+  const carrier=env.MEMORY_TEST_PAUSE_CARRIER??'dedicated';
+  if((carrier!=='dedicated'&&carrier!=='effects')||
+     (carrier==='effects'&&!HEX.test(env.HOSTED_MEMORY_TEST_EFFECTS_TOKEN??'')))
+    return fail(503,'pause_unavailable');
+  // Use the existing TEST ingress's header *slot*, not its effects credential.
+  // Base chooses the pause handler only after matching the dedicated bearer.
+  const target=carrier==='effects'?new URL('/memory-mcp-test-effects',gateway).href:gateway;
+  const header=carrier==='effects'?'x-memory-mcp-test-effects-auth':'x-memory-test-pause-auth';
   const upstream=env.MEMORY_TEST_PAUSE_UPSTREAM_KEY,csrf=env.MEMORY_TEST_PAUSE_CSRF_KEY;
   if(!HEX.test(upstream??'')||!HEX.test(csrf??'')||upstream===csrf||
      Object.entries(env).some(([k,v])=>!['MEMORY_TEST_PAUSE_UPSTREAM_KEY','MEMORY_TEST_PAUSE_CSRF_KEY'].includes(k)&&/(?:_KEY|_TOKEN)$/.test(k)&&(v===upstream||v===csrf)))return fail(503,'pause_unavailable');
@@ -51,8 +59,8 @@ export function makeTestPause({origin,gateway,owner,fetcher=(...a)=>fetch(...a),
   }
   let result;
   try{
-   const r=await fetcher(gateway,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(5000),
-    headers:{'content-type':'application/json','x-memory-test-pause-auth':'Bearer '+upstream},
+   const r=await fetcher(target,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(5000),
+    headers:{'content-type':'application/json',[header]:'Bearer '+upstream},
     body:JSON.stringify({stage:'test',action:prepare?'prepare':'set',actor,arguments:body})});
    if(r.status!==200){try{await r.body?.cancel();}catch{}return r.status===409?fail(409,'queue_control_changed'):fail(503,'pause_unavailable');}
    if(!jsonType(r.headers))throw Error();
