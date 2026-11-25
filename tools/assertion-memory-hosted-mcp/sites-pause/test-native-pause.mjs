@@ -1,0 +1,96 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {test} from 'node:test';
+import {createHash, webcrypto} from 'node:crypto';
+import {pathToFileURL} from 'node:url';
+import {resolve} from 'node:path';
+import {attachTestPause} from './v25-bind.mjs';
+globalThis.crypto??=webcrypto;
+const root=process.env.V25_SITES_ROOT;
+const hash=x=>createHash('sha256').update(x).digest('hex');
+const fixtureHost='https://fixture.owner.chatgpt.site';
+const gateway='https://demo.site.apigw.yandexcloud.net/memory-visual-test-pause';
+const id='real-test-owner-fixture-109', email='fictional@example.test';
+const path='/api/v1/processing/pause', rev='9'.repeat(32);
+const baseEnv={MEMORY_GRAPH_MODE:'test',MEMORY_TEST_PAUSE_ENABLED:'true',MEMORY_MCP_TEST_OWNER_BINDING:'d1',
+ MEMORY_GRAPH_OWNER_EMAIL_SHA256:hash(email),MEMORY_TEST_PAUSE_UPSTREAM_KEY:'b'.repeat(64),MEMORY_TEST_PAUSE_CSRF_KEY:'c'.repeat(64)};
+function setup(real,host=fixtureHost){
+ let hits=0, env={...baseEnv};
+ env.DB={prepare(sql){
+   assert.match(sql,/memory_test_owner_binding/);
+   return {bind:(scope,marker)=>({first:async()=>{
+     assert.equal(scope,'assertion-memory-preview:TEST:owner-v1');
+     assert.equal(marker,'private-synthetic-assertion-smoke/v1');
+     return {owner_sha256:hash(scope+'\0'+id)};
+   }})};
+ }};
+ const native=attachTestPause({origin:host,gateway,withinEnrolledOwner:real,
+     legacy:{fetch:async()=>new Response('unchanged legacy')},fetcher:async(url,o)=>{
+   hits++;
+   assert.equal(url,gateway);assert.equal(o.redirect,'manual');
+   assert.deepEqual(Object.keys(o.headers).sort(),['content-type','x-memory-test-pause-auth']);
+   assert.equal(o.headers['x-memory-test-pause-auth'],'Bearer '+'b'.repeat(64));
+   const b=JSON.parse(o.body);
+   assert.equal(b.actor,hash('native-queue-pause-test-v1\0'+id));
+   if(b.action==='prepare')assert.deepEqual(b.arguments,{});
+   else {assert.equal(b.action,'set');assert.equal(b.arguments.expected_revision,rev);}
+   return Response.json({stage:'test',paused:b.action==='set',revision:rev});
+ }});
+ const req=(target,body,patch={})=>new Request(host+target,{
+  method:target.endsWith('/prepare')?'POST':'PUT',
+  body:JSON.stringify(body),headers:{'content-type':'application/json','sec-fetch-site':'same-origin',origin:host,
+    'oai-authenticated-user-id':id,'oai-authenticated-user-email':email,...patch}});
+ return {env,req,fetch:native.fetch,hits:()=>hits};
+}
+async function suite(real,host=fixtureHost){
+ const f=setup(real,host), {env,req}=f;
+ assert.equal(await (await f.fetch(req('/elsewhere',{}),env)).text(),'unchanged legacy');
+ assert.equal((await f.fetch(req(path+'/prepare',{}),{...env,MEMORY_TEST_PAUSE_ENABLED:'false'})).status,404);
+ assert.equal((await f.fetch(req(path+'/prepare',{}, {origin:'https://evil.test'}),env)).status,403);
+ assert.equal((await f.fetch(req(path+'/prepare',{}, {'oai-authenticated-user-id':'foreign'}),env)).status,403);
+ assert.equal((await f.fetch(req(path+'/prepare',{}, {'oai-authenticated-user-email':'foreign@example.test'}),env)).status,403);
+ assert.equal((await f.fetch(req(path+'/prepare',{}),{...env,MEMORY_GRAPH_TEST_TOKEN:'b'.repeat(64)})).status,503);
+ const body={stage:'test',paused:true,expected_revision:rev};
+ assert.equal((await f.fetch(req(path,body),env)).status,403);
+ assert.equal(f.hits(),0);
+ const ready=await f.fetch(req(path+'/prepare',{}),env);
+ assert.equal(ready.status,200);
+ const cookie=ready.headers.get('set-cookie');
+ assert.match(cookie,/^__Host-assertion-test-pause=[a-f0-9]{64};.*Path=\/; HttpOnly; Secure; SameSite=Strict$/);
+ const p=await ready.json();
+ assert.equal(p.paused,false);assert.equal(p.revision,rev);assert.equal(p.stage,'test');
+ const proof={cookie:cookie.split(';')[0],'x-csrf-token':p.csrf_token};
+ const bad={...proof,cookie:proof.cookie.replace(/[a-f0-9]$/,'x')};
+ assert.equal((await f.fetch(req(path,body,bad),env)).status,403);
+ assert.equal((await f.fetch(req(path,{...body,stage:'prod'},proof),env)).status,400);
+ assert.equal((await f.fetch(req(path,{...body,expected_revision:'e'.repeat(32)},proof),env)).status,403);
+ const result=await f.fetch(req(path,body,proof),env);
+ assert.equal(result.status,200);
+ assert.deepEqual(await result.json(),{stage:'test',paused:true,revision:rev});
+ assert.equal(f.hits(),2);
+}
+test('native transport smoke with pinned synthetic owner predicate',async()=>{
+ await suite(async req=>req.headers.get('oai-authenticated-user-id')===id);
+});
+test('saved V25 owner rule and legacy paired HTTP route', {skip:!root}, async()=>{
+ const src=resolve(root);
+ const entry=await readFile(resolve(src,'preview_visual_entry.mjs'),'utf8');
+ assert.match(entry,/export default withVisualAtMcpOrigin\('test',visualGraph,previous\);/);
+ const enrollment=resolve(src,'test_owner_enrollment.mjs');
+ const source=await readFile(enrollment,'utf8');
+ const host=/^const origin='(https:\/\/[a-z0-9.-]+\.chatgpt\.site)';$/m.exec(source)?.[1];
+ assert.ok(host,'exact native Site origin missing');
+ const {matchesEnrolledOwner}=await import(pathToFileURL(enrollment));
+ await suite(matchesEnrolledOwner,host);
+ // Exercise actual published module graph in place, no source changes and no IO.
+ const actual=(await import(pathToFileURL(resolve(src,'preview_visual_entry.mjs')))).default;
+ const mounted=attachTestPause({origin:host,gateway,legacy:actual,withinEnrolledOwner:matchesEnrolledOwner});
+ const f=setup(matchesEnrolledOwner,host);
+ const req=new Request(host+'/api/v1/session',{headers:{
+  'oai-authenticated-user-id':id,'oai-authenticated-user-email':email,'sec-fetch-site':'same-origin'}});
+ const env={...f.env,MEMORY_TEST_PAUSE_ENABLED:'false'};
+ const before=await actual.fetch(req.clone(),env);
+ const after=await mounted.fetch(req.clone(),env);
+ assert.equal(after.status,before.status);
+ assert.equal(await after.text(),await before.text());
+});

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 from uuid import uuid4
+from .processing_control import paused as processing_paused
 from .queue import LeaseLost
 from .thought_processing_selection import normalize_session_ids,current_cohort,maintenance_predicate,pending_cohort
 
@@ -89,7 +90,7 @@ class ThoughtWorkQueue:
     def claim(self, *, is_pausing=None, thought_id=None):
         with self.store.transaction(write=True) as c:
             # SQLite write admission may have waited past the pause request.
-            if is_pausing is not None and is_pausing():
+            if processing_paused(c) or (is_pausing is not None and is_pausing()):
                 return None
             now = self.queue._time()
             eligible,args = maintenance_predicate(c,self.processing_session_ids,'w')

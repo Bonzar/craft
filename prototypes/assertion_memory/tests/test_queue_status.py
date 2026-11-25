@@ -1,4 +1,5 @@
 from contextlib import closing
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,6 +11,7 @@ import unittest
 from prototypes.assertion_memory import thought_processing_selection
 from prototypes.assertion_memory.query_jobs import QueryJobs
 from prototypes.assertion_memory.queue import CaptureQueue
+from prototypes.assertion_memory import processing_control
 from prototypes.assertion_memory.queue_status import build_queue_status
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_worker import ThoughtWorker
@@ -108,6 +110,49 @@ class QueueStatusTest(unittest.TestCase):
                           ('exhausted','expired')])
         self.assertEqual([self.worker.work.claim()['thought_id'] for _ in range(2)],['a','b'])
         self.assertIsNone(self.worker.work.claim())
+
+    def test_pause_blocks_claims_not_intake_existing_leases_or_interactive(self):
+        self.source('a','pending')
+        claimed=self.worker._claim_source()
+        self.assertEqual(claimed.job.id,'a')
+        self.maintenance('t','pending')
+        with self.store.transaction(write=True) as db:
+            flag,rev=processing_control.set_control(db,paused=True,expected_revision=processing_control.INITIAL)
+        self.assertTrue(flag)
+        self.source('b','pending')
+        self.interactive('question','queued',NOW.timestamp())
+        self.assertIsNone(self.worker._claim_source())
+        self.assertIsNone(self.worker.work.claim())
+        self.assertIsNone(self.queue._claim(with_model=True))
+        self.assertEqual(self.jobs._claim()[0],'question')
+        status=self.status()
+        self.assertEqual(status['processing_control'],{'paused':True,'revision':rev,'can_change':False})
+        known={row['id']:row for row in status['queues'][0]['items']}
+        self.assertEqual(known['a']['status'],'running')
+        self.assertIsNone(known['b']['position'])
+        with self.store.transaction() as db:
+            self.queue._assert_owned(db,claimed)
+        with self.store.transaction(write=True) as db:
+            processing_control.set_control(db,paused=False,expected_revision=rev)
+        self.assertEqual(self.worker._claim_source().job.id,'b')
+        self.assertEqual(self.worker.work.claim()['thought_id'],'t')
+
+    def test_resuming_wakes_actual_launcher_callback_without_another_ingest(self):
+        with self.store.transaction(write=True) as db:
+            _, revision=processing_control.set_control(db,paused=True,expected_revision=processing_control.INITIAL)
+        async def scenario():
+            calls=[]
+            async with processing_control.restart_on_resume(self.path, lambda: calls.append('launch')):
+                await asyncio.sleep(.1)
+                self.assertEqual(calls,[])
+                with self.store.transaction(write=True) as db:
+                    processing_control.set_control(db,paused=False,expected_revision=revision)
+                for _ in range(20):
+                    if calls:
+                        break
+                    await asyncio.sleep(.05)
+                self.assertEqual(calls,['launch'])
+        asyncio.run(scenario())
 
     def test_interactive_order_and_pagination_match_claim(self):
         self.interactive('b','queued',2)

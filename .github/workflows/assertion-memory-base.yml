@@ -143,7 +143,7 @@ jobs:
           PY
           base="tools/assertion-memory-hosted-mcp/sites-dynamic"
           python3 -B "$base/package_release.py" --tag "$GITHUB_REF_NAME" --source-sha "$GITHUB_SHA" \
-            --worker "$base/worker.mjs" --test-profile "$RUNNER_TEMP/test.json" --prod-profile "$RUNNER_TEMP/prod.json" \
+            --worker "$base/worker.mjs" --test-pause-dir "${base%/*}/sites-pause" --test-profile "$RUNNER_TEMP/test.json" --prod-profile "$RUNNER_TEMP/prod.json" \
             --output "$RUNNER_TEMP/sites-bridge-release/source.tar.gz" > "$RUNNER_TEMP/sites-bridge-release/build-evidence.json"
       - id: sites_artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

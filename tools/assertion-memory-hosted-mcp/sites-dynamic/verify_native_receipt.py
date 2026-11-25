@@ -3,21 +3,30 @@ import argparse
 import io
 import tarfile
 from pathlib import Path
-from package_release import HEX,LANES,SHA,digest,read_doc,valid,wire
+from package_release import FORMAT,HEX,LANES,PAUSE_FORMAT,PAUSE_MODULES,SHA,TAG,digest,read_doc,valid,wire
 import json
 
-def validate(bundle,expected_sha,receipt):
+def read_bundle(bundle,expected_sha):
     if len(bundle)>150000 or not valid(HEX,expected_sha) or digest(bundle)!=expected_sha:
         raise ValueError('wrong immutable release archive')
     with tarfile.open(fileobj=io.BytesIO(bundle),mode='r:gz') as tar:
         members=tar.getmembers()
         names={'manifest.json','worker.mjs','profiles/test.json','profiles/prod.json'}
-        if len(members)!=4 or {m.name for m in members}!=names or any(not m.isfile() or m.size>65536 for m in members):
+        newer=names | {'test/pause/'+name for name in PAUSE_MODULES}
+        actual={m.name for m in members}
+        if actual not in (names,newer) or len(members)!=len(actual) or any(not m.isfile() or m.size>65536 for m in members):
             raise ValueError('unexpected archive shape')
         files={m.name:tar.extractfile(m).read() for m in members}
     manifest=json.loads(files.pop('manifest.json'))
-    if manifest['files']!={key:digest(val) for key,val in files.items()}:
+    if (type(manifest) is not dict or set(manifest)!={'version','tag','source_sha','files'}
+            or manifest['version']!=(FORMAT if actual==names else PAUSE_FORMAT)
+            or not valid(TAG,manifest['tag']) or not valid(SHA,manifest['source_sha'])
+            or manifest['files']!={key:digest(val) for key,val in files.items()}):
         raise ValueError('archive files drift')
+    return manifest,files
+
+def validate(bundle,expected_sha,receipt):
+    manifest,files=read_bundle(bundle,expected_sha)
     lanes=receipt.get('lane')
     fields={'tag','archive_sha256','lane','published_source_sha','sites_deployment_id','sites_saved_version_id',
             'owner_only_before','owner_only_after','project_id_sha256','access_identity_sha256_before',

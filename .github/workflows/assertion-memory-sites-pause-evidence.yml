@@ -1,0 +1,51 @@
+name: Verify native Sites TEST pause evidence
+on:
+  workflow_dispatch:
+    inputs:
+      base_tag: {type: string, required: true}
+      visual_tag: {type: string, required: true}
+      base_test_run_id: {type: string, required: true}
+      visual_test_run_id: {type: string, required: true}
+      native_receipt:
+        description: Nonsecret owner-verified private Sites readback and browser smoke evidence
+        type: string
+        required: true
+permissions: {}
+jobs:
+  verify:
+    name: Record reviewed native TEST pause and restore
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == '1'
+    runs-on: ubuntu-latest
+    environment: assertion-memory-sites-pause-test
+    timeout-minutes: 8
+    concurrency:
+      group: assertion-memory-sites-pause-test-evidence
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact immutable releases and reviewed live owner evidence
+        env:
+          PYTHONPATH: tools/assertion-memory-release/experimental:tools/assertion-memory-release:.
+          GH_TOKEN: ${{ github.token }}
+          PAUSE_EVIDENCE_ENV_ID: ${{ vars.PAUSE_EVIDENCE_ENV_ID }}
+          PAUSE_EVIDENCE_REVIEWER_ID: ${{ vars.PAUSE_EVIDENCE_REVIEWER_ID }}
+          BASE_TAG: ${{ inputs.base_tag }}
+          VISUAL_TAG: ${{ inputs.visual_tag }}
+          BASE_TEST_RUN_ID: ${{ inputs.base_test_run_id }}
+          VISUAL_TEST_RUN_ID: ${{ inputs.visual_test_run_id }}
+          NATIVE_RECEIPT: ${{ inputs.native_receipt }}
+        run: python3 -B tools/assertion-memory-hosted-mcp/sites-dynamic/verify_test_pause_gate.py
+      - name: Preserve native TEST evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sites-pause-test-evidence-${{ github.run_id }}-attempt-1
+          path: ${{ runner.temp }}/sites-pause-test-evidence.json
+          if-no-files-found: error
+          retention-days: 90

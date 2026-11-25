@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness(){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -19,7 +19,10 @@ function harness(){
   const events=[],urls=[],writes=[];
   const panel=new Element('dialog'),status=new Element(),container=new Element();
   const launcher=new Element('button'),closer=new Element('button'),copyStatus=new Element();
-  const mapping={'#visual-queue':panel,'#visual-queue-open':launcher,'.queue-meta':status,
+  const controlPanel=new Element(), controlButton=new Element('button'), controlState=new Element(), controlFeedback=new Element();
+  const mutations=[];
+  const mapping={'#queue-processing':controlPanel,'#queue-processing-toggle':controlButton,
+    '#queue-processing-state':controlState,'#queue-processing-feedback':controlFeedback,'#visual-queue':panel,'#visual-queue-open':launcher,'.queue-meta':status,
     '.queue-items':container,'.queue-copy-status':copyStatus,'#visual-queue-close':closer};
   const doc={querySelector:k=>mapping[k],createElement:t=>new Element(t)};
   const longId='65d14fb3a09c427fb6c3f8f161d0036c8c9afa083';
@@ -39,13 +42,27 @@ function harness(){
     fetch:async (url,options)=>{
       assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
       urls.push(url);
+      if(url==='/api/v1/session')return Response.json(session);
+      if(url==='/api/v1/processing/pause/prepare'){
+        assert.equal(options.method,'POST');
+        assert.equal(options.body,'{}');
+        return prepare?prepare(control):Response.json({}, {status:404});
+      }
+      if(url==='/api/v1/processing/pause'){
+        const payload=JSON.parse(options.body);
+        mutations.push({method:options.method,token:options.headers['x-csrf-token'],payload});
+        if(put)return put(payload);
+        const next={stage,paused:payload.paused,revision:(payload.paused?'b':'c').repeat(32)};
+        control={...next,can_change:control.can_change};
+        return Response.json(next);
+      }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage:'test',release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
   return {doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
-    timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
+    controlPanel,controlButton,controlState,controlFeedback,mutations,timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
 }
 
 test('full-screen modal has three labeled lanes, card chips and real positions',async()=>{
@@ -103,4 +120,74 @@ test('paging one lane does not advance other lanes or reorder their cards',async
   assert.equal(h.urls.length,3);
   assert.match(h.urls.at(-1),/offset=50$/);
   assert.ok(h.urls.every(url=>url.startsWith('/api/v1/capabilities?queue_status=1')));
+});
+
+
+const original='a'.repeat(32), csrf='sample_csrf_for_synthetic_owner_only';
+test('pause state can be read without CSRF but pseudo-session never enables mutation',async()=>{
+  const h=harness({control:{paused:true,revision:original,can_change:true}});
+  await h.open();
+  assert.equal(h.controlPanel.hidden,false);
+  assert.equal(h.controlState.textContent,'TEST · Обработка на паузе');
+  assert.equal(h.controlButton.hidden,true);
+  await h.controlButton.listeners.click();
+  assert.deepEqual(h.mutations,[]);
+  const unknown=harness({control:{paused:false,revision:'unproven',can_change:true},session:{authenticated:true,csrf_token:csrf}});
+  await unknown.open();
+  assert.equal(unknown.controlPanel.hidden,true);
+  assert.equal(unknown.urls.length,1);
+});
+
+test('pause and resume set explicit stage and revision with current owner CSRF',async()=>{
+  const h=harness({stage:'prod',control:{paused:false,revision:original,can_change:true},session:{authenticated:true,csrf_token:csrf}});
+  await h.open();assert.equal(h.controlButton.hidden,false);
+  await h.controlButton.listeners.click();await h.delay();
+  assert.deepEqual(h.mutations,[{method:'PUT',token:csrf,payload:{stage:'prod',paused:true,expected_revision:original}}]);
+  assert.equal(h.controlState.textContent,'PROD · Обработка на паузе');
+  await h.controlButton.listeners.click();await h.delay();
+  assert.deepEqual(h.mutations.at(-1).payload,{stage:'prod',paused:false,expected_revision:'b'.repeat(32)});
+  assert.equal(h.controlState.textContent,'PROD · Обработка не на паузе');
+  assert.match(h.text(h.container.items[0]),/Вопросы 0 Активна/);
+});
+
+test('conflict, async acceptance and foreign-stage replies are never rendered as success',async()=>{
+  for(const rejected of [()=>Response.json({}, {status:409}),()=>Response.json({paused:true}, {status:202}),
+    ()=>Response.json({stage:'prod',paused:true,revision:'b'.repeat(32)})]){
+    const h=harness({control:{paused:false,revision:original,can_change:true},session:{authenticated:true,csrf_token:csrf},put:rejected});
+    await h.open();await h.controlButton.listeners.click();await h.delay();
+    assert.equal(h.mutations.length,1);
+    assert.equal(h.controlState.textContent,'TEST · Обработка не на паузе');
+    assert.doesNotMatch(h.controlFeedback.textContent,/Пауза включена/);
+  }
+});
+
+test('native TEST button uses POST prepare and never the pseudo-session token',async()=>{
+  const ncsrf='1650000000.'+'d'.repeat(64);
+  const h=harness({control:{paused:false,revision:original,can_change:false},
+    prepare:({paused,revision})=>Response.json({stage:'test',paused,revision,csrf_token:ncsrf})});
+  await h.open();
+  assert.equal(h.controlButton.hidden,false);
+  assert.ok(!h.urls.includes('/api/v1/session'));
+  await h.controlButton.listeners.click();
+  await h.delay();
+  assert.deepEqual(h.mutations,[{method:'PUT',token:ncsrf,payload:{stage:'test',paused:true,expected_revision:original}}]);
+  assert.equal(h.controlState.textContent,'TEST · Обработка на паузе');
+  await h.controlButton.listeners.click();
+  await h.delay();
+  assert.deepEqual(h.mutations.at(-1).payload,{stage:'test',paused:false,expected_revision:'b'.repeat(32)});
+  assert.equal(h.controlState.textContent,'TEST · Обработка не на паузе');
+});
+
+test('native prepare does not grant control on foreign lane or mismatched revision',async()=>{
+  const ncsrf='1650000000.'+'d'.repeat(64);
+  const prepare=()=>Response.json({stage:'test',paused:false,revision:'e'.repeat(32),csrf_token:ncsrf});
+  const control={paused:false,revision:original,can_change:false};
+  const test=harness({control,prepare}), prod=harness({stage:'prod',control,prepare});
+  await test.open();
+  await prod.open();
+  assert.equal(test.controlButton.hidden,true);
+  assert.equal(prod.controlButton.hidden,true);
+  assert.ok(!prod.urls.includes('/api/v1/processing/pause/prepare'));
+  await test.controlButton.listeners.click();
+  assert.equal(test.mutations.length,0);
 });
