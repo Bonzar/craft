@@ -78,7 +78,7 @@ def configured(stage,root,config_dir):
     raw=read_regular(config_dir/'private-operations.json',12_000,owner=0)
     value=json.loads(raw)
     required={'capabilities','read_token_file','effect_token_file'}
-    if type(value) is not dict or set(value) not in (required,required|{'machine_clients'}):
+    if type(value) is not dict or not required <= set(value) <= required|{'machine_clients','sites_full_catalog'}:
         raise ValueError('Unexpected private operations configuration')
     caps=value['capabilities']
     if caps not in [['baseline_read'],['baseline_read','intake_process'],
@@ -105,7 +105,10 @@ def configured(stage,root,config_dir):
     machine=tuple(clients.values())
     if len(set(machine))!=len(machine):
         raise ValueError('Machine credentials must be distinct')
-    return caps,read,effect,machine
+    full=value.get('sites_full_catalog',False)
+    if type(full) is not bool or full and effect is None:
+        raise ValueError('Full Sites catalog requires both existing authenticated routes')
+    return caps,read,effect,machine,full
 
 
 def effect_lock(app,root,stage,effect_token,machine_digests=()):
@@ -169,12 +172,13 @@ def factory(stage,root,config_dir,legacy_token):
         raise ValueError('Tag/source pointer mismatch')
     source=json.loads(files['mcp-tool-schema.json'])
     pins=catalog_pins(revision,files,source)
-    caps,read,effect,machine=configured(stage,root,config_dir)
+    caps,read,effect,machine,full=configured(stage,root,config_dir)
     if legacy_token in (read,effect) or sha256(legacy_token.encode('ascii')).hexdigest() in machine:
         raise ValueError('Legacy credential cannot authorize private operations')
     catalog=compile_release(source,pins,effects=effect is not None)
     profile={'lane':stage,'base_release':tag,'enabled_capabilities':caps,
-             'catalog_sha256':catalog['catalog_sha256'],'require_catalog_identity':True}
+             'catalog_sha256':catalog['catalog_sha256'],'require_catalog_identity':True,
+             'sites_full_catalog':full}
     if effect is not None:
         without=compile_release(source,pins,effects=False)
         profile['read_catalog_sha256']=without['catalog_sha256']

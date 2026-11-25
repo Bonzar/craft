@@ -92,15 +92,18 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
             or machine_digests and operations is None):
         raise ValueError('invalid machine credentials')
     if machine_digests: routes[f'/memory-api-{lane}']=('machine',None)
-    machine_schemas={name:{**row['canonicalInputSchema'],'additionalProperties':False}
-                     for name,row in manifest.items()} if machine_digests else {}
-    machine_validators={name:Draft202012Validator(schema) for name,schema in machine_schemas.items()}
-    machine_descriptors=[{"name":name,"description":manifest[name].get("description",name),
+    full_sites=profile.get('sites_full_catalog',False)
+    if type(full_sites) is not bool or full_sites and (operations is None or not effects or effects_only):
+        raise ValueError('Full Sites catalog requires the typed registry and both authenticated routes')
+    canonical_schemas={name:{**row['canonicalInputSchema'],'additionalProperties':False}
+                       for name,row in manifest.items()} if machine_digests or full_sites else {}
+    canonical_validators={name:Draft202012Validator(schema) for name,schema in canonical_schemas.items()}
+    canonical_descriptors=[{"name":name,"description":manifest[name].get("description",name),
                           "inputSchema":schema,
                           "annotations":{"readOnlyHint":manifest[name].get("readOnlyHint") is True,
                                          "destructiveHint":False,"openWorldHint":False}}
-                         for name,schema in sorted(machine_schemas.items())]
-    machine_digest=digest(machine_descriptors)
+                         for name,schema in sorted(canonical_schemas.items())]
+    machine_digest=digest(canonical_descriptors)
     compiled={(cap,n):Draft202012Validator(projection) for n,t in manifest.items()
                for cap,projection in t['capability_projections'].items() if cap in caps}
     if not isinstance(gateway_token, str) or not HEX.fullmatch(gateway_token):
@@ -127,7 +130,14 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                                   "inputSchema":row["capability_projections"][cap],
                                   "annotations":{"readOnlyHint":read,"destructiveHint":False,"openWorldHint":False}})
         return tools
-    route_tools={cap:descriptors(cap) for cap,_ in routes.values()}
+    route_tools={cap:descriptors(cap) for cap,_ in routes.values() if cap!='machine'}
+    if full_sites:
+        # Same canonical operation descriptions/schema as the machine API. The
+        # already authenticated transport routes still separate reads and writes.
+        route_tools={cap:[d for d in canonical_descriptors
+                          if d['annotations']['readOnlyHint']==(cap=='baseline_read')]
+                     for cap in ('baseline_read','intake_process')}
+    full_digests={cap:digest(items) for cap,items in route_tools.items()} if full_sites else {}
 
     gate = asyncio.Semaphore(12)
     effect_gate = asyncio.Semaphore(1)
@@ -188,21 +198,25 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
             if discovery:
                 if args or set(b)!=basic: raise ValueError()
             else:
-                if (strict_catalog or machine) and "expected" not in b: raise ValueError()
+                if (strict_catalog or machine or full_sites) and "expected" not in b: raise ValueError()
                 if "expected" in b and (type(expected_identity) is not dict
                         or set(expected_identity)!={"release","generation","catalog_sha256"}
                         or not all(isinstance(v,str) for v in expected_identity.values())
                         or not TAG.fullmatch(expected_identity["release"])
                         or not all(HEX.fullmatch(expected_identity[k]) for k in ("generation","catalog_sha256"))):
                     raise ValueError()
-                if name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
-                if machine:
-                    if name not in machine_validators or not machine_validators[name].is_valid(args): raise ValueError()
+                if not full_sites and name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
+                if machine or full_sites:
+                    if name not in canonical_validators or not canonical_validators[name].is_valid(args):
+                        raise ValueError()
+                    if not machine and manifest[name].get("readOnlyHint") is not (capability=="baseline_read"):
+                        raise ValueError()
                 elif (capability,name) not in compiled or not authorized(profile,catalog,lane,name,capability) or                    not compiled[(capability,name)].is_valid(args): raise ValueError()
         except Exception:
             return await reply(400, {"error":"invalid_request"})
-        limiter=(gate if discovery else query_gate if name==QUERY and machine or capability=="generate" else
-                 effect_gate if machine and manifest[name].get("readOnlyHint") is not True or capability=="intake_process" else gate)
+        query_call = (name == QUERY and (machine or full_sites)) or capability == "generate"
+        is_effect = (machine and manifest.get(name, {}).get("readOnlyHint") is not True) or capability == "intake_process"
+        limiter = gate if discovery else query_gate if query_call else effect_gate if is_effect else gate
         if limiter.locked(): return await reply(503, {"error":"unavailable"})
         try:
             async with limiter:
@@ -213,11 +227,12 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     not HEX.fullmatch(generation): raise ValueError()
                 if release!=profile.get("base_release"): raise ValueError()
                 receipt={"release":release,"generation":generation,
-                         "catalog_sha256":machine_digest if machine else read_digest if capability=="baseline_read" else catalog["catalog_sha256"]}
+                         "catalog_sha256":machine_digest if machine else full_digests[capability] if full_sites else
+                             read_digest if capability=="baseline_read" else catalog["catalog_sha256"]}
                 if discovery:
                     if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
                     return await reply(200, {"environment":lane,"request_id":rid,**receipt,
-                                             "capability":capability,"tools":machine_descriptors if machine else route_tools[capability]})
+                                             "capability":capability,"tools":canonical_descriptors if machine else route_tools[capability]})
                 if expected_identity is not None and expected_identity!=receipt:
                     return await reply(409, {"error":"stale_catalog"})
                 if operations is None:
