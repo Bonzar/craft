@@ -111,7 +111,7 @@ def validate_retained(incoming,release):
         raise ValueError('retained_release_changed')
 
 
-def deploy(stream, revision, digest, *, root, config, hook=None):
+def deploy(stream, revision, digest, *, root, config, hook=None, prove_inactive=None):
     if not re.fullmatch(r'[0-9a-f]{40}',revision):
         raise ValueError('invalid_release_revision')
     checked_hook=Path(config)/'service-hook.sh'
@@ -124,4 +124,4 @@ def deploy(stream, revision, digest, *, root, config, hook=None):
         def factory(fd):
             return lambda action,release: run_hook(checked_hook,action,release,lock_fd=fd)
     return common_deploy(stream,digest,root=root,spec=SPEC,
-        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory)
+        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,prove_inactive=prove_inactive)

@@ -8,6 +8,8 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
+import logging
 import tarfile
 import tempfile
 from typing import Callable
@@ -208,7 +210,54 @@ def prepare(payload, release, root, hook, retained):
         sync_dir(release.parent)
 
 
-def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None):
+def prune_inactive_base(root, active, prove_inactive):
+    """Only Base payloads, under the caller's lane activation lock; no state paths."""
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise ValueError('retention_requires_safe_rmtree')
+    if current_target(root)!=str(active) or checked_release(root,active.name)!=active:
+        raise ValueError('retention_current_unverified')
+    try:
+        (root/PENDING).lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError('retention_pending_activation')
+    fd=os.open(root/'releases',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        if not os.path.samestat(os.fstat(fd),(root/'releases').lstat()):
+            raise ValueError('retention_release_directory_changed')
+        for name in sorted(os.listdir(fd)):
+            if name==active.name or not re.fullmatch(r'[a-f0-9]{40}-[a-f0-9]{64}',name):
+                continue
+            entry=os.stat(name,dir_fd=fd,follow_symlinks=False)
+            path=root/'releases'/name
+            if (not stat.S_ISDIR(entry.st_mode) or entry.st_uid!=os.geteuid()
+                    or entry.st_dev!=os.fstat(fd).st_dev or not is_prepared(path)):
+                continue
+            if prove_inactive(active,path) is not True:
+                raise ValueError('retention_inactivity_unproven')
+            if (current_target(root)!=str(active) or not os.path.samestat(entry,os.stat(name,dir_fd=fd,follow_symlinks=False))
+                    or not os.path.samestat(os.fstat(fd),(root/'releases').lstat())):
+                raise ValueError('retention_identity_changed')
+            # FD-relative hardened shutil never follows nested symlinks (venv uses them).
+            shutil.rmtree(name,dir_fd=fd)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _try_base_retention(root, active, prove):
+    if prove is None or active is None:
+        return
+    try:
+        prune_inactive_base(root,Path(active),prove)
+    except Exception:
+        # A committed healthy runtime must not be reported as rolled back.
+        logging.getLogger(__name__).warning('base_release_retention_incomplete')
+
+
+
+def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,prove_inactive=None):
     """Call after lane-specific authentication. Interpret only validated product artifacts."""
     root=Path(root)
     if not root.is_absolute() or root.is_symlink() or (root/'releases').is_symlink():
@@ -229,5 +278,17 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
                 raise ValueError('invalid_release_name')
             target=root/'releases'/release_id
             prepare(staged,target,root,dispatch,retained)
-            activate(root,target,None,runner)
+            try:
+                activate(root,target,None,runner)
+            except Exception:
+                # Only attempt housekeeping after the existing restore+smoke
+                # cleared its journal. If restore failed it is kept for recovery.
+                if prove_inactive is not None:
+                    try:
+                        active=current_target(root)
+                    except (OSError,ValueError):
+                        active=None
+                    _try_base_retention(root,active,prove_inactive)
+                raise
+            _try_base_retention(root,target,prove_inactive)
     return release_id
