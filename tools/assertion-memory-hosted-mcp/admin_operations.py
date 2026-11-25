@@ -26,6 +26,10 @@ MAX_CLIENTS = 16
 class AdminError(ValueError):
     """Fixed code safe for a response; never contains supplied values."""
 
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
 
 @dataclass(frozen=True)
 class OwnerContext:
