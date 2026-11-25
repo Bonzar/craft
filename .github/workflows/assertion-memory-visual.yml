@@ -34,6 +34,8 @@ jobs:
       - run: |
           python3 -B tools/assertion-memory-visual/test_asset_origin.py
           python3 -B tools/assertion-memory-visual/test_runtime_companion.py
+          python3 -B tools/assertion-memory-visual/test_standalone_bundle.py
+          python3 -B tools/assertion-memory-visual/test_packed_release.py
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_common_transport_adapter.py
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_visual_policy.py
           python3 -B tools/assertion-memory-visual/test_lifecycle.py
@@ -72,6 +74,22 @@ jobs:
         with:
           name: assertion-memory-visual-runtime-${{ github.event.release.id }}-${{ github.sha }}
           path: "${{ runner.temp }}/visual-runtime/*"
+          if-no-files-found: error
+          retention-days: 90
+      - name: Build single immutable Visual UI and runtime package
+        env:
+          VISUAL_RELEASE_ID: ${{ github.event.release.id }}
+        run: |
+          python3 -B tools/assertion-memory-visual/standalone_bundle.py \
+            --tag "${GITHUB_REF#refs/tags/}" --revision "$GITHUB_SHA" \
+            --release-id "$VISUAL_RELEASE_ID" --build-run-id "$GITHUB_RUN_ID" \
+            --static "$RUNNER_TEMP/visual/visual.tar" --static-receipt "$RUNNER_TEMP/build-receipt.json" \
+            --runtime "$RUNNER_TEMP/visual-runtime/runtime.zip" --out "$RUNNER_TEMP/visual-packed"
+      - name: Persist immutable packed Visual artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assertion-memory-visual-packed-${{ github.event.release.id }}-${{ github.sha }}
+          path: "${{ runner.temp }}/visual-packed/*"
           if-no-files-found: error
           retention-days: 90
   deploy:

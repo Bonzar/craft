@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import stat
 from threading import BoundedSemaphore
+from urllib.parse import parse_qs, unquote, urlsplit
 
 PATH = '/memory-visual-test-read'
 ROOT = Path('/var/lib/assertion-memory-visual')
@@ -109,9 +110,9 @@ def snapshot_queues(queues, limit, offset):
     return True
 
 
-def queue_client(origin, key):
+def queue_client(origin, key, *, stage='test'):
     address = BASE_ORIGIN.fullmatch(origin)
-    if not address or int(address[1]) > 65535 or not HEX.fullmatch(key):
+    if stage not in ('test','prod') or not address or int(address[1]) > 65535 or not HEX.fullmatch(key):
         raise ValueError('invalid local TEST Base settings')
     def fetch(limit, offset):
         if (type(limit) is not int or not 1 <= limit <= 50 or
@@ -131,7 +132,7 @@ def queue_client(origin, key):
                 raise ValueError('Base queue page too large')
             value = unique_json(raw)
             ctl = value.get('processing_control') if isinstance(value, dict) else None
-            if (not isinstance(value, dict) or set(value) != SNAPSHOT_KEYS or value['stage'] != 'test'
+            if (not isinstance(value, dict) or set(value) != SNAPSHOT_KEYS or value['stage'] != stage
                     or not isinstance(value['release_version'], str)
                     or not re.fullmatch(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?', value['release_version'])
                     or not isinstance(value['release_generation'], str) or not HEX.fullmatch(value['release_generation'])
@@ -148,20 +149,56 @@ def queue_client(origin, key):
     return fetch
 
 
-def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None, runtime_health=None):
+STANDALONE_HOST = re.compile(r'https://([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)\Z')
+GRAPH_RE = re.compile(r'/api/v1/(?:capabilities|graph|search|events|bookmarks|'
+    r'graph/[A-Za-z0-9:_-]+/(?:nodes\.bin|edges\.bin|topics|sessions|nodes/[0-9]+(?:/edges)?|edges/[0-9]+)|'
+    r'(?:nodes|edges|sources|overviews)/[A-Za-z0-9:/_@.-]+)\Z')
+GRAPH_LIMIT = 32_000_000
+STANDALONE_AUTH = 'X-Memory-Visual-Owner-Ingress'
+
+
+def standalone_config(origin, ingress, graph_origin, graph_key):
+    parsed=STANDALONE_HOST.fullmatch(origin)
+    graph=BASE_ORIGIN.fullmatch(graph_origin)
+    if (not parsed or len(parsed[1])>253 or not HEX.fullmatch(ingress)
+            or not graph or int(graph[1])>65535 or not HEX.fullmatch(graph_key)
+            or ingress==graph_key):
+        raise ValueError('Invalid standalone Visual owner boundary')
+    return (origin,parsed[1],ingress,int(graph[1]),graph_key)
+
+
+def path_and_query(raw):
+    if (not raw.startswith('/') or raw.startswith('//') or '#' in raw or '\\' in raw or len(raw)>3000
+            or any(ord(c)<=32 or ord(c)>126 for c in raw)):
+        raise ValueError('Invalid standalone request path')
+    parsed=urlsplit(raw)
+    if re.search(r'%(?:2f|5c)',parsed.path,re.I):
+        raise ValueError('Ambiguous standalone request path')
+    path=unquote(parsed.path,errors='strict')
+    if any(x in ('.','..') for x in path.split('/')) or '%' in path or '\\' in path:
+        raise ValueError('Invalid standalone request path')
+    return path,parsed.query
+
+
+def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None, runtime_health=None, standalone=None):
     if environment not in ('test', 'prod') or not HEX.fullmatch(token):
         raise ValueError('invalid dedicated TEST token')
 
     if queue_origin is not None or queue_token is not None:
-        if environment != 'test' or not queue_origin or not queue_token or token == queue_token:
+        if (environment!='test' and standalone is None) or not queue_origin or not queue_token or token==queue_token:
             raise ValueError('TEST queue requires separate complete authority')
-        fetch_queue = queue_client(queue_origin, queue_token)
+        fetch_queue = queue_client(queue_origin, queue_token, stage=environment)
     else:
         fetch_queue = None
     if runtime_health is not None:
         proof,key=runtime_health
         if environment!='test' or not HEX.fullmatch(proof) or not HEX.fullmatch(key) or key in (token,queue_token):
             raise ValueError('Invalid Visual TEST health authority')
+    if standalone is not None:
+        public_origin,public_host,edge_key,graph_port,graph_key=standalone_config(*standalone)
+        keys=[v for v in (token,queue_token,edge_key,graph_key,runtime_health[1] if runtime_health else None) if v]
+        if len(keys)!=len(set(keys)) or fetch_queue is None:
+            raise ValueError('Standalone Visual requires independent complete authorities')
     route = f'/memory-visual-{environment}-read'
 
     class Handler(BaseHTTPRequestHandler):
@@ -194,21 +231,120 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
         def send_error(self, code, *_args, **_kwargs):
             self.respond(code)
 
-        def respond(self, status, data=b'', mime=None):
+        def respond(self, status, data=b'', mime=None, *, headers=None):
             self.close_connection = True
             self.send_response_only(status)
             self.send_header('Cache-Control', 'private, no-store, no-transform')
             self.send_header('X-Content-Type-Options', 'nosniff')
             if mime:
                 self.send_header('Content-Type', mime)
+            for k,v in (headers or {}).items():
+                self.send_header(k,v)
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Connection', 'close')
             self.end_headers()
             if data and getattr(self, 'command', '') != 'HEAD':
                 self.wfile.write(data)
 
+        def standalone(self, raw):
+            # Only the trusted HTTPS owner gate may wrap a request on this exact host.
+            pin=self.headers.get_all(STANDALONE_AUTH,[])
+            origins=self.headers.get_all('Origin',[])
+            if len(pin)!=1 or not hmac.compare_digest(pin[0],edge_key):
+                return self.respond(403)
+            if origins and origins!=[public_origin]:
+                return self.respond(403)
+            if self.command not in ('GET','HEAD') or self.headers.get_all('Transfer-Encoding') or any(
+                    n!='0' for n in self.headers.get_all('Content-Length',[])):
+                return self.respond(405)
+            safe={'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                  'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Strict-Transport-Security':'max-age=31536000'}
+            try:
+                path,query=path_and_query(raw)
+            except (ValueError,UnicodeError):
+                return self.respond(400)
+            try:
+                if self.headers.get('Sec-Fetch-Site')=='cross-site' and path.startswith('/api/'):
+                    return self.respond(403)
+                if path in ('/','/visual','/visual/'):
+                    release=current_release(root)
+                    manifest(root,release)
+                    return self.respond(302,headers={**safe,'Location':'/visual/'+release+'/'+('?' + query if query else '')})
+                if path=='/api/v1/session':
+                    if query:
+                        return self.respond(404)
+                    return self.respond(200,b'{"authenticated":true}','application/json',headers=safe)
+                if path=='/api/v1/capabilities':
+                    q=parse_qs(query,keep_blank_values=True,max_num_fields=12)
+                    if 'queue_status' in q:
+                        if set(q)-{'queue_status','limit','offset'} or q['queue_status']!=['1'] or any(len(v)!=1 for v in q.values()):
+                            return self.respond(400)
+                        l,o=q.get('limit',['50'])[0],q.get('offset',['0'])[0]
+                        if any(not re.fullmatch(r'(?:0|[1-9][0-9]{0,6})',v) for v in (l,o)) or not 1<=int(l)<=50 or int(o)>1_000_000:
+                            return self.respond(400)
+                        return self.respond(200,fetch_queue(int(l),int(o)),'application/json',headers=safe)
+                if GRAPH_RE.fullmatch(path):
+                    return self.graph(raw,safe)
+                match=re.fullmatch(r'/visual/([a-f0-9]{64})/(.*)',path)
+                if match:
+                    release,name=match[1],match[2] or 'index.html'
+                    if release!=current_release(root) or not ITEM.fullmatch(name):
+                        return self.respond(404)
+                    directory,lookup=manifest(root,release)
+                    if name not in lookup:
+                        return self.respond(404)
+                    asset=read_small(directory/name,LIMIT)
+                    if digest(asset)!=lookup[name] or release!=current_release(root):
+                        return self.respond(404)
+                    return self.respond(200,asset,MIME[Path(name).suffix],headers=safe)
+                return self.respond(404)
+            except Exception:
+                return self.respond(503)
+
+        def graph(self, raw, safe):
+            # The browser's Origin/Authorization/Cookie/Sites claims never leave Visual.
+            conn=HTTPConnection('127.0.0.1',graph_port,timeout=8)
+            streaming=False
+            try:
+                outbound={'Authorization':'Bearer '+graph_key,'Accept-Encoding':'identity',
+                          'Connection':'close'}
+                since=self.headers.get_all('Last-Event-ID',[])
+                if len(since)==1 and re.fullmatch(r'[A-Za-z0-9-]{1,80}(?::[A-Za-z0-9-]{1,80}){0,2}',since[0]):
+                    outbound['Last-Event-ID']=since[0]
+                conn.request(self.command,raw,headers=outbound)
+                rsp=conn.getresponse()
+                typ=rsp.headers.get_content_type()
+                if (rsp.status not in (200,202,400,404,409,429) or rsp.headers.get('Content-Encoding') is not None
+                    or typ not in ('application/json','application/octet-stream','text/event-stream')):
+                    return self.respond(503)
+                if typ=='text/event-stream' and rsp.status==200 and self.command=='GET':
+                    streaming=True
+                    self.send_response_only(200)
+                    for k,v in {**safe,'Cache-Control':'private, no-store','Content-Type':'text/event-stream',
+                                'X-Content-Type-Options':'nosniff','X-Accel-Buffering':'no','Connection':'close'}.items():
+                        self.send_header(k,v)
+                    self.end_headers()
+                    self.close_connection=True
+                    while chunk:=rsp.read1(16_384):
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    return
+                blob=rsp.read(GRAPH_LIMIT+1)
+                if len(blob)>GRAPH_LIMIT:
+                    return self.respond(503)
+                return self.respond(rsp.status,blob,typ,headers=safe)
+            except (OSError,ValueError):
+                if not streaming:
+                    return self.respond(503)
+            finally:
+                conn.close()
+
         def dispatch(self):
             raw = self.requestline.split()
+            if standalone is not None and len(raw)==3 and self.headers.get_all('Host',[])==[public_host]:
+                return self.standalone(raw[1])
+            if self.headers.get_all(STANDALONE_AUTH,[]):
+                return self.respond(421)
             if runtime_health is not None and len(raw)==3 and raw[1]=='/__visual-runtime-health':
                 if self.command!='GET' or self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length'):
                     return self.respond(404)
@@ -247,7 +383,7 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             if not isinstance(value, dict):
                 return self.respond(400)
             if value.get('op') == 'queue_status':
-                if fetch_queue is None:
+                if fetch_queue is None or environment!='test':
                     return self.respond(404)
                 if set(value) != {'op', 'limit', 'offset'}:
                     return self.respond(400)
@@ -308,12 +444,16 @@ if __name__ == '__main__':
         raise SystemExit('invalid isolated service settings')
     credential = Path(os.environ['CREDENTIALS_DIRECTORY']) / 'asset-token'
     secret = read_small(credential, 66).decode('ascii').strip()
-    queue_origin = os.environ.get('MEMORY_VISUAL_TEST_BASE_ORIGIN')
+    site_origin=os.environ.get('MEMORY_VISUAL_STANDALONE_ORIGIN')
+    queue_origin=os.environ.get('MEMORY_VISUAL_BASE_ORIGIN') if site_origin else os.environ.get('MEMORY_VISUAL_TEST_BASE_ORIGIN')
+    standalone=(site_origin,read_small(credential.with_name('standalone-ingress-token'),66).decode('ascii').strip(),
+                os.environ['MEMORY_VISUAL_GRAPH_ORIGIN'],
+                read_small(credential.with_name('standalone-graph-token'),66).decode('ascii').strip()) if site_origin else None
     queue_secret = (read_small(credential.with_name('queue-base-token'), 66).decode('ascii').strip()
                     if queue_origin else None)
     health_path=credential.with_name('runtime-health-token')
     health=(digest(read_small(Path(__file__).resolve(strict=True),64_000)),
             read_small(health_path,66).decode('ascii').strip()) if health_path.is_file() else None
     with make_server(ROOT / mode, secret, int(port), environment=mode,
-                     queue_origin=queue_origin, queue_token=queue_secret, runtime_health=health) as server:
+                     queue_origin=queue_origin, queue_token=queue_secret, runtime_health=health, standalone=standalone) as server:
         server.serve_forever()
