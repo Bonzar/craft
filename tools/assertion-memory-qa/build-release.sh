@@ -21,7 +21,19 @@ hosted_runtime=(
   tools/assertion-memory-hosted-mcp/private_host.py
   tools/assertion-memory-hosted-mcp/compile_functional_release.py
 )
-git archive "$sha" -- prototypes/assertion_memory apps/graph_viewer "${hosted_runtime[@]}" | tar -x -C "$stage"
+# Only exact non-secret operator files, not arbitrary contents of the hosted
+# tree or a runtime key/config directory. The receiver does not execute them.
+monium_operator_assets=(
+  tools/assertion-memory-hosted-mcp/MONIUM-GENAI-TRACES.md
+  tools/assertion-memory-hosted-mcp/monium-trace-collector/README.md
+  tools/assertion-memory-hosted-mcp/monium-trace-collector/assertion-monium-traces@.service
+  tools/assertion-memory-hosted-mcp/monium-trace-collector/common.yaml
+  tools/assertion-memory-hosted-mcp/monium-trace-collector/test.yaml
+  tools/assertion-memory-hosted-mcp/monium-trace-collector/prod.yaml
+  tools/assertion-memory-hosted-mcp/monium-trace-collector/smoke.py
+)
+hosted_release_files=("${hosted_runtime[@]}" "${monium_operator_assets[@]}")
+git archive "$sha" -- prototypes/assertion_memory apps/graph_viewer "${hosted_release_files[@]}" | tar -x -C "$stage"
 # These exact helpers are CI-generated or copied from the QA-only tools directory.
 install -m 600 "$root/tools/assertion-memory-qa/smoke_local.py" "$stage/smoke_local.py"
 sed -i 's/resolve().parents\[2\]/resolve().parent/' "$stage/smoke_local.py"
@@ -52,7 +64,7 @@ name="assertion-memory-qa-$sha.tar.gz"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -C "$stage" -cf - . | gzip -n > "$dest/$name"
 (cd "$dest"; sha256sum "$name" > "$name.sha256")
 # Qualify through the shared receiver without rewriting the immutable bytes.
-PYTHONPATH="$root/tools/assertion-memory-release" python3 - "$dest/$name" "$sha" "${hosted_runtime[@]}" <<'PYQUAL'
+PYTHONPATH="$root/tools/assertion-memory-release" python3 - "$dest/$name" "$sha" "${hosted_release_files[@]}" <<'PYQUAL'
 from hashlib import file_digest
 from pathlib import Path, PurePosixPath
 import subprocess
@@ -68,12 +80,12 @@ def qualify(staged):
     prefix = PurePosixPath("tools/assertion-memory-hosted-mcp")
     manifest = read_manifest(staged)
     actual = {name for name in manifest if prefix in name.parents}
-    if len(expected) != 4 or actual != expected:
-        raise ValueError("hosted_runtime_membership")
+    if len(expected) != len(sys.argv[3:]) or actual != expected:
+        raise ValueError("hosted_release_membership")
     for name in expected:
         committed = subprocess.check_output(["git", "show", f"{revision}:{name}"])
         if committed != (staged / name).read_bytes():
-            raise ValueError("hosted_runtime_source_mismatch")
+            raise ValueError("hosted_release_source_mismatch")
     return key
 inspect(path, digest, spec=SPEC, validate=qualify)
 PYQUAL
