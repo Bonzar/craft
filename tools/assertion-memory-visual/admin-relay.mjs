@@ -4,7 +4,6 @@ const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const ID = /^[A-Za-z0-9_.:-]{1,160}$/;
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const TAG = /^assertion-memory-v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,30})?$/;
-const VISUAL_TAG = /^assertion-memory-visual-v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,30})?$/;
 const GATEWAY = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){2}apigw\.yandexcloud\.net$/;
 const prefix='/visual/admin/';
 const plain=x=>x!==null&&typeof x==='object'&&Object.getPrototypeOf(x)===Object.prototype;
@@ -82,7 +81,6 @@ function publicStatus(v,lane,tag){
     return {id:q.id,status:q.status,ordering:q.ordering,total:q.total,next_offset:q.next_offset??null,items};
   });
   return {stage:lane,release_version:tag,
-    ...(typeof v.visual_release_version==='string'&&VISUAL_TAG.test(v.visual_release_version)?{visual_release_version:v.visual_release_version}:{}),
     ...(dates(v.snapshot_at)?{snapshot_at:v.snapshot_at}:{}),
     global_order:false,queues,capabilities:{
       enroll_device:v.capabilities?.enroll_device===true,reset_database:v.capabilities?.reset_database===true,

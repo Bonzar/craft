@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 import sqlite3
 import stat
+import time
 
 from admin_operations import AdminError, OwnerContext, fields
 from visual_admin_service import make_visual_admin, HEX
@@ -61,10 +62,14 @@ def snapshot(db, **settings):
         if not os.path.samestat(entry, path.lstat()):
             raise ValueError('Changed database')
         connection.execute('PRAGMA query_only=ON')
+        # Slow dashboard reads must not hold an old WAL snapshot behind query work.
+        stop_at = time.monotonic() + 3
+        connection.set_progress_handler(lambda: time.monotonic() >= stop_at, 5000)
         connection.execute('BEGIN')
         try:
             return build_queue_status(connection, **settings)
         finally:
+            connection.set_progress_handler(None, 0)
             connection.rollback()
 
 
