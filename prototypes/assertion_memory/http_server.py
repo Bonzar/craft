@@ -139,6 +139,8 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                     await stack.enter_async_context(reconcile_fresh_mac(WorkerLauncher(config).start))
                 if neutral is not None and (jobs := getattr(neutral[1], 'query_jobs', None)) is not None:
                     await stack.enter_async_context(jobs.lifespan())
+                if neutral is not None and (projection := getattr(neutral[1], 'queue_dashboard_projection', None)) is not None:
+                    stack.enter_context(projection())
                 yield
         finally:
             store.close()

@@ -2,37 +2,23 @@
 from __future__ import annotations
 import asyncio
 from contextlib import closing
-from hashlib import sha256
-import json
 import os
 from pathlib import Path
 import secrets
 import re
+import pwd
 import sqlite3
 import stat
 import time
 
 from prototypes.assertion_memory.queue_status import build_queue_status
+from prototypes.assertion_memory import dashboard_projection
 
 SCOPES = {
-    'test': (Path('/srv/assertion-release/test'), Path('/srv/assertion-release/test/state/fictional.sqlite3')),
-    'prod': (Path('/srv/assertion-release/production'), Path('/var/lib/assertion-memory/memory.sqlite3')),
+    'test': ('assertion-test-deploy', Path('/srv/assertion-release/test/state/fictional.sqlite3')),
+    'prod': ('assertion-production-deploy', Path('/var/lib/assertion-memory/memory.sqlite3')),
 }
-TAG = re.compile(r'assertion-memory-v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,30})?\Z')
-RELEASE = re.compile(r'([a-f0-9]{40})-[a-f0-9]{64}\Z')
 CURSOR = re.compile(r'(test|prod):[0-9a-f]{16}:[0-9]{1,15}\Z')
-
-
-def _small(path, size, *, owner=None):
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as f:
-        entry = os.fstat(f.fileno())
-        if (not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1 or entry.st_mode & 0o022
-                or owner is not None and entry.st_uid != owner):
-            raise ValueError('Untrusted dashboard source')
-        data = f.read(size + 1)
-        if len(data) > size:
-            raise ValueError('Oversized dashboard source')
-        return data
 
 
 def _connect(db):
@@ -51,38 +37,16 @@ class HostedQueueDashboard:
     def __init__(self, stage, config, source):
         if stage not in SCOPES:
             raise ValueError('Unrecognized hosted dashboard lane')
-        root, canonical = SCOPES[stage]
-        if Path(config) != root/'state'/'http.json' or Path(source) != canonical:
-            raise ValueError('Expected canonical lane configuration and database')
-        self.stage, self.root, self.db, self.config = stage, root, canonical, Path(config)
+        account, canonical = SCOPES[stage]
+        if Path(config) != dashboard_projection.projection_path(stage) or Path(source) != canonical:
+            raise ValueError('Expected canonical lane projection and database')
+        self.stage, self.db = stage, canonical
+        self.publisher_uid = pwd.getpwnam(account).pw_uid
         self.epoch = secrets.token_hex(8)
         self.streams = asyncio.Semaphore(8)
 
     def metadata(self):
-        release = (self.root/'current').resolve(strict=True)
-        local = Path(__file__).resolve().parents[3]
-        match = RELEASE.fullmatch(release.name)
-        if match is None or release != local or release.parent != self.root/'releases':
-            raise ValueError('Graph service is not loaded from the active lane release')
-        tag_raw = _small(release/'BASE_RELEASE_TAG', 128)
-        tag = tag_raw.decode('ascii').strip()
-        manifest = _small(release/'SHA256SUMS', 5*1024*1024).decode('ascii').splitlines()
-        if (not TAG.fullmatch(tag)
-                or manifest.count(sha256(tag_raw).hexdigest()+'  ./BASE_RELEASE_TAG') != 1
-                or _small(release/'REVISION',128).decode('ascii').strip() != match[1]):
-            raise ValueError('Unverified release identity')
-        s = json.loads(_small(self.config, 20_000))['service']
-        if s.get('db') != str(self.db) or s['provider'] not in {'none','subprocess','local','codex'}:
-            raise ValueError('Expected canonical scheduler configuration')
-        # Presence of interactive work as a configured feature is independent of
-        # whether the lazily-created queue already has rows.
-        bridge_config = Path('/etc/assertion-release')/self.root.name/'private-operations.json'
-        capabilities = json.loads(_small(bridge_config, 20_000, owner=0))['capabilities']
-        return dict(stage=self.stage, release_version=tag,
-                    processing_session_ids=s.get('processing_session_ids'),
-                    auto_process_fresh_mac=s.get('auto_process_fresh_mac',False),
-                    model_configured=s['provider']!='none',
-                    interactive_enabled='intake_process' in capabilities)
+        return dashboard_projection.read(stage=self.stage,database=self.db,uid=self.publisher_uid)
 
     def snapshot(self, *, limit, offset):
         fields = self.metadata()
@@ -91,7 +55,10 @@ class HostedQueueDashboard:
             deadline=time.monotonic()+2
             conn.set_progress_handler(lambda:time.monotonic()>=deadline, 2000)
             try:
-                result=build_queue_status(conn,limit=limit,offset=offset,**fields)
+                status_keys=('stage','release_version','processing_session_ids',
+                    'auto_process_fresh_mac','model_configured','interactive_enabled')
+                result=build_queue_status(conn,limit=limit,offset=offset,
+                                          **{k:fields[k] for k in status_keys})
             finally:
                 conn.set_progress_handler(None,0)
                 conn.rollback()

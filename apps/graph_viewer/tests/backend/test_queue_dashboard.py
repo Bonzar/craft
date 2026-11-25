@@ -1,8 +1,7 @@
 """Existing authenticated capabilities bridge and bounded live queue behavior."""
 import asyncio
+import os
 from collections import deque
-import hashlib
-import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -12,6 +11,7 @@ from starlette.testclient import TestClient
 from apps.graph_viewer.server.app import create_app
 from apps.graph_viewer.server import queue_dashboard
 from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard, dashboard_events, decode_cursor
+from prototypes.assertion_memory import dashboard_projection
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_service import ThoughtService
 
@@ -29,7 +29,7 @@ class FixtureDash(HostedQueueDashboard):
 
     def metadata(self):
         return {'stage':self.stage,'release_version':TAG,'model_configured':True,
-                'interactive_enabled':True,'processing_session_ids':('session',)}
+                'interactive_enabled':True,'processing_session_ids':('session',),'auto_process_fresh_mac':False}
 
 
 class QueueDashboardTest(unittest.TestCase):
@@ -54,40 +54,45 @@ class QueueDashboardTest(unittest.TestCase):
             db.execute('INSERT INTO memory_capture_jobs (id,event_id,status,phase,updated_at,available_at)'
                 ' VALUES (?,?,?,?,?,?)',('job','e','pending','extract',time,time))
 
-    def test_metadata_is_attested_to_active_exact_lane_release_and_scheduler(self):
-        scope = self.root/'test'
-        state=scope/'state'
-        state.mkdir(parents=True)
-        release=scope/'releases'/('a'*40+'-'+'b'*64)
-        release.mkdir(parents=True)
-        tag=(TAG+'\n').encode('ascii')
-        (release/'BASE_RELEASE_TAG').write_bytes(tag)
-        (release/'REVISION').write_text('a'*40+'\n')
-        manifest=release/'SHA256SUMS'
-        manifest.write_text(hashlib.sha256(tag).hexdigest()+'  ./BASE_RELEASE_TAG\n')
-        (scope/'current').symlink_to(release,target_is_directory=True)
-        cfg=state/'http.json'
-        cfg.write_text(json.dumps({'service':{'db':str(self.path),'provider':'codex',
-            'processing_session_ids':[], 'auto_process_fresh_mac':True}}))
-        actual=queue_dashboard._small
-
-        def read(path, limit, **kw):
-            if path == Path('/etc/assertion-release/test/private-operations.json'):
-                self.assertEqual(kw,{'owner':0})
-                return b'{"capabilities":["baseline_read","intake_process"]}'
-            return actual(path, limit, **kw)
-        with patch.object(queue_dashboard,'SCOPES',{'test':(scope,self.path)}), \
-                patch.object(queue_dashboard,'__file__',str(release/'apps/graph_viewer/server/queue_dashboard.py')), \
-                patch.object(queue_dashboard,'_small',read):
-            value=HostedQueueDashboard('test',cfg,self.path)
-            self.assertEqual(value.metadata(),{'stage':'test','release_version':TAG,
-                'processing_session_ids':[],'auto_process_fresh_mac':True,
-                'model_configured':True,'interactive_enabled':True})
-            self.assertRaises(ValueError,HostedQueueDashboard,'prod',cfg,self.path)
-            self.assertRaises(ValueError,HostedQueueDashboard,'test',cfg,Path('/tmp/opposite.sqlite3'))
-            manifest.write_bytes(b'not the exact tag sha\n')
-            with self.assertRaisesRegex(ValueError,'Unverified release identity'):
-                value.metadata()
+    def test_metadata_uses_only_leased_minimal_projection_and_db_identity(self):
+        run=self.root/'projection'
+        directory=run/'test'
+        directory.mkdir(parents=True,mode=0o750)
+        directory.chmod(0o750)
+        alternate=self.root/'wrong.sqlite3'
+        alternate.touch()
+        cfg=SimpleNamespace(db=str(self.path),provider='codex',
+            processing_session_ids=('session',),auto_process_fresh_mac=False,
+            endpoint='NEVER SERIALIZE ME',credential='SECRET')
+        with patch.object(dashboard_projection,'RUN',run), \
+             patch.object(queue_dashboard,'SCOPES',{'test':('assertion-test-deploy',self.path)}), \
+             patch.object(queue_dashboard.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=os.getuid())):
+            projection=dashboard_projection.projection_path('test')
+            owned=HostedQueueDashboard('test',projection,self.path)
+            with self.assertRaises(OSError):
+                owned.metadata()
+            with dashboard_projection.publish(stage='test',config=cfg,release=TAG,
+                    generation='a'*64,interactive_enabled=True) as published:
+                self.assertTrue(published)
+                raw=projection.read_text()
+                self.assertNotIn('SECRET',raw)
+                self.assertNotIn('NEVER SERIALIZE',raw)
+                self.assertNotIn(str(self.path),raw)
+                self.assertEqual(owned.metadata()['processing_session_ids'],['session'])
+                with self.assertRaises(ValueError):
+                    dashboard_projection.read(stage='test',uid=os.getuid(),database=alternate)
+                with self.assertRaises(ValueError):
+                    HostedQueueDashboard('prod',projection,self.path)
+                with self.assertRaises(ValueError):
+                    HostedQueueDashboard('test',Path('/wrong/private-config.json'),self.path)
+                with self.assertRaises(ValueError):
+                    HostedQueueDashboard('test',projection,alternate)
+                with dashboard_projection.publish(stage='test',config=cfg,release=TAG,
+                        generation='b'*64,interactive_enabled=False) as duplicate:
+                    self.assertFalse(duplicate)
+                    self.assertEqual(owned.metadata()['generation'],'a'*64)
+            with self.assertRaisesRegex(ValueError,'No live scheduler publisher'):
+                owned.metadata()
 
     def test_owner_scope_and_actual_scheduler_rows_through_existing_path(self):
         self.seed()

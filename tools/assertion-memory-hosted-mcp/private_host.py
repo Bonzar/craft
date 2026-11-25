@@ -239,5 +239,9 @@ def factory(stage,root,config_dir,legacy_token):
             fresh_mac_digest=personal_mac if config.auto_process_fresh_mac else None)
         handler = effect_lock(app,root,stage,effect,machine)
         handler.query_jobs = jobs
+        from prototypes.assertion_memory.dashboard_projection import publish
+        handler.queue_dashboard_projection = lambda: publish(
+            stage=stage,config=config,release=tag,generation=generation,
+            interactive_enabled=jobs is not None)
         return frozenset(paths),handler
     return mount

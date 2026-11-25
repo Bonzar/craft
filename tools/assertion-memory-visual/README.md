@@ -34,12 +34,51 @@ The hosted viewer uses its existing same-origin Graph web backend. Its optional
 queue dashboard reads `GET /api/v1/capabilities?queue_status=1&limit=50&offset=0`
 through the existing graph read bridge. No new public origin, Sites publish,
 Gateway URL, token, or MCP tool is needed **provided the current authorized
-bridge forwards these query parameters**. This opt-in requires the deployed
-graph service to be given its verified lane's canonical Base scheduler config
-(`--queue-status-config .../state/http.json` and `--queue-status-stage test|prod`);
-verify the actual mounted source, config names/permissions and active release
-directory on TEST before enabling. No auto-discovery guesses lane, Base
-version, or scheduler settings. This branch doesn't change installed units.
+bridge forwards these query parameters**.
+
+The Graph reader never opens Base's private HTTP or relay configuration. The
+verified Base listener publishes a small lane-local in-use projection from its
+already loaded scheduler config, real QueryJobs instance, and verified release
+identity. It contains only the stage, Base release/generation, canonical DB
+device+inode and scheduler control values; no backend config, paths, endpoints,
+keys, SQL/HTTP/queue payloads. The Graph process checks the publisher's service
+UID, a live file lock, the exact lane and its existing canonical source inode
+on each read. No publisher, wrong inode/lane, or stale unlocked data is
+unavailable, not an idle/empty queue.
+
+### TEST provisioning preconditions (not applied here)
+
+- The tracked installer runs its Base and local graph user units
+  `assertion-test-deploy-mcp.service` and `assertion-test-deploy-graph.service`
+  under `assertion-test-deploy`. Their existing `state/http.json` is user-owned
+  with creation mask `077` inside a mode-0700 deployment root/state. The repo
+  does not pin the live Sites graph ingress unit/UID. Before enabling, inspect
+  exact systemd unit identity and verified loopback target, no secrets or full
+  Environment/ExecStart dump, and confirm that existing Graph source is
+  **already** the canonical TEST database at
+  `/srv/assertion-release/test/state/fictional.sqlite3`. If not, stop. Do not
+  widen existing DB, deployment root, HTTP or private config permissions.
+- Provision only `/run/assertion-memory-dashboard/test` (parent root-managed,
+  per-lane path owner `assertion-test-deploy`, 0750 or 2750, group restricted
+  to the publisher and verified Graph reader). Give the runtime services only
+  the new directory group needed to publish/read metadata. No PROD config or
+  group grant. The Base service creates `scheduler.json` as 0640 and a
+  publisher-only technical lock as 0600; nothing else is shared. Neither path
+  is under the public Graph asset root. If the same service UID is used for
+  both, its existing private group is sufficient.
+- Release the exact tested Base build before restarting the verified TEST
+  graph reader with `--queue-status-config
+  /run/assertion-memory-dashboard/test/scheduler.json --queue-status-stage test`.
+  Preserve all other service arguments and authentication. Check status via
+  owner Sites plus negative missing-auth/wrong-lane requests. When rolling back
+  to a Base build without the publisher, the queue status becomes unavailable;
+  existing graph, MCP and Site graph access remain intact.
+- The current official Base implementation gives private QueryJobs only when
+  the verified deployed `intake_process` capability maps to
+  `durable_query_jobs`. The projection reports the actual constructed queue
+  instance, not a second capability table or guess from the UI. A missing or
+  disabled queue is not silently represented as active.
+
 
 Each queue reports its own scheduler order, active state and recorded processing
 phase. Jobs that are executing do not claim a waiting position. Completed jobs

@@ -21,7 +21,7 @@ class Dual(TestCase):
         spec.loader.exec_module(host)
         prod='/var/lib/assertion-memory/memory.sqlite3'
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder)
+            root=Path(folder).resolve()
             state=root/'state'
             state.mkdir()
             test=state/'fictional.sqlite3'
