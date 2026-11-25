@@ -151,3 +151,31 @@ protected operator channel, remove the attestation flag and configure Base
 using that digest; only after independently verifying the ingress and separate
 bindings enable live pause. Do not reuse an ACL UUID or log a raw identity.
 This mode does not support PROD.
+
+### Reuse the TEST transport without sharing authorization
+
+If a production transition is holding the shared nginx TLS/rollback config,
+do not edit or reload that config to introduce pause. An alternative, only
+after release and scoped live header-mapping review, is
+`MEMORY_TEST_PAUSE_CARRIER=effects` on the owner-private TEST Site:
+
+- Existing Yandex/VM path `/memory-mcp-test-effects` remains unchanged, as does
+  its existing header slot `X-Memory-Mcp-Test-Effects-Auth`. The Site sends the
+  **separate pause bearer** in this transport slot, never the generic effects
+  bearer. Confirm cloud Gateway forwards that exact slot and JSON body, and
+  the current nginx location maps it to one Base Authorization header; do not
+  infer this from a historical source or a printed credential. The current
+  tracked native effect client uses that slot for normal requests.
+- At Base startup, the carrier is installed only for TEST with exact scoped
+  active pause and effects credentials, both valid and distinct. The carrier
+  classifies using only a constant-time match of the normalized Authorization
+  header before reading a body. Every request with that exact pause bearer is
+  subject to the existing native pause route's method, one-header, owner,
+  body, action, stage, lease and optimistic-revision rules. Denied requests
+  cannot fall back to MCP. All other requests retain original effects
+  behavior. No operation is added to the MCP catalog.
+- The flag is independent of attestation and off by default. No provider,
+  network, shared nginx, or PROD changes are part of this option. If existing
+  provider headers/routes do not support the exact transport, stop and review
+  a separately provisioned TEST ingress. Do not reconfigure PROD to make it
+  work.
