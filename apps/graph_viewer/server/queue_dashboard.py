@@ -140,6 +140,15 @@ class HostedQueueDashboard:
         except (OSError, ValueError):
             return False
 
+    def read_pause(self):
+        with self.release_lease():
+            identity=self.metadata()
+            with closing(_connect(self.db)) as db:
+                paused, revision=processing_control.read_control(db)
+            if self.metadata()!=identity:
+                raise processing_control.Conflict('Deployment release changed')
+            return {'stage':self.stage,'paused':paused,'revision':revision}
+
     def set_pause(self, *, stage, paused, expected_revision):
         if stage != self.stage:
             raise processing_control.Conflict('Wrong deployment stage')
