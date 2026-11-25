@@ -86,3 +86,29 @@ Its loggable summary contains hashed Site IDs only. The immutable release
 asset is not rewritten to include later receipts. If the live catalogue changes
 types or names, separately verify native plugin inventory refresh; server
 `tools/list` freshness is not an installed-client refresh guarantee.
+
+
+## Switching the private Sites to the full Base catalog
+
+Once the matching Base release is active, the existing root-owned lane profile
+can set `sites_full_catalog: true` in its private operations configuration.
+This requires both existing scoped credentials and the typed Base registry.
+Neither the Sites identity/access list nor existing machine credentials change.
+The VM serves the same canonical descriptors as the machine catalog, partitioned
+by read-only annotation across the two existing endpoints. Sites does not name
+or describe any method. The two endpoints still authorize their own credentials
+and invocations using their respective catalog digests. Absent the flag, the
+previous five-tool rollout remains unchanged.
+
+Roll out TEST first. After enabling the full flag, compare authenticated native
+`tools/list` to the Base registry, check a source and its snapshot, and invoke
+`memory_query` using only fictional data. Verify both a saved answer and a
+request requiring model work; don't infer that generation works from discovery.
+The Sites release profile allows up to 120 seconds for an effect request.
+Confirm the effective Gateway, reverse-proxy and client deadline too. A timed
+out query must not be retried automatically. The current Sites JSON envelope
+is intentionally bounded and does not promise the machine endpoint's large
+binary transfer allowance; use the machine API for large artifacts. Check that
+the native client's published inventory refreshes, through the existing Sites
+release process if needed. Promote the exact Base/Sites artifacts only after
+those TEST checks. Roll back the opt-in (or the Base release) if necessary.
