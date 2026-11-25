@@ -25,8 +25,10 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                           write_sha256=None, actor_sha256=None, verify_owner=None, prepare=None,
                           change=None, port=None, path=PATH):
     from .queue_session_control import PATH as SESSIONS, normalize
+    from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH, check_request
     session_mode=path==SESSIONS and stage=='test'
-    if path!=PATH and not session_mode:
+    item_mode=path in (REMOVE,PREVIEW_PATH) and stage=='test'
+    if path!=PATH and not (session_mode or item_mode):
         return None
     if stage not in ('test','prod') or enabled is not True:
         return None
@@ -51,7 +53,7 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                 or scope.get('raw_path', path.encode()) != path.encode() or scope.get('query_string')):
             return await reply(404, {'error': 'not_found'})
         method = scope.get('method')
-        if method not in ('GET', 'PUT'):
+        if method not in (('PUT',) if item_mode else ('GET', 'PUT')):
             return await reply(405, {'error': 'method_not_allowed'})
         try:
             peer = ipaddress.ip_address(scope['client'][0])
@@ -88,11 +90,14 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                             break
                 request = json.loads(body, object_pairs_hook=unique)
                 field='selected_session_ids' if session_mode else 'paused'
-                if (type(request) is not dict or set(request) != {field, 'expected_revision'}
+                fields={'queue_id','item_id','expected_revision'} if item_mode else {field,'expected_revision'}
+                if (type(request) is not dict or set(request) != fields
                         or type(request['expected_revision']) is not str
                         or not REVISION.fullmatch(request['expected_revision'])):
                     raise ValueError()
-                if session_mode:
+                if item_mode:
+                    check_request(request['queue_id'],request['item_id'])
+                elif session_mode:
                     normalize(request[field])
                 elif type(request[field]) is not bool:
                     raise ValueError()
@@ -115,9 +120,12 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
         try:
             state = await asyncio.to_thread(prepare if method == 'GET' else change, **args)
             required={'stage','revision','selected_session_ids','sessions'} if session_mode else {'stage','revision','paused'}
-            if (type(state) is not dict or set(state) != required
-                    or state['stage'] != stage or not session_mode and type(state['paused']) is not bool
-                    or type(state['revision']) is not str or not REVISION.fullmatch(state['revision'])):
+            if item_mode:
+                required=({'stage','queue_id','item_id','removed','effect'} if path==REMOVE
+                          else {'stage','queue_id','item_id','source_preview','source_role'})
+            if (type(state) is not dict or set(state) != required or state['stage'] != stage
+                    or not item_mode and (not session_mode and type(state['paused']) is not bool
+                    or type(state['revision']) is not str or not REVISION.fullmatch(state['revision']))):
                 raise ValueError()
         except ProofRejected:
             return await reply(403, {'error': 'owner_required'})

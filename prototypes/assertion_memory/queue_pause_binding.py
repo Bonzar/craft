@@ -195,45 +195,32 @@ def _configure(config_path, port, legacy_token):
             except (ValueError,OSError):
                 return False
         handler.queue_pause_ready=ready
-        if p.lane=='test' and config.processing_session_ids==():
-            from . import queue_session_control as sessions
+        if p.lane=='test':
+            from . import queue_item_removal as items, queue_session_control as sessions
+            from .queue_owner_domain import owner_operations
             from .queue_pause_proof import reserve_once
-            def control_session(*, write_mode, args):
-                with release_lease(p,uid=uid):
-                    if identity()!=established:
-                        raise Conflict('Deployment release changed')
-                    before=exact_database(p.db)
-                    mode='rw' if write_mode else 'ro'
-                    with closing(sqlite3.connect(p.db.as_uri()+'?mode='+mode,uri=True,
-                                                 isolation_level=None,timeout=2)) as db:
-                        if not write_mode:
-                            db.execute('PRAGMA query_only=ON')
-                        db.execute('BEGIN IMMEDIATE' if write_mode else 'BEGIN')
-                        try:
-                            if exact_database(p.db)!=before or identity()!=established:
-                                raise Conflict('Queue database changed')
-                            if write_mode:
-                                reserve_once(db,stage=args['stage'],expected_revision=args['expected_revision'],
-                                             proof=args['proof'],path=sessions.PATH)
-                                result=sessions.update(db,selected_session_ids=args['selected_session_ids'],
-                                                       expected_revision=args['expected_revision'])
-                            else:
-                                result=sessions.status(db)
-                            if exact_database(p.db)!=before or identity()!=established:
-                                raise Conflict('Queue database changed')
-                            if write_mode:
-                                db.commit()
-                            return result
-                        finally:
-                            db.rollback()
-            handler.queue_session_route=make_queue_pause_rest(stage='test',enabled=True,read_sha256=read_fp,
-                write_sha256=write_fp,actor_sha256=owner,
-                verify_owner=make_owner_verifier(bytes.fromhex(key),owner,lane='test',path=sessions.PATH),
-                prepare=lambda:control_session(write_mode=False,args={}),
-                change=lambda **args:control_session(write_mode=True,args=args),port=port,path=sessions.PATH)
-            from .mcp_server import WorkerLauncher
-            handler.queue_session_lifespan=lambda:sessions.follow_settings(
-                config, lambda selected:WorkerLauncher(selected).start() if ready() else {})
+            perform=owner_operations(database=p.db,release_lease=lambda:release_lease(p,uid=uid),
+                                     identity=identity)
+
+            def handle(action,path,*,stage,proof,**args):
+                return perform(action,args,authorize=lambda db:reserve_once(
+                    db,stage=stage,expected_revision=args['expected_revision'],proof=proof,path=path))
+
+            def route(path,action,read_action=None):
+                return make_queue_pause_rest(stage='test',enabled=True,read_sha256=read_fp,
+                    write_sha256=write_fp,actor_sha256=owner,
+                    verify_owner=make_owner_verifier(bytes.fromhex(key),owner,lane='test',path=path),
+                    prepare=lambda:perform(read_action,{}),
+                    change=lambda **args:handle(action,path,**args),port=port,path=path)
+
+            if config.processing_session_ids==():
+                handler.queue_session_route=route(sessions.PATH,'sessions_set','sessions_prepare')
+                from .mcp_server import WorkerLauncher
+                handler.queue_session_lifespan=lambda:sessions.follow_settings(
+                    config,lambda selected:WorkerLauncher(selected).start() if ready() else {})
+            handler.queue_item_routes={
+                items.PATH:route(items.PATH,'item_remove'),
+                items.PREVIEW_PATH:route(items.PREVIEW_PATH,'item_preview')}
         return handler
     return bind
 

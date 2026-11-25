@@ -44,7 +44,8 @@ def _fresh(p, now):
 
 def make_owner_verifier(secret, owner, *, lane='test', path=PATH, clock=time.time):
     from .queue_session_control import PATH as SESSIONS
-    if ((path!=PATH and (path!=SESSIONS or lane!='test')) or lane not in ('test','prod') or type(secret) is not bytes or len(secret) != 32
+    from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH
+    if ((path!=PATH and (path not in (SESSIONS,REMOVE,PREVIEW_PATH) or lane!='test')) or lane not in ('test','prod') or type(secret) is not bytes or len(secret) != 32
             or type(owner) is not str or not HEX.fullmatch(owner)):
         raise ValueError('Invalid TEST owner proof authority')
 

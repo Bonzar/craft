@@ -63,7 +63,7 @@ def _unique(pairs):
     return value
 
 
-def make_native_pause(*, actor, token, prepare, change):
+def make_native_pause(*, actor, token, prepare, change, queue_operations=None, queue_sessions=False):
     if not HEX.fullmatch(actor) or not HEX.fullmatch(token):
         raise ValueError('Bad native pause authority')
     expected=b'Bearer '+token.encode('ascii')
@@ -89,7 +89,7 @@ def make_native_pause(*, actor, token, prepare, change):
                     if event.get('type')!='http.request':
                         raise ValueError()
                     data.extend(event.get('body',b''))
-                    if len(data)>1024:
+                    if len(data)>(16_384 if queue_operations is not None else 1024):
                         raise ValueError()
                     if not event.get('more_body'):
                         break
@@ -101,7 +101,34 @@ def make_native_pause(*, actor, token, prepare, change):
                 return await reply(403,{'error':'owner_required'})
             if type(args) is not dict:
                 raise ValueError()
-            if action=='prepare' and not args:
+            owner_action=queue_operations is not None and action in (
+                'sessions_prepare','sessions_set','item_preview','item_remove')
+            if not owner_action and len(data)>1024:
+                raise ValueError()
+            if owner_action:
+                if action.startswith('sessions_'):
+                    if not queue_sessions:
+                        raise ValueError()
+                    if action=='sessions_prepare' and args:
+                        raise ValueError()
+                    if action=='sessions_set':
+                        from .queue_session_control import normalize
+                        if set(args)!={'selected_session_ids','expected_revision'}:
+                            raise ValueError()
+                        normalize(args['selected_session_ids'])
+                else:
+                    from .queue_item_removal import check_request
+                    if set(args)!={'queue_id','item_id','expected_revision'}:
+                        raise ValueError()
+                    check_request(args['queue_id'],args['item_id'])
+                    if action=='item_preview' and args['queue_id']!='source':
+                        raise ValueError()
+                if action!='sessions_prepare' and (
+                    type(args['expected_revision']) is not str or not REVISION.fullmatch(args['expected_revision'])):
+                    raise ValueError()
+            if owner_action:
+                run=lambda **accepted: queue_operations(action,accepted)
+            elif action=='prepare' and not args:
                 run=prepare
             elif (action=='set' and set(args)=={'stage','paused','expected_revision'} and args['stage']=='test'
                     and type(args['paused']) is bool and type(args['expected_revision']) is str
@@ -113,12 +140,18 @@ def make_native_pause(*, actor, token, prepare, change):
             return await reply(400,{'error':'invalid_request'})
         try:
             result=await asyncio.to_thread(run,**args)
-            if (type(result) is not dict or set(result)!={'stage','paused','revision'}
-                    or result['stage']!='test' or type(result['paused']) is not bool
-                    or type(result['revision']) is not str or not REVISION.fullmatch(result['revision'])):
+            required=({'stage','paused','revision'} if not owner_action else
+                      {'stage','revision','selected_session_ids','sessions'} if action.startswith('sessions_') else
+                      {'stage','queue_id','item_id','source_preview','source_role'} if action=='item_preview' else
+                      {'stage','queue_id','item_id','removed','effect'})
+            if (type(result) is not dict or set(result)!=required or result['stage']!='test'
+                    or not owner_action and (type(result['paused']) is not bool or type(result['revision']) is not str
+                                             or not REVISION.fullmatch(result['revision']))):
                 raise ValueError()
         except Conflict:
             return await reply(409,{'error':'queue_control_changed'})
+        except ValueError:
+            return await reply(400 if owner_action else 503,{'error':'invalid_request' if owner_action else 'pause_unavailable'})
         except Exception:
             return await reply(503,{'error':'pause_unavailable'})
         return await reply(200,result)

@@ -208,6 +208,10 @@ class MessageWork(ThoughtWorkQueue):
             if row is None:
                 yield {**item, 'status': 'blocked', 'error': 'Queued thought job disappeared'}
                 continue
+            from .queue_item_removal import was_removed
+            if was_removed(db, row['thought_id'], target['generation']):
+                yield {**item, 'status':'blocked','error':'Queue item was removed by owner'}
+                continue
             yield {**item, **_job_state(row, target)}
 
     def claim_next(self, pausing):

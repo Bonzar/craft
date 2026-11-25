@@ -15,7 +15,7 @@ GATEWAY = re.compile(r'https://[a-z0-9-]+\.[a-z0-9-]+\.apigw\.yandexcloud\.net/m
 
 
 def prepare(bundle, *, archive_sha256, tag, release_sha, observed_acl_sha256,
-            observed_entry_sha256, hosting_bytes, entry_bytes, origin, gateway):
+            observed_entry_sha256, hosting_bytes, entry_bytes, origin, gateway, refresh_existing=False):
     """Compose only the entry and dependency modules for an already owner-proved Site."""
     manifest, files = read_bundle(bundle, archive_sha256)
     if (manifest['version'] != PAUSE_FORMAT or manifest['tag'] != tag or
@@ -31,21 +31,24 @@ def prepare(bundle, *, archive_sha256, tag, release_sha, observed_acl_sha256,
             not valid(HEX,observed_acl_sha256) or observed_acl_sha256 != profile['access_identity_sha256'] or
             not valid(GATEWAY,gateway)):
         raise ValueError('wrong private TEST Site or ingress scope')
-    if (not valid(HEX,observed_entry_sha256) or digest(entry_bytes)!=observed_entry_sha256 or
-            entry_bytes.count(ANCHOR)!=1 or b'attachTestPause' in entry_bytes):
+    if not valid(HEX,observed_entry_sha256) or digest(entry_bytes)!=observed_entry_sha256:
         raise ValueError('native source preimage changed')
     adapter = (b"import {attachTestPause} from './v25-bind.mjs';\n"
                b"import {matchesEnrolledOwner} from './test_owner_enrollment.mjs';\n")
-    if b'{matchesEnrolledOwner}' in entry_bytes:
-        # Avoid repeating an existing import, without assuming a loose rewrite is valid.
-        raise ValueError('unexpected native owner import')
     binding = (b"export default attachTestPause({\n"
                b"  legacy: withVisualAtMcpOrigin('test',visualGraph,previous),\n"
                b"  withinEnrolledOwner: matchesEnrolledOwner,\n"
                + f'  origin: {json.dumps(origin)},\n  gateway: {json.dumps(gateway)},\n'.encode()
                + b'});')
-    return {ENTRY:adapter+entry_bytes.replace(ANCHOR,binding),
-            **{name:files['test/pause/'+name] for name in PAUSE_MODULES}}
+    modules={name:files['test/pause/'+name] for name in PAUSE_MODULES}
+    if refresh_existing:
+        if (not entry_bytes.startswith(adapter) or entry_bytes.count(binding)!=1 or
+                entry_bytes.count(b'export default attachTestPause')!=1 or entry_bytes.count(ANCHOR)):
+            raise ValueError('native installed pause wrapper has drifted')
+        return modules
+    if entry_bytes.count(ANCHOR)!=1 or b'attachTestPause' in entry_bytes or b'{matchesEnrolledOwner}' in entry_bytes:
+        raise ValueError('native source preimage changed or owner import already exists')
+    return {ENTRY:adapter+entry_bytes.replace(ANCHOR,binding),**modules}
 
 
 def main():
@@ -55,6 +58,7 @@ def main():
     for field in ('archive-sha256','tag','release-sha','native-sha','observed-acl-sha256',
                   'observed-entry-sha256','origin','gateway'):
         parser.add_argument('--'+field,required=True)
+    parser.add_argument('--refresh-existing',action='store_true')
     a=parser.parse_args()
     root=a.checkout.resolve(strict=True)
     def git(*args):
@@ -70,14 +74,16 @@ def main():
             raise ValueError('not the pinned native source')
         return raw
     source('test_owner_enrollment.mjs')
-    if any((root/name).exists() or (root/name).is_symlink() for name in PAUSE_MODULES):
+    if a.refresh_existing:
+        for name in PAUSE_MODULES: source(name)
+    elif any((root/name).exists() or (root/name).is_symlink() for name in PAUSE_MODULES):
         raise ValueError('native pause module already present')
     if a.bundle.is_symlink() or not a.bundle.is_file() or a.bundle.stat().st_size>150000:
         raise ValueError('unsafe bundle')
     prepared=prepare(a.bundle.read_bytes(),archive_sha256=a.archive_sha256,tag=a.tag,
         release_sha=a.release_sha,observed_acl_sha256=a.observed_acl_sha256,
         observed_entry_sha256=a.observed_entry_sha256,hosting_bytes=source('.openai/hosting.json'),
-        entry_bytes=source(ENTRY),origin=a.origin,gateway=a.gateway)
+        entry_bytes=source(ENTRY),origin=a.origin,gateway=a.gateway,refresh_existing=a.refresh_existing)
     out=a.output.resolve()
     if out.is_relative_to(root):
         raise ValueError('candidate must be outside the inspected native checkout')

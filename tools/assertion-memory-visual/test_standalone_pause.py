@@ -65,6 +65,14 @@ class StandalonePause(fixture.OriginTest):
                     str(now[0]+15),nonce))+'\n'
                 assert hmac.compare_digest(self.headers['X-Memory-Pause-Signature'],
                      hmac.digest(secret,mac.encode('ascii'),'sha256').hex())
+                if self.path=='/api/v1/queue-items/source-preview':
+                    assert args=={'queue_id':'source','item_id':'job','expected_revision':'1'*32}
+                    return self.reply(200,{'stage':'test','queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'})
+                if self.path=='/api/v1/queue-items/remove':
+                    assert set(args)=={'queue_id','item_id','expected_revision'}
+                    assert args['item_id']=='job' and args['queue_id']=='source'
+                    if args['expected_revision']!='1'*32:return self.reply(409,{})
+                    return self.reply(200,{'stage':'test','queue_id':'source','item_id':'job','removed':True,'effect':'source_and_queue'})
                 if self.path=='/api/v1/queue-sessions':
                     assert set(args)=={'selected_session_ids','expected_revision'}
                     if args['expected_revision']!=sessions['revision']:return self.reply(409,{})
@@ -145,6 +153,7 @@ class StandalonePause(fixture.OriginTest):
         select='/api/v1/processing/sessions'
         if lane=='prod':
             self.assertEqual(request('POST',select+'/prepare',{})[0],404)
+            self.assertEqual(request('POST','/api/v1/processing/items/remove/prepare',{})[0],404)
             self.assertEqual(calls,[])
             return
         self.assertEqual(request('POST',select+'/prepare',{},proof=None)[0],403)
@@ -160,3 +169,27 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(sessions['selected_session_ids'],['synthetic'])
         self.assertEqual(request('PUT',select,body,extra={'X-CSRF-Token':view['csrf_token']})[0],409)
         self.assertTrue(all(p=='/api/v1/queue-sessions' for _,p in calls))
+        calls.clear()
+        delete='/api/v1/processing/items/remove'
+        body={'stage':'test','queue_id':'source','item_id':'job','expected_revision':'1'*32}
+        self.assertEqual(request('POST',delete+'/prepare',body,proof=None)[0],403)
+        code,proof=request('POST',delete+'/prepare',body)
+        self.assertEqual(code,200)
+        token={'X-CSRF-Token':proof['csrf_token']}
+        self.assertEqual(request('PUT',delete,{**body,'item_id':'other'},extra=token)[0],403)
+        self.assertEqual(request('PUT',delete,body)[0],403)
+        self.assertEqual(calls,[])
+        self.assertEqual(request('PUT',delete,body,extra=token),(200,{'stage':'test','queue_id':'source','item_id':'job','removed':True,'effect':'source_and_queue'}))
+        stale={**body,'expected_revision':'2'*32}
+        _,proof=request('POST',delete+'/prepare',stale)
+        self.assertEqual(request('PUT',delete,stale,extra={'X-CSRF-Token':proof['csrf_token']})[0],409)
+        self.assertTrue(all(p=='/api/v1/queue-items/remove' for _,p in calls))
+        calls.clear()
+        preview='/api/v1/processing/items/source-preview'
+        _,proof=request('POST',preview+'/prepare',body)
+        self.assertEqual(request('PUT',delete,body,extra={'X-CSRF-Token':proof['csrf_token']})[0],403)
+        self.assertEqual(request('PUT',preview,body,extra=token)[0],403)
+        self.assertEqual(calls,[])
+        self.assertEqual(request('PUT',preview,body,extra={'X-CSRF-Token':proof['csrf_token']}),
+            (200,{'stage':'test','queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'}))
+        self.assertEqual(calls,[('PUT','/api/v1/queue-items/source-preview')])

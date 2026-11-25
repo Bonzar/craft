@@ -179,3 +179,20 @@ after release and scoped live header-mapping review, is
   provider headers/routes do not support the exact transport, stop and review
   a separately provisioned TEST ingress. Do not reconfigure PROD to make it
   work.
+
+### Existing TEST Sites deployments
+
+For an already-mounted pause adapter, use the same approved companion artifact
+and `prepare_test_pause.py --refresh-existing` (all previous arguments still
+required). The command verifies clean exact source and checks the exact
+existing owner wrapper and immutable TEST pins. It stages only
+`native-pause.mjs` and `v25-bind.mjs`, not the existing entry module. If the
+pinned source differs, stop rather than rebasing it onto an unverified owner
+wrapper. Publish via the already-approved private TEST release workflow only.
+
+Queue session, preview, and remove actions remain off unless
+`MEMORY_TEST_QUEUE_CONTROL_ENABLED=true` and the same authenticated TEST pause
+transport is already active. Use the existing scoped pause bearer and owner
+pin; no new external Gateway/Nginx route. Preview is a separate item-bound
+owner operation, never part of the ordinary queue listing. No production path
+or permission changes.

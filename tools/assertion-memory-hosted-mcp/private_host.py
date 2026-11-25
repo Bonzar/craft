@@ -256,14 +256,27 @@ def factory(stage,root,config_dir,legacy_token):
             control=HostedQueueDashboard(stage,projection_path(stage),config.db,
                                          activation=active_pause_release,control_lock=root/'deploy.lock')
             owner, token = native_pause_config
+            from prototypes.assertion_memory.queue_owner_domain import owner_operations
+            perform=owner_operations(database=config.db,release_lease=control.release_lease,
+                                     identity=live_identity)
+            session_enabled=config.processing_session_ids==()
             pause_app=native_pause.make_native_pause(actor=owner,token=token,
-                                                   prepare=control.read_pause,change=control.set_pause)
+                prepare=control.read_pause,change=control.set_pause,
+                queue_operations=perform,queue_sessions=session_enabled)
             private_handler=native_pause.via_test_effects(handler,pause_app,
                 stage=stage,pause_token=token,effect_token=effect)
             async def handler(scope,receive,send):
                 if scope.get('type')=='http' and scope.get('path')==native_pause.PATH:
                     return await pause_app(scope,receive,send)
                 return await private_handler(scope,receive,send)
+            handler.queue_pause_ready=control.can_change_pause
+            handler.queue_items_ready=control.can_change_pause
+            if session_enabled:
+                from prototypes.assertion_memory.mcp_server import WorkerLauncher
+                from prototypes.assertion_memory.queue_session_control import follow_settings
+                handler.queue_session_route=True
+                handler.queue_session_lifespan=lambda:follow_settings(
+                    config,lambda selected:WorkerLauncher(selected).start() if control.can_change_pause() else {})
         handler.query_jobs = jobs
         from prototypes.assertion_memory.dashboard_projection import publish
         handler.queue_dashboard_projection = lambda: publish(

@@ -230,6 +230,9 @@ class CaptureQueue:
         event_id = _identity("event", *identity)
         status = "waiting_origin" if await_origin else "waiting_model"
         with self.store.transaction(write=True) as connection:
+            from .queue_item_removal import source_tombstoned
+            if source_tombstoned(connection,event_id):
+                raise ValueError('Source was removed before processing')
             existing = self.get_event(event_id)
             previous_job = self.get(event_id)
             previous_position = connection.execute(
