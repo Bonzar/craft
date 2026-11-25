@@ -94,3 +94,21 @@ test('saved V25 owner rule and legacy paired HTTP route', {skip:!root}, async()=
  assert.equal(after.status,before.status);
  assert.equal(await after.text(),await before.text());
 });
+
+test('TEST owner pin attestation is mutually exclusive with writes and never reaches Gateway',async()=>{
+ const f=setup(async req=>req.headers.get('oai-authenticated-user-id')===id);
+ const env={MEMORY_GRAPH_MODE:'test',MEMORY_TEST_PAUSE_OWNER_ATTEST_ONLY:'true',
+   MEMORY_GRAPH_OWNER_EMAIL_SHA256:hash(email)};
+ const url=path+'/prepare';
+ const response=await f.fetch(f.req(url,{}),env);
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('set-cookie'),null);
+ assert.deepEqual(await response.json(),{stage:'test',owner_sha256:hash('native-queue-pause-test-v1\0'+id)});
+ assert.equal((await f.fetch(f.req(url,{}),{...env,MEMORY_TEST_PAUSE_ENABLED:'true'})).status,404);
+ assert.equal((await f.fetch(f.req(url,{}),{...env,MEMORY_GRAPH_MODE:'prod'})).status,404);
+ assert.equal((await f.fetch(f.req(path,{stage:'test',paused:true,expected_revision:rev}),env)).status,404);
+ assert.equal((await f.fetch(f.req(url,{}, {origin:'https://foreign.test'}),env)).status,403);
+ assert.equal((await f.fetch(f.req(url,{}, {'oai-authenticated-user-id':'alien'}),env)).status,403);
+ assert.equal((await f.fetch(f.req(url,{unexpected:true}),env)).status,400);
+ assert.equal(f.hits(),0);
+});

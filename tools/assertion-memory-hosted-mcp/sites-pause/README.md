@@ -134,3 +134,20 @@ call by Actions. A failed/dark route, rollback, old evidence or missing approval
 must leave native pause unverified. No automatic provider webhook for
 owner-only Sites publication is granted by the documented connector; do not
 add a generic GitHub webhook secret or native API emulation to work around it.
+
+### Bootstrapping the TEST Base owner digest
+
+Use only the real platform ID that already matches the bound private TEST
+D1 owner. Sites account ACL IDs are not interchangeable with its Site-local
+authenticated user ID. If the exact owner digest has no independently trusted
+provenance, release the immutable TEST companion with the bootstrap mode.
+Set `MEMORY_TEST_PAUSE_OWNER_ATTEST_ONLY=true` briefly with live pause disabled.
+Same-origin owner-authenticated `POST /api/v1/processing/pause/prepare` with
+`{}` returns only `{stage:"test",owner_sha256}`. Every other request retains
+its normal origin/body checks; PUT cannot execute, no CSRF token/cookie is
+issued, and no Gateway traffic occurs. If both runtime flags are true the
+adapter rejects the route. Once the verified digest is recorded through the
+protected operator channel, remove the attestation flag and configure Base
+using that digest; only after independently verifying the ingress and separate
+bindings enable live pause. Do not reuse an ACL UUID or log a raw identity.
+This mode does not support PROD.
