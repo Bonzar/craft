@@ -134,6 +134,9 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                 WorkerLauncher(config).start()
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(inner.router.lifespan_context(inner))
+                if background:
+                    from .processing_control import restart_on_resume
+                    await stack.enter_async_context(restart_on_resume(config.db,WorkerLauncher(config).start))
                 if background and config.auto_process_fresh_mac:
                     from .fresh_processing import reconcile_fresh_mac
                     await stack.enter_async_context(reconcile_fresh_mac(WorkerLauncher(config).start))

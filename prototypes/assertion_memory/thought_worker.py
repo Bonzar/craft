@@ -10,6 +10,7 @@ from pathlib import Path
 from time import sleep
 from uuid import uuid4
 
+from .processing_control import paused as processing_paused
 from .model import format_prompt
 from .diagnostic_privacy import diagnostic_scope, restricted, ProtectedContextError
 from .queue import _Claim, _event, LeaseLost
@@ -182,7 +183,7 @@ class ThoughtWorker:
     def _claim_source(self, *, event_id=None):
         with self.queue.store.transaction(write=True) as c:
             # SQLite write admission may have waited past the pause request.
-            if self.is_pausing is not None and self.is_pausing():
+            if processing_paused(c) or (self.is_pausing is not None and self.is_pausing()):
                 return None
             now = self.queue._time()
             eligible,args = source_predicate(self.processing_session_ids,'e')

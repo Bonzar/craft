@@ -51,27 +51,34 @@ def error_response(error):
     return JSONResponse({'error':{'code':error.code,'message':error.message}},status_code=error.status)
 
 
-async def body(request):
+async def body(request, *, limit=20_000, unique=False):
     length=request.headers.get('content-length')
     if length is not None:
         try:
             if int(length)<0:
                 raise ValueError()
-            if int(length)>20000:
+            if int(length)>limit:
                 raise APIError('body_too_large','Request body is too large',413)
         except ValueError:
             raise APIError('invalid_length','Invalid request body length') from None
     chunks=[]; total=0
     async for chunk in request.stream():
         total+=len(chunk)
-        if total>20000:
+        if total>limit:
             raise APIError('body_too_large','Request body is too large',413)
         chunks.append(chunk)
     raw=b''.join(chunks)
-    if len(raw)>20000:
+    if len(raw)>limit:
         raise APIError('body_too_large','Request body is too large',413)
+    def checked_object(pairs):
+        value={}
+        for key,item in pairs:
+            if key in value:
+                raise ValueError('duplicate field')
+            value[key]=item
+        return value
     try:
-        value=json.loads(raw)
+        value=json.loads(raw,object_pairs_hook=checked_object if unique else None)
         if not isinstance(value,dict):
             raise ValueError()
         return value
@@ -204,6 +211,12 @@ async def capabilities(request):
             raise APIError('queue_unavailable','Queue status is not configured',503)
         try:
             status = await asyncio.to_thread(dashboard.snapshot,limit=limit,offset=offset)
+            control=status.get('processing_control')
+            if control is not None:
+                owner_control=(request.app.state.queue_control and
+                               request.app.state.owner.session(request) is not None)
+                control['can_change']=(owner_control and
+                                       await asyncio.to_thread(dashboard.can_change_pause))
             # Published native Sites treats all capabilities responses alike:
             # these fixed fields are required before it applies transport policy.
             return JSONResponse({**status,'capabilities':{'live':True},'readiness':[]})
@@ -219,6 +232,30 @@ async def capabilities(request):
     value['live_profile']=list(request.app.state.manager.live_profiles)
     value['preparation']={'pending':len(request.app.state.manager.preparing),'ready_snapshots':len(request.app.state.manager.graphs),'semantic_pending':len(request.app.state.manager.semantic_jobs)}
     return JSONResponse(value)
+
+
+async def change_processing_pause(request):
+    # Independent defense in addition to Boundary's exact-origin/CSRF checks.
+    # Private Graph bridge credentials never become an owner session.
+    if request.app.state.owner.session(request) is None:
+        raise APIError('owner_required','Owner session required',401)
+    dashboard=request.app.state.queue_dashboard
+    if dashboard is None or not request.app.state.queue_control:
+        raise APIError('queue_control_unavailable','Queue control is not configured',503)
+    if request.headers.get('content-type','').split(';',1)[0].strip().lower()!='application/json':
+        raise APIError('invalid_queue_control','Expected JSON pause request',415)
+    data=await body(request,limit=1024,unique=True)
+    from prototypes.assertion_memory.processing_control import Conflict, REVISION
+    if (set(data)!={'stage','paused','expected_revision'} or data['stage'] not in ('test','prod')
+            or type(data['paused']) is not bool or type(data['expected_revision']) is not str
+            or not REVISION.fullmatch(data['expected_revision'])):
+        raise APIError('invalid_queue_control','Invalid pause request')
+    try:
+        return JSONResponse(await asyncio.to_thread(dashboard.set_pause,**data))
+    except Conflict:
+        raise APIError('queue_control_changed','Queue control has changed; reload status',409) from None
+    except Exception:
+        raise APIError('queue_control_unavailable','Queue control unavailable',503) from None
 
 
 async def static(request):
@@ -248,7 +285,11 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False):
+    # The legacy Sites env binding is deliberately read-only. Mutation must be
+    # installed by the standard owner-session web app at startup.
+    if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
+        raise ValueError('Queue control requires an explicit owner web dashboard')
     if queue_dashboard is None:
         from .queue_dashboard import configured_for_legacy_test_reader
         queue_dashboard = configured_for_legacy_test_reader(source_path)
@@ -285,6 +326,7 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     app.state.synthetic_fixture=synthetic_fixture
     app.state.owner=owner; app.state.manager=manager
     app.state.queue_dashboard=queue_dashboard
+    app.state.queue_control=queue_control
     app.state.static_dir=static_dir
     return app
 
@@ -294,6 +336,7 @@ def make_routes():
     routes=[Route(prefix+'/health',lambda request:JSONResponse({'ok':True})),
             Route(prefix+'/session',session,methods=['GET','POST','DELETE']),
             Route(prefix+'/capabilities',capabilities),Route(prefix+'/graph',graph_manifest),
+            Route(prefix+'/processing/pause',change_processing_pause,methods=['PUT']),
             Route(prefix+'/graph/{revision}/{kind}/{ordinal:int}/{action}',card),
             Route(prefix+'/graph/{revision}/{kind}/{ordinal:int}',card),
             Route(prefix+'/graph/{revision}/{name}',graph_file),
