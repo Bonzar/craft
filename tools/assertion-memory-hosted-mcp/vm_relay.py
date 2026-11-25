@@ -61,7 +61,7 @@ def machine_authorized(header, digests):
     return any([hmac.compare_digest(candidate,expected) for expected in digests])
 
 
-def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *, effect_token=None, operations=None, machine_digests=()):
+def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *, effect_token=None, operations=None, machine_digests=(), fresh_mac_digest=None):
     profile,catalog=deepcopy(profile),deepcopy(catalog)
     lane=profile.get('lane')
     caps=profile.get('enabled_capabilities',())
@@ -91,6 +91,8 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                    for t in (gateway_token,effect_token) if isinstance(t,str))
             or machine_digests and operations is None):
         raise ValueError('invalid machine credentials')
+    if fresh_mac_digest is not None and (lane != 'prod' or fresh_mac_digest not in machine_digests):
+        raise ValueError('invalid fresh Mac authority')
     if machine_digests: routes[f'/memory-api-{lane}']=('machine',None)
     full_sites=profile.get('sites_full_catalog',False)
     if type(full_sites) is not bool or full_sites and (operations is None or not effects or effects_only):
@@ -243,7 +245,14 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                 if operations is None:
                     response=await asyncio.to_thread(forward,rid,name,args)
                 else:
-                    value=await operations.invoke(name,args)
+                    if (machine and fresh_mac_digest is not None
+                            and name in ("memory_ingest_register", "memory_capture_message")
+                            and machine_authorized(auth[0], (fresh_mac_digest,))):
+                        from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
+                        with authenticated_fresh_mac():
+                            value=await operations.invoke(name,args)
+                    else:
+                        value=await operations.invoke(name,args)
                     if type(value) is not dict: raise ValueError()
                     json.dumps(value,separators=(",",":"),ensure_ascii=True,allow_nan=False)
                 if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()

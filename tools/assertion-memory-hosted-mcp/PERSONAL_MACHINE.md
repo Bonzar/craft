@@ -32,3 +32,32 @@ catalog for subsequent requests; never automatically repeat an ambiguous
 effect. Missing/wrong credentials fail before dispatch. The endpoint holds the
 existing release lock shared after valid authentication; release activation
 holds it exclusively.
+
+
+## Automatic source processing (disabled by default)
+
+Use the ordinary Base release to deliver this feature. Keep the host's
+automatic legacy selection as `processing_session_ids: []`. Only after the
+release and an isolated canary are verified, an authorized PROD operator may
+opt in with `service.auto_process_fresh_mac: true` in the release-managed host
+service configuration. The neutral PROD binding requires an existing protected
+`machine_clients.personal-mac` credential fingerprint; the server resolves it
+from bearer authentication, never a request's producer or role labels. Do not
+share this credential with other clients. Local fresh-original-session and
+human-input checks remain necessary; server first registration does not by
+itself prove how a client collected any message.
+
+Only a new, previously unseen local session registered through that verified
+client can acquire this automatic scope. The worker will select exact newly
+committed raw events with receipts from the admitted stream; prior events and
+replays cannot be upgraded. Other clients keep their existing access and may
+still select an exact one-time processing session through the normal operation.
+The common worker lock and durable scheduling recover admitted pending source
+calls across restarts. Automatic selection does not run coalesced maintenance
+causes, old work or historical backfills. Verified source thoughts are indexed
+normally; maintenance retains its existing policy.
+
+For rollback, disable the flag via the normal approved configuration path.
+This does not delete raw receipts, thoughts, or previously committed admissions.
+A running worker must be drained by the standard release lifecycle before
+replacing its configuration; never interrupt the database writer in-place.
