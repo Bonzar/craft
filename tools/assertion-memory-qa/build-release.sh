@@ -46,6 +46,7 @@ committed_runtime=("${application_runtime[@]}" "${hosted_release_files[@]}")
 git archive "$sha" -- "${committed_runtime[@]}" | tar -x -C "$stage"
 git show "$sha:apps/graph_viewer/requirements.txt" | grep -v '^fastembed==' > "$stage/requirements-graph-lexical.txt"
 test -s "$root/apps/graph_viewer/web/dist/index.html"
+mkdir -p "$stage/apps/graph_viewer/web"
 cp -R "$root/apps/graph_viewer/web/dist" "$stage/apps/graph_viewer/web/"
 printf '%s\n' "$sha" > "$stage/REVISION"
 # Only the already-verified GitHub Releases job can attach a canonical tag;
