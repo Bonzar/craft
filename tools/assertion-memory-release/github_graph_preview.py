@@ -174,14 +174,23 @@ def result_of(get, release_id, tag, product, revision, artifact, expected_run=No
                 archive_sha=exact('sha256:'+DIGEST,artifact.get('digest',''))[7:])
 
 
-def from_tag(get, tag):
+def selection_for_tag(get, tag):
     product_of_tag(tag)
     indexed=get(ROOT+'/releases/tags/'+quote(tag,safe=''))
     release_id,actual,product,revision=release_by_id(get,str(indexed.get('id','')))
     if actual!=tag:
         raise Reject('Selected tag changed')
+    return release_id,product,revision
+
+
+def archive_filter(product, release_id, revision):
     name=product.artifact_prefix+release_id+'-'+revision
-    artifact=one_artifact(get(ROOT+'/actions/artifacts?per_page=2&name='+quote(name,safe='')))
+    return '?per_page=2&name='+quote(name,safe='')
+
+
+def from_tag(get, tag):
+    release_id,product,revision=selection_for_tag(get,tag)
+    artifact=one_artifact(get(ROOT+'/actions/artifacts'+archive_filter(product,release_id,revision)))
     return result_of(get,release_id,tag,product,revision,artifact)
 
 
@@ -190,22 +199,15 @@ def from_completed_build(get, run):
     run_id=exact(ID,str(run.get('id','')))
     if run.get('event')!='release' or run.get('conclusion')!='success':
         raise Reject('Not a successful release build event')
-    artifact=one_artifact(get(ROOT+'/actions/runs/'+run_id+'/artifacts?per_page=2'))
-    revision=exact(SHA,run.get('head_sha'))
-    compatible=[]
-    for product in PRODUCTS:
-        matched=re.fullmatch(re.escape(product.artifact_prefix)+'('+ID+')-'+revision,artifact.get('name',''))
-        if matched:
-            compatible.append((product,matched[1]))
-    if len(compatible)!=1:
-        raise Reject('Unrecognized base/visual release artifact')
-    supplied,release_id=compatible[0]
-    rid,tag,actual,source=release_by_id(get,release_id)
-    if supplied!=actual or source!=revision:
-        raise Reject('Release namespace or source revision mismatch')
-    if run.get('head_branch')!=tag:
-        raise Reject('Release event tag does not match the immutable release')
-    return result_of(get,rid,tag,actual,source,artifact,expected_run=run_id)
+    tag=run.get('head_branch')
+    release_id,product,revision=selection_for_tag(get,tag)
+    if exact(SHA,run.get('head_sha'))!=revision:
+        raise Reject('Release event source revision mismatch')
+    # Only the canonical archive must be unique. The producer can publish other
+    # named packages (e.g. Sites) in the same run.
+    artifact=one_artifact(get(ROOT+'/actions/runs/'+run_id+'/artifacts'+
+                              archive_filter(product,release_id,revision)))
+    return result_of(get,release_id,tag,product,revision,artifact,expected_run=run_id)
 
 
 def require_control(env):
