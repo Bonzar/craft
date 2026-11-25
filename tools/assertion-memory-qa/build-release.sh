@@ -44,6 +44,12 @@ while IFS= read -r -d '' path; do
 done < <(git ls-tree -rz --name-only "$sha" -- prototypes/assertion_memory apps/graph_viewer/server)
 committed_runtime=("${application_runtime[@]}" "${hosted_release_files[@]}")
 git archive "$sha" -- "${committed_runtime[@]}" | tar -x -C "$stage"
+# Exact root-level entry points consumed by the installed PROD prepare hook.
+# These operate only on the hook's temporary SQLite fixture, never the service DB.
+prod_preflight=(synthetic_fixture.py smoke_local.py)
+for helper in "${prod_preflight[@]}"; do
+  git show "$sha:tools/assertion-memory-qa/$helper" > "$stage/$helper"
+done
 git show "$sha:apps/graph_viewer/requirements.txt" | grep -v '^fastembed==' > "$stage/requirements-graph-lexical.txt"
 test -s "$root/apps/graph_viewer/web/dist/index.html"
 mkdir -p "$stage/apps/graph_viewer/web"
@@ -72,8 +78,10 @@ tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -C "$stage" -cf
 PYTHONPATH="$root/tools/assertion-memory-release" python3 - "$dest/$name" "$sha" "${committed_runtime[@]}" <<'PYQUAL'
 from hashlib import file_digest
 from pathlib import Path, PurePosixPath
+import os
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from assembly import inspect
 from base_payload import SPEC, read_manifest, validate
 path,revision=Path(sys.argv[1]),sys.argv[2]
@@ -82,8 +90,9 @@ with path.open('rb') as archive:
 def qualify(staged):
     key = validate(staged, revision, digest)
     expected = {PurePosixPath(name) for name in sys.argv[3:]}
+    preflight = ("synthetic_fixture.py", "smoke_local.py")
     required = {PurePosixPath(name) for name in (
-        "REVISION", "QA_PROFILE", "mcp-tool-schema.json", "requirements-graph-lexical.txt"
+        "REVISION", "QA_PROFILE", "mcp-tool-schema.json", "requirements-graph-lexical.txt", *preflight
     )}
     if (staged / "BASE_RELEASE_TAG").is_file():
         required.add(PurePosixPath("BASE_RELEASE_TAG"))
@@ -96,6 +105,22 @@ def qualify(staged):
         committed = subprocess.check_output(["git", "show", f"{revision}:{name}"])
         if committed != (staged / name).read_bytes():
             raise ValueError("base_runtime_source_mismatch")
+    for helper in preflight:
+        committed = subprocess.check_output(["git", "show", f"{revision}:tools/assertion-memory-qa/{helper}"])
+        if committed != (staged / helper).read_bytes():
+            raise ValueError("base_prod_preflight_source_mismatch")
+    # Exercise the root paths extracted from the actual archive as the PROD
+    # prepare hook does. No checkout imports, production state or model calls.
+    with TemporaryDirectory(prefix="base-prod-preflight-") as directory:
+        database = str(Path(directory) / "synthetic-smoke.sqlite3")
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment.pop("PYTHONHOME", None)
+        for helper in preflight:
+            subprocess.run(
+                [sys.executable, "-B", helper, database],
+                cwd=staged, env=environment, check=True, timeout=120,
+            )
     return key
 inspect(path, digest, spec=SPEC, validate=qualify)
 PYQUAL
