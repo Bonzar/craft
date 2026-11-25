@@ -132,8 +132,28 @@ def _lookup_gap(engine, question, gap, bindings):
     return fresh_records, fresh_bases
 
 
+def assess_isolated_candidate(engine, question, selected):
+    """Read one fully admitted search hit; abstain to normal navigation if uncertain."""
+    instructions = (
+        'Read the full retrieved thought and the question. A matching subject alone is not evidence. '
+        'Use ready only when the thought itself answers all material parts, with the requested scope, '
+        'time, and attribution. If it answers a definite part, use lookup with a focused question '
+        'for the missing information. If it answers nothing or context is ambiguous, use drill '
+        'with a question for normal navigation. Do not draft an answer, guess, or infer '
+        'that something did not occur from silence. Return verdict, question, and a brief reason as text.'
+    )
+    decision = engine._call('Check ready thought',
+        [{'role': 'question', 'text': question}, _record(engine, selected, role='candidate', full=True)],
+        [engine._basis(selected)], instructions)
+    if decision['verdict'] == 'ready' and decision['question'] is None:
+        return decision
+    if decision['verdict'] == 'lookup':
+        return decision
+    return None
+
+
 def answer_selected(engine, question, selected, *, neighborhood, additional=(), seen_packets=None,
-                    raw_material=((), ()), allow_partial=False):
+                    raw_material=((), ()), allow_partial=False, initial_decision=None):
     """Use one selected location; navigation owns any subsequent missing question.
 
     The caller may retain seen_packets across navigation/resume calls. There is
@@ -155,7 +175,11 @@ def answer_selected(engine, question, selected, *, neighborhood, additional=(), 
     can_ready = (selected.metadata.get('verification') != 'legacy_unverified'
                  and not engine._is_parallel_alternative(selected) and engine._fresh(selected))
     if can_ready:
-        decision = engine._call('Check ready thought', [{'role': 'question', 'text': question}, *records], bindings, READINESS)
+        use_initial = (initial_decision is not None and len(records) == 1 and records[0].get('text')
+                       and not records[0].get('relations')
+                       and not records[0].get('neighborhood_availability', {}).get('omissions'))
+        decision = initial_decision if use_initial else engine._call('Check ready thought',
+            [{'role': 'question', 'text': question}, *records], bindings, READINESS)
         exact_fields(decision, {'verdict', 'question', 'text'})
         reason = semantic_text(decision.get('text'))
         if decision.get('verdict') == 'ready':

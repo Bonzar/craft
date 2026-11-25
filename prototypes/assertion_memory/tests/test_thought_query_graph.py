@@ -17,13 +17,13 @@ class ThoughtQueryGraphTest(unittest.TestCase):
         from .test_thought_engine import ScriptedModel
         text = 'The group chose the 19:40 showing.'
         gap = 'Did Vlad personally confirm the choice?'
-        model = ScriptedModel(navigation('focus',text),
-            {'verdict':'build','question':gap,'text':'The group decision does not prove Vlad took part.'})
+        model = ScriptedModel(
+            {'verdict':'lookup','question':gap,'text':'The group decision does not prove Vlad took part.'})
         with MemoryStore(':memory:') as memory:
             service = ThoughtService(memory,model)
             thought = service.thoughts.publish(text,metadata={'verification':'accepted'})
             with patch('prototypes.assertion_memory.thought_engine.ThoughtEngine.retrieve',
-                       side_effect=[[thought],[]]) as retrieve:
+                       side_effect=[[thought],[thought]]) as retrieve:
                 result=service.query('Which showing did Vlad and the group choose?')
             self.assertEqual(retrieve.call_args.args,(gap,))
             self.assertEqual(retrieve.call_args.kwargs['exclude_ids'],{thought.id})
@@ -34,7 +34,7 @@ class ThoughtQueryGraphTest(unittest.TestCase):
             self.assertEqual(result['completeness'],'incomplete')
             self.assertEqual(result['missing_question'],gap)
             self.assertEqual(len(service.thoughts.list_thoughts()),1)
-            self.assertEqual([r.task for r in model.requests],['Navigate thought graph','Check ready thought'])
+            self.assertEqual([r.task for r in model.requests],['Check ready thought'])
 
     def test_gap_uses_independent_support_only_if_it_resolves_the_gap(self):
         from .test_thought_engine import ScriptedModel, ACCEPT
@@ -45,7 +45,7 @@ class ThoughtQueryGraphTest(unittest.TestCase):
         for supported in (False,True):
             with self.subTest(supported=supported), MemoryStore(':memory:') as memory:
                 surrounding = confirmation if supported else 'The theatre seats 60 people.'
-                model = ScriptedModel(navigation('focus',text),
+                model = ScriptedModel(
                     {'verdict':'lookup','question':gap,'text':'Check who confirmed the choice.'},
                     {'verdict':'build' if supported else 'partial','question':None if supported else gap,
                      'text':'The opened source is checked.'},
@@ -57,7 +57,7 @@ class ThoughtQueryGraphTest(unittest.TestCase):
                 with patch('prototypes.assertion_memory.thought_engine.ThoughtEngine.retrieve',
                            side_effect=[[candidate],[independent]]):
                     result=service.query('Which showing did Vlad and the group choose?')
-                packet=model.requests[2].records
+                packet=model.requests[1].records
                 self.assertTrue(any(r.get('role')=='gap_question' and r.get('text')==gap for r in packet))
                 self.assertTrue(any(r.get('role')=='gap_evidence' and r.get('text')==surrounding for r in packet))
                 self.assertEqual(result['answer_accepted'],supported)
@@ -68,7 +68,24 @@ class ThoughtQueryGraphTest(unittest.TestCase):
                 else:
                     self.assertTrue(result['partial_answer'])
                     self.assertEqual(result['answer'],text)
-                    self.assertEqual(len(model.requests),3)
+                    self.assertEqual(len(model.requests),2)
+
+    def test_isolated_unrelated_match_abstains_to_normal_navigation(self):
+        from .test_thought_engine import ScriptedModel
+        model = ScriptedModel({'verdict':'drill','question':'What were the cinema plans?',
+            'text':'The garden record does not address any part of the question.'},
+            navigation('unknown',None))
+        with MemoryStore(':memory:') as memory:
+            service = ThoughtService(memory,model)
+            candidate = service.thoughts.publish('The team bought lawn chairs.',
+                metadata={'verification':'accepted'})
+            with patch('prototypes.assertion_memory.thought_engine.ThoughtEngine.retrieve',
+                       return_value=[candidate]):
+                result = service.query('What showing did the team choose?')
+            self.assertFalse(result['answer_accepted'])
+            self.assertFalse(result.get('partial_answer',False))
+            self.assertNotEqual(result.get('view_id'),candidate.id)
+            self.assertEqual([r.task for r in model.requests],['Check ready thought','Navigate thought graph'])
 
     def test_unknown_graph_route_does_not_discard_already_found_pending_source(self):
         from prototypes.assertion_memory.tests.test_thought_engine import ScriptedModel, ACCEPT
@@ -261,8 +278,7 @@ class ThoughtQueryGraphTest(unittest.TestCase):
     def test_unchanged_question_reuses_version_without_model_and_question_record_does_not_grow(self):
         question = 'What is required before opening?'
         text = 'Engineering approval is required before opening.'
-        steps = iter([navigation('focus', text),
-            {'verdict': 'ready', 'question': None, 'text': 'The complete condition is present.'}])
+        steps = iter([{'verdict': 'ready', 'question': None, 'text': 'The complete condition is present.'}])
         calls = []
         def model(request):
             calls.append(request.task)
@@ -280,7 +296,7 @@ class ThoughtQueryGraphTest(unittest.TestCase):
             repeat = service.query(question)
             self.assertEqual(first['thought']['id'], thought.id)
             self.assertEqual(repeat['version_id'], first['version_id'])
-            self.assertEqual(calls, ['Navigate thought graph', 'Check ready thought'])
+            self.assertEqual(calls, ['Check ready thought'])
             with memory.transaction() as db:
                 rows = db.execute('SELECT proofs FROM memory_thought_reuse_checks').fetchall()
             self.assertEqual(len(rows), 1)

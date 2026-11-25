@@ -7,7 +7,7 @@ from .model import SemanticUnavailable
 from .thought_engine import ThoughtDetailNeeded, empty_material
 from .thought_engine_contract import semantic_text
 from .thought_navigation import navigate, neighborhood
-from .thought_answering import answer_selected, support_fingerprint
+from .thought_answering import answer_selected, assess_isolated_candidate, support_fingerprint
 
 
 @dataclass
@@ -23,6 +23,7 @@ class _Frame:
     requested: set = field(default_factory=set)
     frontier: str | None = None
     initialized: bool = False
+    initial_decision: dict | None = None
 
 
 def _key(thought):
@@ -74,6 +75,17 @@ def _locate(engine, frame):
         return None
     if not frame.initial:
         raise empty_material('No admitted search starting points or pending source messages were found')
+    if frame.guidance is None and not frame.explicit and not frame.raw[0] and len(frame.initial) == 1:
+        candidate = frame.initial[0]
+        if (candidate.metadata.get('verification') == 'accepted' and engine._fresh(candidate)
+                and not engine._is_parallel_alternative(candidate)):
+            catalog = neighborhood(engine, candidate, frame.question)
+            if catalog['complete'] and not (catalog['relations'] or catalog['omissions']):
+                decision = assess_isolated_candidate(engine, frame.question, candidate)
+                if decision is not None:
+                    frame.initial_decision, frame.selected = decision, candidate
+                    frame.frontier = _frontier(engine, frame, candidate)
+                    return None
     route = navigate(engine, frame.question, frame.explicit, initial=frame.initial,
                      guidance=frame.guidance)
     discovered = (*route.inspected, *((route.thought,) if route.thought is not None else ()))
@@ -91,9 +103,10 @@ def _locate(engine, frame):
 
 def _step(engine, frame):
     if frame.selected is not None:
+        decision, frame.initial_decision = frame.initial_decision, None
         return answer_selected(engine, frame.question, frame.selected, neighborhood=neighborhood,
             additional=frame.additional, seen_packets=frame.packets, raw_material=frame.raw,
-            allow_partial=frame.guidance is None)
+            allow_partial=frame.guidance is None, initial_decision=decision)
     records, bases = frame.raw
     for thought in frame.additional:
         records, bases = engine._merge_material(records, bases,
