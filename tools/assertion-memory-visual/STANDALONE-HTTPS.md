@@ -138,3 +138,41 @@ return a changed revision and persist, stale revision fails, graph/SSE and
 interactive work remain usable. Test this on TEST before independently
 provisioning and verifying PROD. If any check fails remove the opt-in and
 the dedicated proxy locations; leave normal read routes and Sites untouched.
+
+## Signed packed PROD bootstrap (source, default off)
+
+A packed Visual release uses a lane-neutral runtime receipt and identical ZIP
+bytes in both stages. The old standalone runtime companion remains v1 and
+TEST-only; it cannot be reinterpreted as a PROD package. The packed controller
+requires the approved same-run TEST static and packed SHA witnesses before it
+can send a PROD command. Both stage flags remain separate and off by default,
+and differing TEST/PROD format selection fails instead of serving static only.
+
+The closed PROD runtime scope is the existing
+`assertion-memory-visual-prod.service` on `127.0.0.1:8830`. Its process stays
+`assertion-visual-prod-read`; its existing deployment writer stays
+`assertion-visual-prod-deploy`. The following one-time changes require separate
+review and are not applied by this patch:
+
+- Verify the configured PROD signer file permits the distinct
+  `visual-runtime-prod-v1` namespace for the existing `visual-prod` principal.
+  Install reviewed receiver modules root-owned in the existing PROD scope.
+- Install the same fixed restart-helper source at the exact scope-specific
+  `configured/prod/runtime-prod-restart.py` path, with a permit only from the
+  existing PROD writer and only for that no-argument helper. Retain sandbox
+  and fixed unit; do not add any account, generic shell or cross-lane grants.
+- Provision the scoped `runtime` directory and healthy prepared baseline
+  under the current PROD Visual state root using its existing writer/group
+  ownership. Change the existing unit's launch path to immutable current
+  runtime and configure its separately issued health credential and a
+  verified local PROD Base read credential/origin. Baseline smoke must prove
+  running entry hash, active UI digest and successful same-lane queue read,
+  so rollback can be verified. Keep health loopback only.
+- Only after preflight, independently approve the root-owned PROD
+  `runtime-enabled` marker and protected workflow settings. Advance the
+  existing Visual-only workflow to an exact reviewed packed controller pin
+  and publish a fresh immutable Visual release through the original producer.
+  No static-only success substitutes for the packed witness.
+
+This source does not configure, restart or enable a live service. The
+default legacy release command remains unchanged in both environments.

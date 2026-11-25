@@ -17,7 +17,7 @@ class Standalone(fixture.OriginTest):
                 self.exercise(lane)
 
     def exercise(self,lane):
-        ingress,graph_key,queue_key=(x*64 for x in ('2','3','4'))
+        ingress,graph_key,queue_key,health_key=(x*64 for x in ('2','3','4','7'))
         host=f'visual-{lane}.example.test'
         captured=[]
         snapshot={'stage':lane, 'release_version':'assertion-memory-v0.1.16',
@@ -53,7 +53,8 @@ class Standalone(fixture.OriginTest):
         private=start(ThreadingHTTPServer(('127.0.0.1',0),PrivateReader))
         url=f'http://127.0.0.1:{private.server_port}'
         visual=start(fixture.origin.make_server(self.root,fixture.TOKEN,0,environment=lane,
-                     queue_origin=url,queue_token=queue_key,standalone=('https://'+host,ingress,url,graph_key)))
+                     queue_origin=url,queue_token=queue_key,standalone=('https://'+host,ingress,url,graph_key),
+                     runtime_health=('8'*64,health_key)))
 
         def get(path, *, key=ingress, sent_host=host, method='GET', extra=None):
             conn=http.client.HTTPConnection(*visual.server_address,timeout=2)
@@ -123,6 +124,16 @@ class Standalone(fixture.OriginTest):
         self.assertFalse(any(k.lower() in ('cookie','x-memory-visual-owner-ingress') for k in g))
         self.assertEqual(get('/api/v1/events?channel=dashboard')[2],
                          b'event: queue_changed\n\nevent: graph_changed\n\n')
+        self.assertEqual(get('/__visual-runtime-health')[0],404)
+        probe=http.client.HTTPConnection(*visual.server_address,timeout=3)
+        try:
+            probe.request('GET','/__visual-runtime-health',headers={'Authorization':'Bearer '+health_key})
+            rsp=probe.getresponse()
+            self.assertEqual(rsp.status,200)
+            self.assertEqual(json.loads(rsp.read()),{'stage':lane,'runtime_entry_sha':'8'*64,
+                'static_digest':self.release,'queue_ready':True})
+        finally:
+            probe.close()
         snapshot['stage']='prod' if lane=='test' else 'test'
         self.assertEqual(get('/api/v1/capabilities?queue_status=1')[0],503)
 

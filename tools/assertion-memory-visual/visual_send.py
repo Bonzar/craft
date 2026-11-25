@@ -39,8 +39,8 @@ def deploy(d, *, lane="legacy", runtime=None):
     expected={'environment':mode,'revision':rev,'archive_sha256':sha,'release':manifest}
     runtime_claim=None
     if runtime is not None:
-        if mode!='test' or lane!='configured':
-            raise ValueError('Only configured Visual TEST accepts joint runtime release')
+        if mode not in ('test','prod') or lane!='configured':
+            raise ValueError('Only configured Visual accepts joint runtime release')
         if __package__:
             from . import runtime_companion, runtime_receive
         else:
@@ -49,9 +49,9 @@ def deploy(d, *, lane="legacy", runtime=None):
         if descriptor['revision']!=rev or descriptor['static_sha']!=sha:
             raise ValueError('Wrong staged Visual paired identity')
         raw=path.read_bytes()
-        runtime_companion.verify(raw,descriptor,runtime_digest)
-        signature=runtime_companion.sign(descriptor,runtime_digest,d['VISUAL_SIGNING_KEY'])
-        command,joint=runtime_receive.assemble(descriptor,raw,signature,(Path(d['VISUAL_DOWNLOAD'])/'visual.tar').read_bytes())
+        runtime_companion.verify(raw,descriptor,runtime_digest,stage=mode)
+        signature=runtime_companion.sign(descriptor,runtime_digest,d['VISUAL_SIGNING_KEY'],stage=mode)
+        command,joint=runtime_receive.assemble(descriptor,raw,signature,(Path(d['VISUAL_DOWNLOAD'])/'visual.tar').read_bytes(),stage=mode)
         runtime_claim={**expected,'runtime_sha256':runtime_digest}
     if lane == 'configured':
         if __package__:

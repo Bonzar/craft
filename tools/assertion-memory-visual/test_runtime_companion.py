@@ -77,6 +77,39 @@ class Companion(TestCase):
             self.assertEqual(receiver.receive('test',command,wire,**opts),'fixture-success')
             self.assertEqual(calls,[(expected,static,c.digest(raw),self.files)])
 
+    def test_packed_prod_accepts_exact_common_bytes_but_never_test_signature_or_legacy(self):
+        static=b'synthetic paired static TAR'
+        expected={**self.identity,'static_sha':c.digest(static)}
+        legacy=c.build(expected,self.files)
+        packed=c.build(expected,self.files,packed=True)
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            identities={}
+            for stage in ('test','prod'):
+                key=root/stage
+                subprocess.run(['/usr/bin/ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)],check=True)
+                allowed=root/(stage+'-allowed')
+                allowed.write_text('visual-'+stage+' '+key.with_suffix('.pub').read_text())
+                identities[stage]=key,allowed
+            got=[]
+            def receive(stage,signature,body,policy,wire_lane=None):
+                command,w=receiver.assemble(expected,body,signature,static,stage=wire_lane or stage)
+                return receiver.receive(stage,command,w,signers=policy,private_workspace=root,
+                    activate=lambda meta,archive,digest,files:got.append((stage,digest,archive.read_bytes())))
+            test_key,test_policy=identities['test']
+            prod_key,prod_policy=identities['prod']
+            test_signature=c.sign(expected,c.digest(packed),test_key.read_text(),stage='test')
+            prod_signature=c.sign(expected,c.digest(packed),prod_key.read_text(),stage='prod')
+            for sig,body,policy,lane in [(test_signature,packed,prod_policy,None),
+              (prod_signature,packed,prod_policy,'test'),
+              (c.sign(expected,c.digest(legacy),prod_key.read_text(),stage='prod'),legacy,prod_policy,None)]:
+                with self.assertRaises(ValueError):
+                    receive('prod',sig,body,policy,lane)
+            self.assertEqual(got,[])
+            receive('test',test_signature,packed,test_policy)
+            receive('prod',prod_signature,packed,prod_policy)
+            self.assertEqual(got,[('test',c.digest(packed),static),('prod',c.digest(packed),static)])
+
     def test_exact_provider_artifact_and_no_interchange_with_static(self):
         buffer=BytesIO()
         with ZipFile(buffer,'w') as out:

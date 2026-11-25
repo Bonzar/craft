@@ -107,8 +107,8 @@ def deploy_verified(stream, expected_sha, *, root):
     hook=make_hook(root)
     def locked(_fd):
         import os
-        if root.name=='test' and os.path.lexists(root/'runtime'/'.visual-runtime-joint-transition'):
-            raise ValueError('Unsettled TEST Visual joint transition')
+        if root.name in ('test','prod') and os.path.lexists(root/'runtime'/'.visual-runtime-joint-transition'):
+            raise ValueError('Unsettled Visual joint transition')
         return hook
     return release_core.deploy(stream, expected_sha, root=root, spec=archive_spec(),
         validate=validate, hook=hook, retained=retained, hook_factory=locked)

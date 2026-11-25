@@ -51,12 +51,12 @@ def main():
         from visual_policy import deploy_verified
         command=os.environ.get('SSH_ORIGINAL_COMMAND','')
         if command.startswith('deploy-visual-runtime '):
-            if stage!='test':
+            if not command.startswith('deploy-visual-runtime '+stage+' '):
                 raise ValueError('command_denied')
             for name in ('runtime_host.py','runtime_receive.py','runtime_companion.py','runtime_joint.py','runtime_switch.py'):
                 trusted(product/name,stat.S_ISREG)
             from runtime_host import receive as receive_runtime
-            reply=receive_runtime(command,sys.stdin.buffer)
+            reply=receive_runtime(stage,command,sys.stdin.buffer)
         else:
             reply = receive(stage, command, sys.stdin.buffer,
                             verify=verify_frame, deploy=deploy_verified, command_pattern=COMMAND,

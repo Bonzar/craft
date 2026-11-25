@@ -1,4 +1,4 @@
-"""TEST Visual two-pointer transaction; only fixed callbacks, no root operations."""
+"""Visual two-pointer transaction; only fixed callbacks, no root operations."""
 import fcntl
 import json
 import os
@@ -15,20 +15,20 @@ STATIC_PENDING = '.activation-pending-v1'
 def static_target(root, value, validate):
     if (type(value) is not str or not value.startswith('releases/')
             or not DIGEST.fullmatch(value.removeprefix('releases/'))):
-        raise ValueError('Invalid TEST Visual static target')
+        raise ValueError('Invalid Visual static target')
     where=root/value
     if where.resolve(strict=True)!=where or validate(where)!=where.name:
-        raise ValueError('Unverified TEST Visual static release')
+        raise ValueError('Unverified Visual static release')
     return value
 
 
 def pair(value, visual, runtime, validate):
     if type(value) is not dict or set(value)!={'static','runtime'}:
-        raise ValueError('Invalid TEST Visual pointer pair')
+        raise ValueError('Invalid Visual pointer pair')
     static_target(visual,value['static'],validate)
     link=value['runtime']
     if type(link) is not str or not link.startswith('versions/') or target(runtime,link[9:])!=link:
-        raise ValueError('Invalid TEST Visual runtime target')
+        raise ValueError('Invalid Visual runtime target')
     return value
 
 
@@ -70,10 +70,10 @@ def run(visual, runtime, candidate, *, validate, restart, smoke):
                 restart()
                 smoke(before)
             except Exception:
-                raise RuntimeError('TEST Visual pair rollback was not verified') from None
+                raise RuntimeError('Visual pair rollback was not verified') from None
             marker.unlink()
             sync_directory(runtime)
-            raise RuntimeError('TEST Visual activation failed; old pair restored') from None
+            raise RuntimeError('Visual activation failed; old pair restored') from None
         marker.unlink()
         sync_directory(runtime)
         return candidate
@@ -99,10 +99,10 @@ def activate_verified(visual, runtime, expected, archive, runtime_sha, files, *,
                                  visual_policy.retained)
         versions=runtime/'versions'
         if versions.resolve(strict=True)!=versions:
-            raise ValueError('Untrusted TEST Visual runtime versions')
+            raise ValueError('Untrusted Visual runtime versions')
         folder=versions/runtime_sha
         if not DIGEST.fullmatch(runtime_sha) or set(files)!={'asset-origin.py','sites-shell.mjs'}:
-            raise ValueError('Invalid prepared TEST Visual runtime')
+            raise ValueError('Invalid prepared Visual runtime')
         if not os.path.lexists(folder):
             with tempfile.TemporaryDirectory(dir=versions,prefix='.runtime-prepared-') as work:
                 new=Path(work)/'candidate'
@@ -117,11 +117,11 @@ def activate_verified(visual, runtime, expected, archive, runtime_sha, files, *,
                 os.rename(new,folder)
                 sync_directory(versions)
         if folder.resolve(strict=True)!=folder or {p.name for p in folder.iterdir()}!=set(files):
-            raise ValueError('Untrusted existing TEST Visual runtime')
+            raise ValueError('Untrusted existing Visual runtime')
         for name, data in files.items():
             path=folder/name
             if path.is_symlink() or not path.is_file() or path.stat().st_size!=len(data) or digest(path.read_bytes())!=digest(data):
-                raise ValueError('Retained TEST Visual runtime changed')
+                raise ValueError('Retained Visual runtime changed')
         return {'static':'releases/'+static_id,'runtime':'versions/'+runtime_sha}
 
     return run(visual,runtime,prepare,validate=static_validate,restart=restart,smoke=smoke)
