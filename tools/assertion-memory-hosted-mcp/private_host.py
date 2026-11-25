@@ -258,7 +258,8 @@ def factory(stage,root,config_dir,legacy_token):
             owner, token = native_pause_config
             pause_app=native_pause.make_native_pause(actor=owner,token=token,
                                                    prepare=control.read_pause,change=control.set_pause)
-            private_handler=handler
+            private_handler=native_pause.via_test_effects(handler,pause_app,
+                stage=stage,pause_token=token,effect_token=effect)
             async def handler(scope,receive,send):
                 if scope.get('type')=='http' and scope.get('path')==native_pause.PATH:
                     return await pause_app(scope,receive,send)
