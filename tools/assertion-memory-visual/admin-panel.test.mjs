@@ -55,6 +55,15 @@ test('release contains existing worker, a fixed graph mode and integrated admini
   assert.match(visual['index.html'].toString(),/id="topics-toggle" hidden/);
   assert.match(visual['index.html'].toString(),/id="memory-admin"/);
 });
+test('Visual version is pinned in the release bytes, not furnished by Base',async()=>{
+  const dir=new URL('.',import.meta.url).pathname;
+  const tag='assertion-memory-visual-v1.2.3';
+  const pinned=await versionableBundle(dir,tag);
+  assert.match(pinned['index.html'].toString(),/Визуал: assertion-memory-visual-v1.2.3/);
+  const untagged=await versionableBundle(dir);
+  assert.doesNotMatch(untagged['index.html'].toString(),/Визуал: assertion-memory-visual-v/);
+  await assert.rejects(versionableBundle(dir,'<script>'),/Invalid Visual release tag/);
+});
 test('status shows Base version, lane and queues in server order, and pages independently',async()=>{
   const {calls,el}=simulate();
   await tick();

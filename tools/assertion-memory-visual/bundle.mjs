@@ -2,7 +2,9 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {hash,ITEM} from './store.mjs';
 import {patchVisual} from './visual-overlay.mjs';
-export async function versionableBundle(dir) {
+export async function versionableBundle(dir, releaseTag = null) {
+  if (releaseTag !== null && !/^assertion-memory-visual-v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,30})?$/.test(releaseTag))
+    throw Error('Invalid Visual release tag');
   const pins=JSON.parse(await readFile(join(dir,'asset-hashes.json')));
   const files=Object.fromEntries(await Promise.all(pins.map(async p=>{
     const name=p.url.slice(1);
@@ -21,7 +23,7 @@ export async function versionableBundle(dir) {
   const matches=[...script.matchAll(/new Worker\(new URL\(`\/(assets\/graph\.worker-[A-Za-z0-9_-]+\.js)`/g)];
   if(matches.length!==1||!Object.hasOwn(files,matches[0][1])||script.split('/assets/').length!==2)throw Error('unexpected lazy Worker dependency');
   const cssName=deps[1][1];
-  const patched=patchVisual({html,script,css:files[cssName].toString('utf8')});
+  const patched=patchVisual({html,script,css:files[cssName].toString('utf8'),releaseTag});
   files['index.html']=Buffer.from(patched.html.replace(/((?:src|href)=")\/assets\//g,'$1./assets/'));
   files[mainName]=Buffer.from(patched.script.replace('/'+matches[0][1],'./'+matches[0][1].split('/').at(-1)));
   files[cssName]=Buffer.from(patched.css);

@@ -90,5 +90,7 @@ jobs:
           python -m unittest prototypes.assertion_memory.release_catalog_test prototypes.assertion_memory.dual_http_test
           node --test tools/assertion-memory-hosted-mcp/sites-dynamic/test_worker.mjs tools/assertion-memory-hosted-mcp/sites-dynamic/test_base_contract.mjs
           python -m unittest discover -s tools/assertion-memory-hosted-mcp/sites-dynamic -p test_release_package.py
+          PYTHONPATH=.:tools/assertion-memory-hosted-mcp python -m unittest discover -s tools/assertion-memory-hosted-mcp -p 'test_visual_status.py'
+          python -m unittest discover -s prototypes/assertion_memory/tests -p 'test_queue_status.py'
       - name: Build narrow, data-free release
         run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"

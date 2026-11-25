@@ -92,7 +92,7 @@
       stage = stageName(response?.stage);
       capabilities = response?.capabilities || {};
       text('badge',[stage || 'Среда неизвестна', string(response?.release_version) || 'версия неизвестна'].join(' · '));
-      text('status',string(response?.visual_release_version) ? 'Визуал: ' + response.visual_release_version : '');
+      text('status','');
       draw(response || {});
     } catch {
       if (serial !== request) return;
