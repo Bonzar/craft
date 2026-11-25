@@ -1,6 +1,7 @@
 """Bounded raw diagnostics plus exact current-scope unfinished canonical work."""
 import json
 
+from . import query_timing as timing
 from .service import _bounded_status, _status_selection, _fits, _continuation
 
 
@@ -99,6 +100,7 @@ def job(service,identity,scope,rows=None):
     return dict(service.work.get(identity),id=identity,event_id=None,assertion_id=None,phase=row['action'])
 
 
+@timing.timed('diagnostics')
 def query_diagnostics(service,result,scope):
     health=snapshot(service,None,scope,0,100)
     processing=('errors' if health['error_count'] else 'pending' if health['pending_count'] else

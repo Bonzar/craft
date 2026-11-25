@@ -1,6 +1,7 @@
 """One common hosted MCP ASGI relay. Bind an independently attested environment profile at boot."""
 import asyncio, hashlib, hmac, json, re
 from copy import deepcopy
+from time import monotonic
 from jsonschema import Draft202012Validator
 from policy import EFFECTS, QUERY, authorized, digest
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
@@ -159,14 +160,24 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     return
         if scope["type"] != "http": return
 
+        received_at = monotonic()
         machine=scope.get('path')==f'/memory-api-{lane}' and bool(machine_digests)
-        async def reply(status, data):
+        async def reply(status, data, *, query_job_id=None):
             raw=json.dumps(data, separators=(",",":"), ensure_ascii=True).encode()
             if len(raw)>(MACHINE_MAX if machine else MAX_RESPONSE):
                 status,raw=502,b'{"error":"unavailable"}'
-            await send({"type":"http.response.start","status":status,"headers":[
-                (b"content-type",b"application/json"),(b"cache-control",b"private, no-store")]})
-            await send({"type":"http.response.body","body":raw})
+            sent = False
+            try:
+                await send({"type":"http.response.start","status":status,"headers":[
+                    (b"content-type",b"application/json"),(b"cache-control",b"private, no-store")]})
+                await send({"type":"http.response.body","body":raw})
+                sent = True
+            finally:
+                if query_job_id:
+                    from prototypes.assertion_memory import query_timing as timing
+                    with timing.bind(trace_id=query_job_id):
+                        timing.emit('vm_http_submission', 'ok' if sent and status == 200 else 'failed',
+                                    timing.elapsed(received_at))
 
         if scope.get("path") not in routes or scope.get("method")!="POST" or scope.get("query_string"):
             return await reply(404, {"error":"not_found"})
@@ -257,8 +268,9 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     json.dumps(value,separators=(",",":"),ensure_ascii=True,allow_nan=False)
                 if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
             if operations is not None:
+                job_id = value.get('query_job_id') if name == QUERY and args.get('query_job_id') is None else None
                 return await reply(200,{"environment":lane,"request_id":rid,**receipt,
-                                        "status":"ok","result":value})
+                                        "status":"ok","result":value},query_job_id=job_id)
             if operations is None:
                 if type(response) is not dict or response.get("jsonrpc")!="2.0" or response.get("id")!=rid or \
                     "error" in response: raise ValueError()

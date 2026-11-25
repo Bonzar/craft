@@ -3,7 +3,6 @@ import asyncio
 from contextlib import asynccontextmanager, closing
 import fcntl
 import json
-import logging
 import os
 from pathlib import Path
 import re
@@ -12,7 +11,8 @@ import threading
 import time
 from uuid import uuid4
 
-LOG = logging.getLogger(__name__)
+from . import query_timing as timing
+
 ID = re.compile(r'[a-zA-Z0-9_-]{1,100}\Z')
 
 
@@ -86,30 +86,44 @@ class QueryJobs:
                     self.signal.wait(0.25)
                     self.signal.clear()
                     continue
-                key, arguments = claim
-                try:
-                    result = self.run(**json.loads(arguments))
-                    if not isinstance(result, dict):
-                        raise ValueError('unexpected query response')
-                    serialized = self._wire(result)
-                    state = 'completed'
-                except Exception as exc:
-                    LOG.warning('Interactive query failed: %s', type(exc).__name__)
-                    serialized = self._wire({'answer_accepted': False, 'answer_error': {
-                        'code': 'query_failed', 'message': 'The interactive query could not finish.'}})
-                    state = 'failed'
-                # Retry receipt write only, never restart model work.
-                while True:
-                    try:
-                        with closing(self._connect()) as c:
-                            c.execute("UPDATE memory_interactive_queries SET state=?,result=? WHERE id=? AND state='running'",
-                                      (state, serialized, key))
-                        break
-                    except sqlite3.OperationalError:
-                        if self.stop.wait(0.15):
-                            return
+                key, arguments, created = claim
+                with timing.bind(trace_id=key):
+                    timing.emit('queue_wait', 'ok', max(0, round((time.time() - created)*1000)))
+                    self._execute(key, arguments)
             except sqlite3.OperationalError:
                 self.stop.wait(0.15)
+
+    def _execute(self, key, arguments):
+        started = time.monotonic()
+        state = 'failed'
+        timing.emit('job_total', 'start')
+        try:
+            try:
+                result = self.run(**json.loads(arguments))
+                if not isinstance(result, dict):
+                    raise ValueError('unexpected query response')
+                serialized = self._wire(result)
+                state = 'completed'
+            except Exception:
+                serialized = self._wire({'answer_accepted': False, 'answer_error': {
+                    'code': 'query_failed', 'message': 'The interactive query could not finish.'}})
+                state = 'failed'
+            # Retry the receipt write only, never rerun model work.
+            persisted = time.monotonic()
+            while True:
+                try:
+                    with closing(self._connect()) as c:
+                        c.execute("UPDATE memory_interactive_queries SET state=?,result=? WHERE id=? AND state='running'",
+                                  (state, serialized, key))
+                    timing.emit('result_persist', 'ok', timing.elapsed(persisted))
+                    break
+                except sqlite3.OperationalError:
+                    if self.stop.wait(0.15):
+                        timing.emit('result_persist', 'interrupted', timing.elapsed(persisted))
+                        state = 'interrupted'
+                        return
+        finally:
+            timing.emit('job_total', 'ok' if state == 'completed' else state, timing.elapsed(started))
 
     @staticmethod
     def _wire(obj):
@@ -118,13 +132,13 @@ class QueryJobs:
     def _claim(self):
         with closing(self._connect()) as c:
             c.execute('BEGIN IMMEDIATE')
-            row = c.execute("SELECT id,arguments FROM memory_interactive_queries WHERE state='queued' ORDER BY created,id LIMIT 1").fetchone()
+            row = c.execute("SELECT id,arguments,created FROM memory_interactive_queries WHERE state='queued' ORDER BY created,id LIMIT 1").fetchone()
             if row:
                 c.execute("UPDATE memory_interactive_queries SET state='running' WHERE id=?", (row[0],))
             c.commit()
             return row
 
-    def _submission(self, arguments, request_key, ready=None, *, insert):
+    def _submission(self, arguments, request_key, ready=None, *, insert, proposed_id=None):
         with closing(self._connect()) as c:
             c.execute('BEGIN IMMEDIATE' if insert else 'BEGIN')
             row = c.execute('SELECT id,arguments FROM memory_interactive_queries WHERE request_key=?',
@@ -139,7 +153,7 @@ class QueryJobs:
                 return row[0]
             if not insert:
                 return None
-            key = uuid4().hex
+            key = proposed_id or uuid4().hex
             if ready is None:
                 c.execute("INSERT INTO memory_interactive_queries VALUES(?,?,?,'queued',NULL,?)",
                           (key, request_key, arguments, time.time()))
@@ -172,21 +186,38 @@ class QueryJobs:
         topic = arguments.get('query')
         if not isinstance(topic,str) or not topic.strip() or len(topic)>8000:
             raise ValueError('query must contain between 1 and 8000 characters')
+        started = time.monotonic()
         deadline = asyncio.get_running_loop().time() + self.wait_seconds
         wire = self._wire(arguments)
         key = await asyncio.to_thread(self._submission,wire,query_request_id,insert=False)
         if key is None:
+            proposed_id = uuid4().hex
+            probe_started = time.monotonic()
             try:
                 # This path never calls a model. It is bounded and may fall
                 # through to the worker if selection is unavailable/expensive.
                 direct = await asyncio.wait_for(asyncio.to_thread(self.ready,**arguments),
                                             min(1.0,max(0.01,deadline-asyncio.get_running_loop().time())))
-            except (TimeoutError, sqlite3.OperationalError):
+            except (TimeoutError, sqlite3.OperationalError) as failure:
                 direct = None
+                probe_status = 'timeout' if isinstance(failure, TimeoutError) else 'unavailable'
+            else:
+                probe_status = 'ready' if direct is not None else 'miss'
+            probe_ms = timing.elapsed(probe_started)
             if direct is not None and query_request_id is None:
+                with timing.bind(trace_id=proposed_id):
+                    timing.emit('ready_probe', probe_status, probe_ms)
+                    timing.emit('submission', 'ready', timing.elapsed(started))
                 return {**direct,'query_state':'completed'}
-            key = await asyncio.to_thread(self._submission,wire,query_request_id,direct,insert=True)
+            key = await asyncio.to_thread(self._submission,wire,query_request_id,direct,insert=True,proposed_id=proposed_id)
+            with timing.bind(trace_id=key):
+                timing.emit('ready_probe', probe_status, probe_ms)
+                timing.emit('submission', ('reused' if key != proposed_id else 'ready'
+                            if direct is not None else 'queued'), timing.elapsed(started))
             self.signal.set()
+        else:
+            with timing.bind(trace_id=key):
+                timing.emit('submission', 'reused', timing.elapsed(started))
         while True:
             result = await asyncio.to_thread(self._read,key)
             remaining = deadline-asyncio.get_running_loop().time()

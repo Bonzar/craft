@@ -1,0 +1,52 @@
+# One instance per lane. Do not import a second journal input or stdout output.
+service:
+  flush: 5
+  log_level: warn
+  storage.path: "${MEMORY_MONIUM_STATE}/spool"
+
+parsers:
+  - name: memory_query_timing_json
+    format: json
+
+pipeline:
+  inputs:
+    - name: systemd
+      tag: memory.query.timing
+      systemd_filter: "_SYSTEMD_UNIT=${MEMORY_QUERY_UNIT}"
+      read_from_tail: true
+      db: "${MEMORY_MONIUM_STATE}/journal.db"
+      storage.type: filesystem
+
+  filters:
+    - name: grep
+      match: memory.query.timing
+      regex: 'MESSAGE ^\{.*"event":"memory_query_timing"'
+    - name: parser
+      match: memory.query.timing
+      key_name: MESSAGE
+      parser: memory_query_timing_json
+      preserve_key: false
+      reserve_data: false
+    - name: lua
+      match: memory.query.timing
+      script: "${MEMORY_MONIUM_CONFIG}/monium-redact.lua"
+      call: project_memory_query_timing
+      type_int_key: schema_version duration_ms signal_count
+
+  outputs:
+    - name: opentelemetry
+      match: memory.query.timing
+      host: ingest.monium.yandex.cloud
+      port: 443
+      tls: true
+      tls.verify: true
+      tls.verify_hostname: true
+      compress: gzip
+      logs_uri: /otlp/v1/logs
+      logs_body_key: message
+      logs_body_key_attributes: true
+      storage.total_limit_size: 16M
+      retry_limit: 'no_limits'
+      header:
+        - "Authorization Api-Key ${MONIUM_API_KEY}"
+        - "x-monium-project ${MONIUM_PROJECT}"

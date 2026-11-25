@@ -682,8 +682,12 @@ def _register_source_tools(mcp,service):
 
 def _query_with_connection(config, query, scope, valid_as_of, recorded_as_of, request_session_id=None):
     """A slow model call never borrows the stdio event loop's SQLite connection."""
-    with MemoryStore(config.db) as store:
-        service = config.service(store)
+    from . import query_timing as timing
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        with timing.span('service_setup'):
+            store = stack.enter_context(MemoryStore(config.db))
+            service = config.service(store)
         return service.query(query, scope, valid_as_of, recorded_as_of,request_session_id=request_session_id)
 
 
