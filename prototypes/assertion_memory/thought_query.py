@@ -92,7 +92,8 @@ def _locate(engine, frame):
 def _step(engine, frame):
     if frame.selected is not None:
         return answer_selected(engine, frame.question, frame.selected, neighborhood=neighborhood,
-            additional=frame.additional, seen_packets=frame.packets, raw_material=frame.raw)
+            additional=frame.additional, seen_packets=frame.packets, raw_material=frame.raw,
+            allow_partial=frame.guidance is None)
     records, bases = frame.raw
     for thought in frame.additional:
         records, bases = engine._merge_material(records, bases,

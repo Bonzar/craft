@@ -510,7 +510,9 @@ def _register_read_tools(mcp, service, config, launcher=None, query_jobs=None):
         knowledge_limit_notice and notice_payload_complete=true explains only the base's knowledge limit.
         Show that notice even if answer_accepted and answer_payload_complete remain false; no missing
         notice page or automatic retry is implied. It cannot establish world absence, event dates or
-        permission. With answer_error=semantic_review_rejected (in its code field),
+        permission. With partial_answer=true, the answer is retained evidence for only part of the
+        question. Preserve the limitation and missing_question; do not claim answer_accepted.
+        With answer_error=semantic_review_rejected (in its code field),
         drafting ended without an accepted answer. No draft was published and
         this says nothing about whether the underlying facts exist.
         The same query/scope retains summary history. Optional request_session_id is an explicit

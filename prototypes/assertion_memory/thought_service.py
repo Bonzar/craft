@@ -8,6 +8,7 @@ from dataclasses import asdict
 from .model import ModelProviderUnavailable, SemanticUnavailable
 from .service import MemoryService, _text_page, _request_usage
 from .storage import background_write_retry
+from .thought_answering import PartialMemoryAnswer
 from .thought_engine import ThoughtEngine
 from .thought_engine_contract import SemanticReviewRejected, thought_drafts
 from .thought_store import ThoughtStore
@@ -147,6 +148,14 @@ class ThoughtService(MemoryService):
                 result = {'answer': None, 'answer_accepted': False, 'answer_payload_complete': True,
                           'answer_continuations': [], 'run_id': trace.id,
                           'answer_error': {'code': error.code, 'message': 'Модель Codex недоступна.'}}
+            except PartialMemoryAnswer as partial:
+                trace.record('query_outcome', details={'answer_accepted':False, 'partial_answer':True,
+                    'missing_question':partial.missing_question,'thought_id':partial.thought.id})
+                trace.finish('knowledge_limit')
+                result = self._answer_payload(partial.thought,scope,valid_as_of,recorded_as_of)
+                result.update(answer_accepted=False,partial_answer=True,run_id=trace.id,
+                    knowledge_limit='В проверенных материалах нет подтверждения для части вопроса.',
+                    missing_question=partial.missing_question)
             except SemanticUnavailable as error:
                 trace.record('knowledge_limit', details={'reason': str(error)})
                 trace.finish('knowledge_limit')

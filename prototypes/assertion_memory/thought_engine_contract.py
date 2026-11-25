@@ -590,10 +590,10 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
         semantic_text(response.get('question'), 'question', nullable=True)
     else:
         exact_fields(response, {'verdict', 'text', 'question'} if task == 'Check ready thought' else {'verdict', 'text'})
-        verdicts = ('ready', 'build', 'drill') if task == 'Check ready thought' else ('accept', 'reject')
+        verdicts = ('ready', 'build', 'drill', 'lookup', 'partial') if task == 'Check ready thought' else ('accept', 'reject')
         if response.get('verdict') not in verdicts:
             raise ModelError('thought response has an invalid verdict')
-        if response.get('verdict') == 'drill':
+        if response.get('verdict') in ('drill','lookup','partial'):
             semantic_text(response.get('question'), 'question')
     semantic_text(response.get('text'))
 
