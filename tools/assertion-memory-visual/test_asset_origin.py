@@ -167,6 +167,12 @@ class OriginTest(unittest.TestCase):
         snapshot.update(stage='test',_status=302)
         self.assertEqual(ask()[0],503)
         snapshot['processing_control']['can_change']=True
+        code,_,data=ask()
+        self.assertEqual(code,200)
+        legacy=json.loads(data)
+        self.assertIs(legacy['processing_control']['can_change'],False)
+        self.assertEqual(legacy['capabilities'],{'live':False})
+        snapshot['processing_control']['can_change']='yes'
         self.assertEqual(ask()[0],503)
         snapshot['processing_control']['can_change']=False
         snapshot['queues']=[dict(id='source',status='active',ordering='available_at_then_id',

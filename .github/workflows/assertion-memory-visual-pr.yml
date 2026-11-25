@@ -23,6 +23,8 @@ jobs:
           persist-credentials: false
       - run: |
           python3 -B tools/assertion-memory-visual/test_asset_origin.py
+          python3 -B -m unittest discover -s tools/assertion-memory-visual -p 'test_standalone_origin.py'
+          python3 -B -m unittest discover -s tools/assertion-memory-visual -p 'test_standalone_pause.py'
           python3 -B tools/assertion-memory-visual/test_runtime_companion.py
           python3 -B tools/assertion-memory-visual/test_standalone_bundle.py
           python3 -B tools/assertion-memory-visual/test_packed_release.py

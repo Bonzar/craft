@@ -6,8 +6,9 @@ the same runtime code for TEST and PROD, with distinct protected ports and
 credentials. It consumes the queue from that lane's local REST Base, and
 uses only the lane's separately authenticated local Graph HTTP reader for
 legacy graph/search/SSE. No raw Base SQLite file or protocol code is opened
-by Visual. This is the read-only slice; old private Sites routes and MCP
-are untouched, and Visual gains no pause/reset/enrollment write authority.
+by Visual. The default remains read-only; old private Sites routes and MCP are
+untouched. Optional pause authority is documented separately below. Reset
+and enrollment are not supported.
 
 ## One artifact
 
@@ -82,3 +83,58 @@ atomic active pointer. A direct request for inactive retained HTML, JS or CSS
 returns 404. A protected GitHub rollback changes the active pointer first.
 The legacy Sites asset protocol retains its current digest compatibility
 until cutover.
+
+## Optional owner-only pause and resume
+
+The same package supports both lanes, with its pause capability off by
+default. Database reset, device enrollment and application writes are not
+part of this feature. Roll out the compatible Base queue-pause REST endpoint
+first. Visual validates the exact configured stage and in protected service
+startup permits pause only against Base on 127.0.0.1:8893 (TEST) or
+127.0.0.1:8903 (PROD). Base's pause handler is not routed publicly.
+
+For each lane, bootstrap the dedicated HTTPS owner vhost and verify the
+owner authenticator before mounting mutation paths. On the exact
+capabilities-read, POST `/api/v1/processing/pause/prepare` and PUT
+`/api/v1/processing/pause` locations, remove any inbound
+`X-Memory-Visual-Pause-Owner-Ingress` instances and set exactly one new value
+from the proxy's private per-lane credential **only after successful
+authentication of the configured owner**. Never populate it from an inbound
+header, cookie or unverified identity. Suppress this header elsewhere. For
+example, static Nginx `proxy_set_header` replacement belongs only in exact
+locations with their own required owner auth, not a generic API catch-all.
+Use both ingress markers and preserve the browser Origin for the request
+check. Deny cross-site and non-owner calls; do not expose the Visual loopback
+listener to any other ingress. Leave Graph GET and SSE behavior unchanged.
+
+Mount the six protected Visual service credentials using the existing
+service credential mechanism, only readable by the intended service
+identity (one set per lane; no source/CLI arguments/browser secrets):
+
+| File | Purpose |
+| --- | --- |
+| `pause-owner-ingress-token` | dedicated opaque marker installed by the owner-auth proxy |
+| `pause-owner-digest` | expected single owner digest, also pinned by Base |
+| `pause-read-token` | local GET pause readiness/state only |
+| `pause-write-token` | local PUT, accepted only with the signed owner proof |
+| `pause-csrf-key` | lane/origin/revision-bound short-lived browser proof |
+| `pause-proof-key` | exact-request HMAC secret shared only with Base's pause verifier |
+
+Each value is 64 lowercase hex (the two key files decode to 32 bytes).
+The read/write fingerprints belong to that lane's Base config; the write
+operation is always checked with a fresh nonce and compared against the
+current revision inside Base's transaction. No credentials or owner claims
+from the browser are forwarded to Base. A successfully authenticated UI
+only shows the button after the real prepared state matches its queue
+snapshot. Base still makes the final decision; 409 refreshes, 503 never
+looks successful. Pausing affects new source/maintenance claims only, not
+interactive requests or already leased work.
+
+After proving the exact proxy and Base authority, explicitly set
+`MEMORY_VISUAL_STANDALONE_PAUSE=1` in that lane's protected service drop-in;
+otherwise the routes remain unavailable. Prove from the real owner URL:
+nonowner/foreign Origin/forged marker denied, owner pause and resume each
+return a changed revision and persist, stale revision fails, graph/SSE and
+interactive work remain usable. Test this on TEST before independently
+provisioning and verifying PROD. If any check fails remove the opt-in and
+the dedicated proxy locations; leave normal read routes and Sites untouched.
