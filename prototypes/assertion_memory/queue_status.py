@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+from . import thought_processing_selection
 from .thought_processing_selection import (
     maintenance_predicate,
     normalize_session_ids,
@@ -46,7 +47,8 @@ def _page(db, select, args, *, queue_id, status, ordering, limit, offset, exists
 
 def build_queue_status(connection, *, release_version, stage, processing_session_ids,
                        model_configured, interactive_enabled, now=None, limit=50, offset=0,
-                       max_attempts=3, source_expires_exhausted=True, queue_id=None):
+                       max_attempts=3, source_expires_exhausted=True, queue_id=None,
+                       auto_process_fresh_mac=False):
     """Return independent queues and their current claim order, never jobs' contents.
 
     Callers supply trusted deployment metadata and the hosted scheduler configuration.
@@ -66,12 +68,24 @@ def build_queue_status(connection, *, release_version, stage, processing_session
     if not isinstance(now, datetime) or now.utcoffset() is None:
         raise ValueError('timezone-aware snapshot timestamp required')
     stamp = now.astimezone(timezone.utc).isoformat(timespec='microseconds')
+    if type(auto_process_fresh_mac) is not bool or (auto_process_fresh_mac and ids != ()):
+        raise ValueError('fresh Mac auto-processing requires an empty ordinary selector')
+    fresh_selector = getattr(thought_processing_selection, 'FRESH_MAC_ONLY', None)
+    if auto_process_fresh_mac and fresh_selector is None:
+        raise ValueError('fresh Mac auto-processing is not in this release')
     processing = 'unavailable' if not model_configured else 'paused' if ids == () else 'active'
     allowed = processing == 'active'
+    source_mode = ('active' if model_configured else 'unavailable') if auto_process_fresh_mac else processing
     page = dict(limit=limit, offset=offset)
     queues = []
     if queue_id in (None, 'source'):
-        selected, args = source_predicate(ids, 'e')
+        # Fresh-only mode replaces, rather than supplements, the ordinary source
+        # selector. Its registration table is absent until the first opted-in stream.
+        if auto_process_fresh_mac:
+            selected, args = (source_predicate(fresh_selector, 'e')
+                if _has(connection, 'memory_fresh_mac_events') else ('0', []))
+        else:
+            selected, args = source_predicate(ids, 'e')
         exists = _has(connection, 'memory_capture_jobs', 'memory_raw_events')
         queues.append(_page(connection, f"""
             SELECT j.id, CASE
@@ -86,8 +100,8 @@ def build_queue_status(connection, *, release_version, stage, processing_session
                 j.available_at AS available
             FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id
             WHERE j.status IN ('pending','running','waiting_model','waiting_origin')
-        """, (stamp, allowed, *args, source_expires_exhausted, max_attempts, stamp),
-            queue_id='source', status=processing, ordering='available_at_then_id',
+        """, (stamp, source_mode == 'active', *args, source_expires_exhausted, max_attempts, stamp),
+            queue_id='source', status=source_mode, ordering='available_at_then_id',
             exists=exists, **page))
     if queue_id in (None, 'maintenance'):
         selected, args = maintenance_predicate(connection, ids, 'w')
