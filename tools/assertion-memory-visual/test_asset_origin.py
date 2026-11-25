@@ -79,6 +79,28 @@ class OriginTest(unittest.TestCase):
         self.assertIn(b'400',self.raw(h+b'Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}'))
         self.assertIn(b'400',self.raw(h+b'Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n'))
 
+    def test_stale_archive_never_served_even_if_left_on_disk(self):
+        prior=self.release
+        edited={**ORIGINAL,'index.html':b'<html>current fixture</html>'}
+        new_manifest=json.dumps({name:origin.digest(value) for name,value in sorted(edited.items())},
+                               separators=(',', ':')).encode()+b'\n'
+        live=origin.digest(new_manifest)
+        candidate=self.root/'releases'/live
+        (candidate/'assets').mkdir(parents=True)
+        (candidate/'manifest.json').write_bytes(new_manifest)
+        for name,data in edited.items():
+            (candidate/name).write_bytes(data)
+        (self.root/'current').unlink()
+        (self.root/'current').symlink_to(candidate)
+        for name in ORIGINAL:
+            no_old=self.request(json.dumps({'op':'asset','digest':prior,'name':name}))
+            self.assertEqual((no_old[0],no_old[2]),(410,b''))
+        self.assertTrue(self.directory.exists())
+        code, _, body=self.request(json.dumps({'op':'asset','digest':live,'name':'index.html'}))
+        self.assertEqual((code,body),(200,edited['index.html']))
+        (candidate/'manifest.json').write_bytes(new_manifest+b' ')
+        self.assertEqual(self.request(json.dumps({'op':'asset','digest':prior,'name':'index.html'}))[0],404)
+
     def test_hash_mime_exact_bytes_and_tamper(self):
         code, head, body = self.request()
         self.assertEqual((code,head['Content-Type'],json.loads(body)),(200,'application/json',{'digest':self.release}))
@@ -92,13 +114,13 @@ class OriginTest(unittest.TestCase):
         request = lambda name, dig=self.release: self.request(value=json.dumps({'op':'asset','name':name,'digest':dig}))[0]
         self.assertEqual(request('index.html','F'*64),400)
         self.assertEqual(request('assets/../../secret'),400)
-        self.assertEqual(request('index.html','f'*64),404)
+        self.assertEqual(request('index.html','f'*64),410)
         (self.directory/'index.html').write_bytes(b'changed')
         self.assertEqual(request('index.html'),404)
         (self.directory/'manifest.json').write_bytes(self.manifest+b' ')
         self.assertEqual(self.request()[0],404)
 
-    def test_atomic_link_in_scope_only_and_pinned_asset_survives(self):
+    def test_pointer_scope_controls_all_visual_assets(self):
         current = self.root/'current'
         fixed_asset=json.dumps({'op':'asset','name':'index.html','digest':self.release})
         current.unlink()
@@ -107,7 +129,7 @@ class OriginTest(unittest.TestCase):
         current.unlink()
         current.symlink_to(Path('/tmp/another-scope/releases')/self.release)
         self.assertEqual(self.request()[0],404)
-        self.assertEqual(self.request(value=fixed_asset)[0],200)
+        self.assertEqual(self.request(value=fixed_asset)[0],404)
         current.unlink()
         current.symlink_to(Path('releases')/self.release)
         self.assertEqual(self.request()[0],200)

@@ -86,9 +86,49 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual((self.root/'current').readlink(),self.root/'releases'/SEED_ID)
         self.assertNotIn('synthetic release B',(self.root/'current'/'index.html').read_text())
         self.assertFalse((self.root/release_core.PENDING).exists())
-        # A later valid request can select the new artifact; old URL keeps the original.
+        # A later valid request selects the new artifact and only then prunes the prior.
         self.assertEqual(deploy_verified(io.BytesIO(b),hash_bytes(b),root=self.root),b_id)
-        self.assertNotIn('synthetic release B',(self.root/'releases'/SEED_ID/'index.html').read_text())
+        self.assertFalse((self.root/'releases'/SEED_ID).exists())
+        self.assertEqual({x.name for x in (self.root/'releases').iterdir()},{b_id})
+        # Redeploy the archived immutable older release bytes; no local history needed.
+        self.deploy_seed()
+        self.assertFalse((self.root/'releases'/b_id).exists())
+        self.assertEqual({x.name for x in (self.root/'releases').iterdir()},{SEED_ID})
+
+    def test_cleanup_does_not_follow_symlinks_or_remove_unverified_state(self):
+        self.deploy_seed()
+        unknown=self.root/'releases'/('f'*64)
+        unknown.mkdir()
+        (unknown/'source').write_text('outside the visual payload policy')
+        elsewhere=self.root/'separate-state'
+        elsewhere.mkdir()
+        (elsewhere/'keep').write_text('not a visual asset')
+        link=self.root/'releases'/('e'*64)
+        link.symlink_to(elsewhere)
+        b,b_id=variant(self.seed)
+        self.assertEqual(deploy_verified(io.BytesIO(b),hash_bytes(b),root=self.root),b_id)
+        self.assertTrue((unknown/'source').is_file())
+        self.assertTrue(link.is_symlink())
+        self.assertTrue((elsewhere/'keep').is_file())
+        self.assertFalse((self.root/'releases'/SEED_ID).exists())
+        self.assertEqual((self.root/'current').resolve(),(self.root/'releases'/b_id).resolve())
+
+    def test_cleanup_observes_committed_pointer_under_existing_writer_fence(self):
+        import fcntl
+        from unittest.mock import patch
+        from visual_policy import prune_inactive_visual
+        observed=[]
+        def check(root,active):
+            self.assertEqual((root/'current').readlink(),active)
+            self.assertFalse((root/release_core.PENDING).exists())
+            with (root/'deploy.lock').open('rb') as another:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(another,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            observed.append(active.name)
+            prune_inactive_visual(root,active)
+        with patch('visual_policy.prune_inactive_visual',side_effect=check):
+            self.deploy_seed()
+        self.assertEqual(observed,[SEED_ID])
 
 
 if __name__=='__main__': unittest.main()

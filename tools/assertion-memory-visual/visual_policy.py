@@ -6,8 +6,11 @@ candidate before choosing its immutable release key.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import stat
 
 MAX_ARCHIVE_BYTES = 5_000_000
 MAX_MEMBER_BYTES = 2_400_000
@@ -100,8 +103,48 @@ def archive_spec():
         accept_member=accept_member, allow_dirs=False)
 
 
+def prune_inactive_visual(root, active):
+    """After committed activation, under the existing per-stage deploy lock."""
+    import release_core
+    if (not shutil.rmtree.avoids_symlink_attacks or release_core.current_target(root) != str(active)
+            or validate(active,allow_prepared=True) != active.name or not release_core.is_prepared(active)):
+        raise ValueError('visual_retention_current_unverified')
+    try:
+        (root/release_core.PENDING).lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError('visual_retention_pending_activation')
+    releases=root/'releases'
+    fd=os.open(releases,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        parent=os.fstat(fd)
+        for name in sorted(os.listdir(fd)):
+            if name == active.name or not HEX.fullmatch(name):
+                continue
+            item=os.stat(name,dir_fd=fd,follow_symlinks=False)
+            candidate=releases/name
+            if (not stat.S_ISDIR(item.st_mode) or item.st_uid!=os.geteuid()
+                    or item.st_dev!=parent.st_dev or not release_core.is_prepared(candidate)):
+                continue
+            try:
+                valid=validate(candidate,allow_prepared=True)==name
+            except (ValueError, OSError):
+                valid=False
+            if not valid:
+                continue   # Unknown, untrusted, or already altered; never remove.
+            if (release_core.current_target(root)!=str(active)
+                    or not os.path.samestat(item,os.stat(name,dir_fd=fd,follow_symlinks=False))
+                    or not os.path.samestat(parent,releases.lstat())):
+                raise ValueError('visual_retention_identity_changed')
+            shutil.rmtree(name,dir_fd=fd)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def deploy_verified(stream, expected_sha, *, root):
     """Apply the product adapter after caller verifies its environment/signature authority."""
     import release_core
     return release_core.deploy(stream, expected_sha, root=Path(root), spec=archive_spec(),
-        validate=validate, hook=make_hook(root), retained=retained)
+        validate=validate, hook=make_hook(root), retained=retained, after_committed=prune_inactive_visual)
