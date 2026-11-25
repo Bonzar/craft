@@ -21,16 +21,21 @@ async def canonical_exchange(req):
     from prototypes.assertion_memory.release_catalog import export
     from prototypes.assertion_memory.storage import MemoryStore
     from compile_functional_release import compile_release
+    from private_host import private_sites_profile
     lane=req['path'].split('-')[2]
     source=await export('a'*40)
     pins={k:source[k] for k in ('revision','module_sha256','schema_sha256')}
     pins['registry']='base-typed-operations-v1'
     full=compile_release(source,pins,effects=True)
     narrow=compile_release(source,pins,effects=False)
-    profile={'lane':lane,'base_release':'assertion-memory-v9.9.9',
-             'catalog_sha256':full['catalog_sha256'],'read_catalog_sha256':narrow['catalog_sha256'],
-             'enabled_capabilities':['baseline_read','intake_process'],'require_catalog_identity':True,
-             'sites_full_catalog':req['variant']=='full'}
+    profile=private_sites_profile(lane,'assertion-memory-v9.9.9',
+                                  ['baseline_read','intake_process'],full)
+    assert profile['sites_full_catalog']
+    assert not private_sites_profile(lane,'assertion-memory-v9.9.9',['baseline_read'],narrow)['sites_full_catalog']
+    profile['read_catalog_sha256']=narrow['catalog_sha256']
+    if req['variant']=='locked-down':
+        profile['sites_full_catalog']=False  # Previous release shape, on the same routes.
+
     with tempfile.TemporaryDirectory() as folder:
         config=ServiceConfig(str(Path(folder)/'synthetic.sqlite3'),'none')
         with MemoryStore(config.db) as db:
