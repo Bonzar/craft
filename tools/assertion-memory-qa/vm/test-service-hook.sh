@@ -6,6 +6,15 @@ root=/srv/assertion-release/test
 state=$root/state
 release=$2
 units=(assertion-test-deploy-graph.service assertion-test-deploy-mcp.service)
+gate=/etc/assertion-release/test/test-sites-graph-gate.py
+gate_config=/etc/assertion-release/test/sites-graph-gate.json
+canonical=false
+if [[ -e "$gate_config" || -L "$gate_config" ]]; then
+  [[ -f "$gate_config" && ! -L "$gate_config" && $(stat -c '%u:%a:%h' -- "$gate_config") == 0:644:1 ]]
+  [[ -f "$gate" && ! -L "$gate" && $(stat -c '%u:%a:%h' -- "$gate") == 0:644:1 ]]
+  canonical=true
+  units=(assertion-test-deploy-mcp.service)
+fi
 case "$1" in
 prepare)
   [[ "$release" == "$root/releases/"* && -f "$release/requirements-graph-lexical.txt" ]]
@@ -18,16 +27,22 @@ prepare)
   ;;
 restart|restore)
   systemctl --user restart "${units[@]}"
+  if "$canonical"; then /usr/bin/python3 -I -B "$gate" restart "$release"; fi
   ;;
 smoke)
   cd "$release"
   for attempt in 1 2 3 4 5; do
-    if "$release/venv/bin/python" -B /etc/assertion-release/test/test-health.py smoke "$state"; then exit 0; fi
+    if "$canonical"; then
+      if "$release/venv/bin/python" -B /etc/assertion-release/test/test-health.py smoke-mcp "$state" &&
+           /usr/bin/python3 -I -B "$gate" smoke "$release"; then exit 0; fi
+    elif "$release/venv/bin/python" -B /etc/assertion-release/test/test-health.py smoke "$state"; then exit 0
+    fi
     sleep 1
   done
   exit 1
   ;;
 stop)
+  if "$canonical"; then /usr/bin/python3 -I -B "$gate" stop "$release"; fi
   systemctl --user stop "${units[@]}"
   ;;
 *)

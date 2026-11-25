@@ -99,9 +99,13 @@ def graph(client, password, *, deadline_seconds=15):
             require(total==count*stride,'TEST graph buffer does not match layout')
 
 
-def smoke(state):
+def smoke_mcp(state):
     with httpx.Client(base_url='http://localhost:8893', trust_env=False, timeout=3) as client:
         mcp(client,(state/'mcp-token').read_text().strip())
+
+
+def smoke(state):
+    smoke_mcp(state)
     with httpx.Client(base_url='http://localhost:8891', trust_env=False, timeout=3) as client:
         graph(client,(state/'graph-password').read_text().strip())
     print('Authenticated TEST MCP schema and graph layout healthy; no data or model requests.')
@@ -109,12 +113,12 @@ def smoke(state):
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('action',choices=('initialize','smoke'))
+    p.add_argument('action',choices=('initialize','smoke','smoke-mcp'))
     p.add_argument('state',type=Path)
     args=p.parse_args()
     require(args.state==STATE and args.state.resolve(strict=True)==STATE
             and pwd.getpwuid(os.getuid()).pw_name=='assertion-test-deploy','Wrong TEST service identity')
-    {'initialize':initialize,'smoke':smoke}[args.action](STATE)
+    {'initialize':initialize,'smoke':smoke,'smoke-mcp':smoke_mcp}[args.action](STATE)
 
 
 if __name__=='__main__':
