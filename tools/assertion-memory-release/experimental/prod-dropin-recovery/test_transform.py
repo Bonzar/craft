@@ -1,4 +1,4 @@
-import hashlib, hmac, os, pathlib, re, stat, types, unittest
+import hashlib, os, pathlib, re, stat, types, unittest
 from unittest.mock import patch
 
 class UntrustedUnitDropIn(ValueError): pass
@@ -16,8 +16,15 @@ class Transform(unittest.TestCase):
         def checked_file(path, **kwargs):
             if path not in self.file: raise FileNotFoundError
             return self.file[path]
+        from render_hook import render
+        original=b"""def trusted_unit_dropins(unit, raw):
+    return checked_file(MCP_DROPIN_PIN) and MCP_APPROVED_DROPIN and UNITS and UntrustedUnitDropIn
+"""
+        replacement=pathlib.Path(__file__).with_name('transform_policy.txt').read_text()
+        candidate=render(original,hashlib.sha256(original).hexdigest(),replacement)
         self.scope=globals()|{'checked_file':checked_file}
-        exec(pathlib.Path('transform_policy.txt').read_text(),self.scope)
+        self.assertNotIn("hmac",self.scope)
+        exec(candidate,self.scope)
         self.mon=self.scope['MCP_MONIUM_DROPIN']
         self.monpin=self.scope['MCP_MONIUM_PIN']
         self.f=self.scope['trusted_unit_dropins']
