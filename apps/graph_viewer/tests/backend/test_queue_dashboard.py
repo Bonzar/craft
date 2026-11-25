@@ -1,6 +1,8 @@
 """Existing authenticated capabilities bridge and bounded live queue behavior."""
 import asyncio
 import fcntl
+import json
+from contextlib import nullcontext
 import os
 from collections import deque
 from pathlib import Path
@@ -160,6 +162,83 @@ class QueueDashboardTest(unittest.TestCase):
                     next_release.mkdir()
                     (scoped/'current').symlink_to(next_release)
                     self.assertEqual(c.get(endpoint,headers=headers).status_code,503)
+
+    def test_prod_reader_uses_separate_root_pinned_uid_and_current_scope(self):
+        run=self.root/'projection'
+        directory=run/'prod'
+        directory.mkdir(parents=True,mode=0o750)
+        directory.chmod(0o750)
+        scoped=self.root/'production'
+        revision,archive='3'*40,'4'*64
+        active=scoped/'releases'/(revision+'-'+archive)
+        active.mkdir(parents=True)
+        (scoped/'current').symlink_to(active,target_is_directory=True)
+        uid=os.getuid()
+        policy=self.root/'policy.json'
+        policy.write_text(json.dumps({'stage':'prod','account':'existing-graph','uid':uid}))
+        policy.chmod(0o644)
+        stagekey=queue_dashboard.DASHBOARD_STAGE_ENV
+        pathkey=queue_dashboard.DASHBOARD_PATH_ENV
+        env={stagekey:'prod',pathkey:str(directory/'scheduler.json')}
+        graph_cfg={'password':'synthetic-owner-strong','public_origin':ORIGIN,
+                   'allowed_proxy_hosts':[GATEWAY],'bridge_read_token_file':self.key}
+        h={'origin':ORIGIN,'authorization':'Bearer '+'c'*64}
+        source=SimpleNamespace(db=str(self.path),provider='codex',
+            processing_session_ids=('session',),auto_process_fresh_mac=False)
+        self.seed()
+        tested_policy=queue_dashboard._prod_reader_uid
+        with patch.object(queue_dashboard.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=uid)), \
+             patch.object(dashboard_projection,'RUN',run), \
+             patch.object(queue_dashboard,'PROD_READER_POLICY',policy), \
+             patch.object(queue_dashboard,'_prod_reader_uid',side_effect=lambda p:tested_policy(p,policy_owner=uid)), \
+             patch.object(queue_dashboard,'PROD_DEPLOY_ROOT',scoped), \
+             patch.object(queue_dashboard,'SCOPES',{'prod':('publisher',self.path)}), \
+             patch.object(queue_dashboard,'LOADED_RELEASE',active), \
+             patch.object(queue_dashboard,'_prod_read_fence',nullcontext):
+            self.assertEqual(tested_policy(policy,policy_owner=uid),uid)
+            policy.chmod(0o664)
+            self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.path,env=env))
+            policy.chmod(0o644)
+            self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.path,env={
+                **env,pathkey:str(run/'test'/'scheduler.json')}))
+            self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.root/'other',env=env))
+            with patch.object(queue_dashboard.os,'geteuid',return_value=uid+1):
+                self.assertIsNone(queue_dashboard.configured_for_legacy_reader(self.path,env=env))
+            with patch.dict(os.environ,env,clear=False):
+                app=create_app(self.path,self.root/'web-prod',**graph_cfg)
+            self.assertEqual(app.state.queue_dashboard.stage,'prod')
+            path='/api/v1/capabilities?queue_status=1'
+            gen=dashboard_projection.release_generation(revision,archive,TAG,'prod')
+            with TestClient(app,base_url='https://'+GATEWAY) as c:
+                self.assertEqual(c.get(path,headers=h).status_code,503)
+                self.assertEqual(c.get(path).status_code,401)
+                self.assertEqual(c.put('/api/v1/processing/pause',headers=h,json={}).status_code,401)
+                with dashboard_projection.publish(stage='prod',config=source,release=TAG,
+                    generation=gen,interactive_enabled=True):
+                    answer=c.get(path,headers=h)
+                    self.assertEqual(answer.status_code,200,answer.text)
+                    self.assertEqual(answer.json()['stage'],'prod')
+                    self.assertEqual(answer.json()['release_generation'],gen)
+                    self.assertNotIn('DO NOT LEAK',answer.text)
+                    policy.unlink()
+                    self.assertEqual(c.get(path,headers=h).status_code,503)
+
+    def test_prod_dashboard_uses_shared_lane_fence_not_write_or_replace(self):
+        parent=self.root/'root-transition'
+        parent.mkdir(mode=0o755)
+        parent.chmod(0o755)
+        fence=parent/'fence.lock'
+        fence.touch(mode=0o644)
+        fence.chmod(0o644)
+        with queue_dashboard._prod_read_fence(fence,owner=os.getuid()):
+            with fence.open('rb') as f:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        fence.unlink()
+        with self.assertRaises(FileNotFoundError):
+            with queue_dashboard._prod_read_fence(fence,owner=os.getuid()):
+                pass
+        self.assertFalse(fence.exists())
 
     def test_owner_scope_and_actual_scheduler_rows_through_existing_path(self):
         self.seed()

@@ -291,8 +291,8 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
         raise ValueError('Queue control requires an explicit owner web dashboard')
     if queue_dashboard is None:
-        from .queue_dashboard import configured_for_legacy_test_reader
-        queue_dashboard = configured_for_legacy_test_reader(source_path)
+        from .queue_dashboard import configured_for_legacy_reader
+        queue_dashboard = configured_for_legacy_reader(source_path)
     static_dir=validate_static_directory(
         static_dir,state_dir,source_path,bridge_read_token_file,getattr(queue_dashboard,'config',None),
         getattr(source,'source_path',None),getattr(source,'path',None))
