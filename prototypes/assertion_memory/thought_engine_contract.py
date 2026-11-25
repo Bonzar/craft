@@ -593,6 +593,9 @@ def validate_response(task, response, *, support_count=None, single_thought=Fals
         verdicts = ('ready', 'build', 'drill', 'lookup', 'partial') if task == 'Check ready thought' else ('accept', 'reject')
         if response.get('verdict') not in verdicts:
             raise ModelError('thought response has an invalid verdict')
+        if (task == 'Check ready thought' and response['verdict'] == 'ready'
+                and ('question' not in response or response['question'] is not None)):
+            raise ModelError('ready cannot include an unresolved question')
         if response.get('verdict') in ('drill','lookup','partial'):
             semantic_text(response.get('question'), 'question')
     semantic_text(response.get('text'))

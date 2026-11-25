@@ -32,8 +32,8 @@ def _key(thought):
 def _frontier(engine, frame, selected):
     catalog = neighborhood(engine, selected, frame.question) if selected else None
     base = engine._frontier(frame.initial, selected.id if selected else None, *frame.raw)
-    # Old flat-search receipts cannot certify the new graph-neighborhood contract.
-    payload = ['central-graph-answer-v1', base,
+    # Old readiness receipts cannot certify explicit coverage under the new contract.
+    payload = ['central-graph-answer-v2', base,
                catalog['bindings'] if catalog else (), catalog['relations'] if catalog else (),
                catalog['omissions'] if catalog else ()]
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()

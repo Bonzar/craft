@@ -6,35 +6,42 @@ import json
 
 from .model import ModelError, SemanticUnavailable
 from .thought_engine import ThoughtDetailNeeded, empty_material
-from .thought_engine_contract import APPLICABILITY, exact_fields, semantic_text
+from .thought_engine_contract import CONTENT_RULES, exact_fields, semantic_text
 
-READINESS = APPLICABILITY + '''
-The candidate is the selected thought in full. Other records describe only its
-immediate neighbors, or explicitly found additional material. This is not a dump
-of search candidates. Respect questions as distinct semantic purposes.
-A neighbor_option is a navigation description. description_complete=false means
-its remaining content has NOT been read. It cannot establish missing facts or
-absence of exceptions. Known qualifications/conflicts are supplied immediately.
-Return ready only if the candidate itself already answers the original question
-with all material conditions and conflicts accounted for. A potentially material
-incomplete linked neighbor permits drill to read that known location. If the
-candidate answers a concrete part but a specific premise or fact remains
-unconfirmed, return lookup with a focused, searchable question for that gap.
-Use build with question=null only when existing visible evidence supports a
-materially fuller answer. Do not build just to repeat the candidate and note
-lack of confirmation.
-Only text fields are eligible support quotations; descriptions are routing hints.
-Never introduce source IDs, node aliases, indices or addresses in your response.
+_COVERAGE = CONTENT_RULES + '''
+Return only verdict, question, and a brief explanation as text. Do not compose
+an answer or treat your explanation as content that will be returned.
+Check each material part of the original question, including speaker, time,
+scope, exceptions, and what was actually confirmed. Topical similarity, a
+different occurrence, or silence does not establish a requested fact.
+A neighbor_option with description_complete=false is a routing hint, not
+fully read evidence. Only quoted text fields are eligible as evidence.
+Never invent source identifiers or facts.
 '''
 
+READINESS = _COVERAGE + '''
+Ready means the candidate's own text already explicitly answers ALL material
+parts of the original question and current context does not change the answer.
+The caller returns that exact text, discarding your explanation. If you need
+to add an answer or say a requested fact has not been established in the
+evidence, the candidate is NOT ready. Do not infer an answer from silence.
+For a material gap not supported by the visible full texts, return lookup
+with a focused question for that gap, even if you think a search will be empty.
+For a specific unread linked record that may resolve the gap, return drill
+with the missing question. If several fully read records together supply the
+answer but no single candidate does, return build with question=null.
+Do not build merely to restate a known fact and add an unresolved gap.
+For ready, set question=null.
+'''
 
-GAP_READINESS = READINESS + '''
-The bounded independent lookup is now finished; do not request another search.
-The missing question is labeled gap_question. Inspect only fully opened text and
-raw quotations. Choose build with question=null ONLY if the additional evidence
-actually resolves that gap. Otherwise choose partial with the exact unresolved
-question, even if the new text is topically similar. Missing evidence does not
-establish that the underlying fact is false. Do not put new facts in your reason.
+GAP_READINESS = _COVERAGE + '''
+The targeted search for the question labeled gap_question has finished.
+If the newly opened text provides evidence that resolves that specific gap
+and the combined evidence supports a fuller answer, return build with question=null.
+Otherwise return partial with the unresolved question, including when new
+records only repeat related facts or concern a different occurrence.
+Do not return ready, drill, or lookup. Do not infer the fact is false because
+the search found no evidence for it.
 '''
 
 
