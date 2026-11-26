@@ -86,6 +86,10 @@ class DynamicOwnerBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.resolver_test(header,(),lambda:values.pop(0)))
         self.assertFalse(self.resolver_test(header,(),lambda:values.pop(0)))
         self.assertFalse(self.resolver_test(header,('b'*64,),lambda:(managed,)))
+        def unavailable():
+            raise OSError('synthetic store unavailable')
+        self.assertTrue(self.resolver_test(header,(managed,),unavailable))
+        self.assertFalse(self.resolver_test(header,(),unavailable))
         calls=[]
         async def application(scope,receive,send):
             calls.append('downstream')

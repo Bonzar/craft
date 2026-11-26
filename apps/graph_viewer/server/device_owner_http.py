@@ -17,12 +17,13 @@ PATH='/api/v1/processing/devices'
 
 class DeviceOwnerHTTP:
     """Keep disabled without a trusted registry and existing release guard."""
-    def __init__(self, *, stage, registry, release_guard):
+    def __init__(self, *, stage, registry, release_guard, verified_identity):
         if (type(registry) is not MachineDeviceRegistry or registry.lane!=stage
-            or not callable(release_guard)):
+            or not callable(release_guard) or not callable(verified_identity)):
             raise ValueError('invalid stage device owner binding')
         self.registry=registry
         self.release_guard=release_guard
+        self.verified_identity=verified_identity
 
     def routes(self):
         return [Route(PATH,self.handle,methods=['GET','PUT'],name='owner-machine-devices'),
@@ -30,7 +31,17 @@ class DeviceOwnerHTTP:
 
     def _guarded(self, fun, *args):
         with self.release_guard():
-            return fun(*args)
+            try:
+                identity=self.verified_identity()
+            except (OSError,ValueError,KeyError):
+                raise MachineDeviceError('device_release_identity_unavailable') from None
+            value=fun(*args)
+            try:
+                if self.verified_identity()!=identity:
+                    raise ValueError()
+            except (OSError,ValueError,KeyError):
+                raise MachineDeviceError('device_release_identity_unavailable') from None
+            return value
 
     async def ready(self):
         try:

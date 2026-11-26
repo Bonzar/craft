@@ -119,10 +119,11 @@ class BrowserOwnerAPI:
         self.tickets=Tickets(clock)
         self._device_owner=None
 
-    def attach_machine_devices(self, registry, release_guard):
+    def attach_machine_devices(self, registry, release_guard, verified_identity):
         if self._device_owner is not None:
             raise ValueError('Device authority already attached')
-        self._device_owner=DeviceOwnerHTTP(stage=self.stage,registry=registry,release_guard=release_guard)
+        self._device_owner=DeviceOwnerHTTP(stage=self.stage,registry=registry,release_guard=release_guard,
+                                           verified_identity=verified_identity)
 
     def device_routes(self):
         return [] if self._device_owner is None else self._device_owner.routes()

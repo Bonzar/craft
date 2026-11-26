@@ -65,8 +65,10 @@ def machine_authorized(header, digests):
 def authorized_machine_request(header, static, resolver=None):
     if re.fullmatch(rb'Bearer [0-9a-f]{64}',header) is None:
         return False
+    if machine_authorized(header,static):
+        return True  # Existing fixed credentials never depend on the optional backend.
     if resolver is None:
-        return machine_authorized(header,static)
+        return False
     try:
         current=resolver()
         if (type(current) is not tuple or len(current)>16 or

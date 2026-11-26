@@ -36,13 +36,5 @@ def base_owner_browser(*, stage, config, verified_identity, release_lease, inter
 
     browser=BrowserOwnerAPI(stage=stage,perform=perform,queue_snapshot=project,clear_enabled=False,dashboard_live=False)
     if machine_devices is not None:
-        from contextlib import contextmanager
-        @contextmanager
-        def guard_devices():
-            with release_lease():
-                identity=verified_identity()
-                yield
-                if verified_identity()!=identity:
-                    raise ValueError('Base generation drift during owner device request')
-        browser.attach_machine_devices(machine_devices,guard_devices)
+        browser.attach_machine_devices(machine_devices,release_lease,verified_identity)
     return browser

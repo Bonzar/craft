@@ -29,7 +29,12 @@ class DeviceHTTP(unittest.IsolatedAsyncioTestCase):
                 queue_snapshot=lambda **kw:{'stage':'test','capabilities':{'owner_machine_devices_v1':True}})
             self.assertFalse(any(route.path==PATH for route in make_routes(browser)))
             self.assertFalse((await browser.snapshot(None,1,0)).body.count(b'owner_machine_devices_v1'))
-            browser.attach_machine_devices(registry,nullcontext)
+            serving={'ok':True}
+            def verified_identity():
+                if not serving['ok']:
+                    raise ValueError('stale fixture')
+                return ('synthetic-active-release','synthetic-generation')
+            browser.attach_machine_devices(registry,nullcontext,verified_identity)
             self.assertIn(b'owner_machine_devices_v1', (await browser.snapshot(None,1,0)).body)
             self.assertTrue(any(route.path==PATH for route in make_routes(browser)))
 
@@ -56,12 +61,22 @@ class DeviceHTTP(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(denied.status_code,403)
                 invalid=await client.post(PATH+'/prepare',json=body,headers=headers|{'x-csrf-token':'wrong'})
                 self.assertEqual(invalid.status_code,403)
+                serving['ok']=False
+                self.assertNotIn(b'owner_machine_devices_v1',(await browser.snapshot(None,1,0)).body)
+                blocked=await client.post(PATH+'/prepare',json=body,headers=headers)
+                self.assertEqual(blocked.status_code,503)
+                self.assertEqual(registry.machine_digests(),())
+                serving['ok']=True
                 prepared=await client.post(PATH+'/prepare',json=body,headers=headers)
                 self.assertEqual(prepared.status_code,200)
                 proof=headers|{'x-csrf-token':prepared.json()['operation_proof']}
                 client.cookies.set(COOKIE,second)
                 self.assertEqual((await client.put(PATH,json=body,headers=proof)).status_code,403)
                 client.cookies.set(COOKIE,cookie)
+                serving['ok']=False
+                self.assertEqual((await client.put(PATH,json=body,headers=proof)).status_code,503)
+                self.assertEqual(registry.machine_digests(),())
+                serving['ok']=True
                 self.assertEqual((await client.put(PATH,json=body,headers=proof)).status_code,200)
                 self.assertEqual((await client.put(PATH,json=body,headers=proof)).status_code,409)
                 self.assertEqual(registry.machine_digests(),('a'*64,))
