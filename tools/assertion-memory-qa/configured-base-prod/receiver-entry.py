@@ -12,7 +12,6 @@ sys.path.insert(0,'/etc/assertion-release/production/authorization')
 # Installed canonical Base payload and release transaction code are shared.
 sys.path.insert(1,'/etc/assertion-release/shared')
 from configured_base_prod_gate import receive
-from receive_authorized import activate_exact
 from reusable_proof import require
 from receiver_gate import exchange
 
@@ -41,6 +40,7 @@ def main():
         authorize=lambda frame:exchange(frame,socket_path=Path('/run/assertion-configured-base-prod-auth/production.sock'))
         binding=protected_binding()
         if binding is None:
+            from receive_authorized import activate_exact
             result=receive(sys.stdin.buffer,authorize,activate_exact)
         else:
             # Fixed, independently reviewable host integration; never run the

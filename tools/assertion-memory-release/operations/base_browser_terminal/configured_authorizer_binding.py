@@ -53,6 +53,8 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
     # Trusted, current root controller's exact protected phase callback.
     # Do not derive phase from an incoming deploy-owned request or journal.
     def pending():
+        if protected_marker_active() is not True:
+            raise ValueError('terminal publication not enabled')
         current=read_owned_record()
         _,admission,_=read_exact(current)
         if admission is None:
@@ -63,6 +65,8 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
         after=commit(expected,proven_root_request=req,terminal_receipt=replacement)
         return publish(expected=expected,replacement=after)
     def ack(*,expected_receipt):
+        if protected_marker_active() is not True:
+            raise ValueError('terminal publication not enabled')
         current=read_owned_record()
         digest=acknowledge_exact(current,expected_receipt=expected_receipt)
         acknowledge(expected_receipt=current) # re-fsync exact whole protected record

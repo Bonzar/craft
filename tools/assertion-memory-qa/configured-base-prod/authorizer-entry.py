@@ -20,7 +20,11 @@ PROTECTED=Path('/etc/assertion-release/configured-base-prod/base-terminal-bindin
 def protected_binding():
     import stat
     marker=Path('/etc/assertion-release/production/base-browser-listener.json')
-    if not (marker.exists() or marker.is_symlink()):
+    try:
+        PROTECTED.lstat()
+    except FileNotFoundError:
+        if marker.exists() or marker.is_symlink():
+            raise ValueError('protected marker requires installed Base binding')
         return None
     require(PROTECTED.resolve()==PROTECTED,'Wrong protected binding path')
     for directory in (PROTECTED,*PROTECTED.parents):
