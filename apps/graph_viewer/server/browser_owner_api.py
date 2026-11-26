@@ -1,6 +1,7 @@
 """Same-origin browser API on Base's Graph web listener, never the private MCP listener."""
 import asyncio
 from collections import OrderedDict
+from contextlib import ExitStack
 import hashlib
 import json
 import re
@@ -244,8 +245,31 @@ def configured_browser_api(dashboard, *, clear_enabled=False, prod_owner_bridge=
         from .prod_owner_bridge import ProdOwnerBridge
         if type(prod_owner_bridge) is not ProdOwnerBridge or clear_enabled is not False:
             raise ValueError('PROD browser owner API requires the existing private Base authority')
-        return BrowserOwnerAPI(stage='prod',perform=prod_owner_bridge.perform,
-                               queue_snapshot=prod_owner_bridge.queue_snapshot,clear_enabled=False)
+        from prototypes.assertion_memory.dashboard_projection import release_generation
+
+        def guarded(operation, *args, snapshot=False, **kwargs):
+            # Keep the transition fence through the private request; Base's
+            # separate release lease is nonblocking and acquired by Base itself.
+            with ExitStack() as stack:
+                try:
+                    stack.enter_context(dashboard.read_fence())
+                    revision, archive = dashboard.activation()
+                except (OSError, ValueError, KeyError):
+                    raise APIError('owner_api_unavailable','Graph reader authority unavailable',503) from None
+                result = operation(*args, **kwargs)
+                if snapshot and result['release_generation'] != release_generation(
+                        revision, archive, result['release_version'], 'prod'):
+                    raise APIError('owner_api_unavailable','Base release changed',503)
+                return result
+
+        def perform(action, args):
+            return guarded(prod_owner_bridge.perform, action, args)
+
+        def project(*, limit, offset):
+            return guarded(prod_owner_bridge.queue_snapshot, limit=limit, offset=offset, snapshot=True)
+
+        return BrowserOwnerAPI(stage='prod',perform=perform,
+                               queue_snapshot=project,clear_enabled=False)
     if dashboard.stage!='test' or prod_owner_bridge is not None:
         raise ValueError('Invalid Graph owner API lane')
     from prototypes.assertion_memory.queue_owner_domain import owner_operations

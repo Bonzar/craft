@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import contextmanager, nullcontext
 from email.message import Message
 import io
 import json
@@ -42,6 +43,8 @@ class ProdOwnerBridgeTests(TestCase):
     def test_prod_uses_existing_authority_and_does_not_touch_graph_sqlite(self):
         class NoGraphDatabase:
             stage='prod'
+            read_fence=staticmethod(nullcontext)
+            activation=staticmethod(lambda:('a'*40,'b'*64))
             @property
             def db(self):
                 raise AssertionError('Graph must not access the writer DB directly')
@@ -68,6 +71,54 @@ class ProdOwnerBridgeTests(TestCase):
         with self.assertRaises(ValueError):
             api.perform('pause_set',{'paused':True,'expected_revision':self.revision,'origin':'http://localhost'})
         self.assertEqual(len(self.calls),2)
+
+    def test_forwarding_holds_fence_and_rejects_revoked_reader_or_transition(self):
+        held=False
+        condition=None
+        @contextmanager
+        def fence():
+            nonlocal held
+            if condition=='busy':
+                raise BlockingIOError('transition in progress')
+            held=True
+            try:
+                yield
+            finally:
+                held=False
+        def activation():
+            self.assertTrue(held)
+            if condition=='revoked':
+                raise ValueError('reader revoked or old release')
+            return 'a'*40,'b'*64
+        from prototypes.assertion_memory.dashboard_projection import release_generation
+        release='assertion-memory-v0.1.33'
+        value=dict(stage='prod',release_version=release,
+                   release_generation=release_generation('a'*40,'b'*64,release,'prod'),
+                   global_order=False,snapshot_at='',queues=[],
+                   processing_control=dict(paused=False,revision=self.revision,can_change=True))
+        dashboard=SimpleNamespace(stage='prod',read_fence=fence,activation=activation)
+        def guarded_bridge(payload):
+            original=self.bridge(payload=payload)
+            def connect(*args, **kwargs):
+                self.assertTrue(held)
+                return original._connection(*args, **kwargs)
+            return ProdOwnerBridge(*self.keys,self.proof,http_connection=connect,clock=lambda:self.now)
+        bridge=guarded_bridge(value)
+        api=configured_browser_api(dashboard,prod_owner_bridge=bridge)
+        self.assertEqual(api.queue_snapshot(limit=2,offset=0),value)
+        condition='revoked'
+        with self.assertRaises(APIError):
+            api.perform('pause_set',{'paused':True,'expected_revision':self.revision})
+        condition='busy'
+        with self.assertRaises(APIError):
+            api.queue_snapshot(limit=2,offset=0)
+        self.assertEqual(len(self.calls),1)
+        condition=None
+        value['release_generation']='d'*64
+        with self.assertRaises(APIError):
+            api.queue_snapshot(limit=2,offset=0)
+        self.assertEqual(len(self.calls),2)
+        self.assertFalse(held)
 
     def test_unavailable_and_wrong_lane_do_not_fallback(self):
         with self.assertRaises(APIError):
