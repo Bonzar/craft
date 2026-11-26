@@ -115,7 +115,9 @@ class DirectStream(unittest.TestCase):
             return old
 
         request=SimpleNamespace(app=app,query_params=QueryParams())
-        with patch.object(manager,'ensure',side_effect=crosses_reset), self.assertRaises(APIError) as denied:
+        with (patch.object(manager,'ensure',side_effect=crosses_reset),
+              patch.object(app.state.owner,'session',return_value='fictional-owner'),
+              self.assertRaises(APIError) as denied):
             asyncio.run(graph_manifest(request))
         self.assertEqual(denied.exception.status,409)
         self.assertEqual(denied.exception.code,'revision_expired')
@@ -127,6 +129,20 @@ class DirectStream(unittest.TestCase):
                                      headers={'Origin':PUBLIC}).status_code,200)
             for _ in range(50):
                 graph=ui.get('/api/v1/graph',headers={'Origin':PUBLIC})
+                if graph.status_code==200:break
+                time.sleep(.02)
+            self.assertEqual(graph.status_code,200)
+            self.assertNotIn('owner_live_epoch',graph.json())
+
+    def test_machine_read_authority_does_not_receive_owner_marker(self):
+        import time
+        from types import SimpleNamespace
+        app=self.create()
+        app.state.bridge_read_service=SimpleNamespace(
+            authorizes=lambda request: request.method=='GET' and request.url.path=='/api/v1/graph')
+        with TestClient(app,base_url=PUBLIC) as machine:
+            for _ in range(50):
+                graph=machine.get('/api/v1/graph',headers={'Origin':PUBLIC})
                 if graph.status_code==200:break
                 time.sleep(.02)
             self.assertEqual(graph.status_code,200)

@@ -122,7 +122,8 @@ async def session(request):
 async def graph_manifest(request):
     manager=request.app.state.manager
     direct=getattr(request.app.state,'direct_events',None)
-    track_epoch=direct is not None and direct.current()
+    track_epoch=(direct is not None and direct.current()
+                 and request.app.state.owner.session(request) is not None)
     # Fence the awaited graph lookup, not just header serialization. A graph
     # obtained before a reset cannot be published with the *next* epoch.
     generation=manager.sync_generation() if track_epoch else None
