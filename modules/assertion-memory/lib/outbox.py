@@ -153,10 +153,10 @@ class Outbox:
                 'delivery_errors': row['errors'] or 0, 'source_gaps': sorted(set(state.get('gaps', []))),
                 'retained_source_gap_count': len(state.get('gaps', [])),
                 'intentional_exclusions': state.get('exclusions', {}),
-                'blocked': state.get('blocked'),
+                'blocked': state.get('blocked') or (state.get('blocked_interrupted_batch') or {}).get('reason'),
                 'database_clear_ambiguous_before_rearm':state.get('pre_reset_turn_discarded',False),
-                'pending_turn_completion': bool((state.get('turn') or {}).get('user_messages')
-                    or (state.get('turn') or {}).get('assistant')),
+                'pending_turn_completion': bool(state.get('interrupted_users')
+                    or (state.get('turn') or {}).get('user_messages') or (state.get('turn') or {}).get('assistant')),
                 'pending_source_proof': bool((state.get('turn') or {}).get('pending')
                     and not (state.get('turn') or {}).get('pending', {}).get('emitted'))}
 
