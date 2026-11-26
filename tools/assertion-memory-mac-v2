@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Owner-run, five-file update for the enrolled Mac capture adapter. No network."""
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+from urllib.parse import urlsplit
+
+RELEASE = '65bc8e94a2b53a416707c8f16ddbe40de821c311'
+PROD_BASE = 'assertion-memory-v0.1.30'
+INIT = 'ee23ba855b7cb06be01917dc1c3226d1c7f54e1f'
+PINS = {
+    'capture_worker.py': ('0753a797d04adde86222e9d50cfc70a1c04696a6', '7a928de7d050b0ccb4635e69db3a9a4b541015c6'),
+    'frontier.py': ('33762e2586e01d7377a470cb7b2520b83ca2da5c', '686c4da8e93536b0cce8a156e98b44f64bbc4c74'),
+    'native_capture.py': ('c663ef4d69855aecfabad73c6e2619bd80887e18', '714280567e5e7e8797602e803f8397ecd3c83285'),
+    'outbox.py': ('89351986fe6cf2fd0c8ef51a416c14f5df52dd22', '6748961f6eb1b10a0142ad703d77b624c5f8ce9c'),
+    'private_http.py': ('3f01ff12892416f2078a6ff3ee776b6f380c21cb', '06344318f6ed5cccec795b6b3992682169ccd746'),
+}
+BACKUP = '.capture-v2-rollback-' + RELEASE[:12]
+MAX_FILE = 128 * 1024
+
+
+def git_blob(data):
+    return hashlib.sha1(f'blob {len(data)}\0'.encode('ascii') + data).hexdigest()
+
+
+def safe_dir(path, *, private=False):
+    info = path.lstat()
+    forbidden = 0o077 if private else 0o022
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & forbidden or path.resolve() != path):
+        raise ValueError('Expected an owner-controlled, real directory')
+    return path
+
+
+def read_file(path, *, mode):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != mode):
+            raise ValueError('An installed file has unexpected ownership or mode')
+        body = stream.read(MAX_FILE+1)
+        if len(body) > MAX_FILE:
+            raise ValueError('An installed file exceeds its expected size')
+        return body
+
+
+def fingerprint(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def capture_lock(raw, home):
+    obj = json.loads(raw)
+    con, cap = obj.get('connection', {}), obj.get('capture', {})
+    if (obj.get('harness') != 'codex' or con.get('transport') != 'private_base_http'
+            or cap.get('enabled') is not True or cap.get('capture_batch') is not True):
+        raise ValueError('Expected the enrolled, batch-enabled PROD capture profile')
+    url = con.get('url')
+    cutover = cap.get('fresh_since')
+    if not isinstance(url, str) or not isinstance(cutover, str):
+        raise ValueError('Expected a pinned endpoint and cutover')
+    parts = urlsplit(url)
+    if (parts.scheme != 'https' or not parts.hostname or parts.username or parts.password or parts.port
+            or parts.query or parts.fragment or parts.path != '/memory-api-prod'):
+        raise ValueError('Expected the exact machine API route')
+    digest = fingerprint(('private_base_http\0prod\0' + url + '\0' + cutover).encode('utf-8'))
+    path = Path(cap.get('state_dir') or '.')
+    if digest != obj.get('endpoint_sha256') or not path.is_absolute() or not path.is_relative_to(home):
+        raise ValueError('Installed capture scope does not match')
+    if path.resolve() != path:
+        raise ValueError('Capture state path must not contain links')
+    return safe_dir(path / digest, private=True) / 'worker.lock'
+
+
+@contextmanager
+def locked(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) & 0o022):
+            raise ValueError('Invalid capture worker lock')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('The local capture worker still holds its lock') from None
+        check = path.lstat()
+        if (info.st_dev, info.st_ino) != (check.st_dev, check.st_ino):
+            raise ValueError('Capture worker lock changed')
+        yield
+    finally:
+        os.close(fd)
+
+
+def source(repo):
+    config = subprocess.run(['git', '-C', str(repo), 'config', '--get-regexp',
+                             r'^(remote[.].*[.]promisor|extensions[.]partialclone)$'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    if config.returncode != 1:
+        raise ValueError('Expected a complete official Git checkout without a promisor remote')
+    trusted = {}
+    for name, (_, expected) in PINS.items():
+        command = ['git', '-C', str(repo), '--no-replace-objects', 'show',
+                   RELEASE + ':modules/assertion-memory/lib/' + name]
+        done = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              check=True, timeout=15, env={**os.environ, 'GIT_NO_LAZY_FETCH':'1'})
+        body = done.stdout
+        if not body or len(body) > MAX_FILE or git_blob(body) != expected:
+            raise ValueError('Official source blob did not match the package pin')
+        compile(body, name, 'exec')
+        trusted[name] = body
+    return trusted
+
+
+def fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def atomic(path, body, mode):
+    fd, staging = tempfile.mkstemp(prefix='.capture-v2-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as out:
+            os.fchmod(out.fileno(), mode)
+            out.write(body)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(staging, path)
+        fsync_dir(path.parent)
+    finally:
+        if os.path.exists(staging):
+            os.unlink(staging)
+
+
+def save_backup(module, initial, binding_digest):
+    target = module / BACKUP
+    if target.exists() or target.is_symlink():
+        raise ValueError('A previous rollback package exists; use the explicit rollback check')
+    with tempfile.TemporaryDirectory(prefix='.capture-v2-backup-', dir=module) as path:
+        stage = Path(path)
+        for name, body in initial.items():
+            atomic(stage / name, body, 0o600)
+        atomic(stage / 'binding.sha256', (binding_digest + '\n').encode('ascii'), 0o600)
+        os.rename(stage, target)
+        fsync_dir(module)
+
+
+def read_backup(module, binding_digest):
+    saved = safe_dir(module / BACKUP, private=True)
+    if read_file(saved / 'binding.sha256', mode=0o600) != (binding_digest+'\n').encode('ascii'):
+        raise ValueError('The capture profile changed after the backup')
+    result = {name:read_file(saved / name, mode=0o600) for name in PINS}
+    if any(git_blob(result[name]) != PINS[name][0] for name in PINS):
+        raise ValueError('Rollback source blobs did not match the original pins')
+    return result
+
+
+def files(lib):
+    return {name:read_file(lib / name, mode=0o644) for name in PINS}
+
+
+def matches(bodies, index):
+    return all(git_blob(bodies[name]) == PINS[name][index] for name in PINS)
+
+
+def transition(lib, desired, current, binding_path, binding_digest):
+    def profile_guard():
+        if fingerprint(read_file(binding_path, mode=0o600)) != binding_digest:
+            raise ValueError('The capture profile changed during the update')
+
+    changed = []
+    try:
+        for name, new in desired.items():
+            profile_guard()
+            target = lib / name
+            if read_file(target, mode=0o644) != current[name]:
+                raise ValueError('An installed file changed during the update')
+            if current[name] != new:
+                # Include the current file even if fsync fails after replace.
+                changed.append(name)
+                atomic(target, new, 0o644)
+        if files(lib) != desired:
+            raise ValueError('The installed code did not re-read exactly')
+        profile_guard()
+    except Exception:
+        for name in reversed(changed):
+            target = lib / name
+            present = read_file(target, mode=0o644)
+            if present == desired[name]:
+                atomic(target, current[name], 0o644)
+            elif present != current[name]:
+                raise ValueError('Concurrent file change; stop and use the rollback package') from None
+        raise
+
+
+def run(home, repo, *, mode, quiesced=False, prod=None, no_clear=False):
+    home = home.resolve()
+    module = home
+    for part in ('.codex','jarvis','modules','assertion-memory'):
+        module = safe_dir(module / part)
+    lib = safe_dir(module / 'lib')
+    binding_path = safe_dir(module / 'mcp') / 'installed.json'
+    binding = read_file(binding_path, mode=0o600)
+    lock = capture_lock(binding, home)
+    digest = fingerprint(binding)
+    if git_blob(read_file(lib / '__init__.py', mode=0o644)) != INIT:
+        raise ValueError('The existing enrolled session hook code differs')
+    current = files(lib)
+    if mode == 'plan':
+        trusted = source(repo)
+        if not (matches(current, 0) or current == trusted):
+            raise ValueError('Installed code is neither the exact original nor exact new version')
+        return 'preflight_ok_already_current' if current == trusted else 'preflight_ok_five_files_only'
+    if not quiesced:
+        raise ValueError('Confirm that only the capture worker is stopped and no capture hooks will run')
+    if mode == 'apply' and prod != PROD_BASE:
+        raise ValueError('First verify the approved matching PROD Base V2 release')
+    if mode == 'rollback' and not no_clear:
+        raise ValueError('Rollback requires independent proof that no database clear occurred')
+    with locked(lock):
+        if files(lib) != current or fingerprint(read_file(binding_path, mode=0o600)) != digest:
+            raise ValueError('Capture files changed while acquiring the worker lock')
+        if mode == 'apply':
+            trusted = source(repo)
+            if trusted == current:
+                return 'already_current'
+            if not matches(current, 0):
+                raise ValueError('The existing five files do not match the exact upgrade source')
+            if (module / BACKUP).exists() or (module / BACKUP).is_symlink():
+                if read_backup(module, digest) != current:
+                    raise ValueError('Rollback receipt does not match the current original code')
+            else:
+                save_backup(module, current, digest)
+            transition(lib, trusted, current, binding_path, digest)
+            return 'installed_five_files'
+        if not all(git_blob(body) in PINS[name] for name,body in current.items()):
+            raise ValueError('Unknown code is present; refusing rollback')
+        original = read_backup(module, digest)
+        transition(lib, original, current, binding_path, digest)
+        return 'rolled_back_five_files'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=['plan','apply','rollback'])
+    parser.add_argument('--checkout', type=Path, required=True, help='Local official Git checkout; no fetch is performed')
+    parser.add_argument('--operator-quiesced', action='store_true',
+                        help='Only the capture worker is stopped and no capture hooks will run during the update')
+    parser.add_argument('--confirm-prod-base')
+    parser.add_argument('--confirm-no-clear', action='store_true')
+    args = parser.parse_args()
+    if sys.platform != 'darwin':
+        parser.exit(2, 'This package is only for the enrolled Mac.\n')
+    try:
+        result = run(Path.home(), args.checkout, mode=args.mode, quiesced=args.operator_quiesced,
+                     prod=args.confirm_prod_base, no_clear=args.confirm_no_clear)
+    except ValueError as exc:
+        # Parser and OS messages can include local paths and configuration values;
+        # only output deliberately phrased errors, not arbitrary exception text.
+        if type(exc) is ValueError:
+            text = str(exc)
+            if 0 < len(text) < 180 and text.startswith(('Expected ', 'An ', 'Capture ', 'Invalid ', 'The ',
+                'Official ', 'A previous ', 'Rollback ', 'Concurrent ', 'Confirm ', 'First ', 'Installed ',
+                'Unknown ', 'The existing ')):
+                parser.exit(2, text+'\n')
+        parser.exit(2, 'Preflight or install refused. Nothing was sent remotely.\n')
+    except (OSError, KeyError, TypeError, subprocess.SubprocessError):
+        parser.exit(2, 'Capture update unavailable. Check the approved local checkout and rollback state.\n')
+    print(result)
+
+
+if __name__ == '__main__':
+    main()
