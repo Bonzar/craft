@@ -110,7 +110,7 @@ def gateway_delta(spec):
     for method in METHODS:
         op=wild.get(method)
         if op is None:
-            op={'parameters':[expected],'responses':deepcopy(get.get('responses',{})),name:{
+            op={'parameters':[deepcopy(expected)],'responses':deepcopy(get.get('responses',{})),name:{
                 k:deepcopy(v) for k,v in get[name].items() if k in ('type','url','timeouts')}}
             wild[method]=op
         params=op.get('parameters',[])
@@ -123,6 +123,10 @@ def gateway_delta(spec):
         op[name].update(method=method.upper(),headers={k:'{'+k+'}' for k in WIRE},
                         query={'*':'*'},omitEmptyHeaders=True,omitEmptyQueryParameters=True)
     return data
+
+def gateway_wire(candidate):
+    """Emit an alias-free UTF-8 OpenAPI JSON document for the provider CLI."""
+    return json.dumps(candidate,sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False).encode('utf-8')
 
 def plan(source, spec, *, gateway_sha, verified_backend=False, verified_old_deny=False):
     if not verified_backend:

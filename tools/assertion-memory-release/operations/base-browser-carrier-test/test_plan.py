@@ -59,6 +59,24 @@ class TestTestCarrier(unittest.TestCase):
         exact=b'{"paths":{},"title":"\\u0422\\u0435\\u0441\\u0442 \\ud83e\\uddea"}'
         self.assertEqual(plan.spec_sha(fixture),hashlib.sha256(exact).hexdigest())
 
+    def test_provider_wire_is_alias_free_and_pins_every_method(self):
+        import json
+        fixture=spec()
+        for op in fixture['paths'][plan.WILD].values():
+            op['parameters'][0]['schema']={'type':'string'}
+        after=plan.gateway_delta(fixture)
+        # The old implementation reused one path-parameter object across four
+        # methods. PyYAML then emits aliases that the provider rejects.
+        params=[after['paths'][plan.WILD][m]['parameters'][0] for m in plan.METHODS]
+        self.assertEqual(len({id(p) for p in params}),len(plan.METHODS))
+        wire=plan.gateway_wire(after)
+        self.assertEqual(plan.sha(wire),plan.spec_sha(after))
+        decoded=json.loads(wire)
+        self.assertEqual(decoded,after)
+        for m in plan.METHODS:
+            paths=[p for p in decoded['paths'][plan.WILD][m]['parameters'] if p['in']=='path']
+            self.assertEqual(paths,[{'name':'tail','in':'path','required':True,'schema':{'type':'string'}}])
+
     def test_fail_closed(self):
         for edited in (NGINX+ensure('unreviewed',''),NGINX.replace(SSE,''),NGINX.replace('return 404','return 200')):
             with self.assertRaises(ValueError): plan.nginx_delta(edited)
