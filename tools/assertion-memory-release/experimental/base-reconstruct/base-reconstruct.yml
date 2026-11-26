@@ -1,0 +1,111 @@
+# Inactive template: review before installing at .github/workflows/base-reconstruct.yml.
+name: Base Reconstruction Proof
+"on":
+  workflow_dispatch:
+    inputs:
+      source_commit: {description: Full historical main SHA, type: string, required: true}
+      new_tag: {description: New canonical Base tag (not created), type: string, required: true}
+permissions: {}
+jobs:
+  select:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == '1'
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    outputs:
+      source: ${{ steps.select.outputs.source }}
+      tag: ${{ steps.select.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          NEW_TAG: ${{ inputs.new_tag }}
+        run: python3 -B tools/assertion-memory-release/experimental/base-reconstruct/reconstruct_cli.py select
+  build:
+    needs: select
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    timeout-minutes: 20
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.select.outputs.source }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '24'}
+      - env:
+          SOURCE: ${{ needs.select.outputs.source }}
+          TARGET_TAG: ${{ needs.select.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$SOURCE" ]]
+          grep -v '^fastembed==' apps/graph_viewer/requirements.txt > "$RUNNER_TEMP/graph-lexical.txt"
+          python -m pip install --only-binary=:all: -r prototypes/assertion_memory/requirements-mcp.txt -r "$RUNNER_TEMP/graph-lexical.txt"
+          (cd apps/graph_viewer; npm ci --no-audit --no-fund; npm run lint; npm test; npm run build)
+          git tag "$TARGET_TAG" "$SOURCE"
+          GITHUB_EVENT_NAME=release GITHUB_REF_NAME="$TARGET_TAG" GITHUB_REF="refs/tags/$TARGET_TAG" \
+            bash tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/reconstructed"
+          shopt -s nullglob
+          packages=("$RUNNER_TEMP"/reconstructed/*.tar.gz)
+          [[ ${#packages[@]} -eq 1 && -f "${packages[0]}" && ! -L "${packages[0]}" ]]
+          cp -- "${packages[0]}" "$RUNNER_TEMP/assertion-memory-base-reconstructed.tar.gz"
+      - id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reconstructed-base-candidate
+          path: ${{ runner.temp }}/assertion-memory-base-reconstructed.tar.gz
+          if-no-files-found: error
+  attest:
+    needs: [select, build]
+    runs-on: ubuntu-latest
+    permissions: {actions: read, contents: read, id-token: write, attestations: write}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/candidate
+      - env:
+          SOURCE_COMMIT: ${{ needs.select.outputs.source }}
+          NEW_TAG: ${{ needs.select.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/assertion-memory-release/experimental/base-reconstruct/reconstruct_cli.py bind "$RUNNER_TEMP/candidate"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: |
+            ${{ runner.temp }}/candidate/assertion-memory-base-reconstructed.tar.gz
+            ${{ runner.temp }}/candidate/base-source-binding.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reconstructed-base-attested
+          path: ${{ runner.temp }}/candidate/*
+          if-no-files-found: error
+  verify:
+    needs: attest
+    runs-on: ubuntu-latest
+    permissions: {actions: read, contents: read, attestations: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: reconstructed-base-attested
+          path: ${{ runner.temp }}/verified
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/assertion-memory-release/experimental/base-reconstruct/reconstruct_cli.py verify "$RUNNER_TEMP/verified"
