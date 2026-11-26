@@ -38,5 +38,5 @@ def checkpoint_for(expected):
     if type(expected) is not TerminalRequest or os.getuid()!=986 or os.geteuid()!=986:
         raise ValueError('canonical native receiver binding required')
     return lambda root,phase,old,candidate:_before_effect(expected,root=root,phase=phase,old=old,
-        candidate=candidate,root_receipt=_read_root_phase,native_observer=observe_native_boundary,
+        candidate=candidate,root_receipt=lambda:_read_root_phase(expected.admission),native_observer=observe_native_boundary,
         clock=time.monotonic,sleep=time.sleep,timeout=15)

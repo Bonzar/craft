@@ -12,7 +12,8 @@ from native_boundary import PROD_ROOT
 from native_checkpoint import checkpoint_for
 from operator_foreground_controller import FILES,SETTLED,_get
 from release_core import ActivationWitness
-from root_phase_binding import PHASE,_read_root_phase,_safe_parent,document
+from root_phase_binding import _read_root_phase,_safe_parent,document
+from root_run_records import RECORDS,record
 from root_terminal_publisher import canonical_terminal
 from settled_guard_binding import _file
 from terminal_lifecycle import TerminalRequest
@@ -43,8 +44,8 @@ def _step(parent,filename,decode):
     raise TimeoutError('protected foreground witness was not recorded')
 
 def _parent():
-    _safe_parent(PHASE.parent)
-    return os.open(PHASE.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    _safe_parent(RECORDS)
+    return os.open(RECORDS,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
 
 def _paths(request):
     root=PROD_ROOT/'releases'
@@ -56,7 +57,7 @@ def _require_native_pair(root,old,candidate,req):
 
 def _active_precommit(request):
     parent=_parent()
-    try:_step(parent,FILES[request.phase],lambda body:restore_precommit(body,request))
+    try:_step(parent,record(request.admission,FILES[request.phase]).name,lambda body:restore_precommit(body,request))
     finally:os.close(parent)
 
 def _settled(request):
@@ -65,7 +66,7 @@ def _settled(request):
     def verify(body):
         if body!=exact:raise ValueError('wrong protected foreground settlement')
     parent=_parent()
-    try:_step(parent,SETTLED[request.phase],verify)
+    try:_step(parent,record(request.admission,SETTLED[request.phase]).name,verify)
     finally:os.close(parent)
 
 def witness_for(admission,prior):
@@ -80,7 +81,7 @@ def witness_for(admission,prior):
         return _settled(req)
     def recover(root):
         if root!=PROD_ROOT:raise ValueError('wrong recovery root')
-        try: wire=_read_root_phase()
+        try: wire=_read_root_phase(admission)
         except FileNotFoundError:return None
         options=[TerminalRequest(admission,prior,p) for p in ('restart','restore')]
         req=next((req for req in options if document(req)==wire),None)

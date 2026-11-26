@@ -13,12 +13,13 @@ from kernel_observer import observe
 from native_boundary import PROD_ROOT
 from operator_foreground_phase import _read_authorizer,_require_root,_require_active_native_lock,ApprovedPair
 from ops_readonly_preflight import trusted_pid
-from root_phase_binding import PHASE,_read_root_phase,observe_record,_safe_parent
+from root_phase_binding import _read_root_phase,observe_record,_safe_parent
+from root_run_records import RECORDS,record
 from root_terminal_publisher import publish_with_existing_authorizer,canonical_terminal
 from terminal_lifecycle import TerminalRequest
 
-FILES={'restart':'base-terminal-restart.precommit','restore':'base-terminal-restore.precommit'}
-SETTLED={'restart':'base-terminal-restart.settled','restore':'base-terminal-restore.settled'}
+FILES={'restart':'restart.precommit','restore':'restore.precommit'}
+SETTLED={'restart':'restart.settled','restore':'restore.settled'}
 MAX=16384
 
 def _get(parent,name):
@@ -67,7 +68,7 @@ def _settle_step(pair,*,native_effect_closed=False):
     _require_root()
     if type(pair) is not ApprovedPair:
         raise ValueError('signed run/prior foreground scope required')
-    _safe_parent(PHASE.parent)
+    _safe_parent(RECORDS)
     # The native transaction holds deploy lock; never runs a
     # service command and writes only its own fixed root record.
     with _lock(TRANSITION,owner=0,mode=0o644):
@@ -83,12 +84,12 @@ def _settle_step(pair,*,native_effect_closed=False):
             previous_receipt=encode(receipt)
         if previous_receipt is None and (known,admitted)!=(pair.prior,pair.admitted):
             raise ValueError('not the foreground admitted transaction')
-        phase=observe_record(_read_root_phase(),state) if previous_receipt is None else receipt['phase']
+        phase=observe_record(_read_root_phase(pair.admitted),state) if previous_receipt is None else receipt['phase']
         req=TerminalRequest(pair.admitted,pair.prior,phase)
         sample=lambda r:observe(r,trusted_pid=trusted_pid)
         result=sample(req)
-        name=FILES[phase]
-        parent=os.open(PHASE.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+        name=record(pair.admitted,FILES[phase]).name
+        parent=os.open(RECORDS,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
         try:
             if result.journal is not None:
                 if native_effect_closed or previous_receipt is not None:
@@ -102,7 +103,7 @@ def _settle_step(pair,*,native_effect_closed=False):
             _, wire=observe_after_unlink(req,previous,sample,_fsync_native,publish_with_existing_authorizer)
             if previous_receipt is not None and previous_receipt!=wire:
                 raise ValueError('foreground terminal recheck differs')
-            _record(parent,SETTLED[phase],wire)
+            _record(parent,record(pair.admitted,SETTLED[phase]).name,wire)
             return 'settled'
         finally:os.close(parent)
 

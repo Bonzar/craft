@@ -13,7 +13,8 @@ from authorizer_cas import DIRECTORY,AUTHORIZER_UID,_current
 from controller_install_lease import TRANSITION,DEPLOY,_lock
 from configured_terminal_state import read_exact
 from native_boundary import observe_native_boundary
-from root_phase_binding import PHASE,MAX,_safe_parent,document
+from root_phase_binding import MAX,_safe_parent,document
+from root_run_records import record
 from terminal_lifecycle import TerminalRequest
 from transition_witness import Admission,Release
 
@@ -66,15 +67,15 @@ def planned_phase(pair, *, state, prior_phase, native_observer):
         raise ValueError('no allowed monotonic one-run phase transition')
     return document(request)
 
-def _prior(dirfd):
+def _prior(dirfd,name):
     try:
-        fd=os.open(PHASE.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK,dir_fd=dirfd)
+        fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK,dir_fd=dirfd)
     except FileNotFoundError:
         return None
     with os.fdopen(fd,'rb') as f:
         s=os.fstat(fd)
         if (not stat.S_ISREG(s.st_mode) or s.st_uid!=0 or s.st_gid!=0 or s.st_nlink!=1
-                or stat.S_IMODE(s.st_mode)!=0o644 or not os.path.samestat(s,os.stat(PHASE.name,dir_fd=dirfd,follow_symlinks=False))):
+                or stat.S_IMODE(s.st_mode)!=0o644 or not os.path.samestat(s,os.stat(name,dir_fd=dirfd,follow_symlinks=False))):
             raise ValueError('untrusted root phase inode')
         raw=f.read(MAX+1)
         if not 0<len(raw)<=MAX:
@@ -98,15 +99,17 @@ def _require_active_native_lock():
 
 def publish_one_observation(pair):
     _require_root()
-    _safe_parent(PHASE.parent)
+    path=record(pair.admitted,'phase')
+    name=path.name
+    _safe_parent(path.parent)
     # This is a bounded observation between native effects, not a lease across
     # restart or smoke. Never reacquire the live native deploy lock.
     with _lock(TRANSITION,owner=0,mode=0o644):
         _require_active_native_lock()
-        parent=os.open(PHASE.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+        parent=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
         try:
             state=_read_authorizer()
-            old=_prior(parent)
+            old=_prior(parent,name)
             new=planned_phase(pair,state=state,prior_phase=old,native_observer=observe_native_boundary)
             if old==new:
                 os.fsync(parent)
@@ -118,10 +121,10 @@ def publish_one_observation(pair):
                     os.fchmod(f.fileno(),0o644)
                     f.write(new);f.flush();os.fsync(f.fileno())
                 _require_active_native_lock()
-                if (_read_authorizer()!=state or _prior(parent)!=old
+                if (_read_authorizer()!=state or _prior(parent,name)!=old
                         or planned_phase(pair,state=state,prior_phase=old,native_observer=observe_native_boundary)!=new):
                     raise ValueError('native phase changed before publication')
-                os.replace(staged,PHASE.name,src_dir_fd=parent,dst_dir_fd=parent)
+                os.replace(staged,name,src_dir_fd=parent,dst_dir_fd=parent)
                 os.fsync(parent)
             finally:
                 try:os.unlink(staged,dir_fd=parent)

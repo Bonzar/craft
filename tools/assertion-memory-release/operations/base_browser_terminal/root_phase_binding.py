@@ -8,7 +8,8 @@ from configured_terminal_state import encode,read_exact
 from native_boundary import observe_native_boundary
 from terminal_lifecycle import TerminalRequest
 
-PHASE=Path('/run/assertion-base-prod-transition/base-terminal-phase.json')
+from root_run_records import record
+
 MAX=2048
 
 def document(request):
@@ -35,17 +36,19 @@ def _safe_parent(path):
         if not stat.S_ISDIR(s.st_mode) or s.st_uid!=0 or s.st_gid!=0 or s.st_mode&0o022:
             raise ValueError('unprotected root phase ancestor')
 
-def _read_root_phase():
-    _safe_parent(PHASE.parent)
-    with os.fdopen(os.open(PHASE,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as f:
+def _read_root_phase(admission):
+    path=record(admission,'phase')
+    _safe_parent(path.parent)
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as f:
         s=os.fstat(f.fileno())
         if (not stat.S_ISREG(s.st_mode) or s.st_uid!=0 or s.st_gid!=0 or s.st_nlink!=1
-                or stat.S_IMODE(s.st_mode)!=0o644 or not os.path.samestat(s,PHASE.lstat())):
+                or stat.S_IMODE(s.st_mode)!=0o644 or not os.path.samestat(s,path.lstat())):
             raise ValueError('not a root-published native phase')
         return f.read(MAX+1)
 
 def read_phase(state):
-    return observe_record(_read_root_phase(),state)
+    _,admission,_=read_exact(state)
+    return observe_record(_read_root_phase(admission),state)
 
 def phase_image_from_native(request):
     """Called only by the existing protected controller, after pointer swap.
