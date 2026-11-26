@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -111,25 +112,64 @@ def exact_change(before,wanted,prior_pin,next_pin,read,write,verify):
 def main():
     p=ArgumentParser()
     p.add_argument('mode',choices=('plan','apply','plan-remove','remove'))
+    p.add_argument('--direct-page-pair',type=Path)
+    p.add_argument('--direct-origin')
+    p.add_argument('--page-sha256')
     p.add_argument('--before')
     p.add_argument('--after')
     a=p.parse_args()
     if os.geteuid()!=0:
         raise SystemExit('fixed operator command requires configuration ownership')
     reverse=a.mode.endswith('remove')
+    if a.direct_page_pair:
+        if not a.direct_origin:
+            raise ValueError('exact TEST direct origin is mandatory')
+        from direct_test_bundle import render_routes,validate_page
+        from render_direct_test import PROOF_FILE
+        pair=json.loads(read_source(a.direct_page_pair)[0])
+        if set(pair)!= {'html','policy'}:
+            raise ValueError('invalid proof bundle')
+        actual_page_hash=validate_page(pair['html'],pair['policy'])
+        def wanted_for(before):
+            return render_routes(before.decode('utf-8'),pair['policy'],a.direct_origin,reverse).encode()
+        def match_installed_page(required=True):
+            try:
+                page,metadata=read_source(Path(PROOF_FILE))
+            except FileNotFoundError:
+                if required:
+                    raise
+                return None
+            if page!=pair['html'].encode():
+                raise ValueError('installed TEST proof file differs')
+            return metadata
+    else:
+        if a.direct_origin or a.page_sha256:
+            raise ValueError('direct proof options require the explicit bundle')
+        def wanted_for(before):
+            return compute(before,reverse)
     if a.mode.startswith('plan'):
         before,_=read_source(ROUTES)
-        wanted=compute(before,reverse)
-        if a.before or a.after:
+        wanted=wanted_for(before)
+        if a.before or a.after or a.page_sha256:
             raise ValueError('plan never accepts caller inputs')
         print('test_nginx_before_sha256='+digest(before))
         print('test_nginx_after_sha256='+digest(wanted))
+        if a.direct_page_pair:
+            print('test_proof_html_sha256='+actual_page_hash)
         return
     if not a.before or not a.after:
         raise ValueError('both reviewed digest arguments are mandatory')
     with scoped_lock():
         before,st=read_source(ROUTES)
-        wanted=compute(before,reverse)
+        wanted=wanted_for(before)
+        if a.direct_page_pair:
+            if a.page_sha256!=actual_page_hash:
+                raise ValueError('reviewed proof page digest must match')
+            # Stage the fixed file separately (root-owned, 0644) before adding
+            # any serving route. Neither apply nor undo overwrites that file.
+            metadata=match_installed_page()
+            if stat.S_IMODE(metadata.st_mode)!=0o644:
+                raise ValueError('expected readable, root-owned proof page')
         exact_change(before,wanted,a.before,a.after,lambda:read_source(ROUTES)[0],
                      lambda data:replace(ROUTES,data,st),services)
     print('test_nginx_validated_and_reloaded')

@@ -66,6 +66,7 @@ def main():
     p.add_argument('mode',choices=('plan','apply','plan-remove','remove'))
     p.add_argument('--test-gateway',required=True)
     p.add_argument('--test-domain',required=True)
+    p.add_argument('--direct-test-bundle',action='store_true')
     p.add_argument('--before')
     p.add_argument('--after')
     a=p.parse_args()
@@ -89,7 +90,11 @@ def main():
             path.write_text(yaml.safe_dump(spec,sort_keys=False,allow_unicode=True))
             run('update','--spec',str(path))
     before=read()
-    wanted=compute(before,a.mode.endswith('remove'))
+    if a.direct_test_bundle:
+        from direct_test_bundle import render_gateway
+        wanted=render_gateway(before,a.mode.endswith('remove'))
+    else:
+        wanted=compute(before,a.mode.endswith('remove'))
     if a.mode.startswith('plan'):
         if a.before or a.after:
             raise ValueError('plan takes no proof arguments')
