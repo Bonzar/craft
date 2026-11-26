@@ -17,6 +17,7 @@ from .manager import GraphManager,manifest_url,parse_replay_cursor
 from .providers.canonical_thoughts import source_for_path
 from . import cards
 from .search import search
+from .direct_stream import configure_test,TICKET_PATH,DIRECT_PATH,issue_ticket,direct_events
 
 
 class Boundary(BaseHTTPMiddleware):
@@ -26,7 +27,9 @@ class Boundary(BaseHTTPMiddleware):
             check_host(request)
             check_origin(request)
             public=path=='/api/v1/health' and request.method=='GET' or path=='/api/v1/session' and request.method in {'GET','POST'}
-            if path.startswith('/api/') and not public:
+            # The direct stream has its own strictly scoped origin, method and
+            # one-use ticket validation; no other path accepts that authority.
+            if path.startswith('/api/') and not public and path!=DIRECT_PATH:
                 csrf=request.app.state.owner.session(request)
                 if csrf is None and not read_service_authorized(request):
                     raise APIError('unauthorized','Owner session required',401)
@@ -332,7 +335,7 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, test_direct_events_origin=None):
     # The legacy Sites env binding is deliberately read-only. Mutation must be
     # installed by the standard owner-session web app at startup.
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
@@ -343,6 +346,9 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     static_dir=validate_static_directory(
         static_dir,state_dir,source_path,bridge_read_token_file,getattr(queue_dashboard,'config',None),
         getattr(source,'source_path',None),getattr(source,'path',None))
+    browser_origin=validate_public_origin(public_origin)
+    direct=(configure_test(browser_origin,test_direct_events_origin,synthetic_fixture,source_path)
+            if test_direct_events_origin is not None else None)
     bridge_read_service=BridgeReadService(bridge_read_token_file)
     owner=OwnerStore(state_dir,password)
     manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model,owner_store=owner)
@@ -367,7 +373,8 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     routes=make_routes()
     app=Starlette(routes=routes,lifespan=lifespan,exception_handlers={APIError:handle_error,Exception:unavailable},
                   middleware=[Middleware(Boundary),Middleware(GZipMiddleware,minimum_size=1500)])
-    app.state.public_origin=validate_public_origin(public_origin)
+    app.state.public_origin=browser_origin
+    app.state.direct_events=direct
     app.state.allowed_proxy_hosts=validate_proxy_hosts(allowed_proxy_hosts)
     app.state.bridge_read_service=bridge_read_service
     app.state.synthetic_fixture=synthetic_fixture
@@ -380,7 +387,9 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
 
 def make_routes():
     prefix='/api/v1'
-    routes=[Route(prefix+'/health',lambda request:JSONResponse({'ok':True})),
+    routes=[Route(TICKET_PATH,issue_ticket,methods=['POST']),
+            Route(DIRECT_PATH,direct_events,methods=['GET','OPTIONS']),
+            Route(prefix+'/health',lambda request:JSONResponse({'ok':True})),
             Route(prefix+'/session',session,methods=['GET','POST','DELETE']),
             Route(prefix+'/capabilities',capabilities),Route(prefix+'/graph',graph_manifest),
             Route(prefix+'/processing/pause',change_processing_pause,methods=['PUT']),
