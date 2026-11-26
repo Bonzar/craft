@@ -100,3 +100,41 @@ release via cwd, argv or PYTHONPATH. Verify that from actual live units,
 then verify direct TEST Gateway queue identity on approved upgrade **and**
 restoration before arming retention. No manual service restart/pruning
 substitute for a green release and existing owner Sites read acceptance.
+
+## TEST wrapper that stores only the Sites key fingerprint
+
+If the real VM wrapper has only a fingerprint of the existing Sites route key,
+do not copy that key to the VM or substitute an internal bridge/owner-local
+credential. A distinct, root-enabled marker shape is available:
+
+```json
+{"version":1,"mode":"local_candidate_owner_pending"}
+```
+
+It qualifies the **local candidate**, not the user-observed delivery. It
+asserts the real 8819 systemd MainPID, TEST Unix UID, exact immutable venv
+command and PYTHONPATH, exact existing stage/projection environment, PID
+ownership of the sole TCP :8819 listen socket across IPv4/IPv6 in its network
+namespace (which must be 127.0.0.1:8819), and an authentication
+denial on the actual local wrapper with no credentials. Then, as the
+already-authorized TEST Unix service account, it uses the same released
+Graph queue dashboard read method and canonical DB/projection paths to
+verify the release generation and three queue IDs. The probe emits no DB
+records and doesn't assert an HTTP success from an unauthenticated request.
+It fails on a restarted process, stale generation, missing projection,
+wrong listener, missing denial, or unavailable Linux proc data. Hook is
+same for candidate and rollback restores, leaving native Sites auth untouched.
+
+The test release's local qualification explicitly reports
+`owner Sites acceptance still pending`. Before declaring delivered, using
+the established logged-in owner browser, GET the existing TEST Sites
+`/api/v1/capabilities?queue_status=1&limit=1&offset=0`; it must return HTTP 200,
+stage TEST, the exact release tag/generation independently derived from the
+approved release and the three actual queue names. Verify visible Queues
+on the same stable visual entry. A login/error page, old generation, empty
+projection, or unverified owner browser is a failed/pending end-to-end
+check: do not promote, prune, or claim Sites operational from a green local
+check alone. If organizational policy requires the Sites proof *inside*
+the activation transaction, don't enable local-candidate mode: use an
+independent already-authorized owner-side check (never raw key on VM)
+and keep acceptance pending until that is wired.
