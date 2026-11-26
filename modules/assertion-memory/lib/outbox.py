@@ -156,7 +156,8 @@ class Outbox:
                 'blocked': state.get('blocked') or (state.get('blocked_interrupted_batch') or {}).get('reason'),
                 'database_clear_ambiguous_before_rearm':state.get('pre_reset_turn_discarded',False),
                 'pending_turn_completion': bool(state.get('interrupted_users')
-                    or (state.get('turn') or {}).get('user_messages') or (state.get('turn') or {}).get('assistant')),
+                    or (state.get('turn') or {}).get('user_messages') or (state.get('turn') or {}).get('assistant')
+                    or (state.get('turn') or {}).get('assistant_commentary')),
                 'pending_source_proof': bool((state.get('turn') or {}).get('pending')
                     and not (state.get('turn') or {}).get('pending', {}).get('emitted'))}
 

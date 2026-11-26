@@ -268,7 +268,8 @@ def arm_database_reset_boundary(state, *, clock_ns):
                     'turn':None,'current':None,'dialogue_turn_roots':{},'witnesses':[],
                     'interrupted_users':[],'interrupted_user_witnesses':[],'blocked_interrupted_batch':None,
                     'gaps':[gap for gap in state.get('gaps',[])
-                            if gap!='interrupted_batch_exceeds_transport_limits'],
+                            if gap not in ('interrupted_batch_exceeds_transport_limits',
+                                           'visible_commentary_batch_exceeds_transport_limits')],
                     'resume_after_ns':max(state.get('resume_after_ns',0),cutoff_ns),
                     'pre_reset_turn_discarded':bool(st.st_size>cursor or state.get('turn')
                         or state.get('interrupted_users') or state.get('blocked_interrupted_batch'))}
@@ -382,14 +383,20 @@ def _assistant_mode(payload):
     """Explicit visible channel/phase wins; private phases are never corroborated."""
     if payload.get('type')!='message' or payload.get('role')!='assistant':return None
     channel,phase=payload.get('channel'),payload.get('phase')
+    native_id=payload.get('id')
+    if isinstance(native_id,str) and native_id.startswith(('call_','fc_','rs_')):
+        return None
     if channel in ('analysis','reasoning') or phase in ('analysis','reasoning'):return None
     if payload.get('recipient') not in (None,'all') or channel not in (None,'final','commentary'):return None
-    if channel=='commentary' or phase=='commentary':return 'commentary'
+    if channel=='commentary' or phase=='commentary':
+        # Explicit but conflicting final/private phase-channel metadata is not
+        # positive proof that this is a visible commentary occurrence.
+        return 'commentary' if channel in (None,'commentary') and phase in (None,'commentary') else None
     if channel=='final' or phase=='final_answer':return 'final'
     return 'pending'
 
 
-def _chat_exclusion(payload):
+def _chat_exclusion(payload,*,batch=False):
     if payload.get('type') in CHAT_EXCLUDED_TYPES:
         return 'non_dialogue_' + payload['type']
     if payload.get('type') != 'message':
@@ -400,7 +407,7 @@ def _chat_exclusion(payload):
         mode = _assistant_mode(payload)
         if mode is None:
             return 'assistant_private_or_unproven_route'
-        if mode == 'commentary':
+        if mode == 'commentary' and not batch:
             return 'assistant_intermediate_message'
     return None
 
@@ -410,11 +417,31 @@ def _stage_assistant(state, row, mode, offset, position):
     if turn.get('assistant_finished'):
         return
     if not turn['verified']:
-        if mode == 'final':
+        if mode in ('final','commentary'):
             state['gaps'].append('visible_assistant_before_user_proof')
         return
     payload = row['payload']
     parts = payload.get('content')
+    if mode == 'commentary':
+        native_id=payload.get('id')
+        if (not isinstance(native_id,str) or not 0<len(native_id)<=256
+                or not isinstance(parts,list) or not parts
+                or any(not isinstance(p,dict) or p.get('type')!='output_text'
+                       or not isinstance(p.get('text'),str) for p in parts)):
+            state['gaps'].append('unsupported_visible_commentary_schema')
+            return
+        text=''.join(part['text'] for part in parts)
+        if not text.strip():
+            return
+        staged=turn.setdefault('assistant_commentary',[])
+        previous=next((item for item in staged if item['id']==native_id),None)
+        if previous is not None:
+            if previous['text']!=text:
+                raise ValueError('Conflicting text for one assistant commentary occurrence')
+            return
+        staged.append({'id':native_id,'text':text,'offset':offset,'position':position,
+                       'row':{key:row[key] for key in ('timestamp','_witness') if key in row}})
+        return
     if not isinstance(parts, list) or len(parts) != 1 or not isinstance(parts[0], dict) or parts[0].get('type') != 'output_text':
         state['gaps'].append('unsupported_visible_assistant_schema')
         return
@@ -429,6 +456,7 @@ def _seal_turn(state):
     turn = state['turn']
     turn['assistant_finished'] = True
     turn.pop('user_witnesses', None)
+    turn.pop('assistant_commentary', None)
     pending = turn.get('assistant')
     turn['assistant'] = None
     return pending, turn.pop('user_messages', [])
@@ -470,6 +498,7 @@ def _ordered_batch(*groups):
 
 
 def _complete_assistant(store, state, config, payload):
+    commentary=(state['turn'].get('assistant_commentary',[]) if config.get('capture_batch') else [])
     pending, messages = _seal_turn(state)
     if pending:
         row = pending['row']
@@ -490,15 +519,25 @@ def _complete_assistant(store, state, config, payload):
                        or a['actor_id'] != config.get('actor_id', 'user')
                        or a['scope'] != config.get('scope', 'default') for a,_ in carry):
                     raise ValueError('Interrupted users belong to another capture policy; review required')
-                members = (_ordered_batch(carry, messages, (assistant,)) if batch
+                interim=[]
+                for item in commentary:
+                    # Only the authoritative final row is retained when the
+                    # same native message ID is projected in both phases.
+                    if item['id']==source.get('id'):
+                        continue
+                    interim.append(_enqueue(store,state,item['row'],'assistant',item['text'],item['id'],
+                        item['position'],'assistant',config,
+                        'assistant:'+turn_id+':byte:'+str(item['offset']),deferred=True))
+                members = (_ordered_batch(carry, messages, interim, (assistant,)) if batch
                            else sorted([*messages, assistant],key=lambda entry:entry[1]))
-                if carry and (len(members)>_CAPTURE_BATCH_MAX_MEMBERS
+                if batch and (len(members)>_CAPTURE_BATCH_MAX_MEMBERS
                               or sum(len(a['text']) for a,_ in members)>_CAPTURE_BATCH_MAX_CHARS):
                     # No send and no split. The completed normalized members remain in the
                     # durable session row, with its cursor, for an explicit owner recovery.
-                    state['blocked_interrupted_batch'] = {'members':members,
-                        'reason':'interrupted_batch_exceeds_transport_limits'}
-                    state['gaps'].append('interrupted_batch_exceeds_transport_limits')
+                    reason=('visible_commentary_batch_exceeds_transport_limits' if interim
+                            else 'interrupted_batch_exceeds_transport_limits')
+                    state['blocked_interrupted_batch'] = {'members':members,'reason':reason}
+                    state['gaps'].append(reason)
                     return 0
                 if batch:
                     member_ids = [args['message_id'] for args,_ in members]
@@ -514,6 +553,8 @@ def _complete_assistant(store, state, config, payload):
                 state['gaps'].append('unmatched_assistant_completion')
     if messages:
         _exclude(state, 'user_messages_in_turn_without_final', len(messages))
+    if commentary:
+        _exclude(state, 'assistant_commentary_without_final', len(commentary))
     return 0
 
 
@@ -636,7 +677,7 @@ def _process(store, state, meta, row, offset, position, config):
     queued = _flush_user(store, state, config, final=is_complete) if boundary or is_complete else 0
     if is_complete:
         return queued + _complete_assistant(store, state, config, payload)
-    exclusion = _chat_exclusion(payload) if row.get('type') == 'response_item' else None
+    exclusion = _chat_exclusion(payload,batch=bool(config.get('capture_batch'))) if row.get('type') == 'response_item' else None
     if exclusion:
         _exclude(state, exclusion)
     elif mode:
@@ -668,7 +709,7 @@ def _poll_locked(store, session_id, config):
     if not state.get('watching', True): return {'queued': 0, 'status': 'inactive'}
     if state.get('blocked_interrupted_batch'):
         return {'queued':0,'status':'blocked',
-                'gaps':['interrupted_batch_exceeds_transport_limits']}
+                'gaps':[state['blocked_interrupted_batch']['reason']]}
     path = Path(state['path'])
     if not path.exists(): return {'queued': 0, 'status': 'waiting_transcript'}
     queued = 0
@@ -691,7 +732,9 @@ def _poll_locked(store, session_id, config):
         pending_assistant = active_turn.get('assistant') or {}
         pending_witness = pending_assistant.get('row', {}).get('_witness')
         for witness in [*state.get('witnesses', []), *active_turn.get('user_witnesses', []),
-                        *state.get('interrupted_user_witnesses', []), state.get('checkpoint'), pending_witness]:
+                        *state.get('interrupted_user_witnesses', []),
+                        *(item['row'].get('_witness') for item in active_turn.get('assistant_commentary',[])),
+                        state.get('checkpoint'), pending_witness]:
             if witness is None:
                 continue
             stream.seek(witness['start'])
@@ -741,7 +784,8 @@ def _poll_locked(store, session_id, config):
                     from .user_projection import is_photo_response
                     media_envelope=media_envelope or is_photo_response(row)
                 excluded_chat_item=(isinstance(row,dict) and (row.get('type')=='compacted'
-                    or row.get('type')=='response_item' and isinstance(payload,dict) and _chat_exclusion(payload) is not None))
+                    or row.get('type')=='response_item' and isinstance(payload,dict)
+                    and _chat_exclusion(payload,batch=bool(config.get('capture_batch'))) is not None))
                 if len(line)>MAX_RECORD and not media_envelope and not excluded_chat_item:
                     state['gaps'].append('oversized_record');state['turn']=None
                     state.setdefault('gap_witnesses',[]).append({'reason':'oversized_record','start':offset,
