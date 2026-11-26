@@ -33,6 +33,11 @@ HEX=re.compile(r'[a-f0-9]{64}\Z')
 RELEASE=re.compile(r'([a-f0-9]{40})-([a-f0-9]{64})\Z')
 TAG=re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?\Z')
 PAGE=re.compile(rb'(limit|offset)=(0|[1-9][0-9]{0,6})\Z')
+LEGACY_RESPONSE_BYTES=131_072
+# The standalone Visual queue client already permits 2.4 MB. A full batch
+# page can contain 50 * 128 event IDs and their preview revisions; preview
+# text is fetched separately. Do not truncate complete cards or change offsets.
+BATCH_CARD_RESPONSE_BYTES=2_400_000
 HEADERS=[(b'content-type',b'application/json'),(b'cache-control',b'private, no-store'),
          (b'x-content-type-options',b'nosniff')]
 
@@ -104,9 +109,9 @@ def make_queue_rest(*, fingerprint, port, project):
     gate=asyncio.Semaphore(4)
 
     async def app(scope,receive,send):
-        async def reply(status,body):
+        async def reply(status,body,*,max_bytes=LEGACY_RESPONSE_BYTES):
             wire=json.dumps(body,separators=(',',':'),ensure_ascii=True).encode('ascii')
-            if len(wire)>131072:
+            if len(wire)>max_bytes:
                 status,wire=503,b'{"error":"unavailable"}'
             await send({'type':'http.response.start','status':status,'headers':
                         [*HEADERS,(b'content-length',str(len(wire)).encode('ascii'))]})
@@ -151,7 +156,7 @@ def make_queue_rest(*, fingerprint, port, project):
                     **({'batch_cards':True} if card_format else {}))
         except (ValueError,OSError,sqlite3.Error):
             return await reply(503,{'error':'unavailable'})
-        return await reply(200,result)
+        return await reply(200,result,max_bytes=BATCH_CARD_RESPONSE_BYTES if card_format else LEGACY_RESPONSE_BYTES)
 
     return app
 
