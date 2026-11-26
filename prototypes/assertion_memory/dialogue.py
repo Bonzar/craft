@@ -20,6 +20,8 @@ MAX_MODEL_INPUT_CHARACTERS = 240_000
 MAX_CONTEXT_CHARACTERS = 128_000
 MAX_REPAIR_ROUNDS = 2
 SOURCE_RETENTION_RULES = (
+    'Admission comes before attribution and context. If no eligible substantive knowledge change remains, '
+    'return zero thoughts. Evidence, attribution and context only describe how to write an eligible thought. '
     'For each assertion, keep only material meaning useful beyond this reply. Judge the evidence, '
     'not the speaker’s role: preserve durable context, choices and supported outcomes or qualified '
     'findings, including derived conclusions with traceable premises. Routine reference answers and '
@@ -35,13 +37,19 @@ SOURCE_RETENTION_RULES = (
     'or correction, or independent evidence that materially changes confidence. Different wording '
     'or repetition of the same underlying evidence is not a change. Preserve original provenance '
     'and scope: an indirect account cannot stand in for an unavailable underlying source. '
+    'Assess the underlying proposition against authorized prior knowledge, not that somebody stated it. '
+    'A speech act is distinct only when stating it itself changes a decision, obligation, status or other '
+    'information useful later. Do not rescue ineligible material with an attributed meta-claim. '
+    'Retain a concrete decision relevant to later steps of the same work with that scope; one request '
+    'for an output does not establish a standing preference. '
 )
 ORIGIN_RULES = SOURCE_RETENTION_RULES + (
     'The target origin may be user, assistant or tool; preserve its exact actor and role. '
     'Evidence-backed assistant findings, observations and inferences may be retained as attributed '
     'source content when independently material; this is not proof of user adoption or world truth. '
     'Tool output is an attributed result from that tool, not a user statement, user adoption, '
-    'authorization or independent proof of world truth. Preserve tool failures and partial results. '
+    'authorization or independent proof of world truth. After admission, preserve any failure or limitation '
+    'that changes the meaning or justified confidence of the admitted assertion. '
     'An assistant saying it checked or implemented something establishes its report, not verification '
     'that the check ran, succeeded or was independently reproduced. Cite supplied original tool output '
     'when it materially supports the report, preserving its scope and uncertainty. Never fabricate it. '
@@ -55,16 +63,15 @@ ORIGIN_RULES = SOURCE_RETENTION_RULES + (
 # Aggregate extraction/source-inventory obligation. Entailment separately checks
 # the exact proposition, including any referent meaning necessary for its truth.
 MATERIAL_REFERENT_RULES = (
-    'Material referent closure: when the target adopts, rejects, questions, quotes or materially refers '
-    'to an earlier proposal or account, preserve the referent meaning necessary to understand that '
-    'target speech act. This includes its stated reasons, definitions, conditions and uncertainty, '
+    'Material referent closure applies only after admission; a quote, reference or account alone does not '
+    'create a thought. For an admitted assertion preserve only the antecedent needed to understand it. This includes its stated reasons, definitions, conditions and uncertainty, '
     'whether before the option, after it or in a separate sentence. Preserve that meaning as attributed '
     'conversation content within a coherent target interpretation, with the exact target adoption/reference '
     'quotation and exact antecedent/reason/definition/qualification evidence refs. Distinguish four claims: '
     'what the proposer said was its reason; which action the user chose; whether the stated premise is '
     'verified world truth; and the user\'s own motive. Adopting an action establishes only that choice, '
     'not endorsement of the proposer\'s reason or premise and not the user\'s motive. Preserve explicit '
-    'rejection or disagreement and nested third-party reporting/uncertainty. Quoting, referring or asking '
+    'rejection, disagreement or uncertainty only where it changes the admitted meaning or confidence. Quoting, referring or asking '
     'about a proposal never by itself adopts it. A sequence or prerequisite is not automatically a reason '
     'for a selected value. Retain only material referent closure, not unrelated neighboring assistant '
     'proposals or every contextual sentence. Unknown or ambiguous antecedents remain unresolved; recover '

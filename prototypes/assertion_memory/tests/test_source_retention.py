@@ -1,5 +1,5 @@
 """Retention instructions are applied before construction, and again at verification."""
-from ..dialogue import SOURCE_RETENTION_RULES, _extraction_instructions, _verification_instructions
+from ..dialogue import MATERIAL_REFERENT_RULES, SOURCE_RETENTION_RULES, _extraction_instructions, _verification_instructions
 from ..source_coverage import _COVERAGE, _REPAIR
 from ..thought_engine_contract import VERIFY, INDEPENDENT_SOURCE_REVIEW, construction_instructions
 
@@ -8,6 +8,9 @@ def test_source_admission_and_coverage_share_scope_and_attribution():
     for instructions in (construction_instructions(), _extraction_instructions(),
                          _verification_instructions(False), VERIFY, _COVERAGE):
         assert SOURCE_RETENTION_RULES in instructions
+        assert 'Admission comes before attribution and context' in instructions
+        assert 'Do not rescue ineligible material with an attributed meta-claim' in instructions
+        assert 'concrete decision relevant to later steps' in instructions
         assert 'each assertion' in instructions
         assert 'derived conclusions with traceable premises' in instructions
         assert 'exact user-origin evidence' in instructions
@@ -17,6 +20,7 @@ def test_source_admission_and_coverage_share_scope_and_attribution():
         assert 'materially change useful knowledge' in instructions
         assert 'an indirect account cannot stand in for an unavailable underlying source' in instructions
         assert 'independent evidence that materially changes confidence' in instructions
+    assert 'applies only after admission' in MATERIAL_REFERENT_RULES
     assert 'reject unsupported status and retention-ineligible' in VERIFY
     assert 'retention-ineligible raw or task-only statement' in INDEPENDENT_SOURCE_REVIEW
     assert 'Do not flag raw-only, task-only or repeated material' in _COVERAGE
@@ -82,5 +86,5 @@ def test_missing_original_does_not_turn_a_memory_read_into_provenance():
     assert json.loads(drafts[1].body)['thoughts'][0]['text'] == fresh
     for instructions in (calls[0][0].instructions, VERIFY, _COVERAGE):
         assert 'Different wording' in instructions
-        assert 'retelling or tool response never substitutes' in instructions
+        assert 'an indirect account cannot stand in for an unavailable underlying source' in instructions
     assert 'no knowledge change' in _COVERAGE
