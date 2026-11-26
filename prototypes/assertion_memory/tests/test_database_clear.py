@@ -223,6 +223,21 @@ class DatabaseClearTest(unittest.TestCase):
             recover(second,b)
             self.assertEqual(action('clear_prepare',{})['capture_rearm'],'confirmed')
 
+    def test_closed_or_expired_enrollment_does_not_block_clear_confirmation(self):
+        from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
+        producer='jarvis:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        with authenticated_fresh_mac():
+            closed=self.service.ingest_register(producer,'11111111-1111-1111-1111-111111111111')
+            stale=self.service.ingest_register(producer,'22222222-2222-2222-2222-222222222222')
+            self.service.ingest_report(closed['stream_id'],closed['epoch'],1,0,'current',0,lifecycle='closed')
+        with self.store.transaction(write=True) as db:
+            db.execute("UPDATE memory_ingest_streams SET lease_until='2000-01-01T00:00:00.000000+00:00' WHERE stream_id=?",
+                       (stale['stream_id'],))
+        action=self.signed_callbacks('test')
+        receipt=action('clear_commit',{'expected_revision':action('clear_prepare',{})['revision']})
+        self.assertEqual(receipt['capture_rearm'],'not_required')
+        self.assertEqual(action('clear_prepare',{})['capture_rearm'],'not_required')
+
     def test_replace_or_release_change_invalidates_a_prepared_revision(self):
         self.capture('seeded-old')
         original=self.signed_callbacks('test')('clear_prepare',{})['revision']
