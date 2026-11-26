@@ -21,7 +21,7 @@ def installed_prod_owner_api(dashboard):
         raise
     from .browser_owner_api import configured_browser_api
     bridge=configured_prod_owner_bridge(PROD_OWNER_CREDENTIALS)
-    return configured_browser_api(dashboard,prod_owner_bridge=bridge)
+    return configured_browser_api(dashboard,clear_enabled=False,prod_owner_bridge=bridge)
 
 
 def configure_owner_lanes(args, *, prod_owner_api=None):
@@ -58,7 +58,8 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
             profile=installed_test_clear_profile()
             if args.browser_owner_clear and profile is None:
                 raise ValueError('A verified TEST clear profile is required')
-            browser=configured_browser_api(dashboard,clear_profile=profile)
+            browser=(configured_browser_api(dashboard,clear_enabled=False) if profile is None
+                     else configured_browser_api(dashboard,clear_profile=profile))
         return dashboard,browser
     if args.queue_control:
         from .queue_dashboard import configured_browser_dashboard
