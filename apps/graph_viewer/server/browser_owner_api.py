@@ -296,12 +296,16 @@ def installed_test_clear_profile():
         logging.getLogger(__name__).warning('test_browser_clear_profile_invalid')
         return None
 
-def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None):
+def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False):
     """A TEST-only profile always pins release and can bind one pre-clear epoch.
 
     Format: verified release generation plus exact epoch scope or reusable mode.
     The profile is an activation constraint, not proof of an owner session.
     """
+    # Retain the old keyword only to fail closed with a meaningful error.
+    # A caller flag alone cannot supply TEST epoch or release authorization.
+    if clear_enabled is not False:
+        raise ValueError('An explicit verified TEST clear profile is required')
     if dashboard.stage=='prod':
         if clear_profile is not None:
             raise ValueError('TEST clear profiles are forbidden on PROD')
