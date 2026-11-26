@@ -80,11 +80,42 @@ def record_activation(root,old,release):
         os.replace(pending,root/PENDING)
         sync_dir(root)
 
-def recover_activation(root,script,hook):
+@dataclass(frozen=True)
+class ActivationWitness:
+    """Internal optional seam, never derived from payload/runner inputs.
+
+    The lane must supply an independently protected witness adapter.
+    before_unlink is an authorization gate; after_fsync must not roll back
+    a committed activation. recover_absent may finish a previously recorded
+    witness after a crash, but may not repeat native activation.
+    """
+    before_unlink: Callable
+    after_fsync: Callable
+    recover_absent: Callable
+
+    def __post_init__(self):
+        if not all(callable(x) for x in (self.before_unlink,self.after_fsync,self.recover_absent)):
+            raise ValueError('invalid_activation_witness')
+
+
+class ActivationWitnessPublicationPending(RuntimeError):
+    """Native state committed; retry only independent witness publication."""
+
+
+def _publish_activation_witness(witness,root,phase,old,candidate):
+    try:
+        witness.after_fsync(root,phase,old,candidate)
+    except Exception as exc:
+        raise ActivationWitnessPublicationPending('activation_witness_publication_pending') from exc
+
+
+def recover_activation(root,script,hook,*,witness=None):
     journal=root/PENDING
     if journal.is_symlink():
         raise ValueError('invalid_activation_journal')
     if not journal.exists():
+        if witness is not None:
+            witness.recover_absent(root)
         return
     if not journal.is_file() or journal.stat().st_size>1024:
         raise ValueError('invalid_activation_journal')
@@ -106,10 +137,14 @@ def recover_activation(root,script,hook):
         hook(script,'smoke',old)
     else:
         hook(script,'stop',candidate)
+    if witness is not None:
+        witness.before_unlink(root,'restore',old,candidate)
     journal.unlink()
     sync_dir(root)
+    if witness is not None:
+        _publish_activation_witness(witness,root,'restore',old,candidate)
 
-def activate(root,release,script,hook):
+def activate(root,release,script,hook,*,witness=None):
     old=current_target(root)
     record_activation(root,old,release)
     try:
@@ -117,11 +152,15 @@ def activate(root,release,script,hook):
         sync_dir(root)
         hook(script,'restart',release)
         hook(script,'smoke',release)
+        if witness is not None:
+            witness.before_unlink(root,'restart',Path(old) if old is not None else None,release)
     except BaseException:
-        recover_activation(root,script,hook)
+        recover_activation(root,script,hook,witness=witness)
         raise
     (root/PENDING).unlink()
     sync_dir(root)
+    if witness is not None:
+        _publish_activation_witness(witness,root,'restart',Path(old) if old is not None else None,release)
 
 
 def unpack(stream, destination, expected_sha, spec):
@@ -213,7 +252,7 @@ def prepare(payload, release, root, hook, retained, *, reclaim=None):
 
 
 def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,
-           after_committed=None, retention_factory=None):
+           after_committed=None, retention_factory=None, witness_factory=None):
     """Deploy a validated artifact after lane-specific authentication.
 
     An optional after_committed(root, release) runs under the existing lock
@@ -221,6 +260,7 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
     is not a transaction or rollback hook; its failure cannot undo activation.
     retention_factory binds an independently attested, generated-only policy
     to this same existing lane lock before any artifact spooling/preparation.
+    witness_factory is an opt-in internal lane binding under that same lock.
     """
     root=Path(root)
     if not root.is_absolute() or root.is_symlink() or (root/'releases').is_symlink():
@@ -233,7 +273,10 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
         if dispatch is None:
             raise ValueError('missing_release_hook')
         runner=lambda _script,action,location: dispatch(action,location)
-        recover_activation(root,None,runner)
+        witness=witness_factory(lock.fileno()) if witness_factory is not None else None
+        if witness_factory is not None and type(witness) is not ActivationWitness:
+            raise ValueError('invalid_activation_witness')
+        recover_activation(root,None,runner,witness=witness)
         retention=retention_factory(lock.fileno()) if retention_factory else None
         if retention:
             retention.preflight()
@@ -247,7 +290,9 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
             try:
                 prepare(staged,target,root,dispatch,retained,
                         reclaim=(lambda path:retention.remove(store,path)) if retention else None)
-                activate(root,target,None,runner)
+                activate(root,target,None,runner,witness=witness)
+            except ActivationWitnessPublicationPending:
+                raise
             except BaseException:
                 if retention and os.path.lexists(target):
                     retention.failed(store,target)
