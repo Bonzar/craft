@@ -27,10 +27,12 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
     from .queue_session_control import PATH as SESSIONS, normalize
     from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH, check_request
     from .queue_processing_policy import PATH as POLICY, validate
+    from .database_clear import PATH as CLEAR
+    clear_mode=path==CLEAR
     policy_mode=path==POLICY
     session_mode=path==SESSIONS or policy_mode
     item_mode=path in (REMOVE,PREVIEW_PATH)
-    if path!=PATH and not (session_mode or item_mode):
+    if path!=PATH and not (clear_mode or session_mode or item_mode):
         return None
     if stage not in ('test','prod') or enabled is not True:
         return None
@@ -92,7 +94,8 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                             break
                 request = json.loads(body, object_pairs_hook=unique)
                 field='policy' if policy_mode else 'selected_session_ids' if session_mode else 'paused'
-                fields={'queue_id','item_id','expected_revision'} if item_mode else {field,'expected_revision'}
+                fields=({'expected_revision'} if clear_mode else
+                        {'queue_id','item_id','expected_revision'} if item_mode else {field,'expected_revision'})
                 if (type(request) is not dict or set(request) != fields
                         or type(request['expected_revision']) is not str
                         or not REVISION.fullmatch(request['expected_revision'])):
@@ -103,7 +106,7 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                     validate(request[field])
                 elif session_mode:
                     normalize(request[field])
-                elif type(request[field]) is not bool:
+                elif not clear_mode and type(request[field]) is not bool:
                     raise ValueError()
                 args = {'stage': stage, **request}
             except (TimeoutError, ValueError, UnicodeError):
@@ -129,18 +132,23 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
             if item_mode:
                 required=({'stage','queue_id','item_id','removed','effect'} if path==REMOVE
                           else {'stage','queue_id','item_id','source_preview','source_role'})
+            if clear_mode:
+                field='can_clear' if method=='GET' else 'cleared'
+                required={'stage','revision',field}
             if (type(state) is not dict or set(state) != required or state['stage'] != stage
-                    or not item_mode and (not session_mode and type(state['paused']) is not bool
-                    or type(state['revision']) is not str or not REVISION.fullmatch(state['revision']))):
+                    or not item_mode and (type(state['revision']) is not str or not REVISION.fullmatch(state['revision']))
+                    or not (session_mode or item_mode or clear_mode) and type(state['paused']) is not bool
+                    or clear_mode and (type(state[field]) is not bool or method=='PUT' and state[field] is not True)):
                 raise ValueError()
         except ProofRejected:
             return await reply(403, {'error': 'owner_required'})
         except Conflict:
             return await reply(409, {'error': 'queue_control_changed'})
         except ValueError:
-            return await reply(400 if session_mode else 503, {'error':'invalid_request' if session_mode else 'pause_unavailable'})
+            return await reply(400 if session_mode else 503, {'error':'invalid_request' if session_mode else
+                'database_clear_unavailable' if clear_mode else 'pause_unavailable'})
         except Exception:
-            return await reply(503, {'error': 'pause_unavailable'})
+            return await reply(503, {'error':'database_clear_unavailable' if clear_mode else 'pause_unavailable'})
         return await reply(200, state)
 
     return handler

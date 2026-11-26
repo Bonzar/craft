@@ -169,7 +169,7 @@ def _configure(config_path, port, legacy_token):
     parent=Path(__file__).resolve().parent
     if parent!=current/'prototypes/assertion_memory':
         raise ValueError('Untrusted pause release')
-    for name in ('queue_pause_binding.py','queue_pause_rest.py','queue_pause_proof.py'):
+    for name in ('queue_pause_binding.py','queue_pause_rest.py','queue_pause_proof.py','database_clear.py'):
         raw=_checked_file(parent/name,65536)
         if manifest.count(hashlib.sha256(raw).hexdigest()+'  ./prototypes/assertion_memory/'+name)!=1:
             raise ValueError('Untrusted pause release manifest')
@@ -215,6 +215,9 @@ def _configure(config_path, port, legacy_token):
                 change=lambda **args:handle(action,path,**args),port=port,path=path)
 
         handler.queue_policy_route=route(POLICY,'policy_set','policy_prepare')
+        from .database_clear import PATH as CLEAR
+        handler.queue_clear_route=route(CLEAR,'clear_commit','clear_prepare')
+        handler.queue_clear_database=p.db
         if config.processing_session_ids==():
             handler.queue_session_route=route(sessions.PATH,'sessions_set','sessions_prepare')
             from .mcp_server import WorkerLauncher

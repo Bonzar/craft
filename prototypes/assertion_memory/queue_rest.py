@@ -91,6 +91,10 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
             if (can_change() if callable(can_change) else can_change):
                 from .queue_item_removal import annotate
                 annotate(db,data)
+                if batch_cards:
+                    from .database_clear import describe
+                    clear=describe(db,stage=lane,binding=[before,(tag,generation)])
+                    data['database_clear']={k:clear[k] for k in ('revision','can_clear')}
         finally:
             db.set_progress_handler(None,0)
             db.rollback()
