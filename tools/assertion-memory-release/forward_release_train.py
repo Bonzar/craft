@@ -150,13 +150,38 @@ class Ledger:
             return True
         return self._write(write)
 
+    def bind_release_id(self, candidate, release_id):
+        require(type(release_id) is int and release_id > 0, 'Immutable release ID required')
+        def bind():
+            _,_,current,pin,_,_ = self._read(candidate.family)
+            require(current == candidate and pin[0] in (None, release_id), 'Wrong immutable published release')
+            self.db.execute('UPDATE forward_train SET open_id=? WHERE family=?',(release_id,candidate.family))
+        return self._write(bind)
+
+    def require_reserved(self, candidate, *, release_id):
+        require(type(release_id) is int and release_id > 0, 'Immutable release ID required')
+        def check():
+            _,_,current,pin,_,_ = self._read(candidate.family)
+            require(current == candidate and pin[0] == release_id,
+                    'Build is not the exact reserved release')
+        return self._write(check)
+
+    def require_bound(self, artifact):
+        artifact.checked()
+        c = artifact.candidate
+        def check():
+            _,_,current,pin,_,promoting = self._read(c.family)
+            require(not promoting and current == c and pin == (artifact.release_id,artifact.digest),
+                    'Exact pre-promotion artifact required')
+        return self._write(check)
+
     def bind_artifact(self, artifact):
         artifact.checked()
         c = artifact.candidate
         def write():
             _,_,current,pin,_,_ = self._read(c.family)
             require(current == c, 'Unreserved or obsolete release')
-            require(pin == (None,None) or pin == (artifact.release_id,artifact.digest), 'Attempt to replace immutable candidate')
+            require(pin in ((None,None), (artifact.release_id,None), (artifact.release_id,artifact.digest)), 'Attempt to replace immutable candidate')
             self.db.execute('UPDATE forward_train SET open_id=?,open_digest=? WHERE family=?', (artifact.release_id,artifact.digest,c.family))
         return self._write(write)
 
