@@ -1,5 +1,7 @@
 """Durable operational reports and per-stream delivery receipts, never source order."""
+from datetime import datetime, timezone
 import json
+import re
 import base64
 import time
 import uuid
@@ -38,6 +40,7 @@ class Coordinator:
     def __init__(self,store,client,*,clock=time.time):
         self.store,self.db,self.client,self.clock=store,store.db,client,clock
         self.reconciled=set()
+        self.last_probe={}
 
     def local(self,session):
         row=self.db.execute('SELECT data FROM transport_streams WHERE session_id=?',(session,)).fetchone()
@@ -56,6 +59,11 @@ class Coordinator:
     def observed(self,session):
         return self.db.execute('SELECT COALESCE(MAX(seq),0) FROM delivery_sequences WHERE session_id=?',(session,)).fetchone()[0]
 
+    def _wire_observed(self,value):
+        seq=self.observed(value['session_id'])-value.get('reset_seq_floor',0)
+        if seq<0:raise ValueError('Invalid local reset sequence floor')
+        return seq
+
     def observe(self,session,result):
         value=self.local(session);state=self.store.session(session) or {};summary=self.store.summary(session)
         gap_count=len(state.get('gaps',[]))+int(bool(state.get('blocked')))
@@ -64,7 +72,7 @@ class Coordinator:
         elif result.get('backlog') or summary['pending_source_proof'] or state.get('skip_partial') or summary['pending_turn_completion']:
             scan='catching_up'
         else:scan='current'
-        if self.observed(session)>value['server_observed_seq'] or (scan,gap_count)!=(value['scan_state'],value['gap_count']):
+        if self._wire_observed(value)>value['server_observed_seq'] or (scan,gap_count)!=(value['scan_state'],value['gap_count']):
             value['lifecycle']='active'
         value.update(scan_state=scan,gap_count=gap_count)
         with self.db:self._save(value)
@@ -80,30 +88,98 @@ class Coordinator:
         value['report_seq']=max(value['report_seq'],response['report_seq'])
         value['server_observed_seq']=response['observed_seq'];value['server_acked_through']=response['acked_through']
 
+    def _transition_reset(self,value,response):
+        from .native_capture import arm_database_reset_boundary
+        from .outbox import lifecycle_guard
+        previous={'previous_stream_id':value['stream_id'],'previous_epoch':value['epoch'],
+                  'producer_id':value['producer_id'],'session_id':value['session_id']}
+        marker=response.get('database_clear_reset')
+        if (type(marker) is not dict or marker.keys()!=previous.keys()|{'protocol','generation','cleared_at'}
+                or marker.get('protocol')!='owner-clear-v1'
+                or any(marker.get(k)!=v for k,v in previous.items())
+                or any(response.get(k)!=value[k] for k in ('producer_id','session_id'))):
+            raise ValueError('Unbound database reset receipt')
+        generation=marker['generation']
+        cleared=marker['cleared_at']
+        if (not isinstance(generation,str) or not re.fullmatch('[0-9a-f]{32}',generation)
+                or generation=='0'*32 or generation==value.get('database_clear_generation')
+                or not isinstance(cleared,str) or not cleared.endswith(('Z','+00:00'))
+                or datetime.fromisoformat(cleared.removesuffix('Z')+'+00:00' if cleared.endswith('Z') else cleared).utcoffset()!=timezone.utc.utcoffset(None)):
+            raise ValueError('Invalid database reset receipt')
+        for k in ('stream_id','epoch'):
+            ident=response.get(k)
+            if not isinstance(ident,str) or str(uuid.UUID(ident,version=4))!=ident or ident==value[k]:
+                raise ValueError('Invalid replacement stream identity')
+        if any(type(response.get(k)) is not int or response[k]!=0
+               for k in ('report_seq','observed_seq','acked_through')):
+            raise ValueError('Unexpected replacement stream frontier')
+        session=value['session_id']
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            persisted=self.local(session)
+            if any(value[k]!=persisted[k] for k in ('producer_id','stream_id','epoch')):
+                raise ValueError('Concurrent stream reset')
+            with lifecycle_guard(self.store.root,session):
+                state=self.store.session(session)
+                if state is None:raise ValueError('Missing enrolled reset source')
+                fenced=arm_database_reset_boundary(state,clock_ns=lambda:int(self.clock()*1e9))
+                floor=self.observed(session)
+                dropped=self.db.execute("UPDATE messages SET status='discarded_reset',error=NULL "
+                    "WHERE session_id=? AND status='pending'",(session,)).rowcount
+                # This outbox has one authenticated Base binding. Old artifact
+                # receipts are not proof that the cleared Base still has bytes.
+                self.db.execute('UPDATE artifacts SET receipt=NULL')
+                self.store.save_session(fenced)
+                updated=persisted | dict(stream_id=response['stream_id'],epoch=response['epoch'],
+                    report_seq=0,server_observed_seq=0,server_acked_through=0,pending_report=None,
+                    last_report_at=0,last_snapshot=None,lifecycle='active',scan_state='unknown',gap_count=0,
+                    reset_seq_floor=floor,database_clear_generation=generation,reset_discarded_messages=dropped,
+                    reset_ack_pending=generation,database_clear_ready_generation=None)
+                self._save(updated)
+                self.db.commit()
+        value.clear()
+        value.update(updated)
+
     def _register(self,value):
-        response=self.client.call('memory_ingest_register',{'producer_id':value['producer_id'],'session_id':value['session_id']})
+        args={'producer_id':value['producer_id'],'session_id':value['session_id']}
+        register_bound=getattr(self.client,'register_stream',None)
+        bound=bool(value['stream_id'] and register_bound)
+        response=register_bound(args,previous=(value['stream_id'],value['epoch'])) if bound else self.client.call('memory_ingest_register',args)
+        if not isinstance(response,dict):raise ValueError('Invalid stream registration')
         if not value['stream_id']:
-            if not isinstance(response.get('stream_id'),str) or not isinstance(response.get('epoch'),str):raise ValueError('Invalid stream registration')
+            if not isinstance(response.get('stream_id'),str) or not isinstance(response.get('epoch'),str) or 'database_clear_reset' in response:
+                raise ValueError('Invalid stream registration')
             value['stream_id'],value['epoch']=response['stream_id'],response['epoch']
+        elif bound and 'database_clear_reset' in response:
+            self._transition_reset(value,response)
         self._accept(value,response)
-        if value['server_observed_seq']>self.observed(value['session_id']):
+        if value['server_observed_seq']>self._wire_observed(value):
             raise ValueError('Server observed sequences missing from local outbox; review required')
         with self.db:self._save(value)
         self.reconciled.add(value['session_id'])
+        self.last_probe[value['session_id']]=self.clock()
 
     def _report(self,value,*,force=False):
-        snapshot={'observed_seq':max(self.observed(value['session_id']),value['server_observed_seq']),
+        snapshot={'observed_seq':max(self._wire_observed(value),value['server_observed_seq']),
             'scan_state':value['scan_state'],'gap_count':value['gap_count'],'lifecycle':value['lifecycle']}
         pending=value.get('pending_report')
         if pending is None:
             if not force and snapshot==value['last_snapshot'] and self.clock()-value['last_report_at']<20:return
             pending={'stream_id':value['stream_id'],'epoch':value['epoch'],'report_seq':value['report_seq']+1,**snapshot}
+            if value.get('reset_ack_pending'):
+                pending['reset_generation']=value['reset_ack_pending']
             value.update(report_seq=pending['report_seq'],pending_report=pending)
             with self.db:self._save(value)  # durable exact request before sending
         response=self.client.call('memory_ingest_report',pending)
         self._accept(value,response)
         if response['report_seq']<pending['report_seq'] or response['observed_seq']<pending['observed_seq']:
             raise ValueError('Report receipt does not cover requested frontier')
+        if value.get('reset_ack_pending'):
+            generation=value['reset_ack_pending']
+            if (pending.get('reset_generation')!=generation
+                    or response.get('database_clear_ready_generation')!=generation):
+                raise ValueError('Database reset readiness is not acknowledged')
+            value.update(reset_ack_pending=None,database_clear_ready_generation=generation)
         value.update(pending_report=None,last_snapshot={k:pending[k] for k in snapshot},last_report_at=self.clock())
         with self.db:self._save(value)
         # A replay does not renew the remote lease. Follow it with a fresh monotone
@@ -127,7 +203,9 @@ class Coordinator:
                 except Exception as failure:
                     with self.db:self.db.execute('UPDATE artifacts SET attempts=attempts+1,error=? WHERE artifact_id=?',(type(failure).__name__,aid))
                     raise
-        delivery={'stream_id':value['stream_id'],'epoch':value['epoch'],'seq':row['seq']}
+        seq=row['seq']-value.get('reset_seq_floor',0)
+        if seq<=0:raise ValueError('Delivery predates database reset')
+        delivery={'stream_id':value['stream_id'],'epoch':value['epoch'],'seq':seq}
         return {**arguments,'delivery':delivery}
 
     def _record_capture(self,value,row,receipt):
@@ -138,7 +216,7 @@ class Coordinator:
                 or mid!=arguments['message_id'] or event.get('source')!=arguments['source']):raise ValueError('Unmatched message receipt')
         remote=receipt.get('delivery')
         self._accept(value,remote)
-        if remote['observed_seq']<row['seq']:raise ValueError('Delivery receipt lacks observed membership')
+        if remote['observed_seq']<row['seq']-value.get('reset_seq_floor',0):raise ValueError('Delivery receipt lacks observed membership')
         self.db.execute('UPDATE delivery_sequences SET receipt=? WHERE session_id=? AND message_id=?',
             (_dump(receipt),arguments['session_id'],arguments['message_id']))
         self.db.execute("UPDATE messages SET status='acknowledged',attempts=attempts+1,error=NULL,receipt=? WHERE session_id=? AND message_id=?",
@@ -169,13 +247,35 @@ class Coordinator:
                 self._record_capture(value,member,response)
         return len(stored)
 
+    def _failed(self,session,failure):
+        value=self.local(session)
+        value.update(error=type(failure).__name__,retry_at=self.clock()+value['delay'],delay=min(60,value['delay']*2))
+        with self.db:self._save(value)
+        self.reconciled.discard(session)
+
+    def prepare_source_scan(self,session):
+        # Even with no queued work, an active machine checks already-enrolled
+        # streams before polling the transcript. After long downtime, its
+        # first check runs before any new source bytes are admitted locally.
+        if not getattr(self.client,'register_stream',None):
+            return
+        value=self.local(session)
+        now=self.clock()
+        if (not value['stream_id'] or value['retry_at']>now
+                or (session in self.reconciled and now-self.last_probe.get(session,float('-inf'))<10)):
+            return
+        try:
+            self._register(value)
+        except Exception as failure:
+            self._failed(session,failure)
+
     def tick(self,limit=100):
         result={'attempted':0,'acknowledged':0,'stream_errors':0}
         for session in self.store.sessions():
             value=self.local(session['session_id'])
             if (not session.get('watching',True) and value['pending_report'] is None
-                    and not self.db.execute('SELECT 1 FROM delivery_sequences WHERE session_id=? AND receipt IS NULL LIMIT 1',
-                        (session['session_id'],)).fetchone()):continue
+                    and not self.db.execute('SELECT 1 FROM delivery_sequences WHERE session_id=? AND seq>? AND receipt IS NULL LIMIT 1',
+                        (session['session_id'],value.get('reset_seq_floor',0))).fetchone()):continue
             if value['retry_at']>self.clock():continue
             try:
                 if value['session_id'] not in self.reconciled:self._register(value)
@@ -184,8 +284,8 @@ class Coordinator:
                 self._report(value)
                 if replay:self._report(value,force=True)
                 rows=self.db.execute('SELECT m.*,d.seq FROM messages m JOIN delivery_sequences d USING(session_id,message_id) '
-                    'WHERE m.session_id=? AND d.receipt IS NULL ORDER BY d.seq LIMIT ?',
-                    (value['session_id'],limit-result['attempted'])).fetchall()
+                    'WHERE m.session_id=? AND d.seq>? AND d.receipt IS NULL ORDER BY d.seq LIMIT ?',
+                    (value['session_id'],value.get('reset_seq_floor',0),limit-result['attempted'])).fetchall()
                 through=0
                 for row in rows:
                     if row['seq']<=through:continue
@@ -208,17 +308,15 @@ class Coordinator:
                 with self.db:self._save(value)
             except Exception as failure:
                 # Preserve pending exact report and every unacknowledged raw body.
-                value=self.local(session['session_id'])
-                value.update(error=type(failure).__name__,retry_at=self.clock()+value['delay'],delay=min(60,value['delay']*2))
-                with self.db:self._save(value)
-                self.reconciled.discard(value['session_id']);result['stream_errors']+=1
+                self._failed(session['session_id'],failure)
+                result['stream_errors']+=1
             if result['attempted']>=limit:break
         return result
 
     def close(self,session):
         value=self.local(session)
-        missing=self.db.execute('SELECT COUNT(*) FROM delivery_sequences WHERE session_id=? AND receipt IS NULL',(session,)).fetchone()[0]
+        missing=self.db.execute('SELECT COUNT(*) FROM delivery_sequences WHERE session_id=? AND seq>? AND receipt IS NULL',(session,value.get('reset_seq_floor',0))).fetchone()[0]
         if (missing or value['scan_state']!='current' or value['gap_count']
-                or value['server_acked_through']!=self.observed(session)):raise ValueError('Stream is not cleanly acknowledged/current')
+                or value['server_acked_through']!=self._wire_observed(value)):raise ValueError('Stream is not cleanly acknowledged/current')
         if session not in self.reconciled:self._register(value)
         value['lifecycle']='closed';self._report(value,force=True)

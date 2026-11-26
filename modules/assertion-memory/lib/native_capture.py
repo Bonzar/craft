@@ -168,7 +168,8 @@ def resume_enrolled(store, raw, *, fresh_since):
                 if (marker_identity()!=ended or not stat.S_ISREG(observed.st_mode)
                         or [observed.st_dev,observed.st_ino]!=identity or observed.st_size<current.st_size):
                     raise ValueError('Resume lifecycle or source changed')
-                state.update(current=None,turn=None,dialogue_turn_roots={},resume_after_ns=ended[2])
+                state.update(current=None,turn=None,dialogue_turn_roots={},
+                             resume_after_ns=max(state.get('resume_after_ns',0),ended[2]))
                 store.save_session(state)
                 # Commit the new cursor before clearing the marker; any failure
                 # before unlink leaves the worker fail-closed and inactive.
@@ -213,6 +214,60 @@ def _resumed_human_start(row,meta,after_ns,roots):
         return ns>after_ns
     except (TypeError,ValueError,KeyError,AttributeError,OverflowError):
         return False
+
+
+
+def arm_database_reset_boundary(state, *, clock_ns):
+    """Fence bytes that could predate an owner reset without remote/local clock comparison.
+
+    Caller holds the outbox transaction and lifecycle guard. A turn already on
+    disk when the client learned of the reset is ambiguous and is not replayed.
+    """
+    if (not state.get('verified_fresh_since') or state.get('blocked')
+            or state.get('registration_source')!='startup' or state.get('fork_requires_current_session_proof')):
+        raise ValueError('Unverified reset source')
+    path=Path(state['path'])
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as stream:
+        st=os.fstat(stream.fileno())
+        identity=[st.st_dev,st.st_ino]
+        cursor,line=state.get('cursor'),state.get('line')
+        if (not stat.S_ISREG(st.st_mode) or identity!=state.get('identity')
+                or type(cursor) is not int or cursor<0 or cursor>st.st_size
+                or type(line) is not int or line<0):
+            raise ValueError('Reset source replaced or truncated')
+        header,meta=_header(stream,state)
+        check_fresh_header(header,meta,state['verified_fresh_since'])
+        if hashlib.sha256(header).hexdigest()!=state.get('header_hash'):
+            raise ValueError('Reset source header changed')
+        if cursor:
+            lo=max(0,cursor-4096)
+            stream.seek(lo)
+            if state.get('checkpoint')!={'start':lo,'end':cursor,'sha256':hashlib.sha256(stream.read(cursor-lo)).hexdigest()}:
+                raise ValueError('Reset checkpoint changed')
+        # Freeze exact size before counting lines. Do not chase a growing file.
+        cutoff_ns=clock_ns()
+        stream.seek(cursor)
+        remaining=st.st_size-cursor
+        while remaining:
+            block=stream.read(min(remaining,65536))
+            if not block: raise ValueError('Reset source shrank while fencing')
+            remaining-=len(block)
+            line+=block.count(b'\n')
+        stream.seek(st.st_size-1)
+        partial=stream.read(1)!=b'\n'
+        lo=max(0,st.st_size-4096)
+        stream.seek(lo)
+        tail=stream.read(st.st_size-lo)
+        seen=path.lstat()
+        if (len(tail)!=st.st_size-lo or not stat.S_ISREG(seen.st_mode)
+                or [seen.st_dev,seen.st_ino]!=identity or seen.st_size<st.st_size):
+            raise ValueError('Reset source changed while fencing')
+    return state | {'cursor':st.st_size,'line':line,'skip_partial':partial,
+                    'checkpoint':{'start':lo,'end':st.st_size,'sha256':hashlib.sha256(tail).hexdigest()},
+                    'turn':None,'current':None,'dialogue_turn_roots':{},'witnesses':[],
+                    'resume_after_ns':max(state.get('resume_after_ns',0),cutoff_ns),
+                    'pre_reset_turn_discarded':bool(st.st_size>cursor or state.get('turn'))}
 
 
 def _service_context(row):
