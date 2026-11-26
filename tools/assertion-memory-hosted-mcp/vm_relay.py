@@ -264,7 +264,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                         from prototypes.assertion_memory.capture_batch import authorized_machine_batch
                         with authorized_machine_batch():
                             value=await operations.invoke(name,args)
-                    elif fresh_mac and name in ("memory_ingest_register", "memory_capture_message"):
+                    elif fresh_mac and name in ("memory_ingest_register", "memory_ingest_report", "memory_capture_message"):
                         from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
                         with authenticated_fresh_mac():
                             value=await operations.invoke(name,args)

@@ -15,7 +15,9 @@ PATH='/api/v1/queue-database/clear'
 STATE='memory_database_clear_state'
 TOMBSTONES='memory_database_clear_replay_fence'
 INITIAL='0'*32
-PRESERVE={STATE,TOMBSTONES,'memory_processing_control','memory_state',
+from .stream_clear_transition import CUTOVER,TRANSITIONS
+
+PRESERVE={STATE,TOMBSTONES,CUTOVER,TRANSITIONS,'memory_processing_control','memory_state',
           'memory_thought_runtime','memory_test_queue_sessions','memory_queue_processing_policy','memory_queue_pause_nonce'}
 PROVENANCE=('memory_run_provenance','memory_run_causes','memory_run_cause_links','memory_run_events')
 IMMUTABLE_DELETE={'memory_artifacts_no_delete','memory_view_names_no_delete',
@@ -150,6 +152,9 @@ def clear(db, *, stage, expected_revision, binding=None):
         if table in managed:
             db.executemany(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',
                 ((_fingerprint(salt,kind,tuple(v)),) for v in db.execute('SELECT '+','.join(columns)+' FROM '+table)))
+    from .stream_clear_transition import WITNESS,witnesses,finish_clear
+    db.executemany(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',
+                   ((_fingerprint(salt,WITNESS,tuple(row)),) for row in witnesses(db,managed)))
     db.execute('PRAGMA defer_foreign_keys=ON')
     triggers=[(name,sql) for name,sql in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='trigger'") if name in IMMUTABLE_DELETE]
     for name,_ in triggers:
@@ -182,5 +187,7 @@ def clear(db, *, stage, expected_revision, binding=None):
         raise ValueError('invalid foreign keys after clear')
     db.execute('UPDATE memory_state SET version=version+1 WHERE singleton=1')
     new=uuid4().hex
+    from datetime import datetime, timezone
+    finish_clear(db,new,datetime.now(timezone.utc).isoformat(timespec='microseconds'))
     db.execute(f'INSERT INTO {STATE} VALUES (1,?,?) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision',(new,salt))
     return {'stage':stage,'revision':request_revision(db,stage=stage,binding=binding),'cleared':True}

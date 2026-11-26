@@ -116,6 +116,80 @@ class DatabaseClearTest(unittest.TestCase):
                 self.assertGreater(current[0],0)
                 self.assertTrue(unchanged(db,current[0],'raw',captured['event']['id']))
 
+    def test_same_enrolled_producer_can_resume_only_after_exact_clear_witness(self):
+        from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
+        from prototypes.assertion_memory.stream_clear_transition import TRANSITIONS
+        producer='jarvis:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        unrelated='jarvis:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+        session='11111111-1111-1111-1111-111111111111'
+        foreign='22222222-2222-2222-2222-222222222222'
+        def capture(session,message,pair):
+            return self.service.capture_message(session,message,'synthetic-author','user',
+                'private fixture to erase',None,'fixture://native-clear',
+                delivery={'stream_id':pair['stream_id'],'epoch':pair['epoch'],'seq':1})
+        def previous(pair):
+            return {'previous_stream_id':pair['stream_id'],'previous_epoch':pair['epoch']}
+        with authenticated_fresh_mac():
+            old=self.service.ingest_register(producer,session)
+            self.assertNotIn('database_clear_reset',self.service.ingest_register(producer,session,**previous(old)))
+            first=capture(session,'before-clear',old)
+        self.assertEqual(first['delivery']['acked_through'],1)
+        # Same user-level Base API, but no evidence this producer was enrolled.
+        ordinary=self.service.ingest_register(producer,foreign)
+        action=self.signed_callbacks('prod')
+        action('clear_commit',{'expected_revision':action('clear_prepare',{})['revision']})
+        with self.assertRaisesRegex(ValueError,'No authenticated cleared stream witness'):
+            self.service.ingest_register(producer,session,**previous(old))
+        with authenticated_fresh_mac():
+            for wrong_producer,wrong_session,wrong in (
+                (unrelated,session,old),(producer,foreign,ordinary),
+                (producer,session,old|{'epoch':'33333333-3333-3333-3333-333333333333'})):
+                with self.assertRaises(ValueError):
+                    self.service.ingest_register(wrong_producer,wrong_session,**previous(wrong))
+            with self.assertRaises(ValueError):
+                self.service.ingest_register(producer,session,previous_epoch=old['epoch'])
+            with self.store.transaction() as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM memory_ingest_streams').fetchone()[0],0)
+            recovered=self.service.ingest_register(producer,session,**previous(old))
+            witness=recovered['database_clear_reset']
+            self.assertEqual(witness['protocol'],'owner-clear-v1')
+            self.assertEqual(witness['producer_id'],producer)
+            self.assertEqual(witness['session_id'],session)
+            for old_key in ('stream_id','epoch'):
+                self.assertEqual(witness['previous_'+old_key],old[old_key])
+                self.assertNotEqual(recovered[old_key],old[old_key])
+            self.assertTrue(witness['cleared_at'].endswith('+00:00'))
+            self.assertEqual(recovered['acked_through'],0)
+            self.assertEqual(self.service.ingest_register(producer,session,**previous(old)),recovered)
+            with self.assertRaisesRegex(ValueError,'not re-armed'):
+                capture(session,'before-witness-ack',recovered)
+            with self.assertRaisesRegex(ValueError,'not re-armed'):
+                self.service.ingest_register(producer,session,replace_epoch=recovered['epoch'])
+            def ack(gen):
+                return self.service.ingest_report(recovered['stream_id'],recovered['epoch'],1,0,'current',0,
+                                                  reset_generation=gen)
+            with self.assertRaisesRegex(ValueError,'No authenticated current'):
+                ack('f'*32)
+            ready=ack(witness['generation'])
+            self.assertEqual(ready['database_clear_ready_generation'],witness['generation'])
+            self.assertEqual(ack(witness['generation']),ready)
+            with self.assertRaisesRegex(ValueError,'cleared memory generation'):
+                capture(session,'before-clear',recovered)
+            with self.assertRaisesRegex(ValueError,'unknown ingest stream'):
+                capture(session,'old-epoch-replay',old)
+            after=capture(session,'after-clear',recovered)
+            self.assertEqual(after['delivery']['acked_through'],1)
+            self.assertEqual(self.service.ingest_register(producer,session,**previous(old))['acked_through'],1)
+            with self.store.transaction() as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
+                proof=db.execute('SELECT prior_digest,successor_digest FROM '+TRANSITIONS).fetchall()
+                self.assertEqual(len(proof),1)
+                self.assertTrue(all(type(v) is bytes and len(v)==32 for v in proof[0]))
+            replaced=self.service.ingest_register(producer,session,replace_epoch=recovered['epoch'])
+            self.assertNotEqual(replaced['epoch'],recovered['epoch'])
+            with self.assertRaisesRegex(ValueError,'superseded'):
+                self.service.ingest_register(producer,session,**previous(old))
+
     def test_replace_or_release_change_invalidates_a_prepared_revision(self):
         self.capture('seeded-old')
         original=self.signed_callbacks('test')('clear_prepare',{})['revision']

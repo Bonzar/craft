@@ -157,6 +157,7 @@ class FreshMacProcessingTest(unittest.TestCase):
                     result=await client.post('/memory-api-prod',json=body,headers={'authorization':'Bearer '+token})
                     return result.status_code,result.json()
 
+                pairs={}
                 for key,session in ((other,OTHER),(mac,FRESH)):
                     status,descriptor=await call(key,'catalog',{})
                     self.assertEqual(status,200)
@@ -164,7 +165,7 @@ class FreshMacProcessingTest(unittest.TestCase):
                     stream_args={'producer_id':PRODUCER,'session_id':session}
                     status,wire=await call(key,'memory_ingest_register',stream_args,pins)
                     self.assertEqual(status,200)
-                    receipt=wire['result']
+                    receipt=wire['result'];pairs[session]=receipt
                     delivery={k:receipt[k] for k in ('stream_id','epoch')} | {'seq':1}
                     capture={'session_id':session,'message_id':'one','actor_id':'fixture-owner',
                              'role':'user','text':'Only invented test data','source':'fixture://http','delivery':delivery}
@@ -172,6 +173,31 @@ class FreshMacProcessingTest(unittest.TestCase):
                     self.assertEqual(status,200)
                     self.assertEqual(wire['result']['delivery']['acked_through'],1)
                     self.assertEqual(wire['result']['event']['id'] in self.eligible(),key==mac)
+
+                from prototypes.assertion_memory.database_clear import clear,request_revision
+                with self.store.transaction(write=True) as db:
+                    clear(db,stage='prod',expected_revision=request_revision(db,stage='prod'))
+                old=pairs[FRESH]
+                previous={'producer_id':PRODUCER,'session_id':FRESH,
+                          'previous_stream_id':old['stream_id'],'previous_epoch':old['epoch']}
+                self.assertNotEqual((await call(other,'memory_ingest_register',previous,pins))[0],200)
+                status,wire=await call(mac,'memory_ingest_register',previous,pins)
+                self.assertEqual(status,200)
+                successor=wire['result'];witness=successor['database_clear_reset']
+                report={k:successor[k] for k in ('stream_id','epoch')}|{'report_seq':1,
+                    'observed_seq':0,'scan_state':'current','gap_count':0,'reset_generation':witness['generation']}
+                self.assertNotEqual((await call(other,'memory_ingest_report',report,pins))[0],200)
+                fresh={**capture,'session_id':FRESH,'message_id':'new-after-ack',
+                       'delivery':{k:successor[k] for k in ('stream_id','epoch')}|{'seq':1}}
+                self.assertNotEqual((await call(mac,'memory_capture_message',fresh,pins))[0],200)
+                status,wire=await call(mac,'memory_ingest_report',report,pins)
+                self.assertEqual(status,200)
+                self.assertEqual(wire['result']['database_clear_ready_generation'],witness['generation'])
+                self.assertNotEqual((await call(mac,'memory_capture_message',fresh|{'message_id':'one'},pins))[0],200)
+                status,wire=await call(mac,'memory_capture_message',fresh,pins)
+                self.assertEqual(status,200)
+                self.assertEqual(wire['result']['delivery']['acked_through'],1)
+                self.assertEqual(self.eligible(),{wire['result']['event']['id']})
 
         asyncio.run(exercise())
 

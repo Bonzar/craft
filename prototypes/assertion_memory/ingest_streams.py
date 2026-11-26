@@ -183,6 +183,8 @@ def register(db, producer_id, session_id, *, replace_epoch=None, now=None):
             return _public(state)
         if replace_epoch != state['epoch']:
             raise ValueError('stale ingest writer epoch')
+        from .stream_clear_transition import require_ready
+        require_ready(db,state)
         # Losing ownership cannot erase pending receipts or previously reported gaps.
         db.execute("UPDATE memory_ingest_streams SET epoch=?,report_seq=0,report_json=NULL,"
             "lifecycle='active',scan_state=CASE WHEN scan_state='current' THEN 'unknown' ELSE scan_state END,"
@@ -238,6 +240,8 @@ def record_delivery(db, delivery, event_id, session_id, *, now=None):
     _identifier(event_id, 'event_id'); _identifier(session_id, 'session_id')
     schema(db)
     state = _owned(db, delivery['stream_id'], delivery['epoch'])
+    from .stream_clear_transition import require_ready
+    require_ready(db,state)
     if state['session_id'] != session_id:
         raise ValueError('delivery source does not belong to the registered session')
     old = db.execute('SELECT event_id FROM ('+_receipts(db)+') WHERE stream_id=? AND delivery_seq=?',
