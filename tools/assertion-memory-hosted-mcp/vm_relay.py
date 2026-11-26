@@ -62,7 +62,26 @@ def machine_authorized(header, digests):
     return any([hmac.compare_digest(candidate,expected) for expected in digests])
 
 
-def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *, effect_token=None, operations=None, machine_digests=(), fresh_mac_digest=None):
+def authorized_machine_request(header, static, resolver=None):
+    if re.fullmatch(rb'Bearer [0-9a-f]{64}',header) is None:
+        return False
+    if machine_authorized(header,static):
+        return True  # Existing fixed credentials never depend on the optional backend.
+    if resolver is None:
+        return False
+    try:
+        current=resolver()
+        if (type(current) is not tuple or len(current)>16 or
+            any(type(d) is not str or not HEX.fullmatch(d) for d in current)
+            or len(set(current))!=len(current) or not set(static).issubset(current)):
+            return False
+        return machine_authorized(header,current)
+    except Exception:
+        # Unavailable managed authority cannot widen private scope.
+        return False
+
+
+def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *, effect_token=None, operations=None, machine_digests=(), fresh_mac_digest=None, machine_resolver=None):
     profile,catalog=deepcopy(profile),deepcopy(catalog)
     lane=profile.get('lane')
     caps=profile.get('enabled_capabilities',())
@@ -92,9 +111,12 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                    for t in (gateway_token,effect_token) if isinstance(t,str))
             or machine_digests and operations is None):
         raise ValueError('invalid machine credentials')
+    if machine_resolver is not None and (not callable(machine_resolver) or operations is None):
+        raise ValueError('invalid machine resolver')
+    machine_enabled=bool(machine_digests) or machine_resolver is not None
     if fresh_mac_digest is not None and (lane != 'prod' or fresh_mac_digest not in machine_digests):
         raise ValueError('invalid fresh Mac authority')
-    if machine_digests: routes[f'/memory-api-{lane}']=('machine',None)
+    if machine_enabled: routes[f'/memory-api-{lane}']=('machine',None)
     full_sites=profile.get('sites_full_catalog',False)
     if type(full_sites) is not bool or full_sites and (operations is None or not effects or effects_only):
         raise ValueError('Full Sites catalog requires the typed registry and both authenticated routes')
@@ -103,7 +125,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
         raise ValueError('Durable interactive queries require the full typed Sites profile')
 
     canonical_schemas={name:{**row['canonicalInputSchema'],'additionalProperties':False}
-                       for name,row in manifest.items()} if machine_digests or full_sites else {}
+                       for name,row in manifest.items()} if machine_enabled or full_sites else {}
     canonical_validators={name:Draft202012Validator(schema) for name,schema in canonical_schemas.items()}
     canonical_descriptors=[{"name":name,"description":manifest[name].get("description",name),
                           "inputSchema":schema,
@@ -162,7 +184,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
 
         received_at = monotonic()
         query_trace = []
-        machine=scope.get('path')==f'/memory-api-{lane}' and bool(machine_digests)
+        machine=scope.get('path')==f'/memory-api-{lane}' and machine_enabled
         async def reply(status, data, *, query_job_id=None):
             raw=json.dumps(data, separators=(",",":"), ensure_ascii=True).encode()
             if len(raw)>(MACHINE_MAX if machine else MAX_RESPONSE):
@@ -187,7 +209,9 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
         capability,secret=routes[scope["path"]]
         auth=header(b"authorization")
         if machine:
-            allowed=len(auth)==1 and machine_authorized(auth[0],machine_digests)
+            allowed=len(auth)==1 and await asyncio.to_thread(
+                authorized_machine_request,auth[0],machine_digests,machine_resolver) if machine_resolver is not None else (
+                len(auth)==1 and machine_authorized(auth[0],machine_digests))
         else:
             allowed=len(auth)==1 and hmac.compare_digest(auth[0],b'Bearer '+secret.encode('ascii'))
         if not allowed:

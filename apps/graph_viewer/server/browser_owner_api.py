@@ -23,11 +23,13 @@ from prototypes.assertion_memory.queue_processing_policy import validate as vali
 from prototypes.assertion_memory.queue_session_control import normalize
 
 from .common import APIError
+from .device_owner_http import PATH as DEVICE_PATH, DeviceOwnerHTTP
 
 PREFIX = '/api/v1/processing/'
-CONTROLS = ('pause','sessions','items/source-preview','items/remove','database/clear-v2')
+GRAPH_NODE_CONTROL='graph-nodes/remove'
+CONTROLS = ('pause','sessions','items/source-preview','items/remove','database/clear-v2',GRAPH_NODE_CONTROL)
 DIRECT = '/api/v1/events-direct'
-EXACT = frozenset(PREFIX+c+s for c in CONTROLS for s in ('','/prepare'))
+EXACT = frozenset(PREFIX+c+s for c in CONTROLS for s in ('','/prepare')) | {DEVICE_PATH,DEVICE_PATH+'/prepare'}
 FORBIDDEN = {b'authorization', b'forwarded', b'x-real-ip', b'x-memory-environment', b'x-memory-lane'}
 
 def ticket_hash(value):
@@ -109,13 +111,26 @@ class Tickets:
         del self.pending[token]
 
 class BrowserOwnerAPI:
-    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, dashboard_live=True, clock=time.time):
+    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, dashboard_live=True, clock=time.time, node_removal=None):
         if stage not in ('test','prod') or not callable(perform) or not callable(queue_snapshot) or type(dashboard_live) is not bool:
             raise ValueError('Expected explicit Base browser API lane')
         self.stage,self.perform,self.queue_snapshot=stage,perform,queue_snapshot
         self.clear_enabled=clear_enabled is True
         self.dashboard_live=dashboard_live
+        if node_removal is not None and not callable(node_removal):
+            raise ValueError('Expected a verified private Base graph node bridge')
+        self.node_removal=node_removal
         self.tickets=Tickets(clock)
+        self._device_owner=None
+
+    def attach_machine_devices(self, registry, release_guard, verified_identity):
+        if self._device_owner is not None:
+            raise ValueError('Device authority already attached')
+        self._device_owner=DeviceOwnerHTTP(stage=self.stage,registry=registry,release_guard=release_guard,
+                                           verified_identity=verified_identity)
+
+    def device_routes(self):
+        return [] if self._device_owner is None else self._device_owner.routes()
 
     def allows(self, request):
         for route in request.app.routes:
@@ -135,7 +150,8 @@ class BrowserOwnerAPI:
 
     def routes(self):
         return [Route(PREFIX+k+suffix, self.control,methods=[method], name=k+suffix)
-                for k in CONTROLS if k!='database/clear-v2' or self.stage=='test' or self.clear_enabled for suffix,method in (('/prepare','POST'),('','PUT'))]
+                for k in CONTROLS if (k!='database/clear-v2' or self.stage=='test' or self.clear_enabled)
+                and (k!=GRAPH_NODE_CONTROL or self.node_removal is not None) for suffix,method in (('/prepare','POST'),('','PUT'))]
 
     def graph_ready(self, request, scope):
         manager=request.app.state.manager
@@ -152,6 +168,10 @@ class BrowserOwnerAPI:
         ready=self.stage=='test' or (value.get('processing_control') or {}).get('can_change') is True
         value={**value,'capabilities':{**value.get('capabilities',{}),'live':self.dashboard_live,'standalone_pause':ready,
                                       'queue_processing_policy':ready},'readiness':[]}
+        # Do not advertise device enrollment on absent or unavailable authority.
+        value['capabilities'].pop('owner_machine_devices_v1',None)
+        if self._device_owner is not None and await self._device_owner.ready():
+            value['capabilities']['owner_machine_devices_v1']=True
         if 'processing_control' in value:
             value['processing_control']={**value['processing_control'],'can_change':False}
         clear=value.pop('database_clear',None)
@@ -179,6 +199,11 @@ class BrowserOwnerAPI:
         token_headers=request.headers.getlist('x-csrf-token')
         if name=='database/clear-v2' and not self.clear_enabled:
             raise APIError('not_found','Unknown API resource',404)
+        if name==GRAPH_NODE_CONTROL:
+            if self.node_removal is None:
+                raise APIError('not_found','Unknown API resource',404)
+            from .graph_node_owner_api import control_nodes
+            return await control_nodes(self,request,prepare,data,owner,token_headers)
         kind=name
         if name=='sessions' and (data=={'format':'policy-v1'} if prepare else 'policy' in data):
             kind='policy'
@@ -296,7 +321,7 @@ def installed_test_clear_profile():
         logging.getLogger(__name__).warning('test_browser_clear_profile_invalid')
         return None
 
-def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False):
+def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False, graph_node_bridge=None):
     """A TEST-only profile always pins release and can bind one pre-clear epoch.
 
     Format: verified release generation plus exact epoch scope or reusable mode.
@@ -306,6 +331,19 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
     # A caller flag alone cannot supply TEST epoch or release authorization.
     if clear_enabled is not False:
         raise ValueError('An explicit verified TEST clear profile is required')
+    from .prod_owner_bridge import GraphNodeOwnerBridge
+    if graph_node_bridge is not None and (type(graph_node_bridge) is not GraphNodeOwnerBridge
+            or graph_node_bridge.stage!=dashboard.stage):
+        raise ValueError('Verified Base graph node bridge must match the current lane')
+    def graph_node_operation(action,args):
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(dashboard.read_fence())
+                dashboard.activation()
+            except (OSError,ValueError,KeyError):
+                raise APIError('owner_api_unavailable','Graph reader authority unavailable',503) from None
+            return graph_node_bridge.perform(action,args)
+    node_removal=graph_node_operation if graph_node_bridge is not None else None
     if dashboard.stage=='prod':
         if clear_profile is not None:
             raise ValueError('TEST clear profiles are forbidden on PROD')
@@ -336,7 +374,7 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
             return guarded(prod_owner_bridge.queue_snapshot, limit=limit, offset=offset, snapshot=True)
 
         return BrowserOwnerAPI(stage='prod',perform=perform,
-                               queue_snapshot=project,clear_enabled=False)
+                               queue_snapshot=project,clear_enabled=False,node_removal=node_removal)
     if dashboard.stage!='test' or prod_owner_bridge is not None:
         raise ValueError('Invalid Graph owner API lane')
     if clear_profile is not None:
@@ -389,4 +427,4 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
                 value['database_clear']['can_clear']=False
             return value
     return BrowserOwnerAPI(stage=dashboard.stage,perform=perform,queue_snapshot=project,
-        clear_enabled=clear_enabled)
+        clear_enabled=clear_enabled,node_removal=node_removal)

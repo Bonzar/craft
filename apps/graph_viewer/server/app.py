@@ -299,6 +299,10 @@ async def capabilities(request):
             raise APIError('queue_unavailable','Queue status is temporarily unavailable',503) from None
     value=request.app.state.manager.source.capabilities()
     value['capabilities']['session_filter']=True
+    owner_api=getattr(request.app.state,'browser_owner_api',None)
+    if (getattr(owner_api,'node_removal',None) is not None
+            and request.app.state.owner.session(request) is not None):
+        value['owner_graph_node_removal']={'version':1,'stage':owner_api.stage}
     if any(hasattr(g,'semantic_matrix') for g in request.app.state.manager.graphs.values()):
         value['capabilities']['semantic_search']=True
         value['readiness']=[r for r in value['readiness'] if r['code']!='semantic_unavailable']
@@ -455,6 +459,7 @@ def make_routes(browser_owner_api=None):
             Route(prefix+'/nodes/{id:path}/edges',stable_card('nodes','edges'))]
     if browser_owner_api is not None:
         routes.extend(browser_owner_api.routes())
+        routes.extend(browser_owner_api.device_routes())
     else:
         routes.append(Route(prefix+'/processing/pause',change_processing_pause,methods=['PUT']))
     routes.extend(Route(prefix+'/'+kind+'/{id:path}',stable_card(kind)) for kind in ['nodes','edges','sources','overviews'])
