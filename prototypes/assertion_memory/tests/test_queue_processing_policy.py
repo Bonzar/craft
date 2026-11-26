@@ -76,6 +76,20 @@ class ProcessingPolicy(TestCase):
         self.assertIsNotNone(self.worker._claim_source())
         self.assertIsNone(self.worker._claim_source())
 
+    def test_explicit_one_shot_cannot_be_widened_by_saved_policy(self):
+        from dataclasses import replace
+        a=self.event('session-a','first',DAY)
+        b=self.event('session-b','second',DAY)
+        self.set_scope(lower=DAY,upper=DAY)
+        specified=replace(self.config,processing_session_ids=('session-b',))
+        with self.store.transaction() as db:
+            selector=_processing_selector(specified,db)
+            self.assertEqual(selector,('session-b',))
+        worker=ThoughtWorker(self.service.queue,self.service.engine,processing_session_ids=selector)
+        self.assertEqual(worker._claim_source().job.event_id,b)
+        self.assertIsNone(worker._claim_source())
+        self.assertEqual(self.service.queue.get(a).attempts,0)
+
     def test_startup_recovery_alias_and_prod_projection_handle_active_dates(self):
         from prototypes.assertion_memory.thought_processing import _recover_selected
         from prototypes.assertion_memory.queue_status import build_queue_status

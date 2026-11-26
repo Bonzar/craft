@@ -136,7 +136,8 @@ def worker_selection_changed(config):
     if revision is None:
         return False
     try:
-        return read_file(config.db)!=(config.processing_session_ids,revision)
+        selected,current,saved=read_for_launch(config.db)
+        return saved or (selected,current)!=(config.processing_session_ids,revision)
     except (OSError, ValueError):
         return True
     except Exception:

@@ -181,7 +181,9 @@ def _processing_selector(config, db=None):
     from .queue_processing_policy import has_saved
     if config.auto_process_fresh_mac:
         return FRESH_MAC_ONLY
-    if db is not None and has_saved(db):
+    # A bound one-shot or deployment allowlist is always an additional scope,
+    # never replaced by broader saved owner policy.
+    if db is not None and not config.processing_session_ids and has_saved(db):
         return OWNER_POLICY
     return config.processing_session_ids
 

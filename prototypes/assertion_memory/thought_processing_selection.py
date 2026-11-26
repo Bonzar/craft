@@ -88,9 +88,13 @@ def maintenance_predicate(db,session_ids,alias='w'):
     # Existing maintenance coalesces causes and a caller can report a query-session
     # claim. Do not schedule that broader queue from merely trusted raw delivery.
     if ids is FRESH_MAC_ONLY:return '0',[]
-    return ('EXISTS(SELECT 1 FROM memory_thought_work_causes pc JOIN memory_thought_cause_sessions ps '
+    legacy=('EXISTS(SELECT 1 FROM memory_thought_work_causes pc JOIN memory_thought_cause_sessions ps '
         'ON ps.thought_id=pc.thought_id AND ps.cause=pc.cause WHERE pc.thought_id='+alias+'.thought_id '
-        'AND pc.generation>'+alias+'.completed_generation AND ps.session_id IN (SELECT value FROM json_each(?)))'),[json.dumps(ids)]
+        'AND pc.generation>'+alias+'.completed_generation AND ps.session_id IN (SELECT value FROM json_each(?)))')
+    if policy is None:
+        return legacy,[json.dumps(ids)]
+    scope,args=owner_scope(db,policy,alias=alias)
+    return f'({legacy}) AND ({scope})',[json.dumps(ids),*args]
 
 
 def pending_cohort(db,task,allowed):
