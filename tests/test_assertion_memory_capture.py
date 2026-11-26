@@ -230,6 +230,70 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(reset['interrupted_users'],[])
         self.assertEqual(reset['interrupted_user_witnesses'],[])
 
+    def test_oversized_interrupted_batch_is_retained_and_never_split(self):
+        from unittest.mock import patch
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('one','first','u1')
+        self.abort('first')
+        self.assertEqual(self.poll()['queued'],0)
+        self.turn('two','second','u2')
+        self.assistant('three','a2')
+        with patch.object(self.capture,'_CAPTURE_BATCH_MAX_MEMBERS',2):
+            self.assertEqual(self.poll()['status'],'blocked')
+        held=self.store.session('physical')['blocked_interrupted_batch']
+        self.assertEqual(held['reason'],'interrupted_batch_exceeds_transport_limits')
+        self.assertEqual([a['text'] for a,_ in held['members']],['one','two','three'])
+        self.assertEqual(self.messages(),[])
+        self.turn('later','third','u3')
+        self.assistant('not sent','a3')
+        self.assertEqual(self.poll()['status'],'blocked')
+        self.assertEqual(self.store.session('physical')['blocked_interrupted_batch'],held)
+        self.assertEqual(self.messages(),[])
+
+    def test_assistant_only_goal_does_not_claim_interrupted_users(self):
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('interrupted','first','u1')
+        self.abort('first')
+        self.append({'type':'event_msg','payload':{'type':'task_started','turn_id':'goal',
+            'root_turn_id':'first','turn_attribution':{'turn_trigger':'goal','parent_turn_id':'first',
+                'initiating_agent_path':None,'root_turn_id':'first'}}})
+        self.assistant('background goal only','goal-a')
+        self.assertEqual(self.poll()['queued'],1)
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['background goal only'])
+        self.assertEqual(len(self.store.session('physical')['interrupted_users']),1)
+        self.turn('continued','second','u2')
+        self.assistant('finished','a2')
+        self.assertEqual(self.poll()['queued'],3)
+        selected=[m['arguments'] for m in self.messages()]
+        self.assertEqual([m['text'] for m in selected],
+            ['interrupted','background goal only','continued','finished'])
+        self.assertEqual(selected[0]['_capture_batch']['id'],selected[2]['_capture_batch']['id'])
+        self.assertNotEqual(selected[1]['_capture_batch']['id'],selected[2]['_capture_batch']['id'])
+
+    def test_interrupted_carry_and_cursor_rollback_with_partial_enqueue(self):
+        from unittest.mock import patch
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('interrupted','first','u1')
+        self.abort('first')
+        self.assertEqual(self.poll()['queued'],0)
+        previous=self.store.session('physical')
+        self.turn('next','second','u2')
+        self.assistant('complete','a2')
+        enqueue=self.store.enqueue
+        def interrupted_write(arguments, *, local_position):
+            enqueue(arguments,local_position=local_position)
+            raise RuntimeError('synthetic partial SQLite write')
+        with patch.object(self.store,'enqueue',side_effect=interrupted_write):
+            with self.assertRaisesRegex(RuntimeError,'synthetic partial'):
+                self.poll()
+        self.assertEqual(self.messages(),[])
+        self.assertEqual(self.store.session('physical'),previous)
+        self.assertEqual(self.poll()['queued'],3)
+        self.assertEqual(self.poll()['queued'],0)
+
     def test_resume_without_registration_starts_after_existing_tail(self):
         self.turn('old')
         self.assistant('old reply')
