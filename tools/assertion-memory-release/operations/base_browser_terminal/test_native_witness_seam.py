@@ -50,7 +50,9 @@ class Attestor:
 
     def recover(self,root):
         if self.pre is not None and self.final is None:
-            self.publish(root,self.pre)
+            key=self.pre
+            _boundary(root,key) # Authenticate exact precommit context before fsync.
+            return lambda:self.publish(root,key)
 
     def witness(self):
         return core.ActivationWitness(self.before,self.after,self.recover)
@@ -116,3 +118,79 @@ class NativeWitness(TestCase):
             self.assertEqual(hooks,[('restore',old),('smoke',old)])
             self.assertEqual(a.final,a.old)
             self.assertEqual(a.pre.phase,'restore')
+
+    def test_fsync_fault_after_unlink_does_not_restore_and_redrives_durability(self):
+        from unittest.mock import patch
+        for phase in ('restart','restore'):
+            with self.subTest(phase=phase), TemporaryDirectory() as directory:
+                root=Path(directory)
+                a,candidate=self.prepare(root)
+                hooks=[]; syncs=[]
+                verified_sync=core.sync_dir
+                def hook(_,action,loc):
+                    hooks.append(action)
+                    if action=='restart' and phase=='restore':
+                        raise ValueError('native switching fixture')
+                def fail_after_unlink(path):
+                    if path==root and a.pre is not None and not (root/core.PENDING).exists():
+                        syncs.append('failed')
+                        raise OSError('fixture fsync fault')
+                    return verified_sync(path)
+                with patch.object(core,'sync_dir',side_effect=fail_after_unlink):
+                    with self.assertRaises(core.ActivationWitnessPublicationPending):
+                        core.activate(root,candidate,None,hook,witness=a.witness())
+                self.assertEqual(syncs,['failed'])
+                self.assertFalse((root/core.PENDING).exists())
+                self.assertIsNone(a.final)
+                before=hooks.copy()
+                original=a.publish
+                def assert_order(path,key):
+                    self.assertEqual(syncs,['failed','durable'])
+                    return original(path,key)
+                def verify_sync(path):
+                    syncs.append('durable')
+                    return verified_sync(path)
+                with patch.object(a,'publish',side_effect=assert_order), patch.object(core,'sync_dir',side_effect=verify_sync):
+                    core.recover_activation(root,None,hook,witness=a.witness())
+                self.assertEqual(hooks,before)
+                self.assertEqual(a.final,a.candidate if phase=='restart' else a.old)
+
+    def test_opt_in_denies_bootstrap_before_native_mutation(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            a,candidate=self.prepare(root)
+            core.swap(root,None)
+            def unexpected(*args):
+                self.fail('native mutation attempted without predecessor')
+            with self.assertRaisesRegex(ValueError,'requires_verified_predecessor'):
+                core.activate(root,candidate,None,unexpected,witness=a.witness())
+            self.assertIsNone(core.current_target(root))
+            self.assertFalse((root/core.PENDING).exists())
+            core.record_activation(root,None,candidate)
+            with self.assertRaisesRegex(ValueError,'requires_verified_predecessor'):
+                core.recover_activation(root,None,unexpected,witness=a.witness())
+            self.assertTrue((root/core.PENDING).exists())
+
+    def test_deploy_does_not_run_failed_candidate_retention_after_unlink(self):
+        from unittest.mock import Mock, patch
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            a,candidate=self.prepare(root)
+            retention=Mock(stores=['fixture'])
+            actual_sync=core.sync_dir
+            def broken(path):
+                if path==root and a.pre is not None and not (root/core.PENDING).exists():
+                    raise OSError('fixture durability failure')
+                return actual_sync(path)
+            hooks=[]
+            with (patch.object(core,'prepare'),
+                  patch.object(core,'unpack',return_value=candidate),
+                  patch.object(core,'sync_dir',side_effect=broken)):
+                with self.assertRaises(core.ActivationWitnessPublicationPending):
+                    core.deploy(None,a.candidate.archive,root=root,spec=None,
+                        validate=lambda _:candidate.name,
+                        hook=lambda action,loc:hooks.append(action),
+                        witness_factory=lambda _:a.witness(),retention_factory=lambda _:retention)
+            self.assertEqual(hooks,['restart','smoke'])
+            retention.failed.assert_not_called()
+            retention.sweep.assert_not_called()

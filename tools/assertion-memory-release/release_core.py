@@ -87,7 +87,10 @@ class ActivationWitness:
     The lane must supply an independently protected witness adapter.
     before_unlink is an authorization gate; after_fsync must not roll back
     a committed activation. recover_absent may finish a previously recorded
-    witness after a crash, but may not repeat native activation.
+    witness after a crash, but may not repeat native activation. On an
+    absent journal, recover_absent(root) prepares an exact pending witness
+    and returns its zero-argument fresh-observation publisher, or None.
+    Core fsyncs the directory before calling that publisher.
     """
     before_unlink: Callable
     after_fsync: Callable
@@ -109,13 +112,40 @@ def _publish_activation_witness(witness,root,phase,old,candidate):
         raise ActivationWitnessPublicationPending('activation_witness_publication_pending') from exc
 
 
+def _finish_activation_journal(root,journal,phase,old,candidate,witness):
+    journal.unlink()
+    if witness is None:
+        sync_dir(root)
+        return
+    # Journal removal already happened. A failure below is pending even
+    # when the directory fsync failed; do not rollback or clean a candidate.
+    try:
+        sync_dir(root)
+    except Exception as exc:
+        raise ActivationWitnessPublicationPending('activation_witness_durability_pending') from exc
+    _publish_activation_witness(witness,root,phase,old,candidate)
+
+
+def _recover_absent_activation(root,witness):
+    publish=witness.recover_absent(root)
+    if publish is None:
+        return
+    if not callable(publish):
+        raise ValueError('invalid_activation_witness_recovery')
+    try:
+        sync_dir(root)
+        publish()
+    except Exception as exc:
+        raise ActivationWitnessPublicationPending('activation_witness_recovery_pending') from exc
+
+
 def recover_activation(root,script,hook,*,witness=None):
     journal=root/PENDING
     if journal.is_symlink():
         raise ValueError('invalid_activation_journal')
     if not journal.exists():
         if witness is not None:
-            witness.recover_absent(root)
+            _recover_absent_activation(root,witness)
         return
     if not journal.is_file() or journal.stat().st_size>1024:
         raise ValueError('invalid_activation_journal')
@@ -128,6 +158,8 @@ def recover_activation(root,script,hook,*,witness=None):
     candidate=checked_release(root,txn['new'])
     old=None if txn['old'] is None else checked_release(root,txn['old'])
     prior=str(old) if old is not None else None
+    if witness is not None and old is None:
+        raise ValueError('activation_witness_requires_verified_predecessor')
     if current_target(root) not in (prior,str(candidate)):
         raise ValueError('unexpected_activation_current')
     swap(root,old)
@@ -139,13 +171,12 @@ def recover_activation(root,script,hook,*,witness=None):
         hook(script,'stop',candidate)
     if witness is not None:
         witness.before_unlink(root,'restore',old,candidate)
-    journal.unlink()
-    sync_dir(root)
-    if witness is not None:
-        _publish_activation_witness(witness,root,'restore',old,candidate)
+    _finish_activation_journal(root,journal,'restore',old,candidate,witness)
 
 def activate(root,release,script,hook,*,witness=None):
     old=current_target(root)
+    if witness is not None and old is None:
+        raise ValueError('activation_witness_requires_verified_predecessor')
     record_activation(root,old,release)
     try:
         swap(root,release)
@@ -157,10 +188,7 @@ def activate(root,release,script,hook,*,witness=None):
     except BaseException:
         recover_activation(root,script,hook,witness=witness)
         raise
-    (root/PENDING).unlink()
-    sync_dir(root)
-    if witness is not None:
-        _publish_activation_witness(witness,root,'restart',Path(old) if old is not None else None,release)
+    _finish_activation_journal(root,root/PENDING,'restart',Path(old) if old is not None else None,release,witness)
 
 
 def unpack(stream, destination, expected_sha, spec):

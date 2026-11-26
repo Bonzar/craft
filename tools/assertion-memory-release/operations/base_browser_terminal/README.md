@@ -50,3 +50,12 @@ Offline:
     PYTHONPATH=tools/assertion-memory-release:$D python -m unittest discover -s "$D" -p 'test_*.py'
 
 No host I/O, releases or production activation are done by this suite.
+
+Release boundary seam: once journal unlink succeeds, sync/publication
+failure is explicitly pending, not rollback or candidate retention.
+On absent native journal, the exact independently protected precommit
+may prepare a no-argument publication continuation. Core first re-fsyncs
+the directory under the existing lease; only then may the continuation
+freshly observe and settle the exact run. Absent journal by itself is
+not proof; neither branch repeats a native mutation. An opted-in
+witness has no bootstrap authority and requires a verified predecessor.
