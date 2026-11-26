@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Owner-run two-file update for public assistant commentary in capture batches."""
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+BASE_UPDATER_COMMIT = '3e519f48a54521812bbdd4e80de542c3de4e75a9'
+BASE_UPDATER_BLOB = '00b95184801fc922a3828fe921bc06531e2b4e20'
+# Only set to the exact protected source-merge commit of the reviewed change.
+SOURCE_COMMIT = '071eff11ebcf2b9206afcd648e6ca527f7ea3c9d'
+BASE_PROD = 'assertion-memory-v0.1.30'
+COMMENTARY_PINS = {
+    'native_capture.py': ('714280567e5e7e8797602e803f8397ecd3c83285',
+                          '02fad2f52f8bb23b6b0552c53ea1ea05465eb28c'),
+    'outbox.py': ('6748961f6eb1b10a0142ad703d77b624c5f8ce9c',
+                  '810bd87ca952320a7d5039f8c1734d209c45852f'),
+}
+UNCHANGED = {
+    'capture_worker.py': '7a928de7d050b0ccb4635e69db3a9a4b541015c6',
+    'frontier.py': '686c4da8e93536b0cce8a156e98b44f64bbc4c74',
+    'private_http.py': '06344318f6ed5cccec795b6b3992682169ccd746',
+}
+
+
+def blob(data):
+    return hashlib.sha1(f'blob {len(data)}'.encode('ascii')+bytes([0])+data).hexdigest()
+
+
+def load_updater(checkout):
+    git=['git','-C',str(checkout),'--no-replace-objects']
+    cfg=subprocess.run(git+['config','--get-regexp',
+            r'^(remote[.].*[.]promisor|extensions[.]partialclone)$'],
+            stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+    if cfg.returncode!=1:
+        raise ValueError('Expected complete local source')
+    p=subprocess.run(git+['show',BASE_UPDATER_COMMIT+':tools/assertion-memory-mac-v2'],
+        stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=True,timeout=15,
+        env={**os.environ,'GIT_NO_LAZY_FETCH':'1'})
+    if len(p.stdout)>32768 or blob(p.stdout)!=BASE_UPDATER_BLOB:
+        raise ValueError('Existing reviewed updater blob did not match')
+    namespace={'__name__':'approved_capture_updater'}
+    exec(compile(p.stdout,'<approved five-file updater substrate>','exec'),namespace)
+    return namespace
+
+
+def configure(namespace):
+    if len(SOURCE_COMMIT)!=40 or any(c not in '0123456789abcdef' for c in SOURCE_COMMIT):
+        raise ValueError('Visible-commentary source has not been pinned to protected main')
+    original=namespace['run']
+    def check_companions(home):
+        folder=home.resolve()
+        for item in ('.codex','jarvis','modules','assertion-memory','lib'):
+            folder=namespace['safe_dir'](folder/item)
+        if any(blob(namespace['read_file'](folder/name,mode=0o644))!=pin
+               for name,pin in UNCHANGED.items()):
+            raise ValueError('Unexpected unchanged V2 capture companion')
+    def exact_run(home,repo,**kwargs):
+        check_companions(home)
+        result=original(home,repo,**kwargs)
+        check_companions(home)
+        return {'preflight_ok_five_files_only':'preflight_ok_two_files_only',
+                'installed_five_files':'installed_two_files',
+                'rolled_back_five_files':'rolled_back_two_files'}.get(result,result)
+    namespace.update(PINS=COMMENTARY_PINS,RELEASE=SOURCE_COMMIT,PROD_BASE=BASE_PROD,
+        BACKUP='.capture-commentary-rollback-'+SOURCE_COMMIT[:12],run=exact_run)
+    return namespace
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__,add_help=False)
+    parser.add_argument('--checkout',type=Path,required=True)
+    args,_=parser.parse_known_args()
+    if sys.platform!='darwin':
+        parser.exit(2,'This package is only for the enrolled Mac.\n')
+    try:
+        updater=configure(load_updater(args.checkout))
+    except (ValueError,OSError,subprocess.SubprocessError):
+        parser.exit(2,'Approved updater or compatible baseline unavailable. No changes made.\n')
+    updater['main']()
+
+
+if __name__=='__main__':
+    main()
