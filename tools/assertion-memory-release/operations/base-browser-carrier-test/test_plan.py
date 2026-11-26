@@ -18,7 +18,11 @@ def spec():
     return {'paths':{plan.WILD:{m:{'parameters':[{'name':'tail','in':'path','required':True}],
       'x-yc-apigateway-integration':{'url':plan.TARGET,'type':'http','method':m.upper(),
         'headers':{'Cookie':'{Cookie}','Origin':'{Origin}'}}}
-      for m in ('get','post','put')},'/visual':{'get':{}},'/api/v1/events-ticket':{'post':{}}}}
+      for m in ('get','post','put')},'/visual':{'get':{}},'/api/v1/events-ticket':{'post':{}},
+      '/api/v1/session':{m:{'x-yc-apigateway-integration':{'url':plan.TARGET.replace('{tail}','session'),
+          'type':'http','method':m.upper(),'query':{'*':'*'},'headers':{k:'{'+k+'}' for k in
+          ('Cookie','Origin','Content-Type','X-CSRF-Token','Sec-Fetch-Site')}}}
+          for m in ('get','post','delete')}}}
 
 class TestTestCarrier(unittest.TestCase):
     def test_narrow_generation(self):
@@ -36,6 +40,9 @@ class TestTestCarrier(unittest.TestCase):
         self.assertIn('location /prod { return 200; }',nginx)
         self.assertEqual(gate['paths']['/visual'],raw['paths']['/visual'])
         self.assertEqual(gate['paths']['/api/v1/events-ticket'],raw['paths']['/api/v1/events-ticket'])
+        self.assertNotIn('/api/v1/session',gate['paths'])
+        with self.assertRaisesRegex(ValueError,'denial'):
+            plan.inverse(pair,pair['after'])
         for method in plan.METHODS:
             op=gate['paths'][plan.WILD][method]['x-yc-apigateway-integration']
             self.assertEqual(op['method'],method.upper())

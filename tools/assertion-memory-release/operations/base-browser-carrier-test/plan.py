@@ -76,8 +76,22 @@ def nginx_delta(source):
 def gateway_delta(spec):
     data=deepcopy(spec)
     paths=data['paths']
-    if any(k.startswith('/api/v1/') and k not in {WILD, *('/api/v1/'+x for x in SSE)} for k in paths):
+    session='/api/v1/session'
+    if any(k.startswith('/api/v1/') and k not in {WILD, session, *('/api/v1/'+x for x in SSE)} for k in paths):
         raise ValueError('unreviewed exact TEST Gateway API override')
+    legacy=paths.get(session)
+    if set(legacy or {})!={'get','post','delete'}:
+        raise ValueError('legacy TEST session route shape drift')
+    for method, op in legacy.items():
+        carrier=op.get('x-yc-apigateway-integration',{})
+        headers=carrier.get('headers',{})
+        allowed={'Cookie','Origin','Content-Type','X-CSRF-Token','Sec-Fetch-Site'}
+        if (carrier.get('type')!='http' or carrier.get('url')!=TARGET.replace('{tail}','session')
+            or carrier.get('method',method.upper())!=method.upper()
+            or set(headers)!=allowed or any(v!='{'+k+'}' for k,v in headers.items())
+            or carrier.get('serviceAccountId') or op.get('security') or carrier.get('query')!={'*':'*'}):
+            raise ValueError('legacy TEST session route authority drift')
+    del paths[session]
     wild=paths[WILD]
     if not {'get','post','put'}<=set(wild)<=set(METHODS):
         raise ValueError('unexpected TEST wildcard methods')
