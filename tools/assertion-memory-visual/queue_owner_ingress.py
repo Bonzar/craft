@@ -11,7 +11,7 @@ CONFIG_FILE = re.compile(r'/etc/nginx/[A-Za-z0-9_/-]+\.conf\Z')
 PORT = {'test': 8829, 'prod': 8830}
 
 
-def owner_routes(*, lane, host, backend_ip, prefix, owner_auth, marker_include):
+def owner_routes(*, lane, host, backend_ip, prefix, owner_auth, marker_include, include_graph_node_removal=False):
     """Return additive Gateway path definitions and a server-context nginx fragment.
 
     The caller must keep the Gateway's existing equivalent pause paths, or replace
@@ -27,7 +27,9 @@ def owner_routes(*, lane, host, backend_ip, prefix, owner_auth, marker_include):
         raise ValueError('Invalid owner ingress')
     gateway = {}
     nginx = []
-    for control in CONTROLS:
+    if type(include_graph_node_removal) is not bool:
+        raise ValueError('Expected explicit graph node ingress opt-in')
+    for control in CONTROLS+(('graph-nodes/remove',) if include_graph_node_removal else ()):
         for method, suffix in METHODS:
             browser_path = '/api/v1/processing/'+control+suffix
             proxy_path = prefix+browser_path

@@ -227,9 +227,23 @@ def _configure(config_path, port, legacy_token):
             else:
                 handler.queue_session_lifespan=lambda:sessions.follow_settings(
                     config,lambda selected:WorkerLauncher(selected).start() if ready() else {})
+        from . import graph_node_removal as nodes
+
+        def node_preview(*,stage,proof,expected_revision,**args):
+            # Existing path/body owner proof only; query-only preview does not reserve a nonce.
+            return perform('graph_node_preview',args)
+
         handler.queue_item_routes={
             items.PATH:route(items.PATH,'item_remove'),
             items.PREVIEW_PATH:route(items.PREVIEW_PATH,'item_preview')}
+        # No public ingress is registered here. Both calls require the existing
+        # loopback owner write credential and distinct path-scoped HMAC.
+        handler.queue_item_routes.update({
+            nodes.PATH:route(nodes.PATH,'graph_node_remove'),
+            nodes.PREVIEW_PATH:make_queue_pause_rest(stage=p.lane,enabled=True,read_sha256=read_fp,
+                write_sha256=write_fp,actor_sha256=owner,
+                verify_owner=make_owner_verifier(bytes.fromhex(key),owner,lane=p.lane,path=nodes.PREVIEW_PATH),
+                prepare=lambda:None,change=node_preview,port=port,path=nodes.PREVIEW_PATH)})
         return handler
     return bind
 
