@@ -275,7 +275,9 @@ def main(argv=None):
         side_failed=True
         if parent is not None:
             parent.should_exit=True
-    browser=installed_prod_browser_lifespan(args.config,config,private_port=port,on_failure=failed)
+    configured_devices=getattr(neutral_factory,'machine_device_registry',None)
+    browser=installed_prod_browser_lifespan(args.config,config,private_port=port,on_failure=failed,
+        **({} if configured_devices is None else {'machine_devices':configured_devices}))
     app = create_http_app(config, token, value['public_host'], port=port,
                           additional_hosts=value.get('additional_hosts', ()), neutral_factory=neutral_factory,
                           queue_rest_factory=queue_rest_factory, queue_pause_factory=queue_pause_factory,
@@ -293,5 +295,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     main()
-
-

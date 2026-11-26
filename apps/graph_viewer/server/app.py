@@ -459,6 +459,7 @@ def make_routes(browser_owner_api=None):
             Route(prefix+'/nodes/{id:path}/edges',stable_card('nodes','edges'))]
     if browser_owner_api is not None:
         routes.extend(browser_owner_api.routes())
+        routes.extend(browser_owner_api.device_routes())
     else:
         routes.append(Route(prefix+'/processing/pause',change_processing_pause,methods=['PUT']))
     routes.extend(Route(prefix+'/'+kind+'/{id:path}',stable_card(kind)) for kind in ['nodes','edges','sources','overviews'])
