@@ -19,12 +19,13 @@ ROUTES = {
     '/api/v1/graph/{revision}/nodes/{ordinal}': ('revision', 'ordinal'),
     '/api/v1/graph/{revision}/nodes/{ordinal}/edges': ('revision', 'ordinal'),
     '/api/v1/graph/{revision}/edges/{ordinal}': ('revision', 'ordinal'),
+    '/api/v1/nodes/{id}/edges': ('id',),
     **{f'/api/v1/{category}/{{id}}': ('id',) for category in ('nodes', 'edges', 'sources', 'overviews')},
 }
 
 NGINX = r'''
 # Visual graph card reads. Existing owner cookie and upstream, no write routes.
-location ~ "^/__visual-owner-graph-card/api/v1/(?:graph/[A-Za-z0-9:_-]{1,160}/(?:nodes/[0-9]{1,12}(?:/edges)?|edges/[0-9]{1,12})|(?:nodes|edges|sources|overviews)/[A-Za-z0-9:_@.-]{1,256})$" {
+location ~ "^/__visual-owner-graph-card/api/v1/(?:graph/[A-Za-z0-9:_-]{1,160}/(?:nodes/[0-9]{1,12}(?:/edges)?|edges/[0-9]{1,12})|nodes/[A-Za-z0-9:_@.-]{1,256}/edges|(?:nodes|edges|sources|overviews)/[A-Za-z0-9:_@.-]{1,256})$" {
     if ($request_method != GET) { return 405; }
     auth_request /__visual-owner-auth-check;
     rewrite ^/__visual-owner-graph-card(/api/v1/.*)$ $1 break;
@@ -57,11 +58,16 @@ def add_gateway_routes(raw):
             {'name': n, 'in': 'path', 'required': True, 'schema': {'type': 'string'}} for n in variables
         ]
         target = operation[INTEGRATION]
-        if 'id' in variables:
+        query = ['revision'] if 'id' in variables else []
+        if route.endswith('/edges'):
+            query += ['cursor', 'visible']
+        if route.startswith('/api/v1/sources/'):
+            query += ['context', 'focus_start', 'focus_end']
+        for name in query:
             operation['parameters'].append(
-                {'name': 'revision', 'in': 'query', 'required': False, 'schema': {'type': 'string'}}
+                {'name': name, 'in': 'query', 'required': False, 'schema': {'type': 'string'}}
             )
-            target['query']['revision'] = '{revision}'
+            target['query'][name] = '{'+name+'}'
         target['url'] = source._replace(path=PREFIX+route).geturl()
         additions[route] = {'get': operation}
     indented = '\n'.join('  '+line for line in yaml.safe_dump(additions, sort_keys=False).splitlines())
