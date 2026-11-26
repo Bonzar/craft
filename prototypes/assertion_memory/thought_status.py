@@ -89,9 +89,16 @@ def snapshot(service,event_id,scope,offset,limit):
     return _bounded_status(result,scope,offset)
 
 
-def job(service,identity,scope,rows=None):
+def job(service,identity,scope,rows=None,*,batch_diagnostics=False):
     if service.queue.get(identity) is not None:
-        return service._status_job(identity,scope)
+        with service.store.transaction() as db:
+            raw = service._status_job(identity,scope)
+            if batch_diagnostics and raw['event_id'] is not None:
+                from .capture_batch_diagnostics import exact_event
+                diagnostics = exact_event(db,raw['event_id'])
+                if diagnostics is not None:
+                    raw['capture_batch'] = diagnostics
+        return raw
     with service.store.transaction() as db:
         values=_work(service,db,scope,thought_ids=[identity]) if rows is None else rows
     row=next((row for row in values if row['thought_id']==identity),None)
