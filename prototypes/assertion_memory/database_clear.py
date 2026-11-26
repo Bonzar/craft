@@ -170,6 +170,14 @@ def clear(db, *, stage, expected_revision, binding=None):
         db.execute("INSERT INTO memory_thought_fts(memory_thought_fts) VALUES ('rebuild')")
     for _,sql in triggers:
         db.execute(sql)
+    if 'memory_source_admission_clock' in managed:
+        # The running service already installed these triggers at startup.
+        # Install a fresh clock now, before accepting the first post-reset
+        # capture; later workers must not reinterpret old watermarks.
+        if 'memory_source_admission' not in managed:
+            raise ValueError('partial source admission schema')
+        db.execute('DELETE FROM memory_source_admission')
+        db.execute('INSERT INTO memory_source_admission_clock VALUES(1,0,hex(randomblob(32)))')
     if db.execute('PRAGMA foreign_key_check').fetchone():
         raise ValueError('invalid foreign keys after clear')
     db.execute('UPDATE memory_state SET version=version+1 WHERE singleton=1')

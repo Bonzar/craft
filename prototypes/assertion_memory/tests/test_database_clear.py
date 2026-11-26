@@ -75,7 +75,7 @@ class DatabaseClearTest(unittest.TestCase):
                 self.assertNotEqual(got['revision'],request_revision)
                 self.assertEqual(got['revision'],action('clear_prepare',{})['revision'])
                 with self.store.transaction() as db:
-                    for name in reset._inventory(db) & (reset.DATA | reset.VIRTUAL):
+                    for name in reset._inventory(db) & (reset.DATA | reset.VIRTUAL) - {'memory_source_admission_clock'}:
                         self.assertEqual(db.execute('SELECT count(*) FROM '+name).fetchone()[0],0,name)
                     self.assertEqual(db.execute("SELECT count(*) FROM memory_fts WHERE memory_fts MATCH 'marker'").fetchone()[0],0)
                     self.assertEqual(db.execute("SELECT count(*) FROM memory_thought_fts WHERE memory_thought_fts MATCH 'marker'").fetchone()[0],0)
@@ -89,6 +89,32 @@ class DatabaseClearTest(unittest.TestCase):
                     self.capture(ident)
                 with self.assertRaisesRegex(ValueError,'unknown ingest stream'):
                     self.capture('new-write-stale-delivery',delivery)
+
+    def test_live_ingest_and_fresh_worker_share_a_new_admission_clock_after_reset(self):
+        from prototypes.assertion_memory.source_admission import stamp,unchanged
+        old=self.capture('old-id')['event']['id']
+        with self.store.transaction() as db:
+            previous=stamp(db)
+            self.assertTrue(unchanged(db,previous[0],'raw',old))
+        action=self.signed_callbacks('test')
+        action('clear_commit',{'expected_revision':action('clear_prepare',{})['revision']})
+        with self.store.transaction() as db:
+            fresh=stamp(db)
+            self.assertEqual(fresh[0],0)
+            self.assertNotEqual(fresh[1],previous[1])
+            self.assertFalse(unchanged(db,previous[0],'raw',old))
+        # The same live instance receives a fresh message without a restart.
+        with self.store.transaction(write=True) as db:
+            stream=register(db,'fictional-device','fixture-session')
+        delivery=dict(stream_id=stream['stream_id'],epoch=stream['epoch'],seq=1)
+        captured=self.capture('fresh-id',delivery)
+        with MemoryStore(self.path) as worker:
+            MemoryService(worker)
+            with worker.transaction() as db:
+                current=stamp(db)
+                self.assertEqual(current[1],fresh[1])
+                self.assertGreater(current[0],0)
+                self.assertTrue(unchanged(db,current[0],'raw',captured['event']['id']))
 
     def test_replace_or_release_change_invalidates_a_prepared_revision(self):
         self.capture('seeded-old')
