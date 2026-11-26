@@ -26,6 +26,27 @@ ORIGINAL = {
 }
 
 
+class BatchSnapshotTest(unittest.TestCase):
+    def test_nested_members_require_exact_control_free_shape(self):
+        result=dict(id='source',status='active',ordering='batch_fifo_then_available_at_then_id',
+                    total=1,source_count=2,next_offset=None,items=[
+            dict(id='batch:'+'a'*64,status='ready',phase='extract',available_at='synthetic',
+                 position=1,member_count=2,members=[{'id':'first','preview_revision':'b'*32},{'id':'second'}])])
+        self.assertTrue(origin.snapshot_queues([result],1,0))
+        from copy import deepcopy
+        for altered in ('count','duplicate','raw','delete','missing','wrong_lane'):
+            value=deepcopy(result)
+            row=value['items'][0]
+            if altered=='count': row['member_count']=3
+            if altered=='duplicate': row['members'][1]['id']=row['members'][0]['id']
+            if altered=='raw': row['members'][1]['source_preview']='PRIVATE'
+            if altered=='delete': row['remove_revision']='c'*32
+            if altered=='missing': del value['source_count']
+            if altered=='wrong_lane': value['id']='maintenance'
+            with self.subTest(altered=altered):
+                self.assertFalse(origin.snapshot_queues([value],1,0))
+
+
 class OriginTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
