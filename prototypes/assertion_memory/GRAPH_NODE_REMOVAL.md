@@ -25,3 +25,14 @@ database generation change, dependent retained thoughts, or unfinished work on
 the selected node. No partial commit. Support for materially larger databases
 requires an indexed dependency proof: this implementation deliberately refuses
 a scan beyond 5,000 stored external versions instead of pretending safety.
+
+## Visual integration
+The authenticated owner browser uses POST `/api/v1/processing/graph-nodes/remove/prepare`
+and PUT `/api/v1/processing/graph-nodes/remove`. The browser flow binds the returned
+one-use confirmation to the same session, lane, thought ID, version, and revision.
+The browser cannot reach the private Base route directly. Both lanes use the same
+`GraphNodeOwnerBridge` over the pinned loopback Base port. The browser routes and
+capability are absent unless a reviewed deployment explicitly injects a bridge
+for that exact lane, and the ingress generator defaults off separately. No
+credential/value changes, trusted route activation, or database mutation are
+included in this candidate.

@@ -321,8 +321,12 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
             or graph_node_bridge.stage!=dashboard.stage):
         raise ValueError('Verified Base graph node bridge must match the current lane')
     def graph_node_operation(action,args):
-        with dashboard.read_fence():
-            dashboard.activation()
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(dashboard.read_fence())
+                dashboard.activation()
+            except (OSError,ValueError,KeyError):
+                raise APIError('owner_api_unavailable','Graph reader authority unavailable',503) from None
             return graph_node_bridge.perform(action,args)
     node_removal=graph_node_operation if graph_node_bridge is not None else None
     if dashboard.stage=='prod':
