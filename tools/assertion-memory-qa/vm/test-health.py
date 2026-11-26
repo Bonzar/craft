@@ -13,6 +13,9 @@ import httpx
 
 
 STATE = Path('/srv/assertion-release/test/state')
+LOCAL_GRAPH = 'http://127.0.0.1:8891'
+SESSION_PATH = '/api/v1/session'
+GRAPH_SESSION = re.compile(r'[A-Za-z0-9_-]{54}\Z', re.ASCII)
 TOOLS = {'memory_capture_message', 'memory_process', 'memory_query', 'memory_status', 'memory_history'}
 TABLES = ('memory_raw_events', 'memory_capture_jobs', 'memory_thoughts')
 
@@ -67,12 +70,24 @@ def mcp(client, token):
 
 
 def graph(client, password, *, deadline_seconds=15):
-    require(client.get('/api/v1/graph').status_code==401,'TEST graph auth probe failed')
-    require(client.get('/').status_code==200,'TEST graph index unavailable')
-    client.post('/api/v1/session',json={'password':password}).raise_for_status()
+    require(str(client.base_url).rstrip('/')==LOCAL_GRAPH,'TEST Graph smoke requires its fixed loopback listener')
+    require(client.get('/api/v1/graph',follow_redirects=False).status_code==401,'TEST graph auth probe failed')
+    require(client.get('/',follow_redirects=False).status_code==200,'TEST graph index unavailable')
+    login=client.post(SESSION_PATH,json={'password':password},follow_redirects=False)
+    require(login.status_code==200 and str(login.request.url)==LOCAL_GRAPH+SESSION_PATH,
+            'TEST Graph loopback login unavailable')
+    cookies=list(login.cookies.jar)
+    require(len(cookies)==1 and cookies[0].name=='gv_session' and not cookies[0].domain_specified
+            and cookies[0].path=='/api/v1' and isinstance(cookies[0].value,str)
+            and bool(GRAPH_SESSION.fullmatch(cookies[0].value)),
+            'TEST Graph loopback session has unexpected cookie shape')
+    # Browser cookies remain Secure. The trusted smoke actor uses an explicitly
+    # scoped, same-listener request and must not depend on browser cookie forwarding
+    # over its plain local socket. Never log, retain outside the client, redirect or export it.
+    session_headers={'cookie':'gv_session='+cookies[0].value}
     deadline=time.monotonic()+deadline_seconds
     while True:
-        response=client.get('/api/v1/graph')
+        response=client.get('/api/v1/graph',headers=session_headers,follow_redirects=False)
         if response.status_code!=202 or time.monotonic()>=deadline:
             break
         time.sleep(.1)
@@ -89,7 +104,8 @@ def graph(client, password, *, deadline_seconds=15):
         require(type(count) is int and count>=0 and descriptor.get('url')==url and
                 descriptor.get('stride')==stride and descriptor.get('byte_length')==count*stride,
                 'TEST graph layout descriptor invalid')
-        with client.stream('GET',url,headers={'accept-encoding':'identity'}) as buffer:
+        with client.stream('GET',url,headers=session_headers|{'accept-encoding':'identity'},
+                           follow_redirects=False) as buffer:
             require(buffer.status_code==200 and 'application/octet-stream' in buffer.headers.get('content-type',''),
                     'TEST graph buffer unavailable')
             total=0
@@ -106,7 +122,7 @@ def smoke_mcp(state):
 
 def smoke(state):
     smoke_mcp(state)
-    with httpx.Client(base_url='http://localhost:8891', trust_env=False, timeout=3) as client:
+    with httpx.Client(base_url=LOCAL_GRAPH,trust_env=False,timeout=3,follow_redirects=False) as client:
         graph(client,(state/'graph-password').read_text().strip())
     print('Authenticated TEST MCP schema and graph layout healthy; no data or model requests.')
 
