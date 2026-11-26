@@ -204,7 +204,8 @@ selected grounds, with the same attribution and strength; (2) the batch preserve
 the useful meaning required by this job's coverage purpose. Passing either one
 alone is insufficient. Resolve the job's scope before assessing omissions. For
 new source memory also reject unsupported status and retention-ineligible raw- or
-task-only content; its absence does not reduce material coverage.
+task-only content or repetitions with no material change; their absence does not
+reduce material coverage.
 Establish coverage FROM THE MATERIAL TO THE DRAFT, before checking the reverse.
 Use the job's scope to identify the material propositions and their qualifications.
 For each, locate an equivalent meaning in the draft. For every retained action

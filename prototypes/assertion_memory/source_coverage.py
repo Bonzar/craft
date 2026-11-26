@@ -84,7 +84,7 @@ _COVERAGE = (
     'Do not extract every sentence, invent an ontology, create cross products or infer relations from '
     'adjacency, shared vocabulary or membership. Distinguish one described episode from a recurring '
     'conditional pattern; an undated episode must remain undated. Only exact user-origin choice '
-    'establishes user adoption. Do not flag retention-ineligible raw-only or task-only material as omissions. Material '
+    'establishes user adoption. Do not flag raw-only, task-only or repeated material with no knowledge change as omissions. Material '
     'planning questions, proposed investigations and ongoing concerns need attributable speech-act '
     'coverage with exact question and necessary context evidence. '
     'Material intent can be entirely in the question in known project context (Should we group by '

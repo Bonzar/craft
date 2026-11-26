@@ -31,6 +31,10 @@ SOURCE_RETENTION_RULES = (
     'expiry and uncertainty; absence of evidence is not disproof. Retain only what is permitted '
     'and necessary: no secrets, forbidden details or expansion of scoped permission. Do not treat '
     'omitted raw-only or task-only content as missing material coverage. '
+    'A new thought must materially change useful knowledge with new meaning, a supported refinement '
+    'or correction, or independent evidence that materially changes confidence. Different wording '
+    'or repetition of the same underlying evidence is not a change. Preserve original provenance '
+    'and scope: an indirect account cannot stand in for an unavailable underlying source. '
 )
 ORIGIN_RULES = SOURCE_RETENTION_RULES + (
     'The target origin may be user, assistant or tool; preserve its exact actor and role. '
