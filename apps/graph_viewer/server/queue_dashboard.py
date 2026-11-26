@@ -106,6 +106,30 @@ def _prod_read_fence(path=None, *, owner=0):
         os.close(fd)
 
 
+def _scoped_reader_activation(stage, publisher_uid):
+    reader_uid=publisher_uid if stage=='test' else _prod_reader_uid(PROD_READER_POLICY)
+    if os.getuid()!=reader_uid or os.geteuid()!=reader_uid:
+        raise ValueError('Graph reader UID does not match the authorized lane')
+    return _test_activation() if stage=='test' else _active_reader_release('prod')
+
+
+def configured_browser_dashboard(stage, config, source_path):
+    """Pin the browser Graph reader, never grant the PROD writer's DB authority."""
+    if stage not in SCOPES:
+        raise ValueError('Unknown browser Graph lane')
+
+    def activation():
+        return _scoped_reader_activation(stage,dashboard.publisher_uid)
+
+    dashboard=HostedQueueDashboard(stage,config,source_path,activation=activation,
+                    control_lock=TEST_DEPLOY_ROOT/'deploy.lock' if stage=='test' else None,
+                    read_fence=_prod_read_fence if stage=='prod' else None)
+    # Startup can run under the receiver's exclusive activation lock. Never
+    # take either a shared lease or require the publisher projection at boot.
+    activation()
+    return dashboard
+
+
 def configured_for_legacy_reader(source_path, *, env=None):
     env = os.environ if env is None else env
     stage, path = env.get(DASHBOARD_STAGE_ENV), env.get(DASHBOARD_PATH_ENV)
@@ -115,10 +139,7 @@ def configured_for_legacy_reader(source_path, *, env=None):
         if stage not in ('test','prod') or path!=str(dashboard_projection.projection_path(stage)):
             raise ValueError('Wrong scoped dashboard configuration')
         def activation():
-            reader_uid=dashboard.publisher_uid if stage=='test' else _prod_reader_uid(PROD_READER_POLICY)
-            if os.getuid()!=reader_uid or os.geteuid()!=reader_uid:
-                raise ValueError('Graph reader UID does not match the authorized scope')
-            return _test_activation() if stage=='test' else _active_reader_release('prod')
+            return _scoped_reader_activation(stage,dashboard.publisher_uid)
         dashboard = HostedQueueDashboard(stage,path,source_path,activation=activation,
                         read_fence=_prod_read_fence if stage=='prod' else None)
         activation()
