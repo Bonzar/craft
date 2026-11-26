@@ -46,6 +46,8 @@ jobs:
           npm test
           node --test web/test/owner-live-controller.test.mjs
           npm run build
+      - name: Verify TEST-only owner stream activation and receipt
+        run: python -B tools/assertion-memory-release/operations/test-owner-stream-release/test_plan.py
       - name: Test documented offline Python memory contracts
         run: |
           python -m unittest \
@@ -99,6 +101,7 @@ jobs:
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_queue_dashboard.py'
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_database_generation.py'
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_direct_stream.py'
+          python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_owner_snapshot*.py'
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_session_filter.py'
           python tools/assertion-memory-visual/test_graph_reset_readiness.py
           python -m unittest discover -s prototypes/assertion_memory/tests -p 'test_queue_status.py'
