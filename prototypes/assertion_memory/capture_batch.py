@@ -126,11 +126,11 @@ def pending(db):
         "SELECT 1 FROM memory_capture_batches WHERE state='pending' LIMIT 1").fetchone() is not None)
 
 
-def _session_scope(db):
+def _session_scope(db, *, alias=''):
     from .queue_session_control import read
     from .processing_control import INITIAL
     selected,revision=read(db)
-    return ('',()) if revision==INITIAL else (' AND session_id IN (SELECT value FROM json_each(?))',(json.dumps(selected),))
+    return ('',()) if revision==INITIAL else (f' AND {alias}session_id IN (SELECT value FROM json_each(?))',(json.dumps(selected),))
 
 def needs_wake(db):
     if not batch_table_exists(db):

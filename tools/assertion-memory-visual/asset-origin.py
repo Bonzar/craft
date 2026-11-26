@@ -86,7 +86,7 @@ def current_release(root):
     return key
 
 
-QUEUE_LIMIT = 256_000
+QUEUE_LIMIT = 2_400_000 # up to 50 cards, each with 128 bounded member identifiers
 BASE_ORIGIN = re.compile(r'http://127\.0\.0\.1:([1-9][0-9]{0,4})\Z')
 SNAPSHOT_KEYS = {'stage', 'release_version', 'release_generation', 'global_order',
                  'snapshot_at', 'queues', 'processing_control'}
@@ -111,7 +111,8 @@ def snapshot_queues(queues, limit, offset):
         return False
     ids = set()
     for q in queues:
-        if (not isinstance(q, dict) or set(q) != {'id','status','ordering','total','next_offset','items'}
+        if (not isinstance(q, dict) or set(q) - {'source_count'} != {'id','status','ordering','total','next_offset','items'}
+                or ('source_count' in q and (q['id']!='source' or type(q['source_count']) is not int or q['source_count']<q['total']))
                 or any(not isinstance(q[k], str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',q[k])
                        for k in ('id','status','ordering'))
                 or q['id'] in ids or type(q['total']) is not int or q['total'] < 0
@@ -122,7 +123,7 @@ def snapshot_queues(queues, limit, offset):
             return False
         ids.add(q['id'])
         for row in q['items']:
-            if (not isinstance(row, dict) or set(row) - {'hold_reason','session_id','remove_revision','preview_revision'} != {'id','status','phase','position','available_at'}
+            if (not isinstance(row, dict) or set(row) - {'hold_reason','session_id','remove_revision','preview_revision','members','member_count'} != {'id','status','phase','position','available_at'}
                     or (row.get('remove_revision') is not None and (q['id'] not in ('source','maintenance') or type(row['remove_revision']) is not str or not REVISION.fullmatch(row['remove_revision'])))
                     or (row.get('preview_revision') is not None and (q['id']!='source' or type(row['preview_revision']) is not str or not REVISION.fullmatch(row['preview_revision'])))
                     or row.get('hold_reason') not in (None,'global_pause','session_excluded','incomplete_source')
@@ -134,6 +135,23 @@ def snapshot_queues(queues, limit, offset):
                     or (row['available_at'] is not None and
                         (not isinstance(row['available_at'], str) or len(row['available_at']) > 64))):
                 return False
+            if 'members' in row or 'member_count' in row:
+                members=row.get('members')
+                if (q['id']!='source' or 'source_count' not in q
+                        or not re.fullmatch(r'batch:[a-f0-9]{64}',row['id'])
+                        or 'remove_revision' in row or 'preview_revision' in row
+                        or type(row.get('member_count')) is not int or type(members) is not list
+                        or not 1<=len(members)==row['member_count']<=128):
+                    return False
+                member_ids=set()
+                for member in members:
+                    if (type(member) is not dict or set(member)-{'preview_revision'}!={'id'}
+                            or not removal_identity({'queue_id':'source','item_id':member['id']})
+                            or member['id'] in member_ids
+                            or ('preview_revision' in member and (type(member['preview_revision']) is not str
+                                or not REVISION.fullmatch(member['preview_revision'])))):
+                        return False
+                    member_ids.add(member['id'])
     return True
 
 
@@ -149,7 +167,8 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
         try:
             http.request('GET', f'/api/v1/queue-status?limit={limit}&offset={offset}',
                          headers={'Authorization': 'Bearer '+key, 'Accept': 'application/json',
-                                  'Connection': 'close'})
+                                  'Connection': 'close',
+                                  **({'X-Memory-Queue-Format':'batch-cards-v1'} if disclose_pause else {})})
             response = http.getresponse()
             if (response.status != 200 or response.headers.get_content_type() != 'application/json'
                     or response.headers.get('Content-Encoding') is not None):

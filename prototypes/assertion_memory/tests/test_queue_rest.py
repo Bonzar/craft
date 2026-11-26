@@ -70,6 +70,15 @@ class Route(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Path(str(self.db)+'-journal').exists())
         self.assertEqual(self.hits,[dict(limit=50,offset=0),dict(limit=1,offset=1)])
 
+    async def test_batch_cards_negotiation_is_explicit_and_authenticated(self):
+        h=(b'x-memory-queue-format',b'batch-cards-v1')
+        self.assertEqual((await self.send(extra=[h]))[0],200)
+        self.assertEqual(self.hits,[dict(limit=50,offset=0,batch_cards=True)])
+        self.assertEqual((await self.send(extra=[h,h]))[0],400)
+        self.assertEqual((await self.send(extra=[h],token=None))[0],401)
+        self.assertEqual((await self.send(extra=[(h[0],b'other')]))[0],400)
+        self.assertEqual(len(self.hits),1)
+
     async def test_rejects_wrong_authority_peer_headers_and_method_before_snapshot(self):
         cases=(
             ({'token':None},401),({'token':LEGACY},401),({'token':'d'*64},401),
