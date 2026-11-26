@@ -17,7 +17,7 @@
   const itemFeedback=panel.querySelector('#queue-item-feedback');
   const deleting=new Set(), previews=new Map(), previewPending=new Set(), previewJobs=new Map();
   const autoSeen=new Set(), visiblePreviews=new Map();
-  let previewObserver;
+  let previewObserver,previewEpoch=0;
   const maxAutoPreviews=6;
   function drainPreviews(){
     if(previewPending.size||!panel.open)return;
@@ -129,22 +129,22 @@
       };
       const load=async()=>{
         if(previewPending.size||previewPending.has(previewKey)||!panel.open)return;
-        const current=generation;
+        const current=generation,epoch=previewEpoch;
         const body={stage:queueStage,queue_id:'source',item_id:source.id,expected_revision:source.preview_revision};
         const route='/api/v1/processing/items/source-preview';
         previewPending.add(previewKey);open.disabled=true;
         try{
           const proof=await sessionRequest(route+'/prepare','POST',body);
-          if(current!==generation||!panel.open)return;
+          if(current!==generation||epoch!==previewEpoch||!panel.open)return;
           if(proof?.stage!==body.stage||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
           const value=await sessionRequest(route,'PUT',body,proof.csrf_token);
-          if(current!==generation||!panel.open)return;
+          if(current!==generation||epoch!==previewEpoch||!panel.open)return;
           if(value?.stage!==body.stage||value.queue_id!=='source'||value.item_id!==source.id||
              typeof value.source_preview!=='string'||!value.source_preview.trim()||Array.from(value.source_preview).length>240)throw Error();
           if(previews.size>=50)previews.delete(previews.keys().next().value);
           previews.set(previewKey,value);show(value);
         }catch{
-          if(current===generation&&panel.open){
+          if(current===generation&&epoch===previewEpoch&&panel.open){
             excerpt.replaceChildren(element('span','Текст недоступен. '),open);
           }
         }finally{previewPending.delete(previewKey);open.disabled=false;drainPreviews();}
@@ -424,11 +424,12 @@
         return;
       }
       if(receipt.stage!==body.stage||receipt.cleared!==true||!rev(receipt.revision)||receipt.revision===intent.revision)throw Error();
-      previews.clear();autoSeen.clear();visiblePreviews.clear();
+      previewEpoch++;previews.clear();previewPending.clear();autoSeen.clear();visiblePreviews.clear();
       previewObserver?.disconnect();previewObserver=null;previewJobs.clear();
       fetchAbort?.abort();
       offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
       clearFeedback.textContent='База '+body.stage.toUpperCase()+' очищена. Настройки и доступы сохранены.';
+      globalThis.location?.reload();
     }catch{
       if(active())clearFeedback.textContent=sent
         ? 'Результат очистки не подтверждён. Проверьте состояние базы перед повтором.'

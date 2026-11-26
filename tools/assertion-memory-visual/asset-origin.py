@@ -168,7 +168,7 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
             http.request('GET', f'/api/v1/queue-status?limit={limit}&offset={offset}',
                          headers={'Authorization': 'Bearer '+key, 'Accept': 'application/json',
                                   'Connection': 'close',
-                                  **({'X-Memory-Queue-Format':'batch-cards-v1'} if disclose_pause else {})})
+                                  **({'X-Memory-Queue-Format':'batch-cards-v1','X-Memory-Queue-Reset':'ready-v1'} if disclose_pause else {})})
             response = http.getresponse()
             if (response.status != 200 or response.headers.get_content_type() != 'application/json'
                     or response.headers.get('Content-Encoding') is not None):
@@ -390,7 +390,7 @@ def pause_client(origin, read_key, write_key, signer, *, stage, route=BASE_PAUSE
                 raise ValueError('invalid trusted signer response')
             headers.update(proof)
             headers['Content-Type'] = 'application/json'
-        conn = HTTPConnection('127.0.0.1', int(address[1]), timeout=4)
+        conn = HTTPConnection('127.0.0.1', int(address[1]), timeout=18 if route==BASE_CLEAR else 4)
         try:
             conn.request(method, route, body=body, headers=headers)
             rsp = conn.getresponse()
