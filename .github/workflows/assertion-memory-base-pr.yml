@@ -97,6 +97,8 @@ jobs:
         run: |
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_queue_dashboard.py'
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_database_generation.py'
+          python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_session_filter.py'
+          python tools/assertion-memory-visual/test_graph_reset_readiness.py
           python -m unittest discover -s prototypes/assertion_memory/tests -p 'test_queue_status.py'
           python -m unittest prototypes.assertion_memory.tests.test_queue_rest
           python -m unittest prototypes.assertion_memory.tests.test_database_clear

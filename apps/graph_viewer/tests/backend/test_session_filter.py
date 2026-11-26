@@ -95,6 +95,9 @@ class SessionFilter(unittest.TestCase):
   def model(*args):calls.append(args);raise AssertionError('filter must not run model')
   parent.semantic_matrix=object();parent.semantic_model=model;parent.semantic_info={'status':'ready'}
   manager=GraphManager(self.source,self.root/'cache',semantic_model=model);manager.graphs[parent.revision]=parent
+  manager.schedule_semantic(child)  # reset fence rejects candidates not registered in this epoch
+  self.assertFalse(hasattr(child,'semantic_matrix'))
+  manager.graphs[child.revision]=child
   manager.schedule_semantic(child)
   self.assertIs(child.semantic_matrix,parent.semantic_matrix);self.assertTrue(child.manifest['session_filter']['semantic_search_available']);self.assertEqual(calls,[])
  def test_json_session_uses_explicit_primary_episode_not_incidental_evidence(self):
