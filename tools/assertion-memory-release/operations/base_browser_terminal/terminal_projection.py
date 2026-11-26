@@ -37,7 +37,8 @@ def _identity(doc):
 
 def _event(doc):
     if (set(doc)!={'run','nonce','phase','kind','proof'} or doc['phase'] not in ('restart','restore')
-            or doc['kind'] not in ('phase','precommit')
+            or doc['kind'] not in ('phase','precommit','abort-before-first')
+            or doc['kind']=='abort-before-first' and doc['phase']!='restore'
             or type(doc['proof']) is not str or not HEX.fullmatch(doc['proof'])):
         raise ValueError('unexpected terminal projection fields')
     _identity(doc)
@@ -46,7 +47,7 @@ def _event(doc):
 def _advance(old,doc):
     step=(doc['phase'],doc['kind'])
     if old is None:
-        if step!=('restart','phase'):
+        if step not in (('restart','phase'),('restore','abort-before-first')):
             raise ValueError('terminal projection cannot skip native phase')
     else:
         old=_event(old)
@@ -57,13 +58,14 @@ def _advance(old,doc):
             ('restart','phase'):{('restart','precommit'),('restore','phase')},
             ('restart','precommit'):{('restore','phase')},
             ('restore','phase'):{('restore','precommit')},
+            ('restore','abort-before-first'):{('restore','precommit')},
             ('restore','precommit'):set(),
         }
         if step not in next_steps[old['phase'],old['kind']]:
             raise ValueError('nonmonotonic terminal projection')
     return True
 
-def dispatch(raw,*,verified_peer_uid,active,read_admission,read_projection,persist_projection):
+def dispatch(raw,*,verified_peer_uid,active,read_admission,read_projection,persist_projection,read_locked_view):
     """Only use kernel-proven peer UID; exact active mode is separately reviewed."""
     if active is not True:
         raise ValueError('terminal projection disabled')
@@ -84,9 +86,9 @@ def dispatch(raw,*,verified_peer_uid,active,read_admission,read_projection,persi
         return {'status':'ok','proof':sha256(encode(doc)).hexdigest()}
     if op==READ and verified_peer_uid==986 and set(frame)=={'op','run','nonce'}:
         run,nonce=_identity(frame)
-        _,pending,receipt=read_exact(read_admission())
+        state,event=read_locked_view(run,nonce)
+        _,pending,receipt=read_exact(state)
         if pending is not None and (pending.run,pending.nonce)==(run,nonce):
-            event=read_projection(run,nonce)
             if event is None:return {'status':'waiting'}
             event=_event(event)
             if _identity(event)!=(run,nonce):

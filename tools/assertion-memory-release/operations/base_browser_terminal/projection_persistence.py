@@ -86,3 +86,20 @@ def persist_projection(*,expected_admission,expected,replacement,identical):
                 except FileNotFoundError:pass
         finally:os.close(lock)
     finally:os.close(fd)
+
+def read_locked_view(run,nonce):
+    """One authoritative snapshot for expected run; do not trust it as a detached permit."""
+    fd=_open()
+    try:
+        lock=os.open(LOCK,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,dir_fd=fd)
+        try:
+            before=_regular(lock,AUTHORIZER_UID)
+            fcntl.flock(lock,fcntl.LOCK_SH|fcntl.LOCK_NB)
+            if not os.path.samestat(before,os.stat(LOCK,dir_fd=fd,follow_symlinks=False)):
+                raise ValueError('configured authorizer lock changed')
+            state=_current(fd,AUTHORIZER_UID)
+            _,pending,_=read_exact(state)
+            event=_get(fd,_name(run,nonce)) if pending is not None and (pending.run,pending.nonce)==(run,nonce) else None
+            return state,event
+        finally:os.close(lock)
+    finally:os.close(fd)

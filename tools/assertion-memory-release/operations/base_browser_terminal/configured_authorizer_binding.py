@@ -56,7 +56,7 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
         if not terminal_projection_enabled:
             return None
         from terminal_projection import dispatch,PUBLISH,READ
-        from projection_persistence import read_projection,persist_projection
+        from projection_persistence import read_projection,persist_projection,read_locked_view
         # Protocol selection does not grant capability: dispatch validates
         # peer UID, exact canonical fields, active mode and signed pending.
         try:
@@ -68,7 +68,7 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
         try:
             return dispatch(raw,verified_peer_uid=uid,active=protected_marker_active(),
                 read_admission=read_owned_record,read_projection=read_projection,
-                persist_projection=persist_projection)
+                persist_projection=persist_projection,read_locked_view=read_locked_view)
         except (OSError,ValueError):
             return {'status':'rejected'}
     # Trusted, current root controller's exact protected phase callback.
