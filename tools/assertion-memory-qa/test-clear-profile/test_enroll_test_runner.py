@@ -28,7 +28,9 @@ class EnrollTest(unittest.TestCase):
 
     def test_pin_and_existing_key_prevent_second_mint(self):
         st=SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_gid=0)
-        with patch.object(e,'guard_root'),patch.object(e,'trusted_dir'), \
+        edge=b'fixture edge bytes'
+        with patch.object(e,'SHIELDED_EDGE_SHA',hashlib.sha256(edge).hexdigest()), \
+             patch.object(e,'guard_root'),patch.object(e,'trusted_dir'), \
              patch.object(e.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=994)), \
              patch.object(e,'activation_lock',return_value=nullcontext()), \
              patch.object(e,'ensure_current',return_value=['exact-test-prefix']), \
@@ -39,12 +41,15 @@ class EnrollTest(unittest.TestCase):
              patch.object(e,'regular_bytes') as read, \
              patch.object(e,'credential',return_value='a'*64), \
              patch.object(e.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run:
+            read.return_value=b'wrong edge'
+            with self.assertRaisesRegex(ValueError,'isolated TEST neutral edge'):
+                e.enroll(ORIGINAL)
+            read.side_effect=lambda path,**opts:edge if path==e.EDGE_FILE else e.enroll_payload(DOC,{},hashlib.sha256(b'a'*64).hexdigest())
             with self.assertRaises(ValueError): e.enroll('b'*64)
             empty.return_value=False
             with self.assertRaises(ValueError): e.enroll(ORIGINAL)
             mint.assert_not_called();record.assert_not_called();run.assert_not_called()
             empty.return_value=True
-            read.return_value=e.enroll_payload(DOC,{},hashlib.sha256(b'a'*64).hexdigest())
             out=e.enroll(ORIGINAL)
             self.assertEqual(out['stage'],'test')
             self.assertNotIn('a'*64,str(out))
