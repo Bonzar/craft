@@ -1,5 +1,6 @@
-"""Trusted Base launcher seam; the stock launcher does not enable it."""
+"""Canonical PROD Base browser listener: root profile plus sealed package capability."""
 from functools import partial
+from hashlib import sha256
 import errno
 import json
 import os
@@ -9,7 +10,7 @@ import socket
 import stat
 
 from .queue_pause_binding import PROD, release_lease
-from .queue_rest import _identity, exact_database
+from .queue_rest import _checked_file, _identity, exact_database
 
 PROD_BROWSER_PORT=8902
 PROD_PRIVATE_PORT=8903
@@ -20,6 +21,38 @@ PROD_SWITCH=PROD.authority/'base-browser-listener.json'
 _SWITCH={'binding':'dedicated-base-browser-v1','stage':'prod','version':1,
          'retired_graph_unit':'assertion-production-deploy-graph.service'}
 _LEGACY_GRAPH_PORT=8901
+_CAPABILITY='BASE_BROWSER_LISTENER_CONTRACT'
+_CAPABILITY_V1=b'assertion-memory-base-browser-listener-v1\n'
+_MAIN='prototypes/assertion_memory/http_server.py'
+_BINDING='prototypes/assertion_memory/browser_prod_binding.py'
+
+def _capable_release(root):
+    # _identity proves the exact loaded physical release and its sealed
+    # identity files via existing release admission and manifest policy.
+    _identity(root,'prod')
+    path=(root/'current').resolve(strict=True)
+    if Path(__file__).resolve()!=path/_BINDING:
+        raise ValueError('Wrong physical browser binding package')
+    manifest=_checked_file(path/'SHA256SUMS',5*1024*1024).decode('ascii').splitlines()
+    def entries(name):
+        return [line for line in manifest if line.partition('  ')[2] in (name,'./'+name)]
+    marker=entries(_CAPABILITY)
+    if not marker:
+        try:
+            (path/_CAPABILITY).lstat()
+        except FileNotFoundError:
+            return False
+        raise ValueError('Unsealed browser capability marker')
+    for name, limit in ((_CAPABILITY,128),(_MAIN,65536),(_BINDING,65536)):
+        raw=_checked_file(path/name,limit)
+        if entries(name)!=[sha256(raw).hexdigest()+'  ./'+name]:
+            raise ValueError('Unverified Base browser capability member')
+        if name==_CAPABILITY and raw!=_CAPABILITY_V1:
+            raise ValueError('Unsupported Base browser listener contract')
+    if (root/'current').resolve(strict=True)!=path:
+        raise ValueError('Base release changed during browser startup')
+    return True
+
 
 def _read_switch(path):
     # Marker is written only by the separately approved release authority;
@@ -64,6 +97,8 @@ def installed_prod_browser_lifespan(config_path, config, *, private_port, on_fai
         return None
     if PROD_HTTP_CONFIG.resolve(strict=True)!=PROD_HTTP_CONFIG:
         raise ValueError('Noncanonical PROD Base HTTP config')
+    if not _capable_release(PROD.root):
+        return None
     return configured_prod_browser_lifespan(config,private_port=private_port,
         interactive_enabled=None,on_failure=on_failure)
 

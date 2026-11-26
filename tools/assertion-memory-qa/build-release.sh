@@ -6,6 +6,7 @@ cd "$root"
 # This runs in PR validation and in the original immutable Release build;
 # no deployment workflow/legacy signed producer prelude changes.
 python3 -B -m unittest prototypes.assertion_memory.dual_http_test.Dual.test_personal_machine_full_registry_independent_of_sites_key
+PYTHONPATH="$root/tools/assertion-memory-qa" python3 -B -m unittest test_browser_contract
 sha="$(git rev-parse --verify HEAD)"
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
 dest="${1:?absolute output directory required}"
@@ -44,6 +45,12 @@ while IFS= read -r -d '' path; do
 done < <(git ls-tree -rz --name-only "$sha" -- prototypes/assertion_memory apps/graph_viewer/server)
 committed_runtime=("${application_runtime[@]}" "${hosted_release_files[@]}")
 git archive "$sha" -- "${committed_runtime[@]}" | tar -x -C "$stage"
+# Explicit marker from this committed tree, never a build flag or host marker.
+browser_contract=tools/assertion-memory-qa/BASE_BROWSER_LISTENER_CONTRACT
+if git cat-file -e "$sha:$browser_contract"; then
+  [[ "$(git ls-tree "$sha" -- "$browser_contract" | cut -d ' ' -f 1)" == 100644 ]]
+  git show "$sha:$browser_contract" > "$stage/BASE_BROWSER_LISTENER_CONTRACT"
+fi
 # Exact root-level entry points consumed by the installed PROD prepare hook.
 # These operate only on the hook's temporary SQLite fixture, never the service DB.
 prod_preflight=(synthetic_fixture.py smoke_local.py)
@@ -75,7 +82,7 @@ name="assertion-memory-qa-$sha.tar.gz"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -C "$stage" -cf - . | gzip -n > "$dest/$name"
 (cd "$dest"; sha256sum "$name" > "$name.sha256")
 # Qualify through the shared receiver without rewriting the immutable bytes.
-PYTHONPATH="$root/tools/assertion-memory-release" python3 - "$dest/$name" "$sha" "${committed_runtime[@]}" <<'PYQUAL'
+PYTHONPATH="$root/tools/assertion-memory-release:$root/tools/assertion-memory-qa" python3 - "$dest/$name" "$sha" "${committed_runtime[@]}" <<'PYQUAL'
 from hashlib import file_digest
 from pathlib import Path, PurePosixPath
 import os
@@ -83,6 +90,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from assembly import inspect
+from browser_contract import NAME, qualified
 from base_payload import SPEC, read_manifest, validate
 path,revision=Path(sys.argv[1]),sys.argv[2]
 with path.open('rb') as archive:
@@ -97,7 +105,14 @@ def qualify(staged):
     if (staged / "BASE_RELEASE_TAG").is_file():
         required.add(PurePosixPath("BASE_RELEASE_TAG"))
     prefix = PurePosixPath("apps/graph_viewer/web/dist")
-    actual = set(read_manifest(staged))
+    manifest = read_manifest(staged)
+    marked = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}:tools/assertion-memory-qa/{NAME}"],
+        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode == 0
+    if qualified(staged, manifest, expected=marked):
+        required.add(PurePosixPath(NAME))
+    actual = set(manifest)
     dist = {name for name in actual if prefix in name.parents and name.suffix != ".map"}
     if len(expected) != len(sys.argv[3:]) or actual != expected | required | dist:
         raise ValueError("base_runtime_membership")

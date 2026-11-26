@@ -53,3 +53,39 @@ class ProdBrowserBindingTest(TestCase):
             with self.assertRaises(ValueError):
                 open_browser()
             graph.assert_not_called()
+
+    def test_exact_sealed_capability_required_and_legacy_absence_stays_dark(self):
+        from hashlib import sha256
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            root=Path(folder)
+            candidate=root/'sealed-release'
+            candidate.mkdir()
+            (root/'current').symlink_to(candidate)
+            fixture={binding._MAIN:b'main',binding._BINDING:b'binding'}
+            for name,raw in fixture.items():
+                dest=candidate/name
+                dest.parent.mkdir(parents=True,exist_ok=True)
+                dest.write_bytes(raw)
+            def manifest():
+                (candidate/'SHA256SUMS').write_text(''.join(
+                    f'{sha256(raw).hexdigest()}  ./{name}\n' for name,raw in fixture.items()))
+            with (patch.object(binding,'__file__',str(candidate/binding._BINDING)),
+                  patch.object(binding,'_identity')):
+                manifest()
+                self.assertFalse(binding._capable_release(root))
+                (candidate/binding._CAPABILITY).write_bytes(binding._CAPABILITY_V1)
+                with self.assertRaises(ValueError):
+                    binding._capable_release(root) # existing unsealed marker
+                fixture[binding._CAPABILITY]=binding._CAPABILITY_V1
+                manifest()
+                self.assertTrue(binding._capable_release(root))
+                checksums=candidate/'SHA256SUMS'
+                checksums.write_text(checksums.read_text()+
+                    f'{sha256(fixture[binding._CAPABILITY]).hexdigest()}  {binding._CAPABILITY}\n')
+                with self.assertRaises(ValueError):
+                    binding._capable_release(root)
+                manifest()
+                (candidate/binding._MAIN).write_bytes(b'changed')
+                with self.assertRaises(ValueError):
+                    binding._capable_release(root)
