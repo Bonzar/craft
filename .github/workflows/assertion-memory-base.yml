@@ -62,6 +62,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run lint
           npm test
+          node --test web/test/owner-live-controller.test.mjs
           npm run build
       - name: Test documented offline Python memory contracts
         run: |
