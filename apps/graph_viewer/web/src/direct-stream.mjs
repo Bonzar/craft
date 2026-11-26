@@ -17,6 +17,8 @@ export async function readDirectStream({fetcher=fetch,csrf,allowedOrigin,signal,
   const value=await reply.json();
   if(typeof value?.ticket!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.ticket))
     throw new Error('Invalid stream authorization');
+  const epoch=value.epoch??null;
+  if(epoch!==null&&(typeof epoch!=='string'||!/^[a-f0-9]{64}$/.test(epoch)))throw new Error('Invalid stream epoch');
   const target=directStreamTarget(value.stream_url,allowedOrigin);
   const stream=await fetcher(target,{method:'GET',credentials:'omit',mode:'cors',redirect:'error',
     cache:'no-store',headers:{'Authorization':'Bearer '+value.ticket,'Accept':'text/event-stream'},signal});
@@ -38,7 +40,7 @@ export async function readDirectStream({fetcher=fetch,csrf,allowedOrigin,signal,
         const fields=/^event: ([a-z]+)\r?\ndata: \{\}$/.exec(frame);
         if(!fields||!KINDS.has(fields[1])||((fields[1]==='hello')===opened))
           throw new Error('Invalid stream event');
-        opened=true;onEvent(fields[1]);
+        opened=true;onEvent(fields[1],epoch);
       }
       if(pending.length>64)throw new Error('Invalid stream frame size');
     }

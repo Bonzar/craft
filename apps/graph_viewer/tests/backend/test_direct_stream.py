@@ -63,6 +63,16 @@ class DirectStream(unittest.TestCase):
             payload=granted.json(); token=payload['ticket']
             self.assertEqual(payload['stream_url'],DIRECT+'/__mvt/api/v1/events-direct')
             self.assertEqual(payload['expires_in'],15)
+            self.assertRegex(payload['epoch'],r'^[a-f0-9]{64}$')
+            import time
+            for _ in range(40):
+                graph=ui.get('/api/v1/graph',headers={'Origin':PUBLIC})
+                if graph.status_code==200:break
+                time.sleep(.02)
+            self.assertEqual(graph.status_code,200)
+            self.assertEqual(graph.json()['owner_live_epoch'],payload['epoch'])
+            with TestClient(app,base_url=PUBLIC) as anonymous:
+                self.assertNotIn('owner_live_epoch',anonymous.get('/api/v1/graph').json())
             request={'Origin':PUBLIC,'Authorization':'Bearer '+token}
             self.assertEqual(ui.get(DIRECT_PATH,headers=request).status_code,403)
             with TestClient(app,base_url='https://testserver') as stream:
@@ -82,6 +92,61 @@ class DirectStream(unittest.TestCase):
                 self.assertEqual(response.headers['access-control-allow-origin'],PUBLIC)
                 self.assertEqual(response.text,'event: hello\ndata: {}\n\nevent: reset\ndata: {}\n\n')
                 self.assertEqual(stream.get(DIRECT_PATH,headers=request).status_code,401)
+
+    def test_manifest_lookup_crossing_physical_generation_never_labels_old_graph_as_new(self):
+        import asyncio
+        import sqlite3
+        from types import SimpleNamespace
+        from starlette.datastructures import QueryParams
+        from apps.graph_viewer.server.app import APIError,graph_manifest
+        app=self.create()
+        manager=app.state.manager
+        prior=manager._generation
+        old=SimpleNamespace(revision='old-fixture',manifest={'revision':'old-fixture'})
+
+        async def crosses_reset(_):
+            with sqlite3.connect(self.source) as db:
+                db.execute('CREATE TABLE memory_database_clear_state(singleton INTEGER PRIMARY KEY,revision TEXT,salt BLOB)')
+                db.execute('INSERT INTO memory_database_clear_state VALUES(1,?,?)',('a'*32,b'fixture'))
+            # Simulate another request/poll acquiring the new fence before the
+            # suspended old request resumes. Exercise the route itself, without
+            # the outer Graph security middleware's independent body fence.
+            self.assertNotEqual(manager.sync_generation(),prior)
+            return old
+
+        request=SimpleNamespace(app=app,query_params=QueryParams())
+        with (patch.object(manager,'ensure',side_effect=crosses_reset),
+              patch.object(app.state.owner,'session',return_value='fictional-owner'),
+              self.assertRaises(APIError) as denied):
+            asyncio.run(graph_manifest(request))
+        self.assertEqual(denied.exception.status,409)
+        self.assertEqual(denied.exception.code,'revision_expired')
+
+    def test_graph_marker_stays_dark_outside_enabled_test(self):
+        import time
+        with TestClient(self.create(enabled=False),base_url=PUBLIC) as ui:
+            self.assertEqual(ui.post('/api/v1/session',json={'password':'owner-fixture-long'},
+                                     headers={'Origin':PUBLIC}).status_code,200)
+            for _ in range(50):
+                graph=ui.get('/api/v1/graph',headers={'Origin':PUBLIC})
+                if graph.status_code==200:break
+                time.sleep(.02)
+            self.assertEqual(graph.status_code,200)
+            self.assertNotIn('owner_live_epoch',graph.json())
+
+    def test_machine_read_authority_does_not_receive_owner_marker(self):
+        import time
+        from types import SimpleNamespace
+        app=self.create()
+        app.state.bridge_read_service=SimpleNamespace(
+            authorizes=lambda request: request.method=='GET' and request.url.path=='/api/v1/graph')
+        with TestClient(app,base_url=PUBLIC) as machine:
+            for _ in range(50):
+                graph=machine.get('/api/v1/graph',headers={'Origin':PUBLIC})
+                if graph.status_code==200:break
+                time.sleep(.02)
+            self.assertEqual(graph.status_code,200)
+            self.assertNotIn('owner_live_epoch',graph.json())
 
     def test_ticket_expiry_replacement_single_consumption_and_revocation(self):
         now=[100]; tickets=Tickets(Binding.test(PUBLIC,DIRECT,True),clock=lambda:now[0])
@@ -155,14 +220,15 @@ class DirectStream(unittest.TestCase):
             browser={'Origin':PUBLIC,'X-CSRF-Token':csrf}
             self.assertEqual(ui.post(TICKET_PATH,headers=browser,content=b'not empty').status_code,400)
             issue=lambda:ui.post(TICKET_PATH,headers=browser)
-            old=issue().json()['ticket']
+            previous=issue().json();old=previous['ticket']
             with sqlite3.connect(self.source) as db:
                 db.execute('CREATE TABLE memory_database_clear_state(singleton INTEGER PRIMARY KEY,revision TEXT,salt BLOB)')
                 db.execute('INSERT INTO memory_database_clear_state VALUES(1,?,?)',('a'*32,b'fixture'))
             wire=lambda token:{'Origin':PUBLIC,'Authorization':'Bearer '+token}
             self.assertEqual(stream.get(DIRECT_PATH,headers=wire(old)).status_code,409)
             self.assertEqual(stream.get(DIRECT_PATH,headers=wire(old)).status_code,401)
-            fresh=issue().json()['ticket']
+            next_epoch=issue().json();fresh=next_epoch['ticket']
+            self.assertNotEqual(previous['epoch'],next_epoch['epoch'])
             self.active=('later','archive')
             self.assertEqual(stream.get(DIRECT_PATH,headers=wire(fresh)).status_code,404)
             self.assertEqual(issue().status_code,404)

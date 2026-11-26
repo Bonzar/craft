@@ -164,7 +164,7 @@ class Viewer {
   private async fetchGraph(context:SliceContext,preserveOwnerLive=false):Promise<void>{
     if(!this.authenticated)return;this.cardRequest?.abort();this.reader.finishLoading();this.graphRequest?.abort();const request=new AbortController();this.graphRequest=request;if(!preserveOwnerLive)this.stopOwnerLive();this.stream?.close();this.stream=null;if(!preserveOwnerLive)this.setConnection(this.changingContext?'Загружаем новый срез · на карте предыдущий':'Получаем вселенную',false);if(!this.graph){this.loading.hidden=false;byId('load-retry',HTMLButtonElement).hidden=true;}
     let nextWorker:GraphWorker|null=null;
-    try{const manifest=await bootStep('manifest','Источник не успел подготовить карту. Повторите загрузку.',signal=>this.manifestFor(signal,context.selector),request.signal);if(!manifest.complete_graph||manifest.schema!==1||manifest.nodes.stride!==16||manifest.edges.stride!==8||manifest.nodes.byte_length!==manifest.counts.nodes*16||manifest.edges.byte_length!==manifest.counts.edges*8)throw new Error('Источник не предоставил полный граф согласованного формата.');if(!this.capabilities||this.capabilities.provider_id!==manifest.provider_id)this.capabilities=await bootStep('session','Не удалось подтвердить источник карты. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal),request.signal);if(this.capabilities.provider_id!==manifest.provider_id)throw new ApiError(409,'source_changed','Источник изменился во время загрузки.');if(this.manifest&&canReuseSnapshot(this.manifest,manifest)&&sameSliceContext(this.currentContext(),context)){this.cursor=this.cursor||manifest.live_cursor;this.loading.hidden=true;lifecycle('graph-same-revision-reused',{revision:opaqueTag(manifest.revision)});if(!this.changingContext)this.startLive();return;}const sourceChanged=this.manifest!==null&&this.manifest.provider_id!==manifest.provider_id;if(sourceChanged){this.clearContextSelection();this.setConnection('Источник сменился · загружаем текущий срез',false);}byId('loading-detail',HTMLElement).textContent=`Загружаем ${manifest.counts.eligible_before_status_filter.toLocaleString('ru')} звёзд и ${(manifest.counts.source_eligible_edges??manifest.counts.edges).toLocaleString('ru')} связей`;
+    try{const manifest=await bootStep('manifest','Источник не успел подготовить карту. Повторите загрузку.',signal=>this.manifestFor(signal,context.selector),request.signal);if(!manifest.complete_graph||manifest.schema!==1||manifest.nodes.stride!==16||manifest.edges.stride!==8||manifest.nodes.byte_length!==manifest.counts.nodes*16||manifest.edges.byte_length!==manifest.counts.edges*8)throw new Error('Источник не предоставил полный граф согласованного формата.');if(!this.capabilities||this.capabilities.provider_id!==manifest.provider_id)this.capabilities=await bootStep('session','Не удалось подтвердить источник карты. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal),request.signal);if(this.capabilities.provider_id!==manifest.provider_id)throw new ApiError(409,'source_changed','Источник изменился во время загрузки.');if(preserveOwnerLive&&this.manifest?.owner_live_epoch&&manifest.owner_live_epoch&&this.manifest.owner_live_epoch!==manifest.owner_live_epoch){this.clearOwnerLiveGraph();this.ensureLiveScene();}if(this.manifest&&canReuseSnapshot(this.manifest,manifest)&&sameSliceContext(this.currentContext(),context)){this.cursor=this.cursor||manifest.live_cursor;this.loading.hidden=true;lifecycle('graph-same-revision-reused',{revision:opaqueTag(manifest.revision)});if(!this.changingContext)this.startLive();return;}const sourceChanged=this.manifest!==null&&this.manifest.provider_id!==manifest.provider_id;if(sourceChanged){this.clearContextSelection();this.setConnection('Источник сменился · загружаем текущий срез',false);}byId('loading-detail',HTMLElement).textContent=`Загружаем ${manifest.counts.eligible_before_status_filter.toLocaleString('ru')} звёзд и ${(manifest.counts.source_eligible_edges??manifest.counts.edges).toLocaleString('ru')} связей`;
       const [nodes,edges,topics]=await bootStep('payload','Не удалось вовремя загрузить звёзды, связи или темы. Повторите.',signal=>bootBuffers(manifest,signal),request.signal);
       if(request.signal.aborted)return;if(topics.revision!==manifest.revision)throw new Error('Данные тем относятся к другой версии вселенной.');try{nextWorker=new GraphWorker();}catch{throw new BootError('Браузер не смог запустить модуль обработки карты. Обновите страницу и повторите.');}
       const decode=nextWorker;byId('loading-detail',HTMLElement).textContent='Проверяем данные карты…';
@@ -368,9 +368,15 @@ class Viewer {
   private async saveBookmark(kind:'node'|'topic',id:string,label:string,context?:{provider_id:string;selector?:Selector}):Promise<void>{if(!this.manifest)return;await write(`/bookmarks/${crypto.randomUUID()}`,'PUT',{object_kind:kind,object_id:id,provider_id:context?.provider_id??this.manifest.provider_id,label:Array.from(label).slice(0,180).join(''),selector:context?.selector??this.selector},this.csrf,okSchema);this.notice('Сохранено в личные закладки');if(!this.bookmarksPanel.hidden)await this.showBookmarks();}
   private async showBookmarks():Promise<void>{this.bookmarksPanel.querySelector('[data-panel-feedback]')?.remove();const list=byId('bookmarks-list',HTMLElement);list.replaceChildren(note('Загружаем закладки…'));const page=await get('/bookmarks',bookmarksSchema).catch(error=>{list.replaceChildren();throw error;});list.replaceChildren();if(!page.items.length)list.append(note('Сохранённых узлов и тем пока нет. Откройте звезду или тему и добавьте её в закладки.'));for(const bookmark of page.items){const row=element('div','','bookmark-row');const open=button(`${bookmark.object_kind==='topic'?'✦':'·'} ${bookmark.label||'Сохранённый объект'}`,()=>this.run(()=>this.openBookmark(bookmark)),'bookmark-open');const remove=button('×',()=>this.run(async()=>{await response(`/bookmarks/${encodeURIComponent(bookmark.id)}`,undefined,{method:'DELETE',headers:{'X-CSRF-Token':this.csrf}});await this.showBookmarks();}),'icon');remove.setAttribute('aria-label','Удалить закладку');row.append(open,remove);list.append(row);if(bookmark.availability!=='available')list.append(note(bookmark.availability==='hidden_in_slice'?'Объект скрыт в текущем срезе':bookmark.availability==='provider_unavailable'?'Источник закладки недоступен':'Объект сейчас не найден'));}}
   private async openBookmark(bookmark:Bookmark):Promise<void>{if(!this.objectSourceReady(bookmark.provider_id,bookmark.availability))return;this.hidePanel('bookmarks');if(bookmark.selector&&!await this.changeSliceContext(contextForSelector(this.currentContext(),bookmark.selector)))return;if(bookmark.object_kind==='node')await this.openNode(bookmark.object_id);else{const topic=this.topics?.topics.find(item=>item.id===bookmark.object_id);if(topic)this.openTopic(topic);else this.notice('Тема недоступна в выбранной версии.');}}
+  private clearOwnerLiveGraph():void{
+    this.cardRequest?.abort();this.searchRequest?.abort();this.clearContextSelection();
+    this.worker?.dispose();this.worker=null;this.scene?.dispose();this.scene=null;
+    this.graph=null;this.manifest=null;this.topics=null;this.cursor='';
+  }
   private stopOwnerLive():void{this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
   private startDirectOwnerLive():boolean{
     const cfg=this.capabilities?.owner_live_transport;
+    if(!/^[a-f0-9]{64}$/.test(this.manifest?.owner_live_epoch??''))return false;
     if(!cfg||typeof cfg!=='object'||!('version'in cfg)||cfg.version!==1||!('lane'in cfg)||cfg.lane!=='test'||!('origin'in cfg)||typeof cfg.origin!=='string')return false;
     const o=cfg.origin;
     // Reject ambient/configurable destinations. The presented grant never moves
@@ -381,19 +387,19 @@ class Viewer {
     if(this.ownerLive&&this.ownerLiveKey===key)return true;
     this.stopOwnerLive();
     this.ownerLiveKey=key;
-    this.ownerLive=openOwnerLive({allowedOrigin:o,csrf:this.csrf,onState:state=>{
+    this.ownerLive=openOwnerLive({allowedOrigin:o,csrf:this.csrf,initialEpoch:this.manifest?.owner_live_epoch,onState:state=>{
       if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return;
       if(state==='live')this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется',true);
       else this.setConnection(state==='connecting'?'Подключаемся к live-потоку':'Нет live-связи',false);
+    },onInvalidate:retiredEpoch=>{
+      if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return;
+      if(retiredEpoch&&this.manifest?.owner_live_epoch&&this.manifest.owner_live_epoch!==retiredEpoch)return;
+      this.graphRequest?.abort();this.clearOwnerLiveGraph();
     },onRefresh:async reason=>{
       if(this.graphLoading)await this.graphLoading;
       if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return;
-      if(reason==='reset'){
-        this.cardRequest?.abort();this.searchRequest?.abort();this.clearContextSelection();
-        this.worker?.dispose();this.worker=null;this.scene?.dispose();this.scene=null;
-        this.graph=null;this.manifest=null;this.topics=null;this.cursor='';
-        this.ensureLiveScene();
-      }else if(this.selector.mode==='known_then')return;
+      if(reason==='reset')this.ensureLiveScene();
+      else if(this.selector.mode==='known_then')return;
       await this.loadGraph(undefined,true);
     }});
     return true;

@@ -7,13 +7,27 @@ const MAX_BACKOFF=20_000;
 // A transport lifetime can refresh the same Graph slice without reminting.
 // Starting a new slice/session closes the old transport first.
 export function openOwnerLive({
-  allowedOrigin,csrf,onState,onRefresh,read=readDirectStream,
+  allowedOrigin,csrf,onState,onRefresh,onInvalidate=()=>{},initialEpoch=null,read=readDirectStream,
+  visibility=globalThis.document,page=globalThis.window,
   now=()=>performance.now(),schedule=setTimeout,cancel=clearTimeout,
 }){
-  let closed=false, connection=null,watchdog=null,retry=null,failures=0;
-  let refreshing=false,pending=null;
-  function refresh(kind){
-    // Reset subsumes a concurrent changed notification.
+  let closed=false, connection=null,watchdog=null,retry=null,resume=null,failures=0;
+  let refreshing=false,pending=null,epoch=initialEpoch;
+  let hidden=visibility?.visibilityState==='hidden';
+  function foreground(){
+    if(closed||resume!==null||visibility?.visibilityState==='hidden')return;
+    resume=schedule(()=>{resume=null;if(!closed&&visibility?.visibilityState!=='hidden')refresh('changed');},0);
+  }
+  function visibilityChanged(){
+    if(visibility.visibilityState==='hidden'){hidden=true;return;}
+    if(hidden){hidden=false;foreground();}
+  }
+  function pageShown(event){if(event.persisted){hidden=false;foreground();}}
+  visibility?.addEventListener('visibilitychange',visibilityChanged);
+  page?.addEventListener('pageshow',pageShown);
+  function refresh(kind,retiredEpoch=null){
+    // Hard reset hides old epoch synchronously, even if catch-up is in flight.
+    if(kind==='reset'&&pending!=='reset')onInvalidate(retiredEpoch);
     pending=pending==='reset'||kind==='reset'?'reset':'changed';
     if(refreshing)return;
     refreshing=true;
@@ -34,7 +48,7 @@ export function openOwnerLive({
     retry=null;
     const attempt=new AbortController();
     connection=attempt;
-    let hello=null,ready=false;
+    let hello=null,ready=false,firstReset=true,retiredEpoch=null;
     onState('connecting');
     const arm=()=>{
       cancel(watchdog);
@@ -43,10 +57,14 @@ export function openOwnerLive({
     arm();
     void (async()=>{
       try{
-        await read({allowedOrigin,csrf,signal:attempt.signal,onEvent(kind){
+        await read({allowedOrigin,csrf,signal:attempt.signal,onEvent(kind,ticketEpoch){
           if(closed||connection!==attempt||attempt.signal.aborted)return;
           if(kind==='hello'){
             hello=now();
+            if(ticketEpoch){
+              retiredEpoch=epoch!==null&&epoch!==ticketEpoch?epoch:null;
+              epoch=ticketEpoch;
+            }
           }else if(kind==='heartbeat'){
             if(hello!==null&&now()-hello>=MIN_LIVE_GAP){
               arm();
@@ -54,7 +72,13 @@ export function openOwnerLive({
                 ready=true; failures=0; onState('live');
               }
             }
-          }else if(kind==='changed'||kind==='reset'){
+          }else if(kind==='reset'){
+            // First reset is a catch-up hint, not a database clear. Every later
+            // reset on this protocol is a hard epoch transition and closes it.
+            if(firstReset)refresh(retiredEpoch?'reset':'changed',retiredEpoch);
+            else{epoch=null;refresh('reset',ticketEpoch);}
+            firstReset=false;
+          }else if(kind==='changed'){
             refresh(kind);
           }
         }});
@@ -76,7 +100,9 @@ export function openOwnerLive({
   return {close(){
     if(closed)return;
     closed=true;
-    cancel(watchdog);cancel(retry);
+    visibility?.removeEventListener('visibilitychange',visibilityChanged);
+    page?.removeEventListener('pageshow',pageShown);
+    cancel(watchdog);cancel(retry);cancel(resume);
     connection?.abort();pending=null;
   }};
 }
