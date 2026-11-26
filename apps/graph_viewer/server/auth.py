@@ -70,9 +70,12 @@ class OwnerStore:
 
     def session(self, request):
         token = request.cookies.get(COOKIE, '')
+        return self.session_digest(hashlib.sha256(token.encode()).hexdigest())
+
+    def session_digest(self, digest):
         with self.connect() as c:
             row = c.execute('SELECT csrf FROM sessions WHERE token=? AND expires>?',
-                            (hashlib.sha256(token.encode()).hexdigest(),time.time())).fetchone()
+                            (digest,time.time())).fetchone()
         return row[0] if row else None
 
     def revoke(self, request):

@@ -11,7 +11,7 @@ WILDCARD='/api/v1/{tail+}'
 APPROVED_MACROS={'Cookie','Origin','Sec-Fetch-Site'}
 
 def nginx(source):
-    if PRIVATE_PATH in source:
+    if re.search(r'^\s*location = '+re.escape(PRIVATE_PATH)+r'\s*\{',source,re.M):
         raise ValueError('events route already present')
     starts=list(re.finditer(r'^([ \t]*)location ~ "\^/__mvt/api/v1/\(\?:graph.*\{[ \t]*$',source,re.M))
     if len(starts)!=1:

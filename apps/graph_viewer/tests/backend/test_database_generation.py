@@ -144,6 +144,46 @@ class HttpReset(unittest.TestCase):
                 self.assertIn('database_cleared',client.get('/api/v1/events',params={'revision':rev}).text)
                 self.assertEqual(manifest()['counts']['nodes'],0)
 
+    def test_readiness_key_only_authorizes_exact_get_in_each_lane(self):
+        from pathlib import Path
+        import tempfile
+        from unittest.mock import patch
+        from starlette.testclient import TestClient
+        from apps.graph_viewer.server.app import create_app
+        key={'test':'a'*64,'prod':'b'*64}
+        scope_path='/api/v1/capabilities?database_clear_scope=1'
+        for stage in key:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                synthetic=root/'synthetic.sqlite3'
+                import sqlite3
+                with sqlite3.connect(synthetic): pass
+                auth=root/'visual-reset-read.key';auth.write_text(key[stage]);auth.chmod(0o400)
+                wrong=root/'legacy-graph-read.key';wrong.write_text('c'*64);wrong.chmod(0o400)
+                with patch('apps.graph_viewer.server.database_generation.clear_scope_binding',
+                           return_value=lambda source: stage if source==synthetic else None):
+                    app=create_app(synthetic,root/'state',password='owner-test-strong',
+                                   database_clear_lane=stage,database_clear_read_token_file=auth,
+                                   bridge_read_token_file=wrong)
+                remote=TestClient(app,client=('203.0.113.10',50000))
+                self.assertEqual(remote.get(scope_path,headers={'Authorization':'Bearer '+key[stage]}).status_code,401)
+                remote.close()
+                with TestClient(app,client=('127.0.0.1',50000)) as client:
+                    bearer=lambda val: {'Authorization':'Bearer '+val}
+                    good=bearer(key[stage]);opposite=bearer(key['prod' if stage=='test' else 'test'])
+                    self.assertEqual(client.get(scope_path,headers=good).json()['stage'],stage)
+                    self.assertEqual(client.get(scope_path,headers=opposite).status_code,401)
+                    self.assertEqual(client.get(scope_path,headers=bearer('c'*64)).status_code,404)
+                    for path in ('/api/v1/capabilities','/api/v1/capabilities?database_clear_scope=1&other=1',
+                                 '/api/v1/capabilities?database_clear_scope=%31','/api/v1/graph','/api/v1/nodes/x',
+                                 '/api/v1/search','/api/v1/bookmarks','/api/v1/events'):
+                        self.assertEqual(client.get(path,headers=good).status_code,401,path)
+                    self.assertEqual(client.head(scope_path,headers=good).status_code,401)
+                    self.assertEqual(client.post(scope_path,headers=good).status_code,401)
+                    self.assertFalse(client.get('/api/v1/session',headers=good).json().get('authenticated'))
+                    app.state.database_clear_binding=lambda _source:None
+                    self.assertEqual(client.get(scope_path,headers=good).status_code,503)
+
     def test_canonical_private_search_source_ir_and_old_projection_are_reclaimed(self):
         from pathlib import Path
         import tempfile
@@ -163,13 +203,18 @@ class HttpReset(unittest.TestCase):
                 ThoughtStore(store).publish('synthetic-reset-marker')
             state=root/'state'
             token=root/'graph-loopback-only.key'
-            token.write_text('g'*64)
+            token.write_text('a'*64)
             token.chmod(0o600)
             async def watch(_emit):
                 await asyncio.Event().wait()
             dashboard=SimpleNamespace(stage='test',db=self.source_path,watch=watch)
-            with TestClient(create_app(self.source_path,state,password='owner-test-strong',
-                                        bridge_read_token_file=token,queue_dashboard=dashboard)) as client:
+            from unittest.mock import patch
+            with patch('apps.graph_viewer.server.database_generation.clear_scope_binding',
+                       return_value=lambda source: 'test' if source==self.source_path else None):
+                app=create_app(self.source_path,state,password='owner-test-strong',
+                               database_clear_lane='test',database_clear_read_token_file=token,
+                               queue_dashboard=dashboard)
+            with TestClient(app,client=('127.0.0.1',50000)) as client:
                 self.assertEqual(client.post('/api/v1/session',json={'password':'owner-test-strong'},
                                             headers={'origin':'http://testserver'}).status_code,200)
                 def manifest():
@@ -183,7 +228,7 @@ class HttpReset(unittest.TestCase):
                 self.assertGreater(old['counts']['nodes'],0)
                 scope_path='/api/v1/capabilities?database_clear_scope=1'
                 self.assertEqual(client.get(scope_path).status_code,404)
-                trusted_graph_headers={'Authorization':'Bearer '+'g'*64}
+                trusted_graph_headers={'Authorization':'Bearer '+'a'*64}
                 scope=client.get(scope_path,headers=trusted_graph_headers)
                 self.assertEqual(scope.status_code,200)
                 self.assertEqual(scope.json()['stage'],'test')

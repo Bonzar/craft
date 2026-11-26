@@ -29,10 +29,13 @@ class BridgeReadService:
             raise ValueError('Bridge read credential must be a high-entropy printable secret of 32–512 bytes')
         self._digest=hashlib.sha256(token).digest()
 
+    def route(self,request):
+        return any(pattern.fullmatch(request.url.path) for pattern in READ_PATHS)
+
     def authorizes(self,request):
         if self._digest is None or request.method not in {'GET','HEAD'}:
             return False
-        if not any(pattern.fullmatch(request.url.path) for pattern in READ_PATHS):
+        if not self.route(request):
             return False
         header=request.headers.get('authorization','')
         if len(header)>1024:
@@ -54,3 +57,31 @@ def read_service_authorized(request):
 
 def stream_authorized(request):
     return request.app.state.owner.session(request) is not None or read_service_authorized(request)
+
+
+class DatabaseClearReadService(BridgeReadService):
+    """Readiness only. Does not grant ownership or any other Graph read."""
+
+    def __init__(self, secret_file):
+        fd=os.open(secret_file,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+        with os.fdopen(fd,'rb') as stream:
+            info=os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid()
+                    or info.st_mode&0o077 or info.st_nlink!=1 or info.st_size>66):
+                raise ValueError('Readiness credential requires a private regular file')
+            raw=stream.read(67)
+        token=raw.rstrip(b'\r\n')
+        if not re.fullmatch(rb'[a-f0-9]{64}',token) or len(raw)>66:
+            raise ValueError('Readiness credential requires an exact Visual service key')
+        self._digest=hashlib.sha256(token).digest()
+
+    def route(self, request):
+        return (request.method=='GET' and request.url.path=='/api/v1/capabilities'
+                and request.scope.get('raw_path') in (None,b'/api/v1/capabilities')
+                and request.scope.get('query_string')==b'database_clear_scope=1'
+                and request.client is not None and request.client.host in ('127.0.0.1','::1'))
+
+
+def clear_read_authorized(request):
+    service=getattr(request.app.state,'database_clear_read_service',None)
+    return service is not None and service.authorizes(request)

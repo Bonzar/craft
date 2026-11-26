@@ -156,9 +156,14 @@ class MemoryService:
         with self.store.transaction() as connection:
             return read(connection,artifact_id,include_content=include_content)
 
-    def ingest_register(self, producer_id, session_id, *, replace_epoch=None):
+    def ingest_register(self, producer_id, session_id, *, replace_epoch=None, previous_stream_id=None, previous_epoch=None):
         from .ingest_streams import register
         with self.store.transaction(write=True) as connection:
+            if previous_stream_id is not None or previous_epoch is not None:
+                if previous_stream_id is None or previous_epoch is None or replace_epoch is not None:
+                    raise ValueError('Expected one complete previous stream pair')
+                from .stream_clear_transition import re_register
+                return re_register(connection,producer_id,session_id,previous_stream_id,previous_epoch)
             from .fresh_processing import before_register, admit_stream
             allowed = before_register(connection, producer_id, session_id, replace_epoch)
             result = register(connection, producer_id, session_id, replace_epoch=replace_epoch)
@@ -166,11 +171,14 @@ class MemoryService:
                 admit_stream(connection, result)
             return result
 
-    def ingest_report(self, stream_id, epoch, report_seq, observed_seq, scan_state, gap_count, *, lifecycle='active'):
+    def ingest_report(self, stream_id, epoch, report_seq, observed_seq, scan_state, gap_count, *, lifecycle='active', reset_generation=None):
         from .ingest_streams import report
         with self.store.transaction(write=True) as connection:
-            return report(connection, stream_id, epoch, report_seq, observed_seq, scan_state, gap_count,
-                          lifecycle=lifecycle)
+            state=report(connection,stream_id,epoch,report_seq,observed_seq,scan_state,gap_count,lifecycle=lifecycle)
+            if reset_generation is not None:
+                from .stream_clear_transition import acknowledge
+                return acknowledge(connection,state,reset_generation)
+            return state
 
     def transport_status(self):
         from .ingest_streams import transport_status

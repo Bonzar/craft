@@ -386,27 +386,32 @@ def create_server(config: ServiceConfig, *, background: bool = True, store: Memo
 
 def _register_write_tools(mcp, service, launcher, background):
     @mcp.tool()
-    async def memory_ingest_register(producer_id: str, session_id: str, replace_epoch: str | None = None) -> dict:
+    async def memory_ingest_register(producer_id: str, session_id: str, replace_epoch: str | None = None,
+            previous_stream_id: str | None = None, previous_epoch: str | None = None) -> dict:
         """Register one authorized adapter installation's delivery stream for a stable session.
         Idempotently returns flat stream_id/epoch/frontier state. replace_epoch explicitly replaces
         that exact prior writer epoch, preserving known backlog/gaps. No model or worker work.
-        Producer reports are operational claims, never source facts or world verification.
+        An authenticated existing stream may present the complete previous pair to obtain a
+        witnessed owner-clear transition; an ordinary mismatch is never a reset. Producer
+        reports are operational claims, never source facts or world verification.
         """
-        return service.ingest_register(producer_id, session_id, replace_epoch=replace_epoch)
+        return service.ingest_register(producer_id,session_id,replace_epoch=replace_epoch,
+                                       previous_stream_id=previous_stream_id,previous_epoch=previous_epoch)
 
     @mcp.tool()
     async def memory_ingest_report(stream_id: str, epoch: str, report_seq: int, observed_seq: int,
         scan_state: Literal['current','catching_up','gapped','unknown'], gap_count: int,
-        lifecycle: Literal['active','closed'] = 'active') -> dict:
+        lifecycle: Literal['active','closed'] = 'active', reset_generation: str | None = None) -> dict:
         """Report durable local delivery frontier before upload; heartbeat uses a new report_seq.
         observed_seq counts local durable outbox messages, not physical transcript positions.
         Reports must advance monotonically; exact replay is safe but does not prolong a heartbeat.
         gap_count is positive exactly for gapped state. Close only after current scan, no gaps and
         a fully acknowledged prefix. Server derives acked_through from committed capture receipts.
+        An enrolled successor may acknowledge a witnessed reset generation after durably re-arming.
         A stale clean heartbeat means unobserved, not known pending or world-current evidence.
         """
         return service.ingest_report(stream_id, epoch, report_seq, observed_seq, scan_state, gap_count,
-                                     lifecycle=lifecycle)
+                                     lifecycle=lifecycle,reset_generation=reset_generation)
 
     @mcp.tool()
     async def memory_store_artifact(data_base64: str, mime_type: str, sha256: str | None = None) -> dict:
