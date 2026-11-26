@@ -193,8 +193,12 @@ class TracedThoughtWorker(ThoughtWorker):
                 self.batch_contexts = {event.id: self._context(event) for event in events}
                 requests = [self.engine.source_construction_request(event, self.batch_contexts[event.id])
                             for event in events]
+                capture_batch_id = events[0].metadata.get('capture_batch_id')
+                joint_capture = bool(capture_batch_id) and all(
+                    event.metadata.get('capture_batch_id') == capture_batch_id for event in events)
                 drafts = generate_source_drafts(requests, self._generate_source_batch,
-                                               max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True)
+                                               max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True,
+                                               joint_capture=joint_capture)
                 if any(draft is None for draft in drafts):
                     raise ValueError('one group response did not cover every source; original jobs remain queued')
                 self.source_batch = PreparedSourceGroup(requests, drafts)

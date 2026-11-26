@@ -19,10 +19,23 @@ MAX_MODEL_CHARACTERS = 60_000
 MAX_MODEL_INPUT_CHARACTERS = 240_000
 MAX_CONTEXT_CHARACTERS = 128_000
 MAX_REPAIR_ROUNDS = 2
-ORIGIN_RULES = (
+SOURCE_RETENTION_RULES = (
+    'For new durable source memory, require material value beyond the current reply and exact evidence. '
+    'An assistant’s own plan, promise, intended behavior, '
+    'or answering tactic stays in the raw dialogue, even if unique, explicit, or useful to its next step. '
+    'It is not independently retainable as a thought; neither omission nor rejection of it is missing '
+    'material coverage. An assistant account of a user decision is not that decision: retain a user '
+    'choice or authorization only when exact user-origin evidence establishes it. A genuinely material '
+    'completed outcome or sourced substantive finding can be retained with exact evidence and '
+    'its actual scope, speaker, and uncertainty; an unverified report does not establish completion. '
+    'Preserve substantive user-origin choices, preferences, decisions and plans, and their necessary '
+    'attributed referents. Preserve an earlier proposal when necessary to explain a substantive '
+    'user decision or discussion, with the original attribution, never as adopted or executed. '
+)
+ORIGIN_RULES = SOURCE_RETENTION_RULES + (
     'The target origin may be user, assistant or tool; preserve its exact actor and role. '
-    'Material assistant findings, proposals, observations and inferences are independently retainable '
-    'as attributed source content without user adoption. A proposal remains a proposal. '
+    'Evidence-backed assistant findings, observations and inferences may be retained as attributed '
+    'source content when independently material; this is not proof of user adoption or world truth. '
     'Tool output is an attributed result from that tool, not a user statement, user adoption, '
     'authorization or independent proof of world truth. Preserve tool failures and partial results. '
     'An assistant saying it checked or implemented something establishes its report, not verification '

@@ -202,7 +202,9 @@ Review ALL draft records as one bound batch against the exact supplied material.
 Check two independent obligations: (1) every retained claim follows from its own
 selected grounds, with the same attribution and strength; (2) the batch preserves
 the useful meaning required by this job's coverage purpose. Passing either one
-alone is insufficient. Resolve the job's scope before assessing omissions.
+alone is insufficient. Resolve the job's scope before assessing omissions. For
+new source memory, also reject any independently retained draft from the raw-only
+assistant plan/behavior class; its absence does not reduce material coverage.
 Establish coverage FROM THE MATERIAL TO THE DRAFT, before checking the reverse.
 Use the job's scope to identify the material propositions and their qualifications.
 For each, locate an equivalent meaning in the draft. For every retained action
@@ -271,11 +273,12 @@ VERIFICATION_RULES = (VERIFY.replace(_ATOMIC_DRAFT_VERDICTS, '').replace(_FINAL_
 INDEPENDENT_SOURCE_REVIEW = """
 Review draft records independently. Each draft has a local integer draft option.
 Return rejected_drafts with the option and precise semantic reason for every draft
-that changes meaning, lacks grounding or drops a necessary qualification. Include
+that changes meaning, lacks grounding, drops a necessary qualification, or is a
+raw-only assistant plan, promise, intended behavior or work tactic. Include
 all drafts affected if the source ties their conditions or meaning together. Leave
 sound drafts out of rejected_drafts. Check coverage across the current source
 passage; express new useful source meaning absent from all sound drafts as
-missing_meaning, or null if there is none. If offered a drill, use empty rejected_drafts and null missing_meaning while
+missing_meaning, excluding raw-only material, or null if there is none. If offered a drill, use empty rejected_drafts and null missing_meaning while
 requesting evidence. A rejected draft may need replacement
 or removal. In missing_meaning include each independently supported observation
 left in a rejected draft, including supported parts of that draft. Express

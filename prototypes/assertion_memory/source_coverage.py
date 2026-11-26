@@ -13,7 +13,7 @@ from .dialogue_context import MAX_RECOVERY_ROUNDS
 from .model import ModelError, ModelRequest
 from .source_message_clock import CLOCK_RULES
 
-PROTOCOL = 'source-material-coverage-v9:unified-attributed-origins-v1:source-message-clock-v1'
+PROTOCOL = 'source-material-coverage-v10:unified-attributed-origins-v1:source-message-clock-v1'
 
 
 class _SourceContextExhausted(ModelError):
@@ -84,7 +84,7 @@ _COVERAGE = (
     'Do not extract every sentence, invent an ontology, create cross products or infer relations from '
     'adjacency, shared vocabulary or membership. Distinguish one described episode from a recurring '
     'conditional pattern; an undated episode must remain undated. Only exact user-origin choice '
-    'establishes user adoption. Material assistant-origin target content is independently retainable. Material '
+    'establishes user adoption. Do not flag excluded assistant behavior, promises, plans or tactics as omissions. Material '
     'planning questions, proposed investigations and ongoing concerns need attributable speech-act '
     'coverage with exact question and necessary context evidence. '
     'Material intent can be entirely in the question in known project context (Should we group by '
@@ -110,7 +110,7 @@ _REPAIR = (
     ' Zero accepted interpretations still permit repair of independently entailed bounded attributed '
     'speech identified by exact source omissions. Preserve scoped evidence limits, attributed evaluations '
     'and uncertainty without turning them into verified world truth or resolving unknown dates/referents. '
-    ' Repair ONLY the listed omitted material meanings as additional ordinary interpretations using '
+    ' Repair ONLY retention-eligible omitted material meanings as additional ordinary interpretations using '
     'the assertions schema. Return at most one addition per omission, at most the stated remaining '
     'capacity. Preserve a coherent account if splitting loses a sourced relation or qualification. '
     'Accepted interpretations are frozen: do not regenerate, paraphrase or change their kinds. '

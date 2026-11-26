@@ -96,7 +96,10 @@ class SourceModelBatch:
             for (_, _, result), draft in zip(group, drafts, strict=True):
                 result.set_result(draft)
 
-def generate_source_drafts(group, generate, *, max_characters=MAX_BATCH_CHARACTERS, exact=False):
+def generate_source_drafts(group, generate, *, max_characters=MAX_BATCH_CHARACTERS, exact=False,
+                           joint_capture=False):
+    if joint_capture and not exact:
+        raise ValueError('Joint capture analysis requires an exact source group')
     records, bindings, schemas = [], [], {}
     for index, (request, source_bindings) in enumerate(group, 1):
         source = f'source_{index}'
@@ -110,10 +113,17 @@ def generate_source_drafts(group, generate, *, max_characters=MAX_BATCH_CHARACTE
         if exact:
             raise ModelError(f'Exact source group contains {characters} input characters, above {max_characters}')
         return [None] * len(group)
-    instructions = (group[0][0].instructions + '\nApply these rules to each source independently. '
-                    'Return a JSON object keyed by the supplied source names. Use only the '
-                    'records of that source. Fragment numbers are local to each source. '
-                    'Include every source, even if its thoughts are empty.')
+    analysis = (
+        'Read the primary records of the complete capture together. Keep each distinct '
+        'retention-eligible durable meaning once under the source that directly established it, '
+        'not under an echo, paraphrase, or acknowledgment. Apply the shared retention rule even '
+        'to unique content. Other cases may help compare meanings but never supply separate '
+        'citation evidence for this case. '
+        if joint_capture else 'Apply these rules to each source independently. ')
+    instructions = (group[0][0].instructions + '\n' + analysis +
+                    'Return a JSON object keyed by the supplied source names. For each retained '
+                    'draft use only the records of that source as evidence. Fragment numbers are '
+                    'local to each source. Include every source, even if its thoughts are empty.')
     if exact:
         instructions += (' The first record supplies a shared text catalog. Each fragment has a '
                          'text_index into that catalog. Read its text there and cite only its local option.')
