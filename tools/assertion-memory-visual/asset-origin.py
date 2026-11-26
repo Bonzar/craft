@@ -3,6 +3,7 @@ from hashlib import sha256
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
+from ipaddress import IPv4Address
 import json
 import os
 from pathlib import Path
@@ -437,9 +438,25 @@ def pause_signer(stage, owner, secret, *, clock=time.time, route=BASE_PAUSE):
     return sign
 
 
-def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None, runtime_health=None, standalone=None, pause=None, clock=time.time):
+def owner_live_csp_origin(environment, standalone, origin):
+    if origin is None:
+        return ''
+    # Production has no approved direct endpoint or lane-specific issuer yet.
+    if environment != 'test' or standalone is None or not isinstance(origin, str):
+        raise ValueError('owner live origin requires explicit TEST standalone')
+    try:
+        ip = IPv4Address(origin.removeprefix('https://'))
+    except ValueError:
+        raise ValueError('invalid owner live HTTPS origin') from None
+    if not ip.is_global or ip.is_multicast or origin != 'https://' + str(ip):
+        raise ValueError('invalid owner live HTTPS origin')
+    return ' ' + origin
+
+
+def make_server(root, token, port=8829, *, environment='test', queue_origin=None, queue_token=None, runtime_health=None, standalone=None, pause=None, clock=time.time, owner_live_origin=None):
     if environment not in ('test', 'prod') or not HEX.fullmatch(token):
         raise ValueError('invalid dedicated TEST token')
+    live_csp=owner_live_csp_origin(environment,standalone,owner_live_origin)
 
     if queue_origin is not None or queue_token is not None:
         if (environment=='prod' and standalone is None and runtime_health is None) or not queue_origin or not queue_token or token==queue_token:
@@ -563,7 +580,7 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 return self.respond(403)
             if origins and origins!=[public_origin]:
                 return self.respond(403)
-            safe={'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            safe={'Content-Security-Policy':f"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'{live_csp}; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
                   'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Strict-Transport-Security':'max-age=31536000'}
             try:
                 path,query=path_and_query(raw)
@@ -1001,5 +1018,6 @@ if __name__ == '__main__':
                load_pause('owner-digest'),bytes.fromhex(load_pause('proof-key')))
     with make_server(ROOT / mode, secret, int(port), environment=mode,
                      queue_origin=queue_origin, queue_token=queue_secret, runtime_health=health,
-                     standalone=standalone,pause=pause) as server:
+                     standalone=standalone,pause=pause,
+                     owner_live_origin=os.environ.get('MEMORY_VISUAL_TEST_DIRECT_EVENTS_ORIGIN')) as server:
         server.serve_forever()

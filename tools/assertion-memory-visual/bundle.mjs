@@ -1,7 +1,7 @@
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {hash,ITEM} from './store.mjs';
-import {patchVisual} from './visual-overlay.mjs';
+import {patchVisual,patchOwnerLive} from './visual-overlay.mjs';
 import {patchGraphBoot} from './graph-boot-overlay.mjs';
 export async function versionableBundle(dir,releaseTag=null) {
   const pins=JSON.parse(await readFile(join(dir,'asset-hashes.json')));
@@ -25,6 +25,6 @@ export async function versionableBundle(dir,releaseTag=null) {
   const patched=patchVisual({html,script,css:files[cssName].toString('utf8'),releaseTag});
   files[cssName]=Buffer.from(patched.css);
   files['index.html']=Buffer.from(patched.html.replace(/((?:src|href)=")\/assets\//g,'$1./assets/'));
-  files[mainName]=Buffer.from(patchGraphBoot(patched.script,script).replace('/'+matches[0][1],'./'+matches[0][1].split('/').at(-1)));
+  files[mainName]=Buffer.from(patchOwnerLive(patchGraphBoot(patched.script,script),script).replace('/'+matches[0][1],'./'+matches[0][1].split('/').at(-1)));
   return files;
 }

@@ -278,6 +278,9 @@ async def capabilities(request):
         value['readiness']=[r for r in value['readiness'] if r['code']!='semantic_unavailable']
     if request.app.state.synthetic_fixture:
         value['readiness'].append({'code':'synthetic_fixture','message':'Synthetic QA fixture; no personal graph connected'})
+    direct=request.app.state.direct_events
+    if direct is not None and direct.current() and request.app.state.owner.session(request) is not None:
+        value['owner_live_transport']={'version':1,'lane':'test','origin':direct.binding.direct_origin}
     value['live_profile']=list(request.app.state.manager.live_profiles)
     value['preparation']={'pending':len(request.app.state.manager.preparing),'ready_snapshots':len(request.app.state.manager.graphs),'semantic_pending':len(request.app.state.manager.semantic_jobs)}
     return JSONResponse(value)
