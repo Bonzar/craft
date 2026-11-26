@@ -55,8 +55,9 @@ live rule values from those fixtures.
 ## TLS renewal and expiry readiness
 
 For the established direct VM IP, the served public leaf was observed with
-system trust and the matching IP SAN. Its observed `NotAfter` was
-**2026-12-02T15:19:26Z**. No matching system renewal timer or bounded
+system trust and the matching IP SAN. The public leaf issuer organization was verified as **Let's Encrypt**; its
+observed `NotAfter` was **2026-12-02T15:19:26Z**. This does not establish
+which client or account manages the lineage. No matching system renewal timer or bounded
 system/root cron marker was found. This does not exclude an off-host scheduler,
 another client or a differently named existing unit. Do not infer renewal from
 a valid leaf, renewal configuration alone, staging, or the age of the key.
