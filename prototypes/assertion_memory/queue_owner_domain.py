@@ -17,7 +17,10 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
     expected=identity()
 
     def perform(action,args,authorize=None):
-        writing=action not in ('sessions_prepare','policy_prepare','clear_prepare','pause_prepare')
+        if action=='graph_node_remove' and not callable(authorize):
+            from .queue_pause_proof import ProofRejected
+            raise ProofRejected()
+        writing=action not in ('sessions_prepare','policy_prepare','clear_prepare','pause_prepare','graph_node_preview')
         from . import database_clear
         with ExitStack() as leases:
             leases.enter_context(release_lease())
@@ -35,6 +38,9 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
                 if action=='clear_commit':
                     db.execute('PRAGMA secure_delete=ON')
                     deadline=time.monotonic()+12
+                    db.set_progress_handler(lambda:time.monotonic()>=deadline,1000)
+                if action in ('graph_node_preview','graph_node_remove'):
+                    deadline=time.monotonic()+3
                     db.set_progress_handler(lambda:time.monotonic()>=deadline,1000)
                 db.execute('BEGIN IMMEDIATE' if writing else 'BEGIN')
                 try:
@@ -62,6 +68,11 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
                         result=database_clear.describe(db,stage=stage,binding=[before,expected])
                     elif action=='clear_commit':
                         result=database_clear.clear(db,stage=stage,binding=[before,expected],**args)
+                    elif action in ('graph_node_preview','graph_node_remove'):
+                        from . import graph_node_removal as nodes
+                        db.row_factory=sqlite3.Row
+                        operation=nodes.preview if action=='graph_node_preview' else nodes.remove
+                        result=operation(db,stage=stage,binding=[before,expected],**args)
                     elif action=='item_remove':
                         result=items.remove(db,stage=stage,**args,
                             now=datetime.now(timezone.utc).isoformat(timespec='microseconds'))
