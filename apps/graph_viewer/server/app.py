@@ -121,16 +121,19 @@ async def session(request):
 
 async def graph_manifest(request):
     manager=request.app.state.manager
+    direct=getattr(request.app.state,'direct_events',None)
+    track_epoch=direct is not None and direct.current()
+    # Fence the awaited graph lookup, not just header serialization. A graph
+    # obtained before a reset cannot be published with the *next* epoch.
+    generation=manager.sync_generation() if track_epoch else None
     graph=await manager.ensure(selector(request.query_params))
+    if track_epoch and (generation is None or manager.sync_generation()!=generation):
+        raise APIError('revision_expired','Database generation changed; reload the graph',409)
     if graph is None:
         return JSONResponse({'status':'preparing','retry_after_ms':300,'message':'Preparing complete graph and search index'},status_code=202,headers={'Retry-After':'1'})
     manifest=graph.manifest
-    direct=getattr(request.app.state,'direct_events',None)
-    if direct is not None and direct.current():
+    if track_epoch and direct.current():
         from .database_generation import epoch_name
-        generation=manager._generation
-        if generation is None or manager.sync_generation()!=generation:
-            raise APIError('revision_expired','Database generation changed; reload the graph',409)
         manifest={**manifest,'owner_live_epoch':epoch_name(generation)}
     return JSONResponse(manifest,headers={'ETag':'"'+graph.revision+'"'})
 
