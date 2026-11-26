@@ -395,7 +395,11 @@ class OwnerBrowserStartup(unittest.TestCase):
         bridge=object()
         constructor=Mock(return_value=bridge)
         module=SimpleNamespace(configured_prod_owner_bridge=constructor)
-        for wrongly_configured in ({},{'CREDENTIALS_DIRECTORY':'/run/credentials/other.service'}):
+        self.assertEqual(str(PROD_OWNER_CREDENTIALS),
+                         '/run/credentials/assertion-base-prod-browser-graph.service')
+        for wrongly_configured in ({},
+                {'CREDENTIALS_DIRECTORY':'/run/credentials/other.service'},
+                {'CREDENTIALS_DIRECTORY':'/run/credentials/assertion-memory-prod-site-graph.service'}):
             with patch.dict(os.environ,wrongly_configured,clear=True), self.assertRaisesRegex(ValueError,'canonical systemd'):
                 installed_prod_owner_api(dashboard)
         constructor.assert_not_called()
