@@ -6,7 +6,7 @@ const source=await readFile(new URL('./device-enrollment.js',import.meta.url),'u
 const fp='a'.repeat(64),rev='b'.repeat(32),next='d'.repeat(32),csrf='mock_csrf',proof='123.'+'e'.repeat(64);
 const base='/api/v1/processing/devices';
 const delay=()=>new Promise(r=>setImmediate(r));
-function harness({cap=true,owner=true,stage='test',resultStage=stage,confirmStage=stage,commit=true}={}){
+function harness({cap=true,owner=true,stage='test',resultStage=stage,confirmStage=stage,commit=true,commitStatus=200}={}){
   class Elem {
     hidden=true;value='';items=[];listeners={};textContent='';
     addEventListener(kind,fun){this.listeners[kind]=fun;}
@@ -26,7 +26,7 @@ function harness({cap=true,owner=true,stage='test',resultStage=stage,confirmStag
       if(url==='/api/v1/session')return Response.json({authenticated:owner,csrf_token:csrf});
       if(url.startsWith('/api/v1/capabilities?'))return Response.json({stage,capabilities:{owner_machine_devices_v1:cap}});
       if(url===base+'/prepare')return Response.json({stage:confirmStage,revision:rev,action:body.action,fingerprint:body.fingerprint,operation_proof:proof});
-      if(options.method==='PUT')return Response.json({stage,revision:next,action:body.action,fingerprint:body.fingerprint,committed:commit});
+      if(options.method==='PUT')return Response.json({stage,revision:next,action:body.action,fingerprint:body.fingerprint,committed:commit},{status:commitStatus});
       return Response.json({schema:'owner-machine-devices/v1',stage:resultStage,revision:rev,items:[row]});
     }});
   return {get,calls,action:(id,event='click')=>get(id).listeners[event]({preventDefault(){}}),
@@ -52,11 +52,12 @@ test('refuses raw key, prepares exact fingerprint, commits only after owner clic
   assert.match(h.get('owner-devices-feedback').textContent,/подключено/);
 });
 test('foreign proof cannot commit, cancellation and close discard preview',async()=>{
-  for(const action of ['foreign','cancel','close']){
+  for(const action of ['foreign','cancel','close','logout']){
     const h=harness(action==='foreign'?{confirmStage:'prod'}:{});
     h.action('visual-queue-open');await delay();h.enroll('sha256:'+fp);await delay();
     if(action==='cancel')h.action('owner-device-cancel');
     if(action==='close')h.action('visual-queue','close');
+    if(action==='logout')h.action('logout');
     h.action('owner-device-apply');await delay();
     assert.equal(h.calls.some(x=>x.method==='PUT'),false);
   }
@@ -71,4 +72,9 @@ test('revoke managed device requires explicit confirmation and never assumes fai
   h.action('owner-device-apply');await delay();
   assert.match(h.get('owner-devices-feedback').textContent,/Не удалось/);
   assert.equal(h.get('owner-device-enroll').hidden,true);
+});
+test('receipt-shaped 202 is not a committed enrollment',async()=>{
+  const h=harness({commitStatus:202});h.action('visual-queue-open');await delay();
+  h.enroll('sha256:'+fp);await delay();h.action('owner-device-apply');await delay();
+  assert.match(h.get('owner-devices-feedback').textContent,/Не удалось/);
 });

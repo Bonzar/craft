@@ -26,7 +26,7 @@
     if(csrf)headers['X-CSRF-Token']=csrf;
     const response=await fetch(path,{credentials:'same-origin',redirect:'error',cache:'no-store',
       signal,method,headers,...(body===undefined?{}:{body:JSON.stringify(body)})});
-    if(!response.ok)throw new Error('request');
+    if(response.status!==200)throw new Error('request');
     return response.json();
   }
   function accepted(d,wanted){
@@ -72,6 +72,7 @@
     })();
   });
   queue.addEventListener('close',stop);
+  el('logout')?.addEventListener('click',stop);
   addEventListener('pagehide',stop);
   form.addEventListener('submit',event=>{
     event.preventDefault();
