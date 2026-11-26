@@ -128,3 +128,12 @@ slot independently of the capture worker. The legacy direct MCP endpoint
 continues to accept synchronous queries; its old clients do not need to
 supply job fields. A crashed worker returns a failed preserved receipt
 rather than silently running a possibly published query twice.
+
+For a completed result, use `query_coverage.evidence` to decide whether the
+retrieved records support an answer, leave a specific question unanswered or
+require a qualification. An accepted supported answer does not need a generic
+incompleteness warning. Global queue and transport diagnostics do not establish
+that anything relevant to this question is missing; `unassessed` states unknown
+relevance, not a confirmed gap. Neither a supported answer nor a clean queue
+proves database-wide exhaustiveness. Only `answer_continuations` signal missing
+answer content; optional proof/diagnostic pages are separate.

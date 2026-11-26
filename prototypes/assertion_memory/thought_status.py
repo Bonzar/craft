@@ -105,11 +105,19 @@ def query_diagnostics(service,result,scope):
     health=snapshot(service,None,scope,0,100)
     processing=('errors' if health['error_count'] else 'pending' if health['pending_count'] else
                 'needs_review' if health['unresolved_count'] else 'idle')
-    incomplete=processing!='idle' or bool(result.get('knowledge_limit') or result.get('answer_error'))
+    # Counts reflect live scope health, not relevance to this exact question.
+    # A newly saved answer itself enqueues maintenance before this call.
+    incomplete=bool(result.get('knowledge_limit') or result.get('answer_error'))
+    answer_completeness='incomplete' if incomplete else 'available_evidence'
     response={**health,**result,'processing_state':processing,
-        'refresh_required':processing!='idle','completeness':'incomplete' if incomplete else 'available_evidence',
+        'refresh_required':False,'completeness':answer_completeness,
         'response_complete':health['response_complete'] and result.get('response_complete',True)}
     response=service._attach_query_transport(response)
+    # Preserve the transport freshness precaution and diagnostics, but a global
+    # ingest gap cannot downgrade the completeness of the scoped answer.
+    response['completeness']=answer_completeness
+    from .query_coverage import project
+    response['query_coverage']=project(response)
     if _fits(response):return response
     details=('pending_jobs','errors','unresolved','source_audit_requests','thought_pending_jobs','thought_errors','pagination','job')
     response={key:value for key,value in response.items() if key not in details}
