@@ -300,6 +300,147 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(self.poll()['queued'],3)
         self.assertEqual(self.poll()['queued'],0)
 
+    def commentary(self, text, ident='comment', **routing):
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+            'id':ident,'phase':'commentary','content':[{'type':'output_text','text':text}],**routing}})
+
+    def test_batched_visible_commentary_order_restart_and_same_occurrence_dedup(self):
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('request')
+        self.commentary('same wording','message-a')
+        self.append({'type':'event_msg','payload':{'type':'agent_message','id':'message-a',
+            'turn_id':'one','message':'same wording','phase':'commentary'}})
+        self.commentary('same wording','message-a')
+        self.commentary('private reasoning','reasoning',phase='analysis')
+        self.commentary('directed private output','tool-only',recipient='workspace.tool')
+        self.commentary('conflicting route','bad-route',channel='final')
+        self.commentary('call UI artifact','call_ui')
+        self.assertEqual(self.poll()['queued'],0)
+        self.assertEqual(self.messages(),[])
+        state=self.store.session('physical')
+        self.assertEqual([i['id'] for i in state['turn']['assistant_commentary']],['message-a'])
+        self.store.close()
+        from synthetic_memory_adapter.outbox import Outbox
+        self.store=Outbox(self.root/'outbox.sqlite3')
+        self.addCleanup(self.store.close)
+        self.pair('steering','one','second-user')
+        self.commentary('same wording','message-b')
+        self.commentary('partial final representation','final-id')
+        self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'wrong-turn',
+            'last_agent_message':'same wording'}})
+        self.assertEqual(self.poll()['queued'],0)
+        self.assistant('completed answer','final-id')
+        self.assertEqual(self.poll()['queued'],5)
+        messages=[entry['arguments'] for entry in self.messages()]
+        self.assertEqual([m['text'] for m in messages],
+                         ['request','same wording','steering','same wording','completed answer'])
+        ids=[m['message_id'] for m in messages]
+        self.assertEqual(len(set(ids)),5)
+        self.assertEqual([m['role'] for m in messages],['user','assistant','user','assistant','assistant'])
+        self.assertTrue(all(m['_capture_batch']==messages[0]['_capture_batch'] for m in messages))
+        self.assertEqual(messages[0]['_capture_batch']['message_ids'],ids)
+        self.assertEqual(self.poll()['queued'],0)
+
+    def test_batched_visible_commentary_callback_must_match_final(self):
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('request')
+        self.commentary('visible, but callback does not match','partial')
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant',
+            'id':'call_ui_artifact','phase':'final_answer',
+            'content':[{'type':'output_text','text':'UI tool row'}]}})
+        self.append({'type':'event_msg','payload':{'type':'task_complete','turn_id':'one',
+            'last_agent_message':'UI tool row'}})
+        self.assertEqual(self.poll()['queued'],0)
+        self.assertEqual(self.messages(),[])
+        self.turn('new request','two','u2')
+        self.assistant('new final','f2')
+        self.assertEqual(self.poll()['queued'],2)
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],['new request','new final'])
+
+    def test_ordinary_visible_commentary_never_splits_when_over_transport_limits(self):
+        from unittest.mock import patch
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('synthetic request')
+        self.commentary('visible text','progress')
+        self.assistant('final answer','final')
+        with patch.object(self.capture,'_CAPTURE_BATCH_MAX_MEMBERS',2):
+            self.assertEqual(self.poll()['status'],'blocked')
+        state=self.store.session('physical')
+        self.assertFalse(state.get('interrupted_users'))
+        held=state['blocked_interrupted_batch']
+        self.assertEqual(held['reason'],'visible_commentary_batch_exceeds_transport_limits')
+        self.assertEqual([args['text'] for args,_ in held['members']],['synthetic request','visible text','final answer'])
+        self.assertEqual(self.messages(),[])
+        self.assertEqual(self.poll()['gaps'],['visible_commentary_batch_exceeds_transport_limits'])
+
+    def test_ordinary_visible_commentary_checks_cumulative_text_limit(self):
+        from unittest.mock import patch
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('request')
+        self.commentary('xx','progress')
+        self.assistant('final','final')
+        with patch.object(self.capture,'_CAPTURE_BATCH_MAX_CHARS',13):
+            self.assertEqual(self.poll()['status'],'blocked')
+        self.assertEqual(self.messages(),[])
+        self.assertEqual(len(self.store.session('physical')['blocked_interrupted_batch']['members']),3)
+
+    def test_commentary_steering_one_real_batch_and_construct_through_pause(self):
+        from prototypes.assertion_memory.capture_batch import authorized_machine_batch, capture, run_next
+        from prototypes.assertion_memory.mcp_server import ServiceConfig, run_worker
+        from prototypes.assertion_memory.processing_control import INITIAL, set_control
+        from prototypes.assertion_memory.storage import MemoryStore
+        from prototypes.assertion_memory.tests.test_capture_batch import CaptureBatchTest
+        from synthetic_memory_adapter.frontier import Coordinator
+        from unittest.mock import patch
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('The kettle boils water.')
+        self.commentary('The stove heats a pan.','progress')
+        self.pair('The pot cooks food.','one','steering')
+        self.assistant('The oven cooks bread.','response')
+        db=str(self.root/'synthetic-base.sqlite3')
+        cfg=ServiceConfig(db=db,provider='subprocess',command=('unused',),
+                          processing_session_ids=[],worker_idle_seconds=.01)
+        with MemoryStore(db) as local:
+            service=cfg.service(local)
+            submitted=[]
+            class Client:
+                def call(_,name,args):
+                    if name=='memory_ingest_register':
+                        return service.ingest_register(**args)
+                    if name=='memory_ingest_report':
+                        return service.ingest_report(**args)
+                    if name=='memory_capture_batch':
+                        submitted.append(args)
+                        with authorized_machine_batch():
+                            return capture(service,**args)
+                    raise AssertionError(name)
+            coord=Coordinator(self.store,Client())
+            coord.observe('physical',self.poll())
+            self.assertEqual(coord.tick()['acknowledged'],4)
+            self.assertEqual(len(submitted),1)
+            self.assertEqual([x['role'] for x in submitted[0]['messages']],
+                             ['user','assistant','user','assistant'])
+            with local.transaction(write=True) as db:
+                _,revision=set_control(db,paused=True,expected_revision=INITIAL)
+            self.assertFalse(run_next(cfg,local,lambda:False))
+            with local.transaction() as db:
+                self.assertEqual(db.execute('SELECT state FROM memory_capture_batches').fetchone()[0],'pending')
+            with local.transaction(write=True) as db:
+                set_control(db,paused=False,expected_revision=revision)
+            tasks=[]
+            with patch.object(ServiceConfig,'components',lambda *_:(CaptureBatchTest.model(tasks),None,'test')):
+                run_worker(cfg)
+                run_worker(cfg)
+            self.assertEqual(tasks.count('Construct thoughts for multiple source messages'),1)
+            with local.transaction() as db:
+                self.assertEqual(db.execute('SELECT state FROM memory_capture_batches').fetchone()[0],'completed')
+                self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],4)
+
     def test_resume_without_registration_starts_after_existing_tail(self):
         self.turn('old')
         self.assistant('old reply')
