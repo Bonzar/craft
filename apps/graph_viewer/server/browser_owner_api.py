@@ -4,7 +4,11 @@ from collections import OrderedDict
 from contextlib import ExitStack
 import hashlib
 import json
+import logging
+import os
+from pathlib import Path
 import re
+import stat
 import secrets
 import time
 
@@ -241,10 +245,72 @@ class BrowserOwnerAPI:
         except ValueError:
             raise APIError('invalid_request','Invalid browser control request',400) from None
 
-def configured_browser_api(dashboard, *, clear_enabled=False, prod_owner_bridge=None):
+_TEST_CLEAR_PROFILE=re.compile(r'([0-9a-f]{64}):([0-9a-f]{64}|reusable)\Z')
+_TEST_CLEAR_PROFILE_PATH=Path('/etc/assertion-release/test/browser-owner-clear-profile.json')
+
+def read_test_clear_profile(path, *, owner=0):
+    """Accept only a small, regular, immutable-by-service rollout record."""
+    try:
+        entry=path.lstat()
+    except FileNotFoundError:
+        return None
+    for parent in (path.parent,path.parent.parent):
+        st=parent.lstat()
+        if (parent.resolve(strict=True)!=parent or not stat.S_ISDIR(st.st_mode)
+                or st.st_uid!=owner or st.st_mode&0o022):
+            raise ValueError('Untrusted TEST clear profile directory')
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as handle:
+        st=os.fstat(handle.fileno())
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid!=owner or st.st_nlink!=1
+                or stat.S_IMODE(st.st_mode)!=0o644 or not 0<st.st_size<=512
+                or not os.path.samestat(st,entry)):
+            raise ValueError('Untrusted TEST clear profile')
+        raw=handle.read(513)
+        if len(raw)!=st.st_size or not os.path.samestat(st,path.lstat()):
+            raise ValueError('Changed TEST clear profile')
+    def unique(items):
+        value=dict(items)
+        if len(value)!=len(items):
+            raise ValueError('Duplicate TEST clear profile field')
+        return value
+    value=json.loads(raw,object_pairs_hook=unique)
+    if (type(value) is not dict or set(value)!={'version','stage','release_generation','database_scope'}
+            or type(value['version']) is not int or value['version']!=1 or value['stage']!='test'
+            or type(value['release_generation']) is not str
+            or (value['database_scope'] is not None and type(value['database_scope']) is not str)):
+        raise ValueError('Invalid TEST clear profile')
+    scope=value['database_scope']
+    if scope is not None and not re.fullmatch('[a-f0-9]{64}',scope):
+        raise ValueError('Invalid TEST database scope')
+    profile=value['release_generation']+':'+(scope if scope is not None else 'reusable')
+    if not _TEST_CLEAR_PROFILE.fullmatch(profile):
+        raise ValueError('Invalid TEST release generation')
+    return profile
+
+def installed_test_clear_profile():
+    try:
+        return read_test_clear_profile(_TEST_CLEAR_PROFILE_PATH)
+    except (OSError,TypeError,ValueError):
+        # Invalid/missing clear controls must never take owner login or reads down.
+        logging.getLogger(__name__).warning('test_browser_clear_profile_invalid')
+        return None
+
+def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False):
+    """A TEST-only profile always pins release and can bind one pre-clear epoch.
+
+    Format: verified release generation plus exact epoch scope or reusable mode.
+    The profile is an activation constraint, not proof of an owner session.
+    """
+    # Retain the old keyword only to fail closed with a meaningful error.
+    # A caller flag alone cannot supply TEST epoch or release authorization.
+    if clear_enabled is not False:
+        raise ValueError('An explicit verified TEST clear profile is required')
     if dashboard.stage=='prod':
+        if clear_profile is not None:
+            raise ValueError('TEST clear profiles are forbidden on PROD')
         from .prod_owner_bridge import ProdOwnerBridge
-        if type(prod_owner_bridge) is not ProdOwnerBridge or clear_enabled is not False:
+        if type(prod_owner_bridge) is not ProdOwnerBridge:
             raise ValueError('PROD browser owner API requires the existing private Base authority')
         from prototypes.assertion_memory.dashboard_projection import release_generation
 
@@ -273,8 +339,15 @@ def configured_browser_api(dashboard, *, clear_enabled=False, prod_owner_bridge=
                                queue_snapshot=project,clear_enabled=False)
     if dashboard.stage!='test' or prod_owner_bridge is not None:
         raise ValueError('Invalid Graph owner API lane')
+    if clear_profile is not None:
+        match=_TEST_CLEAR_PROFILE.fullmatch(clear_profile) if type(clear_profile) is str else None
+        if match is None:
+            raise ValueError('Expected verified TEST clear release and database epoch profile')
+        release_pin,scope_pin=match.groups()
+        scope_pin=None if scope_pin=='reusable' else scope_pin
+    clear_enabled=clear_profile is not None
     from prototypes.assertion_memory.queue_owner_domain import owner_operations
-    from prototypes.assertion_memory.queue_rest import snapshot as queue_snapshot
+    from prototypes.assertion_memory.queue_rest import exact_database, snapshot as queue_snapshot
     def identity():
         config=dashboard.metadata()
         return config['release_version'], config['generation']
@@ -285,6 +358,22 @@ def configured_browser_api(dashboard, *, clear_enabled=False, prod_owner_bridge=
         owner=owner_operations(database=dashboard.db,release_lease=dashboard.release_lease,
             identity=identity,stage=dashboard.stage,fresh_only=config['auto_process_fresh_mac'],
             baseline=config['processing_session_ids'])
+        if action in ('clear_prepare','clear_commit'):
+            if not clear_enabled or config['generation']!=release_pin:
+                raise APIError('not_found','Unknown API resource',404)
+            if action=='clear_commit':
+                def active_clear(db):
+                    # Recheck inside the SQLite write transaction with both reset
+                    # leases held. A different epoch cannot reuse this profile.
+                    epoch=(*exact_database(dashboard.db),database_clear.revision(db))
+                    if ((scope_pin is not None and database_clear.generation_scope('test',epoch)!=scope_pin)
+                            or identity()[1]!=release_pin):
+                        raise processing_control.Conflict('TEST clear profile changed or consumed')
+                return owner(action,args,authorize=active_clear)
+            value=owner(action,args)
+            if scope_pin is not None and value['scope']!=scope_pin:
+                value={**value,'can_clear':False}
+            return value
         return owner(action,args)
     def project(*, limit, offset):
         with dashboard.release_lease():
@@ -292,9 +381,12 @@ def configured_browser_api(dashboard, *, clear_enabled=False, prod_owner_bridge=
             control=SimpleNamespace(processing_session_ids=current['processing_session_ids'],
                 provider='configured' if current['model_configured'] else 'none',
                 auto_process_fresh_mac=current['auto_process_fresh_mac'])
-            return queue_snapshot(control,identity=identity,database=dashboard.db,
+            value=queue_snapshot(control,identity=identity,database=dashboard.db,
                 interactive_enabled=current['interactive_enabled'],limit=limit,offset=offset,
                 lane=dashboard.stage,can_change=True,session_control=True,batch_cards=True,
-                clear_ready=clear_enabled)
+                clear_ready=clear_enabled and current['generation']==release_pin)
+            if 'database_clear' in value and scope_pin is not None and value['database_clear']['scope']!=scope_pin:
+                value['database_clear']['can_clear']=False
+            return value
     return BrowserOwnerAPI(stage=dashboard.stage,perform=perform,queue_snapshot=project,
         clear_enabled=clear_enabled)

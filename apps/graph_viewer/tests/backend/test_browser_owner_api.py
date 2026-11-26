@@ -1,6 +1,8 @@
 """Real Base Graph owner HTTP boundary and real disposable domain transactions."""
 from contextlib import nullcontext
 from pathlib import Path
+import json
+import os
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -9,7 +11,7 @@ from unittest.mock import patch
 from starlette.testclient import TestClient
 
 from apps.graph_viewer.server.app import create_app
-from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI, PREFIX
+from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI, PREFIX, configured_browser_api, read_test_clear_profile
 from prototypes.assertion_memory.queue_owner_domain import owner_operations
 from prototypes.assertion_memory.queue_rest import snapshot
 from prototypes.assertion_memory.service import MemoryService
@@ -34,12 +36,12 @@ class BrowserOwnerBoundaryTest(unittest.TestCase):
         self.clock=1800000000
         self.control=owner_operations(database=self.db,release_lease=nullcontext,
                                       identity=lambda:IDENTITY,stage='test')
-    def make(self, clear=False, **options):
+    def make(self, clear=False, *, browser=None, **options):
         def project(**page):
             config=SimpleNamespace(processing_session_ids=None,provider='none',auto_process_fresh_mac=False)
             return snapshot(config,identity=lambda:IDENTITY,database=self.db,interactive_enabled=False,
                             clear_ready=clear,can_change=True,**page)
-        api=BrowserOwnerAPI(stage='test',perform=self.control,queue_snapshot=project,
+        api=browser or BrowserOwnerAPI(stage='test',perform=self.control,queue_snapshot=project,
                             clear_enabled=clear,clock=lambda:self.clock)
         app=create_app(self.db,self.viewer,password='synthetic-owner-password',
                        public_origin=ORIGIN,browser_owner_api=api,**options)
@@ -166,3 +168,104 @@ class BrowserOwnerBoundaryTest(unittest.TestCase):
         self.assertEqual(c.put(CLEAR,headers=BROWSER|{'x-csrf-token':prep['csrf_token']},json=req).status_code,409)
         with self.store.transaction() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
+
+
+    def test_canonical_test_clear_profile_is_explicit_and_one_epoch_only(self):
+        witness=self.control('clear_prepare',{})
+        current=dict(release_version=IDENTITY[0],generation=IDENTITY[1],
+            auto_process_fresh_mac=False,processing_session_ids=[],model_configured=False,interactive_enabled=False)
+        dashboard=SimpleNamespace(stage='test',db=self.db,metadata=lambda:current,release_lease=nullcontext)
+        wrong=witness['scope'][::-1]
+        assert wrong!=witness['scope']
+        for invalid in ('',True,IDENTITY[1],IDENTITY[1].upper()+':'+witness['scope'],None):
+            if invalid is None:
+                self.assertFalse(configured_browser_api(dashboard).clear_enabled)
+            else:
+                with self.assertRaises(ValueError):
+                    configured_browser_api(dashboard,clear_profile=invalid)
+        with self.assertRaises(ValueError):
+            configured_browser_api(SimpleNamespace(stage='prod'),
+                                   clear_profile=IDENTITY[1]+':'+witness['scope'])
+        invalid=self.make(browser=configured_browser_api(dashboard,clear_profile=IDENTITY[1]+':'+wrong))
+        self.login(invalid)
+        status=invalid.get('/api/v1/capabilities?queue_status=1').json()['database_clear']
+        self.assertFalse(status['can_clear'])
+        prep={'stage':'test','expected_revision':status['revision'],'confirmation':'ОЧИСТИТЬ TEST'}
+        self.assertEqual(invalid.post(CLEAR+'/prepare',headers=BROWSER,json=prep).status_code,409)
+        invalid.close()
+        c=self.make(browser=configured_browser_api(dashboard,clear_profile=IDENTITY[1]+':'+witness['scope']))
+        self.login(c)
+        self.assertTrue(c.get('/api/v1/capabilities?queue_status=1').json()['database_clear']['can_clear'])
+        self.assertNotIn('database_clear',c.get('/api/v1/capabilities?queue_status=1',
+            headers={'origin':'https://other.example'}).json())
+        current['generation']='b'*64
+        self.assertNotIn('database_clear',c.get('/api/v1/capabilities?queue_status=1').json())
+        self.assertEqual(c.post(CLEAR+'/prepare',headers=BROWSER,json=prep).status_code,404)
+        current['generation']=IDENTITY[1]
+        self.assertEqual(c.post(CLEAR+'/prepare',headers=BROWSER,json=prep|{'confirmation':'ОЧИСТИТЬ PROD'}).status_code,400)
+        ticket=self.prepare(c,CLEAR,prep)
+        other=self.prepare(c,CLEAR,prep)
+        req={k:v for k,v in prep.items() if k!='confirmation'}
+        reply=c.put(CLEAR,headers=BROWSER|{'x-csrf-token':ticket['csrf_token']},json=req)
+        self.assertEqual(reply.status_code,200,reply.text)
+        self.assertTrue(reply.json()['cleared'])
+        self.assertTrue(c.get('/api/v1/session').json()['authenticated'])
+        status=c.get('/api/v1/capabilities?queue_status=1').json()['database_clear']
+        self.assertFalse(status['can_clear'])
+        self.assertNotEqual(status['revision'],req['expected_revision'])
+        self.service.capture_message('fixture','two','fixture-user','user','New fictional memory',2,'fixture')
+        self.assertEqual(c.put(CLEAR,headers=BROWSER|{'x-csrf-token':other['csrf_token']},json=req).status_code,409)
+        self.assertEqual(c.post(CLEAR+'/prepare',headers=BROWSER,
+            json=prep|{'expected_revision':status['revision']}).status_code,409)
+        with self.store.transaction() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
+
+
+    def test_reusable_profile_still_needs_new_confirmation_for_each_epoch(self):
+        current=dict(release_version=IDENTITY[0],generation=IDENTITY[1],
+            auto_process_fresh_mac=False,processing_session_ids=[],model_configured=False,interactive_enabled=False)
+        d=SimpleNamespace(stage='test',db=self.db,metadata=lambda:current,release_lease=nullcontext)
+        c=self.make(browser=configured_browser_api(d,clear_profile=IDENTITY[1]+':reusable'))
+        self.login(c)
+        first=self.control('clear_prepare',{})['revision']
+        old={'stage':'test','expected_revision':first}
+        first_proof=self.prepare(c,CLEAR,old|{'confirmation':'ОЧИСТИТЬ TEST'})
+        old_proof=BROWSER|{'x-csrf-token':first_proof['csrf_token']}
+        self.assertEqual(c.put(CLEAR,headers=old_proof,json=old).status_code,200)
+        new_status=c.get('/api/v1/capabilities?queue_status=1').json()['database_clear']
+        self.assertTrue(new_status['can_clear'])
+        new={'stage':'test','expected_revision':new_status['revision']}
+        self.assertNotEqual(first,new['expected_revision'])
+        self.service.capture_message('fixture','two','fixture-user','user','New fictional memory',2,'fixture')
+        self.assertEqual(c.put(CLEAR,headers=old_proof,json=new).status_code,403)
+        self.assertEqual(c.post(CLEAR+'/prepare',headers=BROWSER,json=new).status_code,400)
+        proof=self.prepare(c,CLEAR,new|{'confirmation':'ОЧИСТИТЬ TEST'})
+        with self.store.transaction() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
+        self.assertEqual(c.put(CLEAR,headers=BROWSER|{'x-csrf-token':proof['csrf_token']},json=new).status_code,200)
+
+    def test_test_clear_profile_file_has_fixed_authority_and_strict_contents(self):
+        parent=self.db.parent/'config'/'test'
+        parent.mkdir(parents=True)
+        marker=parent/'profile.json'
+        self.assertIsNone(read_test_clear_profile(marker,owner=os.getuid()))
+        valid={'version':1,'stage':'test','release_generation':'a'*64,'database_scope':None}
+        def store(payload):
+            marker.write_text(json.dumps(payload)); marker.chmod(0o644)
+        store(valid)
+        self.assertEqual(read_test_clear_profile(marker,owner=os.getuid()),'a'*64+':reusable')
+        store(valid|{'database_scope':'b'*64})
+        self.assertEqual(read_test_clear_profile(marker,owner=os.getuid()),'a'*64+':'+'b'*64)
+        for bad in (valid|{'stage':'prod'},valid|{'version':True},valid|{'release_generation':'a'},
+                    valid|{'database_scope':'reusable'},valid|{'extra':1}):
+            store(bad)
+            with self.assertRaises(ValueError):read_test_clear_profile(marker,owner=os.getuid())
+        store(valid)
+        os.link(marker,parent/'hard')
+        with self.assertRaises(ValueError):read_test_clear_profile(marker,owner=os.getuid())
+        (parent/'hard').unlink()
+        marker.chmod(0o664)
+        with self.assertRaises(ValueError):read_test_clear_profile(marker,owner=os.getuid())
+        marker.rename(parent/'real')
+        marker.symlink_to(parent/'real')
+        with self.assertRaises(OSError):read_test_clear_profile(marker,owner=os.getuid())

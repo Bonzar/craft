@@ -54,8 +54,12 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
             if type(browser) is not BrowserOwnerAPI or browser.stage!='prod' or browser.clear_enabled:
                 raise ValueError('Wrong private Base writer authority')
         else:
-            from .browser_owner_api import configured_browser_api
-            browser=configured_browser_api(dashboard,clear_enabled=args.browser_owner_clear)
+            from .browser_owner_api import configured_browser_api, installed_test_clear_profile
+            profile=installed_test_clear_profile()
+            if args.browser_owner_clear and profile is None:
+                raise ValueError('A verified TEST clear profile is required')
+            browser=(configured_browser_api(dashboard,clear_enabled=False) if profile is None
+                     else configured_browser_api(dashboard,clear_profile=profile))
         return dashboard,browser
     if args.queue_control:
         from .queue_dashboard import configured_browser_dashboard
@@ -89,7 +93,7 @@ def main(*, prod_owner_api=None):
     parser.add_argument('--browser-owner-api',action='store_true',
                         help='Enable the Base-owned same-origin browser API on the canonical lane-local Graph listener')
     parser.add_argument('--browser-owner-clear',action='store_true',
-                        help='Enable the verified owner clear action; requires the browser API and remains off by default')
+                        help='Compatibility flag: require an independently provisioned TEST clear profile')
     parser.add_argument('--queue-control',action='store_true',help='Enable owner-session-only processing pause on the standard web app')
     parser.add_argument('--static-dir',type=Path,default=Path(__file__).resolve().parents[1]/'web'/'dist')
     args=parser.parse_args()
