@@ -42,9 +42,15 @@ class TestTestCarrier(unittest.TestCase):
             self.assertEqual(op['query'],{'*':'*'})
             self.assertEqual(set(op['headers']),set(plan.WIRE))
             self.assertNotIn('Authorization',op['headers'])
-        self.assertEqual(plan.inverse(pair,pair['after']),(NGINX,raw))
+        self.assertEqual(plan.inverse(pair,pair['after'],verified_old_deny=True),(NGINX,raw))
         with self.assertRaisesRegex(ValueError,'drift'):
-            plan.inverse(pair,(nginx+' ',gate))
+            plan.inverse(pair,(nginx+' ',gate),verified_old_deny=True)
+
+    def test_existing_unicode_spec_pin(self):
+        import hashlib
+        fixture={'paths':{},'title':'Тест 🧪'}
+        exact=b'{"paths":{},"title":"\\u0422\\u0435\\u0441\\u0442 \\ud83e\\uddea"}'
+        self.assertEqual(plan.spec_sha(fixture),hashlib.sha256(exact).hexdigest())
 
     def test_fail_closed(self):
         for edited in (NGINX+ensure('unreviewed',''),NGINX.replace(SSE,''),NGINX.replace('return 404','return 200')):
