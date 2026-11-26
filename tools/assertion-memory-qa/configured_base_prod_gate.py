@@ -67,7 +67,7 @@ def claims_policy(claims,policy,promotion,nonce,now):
     require(all(type(v) is int for v in (iat,nbf,exp)) and now-300<=iat<=now+15
             and iat-600<=nbf<=now+15 and now<exp and 0<exp-iat<=600,'Expired configured PROD token')
 
-def verify(token,issuer_keys,policy,promotion,nonce,now):
+def verified_jwt_claims(token,issuer_keys):
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding,rsa
     require(isinstance(token,str) and len(token)<=16_384 and token.count('.')==2,'Invalid JWT')
@@ -82,7 +82,11 @@ def verify(token,issuer_keys,policy,promotion,nonce,now):
     n,e=(int.from_bytes(b64u(k[f]),'big') for f in ('n','e'))
     require(2048<=n.bit_length()<=4096 and e==65537,'Invalid signing key parameters')
     rsa.RSAPublicNumbers(e,n).public_key().verify(b64u(s),(h+'.'+b).encode('ascii'),padding.PKCS1v15(),hashes.SHA256())
-    claims_policy(obj(b64u(b)),policy,promotion,nonce,now)
+    return obj(b64u(b))
+
+
+def verify(token,issuer_keys,policy,promotion,nonce,now):
+    claims_policy(verified_jwt_claims(token,issuer_keys),policy,promotion,nonce,now)
 
 def permit(p):
     return {'status':'ok','environment':'production','revision':p.release.revision,'sha256':p.content.sha256}

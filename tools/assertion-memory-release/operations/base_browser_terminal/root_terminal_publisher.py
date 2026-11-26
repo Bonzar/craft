@@ -100,11 +100,11 @@ def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas
     peer.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
     return response
 
-def _credentialed_response(peer, *, expected_uid):
+def _credentialed_response(peer, *, expected_uid, limit=512):
     """Verify the process sending bytes, not systemd's listen-socket creator."""
     chunks=bytearray()
-    while len(chunks)<=512:
-        raw, ancillary, flags, _ = peer.recvmsg(513-len(chunks),socket.CMSG_SPACE(struct.calcsize('3i')))
+    while len(chunks)<=limit:
+        raw, ancillary, flags, _ = peer.recvmsg(limit+1-len(chunks),socket.CMSG_SPACE(struct.calcsize('3i')))
         stamps=[struct.unpack('3i',data) for level,kind,data in ancillary
                 if level==socket.SOL_SOCKET and kind==socket.SCM_CREDENTIALS
                 and len(data)==struct.calcsize('3i')]
@@ -113,7 +113,7 @@ def _credentialed_response(peer, *, expected_uid):
             raise ValueError('unverified configured authorizer response sender')
         chunks.extend(raw)
         if b'\n' in chunks:
-            if len(chunks)>512 or chunks.count(b'\n')!=1 or not chunks.endswith(b'\n'):
+            if len(chunks)>limit or chunks.count(b'\n')!=1 or not chunks.endswith(b'\n'):
                 break
             return bytes(chunks)
     raise ValueError('invalid configured authorizer response frame')
