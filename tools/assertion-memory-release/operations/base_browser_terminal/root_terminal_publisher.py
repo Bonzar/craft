@@ -1,7 +1,8 @@
 """Fixed root terminal publisher, for the existing configured authorizer only.
 
 An observer running under the already-authorized root controller must perform
-actual kernel and authenticated smoke checks. UID 986 never dispatches here.
+actual protected runtime checks; ordinary owner UI is a separate ops gate.
+UID 986 never dispatches here.
 Nothing in this module reads credentials or controls a service.
 """
 from hashlib import sha256
@@ -33,13 +34,13 @@ def canonical_terminal(request,release):
             'lane':'prod','phase':request.phase,'release':_release_wire(release)},
             sort_keys=True,separators=(',',':')).encode('ascii')
 
-def check_root_terminal(*, controller_pending, before, after, smoke):
-    """Only called where before/after/smoke are independently proven, not JSON."""
+def check_root_terminal(*, controller_pending, before, after):
+    """Only called where before/after are independently proven, not JSON."""
     if type(controller_pending) is not TerminalRequest:
         raise ValueError('missing exact root terminal transaction')
     release=terminal(admission=controller_pending.admission,
             predecessor=controller_pending.predecessor,phase=controller_pending.phase,
-            uid=986,before=before,after=after,smoke=smoke)
+            uid=986,before=before,after=after)
     return canonical_terminal(controller_pending,release)
 
 def verify_and_publish_root_peer(peer, stream, *, read_exact_pending, finish_cas, acknowledge_terminal=None, peer_uid=_pid_uid):
@@ -118,7 +119,7 @@ def _credentialed_response(peer, *, expected_uid):
     raise ValueError('invalid configured authorizer response frame')
 
 
-def publish_with_existing_authorizer(*, controller_pending, before, after, smoke):
+def publish_with_existing_authorizer(*, controller_pending, before, after):
     """Bind actual witnessed release to existing AF_UNIX over kernel peer UID."""
     import os
     from pathlib import Path
@@ -126,7 +127,7 @@ def publish_with_existing_authorizer(*, controller_pending, before, after, smoke
     if os.getuid()!=0 or os.geteuid()!=0:
         raise ValueError('not the protected Base terminal collector')
     proof=check_root_terminal(controller_pending=controller_pending,before=before,
-                             after=after,smoke=smoke)
+                             after=after)
     expected={'status':'ok','proof':sha256(proof).hexdigest()}
     path=Path('/run/assertion-configured-base-prod-auth/production.sock')
     parent=path.parent.lstat()

@@ -31,17 +31,15 @@ the native mutation.
 
 Open integration prerequisites:
 - Root-managed untracked pinned settled/receiver hook wiring for independent
-  kernel/route observation and proof publishing; actual live no trustworthy
+  kernel observation and proof publishing; actual live no trustworthy
   publisher exists. Current approval permits narrowly scoped verifier,
   not bypassing existing receipt/rollback or granting generic execution.
 - Protect exact v3 issuance and same existing socket mutual identity;
   bind independent witness run+nonce and actual revision/archive/manifest
   plus predecessor. Avoid changing persisted schema unless authorized;
   separate authorizer-owned durable record is the proposed location.
-- Sidecar direct authenticated Graph check needs approved evidence;
-  current legacy Smoke logs in but does not consume a cookie or fetch Graph
-  afterwards. Do not alter or overstate that baseline, export any cookie
-  or owner password, or use browser login outside the exact controlled proof.
+- Ordinary Visual readback remains an independent operations condition below,
+  never an auth status boolean or cookie in the terminal proof.
 - Real route rollback/ingress ownership and actual phase evidence are
   separately needed before any protected activation.
 
@@ -70,8 +68,33 @@ the existing UID986 v1/v2 exact handler and defines a separate root-only
 terminal receipt on the existing fixed AF_UNIX socket. Client verifies
 actual UID980 bytes via Linux SCM_CREDENTIALS; root listener-creator
 SO_PEERCRED alone would be insufficient. Its UID980 exact record compare-
-and-set is independent of app/SQLite. Both ends require trustworthy
-preexisting pending transaction and production authenticated smoke, which
-are not installed or exposed by this patch. Protected signed v3 admission,
-owned real process/smoke collectors and reviewed versioned operations
+and-set is independent of app/SQLite. Both ends require a trustworthy
+preexisting pending transaction. Protected signed v3 admission, owned
+process observers and reviewed versioned operations
 bundle are gating. Both TEST and PROD stay unchanged.
+
+## TEST / PROD recovery order for operators
+
+1. On disposable TEST, prove runtime-only observer success and exact inverse
+   package/socket/edge restore. Native release smoke stays native and no
+   new login or permission is added. Verify ordinary same-origin Visual
+   using only an existing authenticated owner tab, no read of credentials,
+   cookies, or session endpoint CSRF. Inspect normal Graph/render and queue
+   actions read-only; deny pass for login screen, stale generation or
+   anonymous readiness alone. Prove no hidden PROD alias in either route.
+2. On PROD, confirm exact operator and configured authorizer protections,
+   initial approved prior archive+edge pair, known recovery availability,
+   and existing owner tab before an actual cutover. Runtime receipt is
+   typed immutable release/controller phase, not user-visible feature pass.
+   Coordinate native feature activation and existing route switch under the
+   reviewed protocol; do not enable a second public alias.
+3. If normal owner tab fails or expected generation is unprovable, do not
+   report Visual healthy or add a login. Revert managed ingress to its
+   exact previously verified boundary with guarded recovery, stop the
+   affected new route/service and restore the exact predecessor native
+   package/role pair, verify trusted before/after listener state and old
+   ordinary UI. Keep nonmutating native receipt retries separate: on
+   already-fsynced candidate recovery do not repeat start/restore.
+4. If valid preexisting owner session is missing, defer this feature
+   readback/cutover; cannot replace with alternate credentials, an inject-
+   browser-auth method, a fabricated runtime signal or an anonymous check.

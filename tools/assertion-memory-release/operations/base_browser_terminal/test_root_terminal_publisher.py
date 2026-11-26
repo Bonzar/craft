@@ -10,14 +10,14 @@ class RootPublisher(TestCase):
     def setup_case(self,phase='restart'):
         f=Verify().fixture(phase)
         req=TerminalRequest(f['admission'],f['predecessor'],phase)
-        body=check_root_terminal(controller_pending=req,before=f['before'],after=f['after'],smoke=f['smoke'])
+        body=check_root_terminal(controller_pending=req,before=f['before'],after=f['after'])
         return req,json.loads(body),f
 
-    def test_owner_smoke_is_verified_before_root_frame_and_only_root_cas(self):
+    def test_runtime_is_verified_before_root_frame_and_only_root_cas(self):
         req,body,f=self.setup_case('restore')
         with self.assertRaises(ValueError):
-            check_root_terminal(controller_pending=req,before=f['before'],after=f['after'],
-                                smoke=replace(f['smoke'],browser_authenticated_ready=False))
+            check_root_terminal(controller_pending=req,before=f['before'],
+                                after=replace(f['after'],database_identity=(11,55)))
         data=lambda:BytesIO(json.dumps({'op':'base-terminal-v1','receipt':body}).encode()+b'\n')
         observed=[]
         def commit(**kw):

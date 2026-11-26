@@ -27,13 +27,10 @@ class Lifecycle(TestCase):
         def observe():
             seq.append('observe')
             return observations.pop(0)
-        def smoke():
-            seq.append('smoke')
-            return sample['smoke']
         binding=ProtectedTerminalLifecycle(service_uid=986,release_lease=lease,
-           read_pending=lambda:chosen,snapshot=observe,smoke=smoke,
+           read_pending=lambda:chosen,snapshot=observe,
            finish_native_release=lambda req:seq.append(('native-finish',req.phase)),
-           read_precommit=lambda req:(VerifiedPrecommit(chosen,sample['before'],sample['smoke'])
+           read_precommit=lambda req:(VerifiedPrecommit(chosen,sample['before'])
                                      if damage=='recovery' else None),
            record_precommit=lambda prep:seq.append(('record',prep.request.phase)),
            settle_exact_authorizer=lambda req,release:seq.append(('settle',req.phase,release.mode)))
@@ -44,14 +41,14 @@ class Lifecycle(TestCase):
             with self.subTest(phase=phase):
                 b,seq=self.check(phase)
                 self.assertEqual(b.verify_terminal().mode,mode)
-                self.assertEqual(seq,['lease','observe','smoke','observe',('record',phase),('native-finish',phase),
+                self.assertEqual(seq,['lease','observe','observe',('record',phase),('native-finish',phase),
                     'observe',('settle',phase,mode),'release'])
 
     def test_bad_before_clear_is_non_effectful(self):
         b,seq=self.check('restart','mid-change')
         with self.assertRaises(ValueError):
             b.verify_terminal()
-        self.assertEqual(seq,['lease','observe','smoke','observe','release'])
+        self.assertEqual(seq,['lease','observe','observe','release'])
 
     def test_bad_terminal_after_clear_never_settles(self):
         b,seq=self.check('restore','post-change')

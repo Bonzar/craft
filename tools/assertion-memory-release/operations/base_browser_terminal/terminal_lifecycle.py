@@ -8,7 +8,7 @@ here accepts commands, database paths, ports or receipt bodies from clients.
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from terminal_verifier import Smoke, Snapshot, terminal
+from terminal_verifier import Snapshot, terminal
 from transition_witness import Admission, Release
 
 @dataclass(frozen=True)
@@ -21,22 +21,20 @@ class TerminalRequest:
 class VerifiedPrecommit:
     request: TerminalRequest
     before: Snapshot
-    smoke: Smoke
 
 class ProtectedTerminalLifecycle:
     def __init__(self, *, service_uid, release_lease: Callable,
-                 read_pending: Callable, snapshot: Callable, smoke: Callable,
+                 read_pending: Callable, snapshot: Callable,
                  finish_native_release: Callable, settle_exact_authorizer: Callable,
                  read_precommit: Callable, record_precommit: Callable):
         if (type(service_uid) is not int or service_uid<=0 or
-            not all(callable(x) for x in (release_lease,read_pending,snapshot,smoke,
+            not all(callable(x) for x in (release_lease,read_pending,snapshot,
                 finish_native_release,settle_exact_authorizer,read_precommit,record_precommit))):
             raise ValueError('protected Base terminal authority required')
         self.uid=service_uid
         self._hold=release_lease
         self._pending=read_pending
         self._observe=snapshot
-        self._smoke=smoke
         self._finish=finish_native_release
         self._read_precommit=read_precommit
         self._record=record_precommit
@@ -58,20 +56,19 @@ class ProtectedTerminalLifecycle:
                 pre=self._read_precommit(request)
                 if type(pre) is not VerifiedPrecommit or pre.request!=request:
                     raise ValueError('missing exact independent precommit witness')
-                return self._commit(request,pre.before,before,pre.smoke)
-            smoke=self._smoke()
+                return self._commit(request,pre.before,before)
             checked=self._observe()
             if checked.journal!=before.journal:
-                raise ValueError('base terminal journal changed during smoke')
+                raise ValueError('base terminal journal changed during observation')
             terminal(admission=request.admission,predecessor=request.predecessor,
                 phase=request.phase,uid=self.uid,before=before,
-                after=replace(checked,journal=None),smoke=smoke)
-            self._record(VerifiedPrecommit(request,before,smoke))
+                after=replace(checked,journal=None))
+            self._record(VerifiedPrecommit(request,before))
             self._finish(request)
-            return self._commit(request,before,self._observe(),smoke)
+            return self._commit(request,before,self._observe())
 
-    def _commit(self,request,before,after,smoke):
+    def _commit(self,request,before,after):
         confirmed=terminal(admission=request.admission,predecessor=request.predecessor,phase=request.phase,
-                uid=self.uid,before=before,after=after,smoke=smoke)
+                uid=self.uid,before=before,after=after)
         self._settle(request,confirmed)
         return confirmed

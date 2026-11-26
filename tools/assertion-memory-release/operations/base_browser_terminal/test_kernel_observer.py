@@ -41,10 +41,10 @@ class Kernel(TestCase):
                     get=lambda unit:345 if unit==BASE else old_graph
                     bound=lambda req:(sample.current,sample.journal)
                     if expected:
-                        self.assertEqual(_observe(proc,req,get,bound),sample)
+                        self.assertEqual(_observe(proc,req,get,bound,lambda:sample.database_identity),sample)
                     else:
                         with self.assertRaises(ValueError):
-                            _observe(proc,req,get,bound)
+                            _observe(proc,req,get,bound,lambda:sample.database_identity)
 
     def test_process_kernel_exe_must_equal_exact_current_venv(self):
         import os

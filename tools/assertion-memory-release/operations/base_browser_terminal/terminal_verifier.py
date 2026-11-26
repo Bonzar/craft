@@ -27,22 +27,13 @@ class Snapshot:
     # Passed only by root controller after independent protected journal read.
     journal: tuple | None
     boot_id: str
-
-@dataclass(frozen=True)
-class Smoke:
-    run: str
-    nonce: str
-    phase: str
-    release: Release
-    private_anonymous_denied: bool
-    private_authenticated_ready: bool
-    browser_anonymous_denied: bool
-    browser_authenticated_ready: bool
-    memory_db_identity_unchanged: bool
+    database_identity: tuple[int,int]
 
 def _snapshot_valid(s, release, uid):
     if (type(s) is not Snapshot or s.current!=release or type(s.boot_id) is not str
-            or not re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}',s.boot_id)):
+            or not re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}',s.boot_id)
+            or type(s.database_identity) is not tuple or len(s.database_identity)!=2
+            or any(type(v) is not int or v<=0 for v in s.database_identity)):
         raise ValueError('unexpected observed Base release')
     for process in (s.private,s.graph):
         if (type(process) is not Process or
@@ -63,11 +54,11 @@ def _snapshot_valid(s, release, uid):
     if s.listeners!=expected:
         raise ValueError('unexpected or competing listener')
 
-def terminal(*, admission, predecessor, phase, uid, before, after, smoke):
+def terminal(*, admission, predecessor, phase, uid, before, after):
     """Only the independent controller may supply trusted observations.
 
     No caller-submitted JSON or deploy-UID response may instantiate these
-    observations. Owner credentials are not inputs/outputs of this verifier.
+    observations. Owner UI readback is a separate operations gate.
     """
     if (type(admission) is not Admission or type(predecessor) is not Release or
             phase not in ('restart','restore') or type(uid) is not int or uid<=0):
@@ -76,12 +67,6 @@ def terminal(*, admission, predecessor, phase, uid, before, after, smoke):
     for snapshot in (before,after):
         _snapshot_valid(snapshot,release,uid)
     if (before.journal!=(admission.run,admission.nonce,predecessor,admission.candidate) or after.journal is not None or
-            before.boot_id!=after.boot_id or before.private!=after.private or before.graph!=after.graph):
+            before.database_identity!=after.database_identity or before.boot_id!=after.boot_id or before.private!=after.private or before.graph!=after.graph):
         raise ValueError('Base transaction not stably settled')
-    if (type(smoke) is not Smoke or
-        (smoke.run,smoke.nonce,smoke.phase,smoke.release)!=(admission.run,admission.nonce,phase,release) or
-        any(receipt is not True for receipt in (smoke.private_anonymous_denied,
-            smoke.private_authenticated_ready,smoke.browser_anonymous_denied,
-            smoke.browser_authenticated_ready,smoke.memory_db_identity_unchanged))):
-        raise ValueError('missing independent exact smoke witness')
     return release

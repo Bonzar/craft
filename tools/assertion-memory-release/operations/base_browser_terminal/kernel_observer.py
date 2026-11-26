@@ -9,6 +9,7 @@ from terminal_verifier import BASE, GRAPH, Process, Snapshot
 from native_boundary import observe_native_boundary
 
 PROC=Path('/proc')
+DB=Path('/var/lib/assertion-memory/memory.sqlite3')
 PORTS=(8901,8902,8903)
 UID=986
 BOOT=re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\n\Z')
@@ -95,11 +96,20 @@ def _process(proc, *, pid, unit, release, physical):
 
 def observe(request, *, trusted_pid):
     """trusted_pid is exact systemd unit query from the protected controller."""
-    return _observe(PROC,request,trusted_pid,observe_native_boundary)
+    return _observe(PROC,request,trusted_pid,observe_native_boundary,_database_identity)
 
-def _observe(proc,request,trusted_pid,boundary):
+def _database_identity():
+    if DB.resolve(strict=True)!=DB:
+        raise ValueError('noncanonical Base DB')
+    info=DB.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:
+        raise ValueError('unexpected Base DB identity')
+    return info.st_dev,info.st_ino
+
+def _observe(proc,request,trusted_pid,boundary,database_identity):
     boot=_read(proc/'sys/kernel/random/boot_id',64)
     if not BOOT.fullmatch(boot): raise ValueError('invalid kernel boot identity')
+    identity=database_identity()
     release,journal=boundary(request)
     physical=Path('/srv/assertion-release/production/releases')/(release.revision+'-'+release.archive)
     main_pid=trusted_pid(BASE)
@@ -120,6 +130,7 @@ def _observe(proc,request,trusted_pid,boundary):
         raise ValueError('Base process socket ownership mismatch')
     if (any(start_ticks(_read(proc/str(p.pid)/'stat',8192),p.pid)!=p.start_ticks for p in {base,graph})
             or _read(proc/'sys/kernel/random/boot_id',64)!=boot or trusted_pid(BASE)!=main_pid
-            or trusted_pid(GRAPH)!=graph_pid or boundary(request)!=(release,journal)):
+            or trusted_pid(GRAPH)!=graph_pid or boundary(request)!=(release,journal)
+            or database_identity()!=identity):
         raise ValueError('protected Base observation changed')
-    return Snapshot(release,base,graph,((graph_port,graph.pid),(8903,base.pid)),journal,boot.strip())
+    return Snapshot(release,base,graph,((graph_port,graph.pid),(8903,base.pid)),journal,boot.strip(),identity)
