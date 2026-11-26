@@ -21,11 +21,12 @@ def exact_event(db, event_id):
         return None
     batch = db.execute('SELECT b.batch_id,b.state,b.error_code FROM memory_capture_batch_members m '
                        'JOIN memory_capture_batches b USING(batch_id) WHERE m.event_id=?', (event_id,)).fetchone()
+    from .source_model_batch import CAPTURE_COVERAGE_CODES
     if batch is None:
         return None
     batch_id, state, error = batch
     result = {'state': state if state in _STATES else 'unknown',
-              'failure_code': error if error is None or error in _FAILURES else 'unknown',
+              'failure_code': error if error is None or error in _FAILURES or error in CAPTURE_COVERAGE_CODES else 'unknown',
               'trace_coverage': 'not_recorded', 'model_stages': {}}
     if not _exists(db, 'memory_thought_runs') or not _exists(db, 'memory_thought_model_calls'):
         return result

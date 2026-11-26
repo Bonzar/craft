@@ -62,3 +62,42 @@ class CaptureBatchDiagnosticsTest(TestCase):
         event=self.fixture.service.capture_message('other','one','user','user',
             'fixture source',1,source='fixture://other')['event']['id']
         self.assertNotIn('capture_batch',self.diagnostic(event))
+
+    def test_disposable_empty_drafts_distinguish_task_only_and_eligible_omission(self):
+        responses=(
+            ('Send the memo now.', {'verdict':'accept','text':'Only a request.', 'discard_drafts':[]},
+             'completed', None),
+            ('I decided that Friday is my recurring office day.',
+             {'verdict':'reject','text':'Supported decision omitted.', 'discard_drafts':[]},
+             'blocked','capture_coverage_omission'),
+            ('I decided that Friday is my recurring office day.', {'verdict':'bad'},
+             'blocked','capture_coverage_verdict_invalid'),
+            ('I decided that Friday is my recurring office day.',
+             {'verdict':'accept','text':'Bad index.', 'discard_drafts':[{'source':'source_1','index':0}]},
+             'blocked','capture_coverage_selection_invalid'),
+        )
+        for text, verdict, state, code in responses:
+            with self.subTest(code=code):
+                t=fixtures.CaptureBatchTest()
+                t.setUp()
+                try:
+                    messages=[t.messages[0]|{'text':text},t.messages[1]|{'text':'I will check.'}]
+                    ids=[i['event']['id'] for i in t.capture(messages)['receipts']]
+                    def model(request):
+                        if request.task=='Construct thoughts for multiple source messages':
+                            return json.dumps({label:{'thoughts':[],'needs_detail':None}
+                                               for label in ('source_1','source_2')})
+                        self.assertEqual(request.task,'Verify source thought batch')
+                        self.assertIn('complete admitted capture package',request.instructions)
+                        self.assertIn('uniquely anchor the exact accepted action',request.instructions)
+                        self.assertIn('does not select a different action or add permission',request.instructions)
+                        return json.dumps(verdict)
+                    with patch.object(ServiceConfig,'components',lambda *_:(model,None,'test')):
+                        self.assertTrue(run_next(t.config,t.store,lambda:False))
+                    self.assertEqual(tuple(t.status()),(state,code))
+                    for event_id in ids:
+                        result=json.loads(t.service.status(event_id,section='job',limit=3000)['content'])
+                        self.assertEqual(result['capture_batch']['failure_code'],code)
+                        self.assertNotIn(text,json.dumps(result))
+                finally:
+                    t.doCleanups()
