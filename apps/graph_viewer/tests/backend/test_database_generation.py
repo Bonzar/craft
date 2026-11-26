@@ -260,3 +260,73 @@ class HttpReset(unittest.TestCase):
                     time.sleep(.1)
                 self.assertFalse(any(x.exists() for x in [old_graph,*previous]))
                 self.assertTrue(list((state/'source-ir').glob('*/database-epochs/*/*/source.sqlite3')))
+
+
+class GraphReleaseSmokeTransport(unittest.TestCase):
+    def setUp(self):
+        import importlib.util
+        from pathlib import Path
+        smoke_path=(Path(__file__).resolve().parents[4]
+                    /'tools/assertion-memory-qa/vm/test-health.py')
+        spec=importlib.util.spec_from_file_location('graph_release_smoke',smoke_path)
+        self.smoke=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.smoke)
+
+    def test_public_secure_cookie_and_loopback_release_smoke_both_preserved(self):
+        import hashlib
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from apps.graph_viewer.server.app import create_app
+        from starlette.testclient import TestClient
+        from test_service import fixture
+
+        for public_origin in (None,'https://synthetic-test-graph.example'):
+            with self.subTest(public_origin=public_origin), TemporaryDirectory() as tmp:
+                r=Path(tmp)
+                db=r/'test.sqlite3'
+                fixture(db)
+                old=hashlib.sha256(db.read_bytes()).digest()
+                ui=r/'web'
+                ui.mkdir()
+                (ui/'index.html').write_text('synthetic TEST')
+                password='synthetic-test-owner-strong'
+                app=create_app(db,r/'state',password=password,static_dir=ui,public_origin=public_origin)
+                with TestClient(app,base_url=self.smoke.LOCAL_GRAPH,follow_redirects=False) as c:
+                    self.smoke.graph(c,password,deadline_seconds=3)
+                with TestClient(app,base_url=self.smoke.LOCAL_GRAPH,follow_redirects=False) as c:
+                    login=c.post('/api/v1/session',json={'password':password})
+                    self.assertEqual(login.status_code,200)
+                    self.assertEqual(next(iter(login.cookies.jar)).secure,public_origin is not None)
+                    if public_origin is not None:
+                        self.assertEqual(c.get('/api/v1/graph').status_code,401)
+                self.assertEqual(hashlib.sha256(db.read_bytes()).digest(),old)
+
+    def test_location_is_fixed_and_login_or_graph_redirect_is_not_followed(self):
+        import httpx
+        for url in ('https://synthetic-external.example','http://localhost:8892',
+                    'http://localhost:8891','http://127.0.0.1:8891/wrong'):
+            fake=httpx.Client(base_url=url,trust_env=False,transport=httpx.MockTransport(
+                lambda request: self.fail('No HTTP request is allowed to this base URL')))
+            with fake,self.assertRaisesRegex(ValueError,'fixed loopback'):
+                self.smoke.graph(fake,'synthetic-passphrase')
+        for redirect_path in ('/api/v1/session','/api/v1/graph'):
+            seen=[]
+            def reply(req):
+                # Assert only on path/method; no cookie or password in logs.
+                self.assertEqual(req.url.host,'127.0.0.1')
+                self.assertEqual(req.url.port,8891)
+                path=req.url.path
+                seen.append(path)
+                if path==redirect_path and len(seen)>1:
+                    return httpx.Response(307,headers={'Location':'https://synthetic-external.example/'})
+                if path=='/api/v1/graph':
+                    return httpx.Response(401)
+                if path=='/api/v1/session':
+                    return httpx.Response(200,headers={'Set-Cookie':
+                        'gv_session='+('x'*54)+'; Path=/api/v1; Secure; HttpOnly'})
+                return httpx.Response(200)
+            with httpx.Client(base_url=self.smoke.LOCAL_GRAPH,trust_env=False,follow_redirects=True,
+                              transport=httpx.MockTransport(reply)) as fake:
+                with self.assertRaisesRegex(ValueError,'loopback login|manifest unavailable'):
+                    self.smoke.graph(fake,'synthetic-passphrase')
+            self.assertEqual(seen[:3],['/api/v1/graph','/','/api/v1/session'])
