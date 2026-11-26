@@ -20,6 +20,9 @@ static frame is spooled, and repeats the settled check under the actual joint
 writer lock before preparing. Base's reserve is 768 MiB and Visual's is 32 MiB
 plus 1,024 inodes; a shortfall fails before archive unpack. Two writer locks
 are held for packed Visual when its old runtime-only lock is installed.
+For Base PROD's proof/unlink the receiver nonblockingly takes a shared
+legacy transition fence; the root witness refuses outstanding permit/pending
+markers. The fence is never held by retention across restart/prepare/smoke.
 Neither the prior nor unverified new build is pruned while a rollback journal
 exists. After committed activation and exact smoke it repeats the sweep while
 the lock is still held. A failed prepare/recovered activation tries only its

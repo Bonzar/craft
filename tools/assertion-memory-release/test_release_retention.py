@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import base_payload
 import release_core
-from release_retention import Retention, Store, lock_identity
+from release_retention import Retention, Store, guard_prod_fence, lock_identity
 import runtime_joint
 
 
@@ -228,6 +228,19 @@ class CurrentOnly(unittest.TestCase):
                 self.assertFalse((root/'runtime'/old_runtime).exists())
                 self.assertTrue(legacy.is_dir())
                 self.durable(root)
+
+    def test_existing_legacy_production_fence_refuses_retirement_nonblocking(self):
+        root=self.roots('production');path=root/'legacy-fence'
+        path.touch(mode=0o644)
+        with path.open('rb') as other:
+            fcntl.flock(other,fcntl.LOCK_EX)
+            with self.assertRaises(BlockingIOError):
+                with guard_prod_fence(path,os.getuid()):
+                    self.fail('Must not run under competing legacy transition')
+        with guard_prod_fence(path,os.getuid()):
+            with path.open('rb') as competitor:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(competitor,fcntl.LOCK_EX|fcntl.LOCK_NB)
 
     def test_visual_can_activate_old_contract_without_pruning(self):
         root=self.roots('test',True);self.visual_baseline(root)

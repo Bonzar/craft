@@ -1,4 +1,5 @@
 """Current-only generated release retention, never an arbitrary directory sweep."""
+from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
 import json
@@ -18,6 +19,7 @@ SCOPES={
 }
 CONFIG=Path('/etc/assertion-release-retention')
 RUN=Path('/run/assertion-release-retention')
+PROD_FENCE=Path('/run/assertion-base-prod-transition/fence.lock')
 OK=b'assertion-release-retention-v1 OK\n'
 BASE_NAME=re.compile(r'[a-f0-9]{40}-[a-f0-9]{64}\Z')
 VISUAL_NAME=re.compile(r'[a-f0-9]{64}\Z')
@@ -205,6 +207,24 @@ def unlink_sealed(parent, name, root_stat, inventory):
     descend(parent,name,root_stat,())
 
 
+@contextmanager
+def guard_prod_fence(path, owner=0):
+    """Hold a shared legacy-transition fence only during proof/unlink.
+
+    The lane lock is already held. Do not wait here: legacy operations may
+    take the exclusive fence first and then attempt their lane lock.
+    Do not hold this when hooking restart/prepare/smoke.
+    """
+    safe_root(path.parent,owner)
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as lock:
+        actual=path.lstat()
+        if (not os.path.samestat(actual,os.fstat(lock.fileno())) or actual.st_uid!=owner
+                or not stat.S_ISREG(actual.st_mode) or actual.st_nlink!=1 or actual.st_mode&0o022):
+            raise ValueError('retention_prod_fence')
+        fcntl.flock(lock,fcntl.LOCK_SH|fcntl.LOCK_NB)
+        yield
+
+
 class Retention:
     def __init__(self, root, stores, *, lock_fd, proof, minimum, ready=None):
         self.root=Path(root)
@@ -253,6 +273,12 @@ class Retention:
         return active
 
     def remove(self, store, inactive, *, dry=False):
+        if self.root==SCOPES['base-prod'][0]:
+            with guard_prod_fence(PROD_FENCE):
+                return self._remove(store,inactive,dry=dry)
+        return self._remove(store,inactive,dry=dry)
+
+    def _remove(self, store, inactive, *, dry):
         self.settled()
         if not self.reader_ready():
             return False
