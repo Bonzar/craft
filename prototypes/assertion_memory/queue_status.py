@@ -8,7 +8,7 @@ from .processing_control import read_control
 from .thought_processing_selection import (
     maintenance_predicate,
     normalize_session_ids,
-    source_predicate,
+    source_claim_predicate,
 )
 
 
@@ -68,6 +68,8 @@ def build_queue_status(connection, *, release_version, stage, processing_session
     Callers supply trusted deployment metadata and the hosted scheduler configuration.
     'running' describes the recorded lease, not proof of liveness or completion order.
     """
+    from .queue_processing_policy import explicit
+    policy=explicit(connection)
     ids = normalize_session_ids(processing_session_ids)
     if stage not in ('test', 'prod') or not isinstance(release_version, str) or not release_version:
         raise ValueError('trusted stage and release are required')
@@ -84,6 +86,9 @@ def build_queue_status(connection, *, release_version, stage, processing_session
     stamp = now.astimezone(timezone.utc).isoformat(timespec='microseconds')
     if type(auto_process_fresh_mac) is not bool or (auto_process_fresh_mac and ids != ()):
         raise ValueError('fresh Mac auto-processing requires an empty ordinary selector')
+    if policy is not None:
+        ids = (thought_processing_selection.FRESH_MAC_ONLY if auto_process_fresh_mac
+               else thought_processing_selection.OWNER_POLICY)
     fresh_selector = getattr(thought_processing_selection, 'FRESH_MAC_ONLY', None)
     if auto_process_fresh_mac and fresh_selector is None:
         raise ValueError('fresh Mac auto-processing is not in this release')
@@ -98,10 +103,9 @@ def build_queue_status(connection, *, release_version, stage, processing_session
         # Fresh-only mode replaces, rather than supplements, the ordinary source
         # selector. Its registration table is absent until the first opted-in stream.
         if auto_process_fresh_mac:
-            selected, args = (source_predicate(fresh_selector, 'e',db=connection)
-                if _has(connection, 'memory_fresh_mac_events') else ('0', []))
+            selected,args=source_claim_predicate(connection,fresh_selector)
         else:
-            selected, args = source_predicate(ids, 'e')
+            selected,args=source_claim_predicate(connection,ids)
         exists = _has(connection, 'memory_capture_jobs', 'memory_raw_events')
         groups = batch_cards and exists and _has(connection,'memory_capture_batches','memory_capture_batch_members')
         columns = ",NULL AS batch_sequence,NULL AS member_count,NULL AS session_id" if groups else ""

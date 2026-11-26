@@ -186,7 +186,9 @@ class ThoughtWorker:
             if processing_paused(c) or (self.is_pausing is not None and self.is_pausing()):
                 return None
             now = self.queue._time()
-            eligible,args = source_predicate(self.processing_session_ids,'e',db=c)
+            from .thought_processing_selection import source_claim_predicate
+            eligible,args = (source_claim_predicate(c,self.processing_session_ids) if capture_batch_id is None
+                             else source_predicate(self.processing_session_ids,'e',db=c))
             if capture_batch_id is None:
                 eligible += " AND json_extract(e.metadata,'$.capture_batch_id') IS NULL"
             else:
@@ -196,10 +198,10 @@ class ThoughtWorker:
                 eligible += ' AND e.id=?'
                 args = [*args, event_id]
             if self.claim_bound_source_extractor_factory is None:
-                c.execute("UPDATE memory_capture_jobs SET status='failed',lease_token=NULL,lease_until=NULL,"
+                c.execute("UPDATE memory_capture_jobs AS j SET status='failed',lease_token=NULL,lease_until=NULL,"
                     "error='Thought source lease expired too many times' WHERE event_id IS NOT NULL "
                     "AND status='running' AND lease_until<=? AND attempts>=? AND EXISTS(SELECT 1 FROM memory_raw_events e "
-                    'WHERE e.id=memory_capture_jobs.event_id AND '+eligible+')',(now,self.queue._max_attempts,*args))
+                    'WHERE e.id=j.event_id AND '+eligible+')',(now,self.queue._max_attempts,*args))
             row = c.execute("SELECT j.id FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id "
                 "WHERE ((j.status='pending' AND j.available_at<=?) OR (j.status='running' AND j.lease_until<=?) "
                 "OR j.status='waiting_model') AND "+eligible+" ORDER BY j.available_at,j.id LIMIT 1",(now,now,*args)).fetchone()

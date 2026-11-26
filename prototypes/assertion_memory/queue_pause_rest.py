@@ -26,7 +26,9 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                           change=None, port=None, path=PATH):
     from .queue_session_control import PATH as SESSIONS, normalize
     from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH, check_request
-    session_mode=path==SESSIONS
+    from .queue_processing_policy import PATH as POLICY, validate
+    policy_mode=path==POLICY
+    session_mode=path==SESSIONS or policy_mode
     item_mode=path in (REMOVE,PREVIEW_PATH)
     if path!=PATH and not (session_mode or item_mode):
         return None
@@ -89,7 +91,7 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                         if not event.get('more_body'):
                             break
                 request = json.loads(body, object_pairs_hook=unique)
-                field='selected_session_ids' if session_mode else 'paused'
+                field='policy' if policy_mode else 'selected_session_ids' if session_mode else 'paused'
                 fields={'queue_id','item_id','expected_revision'} if item_mode else {field,'expected_revision'}
                 if (type(request) is not dict or set(request) != fields
                         or type(request['expected_revision']) is not str
@@ -97,6 +99,8 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                     raise ValueError()
                 if item_mode:
                     check_request(request['queue_id'],request['item_id'])
+                elif policy_mode:
+                    validate(request[field])
                 elif session_mode:
                     normalize(request[field])
                 elif type(request[field]) is not bool:
@@ -120,6 +124,8 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
         try:
             state = await asyncio.to_thread(prepare if method == 'GET' else change, **args)
             required={'stage','revision','selected_session_ids','sessions'} if session_mode else {'stage','revision','paused'}
+            if policy_mode:
+                required={'stage','revision','policy','sessions'}
             if item_mode:
                 required=({'stage','queue_id','item_id','removed','effect'} if path==REMOVE
                           else {'stage','queue_id','item_id','source_preview','source_role'})

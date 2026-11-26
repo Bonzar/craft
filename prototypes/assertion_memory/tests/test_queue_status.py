@@ -49,7 +49,7 @@ class QueueStatusTest(unittest.TestCase):
             db.execute('INSERT INTO memory_thought_work '
                 '(thought_id,desired_version,status,available_at,lease_until,attempts,desired_generation) '
                 'VALUES (?,1,?,?,?,?,1)', (ident, state, time, lease, attempts))
-            db.execute("INSERT INTO memory_thought_work_causes VALUES (?,'cause',1)", (ident,))
+            db.execute("INSERT INTO memory_thought_work_causes(thought_id,cause,generation) VALUES (?,'cause',1)", (ident,))
             db.execute("INSERT INTO memory_thought_cause_sessions VALUES (?,'cause',?)", (ident, session))
 
     def interactive(self, ident, state, created):

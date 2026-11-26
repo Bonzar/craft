@@ -97,6 +97,7 @@ class CaptureQueue:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL,
                     available_at TEXT NOT NULL,
+                    created_at TEXT,
                     error TEXT,
                     lease_token TEXT,
                     lease_until TEXT,
@@ -118,6 +119,8 @@ class CaptureQueue:
                     progress TEXT NOT NULL
                 )
             """)
+            if 'created_at' not in {r[1] for r in connection.execute('PRAGMA table_info(memory_capture_jobs)')}:
+                connection.execute('ALTER TABLE memory_capture_jobs ADD COLUMN created_at TEXT')
             from .source_reprocessing import schema
             schema(connection)
             from .source_admission import install
@@ -194,10 +197,10 @@ class CaptureQueue:
                 valid_at=item.valid_at, recorded_at=recorded_at, metadata=item.metadata,
             )
             connection.execute("""
-                INSERT INTO memory_capture_jobs(id, assertion_id, status, phase, updated_at, available_at)
-                VALUES (?, ?, 'pending', 'link', ?, ?)
+                INSERT INTO memory_capture_jobs(id, assertion_id, status, phase, updated_at, available_at, created_at)
+                VALUES (?, ?, 'pending', 'link', ?, ?, ?)
                 ON CONFLICT(id) DO NOTHING
-            """, (assertion.assertion_id, assertion.assertion_id, now, now))
+            """, (assertion.assertion_id, assertion.assertion_id, now, now, now))
             if self.get(assertion_id).assertion_id != assertion_id:
                 raise ValueError(f"capture job ID {assertion_id!r} belongs to a raw event")
         return assertion
@@ -257,13 +260,13 @@ class CaptureQueue:
                 if previous != position:
                     raise ValueError("raw event has a different immutable dialogue position")
             connection.execute("""
-                INSERT INTO memory_capture_jobs(id, event_id, status, phase, updated_at, available_at)
-                VALUES (?, ?, ?, 'extract', ?, ?)
+                INSERT INTO memory_capture_jobs(id, event_id, status, phase, updated_at, available_at, created_at)
+                VALUES (?, ?, ?, 'extract', ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at,
                     available_at = excluded.available_at
                 WHERE memory_capture_jobs.event_id = excluded.event_id
                   AND memory_capture_jobs.status = 'waiting_origin' AND excluded.status != 'waiting_origin'
-            """, (event_id, event_id, status, now, now))
+            """, (event_id, event_id, status, now, now, now))
             if self.get(event_id).event_id != event_id:
                 raise ValueError(f"capture job ID {event_id!r} belongs to an assertion")
             if (existing is None or (position is not None and previous_position is None)

@@ -258,8 +258,9 @@ def _recover_selected(queue, session_ids):
     """The caller owns the same exclusive worker lock as ordinary processing."""
     now=queue._time()
     with queue.store.transaction(write=True) as db:
-        predicate,arguments=source_predicate(session_ids,'e',db=db)
-        db.execute("UPDATE memory_capture_jobs SET status='pending',lease_token=NULL,lease_until=NULL,"
+        from .thought_processing_selection import source_claim_predicate
+        predicate,arguments=source_claim_predicate(db,session_ids)
+        db.execute("UPDATE memory_capture_jobs AS j SET status='pending',lease_token=NULL,lease_until=NULL,"
             "available_at=?,updated_at=? WHERE status='running' AND event_id IN "
             f"(SELECT e.id FROM memory_raw_events e WHERE json_extract(e.metadata,'$.capture_batch_id') IS NULL AND {predicate})",
             (now,now,*arguments))
@@ -274,7 +275,7 @@ def _recover_selected(queue, session_ids):
 def _deadline(store, config, *, include_batches=True):
     with store.transaction() as db:
         from .mcp_server import _processing_selector
-        return processing_deadline(db,_processing_selector(config),
+        return processing_deadline(db,_processing_selector(config,db),
             now=datetime.now(timezone.utc).isoformat(timespec='microseconds'),
             with_model=config.provider!='none',include_batches=include_batches)
 
@@ -312,14 +313,15 @@ def run_pool(config, lock, idle_handoff, *, limit=0):
 
 def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
     from .mcp_server import _processing_selector
-    selector = _processing_selector(config)
-    if selector == () and limit:
-        return
     claims = ActiveClaims()
     from .source_model_batch import SourceModelBatch
     source_batch = (SourceModelBatch(config.source_workers)
                     if config.batch_source_construction and config.source_workers > 1 else None)
     with MemoryStore(config.db) as store:
+        with store.transaction() as db:
+            selector = _processing_selector(config,db)
+        if selector == () and limit:
+            return
         queue=CaptureQueue(store)
         if config.source_event_ids is not None:
             if not is_pausing():
@@ -357,6 +359,8 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
 
         completed = 0
         while not is_pausing():
+            with store.transaction() as db:
+                selector=_processing_selector(config,db)
             if not limit:
                 from .capture_batch import run_next
                 with processing_cancellation(is_cancelling):

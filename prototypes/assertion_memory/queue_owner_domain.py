@@ -9,14 +9,14 @@ from .processing_control import Conflict
 from .queue_rest import exact_database
 
 
-def owner_operations(*, database, release_lease, identity, stage='test', fresh_only=False):
+def owner_operations(*, database, release_lease, identity, stage='test', fresh_only=False, baseline=None):
     if stage not in ('test','prod') or fresh_only and stage!='prod':
         raise ValueError('Invalid queue owner scope')
     path=Path(database)
     expected=identity()
 
     def perform(action,args,authorize=None):
-        writing=action!='sessions_prepare'
+        writing=action not in ('sessions_prepare','policy_prepare')
         with release_lease():
             before=exact_database(path)
             if identity()!=expected:
@@ -36,6 +36,10 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
                         result=sessions.status(db,stage=stage,fresh_only=fresh_only)
                     elif action=='sessions_set':
                         result=sessions.update(db,stage=stage,fresh_only=fresh_only,**args)
+                    elif action in ('policy_prepare','policy_set'):
+                        from . import queue_processing_policy as policy
+                        run=policy.describe if action=='policy_prepare' else policy.update
+                        result=run(db,stage=stage,baseline=baseline,fresh_only=fresh_only,**args)
                     elif action=='item_remove':
                         result=items.remove(db,stage=stage,**args,
                             now=datetime.now(timezone.utc).isoformat(timespec='microseconds'))

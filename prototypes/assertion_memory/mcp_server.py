@@ -176,17 +176,22 @@ class ServiceConfig:
         return MemoryService(store, self.engine(store))
 
 
-def _processing_selector(config):
-    from .thought_processing_selection import FRESH_MAC_ONLY
-    return FRESH_MAC_ONLY if config.auto_process_fresh_mac else config.processing_session_ids
+def _processing_selector(config, db=None):
+    from .thought_processing_selection import FRESH_MAC_ONLY, OWNER_POLICY
+    from .queue_processing_policy import has_saved
+    if config.auto_process_fresh_mac:
+        return FRESH_MAC_ONLY
+    # A bound one-shot or deployment allowlist is always an additional scope,
+    # never replaced by broader saved owner policy.
+    if db is not None and not config.processing_session_ids and has_saved(db):
+        return OWNER_POLICY
+    return config.processing_session_ids
 
 
 def _eligible_processing_work(config, *, include_batches=True, batches_only=False):
     """Model-free read probe; capture from an unselected session cannot wake work."""
-    if config.processing_session_ids is None and not batches_only:
-        return True
     if not Path(config.db).is_file():
-        return False
+        return config.processing_session_ids is None and not batches_only
     from .thought_processing_selection import processing_deadline
     uri='file:'+quote(str(Path(config.db).resolve()),safe='/')+'?mode=ro'
     connection=sqlite3.connect(uri,uri=True,timeout=5)
@@ -195,7 +200,9 @@ def _eligible_processing_work(config, *, include_batches=True, batches_only=Fals
         connection.execute('PRAGMA query_only=ON')
         connection.execute('BEGIN')
         now=datetime.now(timezone.utc).isoformat(timespec='microseconds')
-        selector = () if batches_only else _processing_selector(config)
+        selector = () if batches_only else _processing_selector(config,connection)
+        if selector is None and not batches_only:
+            return True
         return processing_deadline(connection,selector,now=now,with_model=True,include_batches=include_batches) is not None
     finally:
         connection.close()
