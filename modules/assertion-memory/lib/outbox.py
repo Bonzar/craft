@@ -1,7 +1,10 @@
 """Durable local raw-message delivery. Cursors and queued messages commit together."""
+import fcntl
+import os
+import stat
+from contextlib import contextmanager
 import hashlib
 import json
-import os
 from pathlib import Path
 import sqlite3
 import uuid
@@ -15,7 +18,27 @@ def watching_marker(root, session):
     return Path(root) / 'inactive' / hashlib.sha256(session.encode()).hexdigest()
 
 
+@contextmanager
+def lifecycle_guard(root, session):
+    # Serialize only the short marker mutation; never hold this lock while
+    # waiting for the worker's SQLite writer or reading transcript bytes.
+    directory=Path(root)/'lifecycle'
+    directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+    name=watching_marker(root,session).name
+    fd=os.open(directory/name,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK,0o600)
+    with os.fdopen(fd,'rb',buffering=0) as guard:
+        if not stat.S_ISREG(os.fstat(guard.fileno()).st_mode):
+            raise ValueError('Invalid capture lifecycle lock')
+        fcntl.flock(guard,fcntl.LOCK_EX)
+        yield
+
+
 def set_watching(root, session, is_watching):
+    with lifecycle_guard(root,session):
+        _set_watching(root,session,is_watching)
+
+
+def _set_watching(root, session, is_watching):
     marker = watching_marker(root, session)
     if is_watching:
         marker.unlink(missing_ok=True)
