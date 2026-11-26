@@ -83,7 +83,7 @@ AUTHOR_UID=980
 DEPLOY_UID=986
 
 def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas,
-                                  acknowledge_terminal=None, _uid=_pid_uid):
+                                  acknowledge_terminal=None, root_projection=None, _uid=_pid_uid):
     """Optional dispatcher for the already configured authorizer socket."""
     import os
     if os.getuid()!=AUTHOR_UID or os.geteuid()!=AUTHOR_UID:
@@ -95,16 +95,24 @@ def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas
         raise ValueError('unknown protected authorizer peer')
     peer.settimeout(4)
     with peer.makefile('rb') as stream:
+        if root_projection is not None:
+            from io import BytesIO
+            raw=stream.readline(MAX+1)
+            response=root_projection(raw,stream)
+            if response is not None:
+                peer.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
+                return response
+            stream=BytesIO(raw)
         response=verify_and_publish_root_peer(peer,stream,read_exact_pending=read_exact_pending,
                 finish_cas=finish_cas,acknowledge_terminal=acknowledge_terminal,peer_uid=_uid)
     peer.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
     return response
 
-def _credentialed_response(peer, *, expected_uid):
+def _credentialed_response(peer, *, expected_uid, limit=512):
     """Verify the process sending bytes, not systemd's listen-socket creator."""
     chunks=bytearray()
-    while len(chunks)<=512:
-        raw, ancillary, flags, _ = peer.recvmsg(513-len(chunks),socket.CMSG_SPACE(struct.calcsize('3i')))
+    while len(chunks)<=limit:
+        raw, ancillary, flags, _ = peer.recvmsg(limit+1-len(chunks),socket.CMSG_SPACE(struct.calcsize('3i')))
         stamps=[struct.unpack('3i',data) for level,kind,data in ancillary
                 if level==socket.SOL_SOCKET and kind==socket.SCM_CREDENTIALS
                 and len(data)==struct.calcsize('3i')]
@@ -113,7 +121,7 @@ def _credentialed_response(peer, *, expected_uid):
             raise ValueError('unverified configured authorizer response sender')
         chunks.extend(raw)
         if b'\n' in chunks:
-            if len(chunks)>512 or chunks.count(b'\n')!=1 or not chunks.endswith(b'\n'):
+            if len(chunks)>limit or chunks.count(b'\n')!=1 or not chunks.endswith(b'\n'):
                 break
             return bytes(chunks)
     raise ValueError('invalid configured authorizer response frame')

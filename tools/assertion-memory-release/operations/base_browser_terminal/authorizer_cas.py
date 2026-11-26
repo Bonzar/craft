@@ -93,3 +93,21 @@ def acknowledge(*,expected_receipt):
     if os.getuid()!=AUTHORIZER_UID or os.geteuid()!=AUTHORIZER_UID:
         raise ValueError('wrong protected authorizer identity')
     return _write(DIRECTORY,AUTHORIZER_UID,None,expected_receipt,ack_identical=True)
+
+
+def read_owned_record():
+    """Nonmutating exact probe of the existing authorizer-owned state."""
+    if os.getuid()!=AUTHORIZER_UID or os.geteuid()!=AUTHORIZER_UID:
+        raise ValueError('wrong protected authorizer identity')
+    path=DIRECTORY
+    if path.resolve(strict=True)!=path:
+        raise ValueError('noncanonical authorizer state directory')
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        info=os.fstat(fd)
+        if (info.st_uid!=AUTHORIZER_UID or stat.S_IMODE(info.st_mode)!=0o700
+                or not os.path.samestat(info,path.lstat())):
+            raise ValueError('untrusted authorizer state directory')
+        return _current(fd,AUTHORIZER_UID)
+    finally:
+        os.close(fd)
