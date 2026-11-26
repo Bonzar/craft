@@ -11,6 +11,7 @@
   const controlFeedback=panel.querySelector('#queue-processing-feedback');
   const sessionsPanel=panel.querySelector('#queue-session-policy');
   const sessionOptions=panel.querySelector('#queue-session-options');
+  const sessionHint=panel.querySelector('#queue-session-hint');
   const sessionFeedback=panel.querySelector('#queue-session-feedback');
   const sessionSave=panel.querySelector('#queue-session-save');
   const itemFeedback=panel.querySelector('#queue-item-feedback');
@@ -40,7 +41,7 @@
     previewObserver.observe(target);
   }
   const hold={global_pause:'Глобальная пауза',session_excluded:'Сессия не выбрана для автообработки',incomplete_source:'Ожидает полного источника'};
-  let sessionsState, sessionsDraft=new Set(), sessionsBusy=false, sessionsProbe=false, nativeProbeTried=false;
+  let sessionsState, policyDraft, sessionsDraft=new Set(), sessionsBusy=false, sessionsProbe=false, nativeProbeTried=false;
   let controlsReady=false, queueStage;
   const names={source:'Реплики',maintenance:'Связи и пересчёт',interactive:'Вопросы'};
   const ordered=['interactive','source','maintenance'];
@@ -225,8 +226,81 @@
        !value.sessions.every(x=>x&&typeof x.id==='string'&&Number.isSafeInteger(x.queued)&&x.queued>=0&&typeof x.eligible==='boolean'))throw Error();
     return value;
   }
+  const policyPrepare={format:'policy-v1'};
+  function parsePolicy(value){
+    const p=value?.policy;
+    parseSessions({...value,selected_session_ids:[]});
+    const ids=x=>Array.isArray(x)&&x.length<=50&&x.every(id=>typeof id==='string')&&new Set(x).size===x.length;
+    const date=x=>x===null || (typeof x==='string'&&/^\d{4}-\d{2}-\d{2}T.*(?:Z|\+00:00)$/.test(x)&&Number.isFinite(Date.parse(x)));
+    if(!p||!['all','include'].includes(p.mode)||!ids(p.included_session_ids)||!ids(p.excluded_session_ids)||
+       (p.mode==='all'&&p.included_session_ids.length)||p.included_session_ids.some(x=>p.excluded_session_ids.includes(x))||
+       !date(p.added_from)||!date(p.added_through))throw Error();
+    return value;
+  }
+  function samePolicy(){
+    const original=sessionsState?.policy;
+    return original&&['mode','added_from','added_through'].every(k=>original[k]===policyDraft[k])&&
+      ['included_session_ids','excluded_session_ids'].every(k=>original[k].length===policyDraft[k].length&&original[k].every(id=>policyDraft[k].includes(id)));
+  }
+  function drawPolicy(){
+    const p=policyDraft;
+    const summary=element('div','','queue-policy-fields');
+    const modeLabel=element('label','Обрабатывать');
+    const mode=element('select');mode.value=p.mode;mode.disabled=sessionsBusy;
+    for(const [value,label] of [['all','Все сессии, кроме исключённых'],['include','Только выбранные сессии']]){
+      const option=element('option',label);option.value=value;mode.append(option);
+    }
+    mode.value=p.mode;
+    mode.addEventListener('change',()=>{
+      p.mode=mode.value;
+      if(p.mode==='all')p.included_session_ids=[];
+      drawPolicy();
+    });
+    modeLabel.append(mode);summary.append(modeLabel);
+    for(const [key,label,time] of [['added_from','Дата поступления с (UTC)','T00:00:00Z'],
+                                  ['added_through','Дата поступления по (UTC)','T23:59:59.999999Z']]){
+      const labelNode=element('label',label);
+      const date=element('input');date.type='date';date.value=p[key]?.slice(0,10)??'';date.disabled=sessionsBusy;
+      date.addEventListener('change',()=>{
+        p[key]=date.value?date.value+time:null;
+        sessionSave.disabled=sessionsBusy||samePolicy()||invalidRange();
+        if(invalidRange())sessionFeedback.textContent='Конечная дата должна быть не раньше начальной.';
+        else sessionFeedback.textContent='';
+      });
+      labelNode.append(date);summary.append(labelNode);
+    }
+    const listMode=p.mode==='all'?'excluded_session_ids':'included_session_ids';
+    const chosen=new Set(p[listMode]), present=new Set();
+    const rows=[...sessionsState.sessions];
+    for(const row of rows)present.add(row.id);
+    for(const id of chosen)if(!present.has(id))rows.push({id,queued:0,eligible:false});
+    sessionOptions.replaceChildren(summary,element('p',p.mode==='all'?'Не обрабатывать отмеченные сессии.':'Обрабатывать только отмеченные сессии.'));
+    for(const item of rows){
+      const row=element('label','','queue-session-choice');
+      const box=element('input');box.type='checkbox';box.checked=chosen.has(item.id);box.disabled=sessionsBusy||(!item.eligible&&!box.checked);
+      box.addEventListener('change',()=>{
+        const set=new Set(p[listMode]);
+        if(box.checked&&set.size>=50){
+          box.checked=false;sessionFeedback.textContent='Можно указать не больше 50 сессий.';return;
+        }
+        if(box.checked){
+          set.add(item.id);
+          if(p.mode==='include')p.excluded_session_ids=p.excluded_session_ids.filter(id=>id!==item.id);
+        }else set.delete(item.id);
+        p[listMode]=[...set];
+        sessionSave.disabled=sessionsBusy||samePolicy()||invalidRange();
+      });
+      row.append(box,element('span',item.id+' · задач: '+item.queued));
+      sessionOptions.append(row);
+    }
+    if(!rows.length)sessionOptions.append(element('p','Сессий с задачами пока нет.'));
+    sessionSave.disabled=sessionsBusy||samePolicy()||invalidRange();
+  }
+  const invalidRange=()=>Boolean(policyDraft?.added_from&&policyDraft.added_through&&
+    Date.parse(policyDraft.added_from)>Date.parse(policyDraft.added_through));
   function drawSessions(){
     if(!sessionsPanel)return;
+    if(policyDraft)return drawPolicy();
     const rows=[...(sessionsState?.sessions??[])];
     const present=new Set(rows.map(x=>x.id));
     for(const id of sessionsDraft)if(!present.has(id))rows.push({id,queued:0,eligible:false});
@@ -248,18 +322,23 @@
     if(!rows.length)sessionOptions.append(element('p','Сессий с задачами пока нет.'));
     sessionSave.disabled=sessionsBusy||!sessionsState||sameSessions();
   }
-  const sameSessions=()=>sessionsState?.selected_session_ids.length===sessionsDraft.size&&
+  const sameSessions=()=>policyDraft?samePolicy():sessionsState?.selected_session_ids.length===sessionsDraft.size&&
     sessionsState.selected_session_ids.every(x=>sessionsDraft.has(x));
   function useSessions(value){
-    sessionsState=parseSessions(value);
-    sessionsDraft=new Set(value.selected_session_ids);
+    sessionsState=value?.policy?parsePolicy(value):parseSessions(value);
+    policyDraft=value?.policy?{...value.policy,included_session_ids:[...value.policy.included_session_ids],
+      excluded_session_ids:[...value.policy.excluded_session_ids]}:null;
+    sessionsDraft=new Set(value.selected_session_ids??[]);
+    if(sessionHint)sessionHint.textContent=policyDraft
+      ?'Эти настройки определяют, какие новые задачи запускаются автоматически. Это не фильтр списка на экране. Даты включительны, в UTC.'
+      :'Эта настройка меняет автообработку, а не только список на экране. Пустой выбор останавливает автоматический запуск новых задач реплик.';
     drawSessions();
   }
-  async function sessionRequest(path,method,body,token){
+  async function sessionRequest(path,method,body,token,allowLegacy=false){
     const response=await fetch(path,{method,credentials:'same-origin',redirect:'error',cache:'no-store',
       headers:{accept:'application/json','content-type':'application/json',...(token?{'x-csrf-token':token}:{})},
       body:JSON.stringify(body)});
-    if(response.status===409)return null;
+    if(response.status===409||allowLegacy&&[400,404].includes(response.status))return null;
     if(!response.ok||!response.headers.get('content-type')?.includes('application/json'))throw Error();
     return response.json();
   }
@@ -268,29 +347,35 @@
     sessionsProbe=true;
     const current=generation;
     try{
-      const value=await sessionRequest(sessionUrl+'/prepare','POST',{});
+      const proposed=advertised?await sessionRequest(sessionUrl+'/prepare','POST',policyPrepare,undefined,true):null;
+      if(current!==generation||!panel.open)return;
+      const value=proposed??await sessionRequest(sessionUrl+'/prepare','POST',{});
       if(current!==generation||!panel.open)return;
       useSessions(value);sessionsPanel.hidden=false;
       if(!controlsReady){controlsReady=true;void refresh();}
     }catch{if(advertised&&current===generation&&panel.open){sessionsPanel.hidden=false;sessionFeedback.textContent='Настройка сессий недоступна. Очередь не изменена.';}}
     finally{if(current===generation)sessionsProbe=false;}
   }
-  sessionsPanel?.addEventListener('toggle',()=>{if(sessionsPanel.open&&sameSessions())void loadSessions();});
+  sessionsPanel?.addEventListener('toggle',()=>{if(sessionsPanel.open&&sameSessions())void loadSessions(controlsReady);});
   sessionSave?.addEventListener('click',async()=>{
-    if(sessionsBusy||!sessionsState||sameSessions())return;
-    const current=generation,before=sessionsState,selection=[...sessionsDraft];sessionsBusy=true;drawSessions();
-    sessionFeedback.textContent='Сохраняем выбор…';
+    if(sessionsBusy||!sessionsState||sameSessions()||invalidRange())return;
+    const current=generation,before=sessionsState;
+    const command=policyDraft?{policy:{...policyDraft}}:{selected_session_ids:[...sessionsDraft]};
+    const prepareBody=policyDraft?policyPrepare:{};
+    const parse=policyDraft?parsePolicy:parseSessions;
+    sessionsBusy=true;drawSessions();
+    sessionFeedback.textContent='Сохраняем настройку…';
     try{
-      const proof=parseSessions(await sessionRequest(sessionUrl+'/prepare','POST',{}));
+      const proof=parse(await sessionRequest(sessionUrl+'/prepare','POST',prepareBody));
       if(current!==generation||!panel.open)return;
       if(proof.revision!==before.revision){
         useSessions(proof);sessionFeedback.textContent='Выбор уже изменился. Проверьте новый список и выберите заново.';return;
       }
       if(typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
-      const done=await sessionRequest(sessionUrl,'PUT',{stage:queueStage,selected_session_ids:selection,expected_revision:before.revision},proof.csrf_token);
+      const done=await sessionRequest(sessionUrl,'PUT',{stage:queueStage,...command,expected_revision:before.revision},proof.csrf_token);
       if(current!==generation||!panel.open)return;
       if(!done){
-        const refreshed=await sessionRequest(sessionUrl+'/prepare','POST',{});
+        const refreshed=await sessionRequest(sessionUrl+'/prepare','POST',prepareBody);
         if(current!==generation||!panel.open)return;
         useSessions(refreshed);
         sessionFeedback.textContent='Выбор уже изменился. Проверьте новый список и выберите заново.';return;
@@ -452,7 +537,7 @@
     if(panel.open)return;
     panel.showModal();
     offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
-    sessionsState=null;sessionsDraft=new Set();sessionsBusy=false;sessionsProbe=false;nativeProbeTried=false;controlsReady=false;
+    sessionsState=null;policyDraft=null;sessionsDraft=new Set();sessionsBusy=false;sessionsProbe=false;nativeProbeTried=false;controlsReady=false;
     if(itemFeedback)itemFeedback.textContent='';
     if(sessionsPanel){sessionsPanel.hidden=true;sessionsPanel.open=false;sessionFeedback.textContent='';}
     status.textContent='Подключаемся…';lastSignal=0;

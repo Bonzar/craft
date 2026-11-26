@@ -24,6 +24,8 @@ class StandalonePause(fixture.OriginTest):
         origin='https://'+host
         state=dict(stage=lane,paused=False,revision='a'*32)
         sessions=dict(stage=lane,revision='d'*32,selected_session_ids=[],sessions=[{'id':'synthetic','queued':1,'eligible':True}])
+        processing=dict(stage=lane,revision='d'*32,sessions=sessions['sessions'],
+            policy=dict(mode='all',included_session_ids=[],excluded_session_ids=[],added_from=None,added_through=None))
         calls=[]
         now=[1770000000]
         ready=[True]
@@ -47,6 +49,7 @@ class StandalonePause(fixture.OriginTest):
                         'revision':state['revision'],'can_change':ready[0]}})
                 assert self.headers['Authorization']=='Bearer '+read
                 if self.path=='/api/v1/queue-sessions':return self.reply(200,sessions)
+                if self.path=='/api/v1/queue-processing-policy':return self.reply(200,processing)
                 assert self.path=='/api/v1/queue-pause'
                 self.reply(200,state)
 
@@ -73,6 +76,13 @@ class StandalonePause(fixture.OriginTest):
                     assert args['item_id']=='job' and args['queue_id']=='source'
                     if args['expected_revision']!='1'*32:return self.reply(409,{})
                     return self.reply(200,{'stage':lane,'queue_id':'source','item_id':'job','removed':True,'effect':'source_and_queue'})
+                if self.path=='/api/v1/queue-processing-policy':
+                    assert set(args)=={'policy','expected_revision'}
+                    if args['expected_revision']!=processing['revision']:return self.reply(409,{})
+                    p=args['policy'].copy()
+                    p['added_through']='2026-11-26T23:59:59.999999+00:00'
+                    processing.update(revision='f'*32,policy=p)
+                    return self.reply(200,processing)
                 if self.path=='/api/v1/queue-sessions':
                     assert set(args)=={'selected_session_ids','expected_revision'}
                     if args['expected_revision']!=sessions['revision']:return self.reply(409,{})
@@ -120,6 +130,25 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(request('POST',path+'/prepare',{},extra={'Sec-Fetch-Site':'cross-site'})[0],403)
         self.assertEqual(request('POST',path+'/prepare',{},proof=None)[0],403)
         self.assertEqual(calls,[])
+        policy_path='/api/v1/processing/sessions'
+        code,old_session=request('POST',policy_path+'/prepare',{})
+        self.assertEqual(code,200)
+        code,prepared=request('POST',policy_path+'/prepare',{'format':'policy-v1'})
+        self.assertEqual(code,200)
+        self.assertEqual(prepared['policy']['mode'],'all')
+        self.assertNotEqual(old_session['csrf_token'],prepared['csrf_token'])
+        command=dict(stage=lane,expected_revision=prepared['revision'],policy=dict(
+            mode='all',included_session_ids=[],excluded_session_ids=['synthetic'],
+            added_from=None,added_through='2026-11-26T23:59:59.999999Z'))
+        self.assertEqual(request('PUT',policy_path,command,extra={'X-CSRF-Token':old_session['csrf_token']})[0],403)
+        token={'X-CSRF-Token':prepared['csrf_token']}
+        self.assertEqual(request('PUT',policy_path,{**command,'stage':'prod' if lane=='test' else 'test'},extra=token)[0],409)
+        code,reply=request('PUT',policy_path,command,extra=token)
+        self.assertEqual(code,200)
+        self.assertEqual(reply['policy']['excluded_session_ids'],['synthetic'])
+        self.assertEqual(reply['policy']['added_through'],'2026-11-26T23:59:59.999999+00:00')
+        self.assertEqual(request('PUT',policy_path,command,extra=token)[0],409)
+        calls.clear()
         status_path='/api/v1/capabilities?queue_status=1'
         for base_ready,marker in [(True,pause_edge),(False,pause_edge),(True,None)]:
             ready[0]=base_ready
