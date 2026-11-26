@@ -73,6 +73,36 @@ def smoke(stage, runtime, port, pair, key):
 
 
 
+def retention_reader_ready(stage, visual, runtime, port, key):
+    """Exact active process must itself expose the new current-only contract.
+
+    Older archives are still restorable. Their lack of this authenticated
+    harmless endpoint disables sweeping, not activation/rollback.
+    """
+    import visual_policy
+    static_link=os.readlink(visual/'current').removeprefix(str(visual)+'/')
+    runtime_link=os.readlink(runtime/'current')
+    check=joint.pair({'static':static_link,'runtime':runtime_link},visual,runtime,
+                    lambda p:visual_policy.validate(p,allow_prepared=True))
+    static=Path(check['static']).name
+    entry=runtime/check['runtime']/'asset-origin.py'
+    with os.fdopen(os.open(entry,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as source:
+        st=os.fstat(source.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1:
+            return False
+        raw=source.read(64_001)
+    if len(raw)>64_000:
+        return False
+    expect={'stage':stage,'runtime_entry_sha':sha256(raw).hexdigest(),'static_digest':static,'current_only':True}
+    conn=HTTPConnection('127.0.0.1',port,timeout=3)
+    try:
+        conn.request('GET','/__visual-retention-health',headers={'Authorization':'Bearer '+key})
+        response=conn.getresponse()
+        return response.status==200 and response.headers.get_content_type()=='application/json' and json.loads(response.read(1025))==expect
+    finally:
+        conn.close()
+
+
 def prod_legacy_health(visual, key):
     """Private rollback-only proof; initial package must still pass modern smoke."""
     unit='assertion-memory-visual-prod.service'
@@ -150,12 +180,16 @@ def receive(stage, command, stream):
             raise ValueError('No independent legacy PROD source health authority')
         bootstrap=runtime_bootstrap.read_policy(legacy,prod_legacy_health(visual,legacy_key),
                  source=Path('/etc/assertion-memory-visual/prod/asset-origin.py'))
+    def ready():
+        return retention_reader_ready(stage,visual,runtime,port,key)
     def activate(expected, archive, runtime_sha, files):
         pair=joint.activate_verified(visual,runtime,expected,archive,runtime_sha,files,
                                      restart=lambda:restart(policy/helper),
-                                     smoke=lambda state:smoke(stage,runtime,port,state,key),bootstrap=bootstrap)
+                                     smoke=lambda state:smoke(stage,runtime,port,state,key),bootstrap=bootstrap,
+                                     retention_ready=ready)
         static=Path(pair['static']).name
         return {'environment':stage,'revision':expected['revision'],'archive_sha256':expected['static_sha'],
                 'release':static,'runtime_sha256':runtime_sha}
     return framing.receive(stage,command,stream,signers=policy/'allowed-signers',
-                           private_workspace=runtime,activate=activate)
+                           private_workspace=runtime,activate=activate,
+                           pre_spool=lambda:joint.before_packed_spool(visual,ready))

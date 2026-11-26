@@ -32,7 +32,7 @@ def length(source, maximum, size=10):
     return int(raw)
 
 
-def receive(stage, command, source, *, signers, private_workspace, activate):
+def receive(stage, command, source, *, signers, private_workspace, activate, pre_spool=None):
     """Validate both payloads completely, then call the preinstalled scoped transaction."""
     m=COMMAND.fullmatch(command)
     if not m or stage!=m[1] or not callable(activate):
@@ -52,6 +52,8 @@ def receive(stage, command, source, *, signers, private_workspace, activate):
     runtime_sha=sha256(runtime).hexdigest()
     files=verify_signed(runtime,expected,runtime_sha,proof,signers,stage=stage)
     n=length(source,MAX_STATIC)
+    if pre_spool is not None:
+        pre_spool()
     with TemporaryDirectory(dir=private_workspace,prefix='.joint-visual-') as d:
         archive=Path(d)/'visual.tar'
         digest=sha256()

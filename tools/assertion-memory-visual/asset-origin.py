@@ -622,7 +622,11 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 match=re.fullmatch(r'/visual/([a-f0-9]{64})/(.*)',path)
                 if match:
                     release,name=match[1],match[2] or 'index.html'
-                    if release!=current_release(root) or not ITEM.fullmatch(name):
+                    if not ITEM.fullmatch(name):
+                        return self.respond(404)
+                    if release!=current_release(root):
+                        if name=='index.html':
+                            return self.respond(307,headers={**safe,'Location':'/visual'})
                         return self.respond(404)
                     directory,lookup=manifest(root,release)
                     if name not in lookup:
@@ -854,6 +858,19 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 return self.standalone(raw[1])
             if self.headers.get_all(STANDALONE_AUTH,[]) or self.headers.get_all(PAUSE_OWNER_AUTH,[]):
                 return self.respond(421)
+            if runtime_health is not None and len(raw)==3 and raw[1]=='/__visual-retention-health':
+                if self.command!='GET' or self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length'):
+                    return self.respond(404)
+                header=self.headers.get_all('Authorization',[])
+                if len(header)!=1 or not hmac.compare_digest(header[0], 'Bearer '+runtime_health[1]):
+                    return self.respond(401)
+                try:
+                    current=current_release(root)
+                    manifest(root,current)
+                    return self.respond(200,json.dumps({'stage':environment,'runtime_entry_sha':runtime_health[0],
+                        'static_digest':current,'current_only':True},separators=(',',':')).encode(),'application/json')
+                except (ValueError,OSError):
+                    return self.respond(503)
             if runtime_health is not None and len(raw)==3 and raw[1]=='/__visual-runtime-health':
                 if self.command!='GET' or self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length'):
                     return self.respond(404)
@@ -914,11 +931,15 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                         or not isinstance(release, str) or not HEX.fullmatch(release)
                         or not isinstance(name, str) or not ITEM.fullmatch(name)):
                     return self.respond(400)
+                # Even the authenticated legacy asset relay is current-only.
+                # It returns a typed miss; only owner HTML navigation redirects.
+                if release != current_release(root):
+                    return self.respond(404)
                 directory, files = manifest(root, release)
                 if name not in files:
                     return self.respond(404)
                 asset = read_small(directory / name, LIMIT)
-                if digest(asset) != files[name]:
+                if digest(asset) != files[name] or release != current_release(root):
                     return self.respond(404)
                 return self.respond(200, asset, MIME[Path(name).suffix])
             except (ValueError, OSError, RecursionError):
