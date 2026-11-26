@@ -27,14 +27,16 @@ INSTRUCTIONS = ('Shared thought memory. Source interpretations and composite exp
     'memory_query centrally constructs and saves a missing answer, then returns it; an existing suitable '
     'thought may answer directly. Preserve conditions, exceptions, uncertainty and attribution. '
     'A source report is not independent confirmation of present reality. Memory paraphrases are derivative. '
-    'Check answer_accepted, answer_error, knowledge_limit, pending_count, refresh_required and transport_limit separately. '
+    'Use query_coverage to distinguish requested-evidence limits, global transport and answer pagination. '
+    'A supported result needs no generic incompleteness disclaimer. Mention only a gap that changes the answer. '
+    'Check answer_accepted, answer_error, knowledge_limit, refresh_required and transport_limit separately. '
     'If answer_error is present, report that completion failure and do not use the rejected draft. '
     'A parallel_alternative is independently checked against its grounds, but compatibility with '
     'another answer remains unresolved; show that limit rather than treating completion order as agreement. '
     'Follow all answer_continuations before using an incomplete answer. Exact thought versions, bases and '
     'model run traces are technical provenance. Do not reconstruct the entire graph locally or edit SQLite. '
     'Use memory_source for pinned text, bases and origin; memory_history for versions. '
-    'A partial queue or unknown delivery frontier limits completeness, not the meaning of already stored text.')
+    'Global queue or transport diagnostics establish neither question relevance nor database-wide exhaustiveness.')
 
 
 class ThoughtService(MemoryService):

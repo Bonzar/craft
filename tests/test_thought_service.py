@@ -190,6 +190,9 @@ class ThoughtServiceTest(unittest.TestCase):
             result=service.query('What is required to open the gate?')
             self.assertEqual(result['thought']['bases'][0]['thought_id'],base.id)
             self.assertTrue(result['answer_accepted'])
+            self.assertEqual(result['processing_state'], 'pending')  # Its newly queued maintenance.
+            self.assertEqual(result['completeness'], 'available_evidence')
+            self.assertEqual(result['query_coverage']['evidence'], 'supported')
             with store.transaction() as db:
                 calls=db.execute('SELECT bindings,status FROM memory_thought_model_calls').fetchall()
             self.assertEqual(len(calls),4)
