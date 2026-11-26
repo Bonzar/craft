@@ -47,7 +47,8 @@ def make_owner_verifier(secret, owner, *, lane='test', path=PATH, clock=time.tim
     from .queue_processing_policy import PATH as POLICY
     from .database_clear import PATH as CLEAR
     from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH
-    if (path not in (PATH,SESSIONS,REMOVE,PREVIEW_PATH,POLICY,CLEAR) or lane not in ('test','prod') or type(secret) is not bytes or len(secret) != 32
+    from .graph_node_removal import PATH as GRAPH_REMOVE, PREVIEW_PATH as GRAPH_PREVIEW
+    if (path not in (PATH,SESSIONS,REMOVE,PREVIEW_PATH,POLICY,CLEAR,GRAPH_REMOVE,GRAPH_PREVIEW) or lane not in ('test','prod') or type(secret) is not bytes or len(secret) != 32
             or type(owner) is not str or not HEX.fullmatch(owner)):
         raise ValueError('Invalid TEST owner proof authority')
 

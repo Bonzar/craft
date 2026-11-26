@@ -18,6 +18,11 @@ from prototypes.assertion_memory.queue_processing_policy import PATH as POLICY
 from prototypes.assertion_memory.queue_session_control import PATH as SESSIONS
 
 from .common import APIError
+from prototypes.assertion_memory.graph_node_removal import PATH as GRAPH_REMOVE, PREVIEW_PATH as GRAPH_PREVIEW
+
+_NODE_CONFLICTS={'dependency_proof_unavailable','dependent_thoughts','thought_work_in_progress',
+                 'thought_changed_or_missing','thought_not_current_graph_node','node_confirmation_stale','graph_change_unconfirmed'}
+
 
 _ROUTES = {
     'pause_prepare': ('GET', PAUSE, frozenset()),
@@ -37,6 +42,7 @@ _RELEASE = re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-
 
 class ProdOwnerBridge:
     stage = 'prod'
+    port = 8903
     def __init__(self, queue_key, read_key, write_key, owner_digest, proof_key, *,
                  http_connection=HTTPConnection, clock=time.time):
         keys=(queue_key,read_key,write_key,owner_digest)
@@ -57,9 +63,16 @@ class ProdOwnerBridge:
             headers['X-Memory-Queue-Format']='batch-cards-v1'
         conn=None
         try:
-            conn=self._connection('127.0.0.1',8903,timeout=timeout)
+            conn=self._connection('127.0.0.1',self.port,timeout=timeout)
             conn.request(method,path,body=body,headers=headers)
             rsp=conn.getresponse()
+            if rsp.status==409 and path in (GRAPH_REMOVE,GRAPH_PREVIEW) and rsp.headers.get_content_type()=='application/json':
+                raw=rsp.read(1025)
+                value=json.loads(raw,object_pairs_hook=unique) if len(raw)<=1024 else {}
+                code=value.get('error') if type(value) is dict else None
+                if code in _NODE_CONFLICTS:
+                    from prototypes.assertion_memory.graph_node_removal import NodeConflict
+                    raise NodeConflict(code)
             if rsp.status==409:
                 raise processing_control.Conflict('Base owner state changed')
             if (rsp.status!=200 or rsp.headers.get_content_type()!='application/json'
@@ -69,7 +82,7 @@ class ProdOwnerBridge:
             if len(raw)>limit:
                 raise ValueError()
             result=json.loads(raw,object_pairs_hook=unique)
-            if type(result) is not dict or result.get('stage')!='prod':
+            if type(result) is not dict or result.get('stage')!=self.stage:
                 raise ValueError()
             return result
         except (OSError, HTTPException, ValueError) as error:
@@ -138,6 +151,41 @@ class ProdOwnerBridge:
                 or type(control['paused']) is not bool or type(control['can_change']) is not bool
                 or type(control['revision']) is not str or not processing_control.REVISION.fullmatch(control['revision'])):
             raise APIError('queue_unavailable','Invalid Base queue projection',503)
+        return value
+
+
+class GraphNodeOwnerBridge(ProdOwnerBridge):
+    """Same pinned private request envelope in both lanes; no public authority."""
+    def __init__(self, queue_key, read_key, write_key, owner_digest, proof_key, *, stage, **kwargs):
+        if stage not in ('test','prod'):
+            raise ValueError('An explicit Graph-to-Base lane is required')
+        super().__init__(queue_key,read_key,write_key,owner_digest,proof_key,**kwargs)
+        self.stage,self.port=stage,8893 if stage=='test' else 8903
+
+    def perform(self, action, args):
+        from prototypes.assertion_memory.graph_node_removal import check_request
+        paths={'graph_node_preview':GRAPH_PREVIEW,'graph_node_remove':GRAPH_REMOVE}
+        if (action not in paths or type(args) is not dict
+                or set(args)!={'thought_id','thought_version','expected_revision'}):
+            raise ValueError('Unsupported private graph action')
+        check_request(args['thought_id'],args['thought_version'])
+        revision=args['expected_revision']
+        if (type(revision) is not str or not processing_control.REVISION.fullmatch(revision)
+                or action=='graph_node_preview' and revision!='0'*32):
+            raise ValueError('Invalid node confirmation')
+        path=paths[action]
+        body=json.dumps(args,separators=(',',':'),ensure_ascii=True).encode('ascii')
+        now=int(self._clock())
+        proof=ProvenOwner(self._owner,revision,now,now+TTL,secrets.token_hex(16),self.stage,path)
+        value=self._request('PUT',path,self._write,body=body,proof=proof,limit=2048,timeout=8)
+        expected={'stage','thought_id','thought_version','revision','scope','source_revision'}
+        if action=='graph_node_remove':
+            expected.add('removed')
+        if (set(value)!=expected or value['thought_id']!=args['thought_id'] or value['thought_version']!=args['thought_version']
+                or type(value['revision']) is not str or not processing_control.REVISION.fullmatch(value['revision'])
+                or any(type(value[k]) is not str or not HEX.fullmatch(value[k]) for k in ('scope','source_revision'))
+                or action=='graph_node_remove' and (value['removed'] is not True or value['revision']!=revision)):
+            raise APIError('queue_unavailable','Invalid Base graph node receipt',503)
         return value
 
 
