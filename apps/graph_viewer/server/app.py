@@ -26,18 +26,26 @@ class Boundary(BaseHTTPMiddleware):
             path=request.url.path
             check_host(request)
             check_origin(request)
+            browser=getattr(request.app.state,'browser_owner_api',None)
+            if browser is not None:
+                from .browser_owner_api import EXACT,require_transport
+                require_transport(request)
+                if not browser.allows(request):
+                    raise APIError('not_found','Unknown API resource',404)
+                if path=='/api/v1/session' and request.method=='POST':
+                    check_origin(request,required=True)
             public=path=='/api/v1/health' and request.method=='GET' or path=='/api/v1/session' and request.method in {'GET','POST'}
             # The direct stream has its own strictly scoped origin, method and
             # one-use ticket validation; no other path accepts that authority.
             if path.startswith('/api/') and not public and path!=DIRECT_PATH:
                 csrf=request.app.state.owner.session(request)
-                if csrf is None and not read_service_authorized(request) and not clear_read_authorized(request):
+                if csrf is None and (browser is not None or (not read_service_authorized(request) and not clear_read_authorized(request))):
                     raise APIError('unauthorized','Owner session required',401)
                 if request.method not in {'GET','HEAD','OPTIONS'}:
                     if csrf is None:
                         raise APIError('unauthorized','Owner session required',401)
                     check_origin(request,required=True)
-                    if request.headers.get('x-csrf-token')!=csrf:
+                    if (browser is None or path not in EXACT) and request.headers.getlist('x-csrf-token')!=[csrf]:
                         raise APIError('csrf_denied','Valid CSRF token required',403)
             graph_read=(request.method in {'GET','HEAD'} and path.startswith('/api/v1/')
                         and path.split('/')[3] in {'graph','nodes','edges','sources','overviews','search','bookmarks','capabilities','events'})
@@ -268,6 +276,11 @@ async def capabilities(request):
         limit, offset = map(int,values)
         if not 1<=limit<=100 or offset>1_000_000:
             raise APIError('invalid_dashboard','Invalid queue status page')
+        browser=getattr(request.app.state,'browser_owner_api',None)
+        if browser is not None:
+            if not 1<=limit<=50:
+                raise APIError('invalid_dashboard','Invalid queue status page')
+            return await browser.snapshot(request,limit,offset)
         dashboard = request.app.state.queue_dashboard
         if dashboard is None:
             raise APIError('queue_unavailable','Queue status is not configured',503)
@@ -350,7 +363,7 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None):
     # The legacy Sites env binding is deliberately read-only. Mutation must be
     # installed by the standard owner-session web app at startup.
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
@@ -362,6 +375,9 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
         static_dir,state_dir,source_path,bridge_read_token_file,getattr(queue_dashboard,'config',None),
         getattr(source,'source_path',None),getattr(source,'path',None))
     browser_origin=validate_public_origin(public_origin)
+    if browser_owner_api is not None and (browser_origin is None or queue_control
+            or bridge_read_token_file or database_clear_read_token_file or database_clear_lane):
+        raise ValueError('Browser owner API requires explicit HTTPS and no legacy/private Graph authority')
     direct=(configure_test(browser_origin,test_direct_events_origin,synthetic_fixture,source_path)
             if test_direct_events_origin is not None else None)
     bridge_read_service=BridgeReadService(bridge_read_token_file)
@@ -401,10 +417,11 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
         import logging
         logging.getLogger(__name__).warning('request_failed route=%s error_type=%s',request.scope.get('route').path if request.scope.get('route') else 'unmatched',type(error).__name__)
         return error_response(APIError('service_unavailable','Requested data is temporarily unavailable',503))
-    routes=make_routes()
+    routes=make_routes(browser_owner_api)
     app=Starlette(routes=routes,lifespan=lifespan,exception_handlers={APIError:handle_error,Exception:unavailable},
                   middleware=[Middleware(Boundary),Middleware(GZipMiddleware,minimum_size=1500)])
     app.state.public_origin=browser_origin
+    app.state.browser_owner_api=browser_owner_api
     app.state.direct_events=direct
     app.state.allowed_proxy_hosts=validate_proxy_hosts(allowed_proxy_hosts)
     app.state.bridge_read_service=bridge_read_service
@@ -418,18 +435,21 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     return app
 
 
-def make_routes():
+def make_routes(browser_owner_api=None):
     prefix='/api/v1'
     routes=[Route(TICKET_PATH,issue_ticket,methods=['POST']),
             Route(DIRECT_PATH,direct_events,methods=['GET','OPTIONS']),
             Route(prefix+'/health',lambda request:JSONResponse({'ok':True})),
             Route(prefix+'/session',session,methods=['GET','POST','DELETE']),
             Route(prefix+'/capabilities',capabilities),Route(prefix+'/graph',graph_manifest),
-            Route(prefix+'/processing/pause',change_processing_pause,methods=['PUT']),
             Route(prefix+'/graph/{revision}/{kind}/{ordinal:int}/{action}',card),
             Route(prefix+'/graph/{revision}/{kind}/{ordinal:int}',card),
             Route(prefix+'/graph/{revision}/{name}',graph_file),
             Route(prefix+'/nodes/{id:path}/edges',stable_card('nodes','edges'))]
+    if browser_owner_api is not None:
+        routes.extend(browser_owner_api.routes())
+    else:
+        routes.append(Route(prefix+'/processing/pause',change_processing_pause,methods=['PUT']))
     routes.extend(Route(prefix+'/'+kind+'/{id:path}',stable_card(kind)) for kind in ['nodes','edges','sources','overviews'])
     routes.extend([Route(prefix+'/search',search_response),Route(prefix+'/events',events),
                    Route(prefix+'/bookmarks',bookmark),Route(prefix+'/bookmarks/{id}',bookmark,methods=['PUT','DELETE']),

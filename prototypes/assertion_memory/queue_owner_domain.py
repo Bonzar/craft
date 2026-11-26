@@ -17,7 +17,7 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
     expected=identity()
 
     def perform(action,args,authorize=None):
-        writing=action not in ('sessions_prepare','policy_prepare','clear_prepare')
+        writing=action not in ('sessions_prepare','policy_prepare','clear_prepare','pause_prepare')
         from . import database_clear
         with ExitStack() as leases:
             leases.enter_context(release_lease())
@@ -50,6 +50,14 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
                         from . import queue_processing_policy as policy
                         run=policy.describe if action=='policy_prepare' else policy.update
                         result=run(db,stage=stage,baseline=baseline,fresh_only=fresh_only,**args)
+                    elif action=='pause_prepare':
+                        from .processing_control import read_control
+                        paused,revision=read_control(db)
+                        result={'stage':stage,'paused':paused,'revision':revision}
+                    elif action=='pause_set':
+                        from .processing_control import set_control
+                        paused,revision=set_control(db,**args)
+                        result={'stage':stage,'paused':paused,'revision':revision}
                     elif action=='clear_prepare':
                         result=database_clear.describe(db,stage=stage,binding=[before,expected])
                     elif action=='clear_commit':
