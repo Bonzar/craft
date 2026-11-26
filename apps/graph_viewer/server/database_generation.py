@@ -31,3 +31,28 @@ def epoch_name(generation):
     if not isinstance(generation,tuple) or len(generation)!=3:
         raise ValueError('invalid graph cache epoch')
     return hashlib.sha256(json.dumps(generation).encode()).hexdigest()
+
+
+def clear_scope_binding(lane, source_path):
+    """Derive authority from the running user, canonical source and activated archive."""
+    import os
+    import pwd
+    from .queue_dashboard import SCOPES, _active_reader_release
+    if lane not in SCOPES:
+        raise ValueError('Graph clear requires a known lane')
+    service_user, canonical=SCOPES[lane]
+    if Path(source_path)!=canonical:
+        raise ValueError('Graph clear source is not the canonical lane database')
+
+    def verify(actual):
+        try:
+            if actual is None or Path(actual)!=canonical or canonical.resolve(strict=True)!=canonical:
+                return None
+            uid=pwd.getpwnam(service_user).pw_uid
+            if uid!=os.getuid() or uid!=os.geteuid():
+                return None
+            _active_reader_release(lane)
+            return lane
+        except (OSError,KeyError,ValueError):
+            return None
+    return verify

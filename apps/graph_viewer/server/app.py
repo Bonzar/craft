@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse,FileResponse,StreamingResponse,Resp
 from starlette.routing import Route
 from .auth import OwnerStore,COOKIE,check_origin,check_host,secure_transport,validate_public_origin,validate_proxy_hosts
 from .common import APIError,selector
-from .bridge_auth import BridgeReadService,read_service_authorized
+from .bridge_auth import BridgeReadService,DatabaseClearReadService,clear_read_authorized,read_service_authorized
 from .manager import GraphManager,manifest_url,parse_replay_cursor
 from .providers.canonical_thoughts import source_for_path
 from . import cards
@@ -31,7 +31,7 @@ class Boundary(BaseHTTPMiddleware):
             # one-use ticket validation; no other path accepts that authority.
             if path.startswith('/api/') and not public and path!=DIRECT_PATH:
                 csrf=request.app.state.owner.session(request)
-                if csrf is None and not read_service_authorized(request):
+                if csrf is None and not read_service_authorized(request) and not clear_read_authorized(request):
                     raise APIError('unauthorized','Owner session required',401)
                 if request.method not in {'GET','HEAD','OPTIONS'}:
                     if csrf is None:
@@ -231,14 +231,13 @@ async def events(request):
 async def capabilities(request):
     if 'database_clear_scope' in request.query_params:
         from prototypes.assertion_memory.database_clear import generation_scope
-        if list(request.query_params.multi_items())!=[('database_clear_scope','1')] or not read_service_authorized(request):
+        if not clear_read_authorized(request):
             raise APIError('not_found','Unknown capability request',404)
         manager=request.app.state.manager
-        dashboard=request.app.state.queue_dashboard
-        lane=getattr(dashboard,'stage',None)
+        verify=request.app.state.database_clear_binding
         path=getattr(manager.source,'source_path',getattr(manager.source,'path',None))
-        if (lane not in ('test','prod') or path is None or not getattr(dashboard,'db',None)
-                or path.resolve()!=dashboard.db.resolve() or not manager._poller or manager._poller.done()):
+        lane=verify(path) if verify is not None else None
+        if lane is None or not manager._poller or manager._poller.done():
             raise APIError('graph_clear_unavailable','Graph database reset fencing unavailable',503)
         generation=manager.sync_generation()
         if generation is None:
@@ -335,7 +334,7 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, test_direct_events_origin=None):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None):
     # The legacy Sites env binding is deliberately read-only. Mutation must be
     # installed by the standard owner-session web app at startup.
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
@@ -350,6 +349,22 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     direct=(configure_test(browser_origin,test_direct_events_origin,synthetic_fixture,source_path)
             if test_direct_events_origin is not None else None)
     bridge_read_service=BridgeReadService(bridge_read_token_file)
+    clear_read_service=None
+    clear_binding=None
+    if database_clear_lane is not None or database_clear_read_token_file is not None:
+        from .database_generation import clear_scope_binding
+        try:
+            if database_clear_read_token_file is None:
+                raise ValueError('Readiness credential missing')
+            validate_static_directory(static_dir,database_clear_read_token_file)
+            clear_binding=clear_scope_binding(database_clear_lane,source_path)
+            clear_read_service=DatabaseClearReadService(database_clear_read_token_file)
+            if clear_read_service._digest==bridge_read_service._digest:
+                raise ValueError('Readiness credential cannot double as general Graph read authority')
+        except (OSError,KeyError,ValueError):
+            import logging
+            logging.getLogger(__name__).warning('graph_database_clear_readiness_not_configured')
+            clear_binding=clear_read_service=None
     owner=OwnerStore(state_dir,password)
     manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model,owner_store=owner)
     @asynccontextmanager
@@ -377,6 +392,8 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     app.state.direct_events=direct
     app.state.allowed_proxy_hosts=validate_proxy_hosts(allowed_proxy_hosts)
     app.state.bridge_read_service=bridge_read_service
+    app.state.database_clear_read_service=clear_read_service
+    app.state.database_clear_binding=clear_binding
     app.state.synthetic_fixture=synthetic_fixture
     app.state.owner=owner; app.state.manager=manager
     app.state.queue_dashboard=queue_dashboard
