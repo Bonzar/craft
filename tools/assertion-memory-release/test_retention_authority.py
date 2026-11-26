@@ -2,6 +2,7 @@ from contextlib import contextmanager
 import fcntl
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -51,6 +52,21 @@ class AuthorityTest(unittest.TestCase):
         with self.assertRaises(a.Denied):
             a.check_mounts(clone+'92 91 7:7 / /srv/example/releases/retired/sub ro - ext4 /dev/y rw\n',
                           host,candidate,candidate,host[1],canonical_inode=lambda:True)
+
+    def test_rw_clone_cannot_expand_host_permissions_or_task_root(self):
+        host=('37',os.makedev(8,1),Path('/'),Path('/'))
+        candidate=Path('/srv/example/releases/retired')
+        clone='91 21 8:1 / / rw,nosuid - ext4 /dev/x rw\n'
+        a.check_mounts(clone,host,candidate,candidate,host[1],canonical_inode=lambda:True,
+                      host_options={'rw','nosuid'},same_observer_root=True)
+        for raw,root_ok,policy,probe in ((clone,False,{'rw'},lambda:True),
+                                        (clone,True,{'ro','nosuid'},lambda:True),
+                                        (clone,True,{'rw','nodev'},lambda:True),
+                                        (clone,True,{'rw'},lambda:False),
+                                        (clone.replace(' / rw', ' /relocated rw'),True,{'rw'},lambda:True)):
+            with self.assertRaises(a.Denied):
+                a.check_mounts(raw,host,candidate,candidate,host[1],canonical_inode=probe,
+                              host_options=policy,same_observer_root=root_ok)
 
     @contextmanager
     def fixture(self):
@@ -166,6 +182,22 @@ class AuthorityTest(unittest.TestCase):
             (task/'root').unlink()
             (task/'root').symlink_to(root)
             with self.assertRaises(OSError):
+                a.scan(retired,tracked,proc)
+            # Stock same-root writable namespace copy: actual candidate inode
+            # is the same and the host's canonical filesystem is writable.
+            (task/'root').unlink();(task/'root').symlink_to('/')
+            (task/'mountinfo').write_text(mount.replace('37 21 ','91 21 '))
+            a.scan(retired,tracked,proc)
+            # Same ns but a second task has a different effective root; a
+            # prior task's positive canonical result cannot cover that view.
+            second=task.parent/'2'
+            shutil.copytree(task,second,symlinks=True)
+            (second/'ns/mnt').unlink()
+            (second/'ns/mnt').symlink_to(task/'ns/mnt')
+            self.assertEqual(a.pair((second/'ns/mnt').stat()),a.pair((task/'ns/mnt').stat()))
+            (second/'root').unlink()
+            (second/'root').symlink_to(root)
+            with self.assertRaises(a.Denied):
                 a.scan(retired,tracked,proc)
 
     def test_base_generated_links_are_lexically_sealed_not_followed(self):

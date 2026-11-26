@@ -28,6 +28,7 @@ SIZE = 768
 PROFILE_SIZE = 16_384
 MAX_PROC_ARGS = 4*1024*1024
 PROD_GUARD = Path('/var/lib/assertion-base-prod-transition')
+MOUNT_RESTRICTIONS = frozenset({'nodev','noexec','nosuid','nosymfollow'})
 PIN_ROOTS = tuple(Path(p) for p in ('/etc/systemd/system','/etc/systemd/user',
              '/etc/assertion-release','/etc/assertion-memory-visual',
              '/opt/assertion-memory-prod-site-graph','/opt/assertion-memory-site-test-graph'))
@@ -228,7 +229,8 @@ def intersect(a,b):
     return a.is_relative_to(b) or b.is_relative_to(a)
 
 
-def check_mounts(raw, host_mount, physical, logical, device, *, canonical_inode=None):
+def check_mounts(raw, host_mount, physical, logical, device, *, canonical_inode=None,
+                 host_options=(), same_observer_root=None):
     for mount,options in mount_entries(raw):
         mid,dev,root,target=mount
         require(not target.is_relative_to(logical))
@@ -236,26 +238,32 @@ def check_mounts(raw, host_mount, physical, logical, device, *, canonical_inode=
             if mount==host_mount:
                 continue
             # Linux copies a mount into another namespace with a new local ID.
-            # Accept only a read-only copy at the exact same root and target,
-            # confirmed by the task's actual namespace view of the candidate.
-            # A relocated bind, writable alternate mount, hidden or foreign
-            # inode, and every submount under the candidate still deny.
+            # Recognize only the *same* canonical map and task-view inode,
+            # with no relaxation of permissions or relocation. Writable
+            # replicas require the observer canonically writable as well as
+            # identical task root inode; a read-only observer cannot vouch
+            # for RW replicas or chroot views.
+            ro='ro' in options and 'rw' not in options
+            rw=('rw' in options and 'ro' not in options and 'rw' in host_options
+                and 'ro' not in host_options and same_observer_root is True)
             require(mid!=host_mount[0] and mount[1:]==host_mount[1:]
-                    and 'ro' in options and 'rw' not in options
+                    and (ro or rw)
+                    and MOUNT_RESTRICTIONS.intersection(host_options)<=options
                     and canonical_inode is not None and canonical_inode() is True)
 
 
 def scan(candidate, tracked, proc=Path('/proc')):
     require(os.stat(proc/'self/ns/pid').st_ino == os.stat(proc/'1/ns/pid').st_ino)
-    physical_candidates = [m for m in mounts((proc/'self/mountinfo').read_text())
-                           if candidate.is_relative_to(m[3])]
+    physical_candidates=[(m,opts) for m,opts in mount_entries((proc/'self/mountinfo').read_text())
+                         if candidate.is_relative_to(m[3])]
     require(bool(physical_candidates))
-    mount = max(physical_candidates, key=lambda m: len(m[3].parts))
+    mount,host_options=max(physical_candidates,key=lambda x:len(x[0][3].parts))
+    observer_root=pair(Path('/').stat())
     physical = mount[2]/candidate.relative_to(mount[3])
     require(mount[1] == candidate.stat().st_dev)
     baseline = tasks(proc)
     observed = {}
-    mount_namespaces = {}
+    mount_views = {}
     for pid, tid in baseline:
         t = proc/pid/'task'/tid
         status = (t/'stat').read_text()
@@ -268,13 +276,17 @@ def scan(candidate, tracked, proc=Path('/proc')):
         if state[0] in ('Z','X','x') or kernel:
             observed[pid,tid] = (ident,state[0] if not kernel else 'kernel')
             continue
-        ns = pair((t/'ns/mnt').stat())
-        if ns not in mount_namespaces:
-            data = (t/'mountinfo').read_text()
+        # A chroot can change the effective canonical pathname without
+        # changing the task's mount namespace. Qualify each distinct view.
+        root_inode=pair((t/'root').stat())
+        view=(pair((t/'ns/mnt').stat()),root_inode)
+        if view not in mount_views:
+            data=(t/'mountinfo').read_text()
             def same_inode():
                 return pair((t/'root'/candidate.relative_to('/')).stat())==pair(candidate.lstat())
-            check_mounts(data, mount, physical, candidate, mount[1],canonical_inode=same_inode)
-            mount_namespaces[ns] = data
+            check_mounts(data,mount,physical,candidate,mount[1],canonical_inode=same_inode,
+                         host_options=host_options,same_observer_root=root_inode==observer_root)
+            mount_views[view]=data
         digest = hashlib.sha256()
         for field in ('cmdline','environ'):
             with (t/field).open('rb') as source:
@@ -315,12 +327,12 @@ def scan(candidate, tracked, proc=Path('/proc')):
                 require(key not in tracked)
                 if len(info) == 6 and info[5].startswith('/'):
                     require(not Path(unescape(info[5].strip().removesuffix(' (deleted)'))).is_relative_to(candidate))
-        observed[pid,tid] = (ident,ns,digest.digest())
+        observed[pid,tid] = (ident,view,digest.digest())
     require(tasks(proc) == baseline)
     for line in (proc/'locks').read_text().splitlines():
         keys = [field for field in line.split() if re.fullmatch('[0-9a-f]+:[0-9a-f]+:[0-9]+',field)]
         require(len(keys) == 1 and inode_field(keys[0]) not in tracked)
-    return observed, mount_namespaces
+    return observed, mount_views
 
 def proof(q, root, uid, fd, inspect=scan):
     store = {'base':'releases','visual-static':'releases','visual-runtime':'versions'}[q['store']]

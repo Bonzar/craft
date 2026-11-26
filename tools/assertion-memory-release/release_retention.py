@@ -105,6 +105,31 @@ def host_proof(scope, lock_fd):
     return proof
 
 
+def approved_base_ca(scope):
+    # These digests are independently reviewed against the approved offline
+    # wheel/interpreter package, not learned from a candidate's writable RECORD.
+    if scope not in ('base-test','base-prod'):
+        raise ValueError('retention_base_ca_scope')
+    source=trusted_file(CONFIG/(scope+'.public-ca.json'),0,4096)
+    def exact(pairs):
+        result=dict(pairs)
+        if len(result)!=len(pairs):
+            raise ValueError('retention_base_ca_duplicate')
+        return result
+    value=json.loads(source,object_pairs_hook=exact)
+    if (type(value) is not dict or value.keys()!={'schema','scope','pip','certifi'}
+            or type(value['schema']) is not int or value['schema']!=1 or value['scope']!=scope):
+        raise ValueError('retention_base_ca_scope')
+    out={}
+    for pkg in ('pip','certifi'):
+        pins=value[pkg]
+        if (type(pins) is not list or len(pins)>8 or any(type(x) is not str
+                or not re.fullmatch('[a-f0-9]{64}',x) for x in pins) or len(set(pins))!=len(pins)):
+            raise ValueError('retention_base_ca_pins')
+        out[pkg]=frozenset(pins)
+    return out
+
+
 def bindings(root, stores, *, ready=None):
     """Only installed normal receivers in four canonical roots can enable this."""
     root=Path(root)
@@ -118,8 +143,9 @@ def bindings(root, stores, *, ready=None):
     safe_root(CONFIG,0)
     if trusted_file(marker,0,3)!=b'on\n':
         raise ValueError('retention_enable_marker')
+    ca=approved_base_ca(scope) if scope.startswith('base-') else {}
     return lambda lock: Retention(root,stores,lock_fd=lock,proof=host_proof(scope,lock),
-                                  minimum=SCOPES[scope][1],ready=ready)
+                                  minimum=SCOPES[scope][1],ready=ready,approved_ca=ca)
 
 
 def regular_at(directory,name,expected,owner,device):
@@ -136,12 +162,15 @@ def regular_at(directory,name,expected,owner,device):
         return data
 
 
-def generated_ca(site, parent, name, relative, owner, device, meta):
+def generated_ca(site, parent, name, relative, owner, device, meta, approved_ca):
     """Only real certifi X.509 bundles in the exact installed wheel RECORD."""
     if relative not in CERT_NAMES or site is None:
         raise ValueError('retention_sensitive_member')
     source=regular_at(parent,name,meta,owner,device)
     pkg=CERT_NAMES[relative]
+    digest=hashlib.sha256(source)
+    if digest.hexdigest() not in approved_ca.get(pkg,()):
+        raise ValueError('retention_generated_ca_not_independently_pinned')
     dist_names=[n for n in os.listdir(site) if re.fullmatch(pkg+r'-[0-9][A-Za-z0-9_.+-]{0,95}\.dist-info',n)]
     if len(dist_names)!=1:
         raise ValueError('retention_generated_ca_record')
@@ -152,7 +181,7 @@ def generated_ca(site, parent, name, relative, owner, device, meta):
     finally:
         os.close(fd)
     path='/'.join(relative)
-    want='sha256='+base64.urlsafe_b64encode(hashlib.sha256(source).digest()).decode('ascii').rstrip('=')
+    want='sha256='+base64.urlsafe_b64encode(digest.digest()).decode('ascii').rstrip('=')
     got=[row for row in csv.reader(io.StringIO(records.decode('utf-8')),strict=True) if row and row[0]==path]
     if got!=[[path,want,str(len(source))]]:
         raise ValueError('retention_generated_ca_record')
@@ -166,7 +195,8 @@ def generated_ca(site, parent, name, relative, owner, device, meta):
         elif inside:
             if not re.fullmatch(rb'[A-Za-z0-9+/]{1,76}={0,2}',line):
                 raise ValueError('retention_generated_ca_not_certificates')
-        elif not (line.strip()==b'' or line.startswith(b'#')):
+        elif not (line.strip(b' \t')==b'' or (line.startswith(b'#') and len(line)<=1024
+                  and all(n>=32 or n==9 for n in line))):
             raise ValueError('retention_generated_ca_not_certificates')
         else:
             continue
@@ -179,7 +209,7 @@ def generated_ca(site, parent, name, relative, owner, device, meta):
         raise ValueError('retention_generated_ca_not_certificates') from exc
 
 
-def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
+def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv, approved_ca):
     # Reject writable/shared files, hard links, irregular devices, secret/DB
     # paths and submounts before deletion. The privileged proof additionally
     # checks same-device bind mounts and references across namespaces.
@@ -208,7 +238,7 @@ def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
                 if (not allow_venv or len(prefix)!=4 or prefix[:2]!=('venv','lib')
                         or not VENV_PY.fullmatch(prefix[2]) or prefix[3]!='site-packages'):
                     raise ValueError('retention_sensitive_member')
-                generated_ca(site,fd,name,item[4:],owner,root_stat.st_dev,info)
+                generated_ca(site,fd,name,item[4:],owner,root_stat.st_dev,info,approved_ca)
             entries[item]=info
             mode=info.st_mode
             if stat.S_ISLNK(mode):
@@ -300,7 +330,7 @@ def guard_prod_fence(path, owner=0):
 
 
 class Retention:
-    def __init__(self, root, stores, *, lock_fd, proof, minimum, ready=None):
+    def __init__(self, root, stores, *, lock_fd, proof, minimum, ready=None, approved_ca=None):
         self.root=Path(root)
         self.owner=os.geteuid()
         self.stores=tuple(stores)
@@ -308,6 +338,7 @@ class Retention:
         self.proof=proof
         self.minimum=minimum
         self.ready=ready
+        self.approved_ca=approved_ca or {}
 
     def reader_ready(self):
         try:
@@ -370,7 +401,8 @@ class Retention:
         try:
             if not os.path.samestat(outer,os.fstat(fd)):
                 return False
-            inventory=eligible_tree(fd,inactive.name,meta,owner=self.owner,allow_venv=store.kind=='base')
+            inventory=eligible_tree(fd,inactive.name,meta,owner=self.owner,allow_venv=store.kind=='base',
+                                    approved_ca=self.approved_ca)
             if self.proof(store.kind,active,inactive,meta) is not True:
                 return False
             self.settled()
@@ -378,7 +410,8 @@ class Retention:
                 return False
             if not os.path.samestat(outer,directory.lstat()):
                 return False
-            current_inventory=eligible_tree(fd,inactive.name,meta,owner=self.owner,allow_venv=store.kind=='base')
+            current_inventory=eligible_tree(fd,inactive.name,meta,owner=self.owner,allow_venv=store.kind=='base',
+                                    approved_ca=self.approved_ca)
             if not same_inventory(inventory,current_inventory):
                 raise ValueError('retention_tree_changed_after_witness')
             if not dry:
@@ -455,5 +488,6 @@ def dry_inventory(scope, stores, *, ready=None):
                         or entry.st_mode&0o077 or not os.path.samestat(entry,legacy.lstat())):
                     raise ValueError('retention_legacy_lock')
                 fcntl.flock(marker,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        engine=Retention(root,stores,lock_fd=lock.fileno(),proof=host_proof(scope,lock.fileno()),minimum=minimum,ready=ready)
+        engine=Retention(root,stores,lock_fd=lock.fileno(),proof=host_proof(scope,lock.fileno()),minimum=minimum,ready=ready,
+                         approved_ca=approved_base_ca(scope) if scope.startswith('base-') else None)
         return engine.sweep('dry_inventory',dry=True)

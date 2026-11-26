@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import base_payload
 import release_core
-from release_retention import Retention, Store, guard_prod_fence, lock_identity
+from release_retention import Retention, Store, approved_base_ca, guard_prod_fence, lock_identity
 import runtime_joint
 
 
@@ -73,14 +73,14 @@ class CurrentOnly(unittest.TestCase):
         self.assertTrue(all(p.read_bytes()==b'untouched' for p in (root/'state').iterdir()))
         self.assertEqual((root/'wheelhouse'/'fixture.whl').read_bytes(),b'untouched')
 
-    def factory(self,root,stores,decision,minimum=0,ready=None):
+    def factory(self,root,stores,decision,minimum=0,ready=None,approved_ca=None):
         def bind(fd):
             def proof(kind,active,candidate,meta):
                 lock_identity(root,fd,os.geteuid())
                 self.assertTrue(active.is_dir() and candidate.is_dir() and active!=candidate)
                 self.assertEqual(meta.st_ino,candidate.lstat().st_ino)
                 return decision(kind,active,candidate,meta)
-            return Retention(root,stores,lock_fd=fd,proof=proof,minimum=minimum,ready=ready)
+            return Retention(root,stores,lock_fd=fd,proof=proof,minimum=minimum,ready=ready,approved_ca=approved_ca)
         return bind
 
     def deploy_base(self,root,value,hook,decision=lambda *_:True,minimum=0,source=None):
@@ -128,6 +128,19 @@ class CurrentOnly(unittest.TestCase):
                     self.assertEqual(len(list((root/'releases').iterdir())),1+(not proven))
                 self.durable(root)
 
+    def test_ca_pin_profile_is_lane_bound_typed_and_never_inferred(self):
+        data={'schema':1,'scope':'base-test','pip':['1'*64],'certifi':['2'*64]}
+        with patch('release_retention.trusted_file',return_value=json.dumps(data).encode()):
+            self.assertEqual(approved_base_ca('base-test'),{'pip':frozenset({'1'*64}),
+                                                            'certifi':frozenset({'2'*64})})
+            with self.assertRaises(ValueError):
+                approved_base_ca('base-prod')
+        for invalid in (dict(data,pip=['1'*64,'1'*64]),dict(data,schema=True),
+                        dict(data,certifi=['not-a-hash'])):
+            with patch('release_retention.trusted_file',return_value=json.dumps(invalid).encode()):
+                with self.assertRaises(ValueError):
+                    approved_base_ca('base-test')
+
     def test_real_generated_base_venv_ca_only_with_package_provenance(self):
         root=self.roots('test')
         def prepare(action,path):
@@ -152,6 +165,13 @@ class CurrentOnly(unittest.TestCase):
         with record.open('w',newline='') as dst:
             csv.writer(dst).writerows([path,want,str(len(fake))] if row[0]==path else row for row in rows)
         active=self.deploy_base(root,b'B',lambda *_:None)
+        store=Store('base',base_payload.retention_candidate)
+        with (root/'deploy.lock').open('rb') as locked:
+            fcntl.flock(locked,fcntl.LOCK_EX)
+            forged={'pip':{sha256(fake).hexdigest()}}
+            gc=self.factory(root,(store,),lambda *_:True,approved_ca=forged)(locked.fileno())
+            with self.assertRaisesRegex(ValueError,'not_certificates'):
+                gc.remove(store,old,dry=True)
         self.assertTrue(old.exists() and cacert.read_bytes()==fake)
         self.assertEqual((root/'current').resolve(),active)
         cacert.write_bytes(original);record.write_bytes(initial_record)
@@ -159,9 +179,13 @@ class CurrentOnly(unittest.TestCase):
         store=Store('base',base_payload.retention_candidate)
         with (root/'deploy.lock').open('rb') as locked:
             fcntl.flock(locked,fcntl.LOCK_EX)
-            gc=self.factory(root,(store,),lambda *_:True)(locked.fileno())
+            verified={'pip':{sha256(original).hexdigest()}}
+            gc=self.factory(root,(store,),lambda *_:True,approved_ca=verified)(locked.fileno())
             self.assertEqual(gc.sweep('test'),(0,1,0))
             unrelated.unlink()
+            # Direct dry call surfaces the exact guard reason on the runner,
+            # without changing production's bounded aggregate diagnostics.
+            self.assertTrue(gc.remove(store,old,dry=True))
             self.assertEqual(gc.sweep('test',dry=True),(1,0,0))
             self.assertTrue(old.is_dir())
             self.assertEqual(gc.sweep('test'),(1,0,0))
