@@ -1,5 +1,6 @@
 """Pure terminal verification for the protected Base controller (no I/O)."""
 from dataclasses import dataclass
+import re
 from transition_witness import Admission, Release
 
 BASE='assertion-production-deploy-mcp.service'
@@ -25,6 +26,7 @@ class Snapshot:
     listeners: tuple
     # Passed only by root controller after independent protected journal read.
     journal: tuple | None
+    boot_id: str
 
 @dataclass(frozen=True)
 class Smoke:
@@ -39,7 +41,8 @@ class Smoke:
     memory_db_identity_unchanged: bool
 
 def _snapshot_valid(s, release, uid):
-    if type(s) is not Snapshot or s.current!=release:
+    if (type(s) is not Snapshot or s.current!=release or type(s.boot_id) is not str
+            or not re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}',s.boot_id)):
         raise ValueError('unexpected observed Base release')
     for process in (s.private,s.graph):
         if (type(process) is not Process or
@@ -73,7 +76,7 @@ def terminal(*, admission, predecessor, phase, uid, before, after, smoke):
     for snapshot in (before,after):
         _snapshot_valid(snapshot,release,uid)
     if (before.journal!=(admission.run,admission.nonce,predecessor,admission.candidate) or after.journal is not None or
-            before.private!=after.private or before.graph!=after.graph):
+            before.boot_id!=after.boot_id or before.private!=after.private or before.graph!=after.graph):
         raise ValueError('Base transaction not stably settled')
     if (type(smoke) is not Smoke or
         (smoke.run,smoke.nonce,smoke.phase,smoke.release)!=(admission.run,admission.nonce,phase,release) or

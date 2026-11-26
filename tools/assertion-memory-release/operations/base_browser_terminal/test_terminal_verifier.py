@@ -16,7 +16,7 @@ class Verify(TestCase):
             q=p; ls=((8902,345),(8903,345))
         else:
             q=Process(GRAPH,346,31,self.uid,release); ls=((8901,346),(8903,345))
-        before=Snapshot(release,p,q,ls,('42','7'*64,self.old,self.new))
+        before=Snapshot(release,p,q,ls,('42','7'*64,self.old,self.new),'10000000-0000-0000-0000-000000000000')
         smoke=Smoke('42','7'*64,phase,release,True,True,True,True,True)
         return dict(admission=self.admission,predecessor=self.old,phase=phase,uid=self.uid,before=before,
                     after=replace(before,journal=None),smoke=smoke)
@@ -32,6 +32,7 @@ class Verify(TestCase):
                 dict(after=replace(after,journal=good['before'].journal)),
                 dict(after=replace(after,private=replace(after.private,start_ticks=31))),
                 dict(after=replace(after,current=self.old)),
+                dict(after=replace(after,boot_id='20000000-0000-0000-0000-000000000000')),
                 dict(after=replace(after,listeners=((8902,346),(8903,345)))),
                 dict(after=replace(after,listeners=((8901,347),*after.listeners))),
                 dict(smoke=replace(smoke,run='43')),

@@ -59,3 +59,19 @@ the directory under the existing lease; only then may the continuation
 freshly observe and settle the exact run. Absent journal by itself is
 not proof; neither branch repeats a native mutation. An opted-in
 witness has no bootstrap authority and requires a verified predecessor.
+
+Observer and authorizer transport: kernel_observer.py consumes existing
+protected MainPID lookup and exact native package metadata; can only map
+the Base/old Graph fixed role and three fixed ports. It verifies boot and
+PID start ticks, UID, cgroup, physical cwd, protected module/config, network
+namespace and loopback TCP inode/FD ownership. It does not authenticate the
+application or mutate service state. root_terminal_publisher.py retains
+the existing UID986 v1/v2 exact handler and defines a separate root-only
+terminal receipt on the existing fixed AF_UNIX socket. Client verifies
+actual UID980 bytes via Linux SCM_CREDENTIALS; root listener-creator
+SO_PEERCRED alone would be insufficient. Its UID980 exact record compare-
+and-set is independent of app/SQLite. Both ends require trustworthy
+preexisting pending transaction and production authenticated smoke, which
+are not installed or exposed by this patch. Protected signed v3 admission,
+owned real process/smoke collectors and reviewed versioned operations
+bundle are gating. Both TEST and PROD stay unchanged.
