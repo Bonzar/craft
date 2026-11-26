@@ -33,7 +33,8 @@ class Binding(TestCase):
         result={'status':'ok','environment':'production','revision':N.revision,'sha256':N.archive}
         auth=Mock(return_value=result)
         calls=[]
-        def activate(revision,digest,body):
+        def activate(revision,digest,body,*,admission):
+            self.assertEqual(admission,A)
             self.assertEqual(auth.call_count,1)
             calls.append((revision,digest,body.read()))
             return result

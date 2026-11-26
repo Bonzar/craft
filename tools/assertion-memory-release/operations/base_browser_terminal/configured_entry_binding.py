@@ -8,6 +8,7 @@ from configured_authorizer_binding import serve_exact,terminal_frame
 from configured_terminal_state import _release
 from authorizer_cas import read_owned_record
 from root_phase_binding import read_phase
+from transition_witness import Admission
 
 MARKER=Path('/etc/assertion-release/production/base-browser-listener.json')
 def active():
@@ -55,7 +56,8 @@ def receive_terminal(stream,authorize_frame,activate):
         return response
     if response!=permit(p):
         raise ValueError('terminal authorization denied')
-    result=activate(candidate.revision,candidate.archive,stream)
+    result=activate(candidate.revision,candidate.archive,stream,
+                    admission=Admission(p.run_id,frame['nonce'],candidate))
     if result!=permit(p):
         raise ValueError('wrong exact activation response')
     return result

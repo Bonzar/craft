@@ -6,7 +6,7 @@ import secrets
 import stat
 
 from configured_terminal_state import read_exact,encode
-from controller_install_lease import TRANSITION,_lock
+from controller_install_lease import TRANSITION,DEPLOY,_lock
 from foreground_terminal import (observe_before_unlink,observe_after_unlink,
     precommit_wire,restore_precommit)
 from kernel_observer import observe
@@ -18,6 +18,7 @@ from root_terminal_publisher import publish_with_existing_authorizer,canonical_t
 from terminal_lifecycle import TerminalRequest
 
 FILES={'restart':'base-terminal-restart.precommit','restore':'base-terminal-restore.precommit'}
+SETTLED={'restart':'base-terminal-restart.settled','restore':'base-terminal-restore.settled'}
 MAX=16384
 
 def _get(parent,name):
@@ -62,7 +63,7 @@ def _fsync_native():
         os.fsync(fd)
     finally:os.close(fd)
 
-def settle_step(pair):
+def _settle_step(pair,*,native_effect_closed=False):
     _require_root()
     if type(pair) is not ApprovedPair:
         raise ValueError('signed run/prior foreground scope required')
@@ -70,30 +71,47 @@ def settle_step(pair):
     # The native transaction holds deploy lock; never runs a
     # service command and writes only its own fixed root record.
     with _lock(TRANSITION,owner=0,mode=0o644):
-        _require_active_native_lock()
+        if not native_effect_closed:
+            _require_active_native_lock()
         state=_read_authorizer()
         known,admitted,receipt=read_exact(state)
+        previous_receipt=None
         if admitted is None and receipt is not None:
             req=TerminalRequest(pair.admitted,pair.prior,receipt['phase'])
             selected=pair.admitted.candidate if req.phase=='restart' else pair.prior
             if encode(receipt)!=canonical_terminal(req,selected):raise ValueError('foreign settled receipt')
-            return 'already-settled'
-        if (known,admitted)!=(pair.prior,pair.admitted):
+            previous_receipt=encode(receipt)
+        if previous_receipt is None and (known,admitted)!=(pair.prior,pair.admitted):
             raise ValueError('not the foreground admitted transaction')
-        phase=observe_record(_read_root_phase(),state)
-        req=TerminalRequest(admitted,known,phase)
+        phase=observe_record(_read_root_phase(),state) if previous_receipt is None else receipt['phase']
+        req=TerminalRequest(pair.admitted,pair.prior,phase)
         sample=lambda r:observe(r,trusted_pid=trusted_pid)
         result=sample(req)
         name=FILES[phase]
         parent=os.open(PHASE.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
         try:
             if result.journal is not None:
+                if native_effect_closed or previous_receipt is not None:
+                    raise ValueError('cannot settle active journal with old receipt')
                 pre=observe_before_unlink(req,sample)
                 if _read_authorizer()!=state:
                     raise ValueError('foreground admission changed before precommit')
                 _record(parent,name,precommit_wire(pre))
                 return 'precommit-ready'
             previous=restore_precommit(_get(parent,name),req)
-            observe_after_unlink(req,previous,sample,_fsync_native,publish_with_existing_authorizer)
+            _, wire=observe_after_unlink(req,previous,sample,_fsync_native,publish_with_existing_authorizer)
+            if previous_receipt is not None and previous_receipt!=wire:
+                raise ValueError('foreground terminal recheck differs')
+            _record(parent,SETTLED[phase],wire)
             return 'settled'
         finally:os.close(parent)
+
+def settle_step(pair):
+    return _settle_step(pair)
+
+def recover_settlement_only(pair):
+    _require_root()
+    # No reapply or native hook. This continuation may only inspect the exact
+    # already-removed journal and established durable same-process precommit.
+    with _lock(DEPLOY,owner=986,mode=0o600):
+        return _settle_step(pair,native_effect_closed=True)
