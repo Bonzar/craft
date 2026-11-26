@@ -3,6 +3,7 @@ from contextlib import closing, ExitStack
 from datetime import datetime,timezone
 from pathlib import Path
 import sqlite3
+import time
 
 from . import queue_item_removal as items, queue_session_control as sessions
 from .processing_control import Conflict
@@ -33,6 +34,8 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
                     db.execute('PRAGMA query_only=ON')
                 if action=='clear_commit':
                     db.execute('PRAGMA secure_delete=ON')
+                    deadline=time.monotonic()+12
+                    db.set_progress_handler(lambda:time.monotonic()>=deadline,1000)
                 db.execute('BEGIN IMMEDIATE' if writing else 'BEGIN')
                 try:
                     if identity()!=expected or exact_database(path)!=before:
@@ -63,6 +66,7 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
                     if writing:
                         db.commit()
                     if action=='clear_commit':
+                        db.set_progress_handler(None,0)
                         # Best effort truncation; the reset is already durable,
                         # and the response may not misrepresent a WAL reader as rollback.
                         try:
@@ -72,5 +76,7 @@ def owner_operations(*, database, release_lease, identity, stage='test', fresh_o
                             pass
                     return result
                 finally:
+                    if action=='clear_commit':
+                        db.set_progress_handler(None,0)
                     db.rollback()
     return perform
