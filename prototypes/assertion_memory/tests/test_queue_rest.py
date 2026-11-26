@@ -78,6 +78,10 @@ class Route(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.send(extra=[h],token=None))[0],401)
         self.assertEqual((await self.send(extra=[(h[0],b'other')]))[0],400)
         self.assertEqual(len(self.hits),1)
+        reset=(b'x-memory-queue-reset',b'ready-v1')
+        self.assertEqual((await self.send(extra=[h,reset]))[0],200)
+        self.assertEqual(self.hits[-1],dict(limit=50,offset=0,batch_cards=True,clear_ready=True))
+        self.assertEqual((await self.send(extra=[reset,reset]))[0],400)
 
     async def test_rejects_wrong_authority_peer_headers_and_method_before_snapshot(self):
         cases=(
