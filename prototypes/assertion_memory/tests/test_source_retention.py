@@ -8,6 +8,8 @@ def test_source_admission_and_coverage_share_scope_and_attribution():
     for instructions in (construction_instructions(), _extraction_instructions(),
                          _verification_instructions(False), VERIFY, _COVERAGE):
         assert SOURCE_RETENTION_RULES in instructions
+        assert 'only when extracting new durable source meaning' in instructions
+        assert 'answering a question from admitted evidence or refreshing existing knowledge' in instructions
         assert 'Admission comes before attribution and context' in instructions
         assert 'Do not rescue ineligible material with an attributed meta-claim' in instructions
         assert 'concrete decision relevant to later steps' in instructions

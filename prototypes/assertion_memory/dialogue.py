@@ -20,6 +20,8 @@ MAX_MODEL_INPUT_CHARACTERS = 240_000
 MAX_CONTEXT_CHARACTERS = 128_000
 MAX_REPAIR_ROUNDS = 2
 SOURCE_RETENTION_RULES = (
+    'The following admission test applies only when extracting new durable source meaning, not when '
+    'answering a question from admitted evidence or refreshing existing knowledge. '
     'Admission comes before attribution and context. If no eligible substantive knowledge change remains, '
     'return zero thoughts. Evidence, attribution and context only describe how to write an eligible thought. '
     'For each assertion, keep only material meaning useful beyond this reply. Judge the evidence, '
