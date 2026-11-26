@@ -17,6 +17,8 @@ from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard, dashb
 from prototypes.assertion_memory import dashboard_projection
 from prototypes.assertion_memory.storage import MemoryStore
 from prototypes.assertion_memory.thought_service import ThoughtService
+# Include the companion transport tests in the existing protected Base PR test selection.
+from test_prod_owner_bridge import ProdOwnerBridgeTests
 
 ORIGIN='https://owner.private.test'
 GATEWAY='graph.bridge.test'
@@ -371,6 +373,18 @@ class OwnerBrowserStartup(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'installed private Base writer'):
                 configure_owner_lanes(self.args())
             binder.assert_not_called()
+
+    def test_browser_flags_follow_existing_private_writer_readiness_in_prod(self):
+        from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
+        for stage,private_ready,want_ready in [('prod',False,False),('prod',True,True),('test',False,True)]:
+            with self.subTest(stage=stage,private_ready=private_ready):
+                api=BrowserOwnerAPI(stage=stage,perform=lambda *_:self.fail(),
+                    queue_snapshot=lambda **_:{'stage':stage,'processing_control':{'can_change':private_ready}})
+                raw=asyncio.run(api.snapshot(None,10,0))
+                value=json.loads(raw.body)
+                self.assertIs(value['capabilities']['standalone_pause'],want_ready)
+                self.assertIs(value['capabilities']['queue_processing_policy'],want_ready)
+                self.assertIs(value['processing_control']['can_change'],False)
 
     def test_installed_prod_adapter_accepts_only_canonical_credential_directory(self):
         import sys

@@ -129,7 +129,7 @@ class BrowserOwnerAPI:
 
     def routes(self):
         return [Route(PREFIX+k+suffix, self.control,methods=[method], name=k+suffix)
-                for k in CONTROLS for suffix,method in (('/prepare','POST'),('','PUT'))]
+                for k in CONTROLS if k!='database/clear-v2' or self.stage=='test' or self.clear_enabled for suffix,method in (('/prepare','POST'),('','PUT'))]
 
     def graph_ready(self, request, scope):
         manager=request.app.state.manager
@@ -143,8 +143,9 @@ class BrowserOwnerAPI:
         if value.get('stage')!=self.stage:
             raise APIError('queue_unavailable','Wrong Base queue scope',503)
         # Reuse deployed queue overlay contract: native prepared proof, not old session-token PUT.
-        value={**value,'capabilities':{**value.get('capabilities',{}),'live':True,'standalone_pause':True,
-                                      'queue_processing_policy':True},'readiness':[]}
+        ready=self.stage=='test' or (value.get('processing_control') or {}).get('can_change') is True
+        value={**value,'capabilities':{**value.get('capabilities',{}),'live':True,'standalone_pause':ready,
+                                      'queue_processing_policy':ready},'readiness':[]}
         if 'processing_control' in value:
             value['processing_control']={**value['processing_control'],'can_change':False}
         clear=value.pop('database_clear',None)
@@ -238,7 +239,15 @@ class BrowserOwnerAPI:
         except ValueError:
             raise APIError('invalid_request','Invalid browser control request',400) from None
 
-def configured_browser_api(dashboard, *, clear_enabled=False):
+def configured_browser_api(dashboard, *, clear_enabled=False, prod_owner_bridge=None):
+    if dashboard.stage=='prod':
+        from .prod_owner_bridge import ProdOwnerBridge
+        if type(prod_owner_bridge) is not ProdOwnerBridge or clear_enabled is not False:
+            raise ValueError('PROD browser owner API requires the existing private Base authority')
+        return BrowserOwnerAPI(stage='prod',perform=prod_owner_bridge.perform,
+                               queue_snapshot=prod_owner_bridge.queue_snapshot,clear_enabled=False)
+    if dashboard.stage!='test' or prod_owner_bridge is not None:
+        raise ValueError('Invalid Graph owner API lane')
     from prototypes.assertion_memory.queue_owner_domain import owner_operations
     from prototypes.assertion_memory.queue_rest import snapshot as queue_snapshot
     def identity():
