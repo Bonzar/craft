@@ -32,6 +32,20 @@ class DirectStream(unittest.TestCase):
         with TestClient(self.create(enabled=False),base_url='https://testserver') as client:
             self.assertEqual(client.get(DIRECT_PATH,headers={'Origin':PUBLIC}).status_code,404)
 
+    def test_transport_advertisement_is_dark_and_revokes_on_runtime_drift(self):
+        for enabled in (False, True):
+            with TestClient(self.create(enabled=enabled),base_url=PUBLIC) as ui:
+                self.assertEqual(ui.get('/api/v1/capabilities').status_code,401)
+                self.assertEqual(ui.post('/api/v1/session',json={'password':'owner-fixture-long'},
+                                         headers={'Origin':PUBLIC}).status_code,200)
+                value=ui.get('/api/v1/capabilities').json()
+                if enabled:
+                    self.assertEqual(value['owner_live_transport'],{'version':1,'lane':'test','origin':DIRECT})
+                    self.active=('revision','changed-archive')
+                    self.assertNotIn('owner_live_transport',ui.get('/api/v1/capabilities').json())
+                else:
+                    self.assertNotIn('owner_live_transport',value)
+
     def test_real_owner_csrf_and_origin_then_one_use_direct_without_cookie(self):
         app=self.create()
         with TestClient(app,base_url=PUBLIC) as ui:
