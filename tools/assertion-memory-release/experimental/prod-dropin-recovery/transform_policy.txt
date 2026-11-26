@@ -1,0 +1,45 @@
+MCP_MONIUM_DROPIN = MCP_APPROVED_DROPIN.with_name('50-monium-traces.conf')
+MCP_MONIUM_PIN = MCP_DROPIN_PIN.with_name('mcp-monium-traces.sha256')
+
+
+def trusted_unit_dropins(unit, raw):
+    import hmac
+
+    if unit != UNITS[0]:
+        if raw in ('',None):
+            return
+        raise UntrustedUnitDropIn('untrusted MCP drop-in')
+
+    def optional_pin(path):
+        try:
+            return checked_file(path,owner=0,limit=65,private=True)
+        except FileNotFoundError:
+            # A dangling symlink is an invalid configured path, not absence.
+            if os.path.lexists(path):
+                raise UntrustedUnitDropIn('untrusted MCP drop-in')
+            return None
+
+    try:
+        codex=optional_pin(MCP_DROPIN_PIN)
+        monium=optional_pin(MCP_MONIUM_PIN)
+        if codex is None:
+            if monium is None and raw in ('',None):
+                return
+            raise UntrustedUnitDropIn('untrusted MCP drop-in')
+        ordered=((MCP_MONIUM_DROPIN,monium),(MCP_APPROVED_DROPIN,codex)) if monium is not None else ((MCP_APPROVED_DROPIN,codex),)
+        if raw != ' '.join(str(path) for path,_ in ordered):
+            raise UntrustedUnitDropIn('untrusted MCP drop-in')
+        for path,pin in ordered:
+            if re.fullmatch(rb'[a-f0-9]{64}\n?',pin) is None:
+                raise UntrustedUnitDropIn('untrusted MCP drop-in')
+            parent=path.parent
+            meta=parent.lstat()
+            if parent.resolve()!=parent or not stat.S_ISDIR(meta.st_mode) or meta.st_uid!=0 or meta.st_mode&0o022:
+                raise UntrustedUnitDropIn('untrusted MCP drop-in')
+            contents=checked_file(path,owner=0,limit=16384)
+            if not hmac.compare_digest(hashlib.sha256(contents).hexdigest().encode('ascii'),pin.rstrip(b'\n')):
+                raise UntrustedUnitDropIn('untrusted MCP drop-in')
+    except UntrustedUnitDropIn:
+        raise
+    except (OSError,ValueError) as error:
+        raise UntrustedUnitDropIn('untrusted MCP drop-in') from error
