@@ -60,6 +60,11 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
                 raise ValueError('A verified TEST clear profile is required')
             browser=(configured_browser_api(dashboard,clear_enabled=False) if profile is None
                      else configured_browser_api(dashboard,clear_profile=profile))
+            from .device_test_binding import installed_test_device_binding
+            device_binding=installed_test_device_binding(dashboard)
+            if device_binding is not None:
+                registry,identity=device_binding
+                browser.attach_machine_devices(registry,dashboard.release_lease,identity)
         return dashboard,browser
     if args.queue_control:
         from .queue_dashboard import configured_browser_dashboard

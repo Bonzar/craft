@@ -90,7 +90,7 @@ def _require_legacy_graph_stopped():
         if probe.connect_ex(('127.0.0.1',_LEGACY_GRAPH_PORT))!=errno.ECONNREFUSED:
             raise ValueError('Legacy Graph lifecycle has not been retired')
 
-def installed_prod_browser_lifespan(config_path, config, *, private_port, on_failure):
+def installed_prod_browser_lifespan(config_path, config, *, private_port, on_failure, machine_devices=None):
     if Path(config_path)!=PROD_HTTP_CONFIG:
         return None  # TEST and existing unscoped clients keep original startup.
     if not _read_switch(PROD_SWITCH):
@@ -100,9 +100,10 @@ def installed_prod_browser_lifespan(config_path, config, *, private_port, on_fai
     if not _capable_release(PROD.root):
         return None
     return configured_prod_browser_lifespan(config,private_port=private_port,
-        interactive_enabled=None,on_failure=on_failure)
+        interactive_enabled=None,on_failure=on_failure,
+        **({} if machine_devices is None else {'machine_devices':machine_devices}))
 
-def configured_prod_browser_lifespan(config, *, private_port, interactive_enabled, on_failure=None):
+def configured_prod_browser_lifespan(config, *, private_port, interactive_enabled, on_failure=None, machine_devices=None):
     """Call only after protected legacy login-writer retirement is recorded."""
     if private_port != PROD_PRIVATE_PORT or Path(config.db) != PROD.db:
         raise ValueError('Browser endpoint requires exact PROD Base authority')
@@ -121,7 +122,8 @@ def configured_prod_browser_lifespan(config, *, private_port, interactive_enable
         browser=base_owner_browser(stage='prod',config=config,
             verified_identity=partial(_identity,PROD.root,'prod'),
             release_lease=partial(release_lease,PROD,uid=uid),
-            interactive_enabled=interactive_active if interactive_enabled is None else interactive_enabled)
+            interactive_enabled=interactive_active if interactive_enabled is None else interactive_enabled,
+            **({} if machine_devices is None else {'machine_devices':machine_devices}))
         graph=create_app(PROD.db,PROD_OWNER_STATE,public_origin=PROD_OWNER_ORIGIN,
                          browser_owner_api=browser,existing_owner_only=True)
         return browser_listener(browser_surface(graph),PROD_BROWSER_PORT,on_failure=on_failure)
