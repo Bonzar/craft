@@ -82,3 +82,28 @@ def activate_forward(checkpoints, req, *, receiver_stage, verify_dispatch, verif
                                 live_prod=live_prod, verify_fix=verify_fix)
     return checkpoints.production(a, verified_release=verify_release, actual_test=read_exact_test,
                                   approve=verify_promote_approval, activate_and_probe=activate_and_probe)
+
+
+def protected_activation(checkpoints, req, *, receiver_stage, verify_dispatch,
+                         verify_release, identify_prepared, probe, active_test=None,
+                         verify_promote_approval=None, live_prod=None, verify_fix=None):
+    """Join authenticated receive to release_core/runtime_joint pre-switch hook.
+
+    identify_prepared and probe must be independently configured by the pinned
+    installed adapter. Prepared bytes are already verified by existing release
+    validation; no metadata in them grants authority. probe reads actual served
+    lane identity, not a local enabled flag.
+    """
+    def authorize(prepared, switch):
+        if type(req) is not Request or identify_prepared(prepared) != req.artifact:
+            raise Reject('Prepared release differs from authenticated request')
+
+        def activate_and_probe(artifact):
+            switch()  # preserve native prepare/restart/smoke/recovery code
+            return probe(receiver_stage, artifact)
+
+        return activate_forward(checkpoints,req,receiver_stage=receiver_stage,
+                 verify_dispatch=verify_dispatch,verify_release=verify_release,
+                 active_test=active_test,verify_promote_approval=verify_promote_approval,
+                 activate_and_probe=activate_and_probe,live_prod=live_prod,verify_fix=verify_fix)
+    return authorize

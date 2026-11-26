@@ -40,3 +40,23 @@ class ReceiverTest(unittest.TestCase):
                         pass
                 with self.assertRaises(Reject), locks('unexpected'):
                     pass
+
+    def test_prepared_shared_hook_checks_before_native_switch(self):
+        from forward_release_receiver import protected_activation
+        fixture=fixture_module.CheckpointTests()
+        fixture.setUp()
+        a=fixture.a
+        r=Request(a,'test',99,Path('/dev/null'))
+        switch=Mock()
+        probe=Mock(side_effect=lambda stage,x:witness(stage,x))
+        hook=protected_activation(fixture.q,r,receiver_stage='test',
+               verify_dispatch=lambda req,g:req==r and g is None,
+               live_prod=lambda _:fixture.base,verify_release=fixture.lookup,
+               identify_prepared=lambda p:a if p=='candidate-path' else None,probe=probe)
+        with self.assertRaises(Reject):
+            hook('wrong-prepared-path',switch)
+        switch.assert_not_called()
+        probe.assert_not_called()
+        self.assertEqual(hook('candidate-path',switch).artifact,a)
+        switch.assert_called_once()
+        probe.assert_called_once_with('test',a)

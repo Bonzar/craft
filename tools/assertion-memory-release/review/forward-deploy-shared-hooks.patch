@@ -1,0 +1,115 @@
+--- a/tools/assertion-memory-release/base_payload.py
++++ b/tools/assertion-memory-release/base_payload.py
+@@ -134,7 +134,7 @@
+     validate_retained(path,path)
+ 
+ 
+-def deploy(stream, revision, digest, *, root, config, hook=None):
++def deploy(stream, revision, digest, *, root, config, hook=None, authorize_activation=None):
+     if not re.fullmatch(r'[0-9a-f]{40}',revision):
+         raise ValueError('invalid_release_revision')
+     checked_hook=Path(config)/'service-hook.sh'
+@@ -148,4 +148,5 @@
+             return lambda action,release: run_hook(checked_hook,action,release,lock_fd=fd)
+     retention=bindings(root,(Store('base',retention_candidate),))
+     return common_deploy(stream,digest,root=root,spec=SPEC,
+-        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,retention_factory=retention)
++        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,
++        authorize_activation=authorize_activation,retention_factory=retention)
+--- a/tools/assertion-memory-visual/runtime_joint.py
++++ b/tools/assertion-memory-visual/runtime_joint.py
+@@ -98,7 +98,7 @@
+ 
+ 
+ def run(visual, runtime, candidate, *, validate, restart, smoke, bootstrap=None,
+-        retention_factory=None, prepared=None):
++        retention_factory=None, prepared=None, authorize_activation=None):
+     """Both candidates must already be prepared and immutable; use canonical Visual lock."""
+     visual,runtime=Path(visual),Path(runtime)
+     if any(root.resolve(strict=True)!=root for root in (visual,runtime)) or visual==runtime:
+@@ -173,29 +173,34 @@
+             if type(initial) is not str or not 0<len(initial)<=128:
+                 raise ValueError('Legacy running baseline could not be proven')
+             record.update(bootstrap=True,initial_process=initial)
+-        with marker.open('x',encoding='ascii') as file:
+-            json.dump(record,file,sort_keys=True,separators=(',',':'))
+-            file.flush()
+-            os.fsync(file.fileno())
+-        sync_directory(runtime)
+-        try:
+-            move(visual,candidate['static'])
+-            move(runtime,candidate['runtime'])
+-            restart()
+-            smoke(candidate)
+-        except Exception:
++        def switch():
++            with marker.open('x',encoding='ascii') as file:
++                json.dump(record,file,sort_keys=True,separators=(',',':'))
++                file.flush()
++                os.fsync(file.fileno())
++            sync_directory(runtime)
+             try:
+-                restore(before,record.get('initial_process'))
++                move(visual,candidate['static'])
++                move(runtime,candidate['runtime'])
++                restart()
++                smoke(candidate)
+             except Exception:
+-                raise RuntimeError('Visual pair rollback was not verified') from None
+-            marker.unlink()
++                try:
++                    restore(before,record.get('initial_process'))
++                except Exception:
++                    raise RuntimeError('Visual pair rollback was not verified') from None
++                marker.unlink()
++                sync_directory(runtime)
++                raise RuntimeError('Visual activation failed; old pair restored') from None
++            if bootstrap:
++                os.replace(marker,seal)  # one durable rename, no ambiguous journal/seal overlap
++            else:
++                marker.unlink()
+             sync_directory(runtime)
+-            raise RuntimeError('Visual activation failed; old pair restored') from None
+-        if bootstrap:
+-            os.replace(marker,seal)  # one durable rename, no ambiguous journal/seal overlap
++        if authorize_activation is None:
++            switch()
+         else:
+-            marker.unlink()
+-        sync_directory(runtime)
++            authorize_activation(candidate, switch)
+         if retention:
+             try:
+                 retention.sweep('after_commit')
+@@ -214,7 +219,7 @@
+             os.close(legacy)
+         os.close(fd)
+ 
+-def activate_verified(visual, runtime, expected, archive, runtime_sha, files, *, restart, smoke, bootstrap=None, retention_ready=None):
++def activate_verified(visual, runtime, expected, archive, runtime_sha, files, *, restart, smoke, bootstrap=None, retention_ready=None, authorize_activation=None):
+     """Connect authenticated receiver bytes to prepared files and joint rollback."""
+     import release_core
+     import visual_policy
+@@ -271,4 +276,4 @@
+     if bootstrap:
+         bootstrap.authorize(expected,runtime_sha)
+     return run(visual,runtime,prepare,validate=static_validate,restart=restart,smoke=smoke,bootstrap=bootstrap,
+-               retention_factory=retention_config(visual,retention_ready),prepared=prepared)
++               retention_factory=retention_config(visual,retention_ready),prepared=prepared,authorize_activation=authorize_activation)
+--- a/tools/assertion-memory-visual/visual_policy.py
++++ b/tools/assertion-memory-visual/visual_policy.py
+@@ -100,7 +100,7 @@
+         accept_member=accept_member, allow_dirs=False)
+ 
+ 
+-def deploy_verified(stream, expected_sha, *, root):
++def deploy_verified(stream, expected_sha, *, root, authorize_activation=None):
+     """Apply the product adapter after caller verifies its environment/signature authority."""
+     import release_core
+     root=Path(root)
+@@ -111,4 +111,4 @@
+             raise ValueError('Unsettled Visual joint transition')
+         return hook
+     return release_core.deploy(stream, expected_sha, root=root, spec=archive_spec(),
+-        validate=validate, hook=hook, retained=retained, hook_factory=locked)
++        validate=validate, hook=hook, retained=retained, hook_factory=locked,authorize_activation=authorize_activation)
