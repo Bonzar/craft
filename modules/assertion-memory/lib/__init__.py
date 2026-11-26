@@ -115,18 +115,24 @@ def context(event, storage):
         else:
             try:
                 from .outbox import Outbox
-                from .native_capture import register
+                from .native_capture import register, resume_enrolled
                 if machine:
-                    if event.event != 'session-start' or event.raw.get('source') != 'startup':
+                    if (event.event!='session-start' or event.raw.get('source') not in ('startup','resume')
+                            or event.raw.get('session_id')!=event.session_id):
                         return ''
                     from .fresh_policy import verify_machine_binding
                     root=verify_machine_binding(binding)
                 else:
                     root = Path(capture['state_dir']) / binding['endpoint_sha256']
+                if machine and event.raw.get('source')=='resume' and not (root/'outbox.sqlite3').is_file():
+                    return ''
                 store = Outbox(root / 'outbox.sqlite3')
                 try:
-                    registered = register(store, dict(event.raw), fresh_since=capture['fresh_since'] if machine else None)
-                    store.set_watching(event.session_id, True)
+                    if machine and event.raw.get('source')=='resume':
+                        registered=resume_enrolled(store,dict(event.raw),fresh_since=capture['fresh_since'])
+                    else:
+                        registered=register(store,dict(event.raw),fresh_since=capture['fresh_since'] if machine else None)
+                        store.set_watching(event.session_id,True)
                     local_report = store.summary(event.session_id)
                 finally: store.close()
                 capture_status = 'blocked_source' if registered.get('blocked') else 'registered_local_outbox'

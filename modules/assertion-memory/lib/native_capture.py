@@ -6,10 +6,11 @@ file witnesses stay local; canonical message IDs/source URIs never contain them.
 """
 import hashlib
 import os
+import stat
 import json
 from pathlib import Path
 from urllib.parse import quote
-from datetime import datetime
+from datetime import datetime, timezone
 
 CHAT_EXCLUDED_TYPES = frozenset({'function_call', 'custom_tool_call', 'function_call_output', 'custom_tool_call_output', 'reasoning'})
 
@@ -109,6 +110,73 @@ def register(store, raw, *, fresh_since=None):
     return registered
 
 
+def resume_enrolled(store, raw, *, fresh_since):
+    """Re-arm only an unchanged original startup with a proven end boundary.
+
+    Keep the verified cursor. The worker rejects historical records and any
+    crossing turn until an explicit eligible start recorded after SessionEnd.
+    This preserves new turns that reach disk just before the resume hook.
+    """
+    keys=('session_id','cwd','transcript_path')
+    if (raw.get('source')!='resume' or not isinstance(fresh_since,str)
+            or not all(isinstance(raw.get(k),str) and raw[k].strip() for k in keys)
+            or len(raw['session_id'])>256):
+        raise ValueError('An exact enrolled resume is required')
+    session=raw['session_id']
+    path=Path(raw['transcript_path'])
+    if not path.is_absolute() or not Path(raw['cwd']).is_absolute() or any(raw.get(k) is not None for k in FORK_KEYS):
+        raise ValueError('Resume physical identity is invalid')
+    from .outbox import lifecycle_guard, watching_marker
+    marker=watching_marker(store.root,session)
+
+    def marker_identity():
+        stamp=marker.lstat()
+        if not stat.S_ISREG(stamp.st_mode):
+            raise ValueError('Invalid inactive lifecycle marker')
+        return stamp.st_dev, stamp.st_ino, stamp.st_mtime_ns, stamp.st_ctime_ns
+
+    ended=marker_identity()
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        state=store.session(session)
+        if (not state or state.get('watching') or state.get('blocked')
+                or state.get('registration_source')!='startup' or state.get('fork_requires_current_session_proof')
+                or state.get('verified_fresh_since')!=fresh_since
+                or state.get('path')!=str(path) or Path(state['cwd']).resolve()!=Path(raw['cwd']).resolve()):
+            raise ValueError('Session is not an eligible enrolled resume')
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as stream:
+            current=os.fstat(stream.fileno())
+            identity=[current.st_dev,current.st_ino]
+            cursor,line=state.get('cursor'),state.get('line')
+            if (not stat.S_ISREG(current.st_mode) or state.get('identity')!=identity
+                    or type(cursor) is not int or type(line) is not int or cursor<0 or line<0
+                    or current.st_size<cursor):
+                raise ValueError('Resume source replaced or truncated')
+            header,meta=_header(stream,raw)
+            check_fresh_header(header,meta,fresh_since)
+            if state.get('header_hash')!=hashlib.sha256(header).hexdigest():
+                raise ValueError('Resume source header changed')
+            checkpoint=state.get('checkpoint')
+            if cursor:
+                start=max(0,cursor-4096)
+                stream.seek(start)
+                if checkpoint!={'start':start,'end':cursor,'sha256':hashlib.sha256(stream.read(cursor-start)).hexdigest()}:
+                    raise ValueError('Resume checkpoint changed')
+            with lifecycle_guard(store.root,session):
+                observed=path.lstat()
+                if (marker_identity()!=ended or not stat.S_ISREG(observed.st_mode)
+                        or [observed.st_dev,observed.st_ino]!=identity or observed.st_size<current.st_size):
+                    raise ValueError('Resume lifecycle or source changed')
+                state.update(current=None,turn=None,dialogue_turn_roots={},resume_after_ns=ended[2])
+                store.save_session(state)
+                # Commit the new cursor before clearing the marker; any failure
+                # before unlink leaves the worker fail-closed and inactive.
+                store.db.commit()
+                marker.unlink()
+    return store.session(session)
+
+
 def _allowed_start(payload, meta, roots=None):
     attribution = payload.get('turn_attribution')
     if not isinstance(attribution, dict) or attribution.get('initiating_agent_path'):
@@ -126,6 +194,25 @@ def _allowed_start(payload, meta, roots=None):
         and attribution.get('root_turn_id') == turn and payload.get('root_turn_id') == turn
         and meta.get('originator') == 'Codex Desktop' and meta.get('source') == 'vscode')
 
+
+
+def _resumed_human_start(row,meta,after_ns,roots):
+    payload=row.get('payload')
+    if (row.get('type')!='event_msg' or not isinstance(payload,dict)
+            or payload.get('type')!='task_started' or not _allowed_start(payload,meta,roots)):
+        return False
+    turn=payload.get('turn_id')
+    if not isinstance(turn,str) or not 0<len(turn)<=256:
+        return False
+    try:
+        stamp=datetime.fromisoformat(row['timestamp'].replace('Z','+00:00'))
+        if stamp.utcoffset() is None or stamp>datetime.now(timezone.utc):
+            return False
+        elapsed=stamp-datetime(1970,1,1,tzinfo=timezone.utc)
+        ns=(elapsed.days*86400+elapsed.seconds)*1_000_000_000+elapsed.microseconds*1000
+        return ns>after_ns
+    except (TypeError,ValueError,KeyError,AttributeError,OverflowError):
+        return False
 
 
 def _service_context(row):
@@ -448,13 +535,21 @@ def _exclude_prior_tool_gaps(state):
 
 
 def poll(store, session_id, config):
+    # Serialize the state read as well as writes against resume's cursor fence.
+    # SessionEnd remains independent of SQLite; it only sets a marker.
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        return _poll_locked(store,session_id,config)
+
+
+def _poll_locked(store, session_id, config):
     state = store.session(session_id)
     if state is None: raise ValueError('Unregistered session')
     if not state.get('watching', True): return {'queued': 0, 'status': 'inactive'}
     path = Path(state['path'])
     if not path.exists(): return {'queued': 0, 'status': 'waiting_transcript'}
     queued = 0
-    with path.open('rb') as stream, store.db:
+    with path.open('rb') as stream:
         try: header, meta = _header(stream, {'session_id': session_id, 'cwd': state['cwd']})
         except PendingSource: return {'queued': 0, 'status': 'waiting_header'}
         stat = os.fstat(stream.fileno())
@@ -530,7 +625,15 @@ def poll(store, session_id, config):
                         'end':stream.tell(),'sha256':hashlib.sha256(line).hexdigest()})
                 elif isinstance(row, dict):
                     row['_witness'] = {'start': offset, 'end': stream.tell(), 'sha256': hashlib.sha256(line).hexdigest()}
-                    queued += _process(store, state, meta, row, offset, state['line'], config)
+                    if 'resume_after_ns' not in state:
+                        queued += _process(store, state, meta, row, offset, state['line'], config)
+                    elif row.get('type')=='event_msg' and isinstance(payload,dict) and payload.get('type')=='task_started':
+                        if _resumed_human_start(row,meta,state['resume_after_ns'],state.get('dialogue_turn_roots')):
+                            queued += _process(store, state, meta, row, offset, state['line'], config)
+                        else:
+                            state['turn']=None
+                    elif state.get('turn') is not None:
+                        queued += _process(store, state, meta, row, offset, state['line'], config)
             state['cursor'] = stream.tell()
             state['line'] += 1
         saved_offset = stream.tell()
@@ -541,5 +644,11 @@ def poll(store, session_id, config):
         stream.seek(saved_offset)
         state['gaps'] = state['gaps'][-64:]
         if 'gap_witnesses' in state:state['gap_witnesses']=state['gap_witnesses'][-64:]
-        store.save_session(state)
+        from .outbox import lifecycle_guard, watching_marker
+        with lifecycle_guard(store.root,session_id):
+            if watching_marker(store.root,session_id).exists():
+                store.db.rollback()
+                return {'queued':0,'status':'inactive'}
+            store.save_session(state)
+            store.db.commit()
     return {'queued': queued, 'status': 'registered', 'gaps': state['gaps'], 'backlog': state['cursor'] < stat.st_size}
