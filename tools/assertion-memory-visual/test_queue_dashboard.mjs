@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,observe=false}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -71,11 +71,17 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
       }
       if(url==='/api/v1/processing/sessions/prepare'){
         assert.equal(options.method,'POST');
+        if(JSON.parse(options.body).format==='policy-v1')
+          return processingPolicy?Response.json({...processingPolicy,csrf_token:'123.'+'a'.repeat(64)}):Response.json({}, {status:404});
         return sessionPolicy?Response.json({...sessionPolicy,csrf_token:'123.'+'a'.repeat(64)}):Response.json({}, {status:404});
       }
       if(url==='/api/v1/processing/sessions'){
         const payload=JSON.parse(options.body);
         sessionWrites.push({payload,token:options.headers['x-csrf-token']});
+        if(payload.policy&&processingPolicy){
+          processingPolicy={...processingPolicy,revision:'f'.repeat(32),policy:payload.policy};
+          return Response.json(processingPolicy);
+        }
         assert.equal(options.method,'PUT');
         sessionPolicy={...sessionPolicy,revision:'c'.repeat(32),selected_session_ids:payload.selected_session_ids};
         return Response.json(sessionPolicy);
@@ -95,7 +101,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
@@ -381,4 +387,32 @@ for(const stage of ['test','prod'])test(stage+' shows one source batch card with
     assert.match(h.text(entry),/Ты:.*<script>текст<\/script>/);
   }
   assert.equal(h.urls.filter(x=>x.includes('/source-preview')).length,4);
+});
+
+for(const stage of ['test','prod'])test(stage+' saves an owner processing policy with all/exclusion/date and then include selection',async()=>{
+  const h=harness({stage,standalone:true,control:{paused:false,revision:'b'.repeat(32),can_change:true},
+    processingPolicy:{stage,revision:'b'.repeat(32),policy:{mode:'all',included_session_ids:[],
+      excluded_session_ids:[],added_from:null,added_through:null},sessions:[{id:'native',eligible:true,queued:2}]}});
+  await h.open();
+  assert.equal(h.sessionPanel.hidden,false);
+  assert.match(h.text(h.sessionOptions),/Все сессии, кроме исключённых/);
+  const row=h.find(h.sessionOptions,e=>e.type==='checkbox');
+  row.checked=true;row.listeners.change();
+  const [from,through]=h.sessionOptions.items[0].items.slice(1).map(e=>e.items[0]);
+  from.value='2026-11-26';from.listeners.change();
+  through.value='2026-11-25';through.listeners.change();
+  assert.equal(h.sessionSave.disabled,true);
+  through.value='2026-11-26';through.listeners.change();
+  assert.equal(h.sessionSave.disabled,false);
+  await h.sessionSave.listeners.click();
+  assert.deepEqual(h.sessionWrites[0].payload,{stage,expected_revision:'b'.repeat(32),
+    policy:{mode:'all',included_session_ids:[],excluded_session_ids:['native'],
+      added_from:'2026-11-26T00:00:00Z',added_through:'2026-11-26T23:59:59.999999Z'}});
+  const mode=h.find(h.sessionOptions,e=>e.tag==='select');
+  mode.value='include';mode.listeners.change();
+  const include=h.find(h.sessionOptions,e=>e.type==='checkbox');
+  include.checked=true;include.listeners.change();
+  await h.sessionSave.listeners.click();
+  assert.deepEqual(h.sessionWrites[1].payload.policy.included_session_ids,['native']);
+  assert.deepEqual(h.sessionWrites[1].payload.policy.excluded_session_ids,[]);
 });
