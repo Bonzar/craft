@@ -77,6 +77,7 @@
       catch {copyStatus.textContent='Копирование недоступно. ID можно выделить в карточке.';}
     });
     detail.append(summary,raw,copy);
+    let cardAction=null;
     if(controlsReady&&itemFeedback&&['source','maintenance'].includes(queueId)&&rev(item.remove_revision)&&item.status!=='running'&&(queueId!=='source'||item.phase==='extract')){
       const change=element('div','','queue-remove-action');
       const key=queueId+':'+item.id;
@@ -112,7 +113,9 @@
         change.replaceChildren(element('p',source?'Удалить задачу и реплику из базы памяти? Сообщение в исходном чате останется.':'Удалить только задачу из очереди? Реплики и граф останутся.'),commit,cancel);
         commit.focus();
       });
-      change.append(begin);detail.append(change);
+      change.append(begin);cardAction=change;
+    }else if(controlsReady&&queueId==='source'&&(item.phase==='partial_source'||item.status==='running')){
+      cardAction=element('p','Удаление недоступно: обработка реплики уже началась.','queue-lane-status');
     }
     root.append(row,title);
     if(controlsReady&&queueId==='source'&&rev(item.preview_revision)){
@@ -154,6 +157,7 @@
     }
     if(Object.hasOwn(hold,item.hold_reason))root.append(element('p',hold[item.hold_reason],'queue-lane-status'));
     if(typeof item.session_id==='string'&&item.session_id)detail.append(element('p','Сессия: '+item.session_id));
+    if(cardAction)root.append(cardAction);
     root.append(detail);
     return {root,details:detail,summary,copy};
   }

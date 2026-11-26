@@ -307,6 +307,8 @@ test('source plain excerpt and deletion require item-specific confirmation',asyn
   await h.signal();
   assert.equal(h.urls.filter(url=>url.includes('/source-preview')).length,2);
   assert.equal(action(cards[1],'Удалить реплику и задачу'),undefined);
+  assert.match(h.text(cards[1]),/обработка реплики уже началась/);
+  assert.ok(cards[0].items.some(e=>e.tag!=='details'&&action(e,'Удалить реплику и задачу')));
   action(cards[0],'Удалить реплику и задачу').listeners.click();
   assert.equal(h.removed.length,0);
   action(cards[0],'Отмена').listeners.click();
