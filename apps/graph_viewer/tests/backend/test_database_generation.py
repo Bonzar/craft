@@ -56,6 +56,9 @@ class ResetSafety(LiveFixture,unittest.IsolatedAsyncioTestCase):
         ir.mkdir(mode=0o700)
         retired=ir/('a'*64)
         retired.mkdir(mode=0o700)
+        interrupted=ir/'.building-a1b2c3d4'
+        interrupted.mkdir(mode=0o700)
+        (interrupted/'source.sqlite3').write_bytes(b'incomplete-old-private-source')
         stale=retired/'source.sqlite3'
         stale.write_bytes(b'only-synthetic-old-source')
         stale.chmod(0o600)
@@ -79,6 +82,7 @@ class ResetSafety(LiveFixture,unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.1)
         self.assertFalse(old.directory.exists())
         self.assertFalse(retired.exists())
+        self.assertFalse(interrupted.exists())
         self.assertTrue(fresh.directory.exists())
         self.assertEqual(active.read_bytes(),b'only-synthetic-current-source')
         self.assertEqual(control.read_bytes(),b'never-delete')
