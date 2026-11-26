@@ -49,6 +49,7 @@ it will not sign a clear after an old prepare result. Only the V2 browser
 route can be published; both older components rolled back together still
 receive no route to the old control. A successful clear
 receipt is not a capture-ready receipt. For a previously enrolled producer,
-the owner panel displays capture waiting until an explicit successor report
-is persisted for the same clear generation; it does not claim that every
-session is now resumed. No sensitive support IDs or dates reach the panel.
+the owner panel waits for exact successor reports from every stream in the
+frozen, opaque set of previously enrolled, active, unexpired streams at clear.
+A late acknowledgement for an older clear may resume its stream but cannot
+count toward the current clear. This is not full transcript replay. No sensitive support IDs or dates reach the panel.

@@ -18,9 +18,9 @@ RESET_HEADER=b'x-memory-queue-reset-v2'
 RESET_FORMAT=b'binding-v2'
 REARM_STATES=frozenset(('not_cleared','unknown','not_required','waiting','confirmed'))
 INITIAL='0'*32
-from .stream_clear_transition import CUTOVER,TRANSITIONS,capture_rearm_status
+from .stream_clear_transition import CUTOVER,TRANSITIONS,EXPECTED,capture_rearm_status
 
-PRESERVE={STATE,TOMBSTONES,CUTOVER,TRANSITIONS,'memory_processing_control','memory_state',
+PRESERVE={STATE,TOMBSTONES,CUTOVER,TRANSITIONS,EXPECTED,'memory_processing_control','memory_state',
           'memory_thought_runtime','memory_test_queue_sessions','memory_queue_processing_policy','memory_queue_pause_nonce'}
 PROVENANCE=('memory_run_provenance','memory_run_causes','memory_run_cause_links','memory_run_events')
 IMMUTABLE_DELETE={'memory_artifacts_no_delete','memory_view_names_no_delete',
@@ -157,10 +157,18 @@ def clear(db, *, stage, expected_revision, binding=None):
             db.executemany(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',
                 ((_fingerprint(salt,kind,tuple(v)),) for v in db.execute('SELECT '+','.join(columns)+' FROM '+table)))
     from .stream_clear_transition import WITNESS,witnesses,finish_clear
+    new=uuid4().hex
+    from datetime import datetime, timezone
+    cleared_at=datetime.now(timezone.utc).isoformat(timespec='microseconds')
+    finish_clear(db,new,cleared_at)
     had_enrolled=False
     for row in witnesses(db,managed):
-        had_enrolled=True
-        db.execute(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',(_fingerprint(salt,WITNESS,tuple(row)),))
+        *identity,lifecycle,lease_until=row
+        old=tuple(identity)
+        db.execute(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',(_fingerprint(salt,WITNESS,old),))
+        if lifecycle=='active' and lease_until>cleared_at:
+            had_enrolled=True
+            db.execute(f'INSERT INTO {EXPECTED} VALUES(?)',(_fingerprint(salt,'owner-clear-prior-v1',(new,*old)),))
     db.execute('PRAGMA defer_foreign_keys=ON')
     triggers=[(name,sql) for name,sql in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='trigger'") if name in IMMUTABLE_DELETE]
     for name,_ in triggers:
@@ -192,9 +200,6 @@ def clear(db, *, stage, expected_revision, binding=None):
     if db.execute('PRAGMA foreign_key_check').fetchone():
         raise ValueError('invalid foreign keys after clear')
     db.execute('UPDATE memory_state SET version=version+1 WHERE singleton=1')
-    new=uuid4().hex
-    from datetime import datetime, timezone
-    finish_clear(db,new,datetime.now(timezone.utc).isoformat(timespec='microseconds'),had_enrolled)
     db.execute(f'INSERT INTO {STATE} VALUES (1,?,?) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision',(new,salt))
     return {'stage':stage,'revision':request_revision(db,stage=stage,binding=binding),'cleared':True,
             'capture_rearm':'waiting' if had_enrolled else 'not_required'}

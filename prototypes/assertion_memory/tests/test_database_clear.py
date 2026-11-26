@@ -194,6 +194,35 @@ class DatabaseClearTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'superseded'):
                 self.service.ingest_register(producer,session,**previous(old))
 
+    def test_older_witness_cannot_count_as_a_current_expected_rearm(self):
+        from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
+        producer='jarvis:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        older='11111111-1111-1111-1111-111111111111'
+        first='22222222-2222-2222-2222-222222222222'
+        second='33333333-3333-3333-3333-333333333333'
+        action=self.signed_callbacks('prod')
+        def clear():
+            view=action('clear_prepare',{})
+            return action('clear_commit',{'expected_revision':view['revision']})
+        def recover(session,pair):
+            result=self.service.ingest_register(producer,session,previous_stream_id=pair['stream_id'],
+                                                previous_epoch=pair['epoch'])
+            generation=result['database_clear_reset']['generation']
+            self.service.ingest_report(result['stream_id'],result['epoch'],1,0,'current',0,
+                                       reset_generation=generation)
+        with authenticated_fresh_mac():
+            historic=self.service.ingest_register(producer,older)
+            self.assertEqual(clear()['capture_rearm'],'waiting')
+            a=self.service.ingest_register(producer,first)
+            b=self.service.ingest_register(producer,second)
+            self.assertEqual(clear()['capture_rearm'],'waiting')
+            recover(older,historic)
+            self.assertEqual(action('clear_prepare',{})['capture_rearm'],'waiting')
+            recover(first,a)
+            self.assertEqual(action('clear_prepare',{})['capture_rearm'],'waiting')
+            recover(second,b)
+            self.assertEqual(action('clear_prepare',{})['capture_rearm'],'confirmed')
+
     def test_replace_or_release_change_invalidates_a_prepared_revision(self):
         self.capture('seeded-old')
         original=self.signed_callbacks('test')('clear_prepare',{})['revision']
