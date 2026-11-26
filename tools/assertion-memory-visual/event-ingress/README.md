@@ -35,3 +35,39 @@ never extract browser state, pass a credential as a command argument or mint a
 session. Compare against authorized loopback. Code 200 or buffered frames
 delivered as a batch do not pass. If the integration buffers, leave PROD alone
 and use a reviewed streaming-capable owner-protected HTTPS ingress.
+
+## Smallest reviewed release path
+
+Prefer an operator handoff rather than a permanent cloud editor token. Yandex
+Gateway editor can modify and delete its assigned Gateway, so do not bind
+the role at folder or cloud level just to change one path. The Update API
+writes a complete spec, so serialize against all other edits to that Gateway;
+the plan and its rollback must be regenerated when a fresh spec digest drifts.
+
+1. Publish a separate immutable TEST ingress release with only the reviewed
+   renderer, manifest and pinned tests. Do not put actual routes dumps,
+   cloud IDs, Nginx credentials or cookies in public release assets. Do not
+   enlist the existing app release principal or a broad remote command.
+2. Run read-only plan with a protected TEST operator. Save both originals
+   privately and independently verify the exact spec/digest and existing
+   owner-protected Graph path. Build a single transaction plan containing
+   only allowed path/method changes and discussed TEST rollback.
+3. Have an independently reviewed network-config apply authority consume the
+   immutable release and reviewed digests: a root-managed fixed TEST operation
+   for exactly one preconfigured Nginx file (regular root-owned file,
+   no symlinks, lock, expected-byte comparison, same-directory atomic rename,
+   nginx -t before reload and restore exact before bytes on failure); an
+   existing operator sets only openapiSpec for the exact TEST Gateway.
+   The protected operation must not execute arbitrary archive content as root.
+   If automating later, maintain separate scope-local credentials with owner
+   approval and an explicit serial concurrency key. A new role/binding or
+   root-managed operation requires separate review; none is provisioned here.
+4. Order: validate and install the Nginx-only route (denial expected without
+   credentials), then publish exact scoped Gateway spec change, then prove
+   TEST SSE. If TEST fails, remove just those changes in reverse order; recheck
+   other paths. Do not stage PROD until genuine streaming and auth are proven.
+   Any later PROD plan needs independent TEST evidence, its own exact routing
+   and separate approval.
+
+Yandex references: https://yandex.cloud/en/docs/iam/roles-reference ;
+https://yandex.cloud/en/docs/api-gateway/apigateway/api-ref/ApiGateway/update .

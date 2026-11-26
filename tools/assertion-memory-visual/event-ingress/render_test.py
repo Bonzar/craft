@@ -4,7 +4,6 @@ import argparse
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
-import yaml
 
 PUBLIC_PATH='/api/v1/events'
 PRIVATE_PATH='/__mvt/api/v1/events'
@@ -88,6 +87,7 @@ def apigw(spec):
     return copied
 
 def main():
+    import yaml
     p=argparse.ArgumentParser()
     p.add_argument('nginx_config',type=Path);p.add_argument('gateway_spec',type=Path);p.add_argument('review_dir',type=Path)
     a=p.parse_args()

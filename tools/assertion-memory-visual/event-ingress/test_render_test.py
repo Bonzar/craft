@@ -47,6 +47,10 @@ class Prepare(unittest.TestCase):
         self.assertEqual(route['url'],'https://192.0.2.7'+PRIVATE_PATH)
         self.assertEqual(route['query'],{'after':'{after}','revision':'{revision}'})
         self.assertEqual(set(route['headers']),{'Cookie','Origin','Sec-Fetch-Site','Last-Event-ID'})
+        cross_lane=deepcopy(W)
+        cross_lane['paths']['/api/v1/{tail+}']['get']['x-yc-apigateway-integration']['url']='https://192.0.2.7/__mvp/api/v1/{tail}'
+        with self.assertRaises(ValueError):
+            apigw(cross_lane)
         old['paths']['/api/v1/{tail+}']['get']['x-yc-apigateway-integration']['headers']['Cookie']='bad'
         with self.assertRaises(ValueError):
             apigw(old)
