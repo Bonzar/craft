@@ -32,8 +32,8 @@ const LIVE_SEED='9a0cef2d67103909cd18a81d37aadeb62659622e2f21f56225b43d5fff0b791
 const liveDirect=await readFile(new URL('../../apps/graph_viewer/web/src/direct-stream.mjs',import.meta.url),'utf8');
 const liveController=await readFile(new URL('../../apps/graph_viewer/web/src/owner-live-controller.mjs',import.meta.url),'utf8');
 export function ownerLivePrelude(){
-  const direct=once(once(liveDirect,'export function directStreamTarget(','function directStreamTarget('),'export async function readDirectStream(','async function readDirectStream(');
-  const controller=once(once(once(liveController,"import {readDirectStream} from './direct-stream.mjs';",''),'export function openOwnerLive(','function openOwnerLive('),'export function firstOwnerSnapshot(','function firstOwnerSnapshot(');
+  const direct=once(once(once(liveDirect,'export function directStreamTarget(','function directStreamTarget('),'export async function readDirectStream(','async function readDirectStream('),'export async function readSameOriginOwnerStream(','async function readSameOriginOwnerStream(');
+  const controller=once(once(once(liveController,"import {readDirectStream,readSameOriginOwnerStream} from './direct-stream.mjs';",''),'export function openOwnerLive(','function openOwnerLive('),'export function firstOwnerSnapshot(','function firstOwnerSnapshot(');
   return 'const [releaseOpenOwnerLive,releaseFirstOwnerSnapshot]=(()=>{\n'+direct+'\n'+controller+'\nreturn [openOwnerLive,firstOwnerSnapshot];\n})();\n';
 }
 
@@ -50,29 +50,38 @@ bootstrapReleaseOwnerGraph(){
   const boot=releaseFirstOwnerSnapshot(epoch=>{
     if(!this.authenticated)return;
     this.releaseOwnerSnapshotEpoch=epoch;
-    if(epoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:this.capabilities?.owner_live_transport?.queue_hints===1}}));
+    if(epoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:this.releaseOwnerLiveCarriesQueue}}));
     this.ensureReleaseScene();
     return this.loadGraph(undefined,true);
   });
   if(!this.startReleaseOwnerLive(boot)){boot.close();this.ensureReleaseScene();return this.loadGraph();}
   return boot.ready;
 }
-stopReleaseOwnerLive(){this.releaseOwnerSnapshotBoot?.close();this.releaseOwnerSnapshotBoot=null;this.releaseOwnerSnapshotEpoch=null;this.releaseOwnerLiveHealthy=false;this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}
+stopReleaseOwnerLive(){this.releaseOwnerSnapshotBoot?.close();this.releaseOwnerSnapshotBoot=null;this.releaseOwnerSnapshotEpoch=null;this.releaseOwnerLiveHealthy=false;this.releaseOwnerLiveCarriesQueue=false;this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}
 startReleaseOwnerLive(boot){
   const cfg=this.capabilities?.owner_live_transport;
-  if(this.manifest&&!/^[a-f0-9]{64}$/.test(this.manifest.owner_live_epoch??''))return false;
-  if(!this.authenticated||!this.csrf||cfg?.version!==1||cfg?.lane!=='test'||typeof cfg.origin!=='string')return false;
-  let target;try{target=new URL(cfg.origin);}catch{return false;}
-  if(target.origin!==cfg.origin||target.protocol!=='https:'||target.port||!/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(target.hostname))return false;
-  const key=JSON.stringify([cfg.origin,this.capabilities.provider_id]);
+  if(!this.authenticated||!this.csrf||this.manifest&&!/^[a-f0-9]{64}$/.test(this.manifest.owner_live_epoch??''))return false;
+  let transport='ordinary',origin=null,queue=true;
+  if(cfg?.version===1&&cfg.lane==='test'&&typeof cfg.origin==='string'){
+    try{const url=new URL(cfg.origin);
+      if(url.origin===cfg.origin&&url.protocol==='https:'&&!url.port&&/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(url.hostname)){
+        transport='direct';origin=cfg.origin;queue=cfg.queue_hints===1;
+      }
+    }catch{}
+  }
+  if(transport==='ordinary'){
+    if(this.capabilities?.owner_live_bootstrap!==1||this.capabilities?.capabilities?.live!==true)return false;
+    origin=location.origin;
+  }
+  const key=JSON.stringify([transport,origin,this.capabilities.provider_id]);
   if(this.releaseOwnerLive&&this.releaseOwnerLiveKey===key){
     if(this.releaseOwnerLiveHealthy&&this.manifest)this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется',true);
     return true;
   }
-  this.stopReleaseOwnerLive();this.releaseOwnerLiveKey=key;this.releaseOwnerSnapshotBoot=boot??null;
+  this.stopReleaseOwnerLive();this.releaseOwnerLiveKey=key;this.releaseOwnerSnapshotBoot=boot??null;this.releaseOwnerLiveCarriesQueue=queue;
   const current=()=>this.releaseOwnerLiveKey===key&&this.authenticated&&!this.changingContext;
   this.releaseOwnerLive=releaseOpenOwnerLive({
-    allowedOrigin:cfg.origin,csrf:this.csrf,initialEpoch:this.manifest?.owner_live_epoch,
+    allowedOrigin:origin,csrf:this.csrf,transport,initialEpoch:this.manifest?.owner_live_epoch,
     onBootstrap:epoch=>{
       if(!current())return false;
       this.releaseOwnerSnapshotEpoch=epoch;
@@ -90,7 +99,7 @@ startReleaseOwnerLive(boot){
       if(this.graphLoading)await this.graphLoading;
       if(!current())return;
       this.releaseOwnerSnapshotEpoch=authority??null;
-      if(this.releaseOwnerSnapshotEpoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch:this.releaseOwnerSnapshotEpoch,queue:cfg.queue_hints===1}}));
+      if(this.releaseOwnerSnapshotEpoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch:this.releaseOwnerSnapshotEpoch,queue}}));
       if(reason==='reset')this.ensureReleaseScene();
       else if(this.selector.mode==='known_then')return;
       await this.loadGraph(undefined,true);
@@ -103,7 +112,7 @@ export function patchOwnerLive(script,rawSeed){
   const replace=(from,to)=>{script=once(script,from,to);};
   // The pinned schema strips unknown fields by default. Keep this new field
   // opaque here and validate narrowly only when selecting the transport.
-  replace('ce=p({provider_id:i,capabilities:', 'ce=p({provider_id:i,owner_live_transport:d(c,null),capabilities:');
+  replace('ce=p({provider_id:i,capabilities:', 'ce=p({provider_id:i,owner_live_transport:d(c,null),owner_live_bootstrap:d(c,null),capabilities:');
   replace('complete_graph:s,delta_capabilities:', 'complete_graph:s,owner_live_epoch:d(_,null),delta_capabilities:');
   replace('this.changingContext=!0,this.stream?.close()', 'this.changingContext=!0,this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('this.loading.hidden=!0,this.stream?.close()', 'this.loading.hidden=!0,this.stopReleaseOwnerLive(),this.stream?.close()');

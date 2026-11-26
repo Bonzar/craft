@@ -374,14 +374,15 @@ class Viewer {
     this.graph=null;this.manifest=null;this.topics=null;this.cursor='';
   }
   private ownerLiveHealthy=false;
+  private ownerLiveCarriesQueue=false;
   private ownerSnapshotEpoch:string|null=null;
   private ownerSnapshotBoot:FirstOwnerSnapshot|null=null;
-  private stopOwnerLive():void{this.ownerSnapshotBoot?.close();this.ownerSnapshotBoot=null;this.ownerSnapshotEpoch=null;this.ownerLiveHealthy=false;this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
+  private stopOwnerLive():void{this.ownerSnapshotBoot?.close();this.ownerSnapshotBoot=null;this.ownerSnapshotEpoch=null;this.ownerLiveHealthy=false;this.ownerLiveCarriesQueue=false;this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
   private async bootstrapOwnerGraph():Promise<void>{
     const bootstrap=firstOwnerSnapshot(epoch=>{
       if(!this.authenticated)return;
       this.ownerSnapshotEpoch=epoch;
-      if(epoch)window.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:(this.capabilities?.owner_live_transport as {queue_hints?:number})?.queue_hints===1}}));
+      if(epoch)window.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:this.ownerLiveCarriesQueue}}));
       this.ensureLiveScene();
       return this.loadGraph(undefined,true);
     });
@@ -390,21 +391,24 @@ class Viewer {
   }
   private startDirectOwnerLive(bootstrap?:FirstOwnerSnapshot):boolean{
     const cfg=this.capabilities?.owner_live_transport;
-    if(this.manifest&&!/^[a-f0-9]{64}$/.test(this.manifest.owner_live_epoch??''))return false;
-    if(!cfg||typeof cfg!=='object'||!('version'in cfg)||cfg.version!==1||!('lane'in cfg)||cfg.lane!=='test'||!('origin'in cfg)||typeof cfg.origin!=='string')return false;
-    const o=cfg.origin;
-    // Reject ambient/configurable destinations. The presented grant never moves
-    // to any origin other than the exact trusted deployment's IPv4 HTTPS origin.
-    let url:URL;try{url=new URL(o);}catch{return false;}
-    if(url.origin!==o||url.protocol!=='https:'||url.port||!/^\d+\.\d+\.\d+\.\d+$/.test(url.hostname)||!this.csrf)return false;
-    const key=JSON.stringify([o,this.capabilities?.provider_id]);
+    if(!this.authenticated||!this.csrf||this.manifest&&!/^[a-f0-9]{64}$/.test(this.manifest.owner_live_epoch??''))return false;
+    let transport:'direct'|'ordinary'='ordinary',o=location.origin,queue=true;
+    let direct=false;
+    if(cfg&&typeof cfg==='object'&&'version'in cfg&&cfg.version===1&&'lane'in cfg&&cfg.lane==='test'
+        &&'origin'in cfg&&typeof cfg.origin==='string'){
+      try{const url=new URL(cfg.origin);if(url.origin===cfg.origin&&url.protocol==='https:'&&!url.port&&/^\d+\.\d+\.\d+\.\d+$/.test(url.hostname)){
+        direct=true;transport='direct';o=cfg.origin;queue='queue_hints'in cfg&&cfg.queue_hints===1;
+      }}catch{}
+    }
+    if(!direct&&(this.capabilities?.owner_live_bootstrap!==1||this.capabilities.capabilities.live!==true))return false;
+    const key=JSON.stringify([transport,o,this.capabilities?.provider_id]);
     if(this.ownerLive&&this.ownerLiveKey===key){
       if(this.ownerLiveHealthy&&this.manifest)this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется',true);
       return true;
     }
     this.stopOwnerLive();
-    this.ownerLiveKey=key;this.ownerSnapshotBoot=bootstrap??null;
-    this.ownerLive=openOwnerLive({allowedOrigin:o,csrf:this.csrf,initialEpoch:this.manifest?.owner_live_epoch,onBootstrap:epoch=>{
+    this.ownerLiveKey=key;this.ownerSnapshotBoot=bootstrap??null;this.ownerLiveCarriesQueue=queue;
+    this.ownerLive=openOwnerLive({allowedOrigin:o,csrf:this.csrf,transport,initialEpoch:this.manifest?.owner_live_epoch,onBootstrap:epoch=>{
       if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return false;
       this.ownerSnapshotEpoch=epoch;
       return bootstrap?.accept(epoch)??false;
@@ -423,7 +427,7 @@ class Viewer {
       if(this.graphLoading)await this.graphLoading;
       if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return;
       this.ownerSnapshotEpoch=authority??null;
-      if(this.ownerSnapshotEpoch)window.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch:this.ownerSnapshotEpoch,queue:'queue_hints'in cfg&&cfg.queue_hints===1}}));
+      if(this.ownerSnapshotEpoch)window.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch:this.ownerSnapshotEpoch,queue}}));
       if(reason==='reset')this.ensureLiveScene();
       else if(this.selector.mode==='known_then')return;
       await this.loadGraph(undefined,true);

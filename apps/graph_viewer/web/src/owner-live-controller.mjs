@@ -1,4 +1,4 @@
-import {readDirectStream} from './direct-stream.mjs';
+import {readDirectStream,readSameOriginOwnerStream} from './direct-stream.mjs';
 
 const MIN_LIVE_GAP=500;
 const SILENCE_TIMEOUT=18_000;
@@ -7,7 +7,7 @@ const MAX_BACKOFF=20_000;
 // A transport lifetime can refresh the same Graph slice without reminting.
 // Starting a new slice/session closes the old transport first.
 export function openOwnerLive({
-  allowedOrigin,csrf,onState,onRefresh,onInvalidate=()=>{},initialEpoch=null,onBootstrap=()=>false,read=readDirectStream,
+  allowedOrigin,csrf,onState,onRefresh,onInvalidate=()=>{},initialEpoch=null,onBootstrap=()=>false,transport='direct',read=transport==='ordinary'?readSameOriginOwnerStream:readDirectStream,
   visibility=globalThis.document,page=globalThis.window,
   now=()=>performance.now(),schedule=setTimeout,cancel=clearTimeout,
 }){

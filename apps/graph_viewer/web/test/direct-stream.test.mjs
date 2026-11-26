@@ -70,3 +70,18 @@ test('standalone proof shell has only exact origin and content hash in its polic
   assert.ok(html.includes('Проверить поток'));
   await assert.rejects(renderProof('https://192.0.2.7/help'));
 });
+
+test('ordinary owner path uses exactly same-origin read, and refuses broad legacy deltas',async()=>{
+  const {readSameOriginOwnerStream}=await import('../src/direct-stream.mjs');
+  const epoch='e'.repeat(64),events=[];
+  const invoke=body=>readSameOriginOwnerStream({onEvent:(kind,id)=>events.push([kind,id]),fetcher:async(path,options)=>{
+    assert.equal(path,'/api/v1/events');assert.equal(options.method,'GET');
+    assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
+    assert.equal(options.headers.Authorization,undefined);
+    return new Response(body,{headers:{'Content-Type':'text/event-stream'}});
+  }});
+  await invoke('event: hello\ndata: {"epoch":"'+epoch+'"}\n\nevent: reset\ndata: {}\n\nevent: changed\ndata: {}\n\n');
+  assert.deepEqual(events,[['hello',epoch],['reset',epoch],['changed',epoch]]);
+  await assert.rejects(invoke('event: hello\ndata: {"cursor":"2","revision":null}\n\n'),/Invalid stream event/);
+  await assert.rejects(invoke('event: hello\ndata: {"epoch":"'+epoch+'"}\n\nevent: delta\ndata: {}\n\n'),/Invalid stream event/);
+});

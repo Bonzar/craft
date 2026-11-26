@@ -1,6 +1,7 @@
 export type OwnerLiveHandle = { close(): void };
 export function openOwnerLive(args:{
   allowedOrigin:string;
+  transport?:'direct'|'ordinary';
   csrf:string;
   initialEpoch?:string|null;
   onBootstrap?:(epoch:string)=>boolean;
