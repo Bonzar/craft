@@ -79,7 +79,7 @@ def activate_forward(checkpoints, req, *, receiver_stage, verify_dispatch, verif
 
     if req.stage == 'test':
         return checkpoints.test(a, verified_release=authorize_test, activate_and_probe=activate_and_probe,
-                                live_prod=live_prod, verify_fix=verify_fix)
+                                live_prod=live_prod, verify_fix=verify_fix,observe_test=active_test)
     return checkpoints.production(a, verified_release=verify_release, actual_test=read_exact_test,
                                   approve=verify_promote_approval, activate_and_probe=activate_and_probe)
 

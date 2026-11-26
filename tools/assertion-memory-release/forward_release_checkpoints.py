@@ -38,7 +38,7 @@ class Checkpoints:
                 type(p.release_id) is int and p.release_id > 0, 'Exact immutable published release required')
         return p
 
-    def test(self, artifact: Artifact, *, verified_release, activate_and_probe, live_prod, verify_fix):
+    def test(self, artifact: Artifact, *, verified_release, activate_and_probe, live_prod, verify_fix, observe_test=None):
         artifact.checked()
         c = artifact.candidate
         with self.lock(c.family):
@@ -49,12 +49,35 @@ class Checkpoints:
                 live = live_prod(c.family) if minor == 0 else None
                 fix = verify_fix(artifact) if minor != 0 else None
                 self.ledger.reserve(c, live, fix=fix, artifact=artifact)
-            self.ledger.require_bound(artifact)
-            w = activate_and_probe(artifact)
+            if self.ledger.begin_test_activation(artifact):
+                w=activate_and_probe(artifact)
+            else:
+                require(callable(observe_test), 'Previous TEST attempt needs independent reconciliation')
+                w=observe_test(artifact)
             require(type(w) is Witness and w.artifact == artifact and w.stage == 'test',
                     'TEST service did not prove exact activation')
-            self.ledger.witness(w)
+            self.ledger.reconcile_test_activation(artifact,w)
             return w
+
+    def recover_test(self, artifact, *, verified_release, observe_test, verify_recovery, activate_and_probe):
+        """Separate explicit operation; ordinary retry never authorizes activation."""
+        artifact.checked()
+        c=artifact.candidate
+        with self.lock(c.family):
+            p=self._published(verified_release(artifact.release_id),c)
+            require(p.release_id==artifact.release_id,'Wrong immutable recovery release')
+            actual=observe_test(artifact)
+            if type(actual) is Witness and actual.artifact==artifact:
+                self.ledger.reconcile_test_activation(artifact,actual)
+                return actual
+            # The installed verifier is responsible for validating independent
+            # non-entry evidence or the explicitly scoped protected decision.
+            # Unknown observed state cannot auto-continue.
+            recovered=verify_recovery(artifact,actual)
+            self.ledger.continue_unentered_test(artifact,recovered)
+            new=activate_and_probe(artifact)
+            self.ledger.reconcile_test_activation(artifact,new)
+            return new
 
     def production(self, artifact: Artifact, *, verified_release, actual_test, approve, activate_and_probe):
         c = artifact.candidate

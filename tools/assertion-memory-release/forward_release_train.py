@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import re
 import sqlite3
+import secrets
 import time
 
 MIN_FRESH_SECONDS = 0
@@ -67,6 +68,15 @@ class FixApproval:
     classification: str  # Includes the reviewer's explicit no-unrelated-changes decision.
 
 
+@dataclass(frozen=True)
+class TestRecovery:
+    """Created only by an installed protected recovery verifier."""
+    artifact: Artifact
+    attempt_id: str
+    decision_id: str
+    basis: str
+
+
 class Ledger:
     """Single durable writer authority. No network effects; trust the enclosing receiver.
 
@@ -83,6 +93,76 @@ class Ledger:
             baseline_digest TEXT NOT NULL, baseline_gen TEXT NOT NULL,
             open_tag TEXT, open_rev TEXT, open_id INTEGER, open_digest TEXT,
             tested_gen TEXT, promotion_pending INTEGER NOT NULL DEFAULT 0)''')
+
+        db.execute('''CREATE TABLE IF NOT EXISTS forward_test_attempt(
+            family TEXT NOT NULL, tag TEXT NOT NULL, revision TEXT NOT NULL,
+            release_id INTEGER NOT NULL, digest TEXT NOT NULL, generation TEXT,
+            attempt_id TEXT NOT NULL, continued INTEGER NOT NULL DEFAULT 0, recovery_decision_id TEXT,
+            PRIMARY KEY(family,tag,revision,release_id,digest))''')
+
+    @staticmethod
+    def _attempt_identity(artifact):
+        c=artifact.candidate
+        return (c.family,c.tag,c.revision,artifact.release_id,artifact.digest)
+
+    def begin_test_activation(self, artifact):
+        """True only for an unattempted exact candidate, persisted before native effects."""
+        artifact.checked()
+        c=artifact.candidate
+        def begin():
+            _,_,current,pin,tested,promoting=self._read(c.family)
+            require(not promoting and current == c and pin == (artifact.release_id,artifact.digest),
+                    'Exact pre-promotion artifact required')
+            # A pre-existing published test on an older ledger adapter is
+            # already attempted even if it predates the new journal.
+            outcome=self.db.execute('''INSERT OR IGNORE INTO forward_test_attempt
+                (family,tag,revision,release_id,digest,generation,attempt_id) VALUES(?,?,?,?,?,?,?)''',
+                (*self._attempt_identity(artifact),tested,secrets.token_hex(32)))
+            return tested is None and outcome.rowcount==1
+        return self._write(begin)
+
+    def continue_unentered_test(self, artifact, recovered):
+        """Consume one independently approved exact recovery by compare-and-swap.
+
+        Baseline observation, an absent activation journal, a timeout, and
+        unsigned receiver inputs cannot establish actuator non-entry.
+        """
+        artifact.checked()
+        c=artifact.candidate
+        require(type(recovered) is TestRecovery and recovered.artifact == artifact and
+                recovered.basis in ('verified_actuator_never_entered','protected_manual_recovery') and
+                type(recovered.attempt_id) is str and re.fullmatch('[0-9a-f]{64}',recovered.attempt_id) and
+                type(recovered.decision_id) is str and re.fullmatch('[0-9a-f]{64}',recovered.decision_id),
+                'Missing exact protected TEST recovery decision')
+        def consume():
+            _,_,current,pin,tested,promoting=self._read(c.family)
+            require(not promoting and tested is None and current==c and pin==(artifact.release_id,artifact.digest),
+                    'Only the still-current pending TEST candidate is recoverable')
+            changed=self.db.execute('''UPDATE forward_test_attempt SET continued=1,recovery_decision_id=? WHERE
+                (family,tag,revision,release_id,digest)=(?,?,?,?,?) AND attempt_id=?
+                AND continued=0 AND generation IS NULL''',
+                (recovered.decision_id,*self._attempt_identity(artifact),recovered.attempt_id))
+            require(changed.rowcount==1,'TEST recovery proof stale, consumed, or unknown')
+        self._write(consume)
+
+    def reconcile_test_activation(self, artifact, observed):
+        """Only fresh protected actual-service evidence may close an exact attempt."""
+        self._witness(observed,'test')
+        require(observed.artifact==artifact, 'Actual TEST did not prove exact attempted artifact')
+        c=artifact.candidate
+        def reconcile():
+            _,_,current,pin,tested,promoting=self._read(c.family)
+            require(not promoting and current==c and pin==(artifact.release_id,artifact.digest),
+                    'Test attempt was superseded or already promoting')
+            identity=self._attempt_identity(artifact)
+            row=self.db.execute('''SELECT generation FROM forward_test_attempt WHERE
+                (family,tag,revision,release_id,digest)=(?,?,?,?,?)''',identity).fetchone()
+            require(row is not None and row[0] in (None,observed.generation)
+                    and tested in (None,observed.generation), 'Actual TEST generation does not match the attempt')
+            self.db.execute('''UPDATE forward_test_attempt SET generation=? WHERE
+                (family,tag,revision,release_id,digest)=(?,?,?,?,?)''',(observed.generation,*identity))
+            self.db.execute('UPDATE forward_train SET tested_gen=? WHERE family=?',(observed.generation,c.family))
+        return self._write(reconcile)
 
     def _read(self, family):
         row = self.db.execute('''SELECT baseline_tag,baseline_rev,baseline_id,baseline_digest,baseline_gen,

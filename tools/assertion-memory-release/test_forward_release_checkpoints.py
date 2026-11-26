@@ -72,3 +72,75 @@ class CheckpointTests(unittest.TestCase):
             self.q.production(self.a,verified_release=self.lookup,approve=lambda _:True,
                               actual_test=lambda _:test,activate_and_probe=effect)
         effect.assert_not_called()
+
+    def test_lost_test_receipt_reconciles_only_against_actual_exact_service(self):
+        from dataclasses import replace
+        persisted=witness('test',self.a,g='c')
+        effects=[]
+        def lost(a):
+            effects.append(a)
+            # Native switch succeeded, but process died before receipt.
+            raise OSError('receipt lost after native switch')
+        def test(effect, probe=None):
+            return self.q.test(self.a,verified_release=self.lookup,live_prod=lambda _:self.base,verify_fix=Mock(),
+                               activate_and_probe=effect,observe_test=probe)
+        with self.assertRaises(OSError):
+            test(lost)
+        unwanted=Mock()
+        wwrong=replace(persisted,artifact=art(cand('1.0.0','e'),10))
+        for observed in (None,wwrong,replace(persisted,observed_at=879),replace(persisted,origin='rollback')):
+            with self.assertRaises(Reject):
+                test(unwanted,lambda _:observed)
+        with self.assertRaises(Reject):
+            test(unwanted)
+        self.assertEqual(test(unwanted,lambda _:persisted),persisted)
+        # After proof, a different active generation must not rewrite receipt.
+        with self.assertRaises(Reject):
+            test(unwanted,lambda _:replace(persisted,generation='d'*64))
+        self.assertEqual(effects,[self.a])
+        unwanted.assert_not_called()
+        self.q.production(self.a,verified_release=self.lookup,approve=lambda _:True,
+                          actual_test=lambda _:persisted,activate_and_probe=lambda a:witness('prod',a))
+
+    def test_pending_attempt_is_durable_across_receiver_restart(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile() as f:
+            db=sqlite3.connect(f.name)
+            l=Ledger(db,lambda:1000)
+            l.initialize(self.base)
+            l.reserve(self.c,self.base,artifact=self.a)
+            self.assertTrue(l.begin_test_activation(self.a))
+            db.close()
+            db=sqlite3.connect(f.name)
+            l=Ledger(db,lambda:1000)
+            self.assertFalse(l.begin_test_activation(self.a))
+            l.reconcile_test_activation(self.a,witness('test',self.a))
+            self.assertFalse(l.begin_test_activation(self.a))
+            db.close()
+
+    def test_pre_switch_crash_needs_exact_protected_scope_not_baseline_observation(self):
+        from forward_release_train import TestRecovery
+        self.q.ledger.reserve(self.c,self.base,artifact=self.a)
+        self.assertTrue(self.q.ledger.begin_test_activation(self.a))
+        attempt_id=self.q.ledger.db.execute('SELECT attempt_id FROM forward_test_attempt').fetchone()[0]
+        try_switch=Mock(side_effect=OSError('No durable proof of outcome'))
+        baseline=witness('test',self.base.artifact)
+        recover=lambda proof, w=baseline:self.q.recover_test(self.a,verified_release=self.lookup,
+            observe_test=lambda _:w,verify_recovery=lambda *_:proof,activate_and_probe=try_switch)
+        with self.assertRaises(Reject):
+            recover(None)
+        for bad in (
+                TestRecovery(self.a,attempt_id,'a'*64,'baseline_only'),
+                TestRecovery(self.a,'1'*64,'a'*64,'verified_actuator_never_entered'),
+                TestRecovery(art(cand('1.0.0','e'),10),attempt_id,'a'*64,'protected_manual_recovery')):
+            with self.assertRaises(Reject):
+                recover(bad)
+        try_switch.assert_not_called()
+        okay=TestRecovery(self.a,attempt_id,'a'*64,'verified_actuator_never_entered')
+        with self.assertRaises(OSError):
+            recover(okay)
+        with self.assertRaises(Reject):
+            recover(okay)
+        self.assertEqual(recover(None,witness('test',self.a)),witness('test',self.a))
+        try_switch.assert_called_once_with(self.a)
+        self.assertEqual(self.q.ledger.db.execute('SELECT recovery_decision_id FROM forward_test_attempt').fetchone()[0],'a'*64)
