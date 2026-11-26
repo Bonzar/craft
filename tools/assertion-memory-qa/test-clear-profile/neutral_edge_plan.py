@@ -6,6 +6,11 @@ LIMIT=128*1024
 PIN=re.compile(r'[a-f0-9]{64}\Z')
 HEAD=re.compile(rb'^([ \t]+)location = /memory-api-test \{\n',re.M)
 PROXY=re.compile(rb'^([ \t]+)proxy_pass http://127\.0\.0\.1:8893(?:/memory-api-test)?;[ \t]*$',re.M)
+# Only the already reviewed production-shaped TEST alias can retain its one
+# known, self-contained guard. Neither config bytes nor variables are logged.
+PINNED_GUARD_FILE='96cfdf5b5788c869496f66afa25b2401f356044857b0938dcba7f00097325f72'
+PINNED_GUARD_SHIELDED='eb8f95c477f2a02abc4f393dbb92cb136f0b47ae0e668c5e4777e95e4db89c97'
+PINNED_GUARD_LINE='e751a965d469b579a745a4af355f5f543d0e30fe9525a242255ae6ff91ba9717'
 DENIAL=b'return 404; # TEST qa-runner uses only the existing direct loopback API'
 
 def digest(body):
@@ -21,12 +26,19 @@ def exact_location(raw):
     if c is None:
         raise ValueError('TEST location boundary is not canonical')
     body=raw[start.end():start.end()+c.start()]
-    # Existing probe block is flat; stop for any dynamic routing or nested config.
-    if b'{' in body or b'}' in body or len(tuple(PROXY.finditer(body)))!=1:
+    proxies=tuple(PROXY.finditer(body))
+    if len(proxies)!=1:
         raise ValueError('Unexpected TEST private forward')
-    indent=PROXY.search(body)[1]
+    indent=proxies[0][1]
     if len(indent)<=len(start[1]):
         raise ValueError('Unexpected TEST body indentation')
+    brace_lines=[line for line in body.splitlines(keepends=True) if b'{' in line or b'}' in line]
+    if brace_lines:
+        if (digest(raw) not in (PINNED_GUARD_FILE,PINNED_GUARD_SHIELDED)
+                or len(brace_lines)!=1 or digest(brace_lines[0])!=PINNED_GUARD_LINE
+                or body.count(b'{')!=1 or body.count(b'}')!=1
+                or not re.fullmatch(re.escape(indent)+rb'if \([^\n{}]+\)[ \t]*\{[^\n{}]+\}[ \t]*\n',brace_lines[0])):
+            raise ValueError('Unexpected TEST private forward')
     marker=indent+DENIAL+b'\n'
     return start.end(),body,marker
 
