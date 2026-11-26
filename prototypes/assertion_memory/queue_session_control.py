@@ -34,17 +34,26 @@ def read(db, baseline=()):
     return normalize(json.loads(row[0])),row[1]
 
 
+def _batch_member(db):
+    if not all(_exists(db,t) for t in ('memory_capture_batches','memory_capture_batch_members')):
+        return '0'
+    return ('EXISTS (SELECT 1 FROM memory_capture_batch_members bm '
+            'JOIN memory_capture_batches b ON b.batch_id=bm.batch_id '
+            f'WHERE bm.event_id=e.id AND b.session_id={_SOURCE_SESSION})')
+
+
 def choices(db, selected, *, fresh_only=False):
     if not all(_exists(db,t) for t in ('memory_raw_events','memory_capture_jobs','memory_event_positions')):
         return []
     found={}
-    if fresh_only and not _exists(db,'memory_fresh_mac_events'):
-        return [{'id':sid,'queued':0,'eligible':False} for sid in selected]
-    scope=(' AND e.id IN (SELECT event_id FROM memory_fresh_mac_events)' if fresh_only else '')
+    fresh = 'e.id IN (SELECT event_id FROM memory_fresh_mac_events)' if _exists(db,'memory_fresh_mac_events') else '0'
+    batch = _batch_member(db)
+    ordinary = f'p.position IS NOT NULL AND ({fresh})' if fresh_only else 'p.position IS NOT NULL'
+    scope = f' AND (({ordinary}) OR ({batch}))'
     for sid,count in db.execute(
             f'SELECT {_SOURCE_SESSION} AS sid, sum(CASE WHEN j.status IN (\'pending\',\'running\',\'waiting_model\') THEN 1 ELSE 0 END) '
             'FROM memory_raw_events e JOIN memory_capture_jobs j ON j.event_id=e.id '
-            'JOIN memory_event_positions p ON p.event_id=e.id WHERE j.status<>\'waiting_origin\' '
+            'LEFT JOIN memory_event_positions p ON p.event_id=e.id WHERE j.status<>\'waiting_origin\' '
              + scope + ' GROUP BY sid ORDER BY 2 DESC,sid LIMIT ?', (MAX_CHOICES,)):
         if isinstance(sid,str) and ID.fullmatch(sid):
             found[sid]={'id':sid,'queued':int(count),'eligible':True}
@@ -167,7 +176,16 @@ def annotate_source(db, data, selected, *, fresh_only=False):
     from .thought_processing_selection import FRESH_MAC_ONLY, source_predicate
     gate,gate_args=(source_predicate(FRESH_MAC_ONLY,'e',db=db)
                     if fresh_only and _exists(db,'memory_fresh_mac_events') else ('0' if fresh_only else '1',[]))
-    rows=db.execute(f'SELECT j.id,j.status,{position},{_SOURCE_SESSION},({gate}) '
+    member=_batch_member(db)
+    if fresh_only:
+        batch_gate=member
+        explicit,revision=read(db)
+        if revision!=INITIAL:
+            allowed,allowed_args=source_predicate(explicit,'e')
+            batch_gate=f'({batch_gate}) AND ({allowed})'
+            gate_args += allowed_args
+        gate=f'({gate}) OR ({batch_gate})'
+    rows=db.execute(f'SELECT j.id,j.status,CASE WHEN ({member}) THEN 0 ELSE {position} END,{_SOURCE_SESSION},({gate}) '
                     'FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id '
                     f'{join} WHERE j.id IN (SELECT value FROM json_each(?))',
                     (*gate_args,json.dumps(list(items)))).fetchall()
