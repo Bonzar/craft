@@ -201,7 +201,9 @@ class CaptureTest(unittest.TestCase):
         # The paired fixture's duplicate is within one occurrence. Also include a
         # separate R-only human event, which the ordinary final boundary permits.
         self.append({'type':'response_item','payload':{'type':'message','role':'user','id':'singleton',
-            'content':[{'type':'input_text','text':'trusted R only'}]}})
+            'content':[{'type':'input_text','text':'trusted R only'}],
+            'internal_chat_message_metadata_passthrough':{'turn_id':'first','content_item_kinds':['user.text'],
+                'content_item_metadata':[{'provenance':{'type':'user'}}]}}})
         self.abort('first')
         self.assertEqual(self.poll()['queued'],0)
         self.turn('continued','second','u2')
