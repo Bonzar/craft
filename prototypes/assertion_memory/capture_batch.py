@@ -205,7 +205,8 @@ def run_next(config, store, is_pausing):
     except Exception as exc:
         # The group trace already keeps stage/call outcome. No bodies or arbitrary
         # exception text in group state or automatic per-message fallback.
-        code='batch_'+type(exc).__name__[:70]
+        from .source_model_batch import CaptureCoverageError
+        code=exc.code if isinstance(exc,CaptureCoverageError) else 'batch_'+type(exc).__name__[:70]
     with store.transaction(write=True) as db:
         db.execute('UPDATE memory_capture_batches SET state=?,error_code=? WHERE batch_id=?',
                    (state,code,batch_id))

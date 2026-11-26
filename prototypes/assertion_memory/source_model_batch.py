@@ -13,6 +13,20 @@ MAX_BATCH_CHARACTERS = 48000
 MAX_EXPLICIT_BATCH_CHARACTERS = 256000
 
 
+CAPTURE_COVERAGE_CODES = frozenset({
+    'capture_coverage_verdict_invalid', 'capture_coverage_selection_invalid',
+    'capture_coverage_recheck_selection', 'capture_coverage_omission',
+})
+
+
+class CaptureCoverageError(ModelError):
+    def __init__(self, code, message):
+        if code not in CAPTURE_COVERAGE_CODES:
+            raise ValueError('unknown capture coverage code')
+        self.code = code
+        super().__init__(message)
+
+
 def pending_sources(queue, session_id, event_ids, *, capture_batch_id=None):
     events = []
     now = queue._time()
@@ -209,26 +223,30 @@ def verify_capture_group_coverage(group, drafts, generate, *, allow_discard=True
             'required':['verdict','text','discard_drafts'],'additionalProperties':False}
     result, _ = generate(ModelRequest(task, _share_fragment_text(cases), instructions,
                                      usage_task='Verify thought', response_schema=schema), bindings)
-    response = json.loads(result)
+    try:
+        response = json.loads(result)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise CaptureCoverageError('capture_coverage_verdict_invalid',
+                                   'Invalid capture package coverage verdict') from error
     if (not isinstance(response, dict) or set(response) != {'verdict', 'text', 'discard_drafts'}
             or response['verdict'] not in ('accept', 'reject')
             or not isinstance(response['text'], str) or not response['text'].strip()
             or not isinstance(response['discard_drafts'],list)):
-        raise ModelError('Invalid capture package coverage verdict')
+        raise CaptureCoverageError('capture_coverage_verdict_invalid', 'Invalid capture package coverage verdict')
     discarded=set()
     for point in response['discard_drafts']:
         if (not isinstance(point,dict) or set(point)!={'source','index'}
                 or not isinstance(point['source'],str) or point['source'] not in labels
                 or type(point['index']) is not int):
-            raise ModelError('Invalid capture package draft selection')
+            raise CaptureCoverageError('capture_coverage_selection_invalid', 'Invalid capture package draft selection')
         i,j=labels[point['source']],point['index']
         if (i,j) in discarded or not 0<=j<len(proposed[i]['thoughts']):
-            raise ModelError('Invalid capture package draft selection')
+            raise CaptureCoverageError('capture_coverage_selection_invalid', 'Invalid capture package draft selection')
         discarded.add((i,j))
     if discarded and not allow_discard:
-        raise ModelError('Capture package coverage-only recheck cannot change drafts')
+        raise CaptureCoverageError('capture_coverage_recheck_selection', 'Capture package coverage-only recheck cannot change drafts')
     if response['verdict'] != 'accept':
-        raise ModelError('Capture package omitted eligible meaning')
+        raise CaptureCoverageError('capture_coverage_omission', 'Capture package omitted eligible meaning')
     return [SourceDraft(json.dumps(dict(body,thoughts=[item for j,item in enumerate(body['thoughts'])
                         if (i,j) not in discarded]),ensure_ascii=False),draft.run_id,draft.source)
             for i,(body,draft) in enumerate(zip(proposed,drafts,strict=True))]
