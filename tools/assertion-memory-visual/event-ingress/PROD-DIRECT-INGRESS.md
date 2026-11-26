@@ -51,3 +51,52 @@ Gateway, VM, DNS, certificate, secret or live product action is in this change.
 
 Checked offline against synthetic exact-shape fixtures. Do not infer observed
 live rule values from those fixtures.
+
+## TLS renewal and expiry readiness
+
+For the established direct VM IP, the served public leaf was observed with
+system trust and the matching IP SAN. Its observed `NotAfter` was
+**2026-12-02T15:19:26Z**. No matching system renewal timer or bounded
+system/root cron marker was found. This does not exclude an off-host scheduler,
+another client or a differently named existing unit. Do not infer renewal from
+a valid leaf, renewal configuration alone, staging, or the age of the key.
+
+1. Use the existing authorized VM operator to identify only the public issuer
+   and whether the exact live IP certificate lineage is already managed by a
+   compatible renewal client. Read no key/account contents. Prefer the
+   existing client/scheduler if it is real and scoped to this same lineage.
+   Do not start another client, timer or challenge while its ownership and
+   challenge reachability are unknown.
+2. With an independently established Let's Encrypt IP lineage, the supported
+   short-lived validity is 160 hours. Prefer existing compatible ACME client
+   with ARI; Let’s Encrypt recommends consulting ARI at least twice daily
+   with jitter and renewing at roughly half life if ARI is unavailable.
+   Certbot gained IP identifier support in 5.3 and IP webroot support in 5.4.
+   An already-running webroot challenge also requires validated inbound HTTP
+   port 80 reachability. Use that only if it is the verified supported
+   validation path for the existing lineage; do not guess. No new DNS, IP,
+   paid certificate or VM is required if this lineage can be renewed in place.
+3. A future protected renewal job must run due-only for the exact lineage and
+   use existing private storage on the host. Do not force issuance. Its
+   separately reviewed deploy hook must be limited to that lineage, validate
+   IP SAN/chain and the Nginx config before a graceful reload, and preserve the
+   still-valid served leaf on failure. Do not modify other Nginx routes. Test
+   the exact protection and rollback independently from app release readiness.
+4. A **separate, read-only** monitor runs hourly from an existing approved
+   external observer with a strict system-CA TLS handshake to the exact IP on
+   443, with certificate hostname checks enabled and exact IP SAN. It sends
+   no HTTP, browser session or credentials. Alert on repeated failed trust/SAN
+   checks or remaining life at or below 72 hours (critical at or below 24 hours);
+   also alert when samples cease. Emit time, expiry, status and a bounded
+   public fingerprint only, deduplicate by state/severity, and report recovery
+   once. This monitor never issues, replaces or reloads a certificate.
+5. Wait for the next **actually due automatic** renewal and verify the external
+   monitor sees an independently valid new leaf with later NotAfter and changed
+   fingerprint on the same existing public identity. A staging pass or an
+   active timer is not this proof. Do not enable PROD direct transport before
+   that evidence and the actual authorized mobile SSE acceptance. If cert
+   cannot renew, leave the existing polling fallback in place.
+
+Issuer references: [Let's Encrypt short-lived profiles](https://letsencrypt.org/docs/profiles/),
+[Certbot IP support and install hooks](https://letsencrypt.org/2026/03/11/shorter-certs-certbot),
+[ARI and renewal behavior](https://letsencrypt.org/docs/integration-guide/#when-to-renew).
