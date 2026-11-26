@@ -174,9 +174,17 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                     await stack.enter_async_context(restart_on_resume(config.db,WorkerLauncher(config).start))
                     if (session_watch:=getattr(controller,'queue_session_lifespan',None)) is not None:
                         await stack.enter_async_context(session_watch())
-                if background and config.auto_process_fresh_mac:
-                    from .fresh_processing import reconcile_fresh_mac
-                    await stack.enter_async_context(reconcile_fresh_mac(WorkerLauncher(config).start))
+                if background and neutral is not None and any(
+                        route.startswith('/memory-api-') for route in neutral[0]):
+                    from .fresh_processing import reconcile_processing
+                    from .mcp_server import _eligible_processing_work
+                    launcher=WorkerLauncher(config)
+                    def reconcile():
+                        # A lost batch wake must not periodically wake unselected legacy work.
+                        if config.auto_process_fresh_mac or (config.provider != 'none'
+                                and _eligible_processing_work(config,batches_only=True)):
+                            launcher.start()
+                    await stack.enter_async_context(reconcile_processing(reconcile))
                 if neutral is not None and (jobs := getattr(neutral[1], 'query_jobs', None)) is not None:
                     await stack.enter_async_context(jobs.lifespan())
                 if neutral is not None and (projection := getattr(neutral[1], 'queue_dashboard_projection', None)) is not None:
