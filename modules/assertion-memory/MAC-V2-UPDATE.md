@@ -1,9 +1,10 @@
 # Enrolled Mac capture V2: narrow owner update
 
 Use this package only when the release owner has verified Base V2 in PROD and
-provided the reviewed updater commit. The Base package is pinned to
+provided the reviewed updater commit. The five Mac source files are pinned to
 65bc8e94a2b53a416707c8f16ddbe40de821c311, which contains the interruption fix
-and the V2 re-arm client. This is not the usual whole-Jarvis installer:
+and the V2 re-arm client. The compatible server release is Base v0.1.30,
+built separately from b09b24c969ea8d971af3ff70b0968979e5adc3db. This is not the usual whole-Jarvis installer:
 it never rewrites Codex hooks, settings, Keychain, native binding,
 transcript positions, or the outbox. It does not clear any database.
 
