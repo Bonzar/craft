@@ -44,5 +44,5 @@ class Binding(TestCase):
               patch('configured_authorizer_binding.publish',side_effect=store),
               patch('configured_authorizer_binding.acknowledge') as synced,
               patch('configured_authorizer_binding.dispatch_existing_authorizer',side_effect=dispatch)):
-            serve_exact(None,normal=None,independently_observed_phase=lambda:'restore')
+            serve_exact(None,normal=None,independently_observed_phase=lambda:'restore',protected_marker_active=lambda:True)
             synced.assert_called_once_with(expected_receipt=state[0])

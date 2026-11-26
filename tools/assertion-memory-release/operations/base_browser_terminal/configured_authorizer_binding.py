@@ -49,7 +49,28 @@ def terminal_frame(frame,*,policy,ledger,issuer_keys,now):
     return permit(promotion)
 
 def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_active=lambda:False,
-                sealed_terminal_dispatch=None):
+                sealed_terminal_dispatch=None, terminal_projection_enabled=False):
+    if type(terminal_projection_enabled) is not bool:
+        raise ValueError('exact projection selection required')
+    def projection(raw,uid):
+        if not terminal_projection_enabled:
+            return None
+        from terminal_projection import dispatch,PUBLISH,READ
+        from projection_persistence import read_projection,persist_projection
+        # Protocol selection does not grant capability: dispatch validates
+        # peer UID, exact canonical fields, active mode and signed pending.
+        try:
+            parsed=read_frame(BytesIO(raw))
+        except ValueError:
+            return None
+        if parsed.get('op') not in (PUBLISH,READ):
+            return None
+        try:
+            return dispatch(raw,verified_peer_uid=uid,active=protected_marker_active(),
+                read_admission=read_owned_record,read_projection=read_projection,
+                persist_projection=persist_projection)
+        except (OSError,ValueError):
+            return {'status':'rejected'}
     # Trusted, current root controller's exact protected phase callback.
     # Do not derive phase from an incoming deploy-owned request or journal.
     def pending():
@@ -76,6 +97,10 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
         with channel.makefile('rb') as stream:
             raw=stream.readline(20_001)
             pair_has_extra=raw==REQUEST and bool(stream.read(1))
+        response=projection(raw,986)
+        if response is not None:
+            channel.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
+            return
         marker=protected_marker_active()
         if raw==REQUEST:
             if marker is not True or pair_has_extra:
@@ -101,5 +126,6 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
             channel.sendall(b'{"status":"rejected"}\n')
             return
         return normal(channel,prefetched_frame=frame)
+    extra={'root_projection':lambda raw:projection(raw,0)} if terminal_projection_enabled else {}
     return dispatch_existing_authorizer(peer,normal=ordinary_or_pair,read_exact_pending=pending,
-        finish_cas=finish,acknowledge_terminal=ack)
+        finish_cas=finish,acknowledge_terminal=ack,**extra)

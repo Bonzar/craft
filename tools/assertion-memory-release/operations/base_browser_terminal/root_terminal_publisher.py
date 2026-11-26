@@ -83,7 +83,7 @@ AUTHOR_UID=980
 DEPLOY_UID=986
 
 def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas,
-                                  acknowledge_terminal=None, _uid=_pid_uid):
+                                  acknowledge_terminal=None, root_projection=None, _uid=_pid_uid):
     """Optional dispatcher for the already configured authorizer socket."""
     import os
     if os.getuid()!=AUTHOR_UID or os.geteuid()!=AUTHOR_UID:
@@ -95,6 +95,14 @@ def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas
         raise ValueError('unknown protected authorizer peer')
     peer.settimeout(4)
     with peer.makefile('rb') as stream:
+        if root_projection is not None:
+            from io import BytesIO
+            raw=stream.readline(MAX+1)
+            response=root_projection(raw)
+            if response is not None:
+                peer.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
+                return response
+            stream=BytesIO(raw)
         response=verify_and_publish_root_peer(peer,stream,read_exact_pending=read_exact_pending,
                 finish_cas=finish_cas,acknowledge_terminal=acknowledge_terminal,peer_uid=_uid)
     peer.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
