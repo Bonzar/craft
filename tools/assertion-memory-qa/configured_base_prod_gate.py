@@ -99,8 +99,11 @@ class Ledger:
         db.commit()
 
     def issue(self,policy,p,now):
+        return self.issue_for(p,now,lambda nonce: audience(policy,p,nonce))
+
+    def issue_for(self,p,now,exact_audience):
         nonce=secrets.token_hex(32)
-        aud=audience(policy,p,nonce)
+        aud=exact_audience(nonce)
         self.db.execute('BEGIN IMMEDIATE')
         with self.db:
             self.db.execute('DELETE FROM challenges WHERE expires<=?',(now,))
@@ -112,6 +115,10 @@ class Ledger:
     def confirm(self,policy,p,nonce,token,keys,now):
         aud=audience(policy,p,nonce)
         self.verify_token(token,keys,policy,p,nonce,now)
+        self.consume_for(p,nonce,aud,now)
+        return permit(p)
+
+    def consume_for(self,p,nonce,aud,now):
         self.db.execute('BEGIN IMMEDIATE')
         with self.db:
             row=self.db.execute('SELECT audience,expires FROM challenges WHERE nonce=?',(nonce,)).fetchone()
@@ -119,7 +126,7 @@ class Ledger:
             require(not self.db.execute('SELECT 1 FROM consumed_runs WHERE run=?',(p.run_id,)).fetchone(),'Already consumed output')
             self.db.execute('INSERT INTO consumed_runs VALUES(?)',(p.run_id,))
             self.db.execute('DELETE FROM challenges WHERE nonce=?',(nonce,))
-        return permit(p)
+        return True
 
 def read_frame(stream):
     wire=stream.readline(20_001)

@@ -1,11 +1,16 @@
 from dataclasses import replace
 import base64
 import json
+import sqlite3
+from unittest.mock import patch
+from dataclasses import asdict
+from configured_authorizer_binding import terminal_frame
+from configured_terminal_state import initial,read_exact
 from unittest import TestCase
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding,rsa
 from configured_base_prod_gate import (BASE,Original,Content,Promotion,Policy,REPOSITORY,
-                                       ISSUER,OWNER_ID,REF,audience,verify)
+                                       ISSUER,OWNER_ID,REF,audience,verify,Ledger,intent_document)
 from configured_terminal_admission import signed_audience,verify_admission
 from transition_witness import Release
 
@@ -42,3 +47,29 @@ class Auth(TestCase):
             with self.assertRaises(ValueError):
                 verify_admission(sign(bad),jwks,q,p,nonce,candidate,1010)
         verify(sign(dict(root,aud=audience(q,p,nonce))),jwks,q,p,nonce,1010)
+
+        prior=Release('1'*40,'2'*64,'3'*64,'legacy')
+        record=[initial(trusted_prior=prior)]
+        def persist(*,expected,replacement):
+            self.assertEqual(record[0],expected)
+            record[0]=replacement
+        with sqlite3.connect(':memory:') as conn:
+            gate=Ledger(conn)
+            args=dict(policy=q,ledger=gate,issuer_keys=lambda:jwks,now=1010)
+            args_frame=dict(intent=intent_document(p),candidate=asdict(candidate))
+            with patch('configured_authorizer_binding.read_owned_record',side_effect=lambda:record[0]), patch('configured_authorizer_binding.publish',side_effect=persist):
+                frame=dict(op='terminal-challenge-v3',**args_frame)
+                nonce=terminal_frame(frame,**args)['nonce']
+                v3=dict(root,aud=signed_audience(q,p,nonce,candidate))
+                confirm=dict(op='terminal-confirm-v3',nonce=nonce,token=sign(v3),**args_frame)
+                with self.assertRaises(ValueError):
+                    terminal_frame(dict(confirm,token=sign(dict(root,aud=audience(q,p,nonce)))),**args)
+                with self.assertRaises(ValueError):
+                    terminal_frame(dict(confirm,candidate=dict(asdict(candidate),manifest='e'*64)),**args)
+                self.assertIsNone(read_exact(record[0])[1])
+                self.assertEqual(terminal_frame(confirm,**args)['sha256'],candidate.archive)
+                self.assertEqual(read_exact(record[0])[1].candidate,candidate)
+                with self.assertRaises(ValueError):
+                    terminal_frame(frame,**args)
+                with self.assertRaises(ValueError):
+                    terminal_frame(confirm,**args)

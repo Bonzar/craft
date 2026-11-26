@@ -4,12 +4,13 @@ Not a CLI or network service. Existing configured entrypoint can opt in only
 from a reviewed immutable operations bundle, with independently observed
 root phase and existing one-use v3 authorization. v1/v2 path unchanged.
 """
+import json
 from io import BytesIO
-from configured_base_prod_gate import read_frame
+from configured_base_prod_gate import permit,read_frame,request
 from guard_lookup import REQUEST, respond
 from authorizer_cas import publish,read_owned_record,acknowledge
-from configured_terminal_state import (admit,commit,acknowledge_exact,pending_request,read_exact)
-from configured_terminal_admission import verify_admission
+from configured_terminal_state import (admit,commit,acknowledge_exact,pending_request,read_exact,_release)
+from configured_terminal_admission import verify_admission,signed_audience
 from root_terminal_publisher import dispatch_existing_authorizer
 
 def admit_exact(*, token,issuer_keys,policy,promotion,nonce,candidate,now, consume_authorized_run):
@@ -26,7 +27,29 @@ def admit_exact(*, token,issuer_keys,policy,promotion,nonce,candidate,now, consu
     publish(expected=before,replacement=after)
     return verified
 
-def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_active=lambda:False):
+def terminal_frame(frame,*,policy,ledger,issuer_keys,now):
+    op=frame.get('op')
+    if op not in ('terminal-challenge-v3','terminal-confirm-v3'):
+        raise ValueError('unsupported protected activation operation')
+    challenge=op=='terminal-challenge-v3'
+    expected={'op','intent','candidate'} if challenge else {'op','intent','candidate','nonce','token'}
+    if set(frame)!=expected:
+        raise ValueError('invalid terminal frame fields')
+    candidate=_release(frame['candidate'])
+    legacy={k:v for k,v in frame.items() if k!='candidate'}
+    legacy['op']='challenge' if challenge else 'confirm'
+    promotion,_=request(legacy)
+    bound=lambda nonce:signed_audience(policy,promotion,nonce,candidate)
+    if challenge:
+        return ledger.issue_for(promotion,now,bound)
+    nonce=frame['nonce']
+    admit_exact(token=frame['token'],issuer_keys=issuer_keys(),policy=policy,
+        promotion=promotion,nonce=nonce,candidate=candidate,now=now,
+        consume_authorized_run=lambda _:ledger.consume_for(promotion,nonce,bound(nonce),now))
+    return permit(promotion)
+
+def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_active=lambda:False,
+                sealed_terminal_dispatch=None):
     # Trusted, current root controller's exact protected phase callback.
     # Do not derive phase from an incoming deploy-owned request or journal.
     def pending():
@@ -58,14 +81,15 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
                                    read_authorizer_state=read_owned_record,
                                    independently_observed_phase=independently_observed_phase))
             return
-        if marker is not False:
-            # Ordinary v1/v2 carriers cannot change active generation once
-            # the independently reviewed v3 rollout is in force.
-            channel.sendall(b'{"status":"rejected"}\n')
-            return
         try:
             frame=read_frame(BytesIO(raw))
-        except ValueError:
+            if marker is True and sealed_terminal_dispatch is not None:
+                response=sealed_terminal_dispatch(frame)
+                channel.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
+                return
+            if marker is not False:
+                raise ValueError('protected terminal admission unavailable')
+        except Exception:
             channel.sendall(b'{"status":"rejected"}\n')
             return
         return normal(channel,prefetched_frame=frame)
