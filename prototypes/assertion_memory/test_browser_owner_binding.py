@@ -35,3 +35,32 @@ class OwnerTest(TestCase):
             self.assertFalse(any('clear' in route.path for route in api.routes()))
             with self.assertRaises(ValueError):
                 api.perform('clear_commit',{})
+
+    def test_dashboard_live_false_only_for_new_binding(self):
+        import asyncio
+        import json
+        from unittest.mock import patch
+        from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
+        fixture={'stage':'prod','processing_control':{'can_change':True}}
+        @contextmanager
+        def lease():
+            yield
+        with patch('prototypes.assertion_memory.browser_owner_binding.snapshot',return_value=fixture):
+            browser=base_owner_browser(stage='prod',config=SimpleNamespace(db=Path('/tmp/fixture.sqlite3')),
+                verified_identity=lambda:None,release_lease=lease,interactive_enabled=False)
+            original=BrowserOwnerAPI(stage='prod',perform=lambda *_:None,
+                                     queue_snapshot=lambda **_:fixture)
+            for api, live in ((browser,False),(original,True)):
+                response=asyncio.run(api.snapshot(None,1,0))
+                self.assertEqual(json.loads(response.body)['capabilities']['live'],live)
+
+    def test_dashboard_channel_explicitly_unavailable_without_legacy_dashboard(self):
+        import asyncio
+        from starlette.datastructures import QueryParams
+        from apps.graph_viewer.server.app import events
+        from apps.graph_viewer.server.common import APIError
+        request=SimpleNamespace(query_params=QueryParams('channel=dashboard'),
+            app=SimpleNamespace(state=SimpleNamespace(manager=None,queue_dashboard=None)))
+        with self.assertRaises(APIError) as error:
+            asyncio.run(events(request))
+        self.assertEqual(error.exception.status,503)

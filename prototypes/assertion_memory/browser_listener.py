@@ -36,7 +36,7 @@ def _prepare_server(app):
     ))
 
 @asynccontextmanager
-async def browser_listener(app, port, *, _bind=_prepare_socket, _server=_prepare_server):
+async def browser_listener(app, port, *, on_failure=None, _bind=_prepare_socket, _server=_prepare_server):
     """Own socket and child lifecycle; trusted config must pin the actual port."""
     if not callable(app) or type(port) is not int or not 1024 <= port <= 65535:
         raise ValueError('invalid Base browser listener binding')
@@ -45,9 +45,14 @@ async def browser_listener(app, port, *, _bind=_prepare_socket, _server=_prepare
         stopping = False
 
         async def run():
-            await server.serve(sockets=[listener])
-            if not stopping:
-                raise RuntimeError('Base browser listener stopped before normal shutdown')
+            try:
+                await server.serve(sockets=[listener])
+                if not stopping:
+                    raise RuntimeError('Base browser listener stopped before normal shutdown')
+            except BaseException:
+                if not stopping and on_failure is not None:
+                    on_failure()
+                raise
 
         async with asyncio.TaskGroup() as group:
             task = group.create_task(run(), name='base-browser-listener')

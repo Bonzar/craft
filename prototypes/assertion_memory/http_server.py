@@ -208,10 +208,6 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
     async def lifespan(_app):
         try:
             async with AsyncExitStack() as stack:
-                # Explicitly supplied by verified Base startup only. Browser
-                # ASGI never mounts within this private listener's dispatcher.
-                if browser_lifespan is not None:
-                    await stack.enter_async_context(browser_lifespan())
                 if background:
                     WorkerLauncher(config).start()
                 await stack.enter_async_context(inner.router.lifespan_context(inner))
@@ -235,6 +231,10 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                     await stack.enter_async_context(jobs.lifespan())
                 if neutral is not None and (projection := getattr(neutral[1], 'queue_dashboard_projection', None)) is not None:
                     stack.enter_context(projection())
+                # Browser depends on the writer; enter after dependencies
+                # become ready and leave before they begin unwinding.
+                if browser_lifespan is not None:
+                    await stack.enter_async_context(browser_lifespan(interactive_active=interactive))
                 yield
         finally:
             store.close()
@@ -265,11 +265,29 @@ def main(argv=None):
     queue_rest_factory=configured_queue_rest(args.config,port,token)
     from .queue_pause_binding import configured_queue_pause
     queue_pause_factory=configured_queue_pause(args.config,port,token)
-    app = create_http_app(ServiceConfig(**value['service']), token, value['public_host'], port=port,
+    config=ServiceConfig(**value['service'])
+    from .browser_prod_binding import installed_prod_browser_lifespan
+    parent=None
+    side_failed=False
+    def failed():
+        nonlocal side_failed
+        side_failed=True
+        if parent is not None:
+            parent.should_exit=True
+    browser=installed_prod_browser_lifespan(args.config,config,private_port=port,on_failure=failed)
+    app = create_http_app(config, token, value['public_host'], port=port,
                           additional_hosts=value.get('additional_hosts', ()), neutral_factory=neutral_factory,
-                          queue_rest_factory=queue_rest_factory, queue_pause_factory=queue_pause_factory)
+                          queue_rest_factory=queue_rest_factory, queue_pause_factory=queue_pause_factory,
+                          browser_lifespan=browser)
     import uvicorn
-    uvicorn.run(app, host='127.0.0.1', port=port, access_log=False, log_level='warning')
+    if browser is None:
+        uvicorn.run(app, host='127.0.0.1', port=port, access_log=False, log_level='warning')
+    else:
+        parent=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,
+                                  access_log=False,log_level='warning',lifespan='on',workers=1))
+        parent.run()
+        if side_failed or not parent.started:
+            raise RuntimeError('Base browser listener failed')
 
 
 if __name__ == '__main__':

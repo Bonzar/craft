@@ -37,3 +37,41 @@ class RealListenerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls,['startup','shutdown'])
         with self.assertRaises(OSError):
             await asyncio.open_connection('127.0.0.1',port)
+
+    async def test_late_browser_failure_signals_running_parent_to_exit(self):
+        from .browser_listener import _SideServer
+        import uvicorn
+
+        die=asyncio.Event()
+        class FailingBrowser:
+            started=False
+            should_exit=False
+            async def serve(self, *, sockets):
+                self.started=True
+                await die.wait()
+                raise RuntimeError('fixture child death')
+
+        @asynccontextmanager
+        async def primary_lifespan(_app):
+            with socket.socket() as browser_sock:
+                browser_sock.bind(('127.0.0.1',0))
+                async with browser_listener(lambda: None,browser_sock.getsockname()[1],
+                        _bind=lambda _:browser_sock,_server=lambda _:FailingBrowser(),
+                        on_failure=lambda:setattr(parent,'should_exit',True)):
+                    yield
+
+        app=Starlette(routes=[],lifespan=primary_lifespan)
+        parent=_SideServer(uvicorn.Config(app,host='127.0.0.1',lifespan='on',access_log=False,
+                                         log_level='critical'))
+        with socket.socket() as bound:
+            bound.bind(('127.0.0.1',0))
+            port=bound.getsockname()[1]
+            serving=asyncio.create_task(parent.serve(sockets=[bound]))
+            async with asyncio.timeout(3):
+                while not parent.started:
+                    await asyncio.sleep(0.01)
+                die.set()
+                await serving
+            self.assertTrue(parent.should_exit)
+        with self.assertRaises(OSError):
+            await asyncio.open_connection('127.0.0.1',port)

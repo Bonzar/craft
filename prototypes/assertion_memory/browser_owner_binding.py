@@ -34,4 +34,4 @@ def base_owner_browser(*, stage, config, verified_identity, release_lease, inter
                 interactive_enabled=interactive_enabled,limit=limit,offset=offset,lane=stage,
                 can_change=True,session_control=True,batch_cards=True,clear_ready=False)
 
-    return BrowserOwnerAPI(stage=stage,perform=perform,queue_snapshot=project,clear_enabled=False)
+    return BrowserOwnerAPI(stage=stage,perform=perform,queue_snapshot=project,clear_enabled=False,dashboard_live=False)
