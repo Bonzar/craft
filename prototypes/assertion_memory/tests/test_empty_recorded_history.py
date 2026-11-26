@@ -148,6 +148,7 @@ class EmptyRecordedHistoryTest(unittest.TestCase):
         self.assertTrue(result['answer_accepted']); self.assertTrue(result['answer_payload_complete'])
         self.assertEqual(result['completeness'],'incomplete')
         self.assertEqual(result['answer_metadata']['knowledge_at_cutoff']['domain_facts'],'not_established')
+        self.assertEqual(result['query_coverage']['evidence'],'not_established')
         self.assertEqual(check['overview_review']['query_context']['question'],self.spec.query)
         bad=replace(view,summary='A different answer.')
         self.assertFalse(self.service._answer_review_bound(check,bad,requested_question=self.spec.query))

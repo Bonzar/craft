@@ -8,15 +8,19 @@ def project(response, *, processing_gap=UNASSESSED, missing_roots=False):
     Query evidence is bounded by retrieved records, never the whole database,
     and global queue/transport counters alone cannot assess question relevance.
     """
+    metadata=response.get('answer_metadata') or {}
+    cutoff=metadata.get('knowledge_at_cutoff') or {}
     if response.get('answer_error') or response.get('generation_error'):
         evidence='answer_failed'
+    elif cutoff.get('domain_facts')=='not_established':
+        evidence='not_established'
     elif response.get('partial_answer'):
         evidence='partial'
     elif processing_gap is True or missing_roots or response.get('knowledge_limit') and response.get('answer_accepted'):
         evidence='qualified'
     elif response.get('answer_accepted'):
         evidence='supported'
-    elif response.get('knowledge_limit') or response.get('answer_metadata',{}).get('notice'):
+    elif response.get('knowledge_limit') or metadata.get('notice'):
         evidence='not_established'
     else:
         evidence='unreviewed'
