@@ -3,6 +3,12 @@
 .claude/worktrees/
 .claude/settings.local.json
 
+# SessionStart-hook caches of Craft content — regenerated every session,
+# Craft itself is the source of truth.
+.claude/craft-gate-exempt-scope.txt
+.claude/craft-incident-context.md
+.claude/craft-router-context.md
+
 # Local secrets (CRAFT_API_BASE token, CRAFT_LINKS_STORE, …). Never commit.
 .env
 
