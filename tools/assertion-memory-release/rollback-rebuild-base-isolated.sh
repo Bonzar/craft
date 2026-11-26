@@ -8,11 +8,11 @@ image="$1"
 source_tar="$2"
 dest="$3"
 revision="$4"
-[[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-[[ "$image" =~ ^[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}$ && "$source_tar" == /* && "$dest" == /* ]]
-[[ "$source_tar" != *,* && "$dest" != *,* ]]
-[[ -f "$source_tar" && ! -L "$source_tar" && ! -e "$dest" && ! -L "$dest" ]]
-mkdir -m 700 -- "$dest"
+[[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 2
+[[ "$image" =~ ^[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}$ && "$source_tar" == /* && "$dest" == /* ]] || exit 2
+[[ "$source_tar" != *,* && "$dest" != *,* ]] || exit 2
+[[ -f "$source_tar" && ! -L "$source_tar" && ! -e "$dest" && ! -L "$dest" ]] || exit 2
+mkdir -m 700 -- "$dest" || exit 2
 # Use only the previously prepared exact image. Do not execute historical
 # install scripts with network egress or stage a user HOME / GitHub token here.
 # The image contract is Python 3.12 with pinned dependencies, Node 24, and an
@@ -24,7 +24,7 @@ if ! /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin docker run --rm --pull ne
     --tmpfs /work:rw,nosuid,nodev,size=2g,mode=1777 \
     --mount "type=bind,src=$source_tar,dst=/source.tar,readonly" \
     --mount "type=bind,src=$dest,dst=/out" \
-    --entrypoint /bin/sh "$image" -eu -c '
+    --entrypoint /usr/bin/env "$image" -i PATH=/usr/local/bin:/usr/bin:/bin /bin/sh -eu -c '
         # Git-generated candidate tar from the approved exact commit only.
         cd /work; mkdir src home cache tmp; tar -xf /source.tar -C src
         export HOME=/work/home TMPDIR=/work/tmp npm_config_cache=/work/cache npm_config_userconfig=/dev/null

@@ -1,5 +1,6 @@
 """Pin historical packaging without importing a candidate, using real archives."""
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -28,6 +29,19 @@ class CompileTest(unittest.TestCase):
             two=self.build(folder,'two.tgz')
             self.assertEqual(one,two)
             self.assertEqual((folder/'one.tgz').read_bytes(),(folder/'two.tgz').read_bytes())
+
+    def test_invalid_compile_parameters_fail_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as lab:
+            root=Path(lab)
+            script=Path(__file__).with_name('rollback-rebuild-base-isolated.sh')
+            for values in (('no-digest',str(root/'not-source.tar'),self.case.policy.revision),
+                           ('registry/test@sha256:'+'a'*64,str(root/'not-source.tar'),'latest'),
+                           ('registry/test@sha256:'+'a'*64,str(root/'not-source.tar'),self.case.policy.revision)):
+                image,source,revision=values
+                run=subprocess.run(['/bin/bash',str(script),image,source,str(root/'out'),revision],
+                                   capture_output=True,check=False)
+                self.assertEqual(run.returncode,2)
+                self.assertFalse((root/'out').exists())
 
     def test_rejects_untrusted_dist_link_and_does_not_publish_invalid_archive(self):
         with tempfile.TemporaryDirectory() as lab:
