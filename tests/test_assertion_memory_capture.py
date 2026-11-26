@@ -176,6 +176,7 @@ class CaptureTest(unittest.TestCase):
         self.abort('b')
         self.assertEqual(self.poll()['queued'],0)
         self.assertEqual(self.messages(),[])
+        self.assertTrue(self.store.summary('physical')['pending_turn_completion'])
         self.store.close()
         from synthetic_memory_adapter.outbox import Outbox
         self.store = Outbox(self.root / 'outbox.sqlite3')
@@ -192,6 +193,7 @@ class CaptureTest(unittest.TestCase):
         self.assertTrue(all(a['_capture_batch']==selected[0]['_capture_batch'] for a in selected))
         self.assertEqual(selected[0]['_capture_batch']['message_ids'],ids)
         self.assertNotIn('interrupted_users',self.store.session('physical'))
+        self.assertFalse(self.store.summary('physical')['pending_turn_completion'])
         self.assertEqual(self.poll()['queued'],0)
 
     def test_interrupted_singleton_requires_existing_human_proof(self):
@@ -232,6 +234,9 @@ class CaptureTest(unittest.TestCase):
 
     def test_oversized_interrupted_batch_is_retained_and_never_split(self):
         from unittest.mock import patch
+        from prototypes.assertion_memory.capture_batch import MAX_MEMBERS, MAX_RAW_CHARACTERS
+        self.assertEqual((self.capture._CAPTURE_BATCH_MAX_MEMBERS,self.capture._CAPTURE_BATCH_MAX_CHARS),
+                         (MAX_MEMBERS,MAX_RAW_CHARACTERS))
         self.config['capture_batch']=True
         self.capture.register(self.store,self.raw)
         self.turn('one','first','u1')
@@ -243,6 +248,7 @@ class CaptureTest(unittest.TestCase):
             self.assertEqual(self.poll()['status'],'blocked')
         held=self.store.session('physical')['blocked_interrupted_batch']
         self.assertEqual(held['reason'],'interrupted_batch_exceeds_transport_limits')
+        self.assertEqual(self.store.summary('physical')['blocked'],held['reason'])
         self.assertEqual([a['text'] for a,_ in held['members']],['one','two','three'])
         self.assertEqual(self.messages(),[])
         self.turn('later','third','u3')
