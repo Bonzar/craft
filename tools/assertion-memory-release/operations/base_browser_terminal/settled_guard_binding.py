@@ -43,6 +43,7 @@ def _query():
         if _pid_uid(peer) not in (0,980) or not os.path.samestat(inode,SOCKET.lstat()):
             raise ValueError('unexpected configured authorizer peer')
         peer.sendall(REQUEST)
+        peer.shutdown(socket.SHUT_WR)
         return _credentialed_response(peer,expected_uid=980,limit=4096)
 
 def _mode(proof, *, active_directory, raw_manifest, marker):
@@ -63,12 +64,12 @@ def _mode(proof, *, active_directory, raw_manifest, marker):
     return mode_for_existing_guard(proof,
         physical_identity=Release(rev,archive,sha256(raw_manifest).hexdigest(),mode))
 
-def verified_settled_mode():
+def verified_settled_identity():
     if os.getuid()!=UID or os.geteuid()!=UID:
         raise ValueError('wrong existing settled guard identity')
     try: switch=_file(SWITCH,512,owner=0,mode=0o644)
     except FileNotFoundError:
-        return 'legacy'
+        return None
     exact={'binding':'dedicated-base-browser-v1','stage':'prod','version':1,
            'retired_graph_unit':GRAPH}
     profile=json.loads(switch)
@@ -97,7 +98,12 @@ def verified_settled_mode():
                 raise ValueError('sealed Base serving member mismatch')
     if current.resolve(strict=True)!=physical:
         raise ValueError('settled active Base changed')
-    return mode
+    rev,archive=physical.name.split('-')
+    return Release(rev,archive,sha256(raw).hexdigest(),mode)
+
+def verified_settled_mode():
+    identity=verified_settled_identity()
+    return 'legacy' if identity is None else identity.mode
 
 def restart_selected(*, run,userctl,active):
     """Used only by the exact patched settled routine inside its old fence."""

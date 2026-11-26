@@ -14,13 +14,17 @@ MAX=4096
 def _release(r):
     return {'revision':r.revision,'archive':r.archive,'manifest':r.manifest,'mode':r.mode}
 
-def respond(*, raw_request, verified_peer_uid, read_authorizer_state):
+def respond(*, raw_request, verified_peer_uid, read_authorizer_state, independently_observed_phase):
     if verified_peer_uid!=986 or raw_request!=REQUEST:
         raise ValueError('fixed native guard lookup denied')
     last,pending,_=read_exact(read_authorizer_state())
     response={'schema':1,'lane':'prod','known':_release(last),'pending':None}
     if pending is not None:
-        response['pending']={'run':pending.run,'nonce':pending.nonce,'release':_release(pending.candidate)}
+        phase=independently_observed_phase()
+        if phase not in ('restart','restore'):
+            raise ValueError('missing independently verified native phase')
+        response['pending']={'run':pending.run,'nonce':pending.nonce,
+                             'release':_release(pending.candidate),'phase':phase}
     return encode(response)+b'\n'
 
 def mode_for_existing_guard(proof, *, physical_identity, pending_required=True):
@@ -34,9 +38,10 @@ def mode_for_existing_guard(proof, *, physical_identity, pending_required=True):
     expected=_release(physical_identity)
     pending=body['pending']
     if pending is not None:
-        if type(pending) is not dict or set(pending)!={'run','nonce','release'}:
+        if (type(pending) is not dict or set(pending)!={'run','nonce','release','phase'}
+                or pending['phase'] not in ('restart','restore')):
             raise ValueError('invalid protected pair transaction')
-        possible=(body['known'],pending['release'])
+        possible=(pending['release'],) if pending['phase']=='restart' else (body['known'],)
     else:
         if pending_required:
             raise ValueError('no protected active rollback transaction')

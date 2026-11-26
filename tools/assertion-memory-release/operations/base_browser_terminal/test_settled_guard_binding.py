@@ -16,10 +16,14 @@ class GuardBinding(TestCase):
         candidate=replace(f.new,manifest=sha256(new).hexdigest())
         signed=replace(f.admission,candidate=candidate)
         proof=respond(raw_request=REQUEST,verified_peer_uid=986,read_authorizer_state=lambda:
-             admit(initial(trusted_prior=before),verified_admission=signed))
+             admit(initial(trusted_prior=before),verified_admission=signed),
+             independently_observed_phase=lambda:'restart')
         self.assertEqual(_mode(proof,active_directory=candidate.revision+'-'+candidate.archive,
                                raw_manifest=new,marker=mark),'sidecar')
-        self.assertEqual(_mode(proof,active_directory=before.revision+'-'+before.archive,
+        inverse=respond(raw_request=REQUEST,verified_peer_uid=986,read_authorizer_state=lambda:
+             admit(initial(trusted_prior=before),verified_admission=signed),
+             independently_observed_phase=lambda:'restore')
+        self.assertEqual(_mode(inverse,active_directory=before.revision+'-'+before.archive,
                                raw_manifest=old,marker=None),'legacy')
         with self.assertRaises(ValueError):
             _mode(proof,active_directory=candidate.revision+'-'+candidate.archive,raw_manifest=new,marker=None)

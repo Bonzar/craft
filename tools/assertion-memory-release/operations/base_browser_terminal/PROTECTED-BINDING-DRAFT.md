@@ -28,3 +28,13 @@ Untracked live guard/hook source remains only with authorized operator;
 separately reviewed source transform/head and exact immutable ops/control
 approval are mandatory before using these functions. Current live policy,
 authorizer dispatcher, root holder, scoped startup and ingress unchanged.
+
+Review follow-up gates:
+- Dark marker: original v1/v2 first-frame parser and challenge/confirm unchanged.
+- Independently active marker: exact no-payload pair query only through this
+  additive dispatcher; ordinary v1/v2 release actions intentionally fail closed.
+  The same protected v3 workflow must be confirmed before enabling the marker.
+- Pair response selects exactly the independently observed native phase
+  (candidate restart only or known predecessor restore only). Callback must
+  be provided by the exact installed protected controller; a deploy-owned
+  journal or request phase is not proof. Source remains uninstalled.

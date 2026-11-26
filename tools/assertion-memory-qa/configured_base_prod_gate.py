@@ -150,12 +150,15 @@ def receive(stream,authorize,activate_exact):
     require(result==permit(p),'Wrong activation receipt')
     return result
 
-def serve_peer(sock,policy,ledger,writer_uid,peer_uid,issuer_keys,now=lambda:int(time.time())):
+def serve_peer(sock,policy,ledger,writer_uid,peer_uid,issuer_keys,now=lambda:int(time.time()),*,prefetched_frame=None):
     try:
         require(peer_uid(sock)==writer_uid,'Unexpected receiver UID')
         sock.settimeout(4)
-        with sock.makefile('rb') as f:
-            frame=read_frame(f)
+        if prefetched_frame is None:
+            with sock.makefile('rb') as f:
+                frame=read_frame(f)
+        else:
+            frame=prefetched_frame
         p,challenge=request(frame)
         response=(ledger.issue(policy,p,now()) if challenge else
                   ledger.confirm(policy,p,frame['nonce'],frame['token'],issuer_keys(),now()))
