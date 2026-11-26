@@ -46,8 +46,10 @@ SOURCE_RETENTION_RULES = (
     'Assess the underlying proposition against authorized prior knowledge, not that somebody stated it. '
     'A speech act is distinct only when stating it itself changes a decision, obligation, status or other '
     'information useful later. Do not rescue ineligible material with an attributed meta-claim. '
-    'Retain a concrete decision relevant to later steps of the same work with that scope; one request '
-    'for an output does not establish a standing preference. '
+    'Retain a concrete decision relevant to later steps of the same work with that scope. Include the '
+    'material conditions of an eligible assertion with that assertion. Ordinary next-step language '
+    'or an output request does not by itself establish an independent durable decision or standing '
+    'preference. Keep a separately adopted plan when it independently meets the same admission test. '
 )
 ORIGIN_RULES = SOURCE_RETENTION_RULES + (
     'The target origin may be user, assistant or tool; preserve its exact actor and role. '
