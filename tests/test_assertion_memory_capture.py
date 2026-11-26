@@ -160,6 +160,74 @@ class CaptureTest(unittest.TestCase):
                          [])
         self.assertEqual(self.store.session('physical')['exclusions']['user_messages_in_turn_without_final'], 2)
 
+    def abort(self, turn):
+        self.append({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':turn,'reason':'interrupted'}})
+
+    def test_interrupted_users_are_committed_once_in_next_batch_after_restart(self):
+        self.config['capture_batch'] = True
+        self.capture.register(self.store, self.raw)
+        self.turn('request A','a','u-a')
+        self.assistant('partial assistant A','a-a',channel='commentary')
+        self.abort('a')
+        self.turn('request B','b','u-b')
+        self.pair('additional B','b','u-b2')
+        self.append({'type':'response_item','payload':{'type':'message','role':'assistant','phase':'final_answer',
+            'id':'partial-b','content':[{'type':'output_text','text':'partial assistant B'}]}})
+        self.abort('b')
+        self.assertEqual(self.poll()['queued'],0)
+        self.assertEqual(self.messages(),[])
+        self.store.close()
+        from synthetic_memory_adapter.outbox import Outbox
+        self.store = Outbox(self.root / 'outbox.sqlite3')
+        self.addCleanup(self.store.close)
+        self.turn('request C','c','u-c')
+        self.assistant('completed assistant C','a-c')
+        self.assertEqual(self.poll()['queued'],5)
+        selected=[m['arguments'] for m in self.messages()]
+        self.assertEqual([a['text'] for a in selected],
+            ['request A','request B','additional B','request C','completed assistant C'])
+        self.assertEqual([a['role'] for a in selected],['user','user','user','user','assistant'])
+        ids=[a['message_id'] for a in selected]
+        self.assertEqual(len(set(ids)),5)
+        self.assertTrue(all(a['_capture_batch']==selected[0]['_capture_batch'] for a in selected))
+        self.assertEqual(selected[0]['_capture_batch']['message_ids'],ids)
+        self.assertNotIn('interrupted_users',self.store.session('physical'))
+        self.assertEqual(self.poll()['queued'],0)
+
+    def test_interrupted_singleton_requires_existing_human_proof(self):
+        self.config['capture_batch'] = True
+        self.capture.register(self.store,self.raw)
+        self.turn('eligible singleton','first','u-first',trigger='user_message')
+        # The paired fixture's duplicate is within one occurrence. Also include a
+        # separate R-only human event, which the ordinary final boundary permits.
+        self.append({'type':'response_item','payload':{'type':'message','role':'user','id':'singleton',
+            'content':[{'type':'input_text','text':'trusted R only'}]}})
+        self.abort('first')
+        self.assertEqual(self.poll()['queued'],0)
+        self.turn('continued','second','u2')
+        self.assistant('complete','a2')
+        self.assertEqual(self.poll()['queued'],4)
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],
+            ['eligible singleton','trusted R only','continued','complete'])
+
+    def test_clear_boundary_drops_interrupted_carry_and_evidence(self):
+        self.append({'type':'compacted','payload':{}})
+        # A real fresh header needs its timestamp before any turn is read.
+        rows=self.path.read_text(encoding='utf-8').splitlines()
+        header=json.loads(rows[0])
+        header['timestamp']='2025-01-01T00:00:00+00:00'
+        self.path.write_text('\n'.join([json.dumps(header),*rows[1:]])+'\n',encoding='utf-8')
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw,fresh_since='2024-01-01T00:00:00+00:00')
+        self.turn('old','first','u1')
+        self.abort('first')
+        self.assertEqual(self.poll()['queued'],0)
+        state=self.store.session('physical')
+        self.assertEqual(len(state['interrupted_users']),1)
+        reset=self.capture.arm_database_reset_boundary(state,clock_ns=lambda:0)
+        self.assertEqual(reset['interrupted_users'],[])
+        self.assertEqual(reset['interrupted_user_witnesses'],[])
+
     def test_resume_without_registration_starts_after_existing_tail(self):
         self.turn('old')
         self.assistant('old reply')
