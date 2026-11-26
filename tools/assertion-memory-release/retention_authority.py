@@ -211,21 +211,39 @@ def tasks(proc):
 def unescape(path):
     return re.sub(r'\\([0-7]{3})',lambda m: chr(int(m[1],8)),path)
 
-def mounts(raw):
+def mount_entries(raw):
     for line in raw.splitlines():
-        f = line.split()
-        require(len(f) >= 10 and '-' in f)
-        a,b = f[2].split(':')
-        yield f[0],os.makedev(int(a),int(b)),Path(unescape(f[3])),Path(unescape(f[4]))
+        f=line.split()
+        require(len(f)>=10 and '-' in f[6:])
+        major,minor=f[2].split(':')
+        yield (f[0],os.makedev(int(major),int(minor)),Path(unescape(f[3])),
+               Path(unescape(f[4]))), frozenset(f[5].split(','))
+
+
+def mounts(raw):
+    return (mount for mount,_ in mount_entries(raw))
+
 
 def intersect(a,b):
     return a.is_relative_to(b) or b.is_relative_to(a)
 
-def check_mounts(raw, host_mount, physical, logical, device):
-    for mid, dev, root, target in mounts(raw):
+
+def check_mounts(raw, host_mount, physical, logical, device, *, canonical_inode=None):
+    for mount,options in mount_entries(raw):
+        mid,dev,root,target=mount
         require(not target.is_relative_to(logical))
-        if dev == device and intersect(root,physical):
-            require((mid,dev,root,target) == host_mount)
+        if dev==device and intersect(root,physical):
+            if mount==host_mount:
+                continue
+            # Linux copies a mount into another namespace with a new local ID.
+            # Accept only a read-only copy at the exact same root and target,
+            # confirmed by the task's actual namespace view of the candidate.
+            # A relocated bind, writable alternate mount, hidden or foreign
+            # inode, and every submount under the candidate still deny.
+            require(mid!=host_mount[0] and mount[1:]==host_mount[1:]
+                    and 'ro' in options and 'rw' not in options
+                    and canonical_inode is not None and canonical_inode() is True)
+
 
 def scan(candidate, tracked, proc=Path('/proc')):
     require(os.stat(proc/'self/ns/pid').st_ino == os.stat(proc/'1/ns/pid').st_ino)
@@ -253,7 +271,9 @@ def scan(candidate, tracked, proc=Path('/proc')):
         ns = pair((t/'ns/mnt').stat())
         if ns not in mount_namespaces:
             data = (t/'mountinfo').read_text()
-            check_mounts(data, mount, physical, candidate, mount[1])
+            def same_inode():
+                return pair((t/'root'/candidate.relative_to('/')).stat())==pair(candidate.lstat())
+            check_mounts(data, mount, physical, candidate, mount[1],canonical_inode=same_inode)
             mount_namespaces[ns] = data
         digest = hashlib.sha256()
         for field in ('cmdline','environ'):

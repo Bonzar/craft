@@ -50,6 +50,7 @@ def run(binding, state, *, once=False, binding_path=None):
                     if session.get('blocked'):
                         coordinator.observe(session['session_id'], {'status':'blocked'})
                         continue
+                    if machine: coordinator.prepare_source_scan(session['session_id'])
                     try: observation = poll(store, session['session_id'], capture)
                     except FileNotFoundError: observation = {'status':'waiting_transcript'}
                     except Exception as failure:

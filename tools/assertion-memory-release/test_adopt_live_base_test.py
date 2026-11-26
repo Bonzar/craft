@@ -46,7 +46,7 @@ class Adoption(unittest.TestCase):
         self.keys.write_bytes(b'fixture key only\n'); self.keys.chmod(0o644)
         self.source=self.root/'upload'
         self.source.mkdir(mode=0o700)
-        inputs={'base_payload.py': b'# source fixture\n', 'release_core.py':b'# core fixture\n', 'receive.py':UPGRADE}
+        inputs={'base_payload.py': b'# source fixture\n', 'release_core.py':b'# core fixture\n', 'release_retention.py':b'# retention fixture\n', 'receive.py':UPGRADE}
         for name,body in inputs.items():
             path=self.source/name; path.write_bytes(body); path.chmod(0o644)
         sums=b''.join(f'{digest(body)}  {name}\n'.encode() for name,body in sorted(inputs.items()))
@@ -121,7 +121,10 @@ exit 7
         self.assertEqual(self.receiver.stat().st_mode&0o777,0o644)
         self.assertEqual(self.hook.stat().st_mode&0o777,0o755)
         self.assertEqual((self.home/'current').readlink(),pointer)
-        self.assertTrue((self.shared/'release_core.py').is_file())
+        for name in ('release_core.py','base_payload.py','release_retention.py'):
+            self.assertEqual((self.shared/name).read_bytes(),(self.source/name).read_bytes())
+        self.assertEqual({p.name for p in self.shared.iterdir()},
+                         {'release_core.py','base_payload.py','release_retention.py'})
         self.assertEqual([p.read_bytes() for p in self.config.glob('.receive-before-shared.*')],[LEGACY])
 
     def test_failed_new_receiver_probe_restores_exact_old_entrypoint(self):
@@ -132,6 +135,17 @@ exit 7
         self.assertFalse(self.shared.exists())
         self.assertEqual(self.keys.read_bytes(),b'fixture key only\n')
 
+
+    def test_incomplete_retention_dependency_is_rejected_before_first_install(self):
+        (self.source/'release_retention.py').unlink()
+        manifests=(self.source/'SHA256SUMS')
+        content=b''.join(line+b'\n' for line in manifests.read_bytes().splitlines()
+                         if not line.endswith(b'  release_retention.py'))
+        manifests.write_bytes(content)
+        self.manifest=digest(content)
+        self.assertNotEqual(self.run_script('--check')[0],0)
+        self.assertEqual(self.receiver.read_bytes(),LEGACY)
+        self.assertFalse(self.shared.exists())
 
     def test_changed_source_after_preflight_is_never_installed(self):
         rc,out,err=self.run_script('--apply',tamper_source=True)

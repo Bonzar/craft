@@ -1,13 +1,18 @@
 """Current-only generated release retention, never an arbitrary directory sweep."""
 from contextlib import contextmanager
 from dataclasses import dataclass
+import base64
+import csv
 import fcntl
+import hashlib
+import io
 import json
 import logging
 import os
 from pathlib import Path
 import re
 import socket
+import ssl
 import stat
 import struct
 
@@ -24,9 +29,12 @@ OK=b'assertion-release-retention-v1 OK\n'
 BASE_NAME=re.compile(r'[a-f0-9]{40}-[a-f0-9]{64}\Z')
 VISUAL_NAME=re.compile(r'[a-f0-9]{64}\Z')
 GEN_PATH={'base':'releases','visual-static':'releases','visual-runtime':'runtime/versions'}
+VENV_PY=re.compile(r'python3\.(?:11|12|13|14)\Z')
+CERT_NAMES={('pip','_vendor','certifi','cacert.pem'):'pip',('certifi','cacert.pem'):'certifi'}
+MAX_PROVENANCE_FILE=2*1024**2
 HOLD=('runtime/.runtime-transition','runtime/.visual-runtime-joint-transition','.activation-pending-v1')
 LOG=logging.getLogger(__name__)
-SAFE_ERRORS=(OSError, ValueError, RuntimeError, TypeError)
+SAFE_ERRORS=(OSError, ValueError, RuntimeError, TypeError, csv.Error)
 
 @dataclass(frozen=True)
 class Store:
@@ -114,14 +122,74 @@ def bindings(root, stores, *, ready=None):
                                   minimum=SCOPES[scope][1],ready=ready)
 
 
+def regular_at(directory,name,expected,owner,device):
+    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    with os.fdopen(fd,'rb') as source:
+        current=os.fstat(source.fileno())
+        if (not os.path.samestat(current,expected) or current.st_uid!=owner or current.st_dev!=device
+                or not stat.S_ISREG(current.st_mode) or current.st_nlink!=1 or current.st_mode&0o022
+                or not 0<current.st_size<=MAX_PROVENANCE_FILE):
+            raise ValueError('retention_generated_ca_identity')
+        data=source.read(MAX_PROVENANCE_FILE+1)
+        if len(data)!=current.st_size:
+            raise ValueError('retention_generated_ca_identity')
+        return data
+
+
+def generated_ca(site, parent, name, relative, owner, device, meta):
+    """Only real certifi X.509 bundles in the exact installed wheel RECORD."""
+    if relative not in CERT_NAMES or site is None:
+        raise ValueError('retention_sensitive_member')
+    source=regular_at(parent,name,meta,owner,device)
+    pkg=CERT_NAMES[relative]
+    dist_names=[n for n in os.listdir(site) if re.fullmatch(pkg+r'-[0-9][A-Za-z0-9_.+-]{0,95}\.dist-info',n)]
+    if len(dist_names)!=1:
+        raise ValueError('retention_generated_ca_record')
+    fd=os.open(dist_names[0],os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=site)
+    try:
+        info=os.stat('RECORD',dir_fd=fd,follow_symlinks=False)
+        records=regular_at(fd,'RECORD',info,owner,device)
+    finally:
+        os.close(fd)
+    path='/'.join(relative)
+    want='sha256='+base64.urlsafe_b64encode(hashlib.sha256(source).digest()).decode('ascii').rstrip('=')
+    got=[row for row in csv.reader(io.StringIO(records.decode('utf-8')),strict=True) if row and row[0]==path]
+    if got!=[[path,want,str(len(source))]]:
+        raise ValueError('retention_generated_ca_record')
+    chunks=[]
+    inside=False
+    for line in source.splitlines():
+        if line==b'-----BEGIN CERTIFICATE-----' and not inside:
+            inside=True
+        elif line==b'-----END CERTIFICATE-----' and inside:
+            inside=False
+        elif inside:
+            if not re.fullmatch(rb'[A-Za-z0-9+/]{1,76}={0,2}',line):
+                raise ValueError('retention_generated_ca_not_certificates')
+        elif not (line.strip()==b'' or line.startswith(b'#')):
+            raise ValueError('retention_generated_ca_not_certificates')
+        else:
+            continue
+        chunks.append(line)
+    if inside or not chunks:
+        raise ValueError('retention_generated_ca_not_certificates')
+    try:
+        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cadata=b'\n'.join(chunks).decode('ascii'))
+    except (ssl.SSLError,ValueError) as exc:
+        raise ValueError('retention_generated_ca_not_certificates') from exc
+
+
 def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
     # Reject writable/shared files, hard links, irregular devices, secret/DB
     # paths and submounts before deletion. The privileged proof additionally
     # checks same-device bind mounts and references across namespaces.
     limit=100_000
     entries={}
-    def inspect(fd, rel):
+    def inspect(fd, rel, site=None):
         nonlocal limit
+        if (allow_venv and len(rel)==4 and rel[:2]==('venv','lib')
+                and VENV_PY.fullmatch(rel[2]) and rel[3]=='site-packages'):
+            site=fd
         for name in os.listdir(fd):
             limit-=1
             if limit<0:
@@ -130,11 +198,17 @@ def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
             low=name.lower()
             if ((not rel and low in {'secrets','credentials','wheelhouse','logs','data','state','config','backups'})
                     or low.endswith(('.db','.db-wal','.db-shm','.sqlite','.sqlite-wal','.sqlite-shm',
-                        '.sqlite3','.sqlite3-wal','.sqlite3-shm','.key','.pem','.env','.log'))):
+                        '.sqlite3','.sqlite3-wal','.sqlite3-shm','.key','.env','.log'))):
                 raise ValueError('retention_sensitive_member')
             info=os.stat(name,dir_fd=fd,follow_symlinks=False)
             if info.st_dev!=root_stat.st_dev or info.st_uid!=owner:
                 raise ValueError('retention_member_owner_or_device')
+            if low.endswith('.pem'):
+                prefix=item[:4]
+                if (not allow_venv or len(prefix)!=4 or prefix[:2]!=('venv','lib')
+                        or not VENV_PY.fullmatch(prefix[2]) or prefix[3]!='site-packages'):
+                    raise ValueError('retention_sensitive_member')
+                generated_ca(site,fd,name,item[4:],owner,root_stat.st_dev,info)
             entries[item]=info
             mode=info.st_mode
             if stat.S_ISLNK(mode):
@@ -150,7 +224,7 @@ def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
                 try:
                     if not os.path.samestat(info,os.fstat(child)):
                         raise ValueError('retention_replaced_member')
-                    inspect(child,item)
+                    inspect(child,item,site)
                 finally:
                     os.close(child)
             elif not stat.S_ISREG(mode) or info.st_nlink!=1:

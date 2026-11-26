@@ -10,7 +10,7 @@ class OwnerIngress(unittest.TestCase):
                 paths,nginx=owner_routes(lane=lane,host=host,backend_ip='192.0.2.100',
                     prefix='/__visual-owner',owner_auth='/__visual-owner-auth-check',
                     marker_include=f'/etc/nginx/{lane}/owner-markers.conf')
-                operations={'pause', 'sessions', 'items/source-preview', 'items/remove', 'database/clear'}
+                operations={'pause', 'sessions', 'items/source-preview', 'items/remove', 'database/clear-v2'}
                 self.assertEqual(set(paths),{'/api/v1/processing/'+action+suffix
                                              for action in operations for suffix in ('','/prepare')})
                 self.assertEqual(nginx.count('auth_request /__visual-owner-auth-check;'),10)

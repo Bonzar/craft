@@ -1,9 +1,13 @@
 """Lifecycle contracts for current-only generated paths; no real roots/keys."""
+import base64
+import csv
 import fcntl
 from hashlib import sha256
 from io import BytesIO
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import tarfile
@@ -123,6 +127,46 @@ class CurrentOnly(unittest.TestCase):
                     self.assertEqual((root/'current').resolve(),prior)
                     self.assertEqual(len(list((root/'releases').iterdir())),1+(not proven))
                 self.durable(root)
+
+    def test_real_generated_base_venv_ca_only_with_package_provenance(self):
+        root=self.roots('test')
+        def prepare(action,path):
+            if action=='prepare':
+                subprocess.run([sys.executable,'-I','-B','-m','venv','--copies',str(path/'venv')],
+                               check=True,capture_output=True,timeout=45)
+        old=self.deploy_base(root,b'A',prepare)
+        packages,=old.glob('venv/lib/python*/site-packages')
+        cacert=packages/'pip/_vendor/certifi/cacert.pem'
+        self.assertTrue(cacert.is_file())
+        original=cacert.read_bytes()
+        record,=packages.glob('pip-*.dist-info/RECORD')
+        initial_record=record.read_bytes()
+        # A same-path private-key file is unqualified even if its local
+        # package RECORD happens to transcribe matching bytes and size.
+        fake=b'-----BEGIN PRIVATE KEY-----\nZmljdGlvbmFs\n-----END PRIVATE KEY-----\n'
+        want='sha256='+base64.urlsafe_b64encode(sha256(fake).digest()).decode().rstrip('=')
+        with record.open(newline='') as src:
+            rows=list(csv.reader(src))
+        cacert.write_bytes(fake)
+        path='pip/_vendor/certifi/cacert.pem'
+        with record.open('w',newline='') as dst:
+            csv.writer(dst).writerows([path,want,str(len(fake))] if row[0]==path else row for row in rows)
+        active=self.deploy_base(root,b'B',lambda *_:None)
+        self.assertTrue(old.exists() and cacert.read_bytes()==fake)
+        self.assertEqual((root/'current').resolve(),active)
+        cacert.write_bytes(original);record.write_bytes(initial_record)
+        unrelated=packages/'unrelated.pem';unrelated.write_bytes(original)
+        store=Store('base',base_payload.retention_candidate)
+        with (root/'deploy.lock').open('rb') as locked:
+            fcntl.flock(locked,fcntl.LOCK_EX)
+            gc=self.factory(root,(store,),lambda *_:True)(locked.fileno())
+            self.assertEqual(gc.sweep('test'),(0,1,0))
+            unrelated.unlink()
+            self.assertEqual(gc.sweep('test',dry=True),(1,0,0))
+            self.assertTrue(old.is_dir())
+            self.assertEqual(gc.sweep('test'),(1,0,0))
+        self.assertFalse(old.exists())
+        self.durable(root)
 
     def test_low_space_does_not_consume_an_archive_or_touch_current(self):
         root=self.roots('test')

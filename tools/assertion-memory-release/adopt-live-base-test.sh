@@ -24,7 +24,7 @@ receiver=$config/receive.py
 wrapper=$config/receiver-login
 keys=/etc/ssh/assertion-release/test.authorized_keys
 hook=$config/service-hook.sh
-candidate_files=(base_payload.py receive.py release_core.py)
+candidate_files=(base_payload.py receive.py release_core.py release_retention.py)
 check_hash() { [[ $(sha256sum -- "$1" | cut -d' ' -f1) == "$2" ]]; }
 root_file() { [[ -f "$1" && ! -L "$1" && $(stat -c '%u:%g:%a' -- "$1") == "0:0:$2" ]]; }
 for folder in "$control" "$config"; do
@@ -32,7 +32,7 @@ for folder in "$control" "$config"; do
 done
 root_file "$src/SHA256SUMS" 644
 check_hash "$src/SHA256SUMS" "$manifest_hash"
-[[ $(awk 'NF==2 {print $2}' "$src/SHA256SUMS" | sort | paste -sd, -) == base_payload.py,receive.py,release_core.py ]]
+[[ $(awk 'NF==2 {print $2}' "$src/SHA256SUMS" | sort | paste -sd, -) == base_payload.py,receive.py,release_core.py,release_retention.py ]]
 for f in "${candidate_files[@]}"; do root_file "$src/$f" 644; done
 (cd -- "$src"; sha256sum --check --strict --status SHA256SUMS)
 root_file "$receiver" 644
@@ -53,7 +53,7 @@ active=$(readlink -- "$home/current")
 [[ ! -e "$home/.activation-pending-v1" && ! -L "$home/.activation-pending-v1" ]]
 if [[ -e "$shared" || -L "$shared" ]]; then
   [[ -d "$shared" && ! -L "$shared" && $(stat -c '%u:%g:%a' -- "$shared") == 0:0:755 ]]
-  for f in release_core.py base_payload.py; do root_file "$shared/$f" 644; cmp -s -- "$src/$f" "$shared/$f"; done
+  for f in release_core.py base_payload.py release_retention.py; do root_file "$shared/$f" 644; cmp -s -- "$src/$f" "$shared/$f"; done
 fi
 probe() {
   local output rc=0
@@ -85,7 +85,7 @@ for f in SHA256SUMS "${candidate_files[@]}"; do
   root_file "$staging/input/$f" 644
 done
 check_hash "$staging/input/SHA256SUMS" "$manifest_hash" || { rm -rf -- "$staging"; exit 1; }
-[[ $(awk 'NF==2 {print $2}' "$staging/input/SHA256SUMS" | sort | paste -sd, -) == base_payload.py,receive.py,release_core.py ]]
+[[ $(awk 'NF==2 {print $2}' "$staging/input/SHA256SUMS" | sort | paste -sd, -) == base_payload.py,receive.py,release_core.py,release_retention.py ]]
 (cd -- "$staging/input"; sha256sum --check --strict --status SHA256SUMS) || { rm -rf -- "$staging"; exit 1; }
 src=$staging/input
 prior=$(mktemp "$config/.receive-before-shared.XXXXXXXX")
@@ -109,7 +109,7 @@ cleanup() {
   fi
   if (( shared_created && !done_ok )); then
     # Remove only the unused first-adoption exact files. Never touch a preexisting module directory.
-    rm -- "$shared/release_core.py" "$shared/base_payload.py"
+    rm -- "$shared/release_core.py" "$shared/base_payload.py" "$shared/release_retention.py"
     rmdir -- "$shared"
   fi
   rm -f -- "$next"
@@ -120,7 +120,7 @@ trap cleanup EXIT
 trap 'exit 99' HUP INT TERM
 if [[ ! -d "$shared" ]]; then
   install -d -o root -g root -m 0755 -- "$staging/shared"
-  for f in release_core.py base_payload.py; do install -o root -g root -m 0644 -- "$src/$f" "$staging/shared/$f"; done
+  for f in release_core.py base_payload.py release_retention.py; do install -o root -g root -m 0644 -- "$src/$f" "$staging/shared/$f"; done
   mv -T -- "$staging/shared" "$shared"
   shared_created=1
 fi

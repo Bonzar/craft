@@ -146,14 +146,15 @@ class Outbox:
         row = self.db.execute("SELECT COUNT(*) AS total, SUM(status='pending') AS pending, SUM(status='acknowledged') AS acknowledged, SUM(error IS NOT NULL) AS errors FROM messages WHERE session_id=?", (session,)).fetchone()
         transport_row = self.db.execute('SELECT data FROM transport_streams WHERE session_id=?',(session,)).fetchone()
         transport = json.loads(transport_row['data']) if transport_row else {}
-        pending_receipts = self.db.execute('SELECT COUNT(*) FROM delivery_sequences WHERE session_id=? AND receipt IS NULL',(session,)).fetchone()[0]
+        pending_receipts = self.db.execute('SELECT COUNT(*) FROM delivery_sequences WHERE session_id=? AND seq>? AND receipt IS NULL',(session, transport.get('reset_seq_floor',0))).fetchone()[0]
         return {'queued_pending': row['pending'] or 0, 'pending_delivery_receipts':pending_receipts,
-                'artifact_upload_pending':self.db.execute('SELECT COUNT(DISTINCT m.artifact_id) FROM message_artifacts m LEFT JOIN artifacts a USING(artifact_id) WHERE m.session_id=? AND a.receipt IS NULL',(session,)).fetchone()[0],
-                'remote_transport':{key:transport.get(key) for key in ('stream_id','report_seq','server_observed_seq','server_acked_through','scan_state','gap_count','lifecycle','error')}, 'acknowledged_raw': row['acknowledged'] or 0,
+                'artifact_upload_pending':self.db.execute("SELECT COUNT(DISTINCT m.artifact_id) FROM message_artifacts m LEFT JOIN artifacts a USING(artifact_id) JOIN messages r ON r.session_id=m.session_id AND r.message_id=m.message_id WHERE m.session_id=? AND r.status='pending' AND a.receipt IS NULL",(session,)).fetchone()[0],
+                'remote_transport':{key:transport.get(key) for key in ('stream_id','report_seq','server_observed_seq','server_acked_through','scan_state','gap_count','lifecycle','error','database_clear_generation','reset_discarded_messages','database_clear_ready_generation')}, 'acknowledged_raw': row['acknowledged'] or 0,
                 'delivery_errors': row['errors'] or 0, 'source_gaps': sorted(set(state.get('gaps', []))),
                 'retained_source_gap_count': len(state.get('gaps', [])),
                 'intentional_exclusions': state.get('exclusions', {}),
                 'blocked': state.get('blocked'),
+                'database_clear_ambiguous_before_rearm':state.get('pre_reset_turn_discarded',False),
                 'pending_turn_completion': bool((state.get('turn') or {}).get('user_messages')
                     or (state.get('turn') or {}).get('assistant')),
                 'pending_source_proof': bool((state.get('turn') or {}).get('pending')

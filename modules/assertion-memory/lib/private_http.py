@@ -47,7 +47,11 @@ class MachineClient:
             raise ValueError('invalid release metadata')
         if expected is not None and proof!=expected:raise ValueError('release changed')
         return received,proof
+    def register_stream(self, arguments, *, previous):
+        return self._call('memory_ingest_register',arguments,previous=previous)
     def call(self,name,arguments):
+        return self._call(name,arguments)
+    def _call(self,name,arguments,*,previous=None):
         if name not in {'memory_ingest_register','memory_ingest_report','memory_store_artifact','memory_capture_message','memory_capture_batch'}:
             raise TransportError('Operation outside the Mac collector')
         try:
@@ -55,8 +59,16 @@ class MachineClient:
             if not isinstance(token,str) or not re.fullmatch('[a-f0-9]{64}',token):
                 raise ValueError('invalid credential')
             catalog,proof=self._request(token,'catalog',{})
-            if catalog['capability']!='machine' or sum(t['name']==name for t in catalog['tools'])!=1:
+            matches=[t for t in catalog['tools'] if t['name']==name]
+            if catalog['capability']!='machine' or len(matches)!=1:
                 raise ValueError('required operation absent')
+            if previous is not None:
+                props=matches[0].get('inputSchema',{}).get('properties',{})
+                fields={'previous_stream_id','previous_epoch'}
+                if type(props) is not dict or bool(fields & props.keys())!=fields.issubset(props):
+                    raise ValueError('invalid reset capability')
+                if fields.issubset(props):
+                    arguments=arguments | dict(zip(('previous_stream_id','previous_epoch'),previous,strict=True))
             receipt,_=self._request(token,name,arguments,proof)
             if receipt['status']!='ok' or not isinstance(receipt['result'],dict):
                 raise ValueError('not a successful queue receipt')

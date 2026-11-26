@@ -29,6 +29,9 @@ jobs:
       - run: python3 tools/assertion-memory-release/github_graph_preview_test.py
       - run: python3 tools/assertion-memory-qa/test_native_test_policy.py
       - run: python3 tools/assertion-memory-release/test_release_post_commit.py
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
       - name: Test current-only generated release retention
         run: |
           export PYTHONPATH=tools/assertion-memory-release:tools/assertion-memory-visual

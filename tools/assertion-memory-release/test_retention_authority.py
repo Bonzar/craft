@@ -36,6 +36,22 @@ class AuthorityTest(unittest.TestCase):
             with self.assertRaises(a.Denied):
                 a.check_mounts(good+mount,host,candidate,candidate,host[1])
 
+    def test_ro_canonical_cloned_mount_requires_same_inode(self):
+        host=('37',os.makedev(8,1),Path('/'),Path('/'))
+        candidate=Path('/srv/example/releases/retired')
+        clone='91 21 8:1 / / ro - ext4 /dev/x rw\n'
+        a.check_mounts(clone,host,candidate,candidate,host[1],canonical_inode=lambda:True)
+        for raw,probe in ((clone,None),(clone,lambda:False),
+             (clone.replace(' / ro ',' / rw '),lambda:True),
+             (clone.replace(' / ro ',' /moved ro '),lambda:True),
+             (clone.replace('8:1 / / ro','8:1 /srv / ro'),lambda:True)):
+            with self.assertRaises(a.Denied):
+                a.check_mounts(raw,host,candidate,candidate,host[1],canonical_inode=probe)
+        # A marker saying RO must not allow a mount directly over any child.
+        with self.assertRaises(a.Denied):
+            a.check_mounts(clone+'92 91 7:7 / /srv/example/releases/retired/sub ro - ext4 /dev/y rw\n',
+                          host,candidate,candidate,host[1],canonical_inode=lambda:True)
+
     @contextmanager
     def fixture(self):
         # Test this private fixture with the trusted collector's path ownership checker
@@ -139,6 +155,17 @@ class AuthorityTest(unittest.TestCase):
             (task/'maps').write_text('')
             (task/'environ').write_bytes(b'PYTHONPATH='+os.fsencode(retired)+b'\0')
             with self.assertRaises(a.Denied):
+                a.scan(retired,tracked,proc)
+            (task/'environ').write_bytes(b'')
+            # Walk the task's effective canonical path, not merely equal
+            # values in mountinfo. The fake namespace root now reaches it.
+            (task/'root').unlink()
+            (task/'root').symlink_to('/')
+            (task/'mountinfo').write_text(mount.replace('37 21 ','91 21 ').replace(' / rw -',' / ro -'))
+            self.assertEqual(a.scan(retired,tracked,proc),a.scan(retired,tracked,proc))
+            (task/'root').unlink()
+            (task/'root').symlink_to(root)
+            with self.assertRaises(OSError):
                 a.scan(retired,tracked,proc)
 
     def test_base_generated_links_are_lexically_sealed_not_followed(self):
