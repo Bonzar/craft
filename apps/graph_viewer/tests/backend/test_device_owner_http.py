@@ -2,6 +2,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
@@ -80,3 +81,44 @@ class DeviceHTTP(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await client.put(PATH,json=body,headers=proof)).status_code,200)
                 self.assertEqual((await client.put(PATH,json=body,headers=proof)).status_code,409)
                 self.assertEqual(registry.machine_digests(),('a'*64,))
+
+    def test_standalone_test_binding_skips_all_private_reads_when_dark(self):
+        from apps.graph_viewer.server import device_test_binding as binding
+        with TemporaryDirectory() as folder, patch.object(binding,'MARKER',Path(folder)/'missing'), \
+                patch.object(binding,'configured_neutral_factory',side_effect=AssertionError('unexpected')):
+            self.assertIsNone(binding.installed_test_device_binding(None))
+
+    def test_standalone_test_only_attaches_same_registry_with_exact_selector(self):
+        from contextlib import ExitStack
+        import json
+        import os
+        from types import SimpleNamespace
+        from apps.graph_viewer.server import device_test_binding as m
+        with TemporaryDirectory() as folder, ExitStack() as stack:
+            root=Path(folder);state=root/'state';state.mkdir()
+            marker=root/'marker';marker.write_text('fixture')
+            config=state/'http.json';token=state/'mcp-token';token.touch()
+            db=state/'fictional.sqlite3'
+            ordinary={'service':{'db':str(db)},'token_file':str(token),'port':8893}
+            registry=MachineDeviceRegistry.initialize(root/'devices.sqlite3','test')
+            local=SimpleNamespace(stage='test',db=db)
+            views={'config':ordinary}
+            for name,value in (('ROOT',root),('MARKER',marker),('CONFIG',config),('LEGACY',token)):
+                stack.enter_context(patch.object(m,name,value))
+            stack.enter_context(patch.object(m.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=max(os.getuid(),1))))
+            uid=max(os.getuid(),1)
+            stack.enter_context(patch.object(m.os,'getuid',return_value=uid))
+            stack.enter_context(patch.object(m.os,'geteuid',return_value=uid))
+            stack.enter_context(patch.object(m,'_read_profile',side_effect=lambda p,*args:
+                b'assertion-memory-owner-machine-devices-v1\n' if p==marker else json.dumps(views['config']).encode()))
+            stack.enter_context(patch.object(m,'_identity',return_value=('fixture','generation')))
+            stack.enter_context(patch.object(m,'load_token',return_value='fixture-only-token'))
+            factory=stack.enter_context(patch.object(m,'configured_neutral_factory',
+                return_value=SimpleNamespace(machine_device_registry=registry)))
+            self.assertIs(m.installed_test_device_binding(local)[0],registry)
+            factory.assert_called_once_with(config,'fixture-only-token')
+            factory.reset_mock()
+            views['config']=ordinary|{'token_env_var':'OTHER_SERVICE_ENV'}
+            with self.assertRaises(ValueError):
+                m.installed_test_device_binding(local)
+            factory.assert_not_called()

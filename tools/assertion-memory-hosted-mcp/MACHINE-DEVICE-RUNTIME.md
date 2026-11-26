@@ -42,3 +42,16 @@ commits between middleware and inner auth, an earlier denial is terminal
 and cannot gain a path around the release lock. If currently allowed, the
 guard takes the same shared lease as the existing machine endpoint, and
 inner auth may still deny on a concurrent revoke.
+
+The ordinary protected startup attaches the same registry object in the
+native PROD Base browser process, with the same verified release function
+under its existing lease. Standalone TEST Graph may independently attach
+the same physical stage store using only the exact existing test UID,
+canonical fixture DB, installed marker, `state/http.json` and file-based
+`state/mcp-token` declared by standard TEST provisioning. It does not read
+another process's environment or guess alternate credential locations. A
+different live TEST credential selector is not supported by this adapter.
+Both paths require the same checked active release before effects. Still
+no capability without the protected marker and the verified ready handler;
+enabling/disabling marker policy is a protected restart, whereas revoking
+one enrolled machine takes effect on its next machine request.
