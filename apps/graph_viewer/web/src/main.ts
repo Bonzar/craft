@@ -1,4 +1,4 @@
-import {openOwnerLive,type OwnerLiveHandle} from './owner-live-controller.mjs';
+import {firstOwnerSnapshot,openOwnerLive,type FirstOwnerSnapshot,type OwnerLiveHandle} from './owner-live-controller.mjs';
 import {sourceReadinessNotice} from './source-access.ts';
 import {applyMembershipPatch,checkedDeltaManifest} from './membership-patch.ts';
 import {deriveVisualSceneData} from './visual-scene-data.ts';
@@ -152,8 +152,8 @@ class Viewer {
   private showLogin():void{this.authenticated=false;byId('universe',HTMLElement).inert=true;clearTimeout(this.capabilityTimer);this.login.hidden=false;this.loading.hidden=true;this.stopOwnerLive();this.stream?.close();byId('logout',HTMLButtonElement).hidden=true;requestAnimationFrame(()=>byId('password',HTMLInputElement).focus());}
   private async authenticate():Promise<void>{const password=byId('password',HTMLInputElement);const submit=byId('login-button',HTMLButtonElement);setBusy(submit,true,'Войти');let accepted=false;byId('login-error',HTMLElement).textContent='';try{const state=await write('/session','POST',{password:password.value},'',sessionSchema);if(!state.owner&&!state.authenticated)throw new Error('Не удалось войти');accepted=true;this.csrf=state.csrf_token;password.value='';await this.start();}catch(error){if(accepted){if(error instanceof ApiError&&error.status===401){this.showLogin();byId('login-error',HTMLElement).textContent='Сессия истекла. Войдите ещё раз.';}else this.failLoad(humanError(error));}else byId('login-error',HTMLElement).textContent=error instanceof ApiError&&error.status===401?'Пароль не подошёл.':humanError(error);}finally{password.value='';setBusy(submit,false,'Войти');}}
   private ensureLiveScene():void{if(!this.scene){try{this.scene=new UniverseScene(this.canvas,byId('topic-labels',HTMLElement),picked=>this.run(()=>this.picked(picked)),topic=>this.openTopic(topic),(x,y)=>this.feedback(x,y),error=>this.handleError(error),lod=>this.updateRepresentation(lod),entry=>this.run(()=>this.openNode(entry.id)),metrics=>this.updateReaderConnections(metrics));}catch{throw new Error('Для вселенной нужен браузер с WebGL 2. Проверьте аппаратное ускорение.');}}}
-  private async start():Promise<void>{this.authenticated=true;byId('universe',HTMLElement).inert=false;this.login.hidden=true;byId('logout',HTMLButtonElement).hidden=false;this.ensureLiveScene();
-    this.capabilities=await bootStep('session','Источник не ответил после входа. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal));const query=new URLSearchParams(location.search);const foreign=sourceObjectAccess(this.capabilities.provider_id,query.get('provider_id'))==='foreign_source';if(foreign){this.clearContextSelection();const previous=this.currentContext();this.selector=temporalSelector('current','',previous.zone,false,'separate');this.acceptedContext={...previous,selector:{...this.selector}};this.applyContextInputs(this.acceptedContext);}await this.loadGraph();this.renderCapabilities();if(foreign){this.objectSourceReady(query.get('provider_id'));return;}await this.openDeepLink(query);}
+  private async start():Promise<void>{this.authenticated=true;byId('universe',HTMLElement).inert=false;this.login.hidden=true;byId('logout',HTMLButtonElement).hidden=false;this.setConnection('Подключаемся к live-потоку',false);
+    this.capabilities=await bootStep('session','Источник не ответил после входа. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal));const query=new URLSearchParams(location.search);const foreign=sourceObjectAccess(this.capabilities.provider_id,query.get('provider_id'))==='foreign_source';if(foreign){this.clearContextSelection();const previous=this.currentContext();this.selector=temporalSelector('current','',previous.zone,false,'separate');this.acceptedContext={...previous,selector:{...this.selector}};this.applyContextInputs(this.acceptedContext);}await this.bootstrapOwnerGraph();this.renderCapabilities();if(foreign){this.objectSourceReady(query.get('provider_id'));return;}await this.openDeepLink(query);}
   private async manifestFor(signal:AbortSignal,selector:Selector):Promise<Manifest>{while(!signal.aborted){const reply=await response(apiUrl('/graph',{mode:selector.mode,at:selector.at,history:selector.history?1:0,undated:selector.undated,session_id:selector.session_id,run_id:selector.run_id,output_snapshot_id:selector.output_snapshot_id}),signal);const body:unknown=await reply.json();if(reply.status===202){const preparation=prepSchema.parse(body);byId('loading-detail',HTMLElement).textContent='Источник готовит полную вселенную…';await pause(Math.min(3000,Math.max(100,preparation.retry_after_ms)),signal);continue;}const manifest=manifestSchema.parse(body);if((manifest.selector.session_id??null)!==(selector.session_id??null))throw new ApiError(409,'session_unavailable','Сессия недоступна в этом срезе.');if((manifest.selector.run_id??null)!==(selector.run_id??null)||(selector.output_snapshot_id!==null&&selector.output_snapshot_id!==undefined&&manifest.session_filter?.overview_history?.snapshot_id!==selector.output_snapshot_id))throw new ApiError(409,'run_unavailable','Обработка недоступна в сохранённой истории.');return manifest;}throw new DOMException('Aborted','AbortError');}
   private loadGraph(context?:SliceContext, preserveOwnerLive=false):Promise<void>{lifecycle('load-graph',{manual:context!==undefined});
     if(this.changingContext&&!context)return Promise.resolve();
@@ -164,7 +164,7 @@ class Viewer {
   private async fetchGraph(context:SliceContext,preserveOwnerLive=false):Promise<void>{
     if(!this.authenticated)return;this.cardRequest?.abort();this.reader.finishLoading();this.graphRequest?.abort();const request=new AbortController();this.graphRequest=request;if(!preserveOwnerLive)this.stopOwnerLive();this.stream?.close();this.stream=null;if(!preserveOwnerLive)this.setConnection(this.changingContext?'Загружаем новый срез · на карте предыдущий':'Получаем вселенную',false);if(!this.graph){this.loading.hidden=false;byId('load-retry',HTMLButtonElement).hidden=true;}
     let nextWorker:GraphWorker|null=null;
-    try{const manifest=await bootStep('manifest','Источник не успел подготовить карту. Повторите загрузку.',signal=>this.manifestFor(signal,context.selector),request.signal);if(!manifest.complete_graph||manifest.schema!==1||manifest.nodes.stride!==16||manifest.edges.stride!==8||manifest.nodes.byte_length!==manifest.counts.nodes*16||manifest.edges.byte_length!==manifest.counts.edges*8)throw new Error('Источник не предоставил полный граф согласованного формата.');if(!this.capabilities||this.capabilities.provider_id!==manifest.provider_id)this.capabilities=await bootStep('session','Не удалось подтвердить источник карты. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal),request.signal);if(this.capabilities.provider_id!==manifest.provider_id)throw new ApiError(409,'source_changed','Источник изменился во время загрузки.');if(preserveOwnerLive&&this.manifest?.owner_live_epoch&&manifest.owner_live_epoch&&this.manifest.owner_live_epoch!==manifest.owner_live_epoch){this.clearOwnerLiveGraph();this.ensureLiveScene();}if(this.manifest&&canReuseSnapshot(this.manifest,manifest)&&sameSliceContext(this.currentContext(),context)){this.cursor=this.cursor||manifest.live_cursor;this.loading.hidden=true;lifecycle('graph-same-revision-reused',{revision:opaqueTag(manifest.revision)});if(!this.changingContext)this.startLive();return;}const sourceChanged=this.manifest!==null&&this.manifest.provider_id!==manifest.provider_id;if(sourceChanged){this.clearContextSelection();this.setConnection('Источник сменился · загружаем текущий срез',false);}byId('loading-detail',HTMLElement).textContent=`Загружаем ${manifest.counts.eligible_before_status_filter.toLocaleString('ru')} звёзд и ${(manifest.counts.source_eligible_edges??manifest.counts.edges).toLocaleString('ru')} связей`;
+    try{const manifest=await bootStep('manifest','Источник не успел подготовить карту. Повторите загрузку.',signal=>this.manifestFor(signal,context.selector),request.signal);if(preserveOwnerLive&&this.ownerSnapshotEpoch&&this.ownerSnapshotEpoch!==manifest.owner_live_epoch)throw new ApiError(409,'owner_live_epoch_changed','Источник изменился; ожидаем новое подключение.');if(!manifest.complete_graph||manifest.schema!==1||manifest.nodes.stride!==16||manifest.edges.stride!==8||manifest.nodes.byte_length!==manifest.counts.nodes*16||manifest.edges.byte_length!==manifest.counts.edges*8)throw new Error('Источник не предоставил полный граф согласованного формата.');if(!this.capabilities||this.capabilities.provider_id!==manifest.provider_id)this.capabilities=await bootStep('session','Не удалось подтвердить источник карты. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal),request.signal);if(this.capabilities.provider_id!==manifest.provider_id)throw new ApiError(409,'source_changed','Источник изменился во время загрузки.');if(preserveOwnerLive&&this.manifest?.owner_live_epoch&&manifest.owner_live_epoch&&this.manifest.owner_live_epoch!==manifest.owner_live_epoch){this.clearOwnerLiveGraph();this.ensureLiveScene();}if(this.manifest&&canReuseSnapshot(this.manifest,manifest)&&sameSliceContext(this.currentContext(),context)){this.cursor=this.cursor||manifest.live_cursor;this.loading.hidden=true;lifecycle('graph-same-revision-reused',{revision:opaqueTag(manifest.revision)});if(!this.changingContext)this.startLive();return;}const sourceChanged=this.manifest!==null&&this.manifest.provider_id!==manifest.provider_id;if(sourceChanged){this.clearContextSelection();this.setConnection('Источник сменился · загружаем текущий срез',false);}byId('loading-detail',HTMLElement).textContent=`Загружаем ${manifest.counts.eligible_before_status_filter.toLocaleString('ru')} звёзд и ${(manifest.counts.source_eligible_edges??manifest.counts.edges).toLocaleString('ru')} связей`;
       const [nodes,edges,topics]=await bootStep('payload','Не удалось вовремя загрузить звёзды, связи или темы. Повторите.',signal=>bootBuffers(manifest,signal),request.signal);
       if(request.signal.aborted)return;if(topics.revision!==manifest.revision)throw new Error('Данные тем относятся к другой версии вселенной.');try{nextWorker=new GraphWorker();}catch{throw new BootError('Браузер не смог запустить модуль обработки карты. Обновите страницу и повторите.');}
       const decode=nextWorker;byId('loading-detail',HTMLElement).textContent='Проверяем данные карты…';
@@ -373,31 +373,63 @@ class Viewer {
     this.worker?.dispose();this.worker=null;this.scene?.dispose();this.scene=null;
     this.graph=null;this.manifest=null;this.topics=null;this.cursor='';
   }
-  private stopOwnerLive():void{this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
-  private startDirectOwnerLive():boolean{
+  private ownerLiveHealthy=false;
+  private ownerLiveCarriesQueue=false;
+  private ownerSnapshotEpoch:string|null=null;
+  private ownerSnapshotBoot:FirstOwnerSnapshot|null=null;
+  private stopOwnerLive():void{this.ownerSnapshotBoot?.close();this.ownerSnapshotBoot=null;this.ownerSnapshotEpoch=null;this.ownerLiveHealthy=false;this.ownerLiveCarriesQueue=false;if(this.ownerLive)window.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:'closed'}));this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
+  private async bootstrapOwnerGraph():Promise<void>{
+    const bootstrap=firstOwnerSnapshot(epoch=>{
+      if(!this.authenticated)return;
+      this.ownerSnapshotEpoch=epoch;
+    if(!epoch)this.setConnection('Снимок · живой поток пока не подтверждён',false);
+      if(epoch)window.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:this.ownerLiveCarriesQueue}}));
+      this.ensureLiveScene();
+      return this.loadGraph(undefined,true);
+    });
+    if(!this.startDirectOwnerLive(bootstrap)){bootstrap.close();this.ensureLiveScene();return this.loadGraph();}
+    await bootstrap.ready;
+  }
+  private startDirectOwnerLive(bootstrap?:FirstOwnerSnapshot):boolean{
     const cfg=this.capabilities?.owner_live_transport;
-    if(!/^[a-f0-9]{64}$/.test(this.manifest?.owner_live_epoch??''))return false;
-    if(!cfg||typeof cfg!=='object'||!('version'in cfg)||cfg.version!==1||!('lane'in cfg)||cfg.lane!=='test'||!('origin'in cfg)||typeof cfg.origin!=='string')return false;
-    const o=cfg.origin;
-    // Reject ambient/configurable destinations. The presented grant never moves
-    // to any origin other than the exact trusted deployment's IPv4 HTTPS origin.
-    let url:URL;try{url=new URL(o);}catch{return false;}
-    if(url.origin!==o||url.protocol!=='https:'||url.port||!/^\d+\.\d+\.\d+\.\d+$/.test(url.hostname)||!this.csrf)return false;
-    const key=JSON.stringify([o,this.capabilities?.provider_id,this.currentContext()]);
-    if(this.ownerLive&&this.ownerLiveKey===key)return true;
+    if(!this.authenticated||!this.csrf||this.manifest&&!/^[a-f0-9]{64}$/.test(this.manifest.owner_live_epoch??''))return false;
+    let transport:'direct'|'ordinary'='ordinary',o=location.origin,queue=true;
+    let direct=false;
+    if(cfg&&typeof cfg==='object'&&'version'in cfg&&cfg.version===1&&'lane'in cfg&&cfg.lane==='test'
+        &&'origin'in cfg&&typeof cfg.origin==='string'){
+      try{const url=new URL(cfg.origin);if(url.origin===cfg.origin&&url.protocol==='https:'&&!url.port&&/^\d+\.\d+\.\d+\.\d+$/.test(url.hostname)){
+        direct=true;transport='direct';o=cfg.origin;queue='queue_hints'in cfg&&cfg.queue_hints===1;
+      }}catch{}
+    }
+    if(!direct&&(this.capabilities?.owner_live_bootstrap!==1||this.capabilities.capabilities.live!==true))return false;
+    const key=JSON.stringify([transport,o,this.capabilities?.provider_id]);
+    if(this.ownerLive&&this.ownerLiveKey===key){
+      if(this.ownerLiveHealthy&&this.manifest)this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется',true);
+      return true;
+    }
     this.stopOwnerLive();
-    this.ownerLiveKey=key;
-    this.ownerLive=openOwnerLive({allowedOrigin:o,csrf:this.csrf,initialEpoch:this.manifest?.owner_live_epoch,onState:state=>{
+    this.ownerLiveKey=key;this.ownerSnapshotBoot=bootstrap??null;this.ownerLiveCarriesQueue=queue;
+    this.ownerLive=openOwnerLive({allowedOrigin:o,csrf:this.csrf,transport,initialEpoch:this.manifest?.owner_live_epoch,onBootstrap:epoch=>{
+      if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return false;
+      this.ownerSnapshotEpoch=epoch;
+      return bootstrap?.accept(epoch)??false;
+    },onState:state=>{
       if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return;
-      if(state==='live')this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется',true);
+      this.ownerLiveHealthy=state==='live';
+      window.dispatchEvent(new CustomEvent('owner-live-connection',{detail:state}));
+      if(state==='disconnected'&&!this.manifest)bootstrap?.fallback();
+      if(state==='registered')this.setConnection('Live · поток открыт',true);
+      else if(state==='live')this.setConnection(this.manifest?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):'Live · загружаем карту',true);
       else this.setConnection(state==='connecting'?'Подключаемся к live-потоку':'Нет live-связи',false);
     },onInvalidate:retiredEpoch=>{
       if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return;
       if(retiredEpoch&&this.manifest?.owner_live_epoch&&this.manifest.owner_live_epoch!==retiredEpoch)return;
-      this.graphRequest?.abort();this.clearOwnerLiveGraph();
-    },onRefresh:async reason=>{
+      this.ownerSnapshotEpoch=null;window.dispatchEvent?.(new CustomEvent('owner-live-invalidate'));this.graphRequest?.abort();this.clearOwnerLiveGraph();
+    },onRefresh:async (reason,authority)=>{
       if(this.graphLoading)await this.graphLoading;
       if(this.ownerLiveKey!==key||!this.authenticated||this.changingContext)return;
+      this.ownerSnapshotEpoch=authority??null;
+      if(this.ownerSnapshotEpoch)window.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch:this.ownerSnapshotEpoch,queue}}));
       if(reason==='reset')this.ensureLiveScene();
       else if(this.selector.mode==='known_then')return;
       await this.loadGraph(undefined,true);
