@@ -215,5 +215,18 @@ class Dual(TestCase):
             asyncio.run(test(str(Path(folder)/'empty.sqlite3')))
 
 
+def load_tests(loader, suite, pattern):
+    # The protected Base workflow invokes this module explicitly rather than
+    # discovering sibling test modules.
+    from . import (test_browser_listener,test_browser_listener_real,
+                   test_browser_owner_binding,test_browser_prod_binding,
+                   test_browser_surface,test_existing_owner_store)
+    for module in (test_browser_listener,test_browser_listener_real,
+                   test_browser_owner_binding,test_browser_prod_binding,
+                   test_browser_surface,test_existing_owner_store):
+        suite.addTests(loader.loadTestsFromModule(module))
+    return suite
+
+
 if __name__=='__main__':
     main()

@@ -105,11 +105,12 @@ class Tickets:
         del self.pending[token]
 
 class BrowserOwnerAPI:
-    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, clock=time.time):
-        if stage not in ('test','prod') or not callable(perform) or not callable(queue_snapshot):
+    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, dashboard_live=True, clock=time.time):
+        if stage not in ('test','prod') or not callable(perform) or not callable(queue_snapshot) or type(dashboard_live) is not bool:
             raise ValueError('Expected explicit Base browser API lane')
         self.stage,self.perform,self.queue_snapshot=stage,perform,queue_snapshot
         self.clear_enabled=clear_enabled is True
+        self.dashboard_live=dashboard_live
         self.tickets=Tickets(clock)
 
     def allows(self, request):
@@ -145,7 +146,7 @@ class BrowserOwnerAPI:
             raise APIError('queue_unavailable','Wrong Base queue scope',503)
         # Reuse deployed queue overlay contract: native prepared proof, not old session-token PUT.
         ready=self.stage=='test' or (value.get('processing_control') or {}).get('can_change') is True
-        value={**value,'capabilities':{**value.get('capabilities',{}),'live':True,'standalone_pause':ready,
+        value={**value,'capabilities':{**value.get('capabilities',{}),'live':self.dashboard_live,'standalone_pause':ready,
                                       'queue_processing_policy':ready},'readiness':[]}
         if 'processing_control' in value:
             value['processing_control']={**value['processing_control'],'can_change':False}
