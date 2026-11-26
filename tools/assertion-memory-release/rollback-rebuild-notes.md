@@ -100,3 +100,25 @@ explicit selected revision to the catalog extractor. The review specimen
 workflows: exact compatibility resolver, offline image production/verification,
 and signed generated-output handoff are not implemented. Do not relax sandbox
 restrictions or fake a GitHub release event to run the old compiler.
+
+The disabled receiver-side contract `rollback_rebuild_receiver.py` models the
+final Base PROD authority. Current Base already verifies signed GitHub
+OIDC claims, pins the configured caller/reusable workflow and uses a
+receiver-owned SQLite challenge ledger before its host writer. The new
+contract instead requires the distinctly typed rebuilt promotion and a
+separate rebuild audience, with exact old release, built archive/payload,
+protected current caller/child/actor/lane, run, TEST witness and VM in scope.
+It verifies RS256 against independently supplied issuer JWKS and compares the
+verified TEST payload hash with a measured staged payload hash. Nonce and
+first-attempt run reuse are rejected durably. An original-release promotion
+cannot satisfy this contract, even when a valid issuer signs its normal
+audience.
+
+Still missing from live integration: policy installation and authenticated
+fixed-issuer JWKS retrieval, authentic caller/lane bindings from a real
+protected workflow, and a scoped receiver entry bound to an owned durable
+ledger and the same sealed input file/FD from hash through activation.
+Do not route this module directly from SSH, use a caller-supplied measured
+digest or pass staged bytes to a host writer before verification/consumption.
+The separately signed builder/sealer evidence adapter also remains required.
+No token, key, host configuration or product runtime is installed by this PR.
