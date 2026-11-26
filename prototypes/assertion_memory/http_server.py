@@ -6,13 +6,14 @@ device is already on the tailnet. Database/provider settings are server-owned.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hmac
 import json
 import os
 import stat
 import re
 import uuid
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 from pathlib import Path
 
 from .mcp_server import ServiceConfig, WorkerLauncher, create_server
@@ -22,6 +23,8 @@ from .queue_pause_rest import PATH as QUEUE_PAUSE_PATH
 from .queue_session_control import PATH as QUEUE_SESSIONS_PATH
 from .queue_processing_policy import PATH as QUEUE_POLICY_PATH
 from .queue_item_removal import PATH as QUEUE_REMOVE_PATH, PREVIEW_PATH as QUEUE_PREVIEW_PATH
+
+from .database_clear import PATH as QUEUE_CLEAR_PATH, database_lease
 
 MIN_TOKEN_LENGTH = 32
 TOKEN_ENV_VAR = 'ASSERTION_MEMORY_TOKEN'
@@ -67,6 +70,36 @@ class AuthenticatedMemoryApp:
             yield
 
     async def __call__(self, scope, receive, send):
+        if scope['type']=='http':
+            path=scope.get('path','')
+            if path==QUEUE_CLEAR_PATH:
+                handler=getattr(self.queue_pause,'queue_clear_route',None)
+                if handler is None:
+                    return await _error_response(404,'not found',scope,receive,send)
+                return await handler(scope,receive,send)
+            database=getattr(self.queue_pause,'queue_clear_database',None)
+            # MCP GET may be a stream without a bound lifetime. Provider and
+            # mutations start only via POST/PUT; GET owner queue reads are finite.
+            if database is not None and (scope.get('method')!='GET' or path.startswith('/api/')):
+                # Keep the lease until the actual dispatcher exits, even if
+                # an HTTP caller disconnects while a model thread is active.
+                task=asyncio.create_task(self._leased_dispatch(database,scope,receive,send))
+                try:
+                    return await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    task.add_done_callback(lambda done:None if done.cancelled() else done.exception())
+                    raise
+        return await self._dispatch(scope,receive,send)
+
+    async def _leased_dispatch(self,database,scope,receive,send):
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(database_lease(database))
+            except OSError:
+                return await _error_response(503,'database reset in progress',scope,receive,send)
+            return await self._dispatch(scope,receive,send)
+
+    async def _dispatch(self, scope, receive, send):
         if scope['type'] == 'http':
             path=scope.get('path','')
             if path in (QUEUE_REMOVE_PATH,QUEUE_PREVIEW_PATH):

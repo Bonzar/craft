@@ -4,8 +4,12 @@ from collections import deque
 import json
 import time
 import logging
+import sqlite3
 from urllib.parse import urlencode
 from .common import APIError,now
+from .database_generation import LEGACY, epoch_name
+
+_UNSET=object()
 from .bridge_auth import stream_authorized
 from .cache_restore import restore_graph
 from .live_profile import wall_ms,emitted,first_sse_yield
@@ -14,14 +18,18 @@ from .providers.base import membership_checked
 from .incremental import incremental
 from .layout import VERSION
 from .cache_retention import prune_cache, INTERVAL_SECONDS
+from .cache_reset_purge import after_clear
 from .presentation_refresh import policy_current,inherit_semantic
 from .providers.assertion_memory_topics import topic_policy_current
 
 
 class GraphManager:
-    def __init__(self, source, cache, semantic_model=None):
+    def __init__(self, source, cache, semantic_model=None, *, owner_store=None):
         self.source,self.cache=source,cache
+        self._generation=self.read_generation(); self._epoch_tasks=set()
+        self._purged_epoch=None; self._next_purge=0
         self.semantic_model=semantic_model
+        self.owner_store=owner_store
         self.semantic_jobs=set(); self.semantic_gate=asyncio.Semaphore(1)
         self.graphs={}; self.preparing={}; self.errors={}; self.latest={}; self.observed={}
         self.live_profiles=deque(maxlen=16)
@@ -31,18 +39,72 @@ class GraphManager:
     def key(self, selection):
         return json.dumps(selection,sort_keys=True)
 
+    def read_generation(self):
+        reader=getattr(self.source,'database_generation',None)
+        if reader is None:
+            return None
+        try:
+            return reader()
+        except Exception as error:
+            raise APIError('source_unavailable','Source generation could not be verified',503) from error
+
+    def generation_cache(self,generation):
+        if generation is None or generation[2]==LEGACY:
+            return self.cache
+        name=epoch_name(generation)
+        directory=self.cache/'database-epochs'/name
+        for path in (self.cache,self.cache/'database-epochs',directory):
+            path.mkdir(mode=0o700,exist_ok=True)
+            if path.is_symlink() or not path.is_dir():
+                raise ValueError('Untrusted Graph cache directory')
+        return directory
+
+    def sync_generation(self):
+        generation=self.read_generation()
+        if generation!=self._generation:
+            old=self._generation
+            if old is not None and old[2]!=LEGACY and generation[2]==LEGACY:
+                raise APIError('source_unavailable','Database reset fence disappeared',503)
+            self._generation=generation
+            self.graphs.clear(); self.latest.clear(); self.errors.clear(); self.observed.clear()
+            # Threads already executing cannot be canceled safely. Their epoch
+            # paths remain unreachable and their publication checks will fail.
+            self.preparing.clear(); self.journal.clear(); self.live_profiles.clear()
+            if old is not None:
+                self.emit('reset',{'revision':'','reason':'database_cleared','manifest_url':'/api/v1/graph'})
+        return generation
+
+    def generation_matches(self,generation):
+        return self.read_generation()==generation
+
+    def schedule(self,key,work):
+        task=asyncio.create_task(work)
+        self.preparing[key]=task
+        self._epoch_tasks.add(task)
+        task.add_done_callback(self._epoch_tasks.discard)
+
+    def finish(self,key):
+        if self.preparing.get(key) is asyncio.current_task():
+            self.preparing.pop(key,None)
+
     def get(self, revision):
+        generation=self._generation
+        if not self.generation_matches(generation):
+            raise APIError('revision_expired','Database generation changed; reload the graph',409)
         if revision not in self.graphs:
-            graph=restore_graph(self.cache,revision,self.source.provider_id)
+            graph=restore_graph(self.generation_cache(generation),revision,self.source.provider_id)
             if graph is None:
                 raise APIError('revision_expired','Snapshot revision is unavailable; reload the graph',409)
             graph.manifest['live_cursor']=str(self.cursor)
+            if not self.generation_matches(generation):
+                raise APIError('revision_expired','Database generation changed; reload the graph',409)
             self.graphs.setdefault(revision,graph)
             if self._loop is not None and not self.closed:
                 self._loop.call_soon_threadsafe(self.schedule_semantic,self.graphs[revision])
         return self.graphs[revision]
 
     async def ensure(self,selection):
+        generation=self.sync_generation()
         key=self.key(selection)
         if key in self.latest:
             return self.graphs[self.latest[key]]
@@ -51,25 +113,30 @@ class GraphManager:
                 raise self.errors[key]
             raise APIError('source_unavailable','Source snapshot could not be prepared',503)
         if key not in self.preparing:
-            self.preparing[key]=asyncio.create_task(self.build(selection,key))
+            self.schedule(key,self.build(selection,key,generation))
         return None
 
-    async def build(self,selection,key):
+    async def build(self,selection,key,generation):
         try:
-            graph=await asyncio.to_thread(prepare,self.source,self.cache,selection)
-            self.schedule_semantic(graph)
+            graph=await asyncio.to_thread(prepare,self.source,self.generation_cache(generation),selection)
+            if self.sync_generation()!=generation:
+                return None
             self.graphs[graph.revision]=graph; self.latest[key]=graph.revision
+            self.schedule_semantic(graph)
             graph.manifest['live_cursor']=str(self.cursor)
             self.errors.pop(key,None)
             return graph
         except Exception as error:
             logging.getLogger(__name__).warning('snapshot_preparation_failed mode=%s error_type=%s',selection['mode'],type(error).__name__)
-            self.errors[key]=error if isinstance(error,APIError) else True
+            if generation==self._generation:
+                self.errors[key]=error if isinstance(error,APIError) else True
             return None
         finally:
-            self.preparing.pop(key,None)
+            self.finish(key)
 
     def schedule_semantic(self,graph,old=None):
+        if self.graphs.get(graph.revision) is not graph:
+            return
         if graph.manifest['selector'].get('session_id') is not None:
             # A viewer filter never triggers embedding work. Share only an exact
             # unfiltered snapshot family whose canonical ordinal identities match.
@@ -127,46 +194,52 @@ class GraphManager:
         self.journal.append((self.cursor,event,payload))
 
     async def poll(self):
-        previous=self.source.revision()
         while not self.closed:
             await asyncio.sleep(.35)
             try:
+                generation=self.sync_generation()
                 revision=await asyncio.to_thread(self.source.revision)
+                self.cleanup_reset(generation)
+                if self.sync_generation()!=generation:
+                    continue
                 self.last_observed_at=now()
                 if not self.available:
                     self.available=True
                     self.emit('heartbeat',{'source_available':True,'last_observed_at':self.last_observed_at})
-                previous=revision
                 for key,old in list(self.latest.items()):
                     selection=json.loads(key)
                     clock=self.graphs[old].manifest.get('next_status_at')
                     due=clock is not None and clock<=now()
                     if selection['mode']=='known_then' or key in self.preparing or (self.observed.get(key,self.graphs[old].manifest['source_revision'])==revision and not due and not self.graphs[old].manifest.get('preparation',{}).get('presentation_pending') and self.graphs[old].manifest.get('layout',{}).get('version')==VERSION and policy_current(self.graphs[old].manifest) and topic_policy_current(self.graphs[old].manifest) and membership_checked(self.graphs[old].manifest,getattr(self.graphs[old],'watermarks',None))):
                         continue
-                    self.preparing[key]=asyncio.create_task(self.refresh(selection,key,old,wall_ms()))
+                    self.schedule(key,self.refresh(selection,key,old,wall_ms(),generation))
             except Exception:
                 if self.available:
                     self.available=False
-                    self.emit('unavailable',{'last_good_revision':next(iter(self.latest.values()),None),'since':now(),'message':'Source unavailable; showing the last prepared version'})
+                    self.emit('unavailable',{'last_good_revision':next(iter(self.latest.values()),None),'since':now(),'message':'Source generation unavailable; retained snapshots cannot be verified'})
 
-    async def refresh(self,selection,key,old,detected_at=None):
+    async def refresh(self,selection,key,old,detected_at=None,generation=_UNSET):
+        if generation is _UNSET:
+            generation=self._generation
         profile={'detected_at_ms':detected_at if detected_at is not None else wall_ms()}
         self.live_profiles.append(profile);started=time.monotonic()
         try:
-            result=await asyncio.to_thread(incremental,self.source,self.graphs[old],self.cache,selection)
+            result=await asyncio.to_thread(incremental,self.source,self.graphs[old],self.generation_cache(generation),selection)
+            if self.sync_generation()!=generation:
+                return
             profile['incremental_worker_ms']=round((time.monotonic()-started)*1000,3)
             if result:
                 graph,payload=result
                 if graph is None:
                     self.observed[key]=payload['observed_source_revision'];return
                 graph.live_profile=profile;profile['phases_ms']=graph.manifest['preparation'].get('phases_ms',{})
-                if not graph.manifest['preparation'].get('presentation_only'):self.schedule_semantic(graph,self.graphs[old])
                 self.graphs[graph.revision]=graph; self.latest[key]=graph.revision
+                if not graph.manifest['preparation'].get('presentation_only'):self.schedule_semantic(graph,self.graphs[old])
                 self.emit('delta',dict(payload,base_revision=old,revision=graph.revision,source_revision=graph.manifest['source_revision'],captured_at=graph.manifest['captured_at']))
                 graph.manifest['live_cursor']=str(self.cursor)
                 emitted(profile,self.cursor)
             else:
-                graph=await self.build(selection,key)
+                graph=await self.build(selection,key,generation)
                 if graph:
                     graph.live_profile=profile
                     self.emit('reset',{'revision':graph.revision,'reason':'history_changed','manifest_url':manifest_url(selection)})
@@ -174,7 +247,7 @@ class GraphManager:
                     emitted(profile,self.cursor)
         finally:
             profile['refresh_total_ms']=round((time.monotonic()-started)*1000,3)
-            self.preparing.pop(key,None)
+            self.finish(key)
 
     async def events(self,request):
         raw=request.headers.get('last-event-id') or request.query_params.get('after','0')
@@ -184,12 +257,19 @@ class GraphManager:
             raise APIError('invalid_cursor','Invalid live cursor') from None
         revision=request.query_params.get('revision')
         selection=self.get(revision).manifest['selector'] if revision else None
+        generation=self._generation
         yield self.encode('hello',{'cursor':str(self.cursor),'revision':revision,'captured_at':now()})
         heartbeat=time.monotonic()
         while not self.closed:
             if await request.is_disconnected():
                 break
             if hasattr(request,'app') and not await asyncio.to_thread(stream_authorized,request):
+                break
+            try:
+                if self.sync_generation()!=generation:
+                    yield self.encode('reset',{'cursor':str(self.cursor),'revision':revision or '','reason':'database_cleared','manifest_url':manifest_url(selection) if selection else '/api/v1/graph'})
+                    break
+            except APIError:
                 break
             if self.journal and after<self.journal[0][0]-1 and (not selection or selection['mode']!='known_then'):
                 yield self.encode('reset',{'cursor':str(self.cursor),'revision':revision,'reason':'cursor_expired','manifest_url':'/api/v1/graph'})
@@ -206,6 +286,8 @@ class GraphManager:
             await asyncio.sleep(.15)
 
     def applies(self,event,payload,selection):
+        if event=='reset' and payload.get('reason')=='database_cleared':
+            return True
         if event not in {'delta','reset'} or selection is None:
             return True
         if selection['mode']=='known_then':
@@ -217,11 +299,33 @@ class GraphManager:
     def encode(event,payload):
         return f'id: {payload["cursor"]}\nevent: {event}\ndata: {json.dumps(payload)}\n\n'
 
+    def cleanup_reset(self,generation):
+        if generation is None or generation[2]==LEGACY or self._purged_epoch==generation:
+            return
+        if self._epoch_tasks or self.semantic_jobs or time.monotonic()<self._next_purge:
+            return
+        try:
+            # Create or observe the current provider IR first; it lives in its
+            # own epoch and cannot be confused with old files from the serving state.
+            self.source.revision()
+            if not self.generation_matches(generation):
+                return
+            epoch=epoch_name(generation)
+            after_clear(self.cache,provider_id=self.source.provider_id,active=epoch)
+            if self.owner_store is not None:
+                self.owner_store.reset_graph_bookmarks(self.source.provider_id,epoch)
+            self._purged_epoch=generation
+        except (OSError,ValueError,sqlite3.Error):
+            # Serving still excludes prior epochs even while a filesystem reader
+            # delays reclamation; try again without reporting old contents.
+            self._next_purge=time.monotonic()+2
+            logging.getLogger(__name__).warning('database_reset_cache_reclamation_pending')
+
     async def clean_cache(self):
         while not self.closed:
             try:
                 # Pending builds and embeddings can still use previous generations.
-                if not self.preparing and not self.semantic_jobs:
+                if not self._epoch_tasks and not self.semantic_jobs:
                     retained=set(self.latest.values())
                     for _,_,payload in self.journal:
                         retained.update(payload.get(k) for k in ('revision','base_revision') if payload.get(k))
@@ -235,6 +339,7 @@ class GraphManager:
             await asyncio.sleep(INTERVAL_SECONDS)
 
     async def start(self):
+        self.sync_generation()
         self._loop=asyncio.get_running_loop()
         self._poller=asyncio.create_task(self.poll())
         self._cleaner=asyncio.create_task(self.clean_cache())
@@ -250,7 +355,7 @@ class GraphManager:
                 await self._poller
             except asyncio.CancelledError:
                 pass
-        await asyncio.gather(*list(self.preparing.values()),return_exceptions=True)
+        await asyncio.gather(*list(self._epoch_tasks),return_exceptions=True)
         await asyncio.gather(*list(self.semantic_jobs),return_exceptions=True)
         self.source.close()
 

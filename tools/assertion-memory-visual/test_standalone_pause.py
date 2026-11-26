@@ -1,11 +1,21 @@
 """Real HTTP over the Visual browser paths and a synthetic Base REST peer."""
+import asyncio
+from contextlib import nullcontext
 import hashlib
 import hmac
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import sqlite3
 from threading import Thread
 import test_asset_origin as fixture
+from prototypes.assertion_memory.database_clear import PATH as CLEAR_PATH
+from prototypes.assertion_memory.processing_control import read_control, set_control
+from prototypes.assertion_memory.queue_owner_domain import owner_operations
+from prototypes.assertion_memory.queue_pause_proof import make_owner_verifier,reserve_once
+from prototypes.assertion_memory.queue_pause_rest import make_queue_pause_rest
+from prototypes.assertion_memory.service import MemoryService
+from prototypes.assertion_memory.storage import MemoryStore
 
 
 class StandalonePause(fixture.OriginTest):
@@ -26,9 +36,25 @@ class StandalonePause(fixture.OriginTest):
         sessions=dict(stage=lane,revision='d'*32,selected_session_ids=[],sessions=[{'id':'synthetic','queued':1,'eligible':True}])
         processing=dict(stage=lane,revision='d'*32,sessions=sessions['sessions'],
             policy=dict(mode='all',included_session_ids=[],excluded_session_ids=[],added_from=None,added_through=None))
+        db=(self.root/f'{lane}-disposable.sqlite3').resolve()
+        with MemoryStore(db) as store:
+            service=MemoryService(store)
+            service.capture_message('synthetic-session','synthetic-id','fixture','user',
+                                    'fictional test record',1,'fixture')
+            with store.transaction(write=True) as conn:
+                _,revision=read_control(conn)
+                paused=set_control(conn,paused=True,expected_revision=revision)
+        operations=owner_operations(database=db,release_lease=nullcontext,identity=lambda:('fixture','exact'),stage=lane)
+        db_state=operations('clear_prepare',{})
         calls=[]
         now=[1770000000]
         ready=[True]
+        graph_scope_mode=['match']
+
+        def clear_commit(*,stage,expected_revision,proof):
+            return operations('clear_commit',{'expected_revision':expected_revision},
+                authorize=lambda conn:reserve_once(conn,stage=stage,expected_revision=expected_revision,
+                    proof=proof,path=CLEAR_PATH,clock=lambda:now[0]))
 
         class Base(BaseHTTPRequestHandler):
             def log_message(self,*_): pass
@@ -39,17 +65,43 @@ class StandalonePause(fixture.OriginTest):
                 self.end_headers()
                 self.wfile.write(json.dumps(value).encode())
 
+            def clear_request(self,wire):
+                port=self.server.server_port
+                proof=make_owner_verifier(secret,actor,lane=lane,path=CLEAR_PATH,clock=lambda:now[0])
+                app=make_queue_pause_rest(stage=lane,path=CLEAR_PATH,port=port,enabled=True,
+                    read_sha256=hashlib.sha256(read.encode()).hexdigest(),
+                    write_sha256=hashlib.sha256(write.encode()).hexdigest(),actor_sha256=actor,
+                    prepare=lambda:operations('clear_prepare',{})|{'can_clear':db_state['can_clear']},
+                    change=clear_commit,verify_owner=proof)
+                sent=[]
+                async def receive(): return {'type':'http.request','body':wire}
+                async def send(event): sent.append(event)
+                scope=dict(type='http',path=self.path,raw_path=self.path.encode(),query_string=b'',
+                    method=self.command,client=('127.0.0.1',self.client_address[1]),server=('127.0.0.1',port),
+                    headers=[(k.lower().encode(),v.encode()) for k,v in self.headers.items()])
+                asyncio.run(app(scope,receive,send))
+                return self.reply(sent[0]['status'],json.loads(sent[1]['body']))
+
             def do_GET(self):
                 calls.append((self.command,self.path))
+                if self.path=='/api/v1/capabilities?database_clear_scope=1':
+                    assert self.headers['Authorization']=='Bearer '+graph
+                    if graph_scope_mode[0]=='old':
+                        return self.reply(200,{'capabilities':{'live':True}})
+                    scope=operations('clear_prepare',{})['scope']
+                    return self.reply(200,{'stage':lane,'database_clear_scope':scope if graph_scope_mode[0]=='match' else '0'*64})
                 if self.path.startswith('/api/v1/queue-status?'):
                     assert self.headers['Authorization']=='Bearer '+queue
                     return self.reply(200,{'stage':lane,'release_version':'assertion-memory-v0.1.16',
                         'release_generation':'e'*64,'snapshot_at':'2026-11-25T21:00:00Z','global_order':False,
-                        'queues':[],'processing_control':{'paused':state['paused'],
+                        'queues':[],**({'database_clear':{k:db_state[k] for k in ('revision','can_clear','scope')}}
+                            if self.headers.get('X-Memory-Queue-Reset')=='ready-v1' else {}),
+                        'processing_control':{'paused':state['paused'],
                         'revision':state['revision'],'can_change':ready[0]}})
                 assert self.headers['Authorization']=='Bearer '+read
                 if self.path=='/api/v1/queue-sessions':return self.reply(200,sessions)
                 if self.path=='/api/v1/queue-processing-policy':return self.reply(200,processing)
+                if self.path==CLEAR_PATH:return self.clear_request(b'')
                 assert self.path=='/api/v1/queue-pause'
                 self.reply(200,state)
 
@@ -68,6 +120,9 @@ class StandalonePause(fixture.OriginTest):
                     str(now[0]+15),nonce))+'\n'
                 assert hmac.compare_digest(self.headers['X-Memory-Pause-Signature'],
                      hmac.digest(secret,mac.encode('ascii'),'sha256').hex())
+                if self.path==CLEAR_PATH:
+                    assert set(args)=={'expected_revision'}
+                    return self.clear_request(wire)
                 if self.path=='/api/v1/queue-items/source-preview':
                     assert args=={'queue_id':'source','item_id':'job','expected_revision':'1'*32}
                     return self.reply(200,{'stage':lane,'queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'})
@@ -219,3 +274,54 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(request('PUT',preview,body,extra={'X-CSRF-Token':proof['csrf_token']}),
             (200,{'stage':lane,'queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'}))
         self.assertEqual(calls,[('PUT','/api/v1/queue-items/source-preview')])
+        calls.clear()
+        clear='/api/v1/processing/database/clear'
+        snapshot='/api/v1/capabilities?queue_status=1'
+        self.assertNotIn('database_clear',request('GET',snapshot,None,proof=None)[1])
+        self.assertEqual(request('GET',snapshot,None)[1]['database_clear'],{'revision':db_state['revision'],'can_clear':True})
+        for mode in ('wrong','old'):
+            graph_scope_mode[0]=mode
+            code,payload=request('GET',snapshot,None)
+            self.assertEqual(code,200)
+            self.assertNotIn('database_clear',payload)
+        graph_scope_mode[0]='match'
+        self.assertTrue(all(p.startswith('/api/v1/queue-status?') or p=='/api/v1/capabilities?database_clear_scope=1' for _,p in calls))
+        self.assertEqual(request('GET','/api/v1/capabilities?database_clear_scope=1',None)[0],404)
+        calls.clear()
+        body={'stage':lane,'expected_revision':db_state['revision']}
+        prepare={**body,'confirmation':'ОЧИСТИТЬ '+lane.upper()}
+        self.assertEqual(request('GET',clear,None)[0],405)
+        self.assertEqual(request('POST',clear+'/prepare',prepare,proof=None)[0],403)
+        self.assertEqual(request('POST',clear+'/prepare',prepare,sent_origin='https://other.example.test')[0],403)
+        self.assertEqual(request('POST',clear+'/prepare?anything=1',prepare)[0],404)
+        self.assertEqual(request('POST',clear+'/prepare',{**prepare,'confirmation':'ОЧИСТИТЬ '+other.upper()})[0],400)
+        self.assertEqual(request('POST',clear+'/prepare',{**prepare,'stage':other})[0],409)
+        self.assertEqual(request('PUT',clear,body)[0],403)
+        self.assertEqual(calls,[])
+        db_state['can_clear']=False
+        self.assertEqual(request('POST',clear+'/prepare',prepare)[0],409)
+        db_state['can_clear']=True
+        graph_scope_mode[0]='wrong'
+        self.assertEqual(request('POST',clear+'/prepare',prepare)[0],409)
+        graph_scope_mode[0]='match'
+        self.assertEqual(request('POST',clear+'/prepare',{**prepare,'expected_revision':'8'*32})[0],409)
+        code,prepared=request('POST',clear+'/prepare',prepare)
+        self.assertEqual(code,200)
+        self.assertEqual(prepared['revision'],body['expected_revision'])
+        self.assertTrue(all(m=='GET' and p in (CLEAR_PATH,'/api/v1/capabilities?database_clear_scope=1') for m,p in calls))
+        calls.clear()
+        token={'X-CSRF-Token':prepared['csrf_token']}
+        self.assertEqual(request('PUT',clear,{**body,'stage':other},extra=token)[0],409)
+        self.assertEqual(request('PUT',clear,{**body,'expected_revision':'8'*32},extra=token)[0],403)
+        self.assertEqual(calls,[])
+        with sqlite3.connect(db) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
+        code,cleared=request('PUT',clear,body,extra=token)
+        self.assertEqual(code,200)
+        self.assertEqual(cleared,{'stage':lane,'revision':operations('clear_prepare',{})['revision'],'cleared':True})
+        self.assertNotEqual(cleared['revision'],body['expected_revision'])
+        with sqlite3.connect(db) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],0)
+            self.assertEqual(read_control(conn),paused)
+        self.assertEqual(request('PUT',clear,body,extra=token)[0],409)
+        self.assertEqual([x for x in calls if x[0]=='PUT'],[('PUT',CLEAR_PATH)])
