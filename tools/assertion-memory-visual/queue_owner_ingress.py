@@ -2,7 +2,7 @@
 import ipaddress
 import re
 
-CONTROLS = ('pause', 'sessions', 'items/source-preview', 'items/remove', 'database/clear')
+CONTROLS = ('pause', 'sessions', 'items/source-preview', 'items/remove', 'database/clear-v2')
 METHODS = (('POST', '/prepare'), ('PUT', ''))
 HEADERS = ('Cookie', 'Origin', 'Content-Type', 'X-CSRF-Token', 'Sec-Fetch-Site')
 HOST = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\Z')

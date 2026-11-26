@@ -30,3 +30,26 @@ Graph reader must observe the durable `memory_database_clear_state.revision`
 before serving any cached revision and invalidate before enabling the UI
 button in either lane. Do not ship this feature with a Graph reader that could
 serve an old revision after the reset.
+
+
+## Capture recovery and mixed-version safety
+
+An authorized clear also invalidates the old ingest stream and writer epoch.
+For the previously verified enrolled producer, it keeps only an opaque hash
+of the old binding. The updated client can negotiate a successor using that
+exact pair. It latches the exact physical transcript boundary before its
+authenticated ready report; ambiguous earlier material is not submitted.
+Base will not commit a successor's deliveries or permit generic epoch
+replacement while that acknowledgment is outstanding.
+
+The UI confirmation and private loopback clear REST negotiate the same
+versioned control header. An old Visual cannot mutate a new Base. A new
+Visual paired with an old Base has ordinary queues but no clear affordance;
+it will not sign a clear after an old prepare result. Only the V2 browser
+route can be published; both older components rolled back together still
+receive no route to the old control. A successful clear
+receipt is not a capture-ready receipt. For a previously enrolled producer,
+the owner panel waits for exact successor reports from every stream in the
+frozen, opaque set of previously enrolled, active, unexpired streams at clear.
+A late acknowledgement for an older clear may resume its stream but cannot
+count toward the current clear. This is not full transcript replay. No sensitive support IDs or dates reach the panel.

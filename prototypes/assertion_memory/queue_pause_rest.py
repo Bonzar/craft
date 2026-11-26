@@ -27,7 +27,7 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
     from .queue_session_control import PATH as SESSIONS, normalize
     from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH, check_request
     from .queue_processing_policy import PATH as POLICY, validate
-    from .database_clear import PATH as CLEAR
+    from .database_clear import PATH as CLEAR,RESET_HEADER,RESET_FORMAT,REARM_STATES
     clear_mode=path==CLEAR
     policy_mode=path==POLICY
     session_mode=path==SESSIONS or policy_mode
@@ -73,6 +73,8 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                        or k.lower()==b'x-real-ip' for k,_ in headers) or len(values(b'host')) != 1
                 or values(b'host')[0] not in hosts):
             return await reply(403, {'error': 'local_only'})
+        if clear_mode and values(RESET_HEADER)!=[RESET_FORMAT]:
+            return await reply(404,{'error':'not_found'})
         credentials = values(b'authorization')
         target = read_sha256 if method == 'GET' else write_sha256
         if (len(credentials) != 1 or not re.fullmatch(rb'Bearer [0-9a-f]{64}', credentials[0])
@@ -134,11 +136,11 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                           else {'stage','queue_id','item_id','source_preview','source_role'})
             if clear_mode:
                 field='can_clear' if method=='GET' else 'cleared'
-                required={'stage','revision',field}|({'scope'} if method=='GET' else set())
+                required={'stage','revision',field,'capture_rearm'}|({'scope'} if method=='GET' else set())
             if (type(state) is not dict or set(state) != required or state['stage'] != stage
                     or not item_mode and (type(state['revision']) is not str or not REVISION.fullmatch(state['revision']))
                     or not (session_mode or item_mode or clear_mode) and type(state['paused']) is not bool
-                    or clear_mode and (type(state[field]) is not bool or method=='PUT' and state[field] is not True
+                    or clear_mode and (state['capture_rearm'] not in REARM_STATES or type(state[field]) is not bool or method=='PUT' and state[field] is not True
                          or method=='GET' and (type(state['scope']) is not str or not HEX.fullmatch(state['scope'])))):
                 raise ValueError()
         except ProofRejected:

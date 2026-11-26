@@ -7,6 +7,7 @@ import re
 PROTOCOL='owner-clear-v1'
 CUTOVER='memory_database_clear_cutover'
 TRANSITIONS='memory_database_clear_stream_transitions'
+EXPECTED='memory_database_clear_expected_streams'
 WITNESS='owner-clear-stream-authority-v1'
 UUID=re.compile(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\Z')
 
@@ -21,21 +22,23 @@ def schema(db):
     db.execute(f'''CREATE TABLE IF NOT EXISTS {TRANSITIONS}(
         prior_digest BLOB PRIMARY KEY, successor_digest BLOB NOT NULL UNIQUE, ready INTEGER NOT NULL DEFAULT 0 CHECK(ready IN (0,1))) WITHOUT ROWID''')
 
-def witnesses(db,tables) -> Iterable[tuple[str,str,str,str]]:
+def witnesses(db,tables) -> Iterable[tuple[str,str,str,str,str,str]]:
     # Verify a previously enrolled producer, not a caller label. This adapter
     # to the deployed authenticated authority may be replaced by a generalized
     # stream-to-principal binding without changing this transport protocol.
     if not {'memory_ingest_streams','memory_fresh_mac_streams'}<=tables:
         return ()
-    return db.execute('''SELECT s.producer_id,s.session_id,s.stream_id,s.epoch
+    return db.execute('''SELECT s.producer_id,s.session_id,s.stream_id,s.epoch,s.lifecycle,s.lease_until
         FROM memory_ingest_streams AS s JOIN memory_fresh_mac_streams AS a
         ON s.stream_id=a.stream_id AND s.session_id=a.session_id''')
 
 def finish_clear(db,generation,cleared_at):
     schema(db)
     db.execute(f'DELETE FROM {TRANSITIONS}')
-    db.execute(f'''INSERT INTO {CUTOVER} VALUES(1,?,?)
-        ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation,cleared_at=excluded.cleared_at''',
+    db.execute(f'CREATE TABLE IF NOT EXISTS {EXPECTED}(prior_digest BLOB PRIMARY KEY) WITHOUT ROWID')
+    db.execute(f'DELETE FROM {EXPECTED}')
+    db.execute(f"""INSERT INTO {CUTOVER} VALUES(1,?,?)
+        ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation,cleared_at=excluded.cleared_at""",
         (generation,cleared_at))
 
 def re_register(db,producer_id,session_id,previous_stream_id,previous_epoch):
@@ -123,3 +126,19 @@ def require_ready(db,state):
     result=db.execute(f'SELECT ready FROM {TRANSITIONS} WHERE successor_digest=?',(proof,)).fetchone()
     if result is not None and result[0]!=1:
         raise ValueError('Reset successor capture is not re-armed')
+
+
+def capture_rearm_status(db,generation):
+    """Opaque owner dashboard status; this is not proof of all sessions."""
+    if generation=='0'*32:
+        return 'not_cleared'
+    if not db.execute("SELECT 1 FROM sqlite_schema WHERE name=? AND type='table'",(EXPECTED,)).fetchone():
+        return 'unknown'
+    row=db.execute(f'SELECT generation FROM {CUTOVER} WHERE singleton=1').fetchone()
+    if row is None or row[0]!=generation:
+        return 'unknown'
+    expected,ready=db.execute(f"""SELECT count(*),count(t.ready) FROM {EXPECTED} e
+        LEFT JOIN {TRANSITIONS} t ON e.prior_digest=t.prior_digest AND t.ready=1""").fetchone()
+    if not expected:
+        return 'not_required'
+    return 'confirmed' if ready==expected else 'waiting'

@@ -13,8 +13,8 @@ import release_core
 from visual_policy import deploy_verified, make_hook
 
 ROOT=Path(__file__).resolve().parent
-SEED_SHA='5a1a496f48755b68cdcbe4edfcaaa587b6733113e89c949805584c772f5c2e21'
-SEED_ID='00c63334588be970f161cd48b043956839104939305d673bb43dd1edb3ba6b79'
+SEED_SHA='3142e63923d4bc36bda2262f284243deea329d93af5915451ae14166d5f34059'
+SEED_ID='636ed454f1c60b4c51840a283058ab1597fec2ee469c534534ff2152e3f7196b'
 
 
 def hash_bytes(raw):
