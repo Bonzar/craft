@@ -154,11 +154,11 @@ class ThoughtServiceTest(unittest.TestCase):
             result=service.query('When can it open?')
             self.assertEqual(result['answer'],thought.text)
             self.assertTrue(result['answer_accepted'])
-            self.assertEqual(calls, ['Navigate thought graph', 'Check ready thought'])
+            self.assertEqual(calls, ['Check ready thought'])
             service.engine.model=None
             repeat=service.query('When can it open?')
             self.assertEqual(repeat['thought']['id'], thought.id)
-            self.assertEqual(calls, ['Navigate thought graph', 'Check ready thought'])
+            self.assertEqual(calls, ['Check ready thought'])
             self.assertIsNone(store._connection.execute("SELECT 1 FROM sqlite_master WHERE name='memory_views'").fetchone())
             service.capture_message('session','msg','Vlad','user','Keep the condition.',0,'fixture')
             self.assertEqual(service.status()['pending_count'],1)
