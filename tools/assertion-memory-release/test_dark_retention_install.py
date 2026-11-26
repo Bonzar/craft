@@ -1,5 +1,9 @@
 """Dark host install proof in an isolated root-shaped fixture, no live service."""
+from contextlib import ExitStack, redirect_stdout
 from importlib.util import module_from_spec, spec_from_file_location
+from io import StringIO
+import json
+from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -51,6 +55,43 @@ class DarkInstall(unittest.TestCase):
         self.assertEqual({k:(self.root/k).read_bytes() for k in d.NEEDED},
                          {k:self.prior[k][0] for k in d.NEEDED})
         self.assertEqual((self.root/'foreign.fixture').read_bytes(),b'untouched')
+
+    def run_entrypoint(self, mode, baseline=None):
+        pins=','.join(d.sha256(self.new[k]).hexdigest() for k in d.MODULES)
+        args=['fixture',mode,'a'*40,pins]
+        if baseline is not None:
+            args.append(baseline)
+        output=StringIO()
+        with ExitStack() as scope:
+            scope.enter_context(patch.object(d.sys,'argv',args))
+            scope.enter_context(patch.object(d.sys,'flags',SimpleNamespace(isolated=True)))
+            scope.enter_context(patch.object(d.sys,'dont_write_bytecode',True))
+            scope.enter_context(patch.object(d.os,'geteuid',return_value=0))
+            scope.enter_context(patch.object(d.os,'getegid',return_value=0))
+            scope.enter_context(patch.object(d,'root_dir'))
+            scope.enter_context(patch.object(d,'source_bytes',return_value=self.new))
+            scope.enter_context(redirect_stdout(output))
+            d.main()
+        return json.loads(output.getvalue())
+
+    def test_read_only_cli_does_not_lock_or_apply(self):
+        with patch.object(d,'scope_locks') as locks,patch.object(d,'apply') as apply:
+            view=self.run_entrypoint('--check')
+        locks.assert_not_called()
+        apply.assert_not_called()
+        self.assertFalse(view['retention_armed'])
+        self.assertEqual((view['files_written'],view['locks_acquired']),(0,0))
+
+    def test_recovery_created_while_waiting_cannot_be_ignored_after_locks(self):
+        baseline=d.capture_original(self.new)[1]
+        marker=self.root/'.dark-retention-rollback-previous'
+        def acquired(_stack):
+            marker.mkdir()
+        with patch.object(d,'scope_locks',side_effect=acquired),patch.object(d,'apply') as apply:
+            with self.assertRaisesRegex(ValueError,'unsettled_dark_controller_backup'):
+                self.run_entrypoint('--apply',baseline)
+        apply.assert_not_called()
+        self.assertTrue(marker.is_dir())
 
     def test_changed_baseline_refuses_foreign_bytes_and_reverses_our_earlier_changes(self):
         changed=self.root/'base_payload.py';changed.write_bytes(b'changed independently')

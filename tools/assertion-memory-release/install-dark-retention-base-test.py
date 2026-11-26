@@ -237,6 +237,11 @@ def apply(new,prior,pointers):
     clear_prior(recovery,prior)
 
 
+def no_unsettled_backup():
+    need(not any(p.name.startswith('.dark-retention-rollback-') for p in CONTROL.iterdir()),
+         'unsettled_dark_controller_backup')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode',choices=('--check','--apply'))
@@ -250,8 +255,7 @@ def main():
     inputs=args.pins.split(',')
     need(len(inputs)==len(MODULES) and all(SHA.fullmatch(d) for d in inputs),'exact_source_pin_set')
     root_dir(CONTROL)
-    need(not any(p.name.startswith('.dark-retention-rollback-') for p in CONTROL.iterdir()),
-         'unsettled_dark_controller_backup')
+    no_unsettled_backup()
     before=read_snapshot()
     new=source_bytes(args.revision,dict(zip(MODULES,inputs)))
     _,baseline=capture_original(new)
@@ -266,6 +270,7 @@ def main():
         current=read_snapshot()
         prior,current_baseline=capture_original(new)
         need(current==before and current_baseline==baseline,'scope_changed_before_dark_install')
+        no_unsettled_backup()
         apply(new,prior,current)
     print(json.dumps({'dark_controller_install':True,'revision':args.revision,'module_count':len(MODULES),
                       'pointers_unchanged':True,'retention_armed':False}))
