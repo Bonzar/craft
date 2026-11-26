@@ -118,7 +118,9 @@ def generate_source_drafts(group, generate, *, max_characters=MAX_BATCH_CHARACTE
         'retention-eligible durable meaning once under the source that directly established it, '
         'not under an echo, paraphrase, or acknowledgment. Apply the shared retention rule even '
         'to unique content. Other cases may help compare meanings but never supply separate '
-        'citation evidence for this case. '
+        'citation evidence for this case. Keep the wording no more specific than this case’s '
+        'own records justify. If a label, identity, timing or premise appears only in another '
+        'case, leave it unspecified here rather than copying or inferring it. '
         if joint_capture else 'Apply these rules to each source independently. ')
     instructions = (group[0][0].instructions + '\n' + analysis +
                     'Return a JSON object keyed by the supplied source names. For each retained '
@@ -163,3 +165,70 @@ def _share_fragment_text(cases):
             records.append(record)
         shared_cases.append(dict(case, records=records))
     return [{'fragment_texts': list(text_ids)}, *shared_cases]
+
+
+def verify_capture_group_coverage(group, drafts, generate, *, allow_discard=True):
+    """Check omission once against the exact batch; do not alter any source's evidence."""
+    from .thought_engine_contract import RAW_PASSAGE
+    from .dialogue import SOURCE_RETENTION_RULES
+
+    cases, bindings, proposed = [], [], []
+    for index, ((request, source_bindings), draft) in enumerate(zip(group, drafts, strict=True), 1):
+        source = f'source_{index}'
+        if draft.source != source:
+            raise ModelError('Capture package coverage source labels changed')
+        body = json.loads(draft.body)
+        if (not isinstance(body, dict) or set(body) != {'thoughts', 'needs_detail'}
+                or not isinstance(body['thoughts'], list) or body['needs_detail'] is not None):
+            raise ModelError('Invalid capture package draft')
+        proposed.append(body)
+        cases.append({'source': source, 'records': request.records, 'proposed_thoughts': body})
+        bindings.extend(source_bindings)
+    task = 'Verify source thought batch'
+    instructions = SOURCE_RETENTION_RULES + RAW_PASSAGE + (
+        'Review coverage across the complete admitted capture package, not independently per source. '
+        'A retained draft may cover the same meaning repeated in another source. An empty source '
+        'draft list is valid if it adds no material change or its eligible meaning is already '
+        'represented with appropriate scope and qualifications by another source draft. '
+        + ('First list any ineligible or unsupported draft in discard_drafts by source and zero-based index. '
+           if allow_discard else
+           'These selected drafts already passed source-local entailment. This is a coverage-only recheck. '
+           'Do not remove any further drafts: discard_drafts must be empty. ')
+        +
+        'Reject if any distinct admissible meaning, correction, evidence that materially changes '
+        'confidence, or necessary qualification is missing after discarding those drafts. Other cases are not '
+        'citation evidence for a draft: use its own fragment options when assessing coverage, '
+        'and do not output new drafts or rewrite any draft. '
+        'Each fragment option is local to its case; text_index points into the shared text catalog.')
+    labels={case['source']:i for i,case in enumerate(cases)}
+    discard={'type':'object','properties':{'source':{'type':'string','enum':list(labels)},
+                          'index':{'type':'integer','minimum':0}},
+             'required':['source','index'],'additionalProperties':False}
+    schema={'type':'object','properties':{'verdict':{'type':'string','enum':['accept','reject']},'text':{'type':'string'},
+                                         'discard_drafts':{'type':'array','items':discard}},
+            'required':['verdict','text','discard_drafts'],'additionalProperties':False}
+    result, _ = generate(ModelRequest(task, _share_fragment_text(cases), instructions,
+                                     usage_task='Verify thought', response_schema=schema), bindings)
+    response = json.loads(result)
+    if (not isinstance(response, dict) or set(response) != {'verdict', 'text', 'discard_drafts'}
+            or response['verdict'] not in ('accept', 'reject')
+            or not isinstance(response['text'], str) or not response['text'].strip()
+            or not isinstance(response['discard_drafts'],list)):
+        raise ModelError('Invalid capture package coverage verdict')
+    discarded=set()
+    for point in response['discard_drafts']:
+        if (not isinstance(point,dict) or set(point)!={'source','index'}
+                or not isinstance(point['source'],str) or point['source'] not in labels
+                or type(point['index']) is not int):
+            raise ModelError('Invalid capture package draft selection')
+        i,j=labels[point['source']],point['index']
+        if (i,j) in discarded or not 0<=j<len(proposed[i]['thoughts']):
+            raise ModelError('Invalid capture package draft selection')
+        discarded.add((i,j))
+    if discarded and not allow_discard:
+        raise ModelError('Capture package coverage-only recheck cannot change drafts')
+    if response['verdict'] != 'accept':
+        raise ModelError('Capture package omitted eligible meaning')
+    return [SourceDraft(json.dumps(dict(body,thoughts=[item for j,item in enumerate(body['thoughts'])
+                        if (i,j) not in discarded]),ensure_ascii=False),draft.run_id,draft.source)
+            for i,(body,draft) in enumerate(zip(proposed,drafts,strict=True))]

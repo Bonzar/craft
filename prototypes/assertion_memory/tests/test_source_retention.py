@@ -56,6 +56,8 @@ def test_complete_capture_compares_novelty_in_one_call_with_local_evidence():
     assert SOURCE_RETENTION_RULES in request.instructions
     assert 'complete capture together' in request.instructions
     assert 'only the records of that source as evidence' in request.instructions
+    assert 'Keep the wording no more specific' in request.instructions
+    assert 'leave it unspecified here' in request.instructions
     assert bindings == [item[1][0] for item in group]
     assert [json.loads(d.body) for d in result] == list(replies.values())
     generate_source_drafts(group, generate, exact=True)
@@ -90,3 +92,49 @@ def test_missing_original_does_not_turn_a_memory_read_into_provenance():
         assert 'Different wording' in instructions
         assert 'an indirect account cannot stand in for an unavailable underlying source' in instructions
     assert 'no knowledge change' in _COVERAGE
+
+
+def test_package_coverage_rejects_omission_and_cannot_expand_local_evidence():
+    import json
+    from ..model import ModelError, ModelRequest
+    from ..source_model_batch import SourceDraft, verify_capture_group_coverage, PreparedSourceGroup
+
+    primary = ('Coffee without sugar.', 'Coffee without sugar. Never serve after dinner.')
+    requests = [(ModelRequest('Construct thought', [{'role':'source', 'fragments':[
+                    {'option': 0, 'text': text}]}], 'fixture',
+                   response_schema={'type':'object'}), [{'event_id':str(i)}])
+                for i,text in enumerate(primary, 1)]
+    drafts = [SourceDraft(json.dumps({'thoughts': [{'text': primary[0], 'support_fragments':[0]}], 'needs_detail': None}), 'f', 'source_1'),
+              SourceDraft(json.dumps({'thoughts': [], 'needs_detail': None}), 'f', 'source_2')]
+    def reject(request, _):
+        assert request.task == 'Verify source thought batch'
+        assert 'Reject if any distinct admissible meaning' in request.instructions
+        assert request.records[1]['source'] == 'source_1'
+        assert request.records[2]['source'] == 'source_2'
+        return json.dumps({'verdict':'reject','text':'No evening coffee was omitted.', 'discard_drafts': []}), 'coverage'
+    try:
+        verify_capture_group_coverage(requests, drafts, reject)
+    except ModelError as failure:
+        assert 'omitted eligible meaning' in str(failure)
+    else:
+        raise AssertionError('package omission was accepted')
+    for selections in ([{'source':'source_2','index':0}], [{'source':'foreign','index':0}],
+                       [{'source':'source_1','index':False}],
+                       [{'source':'source_1','index':0}]*2):
+        def invalid(request, bindings):
+            return json.dumps({'verdict':'accept','text':'invalid selection',
+                               'discard_drafts':selections}), 'coverage'
+        try:
+            verify_capture_group_coverage(requests, drafts, invalid)
+        except ModelError as failure:
+            assert 'Invalid capture package draft selection' in str(failure)
+        else:
+            raise AssertionError('invalid draft exclusion was accepted')
+    def accept(request, bindings):
+        return json.dumps({'verdict':'accept','text':'Complete', 'discard_drafts': []}), 'coverage'
+    verify_capture_group_coverage(requests, drafts, accept)
+    group = PreparedSourceGroup(requests, drafts)
+    case = group.submit(*requests[1], None)
+    assert json.loads(case.body)['thoughts'] == []
+    assert primary[0] not in case.body
+    assert requests[1][0].records[0]['fragments'][0]['text'] == primary[1]
