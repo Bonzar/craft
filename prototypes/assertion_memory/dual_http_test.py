@@ -120,6 +120,10 @@ class Dual(TestCase):
                 value=(await send(machine)).json()
                 self.assertEqual(value['capability'],'machine')
                 self.assertEqual({t['name'] for t in value['tools']},set(canonical['tools']))
+                descriptions={row['name']:row['description'] for row in value['tools']}
+                self.assertEqual(descriptions['memory_query'],canonical['descriptions']['memory_query'])
+                self.assertIn('query_coverage.evidence',descriptions['memory_query'])
+                self.assertNotIn('Pending work means this answer is incomplete',descriptions['memory_query'])
                 self.assertEqual((await send(second)).json()['tools'],value['tools'])
                 expected={key:value[key] for key in ('release','generation','catalog_sha256')}
                 for op,args in [('unknown',{}),('memory_status',{'section':2})]:

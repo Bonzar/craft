@@ -1,0 +1,20 @@
+name: Visual TEST event ingress plan
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/visual-event-ingress-plan.yml'
+      - 'tools/assertion-memory-visual/event-ingress/**'
+      - 'tools/assertion-memory-visual/asset-origin.py'
+      - 'tools/assertion-memory-visual/test_asset_origin.py'
+permissions:
+  contents: read
+jobs:
+  synthetic-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check scoped TEST rendering and actual synthetic stream
+        run: python3 -B -m unittest discover -v -s tools/assertion-memory-visual/event-ingress

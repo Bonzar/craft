@@ -1,16 +1,20 @@
 """Canonical worker lanes, retaining the existing supervisor's exclusive pause lock."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
+import json
 import signal
 import threading
 
 from .processing_control import paused as processing_paused
-from .model import ProcessingCancelled, check_processing_cancelled, processing_cancellation
+from .model import ModelError, ProcessingCancelled, check_processing_cancelled, processing_cancellation
+from .diagnostic_privacy import diagnostic_scope
 from .processing_pool import ActiveClaims, ProcessingPool
 from .storage import MemoryStore, background_write_retry
 from .queue import CaptureQueue
-from .thought_processing_selection import source_predicate, maintenance_predicate, processing_deadline
+from .thought_processing_selection import (canonical_session_id, processing_cohort, source_predicate,
+                                            maintenance_predicate, processing_deadline)
 from .thought_service import traced_engine
 from .thought_trace import ThoughtTrace
 from .thought_worker import ThoughtWorker
@@ -41,12 +45,27 @@ def _keep_group_claims(queue, active_claims):
             stop.set()
 
 
+class _VerifiedCaptureExtractor:
+    def __init__(self, prepared):
+        self.prepared = prepared
+
+    def extract(self, event, context):
+        original, original_context, drafts = self.prepared[event.id]
+        if event != original or tuple(context) != original_context:
+            raise ModelError('Capture source changed after package verification')
+        return drafts
+
+    def resume(self, *_args):
+        raise ModelError('A verified capture package is not a repair checkpoint')
+
+
 class TracedThoughtWorker(ThoughtWorker):
     def __init__(self, *args, source_batch=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.source_batch = source_batch
         self.batch_contexts = {}
         self.capture_batch_id = None
+        self._verified_capture_trace = {}
 
     def _context(self, event):
         if event.id in self.batch_contexts:
@@ -60,6 +79,10 @@ class TracedThoughtWorker(ThoughtWorker):
         self.engine = traced_engine(original.thoughts, original.model, original.candidates, trace)
         if operation == 'source' and self.source_batch is not None:
             self.engine.gateway = self._batch_initial_construction(trace, self.engine.gateway, inputs)
+        if operation == 'source' and inputs.get('event_id') in self._verified_capture_trace:
+            draft, bindings = self._verified_capture_trace[inputs['event_id']]
+            trace.record('source_batch_draft', inputs=bindings, details={
+                'batch_run_id':draft.run_id, 'source':draft.source, 'event_id':inputs['event_id']})
         try:
             yield trace
         except ProcessingCancelled:
@@ -193,10 +216,17 @@ class TracedThoughtWorker(ThoughtWorker):
                 self.batch_contexts = {event.id: self._context(event) for event in events}
                 requests = [self.engine.source_construction_request(event, self.batch_contexts[event.id])
                             for event in events]
+                capture_batch_id = events[0].metadata.get('capture_batch_id')
+                joint_capture = bool(capture_batch_id) and all(
+                    event.metadata.get('capture_batch_id') == capture_batch_id for event in events)
                 drafts = generate_source_drafts(requests, self._generate_source_batch,
-                                               max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True)
+                                               max_characters=MAX_EXPLICIT_BATCH_CHARACTERS, exact=True,
+                                               joint_capture=joint_capture)
                 if any(draft is None for draft in drafts):
                     raise ValueError('one group response did not cover every source; original jobs remain queued')
+                if joint_capture:
+                    self._verify_and_publish_capture(claims, events, requests, drafts, renewal, active_claims)
+                    return
                 self.source_batch = PreparedSourceGroup(requests, drafts)
             for claim in claims:
                 check_processing_cancelled()
@@ -207,6 +237,95 @@ class TracedThoughtWorker(ThoughtWorker):
         finally:
             self.source_batch = None
             self.batch_contexts = {}
+
+    def _verify_and_publish_capture(self, claims, events, requests, drafts, renewal, active_claims):
+        from .source_model_batch import verify_capture_group_coverage
+        selected = verify_capture_group_coverage(requests, drafts, self._generate_source_batch)
+        prepared = {}
+        origins = {}
+        retained = []
+        for event, (request, bindings), draft in zip(events, requests, selected, strict=True):
+            check_processing_cancelled()
+            if renewal.done():
+                renewal.result()
+            context = tuple(self.batch_contexts[event.id])
+            with processing_cohort((canonical_session_id(event),)), diagnostic_scope():
+                filtered, verified = self._verify_local_capture_source(event, context, request, bindings, draft)
+            retained.append(filtered)
+            prepared[event.id] = (event, context, verified)
+            origins[event.id] = (filtered, bindings)
+        if retained != selected:
+            # This single conditional check covers only the already grounded subset. The
+            # provider cannot rewrite drafts, exclude anything else, or generate again.
+            verify_capture_group_coverage(requests, retained, self._generate_source_batch, allow_discard=False)
+        check_processing_cancelled()
+        if renewal.done():
+            renewal.result()
+        previous = self.source_extractor_factory
+        self.source_extractor_factory = lambda _engine: _VerifiedCaptureExtractor(prepared)
+        self._verified_capture_trace = origins
+        try:
+            # All provider work is done. Use the ordinary publication and scheduling
+            # path, but commit thought writes and job completion as a single batch.
+            with self.queue.store.transaction(write=True) as connection:
+                self.queue._scheduler_schema(connection)
+                for claim in claims:
+                    check_processing_cancelled()
+                    self._source(claim)
+                    if self.queue.get(claim.job.id).status != 'completed':
+                        raise ModelError('Capture package could not publish atomically')
+                    active_claims.observe('released', 'source', claim.job.id, claim.token)
+        finally:
+            self.source_extractor_factory = previous
+            self._verified_capture_trace = {}
+
+    def _verify_local_capture_source(self, event, context, expected, expected_bindings, draft):
+        from .source_model_batch import SourceDraft
+        trace = ThoughtTrace(self.queue.store, 'source_batch_local_verify',
+                             {'event_id':event.id, 'batch_run_id':draft.run_id})
+        original = self.engine
+        engine = traced_engine(original.thoughts, original.model, original.candidates, trace)
+        fallback = engine.gateway
+        def gateway(task, request, bindings):
+            if task == 'Construct thought':
+                if request != expected or tuple(bindings) != tuple(expected_bindings):
+                    raise ModelError('Capture source inputs changed before verification')
+                return draft.body
+            if task.startswith('Verify '):
+                request = replace(request, instructions=request.instructions + (
+                    '\nPackage coverage is checked separately. Your scope here is local entailment, '
+                    'eligible meaning and exact attribution of each retained draft; do not require '
+                    'repetition for coverage or report missing meanings here. Only the original '
+                    'local citation options can support this source.'))
+            return fallback(task, request, bindings)
+        engine.gateway = gateway
+        try:
+            _, _, origin, records, bases = engine._source_packet(event, context)
+            catalog, wire, instructions, _, _ = engine._construction_material(records, bases)
+            decoded, selections = engine._construct_drafts(catalog, wire, instructions)
+            keep = list(range(len(decoded)))
+            if len(decoded) > 1:
+                review = engine._review_source_drafts(decoded, selections, catalog, origin, [])
+                if review['missing_meaning'] is not None:
+                    raise ModelError('Unexpected omission in capture source-local entailment')
+                rejected = {row['draft'] for row in review['rejected_drafts']}
+                keep = [i for i in keep if i not in rejected]
+            elif decoded:
+                engine._verify([decoded[0][0]], records, bases, origin,
+                               support_catalog=catalog, support_selections=selections)
+            body = json.loads(draft.body)
+            selected = [{**decoded[i][0], 'support_fragments':selections[i]} for i in keep]
+            if selected != body['thoughts']:
+                # Program-selected subset only. Preserve every retained fragment ID and
+                # never substitute package records for source-local grounds.
+                body['thoughts'] = selected
+                draft = SourceDraft(json.dumps(body,ensure_ascii=False), draft.run_id, draft.source)
+            result = (draft, [decoded[i] for i in keep])
+        except BaseException:
+            trace.finish('failed')
+            raise
+        trace.finish()
+        return result
     def _process_group_followups(self, work, limit, renewal):
         for _ in range(limit):
             check_processing_cancelled()

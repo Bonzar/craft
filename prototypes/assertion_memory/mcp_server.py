@@ -351,7 +351,7 @@ def create_server(config: ServiceConfig, *, background: bool = True, store: Memo
         'Shared, harness-neutral assertion memory. Capture raw role-attributed messages using stable '
         'session/message IDs and known producer transcript positions; retain attributed assistant and tool reports. Do not '
         'manufacture kinds or graph edges. Capture acknowledges durable intake, not completed extraction. '
-        'Query returns versioned evidence; always report pending/error counts and use source spans to '
+        'Query returns versioned evidence; treat pending/error counts as diagnostics and use source spans to '
         'check provenance. Read query_snapshot and freshness_check: refresh_required means newer eligible '
         'evidence or processing gaps remain unchecked; use that answer only as dated evidence and query '
         'again before authorizing a current-state action. transport_limit reports known incoming delivery '
@@ -542,9 +542,14 @@ def _register_read_tools(mcp, service, config, launcher=None, query_jobs=None):
         Known incoming transport_limit applies globally even to scoped/historical queries; accepted
         text remains limited to available evidence. Do not retry queries in a loop before the delivery
         frontier advances. Current transport_status is separate from the immutable snapshot/check.
-        Pending work means this answer is incomplete. query_snapshot pins the source membership and
-        effective cutoffs; freshness_check names this invocation's exact check. refresh_required forbids
-        using this dated snapshot to authorize current-state action; query again for a new frontier.
+        Answer using query_coverage.evidence within retrieved_records. Report a specific relevant gap
+        or qualification if it affects what was asked. An accepted supported answer needs no generic
+        'not all sources' disclaimer. Queue counts and global transport describe operational health,
+        not the relevance of missing evidence. Unassessed means unknown, not a confirmed relevant gap.
+        Never claim exhaustive coverage from these flags. query_snapshot pins the source membership and
+        effective cutoffs; freshness_check names this invocation's exact check when available.
+        Respect refresh_required for current-state action, but do not turn it into a claim that the
+        quoted evidence or answer is incomplete. Do not retry merely for diagnostic or proof pages.
         answer_payload_complete reports inline answer delivery only; answer_accepted, completeness and
         refresh_required separately report review and limitations. Follow every answer_continuations
         page for missing answer content and qualifications. Optional proof pagination alone does not

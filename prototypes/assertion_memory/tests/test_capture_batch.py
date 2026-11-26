@@ -41,8 +41,9 @@ class CaptureBatchTest(unittest.TestCase):
     def model(tasks):
         def produce(request):
             tasks.append(request.task)
-            if request.task=='Verify thought':
-                return json.dumps({'verdict':'accept','text':'Matches the source.'})
+            if request.task in ('Verify thought','Verify source thought batch'):
+                return json.dumps({'verdict':'accept','text':'Matches the source.',
+                    **({'discard_drafts': []} if request.task=='Verify source thought batch' else {})})
             if request.task!='Construct thoughts for multiple source messages':
                 raise AssertionError('unexpected individual draft')
             catalog=request.records[0]['fragment_texts']
@@ -110,7 +111,8 @@ class CaptureBatchTest(unittest.TestCase):
         with patch.object(ServiceConfig,'components',lambda *_:(self.model(tasks),None,'test')):
             run_worker(self.config)
             run_worker(self.config)  # no retry after completion
-        self.assertEqual(tasks,['Construct thoughts for multiple source messages','Verify thought','Verify thought'])
+        self.assertEqual(tasks,['Construct thoughts for multiple source messages','Verify source thought batch',
+                                'Verify thought','Verify thought'])
         self.assertEqual(self.status()[0],'completed')
         events=[r['event']['id'] for r in receipt['receipts']]
         self.assertTrue(all(self.service.queue.get(e).status=='completed' for e in events))
@@ -138,6 +140,50 @@ class CaptureBatchTest(unittest.TestCase):
         self.assertTrue(run_next(self.config,self.store,lambda:False))
         self.assertEqual(tuple(self.status()),('blocked','batch_member_removed'))
 
+    def test_complete_package_coverage_ignores_repetition_but_not_independent_omission(self):
+        for repeated,expected in ((True,'completed'),(False,'blocked')):
+            with self.subTest(repeated=repeated), TemporaryDirectory() as root:
+                config=ServiceConfig(db=str(Path(root)/'fixture.sqlite3'),provider='subprocess',
+                                     command=('unused',),processing_session_ids=[],worker_idle_seconds=.01)
+                with MemoryStore(config.db) as store:
+                    service=config.service(store)
+                    stream=service.ingest_register('coverage-test',self.session)
+                    messages=[row|{'delivery':{k:stream[k] for k in ('stream_id','epoch')}|{'seq':i+1},
+                                   'actor_id':'fiction-user','role':'user','text':
+                                   ('I prefer black coffee without sugar.' if i==0 or repeated else
+                                    'I work from the office on Wednesdays.')}
+                              for i,row in enumerate(self.messages)]
+                    with authorized_machine_batch():
+                        receipts=capture(service,self.batch_id,messages)['receipts']
+                    calls=[]
+                    def model(request):
+                        calls.append(request.task)
+                        if request.task=='Construct thoughts for multiple source messages':
+                            return json.dumps({'source_1':{'thoughts':[{'text':messages[0]['text'],
+                                'question':None,'support_fragments':[0]}],'needs_detail':None},
+                                'source_2':{'thoughts':[],'needs_detail':None}})
+                        if request.task=='Verify source thought batch':
+                            self.assertIn('coverage across the complete',request.instructions)
+                            return json.dumps({'verdict':'accept' if repeated else 'reject',
+                                               'text':'Equivalent' if repeated else 'Office fact omitted',
+                                               'discard_drafts': []})
+                        self.assertEqual(request.task,'Verify thought')
+                        self.assertIn('Your scope here is local entailment',request.instructions)
+                        self.assertNotIn('proposed_thoughts',request.records[0])
+                        return json.dumps({'verdict':'accept','text':'Supported locally'})
+                    with patch.object(ServiceConfig,'components',lambda *_:(model,None,'fixture')):
+                        run_worker(config)
+                    with store.transaction() as db:
+                        self.assertEqual(db.execute('SELECT state FROM memory_capture_batches').fetchone()[0],expected)
+                        self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],2)
+                    self.assertEqual(calls,['Construct thoughts for multiple source messages',
+                                            'Verify source thought batch',*(['Verify thought'] if repeated else [])])
+                    thoughts=service.thoughts.list_thoughts()
+                    self.assertEqual(len(thoughts),int(repeated))
+                    if repeated:
+                        self.assertEqual({row['event_id'] for row in thoughts[0].bases},
+                                         {receipts[0]['event']['id']})
+
     def test_pending_batch_rejects_member_delete_at_storage_invariant(self):
         from sqlite3 import IntegrityError
         events=[r['event']['id'] for r in self.capture()['receipts']]
@@ -146,6 +192,52 @@ class CaptureBatchTest(unittest.TestCase):
                 db.execute('DELETE FROM memory_raw_events WHERE id=?',(events[0],))
         self.assertEqual(self.status()[0],'pending')
         self.assertTrue(all(self.service.queue.get(e).attempts==0 for e in events))
+
+    def test_local_subset_rejection_rechecks_once_and_never_reconstructs(self):
+        first, second = self.messages
+        receipts=self.capture([first|{'text':'Only comedy for the current outing.'},second|{'text':'Understood.'}])['receipts']
+        calls=[]
+        def model(request):
+            calls.append(request.task)
+            if request.task=='Construct thoughts for multiple source messages':
+                return json.dumps({'source_1':{'thoughts':[
+                    {'text':'User chose comedy for the current outing.','question':None,'support_fragments':[0]},
+                    {'text':'User chose theatre as well.','question':None,'support_fragments':[0]}],
+                    'needs_detail':None},'source_2':{'thoughts':[],'needs_detail':None}})
+            if request.task=='Verify thought':
+                return json.dumps({'verdict':'reject','text':'one draft unsupported',
+                                   'rejected_drafts':[{'draft':1,'text':'No theatre in source'}],
+                                   'missing_meaning':None})
+            if calls.count('Verify source thought batch')==2:
+                self.assertIn('coverage-only recheck',request.instructions)
+                self.assertEqual(len(request.records[1]['proposed_thoughts']['thoughts']),1)
+            return json.dumps({'verdict':'accept','text':'complete','discard_drafts':[]})
+        with patch.object(ServiceConfig,'components',lambda *_:(model,None,'fixture')):
+            run_worker(self.config)
+        self.assertEqual(calls,['Construct thoughts for multiple source messages',
+                               'Verify source thought batch','Verify thought','Verify source thought batch'])
+        self.assertEqual(self.status()[0],'completed')
+        thoughts=self.service.thoughts.list_thoughts()
+        self.assertEqual(len(thoughts),1)
+        self.assertEqual({row['event_id'] for row in thoughts[0].bases},{receipts[0]['event']['id']})
+
+    def test_batch_rolls_back_first_publish_if_second_cannot_finish(self):
+        from prototypes.assertion_memory.thought_processing import TracedThoughtWorker
+        receipts=self.capture()['receipts']
+        calls=[]
+        ordinary=TracedThoughtWorker._source
+        def fail_second(worker, claim):
+            if claim.job.event_id==receipts[1]['event']['id']:
+                raise RuntimeError('synthetic publication failure')
+            value=ordinary(worker,claim)
+            self.assertEqual(value.status,'completed')
+            return value
+        with (patch.object(ServiceConfig,'components',lambda *_:(self.model(calls),None,'fixture')),
+              patch.object(TracedThoughtWorker,'_source',fail_second)):
+            run_worker(self.config)
+        self.assertEqual(self.status()[0],'blocked')
+        self.assertEqual(self.service.thoughts.list_thoughts(),[])
+        self.assertTrue(all(self.service.queue.get(r['event']['id']).status=='failed' for r in receipts))
 
     def test_fresh_mode_owner_can_discover_neutral_batch_after_explicit_selection(self):
         from prototypes.assertion_memory.capture_batch import needs_wake

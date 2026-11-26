@@ -96,6 +96,7 @@ class AnswerContractTest(unittest.TestCase):
         self.assertEqual(result['completeness'],'incomplete')
         self.assertTrue(result['answer_payload_complete'])
         self.assertTrue(result['answer_accepted'])
+        self.assertEqual(result['query_coverage']['processing_gap'],'relevant')
 
     def test_contract_repair_cannot_weaken_material_relation(self):
         self.relation(); self.disposition='material'; self.qualified=False; self.reclassify=True
@@ -120,6 +121,7 @@ class AnswerContractTest(unittest.TestCase):
         result=self.result(view,check)
         self.assertTrue(result['refresh_required'])
         self.assertTrue(result['source_status']['processing_gaps_apply_to_query'])
+        self.assertEqual(result['query_coverage']['processing_gap'],'unassessed')
 
     def test_omitted_relation_inventory_cannot_clear_potential_materiality(self):
         for i in range(18): self.relation(i)

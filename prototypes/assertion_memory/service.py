@@ -322,8 +322,8 @@ class MemoryService:
                           state.get('source_audit_request_counts',{}).get(key,0) for key in ('pending','scheduled','refresh')) else
                       'needs_review' if state['unresolved_count'] else 'idle')
         requested_question=plan.get('request',{}).get('question')
-        processing_gaps,freshness_gaps=self._query_gap_assessment(scope,recorded_as_of,state,check,view=view,
-            requested_question=requested_question)
+        processing_gaps,freshness_gaps,verified_gap=self._query_gap_assessment(scope,recorded_as_of,state,check,view=view,
+            requested_question=requested_question,include_verified_relevance=True)
         gaps = processing_gaps or view.missing_roots
         result = {'view': asdict(view), 'retrieval_plan': plan, **state, 'processing_state': processing,
                   'completeness': 'incomplete' if generation_error or gaps or health_unknown or processing_gaps is None else 'not_guaranteed',
@@ -331,7 +331,7 @@ class MemoryService:
                       'scope': scope, 'scopes':list(plan.get('request',{}).get('scopes',())),
                       'queue_counts_scope': scope,
                       'queue_counts_perspective': 'latest_scope_health',
-                      'processing_gaps_apply_to_query': processing_gaps},
+                      'processing_gaps_apply_to_query': processing_gaps, 'question_specific_gap':verified_gap},
                   'notice': 'Evidence records are attributed reports. An idle queue does not establish '
                             'full coverage, settle contradictions or prove present reality.'}
         recovery=check.get('overview_review') or {}
@@ -408,13 +408,16 @@ class MemoryService:
                 and frame.get('question')==spec.query and frame.get('scopes')==list(spec.scopes)
                 and (requested_question is None or frame.get('question')==requested_question))
 
-    def _query_gap_assessment(self,scope,recorded_as_of,state,check,*,view=None,requested_question=None):
-        if 'health_error' in state: return None,True
+    def _query_gap_assessment(self,scope,recorded_as_of,state,check,*,view=None,requested_question=None,
+                              include_verified_relevance=False):
+        if 'health_error' in state:
+            return (None,True,None) if include_verified_relevance else (None,True)
         # One short read snapshot covers proposal revisions, source outcomes and
         # operational guards. No model work or external waits occurs here.
         with self.store.transaction():
-            return self._query_gap_assessment_at_boundary(scope,recorded_as_of,state,check,view=view,
+            assessment=self._query_gap_assessment_at_boundary(scope,recorded_as_of,state,check,view=view,
                 requested_question=requested_question)
+            return assessment if include_verified_relevance else assessment[:2]
 
     def _query_gap_assessment_at_boundary(self,scope,recorded_as_of,state,check,*,view=None,requested_question=None):
         from .answer_source_gaps import freeze,inventory
@@ -444,6 +447,7 @@ class MemoryService:
             refresh=True
         if refresh: processing=True
         review=audit.get('source_gap_review')
+        verified_relevant=False
         if processing and not refresh:
             # An answer-specific receipt never rewrites queue health/history.
             if review:
@@ -453,6 +457,7 @@ class MemoryService:
                         and self._answer_review_bound(check,view,requested_question=requested_question)
                         and review.get('final_text_sha256')==audit.get('final_text_sha256')):
                     processing=review.get('processing_gaps_apply_to_query')
+                    verified_relevant=processing is True
                 else:
                     processing=None; refresh=True
             else:
@@ -465,6 +470,7 @@ class MemoryService:
                 and relation_review.get('inventory',{}).get('freshness_sha256')==current_relations['freshness_sha256']
                 and relation_review.get('inventory',{}).get('source_frontier_sha256')==current_relations['source_frontier_sha256'])
             applies=relation_review.get('processing_gaps_apply_to_query') if valid else None
+            verified_relevant |= applies is True
             if applies is False and not relation_review.get('inventory',{}).get('complete'):
                 applies=None
             processing=(True if processing is True or applies is True else
@@ -472,8 +478,13 @@ class MemoryService:
             # A changed/unreviewed/material relation remains a query-local
             # blocker. Extra audit pages alone cannot establish applicability.
             refresh=bool(refresh or applies is not False)
-        if audit.get('source_omissions'):processing=True
-        return processing,refresh
+        if audit.get('source_omissions'):
+            processing=True
+            verified_relevant |= self._answer_review_bound(check,view,requested_question=requested_question)
+        # Operational freshness guards are conservative; only an answer-bound
+        # material diagnosis can be presented as relevant to this question.
+        verified=True if verified_relevant else False if processing is False else None
+        return processing,refresh,verified
 
     def _failed_query(self, error, route, snapshot, scope, recorded_as_of):
         acquired = error.acquisition
@@ -504,6 +515,8 @@ class MemoryService:
                   'notice': 'Proof persistence failed. Only bounded inline acquired evidence is returned; '
                             'omissions are counted and no durable continuation is promised.'}
         self._attach_query_transport(result)
+        from .query_coverage import project
+        result['query_coverage']=project(result)
         from .recorded_history import from_audit, metadata as history_metadata
         try:
             review=acquired.get('review') or {}
@@ -769,9 +782,14 @@ class MemoryService:
             failed=bool(response.get('generation_error'))
             answer_pages=([_continuation('memory_history',view_id=version.view_id,version_id=version.id,
                 section='summary',offset=0,limit=PAGE_CHARACTERS)] if not inline and version.summary and not failed else [])
-            return {**response,'answer_payload_complete':bool(inline and not failed),
-                    'answer_continuations':answer_pages,
-                    'proof_complete':response.get('response_complete',True)}
+            response={**response,'answer_payload_complete':bool(inline and not failed),
+                      'answer_continuations':answer_pages,
+                      'proof_complete':response.get('response_complete',True)}
+            from .query_coverage import project
+            original=result.get('source_status',{})
+            response['query_coverage']=project(response,processing_gap=original.get('question_specific_gap'),
+                                               missing_roots=bool(original.get('missing_roots')))
+            return response
         inline=delivery({**result,'response_complete':result.get('response_complete',True)})
         if _fits(inline): return inline
         if result.get('answer_metadata') and result.get('view',{}).get('overview_review'):
@@ -811,7 +829,8 @@ class MemoryService:
                 'source_status':{'evidence_count':len(version.evidence),'edge_count':len(version.edges),
                                  'missing_root_count':len(version.missing_roots),'queue_counts_scope':scope,
                                  'queue_counts_perspective':'latest_scope_health',
-                                 'processing_gaps_apply_to_query':result['source_status']['processing_gaps_apply_to_query']},
+                                 'processing_gaps_apply_to_query':result['source_status']['processing_gaps_apply_to_query'],
+                                 'question_specific_gap':result['source_status']['question_specific_gap']},
                 'notice':'The answer content is inline; immutable evidence and audit are optional paged inspection. '
                          'Retain all answer qualifications, completeness and freshness limits.'}
         if 'interpretation_recovery' in result['source_status']:
