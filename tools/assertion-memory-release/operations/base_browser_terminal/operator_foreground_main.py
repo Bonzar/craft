@@ -6,7 +6,11 @@ import time
 from configured_terminal_state import read_exact
 from operator_foreground_phase import ApprovedPair,_read_authorizer,_require_root,publish_one_observation
 from operator_foreground_controller import settle_step,recover_settlement_only
-from protected_native_activation import _approved
+from protected_native_activation import _approved,_approved_record
+from projection_client import selected as projection_selected
+from kernel_observer import observe
+from ops_readonly_preflight import trusted_pid
+from terminal_lifecycle import TerminalRequest
 from transition_witness import Admission
 
 def direct(run,*,deadline_seconds=180):
@@ -15,6 +19,18 @@ def direct(run,*,deadline_seconds=180):
         raise ValueError('invalid exact foreground run')
     expiry=time.monotonic()+deadline_seconds
     pair=None
+    baseline=None
+    if projection_selected():
+        # Read-only physical baseline before a pending transaction. Synthetic
+        # label cannot grant authority through either socket or authorizer.
+        candidate,prior=_approved_record(run)
+        probe=TerminalRequest(Admission(run,'0'*64,candidate),prior,'restore')
+        try:
+            sample=observe(probe,trusted_pid=trusted_pid)
+            if sample.journal is None:
+                baseline=sample
+        except (OSError,ValueError):
+            pass # no pre-first skip allowed without the exact original witness
     while time.monotonic()<expiry:
         try:
             known,admission,receipt=read_exact(_read_authorizer())
@@ -25,7 +41,7 @@ def direct(run,*,deadline_seconds=180):
                     raise ValueError('independent approved prior differs')
                 pair=ApprovedPair(admission,known)
             if admission is not None:
-                try:publish_one_observation(pair)
+                try:publish_one_observation(pair,before_first=baseline)
                 except (ValueError,OSError):pass # Kernel/state check below remains exact.
             try:
                 if settle_step(pair)=='settled':

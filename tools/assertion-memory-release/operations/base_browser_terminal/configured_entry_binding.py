@@ -8,6 +8,8 @@ from configured_authorizer_binding import serve_exact,terminal_frame
 from configured_terminal_state import _release
 from authorizer_cas import read_owned_record
 from root_phase_binding import read_phase
+from projection_client import selected
+from configured_terminal_state import read_exact
 from transition_witness import Admission
 
 MARKER=Path('/etc/assertion-release/production/base-browser-listener.json')
@@ -25,8 +27,21 @@ def active():
 def authorize(peer,*,policy,ledger,writer_uid,peer_uid,keys,now):
     normal=partial(serve_peer,policy=policy,ledger=ledger,writer_uid=writer_uid,
                    peer_uid=peer_uid,issuer_keys=keys,now=now)
+    project=selected()
+    def phase():
+        state=read_owned_record()
+        if not project:
+            return read_phase(state)
+        from projection_persistence import read_locked_view
+        _,pending,_=read_exact(state)
+        if pending is None:
+            raise ValueError('exact projected operation missing')
+        same,event=read_locked_view(pending.run,pending.nonce)
+        if same!=state or event is None:
+            raise ValueError('exact projected phase absent or changed')
+        return event['phase']
     return serve_exact(peer,normal=normal,protected_marker_active=active,
-        independently_observed_phase=lambda:read_phase(read_owned_record()),
+        independently_observed_phase=phase,terminal_projection_enabled=project,
         sealed_terminal_dispatch=lambda frame:terminal_frame(frame,policy=policy,ledger=ledger,issuer_keys=keys,now=now()))
 
 def receive_terminal(stream,authorize_frame,activate):

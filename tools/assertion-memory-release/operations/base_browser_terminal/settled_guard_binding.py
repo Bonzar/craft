@@ -7,7 +7,11 @@ import stat
 
 from guard_lookup import REQUEST,mode_for_existing_guard
 from root_terminal_publisher import _pid_uid,_credentialed_response
-from transition_witness import Release
+from transition_witness import Admission,Release
+from terminal_lifecycle import TerminalRequest
+from configured_terminal_state import _release
+from projection_client import selected as projection_selected,query_projection
+from root_phase_binding import document
 from hashlib import sha256
 
 ROOT=Path('/srv/assertion-release/production')
@@ -107,7 +111,34 @@ def verified_settled_mode():
 
 def restart_selected(*, run,userctl,active):
     """Used only by the exact patched settled routine inside its old fence."""
-    if verified_settled_mode()=='legacy':
+    if projection_selected():
+        # This executes INSIDE the original settled guard's exclusive fence.
+        # A projected reply cannot authorize an effect outside this function.
+        pair=json.loads(_query())
+        pending=pair.get('pending')
+        if type(pending) is not dict:
+            raise ValueError('no signed native projection transaction')
+        expected=TerminalRequest(Admission(pending['run'],pending['nonce'],_release(pending['release'])),
+                                 _release(pair['known']),pending['phase'])
+        status=query_projection(expected.admission.run,expected.admission.nonce)
+        event=status.get('event')
+        if (status.get('status')!='ok' or type(event) is not dict
+            or event['phase']!=expected.phase or event['kind'] not in ('phase','abort-before-first')):
+            raise ValueError('no fresh actionable root phase under native fence')
+        identity=verified_settled_identity()
+        choice=expected.admission.candidate if expected.phase=='restart' else expected.predecessor
+        if identity!=choice:
+            raise ValueError('protected native physical identity changed')
+        if event['kind']=='abort-before-first':
+            if identity.mode!='legacy' or expected.phase!='restore':
+                raise ValueError('wrong protected native no-op range')
+            return None # inherited readback/smoke still runs
+        if event['proof']!=sha256(document(expected)).hexdigest():
+            raise ValueError('wrong protected native phase seal')
+        mode=identity.mode
+    else:
+        mode=verified_settled_mode()
+    if mode=='legacy':
         return run([*userctl(False),'restart',BASE,GRAPH],timeout=18)
     run([*userctl(False),'stop',GRAPH],timeout=18)
     if active(GRAPH):

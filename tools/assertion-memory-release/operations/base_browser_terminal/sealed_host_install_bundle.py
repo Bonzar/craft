@@ -23,6 +23,7 @@ BOUND=(
     'native_boundary','native_checkpoint','operator_foreground_controller',
     'operator_foreground_main','operator_foreground_phase','ops_readonly_preflight',
     'protected_native_activation','root_phase_binding','root_run_records',
+    'projection_client','projection_persistence','terminal_projection','native_projection_guard',
     'root_terminal_publisher','settled_guard_binding','terminal_lifecycle',
     'terminal_verifier','transition_witness',
 )

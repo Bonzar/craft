@@ -15,6 +15,8 @@ from operator_foreground_phase import _read_authorizer,_require_root,_require_ac
 from ops_readonly_preflight import trusted_pid
 from root_phase_binding import _read_root_phase,observe_record,_safe_parent
 from root_run_records import RECORDS,record
+from projection_client import selected as projection_selected,publish_projection
+from hashlib import sha256
 from root_terminal_publisher import publish_with_existing_authorizer,canonical_terminal
 from terminal_lifecycle import TerminalRequest
 
@@ -97,7 +99,10 @@ def _settle_step(pair,*,native_effect_closed=False):
                 pre=observe_before_unlink(req,sample)
                 if _read_authorizer()!=state:
                     raise ValueError('foreground admission changed before precommit')
-                _record(parent,name,precommit_wire(pre))
+                body=precommit_wire(pre)
+                _record(parent,name,body)
+                if projection_selected():
+                    publish_projection(req,'precommit',sha256(body).hexdigest())
                 return 'precommit-ready'
             previous=restore_precommit(_get(parent,name),req)
             _, wire=observe_after_unlink(req,previous,sample,_fsync_native,publish_with_existing_authorizer)

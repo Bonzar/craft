@@ -52,7 +52,7 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
                 sealed_terminal_dispatch=None, terminal_projection_enabled=False):
     if type(terminal_projection_enabled) is not bool:
         raise ValueError('exact projection selection required')
-    def projection(raw,uid):
+    def projection(raw,uid,stream):
         if not terminal_projection_enabled:
             return None
         from terminal_projection import dispatch,PUBLISH,READ
@@ -66,6 +66,8 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
         if parsed.get('op') not in (PUBLISH,READ):
             return None
         try:
+            if stream.read(1)!=b'':
+                raise ValueError('unexpected projected frame trailing data')
             return dispatch(raw,verified_peer_uid=uid,active=protected_marker_active(),
                 read_admission=read_owned_record,read_projection=read_projection,
                 persist_projection=persist_projection,read_locked_view=read_locked_view)
@@ -97,7 +99,7 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
         with channel.makefile('rb') as stream:
             raw=stream.readline(20_001)
             pair_has_extra=raw==REQUEST and bool(stream.read(1))
-        response=projection(raw,986)
+            response=projection(raw,986,stream)
         if response is not None:
             channel.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
             return
@@ -126,6 +128,6 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
             channel.sendall(b'{"status":"rejected"}\n')
             return
         return normal(channel,prefetched_frame=frame)
-    extra={'root_projection':lambda raw:projection(raw,0)} if terminal_projection_enabled else {}
+    extra={'root_projection':lambda raw,stream:projection(raw,0,stream)} if terminal_projection_enabled else {}
     return dispatch_existing_authorizer(peer,normal=ordinary_or_pair,read_exact_pending=pending,
         finish_cas=finish,acknowledge_terminal=ack,**extra)

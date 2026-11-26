@@ -98,7 +98,7 @@ def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas
         if root_projection is not None:
             from io import BytesIO
             raw=stream.readline(MAX+1)
-            response=root_projection(raw)
+            response=root_projection(raw,stream)
             if response is not None:
                 peer.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
                 return response

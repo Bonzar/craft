@@ -11,10 +11,12 @@ import stat
 
 from authorizer_cas import DIRECTORY,AUTHORIZER_UID,_current
 from controller_install_lease import TRANSITION,DEPLOY,_lock
-from configured_terminal_state import read_exact
+from configured_terminal_state import read_exact,encode
 from native_boundary import observe_native_boundary
 from root_phase_binding import MAX,_safe_parent,document
 from root_run_records import record
+from projection_client import selected as projection_selected,publish_projection
+from hashlib import sha256
 from terminal_lifecycle import TerminalRequest
 from transition_witness import Admission,Release
 
@@ -97,7 +99,7 @@ def _require_active_native_lock():
     finally:
         os.close(fd)
 
-def publish_one_observation(pair):
+def publish_one_observation(pair,*,before_first=None):
     _require_root()
     path=record(pair.admitted,'phase')
     name=path.name
@@ -110,9 +112,49 @@ def publish_one_observation(pair):
         try:
             state=_read_authorizer()
             old=_prior(parent,name)
-            new=planned_phase(pair,state=state,prior_phase=old,native_observer=observe_native_boundary)
+            early=None
+            abort_name=record(pair.admitted,'abort').name
+            prior_abort=_prior(parent,abort_name)
+            try:
+                if prior_abort is not None:
+                    raise ValueError('replay exact private no-op proof')
+                new=planned_phase(pair,state=state,prior_phase=old,native_observer=observe_native_boundary)
+            except ValueError:
+                if (not projection_selected() or before_first is None or old not in
+                        (None,document(TerminalRequest(pair.admitted,pair.prior,'restore')))):
+                    raise
+                if read_exact(state)[:2]!=(pair.prior,pair.admitted):
+                    raise ValueError('wrong exact protected no-op admission')
+                from kernel_observer import observe
+                from ops_readonly_preflight import trusted_pid
+                from native_projection_guard import fallback_before_first
+                restore=TerminalRequest(pair.admitted,pair.prior,'restore')
+                early=fallback_before_first(restore,baseline=before_first,
+                                             observed=observe(restore,trusted_pid=trusted_pid))
+                if prior_abort is not None and prior_abort!=encode(early):
+                    raise ValueError('restoring incumbent no-op observation drifted')
+                new=document(restore)
+            def projection_recheck():
+                if early is not None:
+                    return fallback_before_first(restore,baseline=before_first,
+                        observed=observe(restore,trusted_pid=trusted_pid))==early
+                return planned_phase(pair,state=state,prior_phase=old,native_observer=observe_native_boundary)==new
+            def project():
+                if projection_selected():
+                    phase='restart' if new==document(TerminalRequest(pair.admitted,pair.prior,'restart')) else 'restore'
+                    if early is not None:
+                        publish_projection(restore,'abort-before-first',early['proof'])
+                    else:
+                        publish_projection(TerminalRequest(pair.admitted,pair.prior,phase),'phase',sha256(new).hexdigest())
+            if early is not None:
+                # Persist this distinction before the actual phase record;
+                # root does not send a phase after an interrupted no-op
+                # transition that has lost its original exact baseline.
+                from operator_foreground_controller import _record
+                _record(parent,abort_name,encode(early))
             if old==new:
                 os.fsync(parent)
+                project()
                 return
             staged='.terminal-phase-'+secrets.token_hex(16)
             fd=os.open(staged,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o644,dir_fd=parent)
@@ -122,10 +164,11 @@ def publish_one_observation(pair):
                     f.write(new);f.flush();os.fsync(f.fileno())
                 _require_active_native_lock()
                 if (_read_authorizer()!=state or _prior(parent,name)!=old
-                        or planned_phase(pair,state=state,prior_phase=old,native_observer=observe_native_boundary)!=new):
+                        or not projection_recheck()):
                     raise ValueError('native phase changed before publication')
                 os.replace(staged,name,src_dir_fd=parent,dst_dir_fd=parent)
                 os.fsync(parent)
+                project()
             finally:
                 try:os.unlink(staged,dir_fd=parent)
                 except FileNotFoundError:pass
