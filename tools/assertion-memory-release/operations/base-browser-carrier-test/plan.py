@@ -89,7 +89,7 @@ def gateway_delta(spec):
         if (carrier.get('type')!='http' or carrier.get('url')!=TARGET.replace('{tail}','session')
             or carrier.get('method',method.upper())!=method.upper()
             or set(headers)!=allowed or any(v!='{'+k+'}' for k,v in headers.items())
-            or carrier.get('serviceAccountId') or op.get('security') or carrier.get('query')):
+            or carrier.get('serviceAccountId') or op.get('security') or carrier.get('query')!={'*':'*'}):
             raise ValueError('legacy TEST session route authority drift')
     del paths[session]
     wild=paths[WILD]
