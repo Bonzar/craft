@@ -16,6 +16,30 @@
 -        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,retention_factory=retention)
 +        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,
 +        authorize_activation=authorize_activation,retention_factory=retention)
+--- a/tools/assertion-memory-release/release_core.py
++++ b/tools/assertion-memory-release/release_core.py
+@@ -280,7 +280,7 @@
+ 
+ 
+ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,
+-           after_committed=None, retention_factory=None, witness_factory=None):
++           after_committed=None, retention_factory=None, witness_factory=None, authorize_activation=None):
+     """Deploy a validated artifact after lane-specific authentication.
+ 
+     An optional after_committed(root, release) runs under the existing lock
+@@ -318,7 +318,11 @@
+             try:
+                 prepare(staged,target,root,dispatch,retained,
+                         reclaim=(lambda path:retention.remove(store,path)) if retention else None)
+-                activate(root,target,None,runner,witness=witness)
++                switch=lambda: activate(root,target,None,runner,witness=witness)
++                if authorize_activation is None:
++                    switch()
++                else:
++                    authorize_activation(target, switch)
+             except ActivationWitnessPublicationPending:
+                 raise
+             except BaseException:
 --- a/tools/assertion-memory-visual/runtime_joint.py
 +++ b/tools/assertion-memory-visual/runtime_joint.py
 @@ -98,7 +98,7 @@
