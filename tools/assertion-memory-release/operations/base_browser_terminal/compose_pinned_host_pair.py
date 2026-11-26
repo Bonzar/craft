@@ -52,13 +52,31 @@ def _transform_hook(raw,expected):
             or check.body[4].lineno!=315 or type(check.body[5]) is not ast.For
             or check.body[5].lineno!=316 or check.body[5].end_lineno!=329):
         raise ValueError('unexpected exact old application proof boundary')
+    old_loop=check.body[5]
+    if (len(old_loop.body)<6
+            or [(n.lineno,n.end_lineno) for n in old_loop.body[:3]]!=[(317,317),(318,318),(319,319)]
+            or any(type(n) is not t for n,t in zip(old_loop.body[:3],(ast.Assign,ast.Assign,ast.Expr)))):
+        raise ValueError('wrong inherited fixed systemd metadata checks')
+    original=raw.splitlines(keepends=True)
+    # The callback is nested in original check_live, so all inherited common
+    # config and scope locals remain authoritative. Reuse the native exact
+    # metadata read, split, and trusted fragment validation byte-for-byte.
+    native_pid=(b'        def _base_native_pid(unit):\n'
+                b'            i = UNITS.index(unit)\n'
+                + b''.join(b'    '+line for line in original[316:319])
+                + b'            found = values.get("MainPID", "")\n'
+                  b'            if not re.fullmatch(r"0|[1-9][0-9]{0,9}", found):\n'
+                  b'                raise ValueError("invalid trusted MainPID")\n'
+                  b'            return int(found)\n')
     # Preserve native private MCP probes exactly. Existing owner UI handling
     # is separate from runtime witness; do not create a browser session.
     additions={
         166:b'        if _base_browser_sidecar_enabled():\n            return\n',
         316:
              b'    if _base_browser_sidecar_enabled():\n'
-             b'        return _base_browser_sidecar_check_live(policy, release, uid)\n',
+             + native_pid +
+             b'        return _base_browser_sidecar_check_live(policy, release, uid,\n'
+             b'              trusted_pid=_base_native_pid, not_listening=StartupNotListening)\n',
     }
     lines=[]
     for number,line in enumerate(raw.splitlines(keepends=True),1):
