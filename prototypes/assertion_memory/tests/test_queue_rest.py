@@ -27,7 +27,7 @@ class Route(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(self.db) as db:
             db.executescript('CREATE TABLE memory_interactive_queries (id TEXT,state TEXT,created REAL);'
                              "INSERT INTO memory_interactive_queries VALUES ('fixture-q','queued',12.0);")
-        self.config=SimpleNamespace(processing_session_ids=None,provider='fixture')
+        self.config=SimpleNamespace(processing_session_ids=None,provider='fixture',auto_process_fresh_mac=False)
         self.hits=[]
         self.ident=TAG,GEN
         async def old(scope,receive,send):
@@ -41,8 +41,8 @@ class Route(unittest.IsolatedAsyncioTestCase):
         self.base=AuthenticatedMemoryApp(old,LEGACY,queue_rest=queue)
 
     async def send(self, *, raw=b'', token=TOKEN, peer=('127.0.0.1',9020), method='GET',
-                   extra=(), host=b'127.0.0.1:8893', body=b'', path=rest.PATH, app=None, path_raw=None):
-        headers=[(b'host',host),*extra]
+                   extra=(), host=None, body=b'', path=rest.PATH, app=None, path_raw=None, port=PORT):
+        headers=[(b'host',f'127.0.0.1:{port}'.encode() if host is None else host),*extra]
         if token:
             headers.append((b'authorization',('Bearer '+token).encode()))
         events=[]
@@ -51,7 +51,7 @@ class Route(unittest.IsolatedAsyncioTestCase):
         async def respond(event):
             events.append(event)
         await (app or self.base)({'type':'http','method':method,'path':path,'raw_path':path.encode() if path_raw is None else path_raw,
-                                 'query_string':raw,'client':peer,'server':('127.0.0.1',PORT),'headers':headers},req,respond)
+                                 'query_string':raw,'client':peer,'server':('127.0.0.1',port),'headers':headers},req,respond)
         return events[0]['status'],json.loads(events[1]['body']),dict(events[0]['headers'])
 
     async def test_real_queue_get_preserves_exact_identity_and_read_only_state(self):
@@ -78,6 +78,112 @@ class Route(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.send(extra=[h],token=None))[0],401)
         self.assertEqual((await self.send(extra=[(h[0],b'other')]))[0],400)
         self.assertEqual(len(self.hits),1)
+        reset=(b'x-memory-queue-reset',b'ready-v1')
+        self.assertEqual((await self.send(extra=[h,reset]))[0],200)
+        self.assertEqual(self.hits[-1],dict(limit=50,offset=0,batch_cards=True,clear_ready=True))
+        self.assertEqual((await self.send(extra=[reset,reset]))[0],400)
+
+    def seed_dense_batch_queue(self, start, stop):
+        from prototypes.assertion_memory.capture_batch import MAX_MEMBERS, schema
+        from prototypes.assertion_memory.queue import CaptureQueue, _identity
+        from prototypes.assertion_memory.storage import MemoryStore
+
+        store = MemoryStore(self.db)
+        self.addCleanup(store.close)
+        CaptureQueue(store)
+        expected = {}
+        timestamp = '2026-11-25T00:00:00.000000+00:00'
+        # Maximum legal session-ID size; event IDs have the production SHA-256 shape.
+        session = 's' * 256
+        raw_text = 'SYNTHETIC RAW TEXT ' + ('кириллица漢字😀"\\\n\t' * 12)
+        with store.transaction(write=True) as db:
+            schema(db)
+            for n in range(start, stop):
+                # Deliberately descending IDs to ensure row order is FIFO, not lexical.
+                batch = f'{1000-n:064x}'
+                db.execute('INSERT INTO memory_capture_batches '
+                           '(batch_id,stream_id,session_id,member_digest,request_digest,state) '
+                           "VALUES (?,?,?,?,?,'pending')",
+                           (batch, 'stream', session, 'member-digest', 'request-digest'))
+                ids = [_identity('event', session, str(n), str(i)) for i in range(MAX_MEMBERS)]
+                db.executemany('INSERT INTO memory_raw_events VALUES (?,?,?,?,?,?,?,?,?)',
+                               ((eid,session,'turn',raw_text,'user','test','scope',timestamp,'{}')
+                                for eid in ids))
+                db.executemany('INSERT INTO memory_capture_jobs '
+                               '(id,event_id,status,phase,updated_at,available_at) '
+                               "VALUES (?,?,'pending','extract',?,?)",
+                               ((eid,eid,timestamp,timestamp) for eid in ids))
+                db.executemany('INSERT INTO memory_capture_batch_members VALUES (?,?,?)',
+                               ((batch,i,eid) for i,eid in enumerate(ids)))
+                expected['batch:'+batch] = ids
+        return expected
+
+    def owner_queue_app(self, lane):
+        def do_read(**paging):
+            return rest.snapshot(self.config,identity=lambda:self.ident,database=self.db,
+                                 interactive_enabled=True,lane=lane,can_change=True,**paging)
+        port = rest.PROD_PORT if lane=='prod' else PORT
+        queue = rest.make_queue_rest(fingerprint=KEY,port=port,project=do_read)
+        return AuthenticatedMemoryApp(self.base.app,LEGACY,queue_rest=queue),port
+
+    async def test_dense_batch_page_preserves_all_members_and_exact_offsets(self):
+        hdr = [(b'x-memory-queue-format',b'batch-cards-v1')]
+        expected = self.seed_dense_batch_queue(0,12)
+        original = self.db.read_bytes()
+        for lane in ('test','prod'):
+            with self.subTest(lane=lane, batches=12):
+                app,port = self.owner_queue_app(lane)
+                status, body, headers = await self.send(extra=hdr,app=app,port=port)
+                self.assertEqual(status, 200)
+                source = body['queues'][0]
+                self.assertEqual((source['total'],source['source_count'],source['next_offset']),
+                                 (12,12*128,None))
+                self.assertEqual(body['stage'],lane)
+                self.assertGreater(int(headers[b'content-length']),131_072)
+        self.assertEqual(self.db.read_bytes(),original)
+
+        expected.update(self.seed_dense_batch_queue(12,53))
+        original = self.db.read_bytes()
+        for lane in ('test','prod'):
+            app,port = self.owner_queue_app(lane)
+            cards = []
+            for offset,count,next_offset in ((0,50,50),(50,3,None),(53,0,None)):
+                with self.subTest(lane=lane,offset=offset):
+                    status,body,headers = await self.send(extra=hdr,app=app,port=port,
+                                                         raw=f'limit=50&offset={offset}'.encode())
+                    self.assertEqual(status,200)
+                    self.assertLessEqual(int(headers[b'content-length']),2_400_000)
+                    source = body['queues'][0]
+                    self.assertEqual((source['total'],source['source_count'],source['next_offset']),
+                                     (53,53*128,next_offset))
+                    self.assertEqual(len(source['items']),count)
+                    self.assertEqual(body['queues'][2]['total'],1)
+                    cards.extend(source['items'])
+            self.assertEqual([c['id'] for c in cards],list(expected))
+            self.assertEqual([c['position'] for c in cards],list(range(1,54)))
+            for card in cards:
+                self.assertEqual([m['id'] for m in card['members']],expected[card['id']])
+                self.assertEqual(card['member_count'],128)
+                self.assertTrue(all(len(m['preview_revision'])==32 for m in card['members']))
+            self.assertNotIn('SYNTHETIC RAW TEXT',json.dumps(cards))
+        self.assertEqual(self.db.read_bytes(),original)
+
+    async def test_response_budget_is_negotiated_and_byte_bounded(self):
+        h = [(b'x-memory-queue-format',b'batch-cards-v1')]
+        text = '😀"\\' * 10_000
+        def project(**_):
+            return {'synthetic': text}
+        app = rest.make_queue_rest(fingerprint=KEY,port=PORT,project=project)
+        self.assertEqual((await self.send(app=app))[:2],(503,{'error':'unavailable'}))
+        self.assertEqual((await self.send(app=app,extra=h,token=None))[0],401)
+        status,body,headers = await self.send(app=app,extra=h)
+        self.assertEqual(status,200)
+        self.assertEqual(body,{'synthetic':text})
+        expected = len(json.dumps(body,separators=(',',':'),ensure_ascii=True).encode('ascii'))
+        self.assertEqual(int(headers[b'content-length']),expected)
+        self.assertGreater(expected,131_072)
+        text *= 20
+        self.assertEqual((await self.send(app=app,extra=h))[:2],(503,{'error':'unavailable'}))
 
     async def test_rejects_wrong_authority_peer_headers_and_method_before_snapshot(self):
         cases=(

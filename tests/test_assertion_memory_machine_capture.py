@@ -32,7 +32,7 @@ class Verified(unittest.TestCase):
             self.assertEqual(register(db,bind,fresh_since=clock)['cursor'],0)
             with self.assertRaises(ValueError):register(db,bind,fresh_since=clock)
             db.close()
-    def test_module_context_starts_worker_only_for_fresh_startup(self):
+    def test_module_context_starts_worker_for_fresh_startup_and_exact_enrolled_resume(self):
         import hashlib
         from unittest.mock import patch
         from .test_assertion_memory_capture import load_capture
@@ -65,6 +65,12 @@ class Verified(unittest.TestCase):
                 self.assertIn(str(root/key),spawn.call_args.args[0])
                 hook('startup')
                 spawn.assert_called_once()
+                library.context(Event('session-end','fixture',temp,'codex',raw=raw),store)
+                hook('resume')
+                self.assertEqual(spawn.call_count,2)
+                hook('resume')
+                self.assertEqual(spawn.call_count,2)
+
     def test_transport(self):
         calls=[]
         def run(req,timeout):

@@ -17,7 +17,7 @@
   const itemFeedback=panel.querySelector('#queue-item-feedback');
   const deleting=new Set(), previews=new Map(), previewPending=new Set(), previewJobs=new Map();
   const autoSeen=new Set(), visiblePreviews=new Map();
-  let previewObserver;
+  let previewObserver,previewEpoch=0;
   const maxAutoPreviews=6;
   function drainPreviews(){
     if(previewPending.size||!panel.open)return;
@@ -129,22 +129,22 @@
       };
       const load=async()=>{
         if(previewPending.size||previewPending.has(previewKey)||!panel.open)return;
-        const current=generation;
+        const current=generation,epoch=previewEpoch;
         const body={stage:queueStage,queue_id:'source',item_id:source.id,expected_revision:source.preview_revision};
         const route='/api/v1/processing/items/source-preview';
         previewPending.add(previewKey);open.disabled=true;
         try{
           const proof=await sessionRequest(route+'/prepare','POST',body);
-          if(current!==generation||!panel.open)return;
+          if(current!==generation||epoch!==previewEpoch||!panel.open)return;
           if(proof?.stage!==body.stage||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
           const value=await sessionRequest(route,'PUT',body,proof.csrf_token);
-          if(current!==generation||!panel.open)return;
+          if(current!==generation||epoch!==previewEpoch||!panel.open)return;
           if(value?.stage!==body.stage||value.queue_id!=='source'||value.item_id!==source.id||
              typeof value.source_preview!=='string'||!value.source_preview.trim()||Array.from(value.source_preview).length>240)throw Error();
           if(previews.size>=50)previews.delete(previews.keys().next().value);
           previews.set(previewKey,value);show(value);
         }catch{
-          if(current===generation&&panel.open){
+          if(current===generation&&epoch===previewEpoch&&panel.open){
             excerpt.replaceChildren(element('span','Текст недоступен. '),open);
           }
         }finally{previewPending.delete(previewKey);open.disabled=false;drainPreviews();}
@@ -342,6 +342,105 @@
     if(!response.ok||!response.headers.get('content-type')?.includes('application/json'))throw Error();
     return response.json();
   }
+  const clearPanel=panel.querySelector('#queue-database-clear');
+  const clearOpen=panel.querySelector('#queue-clear-open');
+  const clearConfirmation=panel.querySelector('#queue-clear-confirmation');
+  const clearInstance=panel.querySelector('#queue-clear-instance');
+  const clearLabel=panel.querySelector('#queue-clear-label');
+  const clearTyped=panel.querySelector('#queue-clear-typed');
+  const clearCommit=panel.querySelector('#queue-clear-commit');
+  const clearCancel=panel.querySelector('#queue-clear-cancel');
+  const clearFeedback=panel.querySelector('#queue-clear-feedback');
+  const clearUrl='/api/v1/processing/database/clear';
+  let clearState=null, clearIntent=null, clearBusy=false;
+  const sameClear=(a,b)=>Boolean(a&&b&&a.stage===b.stage&&a.revision===b.revision&&
+    a.releaseGeneration===b.releaseGeneration&&b.canClear);
+  function drawClear(){
+    if(!clearPanel)return;
+    clearPanel.hidden=!clearState&&!clearBusy;
+    clearOpen.hidden=Boolean(clearIntent)||clearBusy;
+    clearOpen.disabled=clearBusy||clearState?.canClear!==true;
+    clearConfirmation.hidden=!clearIntent;
+    if(clearState)clearInstance.textContent='Текущее окружение: '+clearState.stage.toUpperCase()+
+      (clearState.canClear?'':'. Очистка сейчас недоступна.');
+    clearTyped.disabled=clearBusy;
+    clearCancel.disabled=clearBusy;
+    clearCommit.disabled=clearBusy||!clearIntent||clearTyped.value!==clearIntent.phrase;
+  }
+  function closeClear(focus=false){
+    clearIntent=null;
+    if(clearTyped)clearTyped.value='';
+    drawClear();
+    if(focus&&!clearOpen?.disabled)clearOpen?.focus();
+  }
+  function acceptClear(data){
+    if(!clearPanel)return;
+    const item=data?.database_clear;
+    clearState=['test','prod'].includes(data?.stage)&&rev(item?.revision)&&
+      typeof item.can_clear==='boolean'&&typeof data.release_generation==='string'&&/^[0-9a-f]{64}$/.test(data.release_generation)
+      ? {stage:data.stage,revision:item.revision,canClear:item.can_clear,releaseGeneration:data.release_generation}:null;
+    if(!clearBusy&&clearIntent&&!sameClear(clearIntent,clearState)){
+      clearFeedback.textContent='Состояние базы изменилось. Откройте подтверждение заново.';
+      closeClear(true);
+    }else drawClear();
+  }
+  clearOpen?.addEventListener('click',()=>{
+    if(!panel.open||clearBusy||!clearState?.canClear||clearIntent)return;
+    clearIntent={...clearState,phrase:'ОЧИСТИТЬ '+clearState.stage.toUpperCase()};
+    clearLabel.textContent='Введите «'+clearIntent.phrase+'» для подтверждения';
+    clearFeedback.textContent='';drawClear();clearTyped.focus();
+  });
+  clearTyped?.addEventListener('input',drawClear);
+  clearCancel?.addEventListener('click',()=>{
+    if(clearBusy)return;
+    clearFeedback.textContent='Очистка отменена.';
+    closeClear(true);
+  });
+  clearCommit?.addEventListener('click',async()=>{
+    const intent=clearIntent;
+    if(clearBusy||!panel.open||!sameClear(intent,clearState)||clearTyped.value!==intent?.phrase)return;
+    const current=generation;
+    const active=()=>current===generation&&panel.open;
+    let sent=false;
+    clearBusy=true;
+    clearFeedback.textContent='Проверяем состояние базы…';
+    drawClear();
+    const body={stage:intent.stage,expected_revision:intent.revision};
+    try{
+      const proof=await sessionRequest(clearUrl+'/prepare','POST',{...body,confirmation:intent.phrase});
+      if(!active()||clearIntent!==intent)return;
+      if(!proof||!sameClear(intent,clearState)){
+        clearFeedback.textContent='Состояние базы изменилось. Ничего не удалено.';
+        return;
+      }
+      if(proof.stage!==body.stage||proof.revision!==body.expected_revision||
+         typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
+      clearFeedback.textContent='Очищаем базу '+body.stage.toUpperCase()+'…';
+      sent=true;
+      const receipt=await sessionRequest(clearUrl,'PUT',body,proof.csrf_token);
+      if(!active())return;
+      if(!receipt){
+        clearFeedback.textContent='База изменилась или занята. Очистка не выполнена.';
+        return;
+      }
+      if(receipt.stage!==body.stage||receipt.cleared!==true||!rev(receipt.revision)||receipt.revision===intent.revision)throw Error();
+      previewEpoch++;previews.clear();previewPending.clear();autoSeen.clear();visiblePreviews.clear();
+      previewObserver?.disconnect();previewObserver=null;previewJobs.clear();
+      fetchAbort?.abort();
+      offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
+      clearFeedback.textContent='База '+body.stage.toUpperCase()+' очищена. Настройки и доступы сохранены.';
+      globalThis.location?.reload();
+    }catch{
+      if(active())clearFeedback.textContent=sent
+        ? 'Результат очистки не подтверждён. Проверьте состояние базы перед повтором.'
+        : 'Не удалось подтвердить состояние базы. Запрос на очистку не отправлен.';
+    }finally{
+      clearBusy=false;
+      clearState=null;
+      closeClear();
+      if(panel.open){if(active())panel.querySelector('#visual-queue-close')?.focus();void refresh();}
+    }
+  });
   async function loadSessions(advertised=false){
     if(!sessionsPanel||sessionsBusy||sessionsProbe)return;
     sessionsProbe=true;
@@ -508,6 +607,7 @@
       if(!inFlight&&epoch===controlEpoch)acceptControl(base);
       if(queueStage!==undefined&&base.stage!==queueStage)throw Error();
       queueStage=base.stage;
+      acceptClear(base);
       if(base.capabilities?.standalone_pause===true)controlsReady=true;
       if((base.capabilities?.standalone_queue_sessions===true||base.stage==='test')&&!nativeProbeTried&&!sessionsState){
         nativeProbeTried=true;
@@ -522,6 +622,7 @@
         const label=rendered.size?'Не удалось обновить. Показаны последние полученные данные.':'Не удалось загрузить очереди.';
         if(status.textContent!==label)status.textContent=label;
         if(!inFlight&&epoch===controlEpoch)acceptControl(null);
+        acceptClear(null);
       }
     }finally{
       loading=false;fetchAbort=null;
@@ -529,7 +630,7 @@
     }
   }
   function stop(){
-    generation++;previews.clear();previewObserver?.disconnect();previewObserver=null;
+    generation++;clearState=null;closeClear();previews.clear();previewObserver?.disconnect();previewObserver=null;
     autoSeen.clear();previewJobs.clear();visiblePreviews.clear();dirty=false;fetchAbort?.abort();stream?.close();stream=null;
     if(timer)clearInterval(timer);timer=null;
   }
@@ -539,6 +640,7 @@
     offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
     sessionsState=null;policyDraft=null;sessionsDraft=new Set();sessionsBusy=false;sessionsProbe=false;nativeProbeTried=false;controlsReady=false;
     if(itemFeedback)itemFeedback.textContent='';
+    if(clearFeedback)clearFeedback.textContent='';
     if(sessionsPanel){sessionsPanel.hidden=true;sessionsPanel.open=false;sessionFeedback.textContent='';}
     status.textContent='Подключаемся…';lastSignal=0;
     control=null;ownerReady=false;ownerCheck=null;nativeReady=false;probedRevision=null;controlFeedback.textContent='';drawControl();

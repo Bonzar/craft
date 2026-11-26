@@ -96,8 +96,10 @@ jobs:
       - name: Verify owner Graph queue status and live replay
         run: |
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_queue_dashboard.py'
+          python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_database_generation.py'
           python -m unittest discover -s prototypes/assertion_memory/tests -p 'test_queue_status.py'
           python -m unittest prototypes.assertion_memory.tests.test_queue_rest
+          python -m unittest prototypes.assertion_memory.tests.test_database_clear
           python -m unittest prototypes.assertion_memory.tests.test_queue_sessions prototypes.assertion_memory.tests.test_queue_processing_policy prototypes.assertion_memory.tests.test_queue_item_removal prototypes.assertion_memory.tests.test_native_queue_carrier
           python -m unittest discover -s prototypes/assertion_memory/tests -p 'test_native_pause.py'
           node --test tools/assertion-memory-hosted-mcp/sites-pause/test-native-pause.mjs

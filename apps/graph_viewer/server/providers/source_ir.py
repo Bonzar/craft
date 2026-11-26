@@ -113,13 +113,22 @@ def populate(connection, doc, fingerprint):
     connection.commit()
 
 
-def materialize(doc, fingerprint, state_dir):
+def materialize(doc, fingerprint, state_dir, *, epoch=None):
     """Atomically publish a private, complete generation after full validation."""
     state = Path(state_dir).resolve()
     provider_hash = hashlib.sha256(doc['provider_id'].encode('utf-8')).hexdigest()
     provider = state / 'source-ir' / provider_hash
-    for directory in [state, state / 'source-ir', provider]:
+    directories=[state,state/'source-ir',provider]
+    if epoch is not None:
+        import re
+        if not re.fullmatch(r'[a-f0-9]{64}',epoch):
+            raise ValueError('Invalid source IR epoch')
+        directories.extend([provider/'database-epochs',provider/'database-epochs'/epoch])
+        provider=directories[-1]
+    for directory in directories:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError('Unsafe private source IR directory')
         directory.chmod(0o700)
     target = provider / fingerprint
     temporary = Path(tempfile.mkdtemp(prefix='.building-', dir=provider))

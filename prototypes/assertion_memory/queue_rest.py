@@ -33,6 +33,11 @@ HEX=re.compile(r'[a-f0-9]{64}\Z')
 RELEASE=re.compile(r'([a-f0-9]{40})-([a-f0-9]{64})\Z')
 TAG=re.compile(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?\Z')
 PAGE=re.compile(rb'(limit|offset)=(0|[1-9][0-9]{0,6})\Z')
+LEGACY_RESPONSE_BYTES=131_072
+# The standalone Visual queue client already permits 2.4 MB. A full batch
+# page can contain 50 * 128 event IDs and their preview revisions; preview
+# text is fetched separately. Do not truncate complete cards or change offsets.
+BATCH_CARD_RESPONSE_BYTES=2_400_000
 HEADERS=[(b'content-type',b'application/json'),(b'cache-control',b'private, no-store'),
          (b'x-content-type-options',b'nosniff')]
 
@@ -62,7 +67,7 @@ def exact_database(db):
     return info.st_dev,info.st_ino
 
 
-def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False,batch_cards=False):
+def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False,batch_cards=False,clear_ready=False):
     tag,generation=identity()
     before=exact_database(database)
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=1)) as db:
@@ -86,6 +91,10 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
             if (can_change() if callable(can_change) else can_change):
                 from .queue_item_removal import annotate
                 annotate(db,data)
+                if clear_ready:
+                    from .database_clear import describe
+                    clear=describe(db,stage=lane,binding=[before,(tag,generation)])
+                    data['database_clear']={k:clear[k] for k in ('revision','can_clear','scope')}
         finally:
             db.set_progress_handler(None,0)
             db.rollback()
@@ -104,9 +113,9 @@ def make_queue_rest(*, fingerprint, port, project):
     gate=asyncio.Semaphore(4)
 
     async def app(scope,receive,send):
-        async def reply(status,body):
+        async def reply(status,body,*,max_bytes=LEGACY_RESPONSE_BYTES):
             wire=json.dumps(body,separators=(',',':'),ensure_ascii=True).encode('ascii')
-            if len(wire)>131072:
+            if len(wire)>max_bytes:
                 status,wire=503,b'{"error":"unavailable"}'
             await send({'type':'http.response.start','status':status,'headers':
                         [*HEADERS,(b'content-length',str(len(wire)).encode('ascii'))]})
@@ -134,7 +143,8 @@ def make_queue_rest(*, fingerprint, port, project):
         try:
             limit,offset=page(scope.get('query_string',b''))
             card_format=values(b'x-memory-queue-format')
-            if card_format not in ([],[b'batch-cards-v1']):
+            reset_format=values(b'x-memory-queue-reset')
+            if card_format not in ([],[b'batch-cards-v1']) or reset_format not in ([],[b'ready-v1']):
                 raise ValueError()
             if values(b'content-length') not in ([],[b'0']) or values(b'transfer-encoding'):
                 raise ValueError()
@@ -148,10 +158,11 @@ def make_queue_rest(*, fingerprint, port, project):
         try:
             async with gate:
                 result=await asyncio.to_thread(project,limit=limit,offset=offset,
-                    **({'batch_cards':True} if card_format else {}))
+                    **({'batch_cards':True} if card_format else {}),
+                    **({'clear_ready':True} if reset_format else {}))
         except (ValueError,OSError,sqlite3.Error):
             return await reply(503,{'error':'unavailable'})
-        return await reply(200,result)
+        return await reply(200,result,max_bytes=BATCH_CARD_RESPONSE_BYTES if card_format else LEGACY_RESPONSE_BYTES)
 
     return app
 

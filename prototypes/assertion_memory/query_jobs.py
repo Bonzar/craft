@@ -81,17 +81,19 @@ class QueryJobs:
     def _loop(self):
         while not self.stop.is_set():
             try:
-                claim = self._claim()
+                from .database_clear import database_lease
+                with database_lease(self.db):
+                    claim = self._claim()
+                    if claim is not None:
+                        key, arguments, created = claim
+                        with timing.bind(trace_id=key):
+                            queue_wait_ms = max(0, round((time.time() - created)*1000))
+                            timing.emit('queue_wait', 'ok', queue_wait_ms)
+                            self._execute(key, arguments, queue_wait_ms=queue_wait_ms)
                 if claim is None:
                     self.signal.wait(0.25)
                     self.signal.clear()
-                    continue
-                key, arguments, created = claim
-                with timing.bind(trace_id=key):
-                    queue_wait_ms = max(0, round((time.time() - created)*1000))
-                    timing.emit('queue_wait', 'ok', queue_wait_ms)
-                    self._execute(key, arguments, queue_wait_ms=queue_wait_ms)
-            except sqlite3.OperationalError:
+            except (sqlite3.OperationalError,BlockingIOError):
                 self.stop.wait(0.15)
 
     def _execute(self, key, arguments, *, queue_wait_ms):
