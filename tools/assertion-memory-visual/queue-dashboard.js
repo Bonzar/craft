@@ -587,6 +587,28 @@
       if(panel.open){drawControl();void refresh();}
     }
   });
+  let directQueueEpoch=null,directQueueLive=false,transportUp=false,primedQueue=null,primeAbort=null;
+  function resetDirectQueue(){
+    directQueueEpoch=null;directQueueLive=false;primedQueue=null;primeAbort?.abort();primeAbort=null;
+  }
+  addEventListener('owner-live-connection',event=>{
+    transportUp=event.detail==='live';
+    if(transportUp){directQueueLive=!!directQueueEpoch;if(directQueueLive){stream?.close();stream=null;}return;}
+    if(event.detail==='disconnected'){resetDirectQueue();if(panel.open)void refresh();}
+  });
+  addEventListener('owner-live-invalidate',()=>{resetDirectQueue();fetchAbort?.abort();if(panel.open){rendered.clear();lanes.clear();container.replaceChildren();status.textContent='Подключаемся к новой версии базы…';}});
+  addEventListener('owner-live-snapshot',event=>{
+    const {epoch,queue}=event.detail??{};
+    if(queue!==true||typeof epoch!=='string'||!(/^[a-f0-9]{64}$/).test(epoch))return;
+    if(directQueueEpoch!==epoch){directQueueEpoch=epoch;primedQueue=null;primeAbort?.abort();}
+    directQueueLive=transportUp;if(directQueueLive){stream?.close();stream=null;}
+    if(panel.open){void refresh();return;}
+    primeAbort?.abort();const signal=new AbortController();primeAbort=signal;
+    void snapshot(0,signal.signal).then(page=>{
+      if(!signal.signal.aborted&&directQueueEpoch===epoch&&page.owner_live_epoch===epoch)
+        primedQueue={page,at:Date.now()};
+    }).catch(()=>{});
+  });
   async function snapshot(offset,signal){
     const result=await fetch('/api/v1/capabilities?queue_status=1&limit=50&offset='+offset,
       {cache:'no-store',credentials:'same-origin',redirect:'error',signal,headers:{accept:'application/json'}});
@@ -599,14 +621,15 @@
     if(!panel.open)return;
     if(loading){dirty=true;return;}
     loading=true;
-    const current=generation, requested=new Map(offsets), epoch=controlEpoch;
+    const current=generation, requested=new Map(offsets), epoch=controlEpoch, sourceEpoch=directQueueEpoch;
     const abort=new AbortController();
     fetchAbort=abort;
     try{
-      const pages=new Map(await Promise.all([...new Set(ordered.map(k=>requested.get(k)??0))].map(async n=>[n,await snapshot(n,abort.signal)])));
-      if(!panel.open||current!==generation)return;
+      const pages=new Map(await Promise.all([...new Set(ordered.map(k=>requested.get(k)??0))].map(async n=>[n,n===0&&primedQueue&&Date.now()-primedQueue.at<3000?primedQueue.page:await snapshot(n,abort.signal)])))
+      primedQueue=null;;
+      if(!panel.open||current!==generation||sourceEpoch!==directQueueEpoch)return;
       const base=pages.values().next().value;
-      if([...pages.values()].some(x=>x.stage!==base.stage||x.release_version!==base.release_version))throw Error();
+      if([...pages.values()].some(x=>x.stage!==base.stage||x.release_version!==base.release_version||sourceEpoch&&x.owner_live_epoch!==sourceEpoch))throw Error();
       const version=typeof base.release_version==='string'&&base.release_version?' · База '+base.release_version:'';
       const label=base.stage.toUpperCase()+version;
       if(status.textContent!==label)status.textContent=label;
@@ -650,16 +673,16 @@
     if(sessionsPanel){sessionsPanel.hidden=true;sessionsPanel.open=false;sessionFeedback.textContent='';}
     status.textContent='Подключаемся…';lastSignal=0;
     control=null;ownerReady=false;ownerCheck=null;nativeReady=false;probedRevision=null;controlFeedback.textContent='';drawControl();
-    if(typeof EventSource!=='undefined'){
+    if(!directQueueLive&&typeof EventSource!=='undefined'){
       stream=new EventSource('/api/v1/events?channel=dashboard',{withCredentials:true});
       const received=()=>{lastSignal=Date.now();void refresh();};
       stream.addEventListener('resync',received);
       stream.addEventListener('queue_changed',received);
     }
-    timer=setInterval(()=>{if(Date.now()-lastSignal>2500)void refresh();},3000);
+    timer=setInterval(()=>{if(!directQueueLive&&Date.now()-lastSignal>2500)void refresh();},3000);
     void refresh();
   });
   panel.querySelector('#visual-queue-close').addEventListener('click',()=>panel.close());
   panel.addEventListener('close',()=>{stop();launcher.focus();});
-  addEventListener('pagehide',stop,{once:true});
+  addEventListener('pagehide',()=>{resetDirectQueue();stop();},{once:true});
 })();

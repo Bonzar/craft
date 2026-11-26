@@ -40,7 +40,7 @@ class DirectStream(unittest.TestCase):
                                          headers={'Origin':PUBLIC}).status_code,200)
                 value=ui.get('/api/v1/capabilities').json()
                 if enabled:
-                    self.assertEqual(value['owner_live_transport'],{'version':1,'lane':'test','origin':DIRECT})
+                    self.assertEqual(value['owner_live_transport'],{'version':1,'lane':'test','origin':DIRECT,'queue_hints':1})
                     self.active=('revision','changed-archive')
                     self.assertNotIn('owner_live_transport',ui.get('/api/v1/capabilities').json())
                 else:

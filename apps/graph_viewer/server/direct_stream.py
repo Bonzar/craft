@@ -208,7 +208,7 @@ async def direct_events(request):
                     return
                 unseen=[(number,kind) for number,kind,_ in list(manager.journal) if number>cursor]
                 if unseen:
-                    if unseen[0][0]>cursor+1 or any(kind in ('delta','reset') for _,kind in unseen):
+                    if unseen[0][0]>cursor+1 or any(kind in ('delta','reset','queue_changed') for _,kind in unseen):
                         yield frame('changed') # Same epoch; revalidate without clearing the view.
                     cursor=unseen[-1][0]
                 if time.monotonic()-ping>=HEARTBEAT_SECONDS:
