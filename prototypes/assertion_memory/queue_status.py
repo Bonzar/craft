@@ -71,9 +71,6 @@ def build_queue_status(connection, *, release_version, stage, processing_session
     from .queue_processing_policy import explicit
     policy=explicit(connection)
     ids = normalize_session_ids(processing_session_ids)
-    if policy is not None:
-        ids = (thought_processing_selection.FRESH_MAC_ONLY if auto_process_fresh_mac
-               else thought_processing_selection.OWNER_POLICY)
     if stage not in ('test', 'prod') or not isinstance(release_version, str) or not release_version:
         raise ValueError('trusted stage and release are required')
     if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 1_000_000:
@@ -89,6 +86,9 @@ def build_queue_status(connection, *, release_version, stage, processing_session
     stamp = now.astimezone(timezone.utc).isoformat(timespec='microseconds')
     if type(auto_process_fresh_mac) is not bool or (auto_process_fresh_mac and ids != ()):
         raise ValueError('fresh Mac auto-processing requires an empty ordinary selector')
+    if policy is not None:
+        ids = (thought_processing_selection.FRESH_MAC_ONLY if auto_process_fresh_mac
+               else thought_processing_selection.OWNER_POLICY)
     fresh_selector = getattr(thought_processing_selection, 'FRESH_MAC_ONLY', None)
     if auto_process_fresh_mac and fresh_selector is None:
         raise ValueError('fresh Mac auto-processing is not in this release')

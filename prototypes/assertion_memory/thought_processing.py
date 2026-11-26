@@ -242,7 +242,7 @@ class TracedThoughtWorker(ThoughtWorker):
 
     def _cancel_source(self, db, claim, *, error=None):
         now = self.queue._time()
-        db.execute("UPDATE memory_capture_jobs AS j SET status='pending',attempts=max(0,attempts-1),"
+        db.execute("UPDATE memory_capture_jobs SET status='pending',attempts=max(0,attempts-1),"
                    "lease_token=NULL,lease_until=NULL,available_at=?,updated_at=?,error=coalesce(?,error) "
                    "WHERE id=? AND status='running' AND lease_token=?",
                    (now, now, error, claim.job.id, claim.token))
@@ -260,7 +260,7 @@ def _recover_selected(queue, session_ids):
     with queue.store.transaction(write=True) as db:
         from .thought_processing_selection import source_claim_predicate
         predicate,arguments=source_claim_predicate(db,session_ids)
-        db.execute("UPDATE memory_capture_jobs SET status='pending',lease_token=NULL,lease_until=NULL,"
+        db.execute("UPDATE memory_capture_jobs AS j SET status='pending',lease_token=NULL,lease_until=NULL,"
             "available_at=?,updated_at=? WHERE status='running' AND event_id IN "
             f"(SELECT e.id FROM memory_raw_events e WHERE json_extract(e.metadata,'$.capture_batch_id') IS NULL AND {predicate})",
             (now,now,*arguments))

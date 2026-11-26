@@ -76,6 +76,22 @@ class ProcessingPolicy(TestCase):
         self.assertIsNotNone(self.worker._claim_source())
         self.assertIsNone(self.worker._claim_source())
 
+    def test_startup_recovery_alias_and_prod_projection_handle_active_dates(self):
+        from prototypes.assertion_memory.thought_processing import _recover_selected
+        from prototypes.assertion_memory.queue_status import build_queue_status
+        recover=self.event('session-a','one',DAY)
+        isolate=self.event('session-b','two',OLD)
+        self.set_scope(stage='prod',lower=DAY,upper=DAY)
+        with self.store.transaction(write=True) as db:
+            db.execute("UPDATE memory_capture_jobs SET status='running',lease_token='fixture'")
+        _recover_selected(self.service.queue,OWNER_POLICY)
+        with self.store.transaction() as db:
+            states={tuple(row) for row in db.execute('SELECT event_id,status FROM memory_capture_jobs')}
+            self.assertEqual(states,{(recover,'pending'),(isolate,'running')})
+            dashboard=build_queue_status(db,release_version='fixture',stage='prod',processing_session_ids=(),
+                                         model_configured=True,interactive_enabled=False,auto_process_fresh_mac=True)
+            self.assertEqual([q['id'] for q in dashboard['queues']],['source','maintenance','interactive'])
+
     def test_maintenance_uses_cause_enqueue_time_and_keeps_composite_atomic(self):
         work=self.worker.work
         for thought,session,cause,stamp in [
