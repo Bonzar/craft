@@ -6,7 +6,7 @@ import uvicorn
 from .app import create_app,validate_static_directory
 
 
-PROD_OWNER_CREDENTIALS = Path('/run/credentials/assertion-memory-prod-site-graph.service')
+PROD_OWNER_CREDENTIALS = Path('/run/credentials/assertion-base-prod-browser-graph.service')
 
 
 def installed_prod_owner_api(dashboard):
