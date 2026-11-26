@@ -8,7 +8,7 @@ _ACTIONS = frozenset((
     'policy_prepare', 'policy_set', 'item_preview', 'item_remove',
 ))
 
-def base_owner_browser(*, stage, config, verified_identity, release_lease, interactive_enabled):
+def base_owner_browser(*, stage, config, verified_identity, release_lease, interactive_enabled, machine_devices=None):
     """Compose browser transport with already bootstrapped Base writer authority.
 
     Only Base startup can supply the pinned identity and actual writer lease.
@@ -34,4 +34,15 @@ def base_owner_browser(*, stage, config, verified_identity, release_lease, inter
                 interactive_enabled=interactive_enabled,limit=limit,offset=offset,lane=stage,
                 can_change=True,session_control=True,batch_cards=True,clear_ready=False)
 
-    return BrowserOwnerAPI(stage=stage,perform=perform,queue_snapshot=project,clear_enabled=False,dashboard_live=False)
+    browser=BrowserOwnerAPI(stage=stage,perform=perform,queue_snapshot=project,clear_enabled=False,dashboard_live=False)
+    if machine_devices is not None:
+        from contextlib import contextmanager
+        @contextmanager
+        def guard_devices():
+            with release_lease():
+                identity=verified_identity()
+                yield
+                if verified_identity()!=identity:
+                    raise ValueError('Base generation drift during owner device request')
+        browser.attach_machine_devices(machine_devices,guard_devices)
+    return browser

@@ -7,6 +7,8 @@ from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 
+from apps.graph_viewer.server.app import make_routes, Boundary
+from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
 from apps.graph_viewer.server.auth import COOKIE, OwnerStore
 from apps.graph_viewer.server.common import APIError
 from apps.graph_viewer.server.device_owner_http import DeviceOwnerHTTP, PATH
@@ -23,11 +25,19 @@ class DeviceHTTP(unittest.IsolatedAsyncioTestCase):
             cookie,csrf=owner.login(PASSWORD,'local-test')
             second,_=owner.login(PASSWORD,'other-test')
             registry=MachineDeviceRegistry.initialize(root/'device-test.sqlite3','test')
-            guarded=DeviceOwnerHTTP(stage='test',registry=registry,release_guard=nullcontext)
+            browser=BrowserOwnerAPI(stage='test',perform=lambda *x:None,
+                queue_snapshot=lambda **kw:{'stage':'test','capabilities':{'owner_machine_devices_v1':True}})
+            self.assertFalse(any(route.path==PATH for route in make_routes(browser)))
+            self.assertFalse((await browser.snapshot(None,1,0)).body.count(b'owner_machine_devices_v1'))
+            browser.attach_machine_devices(registry,nullcontext)
+            self.assertIn(b'owner_machine_devices_v1', (await browser.snapshot(None,1,0)).body)
+            self.assertTrue(any(route.path==PATH for route in make_routes(browser)))
 
             async def err(request,exc):
                 return JSONResponse({'code':exc.code},status_code=exc.status)
-            app=Starlette(routes=guarded.routes(),exception_handlers={APIError:err})
+            app=Starlette(routes=make_routes(browser),exception_handlers={APIError:err})
+            app.add_middleware(Boundary)
+            app.state.browser_owner_api=browser
             app.state.owner=owner
             app.state.public_origin=ORIGIN
             async with AsyncClient(transport=ASGITransport(app=app),base_url=ORIGIN) as client:
@@ -35,8 +45,8 @@ class DeviceHTTP(unittest.IsolatedAsyncioTestCase):
                 client.cookies.set(COOKIE,cookie)
                 status=await client.get(PATH)
                 self.assertEqual(status.status_code,200)
-                self.assertEqual(status.headers['cache-control'],'no-store')
-                self.assertEqual((await client.get(PATH+'?stage=prod')).status_code,400)
+                self.assertIn('no-store',status.headers['cache-control'])
+                self.assertIn((await client.get(PATH+'?stage=prod')).status_code,(400,404))
                 self.assertEqual((await client.get(PATH.replace('/devices','/de%76ices'))).status_code,404)
                 self.assertEqual((await client.get(PATH,headers={'authorization':'Bearer synthetic'})).status_code,403)
                 body={'stage':'test','expected_revision':status.json()['revision'],

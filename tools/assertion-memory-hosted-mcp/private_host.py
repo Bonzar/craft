@@ -313,4 +313,6 @@ def factory(stage,root,config_dir,legacy_token):
             stage=stage,config=config,release=tag,generation=generation,
             interactive_enabled=jobs is not None)
         return frozenset(paths),handler
+    if managed_devices is not None:
+        mount.machine_device_registry=managed_devices
     return mount

@@ -23,11 +23,12 @@ from prototypes.assertion_memory.queue_processing_policy import validate as vali
 from prototypes.assertion_memory.queue_session_control import normalize
 
 from .common import APIError
+from .device_owner_http import PATH as DEVICE_PATH, DeviceOwnerHTTP
 
 PREFIX = '/api/v1/processing/'
 CONTROLS = ('pause','sessions','items/source-preview','items/remove','database/clear-v2')
 DIRECT = '/api/v1/events-direct'
-EXACT = frozenset(PREFIX+c+s for c in CONTROLS for s in ('','/prepare'))
+EXACT = frozenset(PREFIX+c+s for c in CONTROLS for s in ('','/prepare')) | {DEVICE_PATH,DEVICE_PATH+'/prepare'}
 FORBIDDEN = {b'authorization', b'forwarded', b'x-real-ip', b'x-memory-environment', b'x-memory-lane'}
 
 def ticket_hash(value):
@@ -116,6 +117,15 @@ class BrowserOwnerAPI:
         self.clear_enabled=clear_enabled is True
         self.dashboard_live=dashboard_live
         self.tickets=Tickets(clock)
+        self._device_owner=None
+
+    def attach_machine_devices(self, registry, release_guard):
+        if self._device_owner is not None:
+            raise ValueError('Device authority already attached')
+        self._device_owner=DeviceOwnerHTTP(stage=self.stage,registry=registry,release_guard=release_guard)
+
+    def device_routes(self):
+        return [] if self._device_owner is None else self._device_owner.routes()
 
     def allows(self, request):
         for route in request.app.routes:
@@ -152,6 +162,10 @@ class BrowserOwnerAPI:
         ready=self.stage=='test' or (value.get('processing_control') or {}).get('can_change') is True
         value={**value,'capabilities':{**value.get('capabilities',{}),'live':self.dashboard_live,'standalone_pause':ready,
                                       'queue_processing_policy':ready},'readiness':[]}
+        # Do not advertise device enrollment on absent or unavailable authority.
+        value['capabilities'].pop('owner_machine_devices_v1',None)
+        if self._device_owner is not None and await self._device_owner.ready():
+            value['capabilities']['owner_machine_devices_v1']=True
         if 'processing_control' in value:
             value['processing_control']={**value['processing_control'],'can_change':False}
         clear=value.pop('database_clear',None)

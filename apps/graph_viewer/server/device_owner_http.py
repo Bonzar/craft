@@ -32,6 +32,13 @@ class DeviceOwnerHTTP:
         with self.release_guard():
             return fun(*args)
 
+    async def ready(self):
+        try:
+            await asyncio.to_thread(self._guarded,self.registry.status)
+            return True
+        except (OSError,sqlite3.Error,ValueError):
+            return False
+
     async def handle(self, request):
         from .app import body
         from .browser_owner_api import require_transport
