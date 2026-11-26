@@ -15,6 +15,7 @@ import httpx
 STATE = Path('/srv/assertion-release/test/state')
 LOCAL_GRAPH = 'http://127.0.0.1:8891'
 SESSION_PATH = '/api/v1/session'
+TEST_PUBLIC_ORIGIN = 'https://d5dc14bhh6hba54q0i3p.hsvi2zuh.apigw.yandexcloud.net'
 GRAPH_SESSION = re.compile(r'[A-Za-z0-9_-]{54}\Z', re.ASCII)
 TOOLS = {'memory_capture_message', 'memory_process', 'memory_query', 'memory_status', 'memory_history'}
 TABLES = ('memory_raw_events', 'memory_capture_jobs', 'memory_thoughts')
@@ -72,8 +73,9 @@ def mcp(client, token):
 def graph(client, password, *, deadline_seconds=15):
     require(str(client.base_url).rstrip('/')==LOCAL_GRAPH,'TEST Graph smoke requires its fixed loopback listener')
     require(client.get('/api/v1/graph',follow_redirects=False).status_code==401,'TEST graph auth probe failed')
-    require(client.get('/',follow_redirects=False).status_code==200,'TEST graph index unavailable')
-    login=client.post(SESSION_PATH,json={'password':password},follow_redirects=False)
+    require(client.get('/api/v1/health',follow_redirects=False).status_code==200,'TEST graph API health unavailable')
+    login=client.post(SESSION_PATH,headers={'Origin':TEST_PUBLIC_ORIGIN},
+                      json={'password':password},follow_redirects=False)
     require(login.status_code==200 and str(login.request.url)==LOCAL_GRAPH+SESSION_PATH,
             'TEST Graph loopback login unavailable')
     cookies=list(login.cookies.jar)

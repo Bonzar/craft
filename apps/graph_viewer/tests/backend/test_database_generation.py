@@ -280,7 +280,7 @@ class GraphReleaseSmokeTransport(unittest.TestCase):
         from starlette.testclient import TestClient
         from test_service import fixture
 
-        for public_origin in (None,'https://synthetic-test-graph.example'):
+        for public_origin in (None,'https://synthetic-test-graph.example',self.smoke.TEST_PUBLIC_ORIGIN):
             with self.subTest(public_origin=public_origin), TemporaryDirectory() as tmp:
                 r=Path(tmp)
                 db=r/'test.sqlite3'
@@ -291,8 +291,9 @@ class GraphReleaseSmokeTransport(unittest.TestCase):
                 (ui/'index.html').write_text('synthetic TEST')
                 password='synthetic-test-owner-strong'
                 app=create_app(db,r/'state',password=password,static_dir=ui,public_origin=public_origin)
-                with TestClient(app,base_url=self.smoke.LOCAL_GRAPH,follow_redirects=False) as c:
-                    self.smoke.graph(c,password,deadline_seconds=3)
+                if public_origin==self.smoke.TEST_PUBLIC_ORIGIN:
+                    with TestClient(app,base_url=self.smoke.LOCAL_GRAPH,follow_redirects=False) as c:
+                        self.smoke.graph(c,password,deadline_seconds=3)
                 with TestClient(app,base_url=self.smoke.LOCAL_GRAPH,follow_redirects=False) as c:
                     login=c.post('/api/v1/session',json={'password':password})
                     self.assertEqual(login.status_code,200)
@@ -322,6 +323,7 @@ class GraphReleaseSmokeTransport(unittest.TestCase):
                 if path=='/api/v1/graph':
                     return httpx.Response(401)
                 if path=='/api/v1/session':
+                    self.assertEqual(req.headers['origin'],self.smoke.TEST_PUBLIC_ORIGIN)
                     return httpx.Response(200,headers={'Set-Cookie':
                         'gv_session='+('x'*54)+'; Path=/api/v1; Secure; HttpOnly'})
                 return httpx.Response(200)
@@ -329,4 +331,4 @@ class GraphReleaseSmokeTransport(unittest.TestCase):
                               transport=httpx.MockTransport(reply)) as fake:
                 with self.assertRaisesRegex(ValueError,'loopback login|manifest unavailable'):
                     self.smoke.graph(fake,'synthetic-passphrase')
-            self.assertEqual(seen[:3],['/api/v1/graph','/','/api/v1/session'])
+            self.assertEqual(seen[:3],['/api/v1/graph','/api/v1/health','/api/v1/session'])
