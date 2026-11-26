@@ -30,7 +30,9 @@ sys.path.append(str(qa))
 source=entry.read_bytes()
 namespace={'__file__':str(entry),'__name__':'_import_smoke'}
 exec(compile(source,str(entry),'exec'),namespace)
-assert namespace['activate_exact'].__module__=='receive_authorized'
+assert 'receive_authorized' not in sys.modules
+assert all(name not in sys.modules for name in ('base_payload','release_core','release_retention'))
+assert namespace['legacy_activation']().__module__=='receive_authorized'
 assert pathlib.Path(sys.modules['base_payload'].__file__)==rel/'base_payload.py'
 assert pathlib.Path(sys.modules['release_core'].__file__)==rel/'release_core.py'
 assert pathlib.Path(sys.modules['release_retention'].__file__)==rel/'release_retention.py'

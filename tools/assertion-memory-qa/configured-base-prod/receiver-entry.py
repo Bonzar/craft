@@ -33,6 +33,10 @@ def protected_binding():
     import configured_entry_binding
     return configured_entry_binding
 
+def legacy_activation():
+    from receive_authorized import activate_exact
+    return activate_exact
+
 def main():
     try:
         require(len(sys.argv)==1 and os.getuid()==os.geteuid()!=0
@@ -40,8 +44,7 @@ def main():
         authorize=lambda frame:exchange(frame,socket_path=Path('/run/assertion-configured-base-prod-auth/production.sock'))
         binding=protected_binding()
         if binding is None:
-            from receive_authorized import activate_exact
-            result=receive(sys.stdin.buffer,authorize,activate_exact)
+            result=receive(sys.stdin.buffer,authorize,legacy_activation())
         else:
             # Fixed, independently reviewable host integration; never run the
             # old un-witnessed activation with a protected terminal permit.
