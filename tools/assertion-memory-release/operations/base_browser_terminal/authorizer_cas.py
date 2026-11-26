@@ -33,7 +33,7 @@ def _current(root,uid):
             raise ValueError('invalid authorizer record size')
         return data
 
-def _write(path,uid,expected,replacement):
+def _write(path,uid,expected,replacement,*,ack_identical=False):
     if (type(replacement) is not bytes or not 0<len(replacement)<=LIMIT
         or expected is not None and (type(expected) is not bytes or not 0<len(expected)<=LIMIT)
         or replacement==expected):
@@ -54,7 +54,12 @@ def _write(path,uid,expected,replacement):
             if not os.path.samestat(st,os.stat(LOCK,dir_fd=root,follow_symlinks=False)):
                 raise ValueError('authorizer lock changed')
             current=_current(root,uid)
-            if current!=expected:
+            if ack_identical and current==replacement:
+                # Previous replacement or acknowledgment may have failed at
+                # fsync. Re-establish exact directory durability under CAS.
+                os.fsync(root)
+                return sha256(replacement).hexdigest()
+            if ack_identical or current!=expected:
                 raise ValueError('authorizer state CAS rejected')
             staged='.base-terminal-'+secrets.token_hex(16)
             fd=os.open(staged,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,
@@ -81,3 +86,10 @@ def publish(*,expected,replacement):
     if os.getuid()!=AUTHORIZER_UID or os.geteuid()!=AUTHORIZER_UID:
         raise ValueError('wrong protected authorizer identity')
     return _write(DIRECTORY,AUTHORIZER_UID,expected,replacement)
+
+
+
+def acknowledge(*,expected_receipt):
+    if os.getuid()!=AUTHORIZER_UID or os.geteuid()!=AUTHORIZER_UID:
+        raise ValueError('wrong protected authorizer identity')
+    return _write(DIRECTORY,AUTHORIZER_UID,None,expected_receipt,ack_identical=True)

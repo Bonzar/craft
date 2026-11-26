@@ -73,3 +73,30 @@ class RootPublisher(TestCase):
             right.sendall(b'wrong source fixture\n')
             with self.assertRaises(ValueError):
                 _credentialed_response(left,expected_uid=os.getuid()+1)
+
+    def test_lost_ack_can_repeat_only_exact_committed_receipt(self):
+        from hashlib import sha256
+        req,body,_=self.setup_case('restore')
+        wire=lambda value:BytesIO(json.dumps({'op':'base-terminal-v1','receipt':value}).encode()+b'\n')
+        state={'record':b'pending','candidate':req}
+        def pending():
+            return (state['record'],state['candidate']) if state['candidate'] else None
+        def commit(**kw):
+            self.assertEqual(kw['expected'],state['record'])
+            state.update(record=kw['replacement'],candidate=None)
+            raise OSError('fixture acknowledgment lost after durable CAS')
+        def ack(*,expected_receipt):
+            if expected_receipt!=state['record']:
+                raise ValueError('unknown prior terminal receipt')
+            return sha256(state['record']).hexdigest()
+        def send(value):
+            return verify_and_publish_root_peer(None,wire(value),read_exact_pending=pending,
+                finish_cas=commit,acknowledge_terminal=ack,peer_uid=lambda _:0)
+        with self.assertRaises(OSError):
+            send(body)
+        self.assertEqual(send(body),{'status':'ok','proof':sha256(state['record']).hexdigest()})
+        with self.assertRaises(ValueError):
+            send(dict(body,run='43'))
+        state['candidate']=replace(req,phase='restart')
+        with self.assertRaises(ValueError):
+            send(body)

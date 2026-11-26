@@ -45,3 +45,37 @@ class Kernel(TestCase):
                     else:
                         with self.assertRaises(ValueError):
                             _observe(proc,req,get,bound)
+
+    def test_process_kernel_exe_must_equal_exact_current_venv(self):
+        import os
+        from kernel_observer import _process
+        f=Verify()
+        release=f.new
+        with TemporaryDirectory() as tmp:
+            proc=Path(tmp)
+            physical=proc/'physical'
+            python=physical/'venv/bin/python'
+            python.parent.mkdir(parents=True)
+            python.write_text('fixture')
+            role='prototypes.assertion_memory.http_server'
+            process=proc/'345'
+            process.mkdir()
+            (process/'stat').write_text('345 (fixture) S '+'0 '*18+'30')
+            (process/'status').write_text('Uid: 986 986 986 986\n')
+            (process/'cgroup').write_text('0::/user/'+BASE+'\n')
+            (process/'cwd').symlink_to(physical,target_is_directory=True)
+            (process/'exe').symlink_to(python)
+            (process/'cmdline').write_text('\0'.join([str(python),'-m',role,'--config',
+                '/srv/assertion-release/production/state/http.json','']))
+            (process/'ns').mkdir()
+            (process/'ns/net').touch()
+            (proc/'self/ns').mkdir(parents=True)
+            os.link(process/'ns/net',proc/'self/ns/net')
+            (process/'fd').mkdir()
+            (process/'fd/12').symlink_to('socket:[8903]')
+            self.assertEqual(_process(proc,pid=345,unit=BASE,release=release,physical=physical)[1],{8903})
+            wrong=proc/'wrong'; wrong.touch()
+            (process/'exe').unlink()
+            (process/'exe').symlink_to(wrong)
+            with self.assertRaisesRegex(ValueError,'wrong protected process executable'):
+                _process(proc,pid=345,unit=BASE,release=release,physical=physical)

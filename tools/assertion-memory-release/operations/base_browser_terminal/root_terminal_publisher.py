@@ -42,7 +42,7 @@ def check_root_terminal(*, controller_pending, before, after, smoke):
             uid=986,before=before,after=after,smoke=smoke)
     return canonical_terminal(controller_pending,release)
 
-def verify_and_publish_root_peer(peer, stream, *, read_exact_pending, finish_cas, peer_uid=_pid_uid):
+def verify_and_publish_root_peer(peer, stream, *, read_exact_pending, finish_cas, acknowledge_terminal=None, peer_uid=_pid_uid):
     """Root-only additive dispatch inside old socket; nonce use is exact CAS.
 
     read_exact_pending yields (exact independently owned record bytes,
@@ -58,13 +58,22 @@ def verify_and_publish_root_peer(peer, stream, *, read_exact_pending, finish_cas
     frame=json.loads(raw,object_pairs_hook=_pairs)
     if type(frame) is not dict or set(frame)!={'op','receipt'} or frame['op']!='base-terminal-v1':
         raise ValueError('unexpected protected operation')
-    record,request=read_exact_pending()
+    received=json.dumps(frame['receipt'],sort_keys=True,separators=(',',':')).encode('ascii')
+    pending=read_exact_pending()
+    if pending is None:
+        if acknowledge_terminal is None:
+            raise ValueError('missing exact pending or terminal witness')
+        expected=sha256(received).hexdigest()
+        if acknowledge_terminal(expected_receipt=received)!=expected:
+            raise ValueError('idempotent exact terminal acknowledgment unavailable')
+        return {'status':'ok','proof':expected}
+    record,request=pending
     if (type(record) is not bytes or not record or type(request) is not TerminalRequest
             or request.phase not in ('restart','restore')):
         raise ValueError('no independently admitted pending release')
     release=request.admission.candidate if request.phase=='restart' else request.predecessor
     body=canonical_terminal(request,release)
-    if json.dumps(frame['receipt'],sort_keys=True,separators=(',',':')).encode('ascii')!=body:
+    if received!=body:
         raise ValueError('receipt does not match exact pending activation')
     finish_cas(expected=record,replacement=body)
     return {'status':'ok','proof':sha256(body).hexdigest()}
@@ -73,7 +82,7 @@ AUTHOR_UID=980
 DEPLOY_UID=986
 
 def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas,
-                                  _uid=_pid_uid):
+                                  acknowledge_terminal=None, _uid=_pid_uid):
     """Optional dispatcher for the already configured authorizer socket."""
     import os
     if os.getuid()!=AUTHOR_UID or os.geteuid()!=AUTHOR_UID:
@@ -86,7 +95,7 @@ def dispatch_existing_authorizer(peer, *, normal, read_exact_pending, finish_cas
     peer.settimeout(4)
     with peer.makefile('rb') as stream:
         response=verify_and_publish_root_peer(peer,stream,read_exact_pending=read_exact_pending,
-                finish_cas=finish_cas,peer_uid=_uid)
+                finish_cas=finish_cas,acknowledge_terminal=acknowledge_terminal,peer_uid=_uid)
     peer.sendall(json.dumps(response,separators=(',',':')).encode('ascii')+b'\n')
     return response
 

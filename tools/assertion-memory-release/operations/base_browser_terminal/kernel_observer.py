@@ -68,8 +68,9 @@ def _process(proc, *, pid, unit, release, physical):
     if not os.path.samestat((root/'ns'/'net').stat(),(proc/'self'/'ns'/'net').stat()):
         raise ValueError('unexpected Base network namespace')
     exe=(root/'exe').resolve(strict=True)
-    if not exe.is_file():
-        raise ValueError('missing process executable')
+    interpreter=(physical/'venv'/'bin'/'python').resolve(strict=True)
+    if not interpreter.is_file() or exe!=interpreter:
+        raise ValueError('wrong protected process executable')
     cmd=_read(root/'cmdline',32768).split('\0')
     module='prototypes.assertion_memory.http_server' if unit==BASE else 'apps.graph_viewer.server'
     if cmd.count('-m')!=1 or cmd[cmd.index('-m')+1:cmd.index('-m')+2]!=[module]:

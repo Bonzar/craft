@@ -29,3 +29,26 @@ class Cas(TestCase):
         with patch('authorizer_cas.os.geteuid',return_value=986):
             with self.assertRaises(ValueError):
                 publish(expected=None,replacement=b'no')
+
+    def test_exact_durable_ack_after_directory_fsync_fault(self):
+        import stat
+        with TemporaryDirectory() as tmp:
+            path=Path(tmp); uid=os.getuid()
+            _write(path,uid,None,b'protected pending')
+            native=os.fsync
+            def crash_after_replace(fd):
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    raise OSError('fixture directory fsync fault')
+                return native(fd)
+            with patch('authorizer_cas.os.fsync',side_effect=crash_after_replace):
+                with self.assertRaises(OSError):
+                    _write(path,uid,b'protected pending',b'exact final')
+            state=path/STATE
+            self.assertEqual(state.read_bytes(),b'exact final')
+            before=state.stat().st_ino
+            with patch('authorizer_cas.os.fsync',wraps=native) as sync:
+                _write(path,uid,None,b'exact final',ack_identical=True)
+                sync.assert_called_once()
+            self.assertEqual(state.stat().st_ino,before)
+            with self.assertRaises(ValueError):
+                _write(path,uid,None,b'different final',ack_identical=True)
