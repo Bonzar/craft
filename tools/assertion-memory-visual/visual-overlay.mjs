@@ -1,3 +1,4 @@
+import {patchGraphLive} from './graph-live-overlay.mjs';
 import {readFile} from 'node:fs/promises';
 const [queueHtml, queueScript, queueCss]=await Promise.all(['queue-dashboard.html','queue-dashboard.js','queue-dashboard.css'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
 // The pinned bundle still owns the Connections renderer and worker.
@@ -15,6 +16,7 @@ export function patchVisual({html,script,css,releaseTag=null}) {
     html=once(html,'</body>','<div class="visual-release-version">Визуал: '+releaseTag+'</div>\n</body>');
   }
   html=once(html,'</body>',queueHtml+'\n</body>');
+  script=patchGraphLive(script,once);
   script+='\n'+queueScript;
   css+='\n'+queueCss;
   css+='\n#layout-toggle[hidden],#topics-toggle[hidden]{display:none!important}\n'+
