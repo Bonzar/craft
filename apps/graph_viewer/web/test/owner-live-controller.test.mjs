@@ -82,3 +82,36 @@ test('foreground and reconnect catch up in place; a verified new epoch invalidat
   page.dispatchEvent(shown);
   assert.equal(timers.filter(t=>t.delay===0&&!t.dead&&!t.done).length,0);
 });
+
+test('first authoritative handshake starts reads before heartbeat and never waits for rendering',async()=>{
+  const {firstOwnerSnapshot}=await import('../src/owner-live-controller.mjs');
+  const order=[],timers=[],epoch='a'.repeat(64);
+  let frame,time=0,finish;
+  const boot=firstOwnerSnapshot(id=>{order.push(['graph+queue',id,time]);return new Promise(r=>{finish=r});},{
+    schedule:(fn,ms)=>{const item={fn,ms};timers.push(item);return item},
+    cancel:item=>{if(item)item.cancelled=true}
+  });
+  const c=openOwnerLive({allowedOrigin:'https://192.0.2.7',csrf:'x',now:()=>time,
+    onBootstrap:id=>boot.accept(id),onState:value=>order.push([value,time]),onRefresh:(reason,id)=>order.push([reason,id,time]),
+    read:({onEvent})=>{order.push(['transport opened',time]);frame=onEvent;return new Promise(()=>{});}
+  });
+  assert.deepEqual(order,[['connecting',0],['transport opened',0]]);
+  time=70;frame('hello',epoch);await Promise.resolve();assert.equal(order.length,2);
+  time=71;frame('reset',epoch);await Promise.resolve();
+  assert.deepEqual(order.at(-1),['graph+queue',epoch,71]);
+  assert.equal(timers[0].cancelled,true);
+  assert.equal(boot.accept('b'.repeat(64)),false);
+  time=580;frame('heartbeat',epoch);assert.deepEqual(order.at(-1),['live',580]);
+  time=620;finish();await boot.ready;
+  time=700;frame('changed',epoch);assert.deepEqual(order.at(-1),['changed',epoch,700]);
+  c.close();
+});
+
+test('blocked stream falls back once without accepting late or forged authority',async()=>{
+  const {firstOwnerSnapshot}=await import('../src/owner-live-controller.mjs');
+  let timeout, reads=[];
+  const f=firstOwnerSnapshot(epoch=>reads.push(epoch),{schedule:fn=>{timeout=fn;return 1;},cancel(){}});
+  assert.equal(f.accept('not-real'),false);
+  timeout();await f.ready;
+  assert.deepEqual(reads,[null]);assert.equal(f.accept('a'.repeat(64)),false);
+});

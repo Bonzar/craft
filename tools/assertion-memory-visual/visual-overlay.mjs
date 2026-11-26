@@ -33,8 +33,8 @@ const liveDirect=await readFile(new URL('../../apps/graph_viewer/web/src/direct-
 const liveController=await readFile(new URL('../../apps/graph_viewer/web/src/owner-live-controller.mjs',import.meta.url),'utf8');
 export function ownerLivePrelude(){
   const direct=once(once(liveDirect,'export function directStreamTarget(','function directStreamTarget('),'export async function readDirectStream(','async function readDirectStream(');
-  const controller=once(once(liveController,"import {readDirectStream} from './direct-stream.mjs';",''),'export function openOwnerLive(','function openOwnerLive(');
-  return 'const releaseOpenOwnerLive=(()=>{\n'+direct+'\n'+controller+'\nreturn openOwnerLive;\n})();\n';
+  const controller=once(once(once(liveController,"import {readDirectStream} from './direct-stream.mjs';",''),'export function openOwnerLive(','function openOwnerLive('),'export function firstOwnerSnapshot(','function firstOwnerSnapshot(');
+  return 'const [releaseOpenOwnerLive,releaseFirstOwnerSnapshot]=(()=>{\n'+direct+'\n'+controller+'\nreturn [openOwnerLive,firstOwnerSnapshot];\n})();\n';
 }
 
 const releaseScene='if(!this.scene)try{this.scene=new cm(this.canvas,$(`topic-labels`,HTMLElement),e=>this.run(()=>this.picked(e)),e=>this.openTopic(e),(e,t)=>this.feedback(e,t),e=>this.handleError(e),e=>this.updateRepresentation(e),e=>this.run(()=>this.openNode(e.id)),e=>this.updateReaderConnections(e))}catch{throw Error(`Для вселенной нужен браузер с WebGL 2. Проверьте аппаратное ускорение.`)}';
@@ -46,27 +46,51 @@ clearReleaseOwnerLiveGraph(){
   this.graph=null;this.manifest=null;this.topics=null;this.cursor='';
   this.loading.hidden=false;
 }
-stopReleaseOwnerLive(){this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}
-startReleaseOwnerLive(){
+bootstrapReleaseOwnerGraph(){
+  const boot=releaseFirstOwnerSnapshot(epoch=>{
+    if(!this.authenticated)return;
+    this.releaseOwnerSnapshotEpoch=epoch;
+    if(epoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:this.capabilities?.owner_live_transport?.queue_hints===1}}));
+    this.ensureReleaseScene();
+    return this.loadGraph(undefined,true);
+  });
+  if(!this.startReleaseOwnerLive(boot)){boot.close();this.ensureReleaseScene();return this.loadGraph();}
+  return boot.ready;
+}
+stopReleaseOwnerLive(){this.releaseOwnerSnapshotBoot?.close();this.releaseOwnerSnapshotBoot=null;this.releaseOwnerSnapshotEpoch=null;this.releaseOwnerLiveHealthy=false;this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}
+startReleaseOwnerLive(boot){
   const cfg=this.capabilities?.owner_live_transport;
-  if(!/^[a-f0-9]{64}$/.test(this.manifest?.owner_live_epoch??''))return false;
+  if(this.manifest&&!/^[a-f0-9]{64}$/.test(this.manifest.owner_live_epoch??''))return false;
   if(!this.authenticated||!this.csrf||cfg?.version!==1||cfg?.lane!=='test'||typeof cfg.origin!=='string')return false;
   let target;try{target=new URL(cfg.origin);}catch{return false;}
   if(target.origin!==cfg.origin||target.protocol!=='https:'||target.port||!/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(target.hostname))return false;
-  const key=JSON.stringify([cfg.origin,this.capabilities.provider_id,this.currentContext()]);
-  if(this.releaseOwnerLive&&this.releaseOwnerLiveKey===key)return true;
-  this.stopReleaseOwnerLive();this.releaseOwnerLiveKey=key;
+  const key=JSON.stringify([cfg.origin,this.capabilities.provider_id]);
+  if(this.releaseOwnerLive&&this.releaseOwnerLiveKey===key){
+    if(this.releaseOwnerLiveHealthy&&this.manifest)this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется',true);
+    return true;
+  }
+  this.stopReleaseOwnerLive();this.releaseOwnerLiveKey=key;this.releaseOwnerSnapshotBoot=boot??null;
   const current=()=>this.releaseOwnerLiveKey===key&&this.authenticated&&!this.changingContext;
   this.releaseOwnerLive=releaseOpenOwnerLive({
     allowedOrigin:cfg.origin,csrf:this.csrf,initialEpoch:this.manifest?.owner_live_epoch,
+    onBootstrap:epoch=>{
+      if(!current())return false;
+      this.releaseOwnerSnapshotEpoch=epoch;
+      return boot?.accept(epoch)??false;
+    },
     onState:state=>{
       if(!current())return;
-      this.setConnection(state==='live'?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):state==='connecting'?'Подключаемся к live-потоку':'Нет live-связи',state==='live');
+      this.releaseOwnerLiveHealthy=state==='live';
+      globalThis.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:state}));
+      if(state==='disconnected'&&!this.manifest)boot?.fallback();
+      this.setConnection(state==='live'?(this.manifest?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):'Поток подключён · загружаем карту'):state==='connecting'?'Подключаемся к live-потоку':'Нет live-связи',state==='live'&&!!this.manifest);
     },
-    onInvalidate:retiredEpoch=>{if(!current()||retiredEpoch&&this.manifest?.owner_live_epoch&&this.manifest.owner_live_epoch!==retiredEpoch)return;this.graphRequest?.abort();this.clearReleaseOwnerLiveGraph();},
-    onRefresh:async reason=>{
+    onInvalidate:retiredEpoch=>{if(!current()||retiredEpoch&&this.manifest?.owner_live_epoch&&this.manifest.owner_live_epoch!==retiredEpoch)return;this.releaseOwnerSnapshotEpoch=null;globalThis.dispatchEvent?.(new CustomEvent('owner-live-invalidate'));this.graphRequest?.abort();this.clearReleaseOwnerLiveGraph();},
+    onRefresh:async (reason,authority)=>{
       if(this.graphLoading)await this.graphLoading;
       if(!current())return;
+      this.releaseOwnerSnapshotEpoch=authority??null;
+      if(this.releaseOwnerSnapshotEpoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch:this.releaseOwnerSnapshotEpoch,queue:cfg.queue_hints===1}}));
       if(reason==='reset')this.ensureReleaseScene();
       else if(this.selector.mode==='known_then')return;
       await this.loadGraph(undefined,true);
@@ -85,11 +109,12 @@ export function patchOwnerLive(script,rawSeed){
   replace('this.loading.hidden=!0,this.stream?.close()', 'this.loading.hidden=!0,this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('this.cardRequest?.abort(),this.searchRequest?.abort(),this.stream?.close()', 'this.cardRequest?.abort(),this.searchRequest?.abort(),this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('async start(){if(this.authenticated=', 'async start(){this.authenticated=');
-  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.ensureReleaseScene();this.capabilities=await');
+  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.capabilities=await');
+  replace('await this.loadGraph(),this.renderCapabilities()', 'await this.bootstrapReleaseOwnerGraph(),this.renderCapabilities()');
   replace('loadGraph(e){if(wd(', 'loadGraph(e,preserveOwnerLive=false){if(wd(');
   replace('this.fetchGraph(e??this.currentContext())','this.fetchGraph(e??this.currentContext(),preserveOwnerLive)');
   replace('async fetchGraph(e){','async fetchGraph(e,preserveOwnerLive=false){');
-  replace('if(this.manifest&&xd(this.manifest,r)&&yd(this.currentContext(),e))', 'if(preserveOwnerLive&&this.manifest?.owner_live_epoch&&r.owner_live_epoch&&this.manifest.owner_live_epoch!==r.owner_live_epoch){this.clearReleaseOwnerLiveGraph();this.ensureReleaseScene();}if(this.manifest&&xd(this.manifest,r)&&yd(this.currentContext(),e))');
+  replace('if(this.manifest&&xd(this.manifest,r)&&yd(this.currentContext(),e))', 'if(preserveOwnerLive&&this.releaseOwnerSnapshotEpoch&&r.owner_live_epoch!==this.releaseOwnerSnapshotEpoch)throw Error(`Источник изменился; ожидаем новое подключение.`);if(preserveOwnerLive&&this.manifest?.owner_live_epoch&&r.owner_live_epoch&&this.manifest.owner_live_epoch!==r.owner_live_epoch){this.clearReleaseOwnerLiveGraph();this.ensureReleaseScene();}if(this.manifest&&xd(this.manifest,r)&&yd(this.currentContext(),e))');
   replace('this.graphRequest=t,this.stream?.close(),this.stream=null,this.setConnection(this.changingContext?', 'this.graphRequest=t,preserveOwnerLive||this.stopReleaseOwnerLive(),this.stream?.close(),this.stream=null,preserveOwnerLive||this.setConnection(this.changingContext?');
   replace('startLive(){', ownerLiveMethods+'startLive(){');
   replace('this.capabilities.provider_id!==this.manifest.provider_id){this.setConnection', 'this.capabilities.provider_id!==this.manifest.provider_id){this.stopReleaseOwnerLive();this.setConnection');

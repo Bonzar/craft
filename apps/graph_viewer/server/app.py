@@ -277,10 +277,21 @@ async def capabilities(request):
         if not 1<=limit<=100 or offset>1_000_000:
             raise APIError('invalid_dashboard','Invalid queue status page')
         browser=getattr(request.app.state,'browser_owner_api',None)
+        direct=request.app.state.direct_events
+        manager=request.app.state.manager
+        generation=manager.sync_generation() if direct is not None and direct.current() else None
+        def scoped_snapshot(value):
+            if generation is not None:
+                from .database_generation import epoch_name
+                if not direct.current() or manager.sync_generation()!=generation:
+                    raise APIError('queue_unavailable','Database epoch changed before queue snapshot',409)
+                value={**value,'owner_live_epoch':epoch_name(generation)}
+            return JSONResponse(value)
         if browser is not None:
             if not 1<=limit<=50:
                 raise APIError('invalid_dashboard','Invalid queue status page')
-            return await browser.snapshot(request,limit,offset)
+            output=await browser.snapshot(request,limit,offset)
+            return scoped_snapshot(json.loads(output.body)) if generation is not None else output
         dashboard = request.app.state.queue_dashboard
         if dashboard is None:
             raise APIError('queue_unavailable','Queue status is not configured',503)
@@ -294,7 +305,9 @@ async def capabilities(request):
                                        await asyncio.to_thread(dashboard.can_change_pause))
             # Published native Sites treats all capabilities responses alike:
             # these fixed fields are required before it applies transport policy.
-            return JSONResponse({**status,'capabilities':{'live':True},'readiness':[]})
+            return scoped_snapshot({**status,'capabilities':{'live':True},'readiness':[]})
+        except APIError:
+            raise
         except Exception:
             raise APIError('queue_unavailable','Queue status is temporarily unavailable',503) from None
     value=request.app.state.manager.source.capabilities()
@@ -310,7 +323,7 @@ async def capabilities(request):
         value['readiness'].append({'code':'synthetic_fixture','message':'Synthetic QA fixture; no personal graph connected'})
     direct=request.app.state.direct_events
     if direct is not None and direct.current() and request.app.state.owner.session(request) is not None:
-        value['owner_live_transport']={'version':1,'lane':'test','origin':direct.binding.direct_origin}
+        value['owner_live_transport']={'version':1,'lane':'test','origin':direct.binding.direct_origin,'queue_hints':1}
     value['live_profile']=list(request.app.state.manager.live_profiles)
     value['preparation']={'pending':len(request.app.state.manager.preparing),'ready_snapshots':len(request.app.state.manager.graphs),'semantic_pending':len(request.app.state.manager.semantic_jobs)}
     return JSONResponse(value)
