@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite,sourceEpoch}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -17,7 +17,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     showModal(){this.open=true;}
     querySelector(key){return mapping[key];}
   }
-  const events=[],urls=[],writes=[];
+  const events=[],urls=[],writes=[],windowHandlers={};
   const panel=new Element('dialog'),status=new Element(),container=new Element();
   const launcher=new Element('button'),closer=new Element('button'),copyStatus=new Element();
   const controlPanel=new Element(), controlButton=new Element('button'), controlState=new Element(), controlFeedback=new Element();
@@ -51,7 +51,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     unobserve(e){targets.delete(e);}
     disconnect(){targets.clear();}
   }
-  runInNewContext(script,{document:doc,EventSource,AbortController,...(observe?{IntersectionObserver:IO}:{}),addEventListener(){},
+  runInNewContext(script,{document:doc,EventSource,AbortController,...(observe?{IntersectionObserver:IO}:{}),addEventListener(name,fn){windowHandlers[name]=fn;},
     navigator:{clipboard:{writeText:async id=>writes.push(id)}},
     setInterval:fn=>{scheduled=fn;return 1;},clearInterval(){scheduled=null;},
     fetch:async (url,options)=>{
@@ -115,12 +115,12 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,release_generation:'e'.repeat(64),database_clear:clear,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,release_generation:'e'.repeat(64),owner_live_epoch:sourceEpoch,database_clear:clear,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
   return {clearNode:k=>clearDom['#queue-'+k],clearCalls,setClear:x=>{clear=x;},doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
-    controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,itemFeedback,removed,intersect:()=>observed([...targets].map(target=>({target,isIntersecting:true}))),timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
+    controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,itemFeedback,removed,intersect:()=>observed([...targets].map(target=>({target,isIntersecting:true}))),timer:()=>scheduled,async ownerEvent(name,detail){windowHandlers['owner-live-'+name]({detail});await delay();},setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
 }
 
 test('independent owner queue sits above canvas failure and below sign-in',async()=>{
@@ -513,4 +513,19 @@ test('old Base capability stays hidden; capture resumes only when separately ack
   await h.signal();
   assert.match(h.clearNode('clear-instance').textContent,/Получено подтверждение/);
   assert.deepEqual(h.clearCalls,[]);
+});
+
+test('initial authoritative stream primes the queue, push changes update it with no poll',async()=>{
+  const epoch='a'.repeat(64), q=harness({sourceEpoch:epoch});
+  const reads=()=>q.urls.filter(x=>x.includes('queue_status=1')).length;
+  assert.equal(reads(),0);
+  await q.ownerEvent('snapshot',{epoch,queue:true});
+  assert.equal(reads(),1);
+  await q.ownerEvent('connection','live');
+  await q.open();assert.equal(reads(),1);assert.equal(q.events.length,0);
+  q.timer()();await q.delay();assert.equal(reads(),1);
+  q.setData([{id:'source',status:'active',total:1,items:[{id:'new-stream-row',status:'ready',phase:'extract',position:1}]}]);
+  await q.ownerEvent('snapshot',{epoch,queue:true});
+  assert.equal(reads(),2);assert.match(q.text(q.container),/new-stream-row/);
+  await q.ownerEvent('invalidate');assert.doesNotMatch(q.text(q.container),/new-stream-row/);
 });
