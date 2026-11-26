@@ -1,4 +1,6 @@
 import unittest
+from unittest.mock import patch
+import neutral_edge_plan as edge
 from neutral_edge_plan import derive,digest,inverse
 
 SAMPLE=b"""server {
@@ -28,6 +30,17 @@ class TestExactAlias(unittest.TestCase):
         self.assertEqual(c.replace(old_line+b'    return 404; # TEST qa-runner uses only the existing direct loopback API\n',old_line),SAMPLE)
         self.assertTrue(p['prod_bytes_identical']);self.assertFalse(p['writes_performed'])
         self.assertEqual(inverse(c,expected_after_sha256=digest(c),expected_before_sha256=digest(SAMPLE)),SAMPLE)
+    def test_one_known_pinned_inline_guard_survives_both_directions(self):
+        guard=b'    if ($flag) { return 400; }\n'
+        witness=SAMPLE.replace(b'  location = /memory-api-test {\n',b'  location = /memory-api-test {\n'+guard)
+        candidate=witness.replace(guard,b'    '+edge.DENIAL+b'\n'+guard)
+        with patch.multiple(edge,PINNED_GUARD_FILE=digest(witness),PINNED_GUARD_SHIELDED=digest(candidate),
+                            PINNED_GUARD_LINE=digest(guard)):
+            self.assertEqual(plan(witness)['candidate'],candidate)
+            self.assertEqual(inverse(candidate,expected_after_sha256=digest(candidate),
+                             expected_before_sha256=digest(witness)),witness)
+            with self.assertRaises(ValueError):plan(witness.replace(b'return 400',b'return 401'))
+        with self.assertRaises(ValueError):plan(witness)
     def test_inventory_and_drift_fail_closed(self):
         cases=dict(registered_clients=1,gateway_paths_absent=False,alternate_forwards_absent=False,expected_sha256='f'*64)
         for k,v in cases.items():
