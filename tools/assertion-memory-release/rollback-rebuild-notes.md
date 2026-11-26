@@ -77,3 +77,15 @@ receiver audience. Verify live GitHub metadata semantics (runner/job names,
 download size metadata, workflow identity and attempt fields) in disposable
 non-PROD tests before any activation. Existing deployed release workflows,
 environment protection, retention, and active runtimes remain untouched.
+
+`rollback_rebuild_base_input.py` implements the Base sealing runner's first
+non-executing input qualifier for the documented `base-v1` layout: bounded
+extraction/digest, exact historical tag and revision, exhaustive archived
+membership, exact immutable historical Git blobs and derived dependency list.
+It does not prove the generated Web/schema semantics, run a historical build,
+or sign any artifact. The protected integration must pin a compatible build
+adapter that explicitly supplies the selected tag (the current ordinary build
+writes it only on the real release event); it must neither fake release event
+variables nor run the old checkout on the trusted sealing runner. One separate
+packed Visual qualifier is still required. The compat table may admit only
+precisely rehearsed older tags, not all versions sharing a tag prefix.
