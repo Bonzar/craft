@@ -122,6 +122,29 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,itemFeedback,removed,intersect:()=>observed([...targets].map(target=>({target,isIntersecting:true}))),timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
 }
 
+test('independent owner queue sits above canvas failure and below sign-in',async()=>{
+  const [dashboard,graph,queueHtml]=await Promise.all([
+    readFile(new URL('./queue-dashboard.css',import.meta.url),'utf8'),
+    readFile(new URL('../../apps/graph_viewer/web/src/style.css',import.meta.url),'utf8'),
+    readFile(new URL('./queue-dashboard.html',import.meta.url),'utf8'),
+  ]);
+  const rule=(css,selector)=>css.slice(css.indexOf(selector+'{')+selector.length+1).split('}')[0];
+  const layer=(css,selector)=>Number(rule(css,selector).match(/z-index:(\d+)/)?.[1]);
+  assert.match(rule(graph,'.loading-overlay'),/pointer-events:auto/);
+  assert.ok(layer(dashboard,'#visual-queue-open')>layer(graph,'.loading-overlay'));
+  assert.ok(layer(dashboard,'#visual-queue-open')<layer(graph,'.login-overlay'));
+  assert.match(dashboard,/body:has\(#login:not\(\[hidden\]\)\) #visual-queue-open\{display:none\}/);
+  assert.match(queueHtml,/^<button id="visual-queue-open" /);
+  // Dashboard harness has no canvas or Viewer; consumes only the owner session and queue API.
+  const app=harness({stage:'test',standalone:true,session:{authenticated:true,csrf_token:csrf},
+    control:{paused:false,revision:'a'.repeat(32),can_change:true},
+    sessionPolicy:{stage:'test',revision:'b'.repeat(32),selected_session_ids:[],sessions:[]}});
+  await app.open();await app.delay();
+  assert.equal(app.panel.open,true);
+  assert.equal(app.controlButton.hidden,false);
+  assert.equal(app.sessionPanel.hidden,false);
+  assert.equal(app.mutations.length,0);
+});
 test('full-screen modal has three labeled lanes, card chips and real positions',async()=>{
   const h=harness();
   assert.equal(h.urls.length,0);
