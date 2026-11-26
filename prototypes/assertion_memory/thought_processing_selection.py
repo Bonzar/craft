@@ -86,11 +86,13 @@ def processing_deadline(db,session_ids,*,now,with_model=True,lane='all',include_
     """Read-only scheduler probe; never build engines, migrate schema, or load bodies."""
     if lane not in ('all','source','maintenance'):raise ValueError('unknown processing lane')
     ids=normalize_session_ids(session_ids)
-    if ids==() or not with_model or processing_paused(db):return None
-    if ids is FRESH_MAC_ONLY:
+    if not with_model or processing_paused(db):return None
+    if include_batches and lane!='maintenance':
         from .capture_batch import needs_wake
+        if needs_wake(db):return now
+    if ids==():return None
+    if ids is FRESH_MAC_ONLY:
         from .fresh_processing import ensure_selector
-        if include_batches and lane != 'maintenance' and needs_wake(db):return now
         if not ensure_selector(db):return None
     deadlines=[]
     if lane!='maintenance' and _exists(db,'memory_raw_events') and _exists(db,'memory_capture_jobs'):

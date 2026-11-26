@@ -271,12 +271,12 @@ def _recover_selected(queue, session_ids):
                 f'(SELECT w.thought_id FROM memory_thought_work w WHERE {predicate})',(now,*arguments))
 
 
-def _deadline(store, config):
+def _deadline(store, config, *, include_batches=True):
     with store.transaction() as db:
         from .mcp_server import _processing_selector
         return processing_deadline(db,_processing_selector(config),
             now=datetime.now(timezone.utc).isoformat(timespec='microseconds'),
-            with_model=config.provider!='none',include_batches=True)
+            with_model=config.provider!='none',include_batches=include_batches)
 
 
 @contextmanager
@@ -313,7 +313,7 @@ def run_pool(config, lock, idle_handoff, *, limit=0):
 def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
     from .mcp_server import _processing_selector
     selector = _processing_selector(config)
-    if selector == ():
+    if selector == () and limit:
         return
     claims = ActiveClaims()
     from .source_model_batch import SourceModelBatch
@@ -330,8 +330,13 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
                                                  is_pausing=is_pausing)
                     worker.process_source_group(config.source_event_ids, limit)
             return
-        _recover_selected(queue,selector)
-        if config.auto_process_fresh_mac and not limit:
+        if selector != ():
+            from .fresh_processing import ensure_selector
+            with store.transaction() as db:
+                recover = not config.auto_process_fresh_mac or ensure_selector(db)
+            if recover:
+                _recover_selected(queue,selector)
+        if not limit:
             from .capture_batch import fence_interrupted
             with store.transaction(write=True) as db:
                 fence_interrupted(db)
@@ -352,11 +357,15 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
 
         completed = 0
         while not is_pausing():
-            if config.auto_process_fresh_mac and not limit:
+            if not limit:
                 from .capture_batch import run_next
                 with processing_cancellation(is_cancelling):
                     if run_next(config,store,is_pausing):
                         continue
+            if selector == ():
+                if idle_handoff(lock, lambda: _deadline(store,config)):
+                    return
+                continue
             remaining = limit-completed if limit else 0
             pool = ProcessingPool(factory, source_workers=config.source_workers, limit=remaining,
                 idle_seconds=min(config.worker_idle_seconds,1.0) if config.auto_process_fresh_mac else config.worker_idle_seconds,
@@ -364,6 +373,6 @@ def _run_pool(config, lock, idle_handoff, limit, is_pausing, is_cancelling):
             completed += pool.run()['completed']
             if is_pausing() or (limit and completed >= limit):
                 return
-            if idle_handoff(lock, lambda: _deadline(store,config)):
+            if idle_handoff(lock, lambda: _deadline(store,config,include_batches=not limit)):
                 return
 
