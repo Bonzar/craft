@@ -120,10 +120,19 @@ async def session(request):
 
 
 async def graph_manifest(request):
-    graph=await request.app.state.manager.ensure(selector(request.query_params))
+    manager=request.app.state.manager
+    graph=await manager.ensure(selector(request.query_params))
     if graph is None:
         return JSONResponse({'status':'preparing','retry_after_ms':300,'message':'Preparing complete graph and search index'},status_code=202,headers={'Retry-After':'1'})
-    return JSONResponse(graph.manifest,headers={'ETag':'"'+graph.revision+'"'})
+    manifest=graph.manifest
+    direct=getattr(request.app.state,'direct_events',None)
+    if direct is not None and direct.current():
+        from .database_generation import epoch_name
+        generation=manager._generation
+        if generation is None or manager.sync_generation()!=generation:
+            raise APIError('revision_expired','Database generation changed; reload the graph',409)
+        manifest={**manifest,'owner_live_epoch':epoch_name(generation)}
+    return JSONResponse(manifest,headers={'ETag':'"'+graph.revision+'"'})
 
 
 def resolve_graph(request):

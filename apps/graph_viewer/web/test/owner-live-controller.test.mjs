@@ -18,7 +18,7 @@ test('only independent frames on current connection mark live; reload and retry 
   assert.deepEqual(states,['connecting']);
   clock=502;first.options.onEvent('heartbeat');
   assert.deepEqual(states,['connecting','live']);
-  assert.deepEqual(updates,['reset']);
+  assert.deepEqual(updates,['changed']);
   first.resolve();await Promise.resolve();await Promise.resolve();
   assert.equal(states.at(-1),'disconnected');
   const retry=timers.find(t=>t.delay===1000&&!t.dead);
@@ -29,4 +29,56 @@ test('only independent frames on current connection mark live; reload and retry 
   controller.close();
   assert.equal(connections[1].options.signal.aborted,true);
   assert.ok(timers.filter(t=>t.delay===18000).every(t=>t.dead));
+});
+
+test('foreground and reconnect catch up in place; a verified new epoch invalidates synchronously',async()=>{
+  let clock=0, rev=1, acceptedRev=1, invalidations=0, oldSelection='same', rejectOld;
+  const epoch1='a'.repeat(64),epoch2='b'.repeat(64),timers=[],connections=[],calls=[];
+  const document=new EventTarget();document.visibilityState='visible';
+  const page=new EventTarget();
+  const tick=async()=>{for(let i=0;i<6;i++)await Promise.resolve()};
+  const take=delay=>{const task=timers.find(t=>t.delay===delay&&!t.dead&&!t.done);assert.ok(task);task.done=true;task.fn()};
+  const controller=openOwnerLive({
+    allowedOrigin:'https://192.0.2.7',csrf:'x',now:()=>clock,initialEpoch:epoch1,
+    visibility:document,page,onState:()=>{},
+    onInvalidate(){invalidations++;oldSelection=null;rejectOld?.()},
+    onRefresh:async reason=>{
+      calls.push(reason);
+      if(rev===4)await new Promise(resolve=>rejectOld=resolve);
+      acceptedRev=rev;
+    },
+    schedule:(fn,delay)=>{const item={fn,delay};timers.push(item);return item},
+    cancel:t=>{if(t)t.dead=true},
+    read:options=>new Promise(resolve=>connections.push({options,resolve})),
+  });
+  const first=connections[0];
+  first.options.onEvent('hello',epoch1);first.options.onEvent('reset',epoch1);
+  await tick();
+  assert.deepEqual([invalidations,acceptedRev,oldSelection],[0,1,'same']);
+  document.visibilityState='hidden';document.dispatchEvent(new Event('visibilitychange'));
+  rev=2;
+  document.visibilityState='visible';document.dispatchEvent(new Event('visibilitychange'));
+  const shown=new Event('pageshow');Object.defineProperty(shown,'persisted',{value:true});page.dispatchEvent(shown);
+  take(0);await tick();
+  assert.deepEqual(calls,['changed','changed']);
+  assert.deepEqual([invalidations,acceptedRev,oldSelection],[0,2,'same']);
+  // Reconnect with a missed mutation: first reset is only a soft catch-up.
+  first.resolve();await tick();rev=3;take(1000);
+  connections[1].options.onEvent('hello',epoch1);connections[1].options.onEvent('reset',epoch1);await tick();
+  assert.deepEqual([invalidations,acceptedRev,oldSelection],[0,3,'same']);
+  // An in-stream clear invalidates immediately, even behind an older fetch.
+  rev=4;connections[1].options.onEvent('changed',epoch1);await tick();
+  rev=5;connections[1].options.onEvent('reset',epoch1);
+  assert.deepEqual([invalidations,oldSelection],[1,null]);
+  await tick();assert.equal(acceptedRev,5);
+  connections[1].resolve();await tick();take(2000);
+  connections[2].options.onEvent('hello',epoch2);connections[2].options.onEvent('reset',epoch2);await tick();
+  assert.equal(invalidations,1,'reconnect after already witnessed clear need not clear twice');
+  // A clear that happened during the disconnect is detected by comparing epochs.
+  connections[2].resolve();await tick();take(4000);
+  connections[3].options.onEvent('hello','c'.repeat(64));connections[3].options.onEvent('reset','c'.repeat(64));await tick();
+  assert.equal(invalidations,2);
+  controller.close();
+  page.dispatchEvent(shown);
+  assert.equal(timers.filter(t=>t.delay===0&&!t.dead&&!t.done).length,0);
 });

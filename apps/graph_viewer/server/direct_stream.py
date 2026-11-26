@@ -146,7 +146,9 @@ async def issue_ticket(request):
     generation=request.app.state.manager.sync_generation()
     if generation is None or not scope.current():
         raise APIError('not_found','Direct events are not enabled',404)
+    from .database_generation import epoch_name
     return JSONResponse({'ticket':scope.issue(session,generation),'expires_in':TICKET_SECONDS,
+                         'epoch':epoch_name(generation),
                          'stream_url':scope.binding.direct_origin+TEST_EDGE_PATH},
                         headers={'Cache-Control':'private, no-store','Pragma':'no-cache'})
 
@@ -206,10 +208,8 @@ async def direct_events(request):
                     return
                 unseen=[(number,kind) for number,kind,_ in list(manager.journal) if number>cursor]
                 if unseen:
-                    if unseen[0][0]>cursor+1 or any(kind=='reset' for _,kind in unseen):
-                        yield frame('reset')
-                    elif any(kind=='delta' for _,kind in unseen):
-                        yield frame('changed')
+                    if unseen[0][0]>cursor+1 or any(kind in ('delta','reset') for _,kind in unseen):
+                        yield frame('changed') # Same epoch; revalidate without clearing the view.
                     cursor=unseen[-1][0]
                 if time.monotonic()-ping>=HEARTBEAT_SECONDS:
                     yield frame('heartbeat')

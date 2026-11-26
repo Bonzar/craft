@@ -63,6 +63,16 @@ class DirectStream(unittest.TestCase):
             payload=granted.json(); token=payload['ticket']
             self.assertEqual(payload['stream_url'],DIRECT+'/__mvt/api/v1/events-direct')
             self.assertEqual(payload['expires_in'],15)
+            self.assertRegex(payload['epoch'],r'^[a-f0-9]{64}$')
+            import time
+            for _ in range(40):
+                graph=ui.get('/api/v1/graph',headers={'Origin':PUBLIC})
+                if graph.status_code==200:break
+                time.sleep(.02)
+            self.assertEqual(graph.status_code,200)
+            self.assertEqual(graph.json()['owner_live_epoch'],payload['epoch'])
+            with TestClient(app,base_url=PUBLIC) as anonymous:
+                self.assertNotIn('owner_live_epoch',anonymous.get('/api/v1/graph').json())
             request={'Origin':PUBLIC,'Authorization':'Bearer '+token}
             self.assertEqual(ui.get(DIRECT_PATH,headers=request).status_code,403)
             with TestClient(app,base_url='https://testserver') as stream:
@@ -155,14 +165,15 @@ class DirectStream(unittest.TestCase):
             browser={'Origin':PUBLIC,'X-CSRF-Token':csrf}
             self.assertEqual(ui.post(TICKET_PATH,headers=browser,content=b'not empty').status_code,400)
             issue=lambda:ui.post(TICKET_PATH,headers=browser)
-            old=issue().json()['ticket']
+            previous=issue().json();old=previous['ticket']
             with sqlite3.connect(self.source) as db:
                 db.execute('CREATE TABLE memory_database_clear_state(singleton INTEGER PRIMARY KEY,revision TEXT,salt BLOB)')
                 db.execute('INSERT INTO memory_database_clear_state VALUES(1,?,?)',('a'*32,b'fixture'))
             wire=lambda token:{'Origin':PUBLIC,'Authorization':'Bearer '+token}
             self.assertEqual(stream.get(DIRECT_PATH,headers=wire(old)).status_code,409)
             self.assertEqual(stream.get(DIRECT_PATH,headers=wire(old)).status_code,401)
-            fresh=issue().json()['ticket']
+            next_epoch=issue().json();fresh=next_epoch['ticket']
+            self.assertNotEqual(previous['epoch'],next_epoch['epoch'])
             self.active=('later','archive')
             self.assertEqual(stream.get(DIRECT_PATH,headers=wire(fresh)).status_code,404)
             self.assertEqual(issue().status_code,404)
