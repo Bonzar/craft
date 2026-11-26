@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import uvicorn
 from .app import create_app,validate_static_directory
+from .owner_snapshot_release_policy import enabled as owner_snapshot_enabled
 
 
 PROD_OWNER_CREDENTIALS = Path('/run/credentials/assertion-base-prod-browser-graph.service')
@@ -86,6 +87,7 @@ def main(*, prod_owner_api=None):
     parser.add_argument('--embedding-model')
     parser.add_argument('--embedding-cache',type=Path)
     parser.add_argument('--synthetic-fixture',action='store_true')
+    parser.add_argument('--owner-snapshot-events',action='store_true',help='Opt into private same-origin initial snapshot events')
     parser.add_argument('--test-direct-events-origin',help='Optional existing HTTPS/IP route, synthetic TEST only')
     parser.add_argument('--public-origin',help='Expected HTTPS browser origin; forwarded headers remain untrusted')
     parser.add_argument('--allowed-proxy-host',action='append',default=[],help='Explicit upstream bridge hostname; repeatable, independent of browser origin')
@@ -122,9 +124,10 @@ def main(*, prod_owner_api=None):
         model=FastEmbedQueryModel(args.embedding_model,args.embedding_cache)
     try:
         queue_dashboard,browser=configure_owner_lanes(args,prod_owner_api=prod_owner_api or installed_prod_owner_api)
+        owner_snapshot_events=owner_snapshot_enabled(dashboard=queue_dashboard,browser=browser,explicit_test=args.owner_snapshot_events)
     except (OSError,ValueError,KeyError,TypeError) as error:
         parser.error(str(error))
-    app=create_app(args.source,args.state_dir,password=password,provider_id=args.provider_id,static_dir=args.static_dir,semantic_model=model,synthetic_fixture=args.synthetic_fixture,public_origin=args.public_origin,allowed_proxy_hosts=args.allowed_proxy_host,bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard,queue_control=args.queue_control,database_clear_lane=args.database_clear_lane,database_clear_read_token_file=args.database_clear_read_token_file,test_direct_events_origin=args.test_direct_events_origin,browser_owner_api=browser)
+    app=create_app(args.source,args.state_dir,password=password,provider_id=args.provider_id,static_dir=args.static_dir,semantic_model=model,synthetic_fixture=args.synthetic_fixture,public_origin=args.public_origin,allowed_proxy_hosts=args.allowed_proxy_host,bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard,queue_control=args.queue_control,database_clear_lane=args.database_clear_lane,database_clear_read_token_file=args.database_clear_read_token_file,test_direct_events_origin=args.test_direct_events_origin,browser_owner_api=browser,owner_snapshot_events=owner_snapshot_events)
     uvicorn.run(app,host=args.host,port=args.port,access_log=False,proxy_headers=False,server_header=False)
 
 
