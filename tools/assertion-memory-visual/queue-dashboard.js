@@ -594,6 +594,8 @@
   addEventListener('owner-live-connection',event=>{
     transportUp=event.detail==='live';
     if(transportUp){directQueueLive=!!directQueueEpoch;if(directQueueLive){stream?.close();stream=null;}return;}
+    directQueueLive=false;
+    if(event.detail==='closed'){resetDirectQueue();fetchAbort?.abort();}
     if(event.detail==='disconnected'){resetDirectQueue();if(panel.open)void refresh();}
   });
   addEventListener('owner-live-invalidate',()=>{resetDirectQueue();fetchAbort?.abort();if(panel.open){rendered.clear();lanes.clear();container.replaceChildren();status.textContent='Подключаемся к новой версии базы…';}});

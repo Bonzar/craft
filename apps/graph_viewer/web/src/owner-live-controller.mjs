@@ -1,13 +1,14 @@
-import {readDirectStream} from './direct-stream.mjs';
+import {readDirectStream,readSameOriginOwnerStream} from './direct-stream.mjs';
 
 const MIN_LIVE_GAP=500;
 const SILENCE_TIMEOUT=18_000;
+const FIRST_HEARTBEAT_TIMEOUT=12_000;
 const MAX_BACKOFF=20_000;
 
 // A transport lifetime can refresh the same Graph slice without reminting.
 // Starting a new slice/session closes the old transport first.
 export function openOwnerLive({
-  allowedOrigin,csrf,onState,onRefresh,onInvalidate=()=>{},initialEpoch=null,onBootstrap=()=>false,read=readDirectStream,
+  allowedOrigin,csrf,onState,onRefresh,onInvalidate=()=>{},initialEpoch=null,onBootstrap=()=>false,transport='direct',read=transport==='ordinary'?readSameOriginOwnerStream:readDirectStream,
   visibility=globalThis.document,page=globalThis.window,
   now=()=>performance.now(),schedule=setTimeout,cancel=clearTimeout,
 }){
@@ -50,9 +51,9 @@ export function openOwnerLive({
     connection=attempt;
     let hello=null,ready=false,firstReset=true,retiredEpoch=null;
     onState('connecting');
-    const arm=()=>{
+    const arm=(timeout=SILENCE_TIMEOUT)=>{
       cancel(watchdog);
-      watchdog=schedule(()=>attempt.abort(),SILENCE_TIMEOUT);
+      watchdog=schedule(()=>attempt.abort(),timeout);
     };
     arm();
     void (async()=>{
@@ -75,7 +76,14 @@ export function openOwnerLive({
           }else if(kind==='reset'){
             // First reset is a catch-up hint, not a database clear. Every later
             // reset on this protocol is a hard epoch transition and closes it.
-            if(firstReset){const accepted=!retiredEpoch&&epoch&&onBootstrap(epoch)===true;if(!accepted)refresh(retiredEpoch?'reset':'changed',retiredEpoch);}
+            if(firstReset){
+              const accepted=!retiredEpoch&&epoch&&onBootstrap(epoch)===true;
+              // The exact epoch-bound initial handshake is registration. This
+              // runs before the snapshot loader microtask; heartbeat measures
+              // continued freshness rather than delaying the first live badge.
+              if(accepted){onState('registered');arm(FIRST_HEARTBEAT_TIMEOUT);}
+              else refresh(retiredEpoch?'reset':'changed',retiredEpoch);
+            }
             else{epoch=null;refresh('reset',ticketEpoch);}
             firstReset=false;
           }else if(kind==='changed'){
