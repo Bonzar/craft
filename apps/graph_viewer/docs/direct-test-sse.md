@@ -39,3 +39,13 @@ and another heartbeat over one still-open TLS response without using WebGL,
 then verify normal graph behavior separately. No personal data mutation and
 no mobile certificate interstitial overrides. Remove only the tentative TEST
 flag/exact paths if the direct proof fails.
+
+Runtime activation requires the canonical active TEST release, canonical TEST
+source file, and matching real/effective TEST uid, independently of the synthetic
+fixture marker. The 15-second ticket is bound to the observed durable database
+epoch; a pre-clear ticket cannot open a post-clear connection. If a clear
+occurs while open, a reset notification ends the stream and no old notification
+is delivered. For the issuer and direct routes, keep request and response
+headers/bodies out of telemetry; only ordinary path, status and elapsed time
+may be observed. Source-only fixed renderers and dry-run coverage are in the
+Visual event-ingress directory. No root bootstrap is implicit.

@@ -5,7 +5,8 @@ import unittest
 from unittest.mock import patch
 from starlette.testclient import TestClient
 from apps.graph_viewer.server.app import create_app
-from apps.graph_viewer.server.direct_stream import Binding,DIRECT_PATH,TICKET_PATH,Tickets
+from apps.graph_viewer.server.direct_stream import (Binding,DIRECT_PATH,TICKET_PATH,Tickets,
+                                                  active_test_scope)
 from test_service import fixture
 
 PUBLIC='https://visual-test.example'
@@ -16,6 +17,9 @@ class DirectStream(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
         self.source=self.root/'source.sqlite3';fixture(self.source)
+        self.active=('revision','archive')
+        stack=patch('apps.graph_viewer.server.direct_stream.active_test_scope',side_effect=lambda _:self.active)
+        stack.start();self.addCleanup(stack.stop)
     def create(self,enabled=True,synthetic=True):
         return create_app(self.source,self.root/'viewer',password='owner-fixture-long',
                           public_origin=PUBLIC,synthetic_fixture=synthetic,
@@ -41,6 +45,7 @@ class DirectStream(unittest.TestCase):
             valid={'Origin':PUBLIC,'X-CSRF-Token':csrf}
             granted=ui.post(TICKET_PATH,headers=valid)
             self.assertEqual(granted.status_code,200)
+            self.assertIn('no-store',granted.headers['cache-control'])
             payload=granted.json(); token=payload['ticket']
             self.assertEqual(payload['stream_url'],DIRECT+'/__mvt/api/v1/events-direct')
             self.assertEqual(payload['expires_in'],15)
@@ -53,6 +58,8 @@ class DirectStream(unittest.TestCase):
                 self.assertEqual(pre.status_code,204)
                 self.assertNotIn('access-control-allow-credentials',pre.headers)
                 self.assertEqual(stream.get(DIRECT_PATH,headers={'Origin':PUBLIC}).status_code,401)
+                self.assertEqual(stream.options(DIRECT_PATH,headers={**preflight,'Cookie':''}).status_code,403)
+                self.assertEqual(stream.get(DIRECT_PATH,headers={**request,'Cookie':'malformed'}).status_code,403)
                 self.assertEqual(stream.get(DIRECT_PATH,headers={**request,'Origin':'https://prod.example'}).status_code,403)
                 self.assertEqual(stream.get('/api/v1/capabilities',headers=request).status_code,401)
                 with patch('apps.graph_viewer.server.direct_stream.LIVE_SECONDS',0):
@@ -67,7 +74,7 @@ class DirectStream(unittest.TestCase):
         old=tickets.issue('owner1')
         token=tickets.issue('owner1')
         self.assertIsNone(tickets.consume(old))
-        key,_=tickets.consume(token)
+        key,_,_=tickets.consume(token)
         self.assertIsNone(tickets.consume(token))
         tickets.close(key)
         short=tickets.issue('owner2')
@@ -124,3 +131,80 @@ class DirectStream(unittest.TestCase):
             finally:
                 server.should_exit=True
                 thread.join(timeout=5)
+
+    def test_lane_drift_and_generation_change_invalidates_the_ticket(self):
+        import sqlite3
+        app=self.create()
+        with TestClient(app,base_url=PUBLIC) as ui, TestClient(app,base_url='https://testserver') as stream:
+            csrf=ui.post('/api/v1/session',json={'password':'owner-fixture-long'},
+                        headers={'Origin':PUBLIC}).json()['csrf_token']
+            browser={'Origin':PUBLIC,'X-CSRF-Token':csrf}
+            self.assertEqual(ui.post(TICKET_PATH,headers=browser,content=b'not empty').status_code,400)
+            issue=lambda:ui.post(TICKET_PATH,headers=browser)
+            old=issue().json()['ticket']
+            with sqlite3.connect(self.source) as db:
+                db.execute('CREATE TABLE memory_database_clear_state(singleton INTEGER PRIMARY KEY,revision TEXT,salt BLOB)')
+                db.execute('INSERT INTO memory_database_clear_state VALUES(1,?,?)',('a'*32,b'fixture'))
+            wire=lambda token:{'Origin':PUBLIC,'Authorization':'Bearer '+token}
+            self.assertEqual(stream.get(DIRECT_PATH,headers=wire(old)).status_code,409)
+            self.assertEqual(stream.get(DIRECT_PATH,headers=wire(old)).status_code,401)
+            fresh=issue().json()['ticket']
+            self.active=('later','archive')
+            self.assertEqual(stream.get(DIRECT_PATH,headers=wire(fresh)).status_code,404)
+            self.assertEqual(issue().status_code,404)
+
+    def test_active_stream_resets_without_emitting_retired_journal(self):
+        import asyncio
+        import sqlite3
+        from starlette.requests import Request
+        from apps.graph_viewer.server.direct_stream import direct_events
+        app=self.create()
+        # This tests the actual async response, on a pristine disposable graph.
+        manager=app.state.manager
+        cookie,_=app.state.owner.login('owner-fixture-long','synthetic')
+        from apps.graph_viewer.server.direct_stream import digest
+        token=app.state.direct_events.issue(digest(cookie),manager.sync_generation())
+        async def disconnected():
+            return {'type':'http.request','body':b'','more_body':False}
+        req=Request({'type':'http','app':app,'method':'GET','path':DIRECT_PATH,
+                     'headers':[(b'origin',PUBLIC.encode()),(b'authorization',('Bearer '+token).encode())]},receive=disconnected)
+        async def witness():
+            response=await direct_events(req)
+            self.assertEqual(response.status_code,200)
+            body=response.body_iterator
+            self.assertEqual(await anext(body),'event: hello\ndata: {}\n\n')
+            self.assertEqual(await anext(body),'event: reset\ndata: {}\n\n')
+            manager.emit('delta',{'test':'must not leave the old generation'})
+            with sqlite3.connect(self.source) as db:
+                db.execute('CREATE TABLE memory_database_clear_state(singleton INTEGER PRIMARY KEY,revision TEXT,salt BLOB)')
+                db.execute('INSERT INTO memory_database_clear_state VALUES(1,?,?)',('b'*32,b'fixture'))
+            self.assertEqual(await anext(body),'event: reset\ndata: {}\n\n')
+            with self.assertRaises(StopAsyncIteration):
+                await anext(body)
+            await manager.stop()
+        asyncio.run(witness())
+
+    def test_ordinary_fixture_cannot_claim_deployed_test_lane(self):
+        with patch('apps.graph_viewer.server.direct_stream.active_test_scope',new=active_test_scope):
+            with self.assertRaisesRegex(ValueError,'exact active TEST runtime'):
+                self.create(synthetic=True)
+
+    def test_nonempty_body_without_length_is_rejected_before_minting(self):
+        import asyncio
+        from starlette.requests import Request
+        from apps.graph_viewer.server.direct_stream import issue_ticket
+        from apps.graph_viewer.server.common import APIError
+        app=self.create()
+        cookie,csrf=app.state.owner.login('owner-fixture-long','synthetic')
+        async def receive():
+            return {'type':'http.request','body':b'x','more_body':True}
+        request=Request({'type':'http','app':app,'method':'POST','path':TICKET_PATH,
+                         'headers':[(b'origin',PUBLIC.encode()),(b'x-csrf-token',csrf.encode()),
+                                    (b'cookie',('gv_session='+cookie).encode())]},receive)
+        try:
+            with self.assertRaises(APIError) as failure:
+                asyncio.run(issue_ticket(request))
+            self.assertEqual(failure.exception.status,400)
+            self.assertFalse(app.state.direct_events.unused)
+        finally:
+            asyncio.run(app.state.manager.stop())

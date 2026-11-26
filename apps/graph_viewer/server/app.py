@@ -17,7 +17,7 @@ from .manager import GraphManager,manifest_url,parse_replay_cursor
 from .providers.canonical_thoughts import source_for_path
 from . import cards
 from .search import search
-from .direct_stream import Binding,Tickets,TICKET_PATH,DIRECT_PATH,issue_ticket,direct_events
+from .direct_stream import configure_test,TICKET_PATH,DIRECT_PATH,issue_ticket,direct_events
 
 
 class Boundary(BaseHTTPMiddleware):
@@ -347,7 +347,7 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
         static_dir,state_dir,source_path,bridge_read_token_file,getattr(queue_dashboard,'config',None),
         getattr(source,'source_path',None),getattr(source,'path',None))
     browser_origin=validate_public_origin(public_origin)
-    direct=(Tickets(Binding.test(browser_origin,test_direct_events_origin,synthetic_fixture))
+    direct=(configure_test(browser_origin,test_direct_events_origin,synthetic_fixture,source_path)
             if test_direct_events_origin is not None else None)
     bridge_read_service=BridgeReadService(bridge_read_token_file)
     owner=OwnerStore(state_dir,password)
