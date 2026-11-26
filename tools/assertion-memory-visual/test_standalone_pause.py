@@ -26,6 +26,7 @@ class StandalonePause(fixture.OriginTest):
         sessions=dict(stage=lane,revision='d'*32,selected_session_ids=[],sessions=[{'id':'synthetic','queued':1,'eligible':True}])
         processing=dict(stage=lane,revision='d'*32,sessions=sessions['sessions'],
             policy=dict(mode='all',included_session_ids=[],excluded_session_ids=[],added_from=None,added_through=None))
+        db_state={'stage':lane,'revision':'7'*32,'can_clear':True}
         calls=[]
         now=[1770000000]
         ready=[True]
@@ -45,11 +46,14 @@ class StandalonePause(fixture.OriginTest):
                     assert self.headers['Authorization']=='Bearer '+queue
                     return self.reply(200,{'stage':lane,'release_version':'assertion-memory-v0.1.16',
                         'release_generation':'e'*64,'snapshot_at':'2026-11-25T21:00:00Z','global_order':False,
-                        'queues':[],'processing_control':{'paused':state['paused'],
+                        'queues':[],**({'database_clear':{k:db_state[k] for k in ('revision','can_clear')}}
+                            if self.headers.get('X-Memory-Queue-Format')=='batch-cards-v1' else {}),
+                        'processing_control':{'paused':state['paused'],
                         'revision':state['revision'],'can_change':ready[0]}})
                 assert self.headers['Authorization']=='Bearer '+read
                 if self.path=='/api/v1/queue-sessions':return self.reply(200,sessions)
                 if self.path=='/api/v1/queue-processing-policy':return self.reply(200,processing)
+                if self.path=='/api/v1/queue-database/clear':return self.reply(200,db_state)
                 assert self.path=='/api/v1/queue-pause'
                 self.reply(200,state)
 
@@ -68,6 +72,11 @@ class StandalonePause(fixture.OriginTest):
                     str(now[0]+15),nonce))+'\n'
                 assert hmac.compare_digest(self.headers['X-Memory-Pause-Signature'],
                      hmac.digest(secret,mac.encode('ascii'),'sha256').hex())
+                if self.path=='/api/v1/queue-database/clear':
+                    assert set(args)=={'expected_revision'}
+                    if args['expected_revision']!=db_state['revision']:return self.reply(409,{})
+                    db_state['revision']='8'*32
+                    return self.reply(200,{'stage':lane,'revision':db_state['revision'],'cleared':True})
                 if self.path=='/api/v1/queue-items/source-preview':
                     assert args=={'queue_id':'source','item_id':'job','expected_revision':'1'*32}
                     return self.reply(200,{'stage':lane,'queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'})
@@ -219,3 +228,36 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(request('PUT',preview,body,extra={'X-CSRF-Token':proof['csrf_token']}),
             (200,{'stage':lane,'queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'}))
         self.assertEqual(calls,[('PUT','/api/v1/queue-items/source-preview')])
+        calls.clear()
+        clear='/api/v1/processing/database/clear'
+        snapshot='/api/v1/capabilities?queue_status=1'
+        self.assertNotIn('database_clear',request('GET',snapshot,None,proof=None)[1])
+        self.assertEqual(request('GET',snapshot,None)[1]['database_clear'],{'revision':'7'*32,'can_clear':True})
+        self.assertTrue(all(p.startswith('/api/v1/queue-status?') for _,p in calls))
+        calls.clear()
+        body={'stage':lane,'expected_revision':'7'*32}
+        prepare={**body,'confirmation':'ОЧИСТИТЬ '+lane.upper()}
+        self.assertEqual(request('GET',clear,None)[0],405)
+        self.assertEqual(request('POST',clear+'/prepare',prepare,proof=None)[0],403)
+        self.assertEqual(request('POST',clear+'/prepare',prepare,sent_origin='https://other.example.test')[0],403)
+        self.assertEqual(request('POST',clear+'/prepare?anything=1',prepare)[0],404)
+        self.assertEqual(request('POST',clear+'/prepare',{**prepare,'confirmation':'ОЧИСТИТЬ '+other.upper()})[0],400)
+        self.assertEqual(request('POST',clear+'/prepare',{**prepare,'stage':other})[0],409)
+        self.assertEqual(request('PUT',clear,body)[0],403)
+        self.assertEqual(calls,[])
+        db_state['can_clear']=False
+        self.assertEqual(request('POST',clear+'/prepare',prepare)[0],409)
+        db_state['can_clear']=True
+        self.assertEqual(request('POST',clear+'/prepare',{**prepare,'expected_revision':'8'*32})[0],409)
+        code,prepared=request('POST',clear+'/prepare',prepare)
+        self.assertEqual(code,200)
+        self.assertEqual(prepared['revision'],body['expected_revision'])
+        self.assertTrue(all(x==('GET','/api/v1/queue-database/clear') for x in calls))
+        calls.clear()
+        token={'X-CSRF-Token':prepared['csrf_token']}
+        self.assertEqual(request('PUT',clear,{**body,'stage':other},extra=token)[0],409)
+        self.assertEqual(request('PUT',clear,{**body,'expected_revision':'8'*32},extra=token)[0],403)
+        self.assertEqual(calls,[])
+        self.assertEqual(request('PUT',clear,body,extra=token),(200,{'stage':lane,'revision':'8'*32,'cleared':True}))
+        self.assertEqual(request('PUT',clear,body,extra=token)[0],409)
+        self.assertTrue(all(x==('PUT','/api/v1/queue-database/clear') for x in calls))
