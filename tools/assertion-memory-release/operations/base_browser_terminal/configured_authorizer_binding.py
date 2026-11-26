@@ -77,9 +77,13 @@ def serve_exact(peer, *, normal, independently_observed_phase, protected_marker_
             if marker is not True or pair_has_extra:
                 channel.sendall(b'{"status":"rejected"}\n')
                 return
-            channel.sendall(respond(raw_request=raw,verified_peer_uid=986,
-                                   read_authorizer_state=read_owned_record,
-                                   independently_observed_phase=independently_observed_phase))
+            try:
+                response=respond(raw_request=raw,verified_peer_uid=986,
+                                 read_authorizer_state=read_owned_record,
+                                 independently_observed_phase=independently_observed_phase)
+            except (OSError, ValueError):
+                response=b'{"status":"rejected"}\n'
+            channel.sendall(response)
             return
         try:
             frame=read_frame(BytesIO(raw))

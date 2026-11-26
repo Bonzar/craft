@@ -95,9 +95,11 @@ class ActivationWitness:
     before_unlink: Callable
     after_fsync: Callable
     recover_absent: Callable
+    before_effect: Callable | None = None
 
     def __post_init__(self):
-        if not all(callable(x) for x in (self.before_unlink,self.after_fsync,self.recover_absent)):
+        if (not all(callable(x) for x in (self.before_unlink,self.after_fsync,self.recover_absent))
+                or self.before_effect is not None and not callable(self.before_effect)):
             raise ValueError('invalid_activation_witness')
 
 
@@ -165,6 +167,8 @@ def recover_activation(root,script,hook,*,witness=None):
     swap(root,old)
     sync_dir(root)
     if old is not None:
+        if witness is not None and witness.before_effect is not None:
+            witness.before_effect(root,'restore',old,candidate)
         hook(script,'restore',old)
         hook(script,'smoke',old)
     else:
@@ -181,6 +185,8 @@ def activate(root,release,script,hook,*,witness=None):
     try:
         swap(root,release)
         sync_dir(root)
+        if witness is not None and witness.before_effect is not None:
+            witness.before_effect(root,'restart',Path(old),release)
         hook(script,'restart',release)
         hook(script,'smoke',release)
         if witness is not None:

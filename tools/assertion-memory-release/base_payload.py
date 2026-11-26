@@ -134,7 +134,7 @@ def retention_candidate(path):
     validate_retained(path,path)
 
 
-def deploy(stream, revision, digest, *, root, config, hook=None):
+def deploy(stream, revision, digest, *, root, config, hook=None, witness_factory=None):
     if not re.fullmatch(r'[0-9a-f]{40}',revision):
         raise ValueError('invalid_release_revision')
     checked_hook=Path(config)/'service-hook.sh'
@@ -148,4 +148,5 @@ def deploy(stream, revision, digest, *, root, config, hook=None):
             return lambda action,release: run_hook(checked_hook,action,release,lock_fd=fd)
     retention=bindings(root,(Store('base',retention_candidate),))
     return common_deploy(stream,digest,root=root,spec=SPEC,
-        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,retention_factory=retention)
+        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,retention_factory=retention,
+        witness_factory=witness_factory)
