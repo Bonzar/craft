@@ -275,7 +275,7 @@ class StandalonePause(fixture.OriginTest):
             (200,{'stage':lane,'queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'}))
         self.assertEqual(calls,[('PUT','/api/v1/queue-items/source-preview')])
         calls.clear()
-        clear='/api/v1/processing/database/clear'
+        clear='/api/v1/processing/database/clear-v2'
         snapshot='/api/v1/capabilities?queue_status=1'
         self.assertNotIn('database_clear',request('GET',snapshot,None,proof=None)[1])
         self.assertEqual(request('GET',snapshot,None)[1]['database_clear'],{'revision':db_state['revision'],'can_clear':True,'capture_rearm':'not_cleared'})
@@ -290,6 +290,7 @@ class StandalonePause(fixture.OriginTest):
         calls.clear()
         body={'stage':lane,'expected_revision':db_state['revision']}
         prepare={**body,'confirmation':'ОЧИСТИТЬ '+lane.upper()}
+        self.assertNotEqual(request('POST',clear.replace('-v2','')+'/prepare',prepare)[0],200)
         self.assertEqual(request('GET',clear,None)[0],405)
         self.assertEqual(request('POST',clear+'/prepare',prepare,proof=None)[0],403)
         self.assertEqual(request('POST',clear+'/prepare',prepare,sent_origin='https://other.example.test')[0],403)

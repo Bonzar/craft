@@ -45,7 +45,9 @@ replacement while that acknowledgment is outstanding.
 The UI confirmation and private loopback clear REST negotiate the same
 versioned control header. An old Visual cannot mutate a new Base. A new
 Visual paired with an old Base has ordinary queues but no clear affordance;
-it will not sign a clear after an old prepare result. A successful clear
+it will not sign a clear after an old prepare result. Only the V2 browser
+route can be published; both older components rolled back together still
+receive no route to the old control. A successful clear
 receipt is not a capture-ready receipt. For a previously enrolled producer,
 the owner panel displays capture waiting until an explicit successor report
 is persisted for the same clear generation; it does not claim that every

@@ -56,7 +56,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     fetch:async (url,options)=>{
       assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
       urls.push(url);
-      if(url.startsWith('/api/v1/processing/database/clear')){
+      if(url.startsWith('/api/v1/processing/database/clear-v2')){
         const args=JSON.parse(options.body);
         clearCalls.push({url,args,method:options.method,csrf:options.headers['x-csrf-token']});
         if(url.endsWith('/prepare'))return Response.json({stage,revision:args.expected_revision,csrf_token:'123.'+'a'.repeat(64)});

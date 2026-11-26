@@ -351,7 +351,7 @@
   const clearCommit=panel.querySelector('#queue-clear-commit');
   const clearCancel=panel.querySelector('#queue-clear-cancel');
   const clearFeedback=panel.querySelector('#queue-clear-feedback');
-  const clearUrl='/api/v1/processing/database/clear';
+  const clearUrl='/api/v1/processing/database/clear-v2';
   let clearState=null, clearIntent=null, clearBusy=false;
   const sameClear=(a,b)=>Boolean(a&&b&&a.stage===b.stage&&a.revision===b.revision&&
     a.releaseGeneration===b.releaseGeneration&&b.canClear);
