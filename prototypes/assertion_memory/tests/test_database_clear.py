@@ -66,7 +66,8 @@ class DatabaseClearTest(unittest.TestCase):
                     keep=processing_control.read_control(db)
                     pristine=reset.revision(db)
                 self.assertEqual(reset.describe(self.store._connection,stage=lane),
-                    {'stage':lane,'revision':pristine,'can_clear':True})
+                    {'stage':lane,'revision':pristine,'can_clear':True,
+                     'capture_rearm':'not_cleared' if pristine==reset.INITIAL else 'not_required'})
                 action=self.signed_callbacks(lane)
                 request_revision=action('clear_prepare',{})['revision']
                 got=action('clear_commit',{'expected_revision':request_revision})
@@ -137,7 +138,9 @@ class DatabaseClearTest(unittest.TestCase):
         # Same user-level Base API, but no evidence this producer was enrolled.
         ordinary=self.service.ingest_register(producer,foreign)
         action=self.signed_callbacks('prod')
-        action('clear_commit',{'expected_revision':action('clear_prepare',{})['revision']})
+        clear_receipt=action('clear_commit',{'expected_revision':action('clear_prepare',{})['revision']})
+        self.assertEqual(clear_receipt['capture_rearm'],'waiting')
+        self.assertEqual(action('clear_prepare',{})['capture_rearm'],'waiting')
         with self.assertRaisesRegex(ValueError,'No authenticated cleared stream witness'):
             self.service.ingest_register(producer,session,**previous(old))
         with authenticated_fresh_mac():
@@ -173,6 +176,7 @@ class DatabaseClearTest(unittest.TestCase):
             ready=ack(witness['generation'])
             self.assertEqual(ready['database_clear_ready_generation'],witness['generation'])
             self.assertEqual(ack(witness['generation']),ready)
+            self.assertEqual(action('clear_prepare',{})['capture_rearm'],'confirmed')
             with self.assertRaisesRegex(ValueError,'cleared memory generation'):
                 capture(session,'before-clear',recovered)
             with self.assertRaisesRegex(ValueError,'unknown ingest stream'):
@@ -250,15 +254,18 @@ class DatabaseClearWireTest(unittest.IsolatedAsyncioTestCase):
                     envelope=ProvenOwner(actor,revision,clock(),clock()+15,nonce,lane=lane,path=path)
                     mac=hmac.digest(secret,canonical(body,envelope),'sha256').hex()
                     return [(k,v.encode()) for k,v in zip(ENVELOPE,[actor,str(clock()),str(clock()+15),nonce,mac])]
-                async def request(method,key,*,extra=(),outer=reset.PATH):
+                async def request(method,key,*,extra=(),outer=reset.PATH,negotiated=True):
                     observed=[]
                     async def recv(): return {'type':'http.request','body':body}
                     async def send(event): observed.append(event)
                     await app({'type':'http','path':outer,'raw_path':outer.encode(),'method':method,
                         'client':('127.0.0.1',1),'server':('127.0.0.1',8903),'headers':[
                         (b'authorization',f'Bearer {key}'.encode()),(b'host',b'127.0.0.1:8903'),
-                        (b'content-type',b'application/json'),*extra]},recv,send)
+                        (b'content-type',b'application/json'),
+                        *([(reset.RESET_HEADER,reset.RESET_FORMAT)] if negotiated else []),*extra]},recv,send)
                     return observed[0]['status'],json.loads(observed[1]['body'])
+                self.assertEqual((await request('GET',read,negotiated=False))[0],404)
+                self.assertEqual((await request('PUT',write,negotiated=False,extra=proof('prod',reset.PATH,'3'*32)))[0],404)
                 self.assertEqual(await request('GET',read),(200,perform('clear_prepare',{})))
                 self.assertEqual((await request('PUT',write))[0],403)
                 self.assertEqual((await request('PUT',write,extra=proof('test',reset.PATH,'1'*32)))[0],403)

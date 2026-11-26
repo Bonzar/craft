@@ -168,7 +168,7 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False, graph_ready
             http.request('GET', f'/api/v1/queue-status?limit={limit}&offset={offset}',
                          headers={'Authorization': 'Bearer '+key, 'Accept': 'application/json',
                                   'Connection': 'close',
-                                  **({'X-Memory-Queue-Format':'batch-cards-v1','X-Memory-Queue-Reset':'ready-v1'} if disclose_pause else {})})
+                                  **({'X-Memory-Queue-Format':'batch-cards-v1','X-Memory-Queue-Reset-V2':'binding-v2'} if disclose_pause else {})})
             response = http.getresponse()
             if (response.status != 200 or response.headers.get_content_type() != 'application/json'
                     or response.headers.get('Content-Encoding') is not None):
@@ -196,7 +196,7 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False, graph_ready
                     pass
                 else:
                     if item['can_clear'] and graph_ready(item['scope']):
-                        value['database_clear']={k:item[k] for k in ('revision','can_clear')}
+                        value['database_clear']={k:item[k] for k in ('revision','can_clear','capture_rearm')}
             capabilities={'live':False}
             if disclose_pause and ctl['can_change']:
                 capabilities['standalone_pause']=True
@@ -268,17 +268,19 @@ BROWSER_PREVIEW = '/api/v1/processing/items/source-preview'
 BASE_PREVIEW = '/api/v1/queue-items/source-preview'
 
 
+REARM_STATES=frozenset(('not_cleared','unknown','not_required','waiting','confirmed'))
+
 def clear_state(value, stage):
-    if (type(value) is not dict or set(value)!={'stage','revision','can_clear','scope'}
-            or value['stage']!=stage or type(value['can_clear']) is not bool or type(value['scope']) is not str or not HEX.fullmatch(value['scope'])
+    if (type(value) is not dict or set(value)!={'stage','revision','can_clear','scope','capture_rearm'}
+            or value['stage']!=stage or type(value['capture_rearm']) is not str or value['capture_rearm'] not in REARM_STATES or type(value['can_clear']) is not bool or type(value['scope']) is not str or not HEX.fullmatch(value['scope'])
             or type(value['revision']) is not str or not REVISION.fullmatch(value['revision'])):
         raise ValueError('invalid Base database clear state')
     return value
 
 
 def clear_receipt(value, stage):
-    if (type(value) is not dict or set(value)!={'stage','revision','cleared'}
-            or value['stage']!=stage or value['cleared'] is not True
+    if (type(value) is not dict or set(value)!={'stage','revision','cleared','capture_rearm'}
+            or value['stage']!=stage or value['cleared'] is not True or value['capture_rearm'] not in ('waiting','not_required')
             or type(value['revision']) is not str or not REVISION.fullmatch(value['revision'])):
         raise ValueError('invalid Base database clear receipt')
     return value
@@ -383,6 +385,8 @@ def pause_client(origin, read_key, write_key, signer, *, stage, route=BASE_PAUSE
         body = None
         headers = {'Accept':'application/json','Connection':'close',
                    'Authorization':'Bearer '+(read_key if method=='GET' else write_key)}
+        if route==BASE_CLEAR:
+            headers['X-Memory-Queue-Reset-V2']='binding-v2'
         if method == 'PUT':
             body = json.dumps(command, separators=(',',':')).encode('ascii')
             proof = signer(body, command['expected_revision'])

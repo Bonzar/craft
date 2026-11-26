@@ -94,8 +94,8 @@ class StandalonePause(fixture.OriginTest):
                     assert self.headers['Authorization']=='Bearer '+queue
                     return self.reply(200,{'stage':lane,'release_version':'assertion-memory-v0.1.16',
                         'release_generation':'e'*64,'snapshot_at':'2026-11-25T21:00:00Z','global_order':False,
-                        'queues':[],**({'database_clear':{k:db_state[k] for k in ('revision','can_clear','scope')}}
-                            if self.headers.get('X-Memory-Queue-Reset')=='ready-v1' else {}),
+                        'queues':[],**({'database_clear':{k:db_state[k] for k in ('revision','can_clear','scope','capture_rearm')}}
+                            if self.headers.get('X-Memory-Queue-Reset-V2')=='binding-v2' else {}),
                         'processing_control':{'paused':state['paused'],
                         'revision':state['revision'],'can_change':ready[0]}})
                 assert self.headers['Authorization']=='Bearer '+read
@@ -278,7 +278,7 @@ class StandalonePause(fixture.OriginTest):
         clear='/api/v1/processing/database/clear'
         snapshot='/api/v1/capabilities?queue_status=1'
         self.assertNotIn('database_clear',request('GET',snapshot,None,proof=None)[1])
-        self.assertEqual(request('GET',snapshot,None)[1]['database_clear'],{'revision':db_state['revision'],'can_clear':True})
+        self.assertEqual(request('GET',snapshot,None)[1]['database_clear'],{'revision':db_state['revision'],'can_clear':True,'capture_rearm':'not_cleared'})
         for mode in ('wrong','old'):
             graph_scope_mode[0]=mode
             code,payload=request('GET',snapshot,None)
@@ -318,7 +318,7 @@ class StandalonePause(fixture.OriginTest):
             self.assertEqual(conn.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
         code,cleared=request('PUT',clear,body,extra=token)
         self.assertEqual(code,200)
-        self.assertEqual(cleared,{'stage':lane,'revision':operations('clear_prepare',{})['revision'],'cleared':True})
+        self.assertEqual(cleared,{'stage':lane,'revision':operations('clear_prepare',{})['revision'],'cleared':True,'capture_rearm':'not_required'})
         self.assertNotEqual(cleared['revision'],body['expected_revision'])
         with sqlite3.connect(db) as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],0)

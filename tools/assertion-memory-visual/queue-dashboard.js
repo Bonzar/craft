@@ -355,6 +355,11 @@
   let clearState=null, clearIntent=null, clearBusy=false;
   const sameClear=(a,b)=>Boolean(a&&b&&a.stage===b.stage&&a.revision===b.revision&&
     a.releaseGeneration===b.releaseGeneration&&b.canClear);
+  const rearmText=status=>({
+    waiting:'Ожидаем повторного подтверждения захвата от устройства.',
+    confirmed:'Получено подтверждение повторного захвата от устройства.',
+    unknown:'Повторный захват пока не подтверждён.'
+  })[status]||'';
   function drawClear(){
     if(!clearPanel)return;
     clearPanel.hidden=!clearState&&!clearBusy;
@@ -362,7 +367,7 @@
     clearOpen.disabled=clearBusy||clearState?.canClear!==true;
     clearConfirmation.hidden=!clearIntent;
     if(clearState)clearInstance.textContent='Текущее окружение: '+clearState.stage.toUpperCase()+
-      (clearState.canClear?'':'. Очистка сейчас недоступна.');
+      (clearState.canClear?'.':'. Очистка сейчас недоступна.')+' '+rearmText(clearState.captureRearm);
     clearTyped.disabled=clearBusy;
     clearCancel.disabled=clearBusy;
     clearCommit.disabled=clearBusy||!clearIntent||clearTyped.value!==clearIntent.phrase;
@@ -378,7 +383,8 @@
     const item=data?.database_clear;
     clearState=['test','prod'].includes(data?.stage)&&rev(item?.revision)&&
       typeof item.can_clear==='boolean'&&typeof data.release_generation==='string'&&/^[0-9a-f]{64}$/.test(data.release_generation)
-      ? {stage:data.stage,revision:item.revision,canClear:item.can_clear,releaseGeneration:data.release_generation}:null;
+      &&['not_cleared','unknown','not_required','waiting','confirmed'].includes(item.capture_rearm)
+      ? {stage:data.stage,revision:item.revision,canClear:item.can_clear,captureRearm:item.capture_rearm,releaseGeneration:data.release_generation}:null;
     if(!clearBusy&&clearIntent&&!sameClear(clearIntent,clearState)){
       clearFeedback.textContent='Состояние базы изменилось. Откройте подтверждение заново.';
       closeClear(true);
@@ -423,12 +429,12 @@
         clearFeedback.textContent='База изменилась или занята. Очистка не выполнена.';
         return;
       }
-      if(receipt.stage!==body.stage||receipt.cleared!==true||!rev(receipt.revision)||receipt.revision===intent.revision)throw Error();
+      if(receipt.stage!==body.stage||receipt.cleared!==true||!rev(receipt.revision)||receipt.revision===intent.revision||!['waiting','not_required'].includes(receipt.capture_rearm))throw Error();
       previewEpoch++;previews.clear();previewPending.clear();autoSeen.clear();visiblePreviews.clear();
       previewObserver?.disconnect();previewObserver=null;previewJobs.clear();
       fetchAbort?.abort();
       offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
-      clearFeedback.textContent='База '+body.stage.toUpperCase()+' очищена. Настройки и доступы сохранены.';
+      clearFeedback.textContent='База '+body.stage.toUpperCase()+' очищена. Настройки и доступы сохранены. '+rearmText(receipt.capture_rearm);
       globalThis.location?.reload();
     }catch{
       if(active())clearFeedback.textContent=sent

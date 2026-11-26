@@ -14,8 +14,11 @@ from .processing_control import Conflict
 PATH='/api/v1/queue-database/clear'
 STATE='memory_database_clear_state'
 TOMBSTONES='memory_database_clear_replay_fence'
+RESET_HEADER=b'x-memory-queue-reset-v2'
+RESET_FORMAT=b'binding-v2'
+REARM_STATES=frozenset(('not_cleared','unknown','not_required','waiting','confirmed'))
 INITIAL='0'*32
-from .stream_clear_transition import CUTOVER,TRANSITIONS
+from .stream_clear_transition import CUTOVER,TRANSITIONS,capture_rearm_status
 
 PRESERVE={STATE,TOMBSTONES,CUTOVER,TRANSITIONS,'memory_processing_control','memory_state',
           'memory_thought_runtime','memory_test_queue_sessions','memory_queue_processing_policy','memory_queue_pause_nonce'}
@@ -115,7 +118,8 @@ def describe(db, *, stage, binding=None):
         capable=True
     except (ValueError, IndexError):
         capable=False
-    result={'stage':stage,'revision':rev,'can_clear':capable}
+    result={'stage':stage,'revision':rev,'can_clear':capable,
+            'capture_rearm':capture_rearm_status(db,revision(db))}
     if binding is not None:
         result['scope']=generation_scope(stage,(*binding[0],revision(db)))
     return result
@@ -153,8 +157,10 @@ def clear(db, *, stage, expected_revision, binding=None):
             db.executemany(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',
                 ((_fingerprint(salt,kind,tuple(v)),) for v in db.execute('SELECT '+','.join(columns)+' FROM '+table)))
     from .stream_clear_transition import WITNESS,witnesses,finish_clear
-    db.executemany(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',
-                   ((_fingerprint(salt,WITNESS,tuple(row)),) for row in witnesses(db,managed)))
+    had_enrolled=False
+    for row in witnesses(db,managed):
+        had_enrolled=True
+        db.execute(f'INSERT OR IGNORE INTO {TOMBSTONES} VALUES(?)',(_fingerprint(salt,WITNESS,tuple(row)),))
     db.execute('PRAGMA defer_foreign_keys=ON')
     triggers=[(name,sql) for name,sql in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='trigger'") if name in IMMUTABLE_DELETE]
     for name,_ in triggers:
@@ -188,6 +194,7 @@ def clear(db, *, stage, expected_revision, binding=None):
     db.execute('UPDATE memory_state SET version=version+1 WHERE singleton=1')
     new=uuid4().hex
     from datetime import datetime, timezone
-    finish_clear(db,new,datetime.now(timezone.utc).isoformat(timespec='microseconds'))
+    finish_clear(db,new,datetime.now(timezone.utc).isoformat(timespec='microseconds'),had_enrolled)
     db.execute(f'INSERT INTO {STATE} VALUES (1,?,?) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision',(new,salt))
-    return {'stage':stage,'revision':request_revision(db,stage=stage,binding=binding),'cleared':True}
+    return {'stage':stage,'revision':request_revision(db,stage=stage,binding=binding),'cleared':True,
+            'capture_rearm':'waiting' if had_enrolled else 'not_required'}

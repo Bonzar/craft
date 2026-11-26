@@ -63,7 +63,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         if(clearWrite)return clearWrite();
         clear={...clear,revision:'b'.repeat(32)};
         data=data.map(q=>({...q,total:0,next_offset:null,items:[]}));
-        return Response.json({stage,revision:clear.revision,cleared:true});
+        return Response.json({stage,revision:clear.revision,cleared:true,capture_rearm:"waiting"});
       }
       if(url==='/api/v1/processing/items/source-preview/prepare'){
         assert.equal(options.method,'POST');return Response.json({stage,csrf_token:'123.'+'a'.repeat(64)});
@@ -431,7 +431,7 @@ for(const stage of ['test','prod'])test(stage+' saves an owner processing policy
 });
 
 test('clear is owner-capability gated, stage specific and request-free before explicit confirmation',async()=>{
-  const h=harness({stage:'prod',clear:{revision:'a'.repeat(32),can_clear:true}});
+  const h=harness({stage:'prod',clear:{revision:'a'.repeat(32),can_clear:true,capture_rearm:"not_cleared"}});
   await h.open();
   const get=h.clearNode;
   assert.equal(get('clear-open').disabled,false);
@@ -460,11 +460,11 @@ test('clear is owner-capability gated, stage specific and request-free before ex
 });
 
 test('a stale clear dialog closes without preparing; a failed write never claims success',async()=>{
-  const h=harness({clear:{revision:'a'.repeat(32),can_clear:true},clearWrite:()=>Response.json({}, {status:503})});
+  const h=harness({clear:{revision:'a'.repeat(32),can_clear:true,capture_rearm:"not_cleared"},clearWrite:()=>Response.json({}, {status:503})});
   await h.open();
   const get=h.clearNode;
   get('clear-open').listeners.click();
-  h.setClear({revision:'c'.repeat(32),can_clear:true});
+  h.setClear({revision:'c'.repeat(32),can_clear:true,capture_rearm:"not_cleared"});
   await h.signal();
   assert.equal(get('clear-confirmation').hidden,true);
   assert.match(get('clear-feedback').textContent,/Откройте подтверждение заново/);
@@ -474,4 +474,19 @@ test('a stale clear dialog closes without preparing; a failed write never claims
   await get('clear-commit').listeners.click();
   assert.equal(h.clearCalls.length,2);
   assert.match(get('clear-feedback').textContent,/не подтверждён/);
+});
+
+test('old Base capability stays hidden; capture resumes only when separately acknowledged',async()=>{
+  const old=harness({clear:{revision:'a'.repeat(32),can_clear:true}});
+  await old.open();
+  assert.equal(old.clearNode('clear-open').disabled,true);
+  assert.deepEqual(old.clearCalls,[]);
+  const h=harness({clear:{revision:'b'.repeat(32),can_clear:true,capture_rearm:'waiting'}});
+  await h.open();
+  assert.match(h.clearNode('clear-instance').textContent,/Ожидаем повторного подтверждения/);
+  assert.doesNotMatch(h.clearNode('clear-instance').textContent,/Получено/);
+  h.setClear({revision:'b'.repeat(32),can_clear:true,capture_rearm:'confirmed'});
+  await h.signal();
+  assert.match(h.clearNode('clear-instance').textContent,/Получено подтверждение/);
+  assert.deepEqual(h.clearCalls,[]);
 });

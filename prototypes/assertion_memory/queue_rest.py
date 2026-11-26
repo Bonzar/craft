@@ -94,7 +94,7 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
                 if clear_ready:
                     from .database_clear import describe
                     clear=describe(db,stage=lane,binding=[before,(tag,generation)])
-                    data['database_clear']={k:clear[k] for k in ('revision','can_clear','scope')}
+                    data['database_clear']={k:clear[k] for k in ('revision','can_clear','scope','capture_rearm')}
         finally:
             db.set_progress_handler(None,0)
             db.rollback()
@@ -143,8 +143,11 @@ def make_queue_rest(*, fingerprint, port, project):
         try:
             limit,offset=page(scope.get('query_string',b''))
             card_format=values(b'x-memory-queue-format')
-            reset_format=values(b'x-memory-queue-reset')
-            if card_format not in ([],[b'batch-cards-v1']) or reset_format not in ([],[b'ready-v1']):
+            from .database_clear import RESET_HEADER,RESET_FORMAT
+            old_reset=values(b'x-memory-queue-reset')
+            reset_format=values(RESET_HEADER)
+            if (card_format not in ([],[b'batch-cards-v1']) or old_reset not in ([],[b'ready-v1'])
+                    or reset_format not in ([],[RESET_FORMAT]) or old_reset and reset_format):
                 raise ValueError()
             if values(b'content-length') not in ([],[b'0']) or values(b'transfer-encoding'):
                 raise ValueError()

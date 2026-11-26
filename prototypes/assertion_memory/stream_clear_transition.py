@@ -17,7 +17,7 @@ def _pair(value, field):
 
 def schema(db):
     db.execute(f'''CREATE TABLE IF NOT EXISTS {CUTOVER}(
-        singleton INTEGER PRIMARY KEY CHECK(singleton=1), generation TEXT NOT NULL, cleared_at TEXT NOT NULL)''')
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), generation TEXT NOT NULL, cleared_at TEXT NOT NULL, had_enrolled INTEGER NOT NULL CHECK(had_enrolled IN (0,1)))''')
     db.execute(f'''CREATE TABLE IF NOT EXISTS {TRANSITIONS}(
         prior_digest BLOB PRIMARY KEY, successor_digest BLOB NOT NULL UNIQUE, ready INTEGER NOT NULL DEFAULT 0 CHECK(ready IN (0,1))) WITHOUT ROWID''')
 
@@ -31,12 +31,12 @@ def witnesses(db,tables) -> Iterable[tuple[str,str,str,str]]:
         FROM memory_ingest_streams AS s JOIN memory_fresh_mac_streams AS a
         ON s.stream_id=a.stream_id AND s.session_id=a.session_id''')
 
-def finish_clear(db,generation,cleared_at):
+def finish_clear(db,generation,cleared_at,had_enrolled):
     schema(db)
     db.execute(f'DELETE FROM {TRANSITIONS}')
-    db.execute(f'''INSERT INTO {CUTOVER} VALUES(1,?,?)
-        ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation,cleared_at=excluded.cleared_at''',
-        (generation,cleared_at))
+    db.execute(f'''INSERT INTO {CUTOVER} VALUES(1,?,?,?)
+        ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation,cleared_at=excluded.cleared_at,
+        had_enrolled=excluded.had_enrolled''',(generation,cleared_at,int(had_enrolled)))
 
 def re_register(db,producer_id,session_id,previous_stream_id,previous_epoch):
     from .database_clear import STATE,_fingerprint,revision,was_cleared
@@ -123,3 +123,17 @@ def require_ready(db,state):
     result=db.execute(f'SELECT ready FROM {TRANSITIONS} WHERE successor_digest=?',(proof,)).fetchone()
     if result is not None and result[0]!=1:
         raise ValueError('Reset successor capture is not re-armed')
+
+
+def capture_rearm_status(db,generation):
+    """Opaque owner dashboard status; this is not proof of all sessions."""
+    if generation=='0'*32:
+        return 'not_cleared'
+    if not db.execute("SELECT 1 FROM sqlite_schema WHERE name=? AND type='table'",(CUTOVER,)).fetchone():
+        return 'unknown'
+    row=db.execute(f'SELECT generation,had_enrolled FROM {CUTOVER} WHERE singleton=1').fetchone()
+    if row is None or row[0]!=generation:
+        return 'unknown'
+    if not row[1]:
+        return 'not_required'
+    return 'confirmed' if db.execute(f'SELECT 1 FROM {TRANSITIONS} WHERE ready=1 LIMIT 1').fetchone() else 'waiting'
