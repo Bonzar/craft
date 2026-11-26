@@ -13,8 +13,15 @@ def test_source_admission_and_coverage_share_scope_and_attribution():
         assert 'Admission comes before attribution and context' in instructions
         assert 'Do not rescue ineligible material with an attributed meta-claim' in instructions
         assert 'concrete decision relevant to later steps' in instructions
+        assert 'material conditions of an eligible assertion with that assertion' in instructions
+        assert 'by itself establish an independent durable decision' in instructions
+        assert 'separately adopted plan when it independently meets the same admission test' in instructions
         assert 'each assertion' in instructions
         assert 'derived conclusions with traceable premises' in instructions
+        assert 'supported time-bound observation' in instructions
+        assert 'even if no tracking goal was stated' in instructions
+        assert 'without inferring a trend, lasting trait or diagnosis' in instructions
+        assert 'A timestamp alone does not make incidental live commentary useful' in instructions
         assert 'exact user-origin evidence' in instructions
         assert 'acceptance, execution and verified outcome' in instructions
         assert 'expiry and uncertainty' in instructions
