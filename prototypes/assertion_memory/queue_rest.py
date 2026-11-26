@@ -94,7 +94,7 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
                 if clear_ready:
                     from .database_clear import describe
                     clear=describe(db,stage=lane,binding=[before,(tag,generation)])
-                    data['database_clear']={k:clear[k] for k in ('revision','can_clear')}
+                    data['database_clear']={k:clear[k] for k in ('revision','can_clear','scope')}
         finally:
             db.set_progress_handler(None,0)
             db.rollback()

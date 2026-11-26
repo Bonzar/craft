@@ -159,7 +159,7 @@ class DatabaseClearWireTest(unittest.IsolatedAsyncioTestCase):
                         (b'authorization',f'Bearer {key}'.encode()),(b'host',b'127.0.0.1:8903'),
                         (b'content-type',b'application/json'),*extra]},recv,send)
                     return observed[0]['status'],json.loads(observed[1]['body'])
-                self.assertEqual(await request('GET',read),(200,{'stage':'prod','revision':revision,'can_clear':True}))
+                self.assertEqual(await request('GET',read),(200,perform('clear_prepare',{})))
                 self.assertEqual((await request('PUT',write))[0],403)
                 self.assertEqual((await request('PUT',write,extra=proof('test',reset.PATH,'1'*32)))[0],403)
                 self.assertEqual((await request('PUT',write,extra=proof('prod','/api/v1/queue-pause','2'*32)))[0],403)

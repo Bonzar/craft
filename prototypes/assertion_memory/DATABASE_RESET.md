@@ -3,9 +3,9 @@
 The private Base route `/api/v1/queue-database/clear` is a fixed operation,
 not a general database interface. It is loopback-only and uses the same
 separate lane read/write credentials and path-bound owner HMAC as other
-protected owner operations. Standalone Visual must require the exact
+protected owner operations. Standalone Visual also requires an authenticated Graph capability with the same lane and exact database epoch digest; the digest is never exposed to browser clients. Visual must require the exact
 lane-specific confirmation phrase, not offer this on public or legacy paths.
-GET returns readiness and a revision bound to the authenticated stage, exact
+Private GET returns readiness, a graph-database scope digest, and a revision bound to the authenticated stage, exact
 deployment generation, live SQLite device/inode and durable reset generation.
 PUT requires this revision and a one-time proof; success returns a new
 revision. Never automatically retry an ambiguous PUT.

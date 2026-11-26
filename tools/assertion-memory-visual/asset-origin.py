@@ -155,7 +155,7 @@ def snapshot_queues(queues, limit, offset):
     return True
 
 
-def queue_client(origin, key, *, stage='test', disclose_pause=False):
+def queue_client(origin, key, *, stage='test', disclose_pause=False, graph_ready=None):
     address = BASE_ORIGIN.fullmatch(origin)
     if stage not in ('test','prod') or not address or int(address[1]) > 65535 or not HEX.fullmatch(key):
         raise ValueError('invalid local TEST Base settings')
@@ -188,12 +188,15 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
                     or type(ctl['paused']) is not bool or type(ctl['can_change']) is not bool
                     or not isinstance(ctl['revision'], str) or not re.fullmatch(r'[0-9a-f]{32}',ctl['revision'])):
                 raise ValueError('invalid TEST Base queue page')
-            if 'database_clear' in value:
-                item = value['database_clear']
-                if disclose_pause and type(item) is dict and set(item)=={'revision','can_clear'}:
+            item = value.pop('database_clear',None)
+            if disclose_pause and isinstance(item,dict) and callable(graph_ready):
+                try:
                     clear_state({'stage':stage,**item},stage)
+                except ValueError:
+                    pass
                 else:
-                    value.pop('database_clear')
+                    if item['can_clear'] and graph_ready(item['scope']):
+                        value['database_clear']={k:item[k] for k in ('revision','can_clear')}
             capabilities={'live':False}
             if disclose_pause and ctl['can_change']:
                 capabilities['standalone_pause']=True
@@ -266,8 +269,8 @@ BASE_PREVIEW = '/api/v1/queue-items/source-preview'
 
 
 def clear_state(value, stage):
-    if (type(value) is not dict or set(value)!={'stage','revision','can_clear'}
-            or value['stage']!=stage or type(value['can_clear']) is not bool
+    if (type(value) is not dict or set(value)!={'stage','revision','can_clear','scope'}
+            or value['stage']!=stage or type(value['can_clear']) is not bool or type(value['scope']) is not str or not HEX.fullmatch(value['scope'])
             or type(value['revision']) is not str or not REVISION.fullmatch(value['revision'])):
         raise ValueError('invalid Base database clear state')
     return value
@@ -458,7 +461,28 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 or type(pause_ingress) is not str or not HEX.fullmatch(pause_ingress)
                 or len(set(keys+[read_key,write_key,csrf_key.hex(),pause_ingress,proof_key.hex()]))!=len(keys)+5):
             raise ValueError('pause requires distinct local authorities')
-        fetch_owner_queue = queue_client(queue_origin,queue_token,stage=environment,disclose_pause=True)
+        def graph_clear_ready(scope):
+            # Prove the reader is reset-aware and bound to this exact DB epoch
+            # using its existing authenticated local read channel. Never forward
+            # or expose the opaque scope to any browser/client.
+            conn=HTTPConnection('127.0.0.1',graph_port,timeout=2)
+            try:
+                conn.request('GET','/api/v1/capabilities?database_clear_scope=1',
+                    headers={'Authorization':'Bearer '+graph_key,'Accept-Encoding':'identity','Connection':'close'})
+                response=conn.getresponse()
+                if response.status!=200 or response.headers.get_content_type()!='application/json':
+                    return False
+                raw=response.read(1025)
+                if len(raw)>1024:
+                    return False
+                return unique_json(raw)=={'stage':environment,'database_clear_scope':scope}
+            except (OSError,ValueError):
+                return False
+            finally:
+                conn.close()
+
+        fetch_owner_queue = queue_client(queue_origin,queue_token,stage=environment,
+                                        disclose_pause=True,graph_ready=graph_clear_ready)
         pause_call = pause_client(origin,read_key,write_key,
                                   pause_signer(environment,owner,proof_key,clock=clock),stage=environment)
         sessions_call = pause_client(origin,read_key,write_key,
@@ -579,6 +603,8 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                     return self.respond(200,b'{"authenticated":true}','application/json',headers=safe)
                 if path=='/api/v1/capabilities':
                     q=parse_qs(query,keep_blank_values=True,max_num_fields=12)
+                    if 'database_clear_scope' in q:
+                        return self.respond(404)
                     if 'queue_status' in q:
                         if set(q)-{'queue_status','limit','offset'} or q['queue_status']!=['1'] or any(len(v)!=1 for v in q.values()):
                             return self.respond(400)
@@ -717,7 +743,7 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 if request['confirmation']!='ОЧИСТИТЬ '+environment.upper():
                     return self.respond(400)
                 state=clear_call('GET')
-                if not state['can_clear'] or state['revision']!=revision:
+                if not state['can_clear'] or state['revision']!=revision or not graph_clear_ready(state['scope']):
                     return reply(409,{'error':'database_clear_state_changed'})
                 return reply(200,{'stage':environment,'revision':revision,
                                   'csrf_token':csrf_token(revision,int(clock())+30,'database-clear')})
@@ -728,6 +754,9 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             expiry,now=int(token[1]),int(clock())
             if not now < expiry <= now+30 or not hmac.compare_digest(tokens[0],csrf_token(revision,expiry,'database-clear')):
                 return self.respond(403)
+            state=clear_call('GET')
+            if not state['can_clear'] or state['revision']!=revision or not graph_clear_ready(state['scope']):
+                return reply(409,{'error':'database_clear_state_changed'})
             result=clear_call('PUT',{'expected_revision':revision})
             if result is None:
                 return reply(409,{'error':'database_clear_state_changed'})

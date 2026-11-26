@@ -134,11 +134,12 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                           else {'stage','queue_id','item_id','source_preview','source_role'})
             if clear_mode:
                 field='can_clear' if method=='GET' else 'cleared'
-                required={'stage','revision',field}
+                required={'stage','revision',field}|({'scope'} if method=='GET' else set())
             if (type(state) is not dict or set(state) != required or state['stage'] != stage
                     or not item_mode and (type(state['revision']) is not str or not REVISION.fullmatch(state['revision']))
                     or not (session_mode or item_mode or clear_mode) and type(state['paused']) is not bool
-                    or clear_mode and (type(state[field]) is not bool or method=='PUT' and state[field] is not True)):
+                    or clear_mode and (type(state[field]) is not bool or method=='PUT' and state[field] is not True
+                         or method=='GET' and (type(state['scope']) is not str or not HEX.fullmatch(state['scope'])))):
                 raise ValueError()
         except ProofRejected:
             return await reply(403, {'error': 'owner_required'})

@@ -162,7 +162,14 @@ class HttpReset(unittest.TestCase):
                 self.assertTrue(initialize_empty(store))
                 ThoughtStore(store).publish('synthetic-reset-marker')
             state=root/'state'
-            with TestClient(create_app(self.source_path,state,password='owner-test-strong')) as client:
+            token=root/'graph-loopback-only.key'
+            token.write_text('g'*64)
+            token.chmod(0o600)
+            async def watch(_emit):
+                await asyncio.Event().wait()
+            dashboard=SimpleNamespace(stage='test',db=self.source_path,watch=watch)
+            with TestClient(create_app(self.source_path,state,password='owner-test-strong',
+                                        bridge_read_token_file=token,queue_dashboard=dashboard)) as client:
                 self.assertEqual(client.post('/api/v1/session',json={'password':'owner-test-strong'},
                                             headers={'origin':'http://testserver'}).status_code,200)
                 def manifest():
@@ -174,6 +181,13 @@ class HttpReset(unittest.TestCase):
                     self.fail('No manifest')
                 old=manifest()
                 self.assertGreater(old['counts']['nodes'],0)
+                scope_path='/api/v1/capabilities?database_clear_scope=1'
+                self.assertEqual(client.get(scope_path).status_code,404)
+                trusted_graph_headers={'Authorization':'Bearer '+'g'*64}
+                scope=client.get(scope_path,headers=trusted_graph_headers)
+                self.assertEqual(scope.status_code,200)
+                self.assertEqual(scope.json()['stage'],'test')
+                self.assertRegex(scope.json()['database_clear_scope'],r'^[a-f0-9]{64}$')
                 csrf=client.get('/api/v1/session').json()['csrf_token']
                 headers={'origin':'http://testserver','x-csrf-token':csrf}
                 bookmark={'provider_id':'assertion-memory','object_id':'synthetic-node','object_kind':'node',
@@ -188,6 +202,7 @@ class HttpReset(unittest.TestCase):
                 self.assertEqual(client.get('/api/v1/graph/'+old['revision']+'/nodes.bin').status_code,409)
                 fresh=manifest()
                 self.assertEqual(fresh['counts']['nodes'],0)
+                self.assertNotEqual(client.get(scope_path,headers=trusted_graph_headers).json(),scope.json())
                 self.assertEqual(client.get('/api/v1/session').json()['csrf_token'],csrf)
                 shown=client.get('/api/v1/bookmarks').json()['items']
                 self.assertEqual([(item['id'],item['label']) for item in shown],[('keep','keep-me')])

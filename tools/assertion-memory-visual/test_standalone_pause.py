@@ -49,6 +49,7 @@ class StandalonePause(fixture.OriginTest):
         calls=[]
         now=[1770000000]
         ready=[True]
+        graph_scope_mode=['match']
 
         def clear_commit(*,stage,expected_revision,proof):
             return operations('clear_commit',{'expected_revision':expected_revision},
@@ -83,11 +84,17 @@ class StandalonePause(fixture.OriginTest):
 
             def do_GET(self):
                 calls.append((self.command,self.path))
+                if self.path=='/api/v1/capabilities?database_clear_scope=1':
+                    assert self.headers['Authorization']=='Bearer '+graph
+                    if graph_scope_mode[0]=='old':
+                        return self.reply(200,{'capabilities':{'live':True}})
+                    scope=operations('clear_prepare',{})['scope']
+                    return self.reply(200,{'stage':lane,'database_clear_scope':scope if graph_scope_mode[0]=='match' else '0'*64})
                 if self.path.startswith('/api/v1/queue-status?'):
                     assert self.headers['Authorization']=='Bearer '+queue
                     return self.reply(200,{'stage':lane,'release_version':'assertion-memory-v0.1.16',
                         'release_generation':'e'*64,'snapshot_at':'2026-11-25T21:00:00Z','global_order':False,
-                        'queues':[],**({'database_clear':{k:db_state[k] for k in ('revision','can_clear')}}
+                        'queues':[],**({'database_clear':{k:db_state[k] for k in ('revision','can_clear','scope')}}
                             if self.headers.get('X-Memory-Queue-Reset')=='ready-v1' else {}),
                         'processing_control':{'paused':state['paused'],
                         'revision':state['revision'],'can_change':ready[0]}})
@@ -272,7 +279,14 @@ class StandalonePause(fixture.OriginTest):
         snapshot='/api/v1/capabilities?queue_status=1'
         self.assertNotIn('database_clear',request('GET',snapshot,None,proof=None)[1])
         self.assertEqual(request('GET',snapshot,None)[1]['database_clear'],{'revision':db_state['revision'],'can_clear':True})
-        self.assertTrue(all(p.startswith('/api/v1/queue-status?') for _,p in calls))
+        for mode in ('wrong','old'):
+            graph_scope_mode[0]=mode
+            code,payload=request('GET',snapshot,None)
+            self.assertEqual(code,200)
+            self.assertNotIn('database_clear',payload)
+        graph_scope_mode[0]='match'
+        self.assertTrue(all(p.startswith('/api/v1/queue-status?') or p=='/api/v1/capabilities?database_clear_scope=1' for _,p in calls))
+        self.assertEqual(request('GET','/api/v1/capabilities?database_clear_scope=1',None)[0],404)
         calls.clear()
         body={'stage':lane,'expected_revision':db_state['revision']}
         prepare={**body,'confirmation':'ОЧИСТИТЬ '+lane.upper()}
@@ -287,11 +301,14 @@ class StandalonePause(fixture.OriginTest):
         db_state['can_clear']=False
         self.assertEqual(request('POST',clear+'/prepare',prepare)[0],409)
         db_state['can_clear']=True
+        graph_scope_mode[0]='wrong'
+        self.assertEqual(request('POST',clear+'/prepare',prepare)[0],409)
+        graph_scope_mode[0]='match'
         self.assertEqual(request('POST',clear+'/prepare',{**prepare,'expected_revision':'8'*32})[0],409)
         code,prepared=request('POST',clear+'/prepare',prepare)
         self.assertEqual(code,200)
         self.assertEqual(prepared['revision'],body['expected_revision'])
-        self.assertTrue(all(x==('GET','/api/v1/queue-database/clear') for x in calls))
+        self.assertTrue(all(m=='GET' and p in (CLEAR_PATH,'/api/v1/capabilities?database_clear_scope=1') for m,p in calls))
         calls.clear()
         token={'X-CSRF-Token':prepared['csrf_token']}
         self.assertEqual(request('PUT',clear,{**body,'stage':other},extra=token)[0],409)
@@ -307,4 +324,4 @@ class StandalonePause(fixture.OriginTest):
             self.assertEqual(conn.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],0)
             self.assertEqual(read_control(conn),paused)
         self.assertEqual(request('PUT',clear,body,extra=token)[0],409)
-        self.assertTrue(all(x==('PUT','/api/v1/queue-database/clear') for x in calls))
+        self.assertEqual([x for x in calls if x[0]=='PUT'],[('PUT',CLEAR_PATH)])

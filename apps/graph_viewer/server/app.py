@@ -226,6 +226,22 @@ async def events(request):
 
 
 async def capabilities(request):
+    if 'database_clear_scope' in request.query_params:
+        from prototypes.assertion_memory.database_clear import generation_scope
+        if list(request.query_params.multi_items())!=[('database_clear_scope','1')] or not read_service_authorized(request):
+            raise APIError('not_found','Unknown capability request',404)
+        manager=request.app.state.manager
+        dashboard=request.app.state.queue_dashboard
+        lane=getattr(dashboard,'stage',None)
+        path=getattr(manager.source,'source_path',getattr(manager.source,'path',None))
+        if (lane not in ('test','prod') or path is None or not getattr(dashboard,'db',None)
+                or path.resolve()!=dashboard.db.resolve() or not manager._poller or manager._poller.done()):
+            raise APIError('graph_clear_unavailable','Graph database reset fencing unavailable',503)
+        generation=manager.sync_generation()
+        if generation is None:
+            raise APIError('graph_clear_unavailable','Graph database reset fencing unavailable',503)
+        return JSONResponse({'stage':lane,'database_clear_scope':generation_scope(lane,generation)})
+
     if 'queue_status' in request.query_params:
         q = request.query_params
         if (set(q)-{'queue_status','limit','offset'} or any(len(q.getlist(k)) != 1 for k in q)

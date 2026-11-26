@@ -91,6 +91,13 @@ def revision(db):
     return INITIAL
 
 
+def generation_scope(stage, generation):
+    if stage not in ('test','prod') or len(generation)!=3:
+        raise ValueError('invalid lane generation')
+    return sha256(json.dumps(['database-clear-scope-v1',stage,*generation],
+                            separators=(',',':')).encode()).hexdigest()
+
+
 def request_revision(db, *, stage, binding=None):
     generation=revision(db)
     if binding is None:
@@ -106,7 +113,10 @@ def describe(db, *, stage, binding=None):
         capable=True
     except (ValueError, IndexError):
         capable=False
-    return {'stage':stage,'revision':rev,'can_clear':capable}
+    result={'stage':stage,'revision':rev,'can_clear':capable}
+    if binding is not None:
+        result['scope']=generation_scope(stage,(*binding[0],revision(db)))
+    return result
 
 
 def _fingerprint(salt, kind, values):
