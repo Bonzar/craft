@@ -85,7 +85,7 @@ def build_queue_status(connection, *, release_version, stage, processing_session
         # Fresh-only mode replaces, rather than supplements, the ordinary source
         # selector. Its registration table is absent until the first opted-in stream.
         if auto_process_fresh_mac:
-            selected, args = (source_predicate(fresh_selector, 'e')
+            selected, args = (source_predicate(fresh_selector, 'e',db=connection)
                 if _has(connection, 'memory_fresh_mac_events') else ('0', []))
         else:
             selected, args = source_predicate(ids, 'e')

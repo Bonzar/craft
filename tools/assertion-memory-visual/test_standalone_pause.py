@@ -67,12 +67,12 @@ class StandalonePause(fixture.OriginTest):
                      hmac.digest(secret,mac.encode('ascii'),'sha256').hex())
                 if self.path=='/api/v1/queue-items/source-preview':
                     assert args=={'queue_id':'source','item_id':'job','expected_revision':'1'*32}
-                    return self.reply(200,{'stage':'test','queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'})
+                    return self.reply(200,{'stage':lane,'queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'})
                 if self.path=='/api/v1/queue-items/remove':
                     assert set(args)=={'queue_id','item_id','expected_revision'}
                     assert args['item_id']=='job' and args['queue_id']=='source'
                     if args['expected_revision']!='1'*32:return self.reply(409,{})
-                    return self.reply(200,{'stage':'test','queue_id':'source','item_id':'job','removed':True,'effect':'source_and_queue'})
+                    return self.reply(200,{'stage':lane,'queue_id':'source','item_id':'job','removed':True,'effect':'source_and_queue'})
                 if self.path=='/api/v1/queue-sessions':
                     assert set(args)=={'selected_session_ids','expected_revision'}
                     if args['expected_revision']!=sessions['revision']:return self.reply(409,{})
@@ -151,18 +151,15 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual({path for _,path in calls},{'/api/v1/queue-pause'})
         calls.clear()
         select='/api/v1/processing/sessions'
-        if lane=='prod':
-            self.assertEqual(request('POST',select+'/prepare',{})[0],404)
-            self.assertEqual(request('POST','/api/v1/processing/items/remove/prepare',{})[0],404)
-            self.assertEqual(calls,[])
-            return
         self.assertEqual(request('POST',select+'/prepare',{},proof=None)[0],403)
         self.assertEqual(request('POST',select+'/prepare',{},sent_origin='https://wrong.example.test')[0],403)
         self.assertEqual(calls,[])
         code,view=request('POST',select+'/prepare',{})
         self.assertEqual(code,200)
-        body=dict(stage='test',selected_session_ids=['synthetic'],expected_revision=view['revision'])
+        body=dict(stage=lane,selected_session_ids=['synthetic'],expected_revision=view['revision'])
         self.assertEqual(request('PUT',select,body)[0],403)
+        other='prod' if lane=='test' else 'test'
+        self.assertEqual(request('PUT',select,{**body,'stage':other},extra={'X-CSRF-Token':view['csrf_token']})[0],409)
         cross=fixture.origin.hmac.digest(b'c'*32,f'visual-pause-v1\ntest\n{origin}\n{view["revision"]}\n{now[0]+30}'.encode(),'sha256').hex()
         self.assertEqual(request('PUT',select,body,extra={'X-CSRF-Token':f'{now[0]+30}.'+cross})[0],403)
         self.assertEqual(request('PUT',select,body,extra={'X-CSRF-Token':view['csrf_token']})[0],200)
@@ -171,7 +168,7 @@ class StandalonePause(fixture.OriginTest):
         self.assertTrue(all(p=='/api/v1/queue-sessions' for _,p in calls))
         calls.clear()
         delete='/api/v1/processing/items/remove'
-        body={'stage':'test','queue_id':'source','item_id':'job','expected_revision':'1'*32}
+        body={'stage':lane,'queue_id':'source','item_id':'job','expected_revision':'1'*32}
         self.assertEqual(request('POST',delete+'/prepare',body,proof=None)[0],403)
         code,proof=request('POST',delete+'/prepare',body)
         self.assertEqual(code,200)
@@ -179,7 +176,7 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(request('PUT',delete,{**body,'item_id':'other'},extra=token)[0],403)
         self.assertEqual(request('PUT',delete,body)[0],403)
         self.assertEqual(calls,[])
-        self.assertEqual(request('PUT',delete,body,extra=token),(200,{'stage':'test','queue_id':'source','item_id':'job','removed':True,'effect':'source_and_queue'}))
+        self.assertEqual(request('PUT',delete,body,extra=token),(200,{'stage':lane,'queue_id':'source','item_id':'job','removed':True,'effect':'source_and_queue'}))
         stale={**body,'expected_revision':'2'*32}
         _,proof=request('POST',delete+'/prepare',stale)
         self.assertEqual(request('PUT',delete,stale,extra={'X-CSRF-Token':proof['csrf_token']})[0],409)
@@ -191,5 +188,5 @@ class StandalonePause(fixture.OriginTest):
         self.assertEqual(request('PUT',preview,body,extra=token)[0],403)
         self.assertEqual(calls,[])
         self.assertEqual(request('PUT',preview,body,extra={'X-CSRF-Token':proof['csrf_token']}),
-            (200,{'stage':'test','queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'}))
+            (200,{'stage':lane,'queue_id':'source','item_id':'job','source_preview':'literal <text>','source_role':'assistant'}))
         self.assertEqual(calls,[('PUT','/api/v1/queue-items/source-preview')])

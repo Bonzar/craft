@@ -32,8 +32,8 @@ class FreshMacProcessingTest(unittest.TestCase):
             'Only invented proof data',None,'fixture://fresh-auto/'+message,delivery=delivery)['event']['id']
 
     def eligible(self):
-        query,args = source_predicate(_processing_selector(self.config),'e')
         with self.store.transaction() as db:
+            query,args = source_predicate(_processing_selector(self.config),'e',db=db)
             from prototypes.assertion_memory.fresh_processing import ensure_selector
             if not ensure_selector(db):
                 return set()
@@ -91,6 +91,32 @@ class FreshMacProcessingTest(unittest.TestCase):
         self.assertEqual(claim.job.event_id,fresh_event)
         self.assertIsNone(worker._claim_source())
         self.assertEqual(self.service.queue.get(old_event).attempts,0)
+
+    def test_owner_selection_can_only_narrow_fresh_admission(self):
+        from prototypes.assertion_memory.processing_control import INITIAL
+        from prototypes.assertion_memory.queue_session_control import status, update
+
+        legacy = self.record(OLD,'older')
+        with authenticated_fresh_mac():
+            r1=self.service.ingest_register(PRODUCER,FRESH)
+            r2=self.service.ingest_register(PRODUCER,NEXT)
+            first=self.record(FRESH,'fresh-one',r1)
+            second=self.record(NEXT,'fresh-two',r2)
+        spoof=self.record(FRESH,'spoof',r1,2)
+        with self.store.transaction(write=True) as db:
+            db.executemany('INSERT OR IGNORE INTO memory_event_positions VALUES (?,1)',
+                           [(i,) for i in (legacy,first,second,spoof)])
+            state=status(db,stage='prod',fresh_only=True)
+            self.assertEqual(state['revision'],INITIAL)
+            self.assertEqual({x['id'] for x in state['sessions']},{FRESH,NEXT})
+            with self.assertRaises(ValueError):
+                update(db,selected_session_ids=[OLD],expected_revision=INITIAL,stage='prod',fresh_only=True)
+            state=update(db,selected_session_ids=[FRESH],expected_revision=INITIAL,stage='prod',fresh_only=True)
+        self.assertEqual(self.eligible(),{first})
+        with self.store.transaction(write=True) as db:
+            update(db,selected_session_ids=[],expected_revision=state['revision'],stage='prod',fresh_only=True)
+        self.assertFalse(_eligible_processing_work(self.config))
+        self.assertEqual(self.eligible(),set())
 
     def test_no_union_with_legacy_selection(self):
         for legacy in (None,[OLD]):

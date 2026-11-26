@@ -186,7 +186,7 @@ class ThoughtWorker:
             if processing_paused(c) or (self.is_pausing is not None and self.is_pausing()):
                 return None
             now = self.queue._time()
-            eligible,args = source_predicate(self.processing_session_ids,'e')
+            eligible,args = source_predicate(self.processing_session_ids,'e',db=c)
             if capture_batch_id is None:
                 eligible += " AND json_extract(e.metadata,'$.capture_batch_id') IS NULL"
             else:

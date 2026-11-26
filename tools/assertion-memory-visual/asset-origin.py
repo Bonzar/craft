@@ -151,7 +151,7 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
             capabilities={'live':False}
             if disclose_pause and ctl['can_change']:
                 capabilities['standalone_pause']=True
-            if disclose_pause and stage=='test':
+            if disclose_pause and ctl['can_change']:
                 capabilities['standalone_queue_sessions']=True
             if not disclose_pause:
                 for q in value['queues']:
@@ -357,16 +357,15 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
         fetch_owner_queue = queue_client(queue_origin,queue_token,stage=environment,disclose_pause=True)
         pause_call = pause_client(origin,read_key,write_key,
                                   pause_signer(environment,owner,proof_key,clock=clock),stage=environment)
-        if environment=='test':
-            sessions_call = pause_client(origin,read_key,write_key,
-                pause_signer(environment,owner,proof_key,clock=clock,route=BASE_SESSIONS),
-                stage=environment,route=BASE_SESSIONS,validate=sessions_state,max_bytes=524288)
-            remove_call = pause_client(origin,read_key,write_key,
-                pause_signer(environment,owner,proof_key,clock=clock,route=BASE_REMOVE),
-                stage=environment,route=BASE_REMOVE,validate=removal_receipt,max_bytes=4096)
-            preview_call = pause_client(origin,read_key,write_key,
-                pause_signer(environment,owner,proof_key,clock=clock,route=BASE_PREVIEW),
-                stage=environment,route=BASE_PREVIEW,validate=preview_receipt,max_bytes=4096)
+        sessions_call = pause_client(origin,read_key,write_key,
+            pause_signer(environment,owner,proof_key,clock=clock,route=BASE_SESSIONS),
+            stage=environment,route=BASE_SESSIONS,validate=sessions_state,max_bytes=524288)
+        remove_call = pause_client(origin,read_key,write_key,
+            pause_signer(environment,owner,proof_key,clock=clock,route=BASE_REMOVE),
+            stage=environment,route=BASE_REMOVE,validate=removal_receipt,max_bytes=4096)
+        preview_call = pause_client(origin,read_key,write_key,
+            pause_signer(environment,owner,proof_key,clock=clock,route=BASE_PREVIEW),
+            stage=environment,route=BASE_PREVIEW,validate=preview_receipt,max_bytes=4096)
         def csrf_token(revision, expiry, kind='pause'):
             msg = f'visual-{kind}-v1\n{environment}\n{public_origin}\n{revision}\n{expiry}'.encode('ascii')
             return f'{expiry}.'+hmac.digest(csrf_key,msg,'sha256').hex()
@@ -436,11 +435,11 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 if self.headers.get('Sec-Fetch-Site')=='cross-site' and path.startswith('/api/'):
                     return self.respond(403)
                 if path in (BROWSER_REMOVE,BROWSER_REMOVE+'/prepare',BROWSER_PREVIEW,BROWSER_PREVIEW+'/prepare'):
-                    if environment!='test' or pause is None or raw != path or query:
+                    if pause is None or raw != path or query:
                         return self.respond(404)
                     return self.remove_request(path,safe,preview=path in (BROWSER_PREVIEW,BROWSER_PREVIEW+'/prepare'))
                 if path in (BROWSER_SESSIONS,BROWSER_SESSIONS+'/prepare'):
-                    if environment!='test' or pause is None or raw != path or query:
+                    if pause is None or raw != path or query:
                         return self.respond(404)
                     return self.pause_request(path,safe, sessions=True)
                 if pause is not None and path in (BROWSER_PAUSE,BROWSER_PAUSE+'/prepare'):

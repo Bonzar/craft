@@ -113,9 +113,20 @@ def pending(db):
         "SELECT 1 FROM memory_capture_batches WHERE state='pending' LIMIT 1").fetchone() is not None)
 
 
+def _session_scope(db):
+    from .queue_session_control import read
+    from .processing_control import INITIAL
+    selected,revision=read(db)
+    return ('',()) if revision==INITIAL else (' AND session_id IN (SELECT value FROM json_each(?))',(json.dumps(selected),))
+
 def needs_wake(db):
-    return (batch_table_exists(db) and db.execute(
-        "SELECT 1 FROM memory_capture_batches WHERE state IN ('pending','dispatching') LIMIT 1").fetchone() is not None)
+    if not batch_table_exists(db):
+        return False
+    scope,args=_session_scope(db)
+    # Always allow recovery of a previously dispatched batch, even when its
+    # session has since been excluded. This does not dispatch any provider work.
+    return db.execute("SELECT 1 FROM memory_capture_batches WHERE state='dispatching' "
+                      "OR (state='pending'"+scope+") LIMIT 1",args).fetchone() is not None
 
 
 def fence_interrupted(db):
@@ -135,10 +146,13 @@ def run_next(config, store, is_pausing):
     from .processing_control import paused as processing_paused
     from .thought_processing import TracedThoughtWorker
     with store.transaction(write=True) as db:
-        if processing_paused(db) or not pending(db):
+        if processing_paused(db) or not batch_table_exists(db):
             return False
+        scope,args=_session_scope(db)
         batch=db.execute("SELECT batch_id,session_id,member_digest FROM memory_capture_batches "
-                         "WHERE state='pending' ORDER BY rowid LIMIT 1").fetchone()
+                         "WHERE state='pending'"+scope+" ORDER BY rowid LIMIT 1",args).fetchone()
+        if batch is None:
+            return False
         batch_id,session,membership=batch
         rows=db.execute("SELECT m.event_id,json_extract(e.metadata,'$.message_id') "
                         'FROM memory_capture_batch_members m JOIN memory_raw_events e ON e.id=m.event_id '
