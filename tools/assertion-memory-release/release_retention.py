@@ -6,7 +6,6 @@ import logging
 import os
 from pathlib import Path
 import re
-import shutil
 import socket
 import stat
 import struct
@@ -118,6 +117,7 @@ def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
     # paths and submounts before deletion. The privileged proof additionally
     # checks same-device bind mounts and references across namespaces.
     limit=100_000
+    entries={}
     def inspect(fd, rel):
         nonlocal limit
         for name in os.listdir(fd):
@@ -133,6 +133,7 @@ def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
             info=os.stat(name,dir_fd=fd,follow_symlinks=False)
             if info.st_dev!=root_stat.st_dev or info.st_uid!=owner:
                 raise ValueError('retention_member_owner_or_device')
+            entries[item]=info
             mode=info.st_mode
             if stat.S_ISLNK(mode):
                 if not allow_venv or item not in {('venv','lib64'),('venv','bin','python'),
@@ -159,6 +160,49 @@ def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
         inspect(fd,())
     finally:
         os.close(fd)
+    return entries
+
+
+def same_inventory(left, right):
+    def seal(info):
+        return (info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_gid,
+                info.st_nlink,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+    return left.keys()==right.keys() and all(seal(info)==seal(right[path]) for path,info in left.items())
+
+
+def unlink_sealed(parent, name, root_stat, inventory):
+    """Delete only names in the qualified tree, through inode-bound FDs."""
+    children={}
+    for path, info in inventory.items():
+        children.setdefault(path[:-1],{})[path[-1]]=info
+    def entry(fd, label, expected):
+        current=os.stat(label,dir_fd=fd,follow_symlinks=False)
+        if (not os.path.samestat(current,expected) or current.st_mode!=expected.st_mode
+                or current.st_uid!=expected.st_uid or current.st_gid!=expected.st_gid):
+            raise ValueError('retention_tree_replaced_after_witness')
+        if not stat.S_ISDIR(expected.st_mode) and (current.st_ctime_ns!=expected.st_ctime_ns
+                or current.st_mtime_ns!=expected.st_mtime_ns or current.st_nlink!=expected.st_nlink):
+            raise ValueError('retention_file_changed_after_witness')
+    def descend(parent_fd, label, expected, path):
+        fd=os.open(label,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent_fd)
+        try:
+            if not os.path.samestat(os.fstat(fd),expected):
+                raise ValueError('retention_tree_replaced_after_witness')
+            out=children.get(path,{})
+            if set(os.listdir(fd))!=set(out):
+                raise ValueError('retention_tree_changed_after_witness')
+            for child, info in out.items():
+                entry(fd,child,info)
+                if stat.S_ISDIR(info.st_mode):
+                    descend(fd,child,info,(*path,child))
+                else:
+                    os.unlink(child,dir_fd=fd)
+            entry(parent_fd,label,expected)
+            os.rmdir(label,dir_fd=parent_fd)
+        finally:
+            os.close(fd)
+    entry(parent,name,root_stat)
+    descend(parent,name,root_stat,())
 
 
 class Retention:
@@ -212,14 +256,12 @@ class Retention:
         outer=safe_root(directory,self.owner)
         if meta.st_dev!=outer.st_dev or os.path.ismount(inactive):
             return False
-        if not shutil.rmtree.avoids_symlink_attacks:
-            raise ValueError('retention_unsafe_rmtree')
         store.qualified(inactive)
         fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
         try:
             if not os.path.samestat(outer,os.fstat(fd)):
                 return False
-            eligible_tree(fd,inactive.name,meta,owner=self.owner,allow_venv=store.kind=='base')
+            inventory=eligible_tree(fd,inactive.name,meta,owner=self.owner,allow_venv=store.kind=='base')
             if self.proof(store.kind,active,inactive,meta) is not True:
                 return False
             self.settled()
@@ -227,8 +269,11 @@ class Retention:
                 return False
             if not os.path.samestat(outer,directory.lstat()):
                 return False
+            current_inventory=eligible_tree(fd,inactive.name,meta,owner=self.owner,allow_venv=store.kind=='base')
+            if not same_inventory(inventory,current_inventory):
+                raise ValueError('retention_tree_changed_after_witness')
             if not dry:
-                shutil.rmtree(inactive.name,dir_fd=fd)
+                unlink_sealed(fd,inactive.name,meta,inventory)
                 os.fsync(fd)
             return True
         finally:
@@ -242,6 +287,7 @@ class Retention:
             safe_root(directory,self.owner)
             active=self.active(store)
             if not active:
+                skipped+=sum(1 for _ in directory.iterdir())
                 continue
             valid=BASE_NAME if store.kind=='base' else VISUAL_NAME
             for candidate in sorted(directory.iterdir()):
@@ -256,8 +302,7 @@ class Retention:
                     ok=False
                 deleted+=ok
                 skipped+=not ok
-        LOG.log(logging.WARNING if skipped or unknown else logging.INFO,
-                'release_retention phase=%s %s=%d unproven=%d unknown=%d',phase,
+        LOG.warning('release_retention phase=%s %s=%d unproven=%d unknown=%d',phase,
                 'would_remove' if dry else 'removed',deleted,skipped,unknown)
         return deleted,skipped,unknown
 
@@ -272,7 +317,7 @@ class Retention:
         # exact candidate is considered, and only once rollback is settled.
         try:
             if self.remove(store,candidate):
-                LOG.info('release_retention phase=failed_prepare removed=1')
+                LOG.warning('release_retention phase=failed_prepare removed=1')
                 return
         except SAFE_ERRORS:
             pass

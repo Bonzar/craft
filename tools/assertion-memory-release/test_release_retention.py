@@ -153,6 +153,16 @@ class CurrentOnly(unittest.TestCase):
             (hard/'fictional_shared').unlink()
             self.assertEqual(engine.sweep('test',dry=True),(1,0,0))
             self.assertTrue(initial.is_dir())
+            def nested_race(*_):
+                path=initial/'venv'/'new-after-proof'
+                path.write_text('unknown')
+                return True
+            nested=self.factory(root,(store,),nested_race)(f.fileno())
+            with self.assertRaisesRegex(ValueError,'tree_changed_after_witness'):
+                nested.remove(store,initial)
+            self.assertTrue((initial/'venv'/'new-after-proof').is_file())
+            self.assertTrue((initial/'SHA256SUMS').is_file())
+            (initial/'venv'/'new-after-proof').unlink()
             journal=root/release_core.PENDING
             journal.write_text('unsettled')
             with self.assertRaisesRegex(ValueError,'unsettled'):
