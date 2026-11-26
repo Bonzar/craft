@@ -15,6 +15,10 @@ def test_source_admission_and_coverage_share_scope_and_attribution():
         assert 'concrete decision relevant to later steps' in instructions
         assert 'each assertion' in instructions
         assert 'derived conclusions with traceable premises' in instructions
+        assert 'supported time-bound observation' in instructions
+        assert 'even if no tracking goal was stated' in instructions
+        assert 'without inferring a trend, lasting trait or diagnosis' in instructions
+        assert 'A timestamp alone does not make incidental live commentary useful' in instructions
         assert 'exact user-origin evidence' in instructions
         assert 'acceptance, execution and verified outcome' in instructions
         assert 'expiry and uncertainty' in instructions
