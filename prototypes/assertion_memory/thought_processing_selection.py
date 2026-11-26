@@ -45,12 +45,21 @@ def _exists(db,table):
     return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone() is not None
 
 
-def source_predicate(session_ids,alias='e'):
+def source_predicate(session_ids,alias='e',*,db=None):
     ids=normalize_session_ids(session_ids)
     if ids is None:return '1',[]
     if not ids:return '0',[]
     if ids is FRESH_MAC_ONLY:
-        return _alias(alias)+'.id IN (SELECT event_id FROM memory_fresh_mac_events)',[]
+        if db is None:
+            raise ValueError('Fresh-only selection requires the lane database')
+        from .queue_session_control import read
+        from .processing_control import INITIAL
+        selected,revision=read(db)
+        fresh=_alias(alias)+'.id IN (SELECT event_id FROM memory_fresh_mac_events)'
+        if revision==INITIAL:
+            return fresh,[]
+        explicit,args=source_predicate(selected,alias)
+        return f'({fresh}) AND ({explicit})',args
     source=_SOURCE_SESSION.replace('e.',_alias(alias)+'.')
     return source+' IN (SELECT value FROM json_each(?))',[json.dumps(ids)]
 
@@ -94,7 +103,7 @@ def processing_deadline(db,session_ids,*,now,with_model=True,lane='all',include_
         if not ensure_selector(db):return None
     deadlines=[]
     if lane!='maintenance' and _exists(db,'memory_raw_events') and _exists(db,'memory_capture_jobs'):
-        where,args=source_predicate(ids)
+        where,args=source_predicate(ids,db=db)
         deadlines.append(db.execute("SELECT min(CASE j.status WHEN 'running' THEN j.lease_until WHEN 'waiting_model' THEN ? ELSE j.available_at END) "
             'FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id '
             "WHERE j.status IN ('pending','running','waiting_model') "

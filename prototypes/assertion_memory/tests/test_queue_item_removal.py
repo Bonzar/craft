@@ -59,6 +59,21 @@ class Removal(unittest.TestCase):
         self.assertFalse(self.db.execute('PRAGMA foreign_key_check').fetchall())
         self.assertTrue(self.db.execute("SELECT 1 FROM memory_raw_events WHERE id='source-b'").fetchone())
 
+    def test_prod_owner_can_preview_and_remove_unprocessed_fresh_intake(self):
+        self.db.executescript("""
+            CREATE TABLE memory_fresh_mac_events(event_id TEXT PRIMARY KEY REFERENCES memory_raw_events(id));
+            INSERT INTO memory_fresh_mac_events VALUES ('source-a');
+        """)
+        item=self.hints('source','source-a')
+        read=source_preview(self.db,stage='prod',queue_id='source',item_id='source-a',
+                            expected_revision=item['preview_revision'])
+        self.assertEqual((read['stage'],read['source_preview']),('prod','body <not html>'))
+        removed=self.remove('source','source-a',item['remove_revision'],'prod')
+        self.assertEqual((removed['stage'],removed['effect']),('prod','source_and_queue'))
+        self.assertFalse(self.db.execute('SELECT 1 FROM memory_fresh_mac_events').fetchone())
+        self.assertTrue(source_tombstoned(self.db,'source-a'))
+        self.assertEqual(self.db.execute('PRAGMA foreign_key_check').fetchall(),[])
+
     def test_preview_role_only_from_canonical_metadata(self):
         for item,expected in [('source-a','user'),('active-a','assistant'),('source-b',None),('prior-a',None)]:
             with self.subTest(item=item):
@@ -72,7 +87,7 @@ class Removal(unittest.TestCase):
             self.remove('source','prior-a',self.hints('source','prior-a')['remove_revision'])
         rev=self.hints('source','source-b')['remove_revision']
         with self.assertRaises(ValueError):
-            self.remove('source','source-b',rev,'prod')
+            self.remove('source','source-b',rev,'unknown')
         self.db.execute("UPDATE memory_capture_jobs SET updated_at='1' WHERE id='source-b'")
         self.db.commit()
         with self.assertRaises(Conflict):

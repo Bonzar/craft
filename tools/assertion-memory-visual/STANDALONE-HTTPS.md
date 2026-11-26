@@ -139,6 +139,31 @@ interactive work remain usable. Test this on TEST before independently
 provisioning and verifying PROD. If any check fails remove the opt-in and
 the dedicated proxy locations; leave normal read routes and Sites untouched.
 
+## Queue management parity
+
+Standalone queue selection, source preview, and task removal use the same
+verified local owner authority as pause on both lanes. There is no separate
+release feature toggle. Reuse the established per-lane identities and assets;
+do not route the Base endpoint externally or enable legacy Sites writes on PROD.
+The gateway forwards only the exact POST preparation and PUT commit pairs for
+`sessions`, `items/source-preview`, and `items/remove`, along with pause.
+`queue_owner_ingress.py:owner_routes` renders those known browser routes and
+corresponding finite nginx locations from deployment source. The renderer does
+not read or write keys. Merge the additive routes with the existing gateway
+specification and trusted owner-auth location and private marker include.
+Do not duplicate an existing pause location or change unrelated routes.
+The existing TEST and PROD lane authorization and promotion checks are still
+required, including distinct service credentials and correct scope.
+
+A fresh-Mac PROD installation lists only sessions with eligible, admitted
+Mac events. Before the first saved selection it keeps its existing behavior.
+After a selection is saved it admits only fresh events in that selection;
+an empty saved selection is not equivalent to the initial default. Selection
+cannot authorize processing of old records or maintenance work from a broader
+selector. Source removal is still limited to untouched, independent tasks:
+in-flight, published, or partially processed sources are not removed.
+Changes only affect the selected lane's SQLite transaction.
+
 ## Signed packed PROD bootstrap (source, default off)
 
 A packed Visual release uses a lane-neutral runtime receipt and identical ZIP

@@ -195,32 +195,35 @@ def _configure(config_path, port, legacy_token):
             except (ValueError,OSError):
                 return False
         handler.queue_pause_ready=ready
-        if p.lane=='test':
-            from . import queue_item_removal as items, queue_session_control as sessions
-            from .queue_owner_domain import owner_operations
-            from .queue_pause_proof import reserve_once
-            perform=owner_operations(database=p.db,release_lease=lambda:release_lease(p,uid=uid),
-                                     identity=identity)
+        from . import queue_item_removal as items, queue_session_control as sessions
+        from .queue_owner_domain import owner_operations
+        from .queue_pause_proof import reserve_once
+        perform=owner_operations(database=p.db,release_lease=lambda:release_lease(p,uid=uid),
+                                 identity=identity,stage=p.lane,fresh_only=config.auto_process_fresh_mac)
 
-            def handle(action,path,*,stage,proof,**args):
-                return perform(action,args,authorize=lambda db:reserve_once(
-                    db,stage=stage,expected_revision=args['expected_revision'],proof=proof,path=path))
+        def handle(action,path,*,stage,proof,**args):
+            return perform(action,args,authorize=lambda db:reserve_once(
+                db,stage=stage,expected_revision=args['expected_revision'],proof=proof,path=path))
 
-            def route(path,action,read_action=None):
-                return make_queue_pause_rest(stage='test',enabled=True,read_sha256=read_fp,
-                    write_sha256=write_fp,actor_sha256=owner,
-                    verify_owner=make_owner_verifier(bytes.fromhex(key),owner,lane='test',path=path),
-                    prepare=lambda:perform(read_action,{}),
-                    change=lambda **args:handle(action,path,**args),port=port,path=path)
+        def route(path,action,read_action=None):
+            return make_queue_pause_rest(stage=p.lane,enabled=True,read_sha256=read_fp,
+                write_sha256=write_fp,actor_sha256=owner,
+                verify_owner=make_owner_verifier(bytes.fromhex(key),owner,lane=p.lane,path=path),
+                prepare=lambda:perform(read_action,{}),
+                change=lambda **args:handle(action,path,**args),port=port,path=path)
 
-            if config.processing_session_ids==():
-                handler.queue_session_route=route(sessions.PATH,'sessions_set','sessions_prepare')
-                from .mcp_server import WorkerLauncher
+        if config.processing_session_ids==():
+            handler.queue_session_route=route(sessions.PATH,'sessions_set','sessions_prepare')
+            from .mcp_server import WorkerLauncher
+            if config.auto_process_fresh_mac:
+                handler.queue_session_lifespan=lambda:sessions.follow_settings(
+                    config,lambda selected:WorkerLauncher(selected).start() if ready() else {},fresh_only=True)
+            else:
                 handler.queue_session_lifespan=lambda:sessions.follow_settings(
                     config,lambda selected:WorkerLauncher(selected).start() if ready() else {})
-            handler.queue_item_routes={
-                items.PATH:route(items.PATH,'item_remove'),
-                items.PREVIEW_PATH:route(items.PREVIEW_PATH,'item_preview')}
+        handler.queue_item_routes={
+            items.PATH:route(items.PATH,'item_remove'),
+            items.PREVIEW_PATH:route(items.PREVIEW_PATH,'item_preview')}
         return handler
     return bind
 

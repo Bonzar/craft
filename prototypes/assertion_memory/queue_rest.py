@@ -72,20 +72,20 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
         db.execute('BEGIN')
         try:
             selected=config.processing_session_ids
-            if session_control and lane=='test':
+            if session_control and not getattr(config,"auto_process_fresh_mac",False):
                 from .queue_session_control import read
                 selected,_=read(db,selected)
             data=build_queue_status(db,stage=lane,release_version=tag,
                  processing_session_ids=selected,
                  model_configured=config.provider!='none',interactive_enabled=interactive_enabled,
                  auto_process_fresh_mac=(lane=='prod' and config.auto_process_fresh_mac),limit=limit,offset=offset)
-            if lane=='test':
+            if lane=='test' or session_control:
                 from .queue_session_control import annotate_source, annotate_maintenance
-                annotate_source(db,data,selected)
+                annotate_source(db,data,selected,fresh_only=getattr(config,"auto_process_fresh_mac",False))
                 annotate_maintenance(db,data,selected)
-                if (can_change() if callable(can_change) else can_change):
-                    from .queue_item_removal import annotate
-                    annotate(db,data)
+            if (can_change() if callable(can_change) else can_change):
+                from .queue_item_removal import annotate
+                annotate(db,data)
         finally:
             db.set_progress_handler(None,0)
             db.rollback()

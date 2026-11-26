@@ -53,21 +53,21 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
       assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
       urls.push(url);
       if(url==='/api/v1/processing/items/source-preview/prepare'){
-        assert.equal(options.method,'POST');return Response.json({stage:'test',csrf_token:'123.'+'a'.repeat(64)});
+        assert.equal(options.method,'POST');return Response.json({stage,csrf_token:'123.'+'a'.repeat(64)});
       }
       if(url==='/api/v1/processing/items/source-preview'){
         assert.equal(options.method,'PUT');const body=JSON.parse(options.body);
-        return Response.json({stage:'test',queue_id:'source',item_id:body.item_id,source_role:'user',source_preview:'<script>текст</script>'});
+        return Response.json({stage,queue_id:'source',item_id:body.item_id,source_role:'user',source_preview:'<script>текст</script>'});
       }
       if(url==='/api/v1/processing/items/remove/prepare'){
         assert.equal(options.method,'POST');
-        return Response.json({stage:'test',csrf_token:'123.'+'a'.repeat(64)});
+        return Response.json({stage,csrf_token:'123.'+'a'.repeat(64)});
       }
       if(url==='/api/v1/processing/items/remove'){
         assert.equal(options.method,'PUT');
         assert.equal(options.headers['x-csrf-token'],'123.'+'a'.repeat(64));
         const args=JSON.parse(options.body);removed.push(args);
-        return Response.json({stage:'test',queue_id:args.queue_id,item_id:args.item_id,removed:true,effect:args.queue_id==='source'?'source_and_queue':'queue_only'});
+        return Response.json({stage,queue_id:args.queue_id,item_id:args.item_id,removed:true,effect:args.queue_id==='source'?'source_and_queue':'queue_only'});
       }
       if(url==='/api/v1/processing/sessions/prepare'){
         assert.equal(options.method,'POST');
@@ -276,6 +276,22 @@ test('PROD dashboard does not try TEST scheduler management',async()=>{
 });
 
 
+test('PROD standalone prepares its own selection, preview and deletion without a separate feature flag',async()=>{
+  const stage='prod',revision='b'.repeat(32);
+  const h=harness({stage,standalone:true,sessionPolicy:{stage,revision,selected_session_ids:[],sessions:[{id:'same-lane',queued:1,eligible:true}]}});
+  h.setData([{id:'source',status:'active',total:1,items:[{id:'job',status:'ready',phase:'extract',preview_revision:revision,remove_revision:revision}]}]);
+  await h.open();
+  const box=h.sessionOptions.items[0].items[0];box.checked=true;box.listeners.change();
+  await h.sessionSave.listeners.click();
+  assert.deepEqual(h.sessionWrites[0].payload,{stage,selected_session_ids:['same-lane'],expected_revision:revision});
+  const action=label=>h.find(h.container,e=>e.tag==='button'&&e.textContent===label);
+  await action('Показать текст реплики').listeners.click();
+  assert.match(h.text(h.container),/<script>текст<\/script>/);
+  action('Удалить реплику и задачу').listeners.click();
+  await action('Подтвердить удаление').listeners.click();
+  assert.deepEqual(h.removed,[{stage,queue_id:'source',item_id:'job',expected_revision:revision}]);
+});
+
 const ownerPolicy=()=>({stage:'test',revision:'b'.repeat(32),selected_session_ids:[],sessions:[]});
 
 test('source plain excerpt and deletion require item-specific confirmation',async()=>{
@@ -291,6 +307,8 @@ test('source plain excerpt and deletion require item-specific confirmation',asyn
   await h.signal();
   assert.equal(h.urls.filter(url=>url.includes('/source-preview')).length,2);
   assert.equal(action(cards[1],'Удалить реплику и задачу'),undefined);
+  assert.match(h.text(cards[1]),/обработка реплики уже началась/);
+  assert.ok(cards[0].items.some(e=>e.tag!=='details'&&action(e,'Удалить реплику и задачу')));
   action(cards[0],'Удалить реплику и задачу').listeners.click();
   assert.equal(h.removed.length,0);
   action(cards[0],'Отмена').listeners.click();

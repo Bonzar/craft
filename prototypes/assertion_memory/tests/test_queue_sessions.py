@@ -17,6 +17,8 @@ NOW=1795619000
 
 
 class Sessions(unittest.IsolatedAsyncioTestCase):
+    stage='test'
+    port=8893
     def setUp(self):
         temporary=tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -38,37 +40,40 @@ class Sessions(unittest.IsolatedAsyncioTestCase):
         self.write_key=b'c'*64
         def prepare():
             with sqlite3.connect(self.path) as db:
-                return status(db)
+                return status(db,stage=self.stage)
         def change(*, stage, selected_session_ids, expected_revision, proof):
             with sqlite3.connect(self.path) as db:
                 db.execute('BEGIN IMMEDIATE')
                 reserve_once(db,stage=stage,expected_revision=expected_revision,
                              proof=proof,path=PATH,clock=lambda:NOW)
-                return update(db,selected_session_ids=selected_session_ids,expected_revision=expected_revision)
-        self.app=make_queue_pause_rest(stage='test',enabled=True,path=PATH,port=8893,
+                return update(db,selected_session_ids=selected_session_ids,expected_revision=expected_revision,stage=self.stage)
+        self.app=make_queue_pause_rest(stage=self.stage,enabled=True,path=PATH,port=self.port,
             read_sha256=hashlib.sha256(self.read_key).hexdigest(),
             write_sha256=hashlib.sha256(self.write_key).hexdigest(),actor_sha256=self.owner,
-            verify_owner=make_owner_verifier(self.secret,self.owner,path=PATH,clock=lambda:NOW),
+            verify_owner=make_owner_verifier(self.secret,self.owner,lane=self.stage,path=PATH,clock=lambda:NOW),
             prepare=prepare,change=change)
 
-    async def call(self, ids=None, expected=INITIAL, nonce='f'*32, *, method='PUT'):
+    async def call(self, ids=None, expected=INITIAL, nonce='f'*32, *, method='PUT', proof_lane=None):
         wire=json.dumps({'selected_session_ids':ids,'expected_revision':expected}).encode()
-        proof=ProvenOwner(self.owner,expected,NOW,NOW+15,nonce,'test',PATH)
+        proof=ProvenOwner(self.owner,expected,NOW,NOW+15,nonce,proof_lane or self.stage,PATH)
         sig=hmac.digest(self.secret,canonical(wire,proof),'sha256').hex()
         token=self.write_key if method=='PUT' else self.read_key
-        headers=[(b'authorization',b'Bearer '+token),(b'host',b'127.0.0.1:8893'),
+        headers=[(b'authorization',b'Bearer '+token),(b'host',f'127.0.0.1:{self.port}'.encode()),
                  (b'content-type',b'application/json')]
         headers+=list(zip(ENVELOPE,map(str.encode,(self.owner,str(NOW),str(NOW+15),nonce,sig))))
         output=[]
         async def receive():return {'type':'http.request','body':wire}
         async def send(event):output.append(event)
-        await self.app(dict(type='http',method=method,path=PATH,server=('127.0.0.1',8893),
+        await self.app(dict(type='http',method=method,path=PATH,server=('127.0.0.1',self.port),
                             client=('127.0.0.1',34000),headers=headers),receive,send)
         return output[0]['status'],json.loads(output[1]['body'])
 
     async def test_owner_route_and_admission_revision(self):
         code,initial=await self.call(method='GET')
         self.assertEqual(code,200)
+        self.assertEqual(initial['stage'],self.stage)
+        other='prod' if self.stage=='test' else 'test'
+        self.assertEqual((await self.call(['native.qa'],proof_lane=other))[0],403)
         self.assertEqual(initial['selected_session_ids'],[])
         self.assertEqual(initial['sessions'],[{'id':'native.qa','eligible':True,'queued':1}])
         self.assertEqual((await self.call(['incomplete.qa'],nonce='e'*32))[0],400)
@@ -112,3 +117,8 @@ class Sessions(unittest.IsolatedAsyncioTestCase):
         data['processing_control']['paused']=True
         annotate_maintenance(self.db,data,['native.qa'])
         self.assertEqual([i['hold_reason'] for i in items],['global_pause','global_pause'])
+
+
+class ProductionSessions(Sessions):
+    stage='prod'
+    port=8903

@@ -41,7 +41,7 @@
   }
   const hold={global_pause:'Глобальная пауза',session_excluded:'Сессия не выбрана для автообработки',incomplete_source:'Ожидает полного источника'};
   let sessionsState, sessionsDraft=new Set(), sessionsBusy=false, sessionsProbe=false, nativeProbeTried=false;
-  let controlsReady=false;
+  let controlsReady=false, queueStage;
   const names={source:'Реплики',maintenance:'Связи и пересчёт',interactive:'Вопросы'};
   const ordered=['interactive','source','maintenance'];
   const states={running:'В работе',ready:'Ожидает',waiting_origin:'Ждёт источник',delayed:'Отложено',paused:'Приостановлено',expired:'Исчерпаны попытки',active:'Активна',unavailable:'Недоступна',disabled:'Выключена'};
@@ -77,6 +77,7 @@
       catch {copyStatus.textContent='Копирование недоступно. ID можно выделить в карточке.';}
     });
     detail.append(summary,raw,copy);
+    let cardAction=null;
     if(controlsReady&&itemFeedback&&['source','maintenance'].includes(queueId)&&rev(item.remove_revision)&&item.status!=='running'&&(queueId!=='source'||item.phase==='extract')){
       const change=element('div','','queue-remove-action');
       const key=queueId+':'+item.id;
@@ -88,19 +89,19 @@
           if(deleting.has(key)||!panel.open)return;
           const current=generation;deleting.add(key);commit.disabled=true;
           itemFeedback.textContent='Удаляем задачу из очереди…';
-          const body={stage:'test',queue_id:queueId,item_id:item.id,expected_revision:item.remove_revision};
+          const body={stage:queueStage,queue_id:queueId,item_id:item.id,expected_revision:item.remove_revision};
           const route='/api/v1/processing/items/remove';
           try{
             const proof=await sessionRequest(route+'/prepare','POST',body);
             if(current!==generation||!panel.open)return;
-            if(proof?.stage!=='test'||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
+            if(proof?.stage!==body.stage||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
             const value=await sessionRequest(route,'PUT',body,proof.csrf_token);
             if(current!==generation||!panel.open)return;
             if(!value){
               itemFeedback.textContent='Задача уже изменилась, выполняется или отсутствует. Обновляем очередь.';
               return;
             }
-            if(value.stage!=='test'||value.queue_id!==queueId||value.item_id!==item.id||value.removed!==true||value.effect!==effect)throw Error();
+            if(value.stage!==body.stage||value.queue_id!==queueId||value.item_id!==item.id||value.removed!==true||value.effect!==effect)throw Error();
             itemFeedback.textContent=source?'Задача и сохранённая реплика удалены из базы. Исходный чат не изменён.':'Задача удалена из очереди. Реплики и граф не изменены.';
           }catch{if(current===generation&&panel.open)itemFeedback.textContent='Удаление не подтверждено. Проверьте обновлённую очередь.';}
           finally{
@@ -112,7 +113,9 @@
         change.replaceChildren(element('p',source?'Удалить задачу и реплику из базы памяти? Сообщение в исходном чате останется.':'Удалить только задачу из очереди? Реплики и граф останутся.'),commit,cancel);
         commit.focus();
       });
-      change.append(begin);detail.append(change);
+      change.append(begin);cardAction=change;
+    }else if(controlsReady&&queueId==='source'&&(item.phase==='partial_source'||item.status==='running')){
+      cardAction=element('p','Удаление недоступно: обработка реплики уже началась.','queue-lane-status');
     }
     root.append(row,title);
     if(controlsReady&&queueId==='source'&&rev(item.preview_revision)){
@@ -125,16 +128,16 @@
       const load=async()=>{
         if(previewPending.size||previewPending.has(previewKey)||!panel.open)return;
         const current=generation;
-        const body={stage:'test',queue_id:'source',item_id:item.id,expected_revision:item.preview_revision};
+        const body={stage:queueStage,queue_id:'source',item_id:item.id,expected_revision:item.preview_revision};
         const route='/api/v1/processing/items/source-preview';
         previewPending.add(previewKey);open.disabled=true;
         try{
           const proof=await sessionRequest(route+'/prepare','POST',body);
           if(current!==generation||!panel.open)return;
-          if(proof?.stage!=='test'||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
+          if(proof?.stage!==body.stage||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
           const value=await sessionRequest(route,'PUT',body,proof.csrf_token);
           if(current!==generation||!panel.open)return;
-          if(value?.stage!=='test'||value.queue_id!=='source'||value.item_id!==item.id||
+          if(value?.stage!==body.stage||value.queue_id!=='source'||value.item_id!==item.id||
              typeof value.source_preview!=='string'||!value.source_preview.trim()||Array.from(value.source_preview).length>240)throw Error();
           if(previews.size>=50)previews.delete(previews.keys().next().value);
           previews.set(previewKey,value);show(value);
@@ -154,6 +157,7 @@
     }
     if(Object.hasOwn(hold,item.hold_reason))root.append(element('p',hold[item.hold_reason],'queue-lane-status'));
     if(typeof item.session_id==='string'&&item.session_id)detail.append(element('p','Сессия: '+item.session_id));
+    if(cardAction)root.append(cardAction);
     root.append(detail);
     return {root,details:detail,summary,copy};
   }
@@ -198,7 +202,7 @@
   }
   const sessionUrl='/api/v1/processing/sessions';
   function parseSessions(value){
-    if(value?.stage!=='test'||!rev(value.revision)||!Array.isArray(value.sessions)||!Array.isArray(value.selected_session_ids)||
+    if(value?.stage!==queueStage||!rev(value.revision)||!Array.isArray(value.sessions)||!Array.isArray(value.selected_session_ids)||
        value.selected_session_ids.length>50||!value.selected_session_ids.every(id=>typeof id==='string')||
        !value.sessions.every(x=>x&&typeof x.id==='string'&&Number.isSafeInteger(x.queued)&&x.queued>=0&&typeof x.eligible==='boolean'))throw Error();
     return value;
@@ -265,7 +269,7 @@
         useSessions(proof);sessionFeedback.textContent='Выбор уже изменился. Проверьте новый список и выберите заново.';return;
       }
       if(typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
-      const done=await sessionRequest(sessionUrl,'PUT',{stage:'test',selected_session_ids:selection,expected_revision:before.revision},proof.csrf_token);
+      const done=await sessionRequest(sessionUrl,'PUT',{stage:queueStage,selected_session_ids:selection,expected_revision:before.revision},proof.csrf_token);
       if(current!==generation||!panel.open)return;
       if(!done){
         const refreshed=await sessionRequest(sessionUrl+'/prepare','POST',{});
@@ -399,7 +403,10 @@
       const label=base.stage.toUpperCase()+version;
       if(status.textContent!==label)status.textContent=label;
       if(!inFlight&&epoch===controlEpoch)acceptControl(base);
-      if(base.stage==='test'&&!nativeProbeTried&&!sessionsState){
+      if(queueStage!==undefined&&base.stage!==queueStage)throw Error();
+      queueStage=base.stage;
+      if(base.capabilities?.standalone_pause===true)controlsReady=true;
+      if((base.capabilities?.standalone_queue_sessions===true||base.stage==='test')&&!nativeProbeTried&&!sessionsState){
         nativeProbeTried=true;
         void loadSessions(base.capabilities?.standalone_queue_sessions===true);
       }

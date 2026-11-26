@@ -1,4 +1,4 @@
-"""Explicit TEST session selection; never interprets null as all."""
+"""Explicit owner session selection; never interprets null as all."""
 import json
 import re
 from uuid import uuid4
@@ -34,15 +34,18 @@ def read(db, baseline=()):
     return normalize(json.loads(row[0])),row[1]
 
 
-def choices(db, selected):
+def choices(db, selected, *, fresh_only=False):
     if not all(_exists(db,t) for t in ('memory_raw_events','memory_capture_jobs','memory_event_positions')):
         return []
     found={}
+    if fresh_only and not _exists(db,'memory_fresh_mac_events'):
+        return [{'id':sid,'queued':0,'eligible':False} for sid in selected]
+    scope=(' AND e.id IN (SELECT event_id FROM memory_fresh_mac_events)' if fresh_only else '')
     for sid,count in db.execute(
             f'SELECT {_SOURCE_SESSION} AS sid, sum(CASE WHEN j.status IN (\'pending\',\'running\',\'waiting_model\') THEN 1 ELSE 0 END) '
             'FROM memory_raw_events e JOIN memory_capture_jobs j ON j.event_id=e.id '
             'JOIN memory_event_positions p ON p.event_id=e.id WHERE j.status<>\'waiting_origin\' '
-            'GROUP BY sid ORDER BY 2 DESC,sid LIMIT ?', (MAX_CHOICES,)):
+             + scope + ' GROUP BY sid ORDER BY 2 DESC,sid LIMIT ?', (MAX_CHOICES,)):
         if isinstance(sid,str) and ID.fullmatch(sid):
             found[sid]={'id':sid,'queued':int(count),'eligible':True}
     # Already selected IDs remain visible even if the matching data aged out.
@@ -51,29 +54,34 @@ def choices(db, selected):
     return list(found.values())
 
 
-def status(db, baseline=()):
+def status(db, baseline=(), *, stage='test', fresh_only=False):
     selected,revision=read(db,baseline)
-    return dict(stage='test',revision=revision,selected_session_ids=list(selected),
-                sessions=choices(db,selected))
+    if stage not in ('test','prod'):
+        raise ValueError('Invalid queue stage')
+    # Before an explicit override, existing fresh-only admission stays active.
+    if fresh_only and revision==INITIAL:
+        selected=tuple(x['id'] for x in choices(db,(),fresh_only=True)[:MAX_SELECTED])
+    return dict(stage=stage,revision=revision,selected_session_ids=list(selected),
+                sessions=choices(db,selected,fresh_only=fresh_only))
 
 
-def update(db, *, selected_session_ids, expected_revision, baseline=()):
+def update(db, *, selected_session_ids, expected_revision, baseline=(), stage='test', fresh_only=False):
     if not db.in_transaction or type(expected_revision) is not str or not REVISION.fullmatch(expected_revision):
         raise ValueError('Invalid session selection revision')
     wanted=normalize(selected_session_ids)
     current,rev=read(db,baseline)
     if rev!=expected_revision:
         raise Conflict('Session selection changed')
-    known={x['id'] for x in choices(db,current) if x['eligible']}
+    known={x['id'] for x in choices(db,current,fresh_only=fresh_only) if x['eligible']}
     if not set(wanted)<=known|set(current):
         raise ValueError('Unknown session selection')
-    if wanted!=current:
+    if wanted!=current or fresh_only and rev==INITIAL:
         db.execute('CREATE TABLE IF NOT EXISTS memory_test_queue_sessions('
                    'singleton INTEGER PRIMARY KEY CHECK(singleton=1),selected TEXT NOT NULL,revision TEXT NOT NULL)')
         db.execute('INSERT INTO memory_test_queue_sessions VALUES (1,?,?) '
                    'ON CONFLICT(singleton) DO UPDATE SET selected=excluded.selected,revision=excluded.revision',
                    (json.dumps(wanted,separators=(',',':')),uuid4().hex))
-    return status(db,baseline)
+    return status(db,baseline,stage=stage,fresh_only=fresh_only)
 
 
 def hold_reason(*, live, status, position, selected, session_id, paused):
@@ -113,7 +121,7 @@ def worker_selection_changed(config):
         return True
 
 
-def follow_settings(config, launch):
+def follow_settings(config, launch, *, fresh_only=False):
     """Run alongside the existing TEST supervisor only when owner route is active."""
     from contextlib import asynccontextmanager
     from dataclasses import replace
@@ -132,7 +140,7 @@ def follow_settings(config, launch):
                     if selected and rev!=INITIAL and time.monotonic()>=failed_until:
                         # Existing WORKER flock prevents two workers; poll again
                         # after the previous revision drains and lets go.
-                        next_=replace(config,processing_session_ids=selected,queue_sessions_revision=rev)
+                        next_=(config if fresh_only else replace(config,processing_session_ids=selected,queue_sessions_revision=rev))
                         started=await asyncio.to_thread(launch,next_)
                         if started.get('scheduled'):
                             failed_until=time.monotonic()+5
@@ -148,7 +156,7 @@ def follow_settings(config, launch):
     return running()
 
 
-def annotate_source(db, data, selected):
+def annotate_source(db, data, selected, *, fresh_only=False):
     source=next((q for q in data['queues'] if q['id']=='source'),None)
     if not source or not source['items']:
         return
@@ -156,15 +164,18 @@ def annotate_source(db, data, selected):
     join=("LEFT JOIN memory_event_positions p ON p.event_id=e.id"
           if position!='NULL' else '')
     items={x['id']:x for x in source['items']}
-    rows=db.execute(f'SELECT j.id,j.status,{position},{_SOURCE_SESSION} '
+    from .thought_processing_selection import FRESH_MAC_ONLY, source_predicate
+    gate,gate_args=(source_predicate(FRESH_MAC_ONLY,'e',db=db)
+                    if fresh_only and _exists(db,'memory_fresh_mac_events') else ('0' if fresh_only else '1',[]))
+    rows=db.execute(f'SELECT j.id,j.status,{position},{_SOURCE_SESSION},({gate}) '
                     'FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id '
                     f'{join} WHERE j.id IN (SELECT value FROM json_each(?))',
-                    (json.dumps(list(items)),)).fetchall()
-    for key,state,pos,sid in rows:
+                    (*gate_args,json.dumps(list(items)))).fetchall()
+    for key,state,pos,sid,in_scope in rows:
         item=items[key]
         item['session_id']=sid if isinstance(sid,str) and ID.fullmatch(sid) else None
         item['hold_reason']=hold_reason(live=True,status=item['status'] if item['status']=='running' else state,
-            position=pos,selected=selected,session_id=sid,paused=data['processing_control']['paused'])
+            position=pos,selected=(None if in_scope else ()) if fresh_only else selected,session_id=sid,paused=data['processing_control']['paused'])
 
 
 def annotate_maintenance(db,data,selected):

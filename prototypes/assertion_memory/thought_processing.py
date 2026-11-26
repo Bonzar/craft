@@ -258,7 +258,7 @@ def _recover_selected(queue, session_ids):
     """The caller owns the same exclusive worker lock as ordinary processing."""
     now=queue._time()
     with queue.store.transaction(write=True) as db:
-        predicate,arguments=source_predicate(session_ids,'e')
+        predicate,arguments=source_predicate(session_ids,'e',db=db)
         db.execute("UPDATE memory_capture_jobs SET status='pending',lease_token=NULL,lease_until=NULL,"
             "available_at=?,updated_at=? WHERE status='running' AND event_id IN "
             f"(SELECT e.id FROM memory_raw_events e WHERE json_extract(e.metadata,'$.capture_batch_id') IS NULL AND {predicate})",

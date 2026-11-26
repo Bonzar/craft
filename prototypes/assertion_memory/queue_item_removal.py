@@ -1,4 +1,4 @@
-"""Non-running TEST queue cancellation; raw messages and graph records stay intact."""
+"""Owner cancellation of non-running queue items with bounded dependency checks."""
 import hashlib
 import json
 import re
@@ -92,7 +92,7 @@ def _first_source_dependency_check(db, item_id):
             if index>=2000 or item_id in _actual_raw_refs(Thought(**decode_payload(payload))):
                 raise Conflict('Source has retained or unverified thought evidence')
     required={'memory_event_positions','memory_capture_jobs','memory_ingest_receipts',
-              'memory_message_receipts','memory_source_context_changes'}
+              'memory_message_receipts','memory_source_context_changes','memory_fresh_mac_events'}
     for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'"):
         if table in required:
             continue
@@ -114,7 +114,7 @@ def source_tombstoned(db,event_id):
 
 
 def remove(db,*,stage,queue_id,item_id,expected_revision,now):
-    if stage!='test' or not db.in_transaction:
+    if stage not in ('test','prod') or not db.in_transaction:
         raise ValueError('Invalid TEST queue transaction')
     check_request(queue_id,item_id)
     if queue_id=='source' and active_member(db,item_id):
@@ -134,8 +134,8 @@ def remove(db,*,stage,queue_id,item_id,expected_revision,now):
         _first_source_dependency_check(db,item_id)
         if _exists(db,'memory_ingest_receipts'):
             from .ingest_streams import retire_delivery_receipts
-            retire_delivery_receipts(db,item_id,'test-owner-removed-before-first-processing-v1')
-        for table in ('memory_event_positions','memory_message_receipts','memory_source_context_changes'):
+            retire_delivery_receipts(db,item_id,f'{stage}-owner-removed-before-first-processing-v1')
+        for table in ('memory_event_positions','memory_message_receipts','memory_source_context_changes','memory_fresh_mac_events'):
             if _exists(db,table):
                 db.execute(f'DELETE FROM {table} WHERE event_id=?',(item_id,))
         result=db.execute("DELETE FROM memory_capture_jobs WHERE id=? AND event_id=? AND status=? "
@@ -152,7 +152,7 @@ def remove(db,*,stage,queue_id,item_id,expected_revision,now):
                           (hi,item_id,hi,low))
     if result.rowcount!=1:
         raise Conflict('Queue item changed')
-    return dict(stage='test',queue_id=queue_id,item_id=item_id,removed=True,
+    return dict(stage=stage,queue_id=queue_id,item_id=item_id,removed=True,
                 effect='source_and_queue' if queue_id=='source' else 'queue_only')
 
 
@@ -165,7 +165,7 @@ def was_removed(db, thought_id, generation):
 
 
 def source_preview(db,*,stage,queue_id,item_id,expected_revision):
-    if stage!='test' or queue_id!='source':
+    if stage not in ('test','prod') or queue_id!='source':
         raise ValueError('Invalid source preview route')
     check_request(queue_id,item_id)
     row=_state(db,queue_id,item_id)
@@ -180,5 +180,5 @@ def source_preview(db,*,stage,queue_id,item_id,expected_revision):
     if not isinstance(prompt,str):
         raise ValueError('Invalid source preview')
     prompt=''.join(c if c.isprintable() or c in '\n\t' else ' ' for c in prompt)
-    return dict(stage='test',queue_id='source',item_id=item_id,
+    return dict(stage=stage,queue_id='source',item_id=item_id,
                 source_preview=prompt,source_role=role if isinstance(role,str) and role in ROLES else None)

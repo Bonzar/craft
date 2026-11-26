@@ -1,4 +1,4 @@
-"""Inert local TEST REST pause endpoint; mounting requires separately verified owner ingress."""
+"""Inert local REST queue owner endpoint; mounting requires separately verified owner ingress."""
 import asyncio
 import hashlib
 import hmac
@@ -26,8 +26,8 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                           change=None, port=None, path=PATH):
     from .queue_session_control import PATH as SESSIONS, normalize
     from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH, check_request
-    session_mode=path==SESSIONS and stage=='test'
-    item_mode=path in (REMOVE,PREVIEW_PATH) and stage=='test'
+    session_mode=path==SESSIONS
+    item_mode=path in (REMOVE,PREVIEW_PATH)
     if path!=PATH and not (session_mode or item_mode):
         return None
     if stage not in ('test','prod') or enabled is not True:
@@ -114,7 +114,7 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
             except Exception:
                 return await reply(403, {'error': 'owner_required'})
             if (type(proof) is not ProvenOwner
-                    or proof.path!=path or not hmac.compare_digest(proof.owner, actor_sha256)):
+                    or proof.path!=path or proof.lane!=stage or not hmac.compare_digest(proof.owner, actor_sha256)):
                 return await reply(403, {'error': 'owner_required'})
             args['proof'] = proof
         try:
