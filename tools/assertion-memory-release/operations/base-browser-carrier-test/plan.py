@@ -25,8 +25,8 @@ def sha(b):
     return hashlib.sha256(b).hexdigest()
 
 def spec_sha(value):
-    return sha(json.dumps(value,ensure_ascii=False,allow_nan=False,sort_keys=True,
-                          separators=(',',':')).encode())
+    return sha(json.dumps(value,ensure_ascii=True,allow_nan=False,sort_keys=True,
+                          separators=(',',':')).encode('ascii'))
 
 def nginx_delta(source):
     if len(source.encode())>131072 or source.count(FALLBACK)!=1:
@@ -121,7 +121,9 @@ def plan(source, spec, *, gateway_sha, verified_backend=False, verified_old_deny
     return {'before':(source,deepcopy(spec)),'after':after,
             'pins':((TEST_NGINX_SHA,gateway_sha),(sha(after[0].encode()),spec_sha(after[1])))}
 
-def inverse(p, current):
+def inverse(p, current, *, verified_old_deny=False):
+    if not verified_old_deny:
+        raise ValueError('prior destructive route denial proof required for rollback')
     if current!=p['after'] or (sha(current[0].encode()),spec_sha(current[1]))!=p['pins'][1]:
         raise ValueError('TEST active generation drift')
     return deepcopy(p['before'])
