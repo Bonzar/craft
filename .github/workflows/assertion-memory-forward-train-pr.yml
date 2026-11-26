@@ -19,4 +19,4 @@ jobs:
           python-version: '3.12'
       - name: Test independent TEST/PROD admission and supersession
         working-directory: tools/assertion-memory-release
-        run: python3 -B -m unittest test_forward_release_train test_forward_release_checkpoints test_forward_release_receiver
+        run: python3 -B -m unittest test_forward_release_train test_forward_release_checkpoints test_forward_release_receiver test_forward_release_evidence
