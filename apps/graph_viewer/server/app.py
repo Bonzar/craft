@@ -363,12 +363,15 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False):
     # The legacy Sites env binding is deliberately read-only. Mutation must be
     # installed by the standard owner-session web app at startup.
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
         raise ValueError('Queue control requires an explicit owner web dashboard')
-    if queue_dashboard is None:
+    if type(existing_owner_only) is not bool or existing_owner_only and (
+            password is not None or browser_owner_api is None or queue_dashboard is not None):
+        raise ValueError('Existing-only owner store requires the verified browser pipeline')
+    if queue_dashboard is None and not existing_owner_only:
         from .queue_dashboard import configured_for_legacy_reader
         queue_dashboard = configured_for_legacy_reader(source_path)
     static_dir=validate_static_directory(
@@ -397,7 +400,11 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
             import logging
             logging.getLogger(__name__).warning('graph_database_clear_readiness_not_configured')
             clear_binding=clear_read_service=None
-    owner=OwnerStore(state_dir,password)
+    if existing_owner_only:
+        from .existing_owner_store import ExistingOwnerStore
+        owner=ExistingOwnerStore(state_dir)
+    else:
+        owner=OwnerStore(state_dir,password)
     manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model,owner_store=owner)
     @asynccontextmanager
     async def lifespan(app):

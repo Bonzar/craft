@@ -146,8 +146,11 @@ async def _error_response(status,code,scope,receive,send):
 
 
 def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port=8793, background=True,
-                    additional_hosts=(), neutral_factory=None, queue_rest_factory=None, queue_pause_factory=None):
+                    additional_hosts=(), neutral_factory=None, queue_rest_factory=None, queue_pause_factory=None,
+                    browser_lifespan=None):
     from mcp.server.transport_security import TransportSecuritySettings
+    if browser_lifespan is not None and not callable(browser_lifespan):
+        raise ValueError('Invalid browser-only lifespan')
     if (not isinstance(token, str) or len(token) < MIN_TOKEN_LENGTH
             or not token.isascii() or any(x.isspace() for x in token)):
         raise ValueError('a private bearer key of at least 32 ASCII characters is required')
@@ -204,9 +207,13 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
     @asynccontextmanager
     async def lifespan(_app):
         try:
-            if background:
-                WorkerLauncher(config).start()
             async with AsyncExitStack() as stack:
+                # Explicitly supplied by verified Base startup only. Browser
+                # ASGI never mounts within this private listener's dispatcher.
+                if browser_lifespan is not None:
+                    await stack.enter_async_context(browser_lifespan())
+                if background:
+                    WorkerLauncher(config).start()
                 await stack.enter_async_context(inner.router.lifespan_context(inner))
                 if background:
                     from .processing_control import restart_on_resume
