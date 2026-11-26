@@ -266,8 +266,12 @@ def arm_database_reset_boundary(state, *, clock_ns):
     return state | {'cursor':st.st_size,'line':line,'skip_partial':partial,
                     'checkpoint':{'start':lo,'end':st.st_size,'sha256':hashlib.sha256(tail).hexdigest()},
                     'turn':None,'current':None,'dialogue_turn_roots':{},'witnesses':[],
+                    'interrupted_users':[],'interrupted_user_witnesses':[],'blocked_interrupted_batch':None,
+                    'gaps':[gap for gap in state.get('gaps',[])
+                            if gap!='interrupted_batch_exceeds_transport_limits'],
                     'resume_after_ns':max(state.get('resume_after_ns',0),cutoff_ns),
-                    'pre_reset_turn_discarded':bool(st.st_size>cursor or state.get('turn'))}
+                    'pre_reset_turn_discarded':bool(st.st_size>cursor or state.get('turn')
+                        or state.get('interrupted_users') or state.get('blocked_interrupted_batch'))}
 
 
 def _service_context(row):
@@ -430,6 +434,41 @@ def _seal_turn(state):
     return pending, turn.pop('user_messages', [])
 
 
+def _hold_interrupted_users(state, witnesses, messages):
+    if not messages:
+        return
+    # Store source witnesses in the same SQLite session row as the verified cursor.
+    # They must still match the physical transcript before the next delivery.
+    state.setdefault('interrupted_users', []).extend(messages)
+    prior = state.setdefault('interrupted_user_witnesses', [])
+    seen = {(item['start'], item['end'], item['sha256']) for item in prior}
+    for item in witnesses:
+        identity = (item['start'], item['end'], item['sha256'])
+        if identity not in seen:
+            prior.append(item)
+            seen.add(identity)
+
+
+# Keep the native interrupted-batch admission aligned with Base capture_batch.py.
+# Crossing either published limit cannot turn one batch into multiple model jobs.
+_CAPTURE_BATCH_MAX_MEMBERS = 128
+_CAPTURE_BATCH_MAX_CHARS = 256000
+
+
+def _ordered_batch(*groups):
+    exact = {}
+    for arguments, position in sorted(
+            (entry for group in groups for entry in group), key=lambda entry: entry[1]):
+        identity = arguments['message_id']
+        previous = exact.get(identity)
+        if previous is not None:
+            if previous[0] != arguments:
+                raise ValueError('Conflicting transcript occurrences in capture batch')
+            continue
+        exact[identity] = arguments, position
+    return list(exact.values())
+
+
 def _complete_assistant(store, state, config, payload):
     pending, messages = _seal_turn(state)
     if pending:
@@ -443,13 +482,34 @@ def _complete_assistant(store, state, config, payload):
                 assistant = _enqueue(store, state, row, 'assistant', text, source.get('id'),
                     pending['position'], 'assistant', config,
                     'assistant:' + turn_id + ':byte:' + str(pending['offset']), deferred=True)
-                members = sorted([*messages, assistant], key=lambda entry: entry[1])
-                if config.get('capture_batch'):
+                batch = config.get('capture_batch')
+                # An assistant-only background completion must not move a user's
+                # interrupted input into the wrong completed interaction.
+                carry = state.get('interrupted_users', []) if batch and messages else []
+                if any(a['session_id'] != state['session_id']
+                       or a['actor_id'] != config.get('actor_id', 'user')
+                       or a['scope'] != config.get('scope', 'default') for a,_ in carry):
+                    raise ValueError('Interrupted users belong to another capture policy; review required')
+                members = (_ordered_batch(carry, messages, (assistant,)) if batch
+                           else sorted([*messages, assistant],key=lambda entry:entry[1]))
+                if carry and (len(members)>_CAPTURE_BATCH_MAX_MEMBERS
+                              or sum(len(a['text']) for a,_ in members)>_CAPTURE_BATCH_MAX_CHARS):
+                    # No send and no split. The completed normalized members remain in the
+                    # durable session row, with its cursor, for an explicit owner recovery.
+                    state['blocked_interrupted_batch'] = {'members':members,
+                        'reason':'interrupted_batch_exceeds_transport_limits'}
+                    state['gaps'].append('interrupted_batch_exceeds_transport_limits')
+                    return 0
+                if batch:
                     member_ids = [args['message_id'] for args,_ in members]
                     payload = json.dumps([state['session_id'], member_ids],ensure_ascii=True,separators=(',',':'))
                     marker = {'id': hashlib.sha256(payload.encode('ascii')).hexdigest(), 'message_ids': member_ids}
                     members = [(args | {'_capture_batch': marker}, position) for args,position in members]
-                return sum(store.enqueue(args,local_position=position) for args,position in members)
+                queued = sum(store.enqueue(args,local_position=position) for args,position in members)
+                if carry:
+                    state.pop('interrupted_users', None)
+                    state.pop('interrupted_user_witnesses', None)
+                return queued
             if payload.get('last_agent_message'):
                 state['gaps'].append('unmatched_assistant_completion')
     if messages:
@@ -559,10 +619,15 @@ def _process(store, state, meta, row, offset, position, config):
         return 0
     event_type = payload.get('type') if row.get('type') == 'event_msg' and payload.get('turn_id') == turn['id'] else None
     if event_type == 'turn_aborted':
-        _, discarded = _seal_turn(state)
-        if discarded:
-            _exclude(state, 'user_messages_in_turn_without_final', len(discarded))
-        return 0
+        batch = config.get('capture_batch')
+        queued = _flush_user(store, state, config, final=True) if batch else 0
+        proof = [*state.get('witnesses', []), *turn.get('user_witnesses', []), row['_witness']]
+        _, users = _seal_turn(state)
+        if batch:
+            _hold_interrupted_users(state, proof, users)
+        elif users:
+            _exclude(state, 'user_messages_in_turn_without_final', len(users))
+        return queued
     is_complete = event_type == 'task_complete'
     mode = _assistant_mode(payload) if row.get('type') == 'response_item' else None
     boundary = (row.get('type') == 'response_item' and (payload.get('type') in
@@ -601,6 +666,9 @@ def _poll_locked(store, session_id, config):
     state = store.session(session_id)
     if state is None: raise ValueError('Unregistered session')
     if not state.get('watching', True): return {'queued': 0, 'status': 'inactive'}
+    if state.get('blocked_interrupted_batch'):
+        return {'queued':0,'status':'blocked',
+                'gaps':['interrupted_batch_exceeds_transport_limits']}
     path = Path(state['path'])
     if not path.exists(): return {'queued': 0, 'status': 'waiting_transcript'}
     queued = 0
@@ -623,7 +691,7 @@ def _poll_locked(store, session_id, config):
         pending_assistant = active_turn.get('assistant') or {}
         pending_witness = pending_assistant.get('row', {}).get('_witness')
         for witness in [*state.get('witnesses', []), *active_turn.get('user_witnesses', []),
-                        state.get('checkpoint'), pending_witness]:
+                        *state.get('interrupted_user_witnesses', []), state.get('checkpoint'), pending_witness]:
             if witness is None:
                 continue
             stream.seek(witness['start'])
@@ -691,6 +759,8 @@ def _poll_locked(store, session_id, config):
                         queued += _process(store, state, meta, row, offset, state['line'], config)
             state['cursor'] = stream.tell()
             state['line'] += 1
+            if state.get('blocked_interrupted_batch'):
+                break
         saved_offset = stream.tell()
         checkpoint_start = max(0, state['cursor'] - 4096)
         stream.seek(checkpoint_start)
@@ -706,4 +776,5 @@ def _poll_locked(store, session_id, config):
                 return {'queued':0,'status':'inactive'}
             store.save_session(state)
             store.db.commit()
-    return {'queued': queued, 'status': 'registered', 'gaps': state['gaps'], 'backlog': state['cursor'] < stat.st_size}
+    return {'queued': queued, 'status': 'blocked' if state.get('blocked_interrupted_batch') else 'registered',
+            'gaps': state['gaps'], 'backlog': state['cursor'] < stat.st_size}
