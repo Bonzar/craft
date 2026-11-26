@@ -327,7 +327,7 @@ class ThoughtService(MemoryService):
         if section=='job':
             if event_id is None:raise ValueError('job section requires event_id')
             from .thought_status import job
-            return _text_page(job(self,event_id,scope),'memory_status',
+            return _text_page(job(self,event_id,scope,batch_diagnostics=True),'memory_status',
                 {'event_id':event_id,'scope':scope,'section':'job'},offset,limit)
         if section=='overview':
             from .thought_status import snapshot
