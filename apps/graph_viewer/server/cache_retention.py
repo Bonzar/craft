@@ -54,7 +54,16 @@ def candidates(state, opened, clock):
         locations.extend((p,'cache') for p in epochs.iterdir() if re.fullmatch('[0-9a-f]{64}',p.name)
                          and p.is_dir() and not p.is_symlink())
     if ir.exists():
-        locations += [(p, 'source-ir') for p in ir.iterdir() if p.is_dir() and not p.is_symlink()]
+        for p in ir.iterdir():
+            if not p.is_dir() or p.is_symlink():
+                continue
+            locations.append((p,'source-ir'))
+            epochs=p/'database-epochs'
+            if epochs.is_symlink():
+                raise ValueError('Symlink epoch IR root')
+            if epochs.is_dir():
+                locations.extend((d,'source-ir') for d in epochs.iterdir()
+                                 if re.fullmatch('[0-9a-f]{64}',d.name) and d.is_dir() and not d.is_symlink())
     for parent, kind in locations:
         if parent.exists():
             rows += [row for d in parent.iterdir() if (row := generation(d, kind))]

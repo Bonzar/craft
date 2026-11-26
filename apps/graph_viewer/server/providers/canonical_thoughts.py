@@ -151,8 +151,10 @@ class CanonicalThoughtSource(JsonSnapshotSource):
             dirty = self._watch.execute('PRAGMA data_version').fetchone()[0]
             if dirty == self._dirty:
                 return self._revision
-            reset_generation=self.database_generation()[2]
-            stamp = (reset_generation, *self._watch.execute('SELECT '
+            from ..database_generation import LEGACY, epoch_name
+            generation=self.database_generation()
+            reset_generation=generation[2]
+            stamp = (generation, *self._watch.execute('SELECT '
                 '(SELECT coalesce(max(rowid),0) FROM memory_thought_versions),'
                 '(SELECT count(*) FROM memory_thoughts),'
                 '(SELECT coalesce(sum(current_version),0) FROM memory_thoughts),'
@@ -167,13 +169,14 @@ class CanonicalThoughtSource(JsonSnapshotSource):
             fingerprint = hashlib.sha256(json.dumps({'adaptation':'canonical-thought-groups-v2',
                 'document':document}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             revision = 'sha256:' + fingerprint
-            if revision != self._revision:
+            if revision != self._revision or generation!=getattr(self,'_reset_generation',None):
                 # Canonical schema is part of the fingerprint; publishing the
                 # complete private IR never touches the source database.
-                path = materialize(document, fingerprint, self.state_dir)
+                path = materialize(document,fingerprint,self.state_dir,epoch=epoch_name(generation) if reset_generation!=LEGACY else None)
                 self.path, self._revision = path, revision
             self._dirty = dirty
             self._semantic_stamp = stamp
+            self._reset_generation = generation
             return self._revision
 
     def connect(self, **kwargs):

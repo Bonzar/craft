@@ -1,6 +1,8 @@
 """Read the reset fence from the exact live read-only database, never its salt."""
 from contextlib import closing
 from pathlib import Path
+import hashlib
+import json
 import re
 import sqlite3
 
@@ -23,3 +25,9 @@ def database_generation(path):
     if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):
         raise ValueError('Database identity changed during reset fence read')
     return after.st_dev,after.st_ino,generation
+
+
+def epoch_name(generation):
+    if not isinstance(generation,tuple) or len(generation)!=3:
+        raise ValueError('invalid graph cache epoch')
+    return hashlib.sha256(json.dumps(generation).encode()).hexdigest()

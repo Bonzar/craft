@@ -1,5 +1,6 @@
 """Only disposable SQLite fixtures: stale built and persisted projections cannot return."""
 import asyncio
+import json
 import sqlite3
 import threading
 from types import SimpleNamespace
@@ -12,15 +13,14 @@ from apps.graph_viewer.server.projection import prepare
 from test_live import LiveFixture
 
 class ResetSafety(LiveFixture,unittest.IsolatedAsyncioTestCase):
-    def clear(self,generation):
-        with sqlite3.connect(self.source_path) as db:
-            db.execute('CREATE TABLE IF NOT EXISTS memory_database_clear_state(singleton INTEGER PRIMARY KEY,revision TEXT,salt BLOB)')
-            db.execute('DELETE FROM memory_edges')
-            db.execute('DELETE FROM memory_assertions')
-            db.execute('DELETE FROM memory_views')
-            db.execute('DELETE FROM memory_view_versions')
-            db.execute('UPDATE memory_state SET version=version+1')
-            db.execute('INSERT OR REPLACE INTO memory_database_clear_state VALUES(1,?,?)',(generation,b'fixture'))
+    def clear(self):
+        from contextlib import nullcontext
+        from prototypes.assertion_memory.queue_owner_domain import owner_operations
+        reset=owner_operations(database=self.source_path.resolve(),stage='test',
+                               release_lease=nullcontext,identity=lambda:('fixture','exact-build'))
+        status=reset('clear_prepare',{})
+        self.assertTrue(status['can_clear'])
+        self.assertTrue(reset('clear_commit',{'expected_revision':status['revision']})['cleared'])
 
     async def test_sse_historical_reader_crosses_neither_reset_nor_restart(self):
         selection={'mode':'known_then','at':'2025-02-01T00:00:00.000000+00:00','history':True,'undated':'separate'}
@@ -28,7 +28,7 @@ class ResetSafety(LiveFixture,unittest.IsolatedAsyncioTestCase):
         async def still_open(): return False
         stream=self.manager.events(SimpleNamespace(query_params={'revision':old.revision},headers={},is_disconnected=still_open))
         self.assertIn('event: hello',await anext(stream))
-        self.clear('1'*32)
+        self.clear()
         reset=await asyncio.wait_for(anext(stream),2)
         self.assertIn('event: reset',reset)
         self.assertIn('database_cleared',reset)
@@ -46,6 +46,43 @@ class ResetSafety(LiveFixture,unittest.IsolatedAsyncioTestCase):
         finally:
             await restarted.stop()
 
+    async def test_purge_removes_private_file_caches_after_reset_without_touching_other_scopes(self):
+        from hashlib import sha256
+        from apps.graph_viewer.server.database_generation import epoch_name
+        old=await self.graph()
+        provider=sha256(self.manager.source.provider_id.encode()).hexdigest()
+        ir=self.root/'source-ir'/provider
+        ir.parent.mkdir(mode=0o700)
+        ir.mkdir(mode=0o700)
+        retired=ir/('a'*64)
+        retired.mkdir(mode=0o700)
+        stale=retired/'source.sqlite3'
+        stale.write_bytes(b'only-synthetic-old-source')
+        stale.chmod(0o600)
+        unrelated=self.root/'embedding-models'
+        unrelated.mkdir()
+        control=unrelated/'weights'
+        control.write_bytes(b'never-delete')
+        self.clear()
+        fresh=await self.graph()
+        generation=self.manager.read_generation()
+        current=ir/'database-epochs'/epoch_name(generation)/('b'*64)
+        for path in (current.parent.parent,current.parent,current):
+            path.mkdir(mode=0o700)
+        active=current/'source.sqlite3'
+        active.write_bytes(b'only-synthetic-current-source')
+        active.chmod(0o600)
+        for _ in range(25):
+            if not old.directory.exists() and not retired.exists():
+                break
+            self.manager.cleanup_reset(generation)
+            await asyncio.sleep(.1)
+        self.assertFalse(old.directory.exists())
+        self.assertFalse(retired.exists())
+        self.assertTrue(fresh.directory.exists())
+        self.assertEqual(active.read_bytes(),b'only-synthetic-current-source')
+        self.assertEqual(control.read_bytes(),b'never-delete')
+
     async def test_old_worker_can_finish_io_but_cannot_republish(self):
         arrived=threading.Event(); resume=threading.Event(); olds=[]
         def blocked(*args):
@@ -60,7 +97,7 @@ class ResetSafety(LiveFixture,unittest.IsolatedAsyncioTestCase):
             try:
                 self.assertIsNone(await self.manager.ensure(selection))
                 self.assertTrue(await asyncio.to_thread(arrived.wait,3))
-                self.clear('2'*32)
+                self.clear()
                 fresh=await self.graph(selection)
                 self.assertEqual(fresh.manifest['counts']['nodes'],0)
             finally:
@@ -97,8 +134,65 @@ class HttpReset(unittest.TestCase):
                 first=manifest()
                 rev=first['revision']
                 self.assertEqual(client.get('/api/v1/graph/'+rev+'/nodes.bin').status_code,200)
-                ResetSafety.clear(self,'3'*32)
+                ResetSafety.clear(self)
                 for suffix in ('nodes.bin','nodes/0'):
                     self.assertEqual(client.get('/api/v1/graph/'+rev+'/'+suffix).status_code,409)
                 self.assertIn('database_cleared',client.get('/api/v1/events',params={'revision':rev}).text)
                 self.assertEqual(manifest()['counts']['nodes'],0)
+
+    def test_canonical_private_search_source_ir_and_old_projection_are_reclaimed(self):
+        from pathlib import Path
+        import tempfile
+        import time
+        from starlette.testclient import TestClient
+        from prototypes.assertion_memory.storage import MemoryStore
+        from prototypes.assertion_memory.service import MemoryService
+        from prototypes.assertion_memory.thought_store import ThoughtStore
+        from prototypes.assertion_memory.thought_runtime import initialize_empty
+        from apps.graph_viewer.server.app import create_app
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            self.source_path=root/'synthetic.sqlite3'
+            with MemoryStore(self.source_path) as store:
+                MemoryService(store)
+                self.assertTrue(initialize_empty(store))
+                ThoughtStore(store).publish('synthetic-reset-marker')
+            state=root/'state'
+            with TestClient(create_app(self.source_path,state,password='owner-test-strong')) as client:
+                self.assertEqual(client.post('/api/v1/session',json={'password':'owner-test-strong'},
+                                            headers={'origin':'http://testserver'}).status_code,200)
+                def manifest():
+                    for _ in range(100):
+                        response=client.get('/api/v1/graph')
+                        if response.status_code==200:
+                            return response.json()
+                        time.sleep(.02)
+                    self.fail('No manifest')
+                old=manifest()
+                self.assertGreater(old['counts']['nodes'],0)
+                csrf=client.get('/api/v1/session').json()['csrf_token']
+                headers={'origin':'http://testserver','x-csrf-token':csrf}
+                bookmark={'provider_id':'assertion-memory','object_id':'synthetic-node','object_kind':'node',
+                          'label':'synthetic-deleted-bookmark'}
+                self.assertEqual(client.put('/api/v1/bookmarks/wipe',json=bookmark,headers=headers).status_code,200)
+                self.assertEqual(client.put('/api/v1/bookmarks/keep',json=bookmark|{'provider_id':'unrelated','label':'keep-me'},headers=headers).status_code,200)
+                previous=list((state/'source-ir').glob('*/*/source.sqlite3'))
+                self.assertTrue(previous)
+                old_graph=state/'cache'/old['revision']
+                self.assertTrue(old_graph.exists())
+                ResetSafety.clear(self)
+                self.assertEqual(client.get('/api/v1/graph/'+old['revision']+'/nodes.bin').status_code,409)
+                fresh=manifest()
+                self.assertEqual(fresh['counts']['nodes'],0)
+                self.assertEqual(client.get('/api/v1/session').json()['csrf_token'],csrf)
+                shown=client.get('/api/v1/bookmarks').json()['items']
+                self.assertEqual([(item['id'],item['label']) for item in shown],[('keep','keep-me')])
+                search=client.get('/api/v1/search',params={'q':'synthetic-reset-marker','revision':fresh['revision']})
+                self.assertEqual(search.status_code,200)
+                self.assertNotIn('synthetic-reset-marker',json.dumps(search.json().get('items',[])))
+                for _ in range(40):
+                    if not any(x.exists() for x in [old_graph,*previous]):
+                        break
+                    time.sleep(.1)
+                self.assertFalse(any(x.exists() for x in [old_graph,*previous]))
+                self.assertTrue(list((state/'source-ir').glob('*/database-epochs/*/*/source.sqlite3')))

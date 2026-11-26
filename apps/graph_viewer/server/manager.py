@@ -1,13 +1,13 @@
 """Visible asynchronous preparation and bounded live replay journal."""
 import asyncio
 from collections import deque
-import hashlib
 import json
 import time
 import logging
+import sqlite3
 from urllib.parse import urlencode
 from .common import APIError,now
-from .database_generation import LEGACY
+from .database_generation import LEGACY, epoch_name
 
 _UNSET=object()
 from .bridge_auth import stream_authorized
@@ -18,15 +18,18 @@ from .providers.base import membership_checked
 from .incremental import incremental
 from .layout import VERSION
 from .cache_retention import prune_cache, INTERVAL_SECONDS
+from .cache_reset_purge import after_clear
 from .presentation_refresh import policy_current,inherit_semantic
 from .providers.assertion_memory_topics import topic_policy_current
 
 
 class GraphManager:
-    def __init__(self, source, cache, semantic_model=None):
+    def __init__(self, source, cache, semantic_model=None, *, owner_store=None):
         self.source,self.cache=source,cache
         self._generation=self.read_generation(); self._epoch_tasks=set()
+        self._purged_epoch=None; self._next_purge=0
         self.semantic_model=semantic_model
+        self.owner_store=owner_store
         self.semantic_jobs=set(); self.semantic_gate=asyncio.Semaphore(1)
         self.graphs={}; self.preparing={}; self.errors={}; self.latest={}; self.observed={}
         self.live_profiles=deque(maxlen=16)
@@ -48,7 +51,7 @@ class GraphManager:
     def generation_cache(self,generation):
         if generation is None or generation[2]==LEGACY:
             return self.cache
-        name=hashlib.sha256(json.dumps(generation).encode()).hexdigest()
+        name=epoch_name(generation)
         directory=self.cache/'database-epochs'/name
         for path in (self.cache,self.cache/'database-epochs',directory):
             path.mkdir(mode=0o700,exist_ok=True)
@@ -196,6 +199,7 @@ class GraphManager:
             try:
                 generation=self.sync_generation()
                 revision=await asyncio.to_thread(self.source.revision)
+                self.cleanup_reset(generation)
                 if self.sync_generation()!=generation:
                     continue
                 self.last_observed_at=now()
@@ -294,6 +298,28 @@ class GraphManager:
     @staticmethod
     def encode(event,payload):
         return f'id: {payload["cursor"]}\nevent: {event}\ndata: {json.dumps(payload)}\n\n'
+
+    def cleanup_reset(self,generation):
+        if generation is None or generation[2]==LEGACY or self._purged_epoch==generation:
+            return
+        if self._epoch_tasks or self.semantic_jobs or time.monotonic()<self._next_purge:
+            return
+        try:
+            # Create or observe the current provider IR first; it lives in its
+            # own epoch and cannot be confused with old files from the serving state.
+            self.source.revision()
+            if not self.generation_matches(generation):
+                return
+            epoch=epoch_name(generation)
+            after_clear(self.cache,provider_id=self.source.provider_id,active=epoch)
+            if self.owner_store is not None:
+                self.owner_store.reset_graph_bookmarks(self.source.provider_id,epoch)
+            self._purged_epoch=generation
+        except (OSError,ValueError,sqlite3.Error):
+            # Serving still excludes prior epochs even while a filesystem reader
+            # delays reclamation; try again without reporting old contents.
+            self._next_purge=time.monotonic()+2
+            logging.getLogger(__name__).warning('database_reset_cache_reclamation_pending')
 
     async def clean_cache(self):
         while not self.closed:

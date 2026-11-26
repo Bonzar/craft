@@ -169,13 +169,24 @@ async def search_response(request):
 
 
 async def bookmark(request):
+    from .database_generation import LEGACY, epoch_name
     owner=request.app.state.owner
-    if request.method in {'GET','HEAD'}:
-        from .bookmarks import resolve_bookmarks
-        manager=request.app.state.manager
-        return JSONResponse(await resolve_bookmarks(manager,owner.bookmarks(manager.source.provider_id)))
+    manager=request.app.state.manager
+    generation=manager.sync_generation()
+    reading=request.method in {'GET','HEAD'}
     payload=await body(request) if request.method=='PUT' else None
-    return JSONResponse(owner.bookmark(request.path_params['id'],payload))
+    if not manager.generation_matches(generation):
+        raise APIError('revision_expired','Database generation changed; refresh the graph',409)
+    if generation is not None and generation[2]!=LEGACY:
+        owner.reset_graph_bookmarks(manager.source.provider_id,epoch_name(generation))
+    if reading:
+        from .bookmarks import resolve_bookmarks
+        value=await resolve_bookmarks(manager,owner.bookmarks(manager.source.provider_id))
+    else:
+        value=owner.bookmark(request.path_params['id'],payload)
+    if not manager.generation_matches(generation):
+        raise APIError('revision_expired','Database generation changed; refresh the graph',409)
+    return JSONResponse(value)
 
 
 async def events(request):
@@ -318,7 +329,7 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
         getattr(source,'source_path',None),getattr(source,'path',None))
     bridge_read_service=BridgeReadService(bridge_read_token_file)
     owner=OwnerStore(state_dir,password)
-    manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model)
+    manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model,owner_store=owner)
     @asynccontextmanager
     async def lifespan(app):
         await manager.start()
