@@ -71,3 +71,18 @@ the plan and its rollback must be regenerated when a fresh spec digest drifts.
 
 Yandex references: https://yandex.cloud/en/docs/iam/roles-reference ;
 https://yandex.cloud/en/docs/api-gateway/apigateway/api-ref/ApiGateway/update .
+
+The source-controlled TEST operations implement this narrow handoff. On each
+side first use the plan mode to print only its before/after digests:
+
+
+For the platform operator installed from exact reviewed bytes in a private
+root-owned directory, use python3 -B with nginx_test_apply.py plan (as the
+authorized root operator) and gateway_test_apply.py plan --test-gateway ID
+--test-domain DOMAIN (existing cloud operator). Run only the reviewed local
+copies; the renderer import must be in the same non-user-writable directory.
+Both apply modes require separate exact before/after digests. Use plan-remove
+and remove for an exact reverse. Cloud Gateway full-spec writes have no
+conditional revision: hold the existing serial operator window, reread twice
+and do not publish a stale rollback if another operator changed the Gateway.
+No Nginx or CLI messages that can embed configuration are emitted.
