@@ -126,11 +126,27 @@ def pending(db):
         "SELECT 1 FROM memory_capture_batches WHERE state='pending' LIMIT 1").fetchone() is not None)
 
 
-def _session_scope(db):
+def _session_scope(db, *, alias=''):
+    if alias not in ('','b.'):
+        raise ValueError('Invalid batch table alias')
     from .queue_session_control import read
     from .processing_control import INITIAL
+    from .queue_processing_policy import explicit, predicate
+    active=explicit(db)
+    if active is not None:
+        session,session_args=predicate(type(active)(active.mode,active.included_session_ids,active.excluded_session_ids),
+                                       session=alias+'session_id',added='NULL')
+        added='batch_job.created_at' if any(row[1]=='created_at' for row in db.execute('PRAGMA table_info(memory_capture_jobs)')) else 'NULL'
+        time,time_args=predicate(type(active)(added_from=active.added_from,added_through=active.added_through),
+                                 session='NULL',added=added)
+        if time!='1':
+            outer=alias+'batch_id' if alias else 'memory_capture_batches.batch_id'
+            session += (" AND NOT EXISTS (SELECT 1 FROM memory_capture_batch_members bm "
+                        "LEFT JOIN memory_capture_jobs batch_job ON batch_job.event_id=bm.event_id "
+                        f"WHERE bm.batch_id={outer} AND NOT coalesce(({time}),0))")
+        return (' AND '+session,(*session_args,*time_args))
     selected,revision=read(db)
-    return ('',()) if revision==INITIAL else (' AND session_id IN (SELECT value FROM json_each(?))',(json.dumps(selected),))
+    return ('',()) if revision==INITIAL else (' AND '+alias+'session_id IN (SELECT value FROM json_each(?))',(json.dumps(selected),))
 
 def needs_wake(db):
     if not batch_table_exists(db):

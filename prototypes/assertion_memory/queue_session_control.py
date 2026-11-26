@@ -77,6 +77,9 @@ def status(db, baseline=(), *, stage='test', fresh_only=False):
 def update(db, *, selected_session_ids, expected_revision, baseline=(), stage='test', fresh_only=False):
     if not db.in_transaction or type(expected_revision) is not str or not REVISION.fullmatch(expected_revision):
         raise ValueError('Invalid session selection revision')
+    from .queue_processing_policy import has_saved
+    if has_saved(db):
+        raise Conflict('Use the active owner processing policy')
     wanted=normalize(selected_session_ids)
     current,rev=read(db,baseline)
     if rev!=expected_revision:
@@ -117,6 +120,17 @@ def read_file(path, baseline=()):
         return read(db,baseline)
 
 
+def read_for_launch(path, baseline=()):
+    from contextlib import closing
+    from pathlib import Path
+    import sqlite3
+    from .queue_processing_policy import has_saved
+    with closing(sqlite3.connect(Path(path).as_uri()+'?mode=ro',uri=True,
+                                 isolation_level=None,timeout=.2)) as db:
+        db.execute('BEGIN')
+        return (*read(db,baseline),has_saved(db))
+
+
 def worker_selection_changed(config):
     revision=config.queue_sessions_revision
     if revision is None:
@@ -145,11 +159,11 @@ def follow_settings(config, launch, *, fresh_only=False):
             nonlocal failed_until
             while True:
                 try:
-                    selected,rev=await asyncio.to_thread(read_file,config.db,config.processing_session_ids)
-                    if selected and rev!=INITIAL and time.monotonic()>=failed_until:
+                    selected,rev,saved=await asyncio.to_thread(read_for_launch,config.db,config.processing_session_ids)
+                    if (saved or selected and rev!=INITIAL) and time.monotonic()>=failed_until:
                         # Existing WORKER flock prevents two workers; poll again
                         # after the previous revision drains and lets go.
-                        next_=(config if fresh_only else replace(config,processing_session_ids=selected,queue_sessions_revision=rev))
+                        next_=(config if fresh_only or saved else replace(config,processing_session_ids=selected,queue_sessions_revision=rev))
                         started=await asyncio.to_thread(launch,next_)
                         if started.get('scheduled'):
                             failed_until=time.monotonic()+5
@@ -173,15 +187,24 @@ def annotate_source(db, data, selected, *, fresh_only=False):
     join=("LEFT JOIN memory_event_positions p ON p.event_id=e.id"
           if position!='NULL' else '')
     items={x['id']:x for x in source['items']}
-    from .thought_processing_selection import FRESH_MAC_ONLY, source_predicate
-    gate,gate_args=(source_predicate(FRESH_MAC_ONLY,'e',db=db)
-                    if fresh_only and _exists(db,'memory_fresh_mac_events') else ('0' if fresh_only else '1',[]))
+    from .thought_processing_selection import FRESH_MAC_ONLY, OWNER_POLICY, source_claim_predicate, source_predicate
+    from .queue_processing_policy import explicit
+    policy=explicit(db)
+    if policy is not None:
+        gate,gate_args=source_claim_predicate(db,FRESH_MAC_ONLY if fresh_only else OWNER_POLICY)
+    else:
+        gate,gate_args=(source_predicate(FRESH_MAC_ONLY,'e',db=db) if fresh_only else ('1',[]))
     member=_batch_member(db)
     if fresh_only:
         batch_gate=member
-        explicit,revision=read(db)
-        if revision!=INITIAL:
-            allowed,allowed_args=source_predicate(explicit,'e')
+        saved_legacy,revision=read(db)
+        if policy is not None:
+            from .queue_processing_policy import source_predicate as policy_scope
+            allowed,allowed_args=policy_scope(db,event_alias='e',job_alias='j')
+            batch_gate=f'({batch_gate}) AND ({allowed})'
+            gate_args += allowed_args
+        elif revision!=INITIAL:
+            allowed,allowed_args=source_predicate(saved_legacy,'e')
             batch_gate=f'({batch_gate}) AND ({allowed})'
             gate_args += allowed_args
         gate=f'({gate}) OR ({batch_gate})'
@@ -193,12 +216,18 @@ def annotate_source(db, data, selected, *, fresh_only=False):
         item=items[key]
         item['session_id']=sid if isinstance(sid,str) and ID.fullmatch(sid) else None
         item['hold_reason']=hold_reason(live=True,status=item['status'] if item['status']=='running' else state,
-            position=pos,selected=(None if in_scope else ()) if fresh_only else selected,session_id=sid,paused=data['processing_control']['paused'])
+            position=pos,selected=(None if in_scope else ()) if fresh_only or policy is not None else selected,session_id=sid,paused=data['processing_control']['paused'])
 
 
 def annotate_maintenance(db,data,selected):
     queue=next((q for q in data['queues'] if q['id']=='maintenance'),None)
     if not queue or not queue['items']:
+        return
+    from .queue_processing_policy import explicit
+    if explicit(db) is not None:
+        for item in queue['items']:
+            item['hold_reason'] = (None if item['status']!='paused' else
+                'global_pause' if data['processing_control']['paused'] else 'session_excluded')
         return
     scope={}
     if all(_exists(db,t) for t in ('memory_thought_work','memory_thought_work_causes','memory_thought_cause_sessions')):

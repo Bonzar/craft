@@ -197,9 +197,11 @@ def _configure(config_path, port, legacy_token):
         handler.queue_pause_ready=ready
         from . import queue_item_removal as items, queue_session_control as sessions
         from .queue_owner_domain import owner_operations
+        from .queue_processing_policy import PATH as POLICY
         from .queue_pause_proof import reserve_once
         perform=owner_operations(database=p.db,release_lease=lambda:release_lease(p,uid=uid),
-                                 identity=identity,stage=p.lane,fresh_only=config.auto_process_fresh_mac)
+                                 identity=identity,stage=p.lane,fresh_only=config.auto_process_fresh_mac,
+                                 baseline=config.processing_session_ids)
 
         def handle(action,path,*,stage,proof,**args):
             return perform(action,args,authorize=lambda db:reserve_once(
@@ -212,6 +214,7 @@ def _configure(config_path, port, legacy_token):
                 prepare=lambda:perform(read_action,{}),
                 change=lambda **args:handle(action,path,**args),port=port,path=path)
 
+        handler.queue_policy_route=route(POLICY,'policy_set','policy_prepare')
         if config.processing_session_ids==():
             handler.queue_session_route=route(sessions.PATH,'sessions_set','sessions_prepare')
             from .mcp_server import WorkerLauncher

@@ -20,6 +20,7 @@ from .storage import MemoryStore
 from .queue_rest import PATH as QUEUE_REST_PATH
 from .queue_pause_rest import PATH as QUEUE_PAUSE_PATH
 from .queue_session_control import PATH as QUEUE_SESSIONS_PATH
+from .queue_processing_policy import PATH as QUEUE_POLICY_PATH
 from .queue_item_removal import PATH as QUEUE_REMOVE_PATH, PREVIEW_PATH as QUEUE_PREVIEW_PATH
 
 MIN_TOKEN_LENGTH = 32
@@ -70,6 +71,11 @@ class AuthenticatedMemoryApp:
             path=scope.get('path','')
             if path in (QUEUE_REMOVE_PATH,QUEUE_PREVIEW_PATH):
                 handler=getattr(self.queue_pause,'queue_item_routes',{}).get(path)
+                if handler is None:
+                    return await _error_response(404,'not found',scope,receive,send)
+                return await handler(scope,receive,send)
+            if path==QUEUE_POLICY_PATH:
+                handler=getattr(self.queue_pause,'queue_policy_route',None)
                 if handler is None:
                     return await _error_response(404,'not found',scope,receive,send)
                 return await handler(scope,receive,send)

@@ -7,12 +7,13 @@ from .processing_control import paused as processing_paused
 from .session_api import _SOURCE_SESSION
 
 FRESH_MAC_ONLY = object()
+OWNER_POLICY = object()
 
 _COHORT=ContextVar('thought_processing_cohort',default=None)
 
 
 def normalize_session_ids(values):
-    if values is None or values is FRESH_MAC_ONLY:return values
+    if values is None or values is FRESH_MAC_ONLY or values is OWNER_POLICY:return values
     if not isinstance(values,(tuple,list)) or any(not isinstance(value,str) or not value.strip() for value in values):
         raise ValueError('processing_session_ids must be null or nonempty session ID strings')
     return tuple(dict.fromkeys(values))
@@ -47,16 +48,19 @@ def _exists(db,table):
 
 def source_predicate(session_ids,alias='e',*,db=None):
     ids=normalize_session_ids(session_ids)
-    if ids is None:return '1',[]
+    if ids is None or ids is OWNER_POLICY:return '1',[]
     if not ids:return '0',[]
     if ids is FRESH_MAC_ONLY:
         if db is None:
             raise ValueError('Fresh-only selection requires the lane database')
+        if not _exists(db,'memory_fresh_mac_events'):
+            return '0',[]
         from .queue_session_control import read
+        from .queue_processing_policy import has_saved
         from .processing_control import INITIAL
         selected,revision=read(db)
         fresh=_alias(alias)+'.id IN (SELECT event_id FROM memory_fresh_mac_events)'
-        if revision==INITIAL:
+        if revision==INITIAL or has_saved(db):
             return fresh,[]
         explicit,args=source_predicate(selected,alias)
         return f'({fresh}) AND ({explicit})',args
@@ -64,8 +68,20 @@ def source_predicate(session_ids,alias='e',*,db=None):
     return source+' IN (SELECT value FROM json_each(?))',[json.dumps(ids)]
 
 
+def source_claim_predicate(db, session_ids, event_alias='e', job_alias='j'):
+    from .queue_processing_policy import source_predicate as policy_scope
+    source,args=source_predicate(session_ids,event_alias,db=db)
+    policy,policy_args=policy_scope(db,event_alias=_alias(event_alias),job_alias=_alias(job_alias))
+    return f'({source}) AND ({policy})',[*args,*policy_args]
+
+
 def maintenance_predicate(db,session_ids,alias='w'):
     ids=normalize_session_ids(session_ids)
+    from .queue_processing_policy import explicit, maintenance_predicate as owner_scope
+    policy=explicit(db)
+    if ids is OWNER_POLICY or (ids is None or ids is FRESH_MAC_ONLY) and policy is not None:
+        return (owner_scope(db,policy,alias=_alias(alias),admitted_only=ids is FRESH_MAC_ONLY)
+                if policy is not None else ('0',[]))
     if ids is None:return '1',[]
     if not ids or not _exists(db,'memory_thought_cause_sessions'):return '0',[]
     alias=_alias(alias)
@@ -80,7 +96,11 @@ def maintenance_predicate(db,session_ids,alias='w'):
 def pending_cohort(db,task,allowed):
     if not _exists(db,'memory_thought_cause_sessions'):return None
     ids=normalize_session_ids(allowed)
-    if ids is FRESH_MAC_ONLY:return ()
+    if ids is FRESH_MAC_ONLY:
+        from .queue_processing_policy import explicit
+        if explicit(db) is None:return ()
+        ids=None
+    if ids is OWNER_POLICY:ids=None
     clause=' AND ps.session_id IN (SELECT value FROM json_each(?))' if ids is not None else ''
     args=[task['thought_id'],task['completed_generation'],task['generation']]
     if ids is not None:args.append(json.dumps(ids))
@@ -102,10 +122,13 @@ def processing_deadline(db,session_ids,*,now,with_model=True,lane='all',include_
     if ids==():return None
     if ids is FRESH_MAC_ONLY:
         from .fresh_processing import ensure_selector
-        if not ensure_selector(db):return None
+        if not ensure_selector(db):
+            # An authenticated batch stream may have admitted maintenance, even before any legacy raw admission.
+            if lane=='source':return None
+            lane='maintenance'
     deadlines=[]
     if lane!='maintenance' and _exists(db,'memory_raw_events') and _exists(db,'memory_capture_jobs'):
-        where,args=source_predicate(ids,db=db)
+        where,args=source_claim_predicate(db,ids)
         deadlines.append(db.execute("SELECT min(CASE j.status WHEN 'running' THEN j.lease_until WHEN 'waiting_model' THEN ? ELSE j.available_at END) "
             'FROM memory_capture_jobs j JOIN memory_raw_events e ON e.id=j.event_id '
             "WHERE j.status IN ('pending','running','waiting_model') "

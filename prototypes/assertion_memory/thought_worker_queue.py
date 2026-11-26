@@ -36,6 +36,8 @@ class ThoughtWorkQueue:
                 # Old receipts have no ordering evidence: place them in one current group.
                 c.execute('UPDATE memory_thought_work_causes SET generation=coalesce((SELECT desired_generation '
                     'FROM memory_thought_work w WHERE w.thought_id=memory_thought_work_causes.thought_id),0)')
+            if 'added_at' not in cause_columns:
+                c.execute('ALTER TABLE memory_thought_work_causes ADD COLUMN added_at TEXT')
             c.execute('CREATE INDEX IF NOT EXISTS memory_thought_work_cause_generation '
                 'ON memory_thought_work_causes(thought_id,generation)')
             c.execute('CREATE TABLE IF NOT EXISTS memory_thought_cause_sessions '
@@ -59,8 +61,9 @@ class ThoughtWorkQueue:
         with self.store.transaction(write=True) as c:
             existing = c.execute('SELECT * FROM memory_thought_work WHERE thought_id=?', (thought.id,)).fetchone()
             generation = existing['desired_generation'] + 1 if existing else 1
-            inserted = c.execute('INSERT OR IGNORE INTO memory_thought_work_causes(thought_id,cause,generation) VALUES(?,?,?)',
-                (thought.id, json.dumps(cause, sort_keys=True), generation)).rowcount
+            now = self.queue._time()
+            inserted = c.execute('INSERT OR IGNORE INTO memory_thought_work_causes(thought_id,cause,generation,added_at) VALUES(?,?,?,?)',
+                (thought.id, json.dumps(cause, sort_keys=True), generation, now)).rowcount
             sessions = current_cohort() or ()
             if not inserted:
                 prior = c.execute('SELECT generation FROM memory_thought_work_causes WHERE thought_id=? AND cause=?',
@@ -73,7 +76,6 @@ class ThoughtWorkQueue:
                     (thought.id,json.dumps(cause,sort_keys=True),session_id)).rowcount
             if not inserted:
                 return bool(tagged)
-            now = self.queue._time()
             if existing is None:
                 c.execute('INSERT INTO memory_thought_work(thought_id,desired_version,status,available_at,action,desired_generation) '
                     "VALUES(?,?,'pending',?,?,1)", (thought.id, thought.version, now, action))

@@ -7,7 +7,7 @@ from .processing_control import read_control
 from .thought_processing_selection import (
     maintenance_predicate,
     normalize_session_ids,
-    source_predicate,
+    source_claim_predicate,
 )
 
 
@@ -55,7 +55,12 @@ def build_queue_status(connection, *, release_version, stage, processing_session
     Callers supply trusted deployment metadata and the hosted scheduler configuration.
     'running' describes the recorded lease, not proof of liveness or completion order.
     """
+    from .queue_processing_policy import explicit
+    policy=explicit(connection)
     ids = normalize_session_ids(processing_session_ids)
+    if policy is not None:
+        ids = (thought_processing_selection.FRESH_MAC_ONLY if auto_process_fresh_mac
+               else thought_processing_selection.OWNER_POLICY)
     if stage not in ('test', 'prod') or not isinstance(release_version, str) or not release_version:
         raise ValueError('trusted stage and release are required')
     if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 1_000_000:
@@ -85,10 +90,9 @@ def build_queue_status(connection, *, release_version, stage, processing_session
         # Fresh-only mode replaces, rather than supplements, the ordinary source
         # selector. Its registration table is absent until the first opted-in stream.
         if auto_process_fresh_mac:
-            selected, args = (source_predicate(fresh_selector, 'e',db=connection)
-                if _has(connection, 'memory_fresh_mac_events') else ('0', []))
+            selected,args=source_claim_predicate(connection,fresh_selector)
         else:
-            selected, args = source_predicate(ids, 'e')
+            selected,args=source_claim_predicate(connection,ids)
         exists = _has(connection, 'memory_capture_jobs', 'memory_raw_events')
         queues.append(_page(connection, f"""
             SELECT j.id, CASE
