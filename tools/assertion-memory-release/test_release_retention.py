@@ -6,6 +6,7 @@ from hashlib import sha256
 from io import BytesIO
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -145,8 +146,16 @@ class CurrentOnly(unittest.TestCase):
         root=self.roots('test')
         def prepare(action,path):
             if action=='prepare':
-                subprocess.run([sys.executable,'-I','-B','-m','venv','--copies',str(path/'venv')],
-                               check=True,capture_output=True,timeout=45)
+                subprocess.run([sys.executable,'-I','-B','-m','venv','--clear','--copies',str(path/'venv')],
+                               check=True,capture_output=True,timeout=45,umask=0o077)
+                # Hosted toolcache may copy its runner-owned executable
+                # modes. The VM hook uses the root-owned stock interpreter
+                # and symlinks; model the stock permission for copied bin
+                # children only, without sanitizing package files or probes.
+                for executable in (path/'venv/bin').iterdir():
+                    mode=executable.lstat().st_mode
+                    if stat.S_ISREG(mode):
+                        executable.chmod(stat.S_IMODE(mode)&~0o022)
         old=self.deploy_base(root,b'A',prepare)
         packages,=old.glob('venv/lib/python*/site-packages')
         cacert=packages/'pip/_vendor/certifi/cacert.pem'
@@ -183,6 +192,12 @@ class CurrentOnly(unittest.TestCase):
             gc=self.factory(root,(store,),lambda *_:True,approved_ca=verified)(locked.fileno())
             self.assertEqual(gc.sweep('test'),(0,1,0))
             unrelated.unlink()
+            generated_script=packages/'fictional_generated.py'
+            generated_script.write_text('# fixture\n')
+            generated_script.chmod(0o662)
+            with self.assertRaisesRegex(ValueError,'retention_writable_member'):
+                gc.remove(store,old,dry=True)
+            generated_script.unlink()
             # Direct dry call surfaces the exact guard reason on the runner,
             # without changing production's bounded aggregate diagnostics.
             self.assertTrue(gc.remove(store,old,dry=True))

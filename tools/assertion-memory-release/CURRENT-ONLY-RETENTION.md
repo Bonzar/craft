@@ -61,7 +61,15 @@ cleanup. A live or interrupted deployment always takes priority over cleanup.
    change the trusted receivers under /etc. Use reviewed configuration
    management/root install under the PROD transition fence and all canonical
    lane locks, with exact prior receiver modules retained until import and
-   forced-command probes pass. The systemd templates in retention-systemd/
+   forced-command probes pass. The scoped install-dark-retention-base-test.py
+   helper can first check all pins and canonical pointers without writing or
+   taking locks, then replace only the four approved shared modules under the
+   fixed locks with a root-only prior-controller recovery record. Its reviewed
+   SHA, exact merge revision, four independently verified source SHA-256 pins
+   in documented module order and current baseline hash are all required.
+   It must leave markers, profiles, socket units, services and pointers unchanged.
+   If it is interrupted, reconcile its exact prior-controller recovery record
+   before another dark install. The systemd templates in retention-systemd/
    use the four existing account groups; verify effective groups before use.
 2. Prove that the running and restartable host service inventory for each lane
    only uses that lane's physical active build or trusted paths outside these
