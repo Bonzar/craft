@@ -30,3 +30,30 @@ class DirectPlan(unittest.TestCase):
                          "default-src 'self'; connect-src 'self' https://8.8.8.8;")
         with self.assertRaises(ValueError):csp("connect-src *;","https://8.8.8.8")
         with self.assertRaises(ValueError):csp("connect-src 'self';","https://127.0.0.1")
+
+    def test_diagnostic_proxy_uses_verified_owner_authority(self):
+        from render_direct_test import proof_nginx,proof_gateway,PROOF,PROOF_FILE
+        base=NGINX+'''
+  location = /__mvt_auth {
+    internal;
+    proxy_pass_request_headers off;
+    proxy_set_header Cookie $http_cookie;
+    proxy_pass http://127.0.0.1:8891/api/v1/capabilities;
+  }
+'''
+        origin='https://8.8.8.8'
+        policy=("default-src 'none'; script-src 'sha256-"+'A'*43+"='; connect-src 'self' "+origin+
+                "; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+        rendered=proof_nginx(base,policy,origin)
+        self.assertIn('auth_request /__mvt_auth;',rendered)
+        self.assertIn('alias '+PROOF_FILE+';',rendered)
+        self.assertIn('Cache-Control "private, no-store"',rendered)
+        with self.assertRaises(ValueError):
+            proof_nginx(base.replace('/api/v1/capabilities;', '/api/v1/health;'),policy,origin)
+        with self.assertRaises(ValueError):
+            proof_nginx(base,policy+';',origin)
+        updated=proof_gateway(W)
+        entry=updated['paths'].pop(PROOF)
+        self.assertEqual(set(entry),{'get'})
+        self.assertEqual(entry['get']['x-yc-apigateway-integration']['headers'],{'Cookie':'{Cookie}'})
+        self.assertEqual(updated,W)
