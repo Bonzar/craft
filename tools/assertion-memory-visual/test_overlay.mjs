@@ -22,3 +22,5 @@ test('release uses the unmodified Connections worker and a pinned tag',async()=>
   assert.match(pinned[stylesheet].toString(),/#visual-queue\{box-sizing:border-box;position:fixed;inset:0/);
   await assert.rejects(versionableBundle(dir,'<script>'),/Invalid Visual release tag/);
 });
+
+import "./graph-boot-overlay.test.mjs";
