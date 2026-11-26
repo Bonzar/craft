@@ -84,6 +84,8 @@ class MemoryService:
             return _payload_fingerprint(json.dumps({key:value[key] for key in (*FIELDS,'timezone','artifact_refs') if key in value},
                 ensure_ascii=False, sort_keys=True))
         with self.store.transaction(write=True) as connection:
+            from .database_clear import deny_replay
+            deny_replay(connection,'messages',session_id,message_id)
             if artifact_ids:
                 metadata['artifact_refs'] = [read_artifact(connection,key) for key in artifact_ids]
             receipt_value = ('source-clock-v1:' + json.dumps({'base':fingerprint,'clock':clock_fingerprint(metadata)},
