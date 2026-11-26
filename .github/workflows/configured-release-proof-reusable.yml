@@ -1,0 +1,80 @@
+name: Configured release proof reusable
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        type: string
+        required: true
+
+permissions: {}
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.pack.outputs.digest }}
+      archive_id: ${{ steps.archive.outputs.artifact-id }}
+    steps:
+      - id: pack
+        env:
+          PROFILE: ${{ inputs.profile }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -eu
+          test "$PROFILE" = synthetic
+          test "$ATTEMPT" = 1
+          mkdir artifact
+          printf 'fictional fixture v1\nprofile=%s\nrun=%s\n' "$PROFILE" "$GITHUB_RUN_ID" > artifact/archive
+          printf 'digest=%s\n' "$(sha256sum artifact/archive | cut -c1-64)" >> "$GITHUB_OUTPUT"
+      - id: archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-proof-archive-${{ github.run_id }}
+          path: artifact/archive
+          if-no-files-found: error
+          retention-days: 1
+  test:
+    name: TEST (synthetic)
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      receipt: ${{ steps.verify.outputs.receipt }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.archive_id }}
+          path: artifact
+          merge-multiple: true
+      - id: verify
+        env:
+          PROFILE: ${{ inputs.profile }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          ARCHIVE_ID: ${{ needs.build.outputs.archive_id }}
+        run: |
+          set -eu
+          test "$PROFILE" = synthetic
+          test "$(sha256sum artifact/archive | cut -c1-64)" = "$DIGEST"
+          printf 'fictional fixture v1\nprofile=%s\nrun=%s\n' "$PROFILE" "$GITHUB_RUN_ID" | cmp - artifact/archive
+          printf 'receipt=%s:%s:%s:%s:%s\n' "$PROFILE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$ARCHIVE_ID" "$DIGEST" >> "$GITHUB_OUTPUT"
+  prod:
+    name: PROD (proof only)
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.archive_id }}
+          path: artifact
+          merge-multiple: true
+      - env:
+          PROFILE: ${{ inputs.profile }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          ARCHIVE_ID: ${{ needs.build.outputs.archive_id }}
+          RECEIPT: ${{ needs.test.outputs.receipt }}
+        run: |
+          set -eu
+          test "$PROFILE" = synthetic
+          test "$RECEIPT" = "$PROFILE:$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:$ARCHIVE_ID:$DIGEST"
+          test "$(sha256sum artifact/archive | cut -c1-64)" = "$DIGEST"
+          printf '%s\n' 'Same-archive promotion verified; no environment, credentials or deployment used.'
