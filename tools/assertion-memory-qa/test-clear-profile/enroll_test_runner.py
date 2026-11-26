@@ -16,6 +16,8 @@ from witness_one_test_batch import (credential,discover,loopback,installed_clien
     DIR,REGISTRY,KEY,CLIENT,REV,ARCHIVE,TAG,GENERATION)
 
 UNIT='assertion-test-deploy-mcp.service'
+EDGE_FILE=Path('/etc/nginx/conf.d/assertion-memory-probe-tls.conf')
+SHIELDED_EDGE_SHA='eb8f95c477f2a02abc4f393dbb92cb136f0b47ae0e668c5e4777e95e4db89c97'
 MANIFEST='a713d6e6669f1425a09d3cce6a5db6a2cf1917856017dff601d43d0e88ad316f'
 HEX=re.compile(r'[0-9a-f]{64}\Z')
 EXPECTED_PATHS={
@@ -135,6 +137,11 @@ def enroll(expected_registry_sha256):
     uid=pwd.getpwnam('assertion-test-deploy').pw_uid
     if uid<=0:raise ValueError('Wrong canonical TEST account')
     with activation_lock(uid):
+        # Selected after independent public HTTPS 404 proof; other TEST edge
+        # apply uses this same release lock. Never enable credentials against
+        # the prior public forward or an unrelated edge mutation.
+        if sha256(regular_bytes(EDGE_FILE,maximum=128*1024,uid=0)).hexdigest()!=SHIELDED_EDGE_SHA:
+            raise ValueError('Approved isolated TEST neutral edge is not installed')
         prefix=ensure_current(uid)
         raw,st,doc,registry=existing()
         if registry or not absent(KEY) or sha256(raw).hexdigest()!=expected_registry_sha256:
