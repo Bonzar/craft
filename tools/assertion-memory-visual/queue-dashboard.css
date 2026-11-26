@@ -44,3 +44,7 @@ body:has(#login:not([hidden])) #visual-queue-open{display:none}
 #queue-session-policy summary{cursor:pointer;font-weight:600}
 #queue-session-options{max-height:22rem;overflow:auto;margin:.5rem 0}
 .queue-source-preview{margin:.4rem 0;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}
+
+.queue-policy-fields{display:flex;flex-wrap:wrap;gap:.65rem 1.25rem;margin:.75rem 0}
+.queue-policy-fields label{display:grid;gap:.3rem}
+.queue-policy-fields :is(select,input){font:inherit;color:inherit;background:var(--queue-bg,Canvas);border:1px solid currentColor;border-radius:.3rem;padding:.3rem}

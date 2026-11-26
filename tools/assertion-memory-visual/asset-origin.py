@@ -250,6 +250,7 @@ REVISION = re.compile(r'[0-9a-f]{32}\Z')
 
 BROWSER_SESSIONS = '/api/v1/processing/sessions'
 BASE_SESSIONS = '/api/v1/queue-sessions'
+BASE_POLICY = '/api/v1/queue-processing-policy'
 BROWSER_REMOVE = '/api/v1/processing/items/remove'
 BASE_REMOVE = '/api/v1/queue-items/remove'
 BROWSER_PREVIEW = '/api/v1/processing/items/source-preview'
@@ -302,6 +303,40 @@ def sessions_state(value, stage):
     return value
 
 
+def policy_date(value):
+    if value is None:
+        return None
+    from datetime import datetime
+    if type(value) is not str or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|\+00:00)',value):
+        raise ValueError('invalid policy timestamp')
+    return datetime.fromisoformat(value.replace('Z','+00:00'))
+
+
+def canonical_policy(value):
+    if (type(value) is not dict or set(value)!={'mode','included_session_ids','excluded_session_ids','added_from','added_through'}
+            or value['mode'] not in ('all','include')
+            or not selected_ids(value['included_session_ids']) or not selected_ids(value['excluded_session_ids'])
+            or set(value['included_session_ids']) & set(value['excluded_session_ids'])
+            or (value['mode']=='all' and value['included_session_ids'])):
+        raise ValueError('invalid processing policy')
+    low, high=map(policy_date,(value['added_from'],value['added_through']))
+    if low is not None and high is not None and low>high:
+        raise ValueError('invalid policy time range')
+    return (value['mode'],frozenset(value['included_session_ids']),frozenset(value['excluded_session_ids']),low,high)
+
+
+def policy_state(value,stage):
+    if type(value) is not dict or set(value)!={'stage','revision','policy','sessions'}:
+        raise ValueError('invalid Base processing policy response')
+    canonical_policy(value['policy'])
+    sessions_state({k:value[k] for k in ('stage','revision','sessions')}|{'selected_session_ids':[]},stage)
+    return value
+
+
+class PolicyUnavailable(ValueError):
+    pass
+
+
 def pause_state(value, stage):
     if (type(value) is not dict or set(value) != {'stage','paused','revision'}
             or value['stage'] != stage or type(value['paused']) is not bool
@@ -335,6 +370,8 @@ def pause_client(origin, read_key, write_key, signer, *, stage, route=BASE_PAUSE
         try:
             conn.request(method, route, body=body, headers=headers)
             rsp = conn.getresponse()
+            if route==BASE_POLICY and (rsp.status==404 or method=='GET' and rsp.status==401):
+                raise PolicyUnavailable()
             if method == 'PUT' and rsp.status == 409:
                 return None
             if (rsp.status != 200 or rsp.headers.get_content_type() != 'application/json'
@@ -400,6 +437,9 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
         sessions_call = pause_client(origin,read_key,write_key,
             pause_signer(environment,owner,proof_key,clock=clock,route=BASE_SESSIONS),
             stage=environment,route=BASE_SESSIONS,validate=sessions_state,max_bytes=524288)
+        policy_call = pause_client(origin,read_key,write_key,
+            pause_signer(environment,owner,proof_key,clock=clock,route=BASE_POLICY),
+            stage=environment,route=BASE_POLICY,validate=policy_state,max_bytes=524288)
         remove_call = pause_client(origin,read_key,write_key,
             pause_signer(environment,owner,proof_key,clock=clock,route=BASE_REMOVE),
             stage=environment,route=BASE_REMOVE,validate=removal_receipt,max_bytes=4096)
@@ -561,15 +601,29 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             def reply(status,value):
                 return self.respond(status,json.dumps(value,separators=(',',':')).encode(),
                                     'application/json',headers=safe)
+            processing_policy=sessions and type(request) is dict and (
+                request=={'format':'policy-v1'} if prepare else 'policy' in request)
+            if processing_policy:
+                call,kind=policy_call,'processing-policy'
             if prepare:
-                if type(request) is not dict or request:
+                if type(request) is not dict or (request and not processing_policy):
                     return self.respond(400)
-                state = call('GET')
+                try:
+                    state = call('GET')
+                except PolicyUnavailable:
+                    return self.respond(404)
                 return reply(200,{**state,'csrf_token':csrf_token(state['revision'],int(clock())+30,kind)})
-            fields={'stage','expected_revision','selected_session_ids' if sessions else 'paused'}
+            operation='policy' if processing_policy else ('selected_session_ids' if sessions else 'paused')
+            fields={'stage','expected_revision',operation}
             if (type(request) is not dict or set(request)!=fields
-                    or (not selected_ids(request['selected_session_ids']) if sessions else type(request['paused']) is not bool)
                     or type(request['expected_revision']) is not str or not REVISION.fullmatch(request['expected_revision'])):
+                return self.respond(400)
+            if processing_policy:
+                try:
+                    wanted_policy=canonical_policy(request['policy'])
+                except ValueError:
+                    return self.respond(400)
+            elif not (selected_ids(request[operation]) if sessions else type(request[operation]) is bool):
                 return self.respond(400)
             if request['stage']!=environment:
                 return reply(409,{'error':'queue_control_changed'})
@@ -581,11 +635,16 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             expiry, now = int(proof[1]), int(clock())
             if not now < expiry <= now+30 or not hmac.compare_digest(tokens[0],csrf_token(revision,expiry,kind)):
                 return self.respond(403)
-            operation='selected_session_ids' if sessions else 'paused'
-            result = call('PUT',{operation:request[operation],'expected_revision':revision})
+            try:
+                result = call('PUT',{operation:request[operation],'expected_revision':revision})
+            except PolicyUnavailable:
+                return self.respond(404)
             if result is None:
                 return reply(409,{'error':'queue_control_changed'})
-            if (set(result[operation])!=set(request[operation]) if sessions else result[operation] is not request[operation]) or result['revision']==revision:
+            matches=(canonical_policy(result['policy'])==wanted_policy if processing_policy else
+                     set(result[operation])==set(request[operation]) if sessions else
+                     result[operation] is request[operation])
+            if not matches or result['revision']==revision:
                 return self.respond(503)
             return reply(200,result)
 
