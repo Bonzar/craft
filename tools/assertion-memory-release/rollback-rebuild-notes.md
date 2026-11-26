@@ -89,3 +89,14 @@ writes it only on the real release event); it must neither fake release event
 variables nor run the old checkout on the trusted sealing runner. One separate
 packed Visual qualifier is still required. The compat table may admit only
 precisely rehearsed older tags, not all versions sharing a tag prefix.
+
+The trusted assembly adapter `rollback_rebuild_base_compile.py` can now
+materialize a fresh deterministic Base-v1 archive without the old workflow,
+and calls the qualifier before returning its digest. `rollback-rebuild-base-isolated.sh`
+runs historical compilation only in a preloaded digest-pinned, unprivileged,
+network-disabled Docker container with no host secrets or HOME, passing an
+explicit selected revision to the catalog extractor. The review specimen
+`rollback-rebuild-disposable-build.yml` is deliberately disabled/outside
+workflows: exact compatibility resolver, offline image production/verification,
+and signed generated-output handoff are not implemented. Do not relax sandbox
+restrictions or fake a GitHub release event to run the old compiler.
