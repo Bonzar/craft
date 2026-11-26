@@ -178,7 +178,7 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
                 raise ValueError('Base queue page too large')
             value = unique_json(raw)
             ctl = value.get('processing_control') if isinstance(value, dict) else None
-            if (not isinstance(value, dict) or set(value) != SNAPSHOT_KEYS or value['stage'] != stage
+            if (not isinstance(value, dict) or set(value)-{'database_clear'} != SNAPSHOT_KEYS or value['stage'] != stage
                     or not isinstance(value['release_version'], str)
                     or not re.fullmatch(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?', value['release_version'])
                     or not isinstance(value['release_generation'], str) or not HEX.fullmatch(value['release_generation'])
@@ -188,6 +188,12 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False):
                     or type(ctl['paused']) is not bool or type(ctl['can_change']) is not bool
                     or not isinstance(ctl['revision'], str) or not re.fullmatch(r'[0-9a-f]{32}',ctl['revision'])):
                 raise ValueError('invalid TEST Base queue page')
+            if 'database_clear' in value:
+                item = value['database_clear']
+                if disclose_pause and type(item) is dict and set(item)=={'revision','can_clear'}:
+                    clear_state({'stage':stage,**item},stage)
+                else:
+                    value.pop('database_clear')
             capabilities={'live':False}
             if disclose_pause and ctl['can_change']:
                 capabilities['standalone_pause']=True
@@ -253,8 +259,26 @@ BASE_SESSIONS = '/api/v1/queue-sessions'
 BASE_POLICY = '/api/v1/queue-processing-policy'
 BROWSER_REMOVE = '/api/v1/processing/items/remove'
 BASE_REMOVE = '/api/v1/queue-items/remove'
+BROWSER_CLEAR = '/api/v1/processing/database/clear'
+BASE_CLEAR = '/api/v1/queue-database/clear'
 BROWSER_PREVIEW = '/api/v1/processing/items/source-preview'
 BASE_PREVIEW = '/api/v1/queue-items/source-preview'
+
+
+def clear_state(value, stage):
+    if (type(value) is not dict or set(value)!={'stage','revision','can_clear'}
+            or value['stage']!=stage or type(value['can_clear']) is not bool
+            or type(value['revision']) is not str or not REVISION.fullmatch(value['revision'])):
+        raise ValueError('invalid Base database clear state')
+    return value
+
+
+def clear_receipt(value, stage):
+    if (type(value) is not dict or set(value)!={'stage','revision','cleared'}
+            or value['stage']!=stage or value['cleared'] is not True
+            or type(value['revision']) is not str or not REVISION.fullmatch(value['revision'])):
+        raise ValueError('invalid Base database clear receipt')
+    return value
 
 
 def preview_receipt(value, stage):
@@ -380,7 +404,10 @@ def pause_client(origin, read_key, write_key, signer, *, stage, route=BASE_PAUSE
             raw = rsp.read(max_bytes+1)
             if len(raw) > max_bytes:
                 raise ValueError('invalid Base pause response')
-            return validate(unique_json(raw), stage)
+            parsed=unique_json(raw)
+            if route==BASE_CLEAR:
+                return (clear_state if method=='GET' else clear_receipt)(parsed,stage)
+            return validate(parsed, stage)
         finally:
             conn.close()
     return call
@@ -446,6 +473,9 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
         preview_call = pause_client(origin,read_key,write_key,
             pause_signer(environment,owner,proof_key,clock=clock,route=BASE_PREVIEW),
             stage=environment,route=BASE_PREVIEW,validate=preview_receipt,max_bytes=4096)
+        clear_call = pause_client(origin,read_key,write_key,
+            pause_signer(environment,owner,proof_key,clock=clock,route=BASE_CLEAR),
+            stage=environment,route=BASE_CLEAR,max_bytes=1024)
         def csrf_token(revision, expiry, kind='pause'):
             msg = f'visual-{kind}-v1\n{environment}\n{public_origin}\n{revision}\n{expiry}'.encode('ascii')
             return f'{expiry}.'+hmac.digest(csrf_key,msg,'sha256').hex()
@@ -514,6 +544,10 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
             try:
                 if self.headers.get('Sec-Fetch-Site')=='cross-site' and path.startswith('/api/'):
                     return self.respond(403)
+                if path in (BROWSER_CLEAR,BROWSER_CLEAR+'/prepare'):
+                    if pause is None or raw != path or query:
+                        return self.respond(404)
+                    return self.clear_request(path,safe)
                 if path in (BROWSER_REMOVE,BROWSER_REMOVE+'/prepare',BROWSER_PREVIEW,BROWSER_PREVIEW+'/prepare'):
                     if pause is None or raw != path or query:
                         return self.respond(404)
@@ -645,6 +679,59 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                      set(result[operation])==set(request[operation]) if sessions else
                      result[operation] is request[operation])
             if not matches or result['revision']==revision:
+                return self.respond(503)
+            return reply(200,result)
+
+        def clear_request(self,path,safe):
+            if not self.has_pause_owner() or self.headers.get_all('Origin',[]) != [public_origin]:
+                return self.respond(403)
+            prepare=path.endswith('/prepare')
+            if self.command != ('POST' if prepare else 'PUT'):
+                return self.respond(405)
+            lengths=self.headers.get_all('Content-Length',[])
+            if (self.headers.get_all('Transfer-Encoding') or len(lengths)!=1
+                    or not re.fullmatch(r'[1-9][0-9]{0,2}',lengths[0])):
+                return self.respond(400)
+            if self.headers.get_all('Content-Type',[])!=['application/json']:
+                return self.respond(415)
+            try:
+                raw=self.rfile.read(int(lengths[0]))
+                if len(raw)!=int(lengths[0]):
+                    return self.respond(400)
+                request=unique_json(raw)
+            except (ValueError,OSError,RecursionError):
+                return self.respond(400)
+            fields={'stage','expected_revision','confirmation'} if prepare else {'stage','expected_revision'}
+            if (type(request) is not dict or set(request)!=fields
+                    or request['stage'] not in ('test','prod')
+                    or type(request['expected_revision']) is not str
+                    or not REVISION.fullmatch(request['expected_revision'])):
+                return self.respond(400)
+            def reply(status,value):
+                return self.respond(status,json.dumps(value,separators=(',',':')).encode(),'application/json',
+                                    headers={**safe,'Cache-Control':'no-store'})
+            if request['stage']!=environment:
+                return reply(409,{'error':'database_clear_state_changed'})
+            revision=request['expected_revision']
+            if prepare:
+                if request['confirmation']!='ОЧИСТИТЬ '+environment.upper():
+                    return self.respond(400)
+                state=clear_call('GET')
+                if not state['can_clear'] or state['revision']!=revision:
+                    return reply(409,{'error':'database_clear_state_changed'})
+                return reply(200,{'stage':environment,'revision':revision,
+                                  'csrf_token':csrf_token(revision,int(clock())+30,'database-clear')})
+            tokens=self.headers.get_all('X-CSRF-Token',[])
+            token=re.fullmatch(r'([0-9]{1,12})\.[0-9a-f]{64}',tokens[0]) if len(tokens)==1 else None
+            if not token:
+                return self.respond(403)
+            expiry,now=int(token[1]),int(clock())
+            if not now < expiry <= now+30 or not hmac.compare_digest(tokens[0],csrf_token(revision,expiry,'database-clear')):
+                return self.respond(403)
+            result=clear_call('PUT',{'expected_revision':revision})
+            if result is None:
+                return reply(409,{'error':'database_clear_state_changed'})
+            if result['revision']==revision:
                 return self.respond(503)
             return reply(200,result)
 
