@@ -6,7 +6,7 @@ export function openOwnerLive(args:{
   initialEpoch?:string|null;
   onBootstrap?:(epoch:string)=>boolean;
   onInvalidate?:(retiredEpoch:string|null)=>void;
-  onState:(state:'connecting'|'live'|'disconnected')=>void;
+  onState:(state:'connecting'|'registered'|'live'|'disconnected')=>void;
   onRefresh:(reason:'changed'|'reset',epoch:string|null)=>void|Promise<void>;
 }):OwnerLiveHandle;
 

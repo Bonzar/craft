@@ -14,6 +14,7 @@ export function patchVisual({html,script,css,releaseTag=null}) {
   // The exact pinned Connections client must reload even a historical page
   // after a committed clear. Do not replace its renderer or layout worker.
   script=once(script,'let t=_d(e,fe);wd(`sse-reset`','let t=_d(e,fe);if(t.reason===`database_cleared`){this.stream?.close();location.reload();return;}wd(`sse-reset`');
+  html=once(html,'role="status">Подключение</span>','role="status">Проверяем вход…</span>');
   html=once(html,'id="topics-toggle" aria-label=','id="topics-toggle" hidden aria-label=');
   if(releaseTag!==null) {
     html=once(html,'</body>','<div class="visual-release-version">Визуал: '+releaseTag+'</div>\n</body>');
@@ -50,6 +51,7 @@ bootstrapReleaseOwnerGraph(){
   const boot=releaseFirstOwnerSnapshot(epoch=>{
     if(!this.authenticated)return;
     this.releaseOwnerSnapshotEpoch=epoch;
+    if(!epoch)this.setConnection('Снимок · живой поток пока не подтверждён',false);
     if(epoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:this.releaseOwnerLiveCarriesQueue}}));
     this.ensureReleaseScene();
     return this.loadGraph(undefined,true);
@@ -92,7 +94,8 @@ startReleaseOwnerLive(boot){
       this.releaseOwnerLiveHealthy=state==='live';
       globalThis.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:state}));
       if(state==='disconnected'&&!this.manifest)boot?.fallback();
-      this.setConnection(state==='live'?(this.manifest?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):'Поток подключён · загружаем карту'):state==='connecting'?'Подключаемся к live-потоку':'Нет live-связи',state==='live'&&!!this.manifest);
+      if(state==='registered'){this.setConnection('Live · поток открыт',true);return;}
+      this.setConnection(state==='live'?(this.manifest?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):'Live · загружаем карту'):state==='connecting'?'Подключаемся к live-потоку':'Нет live-связи',state==='live');
     },
     onInvalidate:retiredEpoch=>{if(!current()||retiredEpoch&&this.manifest?.owner_live_epoch&&this.manifest.owner_live_epoch!==retiredEpoch)return;this.releaseOwnerSnapshotEpoch=null;globalThis.dispatchEvent?.(new CustomEvent('owner-live-invalidate'));this.graphRequest?.abort();this.clearReleaseOwnerLiveGraph();},
     onRefresh:async (reason,authority)=>{
@@ -118,7 +121,7 @@ export function patchOwnerLive(script,rawSeed){
   replace('this.loading.hidden=!0,this.stream?.close()', 'this.loading.hidden=!0,this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('this.cardRequest?.abort(),this.searchRequest?.abort(),this.stream?.close()', 'this.cardRequest?.abort(),this.searchRequest?.abort(),this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('async start(){if(this.authenticated=', 'async start(){this.authenticated=');
-  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.capabilities=await');
+  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.setConnection(`Подключаемся к live-потоку`,false);this.capabilities=await');
   replace('await this.loadGraph(),this.renderCapabilities()', 'await this.bootstrapReleaseOwnerGraph(),this.renderCapabilities()');
   replace('loadGraph(e){if(wd(', 'loadGraph(e,preserveOwnerLive=false){if(wd(');
   replace('this.fetchGraph(e??this.currentContext())','this.fetchGraph(e??this.currentContext(),preserveOwnerLive)');

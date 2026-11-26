@@ -98,7 +98,7 @@ test('first authoritative handshake starts reads before heartbeat and never wait
   assert.deepEqual(order,[['connecting',0],['transport opened',0]]);
   time=70;frame('hello',epoch);await Promise.resolve();assert.equal(order.length,2);
   time=71;frame('reset',epoch);await Promise.resolve();
-  assert.deepEqual(order.at(-1),['graph+queue',epoch,71]);
+  assert.deepEqual(order.slice(-2),[['registered',71],['graph+queue',epoch,71]]);
   assert.equal(timers[0].cancelled,true);
   assert.equal(boot.accept('b'.repeat(64)),false);
   time=580;frame('heartbeat',epoch);assert.deepEqual(order.at(-1),['live',580]);
