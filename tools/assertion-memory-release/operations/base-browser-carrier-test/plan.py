@@ -8,7 +8,7 @@ TEST_NGINX_SHA='b29a1fb8d880fce8f53ff6ca7e57d7eea435c8dd8e2a2f028adbe6e64f5e5103
 TEST_HOST='d5dc14bhh6hba54q0i3p.hsvi2zuh.apigw.yandexcloud.net'
 TARGET='https://153.51.163.106/__mvt/api/v1/{tail}'
 WILD='/api/v1/{tail+}'
-METHODS=('get','head','post','put','delete')
+METHODS=('get','head','post','put','patch','delete','options')
 SSE=('events-direct','events-proof','events-ticket')
 WIRE={'Cookie':'$http_cookie','Origin':'$http_origin','Content-Type':'$http_content_type',
       'X-CSRF-Token':'$http_x_csrf_token','Sec-Fetch-Site':'$http_sec_fetch_site',
@@ -63,7 +63,7 @@ def nginx_delta(source):
     # Hard-deny the retired path even if a future Base accidentally mounts it.
     deny=''.join(f'location = /__mvt/api/v1/{x} {{ return 404; }}\n' for x in HARD_DENY)
     block=deny+'location ^~ /__mvt/api/v1/ {\n'
-    block+='    if ($request_method !~ ^(GET|HEAD|POST|PUT|DELETE)$) { return 405; }\n'
+    block+='    if ($request_method !~ ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$) { return 405; }\n'
     block+='    proxy_pass_request_headers off;\n'
     block+=f'    proxy_set_header Host {TEST_HOST};\n'
     block+=''.join(f'    proxy_set_header {k} {v};\n' for k,v in WIRE.items())
