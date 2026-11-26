@@ -22,7 +22,20 @@ class Standalone(fixture.OriginTest):
                 fixture.ORIGINAL['index.html'].replace(b'index-ab.js',b'index-other.js'),
                 self.release,fixture.ORIGINAL)
 
-    def exercise(self,lane):
+    def test_direct_live_csp_is_explicit_and_test_only(self):
+        csp_origin=fixture.origin.owner_live_csp_origin
+        self.assertEqual(csp_origin('test', object(), None),'')
+        self.assertEqual(csp_origin('test', object(), 'https://8.8.8.8'),' https://8.8.8.8')
+        for stage, standalone, origin in (
+            ('prod',object(),'https://8.8.8.8'), ('test',None,'https://8.8.8.8'),
+            ('test',object(),'https://127.0.0.1'), ('test',object(),'https://8.8.8.8:443'),
+            ('test',object(),'https://8.8.8.8; connect-src *'),
+        ):
+            with self.assertRaises(ValueError):
+                csp_origin(stage,standalone,origin)
+        self.exercise('test','https://8.8.8.8')
+
+    def exercise(self,lane, live_origin=None):
         ingress,graph_key,queue_key,health_key=(x*64 for x in ('2','3','4','7'))
         host=f'visual-{lane}.example.test'
         captured=[]
@@ -60,7 +73,7 @@ class Standalone(fixture.OriginTest):
         url=f'http://127.0.0.1:{private.server_port}'
         visual=start(fixture.origin.make_server(self.root,fixture.TOKEN,0,environment=lane,
                      queue_origin=url,queue_token=queue_key,standalone=('https://'+host,ingress,url,graph_key),
-                     runtime_health=('8'*64,health_key)))
+                     runtime_health=('8'*64,health_key),owner_live_origin=live_origin))
 
         def get(path, *, key=ingress, sent_host=host, method='GET', extra=None):
             conn=http.client.HTTPConnection(*visual.server_address,timeout=2)
@@ -86,6 +99,7 @@ class Standalone(fixture.OriginTest):
             self.assertEqual(code,200)
             self.assertNotIn('Location',headers)
             self.assertIn("base-uri 'none'",headers['Content-Security-Policy'])
+            self.assertIn("connect-src 'self'"+(' '+live_origin if live_origin else '')+';',headers['Content-Security-Policy'])
             self.assertEqual(page,expected)
         code,headers,page=get('/visual',method='HEAD')
         self.assertEqual((code,page,int(headers['Content-Length'])),(200,b'',len(expected)))
