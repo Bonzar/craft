@@ -15,45 +15,37 @@ class CheckpointTests(unittest.TestCase):
         self.p = Published(self.c,10,True)
         self.a = art(self.c,10)
         self.lookup = lambda _: self.p
-        self.publish = Mock(return_value=self.p)
         self.q = Checkpoints(Ledger(sqlite3.connect(':memory:'),lambda:1000), lambda _: nullcontext())
         self.q.ledger.initialize(self.base)
 
-    def publish_once(self):
-        return self.q.publication(self.c, live_prod=lambda _:self.base,verify_fix=Mock(),publish=self.publish)
-
-    def test_all_stages_and_next_major(self):
-        prepare = Mock(return_value=self.a)
-        with self.assertRaises(Reject):
-            self.q.build_start(self.p,lookup=self.lookup,prepare=prepare)
-        prepare.assert_not_called()
-        self.publish_once()
-        with self.assertRaises(Reject):
-            self.publish_once()
-        self.publish.assert_called_once_with(self.c)
-        self.q.build_start(self.p,lookup=self.lookup,prepare=prepare)
-        test = self.q.test(self.a,verified_release=self.lookup,activate_and_probe=lambda a:witness('test',a))
-        live = self.q.production(self.a,verified_release=self.lookup,approve=lambda _:True,
-                                 actual_test=lambda _:test,activate_and_probe=lambda a:witness('prod',a))
+    def test_build_can_exist_but_deployment_is_gated(self):
         next_candidate = cand('2.0.0','c')
-        self.q.publication(next_candidate,live_prod=lambda _:live,verify_fix=Mock(),
-                           publish=lambda c:Published(c,11,True))
+        b=art(next_candidate,11)
+        next_p=Published(next_candidate,11,True)
+        execute=Mock(side_effect=lambda a:witness('test',a))
+        with self.assertRaises(Reject):
+            self.q.test(b,verified_release=lambda _:next_p,live_prod=lambda _:self.base,
+                        verify_fix=Mock(),activate_and_probe=execute)
+        execute.assert_not_called()
+        test=self.q.test(self.a,verified_release=self.lookup,live_prod=lambda _:self.base,
+                         verify_fix=Mock(),activate_and_probe=execute)
+        live=self.q.production(self.a,verified_release=self.lookup,approve=lambda _:True,
+                               actual_test=lambda _:test,activate_and_probe=lambda a:witness('prod',a))
+        self.q.test(b,verified_release=lambda _:next_p,live_prod=lambda _:live,
+                    verify_fix=Mock(),activate_and_probe=execute)
 
     def test_wrong_approval_or_wrong_service_never_closes_train(self):
-        self.publish_once()
-        self.q.build_start(self.p,lookup=self.lookup,prepare=lambda _:self.a)
-        test = self.q.test(self.a,verified_release=self.lookup,activate_and_probe=lambda a:witness('test',a))
-        execute = Mock(return_value=witness('prod',art(cand('1.0.0','e'),10)))
+        test=self.q.test(self.a,verified_release=self.lookup,live_prod=lambda _:self.base,
+                         verify_fix=Mock(),activate_and_probe=lambda a:witness('test',a))
+        execute=Mock(return_value=witness('prod',art(cand('1.0.0','e'),10)))
         for i in range(2):
             with self.assertRaises(Reject):
                 self.q.production(self.a,verified_release=self.lookup,approve=lambda _:bool(i),
                                   actual_test=lambda _:test,activate_and_probe=execute)
         execute.assert_called_once()
-        with self.assertRaises(Reject):
-            self.q.publication(cand('2.0.0','c'),live_prod=lambda _:self.base,verify_fix=Mock(),publish=Mock())
 
     def test_supervised_restore_never_seeds_train(self):
         legacy = Published(self.base.artifact.candidate,1,True)
         self.q.supervised_legacy(SupervisedLegacy('historical_rollback',legacy,'evidence'),
                                  verify=lambda _:True,perform_and_probe=lambda _:self.base)
-        self.publish_once()
+        self.assertFalse(self.q.ledger.is_reserved(self.c))

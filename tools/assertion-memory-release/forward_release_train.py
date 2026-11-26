@@ -158,12 +158,10 @@ class Ledger:
             self.db.execute('UPDATE forward_train SET open_id=? WHERE family=?',(release_id,candidate.family))
         return self._write(bind)
 
-    def require_reserved(self, candidate, *, release_id):
-        require(type(release_id) is int and release_id > 0, 'Immutable release ID required')
+    def is_reserved(self, candidate):
         def check():
-            _,_,current,pin,_,_ = self._read(candidate.family)
-            require(current == candidate and pin[0] == release_id,
-                    'Build is not the exact reserved release')
+            _,_,current,_,_,_ = self._read(candidate.family)
+            return current == candidate
         return self._write(check)
 
     def require_bound(self, artifact):

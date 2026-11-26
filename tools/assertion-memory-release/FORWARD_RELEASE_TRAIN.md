@@ -1,28 +1,17 @@
-# Forward release admission (review draft)
+# Forward release train
 
-Apply per product independently. Keep existing 0.1.x immutable. Seed each
-product once from exact live PROD release, payload and generation. Its first
-forward train is 1.0.0. Visual must not wait for Base or vice versa.
-An already-green TEST candidate proceeds to existing protected PROD approval.
+This is a deployment gate only. Apply independently to Base and Visual. Keep
+existing 0.1.x tags immutable and recognize the exact running artifact as
+baseline after supervised initialization. The first planned forward train is
+1.0.0. Publish and build later releases freely. The next major cannot activate
+in TEST until the preceding train is verified running in PROD.
 
-Next minor is only a repair of a recorded failing TEST check in the current
-train. Protected review must bind exact predecessor artifact, exact new head,
-failing check ID and scope manifest, with explicit no-unrelated-changes
-classification even for edits in the same file. Incoming caller claims cannot
-populate those types. The resolver must verify immutable review + provider
-evidence and compute the manifest independently; paths cannot prove scope.
+Next minor requires a reviewed repair of a recorded failing TEST check on
+the exact current train artifact. Review binds the exact old artifact, new
+head, failing evidence and scope manifest; unrelated changes are disallowed.
+A passing TEST candidate is not superseded by unrelated feature work and
+proceeds to the existing protected PROD approval.
 
-Wire the same durable authority before tag/Release publication, automatic
-build, protected TEST activation and manual PROD activation. Restrict direct
-tag/publisher bypass at cutover. GitHub event/build concurrency alone cannot
-prevent early publication. Require exact immutable binding after publication;
-recover the same slot after timeout, never assume a failed response means no
-side effect. Lock promotion before effects; attest actual PROD before closing.
-No new train until PROD fresh smoke matches closed artifact and generation.
-
-Privileged historical rebuild/rollback bypasses no forward gate and never
-opens or closes a train. If PROD moved away from forward baseline, do not
-continue until exact restoration is explicitly requalified; no automatic
-ledger reset. Pending uncertain activation also requires independent receiver
-reconciliation. This source-only first review does not activate any workflow
-or control plane.
+Legacy versions, emergency continuity and historical rollback use a distinct
+supervised path, not the forward train. If a rollback changes live PROD, new
+forward activation remains blocked until the genuine baseline is reverified.

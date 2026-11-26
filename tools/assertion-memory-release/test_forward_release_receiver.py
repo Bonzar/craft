@@ -14,18 +14,16 @@ class ReceiverTest(unittest.TestCase):
     def test_proof_and_lock_fail_closed(self):
         fixture=fixture_module.CheckpointTests()
         fixture.setUp()
-        fixture.publish_once()
-        fixture.q.build_start(fixture.p,lookup=fixture.lookup,prepare=lambda _:fixture.a)
         a=fixture.a
         effect=Mock(side_effect=lambda a:witness('test',a))
         r=Request(a,'test',88,Path('/dev/null'))
-        signed=dict(schema='forward-release-stage/v1',repository_id=1260097465,authority_revision='b'*40,
+        signed=dict(schema='forward-release-stage/v1',repository_id=1260097465,
                     family='base',stage='test',tag=a.candidate.tag,revision=a.candidate.revision,
                     release_id=a.release_id,workflow_run_id=88,payload_sha256=a.digest,test_generation=None)
         def execute(stage, claim):
-            return activate_forward(fixture.q,r,receiver_stage=stage,verify_seal=lambda *_:claim,
+            return activate_forward(fixture.q,r,receiver_stage=stage,verify_dispatch=lambda req,g: claim == signed and req.artifact == a and g is None,
                    verify_release=fixture.lookup,active_test=None,verify_promote_approval=None,
-                   activate_and_probe=effect,authority_revision='b'*40)
+                   activate_and_probe=effect,live_prod=lambda _:fixture.base,verify_fix=None)
         with self.assertRaises(Reject):
             execute('prod',signed)
         with self.assertRaises(Reject):

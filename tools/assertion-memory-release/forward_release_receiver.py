@@ -12,7 +12,6 @@ import stat
 from contextlib import contextmanager
 
 from forward_release_train import Artifact, Reject, require
-from forward_release_workflow import check
 
 
 @dataclass(frozen=True)
@@ -49,18 +48,21 @@ class FamilyLocks:
             os.close(dfd)
 
 
-def activate_forward(checkpoints, req, *, receiver_stage, verify_seal, verify_release,
-                     active_test, verify_promote_approval, activate_and_probe, authority_revision):
+def activate_forward(checkpoints, req, *, receiver_stage, verify_dispatch, verify_release,
+                     active_test, verify_promote_approval, activate_and_probe,
+                     live_prod=None, verify_fix=None):
     if (type(req) is not Request or req.stage not in ('test','prod')
             or req.stage != receiver_stage or type(req.artifact) is not Artifact):
         raise Reject('Receiver stage or artifact mismatch')
+    require(type(req.run_id) is int and req.run_id > 0, 'Invalid protected deployment run')
     a = req.artifact
     a.checked()
     require(a.candidate.version()[0] > 0, 'Use separate supervised legacy receiver path')
 
     def authority(generation=None):
-        return check(a.candidate,req.stage,a.release_id,req.run_id,authority_revision,req.receipt,
-                     verify_signed=verify_seal,payload_sha256=a.digest,test_generation=generation) == 'forward-admitted'
+        # Existing provider/receiver authority must check exact stage, run,
+        # artifact and, before PROD, the actual TEST generation. No new signer.
+        return verify_dispatch(req, generation) is True
 
     def authorize_test(pub):
         # Route through checkpoint lock before proof verification and effects.
@@ -76,6 +78,7 @@ def activate_forward(checkpoints, req, *, receiver_stage, verify_seal, verify_re
         return w
 
     if req.stage == 'test':
-        return checkpoints.test(a, verified_release=authorize_test, activate_and_probe=activate_and_probe)
+        return checkpoints.test(a, verified_release=authorize_test, activate_and_probe=activate_and_probe,
+                                live_prod=live_prod, verify_fix=verify_fix)
     return checkpoints.production(a, verified_release=verify_release, actual_test=read_exact_test,
                                   approve=verify_promote_approval, activate_and_probe=activate_and_probe)
