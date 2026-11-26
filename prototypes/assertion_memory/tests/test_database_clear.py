@@ -44,6 +44,9 @@ class DatabaseClearTest(unittest.TestCase):
                 delivery=dict(stream_id=stream['stream_id'],epoch=stream['epoch'],seq=1)
                 ident='first-'+lane
                 event=self.capture(ident,delivery)['event']['id']
+                # Historical generic streams can be erased, not active ones
+                # which lack proof that they can re-arm after reset.
+                self.service.ingest_report(stream['stream_id'],stream['epoch'],1,1,'current',0,lifecycle='closed')
                 with self.store.transaction(write=True) as db:
                     batch_schema(db)
                     db.execute("INSERT INTO memory_capture_batches VALUES(?,?,?,?,?,?,NULL)",
@@ -138,6 +141,8 @@ class DatabaseClearTest(unittest.TestCase):
         # Same user-level Base API, but no evidence this producer was enrolled.
         ordinary=self.service.ingest_register(producer,foreign)
         action=self.signed_callbacks('prod')
+        self.assertFalse(action('clear_prepare',{})['can_clear'])
+        self.service.ingest_report(ordinary['stream_id'],ordinary['epoch'],1,0,'current',0,lifecycle='closed')
         clear_receipt=action('clear_commit',{'expected_revision':action('clear_prepare',{})['revision']})
         self.assertEqual(clear_receipt['capture_rearm'],'waiting')
         self.assertEqual(action('clear_prepare',{})['capture_rearm'],'waiting')
@@ -253,6 +258,34 @@ class DatabaseClearTest(unittest.TestCase):
         with self.store.transaction() as db:
             self.assertNotEqual(reset.request_revision(db,stage='test',binding=[
                 (self.path.stat().st_dev,self.path.stat().st_ino),('other-release','generation')]),original)
+
+    def test_late_unsupported_stream_fences_reset_until_it_is_inactive(self):
+        self.capture('survives-rejected-clear')
+        action=self.signed_callbacks('test')
+        prior=action('clear_prepare',{})
+        self.assertTrue(prior['can_clear'])
+        new=self.service.ingest_register('synthetic-ordinary','other-session')
+        self.assertFalse(action('clear_prepare',{})['can_clear'])
+        with self.store.transaction() as db:
+            version=db.execute('SELECT version FROM memory_state').fetchone()[0]
+        authorized=[]
+        def reserve(db):
+            authorized.append(db.in_transaction)
+            # Model a one-time nonce write: even this must roll back.
+            db.execute('UPDATE memory_state SET version=version+1')
+        with self.assertRaisesRegex(processing_control.Conflict,'no authenticated reset continuity'):
+            action('clear_commit',{'expected_revision':prior['revision']},authorize=reserve)
+        self.assertEqual(authorized,[True])
+        with self.store.transaction() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
+            self.assertEqual(reset.revision(db),reset.INITIAL)
+            self.assertEqual(db.execute('SELECT version FROM memory_state').fetchone()[0],version)
+            self.assertEqual(db.execute("SELECT lifecycle FROM memory_ingest_streams WHERE stream_id=?",
+                                        (new['stream_id'],)).fetchone()[0],'active')
+        self.service.ingest_report(new['stream_id'],new['epoch'],1,0,'current',0,lifecycle='closed')
+        prepared=action('clear_prepare',{})
+        self.assertTrue(prepared['can_clear'])
+        self.assertTrue(action('clear_commit',{'expected_revision':prepared['revision']})['cleared'])
 
     def test_unknown_schema_and_busy_fences_leave_data_untouched(self):
         self.capture('no-delete')

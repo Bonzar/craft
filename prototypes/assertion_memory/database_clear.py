@@ -1,5 +1,6 @@
 """Owner-confirmed logical reset. No filesystem target, SQL, or row input from clients."""
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from hashlib import sha256
 import fcntl
 import hmac
@@ -18,7 +19,8 @@ RESET_HEADER=b'x-memory-queue-reset-v2'
 RESET_FORMAT=b'binding-v2'
 REARM_STATES=frozenset(('not_cleared','unknown','not_required','waiting','confirmed'))
 INITIAL='0'*32
-from .stream_clear_transition import CUTOVER,TRANSITIONS,EXPECTED,capture_rearm_status
+from .stream_clear_transition import (CUTOVER,TRANSITIONS,EXPECTED,capture_rearm_status,
+                                      unsupported_active_stream_exists)
 
 PRESERVE={STATE,TOMBSTONES,CUTOVER,TRANSITIONS,EXPECTED,'memory_processing_control','memory_state',
           'memory_thought_runtime','memory_test_queue_sessions','memory_queue_processing_policy','memory_queue_pause_nonce'}
@@ -114,8 +116,9 @@ def request_revision(db, *, stage, binding=None):
 def describe(db, *, stage, binding=None):
     rev=request_revision(db,stage=stage,binding=binding)
     try:
-        _inventory(db)
-        capable=True
+        managed=_inventory(db)
+        now=datetime.now(timezone.utc).isoformat(timespec='microseconds')
+        capable=not unsupported_active_stream_exists(db,managed,now)
     except (ValueError, IndexError):
         capable=False
     result={'stage':stage,'revision':rev,'can_clear':capable,
@@ -148,6 +151,9 @@ def clear(db, *, stage, expected_revision, binding=None):
     if expected_revision!=request_revision(db,stage=stage,binding=binding):
         raise Conflict('Database clear revision changed')
     managed=_inventory(db)
+    cleared_at=datetime.now(timezone.utc).isoformat(timespec='microseconds')
+    if unsupported_active_stream_exists(db,managed,cleared_at):
+        raise Conflict('Active capture stream has no authenticated reset continuity')
     db.execute(f'CREATE TABLE IF NOT EXISTS {STATE}(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision TEXT NOT NULL,salt BLOB NOT NULL)')
     db.execute(f'CREATE TABLE IF NOT EXISTS {TOMBSTONES}(digest BLOB PRIMARY KEY) WITHOUT ROWID')
     row=db.execute(f'SELECT salt FROM {STATE} WHERE singleton=1').fetchone()
@@ -158,8 +164,6 @@ def clear(db, *, stage, expected_revision, binding=None):
                 ((_fingerprint(salt,kind,tuple(v)),) for v in db.execute('SELECT '+','.join(columns)+' FROM '+table)))
     from .stream_clear_transition import WITNESS,witnesses,finish_clear
     new=uuid4().hex
-    from datetime import datetime, timezone
-    cleared_at=datetime.now(timezone.utc).isoformat(timespec='microseconds')
     finish_clear(db,new,cleared_at)
     had_enrolled=False
     for row in witnesses(db,managed):
