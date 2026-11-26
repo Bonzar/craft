@@ -361,3 +361,24 @@ test('native TEST fallback probes once without a advertised standalone capabilit
  assert.equal(h.sessionPanel.hidden,true);
  assert.doesNotMatch(h.text(h.container),/Удалить реплику|Показать текст/);
 });
+
+for(const stage of ['test','prod'])test(stage+' shows one source batch card with ordered, individually protected previews',async()=>{
+  const h=harness({stage,capabilities:{standalone_pause:true,standalone_queue_sessions:true},
+    sessionPolicy:{stage,revision:'b'.repeat(32),selected_session_ids:[],sessions:[]}});
+  h.setData([{id:'source',status:'active',total:1,source_count:2,items:[
+    {id:'batch:'+'c'.repeat(64),status:'ready',phase:'extract',position:1,member_count:2,
+     members:[{id:'first',preview_revision:'d'.repeat(32)},{id:'second',preview_revision:'e'.repeat(32)}]}]}]);
+  await h.open();
+  const cards=h.container.items[1].items[2].items;
+  assert.equal(cards.length,1);
+  assert.match(h.text(cards[0]),/Пакет реплик · 2/);
+  assert.match(h.text(h.container),/Реплик: 2/);
+  assert.doesNotMatch(h.text(cards[0]),/Удалить/);
+  const members=h.find(cards[0],e=>e.tag==='ol').items;
+  assert.equal(members.length,2);
+  for(const entry of members){
+    await h.find(entry,e=>e.tag==='button').listeners.click();
+    assert.match(h.text(entry),/Ты:.*<script>текст<\/script>/);
+  }
+  assert.equal(h.urls.filter(x=>x.includes('/source-preview')).length,4);
+});

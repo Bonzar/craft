@@ -16,8 +16,9 @@ QUEUES=('source','maintenance')
 ROLES={'user','assistant','system','developer','tool'}
 
 
-def preview_revision(row,item_id):
-    if row is None or row[0] not in (*SOURCE,'running') or not row[3]:
+def preview_revision(row,item_id,*,active_batch=False):
+    if (row is None or (row[0] not in (*SOURCE,'running') and
+            not (active_batch and row[0]=='completed' and row[3]==item_id)) or not row[3]):
         return None
     wire=json.dumps(['test-queue-preview-v1',item_id,*row],separators=(',',':')).encode()
     return hashlib.sha256(wire).hexdigest()[:32]
@@ -57,6 +58,11 @@ def annotate(db,data):
         if q not in QUEUES:
             continue
         for item in queue['items']:
+            if q=='source' and 'members' in item:
+                for member in item['members']:
+                    if (preview:=preview_revision(_state(db,q,member['id']),member['id'],active_batch=True)) is not None:
+                        member['preview_revision']=preview
+                continue
             row=_state(db,q,item['id'])
             if (not (q=='source' and active_member(db,item['id']))
                     and (rev:=revision(row,q,item['id'])) is not None):
@@ -169,7 +175,8 @@ def source_preview(db,*,stage,queue_id,item_id,expected_revision):
         raise ValueError('Invalid source preview route')
     check_request(queue_id,item_id)
     row=_state(db,queue_id,item_id)
-    if preview_revision(row,item_id) is None or preview_revision(row,item_id)!=expected_revision:
+    current=preview_revision(row,item_id,active_batch=(row is not None and row[0]=='completed' and active_member(db,item_id)))
+    if current is None or current!=expected_revision:
         raise Conflict('Queue item changed')
     source=db.execute("SELECT substr(prompt,1,240),CASE WHEN json_valid(metadata) THEN "
                       "json_extract(metadata,'$.role') END FROM memory_raw_events WHERE id=?",

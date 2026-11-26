@@ -62,7 +62,7 @@ def exact_database(db):
     return info.st_dev,info.st_ino
 
 
-def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False):
+def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False,batch_cards=False):
     tag,generation=identity()
     before=exact_database(database)
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=1)) as db:
@@ -78,7 +78,7 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
             data=build_queue_status(db,stage=lane,release_version=tag,
                  processing_session_ids=selected,
                  model_configured=config.provider!='none',interactive_enabled=interactive_enabled,
-                 auto_process_fresh_mac=(lane=='prod' and config.auto_process_fresh_mac),limit=limit,offset=offset)
+                 auto_process_fresh_mac=(lane=='prod' and config.auto_process_fresh_mac),limit=limit,offset=offset,batch_cards=batch_cards)
             if lane=='test' or session_control:
                 from .queue_session_control import annotate_source, annotate_maintenance
                 annotate_source(db,data,selected,fresh_only=getattr(config,"auto_process_fresh_mac",False))
@@ -133,6 +133,9 @@ def make_queue_rest(*, fingerprint, port, project):
             return await reply(401,{'error':'unauthorized'})
         try:
             limit,offset=page(scope.get('query_string',b''))
+            card_format=values(b'x-memory-queue-format')
+            if card_format not in ([],[b'batch-cards-v1']):
+                raise ValueError()
             if values(b'content-length') not in ([],[b'0']) or values(b'transfer-encoding'):
                 raise ValueError()
             event=await asyncio.wait_for(receive(),1)
@@ -144,7 +147,8 @@ def make_queue_rest(*, fingerprint, port, project):
             return await reply(503,{'error':'unavailable'})
         try:
             async with gate:
-                result=await asyncio.to_thread(project,limit=limit,offset=offset)
+                result=await asyncio.to_thread(project,limit=limit,offset=offset,
+                    **({'batch_cards':True} if card_format else {}))
         except (ValueError,OSError,sqlite3.Error):
             return await reply(503,{'error':'unavailable'})
         return await reply(200,result)

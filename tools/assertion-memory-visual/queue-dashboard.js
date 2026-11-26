@@ -67,7 +67,8 @@
     if(Number.isSafeInteger(item.position)&&item.position>0&&item.status!=='running'){
       row.append(element('span','№ '+item.position,'queue-position'));
     }
-    const title=element('h3',labels(phases,item.phase,'Этап не указан'));
+    const members=queueId==='source'&&Array.isArray(item.members)?item.members:null;
+    const title=element('h3',members?'Пакет реплик · '+members.length:labels(phases,item.phase,'Этап не указан'));
     const detail=element('details');
     detail.open=Boolean(previous?.details.open);
     const summary=element('summary','ID '+shorten(item.id));
@@ -78,7 +79,7 @@
     });
     detail.append(summary,raw,copy);
     let cardAction=null;
-    if(controlsReady&&itemFeedback&&['source','maintenance'].includes(queueId)&&rev(item.remove_revision)&&item.status!=='running'&&(queueId!=='source'||item.phase==='extract')){
+    if(!members&&controlsReady&&itemFeedback&&['source','maintenance'].includes(queueId)&&rev(item.remove_revision)&&item.status!=='running'&&(queueId!=='source'||item.phase==='extract')){
       const change=element('div','','queue-remove-action');
       const key=queueId+':'+item.id;
       const source=queueId==='source';
@@ -114,13 +115,13 @@
         commit.focus();
       });
       change.append(begin);cardAction=change;
-    }else if(controlsReady&&queueId==='source'&&(item.phase==='partial_source'||item.status==='running')){
+    }else if(!members&&controlsReady&&queueId==='source'&&(item.phase==='partial_source'||item.status==='running')){
       cardAction=element('p','Удаление недоступно: обработка реплики уже началась.','queue-lane-status');
     }
     root.append(row,title);
-    if(controlsReady&&queueId==='source'&&rev(item.preview_revision)){
+    function sourceExcerpt(source,auto){
       const excerpt=element('p','','queue-source-preview');
-      const previewKey=JSON.stringify([item.id,item.preview_revision]);
+      const previewKey=JSON.stringify([source.id,source.preview_revision]);
       const show=value=>{
         const role=labels({user:'Ты',assistant:'Ассистент',tool:'Инструмент',system:'Система',developer:'Разработчик'},value.source_role,'');
         excerpt.replaceChildren(...(role?[element('strong',role+': ')]:[]),element('span',value.source_preview));
@@ -128,7 +129,7 @@
       const load=async()=>{
         if(previewPending.size||previewPending.has(previewKey)||!panel.open)return;
         const current=generation;
-        const body={stage:queueStage,queue_id:'source',item_id:item.id,expected_revision:item.preview_revision};
+        const body={stage:queueStage,queue_id:'source',item_id:source.id,expected_revision:source.preview_revision};
         const route='/api/v1/processing/items/source-preview';
         previewPending.add(previewKey);open.disabled=true;
         try{
@@ -137,7 +138,7 @@
           if(proof?.stage!==body.stage||typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
           const value=await sessionRequest(route,'PUT',body,proof.csrf_token);
           if(current!==generation||!panel.open)return;
-          if(value?.stage!==body.stage||value.queue_id!=='source'||value.item_id!==item.id||
+          if(value?.stage!==body.stage||value.queue_id!=='source'||value.item_id!==source.id||
              typeof value.source_preview!=='string'||!value.source_preview.trim()||Array.from(value.source_preview).length>240)throw Error();
           if(previews.size>=50)previews.delete(previews.keys().next().value);
           previews.set(previewKey,value);show(value);
@@ -150,16 +151,30 @@
       const open=action('Показать текст реплики',load);
       if(previews.has(previewKey))show(previews.get(previewKey));else{
         excerpt.append(open);
-        previewJobs.set(root,{key:previewKey,run:load});
-        watchPreview(root);
+        if(auto){previewJobs.set(root,{key:previewKey,run:load});watchPreview(root);}
       }
-      root.append(excerpt);
+      return excerpt;
     }
+    let group;
+    if(members){
+      group=element('details','','queue-batch-members');
+      group.open=Boolean(previous?.members?.open);
+      group.append(element('summary','Реплики в пакете'));
+      const list=element('ol');
+      for(const member of members){
+        const entry=element('li');
+        entry.append(controlsReady&&rev(member.preview_revision)?sourceExcerpt(member,false)
+          :element('span','Текст недоступен'));
+        list.append(entry);
+      }
+      group.append(list);
+      root.append(element('p',labels(phases,item.phase,'Этап не указан'),'queue-lane-status'),group);
+    }else if(controlsReady&&queueId==='source'&&rev(item.preview_revision))root.append(sourceExcerpt(item,true));
     if(Object.hasOwn(hold,item.hold_reason))root.append(element('p',hold[item.hold_reason],'queue-lane-status'));
     if(typeof item.session_id==='string'&&item.session_id)detail.append(element('p','Сессия: '+item.session_id));
     if(cardAction)root.append(cardAction);
     root.append(detail);
-    return {root,details:detail,summary,copy};
+    return {root,details:detail,summary,copy,members:group};
   }
   function render(id,queue,offset){
     let target=lanes.get(id);
@@ -196,6 +211,9 @@
     const nav=element('div','','queue-nav');
     if(offset>0)nav.append(action('К началу',()=>move(id,0)));
     if(Number.isSafeInteger(queue?.next_offset)&&queue.next_offset>offset)nav.append(action('Ещё задачи',()=>move(id,queue.next_offset)));
+    if(id==='source'&&Number.isSafeInteger(queue?.source_count)&&queue.source_count!==queue.total){
+      heading.append(element('span','Реплик: '+queue.source_count,'queue-lane-status'));
+    }
     target.replaceChildren(heading,state,grid,nav);
     if(restored)restored.focus();
     rendered.set(id,{signature,cards});

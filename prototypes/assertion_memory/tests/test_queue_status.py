@@ -96,6 +96,49 @@ class QueueStatusTest(unittest.TestCase):
         self.assertEqual([row['position'] for row in ready],list(range(1,len(ready)+1)))
         self.assertIsNone(self.worker._claim_source())
 
+    def test_batch_projects_one_fifo_card_before_pagination_on_both_lanes(self):
+        from prototypes.assertion_memory.capture_batch import schema
+        from prototypes.assertion_memory.queue_item_removal import annotate
+        first,second,running='f'*64,'0'*64,'1'*64
+        for ident in ('z','a','early-job','later-member','active'):
+            self.source(ident,'completed' if ident=='active' else 'pending')
+        with self.store.transaction(write=True) as db:
+            schema(db)
+            for key,state,members in ((first,'pending',('z','a')),
+                                      (second,'pending',('later-member',)),
+                                      (running,'dispatching',('active',))):
+                db.execute('INSERT INTO memory_capture_batches VALUES (?,?,?,?,?,?,NULL)',
+                           (key,'stream','selected','digest','request',state))
+                db.executemany('INSERT INTO memory_capture_batch_members VALUES (?,?,?)',
+                               ((key,i,'e-'+name) for i,name in enumerate(members)))
+            # Real batch-backed source jobs are keyed by their original receipt.
+            db.execute("UPDATE memory_capture_jobs SET id=event_id WHERE id IN ('z','a','later-member','active')")
+        for lane in ('test','prod'):
+            with self.subTest(lane=lane):
+                pages=[self.lane('source',stage=lane,batch_cards=True,limit=1,offset=i) for i in range(4)]
+                self.assertEqual([p['total'] for p in pages],[4]*4)
+                self.assertEqual([p['source_count'] for p in pages],[5]*4)
+                self.assertEqual([p['next_offset'] for p in pages],[1,2,3,None])
+                rows=[p['items'][0] for p in pages]
+                self.assertEqual([r['id'] for r in rows],['batch:'+running,'batch:'+first,'batch:'+second,'early-job'])
+                self.assertEqual([r['position'] for r in rows],[None,1,2,3])
+                self.assertEqual(rows[1]['members'],[{'id':'e-z'},{'id':'e-a'}])
+                with self.store.transaction() as db:
+                    annotate(db,{'queues':pages})
+                self.assertTrue(all(m.get('preview_revision') for m in rows[1]['members']))
+                self.assertIn('preview_revision',rows[0]['members'][0])
+                self.assertNotIn('remove_revision',rows[1])
+                self.assertNotIn('PRIVATE',json.dumps(pages))
+                old=self.lane('source',stage=lane)
+                self.assertNotIn('source_count',old)
+                self.assertEqual(old['total'],4)
+        # Exact same persisted selector as run_next; batch order remains stable.
+        from prototypes.assertion_memory.queue_session_control import update
+        with self.store.transaction(write=True) as db:
+            update(db,selected_session_ids=[],expected_revision=processing_control.INITIAL,baseline=('selected',))
+        out=self.lane('source',batch_cards=True)
+        self.assertEqual({i['id']:i['status'] for i in out['items']}['batch:'+first],'paused')
+
     def test_maintenance_matches_worker_cohort_generation_and_retry(self):
         self.maintenance('b','pending')
         self.maintenance('a','running',lease=OLD)
