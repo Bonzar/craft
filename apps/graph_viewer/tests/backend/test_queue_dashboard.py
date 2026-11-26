@@ -353,3 +353,113 @@ class QueueDashboardTest(unittest.TestCase):
             with self.assertRaises(StopAsyncIteration):
                 await asyncio.wait_for(anext(events),1)
         asyncio.run(run())
+class OwnerBrowserStartup(unittest.TestCase):
+    @staticmethod
+    def args(**changes):
+        options=dict(queue_status_config=Path('/canonical/projection.json'),queue_status_stage='prod',
+            source=Path('/canonical/memory.sqlite3'),queue_control=False,browser_owner_api=True,
+            browser_owner_clear=False,public_origin='https://owner.example.test',
+            bridge_read_token_file=None,database_clear_read_token_file=None,database_clear_lane=None,
+            allowed_proxy_host=[],test_direct_events_origin=None,synthetic_fixture=False)
+        return SimpleNamespace(**(options|changes))
+
+    def test_dark_and_missing_prod_writer_fail_before_opening_scope(self):
+        from apps.graph_viewer.server.__main__ import configure_owner_lanes
+        with patch.object(queue_dashboard,'configured_browser_dashboard') as binder:
+            self.assertEqual(configure_owner_lanes(self.args(browser_owner_api=False,queue_status_stage=None,
+                                                            queue_status_config=None)),(None,None))
+            with self.assertRaisesRegex(ValueError,'installed private Base writer'):
+                configure_owner_lanes(self.args())
+            binder.assert_not_called()
+
+    def test_installed_prod_adapter_accepts_only_canonical_credential_directory(self):
+        import sys
+        from apps.graph_viewer.server.__main__ import PROD_OWNER_CREDENTIALS,installed_prod_owner_api
+        from apps.graph_viewer.server import browser_owner_api
+        from unittest.mock import Mock
+        dashboard=SimpleNamespace(stage='prod')
+        bridge=object()
+        constructor=Mock(return_value=bridge)
+        module=SimpleNamespace(configured_prod_owner_bridge=constructor)
+        for wrongly_configured in ({},{'CREDENTIALS_DIRECTORY':'/run/credentials/other.service'}):
+            with patch.dict(os.environ,wrongly_configured,clear=True), self.assertRaisesRegex(ValueError,'canonical systemd'):
+                installed_prod_owner_api(dashboard)
+        constructor.assert_not_called()
+        with (patch.dict(os.environ,{'CREDENTIALS_DIRECTORY':str(PROD_OWNER_CREDENTIALS)},clear=True),
+              patch.dict(sys.modules,{'apps.graph_viewer.server.prod_owner_bridge':module}),
+              patch.object(browser_owner_api,'configured_browser_api') as configured):
+            self.assertIs(installed_prod_owner_api(dashboard),configured.return_value)
+            constructor.assert_called_once_with(PROD_OWNER_CREDENTIALS)
+            configured.assert_called_once_with(dashboard,clear_enabled=False,prod_owner_bridge=bridge)
+
+    def test_explicit_prod_never_uses_test_modes_or_legacy_authority(self):
+        from apps.graph_viewer.server.__main__ import configure_owner_lanes
+        for update in (dict(bridge_read_token_file=Path('/forbidden')),dict(database_clear_read_token_file=Path('/forbidden')),
+                       dict(database_clear_lane='prod'),dict(allowed_proxy_host=['legacy.example.test']),
+                       dict(queue_control=True),dict(browser_owner_clear=True),dict(synthetic_fixture=True),
+                       dict(test_direct_events_origin='https://192.0.2.1'),dict(public_origin='http://not-secure.test'),
+                       dict(queue_status_stage='test',queue_control=True)):
+            with self.subTest(update=update), patch.object(queue_dashboard,'configured_browser_dashboard') as binder:
+                with self.assertRaises(ValueError):
+                    configure_owner_lanes(self.args(**update),prod_owner_api=lambda _scope: self.fail('writer called'))
+                binder.assert_not_called()
+
+    def test_only_trusted_injected_same_lane_browser_type_can_bind_prod(self):
+        from apps.graph_viewer.server.__main__ import configure_owner_lanes
+        from apps.graph_viewer.server import browser_owner_api
+        from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
+        dummy=SimpleNamespace(stage='prod')
+        def factory(stage,clear=False):
+            return BrowserOwnerAPI(stage=stage,clear_enabled=clear,perform=lambda *_:self.fail(),
+                                   queue_snapshot=lambda **_:self.fail())
+        with (patch.object(queue_dashboard,'configured_browser_dashboard',return_value=dummy) as binder,
+              patch.object(browser_owner_api,'configured_browser_api') as direct):
+            application=factory('prod')
+            dashboard,browser=configure_owner_lanes(self.args(),prod_owner_api=lambda d: application if d is dummy else None)
+            self.assertIs(dashboard,dummy);self.assertIs(browser,application)
+            binder.assert_called_once_with('prod',self.args().queue_status_config,self.args().source)
+            for wrong in (None,SimpleNamespace(stage='prod',clear_enabled=False),factory('test'),factory('prod',True)):
+                with self.assertRaisesRegex(ValueError,'Wrong private Base writer'):
+                    configure_owner_lanes(self.args(),prod_owner_api=lambda _d: wrong)
+            direct.assert_not_called()
+            configure_owner_lanes(self.args(queue_status_stage='test'))
+            direct.assert_called_once_with(dummy,clear_enabled=False)
+
+    def test_prod_reader_policy_canonical_db_release_and_fence_are_distinct_from_writer(self):
+        from contextlib import contextmanager
+        root=Path(tempfile.mkdtemp())
+        self.addCleanup(__import__('shutil').rmtree,root)
+        canonical=root/'prod.sqlite3'; canonical.touch()
+        alternate=root/'other.sqlite3'; alternate.touch()
+        proof=('a'*40,'b'*64)
+        events=[]
+        @contextmanager
+        def fence():
+            events.append('fence')
+            yield
+        with (patch.object(queue_dashboard,'SCOPES',{'prod':('fictional-publisher',canonical)}),
+              patch.object(dashboard_projection,'RUN',root),
+              patch.object(queue_dashboard.os,'getuid',return_value=4321),
+              patch.object(queue_dashboard.os,'geteuid',return_value=4321),
+              patch.object(queue_dashboard.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1234)),
+              patch.object(queue_dashboard,'_prod_reader_uid',return_value=4321) as reader,
+              patch.object(queue_dashboard,'_active_reader_release',return_value=proof) as active,
+              patch.object(queue_dashboard,'_prod_read_fence',side_effect=fence)):
+            projection=dashboard_projection.projection_path('prod')
+            for config,path in ((projection,alternate),(dashboard_projection.projection_path('test'),canonical)):
+                with self.assertRaisesRegex(ValueError,'canonical lane'):
+                    queue_dashboard.configured_browser_dashboard('prod',config,path)
+            dash=queue_dashboard.configured_browser_dashboard('prod',projection,canonical)
+            self.assertEqual(events,[],'activation must not wait for shared lease or publisher')
+            reader.assert_called_with(queue_dashboard.PROD_READER_POLICY)
+            active.assert_called_with('prod')
+            self.assertEqual(dash.publisher_uid,1234);self.assertIsNone(dash.control_lock)
+            with self.assertRaisesRegex(ValueError,'lease unavailable'):
+                with dash.release_lease():self.fail('reader obtained write lease')
+            with patch.object(dash,'_snapshot',return_value={'mock-status':True}) as local_read:
+                self.assertEqual(dash.snapshot(limit=10,offset=0),{'mock-status':True})
+                local_read.assert_called_once_with(limit=10,offset=0)
+                self.assertEqual(events,['fence'])
+            reader.return_value=1234
+            with self.assertRaisesRegex(ValueError,'authorized lane'):
+                queue_dashboard.configured_browser_dashboard('prod',projection,canonical)
