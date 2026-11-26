@@ -1,0 +1,32 @@
+--- a/.github/workflows/assertion-memory-base.yml
++++ b/.github/workflows/assertion-memory-base.yml
+@@ -40,6 +40,13 @@
+         with:
+           persist-credentials: false
+       - if: github.event_name == 'release'
++        name: Require exact protected forward build admission
++        env:
++          GH_TOKEN: ${{ github.token }}
++          FORWARD_RELEASE_ID: ${{ github.event.release.id }}
++          FORWARD_AUTHORITY_SHA: ${{ vars.ASSERTION_MEMORY_FORWARD_AUTHORITY_SHA }}
++        run: python3 tools/assertion-memory-release/forward_release_workflow.py base build
++      - if: github.event_name == 'release'
+         name: Verify published immutable release and ancestry
+         env:
+           GH_TOKEN: ${{ github.token }}
+--- a/.github/workflows/assertion-memory-visual.yml
++++ b/.github/workflows/assertion-memory-visual.yml
+@@ -27,6 +27,13 @@
+         with:
+           persist-credentials: false
+       - if: github.event_name == 'release'
++        name: Require exact protected forward build admission
++        env:
++          GH_TOKEN: ${{ github.token }}
++          FORWARD_RELEASE_ID: ${{ github.event.release.id }}
++          FORWARD_AUTHORITY_SHA: ${{ vars.ASSERTION_MEMORY_FORWARD_AUTHORITY_SHA }}
++        run: python3 tools/assertion-memory-release/forward_release_workflow.py visual build
++      - if: github.event_name == 'release'
+         env:
+           GH_TOKEN: ${{ github.token }}
+           VISUAL_RELEASE_ID: ${{ github.event.release.id }}
