@@ -46,3 +46,34 @@ provider tests. It does not implement the authenticated signature adapter,
 historical builder, archived storage, modified protected controllers, TEST
 witness or deployment, and it cannot deploy, rebuild, or publish by itself.
 Existing ephemeral Actions artifacts are still subject to expiry.
+
+## Reviewable workflow wiring checklist
+
+The following states are separate from the original-release path. An old-release
+version is never passed as the controller checkout ref.
+
+| Step | Trigger and job boundary | Required evidence and failure behavior |
+| --- | --- | --- |
+| Resolve | Explicit dispatch on protected main; exact known historical tag only | Read immutable Release by tag and ID; peel to commit; verify main ancestry and compatibility allowlist. Verify protected entry workflow path, exact revision and attempt 1. Nothing consumes a candidate-supplied URL, shell command or runner label. |
+| Build | Dedicated GitHub-hosted runner, pinned current workflow, read-only repo access, no deployment environment or inherited secrets, no OIDC; candidate checkout by complete SHA | The checkout may contain executable old project code; prohibit its execution outside this job and use no write credentials. Produce the canonical profile package and ensure it can be authenticated as the requested old tag without synthesizing release-event metadata. No retry from an arbitrary workflow/run ID; a new explicit protected dispatch is a new rebuild. |
+| Seal | Trusted separately checked-out and pinned workflow on a fresh runner; accepts an authenticated handle, never runs candidate code | Independent repository/path/attempt/revision and artifact provenance; bounded ZIP intake; verify profile layout/allowed contents/payload digest. Trusted signing adapter binds issuer, repo, exact sealer workflow+SHA and ZIP subject; require exact structured claim. Receiver ignores unsigned inputs. |
+| TEST | Explicit rollback deployment workflow on protected main, existing configured TEST environment and exact profile concurrency group | Resolve the attested rebuild again; verify provider ZIP and unpacked payload. Authenticate/activate exact digest with protected TEST on-host receiver; read smoke from actual service path. Produce `rollback-rebuild-test-proof.json` only after success and upload as a unique same-run bounded Actions ZIP. |
+| PROD | Same protected rollback deployment workflow run, `needs: [test]`, existing configured PROD environment and profile concurrency | Verify stage approval independently (reuse the existing approval policy, never rely solely on green TEST or a workflow variable). Re-resolve the same rebuilt origin, re-download and hash the same provider ZIP and payload. `promote()` independently verifies the protected main run, successful TEST job and required steps, then requires GitHub TEST ZIP, TEST output and expected origin to match. Sign a distinct rebuild audience; normal-release audience/receiver must not interpret it as an original build. No approval can substitute a new or rebuilt-again artifact. |
+
+Current configured controllers (`experimental/configured_release_run.py` and
+`configured_provider_checks.py`) verify GitHub stage approval, call the
+canonical original resolver, and before PROD match an independently downloaded
+TEST receipt against job output and expected identity; a separate origin and
+receiver proof must keep the same guarantees. Do not bind the new deploy
+workflow ID or accepted signer through dispatch values. Obtain them from
+reviewed current policy and verify provider metadata from authenticated GitHub.
+
+`rollback_rebuild_promotion.py` now implements the offline same-run evidence
+contract for steps TEST/PROD. It cannot approve an environment or authorize
+a receiver call. Remaining integration includes the actual historical
+packager, real cryptographic adapter and trust-root pinning, wiring existing
+stage-approval/receipt authenticity to the new origin, and a product-specific
+receiver audience. Verify live GitHub metadata semantics (runner/job names,
+download size metadata, workflow identity and attempt fields) in disposable
+non-PROD tests before any activation. Existing deployed release workflows,
+environment protection, retention, and active runtimes remain untouched.
