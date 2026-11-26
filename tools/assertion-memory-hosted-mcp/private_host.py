@@ -1,6 +1,7 @@
 """Loopback-only launcher for one verified Base release's private JSON operations."""
 from __future__ import annotations
 
+import asyncio
 import fcntl
 from hashlib import sha256
 import hmac
@@ -108,7 +109,20 @@ def configured(stage,root,config_dir):
     return caps,read,effect,machine,clients.get("personal-mac")
 
 
-def effect_lock(app,root,stage,effect_token,machine_digests=()):
+def configured_machine_registry(stage,root,config_dir,machine,reserved):
+    from prototypes.assertion_memory.machine_device_registry import MachineDeviceRegistry
+    marker=config_dir/'machine-device-registry-v1.enabled'
+    try:
+        raw=read_regular(marker,64,owner=0)
+    except FileNotFoundError:
+        return None
+    if raw!=b'assertion-memory-owner-machine-devices-v1\n':
+        raise ValueError('Invalid managed machine registry profile')
+    return MachineDeviceRegistry(root/'state'/'machine-devices'/'registry.sqlite3',
+                                 stage,machine,reserved=tuple(sorted(set(reserved))))
+
+
+def effect_lock(app,root,stage,effect_token,machine_digests=(),*,machine_resolver=None):
     """Writes may never straddle activation. Catalog/health never takes this lock."""
     async def locked(scope,receive,send):
         path=scope.get('path')
@@ -116,8 +130,19 @@ def effect_lock(app,root,stage,effect_token,machine_digests=()):
             return await app(scope,receive,send)
         headers=[value for key,value in scope.get('headers',()) if key.lower()==b'authorization']
         if path==f'/memory-api-{stage}':
-            from vm_relay import machine_authorized
-            authorized=len(headers)==1 and machine_authorized(headers[0],machine_digests)
+            from vm_relay import authorized_machine_request
+            if machine_resolver is None:
+                authorized=len(headers)==1 and authorized_machine_request(headers[0],machine_digests)
+            else:
+                authorized=len(headers)==1 and await asyncio.to_thread(
+                    authorized_machine_request,headers[0],machine_digests,machine_resolver)
+                if not authorized:
+                    # A concurrent new enrollment cannot send this request to
+                    # downstream without the lease after an earlier denial.
+                    await send({'type':'http.response.start','status':401,'headers':[
+                        (b'content-type',b'application/json'),(b'cache-control',b'no-store')]})
+                    await send({'type':'http.response.body','body':b'{"error":"unauthorized"}'})
+                    return
         else:
             authorized=(effect_token is not None and len(headers)==1 and
                         hmac.compare_digest(headers[0],('Bearer '+effect_token).encode('ascii')))
@@ -180,6 +205,7 @@ def factory(stage,root,config_dir,legacy_token):
     caps,read,effect,machine,personal_mac=configured(stage,root,config_dir)
     if legacy_token in (read,effect) or sha256(legacy_token.encode('ascii')).hexdigest() in machine:
         raise ValueError('Legacy credential cannot authorize private operations')
+    reserved={sha256(v.encode('ascii')).hexdigest() for v in (legacy_token,read,effect) if v is not None}
     catalog=compile_release(source,pins,effects=effect is not None)
     profile=private_sites_profile(stage,tag,caps,catalog)
     profile['durable_query_jobs'] = profile['sites_full_catalog']
@@ -200,10 +226,14 @@ def factory(stage,root,config_dir,legacy_token):
             reserved=set(machine)|{sha256(v.encode('ascii')).hexdigest() for v in (legacy_token,read,effect) if v is not None})
     except (OSError,ValueError,UnicodeError):
         native_pause_config=None
+    if native_pause_config is not None:
+        reserved.update(sha256(v.encode('ascii')).hexdigest() for v in native_pause_config)
+    managed_devices=configured_machine_registry(stage,root,config_dir,machine,reserved)
+    machine_resolver=managed_devices.machine_digests if managed_devices is not None else None
     paths={f'/memory-mcp-{stage}-tools'}
     if native_pause_config is not None:
         paths.add(native_pause.PATH)
-    if machine:
+    if machine or machine_resolver is not None:
         paths.add(f'/memory-api-{stage}')
     if effect is not None:
         paths.add(f'/memory-mcp-{stage}-effects')
@@ -245,8 +275,8 @@ def factory(stage,root,config_dir,legacy_token):
         jobs = QueryJobs(config.db,query_locked,ready_query) if profile['durable_query_jobs'] else None
         operations=create_operations(config,store,background=background,service=service,query_jobs=jobs)
         app=make_app(profile,catalog,read,live_identity,effect_token=effect,operations=operations,machine_digests=machine,
-            fresh_mac_digest=personal_mac if config.auto_process_fresh_mac else None)
-        handler = effect_lock(app,root,stage,effect,machine)
+            fresh_mac_digest=personal_mac if config.auto_process_fresh_mac else None,machine_resolver=machine_resolver)
+        handler = effect_lock(app,root,stage,effect,machine,machine_resolver=machine_resolver)
         if native_pause_config is not None:
             from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard
             from prototypes.assertion_memory.dashboard_projection import projection_path
