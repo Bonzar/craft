@@ -22,6 +22,16 @@ export async function readDirectStream({fetcher=fetch,csrf,allowedOrigin,signal,
   const target=directStreamTarget(value.stream_url,allowedOrigin);
   const stream=await fetcher(target,{method:'GET',credentials:'omit',mode:'cors',redirect:'error',
     cache:'no-store',headers:{'Authorization':'Bearer '+value.ticket,'Accept':'text/event-stream'},signal});
+  return parseOwnerFrames(stream,{epoch,signal,onEvent});
+}
+
+export async function readSameOriginOwnerStream({fetcher=fetch,signal,onEvent}){
+  const stream=await fetcher('/api/v1/events',{method:'GET',credentials:'same-origin',
+    redirect:'error',cache:'no-store',headers:{Accept:'text/event-stream'},signal});
+  return parseOwnerFrames(stream,{sameOrigin:true,signal,onEvent});
+}
+
+async function parseOwnerFrames(stream,{epoch=null,sameOrigin=false,signal,onEvent}){
   if(!stream.ok||!/^text\/event-stream(?:;|$)/i.test(stream.headers.get('Content-Type')??'')||!stream.body)
     throw new Error('Stream unavailable');
   const reader=stream.body.getReader();
@@ -33,16 +43,19 @@ export async function readDirectStream({fetcher=fetch,csrf,allowedOrigin,signal,
       if(chunk.done)break;
       pending+=decoder.decode(chunk.value,{stream:true});
       let match;
+      const maxFrame=sameOrigin?128:64;
       while((match=/\r?\n\r?\n/.exec(pending))){
-        if(match.index>64)throw new Error('Invalid stream frame size');
+        if(match.index>maxFrame)throw new Error('Invalid stream frame size');
         const frame=pending.slice(0,match.index);
         pending=pending.slice(match.index+match[0].length);
+        const ordinaryHello=sameOrigin&&!opened&&/^event: hello\r?\ndata: \{"epoch":"([a-f0-9]{64})"\}$/.exec(frame);
+        if(ordinaryHello){epoch=ordinaryHello[1];opened=true;onEvent('hello',epoch);continue;}
         const fields=/^event: ([a-z]+)\r?\ndata: \{\}$/.exec(frame);
-        if(!fields||!KINDS.has(fields[1])||((fields[1]==='hello')===opened))
+        if(!fields||!KINDS.has(fields[1])||((fields[1]==='hello')===opened)||sameOrigin&&!opened)
           throw new Error('Invalid stream event');
         opened=true;onEvent(fields[1],epoch);
       }
-      if(pending.length>64)throw new Error('Invalid stream frame size');
+      if(pending.length>maxFrame)throw new Error('Invalid stream frame size');
     }
     if(!opened||pending.length)throw new Error('Stream ended during a frame');
   } finally {

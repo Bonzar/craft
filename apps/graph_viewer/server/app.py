@@ -18,6 +18,7 @@ from .providers.canonical_thoughts import source_for_path
 from . import cards
 from .search import search
 from .direct_stream import configure_test,TICKET_PATH,DIRECT_PATH,issue_ticket,direct_events
+from .owner_snapshot_stream import enabled_owner as snapshot_owner, owner_snapshot_events
 
 
 class Boundary(BaseHTTPMiddleware):
@@ -130,7 +131,7 @@ async def session(request):
 async def graph_manifest(request):
     manager=request.app.state.manager
     direct=getattr(request.app.state,'direct_events',None)
-    track_epoch=(direct is not None and direct.current()
+    track_epoch=snapshot_owner(request) or (direct is not None and direct.current()
                  and request.app.state.owner.session(request) is not None)
     # Fence the awaited graph lookup, not just header serialization. A graph
     # obtained before a reset cannot be published with the *next* epoch.
@@ -141,7 +142,7 @@ async def graph_manifest(request):
     if graph is None:
         return JSONResponse({'status':'preparing','retry_after_ms':300,'message':'Preparing complete graph and search index'},status_code=202,headers={'Retry-After':'1'})
     manifest=graph.manifest
-    if track_epoch and direct.current():
+    if track_epoch and (snapshot_owner(request) or direct is not None and direct.current()):
         from .database_generation import epoch_name
         manifest={**manifest,'owner_live_epoch':epoch_name(generation)}
     return JSONResponse(manifest,headers={'ETag':'"'+graph.revision+'"'})
@@ -226,6 +227,8 @@ async def events(request):
         from .queue_dashboard import dashboard_events
         return StreamingResponse(dashboard_events(request,manager,dashboard),
                                  media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
+    if not request.scope.get('query_string') and getattr(request.app.state,'owner_snapshot_events',False):
+        return await owner_snapshot_events(request)
 
     after=parse_replay_cursor(request)
     revision=request.query_params.get('revision')
@@ -277,10 +280,21 @@ async def capabilities(request):
         if not 1<=limit<=100 or offset>1_000_000:
             raise APIError('invalid_dashboard','Invalid queue status page')
         browser=getattr(request.app.state,'browser_owner_api',None)
+        direct=request.app.state.direct_events
+        manager=request.app.state.manager
+        generation=manager.sync_generation() if snapshot_owner(request) or direct is not None and direct.current() else None
+        def scoped_snapshot(value):
+            if generation is not None:
+                from .database_generation import epoch_name
+                if (not snapshot_owner(request) and (direct is None or not direct.current())) or manager.sync_generation()!=generation:
+                    raise APIError('queue_unavailable','Database epoch changed before queue snapshot',409)
+                value={**value,'owner_live_epoch':epoch_name(generation)}
+            return JSONResponse(value)
         if browser is not None:
             if not 1<=limit<=50:
                 raise APIError('invalid_dashboard','Invalid queue status page')
-            return await browser.snapshot(request,limit,offset)
+            output=await browser.snapshot(request,limit,offset)
+            return scoped_snapshot(json.loads(output.body)) if generation is not None else output
         dashboard = request.app.state.queue_dashboard
         if dashboard is None:
             raise APIError('queue_unavailable','Queue status is not configured',503)
@@ -294,7 +308,9 @@ async def capabilities(request):
                                        await asyncio.to_thread(dashboard.can_change_pause))
             # Published native Sites treats all capabilities responses alike:
             # these fixed fields are required before it applies transport policy.
-            return JSONResponse({**status,'capabilities':{'live':True},'readiness':[]})
+            return scoped_snapshot({**status,'capabilities':{'live':True},'readiness':[]})
+        except APIError:
+            raise
         except Exception:
             raise APIError('queue_unavailable','Queue status is temporarily unavailable',503) from None
     value=request.app.state.manager.source.capabilities()
@@ -307,6 +323,8 @@ async def capabilities(request):
     direct=request.app.state.direct_events
     if direct is not None and direct.current() and request.app.state.owner.session(request) is not None:
         value['owner_live_transport']={'version':1,'lane':'test','origin':direct.binding.direct_origin}
+    if snapshot_owner(request) and value['capabilities'].get('live') is True:
+        value['owner_live_bootstrap']=1
     value['live_profile']=list(request.app.state.manager.live_profiles)
     value['preparation']={'pending':len(request.app.state.manager.preparing),'ready_snapshots':len(request.app.state.manager.graphs),'semantic_pending':len(request.app.state.manager.semantic_jobs)}
     return JSONResponse(value)
@@ -363,7 +381,7 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False, owner_snapshot_events=False):
     # The legacy Sites env binding is deliberately read-only. Mutation must be
     # installed by the standard owner-session web app at startup.
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
@@ -428,6 +446,10 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     app=Starlette(routes=routes,lifespan=lifespan,exception_handlers={APIError:handle_error,Exception:unavailable},
                   middleware=[Middleware(Boundary),Middleware(GZipMiddleware,minimum_size=1500)])
     app.state.public_origin=browser_origin
+    if type(owner_snapshot_events) is not bool:
+        raise ValueError('Expected explicit owner snapshot event flag')
+    app.state.owner_snapshot_events=owner_snapshot_events
+    app.state.owner_snapshot_slots=asyncio.Semaphore(4)
     app.state.browser_owner_api=browser_owner_api
     app.state.direct_events=direct
     app.state.allowed_proxy_hosts=validate_proxy_hosts(allowed_proxy_hosts)
