@@ -70,7 +70,7 @@ def ensure_selector(db):
 
 
 @asynccontextmanager
-async def reconcile_fresh_mac(launch, *, interval=15):
+async def reconcile_processing(launch, *, interval=15):
     """Retry a wake lost to an explicitly selected worker or a paused lock."""
     stop = asyncio.Event()
 
@@ -83,7 +83,7 @@ async def reconcile_fresh_mac(launch, *, interval=15):
                     await asyncio.to_thread(launch)
                 except Exception:
                     # Operational signal only; do not include arbitrary exception text.
-                    _LOG.warning('fresh_mac_processing_reconcile_failed')
+                    _LOG.warning('processing_reconcile_failed')
 
     task = asyncio.create_task(loop())
     try:
@@ -91,3 +91,7 @@ async def reconcile_fresh_mac(launch, *, interval=15):
     finally:
         stop.set()
         await task
+
+
+# Keep the existing legacy helper available without imposing its policy on batches.
+reconcile_fresh_mac = reconcile_processing

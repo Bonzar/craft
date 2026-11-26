@@ -110,9 +110,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                           "annotations":{"readOnlyHint":manifest[name].get("readOnlyHint") is True,
                                          "destructiveHint":False,"openWorldHint":False}}
                          for name,schema in sorted(canonical_schemas.items())]
-    general_machine_descriptors=[row for row in canonical_descriptors if row["name"]!=BATCH]
-    fresh_machine_digest=digest(canonical_descriptors)
-    general_machine_digest=digest(general_machine_descriptors)
+    machine_digest=digest(canonical_descriptors)
     compiled={(cap,n):Draft202012Validator(projection) for n,t in manifest.items()
                for cap,projection in t['capability_projections'].items() if cap in caps}
     if not isinstance(gateway_token, str) or not HEX.fullmatch(gateway_token):
@@ -227,7 +225,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                         or not all(HEX.fullmatch(expected_identity[k]) for k in ("generation","catalog_sha256"))):
                     raise ValueError()
                 if not full_sites and name==QUERY and capability=="intake_process" and "generate" in caps:capability="generate"
-                if name==BATCH and not fresh_mac:
+                if name==BATCH and not machine:
                     raise ValueError()
                 if machine or full_sites:
                     if name not in canonical_validators or not canonical_validators[name].is_valid(args):
@@ -251,18 +249,22 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                     not HEX.fullmatch(generation): raise ValueError()
                 if release!=profile.get("base_release"): raise ValueError()
                 receipt={"release":release,"generation":generation,
-                         "catalog_sha256":(fresh_machine_digest if fresh_mac else general_machine_digest) if machine else full_digests[capability] if full_sites else
+                         "catalog_sha256":machine_digest if machine else full_digests[capability] if full_sites else
                              read_digest if capability=="baseline_read" else catalog["catalog_sha256"]}
                 if discovery:
                     if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
                     return await reply(200, {"environment":lane,"request_id":rid,**receipt,
-                                             "capability":capability,"tools":(canonical_descriptors if fresh_mac else general_machine_descriptors) if machine else route_tools[capability]})
+                                             "capability":capability,"tools":canonical_descriptors if machine else route_tools[capability]})
                 if expected_identity is not None and expected_identity!=receipt:
                     return await reply(409, {"error":"stale_catalog"})
                 if operations is None:
                     response=await asyncio.to_thread(forward,rid,name,args)
                 else:
-                    if fresh_mac and name in ("memory_ingest_register", "memory_capture_message", BATCH):
+                    if name==BATCH:
+                        from prototypes.assertion_memory.capture_batch import authorized_machine_batch
+                        with authorized_machine_batch():
+                            value=await operations.invoke(name,args)
+                    elif fresh_mac and name in ("memory_ingest_register", "memory_capture_message"):
                         from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
                         with authenticated_fresh_mac():
                             value=await operations.invoke(name,args)

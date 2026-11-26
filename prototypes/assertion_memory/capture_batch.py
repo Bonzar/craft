@@ -2,12 +2,25 @@
 import hashlib
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 BATCH_ID = re.compile(r'[0-9a-f]{64}')
 MAX_MEMBERS = 128
 MAX_RAW_CHARACTERS = 256000
 OPTIONAL = frozenset(('position','scope','source_message_at','source_message_clock_basis','timezone','artifact_ids'))
 REQUIRED = frozenset(('session_id','message_id','actor_id','role','text','source','delivery'))
+_API_AUTHORIZED = ContextVar('capture_batch_api_authorized', default=False)
+
+
+@contextmanager
+def authorized_machine_batch():
+    """The authenticated, lane-scoped API grants batch intake, not device identity."""
+    token = _API_AUTHORIZED.set(True)
+    try:
+        yield
+    finally:
+        _API_AUTHORIZED.reset(token)
 
 
 def digest(document):
@@ -45,9 +58,11 @@ def active_member(db,event_id):
 
 def capture(service, batch_id, messages):
     """Authorize once; commit the exact envelope and individual source receipts once."""
-    from .fresh_processing import is_authenticated_fresh_mac
-    if not is_authenticated_fresh_mac():
-        raise ValueError('raw batches require the configured authenticated machine')
+    if not _API_AUTHORIZED.get():
+        raise ValueError('raw batches require the authenticated machine API')
+    from .thought_service import ThoughtService
+    if not isinstance(service,ThoughtService):
+        raise ValueError('raw batches require the canonical thought runtime')
     if not isinstance(batch_id,str) or not BATCH_ID.fullmatch(batch_id):
         raise ValueError('invalid stable batch identity')
     if type(messages) is not list or not 1<=len(messages)<=MAX_MEMBERS:
@@ -72,12 +87,10 @@ def capture(service, batch_id, messages):
     request_digest=digest([row | {'delivery':{k:v for k,v in row['delivery'].items() if k!='epoch'}} for row in messages])
     with service.store.transaction(write=True) as db:
         schema(db)
-        stream_is_admitted = False
-        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_fresh_mac_streams'").fetchone():
-            stream_is_admitted=db.execute('SELECT 1 FROM memory_fresh_mac_streams WHERE stream_id=? AND session_id=?',
-                                           (stream,session)).fetchone() is not None
-        if not stream_is_admitted:
-            raise ValueError('batch stream was not admitted for automatic processing')
+        from .ingest_streams import _owned, schema as stream_schema
+        stream_schema(db)
+        if _owned(db,stream,epoch)['session_id'] != session:
+            raise ValueError('batch does not belong to the registered session')
         prior=db.execute('SELECT stream_id,session_id,member_digest,request_digest FROM memory_capture_batches WHERE batch_id=?',
                          (batch_id,)).fetchone()
         identity=(stream,session,member_digest,request_digest)

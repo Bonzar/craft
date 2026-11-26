@@ -181,11 +181,11 @@ def _processing_selector(config):
     return FRESH_MAC_ONLY if config.auto_process_fresh_mac else config.processing_session_ids
 
 
-def _eligible_processing_work(config):
+def _eligible_processing_work(config, *, include_batches=True, batches_only=False):
     """Model-free read probe; capture from an unselected session cannot wake work."""
-    if config.processing_session_ids is None:
+    if config.processing_session_ids is None and not batches_only:
         return True
-    if _processing_selector(config) == () or not Path(config.db).is_file():
+    if not Path(config.db).is_file():
         return False
     from .thought_processing_selection import processing_deadline
     uri='file:'+quote(str(Path(config.db).resolve()),safe='/')+'?mode=ro'
@@ -195,7 +195,8 @@ def _eligible_processing_work(config):
         connection.execute('PRAGMA query_only=ON')
         connection.execute('BEGIN')
         now=datetime.now(timezone.utc).isoformat(timespec='microseconds')
-        return processing_deadline(connection,_processing_selector(config),now=now,with_model=True,include_batches=True) is not None
+        selector = () if batches_only else _processing_selector(config)
+        return processing_deadline(connection,selector,now=now,with_model=True,include_batches=include_batches) is not None
     finally:
         connection.close()
 
@@ -224,7 +225,7 @@ class WorkerLauncher:
                 return {'scheduled':False,'reason':'processing lock already owned; raw events remain durable'}
         # Probe after releasing flock: an intake committed during this probe can
         # acquire the same lock and launch its own worker, preserving idle handoff.
-        if not _eligible_processing_work(self.config):
+        if not _eligible_processing_work(self.config,include_batches=limit is None):
             return {'scheduled':False,'reason':'no work eligible for startup processing selection'}
         args = [sys.executable, '-B', '-m', 'prototypes.assertion_memory.mcp_server', '--worker-config-json',
                 json.dumps(asdict(self.config)), '--worker-limit', str(limit or 0)]
@@ -261,7 +262,7 @@ def _idle_handoff(lock, next_deadline):
 def run_worker(config: ServiceConfig, limit: int = 0) -> None:
     if type(limit) is not int or limit < 0:
         raise ValueError('worker limit must be a nonnegative shared attempt budget')
-    if config.processing_session_ids == () and (not config.auto_process_fresh_mac or not _eligible_processing_work(config)):
+    if config.processing_session_ids == () and not _eligible_processing_work(config,include_batches=not limit):
         return
     from .queue_session_control import worker_selection_changed
     if worker_selection_changed(config):

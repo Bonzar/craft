@@ -119,7 +119,7 @@ class Dual(TestCase):
                 self.assertNotIn('memory_history',{t['name'] for t in read['tools']})
                 value=(await send(machine)).json()
                 self.assertEqual(value['capability'],'machine')
-                self.assertEqual({t['name'] for t in value['tools']},set(canonical['tools'])-{'memory_capture_batch'})
+                self.assertEqual({t['name'] for t in value['tools']},set(canonical['tools']))
                 self.assertEqual((await send(second)).json()['tools'],value['tools'])
                 expected={key:value[key] for key in ('release','generation','catalog_sha256')}
                 for op,args in [('unknown',{}),('memory_status',{'section':2})]:
