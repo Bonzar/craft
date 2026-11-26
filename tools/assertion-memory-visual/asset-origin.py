@@ -53,6 +53,27 @@ def manifest(root, release):
         raise ValueError('invalid manifest')
     return directory, parsed
 
+ENTRY_ASSET = re.compile(rb'((?:src|href)=")\./(assets/index-[A-Za-z0-9_-]+\.(?:js|css))(")')
+
+
+def standalone_entry_html(html, release, files):
+    """Resolve built asset references without moving the browser off /visual."""
+    prefix = b'/visual/' + release.encode('ascii') + b'/'
+    seen = set()
+
+    def qualify(match):
+        asset = match[2].decode('ascii')
+        if asset not in files or asset in seen:
+            raise ValueError('Invalid standalone entry asset')
+        seen.add(asset)
+        return match[1] + prefix + match[2] + match[3]
+
+    result = ENTRY_ASSET.sub(qualify, html)
+    expected = {name for name in files if name.startswith('assets/index-')}
+    if seen != expected or {Path(name).suffix for name in seen} != {'.js', '.css'}:
+        raise ValueError('Incomplete standalone entry assets')
+    return result
+
 
 def current_release(root):
     """Read the shared journal receiver's atomic pointer, without following it."""
@@ -451,8 +472,14 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                     return self.respond(405)
                 if path in ('/','/visual','/visual/'):
                     release=current_release(root)
-                    manifest(root,release)
-                    return self.respond(302,headers={**safe,'Location':'/visual/'+release+'/'+('?' + query if query else '')})
+                    directory,lookup=manifest(root,release)
+                    page=read_small(directory/'index.html',LIMIT)
+                    if digest(page)!=lookup['index.html']:
+                        return self.respond(404)
+                    page=standalone_entry_html(page,release,lookup)
+                    if release!=current_release(root):
+                        return self.respond(404)
+                    return self.respond(200,page,MIME['.html'],headers=safe)
                 if path=='/api/v1/session':
                     if query:
                         return self.respond(404)

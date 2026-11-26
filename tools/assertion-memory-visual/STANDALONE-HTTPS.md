@@ -79,7 +79,8 @@ not actual DNS/TLS, owner login or published PROD.
 ## Active frontend and rollback
 
 The standalone HTTPS route serves only the digest selected by its lane's
-atomic active pointer. A direct request for inactive retained HTML, JS or CSS
+atomic active pointer. `/visual` returns the selected HTML directly, without
+redirecting the browser. Only its validated asset references are release-pinned. A direct request for inactive retained HTML, JS or CSS
 returns 404. A protected GitHub rollback changes the active pointer first.
 The legacy Sites asset protocol retains its current digest compatibility
 until cutover.
