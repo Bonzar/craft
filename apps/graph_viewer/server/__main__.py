@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--embedding-model')
     parser.add_argument('--embedding-cache',type=Path)
     parser.add_argument('--synthetic-fixture',action='store_true')
+    parser.add_argument('--test-direct-events-origin',help='Optional existing HTTPS/IP route, synthetic TEST only')
     parser.add_argument('--public-origin',help='Expected HTTPS browser origin; forwarded headers remain untrusted')
     parser.add_argument('--allowed-proxy-host',action='append',default=[],help='Explicit upstream bridge hostname; repeatable, independent of browser origin')
     parser.add_argument('--bridge-read-token-file',type=Path,help='Owner-only high-entropy read service credential file; no write or session authority')
@@ -61,7 +62,7 @@ def main():
                 _test_activation()
         except (ValueError, KeyError) as error:
             parser.error(str(error))
-    app=create_app(args.source,args.state_dir,password=password,provider_id=args.provider_id,static_dir=args.static_dir,semantic_model=model,synthetic_fixture=args.synthetic_fixture,public_origin=args.public_origin,allowed_proxy_hosts=args.allowed_proxy_host,bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard,queue_control=args.queue_control)
+    app=create_app(args.source,args.state_dir,password=password,provider_id=args.provider_id,static_dir=args.static_dir,semantic_model=model,synthetic_fixture=args.synthetic_fixture,public_origin=args.public_origin,allowed_proxy_hosts=args.allowed_proxy_host,bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard,queue_control=args.queue_control,test_direct_events_origin=args.test_direct_events_origin)
     uvicorn.run(app,host=args.host,port=args.port,access_log=False,proxy_headers=False,server_header=False)
 
 
