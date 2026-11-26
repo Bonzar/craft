@@ -95,7 +95,7 @@ def host_proof(scope, lock_fd):
     return proof
 
 
-def bindings(root, stores):
+def bindings(root, stores, *, ready=None):
     """Only installed normal receivers in four canonical roots can enable this."""
     root=Path(root)
     modes=[s for s,(p,_) in SCOPES.items() if p==root]
@@ -109,7 +109,7 @@ def bindings(root, stores):
     if trusted_file(marker,0,3)!=b'on\n':
         raise ValueError('retention_enable_marker')
     return lambda lock: Retention(root,stores,lock_fd=lock,proof=host_proof(scope,lock),
-                                  minimum=SCOPES[scope][1])
+                                  minimum=SCOPES[scope][1],ready=ready)
 
 
 def eligible_tree(parent_fd, name, root_stat, *, owner, allow_venv):
@@ -206,13 +206,20 @@ def unlink_sealed(parent, name, root_stat, inventory):
 
 
 class Retention:
-    def __init__(self, root, stores, *, lock_fd, proof, minimum):
+    def __init__(self, root, stores, *, lock_fd, proof, minimum, ready=None):
         self.root=Path(root)
         self.owner=os.geteuid()
         self.stores=tuple(stores)
         self.lock=lock_fd
         self.proof=proof
         self.minimum=minimum
+        self.ready=ready
+
+    def reader_ready(self):
+        try:
+            return self.ready is None or self.ready() is True
+        except SAFE_ERRORS:
+            return False
 
     def settled(self):
         safe_root(self.root,self.owner)
@@ -247,6 +254,8 @@ class Retention:
 
     def remove(self, store, inactive, *, dry=False):
         self.settled()
+        if not self.reader_ready():
+            return False
         active=self.active(store)
         directory=self.root/GEN_PATH[store.kind]
         matcher=BASE_NAME if store.kind=='base' else VISUAL_NAME
@@ -265,7 +274,7 @@ class Retention:
             if self.proof(store.kind,active,inactive,meta) is not True:
                 return False
             self.settled()
-            if self.active(store)!=active or not os.path.samestat(meta,inactive.lstat()):
+            if not self.reader_ready() or self.active(store)!=active or not os.path.samestat(meta,inactive.lstat()):
                 return False
             if not os.path.samestat(outer,directory.lstat()):
                 return False
@@ -324,12 +333,14 @@ class Retention:
         LOG.warning('release_retention phase=failed_prepare deferred=1')
 
 
-def dry_inventory(scope, stores):
+def dry_inventory(scope, stores, *, ready=None):
     """Review-only real host proof, no marker needed and no file can be deleted."""
     from contextlib import ExitStack
     if scope not in SCOPES:
         raise ValueError('retention_scope')
     root,minimum=SCOPES[scope]
+    if scope.startswith('visual-') and ready is None:
+        raise ValueError('retention_visual_reader_proof_required')
     with ExitStack() as guards:
         lock=guards.enter_context(os.fdopen(os.open(root/'deploy.lock',
                      os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb'))
@@ -344,5 +355,5 @@ def dry_inventory(scope, stores):
                         or entry.st_mode&0o077 or not os.path.samestat(entry,legacy.lstat())):
                     raise ValueError('retention_legacy_lock')
                 fcntl.flock(marker,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        engine=Retention(root,stores,lock_fd=lock.fileno(),proof=host_proof(scope,lock.fileno()),minimum=minimum)
+        engine=Retention(root,stores,lock_fd=lock.fileno(),proof=host_proof(scope,lock.fileno()),minimum=minimum,ready=ready)
         return engine.sweep('dry_inventory',dry=True)

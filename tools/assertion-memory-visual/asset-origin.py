@@ -854,6 +854,19 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 return self.standalone(raw[1])
             if self.headers.get_all(STANDALONE_AUTH,[]) or self.headers.get_all(PAUSE_OWNER_AUTH,[]):
                 return self.respond(421)
+            if runtime_health is not None and len(raw)==3 and raw[1]=='/__visual-retention-health':
+                if self.command!='GET' or self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length'):
+                    return self.respond(404)
+                header=self.headers.get_all('Authorization',[])
+                if len(header)!=1 or not hmac.compare_digest(header[0], 'Bearer '+runtime_health[1]):
+                    return self.respond(401)
+                try:
+                    current=current_release(root)
+                    manifest(root,current)
+                    return self.respond(200,json.dumps({'stage':environment,'runtime_entry_sha':runtime_health[0],
+                        'static_digest':current,'current_only':True},separators=(',',':')).encode(),'application/json')
+                except (ValueError,OSError):
+                    return self.respond(503)
             if runtime_health is not None and len(raw)==3 and raw[1]=='/__visual-runtime-health':
                 if self.command!='GET' or self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length'):
                     return self.respond(404)

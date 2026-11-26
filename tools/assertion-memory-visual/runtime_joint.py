@@ -73,15 +73,16 @@ def retention_static(path):
         raise ValueError('Unverified generated Visual statics')
 
 
-def retention_config(visual):
+def retention_config(visual, ready=None):
     from release_retention import Store, bindings
     return bindings(visual,(Store('visual-static',retention_static),
-                            Store('visual-runtime',retention_runtime)))
+                            Store('visual-runtime',retention_runtime)),
+                    ready=ready if ready is not None else lambda:False)
 
 
-def before_packed_spool(visual):
+def before_packed_spool(visual, ready=None):
     """Current-only preflight before the authenticated archive consumes VM space."""
-    factory=retention_config(visual)
+    factory=retention_config(visual,ready)
     if not factory:
         return
     fd=os.open(visual/'deploy.lock',os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
@@ -213,7 +214,7 @@ def run(visual, runtime, candidate, *, validate, restart, smoke, bootstrap=None,
             os.close(legacy)
         os.close(fd)
 
-def activate_verified(visual, runtime, expected, archive, runtime_sha, files, *, restart, smoke, bootstrap=None):
+def activate_verified(visual, runtime, expected, archive, runtime_sha, files, *, restart, smoke, bootstrap=None, retention_ready=None):
     """Connect authenticated receiver bytes to prepared files and joint rollback."""
     import release_core
     import visual_policy
@@ -270,4 +271,4 @@ def activate_verified(visual, runtime, expected, archive, runtime_sha, files, *,
     if bootstrap:
         bootstrap.authorize(expected,runtime_sha)
     return run(visual,runtime,prepare,validate=static_validate,restart=restart,smoke=smoke,bootstrap=bootstrap,
-               retention_factory=retention_config(visual),prepared=prepared)
+               retention_factory=retention_config(visual,retention_ready),prepared=prepared)

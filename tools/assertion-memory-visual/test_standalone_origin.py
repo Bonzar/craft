@@ -158,6 +158,19 @@ class Standalone(fixture.OriginTest):
                 'static_digest':self.release,'queue_ready':True})
         finally:
             probe.close()
+        self.assertEqual(get('/__visual-retention-health')[0],404)
+        for presented,expected_code in ((None,401),(health_key,200)):
+            conn=http.client.HTTPConnection(*visual.server_address,timeout=3)
+            try:
+                headers={'Authorization':'Bearer '+presented} if presented else {}
+                conn.request('GET','/__visual-retention-health',headers=headers)
+                rsp=conn.getresponse()
+                self.assertEqual(rsp.status,expected_code)
+                if rsp.status==200:
+                    self.assertEqual(json.loads(rsp.read()),{'stage':lane,'runtime_entry_sha':'8'*64,
+                        'static_digest':self.release,'current_only':True})
+            finally:
+                conn.close()
         snapshot['stage']='prod' if lane=='test' else 'test'
         self.assertEqual(get('/api/v1/capabilities?queue_status=1')[0],503)
 

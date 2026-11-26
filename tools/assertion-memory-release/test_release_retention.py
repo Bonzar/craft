@@ -69,14 +69,14 @@ class CurrentOnly(unittest.TestCase):
         self.assertTrue(all(p.read_bytes()==b'untouched' for p in (root/'state').iterdir()))
         self.assertEqual((root/'wheelhouse'/'fixture.whl').read_bytes(),b'untouched')
 
-    def factory(self,root,stores,decision,minimum=0):
+    def factory(self,root,stores,decision,minimum=0,ready=None):
         def bind(fd):
             def proof(kind,active,candidate,meta):
                 lock_identity(root,fd,os.geteuid())
                 self.assertTrue(active.is_dir() and candidate.is_dir() and active!=candidate)
                 self.assertEqual(meta.st_ino,candidate.lstat().st_ino)
                 return decision(kind,active,candidate,meta)
-            return Retention(root,stores,lock_fd=fd,proof=proof,minimum=minimum)
+            return Retention(root,stores,lock_fd=fd,proof=proof,minimum=minimum,ready=ready)
         return bind
 
     def deploy_base(self,root,value,hook,decision=lambda *_:True,minimum=0,source=None):
@@ -179,13 +179,13 @@ class CurrentOnly(unittest.TestCase):
             self.assertEqual((root/'current').resolve(),active)
         self.durable(root)
 
-    def visual_deploy(self,root,value,runid,smoke,decision=lambda *_:True):
+    def visual_deploy(self,root,value,runid,smoke,decision=lambda *_:True,ready=None):
         digest,raw,staticid=visual_archive(value)
         with TemporaryDirectory() as d:
             archive=Path(d)/'test.tar';archive.write_bytes(raw)
             stores=(Store('visual-static',runtime_joint.retention_static),
                     Store('visual-runtime',runtime_joint.retention_runtime))
-            with patch.object(runtime_joint,'retention_config',return_value=self.factory(root,stores,decision)):
+            with patch.object(runtime_joint,'retention_config',return_value=self.factory(root,stores,decision,ready=ready)):
                 runtime_joint.activate_verified(root,root/'runtime',{'static_sha':digest},archive,runid,
                   {'asset-origin.py':value,'sites-shell.mjs':b'//shell'},restart=lambda:None,smoke=smoke)
         return 'releases/'+staticid,'versions/'+runid
@@ -228,6 +228,16 @@ class CurrentOnly(unittest.TestCase):
                 self.assertFalse((root/'runtime'/old_runtime).exists())
                 self.assertTrue(legacy.is_dir())
                 self.durable(root)
+
+    def test_visual_can_activate_old_contract_without_pruning(self):
+        root=self.roots('test',True);self.visual_baseline(root)
+        old_static,old_runtime=self.visual_deploy(root,b'A','2'*64,lambda state:None)
+        new_static,new_runtime=self.visual_deploy(root,b'B','3'*64,lambda state:None,
+                decision=lambda *_:self.fail('Host must not be asked about an unsupported reader'),
+                ready=lambda:False)
+        self.assertEqual((root/'current').readlink().as_posix(),new_static)
+        self.assertEqual((root/'runtime/current').readlink().as_posix(),new_runtime)
+        self.assertTrue((root/old_static).is_dir() and (root/'runtime'/old_runtime).is_dir())
 
     def test_legacy_visual_runtime_writer_blocks_packed_sweep(self):
         root=self.roots('test',True);self.visual_baseline(root)

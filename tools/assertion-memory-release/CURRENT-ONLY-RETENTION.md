@@ -56,11 +56,18 @@ priority over cleanup.
    from four main PIDs**. Install the current-only Visual origin first: signed
    owner current document/assets succeed, retired HTML navigation redirects to
    /visual, retired JS/CSS/worker gives 404 and never HTML; legacy asset relay
-   also refuses stale digests. If any deployment still routes readers to
+   also refuses stale digests. The live Visual process must authenticate its
+   current-only capability and exact entry/static identity before sweeping.
+   Rolling back to a pre-policy Visual release restores normally and defers
+   cleanup while that active origin lacks the capability. If any deployment
+   still routes readers to
    historical releases, leave that lane dark.
 3. Put a root-owned 0600 /etc/assertion-release-retention/SCOPE.json with exact
-   JSON {"scope":"SCOPE","uid":ACTUAL_DEPLOY_UID,"host_complete":true,"current_only":true}
-   in a root-only writable directory. Start only that scope's reviewed socket.
+   JSON {"scope":"SCOPE","uid":ACTUAL_DEPLOY_UID,"host_complete":true,"current_only":true,"pins":{ABSOLUTE_LAUNCHER_PATH:SHA256,...}}
+   in a root-only writable directory. Pin the actual authorized effective
+   systemd fragments, all drop-ins, and applicable launch wrappers as inspected
+   for that scope. The witness rejects changed bytes/modes and rechecks them
+   after the host scan. Start only that scope's reviewed socket.
    Neither a marker nor data from a caller grants permission by itself: peer
    credentials, actual writer lock FD, scoped active pointer, exact target
    inode, and independent stable host-wide no-reference/mount witness must all
@@ -68,7 +75,8 @@ priority over cleanup.
 4. Before enabling, use scoped release_retention.dry_inventory(scope, stores)
    from the exact installed modules as the canonical deploy UID (Base store uses
    base_payload.retention_candidate; packed Visual stores use
-   runtime_joint.retention_static and retention_runtime). This opens only
+   runtime_joint.retention_static and retention_runtime, plus an exact
+   authenticated runtime_host.retention_reader_ready callback). This opens only
    existing lock files and invokes the live witness without any unlink; compare
    the would_remove count with trusted deployment history and rollback
    reachability. Also test denial on a known busy candidate and independent

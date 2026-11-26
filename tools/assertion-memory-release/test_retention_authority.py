@@ -61,6 +61,24 @@ class AuthorityTest(unittest.TestCase):
             finally:
                 os.close(fd)
 
+    def test_root_launcher_pins_refuse_content_drift_and_foreign_scope(self):
+        from hashlib import sha256
+        with self.fixture() as (root,_,q,fd):
+            unit=root/'active.service';unit.write_text('[Service]\n')
+            wrapper=root/'start.py';wrapper.write_text('pass\n')
+            pin=lambda path:sha256(path.read_bytes()).hexdigest()
+            pins={str(p):pin(p) for p in (unit,wrapper)}
+            result=a.pinned_launchers(pins,roots=(root,),owner=os.getuid())
+            self.assertEqual(set(result),set(pins))
+            wrapper.write_text('new package path\n')
+            with self.assertRaises(a.Denied):
+                a.pinned_launchers(pins,roots=(root,),owner=os.getuid())
+            with self.assertRaises(a.Denied):
+                a.pinned_launchers(pins,roots=(root/'foreign',),owner=os.getuid())
+            wrapper.unlink();wrapper.symlink_to(unit)
+            with self.assertRaises(a.Denied):
+                a.pinned_launchers(pins,roots=(root,),owner=os.getuid())
+
     def test_exact_lock_item_identity_and_journal(self):
         with self.fixture() as (root,retired,q,fd):
             def check(q=q):

@@ -25,8 +25,12 @@ DIGEST = re.compile('[a-f0-9]{64}')
 BASE_ID = re.compile('[a-f0-9]{40}-[a-f0-9]{64}')
 FIELDS = {'version','scope','store','active','inactive','dev','ino'}
 SIZE = 768
+PROFILE_SIZE = 16_384
 MAX_PROC_ARGS = 4*1024*1024
 PROD_GUARD = Path('/var/lib/assertion-base-prod-transition')
+PIN_ROOTS = tuple(Path(p) for p in ('/etc/systemd/system','/etc/systemd/user',
+             '/etc/assertion-release','/etc/assertion-memory-visual',
+             '/opt/assertion-memory-prod-site-graph','/opt/assertion-memory-site-test-graph'))
 
 class Denied(ValueError):
     pass
@@ -67,6 +71,31 @@ def real_dir(path, owners):
         require(stat.S_ISDIR(st.st_mode) and st.st_uid in owners and not st.st_mode & 0o022)
     return path.lstat()
 
+def pinned_launchers(pins, *, roots=PIN_ROOTS, owner=0):
+    # Root material includes unit fragments and non-secret, root-owned
+    # effective drop-ins/wrappers. Never accept arbitrary host roots.
+    require(type(pins) is dict and 2<=len(pins)<=32)
+    out={}
+    for text,want in pins.items():
+        path=Path(text)
+        require(type(text) is str and path.is_absolute() and str(path)==text
+                and any(path.is_relative_to(root) for root in roots)
+                and path.suffix in {'.service','.conf','.sh','.py'}
+                and type(want) is str and DIGEST.fullmatch(want)
+                and path.resolve(strict=True)==path)
+        real_dir(path.parent,{owner})
+        with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as source:
+            info=os.fstat(source.fileno())
+            require(stat.S_ISREG(info.st_mode) and info.st_uid==owner and info.st_nlink==1
+                    and not info.st_mode&0o022 and 0<info.st_size<=262144)
+            raw=source.read(262145)
+            require(len(raw)==info.st_size and hashlib.sha256(raw).hexdigest()==want)
+            require(seal(path.lstat())==seal(info))
+            out[text]=seal(info),want
+    require(any(text.endswith('.service') for text in out))
+    return out
+
+
 def trusted_profile(scope, uid):
     """A root operator must attest host PID visibility and deny non-current opens."""
     require(os.geteuid() == 0 and uid != 0)
@@ -76,13 +105,14 @@ def trusted_profile(scope, uid):
     with os.fdopen(fd, 'rb') as src:
         st = os.fstat(src.fileno())
         require(stat.S_ISREG(st.st_mode) and st.st_uid == 0 and st.st_nlink == 1
-                and st.st_mode & 0o777 == 0o600 and 0 < st.st_size <= SIZE)
-        raw = src.read(SIZE + 1)
+                and st.st_mode & 0o777 == 0o600 and 0 < st.st_size <= PROFILE_SIZE)
+        raw = src.read(PROFILE_SIZE + 1)
+    require(len(raw)==st.st_size)
     value = json.loads(raw, object_pairs_hook=unique)
-    require(type(value) is dict and value.keys() == {'scope','uid','host_complete','current_only'}
+    require(type(value) is dict and value.keys() == {'scope','uid','host_complete','current_only','pins'}
             and value['scope'] == scope and type(value['uid']) is int and value['uid'] == uid
             and value['host_complete'] is True and value['current_only'] is True)
-    return seal(st), raw
+    return seal(st), raw, pinned_launchers(value['pins'])
 
 def verify_lock(root, fd, uid):
     st = os.fstat(fd)
