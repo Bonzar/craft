@@ -100,16 +100,19 @@ class Standalone(fixture.OriginTest):
         (retained/'manifest.json').write_bytes(stale_manifest)
         for k,v in stale.items():
             (retained/k).write_bytes(v)
-        self.assertEqual(get('/visual/'+stale_release+'/')[0],404)
+        for path in ('/visual/'+stale_release+'/', '/visual/'+stale_release+'/index.html?discarded=1'):
+            status,headers,body=get(path)
+            self.assertEqual((status,headers.get('Location'),body),(307,'/visual',b''))
+            self.assertEqual(get(path,key=None)[0],403)
         self.assertEqual(get('/visual/'+stale_release+'/assets/index-ab.js')[0],404)
-        # The old Sites asset protocol is deliberately unchanged until cutover.
+        # The legacy transport never opens a retired release either.
         conn=http.client.HTTPConnection(*visual.server_address,timeout=2)
         try:
             conn.request('POST',f'/memory-visual-{lane}-read',
                          body=json.dumps({'op':'asset','digest':stale_release,'name':'index.html'}),
                          headers={'Authorization':'Bearer '+fixture.TOKEN,'Content-Type':'application/json'})
             rsp=conn.getresponse()
-            self.assertEqual((rsp.status,rsp.read()),(200,stale['index.html']))
+            self.assertEqual((rsp.status,rsp.read()),(404,b''))
         finally:
             conn.close()
         link=self.root/'current'
@@ -117,7 +120,11 @@ class Standalone(fixture.OriginTest):
         next_link.symlink_to('releases/'+stale_release)
         next_link.replace(link)
         try:
-            self.assertEqual(get('/visual/'+self.release+'/')[0],404)
+            code,h,body=get('/visual/'+self.release+'/',method='HEAD')
+            self.assertEqual((code,h.get('Location'),body),(307,'/visual',b''))
+            for name in ('assets/index-ab.js','assets/index-ab.css','assets/graph.worker-ef.js'):
+                code,h,body=get('/visual/'+self.release+'/'+name)
+                self.assertEqual((code,h.get('Location'),body),(404,None,b''))
             self.assertEqual(get('/visual/'+stale_release+'/')[2],stale['index.html'])
             status,headers,page=get('/visual?marker=kept')
             self.assertEqual(status,200)

@@ -121,7 +121,7 @@ class OriginTest(unittest.TestCase):
         (self.directory/'manifest.json').write_bytes(self.manifest+b' ')
         self.assertEqual(self.request()[0],404)
 
-    def test_atomic_link_in_scope_only_and_pinned_asset_survives(self):
+    def test_atomic_link_in_scope_only_and_pinned_asset_needs_valid_active_pointer(self):
         current = self.root/'current'
         fixed_asset=json.dumps({'op':'asset','name':'index.html','digest':self.release})
         current.unlink()
@@ -130,7 +130,7 @@ class OriginTest(unittest.TestCase):
         current.unlink()
         current.symlink_to(Path('/tmp/another-scope/releases')/self.release)
         self.assertEqual(self.request()[0],404)
-        self.assertEqual(self.request(value=fixed_asset)[0],200)
+        self.assertEqual(self.request(value=fixed_asset)[0],404)
         current.unlink()
         current.symlink_to(Path('releases')/self.release)
         self.assertEqual(self.request()[0],200)

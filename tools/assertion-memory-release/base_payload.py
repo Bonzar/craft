@@ -8,6 +8,7 @@ import subprocess
 import stat
 
 from release_core import ArchiveSpec, deploy as common_deploy
+from release_retention import BASE_NAME, Store, bindings
 
 
 def permitted(item, path):
@@ -111,6 +112,28 @@ def validate_retained(incoming,release):
         raise ValueError('retained_release_changed')
 
 
+def retention_candidate(path):
+    """Recognize only manifest-validated Base artifacts and their generated venv.
+
+    No legacy filename, only-matching-directory-name or malformed partial
+    artifact qualifies. A failed venv prepare retains the raw verified manifest.
+    """
+    if not BASE_NAME.fullmatch(path.name):
+        raise ValueError('retention_invalid_base_name')
+    revision=path.name.split('-',1)[0]
+    if (path/'REVISION').is_symlink() or (path/'REVISION').stat().st_size!=41:
+        raise ValueError('retention_invalid_base_revision')
+    if (path/'REVISION').read_bytes()!=revision.encode()+b'\n':
+        raise ValueError('retention_invalid_base_revision')
+    tag=path/'BASE_RELEASE_TAG'
+    if (tag.is_symlink() or not tag.is_file() or tag.stat().st_size>128 or
+            not re.fullmatch(rb'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?\n',tag.read_bytes())):
+        raise ValueError('retention_invalid_base_tag')
+    if (path/'SHA256SUMS').is_symlink():
+        raise ValueError('retention_invalid_base_manifest')
+    validate_retained(path,path)
+
+
 def deploy(stream, revision, digest, *, root, config, hook=None):
     if not re.fullmatch(r'[0-9a-f]{40}',revision):
         raise ValueError('invalid_release_revision')
@@ -123,5 +146,6 @@ def deploy(stream, revision, digest, *, root, config, hook=None):
             raise ValueError('untrusted_hook')
         def factory(fd):
             return lambda action,release: run_hook(checked_hook,action,release,lock_fd=fd)
+    retention=bindings(root,(Store('base',retention_candidate),))
     return common_deploy(stream,digest,root=root,spec=SPEC,
-        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory)
+        validate=lambda staged:validate(staged,revision,digest),hook=hook,retained=validate_retained,hook_factory=factory,retention_factory=retention)

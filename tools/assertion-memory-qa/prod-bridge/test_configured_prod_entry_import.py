@@ -16,7 +16,7 @@ shared='/etc/assertion-release/shared'
 mapping={auth:qa/'prod-bridge',shared:rel}
 class VmPath(importlib.abc.MetaPathFinder):
     def find_spec(self,name,path=None,target=None):
-        if name not in {'receive_authorized','receiver_gate','reusable_proof','authorizer','base_payload','release_core'}:
+        if name not in {'receive_authorized','receiver_gate','reusable_proof','authorizer','base_payload','release_core','release_retention'}:
             return None
         for directory in sys.path:
             if directory not in mapping:
@@ -33,6 +33,7 @@ exec(compile(source,str(entry),'exec'),namespace)
 assert namespace['activate_exact'].__module__=='receive_authorized'
 assert pathlib.Path(sys.modules['base_payload'].__file__)==rel/'base_payload.py'
 assert pathlib.Path(sys.modules['release_core'].__file__)==rel/'release_core.py'
+assert pathlib.Path(sys.modules['release_retention'].__file__)==rel/'release_retention.py'
 assert pathlib.Path(sys.modules['receive_authorized'].__file__)==qa/'prod-bridge'/'receive_authorized.py'
 """
 

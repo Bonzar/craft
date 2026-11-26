@@ -23,12 +23,12 @@ fi
 runtime_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 shared_source="$runtime_source/../../assertion-memory-release"
 shared_target=/etc/assertion-release/shared
-for file in "$runtime_source/receive.py" "$runtime_source/test-service-hook.sh" "$runtime_source/test-health.py" "$shared_source/release_core.py" "$shared_source/base_payload.py"; do
+for file in "$runtime_source/receive.py" "$runtime_source/test-service-hook.sh" "$runtime_source/test-health.py" "$shared_source/release_core.py" "$shared_source/base_payload.py" "$shared_source/release_retention.py"; do
   [[ -f "$file" && ! -L "$file" ]]
 done
 if [[ -e "$shared_target" || -L "$shared_target" ]]; then
   [[ -d "$shared_target" && ! -L "$shared_target" && $(stat -c '%u:%g:%a' -- "$shared_target") == 0:0:755 ]]
-  for file in release_core.py base_payload.py; do
+  for file in release_core.py base_payload.py release_retention.py; do
     [[ ! -L "$shared_target/$file" && $(stat -c '%u:%g:%a' -- "$shared_target/$file") == 0:0:644 ]]
     cmp -s -- "$shared_source/$file" "$shared_target/$file"
   done
@@ -42,7 +42,7 @@ install -o root -g root -m 0644 -- "$runtime_source/test-service-hook.sh" "$conf
 install -o root -g root -m 0644 -- "$runtime_source/test-health.py" "$config/test-health.py"
 if [[ ! -d "$shared_target" ]]; then
   install -d -o root -g root -m 0755 -- "$shared_target"
-  for file in release_core.py base_payload.py; do
+  for file in release_core.py base_payload.py release_retention.py; do
     install -o root -g root -m 0644 -- "$shared_source/$file" "$shared_target/$file"
   done
 fi

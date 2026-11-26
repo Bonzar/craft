@@ -183,7 +183,7 @@ def unpack(stream, destination, expected_sha, spec):
     return staging
 
 
-def prepare(payload, release, root, hook, retained):
+def prepare(payload, release, root, hook, retained, *, reclaim=None):
     marker=release/'.prepared-v1'
     if release.is_symlink() or (release.exists() and not release.is_dir()):
         raise ValueError('invalid_staged_release')
@@ -195,7 +195,10 @@ def prepare(payload, release, root, hook, retained):
         prior=current_target(root)
         if prior is not None and Path(prior).resolve().is_relative_to(release.resolve()):
             raise ValueError('unverified_current_release')
-        shutil.rmtree(release)
+        if reclaim is None:
+            shutil.rmtree(release)
+        elif reclaim(release) is not True:
+            raise ValueError('previous_unactivated_candidate_not_proven_disposable')
     os.rename(payload,release)
     hook('prepare',release)
     with tempfile.TemporaryDirectory(prefix='.prepare-',dir=root) as tmp:
@@ -210,12 +213,14 @@ def prepare(payload, release, root, hook, retained):
 
 
 def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, hook_factory=None,
-           after_committed=None):
+           after_committed=None, retention_factory=None):
     """Deploy a validated artifact after lane-specific authentication.
 
     An optional after_committed(root, release) runs under the existing lock
     once activation is healthy and its journal has been durably cleared. It
     is not a transaction or rollback hook; its failure cannot undo activation.
+    retention_factory binds an independently attested, generated-only policy
+    to this same existing lane lock before any artifact spooling/preparation.
     """
     root=Path(root)
     if not root.is_absolute() or root.is_symlink() or (root/'releases').is_symlink():
@@ -229,14 +234,29 @@ def deploy(stream, expected_sha, *, root, spec, validate, hook, retained=None, h
             raise ValueError('missing_release_hook')
         runner=lambda _script,action,location: dispatch(action,location)
         recover_activation(root,None,runner)
+        retention=retention_factory(lock.fileno()) if retention_factory else None
+        if retention:
+            retention.preflight()
         with tempfile.TemporaryDirectory(prefix='.incoming-',dir=root) as temp:
             staged=unpack(stream,Path(temp),expected_sha,spec)
             release_id=validate(staged)
             if not isinstance(release_id,str) or not RELEASE_NAME.fullmatch(release_id):
                 raise ValueError('invalid_release_name')
             target=root/'releases'/release_id
-            prepare(staged,target,root,dispatch,retained)
-            activate(root,target,None,runner)
+            store=retention.stores[0] if retention else None
+            try:
+                prepare(staged,target,root,dispatch,retained,
+                        reclaim=(lambda path:retention.remove(store,path)) if retention else None)
+                activate(root,target,None,runner)
+            except BaseException:
+                if retention and os.path.lexists(target):
+                    retention.failed(store,target)
+                raise
+            if retention:
+                try:
+                    retention.sweep('after_commit')
+                except Exception:
+                    logging.getLogger(__name__).warning('release_retention phase=after_commit incomplete=1')
             if after_committed is not None:
                 try:
                     after_committed(root,target)

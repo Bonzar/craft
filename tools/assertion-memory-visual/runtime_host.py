@@ -158,4 +158,5 @@ def receive(stage, command, stream):
         return {'environment':stage,'revision':expected['revision'],'archive_sha256':expected['static_sha'],
                 'release':static,'runtime_sha256':runtime_sha}
     return framing.receive(stage,command,stream,signers=policy/'allowed-signers',
-                           private_workspace=runtime,activate=activate)
+                           private_workspace=runtime,activate=activate,
+                           pre_spool=lambda:joint.before_packed_spool(visual))

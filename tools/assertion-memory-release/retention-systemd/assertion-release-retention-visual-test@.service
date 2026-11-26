@@ -1,0 +1,13 @@
+[Unit]
+Description=Read-only release retirement witness (visual-test)
+
+[Service]
+Type=exec
+User=root
+ExecStart=/usr/bin/python3 -I -B /etc/assertion-release/shared/retention_authority.py visual-test
+StandardInput=socket
+StandardOutput=null
+StandardError=journal
+RuntimeMaxSec=12
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
