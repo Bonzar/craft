@@ -8,15 +8,15 @@ def test_source_admission_and_coverage_share_scope_and_attribution():
     for instructions in (construction_instructions(), _extraction_instructions(),
                          _verification_instructions(False), VERIFY, _COVERAGE):
         assert SOURCE_RETENTION_RULES in instructions
-        assert 'own plan, promise, intended behavior' in instructions
+        assert 'each assertion' in instructions
+        assert 'derived conclusions with traceable premises' in instructions
         assert 'exact user-origin evidence' in instructions
-        assert 'unverified report does not establish completion' in instructions
-        assert 'completed outcome or sourced substantive finding' in instructions
-        assert 'substantive user-origin choices, preferences, decisions and plans' in instructions
-        assert 'earlier proposal when necessary' in instructions
-    assert 'reject any independently retained draft from the raw-only' in VERIFY
-    assert 'raw-only assistant plan, promise, intended behavior or work tactic' in INDEPENDENT_SOURCE_REVIEW
-    assert 'Do not flag excluded assistant behavior' in _COVERAGE
+        assert 'acceptance, execution and verified outcome' in instructions
+        assert 'expiry and uncertainty' in instructions
+        assert 'forbidden details or expansion of scoped permission' in instructions
+    assert 'reject unsupported status and retention-ineligible' in VERIFY
+    assert 'retention-ineligible raw or task-only statement' in INDEPENDENT_SOURCE_REVIEW
+    assert 'Do not flag retention-ineligible raw-only or task-only' in _COVERAGE
     assert 'retention-eligible omitted material meanings' in _REPAIR
 
 

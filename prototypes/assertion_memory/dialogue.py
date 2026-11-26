@@ -20,17 +20,17 @@ MAX_MODEL_INPUT_CHARACTERS = 240_000
 MAX_CONTEXT_CHARACTERS = 128_000
 MAX_REPAIR_ROUNDS = 2
 SOURCE_RETENTION_RULES = (
-    'For new durable source memory, require material value beyond the current reply and exact evidence. '
-    'An assistant’s own plan, promise, intended behavior, '
-    'or answering tactic stays in the raw dialogue, even if unique, explicit, or useful to its next step. '
-    'It is not independently retainable as a thought; neither omission nor rejection of it is missing '
-    'material coverage. An assistant account of a user decision is not that decision: retain a user '
-    'choice or authorization only when exact user-origin evidence establishes it. A genuinely material '
-    'completed outcome or sourced substantive finding can be retained with exact evidence and '
-    'its actual scope, speaker, and uncertainty; an unverified report does not establish completion. '
-    'Preserve substantive user-origin choices, preferences, decisions and plans, and their necessary '
-    'attributed referents. Preserve an earlier proposal when necessary to explain a substantive '
-    'user decision or discussion, with the original attribution, never as adopted or executed. '
+    'For each assertion, keep only material meaning useful beyond this reply. Judge the evidence, '
+    'not the speaker’s role: preserve durable context, choices and supported outcomes or qualified '
+    'findings, including derived conclusions with traceable premises. Routine reference answers and '
+    'unchanged service checks are not memories. Keep transient work status with the task, not as an '
+    'independent thought; preserve an authorized standing configuration when useful. Separate '
+    'permission, request, acceptance, execution and verified outcome. The assistant’s own '
+    'plan, promise or tactic stays raw; an unverified assistant report is not proof. Only exact user-origin evidence '
+    'establishes the user’s choice or permission. Preserve the actual speaker, evidence, scope, '
+    'expiry and uncertainty; absence of evidence is not disproof. Retain only what is permitted '
+    'and necessary: no secrets, forbidden details or expansion of scoped permission. Do not treat '
+    'omitted raw-only or task-only content as missing material coverage. '
 )
 ORIGIN_RULES = SOURCE_RETENTION_RULES + (
     'The target origin may be user, assistant or tool; preserve its exact actor and role. '

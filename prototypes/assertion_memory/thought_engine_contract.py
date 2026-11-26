@@ -203,8 +203,8 @@ Check two independent obligations: (1) every retained claim follows from its own
 selected grounds, with the same attribution and strength; (2) the batch preserves
 the useful meaning required by this job's coverage purpose. Passing either one
 alone is insufficient. Resolve the job's scope before assessing omissions. For
-new source memory, also reject any independently retained draft from the raw-only
-assistant plan/behavior class; its absence does not reduce material coverage.
+new source memory also reject unsupported status and retention-ineligible raw- or
+task-only content; its absence does not reduce material coverage.
 Establish coverage FROM THE MATERIAL TO THE DRAFT, before checking the reverse.
 Use the job's scope to identify the material propositions and their qualifications.
 For each, locate an equivalent meaning in the draft. For every retained action
@@ -274,7 +274,7 @@ INDEPENDENT_SOURCE_REVIEW = """
 Review draft records independently. Each draft has a local integer draft option.
 Return rejected_drafts with the option and precise semantic reason for every draft
 that changes meaning, lacks grounding, drops a necessary qualification, or is a
-raw-only assistant plan, promise, intended behavior or work tactic. Include
+retention-ineligible raw or task-only statement. Include
 all drafts affected if the source ties their conditions or meaning together. Leave
 sound drafts out of rejected_drafts. Check coverage across the current source
 passage; express new useful source meaning absent from all sound drafts as
