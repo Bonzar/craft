@@ -39,7 +39,21 @@ class Boundary(BaseHTTPMiddleware):
                     check_origin(request,required=True)
                     if request.headers.get('x-csrf-token')!=csrf:
                         raise APIError('csrf_denied','Valid CSRF token required',403)
+            graph_read=(request.method in {'GET','HEAD'} and path.startswith('/api/v1/')
+                        and path.split('/')[3] in {'graph','nodes','edges','sources','overviews','search','bookmarks','capabilities','events'})
+            manager=request.app.state.manager if graph_read else None
+            generation=manager.sync_generation() if manager is not None else None
             response=await call_next(request)
+            if manager is not None and path!='/api/v1/events' and not manager.generation_matches(generation):
+                raise APIError('revision_expired','Database generation changed; reload the graph',409)
+            if generation is not None and path!='/api/v1/events':
+                original=response.body_iterator
+                async def fenced_body():
+                    async for chunk in original:
+                        if not await asyncio.to_thread(manager.generation_matches,generation):
+                            return
+                        yield chunk
+                response.body_iterator=fenced_body()
         except APIError as error:
             response=error_response(error)
         response.headers.update({'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
@@ -158,13 +172,24 @@ async def search_response(request):
 
 
 async def bookmark(request):
+    from .database_generation import LEGACY, epoch_name
     owner=request.app.state.owner
-    if request.method in {'GET','HEAD'}:
-        from .bookmarks import resolve_bookmarks
-        manager=request.app.state.manager
-        return JSONResponse(await resolve_bookmarks(manager,owner.bookmarks(manager.source.provider_id)))
+    manager=request.app.state.manager
+    generation=manager.sync_generation()
+    reading=request.method in {'GET','HEAD'}
     payload=await body(request) if request.method=='PUT' else None
-    return JSONResponse(owner.bookmark(request.path_params['id'],payload))
+    if not manager.generation_matches(generation):
+        raise APIError('revision_expired','Database generation changed; refresh the graph',409)
+    if generation is not None and generation[2]!=LEGACY:
+        owner.reset_graph_bookmarks(manager.source.provider_id,epoch_name(generation))
+    if reading:
+        from .bookmarks import resolve_bookmarks
+        value=await resolve_bookmarks(manager,owner.bookmarks(manager.source.provider_id))
+    else:
+        value=owner.bookmark(request.path_params['id'],payload)
+    if not manager.generation_matches(generation):
+        raise APIError('revision_expired','Database generation changed; refresh the graph',409)
+    return JSONResponse(value)
 
 
 async def events(request):
@@ -183,7 +208,13 @@ async def events(request):
 
     after=parse_replay_cursor(request)
     revision=request.query_params.get('revision')
-    graph=manager.get(revision) if revision else None
+    try:
+        graph=manager.get(revision) if revision else None
+    except APIError as error:
+        if error.code!='revision_expired' or manager._generation is None or manager._generation[2]=='0'*32:
+            raise
+        payload={'cursor':str(manager.cursor),'revision':revision,'reason':'database_cleared','manifest_url':'/api/v1/graph'}
+        return Response(manager.encode('reset',payload),media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
     selected=graph.manifest['selector'] if graph is not None else None
     missing_family=selected is not None and manager.key(selected) not in manager.latest
     if selected is not None and selected['mode']=='known_then' and missing_family:
@@ -198,6 +229,22 @@ async def events(request):
 
 
 async def capabilities(request):
+    if 'database_clear_scope' in request.query_params:
+        from prototypes.assertion_memory.database_clear import generation_scope
+        if list(request.query_params.multi_items())!=[('database_clear_scope','1')] or not read_service_authorized(request):
+            raise APIError('not_found','Unknown capability request',404)
+        manager=request.app.state.manager
+        dashboard=request.app.state.queue_dashboard
+        lane=getattr(dashboard,'stage',None)
+        path=getattr(manager.source,'source_path',getattr(manager.source,'path',None))
+        if (lane not in ('test','prod') or path is None or not getattr(dashboard,'db',None)
+                or path.resolve()!=dashboard.db.resolve() or not manager._poller or manager._poller.done()):
+            raise APIError('graph_clear_unavailable','Graph database reset fencing unavailable',503)
+        generation=manager.sync_generation()
+        if generation is None:
+            raise APIError('graph_clear_unavailable','Graph database reset fencing unavailable',503)
+        return JSONResponse({'stage':lane,'database_clear_scope':generation_scope(lane,generation)})
+
     if 'queue_status' in request.query_params:
         q = request.query_params
         if (set(q)-{'queue_status','limit','offset'} or any(len(q.getlist(k)) != 1 for k in q)
@@ -304,7 +351,7 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
             if test_direct_events_origin is not None else None)
     bridge_read_service=BridgeReadService(bridge_read_token_file)
     owner=OwnerStore(state_dir,password)
-    manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model)
+    manager=GraphManager(source or source_for_path(source_path,state_dir,provider_id),Path(state_dir)/'cache',semantic_model,owner_store=owner)
     @asynccontextmanager
     async def lifespan(app):
         await manager.start()

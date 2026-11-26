@@ -10,6 +10,9 @@ export function patchVisual({html,script,css,releaseTag=null}) {
   if(releaseTag!==null&&(typeof releaseTag!=='string'||!TAG.test(releaseTag)||/\s/.test(releaseTag)))throw Error('Invalid Visual release tag');
   script=once(script,'graphMode=e(new URLSearchParams(location.search));','graphMode=`connections`;');
   script=once(script,'let e=Z(this.graphMode===`connections`?`⬡ Обзоры`:`⬡ Связи`,()=>this.run(()=>this.toggleGraphMode()));e.id=`layout-toggle`,','let e=Z(`Связи`,()=>{});e.hidden=true;e.disabled=true;e.id=`layout-toggle`,');
+  // The exact pinned Connections client must reload even a historical page
+  // after a committed clear. Do not replace its renderer or layout worker.
+  script=once(script,'let t=_d(e,fe);wd(`sse-reset`','let t=_d(e,fe);if(t.reason===`database_cleared`){this.stream?.close();location.reload();return;}wd(`sse-reset`');
   html=once(html,'id="topics-toggle" aria-label=','id="topics-toggle" hidden aria-label=');
   if(releaseTag!==null) {
     html=once(html,'</body>','<div class="visual-release-version">Визуал: '+releaseTag+'</div>\n</body>');

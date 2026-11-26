@@ -213,7 +213,7 @@ export class UniverseScene {
       selectedOrdinal!==null?worker.incident(selectedOrdinal):Promise.resolve(null)
     ]);
     const previews:PreviewEntry[]=[];
-    identities.signal?.throwIfAborted();if(token!==this.graphToken||identities.isCurrent?.()===false){lifecycle('set-graph-rejected');throw new DOMException('Aborted','AbortError');}
+    if(identities.signal?.aborted||token!==this.graphToken||identities.isCurrent?.()===false){lifecycle('set-graph-rejected');throw new DOMException('Aborted','AbortError');}
     if(!visualStageMatches({revision:manifest.revision,generation:lod.generation},{lod,metrics,envelopes})||worker.envelopes?.revision!==manifest.revision)throw new Error('Подготовленная карта относится к другой версии');
     this.controller.dispose();this.controller=nextController;if(!sameSource){this.cameraPoses.clear();this.levelAnchors.clear();}this.pendingFit=null;this.explicitOrdinal=explicitOrdinal;this.searchNodes=searchOrdinals;this.selectedIndices=incident;
     this.clearGeometry();this.lod=null;

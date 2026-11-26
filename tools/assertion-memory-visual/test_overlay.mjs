@@ -18,7 +18,10 @@ test('release uses the unmodified Connections worker and a pinned tag',async()=>
   assert.equal(Object.keys(pinned).length,4);
   assert.match(pinned['index.html'].toString(),/<dialog id="visual-queue" aria-labelledby="visual-queue-heading">/);
   assert.match(pinned[javascript].toString(),/queue-card-top/);
+  assert.match(pinned[javascript].toString(),/database_cleared.*location\.reload/);
   const stylesheet=Object.keys(pinned).find(n=>n.endsWith('.css'));
   assert.match(pinned[stylesheet].toString(),/#visual-queue\{box-sizing:border-box;position:fixed;inset:0/);
   await assert.rejects(versionableBundle(dir,'<script>'),/Invalid Visual release tag/);
 });
+
+import "./graph-boot-overlay.test.mjs";

@@ -82,6 +82,22 @@ class OwnerStore:
         with self.connect() as c:
             c.execute('DELETE FROM sessions WHERE token=?', (hashlib.sha256(request.cookies.get(COOKIE,'').encode()).hexdigest(),))
 
+    def reset_graph_bookmarks(self,provider_id,epoch):
+        # Share one viewer store with auth, but mutate only bookmarked graph data.
+        with self.connect() as db:
+            db.execute('PRAGMA secure_delete=ON')
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('CREATE TABLE IF NOT EXISTS bookmark_reset_epoch '
+                       '(provider_id TEXT PRIMARY KEY,epoch TEXT NOT NULL)')
+            previous=db.execute('SELECT epoch FROM bookmark_reset_epoch WHERE provider_id=?',
+                                (provider_id,)).fetchone()
+            if previous and previous[0]==epoch:
+                return
+            db.execute("DELETE FROM bookmarks WHERE json_valid(body) AND json_extract(body,'$.provider_id')=?",
+                       (provider_id,))
+            db.execute('INSERT INTO bookmark_reset_epoch VALUES (?,?) '
+                       'ON CONFLICT(provider_id) DO UPDATE SET epoch=excluded.epoch',(provider_id,epoch))
+
     def bookmarks(self, provider_id):
         with self.connect() as c:
             rows = c.execute('SELECT id,body,created_at FROM bookmarks ORDER BY created_at,id').fetchall()

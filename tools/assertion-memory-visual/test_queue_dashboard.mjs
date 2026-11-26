@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -24,7 +24,11 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
   const itemFeedback=new Element(),removed=[];
   const sessionWrites=[];
   const mutations=[];
-  const mapping={'#queue-item-feedback':itemFeedback,'#queue-session-policy':sessionPanel,'#queue-session-options':sessionOptions,'#queue-session-feedback':sessionFeedback,'#queue-session-save':sessionSave,'#queue-processing':controlPanel,'#queue-processing-toggle':controlButton,
+  const clearCalls=[];
+  const clearDom=Object.fromEntries(['database-clear','clear-open','clear-instance','clear-confirmation',
+    'clear-label','clear-typed','clear-commit','clear-cancel','clear-feedback'].map(k=>['#queue-'+k,new Element()]));
+
+  const mapping={...clearDom,'#queue-item-feedback':itemFeedback,'#queue-session-policy':sessionPanel,'#queue-session-options':sessionOptions,'#queue-session-feedback':sessionFeedback,'#queue-session-save':sessionSave,'#queue-processing':controlPanel,'#queue-processing-toggle':controlButton,
     '#queue-processing-state':controlState,'#queue-processing-feedback':controlFeedback,'#visual-queue':panel,'#visual-queue-open':launcher,'.queue-meta':status,
     '.queue-items':container,'.queue-copy-status':copyStatus,'#visual-queue-close':closer};
   const doc={querySelector:k=>mapping[k],createElement:t=>new Element(t)};
@@ -52,6 +56,15 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     fetch:async (url,options)=>{
       assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'error');
       urls.push(url);
+      if(url.startsWith('/api/v1/processing/database/clear')){
+        const args=JSON.parse(options.body);
+        clearCalls.push({url,args,method:options.method,csrf:options.headers['x-csrf-token']});
+        if(url.endsWith('/prepare'))return Response.json({stage,revision:args.expected_revision,csrf_token:'123.'+'a'.repeat(64)});
+        if(clearWrite)return clearWrite();
+        clear={...clear,revision:'b'.repeat(32)};
+        data=data.map(q=>({...q,total:0,next_offset:null,items:[]}));
+        return Response.json({stage,revision:clear.revision,cleared:true});
+      }
       if(url==='/api/v1/processing/items/source-preview/prepare'){
         assert.equal(options.method,'POST');return Response.json({stage,csrf_token:'123.'+'a'.repeat(64)});
       }
@@ -101,11 +114,11 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,release_generation:'e'.repeat(64),database_clear:clear,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
-  return {doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
+  return {clearNode:k=>clearDom['#queue-'+k],clearCalls,setClear:x=>{clear=x;},doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
     controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,itemFeedback,removed,intersect:()=>observed([...targets].map(target=>({target,isIntersecting:true}))),timer:()=>scheduled,setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
 }
 
@@ -415,4 +428,50 @@ for(const stage of ['test','prod'])test(stage+' saves an owner processing policy
   await h.sessionSave.listeners.click();
   assert.deepEqual(h.sessionWrites[1].payload.policy.included_session_ids,['native']);
   assert.deepEqual(h.sessionWrites[1].payload.policy.excluded_session_ids,[]);
+});
+
+test('clear is owner-capability gated, stage specific and request-free before explicit confirmation',async()=>{
+  const h=harness({stage:'prod',clear:{revision:'a'.repeat(32),can_clear:true}});
+  await h.open();
+  const get=h.clearNode;
+  assert.equal(get('clear-open').disabled,false);
+  assert.match(get('clear-instance').textContent,/PROD/);
+  get('clear-open').listeners.click();
+  assert.equal(h.doc.activeElement,get('clear-typed'));
+  assert.match(get('clear-label').textContent,/ОЧИСТИТЬ PROD/);
+  assert.deepEqual(h.clearCalls,[]);
+  get('clear-typed').value='ОЧИСТИТЬ TEST';
+  get('clear-typed').listeners.input();
+  assert.equal(get('clear-commit').disabled,true);
+  await get('clear-commit').listeners.click();
+  get('clear-cancel').listeners.click();
+  assert.equal(h.doc.activeElement,get('clear-open'));
+  assert.deepEqual(h.clearCalls,[]);
+  get('clear-open').listeners.click();
+  get('clear-typed').value='ОЧИСТИТЬ PROD';
+  get('clear-typed').listeners.input();
+  assert.equal(get('clear-commit').disabled,false);
+  await get('clear-commit').listeners.click();
+  assert.deepEqual(h.clearCalls.map(({method,args,csrf})=>({method,args,csrf})),[
+    {method:'POST',args:{stage:'prod',expected_revision:'a'.repeat(32),confirmation:'ОЧИСТИТЬ PROD'},csrf:undefined},
+    {method:'PUT',args:{stage:'prod',expected_revision:'a'.repeat(32)},csrf:'123.'+'a'.repeat(64)},
+  ]);
+  assert.match(get('clear-feedback').textContent,/PROD очищена/);
+});
+
+test('a stale clear dialog closes without preparing; a failed write never claims success',async()=>{
+  const h=harness({clear:{revision:'a'.repeat(32),can_clear:true},clearWrite:()=>Response.json({}, {status:503})});
+  await h.open();
+  const get=h.clearNode;
+  get('clear-open').listeners.click();
+  h.setClear({revision:'c'.repeat(32),can_clear:true});
+  await h.signal();
+  assert.equal(get('clear-confirmation').hidden,true);
+  assert.match(get('clear-feedback').textContent,/Откройте подтверждение заново/);
+  assert.deepEqual(h.clearCalls,[]);
+  get('clear-open').listeners.click();
+  get('clear-typed').value='ОЧИСТИТЬ TEST';
+  await get('clear-commit').listeners.click();
+  assert.equal(h.clearCalls.length,2);
+  assert.match(get('clear-feedback').textContent,/не подтверждён/);
 });

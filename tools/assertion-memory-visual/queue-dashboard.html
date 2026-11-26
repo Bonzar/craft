@@ -25,6 +25,21 @@
       <div id="queue-session-options" role="group" aria-label="Политика обработки сессий"></div>
       <button id="queue-session-save" type="button" disabled>Применить выбор</button>
     </details>
+    <section id="queue-database-clear" class="queue-processing" aria-labelledby="queue-clear-title" hidden>
+      <div>
+        <h2 id="queue-clear-title">Очистка базы</h2>
+        <p id="queue-clear-instance"></p>
+        <div id="queue-clear-confirmation" hidden>
+          <p>Будут безвозвратно удалены реплики, мысли, связи и задачи этого окружения. Резервная копия не создаётся. Настройки и доступы не изменятся.</p>
+          <label id="queue-clear-label" for="queue-clear-typed"></label>
+          <input id="queue-clear-typed" type="text" autocomplete="off" spellcheck="false">
+          <button id="queue-clear-commit" type="button" disabled>Удалить данные</button>
+          <button id="queue-clear-cancel" type="button">Отмена</button>
+        </div>
+      </div>
+      <button id="queue-clear-open" type="button" disabled>Очистить базу</button>
+    </section>
+    <p id="queue-clear-feedback" role="status" aria-live="polite"></p>
     <p id="queue-item-feedback" role="status"></p>
     <div class="queue-items"></div>
   </div>

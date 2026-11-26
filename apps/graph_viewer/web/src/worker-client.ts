@@ -11,12 +11,21 @@ interface Reply { id:number;preview?:{base_token:number;lod:LodResult};cell_memb
 export class GraphWorker {
   private bounds:EnvelopeBounds|null=null;private accepted:{token:number;lod:LodResult}|null=null;private staged:LodCandidate|null=null;private disposed=false;private unsynchronized=false;
   get envelopes():EnvelopeBounds|null{return this.bounds;}
-  private worker=new Worker(new URL('./graph.worker.ts',import.meta.url),{type:'module'});
+  private worker:Worker;
+  private failure:Error|null=null;
   private serial=0;
   private pending=new Map<number,{kind:string;resolve:(value:Reply)=>void;reject:(reason:Error)=>void}>();
-  constructor(){ lifecycle('worker-create');this.worker.addEventListener('message',(event:MessageEvent<Reply>)=>{const task=this.pending.get(event.data.id);if(!task)return;this.pending.delete(event.data.id);if(event.data.error){lifecycle('worker-query-rejected',{kind:task.kind,reason:['Expired connectivity query','Expired near query','Expired envelope query','Expired LOD revision'].includes(event.data.error)?event.data.error:'invalid-data'});task.reject(new Error('Не удалось проверить данные вселенной.'));}else task.resolve(event.data);}); }
+  constructor(worker?:Worker){
+    this.worker=worker??new Worker(new URL('./graph.worker.ts',import.meta.url),{type:'module'});
+    lifecycle('worker-create');
+    const fail=()=>{if(this.disposed)return;this.disposed=true;
+      this.failure=new Error('Браузер не смог запустить модуль обработки карты. Обновите страницу и повторите.');
+      this.failSynchronization(this.failure);this.worker.terminate();};
+    this.worker.addEventListener('error',fail);
+    this.worker.addEventListener('messageerror',fail);
+    this.worker.addEventListener('message',(event:MessageEvent<Reply>)=>{const task=this.pending.get(event.data.id);if(!task)return;this.pending.delete(event.data.id);if(event.data.error){lifecycle('worker-query-rejected',{kind:task.kind,reason:['Expired connectivity query','Expired near query','Expired envelope query','Expired LOD revision'].includes(event.data.error)?event.data.error:'invalid-data'});task.reject(new Error('Не удалось проверить данные вселенной.'));}else task.resolve(event.data);}); }
   private request(body:Record<string,unknown>,transfer:Transferable[]=[],freshGraph=false):Promise<Reply>{
-    if(this.disposed)throw new Error('Worker disposed');if(this.unsynchronized&&!freshGraph)throw new Error('Worker unsynchronized; fresh graph bind required');const id=++this.serial;let resolve!:(value:Reply)=>void,reject!:(reason:Error)=>void;const result=new Promise<Reply>((yes,no)=>{resolve=yes;reject=no;});this.pending.set(id,{kind:typeof body.kind==='string'?body.kind:'unknown',resolve,reject});
+    if(this.disposed)throw this.failure??new Error('Worker disposed');if(this.unsynchronized&&!freshGraph)throw new Error('Worker unsynchronized; fresh graph bind required');const id=++this.serial;let resolve!:(value:Reply)=>void,reject!:(reason:Error)=>void;const result=new Promise<Reply>((yes,no)=>{resolve=yes;reject=no;});this.pending.set(id,{kind:typeof body.kind==='string'?body.kind:'unknown',resolve,reject});
     try{this.worker.postMessage({...body,id},transfer);}catch(error){this.pending.delete(id);throw error;}return result;
   }
   async load(nodes:ArrayBuffer,edges:ArrayBuffer,nodeCount:number,edgeCount:number,history:boolean,topics:Topics,revision:string):Promise<GraphData>{this.unsynchronized=true;this.accepted=null;this.staged=null;const reply=await this.request({kind:'load',nodes,edges,nodeCount,edgeCount,history,topics,revision},[nodes,edges],true);if(!reply.graph)throw new Error('Вселенная не загрузилась');this.bounds=reply.envelopes??null;this.unsynchronized=false;return reply.graph;}

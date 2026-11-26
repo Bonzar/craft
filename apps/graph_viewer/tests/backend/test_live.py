@@ -99,14 +99,17 @@ class StreamIsolation(LiveFixture,unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(latest.revision,old.revision)
 
 class SourceAvailability(LiveFixture,unittest.IsolatedAsyncioTestCase):
-    async def test_missing_source_reports_unavailable_while_last_graph_remains_readable(self):
+    async def test_missing_source_reports_unavailable_and_fences_last_graph(self):
         old=await self.graph()
         self.source_path.unlink()
         for _ in range(40):
             if not self.manager.available:break
             await asyncio.sleep(.03)
         self.assertFalse(self.manager.available)
-        self.assertEqual(self.manager.get(old.revision).manifest['counts']['nodes'],6)
+        from apps.graph_viewer.server.common import APIError
+        with self.assertRaises(APIError) as denied:
+            self.manager.get(old.revision)
+        self.assertEqual(denied.exception.status,503)
         self.assertEqual(self.manager.journal[-1][1],'unavailable')
     async def test_atomic_source_replacement_wakes_publisher_even_with_identical_version(self):
         first=self.manager.source.revision()

@@ -326,6 +326,9 @@ class NativeIntake:
         selected = next((actual for actual in actual_rows if actual['type'] == 'response_item'), actual_rows[0])
         clock = source_clock(selected, path)
         with queue.store.transaction(write=True) as connection:
+            from .database_clear import was_cleared
+            if was_cleared(connection,'native',str(path),meta['id'],turn['id'],key):
+                return 0
             self._schema(connection)
             receipt = connection.execute('SELECT * FROM native_occurrence_receipts WHERE path=? AND physical_session=? AND turn_id=? AND occurrence=?',
                 (path, meta['id'], turn['id'], key)).fetchone()
