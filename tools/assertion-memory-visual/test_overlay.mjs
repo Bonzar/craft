@@ -136,3 +136,31 @@ test('actual packed transport keeps open view on foreground and reconnect, then 
   assert.equal(v.manifest.revision,5);assert.equal(v.selectedNodeId,null);
   assert.equal(v.selector,selector);v.stopReleaseOwnerLive();
 });
+
+test('packed browser assets keep the public same-origin contract without carrying Base service code or credentials',async()=>{
+  const dir=new URL('.',import.meta.url).pathname;
+  const assets=await versionableBundle(dir);
+  const paths=Object.keys(assets);
+  assert.equal(paths.length,4);
+  assert.ok(paths.includes('index.html'));
+  assert.equal(paths.filter(x=>/^assets\/index-[\w-]+\.js$/.test(x)).length,1);
+  assert.equal(paths.filter(x=>/^assets\/index-[\w-]+\.css$/.test(x)).length,1);
+  assert.equal(paths.filter(x=>/^assets\/graph\.worker-[\w-]+\.js$/.test(x)).length,1);
+  const browser=assets[paths.find(x=>/^assets\/index-[\w-]+\.js$/.test(x))].toString();
+  for(const path of [
+    '/api/v1/session','/api/v1/capabilities?queue_status=1',
+    '/api/v1/processing/sessions','/api/v1/processing/pause/prepare',
+    '/api/v1/processing/pause','/api/v1/processing/items/remove',
+    '/api/v1/processing/items/source-preview','/api/v1/processing/database/clear-v2',
+    '/api/v1/events?channel=dashboard','/api/v1/events-ticket',
+  ])assert.ok(browser.includes(path),'missing public request: '+path);
+  for(const path of ['graph','search','capabilities','bookmarks','events']) {
+    assert.match(browser,new RegExp('["\x60]/'+path+'["\x60]'),'missing graph request: '+path);
+  }
+  assert.doesNotMatch(browser,/\/api\/v1\/(?:queue-(?:status|pause|selection|remove)|internal)(?:[/"'`?]|$)/);
+  assert.doesNotMatch(browser,/localhost:88\d\d|127\.0\.0\.1:88\d\d/);
+  // The existing, distinct direct TEST ingress consumes only the scoped
+  // browser ticket returned by the authenticated same-origin POST.
+  assert.match(browser,/\/__mvt\/api\/v1\/events-direct/);
+  assert.match(browser,/credentials:'omit',mode:'cors',redirect:'error'/);
+});
