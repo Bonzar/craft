@@ -57,7 +57,7 @@ bootstrapReleaseOwnerGraph(){
   if(!this.startReleaseOwnerLive(boot)){boot.close();this.ensureReleaseScene();return this.loadGraph();}
   return boot.ready;
 }
-stopReleaseOwnerLive(){this.releaseOwnerSnapshotBoot?.close();this.releaseOwnerSnapshotBoot=null;this.releaseOwnerSnapshotEpoch=null;this.releaseOwnerLiveHealthy=false;this.releaseOwnerLiveCarriesQueue=false;this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}
+stopReleaseOwnerLive(){this.releaseOwnerSnapshotBoot?.close();this.releaseOwnerSnapshotBoot=null;this.releaseOwnerSnapshotEpoch=null;this.releaseOwnerLiveHealthy=false;this.releaseOwnerLiveCarriesQueue=false;if(this.releaseOwnerLive)globalThis.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:'closed'}));this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}
 startReleaseOwnerLive(boot){
   const cfg=this.capabilities?.owner_live_transport;
   if(!this.authenticated||!this.csrf||this.manifest&&!/^[a-f0-9]{64}$/.test(this.manifest.owner_live_epoch??''))return false;

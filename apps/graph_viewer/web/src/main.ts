@@ -377,7 +377,7 @@ class Viewer {
   private ownerLiveCarriesQueue=false;
   private ownerSnapshotEpoch:string|null=null;
   private ownerSnapshotBoot:FirstOwnerSnapshot|null=null;
-  private stopOwnerLive():void{this.ownerSnapshotBoot?.close();this.ownerSnapshotBoot=null;this.ownerSnapshotEpoch=null;this.ownerLiveHealthy=false;this.ownerLiveCarriesQueue=false;this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
+  private stopOwnerLive():void{this.ownerSnapshotBoot?.close();this.ownerSnapshotBoot=null;this.ownerSnapshotEpoch=null;this.ownerLiveHealthy=false;this.ownerLiveCarriesQueue=false;if(this.ownerLive)window.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:'closed'}));this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
   private async bootstrapOwnerGraph():Promise<void>{
     const bootstrap=firstOwnerSnapshot(epoch=>{
       if(!this.authenticated)return;
