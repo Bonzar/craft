@@ -1,0 +1,14 @@
+{
+  "scope": "TEST canonical smoke helper only (no service operation)",
+  "target": "/etc/assertion-release/test/test-health.py",
+  "prior_source_revision": "c757e95512ef41bcc8de0de33f53458e1af69dad",
+  "prior_sha256": "4cb99c05ed3fe7ba7f64c9d61843ab39612856929957a5fa3ec695e624c9f533",
+  "canonical_prior_revision": "b09b24c969ea8d971af3ff70b0968979e5adc3db",
+  "canonical_prior_sha256": "f41e1b1825f40c9e8649fb0cac9e2de90d8d1ac09f5cf474a052bf2340036085",
+  "canonical_fix_pr": 339,
+  "canonical_fix_head": "68aaa8ca989468b58114dce295ba77e1d4709b09",
+  "canonical_fix_sha256": "de30ff27dc4918ba263afc7b2310b029e85f6f4007d0a3f8a4cca7e363e71080",
+  "derived_fix_sha256": "57d7e0cf47e85f7ecd52ca0cfc9d6acd03eefd9d05f42cdd31b34544b2a92476",
+  "derived_reproducibility": "Replace only exact Graph constants, Graph smoke function and loopback constructor from reviewed canonical delta; inverse must reproduce prior bytes.",
+  "host_apply": "No application authority in this artifact. Reviewed root operator must check the existing deployment lock, exact root-owned original, pending activation old/current and unambiguous immutable candidate. Publish only exact intended source under same ownership/mode. No credential reads, changes or logging. Then only the standard protected release receiver may settle its activation journal."
+}
