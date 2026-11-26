@@ -79,3 +79,5 @@ class Proof(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan(dict(spec,paths=spec['paths']|{ROOT+'database/clear':{}}),server,**args)
 
+
+from test_clear_v2_test_edge import TestCarrier  # included in the standard Visual PR test group
