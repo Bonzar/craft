@@ -32,6 +32,18 @@ def witnesses(db,tables) -> Iterable[tuple[str,str,str,str,str,str]]:
         FROM memory_ingest_streams AS s JOIN memory_fresh_mac_streams AS a
         ON s.stream_id=a.stream_id AND s.session_id=a.session_id''')
 
+def unsupported_active_stream_exists(db,tables,now):
+    """Do not erase an active epoch lacking an authenticated rearm witness."""
+    if 'memory_ingest_streams' not in tables:
+        return False
+    predicate=("SELECT 1 FROM memory_ingest_streams AS s "
+               "WHERE s.lifecycle='active' AND s.lease_until>?")
+    if 'memory_fresh_mac_streams' in tables:
+        predicate += (" AND NOT EXISTS (SELECT 1 FROM memory_fresh_mac_streams AS a "
+                      "WHERE a.stream_id=s.stream_id AND a.session_id=s.session_id)")
+    return db.execute(predicate+' LIMIT 1',(now,)).fetchone() is not None
+
+
 def finish_clear(db,generation,cleared_at):
     schema(db)
     db.execute(f'DELETE FROM {TRANSITIONS}')

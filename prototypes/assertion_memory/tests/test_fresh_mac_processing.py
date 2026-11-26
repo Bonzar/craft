@@ -175,6 +175,12 @@ class FreshMacProcessingTest(unittest.TestCase):
                     self.assertEqual(wire['result']['event']['id'] in self.eligible(),key==mac)
 
                 from prototypes.assertion_memory.database_clear import clear,request_revision
+                from prototypes.assertion_memory.processing_control import Conflict
+                with self.assertRaises(Conflict),self.store.transaction(write=True) as db:
+                    clear(db,stage='prod',expected_revision=request_revision(db,stage='prod'))
+                ordinary={k:pairs[OTHER][k] for k in ('stream_id','epoch')}|{'report_seq':1,
+                    'observed_seq':1,'scan_state':'current','gap_count':0,'lifecycle':'closed'}
+                self.assertEqual((await call(other,'memory_ingest_report',ordinary,pins))[0],200)
                 with self.store.transaction(write=True) as db:
                     clear(db,stage='prod',expected_revision=request_revision(db,stage='prod'))
                 old=pairs[FRESH]
