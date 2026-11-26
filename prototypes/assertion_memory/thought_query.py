@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 
+from . import query_timing as timing
 from .model import SemanticUnavailable
 from .thought_engine import ThoughtDetailNeeded, empty_material
 from .thought_engine_contract import semantic_text
@@ -129,7 +130,8 @@ def answer(engine, question, explicit_ids=()):
         except ThoughtDetailNeeded as need:
             _request_detail(frames, frame, need)
             continue
-        engine._save_check(result, frame.question, frame.frontier)
+        with timing.span('answer_check_write'):
+            engine._save_check(result, frame.question, frame.frontier)
         frames.pop()
         if not frames:
             return result

@@ -4,6 +4,9 @@ from dataclasses import replace
 import hashlib
 import json
 
+from time import monotonic
+
+from . import query_timing as timing
 from .model import SemanticUnavailable
 from .thought_worker import _Replay
 
@@ -14,13 +17,16 @@ def query_replay(engine, trace, selection):
     original = engine.gateway
 
     def cached(key):
+        started = monotonic()
         with engine.store.transaction() as db:
             row = db.execute('SELECT response FROM memory_thought_generations WHERE request_key=?', (key,)).fetchone()
         if row is None:
+            timing.emit('model_step_replay', 'miss', timing.elapsed(started))
             return None
         reference = json.loads(row[0])
         body = trace.payload(reference['response_hash'])
         trace.record('model_step_reused', details={'request_key': key, **reference})
+        timing.emit('model_step_replay', 'reused', timing.elapsed(started))
         return body
 
     def save(key, body):

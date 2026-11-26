@@ -88,7 +88,6 @@ class QueryJobs:
                         key, arguments, created = claim
                         with timing.bind(trace_id=key):
                             queue_wait_ms = max(0, round((time.time() - created)*1000))
-                            timing.emit('queue_wait', 'ok', queue_wait_ms)
                             self._execute(key, arguments, queue_wait_ms=queue_wait_ms)
                 if claim is None:
                     self.signal.wait(0.25)
@@ -101,6 +100,7 @@ class QueryJobs:
         started = time.monotonic()
         state = 'failed'
         timing.emit('job_total', 'start')
+        timing.emit('queue_wait', 'ok', queue_wait_ms)
         try:
             try:
                 result = self.run(**json.loads(arguments))
@@ -114,16 +114,18 @@ class QueryJobs:
                 state = 'failed'
             # Retry the receipt write only, never rerun model work.
             persisted = time.monotonic()
+            write_retries = 0
             while True:
                 try:
                     with closing(self._connect()) as c:
                         c.execute("UPDATE memory_interactive_queries SET state=?,result=? WHERE id=? AND state='running'",
                                   (state, serialized, key))
-                    timing.emit('result_persist', 'ok', timing.elapsed(persisted))
+                    timing.emit('result_persist', 'ok', timing.elapsed(persisted), signal_count=write_retries)
                     break
                 except sqlite3.OperationalError:
+                    write_retries += 1
                     if self.stop.wait(0.15):
-                        timing.emit('result_persist', 'interrupted', timing.elapsed(persisted))
+                        timing.emit('result_persist', 'interrupted', timing.elapsed(persisted), signal_count=write_retries)
                         state = 'interrupted'
                         return
         finally:
@@ -211,22 +213,34 @@ class QueryJobs:
                 probe_status = 'ready' if direct is not None else 'miss'
             probe_ms = timing.elapsed(probe_started)
             if direct is not None and query_request_id is None:
+                timing.capture_transport_trace(proposed_id)
                 with timing.bind(trace_id=proposed_id):
                     timing.emit('ready_probe', probe_status, probe_ms)
                     timing.emit('submission', 'ready', timing.elapsed(started))
                 return {**direct,'query_state':'completed'}
+            persisted = time.monotonic()
             key = await asyncio.to_thread(self._submission,wire,query_request_id,direct,insert=True,proposed_id=proposed_id)
+            timing.capture_transport_trace(key)
             with timing.bind(trace_id=key):
+                if direct is not None and key == proposed_id:
+                    timing.emit('ready_result_persist', 'ok', timing.elapsed(persisted))
                 timing.emit('ready_probe', probe_status, probe_ms)
                 timing.emit('submission', ('reused' if key != proposed_id else 'ready'
                             if direct is not None else 'queued'), timing.elapsed(started))
             self.signal.set()
         else:
+            timing.capture_transport_trace(key)
             with timing.bind(trace_id=key):
                 timing.emit('submission', 'reused', timing.elapsed(started))
+        response_started = time.monotonic()
         while True:
             result = await asyncio.to_thread(self._read,key)
             remaining = deadline-asyncio.get_running_loop().time()
-            if result['query_state'] not in ('queued','running') or remaining<=0:
+            pending = result['query_state'] in ('queued','running')
+            if not pending or remaining<=0:
+                with timing.bind(trace_id=key):
+                    timing.emit('query_response_wait', 'timeout' if pending else
+                                'ok' if result['query_state']=='completed' else 'failed',
+                                timing.elapsed(response_started))
                 return result
             await asyncio.sleep(min(0.15,remaining))

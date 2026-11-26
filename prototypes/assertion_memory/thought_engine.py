@@ -482,6 +482,7 @@ class ThoughtEngine:
     def _source_key(basis):
         return (basis.get('event_id'), basis.get('thought_id'), basis.get('version'))
 
+    @timing.timed('answer_persist')
     def _publish(self, verified, *, origin=None, target=None, emit=True, whole_refresh=None, title=None, rebuild=True):
         from .thought_publication import publish
         return publish(self, verified, origin=origin, target=target, emit=emit, whole_refresh=whole_refresh,
