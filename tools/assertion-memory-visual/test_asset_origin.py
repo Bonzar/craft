@@ -19,7 +19,8 @@ def load(filename):
 origin = load('asset-origin.py')
 TOKEN = '1' * 64
 ORIGINAL = {
-    'index.html': b'<html>synthetic</html>',
+    'index.html': (b'<html><link rel="stylesheet" href="./assets/index-ab.css">'
+                   b'<script type="module" src="./assets/index-ab.js"></script>synthetic</html>'),
     'assets/index-ab.js': b'window.synthetic=true;',
     'assets/index-ab.css': b'.fixture{}',
     'assets/graph.worker-ab.js': b'const fictional=true;',

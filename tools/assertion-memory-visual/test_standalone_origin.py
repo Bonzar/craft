@@ -16,6 +16,12 @@ class Standalone(fixture.OriginTest):
             with self.subTest(lane=lane):
                 self.exercise(lane)
 
+    def test_stable_entry_rejects_unknown_assets(self):
+        with self.assertRaisesRegex(ValueError,'Invalid standalone entry asset'):
+            fixture.origin.standalone_entry_html(
+                fixture.ORIGINAL['index.html'].replace(b'index-ab.js',b'index-other.js'),
+                self.release,fixture.ORIGINAL)
+
     def exercise(self,lane):
         ingress,graph_key,queue_key,health_key=(x*64 for x in ('2','3','4','7'))
         host=f'visual-{lane}.example.test'
@@ -73,13 +79,19 @@ class Standalone(fixture.OriginTest):
         self.assertEqual(get('/api/v1/graph',extra={'Origin':'https://unauthorized.example'})[0],403)
         self.assertEqual(get('/api/v1/processing/pause',method='PUT')[0],405)
         self.assertEqual(get('/api/v1/capabilities?queue_status=1&limit=51')[0],400)
-        code,headers,_=get('/?focus=fixture')
-        self.assertEqual(code,302)
-        path=headers['Location']
-        self.assertTrue(path.startswith('/visual/'+self.release+'/'))
-        self.assertEqual(get(path)[2],fixture.ORIGINAL['index.html'])
+        expected=fixture.ORIGINAL['index.html'].replace(
+            b'./assets/',('/visual/'+self.release+'/assets/').encode('ascii'))
+        for path in ('/?focus=fixture','/visual','/visual/?mode=current'):
+            code,headers,page=get(path)
+            self.assertEqual(code,200)
+            self.assertNotIn('Location',headers)
+            self.assertIn("base-uri 'none'",headers['Content-Security-Policy'])
+            self.assertEqual(page,expected)
+        code,headers,page=get('/visual',method='HEAD')
+        self.assertEqual((code,page,int(headers['Content-Length'])),(200,b'',len(expected)))
+        self.assertEqual(get('/visual/'+self.release+'/index.html')[2],fixture.ORIGINAL['index.html'])
         self.assertEqual(get('/visual/'+self.release+'/assets/index-ab.js')[2],fixture.ORIGINAL['assets/index-ab.js'])
-        stale=dict(fixture.ORIGINAL, **{'index.html':b'<html>other retained version</html>'})
+        stale=dict(fixture.ORIGINAL, **{'index.html':fixture.ORIGINAL['index.html'].replace(b'synthetic',b'other retained version')})
         stale_manifest=(json.dumps({k:fixture.origin.digest(v) for k,v in sorted(stale.items())},
                                     separators=(',',':'))+'\n').encode()
         stale_release=fixture.origin.digest(stale_manifest)
@@ -107,6 +119,11 @@ class Standalone(fixture.OriginTest):
         try:
             self.assertEqual(get('/visual/'+self.release+'/')[0],404)
             self.assertEqual(get('/visual/'+stale_release+'/')[2],stale['index.html'])
+            status,headers,page=get('/visual?marker=kept')
+            self.assertEqual(status,200)
+            self.assertNotIn('Location',headers)
+            self.assertEqual(page,stale['index.html'].replace(
+                b'./assets/',('/visual/'+stale_release+'/assets/').encode('ascii')))
         finally:
             next_link.symlink_to('releases/'+self.release)
             next_link.replace(link)
