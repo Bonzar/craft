@@ -29,6 +29,10 @@ class AssertionMemorySource:
         with self._lock:
             self._watch.close()
 
+    def database_generation(self):
+        from ..database_generation import database_generation
+        return database_generation(self.path)
+
     def revision(self):
         with self._lock:
             stat=self.path.stat(); identity=(stat.st_dev,stat.st_ino)

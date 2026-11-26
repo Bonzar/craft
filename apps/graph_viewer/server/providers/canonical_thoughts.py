@@ -135,6 +135,10 @@ class CanonicalThoughtSource(JsonSnapshotSource):
         self._identity = (stat.st_dev, stat.st_ino)
         self.revision()
 
+    def database_generation(self):
+        from ..database_generation import database_generation
+        return database_generation(self.source_path)
+
     def revision(self):
         with self._lock:
             stat = self.source_path.stat()
@@ -147,7 +151,8 @@ class CanonicalThoughtSource(JsonSnapshotSource):
             dirty = self._watch.execute('PRAGMA data_version').fetchone()[0]
             if dirty == self._dirty:
                 return self._revision
-            stamp = tuple(self._watch.execute('SELECT '
+            reset_generation=self.database_generation()[2]
+            stamp = (reset_generation, *self._watch.execute('SELECT '
                 '(SELECT coalesce(max(rowid),0) FROM memory_thought_versions),'
                 '(SELECT count(*) FROM memory_thoughts),'
                 '(SELECT coalesce(sum(current_version),0) FROM memory_thoughts),'
