@@ -36,7 +36,21 @@ class Boundary(BaseHTTPMiddleware):
                     check_origin(request,required=True)
                     if request.headers.get('x-csrf-token')!=csrf:
                         raise APIError('csrf_denied','Valid CSRF token required',403)
+            graph_read=(request.method in {'GET','HEAD'} and path.startswith('/api/v1/')
+                        and path.split('/')[3] in {'graph','nodes','edges','sources','overviews','search','bookmarks','capabilities','events'})
+            manager=request.app.state.manager if graph_read else None
+            generation=manager.sync_generation() if manager is not None else None
             response=await call_next(request)
+            if manager is not None and path!='/api/v1/events' and not manager.generation_matches(generation):
+                raise APIError('revision_expired','Database generation changed; reload the graph',409)
+            if generation is not None and path!='/api/v1/events':
+                original=response.body_iterator
+                async def fenced_body():
+                    async for chunk in original:
+                        if not await asyncio.to_thread(manager.generation_matches,generation):
+                            return
+                        yield chunk
+                response.body_iterator=fenced_body()
         except APIError as error:
             response=error_response(error)
         response.headers.update({'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
@@ -180,7 +194,13 @@ async def events(request):
 
     after=parse_replay_cursor(request)
     revision=request.query_params.get('revision')
-    graph=manager.get(revision) if revision else None
+    try:
+        graph=manager.get(revision) if revision else None
+    except APIError as error:
+        if error.code!='revision_expired' or manager._generation is None or manager._generation[2]=='0'*32:
+            raise
+        payload={'cursor':str(manager.cursor),'revision':revision,'reason':'database_cleared','manifest_url':'/api/v1/graph'}
+        return Response(manager.encode('reset',payload),media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
     selected=graph.manifest['selector'] if graph is not None else None
     missing_family=selected is not None and manager.key(selected) not in manager.latest
     if selected is not None and selected['mode']=='known_then' and missing_family:
