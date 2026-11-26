@@ -20,7 +20,7 @@ def spec():
         'headers':{'Cookie':'{Cookie}','Origin':'{Origin}'}}}
       for m in ('get','post','put')},'/visual':{'get':{}},'/api/v1/events-ticket':{'post':{}},
       '/api/v1/session':{m:{'x-yc-apigateway-integration':{'url':plan.TARGET.replace('{tail}','session'),
-          'type':'http','method':m.upper(),'headers':{k:'{'+k+'}' for k in
+          'type':'http','method':m.upper(),'query':{'*':'*'},'headers':{k:'{'+k+'}' for k in
           ('Cookie','Origin','Content-Type','X-CSRF-Token','Sec-Fetch-Site')}}}
           for m in ('get','post','delete')}}}
 
