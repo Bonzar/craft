@@ -21,3 +21,10 @@ Adapter code accepts only protected evidence callbacks. These must be wired
 from the existing receiver and not caller payload. Filesystem lock and state
 root require deliberate receiver installation; neither active environment
 changes in this draft.
+
+When genuinely admitted same-family replacement starts TEST, atomically change
+the ledger before effects. Previous artifacts and receipts remain immutable
+but are permanently ineligible (including old retries), even if the new TEST
+switch fails. A mere artifact or rejected request changes nothing. A formerly
+green candidate can be displaced only with fresh authoritative defect review,
+not an unrelated delay. An uncertain in-flight PROD must be reconciled first.

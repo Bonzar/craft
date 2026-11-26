@@ -75,7 +75,7 @@ class TestTrain(unittest.TestCase):
         self.l.witness(witness('test',b))
         ff = cand('1.2.0','e')
         with self.assertRaises(Reject):
-            self.l.reserve(ff,fix=dc.replace(approved,fix=ff,predecessor=b))
+            self.l.reserve(ff)
 
     def test_legacy_no_rollback_no_stale(self):
         for w in (witness('prod',self.base.artifact,origin='rollback'),

@@ -121,8 +121,11 @@ class Ledger:
             'INSERT INTO forward_train(family,baseline_tag,baseline_rev,baseline_id,baseline_digest,baseline_gen) VALUES(?,?,?,?,?,?)',
             (c.family,c.tag,c.revision,a.release_id,a.digest,live.generation)).rowcount)
 
-    def reserve(self, candidate, live=None, *, fix=None):
+    def reserve(self, candidate, live=None, *, fix=None, artifact=None):
         major, minor, patch = candidate.version()
+        if artifact is not None:
+            require(type(artifact) is Artifact and artifact.candidate == candidate, 'Wrong replacement artifact')
+            artifact.checked()
         def write():
             closed, generation, current, pin, tested, promoting = self._read(candidate.family)
             if current == candidate:
@@ -132,7 +135,7 @@ class Ledger:
                 require(live.artifact == closed and live.generation == generation, 'Live PROD does not match prior verified train')
                 require((major,minor,patch) == (closed.candidate.version()[0]+1,0,0), 'Requires exactly next major at x.0.0')
             else:
-                require(not promoting and tested is None, 'TEST-verified or promoting candidate must not wait for new scope')
+                require(not promoting, 'Uncertain or in-flight PROD cannot be displaced')
                 require(type(fix) is FixApproval and fix.fix == candidate and fix.classification == 'open_major_defect_only'
                         and type(fix.predecessor) is Artifact and fix.predecessor.candidate == current
                         and pin == (fix.predecessor.release_id,fix.predecessor.digest)
@@ -145,8 +148,8 @@ class Ledger:
                 m,n,_ = current.version()
                 require((major,minor,patch) == (m,n+1,0) and candidate.revision != current.revision,
                         'Open train permits only the next minor with a new revision')
-            self.db.execute('''UPDATE forward_train SET open_tag=?,open_rev=?,open_id=NULL,open_digest=NULL,tested_gen=NULL
-                               WHERE family=?''', (candidate.tag,candidate.revision,candidate.family))
+            self.db.execute('''UPDATE forward_train SET open_tag=?,open_rev=?,open_id=?,open_digest=?,tested_gen=NULL
+                               WHERE family=?''', (candidate.tag,candidate.revision,artifact.release_id if artifact else None,artifact.digest if artifact else None,candidate.family))
             return True
         return self._write(write)
 

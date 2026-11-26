@@ -39,6 +39,7 @@ class Checkpoints:
         return p
 
     def test(self, artifact: Artifact, *, verified_release, activate_and_probe, live_prod, verify_fix):
+        artifact.checked()
         c = artifact.candidate
         with self.lock(c.family):
             p = self._published(verified_release(artifact.release_id), c)
@@ -47,9 +48,7 @@ class Checkpoints:
                 _, minor, _ = c.version()
                 live = live_prod(c.family) if minor == 0 else None
                 fix = verify_fix(artifact) if minor != 0 else None
-                self.ledger.reserve(c, live, fix=fix)
-            self.ledger.bind_release_id(c, p.release_id)
-            self.ledger.bind_artifact(artifact)
+                self.ledger.reserve(c, live, fix=fix, artifact=artifact)
             self.ledger.require_bound(artifact)
             w = activate_and_probe(artifact)
             require(type(w) is Witness and w.artifact == artifact and w.stage == 'test',
