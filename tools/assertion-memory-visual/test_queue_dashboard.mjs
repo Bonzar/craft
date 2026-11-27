@@ -551,3 +551,24 @@ test('early packed queue click and poll wait for registered snapshot or explicit
   await offline.ownerEvent('offline');
   assert.equal(count(offline),1);assert.equal(offline.events.length,1);
 });
+
+test('packed and native Graph load a validated owner snapshot without waiting for Live registration',async()=>{
+  const {ownerLiveMethods}=await import('./visual-overlay.mjs');
+  const {firstOwnerSnapshot}=await import('../../apps/graph_viewer/web/src/owner-live-controller.mjs');
+  const native=await readFile(new URL('../../apps/graph_viewer/web/src/main.ts',import.meta.url),'utf8');
+  for(const [source,first,next,ownerBoot,ownerStop,ownerScene,ownerOpen] of [
+    [ownerLiveMethods,'bootstrapReleaseOwnerGraph(){','\nstopReleaseOwnerLive()', 'bootstrapReleaseOwnerGraph','stopReleaseOwnerLive','ensureReleaseScene','startReleaseOwnerLive'],
+    [native,'private async bootstrapOwnerGraph():Promise<void>{','\n  private startDirectOwnerLive', 'bootstrapOwnerGraph','stopOwnerLive','ensureLiveScene','startDirectOwnerLive'],
+  ]){
+    const start=source.indexOf(first), end=source.indexOf(next,start);
+    assert.ok(start>=0&&end>start);
+    const body=source.slice(start+first.length,end).trimEnd().slice(0,-1);
+    const boot=runInNewContext('(async function(){'+body+'})',{firstOwnerSnapshot,releaseFirstOwnerSnapshot:firstOwnerSnapshot,window:{dispatchEvent(){}},dispatchEvent(){},CustomEvent:class{}});
+    const calls=[];
+    const app={authenticated:true,[ownerStop](){calls.push('stop');},[ownerOpen](){assert.fail('Live must follow, not gate, the first accepted snapshot');},
+      [ownerScene](){calls.push('scene');},setConnection(){calls.push('snapshot badge');},
+      async loadGraph(){calls.push('snapshot');}};
+    await boot.call(app);
+    assert.deepEqual(calls,['stop','snapshot badge','scene','snapshot'],ownerBoot);
+  }
+});
