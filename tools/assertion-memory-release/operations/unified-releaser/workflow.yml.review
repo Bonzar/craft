@@ -1,0 +1,44 @@
+# Source specimen, deliberately not in .github/workflows.
+# Not an actuator, no Actions deployment permissions or credential changes.
+name: Releaser
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        type: choice
+        options: [test, prod]
+        required: true
+      releaser_commit:
+        type: string
+        required: true
+      releaser_sha256:
+        type: string
+        required: true
+      releaser_tag:
+        type: string
+        required: true
+      operation:
+        type: choice
+        options: [apply, rollback]
+        required: true
+permissions: {}
+jobs:
+  qualified-test:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && inputs.lane == 'test'
+    runs-on: ubuntu-latest
+    environment: assertion-releaser-test
+    concurrency: {group: assertion-releaser-test, cancel-in-progress: false}
+    permissions: {contents: read}
+    steps:
+      # Only a reviewed source hook may fetch/verify immutable tag and its
+      # one exact asset against approved external manifest. This draft fails
+      # closed rather than selecting a transport or pretending to apply it.
+      - run: 'exit 1 # No installed TEST apply actuator is qualified'
+  qualified-prod:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && inputs.lane == 'prod'
+    runs-on: ubuntu-latest
+    environment: assertion-releaser-prod
+    concurrency: {group: assertion-releaser-prod, cancel-in-progress: false}
+    permissions: {contents: read}
+    steps:
+      - run: 'exit 1 # PROD is disabled; requires independent proof and approval'
